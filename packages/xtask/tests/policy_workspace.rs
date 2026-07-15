@@ -673,6 +673,10 @@ fn daemon_provider_composition_is_exact_startup_owned_and_credential_free() {
     for required in [
         "mapped_runtime_start_budget_for_dag",
         "mapped_runtime_stop_budget_for_roles",
+        "mapped_runtime_role_cleanup_budget",
+        "mapped_runtime_graceful_shutdown_budget",
+        "let request = ch_api::DEFAULT_TIMEOUT",
+        "let trailing_poll = ch_api::DEFAULT_TIMEOUT",
         "restart: stop.saturating_add(start)",
         "CGROUP_KILL_BROKER_TIMEOUT",
         "CGROUP_EMPTY_POST_KILL_WAIT",

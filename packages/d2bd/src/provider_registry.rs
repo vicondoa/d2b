@@ -1608,6 +1608,17 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_contract_accepts_exact_900_seconds_and_rejects_901() {
+        assert_eq!(MAX_PROVIDER_REQUEST_LIFETIME_MS, 900_000);
+        assert!(lifecycle_budget_within_provider_contract(
+            Duration::from_secs(900)
+        ));
+        assert!(!lifecycle_budget_within_provider_contract(
+            Duration::from_secs(901)
+        ));
+    }
+
+    #[test]
     fn exact_live_runtime_factories_register_once_with_matching_capabilities() {
         for kind in [
             LocalRuntimeKind::CloudHypervisor,

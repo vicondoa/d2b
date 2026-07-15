@@ -79,12 +79,13 @@ explicit provider row retain the direct compatibility path.
 Mutation deadlines cover the daemon's complete lifecycle budget rather than a
 fixed provider timeout. Start sums each sequential DAG node's spawn and
 readiness or API-readiness budget, qemu-media boot readiness, every possible
-rollback TERM/KILL wait, and snapshot margin. Stop sums graceful shutdown,
-every declared or currently tracked role's TERM/KILL waits, broker cgroup-kill
-request and post-kill emptiness waits, and snapshot margin. Restart is the sum
-of stop and start. Startup rejects a mapped runtime whose full restart budget
-exceeds the provider contract maximum; it never truncates a required cleanup
-budget.
+rollback TERM/KILL and cgroup-kill/emptiness wait, and snapshot margin. Stop
+sums the configured graceful timer plus its bounded request and trailing poll
+overhead, every declared or currently tracked role's TERM/KILL waits, broker
+cgroup-kill request and post-kill emptiness waits, and snapshot margin. Restart
+is the sum of stop and start. Startup rejects a mapped runtime whose full
+restart budget exceeds the provider contract maximum; it never truncates a
+required cleanup budget.
 
 Runtime adapters retain each admitted mutation in an owned task keyed by its
 operation and idempotency identity. The task also retains exclusive per-VM

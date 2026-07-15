@@ -14639,6 +14639,20 @@ fn bounded_duration_count(count: usize) -> u32 {
     count.max(1).min(u32::MAX as usize) as u32
 }
 
+fn mapped_runtime_role_cleanup_budget(term: Duration, kill: Duration) -> Duration {
+    term.saturating_add(kill)
+        .saturating_add(CGROUP_KILL_BROKER_TIMEOUT)
+        .saturating_add(CGROUP_EMPTY_POST_KILL_WAIT)
+}
+
+fn mapped_runtime_graceful_shutdown_budget(configured: Duration) -> Duration {
+    let request = ch_api::DEFAULT_TIMEOUT;
+    let trailing_poll = ch_api::DEFAULT_TIMEOUT;
+    configured
+        .saturating_add(request)
+        .saturating_add(trailing_poll)
+}
+
 fn mapped_runtime_start_budget_for_dag(
     dag: &d2b_core::processes::VmProcessDag,
     api_timeout: Duration,
@@ -14683,18 +14697,18 @@ fn mapped_runtime_start_budget_for_dag(
             })
             .count(),
     );
-    let rollback = (VM_START_ROLLBACK_TERM_TIMEOUT + VM_START_ROLLBACK_KILL_TIMEOUT)
-        .saturating_mul(rollback_roles)
-        .saturating_add(LIFECYCLE_SNAPSHOT_MARGIN);
+    let rollback = mapped_runtime_role_cleanup_budget(
+        VM_START_ROLLBACK_TERM_TIMEOUT,
+        VM_START_ROLLBACK_KILL_TIMEOUT,
+    )
+    .saturating_mul(rollback_roles)
+    .saturating_add(LIFECYCLE_SNAPSHOT_MARGIN);
     sequential_nodes.saturating_add(rollback)
 }
 
-fn mapped_runtime_stop_budget_for_roles(graceful: Duration, stop_roles: usize) -> Duration {
-    let per_role = VM_STOP_TIMEOUT
-        .saturating_add(VM_STOP_TIMEOUT)
-        .saturating_add(CGROUP_KILL_BROKER_TIMEOUT)
-        .saturating_add(CGROUP_EMPTY_POST_KILL_WAIT);
-    graceful
+fn mapped_runtime_stop_budget_for_roles(graceful_budget: Duration, stop_roles: usize) -> Duration {
+    let per_role = mapped_runtime_role_cleanup_budget(VM_STOP_TIMEOUT, VM_STOP_TIMEOUT);
+    graceful_budget
         .saturating_add(per_role.saturating_mul(bounded_duration_count(stop_roles)))
         .saturating_add(LIFECYCLE_SNAPSHOT_MARGIN)
 }
@@ -14721,7 +14735,10 @@ pub(crate) fn mapped_runtime_lifecycle_budgets(
     let graceful = if request.force || !graceful_shutdown_enabled(&manifest_entry) {
         Duration::ZERO
     } else {
-        graceful_shutdown_timeout_for(state, &manifest_entry)
+        mapped_runtime_graceful_shutdown_budget(graceful_shutdown_timeout_for(
+            state,
+            &manifest_entry,
+        ))
     };
     let declared_roles = dag
         .nodes
@@ -24995,7 +25012,10 @@ mod broker_dispatch_tests {
             d2b_contracts::v2_provider::ProviderMethod::RuntimeStart,
         )
         .expect("start provider deadline");
-        assert_eq!(start_budget, Duration::from_secs(300 + 10 + 10 + 5 + 5));
+        assert_eq!(
+            start_budget,
+            Duration::from_secs(300 + 10 + 10 + 5 + 5 + 5 + 5)
+        );
         assert!(start_deadline.duration > Duration::from_secs(30));
         assert_eq!(
             u128::from(start_deadline.milliseconds),
@@ -25009,7 +25029,10 @@ mod broker_dispatch_tests {
             d2b_contracts::v2_provider::ProviderMethod::RuntimeStop,
         )
         .expect("stop provider deadline");
-        assert_eq!(stop_budget, Duration::from_secs(90 + 30 + 30 + 5 + 5 + 5));
+        assert_eq!(
+            stop_budget,
+            Duration::from_secs(90 + 5 + 5 + 30 + 30 + 5 + 5 + 5)
+        );
         assert_eq!(budgets.restart, start_budget + stop_budget);
         assert!(stop_deadline.duration > Duration::from_secs(30));
         assert_eq!(
@@ -25037,26 +25060,22 @@ mod broker_dispatch_tests {
             crate::mapped_runtime_stop_budget_for_roles(Duration::from_secs(90), dag.nodes.len());
         assert_eq!(
             start,
-            Duration::from_secs((2 * (10 + 300)) + (2 * (10 + 5)) + 5)
+            Duration::from_secs((2 * (10 + 300)) + (2 * (10 + 5 + 5 + 5)) + 5)
         );
         assert_eq!(stop, Duration::from_secs(90 + (2 * (30 + 30 + 5 + 5)) + 5));
-        assert_eq!(start + stop, Duration::from_secs(890));
-
-        let mut third = dag.nodes[0].clone();
-        third.id = d2b_core::processes::NodeId("swtpm".to_owned());
-        third.role = ProcessRole::Swtpm;
-        dag.nodes.push(third);
-        let over_limit_start = crate::mapped_runtime_start_budget_for_dag(
-            &dag,
-            Duration::from_secs(60),
-            Duration::from_secs(300),
-        );
-        let over_limit_stop =
-            crate::mapped_runtime_stop_budget_for_roles(Duration::from_secs(90), dag.nodes.len());
+        let restart = start + stop;
+        assert_eq!(restart, Duration::from_secs(910));
         assert!(
-            (over_limit_start + over_limit_stop).as_millis()
+            restart.as_millis()
                 > u128::from(d2b_contracts::v2_provider::MAX_PROVIDER_REQUEST_LIFETIME_MS)
         );
+
+        let exact_limit = start
+            + crate::mapped_runtime_stop_budget_for_roles(Duration::from_secs(80), dag.nodes.len());
+        let over_limit = start
+            + crate::mapped_runtime_stop_budget_for_roles(Duration::from_secs(81), dag.nodes.len());
+        assert_eq!(exact_limit, Duration::from_secs(900));
+        assert_eq!(over_limit, Duration::from_secs(901));
     }
 
     #[test]
@@ -25082,16 +25101,13 @@ mod broker_dispatch_tests {
         )
         .expect("parse processes");
         let template = processes["vms"][0]["nodes"][0].clone();
-        add_budget_role(&mut processes, &template, "virtiofsd", "virtiofsd");
-        write_json_file(&state.config.artifacts.processes_path, &processes);
-        reseal_provider_test_bundle(&state.config.artifacts);
         assert!(
             provider_registry::compose_startup_registry_with_policy(&state, &artifact, None)
                 .is_ok(),
-            "a two-role 890-second restart budget must remain admissible"
+            "one mapped role must remain within the lifecycle contract"
         );
 
-        add_budget_role(&mut processes, &template, "swtpm", "swtpm");
+        add_budget_role(&mut processes, &template, "virtiofsd", "virtiofsd");
         write_json_file(&state.config.artifacts.processes_path, &processes);
         reseal_provider_test_bundle(&state.config.artifacts);
 

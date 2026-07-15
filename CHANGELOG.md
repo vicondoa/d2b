@@ -120,8 +120,9 @@ deprecations ship one minor release before removal.
   daemon task completes cleanup, and same-operation retries join that task
   instead of dispatching twice. The owned task retains per-VM serialization
   through completion, fresh operations wait behind it, sequential node and
-  per-role cleanup budgets are summed, and over-limit mappings fail startup
-  instead of truncating required cleanup.
+  per-role cleanup budgets are summed—including rollback cgroup cleanup and
+  graceful request/poll overhead—and over-limit mappings fail startup instead
+  of truncating required cleanup.
 - Removed nested Tokio runtime bridging from mapped runtime-provider start,
   graceful stop, and restart dispatch. Provider adapters now await daemon
   lifecycle effects directly, and Cloud Hypervisor observations use the
