@@ -1,5 +1,6 @@
 use std::{
     fmt,
+    num::NonZeroU32,
     os::fd::{AsFd, OwnedFd},
     sync::{Arc, LazyLock},
 };
@@ -189,6 +190,23 @@ impl fmt::Display for OwnedEndpointError {
 
 impl std::error::Error for OwnedEndpointError {}
 
+/// Nonzero guest port used by the Cloud Hypervisor `CONNECT` prelude.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CloudHypervisorVsockPort(NonZeroU32);
+
+impl CloudHypervisorVsockPort {
+    pub const fn new(port: u32) -> Option<Self> {
+        match NonZeroU32::new(port) {
+            Some(port) => Some(Self(port)),
+            None => None,
+        }
+    }
+
+    pub const fn get(self) -> u32 {
+        self.0.get()
+    }
+}
+
 /// A validated, already-owned connected endpoint.
 ///
 /// The raw descriptor is never exposed. Endpoint ports can request a
@@ -197,6 +215,9 @@ impl std::error::Error for OwnedEndpointError {}
 pub struct OwnedEndpointDescriptor {
     kind: LocalTransportKind,
     descriptor: Arc<OwnedFd>,
+    identity: Fingerprint,
+    generation: Generation,
+    cloud_hypervisor_port: Option<CloudHypervisorVsockPort>,
 }
 
 impl OwnedEndpointDescriptor {
@@ -205,10 +226,33 @@ impl OwnedEndpointDescriptor {
     ///
     /// The endpoint port must adapt duplicates through `AsyncFd` or an
     /// equivalent Tokio transport before performing I/O.
-    pub fn from_pre_authorized(kind: LocalTransportKind, descriptor: OwnedFd) -> Self {
+    pub fn from_pre_authorized(
+        kind: LocalTransportKind,
+        descriptor: OwnedFd,
+        identity: Fingerprint,
+        generation: Generation,
+    ) -> Self {
         Self {
             kind,
             descriptor: Arc::new(descriptor),
+            identity,
+            generation,
+            cloud_hypervisor_port: None,
+        }
+    }
+
+    pub fn from_pre_authorized_cloud_hypervisor(
+        descriptor: OwnedFd,
+        port: CloudHypervisorVsockPort,
+        identity: Fingerprint,
+        generation: Generation,
+    ) -> Self {
+        Self {
+            kind: LocalTransportKind::CloudHypervisorVsock,
+            descriptor: Arc::new(descriptor),
+            identity,
+            generation,
+            cloud_hypervisor_port: Some(port),
         }
     }
 
@@ -221,6 +265,18 @@ impl OwnedEndpointDescriptor {
             .as_fd()
             .try_clone_to_owned()
             .map_err(|_| OwnedEndpointError::DescriptorIo)
+    }
+
+    pub fn identity(&self) -> &Fingerprint {
+        &self.identity
+    }
+
+    pub const fn generation(&self) -> Generation {
+        self.generation
+    }
+
+    pub const fn cloud_hypervisor_port(&self) -> Option<CloudHypervisorVsockPort> {
+        self.cloud_hypervisor_port
     }
 }
 
@@ -324,6 +380,7 @@ pub struct TransportBinding {
     provider_id: ProviderId,
     provider_generation: Generation,
     configuration_fingerprint: Fingerprint,
+    configured_scope_digest: Fingerprint,
     scope: AuthorizedProviderScope,
     endpoint_identity: Fingerprint,
     endpoint_generation: Generation,
@@ -338,6 +395,7 @@ impl TransportBinding {
         provider_id: ProviderId,
         provider_generation: Generation,
         configuration_fingerprint: Fingerprint,
+        configured_scope_digest: Fingerprint,
         scope: AuthorizedProviderScope,
         endpoint_identity: Fingerprint,
         endpoint_generation: Generation,
@@ -349,6 +407,7 @@ impl TransportBinding {
             provider_id,
             provider_generation,
             configuration_fingerprint,
+            configured_scope_digest,
             scope,
             endpoint_identity,
             endpoint_generation,
@@ -371,6 +430,10 @@ impl TransportBinding {
 
     pub fn configuration_fingerprint(&self) -> &Fingerprint {
         &self.configuration_fingerprint
+    }
+
+    pub fn configured_scope_digest(&self) -> &Fingerprint {
+        &self.configured_scope_digest
     }
 
     pub fn scope(&self) -> &AuthorizedProviderScope {

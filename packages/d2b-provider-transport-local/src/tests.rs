@@ -1,11 +1,14 @@
 use std::{
     future::pending,
+    io::{Read, Write},
     os::fd::OwnedFd,
-    os::unix::net::UnixStream,
+    os::unix::net::{UnixDatagram, UnixStream},
     sync::{
         Arc, Mutex, MutexGuard,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
+    thread,
+    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -13,7 +16,7 @@ use d2b_contracts::{
     v2_component_session::{EndpointRole, Locality, ServicePackage, TransportClass},
     v2_identity::{ProviderId, ProviderType, RealmId, WorkloadId},
     v2_provider::{
-        AdoptionState, AuthorizedProviderScope, CorrelationId, Fingerprint, Generation,
+        AdoptionState, AuthorizedProviderScope, CorrelationId, Fingerprint, Generation, HandleId,
         IdempotencyKey, ImplementationId, MutationState, ObservationReason, ObservedLifecycleState,
         OperationId, PROVIDER_SCHEMA_VERSION, PrincipalRef, ProviderApiVersion, ProviderAuthority,
         ProviderCallContext, ProviderCapability, ProviderCapabilitySet, ProviderDescriptor,
@@ -29,15 +32,17 @@ use tokio::sync::Notify;
 use crate::{
     AttachmentCapability, AuthenticationOwner, BundleEndpointId,
     CLOUD_HYPERVISOR_VSOCK_FACTORY_KEY, CLOUD_HYPERVISOR_VSOCK_IMPLEMENTATION_ID,
-    EndpointCloseRequest, EndpointCloseResult, EndpointCloseState, EndpointConnectRequest,
-    EndpointConnection, EndpointInspectRequest, EndpointLeaseId, EndpointObservation,
-    EndpointObservationState, EndpointPortError, EndpointProvenance, EndpointSource,
-    LocalEndpointPort, LocalTransportClock, LocalTransportConfigurationError,
-    LocalTransportFactory, LocalTransportKind, LocalTransportLimits, LocalTransportProvider,
-    NATIVE_VSOCK_FACTORY_KEY, NATIVE_VSOCK_IMPLEMENTATION_ID, OwnedEndpointDescriptor,
-    ReachabilityEvidence, TransportBinding, TransportCapabilityProfile, UNIX_SEQPACKET_FACTORY_KEY,
-    UNIX_SEQPACKET_IMPLEMENTATION_ID, UNIX_STREAM_FACTORY_KEY, UNIX_STREAM_IMPLEMENTATION_ID,
-    local_transport_capabilities,
+    CloudHypervisorVsockPort, EndpointCapabilityId, EndpointCloseRequest, EndpointCloseResult,
+    EndpointCloseState, EndpointConnectRequest, EndpointConnection, EndpointConnectionMetadata,
+    EndpointConnectionResource, EndpointInspectRequest, EndpointLeaseId, EndpointObservation,
+    EndpointObservationState, EndpointPortError, EndpointProvenance, EndpointResolveRequest,
+    EndpointSource, LocalEndpointPort, LocalEndpointResolver, LocalTransportClock,
+    LocalTransportConfigurationError, LocalTransportFactory, LocalTransportFactoryError,
+    LocalTransportKind, LocalTransportLimits, LocalTransportProvider, NATIVE_VSOCK_FACTORY_KEY,
+    NATIVE_VSOCK_IMPLEMENTATION_ID, OwnedEndpointConnection, OwnedEndpointDescriptor,
+    ReachabilityEvidence, TokioLocalEndpointPort, TransportBinding, TransportCapabilityProfile,
+    UNIX_SEQPACKET_FACTORY_KEY, UNIX_SEQPACKET_IMPLEMENTATION_ID, UNIX_STREAM_FACTORY_KEY,
+    UNIX_STREAM_IMPLEMENTATION_ID, local_transport_capabilities,
 };
 
 const NOW_UNIX_MS: u64 = 1_700_000_000_000;
@@ -52,6 +57,7 @@ const KINDS: [LocalTransportKind; 4] = [
 struct FakeBehavior {
     pending_connect: bool,
     connect_error: Option<EndpointPortError>,
+    connect_operation_id: Option<OperationId>,
     connect_identity: Option<Fingerprint>,
     connect_generation: Option<Generation>,
     inspect_error: Option<EndpointPortError>,
@@ -69,6 +75,7 @@ impl Default for FakeBehavior {
         Self {
             pending_connect: false,
             connect_error: None,
+            connect_operation_id: None,
             connect_identity: None,
             connect_generation: None,
             inspect_error: None,
@@ -91,6 +98,7 @@ struct FakeEndpointPort {
     close_calls: Mutex<Vec<EndpointCloseRequest>>,
     connect_started: Notify,
     pending_connect_dropped: Arc<AtomicBool>,
+    connection_closes: Arc<AtomicUsize>,
 }
 
 impl FakeEndpointPort {
@@ -112,6 +120,59 @@ impl FakeEndpointPort {
 
     async fn wait_for_connect(&self) {
         self.connect_started.notified().await;
+    }
+}
+
+struct FakeConnectionResource(Arc<AtomicUsize>);
+
+impl EndpointConnectionResource for FakeConnectionResource {
+    fn close(&self) {
+        self.0.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+#[derive(Default)]
+struct RejectingResolver {
+    calls: AtomicUsize,
+}
+
+#[async_trait]
+impl LocalEndpointResolver for RejectingResolver {
+    async fn resolve(
+        &self,
+        _request: EndpointResolveRequest,
+    ) -> Result<OwnedEndpointDescriptor, EndpointPortError> {
+        self.calls.fetch_add(1, Ordering::AcqRel);
+        Err(EndpointPortError::InvariantViolation)
+    }
+}
+
+struct StaticResolver {
+    descriptor: OwnedEndpointDescriptor,
+    calls: Mutex<Vec<EndpointResolveRequest>>,
+}
+
+impl StaticResolver {
+    fn new(descriptor: OwnedEndpointDescriptor) -> Self {
+        Self {
+            descriptor,
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn calls(&self) -> Vec<EndpointResolveRequest> {
+        lock(&self.calls).clone()
+    }
+}
+
+#[async_trait]
+impl LocalEndpointResolver for StaticResolver {
+    async fn resolve(
+        &self,
+        request: EndpointResolveRequest,
+    ) -> Result<OwnedEndpointDescriptor, EndpointPortError> {
+        lock(&self.calls).push(request);
+        Ok(self.descriptor.clone())
     }
 }
 
@@ -139,25 +200,33 @@ impl LocalEndpointPort for FakeEndpointPort {
         if let Some(error) = behavior.connect_error {
             return Err(error);
         }
-        Ok(EndpointConnection {
-            operation_id: request.operation_id,
-            handle_id: request.handle_id,
-            binding_id: request.binding_id,
-            identity: behavior
-                .connect_identity
-                .unwrap_or(request.expected_identity),
-            generation: behavior
-                .connect_generation
-                .unwrap_or(request.expected_generation),
-            kind: request.kind,
-            capabilities: request.capabilities,
-            reachability: ReachabilityEvidence::ReachableOnly,
-        })
+        Ok(EndpointConnection::new(
+            EndpointConnectionMetadata {
+                operation_id: behavior
+                    .connect_operation_id
+                    .unwrap_or(request.operation_id),
+                handle_id: request.handle_id,
+                binding_id: request.binding_id,
+                identity: behavior
+                    .connect_identity
+                    .unwrap_or(request.expected_identity),
+                generation: behavior
+                    .connect_generation
+                    .unwrap_or(request.expected_generation),
+                kind: request.kind,
+                capabilities: request.capabilities,
+                reachability: ReachabilityEvidence::ReachableOnly,
+            },
+            OwnedEndpointConnection::new(Arc::new(FakeConnectionResource(
+                self.connection_closes.clone(),
+            ))),
+        ))
     }
 
     async fn inspect(
         &self,
         request: EndpointInspectRequest,
+        _connection: &OwnedEndpointConnection,
     ) -> Result<EndpointObservation, EndpointPortError> {
         lock(&self.inspect_calls).push(request.clone());
         let behavior = lock(&self.behavior).clone();
@@ -183,6 +252,7 @@ impl LocalEndpointPort for FakeEndpointPort {
     async fn close(
         &self,
         request: EndpointCloseRequest,
+        _connection: &OwnedEndpointConnection,
     ) -> Result<EndpointCloseResult, EndpointPortError> {
         lock(&self.close_calls).push(request.clone());
         let behavior = lock(&self.behavior).clone();
@@ -382,6 +452,7 @@ fn binding(
         descriptor.provider_id.clone(),
         descriptor.registry_generation,
         descriptor.configuration_schema_fingerprint.clone(),
+        descriptor.configured_scope_digest.clone(),
         scope,
         endpoint_identity,
         endpoint_generation,
@@ -421,6 +492,27 @@ fn generation(value: u64) -> Generation {
 
 fn transport_binding_id(value: &str) -> TransportBindingId {
     TransportBindingId::parse(value).expect("valid transport binding id")
+}
+
+fn endpoint_connect_request(
+    kind: LocalTransportKind,
+    operation_id: &str,
+    endpoint: EndpointSource,
+    identity: Fingerprint,
+    generation: Generation,
+    deadline: Duration,
+) -> EndpointConnectRequest {
+    EndpointConnectRequest {
+        operation_id: OperationId::parse(operation_id).expect("valid operation id"),
+        handle_id: HandleId::parse(operation_id).expect("valid handle id"),
+        binding_id: transport_binding_id("production-binding"),
+        endpoint,
+        expected_identity: identity,
+        expected_generation: generation,
+        kind,
+        capabilities: kind.capability_profile(),
+        deadline,
+    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -516,6 +608,83 @@ fn factory_rejects_wrong_descriptor_type_and_implementation() {
         Err(FactoryError::Rejected)
     ));
     assert!(port.connect_calls().is_empty());
+}
+
+#[test]
+fn factory_binds_exact_provider_configuration_and_scope_digest() {
+    let kind = LocalTransportKind::UnixStream;
+    let descriptor = descriptor(kind);
+    let configured_binding = binding(
+        &descriptor,
+        kind,
+        transport_binding_id("factory-exact-entry"),
+        AuthorizedProviderScope::Realm {
+            realm_id: descriptor.placement.realm_id().clone(),
+        },
+        fingerprint(0x35),
+        generation(8),
+    );
+    let port = Arc::new(FakeEndpointPort::default());
+    let factory =
+        LocalTransportFactory::unix_stream(port.clone(), vec![configured_binding.clone()])
+            .expect("valid exact factory");
+
+    let mut wrong_scope_digest = descriptor.clone();
+    wrong_scope_digest.configured_scope_digest = fingerprint(0x36);
+    assert!(matches!(
+        factory.construct(&wrong_scope_digest),
+        Err(FactoryError::Rejected)
+    ));
+    let mixed_scope_binding = binding(
+        &wrong_scope_digest,
+        kind,
+        transport_binding_id("factory-mixed-scope"),
+        AuthorizedProviderScope::Realm {
+            realm_id: wrong_scope_digest.placement.realm_id().clone(),
+        },
+        fingerprint(0x38),
+        generation(9),
+    );
+    assert!(matches!(
+        LocalTransportFactory::unix_stream(
+            Arc::new(FakeEndpointPort::default()),
+            vec![configured_binding.clone(), mixed_scope_binding],
+        ),
+        Err(LocalTransportFactoryError::BindingDescriptorMismatch)
+    ));
+
+    let mut wrong_configuration = descriptor.clone();
+    wrong_configuration.configuration_schema_fingerprint = fingerprint(0x37);
+    assert!(matches!(
+        factory.construct(&wrong_configuration),
+        Err(FactoryError::Rejected)
+    ));
+
+    let mut wrong_generation = descriptor.clone();
+    wrong_generation.registry_generation = generation(81);
+    assert!(matches!(
+        factory.construct(&wrong_generation),
+        Err(FactoryError::Rejected)
+    ));
+
+    let mut wrong_provider = descriptor;
+    wrong_provider.provider_id =
+        ProviderId::parse("fffffffffffffffffffa").expect("valid other provider");
+    assert!(matches!(
+        factory.construct(&wrong_provider),
+        Err(FactoryError::Rejected)
+    ));
+    assert!(port.connect_calls().is_empty());
+
+    assert!(matches!(
+        LocalTransportProvider::new(
+            wrong_scope_digest,
+            kind,
+            vec![configured_binding],
+            Arc::new(FakeEndpointPort::default()),
+        ),
+        Err(LocalTransportConfigurationError::BindingMismatch)
+    ));
 }
 
 #[test]
@@ -787,6 +956,7 @@ async fn propagates_operation_ids_through_connect_inspect_and_close() {
         harness.port.close_calls()[0].operation_id.as_str(),
         "operation-close"
     );
+    assert_eq!(harness.port.connection_closes.load(Ordering::Acquire), 1);
 }
 
 #[tokio::test]
@@ -1005,6 +1175,27 @@ async fn dropping_connect_future_cancels_injected_connector() {
 }
 
 #[tokio::test]
+async fn invalid_post_connect_output_rolls_back_owned_connection_exactly_once() {
+    let harness = Harness::new(LocalTransportKind::UnixStream);
+    let closes = harness.port.connection_closes.clone();
+    harness.port.update(|behavior| {
+        behavior.connect_operation_id =
+            Some(OperationId::parse("substituted-operation").expect("valid operation id"));
+    });
+
+    assert_eq!(
+        connect(&harness, "rollback-connect")
+            .await
+            .expect_err("substituted connector envelope rejected")
+            .kind,
+        ProviderFailureKind::InvariantViolation
+    );
+    assert_eq!(closes.load(Ordering::Acquire), 1);
+    drop(harness);
+    assert_eq!(closes.load(Ordering::Acquire), 1);
+}
+
+#[tokio::test]
 async fn rejects_substituted_identity_and_generation_evidence() {
     for (identity, generation_override, expected_kind) in [
         (
@@ -1159,6 +1350,329 @@ async fn inspect_closed_releases_handle_and_revoke_is_idempotent() {
     );
 }
 
+#[tokio::test]
+async fn production_port_adapts_every_owned_transport_and_closes_idempotently() {
+    for (index, kind) in KINDS.into_iter().enumerate() {
+        let identity = fingerprint(0xa0 + u8::try_from(index).expect("small index"));
+        let endpoint_generation = generation(100 + u64::try_from(index).expect("small index"));
+        let (descriptor, _peer, responder): (
+            OwnedEndpointDescriptor,
+            Option<Box<dyn Send>>,
+            Option<thread::JoinHandle<()>>,
+        ) = match kind {
+            LocalTransportKind::UnixSeqpacket => {
+                let (socket, peer) = UnixDatagram::pair().expect("packet socket pair");
+                socket
+                    .set_nonblocking(true)
+                    .expect("nonblocking packet endpoint");
+                (
+                    OwnedEndpointDescriptor::from_pre_authorized(
+                        kind,
+                        OwnedFd::from(socket),
+                        identity.clone(),
+                        endpoint_generation,
+                    ),
+                    Some(Box::new(peer)),
+                    None,
+                )
+            }
+            LocalTransportKind::CloudHypervisorVsock => {
+                let (socket, mut peer) = UnixStream::pair().expect("CH stream pair");
+                socket
+                    .set_nonblocking(true)
+                    .expect("nonblocking CH endpoint");
+                let responder = thread::spawn(move || {
+                    let mut line = Vec::new();
+                    let mut byte = [0_u8; 1];
+                    loop {
+                        peer.read_exact(&mut byte).expect("read CONNECT byte");
+                        line.push(byte[0]);
+                        if byte[0] == b'\n' {
+                            break;
+                        }
+                    }
+                    assert_eq!(line, b"CONNECT 14318\n");
+                    peer.write_all(b"OK 7\n").expect("write bounded CH ack");
+                });
+                (
+                    OwnedEndpointDescriptor::from_pre_authorized_cloud_hypervisor(
+                        OwnedFd::from(socket),
+                        CloudHypervisorVsockPort::new(14_318).expect("nonzero CH port"),
+                        identity.clone(),
+                        endpoint_generation,
+                    ),
+                    None,
+                    Some(responder),
+                )
+            }
+            LocalTransportKind::UnixStream | LocalTransportKind::NativeVsock => {
+                let (socket, peer) = UnixStream::pair().expect("stream socket pair");
+                socket
+                    .set_nonblocking(true)
+                    .expect("nonblocking stream endpoint");
+                (
+                    OwnedEndpointDescriptor::from_pre_authorized(
+                        kind,
+                        OwnedFd::from(socket),
+                        identity.clone(),
+                        endpoint_generation,
+                    ),
+                    Some(Box::new(peer)),
+                    None,
+                )
+            }
+        };
+        let resolver = Arc::new(RejectingResolver::default());
+        let port = TokioLocalEndpointPort::new(resolver.clone());
+        let operation_id = format!("production-owned-{index}");
+        let connection = port
+            .connect(endpoint_connect_request(
+                kind,
+                &operation_id,
+                EndpointSource::owned(descriptor),
+                identity.clone(),
+                endpoint_generation,
+                Duration::from_secs(1),
+            ))
+            .await
+            .expect("owned production endpoint connects");
+        assert_eq!(connection.operation_id.as_str(), operation_id);
+        assert_eq!(connection.identity, identity);
+        assert_eq!(connection.generation, endpoint_generation);
+        assert_eq!(connection.kind, kind);
+        assert_eq!(connection.capabilities, kind.capability_profile());
+        assert_eq!(connection.reachability, ReachabilityEvidence::ReachableOnly);
+        assert!(connection.owned().is_open());
+        assert_eq!(resolver.calls.load(Ordering::Acquire), 0);
+
+        let inspect = port
+            .inspect(
+                EndpointInspectRequest {
+                    operation_id: OperationId::parse(format!("inspect-{index}"))
+                        .expect("valid inspect operation"),
+                    handle_id: connection.handle_id.clone(),
+                    binding_id: connection.binding_id.clone(),
+                    expected_identity: identity.clone(),
+                    expected_generation: endpoint_generation,
+                    kind,
+                    capabilities: kind.capability_profile(),
+                    deadline: Duration::from_secs(1),
+                },
+                connection.owned(),
+            )
+            .await
+            .expect("owned endpoint inspects");
+        assert_eq!(inspect.state, EndpointObservationState::Connected);
+
+        let close_request = EndpointCloseRequest {
+            operation_id: OperationId::parse(format!("close-{index}"))
+                .expect("valid close operation"),
+            handle_id: connection.handle_id.clone(),
+            binding_id: connection.binding_id.clone(),
+            expected_identity: identity,
+            expected_generation: endpoint_generation,
+            kind,
+            deadline: Duration::from_secs(1),
+        };
+        assert_eq!(
+            port.close(close_request.clone(), connection.owned())
+                .await
+                .expect("first close succeeds")
+                .state,
+            EndpointCloseState::Closed
+        );
+        assert_eq!(
+            port.close(close_request, connection.owned())
+                .await
+                .expect("repeat close succeeds")
+                .state,
+            EndpointCloseState::AlreadyClosed
+        );
+        assert!(!connection.owned().is_open());
+        if let Some(responder) = responder {
+            responder.join().expect("CH responder completes");
+        }
+    }
+}
+
+#[tokio::test]
+async fn production_resolver_accepts_only_opaque_capabilities_and_propagates_operation_id() {
+    for use_lease in [false, true] {
+        let (socket, _peer) = UnixStream::pair().expect("resolver stream pair");
+        socket
+            .set_nonblocking(true)
+            .expect("nonblocking resolver endpoint");
+        let identity = fingerprint(if use_lease { 0xb1 } else { 0xb0 });
+        let endpoint_generation = generation(if use_lease { 111 } else { 110 });
+        let descriptor = OwnedEndpointDescriptor::from_pre_authorized(
+            LocalTransportKind::UnixStream,
+            OwnedFd::from(socket),
+            identity.clone(),
+            endpoint_generation,
+        );
+        let resolver = Arc::new(StaticResolver::new(descriptor));
+        let port = TokioLocalEndpointPort::new(resolver.clone());
+        let capability_binding = transport_binding_id(if use_lease {
+            "authorized-lease"
+        } else {
+            "verified-bundle"
+        });
+        let endpoint = if use_lease {
+            EndpointSource::lease(
+                LocalTransportKind::UnixStream,
+                EndpointLeaseId::new(capability_binding.clone()),
+            )
+        } else {
+            EndpointSource::bundle(
+                LocalTransportKind::UnixStream,
+                BundleEndpointId::new(capability_binding.clone()),
+            )
+        };
+        let operation_id = if use_lease {
+            "resolve-authorized-lease"
+        } else {
+            "resolve-verified-bundle"
+        };
+        let connection = port
+            .connect(endpoint_connect_request(
+                LocalTransportKind::UnixStream,
+                operation_id,
+                endpoint,
+                identity,
+                endpoint_generation,
+                Duration::from_secs(1),
+            ))
+            .await
+            .expect("opaque capability resolves");
+        let calls = resolver.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].operation_id.as_str(), operation_id);
+        assert_eq!(calls[0].kind, LocalTransportKind::UnixStream);
+        match &calls[0].capability_id {
+            EndpointCapabilityId::VerifiedBundle(id) if !use_lease => {
+                assert_eq!(id.as_binding_id(), &capability_binding);
+            }
+            EndpointCapabilityId::AuthorizedLease(id) if use_lease => {
+                assert_eq!(id.as_binding_id(), &capability_binding);
+            }
+            _ => panic!("resolver capability provenance changed"),
+        }
+        assert_eq!(connection.owned().close(), EndpointCloseState::Closed);
+    }
+}
+
+#[tokio::test]
+async fn production_resolver_identity_and_generation_are_verified_before_publication() {
+    for (identity, endpoint_generation, expected) in [
+        (
+            fingerprint(0xc1),
+            generation(120),
+            EndpointPortError::IdentityMismatch,
+        ),
+        (
+            fingerprint(0xc0),
+            generation(121),
+            EndpointPortError::GenerationMismatch,
+        ),
+    ] {
+        let (socket, _peer) = UnixStream::pair().expect("verification stream pair");
+        socket
+            .set_nonblocking(true)
+            .expect("nonblocking verification endpoint");
+        let descriptor = OwnedEndpointDescriptor::from_pre_authorized(
+            LocalTransportKind::UnixStream,
+            OwnedFd::from(socket),
+            identity,
+            endpoint_generation,
+        );
+        let resolver = Arc::new(StaticResolver::new(descriptor));
+        let port = TokioLocalEndpointPort::new(resolver);
+        let error = port
+            .connect(endpoint_connect_request(
+                LocalTransportKind::UnixStream,
+                "resolver-evidence-mismatch",
+                EndpointSource::bundle(
+                    LocalTransportKind::UnixStream,
+                    BundleEndpointId::new(transport_binding_id("resolver-evidence")),
+                ),
+                fingerprint(0xc0),
+                generation(120),
+                Duration::from_secs(1),
+            ))
+            .await
+            .expect_err("substituted resolver evidence rejected");
+        assert_eq!(error, expected);
+    }
+}
+
+#[tokio::test]
+async fn cloud_hypervisor_handshake_is_bounded_and_deadlined() {
+    let identity = fingerprint(0xd0);
+    let endpoint_generation = generation(130);
+    let (socket, mut peer) = UnixStream::pair().expect("bounded CH pair");
+    socket
+        .set_nonblocking(true)
+        .expect("nonblocking bounded CH endpoint");
+    let responder = thread::spawn(move || {
+        let mut line = [0_u8; 14];
+        peer.read_exact(&mut line).expect("read bounded CONNECT");
+        assert_eq!(&line, b"CONNECT 14318\n");
+        peer.write_all(&[b'7'; 64]).expect("write oversized ack");
+    });
+    let descriptor = OwnedEndpointDescriptor::from_pre_authorized_cloud_hypervisor(
+        OwnedFd::from(socket),
+        CloudHypervisorVsockPort::new(14_318).expect("nonzero CH port"),
+        identity.clone(),
+        endpoint_generation,
+    );
+    let port = TokioLocalEndpointPort::new(Arc::new(RejectingResolver::default()));
+    assert_eq!(
+        port.connect(endpoint_connect_request(
+            LocalTransportKind::CloudHypervisorVsock,
+            "bounded-ch-ack",
+            EndpointSource::owned(descriptor),
+            identity.clone(),
+            endpoint_generation,
+            Duration::from_secs(1),
+        ))
+        .await
+        .expect_err("oversized CH ack rejected"),
+        EndpointPortError::BoundExceeded
+    );
+    responder.join().expect("bounded CH responder completes");
+
+    let (socket, mut peer) = UnixStream::pair().expect("deadline CH pair");
+    socket
+        .set_nonblocking(true)
+        .expect("nonblocking deadline CH endpoint");
+    let responder = thread::spawn(move || {
+        let mut line = [0_u8; 14];
+        peer.read_exact(&mut line).expect("read deadline CONNECT");
+        assert_eq!(&line, b"CONNECT 14318\n");
+        thread::sleep(Duration::from_millis(50));
+    });
+    let descriptor = OwnedEndpointDescriptor::from_pre_authorized_cloud_hypervisor(
+        OwnedFd::from(socket),
+        CloudHypervisorVsockPort::new(14_318).expect("nonzero CH port"),
+        identity.clone(),
+        endpoint_generation,
+    );
+    assert_eq!(
+        port.connect(endpoint_connect_request(
+            LocalTransportKind::CloudHypervisorVsock,
+            "deadline-ch-ack",
+            EndpointSource::owned(descriptor),
+            identity,
+            endpoint_generation,
+            Duration::from_millis(5),
+        ))
+        .await
+        .expect_err("silent CH ack times out"),
+        EndpointPortError::DeadlineExpired
+    );
+    responder.join().expect("deadline CH responder completes");
+}
+
 #[test]
 fn endpoint_sources_are_opaque_or_owned_and_debug_redacted() {
     let binding_id = transport_binding_id("opaque-endpoint-id");
@@ -1180,6 +1694,8 @@ fn endpoint_sources_are_opaque_or_owned_and_debug_redacted() {
     let descriptor = OwnedEndpointDescriptor::from_pre_authorized(
         LocalTransportKind::UnixStream,
         OwnedFd::from(stream),
+        fingerprint(0x91),
+        generation(91),
     );
     let duplicate = descriptor.duplicate().expect("close-on-exec duplicate");
     drop(duplicate);

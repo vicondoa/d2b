@@ -1,4 +1,11 @@
-use std::{fmt, time::Duration};
+use std::{
+    fmt,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use d2b_contracts::v2_provider::{
@@ -41,6 +48,83 @@ impl fmt::Debug for EndpointConnectRequest {
 
 /// Successful connection evidence retained by the provider.
 #[derive(Clone)]
+pub struct EndpointConnectionMetadata {
+    pub operation_id: OperationId,
+    pub handle_id: HandleId,
+    pub binding_id: TransportBindingId,
+    pub identity: Fingerprint,
+    pub generation: Generation,
+    pub kind: LocalTransportKind,
+    pub capabilities: TransportCapabilityProfile,
+    pub reachability: ReachabilityEvidence,
+}
+
+/// Resource owned by one successfully connected endpoint.
+///
+/// `close` must perform only nonblocking release work. The wrapper invokes it
+/// exactly once, including when a connect result is rejected or cancelled
+/// before the provider can publish a handle.
+pub trait EndpointConnectionResource: Send + Sync {
+    fn close(&self);
+}
+
+struct OwnedEndpointConnectionInner {
+    resource: Arc<dyn EndpointConnectionResource>,
+    closed: AtomicBool,
+}
+
+impl OwnedEndpointConnectionInner {
+    fn close_once(&self) -> EndpointCloseState {
+        if self
+            .closed
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            self.resource.close();
+            EndpointCloseState::Closed
+        } else {
+            EndpointCloseState::AlreadyClosed
+        }
+    }
+}
+
+impl Drop for OwnedEndpointConnectionInner {
+    fn drop(&mut self) {
+        let _ = self.close_once();
+    }
+}
+
+/// Cloneable RAII ownership token for a connected endpoint.
+#[derive(Clone)]
+pub struct OwnedEndpointConnection(Arc<OwnedEndpointConnectionInner>);
+
+impl OwnedEndpointConnection {
+    pub fn new(resource: Arc<dyn EndpointConnectionResource>) -> Self {
+        Self(Arc::new(OwnedEndpointConnectionInner {
+            resource,
+            closed: AtomicBool::new(false),
+        }))
+    }
+
+    pub fn close(&self) -> EndpointCloseState {
+        self.0.close_once()
+    }
+
+    pub fn is_open(&self) -> bool {
+        !self.0.closed.load(Ordering::Acquire)
+    }
+}
+
+impl fmt::Debug for OwnedEndpointConnection {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("OwnedEndpointConnection")
+            .field("open", &self.is_open())
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone)]
 pub struct EndpointConnection {
     pub operation_id: OperationId,
     pub handle_id: HandleId,
@@ -50,6 +134,27 @@ pub struct EndpointConnection {
     pub kind: LocalTransportKind,
     pub capabilities: TransportCapabilityProfile,
     pub reachability: ReachabilityEvidence,
+    owned: OwnedEndpointConnection,
+}
+
+impl EndpointConnection {
+    pub fn new(metadata: EndpointConnectionMetadata, owned: OwnedEndpointConnection) -> Self {
+        Self {
+            operation_id: metadata.operation_id,
+            handle_id: metadata.handle_id,
+            binding_id: metadata.binding_id,
+            identity: metadata.identity,
+            generation: metadata.generation,
+            kind: metadata.kind,
+            capabilities: metadata.capabilities,
+            reachability: metadata.reachability,
+            owned,
+        }
+    }
+
+    pub fn owned(&self) -> &OwnedEndpointConnection {
+        &self.owned
+    }
 }
 
 impl fmt::Debug for EndpointConnection {
@@ -213,10 +318,12 @@ pub trait LocalEndpointPort: Send + Sync {
     async fn inspect(
         &self,
         request: EndpointInspectRequest,
+        connection: &OwnedEndpointConnection,
     ) -> Result<EndpointObservation, EndpointPortError>;
 
     async fn close(
         &self,
         request: EndpointCloseRequest,
+        connection: &OwnedEndpointConnection,
     ) -> Result<EndpointCloseResult, EndpointPortError>;
 }

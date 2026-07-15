@@ -10,9 +10,9 @@ use d2b_contracts::{
 use d2b_provider::{FactoryError, ProviderFactory, ProviderInstance};
 
 use crate::{
-    LocalEndpointPort, LocalTransportClock, LocalTransportKind, LocalTransportLimits,
-    LocalTransportProvider, MAX_ACTIVE_LOCAL_TRANSPORTS, MAX_LOCAL_TRANSPORT_BINDINGS,
-    SystemTransportClock, TransportBinding,
+    LocalEndpointPort, LocalEndpointResolver, LocalTransportClock, LocalTransportKind,
+    LocalTransportLimits, LocalTransportProvider, MAX_ACTIVE_LOCAL_TRANSPORTS,
+    MAX_LOCAL_TRANSPORT_BINDINGS, SystemTransportClock, TokioLocalEndpointPort, TransportBinding,
 };
 
 pub const MAX_LOCAL_TRANSPORT_FACTORY_PROVIDERS: usize = MAX_PROVIDER_REGISTRY_ENTRIES;
@@ -25,6 +25,7 @@ pub enum LocalTransportFactoryError {
     BindingLimit,
     DuplicateBinding,
     BindingKindMismatch,
+    BindingDescriptorMismatch,
 }
 
 impl fmt::Display for LocalTransportFactoryError {
@@ -36,6 +37,9 @@ impl fmt::Display for LocalTransportFactoryError {
             Self::BindingLimit => "local transport factory binding limit exceeded",
             Self::DuplicateBinding => "local transport factory has a duplicate binding",
             Self::BindingKindMismatch => "local transport factory binding kind mismatch",
+            Self::BindingDescriptorMismatch => {
+                "local transport factory binding descriptor mismatch"
+            }
         })
     }
 }
@@ -89,11 +93,25 @@ impl LocalTransportFactory {
         Self::new(LocalTransportKind::UnixStream, endpoint_port, bindings)
     }
 
+    pub fn unix_stream_with_resolver(
+        resolver: Arc<dyn LocalEndpointResolver>,
+        bindings: impl IntoIterator<Item = TransportBinding>,
+    ) -> Result<Self, LocalTransportFactoryError> {
+        Self::with_resolver(LocalTransportKind::UnixStream, resolver, bindings)
+    }
+
     pub fn unix_seqpacket(
         endpoint_port: Arc<dyn LocalEndpointPort>,
         bindings: impl IntoIterator<Item = TransportBinding>,
     ) -> Result<Self, LocalTransportFactoryError> {
         Self::new(LocalTransportKind::UnixSeqpacket, endpoint_port, bindings)
+    }
+
+    pub fn unix_seqpacket_with_resolver(
+        resolver: Arc<dyn LocalEndpointResolver>,
+        bindings: impl IntoIterator<Item = TransportBinding>,
+    ) -> Result<Self, LocalTransportFactoryError> {
+        Self::with_resolver(LocalTransportKind::UnixSeqpacket, resolver, bindings)
     }
 
     pub fn native_vsock(
@@ -103,6 +121,13 @@ impl LocalTransportFactory {
         Self::new(LocalTransportKind::NativeVsock, endpoint_port, bindings)
     }
 
+    pub fn native_vsock_with_resolver(
+        resolver: Arc<dyn LocalEndpointResolver>,
+        bindings: impl IntoIterator<Item = TransportBinding>,
+    ) -> Result<Self, LocalTransportFactoryError> {
+        Self::with_resolver(LocalTransportKind::NativeVsock, resolver, bindings)
+    }
+
     pub fn cloud_hypervisor_vsock(
         endpoint_port: Arc<dyn LocalEndpointPort>,
         bindings: impl IntoIterator<Item = TransportBinding>,
@@ -110,6 +135,25 @@ impl LocalTransportFactory {
         Self::new(
             LocalTransportKind::CloudHypervisorVsock,
             endpoint_port,
+            bindings,
+        )
+    }
+
+    pub fn cloud_hypervisor_vsock_with_resolver(
+        resolver: Arc<dyn LocalEndpointResolver>,
+        bindings: impl IntoIterator<Item = TransportBinding>,
+    ) -> Result<Self, LocalTransportFactoryError> {
+        Self::with_resolver(LocalTransportKind::CloudHypervisorVsock, resolver, bindings)
+    }
+
+    pub fn with_resolver(
+        kind: LocalTransportKind,
+        resolver: Arc<dyn LocalEndpointResolver>,
+        bindings: impl IntoIterator<Item = TransportBinding>,
+    ) -> Result<Self, LocalTransportFactoryError> {
+        Self::new(
+            kind,
+            Arc::new(TokioLocalEndpointPort::new(resolver)),
             bindings,
         )
     }
@@ -135,6 +179,13 @@ impl LocalTransportFactory {
                 return Err(LocalTransportFactoryError::ProviderLimit);
             }
             let provider_bindings = grouped.entry(provider_id).or_default();
+            if provider_bindings.values().next().is_some_and(|configured| {
+                configured.provider_generation() != binding.provider_generation()
+                    || configured.configuration_fingerprint() != binding.configuration_fingerprint()
+                    || configured.configured_scope_digest() != binding.configured_scope_digest()
+            }) {
+                return Err(LocalTransportFactoryError::BindingDescriptorMismatch);
+            }
             if provider_bindings.contains_key(binding.binding_id()) {
                 return Err(LocalTransportFactoryError::DuplicateBinding);
             }
@@ -185,6 +236,16 @@ impl ProviderFactory for LocalTransportFactory {
         let bindings = self
             .bindings
             .get(&descriptor.provider_id)
+            .filter(|bindings| {
+                bindings.iter().all(|binding| {
+                    binding.provider_id() == &descriptor.provider_id
+                        && binding.provider_generation() == descriptor.registry_generation
+                        && binding.configuration_fingerprint()
+                            == &descriptor.configuration_schema_fingerprint
+                        && binding.configured_scope_digest() == &descriptor.configured_scope_digest
+                        && binding.kind() == self.kind
+                })
+            })
             .ok_or(FactoryError::Rejected)?
             .clone();
         let provider = LocalTransportProvider::with_clock_and_limits(

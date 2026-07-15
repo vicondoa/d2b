@@ -372,15 +372,9 @@ impl LocalTransportProvider {
         let now = self.clock.now_unix_ms();
         let values = ProviderValues::new(&self.descriptor, now)
             .map_err(|_| self.failure(&request.context, now, FailureClass::Invariant))?;
-        // The shared contract currently validates transport.connect as
-        // no-input. Authorization above requires the stricter opaque binding;
-        // only the already-validated copy is normalized for the canonical
-        // response builder.
-        let mut canonical_request = request.clone();
-        canonical_request.input = ProviderOperationInput::NoInput;
         let handle = values
             .handle_from_request(
-                &canonical_request,
+                request,
                 handle_id.clone(),
                 values.provider_owner(request.target.realm_id()),
                 binding.endpoint_generation(),
@@ -445,24 +439,29 @@ impl LocalTransportProvider {
             capabilities: active.connection.capabilities,
             deadline: budget,
         };
-        let observation =
-            match tokio::time::timeout(budget, self.endpoint_port.inspect(port_request)).await {
-                Ok(Ok(observation)) => observation,
-                Ok(Err(error)) => {
-                    return Err(self.failure(
-                        &request.context,
-                        self.clock.now_unix_ms(),
-                        FailureClass::from(error),
-                    ));
-                }
-                Err(_) => {
-                    return Err(self.denial(
-                        &request.context,
-                        self.clock.now_unix_ms(),
-                        RequestDenial::Deadline,
-                    ));
-                }
-            };
+        let observation = match tokio::time::timeout(
+            budget,
+            self.endpoint_port
+                .inspect(port_request, active.connection.owned()),
+        )
+        .await
+        {
+            Ok(Ok(observation)) => observation,
+            Ok(Err(error)) => {
+                return Err(self.failure(
+                    &request.context,
+                    self.clock.now_unix_ms(),
+                    FailureClass::from(error),
+                ));
+            }
+            Err(_) => {
+                return Err(self.denial(
+                    &request.context,
+                    self.clock.now_unix_ms(),
+                    RequestDenial::Deadline,
+                ));
+            }
+        };
         if !observation_envelope_matches(&observation, request, &active) {
             return Err(self.failure(
                 &request.context,
@@ -518,6 +517,7 @@ impl LocalTransportProvider {
             ),
         };
         if observation.state == EndpointObservationState::Closed {
+            let _ = active.connection.owned().close();
             self.remove_if_same(&handle_id, &active.connection).await;
         }
         result
@@ -601,7 +601,7 @@ impl LocalTransportProvider {
             };
             let close = self
                 .endpoint_port
-                .close(port_request)
+                .close(port_request, active.connection.owned())
                 .await
                 .map_err(|error| {
                     self.failure(
@@ -634,7 +634,9 @@ impl LocalTransportProvider {
                     FailureClass::GenerationMismatch,
                 ));
             }
-            closed_any |= close.state == EndpointCloseState::Closed;
+            let owned_close = active.connection.owned().close();
+            closed_any |= close.state == EndpointCloseState::Closed
+                || owned_close == EndpointCloseState::Closed;
             self.remove_if_same(&handle_id, &active.connection).await;
         }
         let state = if newly_revoked || closed_any {
@@ -678,6 +680,7 @@ impl LocalTransportProvider {
             || binding.provider_id() != &self.descriptor.provider_id
             || binding.provider_generation() != self.descriptor.registry_generation
             || binding.configuration_fingerprint() != &request.expected_configuration_fingerprint
+            || binding.configured_scope_digest() != &self.descriptor.configured_scope_digest
             || binding.kind() != self.kind
         {
             return Err(RequestDenial::Unauthorized);
@@ -1035,6 +1038,7 @@ fn validate_configured_binding(
     if binding.provider_id() != &descriptor.provider_id
         || binding.provider_generation() != descriptor.registry_generation
         || binding.configuration_fingerprint() != &descriptor.configuration_schema_fingerprint
+        || binding.configured_scope_digest() != &descriptor.configured_scope_digest
         || binding.scope().realm_id() != descriptor.placement.realm_id()
         || binding.kind() != kind
         || binding.capabilities() != kind.capability_profile()
