@@ -114,6 +114,8 @@ pub mod exec_session_real;
 pub mod guest_control_bridge;
 pub mod guest_control_health;
 pub mod guest_control_vsock;
+pub mod provider_effects;
+pub mod provider_registry;
 pub mod realm_access_resolver;
 pub mod supervisor;
 pub mod terminal_session;
@@ -575,6 +577,10 @@ struct ServerState {
     pidfd_table: Arc<PidfdTable>,
     broker_reap_log: Arc<BrokerReapLog>,
     metrics_registry: Arc<metrics::Registry>,
+    /// Canonical provider registry composed once during daemon startup. The
+    /// existing v1 request paths do not dispatch through it yet.
+    #[allow(dead_code)]
+    provider_registry: Arc<provider_registry::StartupProviderRegistry>,
     /// Daemon-side audit log for supervisor events (e.g. api-ready
     /// timeout) that are not emitted by the broker.
     daemon_audit: Arc<daemon_audit::DaemonAuditLog>,
@@ -1353,6 +1359,13 @@ fn gateway_display_config_error(detail: impl Into<String>) -> TypedError {
 pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     let mut config = load_config(&options.config_path)?;
     apply_overrides(&mut config, &options);
+    let provider_registry = Arc::new(
+        provider_registry::startup_registry_for_current_bundle().map_err(|error| {
+            TypedError::InternalConfig {
+                detail: format!("first-party provider registry composition failed: {error}"),
+            }
+        })?,
+    );
     let notify_socket = std::env::var_os("NOTIFY_SOCKET");
 
     // v1.1.1 runtime pidfs self-probe: refuse startup on kernels
@@ -1481,6 +1494,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         pidfd_table,
         broker_reap_log,
         metrics_registry: Arc::new(crate::metrics::Registry::new()),
+        provider_registry,
         exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
             crate::exec_session::ExecSessionCaps::default(),
         )),
@@ -3979,6 +3993,7 @@ mod workload_observability_tests {
             broker_reap_log,
             metrics_registry: Arc::new(metrics::Registry::new()),
             daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::no_op()),
+            provider_registry: Arc::new(crate::provider_registry::StartupProviderRegistry::Empty),
             exec_sessions: Arc::new(exec_session::SessionTable::new(
                 exec_session::ExecSessionCaps::default(),
             )),
@@ -19601,6 +19616,7 @@ mod public_status_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(metrics::Registry::new()),
+            provider_registry: Arc::new(crate::provider_registry::StartupProviderRegistry::Empty),
             exec_sessions: Arc::new(exec_session::SessionTable::new(
                 exec_session::ExecSessionCaps::default(),
             )),
@@ -22512,6 +22528,7 @@ mod detached_exec_routing_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(metrics::Registry::new()),
+            provider_registry: Arc::new(crate::provider_registry::StartupProviderRegistry::Empty),
             exec_sessions: Arc::new(exec_session::SessionTable::new(caps)),
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
@@ -23227,6 +23244,7 @@ mod accept_loop_concurrency_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(metrics::Registry::new()),
+            provider_registry: Arc::new(crate::provider_registry::StartupProviderRegistry::Empty),
             exec_sessions: Arc::new(exec_session::SessionTable::new(
                 exec_session::ExecSessionCaps::default(),
             )),
@@ -23805,6 +23823,7 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
+            provider_registry: Arc::new(crate::provider_registry::StartupProviderRegistry::Empty),
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
@@ -23843,6 +23862,7 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
+            provider_registry: Arc::new(crate::provider_registry::StartupProviderRegistry::Empty),
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
@@ -25936,6 +25956,7 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
+            provider_registry: Arc::new(crate::provider_registry::StartupProviderRegistry::Empty),
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
@@ -26160,6 +26181,7 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
+            provider_registry: Arc::new(crate::provider_registry::StartupProviderRegistry::Empty),
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
@@ -26418,6 +26440,7 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
+            provider_registry: Arc::new(crate::provider_registry::StartupProviderRegistry::Empty),
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
@@ -28312,6 +28335,7 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
+            provider_registry: Arc::new(crate::provider_registry::StartupProviderRegistry::Empty),
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
@@ -29247,6 +29271,7 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
+            provider_registry: Arc::new(crate::provider_registry::StartupProviderRegistry::Empty),
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
@@ -29372,6 +29397,7 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
+            provider_registry: Arc::new(crate::provider_registry::StartupProviderRegistry::Empty),
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),

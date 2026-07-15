@@ -32,3 +32,57 @@ and the production registry explicitly registers its live capabilities.
 The Azure VM provider reservations remain unavailable to production
 registries. A later accepted decision is required before either crate may make
 live SDK calls or advertise Azure VM support.
+
+## Production composition
+
+`d2bd` owns one canonical provider-registry value for its full process
+lifetime. Startup accepts a typed descriptor list and an exact configuration
+binding for every descriptor, validates the complete transaction, constructs
+instances with each implementation crate's public factory, and then publishes
+the registry. Duplicate or missing bindings, descriptor/factory mismatches,
+stale generations, scope or placement mismatches, unavailable effect mappings,
+and non-dispatchable capabilities abort startup without publishing a partial
+registry. The registry is not reconstructed per request.
+
+The host composer recognizes these in-process implementations:
+
+| Axis | Implementations |
+| --- | --- |
+| Runtime | `cloud-hypervisor`, `qemu-media` |
+| Transport | `unix-stream`, `unix-seqpacket`, `native-vsock`, `cloud-hypervisor-vsock` |
+| Substrate | `nixos`, `linux` |
+| Display | `wayland` |
+| Network | `local-realm` |
+| Storage | `local` |
+| Device | `host-mediated` |
+| Audio | `pipewire-vhost-user` |
+| Observability | `local` |
+
+Daemon effect adapters bind each exact descriptor to semantic provider ports.
+Those ports accept generated opaque identifiers and are the only seam allowed
+to reach existing daemon and host lifecycle behavior. A descriptor without a
+generated mapping is unavailable and is not registered; there is no no-op
+success path, shell command, free-form argument bridge, or provider-to-broker
+dependency.
+
+The current bundle contract declares no canonical v2 provider descriptors or
+generated effect mappings. Consequently the startup-owned registry is
+explicitly empty today, and existing v1 runtime routing remains authoritative.
+Adding a descriptor without its exact configuration and effect dependencies
+will fail the registry transaction. A later routing cutover will consume this
+registry rather than changing current v1 behavior implicitly.
+
+## Process placement
+
+Credential and cloud transport authority stays out of the host registry:
+
+- `systemd-user`, Azure Container Apps, and Azure Relay are constructed only by
+  the generic agent composer with ports supplied by the co-located agent.
+- Entra and managed-identity credential providers are composed only in their
+  exact provider-agent process. Credential bytes never enter `d2bd`.
+- Secret Service composition belongs to `d2b-userd`; the host daemon has no
+  Secret Service provider dependency.
+- Both Azure VM implementation IDs are rejected before any factory or fake SDK
+  construction. Neither Azure VM crate is in a production dependency graph.
+- `RuntimeExecute` is not dispatchable and cannot be advertised by a live
+  registry entry.

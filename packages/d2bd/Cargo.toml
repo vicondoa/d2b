@@ -21,7 +21,19 @@ parking_lot = { version = "0.12", features = ["arc_lock"] }
 rustix = { workspace = true }
 d2b-core = { workspace = true }
 d2b-host = { workspace = true }
-d2b-contracts = { workspace = true, features = ["unsafe-local"] }
+d2b-contracts = { workspace = true, features = ["unsafe-local", "v2-provider"] }
+d2b-provider = { workspace = true, default-features = false }
+d2b-provider-audio-pipewire-vhost-user = { workspace = true, default-features = false }
+d2b-provider-device-host-mediated = { workspace = true, default-features = false }
+d2b-provider-display-wayland = { workspace = true, default-features = false }
+d2b-provider-network-local-realm = { workspace = true, default-features = false }
+d2b-provider-observability-local = { workspace = true, default-features = false }
+d2b-provider-runtime-azure-container-apps = { workspace = true, default-features = false }
+d2b-provider-runtime-local = { workspace = true, default-features = false }
+d2b-provider-storage-local = { workspace = true, default-features = false }
+d2b-provider-substrate-host = { workspace = true, default-features = false }
+d2b-provider-transport-azure-relay = { workspace = true, default-features = false }
+d2b-provider-transport-local = { workspace = true, default-features = false }
 # v2 constellation contract crates (ADR 0032). The peer-module skeletons in
 # src/realm_stubs.rs wire this trait surface; they are compile-only
 # and NOT called from the running daemon (zero behavior change).
@@ -30,6 +42,8 @@ d2b-realm-provider = { workspace = true }
 d2b-realm-router = { workspace = true }
 d2b-gateway = { workspace = true }
 d2b-gateway-runtime = { workspace = true }
+# Retained until the v1 ACA and Relay call paths are routed through the
+# canonical provider registry.
 d2b-provider-aca = { workspace = true }
 d2b-provider-relay = { workspace = true }
 protobuf.workspace = true
@@ -52,5 +66,6 @@ uzers = "0.12"
 
 [dev-dependencies]
 d2b-core = { workspace = true, features = ["test-support"] }
+d2b-provider-toolkit = { workspace = true }
 regex = "1"
 tempfile = "3"

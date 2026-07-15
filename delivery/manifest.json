@@ -994,6 +994,231 @@
       "path": "packages/d2b-azure-vm-fake-sdk/src/lib.rs"
     },
     {
+      "name": "w4-integration-cargo-lock",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/Cargo.lock"
+    },
+    {
+      "name": "w4-integration-cargo-toml",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/Cargo.toml"
+    },
+    {
+      "name": "w4-integration-d2b-azure-vm-fake-sdk-src-binding-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-azure-vm-fake-sdk/src/binding.rs"
+    },
+    {
+      "name": "w4-integration-d2b-azure-vm-fake-sdk-src-client-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-azure-vm-fake-sdk/src/client.rs"
+    },
+    {
+      "name": "w4-integration-d2b-azure-vm-fake-sdk-src-tests-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-azure-vm-fake-sdk/src/tests.rs"
+    },
+    {
+      "name": "w4-integration-d2b-azure-vm-fake-sdk-src-types-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-azure-vm-fake-sdk/src/types.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-audio-pipewire-vhost-user-src-tests-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-audio-pipewire-vhost-user/src/tests.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-credential-entra-src-tests-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-credential-entra/src/tests.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-credential-managed-identity-src-tests-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-credential-managed-identity/src/tests.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-credential-secret-service-src-tests-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-credential-secret-service/src/tests.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-device-host-mediated-src-tests-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-device-host-mediated/src/tests.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-infrastructure-azure-vm-src-tests-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-infrastructure-azure-vm/src/tests.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-observability-local-src-tests-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-observability-local/src/tests.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-runtime-azure-container-apps-src-control-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-runtime-azure-container-apps/src/control.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-runtime-azure-container-apps-src-factory-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-runtime-azure-container-apps/src/factory.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-runtime-azure-container-apps-src-provider-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-runtime-azure-container-apps/src/provider.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-runtime-azure-container-apps-src-tests-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-runtime-azure-container-apps/src/tests.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-runtime-azure-container-apps-src-types-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-runtime-azure-container-apps/src/types.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-runtime-azure-vm-src-tests-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-runtime-azure-vm/src/tests.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-runtime-local-src-config-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-runtime-local/src/config.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-runtime-local-src-control-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-runtime-local/src/control.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-runtime-local-src-factory-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-runtime-local/src/factory.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-runtime-local-src-provider-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-runtime-local/src/provider.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-runtime-local-tests-provider-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-runtime-local/tests/provider.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-substrate-host-src-factory-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-substrate-host/src/factory.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-substrate-host-src-model-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-substrate-host/src/model.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-substrate-host-src-port-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-substrate-host/src/port.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-substrate-host-src-provider-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-substrate-host/src/provider.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-substrate-host-tests-provider-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-substrate-host/tests/provider.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-transport-azure-relay-src-factory-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-transport-azure-relay/src/factory.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-transport-azure-relay-src-port-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-transport-azure-relay/src/port.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-transport-azure-relay-src-production-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-transport-azure-relay/src/production.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-transport-azure-relay-src-production-tests-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-transport-azure-relay/src/production_tests.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-transport-azure-relay-src-provider-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-transport-azure-relay/src/provider.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-transport-azure-relay-src-tests-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-transport-azure-relay/src/tests.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-transport-local-src-binding-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-transport-local/src/binding.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-transport-local-src-connector-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-transport-local/src/connector.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-transport-local-src-factory-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-transport-local/src/factory.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-transport-local-src-production-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-transport-local/src/production.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-transport-local-src-provider-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-transport-local/src/provider.rs"
+    },
+    {
+      "name": "w4-integration-d2b-provider-transport-local-src-tests-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-transport-local/src/tests.rs"
+    },
+    {
+      "name": "w4-integration-d2bd-cargo-toml",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2bd/Cargo.toml"
+    },
+    {
+      "name": "w4-integration-d2bd-src-lib-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2bd/src/lib.rs"
+    },
+    {
+      "name": "w4-integration-d2bd-src-provider-effects-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2bd/src/provider_effects.rs"
+    },
+    {
+      "name": "w4-integration-d2bd-src-provider-registry-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2bd/src/provider_registry.rs"
+    },
+    {
       "name": "w4-provider-audio-pipewire-vhost-user-cargo",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2b-provider-audio-pipewire-vhost-user/Cargo.toml"

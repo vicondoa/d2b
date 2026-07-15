@@ -50,6 +50,11 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Added a startup-owned, transactional composition path for first-party
+  providers with exact descriptor/configuration/effect bindings, strict
+  host-versus-agent placement, explicit Azure VM and `RuntimeExecute`
+  rejection, and no change to existing v1 request routing while generated v2
+  mappings remain unavailable.
 - Changed observability provider queries to return a canonical bounded result
   through the provider trait, proxy, protobuf/ttrpc service, and toolkit
   adapter without dropping records or introducing free-form labels.

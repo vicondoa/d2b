@@ -985,6 +985,7 @@ name = "d2b-azure-vm-fake-sdk"
 version = "2.0.0"
 dependencies = [
  "serde",
+ "tokio",
 ]
 
 [[package]]
@@ -1258,6 +1259,7 @@ version = "2.0.0"
 dependencies = [
  "async-trait",
  "d2b-contracts",
+ "d2b-host",
  "d2b-provider",
  "d2b-provider-toolkit",
  "tokio",
@@ -1302,6 +1304,7 @@ version = "2.0.0"
 dependencies = [
  "async-trait",
  "d2b-contracts",
+ "d2b-host",
  "d2b-provider",
  "d2b-provider-toolkit",
  "tokio",
@@ -1335,7 +1338,7 @@ dependencies = [
 name = "d2b-provider-infrastructure-azure-vm"
 version = "2.0.0"
 dependencies = [
- "async-trait",
+ "d2b-azure-vm-fake-sdk",
  "d2b-contracts",
  "d2b-provider",
  "d2b-provider-toolkit",
@@ -1402,7 +1405,7 @@ dependencies = [
 name = "d2b-provider-runtime-azure-vm"
 version = "2.0.0"
 dependencies = [
- "async-trait",
+ "d2b-azure-vm-fake-sdk",
  "d2b-contracts",
  "d2b-provider",
  "d2b-provider-toolkit",
@@ -1461,10 +1464,21 @@ name = "d2b-provider-transport-azure-relay"
 version = "2.0.0"
 dependencies = [
  "async-trait",
+ "base64",
  "d2b-contracts",
  "d2b-provider",
  "d2b-provider-toolkit",
+ "futures-util",
+ "hmac",
+ "rustls",
+ "rustls-pki-types",
+ "serde_json",
+ "sha2",
  "tokio",
+ "tokio-tungstenite",
+ "urlencoding",
+ "webpki-roots 0.26.11",
+ "zeroize",
 ]
 
 [[package]]
@@ -1657,8 +1671,21 @@ dependencies = [
  "d2b-gateway",
  "d2b-gateway-runtime",
  "d2b-host",
+ "d2b-provider",
  "d2b-provider-aca",
+ "d2b-provider-audio-pipewire-vhost-user",
+ "d2b-provider-device-host-mediated",
+ "d2b-provider-display-wayland",
+ "d2b-provider-network-local-realm",
+ "d2b-provider-observability-local",
  "d2b-provider-relay",
+ "d2b-provider-runtime-azure-container-apps",
+ "d2b-provider-runtime-local",
+ "d2b-provider-storage-local",
+ "d2b-provider-substrate-host",
+ "d2b-provider-toolkit",
+ "d2b-provider-transport-azure-relay",
+ "d2b-provider-transport-local",
  "d2b-realm-core",
  "d2b-realm-provider",
  "d2b-realm-router",

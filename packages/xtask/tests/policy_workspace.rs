@@ -40,6 +40,15 @@ const W4_PROVIDER_CRATES: &[&str] = &[
     "d2b-provider-transport-local",
 ];
 const W4_SUPPORT_CRATE: &str = "d2b-azure-vm-fake-sdk";
+const PROVIDER_INTEGRATION_FILES: &[&str] = &[
+    "packages/Cargo.lock",
+    "packages/Cargo.toml",
+    "packages/d2bd/Cargo.toml",
+    "packages/d2bd/src/lib.rs",
+    "packages/d2bd/src/provider_effects.rs",
+    "packages/d2bd/src/provider_registry.rs",
+    "packages/xtask/tests/policy_workspace.rs",
+];
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -424,6 +433,170 @@ fn w4_provider_workspace_inventory_is_reserved_and_dependency_minimal() {
 }
 
 #[test]
+fn daemon_provider_composition_is_exact_startup_owned_and_credential_free() {
+    let metadata = workspace_metadata();
+    let dependencies = declared_dependencies(&metadata, "d2bd")
+        .into_iter()
+        .map(|dependency| {
+            dependency["name"]
+                .as_str()
+                .expect("dependency name")
+                .to_owned()
+        })
+        .collect::<BTreeSet<_>>();
+    for required in [
+        "d2b-provider",
+        "d2b-provider-audio-pipewire-vhost-user",
+        "d2b-provider-device-host-mediated",
+        "d2b-provider-display-wayland",
+        "d2b-provider-network-local-realm",
+        "d2b-provider-observability-local",
+        "d2b-provider-runtime-azure-container-apps",
+        "d2b-provider-runtime-local",
+        "d2b-provider-storage-local",
+        "d2b-provider-substrate-host",
+        "d2b-provider-transport-azure-relay",
+        "d2b-provider-transport-local",
+    ] {
+        assert!(
+            dependencies.contains(required),
+            "d2bd is missing first-party provider dependency {required}"
+        );
+    }
+    for forbidden in [
+        "d2b-provider-credential-entra",
+        "d2b-provider-credential-managed-identity",
+        "d2b-provider-credential-secret-service",
+        "d2b-provider-infrastructure-azure-vm",
+        "d2b-provider-runtime-azure-vm",
+    ] {
+        assert!(
+            !dependencies.contains(forbidden),
+            "d2bd must not own credential or unavailable provider {forbidden}"
+        );
+    }
+    let transitive_dependencies = transitive_package_names(&metadata, "d2bd");
+    for forbidden in [
+        "d2b-provider-credential-entra",
+        "d2b-provider-credential-managed-identity",
+        "d2b-provider-credential-secret-service",
+        "d2b-provider-infrastructure-azure-vm",
+        "d2b-provider-runtime-azure-vm",
+    ] {
+        assert!(
+            !transitive_dependencies.contains(forbidden),
+            "d2bd must not transitively acquire credential or unavailable provider {forbidden}"
+        );
+    }
+
+    let daemon = read_repo_file("packages/d2bd/src/lib.rs");
+    assert!(
+        daemon.contains("provider_registry: Arc<provider_registry::StartupProviderRegistry>")
+            && daemon.contains("provider_registry::startup_registry_for_current_bundle()")
+            && daemon.contains("provider_registry,"),
+        "the daemon must construct and retain one startup-owned provider registry"
+    );
+    assert_eq!(
+        daemon
+            .matches("provider_registry::startup_registry_for_current_bundle()")
+            .count(),
+        1,
+        "the provider registry must be constructed once at startup, not per call"
+    );
+
+    let composition = read_repo_file("packages/d2bd/src/provider_registry.rs");
+    for required in [
+        "ProviderRegistryBuilder::new",
+        "register_factory",
+        "register_constructed",
+        "provider_capabilities_are_dispatchable",
+        "LocalRuntimeProviderFactory",
+        "LocalTransportFactory",
+        "HostSubstrateProviderFactory",
+        "WaylandDisplayFactory",
+        "LocalRealmNetworkFactory",
+        "LocalStorageFactory",
+        "HostMediatedDeviceFactory",
+        "PipewireVhostUserAudioFactory",
+        "LocalObservabilityFactory",
+        "AzureContainerAppsRuntimeProviderFactory",
+        "AzureRelayProviderFactory",
+        "AzureVmForbidden",
+        "AgentProviderBinding",
+    ] {
+        assert!(
+            composition.contains(required),
+            "provider composition is missing exact integration surface {required}"
+        );
+    }
+    for binding in [
+        "LocalRuntime",
+        "LocalTransport",
+        "HostSubstrate",
+        "WaylandDisplay",
+        "LocalRealmNetwork",
+        "LocalStorage",
+        "HostMediatedDevice",
+        "PipewireVhostUserAudio",
+        "LocalObservability",
+    ] {
+        assert!(
+            composition.contains(&format!("Self::{binding}")),
+            "host provider composition is missing exact binding {binding}"
+        );
+    }
+    for constructor in [
+        "LocalRuntimeProviderFactoryEntry::new(",
+        "LocalTransportFactory::new(",
+        "HostSubstrateFactoryEntry::new(",
+        "WaylandDisplayFactory::new(",
+        "LocalRealmNetworkFactory::new(",
+        "LocalStorageFactory::new(",
+        "HostMediatedDeviceFactoryEntry::new(",
+        "PipewireVhostUserAudioFactoryEntry::new(",
+        "LocalObservabilityFactoryEntry::new(",
+    ] {
+        assert!(
+            composition.contains(constructor),
+            "host provider composition does not invoke exact constructor {constructor}"
+        );
+    }
+    assert!(
+        composition.contains("key != factory_key(descriptor)")
+            && composition.contains("instance.descriptor() != *descriptor")
+            && composition.contains("instance.capabilities() != descriptor.capabilities"),
+        "constructed instances must match the exact descriptor, factory, and capabilities"
+    );
+    assert!(
+        composition.contains("ProviderType::Infrastructure | ProviderType::Credential => false")
+            && composition.contains("SYSTEMD_USER_IMPLEMENTATION_ID | ACA_IMPLEMENTATION_ID")
+            && composition.contains("(ProviderType::Transport, AZURE_RELAY_IMPLEMENTATION_ID)"),
+        "host composition must exclude credentials and agent-only implementations"
+    );
+
+    let effects = read_repo_file("packages/d2bd/src/provider_effects.rs");
+    for forbidden in ["d2b_priv_broker", "std::process::Command", "Command::new"] {
+        assert!(
+            !effects.contains(forbidden),
+            "daemon semantic effects must not bypass typed provider ports via {forbidden}"
+        );
+    }
+    let instance = read_repo_file("packages/d2b-provider/src/instance.rs");
+    assert!(
+        instance.contains("ProviderMethod::RuntimeExecute") && instance.contains("!matches!"),
+        "RuntimeExecute must remain excluded from live provider dispatch"
+    );
+
+    let manifest = read_repo_file("packages/d2bd/Cargo.toml");
+    assert!(
+        manifest.contains("d2b-provider-aca = { workspace = true }")
+            && manifest.contains("d2b-provider-relay = { workspace = true }")
+            && manifest.contains("Retained until the v1 ACA and Relay"),
+        "legacy ACA and Relay dependencies need an explicit v1 parity boundary"
+    );
+}
+
+#[test]
 fn standalone_proofs_isolate_mixed_toolchain_targets() {
     let script = read_repo_file("tests/test-proofs.sh");
     assert!(
@@ -625,6 +798,11 @@ fn w4_provider_delivery_fingerprints_cover_every_reserved_file() {
         })
         .collect::<BTreeSet<_>>();
     expected.insert("docs/reference/v2-provider-implementations.md".to_owned());
+    expected.extend(
+        PROVIDER_INTEGRATION_FILES
+            .iter()
+            .map(|path| (*path).to_owned()),
+    );
 
     let missing = expected.difference(&actual).cloned().collect::<Vec<_>>();
     assert!(
