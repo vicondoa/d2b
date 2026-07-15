@@ -5,10 +5,9 @@ First-party provider implementations use the base-first
 owns one authority boundary and consumes the canonical `d2b-provider` traits
 and `d2b-contracts` provider DTOs.
 
-These crates are workspace reservations only: there is **no implementation yet
-until slice commits** add behavior and conformance coverage independently.
-They do not register providers, advertise capabilities, or provide fallback
-behavior.
+The workspace boundaries do not imply production availability. A provider is
+available only after its implementation and conformance coverage are complete
+and the production registry explicitly registers its live capabilities.
 
 | Crate | Ownership and scope |
 | --- | --- |
@@ -28,7 +27,7 @@ behavior.
 | `d2b-provider-substrate-host` | NixOS and Linux host checks, plans, and authorized substrate apply. |
 | `d2b-provider-transport-azure-relay` | Azure Relay connection behavior; transport authentication never grants d2b authorization. |
 | `d2b-provider-transport-local` | Unix stream, Unix seqpacket, native vsock, and Cloud Hypervisor vsock transports. |
-| `d2b-azure-vm-fake-sdk` | Serde-only fake Azure VM SDK boundary shared by later infrastructure/runtime conformance tests; it has no live Azure or network client. |
+| `d2b-azure-vm-fake-sdk` | In-process fake Azure VM SDK boundary shared by infrastructure/runtime conformance tests; it has no live Azure or network client. |
 
 The Azure VM provider reservations remain unavailable to production
 registries. A later accepted decision is required before either crate may make

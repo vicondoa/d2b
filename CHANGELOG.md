@@ -13,7 +13,7 @@ deprecations ship one minor release before removal.
 ### Added
 
 - Added default-empty, non-publishable first-party provider implementation
-  crate reservations, a serde-only Azure VM fake SDK boundary, and a
+  crate reservations, an in-process Azure VM fake SDK boundary, and a
   fail-closed workspace policy inventory for their naming and dependencies.
 - Added canonical d2b 2.0 implementations for Unix sessions, authenticated
   sessions, providers, provider tooling, state persistence, and clients.
