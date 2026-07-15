@@ -1059,6 +1059,11 @@
       "path": "packages/d2b-core/tests/bundle_resolver_runner_intent_parity.rs"
     },
     {
+      "name": "w4-integration-d2b-core-test-support-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-core/src/test_support.rs"
+    },
+    {
       "name": "w4-integration-d2b-priv-broker-runtime-rs",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2b-priv-broker/src/runtime.rs"
@@ -1344,6 +1349,11 @@
       "path": "flake.nix"
     },
     {
+      "name": "w4-integration-nixos-modules-assertions-nix",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "nixos-modules/assertions.nix"
+    },
+    {
       "name": "w4-integration-nixos-modules-bundle-artifacts-nix",
       "repository": "github.com/vicondoa/d2b",
       "path": "nixos-modules/bundle-artifacts.nix"
@@ -1359,6 +1369,11 @@
       "path": "nixos-modules/default.nix"
     },
     {
+      "name": "w4-integration-nixos-modules-processes-json-nix",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "nixos-modules/processes-json.nix"
+    },
+    {
       "name": "w4-integration-nixos-modules-provider-registry-v2-json-nix",
       "repository": "github.com/vicondoa/d2b",
       "path": "nixos-modules/provider-registry-v2-json.nix"
@@ -1367,6 +1382,11 @@
       "name": "w4-integration-realm-workloads-nix-test",
       "repository": "github.com/vicondoa/d2b",
       "path": "tests/unit/nix/cases/realm-workloads.nix"
+    },
+    {
+      "name": "w4-integration-realm-workloads-nix-test-pin",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "tests/unit/nix/pinned/common.txt"
     },
     {
       "name": "w4-integration-xtask-main-rs",

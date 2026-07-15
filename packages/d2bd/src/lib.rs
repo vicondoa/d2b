@@ -644,12 +644,14 @@ async fn activate_provider_registry(
     .map_err(|error| TypedError::InternalConfig {
         detail: format!("load provider-registry-v2 failed: {error}"),
     })?;
-    let registry =
-        provider_registry::compose_startup_registry(state, &artifact).map_err(|error| {
-            TypedError::InternalConfig {
-                detail: format!("first-party provider registry composition failed: {error}"),
-            }
-        })?;
+    let registry = provider_registry::compose_startup_registry_with_policy(
+        state,
+        &artifact,
+        verification_policy,
+    )
+    .map_err(|error| TypedError::InternalConfig {
+        detail: format!("first-party provider registry composition failed: {error}"),
+    })?;
     state
         .provider_registry
         .set(registry)
@@ -2165,7 +2167,13 @@ impl autostart::VmStarter for BrokerVmStarter {
             // `d2b vm start --apply` invocations.
             no_wait_api: true,
         };
-        match dispatch_broker_vm_start(&self.state, request) {
+        match dispatch_provider_or_broker_vm_start(
+            &self.state,
+            request,
+            BrokerCallerRole::AdminUid {
+                uid: self.state.daemon_uid,
+            },
+        ) {
             Ok(value) => {
                 // dispatch_broker_vm_start returns a JSON envelope
                 // even on logical failure (so the public verb can
@@ -3333,12 +3341,14 @@ fn dispatch_request_locked(
         // applies in d2bd; only `mutating_verb_preflight` remains
         // to emit the typed InvalidRequest / dry-run-planned envelope
         // before apply dispatch runs.
-        wire::Request::VmStart(req) => dispatch_broker_vm_start(state, req),
+        wire::Request::VmStart(req) => {
+            dispatch_provider_or_broker_vm_start(state, req, broker_caller_role_for_peer(peer))
+        }
         wire::Request::VmStop(req) => {
-            dispatch_broker_vm_stop_as(state, req, broker_caller_role_for_peer(peer))
+            dispatch_provider_or_broker_vm_stop_as(state, req, broker_caller_role_for_peer(peer))
         }
         wire::Request::VmRestart(req) => {
-            dispatch_broker_vm_restart_as(state, req, broker_caller_role_for_peer(peer))
+            dispatch_provider_or_broker_vm_restart_as(state, req, broker_caller_role_for_peer(peer))
         }
         wire::Request::Switch(req) => dispatch_broker_switch(state, req),
         wire::Request::Boot(req) => dispatch_broker_boot(state, req),
@@ -16742,6 +16752,117 @@ fn dispatch_broker_vm_stop_with_timeout_as(
 }
 
 #[cfg(test)]
+thread_local! {
+    static TEST_DIRECT_RUNTIME_FALLBACKS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn reset_test_direct_runtime_fallbacks() {
+    TEST_DIRECT_RUNTIME_FALLBACKS.set(0);
+}
+
+#[cfg(test)]
+fn test_direct_runtime_fallbacks() -> usize {
+    TEST_DIRECT_RUNTIME_FALLBACKS.get()
+}
+
+fn dispatch_provider_or_broker_vm_start(
+    state: &ServerState,
+    request: public_wire::VmLifecycleRequest,
+    caller_role: BrokerCallerRole,
+) -> Result<Value, TypedError> {
+    const VERB: &str = "vm start";
+    if let Some(response) = mutating_verb_preflight(VERB, &request.flags, Some(&request.vm)) {
+        return Ok(response);
+    }
+    match block_on_future(provider_registry::invoke_runtime_lifecycle(
+        state,
+        request.clone(),
+        caller_role,
+        d2b_contracts::v2_provider::ProviderMethod::RuntimeStart,
+    ))? {
+        provider_registry::RuntimeLifecycleInvocation::Unmapped => {
+            #[cfg(test)]
+            TEST_DIRECT_RUNTIME_FALLBACKS.set(TEST_DIRECT_RUNTIME_FALLBACKS.get() + 1);
+            dispatch_broker_vm_start(state, request)
+        }
+        provider_registry::RuntimeLifecycleInvocation::Direct(response) => Ok(response),
+        provider_registry::RuntimeLifecycleInvocation::Converged => Ok(applied_response(
+            VERB,
+            format!("vm start {}: provider already converged", request.vm),
+        )),
+    }
+}
+
+fn dispatch_provider_or_broker_vm_stop_as(
+    state: &ServerState,
+    request: public_wire::VmLifecycleRequest,
+    caller_role: BrokerCallerRole,
+) -> Result<Value, TypedError> {
+    const VERB: &str = "vm stop";
+    if let Some(response) = mutating_verb_preflight(VERB, &request.flags, Some(&request.vm)) {
+        return Ok(response);
+    }
+    match block_on_future(provider_registry::invoke_runtime_lifecycle(
+        state,
+        request.clone(),
+        caller_role.clone(),
+        d2b_contracts::v2_provider::ProviderMethod::RuntimeStop,
+    ))? {
+        provider_registry::RuntimeLifecycleInvocation::Unmapped => {
+            #[cfg(test)]
+            TEST_DIRECT_RUNTIME_FALLBACKS.set(TEST_DIRECT_RUNTIME_FALLBACKS.get() + 1);
+            dispatch_broker_vm_stop_as(state, request, caller_role)
+        }
+        provider_registry::RuntimeLifecycleInvocation::Direct(response) => Ok(response),
+        provider_registry::RuntimeLifecycleInvocation::Converged => Ok(applied_response(
+            VERB,
+            format!("vm stop {}: provider already converged", request.vm),
+        )),
+    }
+}
+
+fn dispatch_provider_or_broker_vm_restart_as(
+    state: &ServerState,
+    request: public_wire::VmLifecycleRequest,
+    caller_role: BrokerCallerRole,
+) -> Result<Value, TypedError> {
+    const VERB: &str = "vm restart";
+    if let Some(response) = mutating_verb_preflight(VERB, &request.flags, Some(&request.vm)) {
+        return Ok(response);
+    }
+    if state
+        .provider_registry()?
+        .runtime_route(&request.vm)
+        .is_none()
+    {
+        #[cfg(test)]
+        TEST_DIRECT_RUNTIME_FALLBACKS.set(TEST_DIRECT_RUNTIME_FALLBACKS.get() + 1);
+        return dispatch_broker_vm_restart_as(state, request, caller_role);
+    }
+
+    let stop_response =
+        dispatch_provider_or_broker_vm_stop_as(state, request.clone(), caller_role.clone())?;
+    if response_outcome(&stop_response) != Some("applied") {
+        return Ok(retarget_mutating_response(&stop_response, VERB));
+    }
+    let start_response = dispatch_provider_or_broker_vm_start(state, request.clone(), caller_role)?;
+    if response_outcome(&start_response) != Some("applied") {
+        return Ok(retarget_mutating_response(&start_response, VERB));
+    }
+    Ok(applied_response(
+        VERB,
+        format!(
+            "vm restart {}: {}; {}",
+            request.vm,
+            response_summary(&stop_response).unwrap_or("stop applied"),
+            response_summary(&start_response).unwrap_or("start applied"),
+        ),
+    ))
+}
+
+#[cfg(test)]
 fn dispatch_broker_vm_restart(
     state: &ServerState,
     request: public_wire::VmLifecycleRequest,
@@ -23754,7 +23875,7 @@ mod accept_loop_concurrency_tests {
 
 #[cfg(test)]
 mod broker_dispatch_tests {
-    use std::collections::VecDeque;
+    use std::collections::{BTreeMap, VecDeque};
     use std::fs::File;
     use std::io::{self, IoSlice, Read, Write};
     use std::net::TcpListener;
@@ -23788,7 +23909,9 @@ mod broker_dispatch_tests {
     };
     use d2b_contracts::types::{RoleId, VmId};
     use d2b_contracts::v2_component_session::EndpointRole;
-    use d2b_contracts::v2_identity::{ProviderType, RealmId, WorkloadId};
+    use d2b_contracts::v2_identity::{
+        ProviderType, RealmId, RealmPath as ProviderRealmPath, WorkloadId, WorkloadName,
+    };
     use d2b_contracts::v2_provider::{
         Fingerprint, Generation, ImplementationId, PROVIDER_SCHEMA_VERSION, ProviderApiVersion,
         ProviderAuthority, ProviderDescriptor, ProviderPlacement,
@@ -23805,6 +23928,7 @@ mod broker_dispatch_tests {
     use nix::unistd::close;
     use serde::Serialize;
     use serde_json::{Value, json};
+    use sha2::{Digest, Sha256};
 
     use super::provider_shutdown::GracefulVmShutdown;
     use super::supervisor::pidfd_table::{
@@ -23826,17 +23950,19 @@ mod broker_dispatch_tests {
         dispatch_broker_run_host_install, dispatch_broker_run_migrate, dispatch_broker_switch,
         dispatch_broker_test, dispatch_broker_trust, dispatch_broker_vm_restart,
         dispatch_broker_vm_start, dispatch_broker_vm_stop, dispatch_broker_vm_stop_with_timeout,
-        dispatch_request, dispatch_status, force_shutdown_generation,
-        initialized_provider_registry, load_bundle_resolver, map_shell_attach_response,
-        map_shell_detach_response, map_shell_kill_response, map_shell_list_response,
-        note_force_shutdown_request, prove_role_cgroup_empty_or_escalate, provider_registry,
-        provider_shutdown, read_activation_marker, redact_broker_dispatch_failure_for_launcher,
-        redact_broker_error_for_launcher, resolve_store_view_intent_for_vm,
+        dispatch_provider_or_broker_vm_restart_as, dispatch_provider_or_broker_vm_start,
+        dispatch_provider_or_broker_vm_stop_as, dispatch_request, dispatch_status,
+        force_shutdown_generation, initialized_provider_registry, load_bundle_resolver,
+        map_shell_attach_response, map_shell_detach_response, map_shell_kill_response,
+        map_shell_list_response, note_force_shutdown_request, prove_role_cgroup_empty_or_escalate,
+        provider_effects, provider_registry, provider_shutdown, read_activation_marker,
+        redact_broker_dispatch_failure_for_launcher, redact_broker_error_for_launcher,
+        reset_test_direct_runtime_fallbacks, resolve_store_view_intent_for_vm,
         rollback_failed_vm_start, run_provider_graceful_shutdown,
         same_vm_declared_usbip_start_claims_with_reader,
         same_vm_persisted_usbip_stop_claims_with_reader,
-        stale_qemu_media_dependency_roles_from_entries, try_acquire_activation_lock,
-        usbip_start_reconciles_synchronously, vm_start_node_mode,
+        stale_qemu_media_dependency_roles_from_entries, test_direct_runtime_fallbacks,
+        try_acquire_activation_lock, usbip_start_reconciles_synchronously, vm_start_node_mode,
     };
 
     static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
@@ -24113,6 +24239,8 @@ mod broker_dispatch_tests {
                                 "id": "cloud-hypervisor",
                                 "role": "cloud-hypervisor-runner",
                                 "unit": null,
+                                "binaryPath": "/bin/true",
+                                "argv": ["cloud-hypervisor"],
                                 "profile": minimal_role_profile("vm-vm-a-cloud-hypervisor", "d2b.slice/vm-a/cloud-hypervisor"),
                                 "readiness": []
                             }
@@ -24187,8 +24315,20 @@ mod broker_dispatch_tests {
     }
 
     fn local_runtime_provider_artifact(runner_intent_id: &str) -> ProviderRegistryV2 {
-        let realm_id = RealmId::parse("aaaaaaaaaaaaaaaaaaaa").expect("realm id");
-        let workload_id = WorkloadId::parse("ccccccccccccccccccca").expect("workload id");
+        local_runtime_provider_artifact_for(LocalRuntimeKind::CloudHypervisor, runner_intent_id)
+    }
+
+    fn local_runtime_provider_artifact_for(
+        kind: LocalRuntimeKind,
+        runner_intent_id: &str,
+    ) -> ProviderRegistryV2 {
+        let realm_id = RealmId::derive(
+            &ProviderRealmPath::parse("work.local-root").expect("provider realm path"),
+        );
+        let workload_id = WorkloadId::derive(
+            &realm_id,
+            &WorkloadName::parse("vm-a").expect("workload name"),
+        );
         let generation = Generation::new(1).expect("generation");
         let provider_id = d2b_contracts::v2_identity::ProviderId::derive(
             &realm_id,
@@ -24199,10 +24339,15 @@ mod broker_dispatch_tests {
             ))
             .expect("configured provider id"),
         );
+        let role_id = match kind {
+            LocalRuntimeKind::CloudHypervisor => "cloud-hypervisor",
+            LocalRuntimeKind::QemuMedia => "qemu-media",
+            LocalRuntimeKind::SystemdUser => panic!("systemd-user is not a host runtime"),
+        };
         let binding = LocalRuntimeProviderBindingV2 {
             realm_id: realm_id.clone(),
             workload_id,
-            vm_start_intent_id: ProviderIntentId::parse("vm-start:vm:vm-a:role:cloud-hypervisor")
+            vm_start_intent_id: ProviderIntentId::parse(format!("vm-start:vm:vm-a:role:{role_id}"))
                 .expect("VM start intent"),
             runner_intent_id: ProviderIntentId::parse(runner_intent_id).expect("runner intent"),
         };
@@ -24210,9 +24355,9 @@ mod broker_dispatch_tests {
             schema_version: PROVIDER_SCHEMA_VERSION,
             provider_id: provider_id.clone(),
             authority: ProviderAuthority::Runtime {
-                posture: LocalRuntimeKind::CloudHypervisor.authority_posture(),
+                posture: kind.authority_posture(),
             },
-            implementation_id: ImplementationId::parse(CLOUD_HYPERVISOR_IMPLEMENTATION_ID)
+            implementation_id: ImplementationId::parse(kind.implementation_id())
                 .expect("implementation id"),
             api_version: ProviderApiVersion::V2,
             capabilities: live_runtime_capabilities().expect("live capabilities"),
@@ -24265,16 +24410,127 @@ mod broker_dispatch_tests {
         fs::set_permissions(&host_path, fs::Permissions::from_mode(0o640))
             .expect("chmod host fixture");
 
+        let mut processes: Value =
+            serde_json::from_slice(&fs::read(&artifacts.processes_path).expect("read processes"))
+                .expect("parse processes");
+        let implementation = artifact.providers[0].descriptor.implementation_id.as_str();
+        let (runtime_kind, legacy_provider, role_id, process_role, binary, argv0) =
+            match implementation {
+                CLOUD_HYPERVISOR_IMPLEMENTATION_ID => (
+                    "nixos",
+                    "local-cloud-hypervisor",
+                    "cloud-hypervisor",
+                    "cloud-hypervisor-runner",
+                    "/bin/true",
+                    "cloud-hypervisor",
+                ),
+                d2b_provider_runtime_local::QEMU_MEDIA_IMPLEMENTATION_ID => (
+                    "qemu-media",
+                    "local-qemu-media",
+                    "qemu-media",
+                    "qemu-media-runner",
+                    "/bin/true",
+                    "qemu-system-x86_64",
+                ),
+                other => panic!("unsupported test implementation {other}"),
+            };
+        processes["vms"][0]["workloadIdentity"] = json!({
+            "workloadId": "vm-a",
+            "realmId": "work",
+            "realmPath": ["work"],
+            "canonicalTarget": "vm-a.work.d2b",
+            "legacyVmName": "vm-a",
+            "runtimeKind": runtime_kind,
+            "providerId": legacy_provider
+        });
+        processes["vms"][0]["nodes"][0]["id"] = json!(role_id);
+        processes["vms"][0]["nodes"][0]["role"] = json!(process_role);
+        processes["vms"][0]["nodes"][0]["binaryPath"] = json!(binary);
+        processes["vms"][0]["nodes"][0]["argv"] = json!([argv0]);
+        write_json_file(&artifacts.processes_path, &processes);
+
         let mut bundle: Value =
             serde_json::from_slice(&fs::read(&artifacts.bundle_path).expect("read bundle"))
                 .expect("parse bundle");
-        bundle["schemaVersion"] = json!("v1");
+        bundle["bundleVersion"] = json!(12);
+        bundle["schemaVersion"] = json!("v2");
         bundle["hostPath"] = json!(host_path.display().to_string());
         bundle["providerRegistryV2Path"] = json!(path.display().to_string());
+        let mut artifact_hashes = BTreeMap::new();
+        for artifact_path in [&host_path, &artifacts.processes_path, &path] {
+            artifact_hashes.insert(
+                artifact_path.display().to_string(),
+                format!(
+                    "sha256:{:x}",
+                    Sha256::digest(fs::read(artifact_path).expect("read hashed artifact"))
+                ),
+            );
+        }
+        bundle["artifactHashes"] =
+            serde_json::to_value(&artifact_hashes).expect("serialize artifact hashes");
+        let mut unhashed = bundle.clone();
+        unhashed
+            .as_object_mut()
+            .expect("bundle object")
+            .remove("bundleHash");
+        unhashed["artifactHashes"] = Value::Null;
+        bundle["bundleHash"] = json!(format!(
+            "sha256:{:x}",
+            Sha256::digest(serde_json::to_vec(&unhashed).expect("serialize canonical bundle"))
+        ));
         write_json_file(&artifacts.bundle_path, &bundle);
         fs::set_permissions(&artifacts.bundle_path, fs::Permissions::from_mode(0o640))
             .expect("chmod bundle");
         path
+    }
+
+    fn seal_provider_test_bundle(artifacts: &ArtifactPaths, bundle: &mut Value) {
+        let bundle_root = artifacts.bundle_path.parent().expect("bundle parent");
+        let resolve = |value: &Value| {
+            let path = PathBuf::from(value.as_str().expect("bundle artifact path"));
+            if path.is_absolute() {
+                path
+            } else {
+                bundle_root.join(path)
+            }
+        };
+        let mut artifact_hashes = BTreeMap::new();
+        for field in ["hostPath", "processesPath", "providerRegistryV2Path"] {
+            let key = bundle[field]
+                .as_str()
+                .expect("bundle artifact path")
+                .to_owned();
+            let path = resolve(&bundle[field]);
+            artifact_hashes.insert(
+                key,
+                format!(
+                    "sha256:{:x}",
+                    Sha256::digest(fs::read(path).expect("read artifact for resealing"))
+                ),
+            );
+        }
+        bundle["artifactHashes"] =
+            serde_json::to_value(artifact_hashes).expect("serialize artifact hashes");
+        let mut unhashed = bundle.clone();
+        unhashed
+            .as_object_mut()
+            .expect("bundle object")
+            .remove("bundleHash");
+        unhashed["artifactHashes"] = Value::Null;
+        bundle["bundleHash"] = json!(format!(
+            "sha256:{:x}",
+            Sha256::digest(serde_json::to_vec(&unhashed).expect("serialize canonical bundle"))
+        ));
+    }
+
+    fn reseal_provider_test_bundle(artifacts: &ArtifactPaths) {
+        let mut bundle: Value =
+            serde_json::from_slice(&fs::read(&artifacts.bundle_path).expect("read bundle"))
+                .expect("parse bundle");
+        seal_provider_test_bundle(artifacts, &mut bundle);
+        write_json_file(&artifacts.bundle_path, &bundle);
+        fs::set_permissions(&artifacts.bundle_path, fs::Permissions::from_mode(0o640))
+            .expect("chmod resealed bundle");
     }
 
     fn uninitialized_provider_registry_state(label: &str) -> Arc<ServerState> {
@@ -24324,6 +24580,193 @@ mod broker_dispatch_tests {
         ));
     }
 
+    #[test]
+    fn mapped_cloud_hypervisor_and_qemu_starts_use_provider_adapters_only() {
+        for (label, kind, role_id) in [
+            (
+                "provider-route-cloud-hypervisor",
+                LocalRuntimeKind::CloudHypervisor,
+                "cloud-hypervisor",
+            ),
+            (
+                "provider-route-qemu-media",
+                LocalRuntimeKind::QemuMedia,
+                "qemu-media",
+            ),
+        ] {
+            let state = uninitialized_provider_registry_state(label);
+            let artifact = local_runtime_provider_artifact_for(
+                kind,
+                &format!("runner:vm:vm-a:role:{role_id}"),
+            );
+            install_provider_registry_artifact(&state.config.artifacts, &artifact);
+            block_on_future(activate_provider_registry(&state, None))
+                .expect("activate mapped runtime");
+            provider_effects::reset_test_runtime_lifecycle_calls();
+            reset_test_direct_runtime_fallbacks();
+
+            let result = dispatch_provider_or_broker_vm_start(
+                &state,
+                VmLifecycleRequest {
+                    vm: "vm-a".to_owned(),
+                    flags: MutationFlags {
+                        apply: true,
+                        dry_run: false,
+                        json: true,
+                    },
+                    force: false,
+                    no_wait_api: true,
+                },
+                BrokerCallerRole::AdminUid { uid: 0 },
+            );
+            assert!(
+                match &result {
+                    Ok(response) => super::response_outcome(response) != Some("applied"),
+                    Err(_) => true,
+                },
+                "unreachable broker must fail closed"
+            );
+            assert_eq!(
+                provider_effects::test_runtime_lifecycle_calls(),
+                (1, 0),
+                "{kind:?} start must enter the retained runtime provider adapter"
+            );
+            assert_eq!(
+                test_direct_runtime_fallbacks(),
+                0,
+                "{kind:?} mapped start must not enter the unmapped fallback"
+            );
+        }
+    }
+
+    #[test]
+    fn mapped_cloud_hypervisor_and_qemu_stops_use_provider_adapters_only() {
+        for (label, kind, role_id, runner_role) in [
+            (
+                "provider-stop-cloud-hypervisor",
+                LocalRuntimeKind::CloudHypervisor,
+                "cloud-hypervisor",
+                RunnerRole::CloudHypervisor,
+            ),
+            (
+                "provider-stop-qemu-media",
+                LocalRuntimeKind::QemuMedia,
+                "qemu-media",
+                RunnerRole::QemuMedia,
+            ),
+        ] {
+            let state = uninitialized_provider_registry_state(label);
+            let artifact = local_runtime_provider_artifact_for(
+                kind,
+                &format!("runner:vm:vm-a:role:{role_id}"),
+            );
+            install_provider_registry_artifact(&state.config.artifacts, &artifact);
+            block_on_future(activate_provider_registry(&state, None))
+                .expect("activate mapped runtime");
+            let _child =
+                register_sleep_runner_for_role(&state, "vm-a", role_id, runner_role, false);
+            provider_effects::reset_test_runtime_lifecycle_calls();
+            reset_test_direct_runtime_fallbacks();
+
+            let _ = dispatch_provider_or_broker_vm_stop_as(
+                &state,
+                VmLifecycleRequest {
+                    vm: "vm-a".to_owned(),
+                    flags: MutationFlags {
+                        apply: true,
+                        dry_run: false,
+                        json: true,
+                    },
+                    force: true,
+                    no_wait_api: true,
+                },
+                BrokerCallerRole::AdminUid { uid: 0 },
+            );
+            assert_eq!(
+                provider_effects::test_runtime_lifecycle_calls(),
+                (0, 1),
+                "{kind:?} stop must enter the retained runtime provider adapter"
+            );
+            assert_eq!(
+                test_direct_runtime_fallbacks(),
+                0,
+                "{kind:?} mapped stop must not enter the unmapped fallback"
+            );
+        }
+    }
+
+    #[test]
+    fn mapped_host_shutdown_stop_and_restart_use_provider_adapters() {
+        let state = uninitialized_provider_registry_state("provider-route-host-shutdown");
+        let artifact = local_runtime_provider_artifact("runner:vm:vm-a:role:cloud-hypervisor");
+        install_provider_registry_artifact(&state.config.artifacts, &artifact);
+        block_on_future(activate_provider_registry(&state, None)).expect("activate mapped runtime");
+        provider_effects::reset_test_runtime_lifecycle_calls();
+        reset_test_direct_runtime_fallbacks();
+        let request = VmLifecycleRequest {
+            vm: "vm-a".to_owned(),
+            flags: MutationFlags {
+                apply: true,
+                dry_run: false,
+                json: true,
+            },
+            force: false,
+            no_wait_api: true,
+        };
+
+        let stopped = dispatch_request(
+            &state,
+            &host_shutdown_peer(),
+            super::wire::Request::VmStop(request.clone()),
+        )
+        .expect("host shutdown routes mapped stop");
+        assert_eq!(super::response_outcome(&stopped), Some("applied"));
+        assert_eq!(provider_effects::test_runtime_lifecycle_calls(), (0, 1));
+        assert_eq!(test_direct_runtime_fallbacks(), 0);
+
+        provider_effects::reset_test_runtime_lifecycle_calls();
+        let restarted = dispatch_provider_or_broker_vm_restart_as(
+            &state,
+            request,
+            BrokerCallerRole::AdminUid { uid: 0 },
+        );
+        assert!(
+            match &restarted {
+                Ok(response) => super::response_outcome(response) != Some("applied"),
+                Err(_) => true,
+            },
+            "start half must fail closed at the unreachable broker"
+        );
+        assert_eq!(provider_effects::test_runtime_lifecycle_calls(), (1, 1));
+        assert_eq!(test_direct_runtime_fallbacks(), 0);
+    }
+
+    #[test]
+    fn unmapped_runtime_start_preserves_direct_compatibility_path() {
+        let state = test_state_with_broker_socket(unreachable_broker_socket_path(
+            "provider-route-unmapped",
+        ));
+        provider_effects::reset_test_runtime_lifecycle_calls();
+        reset_test_direct_runtime_fallbacks();
+        let result = dispatch_provider_or_broker_vm_start(
+            &state,
+            VmLifecycleRequest {
+                vm: "vm-a".to_owned(),
+                flags: MutationFlags {
+                    apply: true,
+                    dry_run: false,
+                    json: true,
+                },
+                force: false,
+                no_wait_api: true,
+            },
+            BrokerCallerRole::AdminUid { uid: 0 },
+        );
+        assert!(result.is_err());
+        assert_eq!(provider_effects::test_runtime_lifecycle_calls(), (0, 0));
+        assert_eq!(test_direct_runtime_fallbacks(), 1);
+    }
+
     #[tokio::test]
     async fn provider_registry_activation_rejects_missing_and_unresolvable_artifacts() {
         let missing = uninitialized_provider_registry_state("provider-registry-missing");
@@ -24344,6 +24787,129 @@ mod broker_dispatch_tests {
         let artifact = local_runtime_provider_artifact("runner:vm:vm-a:role:missing-runtime");
         install_provider_registry_artifact(&unresolved.config.artifacts, &artifact);
         assert!(activate_provider_registry(&unresolved, None).await.is_err());
+    }
+
+    #[test]
+    fn provider_activation_rejects_non_v12_or_hashless_bundle_contracts() {
+        for defect in [
+            "wrong-version",
+            "wrong-schema",
+            "missing-artifact-hashes",
+            "missing-provider-hash",
+            "missing-bundle-hash",
+        ] {
+            let state = uninitialized_provider_registry_state(&format!("provider-bundle-{defect}"));
+            let artifact = local_runtime_provider_artifact("runner:vm:vm-a:role:cloud-hypervisor");
+            install_provider_registry_artifact(&state.config.artifacts, &artifact);
+            let mut bundle: Value = serde_json::from_slice(
+                &fs::read(&state.config.artifacts.bundle_path).expect("read bundle"),
+            )
+            .expect("parse bundle");
+            match defect {
+                "wrong-version" => bundle["bundleVersion"] = json!(11),
+                "wrong-schema" => bundle["schemaVersion"] = json!("v1"),
+                "missing-artifact-hashes" => {
+                    bundle
+                        .as_object_mut()
+                        .expect("bundle object")
+                        .remove("artifactHashes");
+                }
+                "missing-provider-hash" => {
+                    let provider_path = bundle["providerRegistryV2Path"]
+                        .as_str()
+                        .expect("provider path")
+                        .to_owned();
+                    bundle["artifactHashes"]
+                        .as_object_mut()
+                        .expect("artifact hash object")
+                        .remove(&provider_path);
+                }
+                "missing-bundle-hash" => {
+                    bundle
+                        .as_object_mut()
+                        .expect("bundle object")
+                        .remove("bundleHash");
+                }
+                _ => unreachable!(),
+            }
+            if !matches!(
+                defect,
+                "missing-artifact-hashes" | "missing-provider-hash" | "missing-bundle-hash"
+            ) {
+                seal_provider_test_bundle(&state.config.artifacts, &mut bundle);
+            }
+            write_json_file(&state.config.artifacts.bundle_path, &bundle);
+            let error = block_on_future(activate_provider_registry(&state, None))
+                .expect_err("incompatible provider bundle must fail startup");
+            assert!(
+                matches!(error, super::TypedError::InternalConfig { .. }),
+                "{defect} must fail as startup configuration"
+            );
+            assert!(state.provider_registry().is_err());
+        }
+    }
+
+    #[test]
+    fn provider_activation_rejects_tampered_registry_artifact() {
+        let state = uninitialized_provider_registry_state("provider-registry-tampered");
+        let artifact = local_runtime_provider_artifact("runner:vm:vm-a:role:cloud-hypervisor");
+        let artifact_path = install_provider_registry_artifact(&state.config.artifacts, &artifact);
+        write_json_file(
+            &artifact_path,
+            &serde_json::to_value(local_runtime_provider_artifact(
+                "runner:vm:vm-a:role:wrong-runner",
+            ))
+            .expect("serialize tampered provider artifact"),
+        );
+
+        let error = block_on_future(activate_provider_registry(&state, None))
+            .expect_err("provider artifact hash mismatch must fail startup");
+        assert!(matches!(error, super::TypedError::InternalConfig { .. }));
+        assert!(state.provider_registry().is_err());
+    }
+
+    #[test]
+    fn provider_activation_authenticates_process_identity_and_explicit_runner_source() {
+        for defect in ["workload-identity", "legacy-runner"] {
+            let state =
+                uninitialized_provider_registry_state(&format!("provider-process-{defect}"));
+            let artifact = local_runtime_provider_artifact("runner:vm:vm-a:role:cloud-hypervisor");
+            install_provider_registry_artifact(&state.config.artifacts, &artifact);
+            let mut processes: Value = serde_json::from_slice(
+                &fs::read(&state.config.artifacts.processes_path).expect("read processes"),
+            )
+            .expect("parse processes");
+            match defect {
+                "workload-identity" => {
+                    processes["vms"][0]["workloadIdentity"]["workloadId"] = json!("other");
+                }
+                "legacy-runner" => {
+                    processes["vms"][0]["nodes"][0]
+                        .as_object_mut()
+                        .expect("process node")
+                        .remove("binaryPath");
+                    processes["vms"][0]["nodes"][0]
+                        .as_object_mut()
+                        .expect("process node")
+                        .remove("argv");
+                }
+                _ => unreachable!(),
+            }
+            write_json_file(&state.config.artifacts.processes_path, &processes);
+            reseal_provider_test_bundle(&state.config.artifacts);
+            let error = block_on_future(activate_provider_registry(&state, None))
+                .expect_err("stale process mapping must fail startup");
+            let detail = format!("{error:?}");
+            assert!(
+                detail.contains(if defect == "legacy-runner" {
+                    "legacy runner fallback"
+                } else {
+                    "explicit process workload identity"
+                }),
+                "typed activation error identifies {defect}: {detail}"
+            );
+            assert!(state.provider_registry().is_err());
+        }
     }
 
     fn write_usbip_lifecycle_bundle_artifacts(root: &Path) -> ArtifactPaths {

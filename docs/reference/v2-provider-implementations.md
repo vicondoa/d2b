@@ -50,17 +50,31 @@ zero provider rows.
 The generated artifact carries canonical realm, workload, and provider IDs plus
 opaque references to existing bundle intents. It contains no argv, host path,
 credential, or secret payload. `bundleVersion` 12 adds the artifact; its own
-schema remains version `v2`.
+schema remains version `v2`. Provider activation accepts exactly bundle version
+12 with bundle schema `v2`, a declared provider artifact path, a bundle hash,
+and an artifact-hash entry for that path. Older bundle versions remain readable
+by compatibility consumers but cannot activate this registry.
 
 The live host registry currently registers only local runtime providers:
 
 | Axis | Live implementations | Mapping and daemon authority |
 | --- | --- | --- |
-| Runtime | `cloud-hypervisor`, `qemu-media` | Explicit realm workloads map to matching VM-start and runner intent IDs. The daemon adapter revalidates the current bundle, observes its pidfd table, and calls the existing lifecycle start/stop paths. |
+| Runtime | `cloud-hypervisor`, `qemu-media` | Explicit realm workloads map to matching VM-start and runner intent IDs. The daemon authenticates the mapping against the process DAG, observes its pidfd table, and calls the existing lifecycle start/stop authority through the provider adapter. |
 
 Only explicit realm workload rows with a matching generated VM process DAG are
-eligible. A first-class workload without existing VM-start and runner intents is
+eligible. Realm and workload IDs must derive exactly from the DAG's
+`workloadIdentity`; each VM and intent pair has one owner; and the runner must
+carry explicit executable and argv data rather than the legacy synthesis
+fallback. A first-class workload without existing VM-start and runner intents is
 not emitted as live. Azure VM IDs and `RuntimeExecute` are rejected.
+
+Start, stop, and restart requests for a mapped VM enter registry admission and
+the retained `RuntimeProvider` instance. The daemon constructs a bounded,
+workload-scoped operation context from the trusted mapping, and the concrete
+adapter preserves the original lifecycle flags and caller role when invoking
+the existing daemon authority. Restart is a provider stop followed by a
+provider start, and host-shutdown stop uses the same route. VMs without an
+explicit provider row retain the direct compatibility path.
 
 Other first-party host implementation crates remain dependencies so their exact
 factory contracts are checked and available for the eventual composition
@@ -79,9 +93,9 @@ cutover, but they are not registered by the production artifact yet:
   projections.
 
 These axes are intentionally absent rather than backed by no-op success. The
-existing lifecycle request paths also remain authoritative until the later
-routing cutover begins dispatching ordinary requests through the retained
-registry.
+provider registry currently mediates only mapped runtime lifecycle requests;
+the other v1 behavior stays on its existing paths until each axis gains a
+complete generated mapping and concrete adapter.
 
 ## Process placement
 

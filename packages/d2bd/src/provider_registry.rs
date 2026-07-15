@@ -8,14 +8,19 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
     fmt,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use d2b_contracts::{
-    provider_registry_v2::{ProviderBindingV2, ProviderRegistryV2},
+    provider_registry_v2::{ProviderBindingV2, ProviderRegistryEntryV2, ProviderRegistryV2},
     v2_component_session::{EndpointRole, ServicePackage},
-    v2_identity::{ProviderId, ProviderType},
+    v2_identity::{
+        ProviderId, ProviderType, RealmId, RealmPath as ProviderRealmPath, WorkloadId, WorkloadName,
+    },
     v2_provider::{
         AuthorizedProviderScope, CorrelationId, Fingerprint, Generation, IdempotencyKey,
         OperationId, PROVIDER_SCHEMA_VERSION, PrincipalRef, ProviderCallContext,
@@ -23,6 +28,10 @@ use d2b_contracts::{
         ProviderOperationContext, ProviderOperationInput, ProviderOperationRequest,
         ProviderPlacement, ProviderTarget,
     },
+};
+use d2b_core::{
+    bundle_resolver::{BundleResolver, ResolvedRunnerSource},
+    processes::ProcessRole,
 };
 use d2b_provider::{
     FactoryError, ProviderFactory, ProviderInstance, ProviderRegistry, ProviderRegistryBuilder,
@@ -67,13 +76,20 @@ use d2b_provider_transport_azure_relay::{
     AzureRelayProviderFactory, RelayControlPort,
 };
 use d2b_provider_transport_local::{LocalTransportFactory, LocalTransportKind, TransportBinding};
+use sha2::{Digest, Sha256};
 
 use crate::{
     ServerState, load_bundle_resolver,
-    provider_effects::{DaemonEffectAdapterError, DaemonEffectAdapters},
+    provider_effects::{
+        DaemonEffectAdapterError, DaemonEffectAdapters, ProviderLifecycleDispatch,
+        ProviderLifecycleInvocationHandle,
+    },
 };
 
 const AZURE_VM_IMPLEMENTATION_ID: &str = "azure-vm";
+const PROVIDER_BUNDLE_VERSION: u32 = 12;
+const PROVIDER_BUNDLE_SCHEMA_VERSION: &str = "v2";
+static NEXT_LIFECYCLE_OPERATION_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderCompositionError {
@@ -94,6 +110,10 @@ pub enum ProviderCompositionError {
     Factory(FactoryError),
     Registry(RegistryBuildError),
     StartupProbeFailed,
+    BundleContractMismatch,
+    ProcessIdentityMismatch,
+    DuplicateRuntimeMapping,
+    LegacyRunnerForbidden,
 }
 
 impl fmt::Display for ProviderCompositionError {
@@ -126,6 +146,18 @@ impl fmt::Display for ProviderCompositionError {
             Self::Factory(error) => return error.fmt(formatter),
             Self::Registry(error) => return error.fmt(formatter),
             Self::StartupProbeFailed => "provider registry startup health/inspect probe failed",
+            Self::BundleContractMismatch => {
+                "provider registry requires an integrity-complete bundle v12/v2 contract"
+            }
+            Self::ProcessIdentityMismatch => {
+                "provider runtime binding does not match the explicit process workload identity"
+            }
+            Self::DuplicateRuntimeMapping => {
+                "multiple provider runtime bindings claim the same VM or intent"
+            }
+            Self::LegacyRunnerForbidden => {
+                "provider runtime binding resolves through a legacy runner fallback"
+            }
         })
     }
 }
@@ -153,7 +185,11 @@ impl From<RegistryBuildError> for ProviderCompositionError {
 #[derive(Debug, Clone)]
 pub enum StartupProviderRegistry {
     Empty,
-    Live(ProviderRegistry),
+    Live {
+        registry: ProviderRegistry,
+        runtime_routes: Arc<BTreeMap<String, ProviderRegistryEntryV2>>,
+        lifecycle_dispatch: Arc<ProviderLifecycleDispatch>,
+    },
 }
 
 impl StartupProviderRegistry {
@@ -164,7 +200,55 @@ impl StartupProviderRegistry {
     pub fn registry(&self) -> Option<&ProviderRegistry> {
         match self {
             Self::Empty => None,
-            Self::Live(registry) => Some(registry),
+            Self::Live { registry, .. } => Some(registry),
+        }
+    }
+
+    pub fn runtime_route(&self, vm: &str) -> Option<&ProviderRegistryEntryV2> {
+        match self {
+            Self::Empty => None,
+            Self::Live { runtime_routes, .. } => runtime_routes.get(vm),
+        }
+    }
+
+    pub(crate) fn lifecycle_dispatch(&self) -> &Arc<ProviderLifecycleDispatch> {
+        match self {
+            Self::Empty => {
+                static EMPTY: std::sync::OnceLock<Arc<ProviderLifecycleDispatch>> =
+                    std::sync::OnceLock::new();
+                EMPTY.get_or_init(|| Arc::new(ProviderLifecycleDispatch::default()))
+            }
+            Self::Live {
+                lifecycle_dispatch, ..
+            } => lifecycle_dispatch,
+        }
+    }
+
+    pub(crate) fn begin_lifecycle_invocation(
+        &self,
+        operation_id: &OperationId,
+        request: d2b_contracts::public_wire::VmLifecycleRequest,
+        caller_role: d2b_contracts::broker_wire::BrokerCallerRole,
+    ) -> Result<ProviderLifecycleInvocationHandle, crate::TypedError> {
+        self.lifecycle_dispatch()
+            .begin(operation_id, request, caller_role)
+    }
+
+    fn with_runtime_routes(
+        self,
+        runtime_routes: BTreeMap<String, ProviderRegistryEntryV2>,
+    ) -> Self {
+        match self {
+            Self::Empty => Self::Empty,
+            Self::Live {
+                registry,
+                lifecycle_dispatch,
+                ..
+            } => Self::Live {
+                registry,
+                runtime_routes: Arc::new(runtime_routes),
+                lifecycle_dispatch,
+            },
         }
     }
 }
@@ -412,7 +496,11 @@ pub fn compose_host_provider_registry(
         composition.published_at_unix_ms,
         constructed,
     )
-    .map(StartupProviderRegistry::Live)
+    .map(|registry| StartupProviderRegistry::Live {
+        registry,
+        runtime_routes: Arc::new(BTreeMap::new()),
+        lifecycle_dispatch: Arc::new(ProviderLifecycleDispatch::default()),
+    })
 }
 
 #[derive(Clone)]
@@ -530,7 +618,11 @@ pub fn compose_agent_provider_registry(
         composition.published_at_unix_ms,
         constructed,
     )
-    .map(StartupProviderRegistry::Live)
+    .map(|registry| StartupProviderRegistry::Live {
+        registry,
+        runtime_routes: Arc::new(BTreeMap::new()),
+        lifecycle_dispatch: Arc::new(ProviderLifecycleDispatch::default()),
+    })
 }
 
 fn validate_exact_bindings<'a>(
@@ -748,11 +840,155 @@ impl ProviderFactory for ExactConstructedFactory {
     }
 }
 
+fn validate_provider_bundle_contract(
+    resolver: &BundleResolver,
+) -> Result<(), ProviderCompositionError> {
+    let bundle = &resolver.bundle;
+    let provider_path = bundle
+        .provider_registry_v2_path
+        .as_ref()
+        .ok_or(ProviderCompositionError::BundleContractMismatch)?;
+    let artifact_hashes = bundle
+        .artifact_hashes
+        .as_ref()
+        .ok_or(ProviderCompositionError::BundleContractMismatch)?;
+    if bundle.bundle_version != PROVIDER_BUNDLE_VERSION
+        || bundle.schema_version != PROVIDER_BUNDLE_SCHEMA_VERSION
+        || bundle.bundle_hash.is_none()
+        || !artifact_hashes.contains_key(provider_path)
+    {
+        return Err(ProviderCompositionError::BundleContractMismatch);
+    }
+    Ok(())
+}
+
+fn validate_runtime_routes(
+    resolver: &BundleResolver,
+    artifact: &ProviderRegistryV2,
+) -> Result<BTreeMap<String, ProviderRegistryEntryV2>, ProviderCompositionError> {
+    validate_provider_bundle_contract(resolver)?;
+    let current: ProviderRegistryV2 = serde_json::from_slice(
+        resolver
+            .provider_registry_v2_bytes()
+            .ok_or(ProviderCompositionError::ArtifactMissing)?,
+    )
+    .map_err(|_| ProviderCompositionError::ArtifactMalformed)?;
+    if &current != artifact {
+        return Err(ProviderCompositionError::ArtifactMalformed);
+    }
+
+    let mut routes = BTreeMap::new();
+    let mut vm_start_intents = BTreeSet::new();
+    let mut runner_intents = BTreeSet::new();
+    for entry in &artifact.providers {
+        let ProviderBindingV2::LocalRuntime(binding) = &entry.binding;
+        let vm_start = resolver
+            .find_vm_start_intent(binding.vm_start_intent_id.as_str())
+            .ok_or(ProviderCompositionError::ProcessIdentityMismatch)?;
+        let runner = resolver
+            .find_runner_intent(binding.runner_intent_id.as_str())
+            .ok_or(ProviderCompositionError::ProcessIdentityMismatch)?;
+        if runner.source != ResolvedRunnerSource::ExplicitProcessNode {
+            return Err(ProviderCompositionError::LegacyRunnerForbidden);
+        }
+        if vm_start.vm_name != runner.vm_name
+            || vm_start.role_id != runner.role_id
+            || vm_start.role != runner.role
+        {
+            return Err(ProviderCompositionError::ProcessIdentityMismatch);
+        }
+
+        let (expected_role, expected_runtime_kind, expected_legacy_provider) =
+            match entry.descriptor.implementation_id.as_str() {
+                CLOUD_HYPERVISOR_IMPLEMENTATION_ID => (
+                    ProcessRole::CloudHypervisorRunner,
+                    "nixos",
+                    "local-cloud-hypervisor",
+                ),
+                QEMU_MEDIA_IMPLEMENTATION_ID => (
+                    ProcessRole::QemuMediaRunner,
+                    "qemu-media",
+                    "local-qemu-media",
+                ),
+                AZURE_VM_IMPLEMENTATION_ID => {
+                    return Err(ProviderCompositionError::AzureVmForbidden);
+                }
+                _ => return Err(ProviderCompositionError::UnsupportedImplementation),
+            };
+        if runner.role != expected_role {
+            return Err(ProviderCompositionError::ProcessIdentityMismatch);
+        }
+
+        let dag = resolver
+            .find_process_vm(&runner.vm_name)
+            .ok_or(ProviderCompositionError::ProcessIdentityMismatch)?;
+        let identity = dag
+            .workload_identity
+            .as_ref()
+            .ok_or(ProviderCompositionError::ProcessIdentityMismatch)?;
+        let provider_realm_path =
+            ProviderRealmPath::parse(format!("{}.local-root", identity.realm_path.target_form()))
+                .map_err(|_| ProviderCompositionError::ProcessIdentityMismatch)?;
+        let expected_realm_id = RealmId::derive(&provider_realm_path);
+        let workload_name = WorkloadName::parse(identity.workload_id.as_str())
+            .map_err(|_| ProviderCompositionError::ProcessIdentityMismatch)?;
+        let expected_workload_id = WorkloadId::derive(&expected_realm_id, &workload_name);
+        if binding.realm_id != expected_realm_id
+            || binding.workload_id != expected_workload_id
+            || identity.legacy_vm_name.as_ref().map(|value| value.as_str())
+                != Some(runner.vm_name.as_str())
+            || identity.runtime_kind.as_ref().map(|value| value.as_str())
+                != Some(expected_runtime_kind)
+            || identity.provider_id.as_ref().map(|value| value.as_str())
+                != Some(expected_legacy_provider)
+        {
+            return Err(ProviderCompositionError::ProcessIdentityMismatch);
+        }
+
+        if !vm_start_intents.insert(binding.vm_start_intent_id.clone())
+            || !runner_intents.insert(binding.runner_intent_id.clone())
+            || routes
+                .insert(runner.vm_name.clone(), entry.clone())
+                .is_some()
+        {
+            return Err(ProviderCompositionError::DuplicateRuntimeMapping);
+        }
+    }
+    Ok(routes)
+}
+
+pub(crate) fn resolve_current_runtime_route(
+    state: &ServerState,
+    expected: &ProviderRegistryEntryV2,
+) -> Result<(String, String), ProviderCompositionError> {
+    let resolver =
+        load_bundle_resolver(state).map_err(|_| ProviderCompositionError::ArtifactMalformed)?;
+    let artifact: ProviderRegistryV2 = serde_json::from_slice(
+        resolver
+            .provider_registry_v2_bytes()
+            .ok_or(ProviderCompositionError::ArtifactMissing)?,
+    )
+    .map_err(|_| ProviderCompositionError::ArtifactMalformed)?;
+    artifact
+        .validate()
+        .map_err(|_| ProviderCompositionError::ArtifactMalformed)?;
+    let routes = validate_runtime_routes(&resolver, &artifact)?;
+    let ProviderBindingV2::LocalRuntime(binding) = &expected.binding;
+    let runner = resolver
+        .find_runner_intent(binding.runner_intent_id.as_str())
+        .ok_or(ProviderCompositionError::ProcessIdentityMismatch)?;
+    if routes.get(&runner.vm_name) != Some(expected) {
+        return Err(ProviderCompositionError::ProcessIdentityMismatch);
+    }
+    Ok((runner.vm_name.clone(), runner.role_id.clone()))
+}
+
 pub(crate) fn load_provider_registry_v2(
     state: &ServerState,
 ) -> Result<ProviderRegistryV2, ProviderCompositionError> {
     let resolver =
         load_bundle_resolver(state).map_err(|_| ProviderCompositionError::ArtifactMalformed)?;
+    validate_provider_bundle_contract(&resolver)?;
     let bytes = resolver
         .provider_registry_v2_bytes()
         .ok_or(ProviderCompositionError::ArtifactMissing)?;
@@ -773,6 +1009,7 @@ pub(crate) fn load_provider_registry_v2_with_policy(
         policy,
     )
     .map_err(|_| ProviderCompositionError::ArtifactMalformed)?;
+    validate_provider_bundle_contract(&resolver)?;
     let bytes = resolver
         .provider_registry_v2_bytes()
         .ok_or(ProviderCompositionError::ArtifactMissing)?;
@@ -784,13 +1021,24 @@ pub(crate) fn load_provider_registry_v2_with_policy(
     Ok(artifact)
 }
 
-pub(crate) fn compose_startup_registry(
+pub(crate) fn compose_startup_registry_with_policy(
     state: &Arc<ServerState>,
     artifact: &ProviderRegistryV2,
+    policy: Option<&d2b_core::bundle_resolver::BundleVerifyPolicy>,
 ) -> Result<StartupProviderRegistry, ProviderCompositionError> {
     artifact
         .validate()
         .map_err(|_| ProviderCompositionError::ArtifactMalformed)?;
+    let resolver = match policy {
+        Some(policy) => {
+            BundleResolver::load_with_policy(&state.config.artifacts.bundle_path, policy)
+                .map_err(|_| ProviderCompositionError::ArtifactMalformed)?
+        }
+        None => {
+            load_bundle_resolver(state).map_err(|_| ProviderCompositionError::ArtifactMalformed)?
+        }
+    };
+    let runtime_routes = validate_runtime_routes(&resolver, artifact)?;
     let effects =
         DaemonEffectAdapters::for_server_state(Arc::downgrade(state), &artifact.providers)?;
     let bindings = artifact
@@ -835,6 +1083,173 @@ pub(crate) fn compose_startup_registry(
         },
         &effects,
     )
+    .map(|registry| registry.with_runtime_routes(runtime_routes))
+}
+
+pub(crate) enum RuntimeLifecycleInvocation {
+    Unmapped,
+    Direct(serde_json::Value),
+    Converged,
+}
+
+pub(crate) async fn invoke_runtime_lifecycle(
+    state: &ServerState,
+    request: d2b_contracts::public_wire::VmLifecycleRequest,
+    caller_role: d2b_contracts::broker_wire::BrokerCallerRole,
+    method: ProviderMethod,
+) -> Result<RuntimeLifecycleInvocation, crate::TypedError> {
+    if !matches!(
+        method,
+        ProviderMethod::RuntimeStart | ProviderMethod::RuntimeStop
+    ) {
+        return Err(crate::TypedError::InternalConfig {
+            detail: "unsupported mapped runtime lifecycle method".to_owned(),
+        });
+    }
+    let startup = state.provider_registry()?;
+    let Some(entry) = startup.runtime_route(&request.vm) else {
+        return Ok(RuntimeLifecycleInvocation::Unmapped);
+    };
+    let ProviderBindingV2::LocalRuntime(binding) = &entry.binding;
+    let registry = startup
+        .registry()
+        .ok_or_else(|| crate::TypedError::InternalConfig {
+            detail: "mapped runtime provider registry is empty".to_owned(),
+        })?;
+    let instance = registry
+        .instance(&entry.descriptor.provider_id)
+        .ok_or_else(|| crate::TypedError::InternalConfig {
+            detail: "mapped runtime provider instance is unavailable".to_owned(),
+        })?;
+    let ProviderInstance::Runtime(runtime) = instance else {
+        return Err(crate::TypedError::InternalConfig {
+            detail: "mapped runtime provider has the wrong axis".to_owned(),
+        });
+    };
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| crate::TypedError::InternalConfig {
+            detail: "system time is unavailable for provider dispatch".to_owned(),
+        })?
+        .as_millis()
+        .try_into()
+        .map_err(|_| crate::TypedError::InternalConfig {
+            detail: "system time exceeds provider contract bounds".to_owned(),
+        })?;
+    let sequence = NEXT_LIFECYCLE_OPERATION_ID.fetch_add(1, Ordering::Relaxed);
+    let operation_id = OperationId::parse(format!("lifecycle-{sequence}")).map_err(|_| {
+        crate::TypedError::InternalConfig {
+            detail: "provider lifecycle operation id is invalid".to_owned(),
+        }
+    })?;
+    let idempotency_key = IdempotencyKey::parse(format!("lifecycle-{sequence}")).map_err(|_| {
+        crate::TypedError::InternalConfig {
+            detail: "provider lifecycle idempotency key is invalid".to_owned(),
+        }
+    })?;
+    let request_material = format!(
+        "{}:{}:{}:{}:{}:{}",
+        method.as_str(),
+        entry.descriptor.provider_id.as_str(),
+        binding.realm_id.as_str(),
+        binding.workload_id.as_str(),
+        request.force,
+        request.no_wait_api,
+    );
+    let request_digest =
+        Fingerprint::parse(format!("{:x}", Sha256::digest(request_material.as_bytes()))).map_err(
+            |_| crate::TypedError::InternalConfig {
+                detail: "provider lifecycle request digest is invalid".to_owned(),
+            },
+        )?;
+    let operation = ProviderOperationContext {
+        schema_version: PROVIDER_SCHEMA_VERSION,
+        operation_id,
+        idempotency_key,
+        request_digest: request_digest.clone(),
+        scope: AuthorizedProviderScope::Workload {
+            realm_id: binding.realm_id.clone(),
+            workload_id: binding.workload_id.clone(),
+        },
+        principal: PrincipalRef::parse("daemon-lifecycle").map_err(|_| {
+            crate::TypedError::InternalConfig {
+                detail: "provider lifecycle principal is invalid".to_owned(),
+            }
+        })?,
+        provider_id: entry.descriptor.provider_id.clone(),
+        provider_type: ProviderType::Runtime,
+        provider_generation: entry.descriptor.registry_generation,
+        capability: ProviderCapability(method),
+        method,
+        policy_epoch: Generation::new(1).map_err(|_| crate::TypedError::InternalConfig {
+            detail: "provider lifecycle policy generation is invalid".to_owned(),
+        })?,
+        authorization_decision_digest: request_digest,
+        issued_at_unix_ms: now,
+        expires_at_unix_ms: now.checked_add(30_000).ok_or_else(|| {
+            crate::TypedError::InternalConfig {
+                detail: "provider lifecycle deadline overflow".to_owned(),
+            }
+        })?,
+        correlation_id: CorrelationId::parse(format!("lifecycle-{sequence}")).map_err(|_| {
+            crate::TypedError::InternalConfig {
+                detail: "provider lifecycle correlation id is invalid".to_owned(),
+            }
+        })?,
+        trace_id: Fingerprint::parse(format!(
+            "{:x}",
+            Sha256::digest(format!("trace-{sequence}").as_bytes())
+        ))
+        .map_err(|_| crate::TypedError::InternalConfig {
+            detail: "provider lifecycle trace id is invalid".to_owned(),
+        })?,
+    };
+    let call = ProviderCallContext {
+        operation: &operation,
+        peer_role: EndpointRole::RealmController,
+        service: ServicePackage::ProviderV2,
+        monotonic_deadline_remaining_ms: 30_000,
+        cancelled: false,
+    };
+    let provider_request = ProviderOperationRequest {
+        context: operation.clone(),
+        target: ProviderTarget::Workload {
+            realm_id: binding.realm_id.clone(),
+            workload_id: binding.workload_id.clone(),
+        },
+        expected_configuration_fingerprint: entry
+            .descriptor
+            .configuration_schema_fingerprint
+            .clone(),
+        input: ProviderOperationInput::NoInput,
+    };
+    let invocation =
+        startup.begin_lifecycle_invocation(&operation.operation_id, request, caller_role)?;
+    let provider_result = match method {
+        ProviderMethod::RuntimeStart => runtime.start(&call, &provider_request).await,
+        ProviderMethod::RuntimeStop => runtime.stop(&call, &provider_request).await,
+        _ => unreachable!("method checked above"),
+    };
+    let direct_result = invocation.finish();
+    if let Some(result) = direct_result {
+        let value = result?;
+        if value.get("outcome").and_then(serde_json::Value::as_str) == Some("applied") {
+            provider_result.map_err(|_| crate::TypedError::InternalConfig {
+                detail: "mapped runtime provider rejected applied lifecycle dispatch".to_owned(),
+            })?;
+        }
+        return Ok(RuntimeLifecycleInvocation::Direct(value));
+    }
+    let observation = provider_result.map_err(|_| crate::TypedError::InternalConfig {
+        detail: "mapped runtime provider rejected lifecycle dispatch".to_owned(),
+    })?;
+    observation
+        .validate()
+        .map_err(|_| crate::TypedError::InternalConfig {
+            detail: "mapped runtime provider returned an invalid observation".to_owned(),
+        })?;
+    Ok(RuntimeLifecycleInvocation::Converged)
 }
 
 pub(crate) async fn probe_startup_registry(

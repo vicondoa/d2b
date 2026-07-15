@@ -280,6 +280,9 @@ pub struct ResolvedRunnerIntent {
     pub vm_name: String,
     pub role_id: String,
     pub role: ProcessRole,
+    /// Whether the executable and argv came from the explicit process node or
+    /// from the compatibility-only legacy runner synthesis.
+    pub source: ResolvedRunnerSource,
     pub binary_path: PathBuf,
     pub argv: Vec<String>,
     pub env: Vec<String>,
@@ -306,6 +309,16 @@ pub struct ResolvedRunnerIntent {
     pub umask: Option<u32>,
 }
 
+/// Provenance of a resolved runner specification.
+///
+/// Provider-v2 mappings may bind only explicit process-node runner specs.
+/// Legacy fallback remains available solely to pre-v2 lifecycle paths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolvedRunnerSource {
+    ExplicitProcessNode,
+    LegacyFallback,
+}
+
 /// Single-entry user-NS mapping. See [`ResolvedRunnerIntent::user_namespace`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UserNamespaceSpec {
@@ -320,16 +333,23 @@ impl ResolvedRunnerIntent {
     /// legacy spawn specification return `None`.
     pub fn from_process_node(vm_name: &str, node: &ProcessNode) -> Option<Self> {
         let role_name = runner_role_name(&node.role)?;
-        let (binary_path, argv) = match node.binary_path.as_deref() {
+        let (binary_path, argv, source) = match node.binary_path.as_deref() {
             Some(binary_path)
                 if binary_path.starts_with('/')
                     && !node.argv.is_empty()
                     && !node.argv[0].is_empty()
                     && !is_placeholder_runner_spec(binary_path, &node.argv, role_name) =>
             {
-                (binary_path.to_owned(), node.argv.clone())
+                (
+                    binary_path.to_owned(),
+                    node.argv.clone(),
+                    ResolvedRunnerSource::ExplicitProcessNode,
+                )
             }
-            _ => legacy_runner_spec(vm_name, &node.role)?,
+            _ => {
+                let (binary_path, argv) = legacy_runner_spec(vm_name, &node.role)?;
+                (binary_path, argv, ResolvedRunnerSource::LegacyFallback)
+            }
         };
         // v1.1.1fu11 (Option B): start with the baseline D2B_VM
         // env var, then append any node-specific env entries from the
@@ -355,6 +375,7 @@ impl ResolvedRunnerIntent {
             vm_name: vm_name.to_owned(),
             role_id: node.id.0.clone(),
             role: node.role.clone(),
+            source,
             binary_path: PathBuf::from(binary_path),
             argv,
             env,
@@ -4345,6 +4366,41 @@ mod tests {
         assert!(
             super::resolve_runner_node(&dag, &dag.nodes[0]).is_none(),
             "video must fail closed when processes.json omits the patched crosvm video binary/argv"
+        );
+    }
+
+    #[test]
+    fn runner_resolution_records_explicit_vs_legacy_source() {
+        let mut node = ProcessNode {
+            id: NodeId("cloud-hypervisor".to_owned()),
+            role: ProcessRole::CloudHypervisorRunner,
+            unit: None,
+            binary_path: Some("/bin/cloud-hypervisor".to_owned()),
+            argv: vec!["cloud-hypervisor".to_owned()],
+            env: Vec::new(),
+            profile: crate::test_support::RoleProfileBuilder::new()
+                .with_profile_id("cloud-hypervisor")
+                .with_uid(0)
+                .with_gid(0)
+                .build(),
+            readiness: Vec::new(),
+            plan_ops: Vec::new(),
+            network_interfaces: Vec::new(),
+        };
+        assert_eq!(
+            ResolvedRunnerIntent::from_process_node("work", &node)
+                .expect("explicit runner resolves")
+                .source,
+            ResolvedRunnerSource::ExplicitProcessNode
+        );
+
+        node.binary_path = None;
+        node.argv.clear();
+        assert_eq!(
+            ResolvedRunnerIntent::from_process_node("work", &node)
+                .expect("legacy compatibility runner resolves")
+                .source,
+            ResolvedRunnerSource::LegacyFallback
         );
     }
 

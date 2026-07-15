@@ -48,9 +48,11 @@ const PROVIDER_INTEGRATION_FILES: &[&str] = &[
     "docs/reference/schemas/v2/provider-registry-v2.json",
     "docs/reference/schemas/v2/provider-registry-v2.md",
     "flake.nix",
+    "nixos-modules/assertions.nix",
     "nixos-modules/bundle-artifacts.nix",
     "nixos-modules/bundle.nix",
     "nixos-modules/default.nix",
+    "nixos-modules/processes-json.nix",
     "nixos-modules/provider-registry-v2-json.nix",
     "packages/Cargo.lock",
     "packages/Cargo.toml",
@@ -60,6 +62,7 @@ const PROVIDER_INTEGRATION_FILES: &[&str] = &[
     "packages/d2b-core/fuzz/src/bin/core.rs",
     "packages/d2b-core/src/bundle.rs",
     "packages/d2b-core/src/bundle_resolver.rs",
+    "packages/d2b-core/src/test_support.rs",
     "packages/d2b-core/tests/bundle_resolver_runner_intent_parity.rs",
     "packages/d2b-priv-broker/src/ops/storage_contract.rs",
     "packages/d2b-priv-broker/src/ops/tap.rs",
@@ -79,6 +82,7 @@ const PROVIDER_INTEGRATION_FILES: &[&str] = &[
     "packages/xtask/src/main.rs",
     "packages/xtask/tests/policy_workspace.rs",
     "tests/unit/nix/cases/realm-workloads.nix",
+    "tests/unit/nix/pinned/common.txt",
 ];
 
 fn repo_root() -> PathBuf {
@@ -526,7 +530,7 @@ fn daemon_provider_composition_is_exact_startup_owned_and_credential_free() {
             "provider_registry: Arc<OnceLock<provider_registry::StartupProviderRegistry>>"
         ) && daemon.contains("provider_registry: Arc::new(OnceLock::new())")
             && daemon.contains("async fn activate_provider_registry")
-            && daemon.contains("provider_registry::compose_startup_registry(state, &artifact)")
+            && daemon.contains("provider_registry::compose_startup_registry_with_policy(")
             && daemon.contains("provider_registry::probe_startup_registry")
             && daemon.contains("fn provider_registry("),
         "the daemon must compose, probe, retain, and expose one startup-owned provider registry"
@@ -612,6 +616,32 @@ fn daemon_provider_composition_is_exact_startup_owned_and_credential_free() {
             && composition.contains("(ProviderType::Transport, AZURE_RELAY_IMPLEMENTATION_ID)"),
         "host composition must exclude credentials and agent-only implementations"
     );
+    for required in [
+        "bundle.bundle_version != PROVIDER_BUNDLE_VERSION",
+        "bundle.schema_version != PROVIDER_BUNDLE_SCHEMA_VERSION",
+        "bundle.bundle_hash.is_none()",
+        "!artifact_hashes.contains_key(provider_path)",
+        "runner.source != ResolvedRunnerSource::ExplicitProcessNode",
+        "identity.realm_path.target_form()",
+        "WorkloadId::derive(&expected_realm_id, &workload_name)",
+        "DuplicateRuntimeMapping",
+    ] {
+        assert!(
+            composition.contains(required),
+            "provider activation is missing fail-closed mapping check {required}"
+        );
+    }
+    for required in [
+        "dispatch_provider_or_broker_vm_start",
+        "dispatch_provider_or_broker_vm_stop_as",
+        "dispatch_provider_or_broker_vm_restart_as",
+        "provider_registry::invoke_runtime_lifecycle(",
+    ] {
+        assert!(
+            daemon.contains(required),
+            "production lifecycle routing is missing provider admission path {required}"
+        );
+    }
 
     let effects = read_repo_file("packages/d2bd/src/provider_effects.rs");
     for forbidden in ["d2b_priv_broker", "std::process::Command", "Command::new"] {
@@ -623,8 +653,7 @@ fn daemon_provider_composition_is_exact_startup_owned_and_credential_free() {
     for required in [
         "dispatch_broker_vm_start",
         "dispatch_broker_vm_stop_as",
-        "find_vm_start_intent",
-        "find_runner_intent",
+        "resolve_current_runtime_route",
         "still_alive_same_start_time",
     ] {
         assert!(

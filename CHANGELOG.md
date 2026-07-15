@@ -56,9 +56,11 @@ deprecations ship one minor release before removal.
 - Activated the startup-owned transactional provider registry after daemon
   services initialize. Explicit local-VM and qemu-media realm workloads now
   construct live local-runtime providers, revalidate their trusted mappings,
-  and run health and inspect through concrete daemon lifecycle adapters;
-  missing or stale artifacts fail startup, while existing lifecycle request
-  routing remains unchanged until the routing cutover.
+  authenticate exact process-DAG identities and explicit runner provenance,
+  and route start, stop, restart, autostart, and host-shutdown lifecycle work
+  through concrete daemon adapters. Bundle-v12 activation now requires the v2
+  schema and complete bundle/provider-artifact hashes; unmapped VMs retain the
+  compatibility lifecycle path.
 - Changed observability provider queries to return a canonical bounded result
   through the provider trait, proxy, protobuf/ttrpc service, and toolkit
   adapter without dropping records or introducing free-form labels.

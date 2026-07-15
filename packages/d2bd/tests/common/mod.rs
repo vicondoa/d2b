@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write as _;
 use std::os::unix::fs::{FileTypeExt as _, PermissionsExt as _};
@@ -7,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
+use sha2::{Digest, Sha256};
 use tempfile::{Builder, TempDir};
 
 pub const HELLO_FRAME: &str =
@@ -193,26 +195,47 @@ fn write_empty_provider_registry_artifacts(root: &Path) -> serde_json::Value {
         .expect("serialize explicit empty provider registry"),
     )
     .expect("write explicit empty provider registry");
+    let mut artifact_hashes = BTreeMap::new();
+    for (key, path) in [
+        ("host.json", &host_path),
+        ("processes.json", &processes_path),
+        ("provider-registry-v2.json", &provider_registry_path),
+    ] {
+        artifact_hashes.insert(
+            key.to_owned(),
+            format!(
+                "sha256:{:x}",
+                Sha256::digest(fs::read(path).expect("read default artifact for hashing"))
+            ),
+        );
+    }
+    let mut bundle = serde_json::json!({
+        "bundleVersion": 12,
+        "schemaVersion": "v2",
+        "publicManifestPath": "vms.json",
+        "hostPath": "host.json",
+        "processesPath": "processes.json",
+        "privilegesPath": "privileges.json",
+        "providerRegistryV2Path": "provider-registry-v2.json",
+        "closures": [],
+        "minijailProfiles": [],
+        "managedKeys": {},
+        "generation": {
+            "generator": "d2bd-integration-test",
+            "sourceRevision": null,
+            "generatedAt": null
+        },
+        "artifactHashes": artifact_hashes
+    });
+    let mut unhashed = bundle.clone();
+    unhashed["artifactHashes"] = serde_json::Value::Null;
+    bundle["bundleHash"] = serde_json::Value::String(format!(
+        "sha256:{:x}",
+        Sha256::digest(serde_json::to_vec(&unhashed).expect("serialize unhashed bundle"))
+    ));
     fs::write(
         &bundle_path,
-        serde_json::to_vec(&serde_json::json!({
-            "bundleVersion": 12,
-            "schemaVersion": "v1",
-            "publicManifestPath": "vms.json",
-            "hostPath": "host.json",
-            "processesPath": "processes.json",
-            "privilegesPath": "privileges.json",
-            "providerRegistryV2Path": "provider-registry-v2.json",
-            "closures": [],
-            "minijailProfiles": [],
-            "managedKeys": {},
-            "generation": {
-                "generator": "d2bd-integration-test",
-                "sourceRevision": null,
-                "generatedAt": null
-            }
-        }))
-        .expect("serialize default bundle"),
+        serde_json::to_vec(&bundle).expect("serialize default bundle"),
     )
     .expect("write default bundle");
     for path in [

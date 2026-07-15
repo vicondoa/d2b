@@ -1,11 +1,13 @@
 mod common;
 
 mod public_status_socket {
+    use std::collections::BTreeMap;
     use std::fs;
     use std::os::unix::fs::PermissionsExt as _;
     use std::path::{Path, PathBuf};
 
     use serde_json::{Value, json};
+    use sha2::{Digest, Sha256};
 
     use super::common::{
         DaemonFixture, HELLO_FRAME, TestPeer, spawn_d2bd_serve, test_client,
@@ -156,26 +158,47 @@ mod public_status_socket {
             .expect("serialize explicit empty provider registry"),
         )
         .expect("write explicit empty provider registry");
+        let mut artifact_hashes = BTreeMap::new();
+        for (key, path) in [
+            ("host.json", &host_path),
+            ("processes.json", &processes_path),
+            ("provider-registry-v2.json", &provider_registry_path),
+        ] {
+            artifact_hashes.insert(
+                key.to_owned(),
+                format!(
+                    "sha256:{:x}",
+                    Sha256::digest(fs::read(path).expect("read artifact for hashing"))
+                ),
+            );
+        }
+        let mut bundle = json!({
+            "bundleVersion": 12,
+            "schemaVersion": "v2",
+            "publicManifestPath": "vms.json",
+            "hostPath": "host.json",
+            "processesPath": "processes.json",
+            "privilegesPath": "privileges.json",
+            "providerRegistryV2Path": "provider-registry-v2.json",
+            "closures": [],
+            "minijailProfiles": [],
+            "managedKeys": {},
+            "generation": {
+                "generator": "public-status-socket-test",
+                "sourceRevision": null,
+                "generatedAt": null
+            },
+            "artifactHashes": artifact_hashes
+        });
+        let mut unhashed = bundle.clone();
+        unhashed["artifactHashes"] = Value::Null;
+        bundle["bundleHash"] = Value::String(format!(
+            "sha256:{:x}",
+            Sha256::digest(serde_json::to_vec(&unhashed).expect("serialize unhashed bundle"))
+        ));
         fs::write(
             &bundle_path,
-            serde_json::to_vec(&json!({
-                "bundleVersion": 12,
-                "schemaVersion": "v1",
-                "publicManifestPath": "vms.json",
-                "hostPath": "host.json",
-                "processesPath": "processes.json",
-                "privilegesPath": "privileges.json",
-                "providerRegistryV2Path": "provider-registry-v2.json",
-                "closures": [],
-                "minijailProfiles": [],
-                "managedKeys": {},
-                "generation": {
-                    "generator": "public-status-socket-test",
-                    "sourceRevision": null,
-                    "generatedAt": null
-                }
-            }))
-            .expect("serialize bundle"),
+            serde_json::to_vec(&bundle).expect("serialize bundle"),
         )
         .expect("write bundle");
         for path in [

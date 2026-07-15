@@ -10,7 +10,7 @@ use std::{
     collections::BTreeMap,
     error::Error,
     fmt,
-    sync::{Arc, Weak},
+    sync::{Arc, Mutex, Weak},
 };
 
 use async_trait::async_trait;
@@ -18,13 +18,12 @@ use d2b_contracts::{
     broker_wire::BrokerCallerRole,
     provider_registry_v2::{
         LocalRuntimeProviderBindingV2, ProviderBindingV2, ProviderRegistryEntryV2,
-        ProviderRegistryV2,
     },
     public_wire::{MutationFlags, VmLifecycleRequest},
     v2_identity::ProviderId,
     v2_provider::{
         AuthorizedProviderScope, HandleId, HandleOwner, MutationState, ObservationReason,
-        ObservedLifecycleState, PlanId, ProviderDescriptor,
+        ObservedLifecycleState, OperationId, PlanId, ProviderDescriptor,
     },
 };
 use d2b_provider_audio_pipewire_vhost_user::{AudioEffectPort, AudioQueryPort};
@@ -43,8 +42,136 @@ use d2b_provider_substrate_host::HostSubstratePort;
 use d2b_provider_transport_local::LocalEndpointPort;
 
 use crate::{
-    ServerState, dispatch_broker_vm_start, dispatch_broker_vm_stop_as, load_bundle_resolver,
+    ServerState, TypedError, dispatch_broker_vm_start, dispatch_broker_vm_stop_as,
+    provider_registry::resolve_current_runtime_route,
 };
+
+#[cfg(test)]
+thread_local! {
+    static TEST_RUNTIME_START_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static TEST_RUNTIME_STOP_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_test_runtime_lifecycle_calls() {
+    TEST_RUNTIME_START_CALLS.set(0);
+    TEST_RUNTIME_STOP_CALLS.set(0);
+}
+
+#[cfg(test)]
+pub(crate) fn test_runtime_lifecycle_calls() -> (usize, usize) {
+    (
+        TEST_RUNTIME_START_CALLS.get(),
+        TEST_RUNTIME_STOP_CALLS.get(),
+    )
+}
+
+type LifecycleDispatchResult = Result<serde_json::Value, TypedError>;
+type LifecycleInvocationParts = (
+    VmLifecycleRequest,
+    BrokerCallerRole,
+    Arc<Mutex<Option<LifecycleDispatchResult>>>,
+);
+
+#[derive(Debug)]
+struct ProviderLifecycleInvocation {
+    request: VmLifecycleRequest,
+    caller_role: BrokerCallerRole,
+    result: Arc<Mutex<Option<LifecycleDispatchResult>>>,
+}
+
+#[derive(Debug, Default)]
+pub struct ProviderLifecycleDispatch {
+    invocations: Mutex<BTreeMap<String, ProviderLifecycleInvocation>>,
+}
+
+pub(crate) struct ProviderLifecycleInvocationHandle {
+    dispatch: Arc<ProviderLifecycleDispatch>,
+    operation_id: String,
+    result: Arc<Mutex<Option<LifecycleDispatchResult>>>,
+    finished: bool,
+}
+
+impl ProviderLifecycleDispatch {
+    pub(crate) fn begin(
+        self: &Arc<Self>,
+        operation_id: &OperationId,
+        request: VmLifecycleRequest,
+        caller_role: BrokerCallerRole,
+    ) -> Result<ProviderLifecycleInvocationHandle, TypedError> {
+        let operation_id = operation_id.as_str().to_owned();
+        let result = Arc::new(Mutex::new(None));
+        let mut invocations = self
+            .invocations
+            .lock()
+            .map_err(|_| TypedError::InternalConfig {
+                detail: "provider lifecycle invocation table is poisoned".to_owned(),
+            })?;
+        if invocations.contains_key(&operation_id) {
+            return Err(TypedError::InternalConfig {
+                detail: "duplicate provider lifecycle operation id".to_owned(),
+            });
+        }
+        invocations.insert(
+            operation_id.clone(),
+            ProviderLifecycleInvocation {
+                request,
+                caller_role,
+                result: Arc::clone(&result),
+            },
+        );
+        Ok(ProviderLifecycleInvocationHandle {
+            dispatch: Arc::clone(self),
+            operation_id,
+            result,
+            finished: false,
+        })
+    }
+
+    fn invocation(
+        &self,
+        operation_id: &OperationId,
+        vm: &str,
+    ) -> Result<LifecycleInvocationParts, RuntimeControlError> {
+        let invocations = self
+            .invocations
+            .lock()
+            .map_err(|_| RuntimeControlError::Unavailable)?;
+        let invocation = invocations
+            .get(operation_id.as_str())
+            .ok_or(RuntimeControlError::InvalidRequest)?;
+        if invocation.request.vm != vm {
+            return Err(RuntimeControlError::UnauthorizedScope);
+        }
+        Ok((
+            invocation.request.clone(),
+            invocation.caller_role.clone(),
+            Arc::clone(&invocation.result),
+        ))
+    }
+
+    fn remove(&self, operation_id: &str) {
+        if let Ok(mut invocations) = self.invocations.lock() {
+            invocations.remove(operation_id);
+        }
+    }
+}
+
+impl ProviderLifecycleInvocationHandle {
+    pub(crate) fn finish(mut self) -> Option<LifecycleDispatchResult> {
+        self.dispatch.remove(&self.operation_id);
+        self.finished = true;
+        self.result.lock().ok()?.take()
+    }
+}
+
+impl Drop for ProviderLifecycleInvocationHandle {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.dispatch.remove(&self.operation_id);
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DaemonEffectAdapterError {
@@ -309,47 +436,9 @@ impl DaemonLocalRuntimeControl {
             .state
             .upgrade()
             .ok_or(RuntimeControlError::Unavailable)?;
-        let resolver =
-            load_bundle_resolver(&state).map_err(|_| RuntimeControlError::Unavailable)?;
-        let current_bytes = resolver
-            .provider_registry_v2_bytes()
-            .ok_or(RuntimeControlError::Unavailable)?;
-        let current: ProviderRegistryV2 = serde_json::from_slice(current_bytes)
+        let (vm, role) = resolve_current_runtime_route(&state, &self.entry)
             .map_err(|_| RuntimeControlError::InvalidRequest)?;
-        current
-            .validate()
-            .map_err(|_| RuntimeControlError::InvalidRequest)?;
-        if current.find(&self.entry.descriptor.provider_id) != Some(&self.entry) {
-            return Err(RuntimeControlError::InvalidRequest);
-        }
-
-        let vm_start = resolver
-            .find_vm_start_intent(self.binding.vm_start_intent_id.as_str())
-            .ok_or(RuntimeControlError::Unavailable)?;
-        let runner = resolver
-            .find_runner_intent(self.binding.runner_intent_id.as_str())
-            .ok_or(RuntimeControlError::Unavailable)?;
-        if vm_start.vm_name != runner.vm_name
-            || vm_start.role_id != runner.role_id
-            || vm_start.role != runner.role
-            || !matches!(
-                (self.kind()?, &runner.role),
-                (
-                    LocalRuntimeKind::CloudHypervisor,
-                    d2b_core::processes::ProcessRole::CloudHypervisorRunner
-                ) | (
-                    LocalRuntimeKind::QemuMedia,
-                    d2b_core::processes::ProcessRole::QemuMediaRunner
-                )
-            )
-        {
-            return Err(RuntimeControlError::InvalidRequest);
-        }
-        Ok(ResolvedDaemonRuntime {
-            state,
-            vm: runner.vm_name.clone(),
-            role: runner.role_id.clone(),
-        })
+        Ok(ResolvedDaemonRuntime { state, vm, role })
     }
 
     fn validate_target(
@@ -433,6 +522,52 @@ impl DaemonLocalRuntimeControl {
     fn response_applied(response: &serde_json::Value) -> bool {
         response.get("outcome").and_then(serde_json::Value::as_str) == Some("applied")
     }
+
+    fn invoke_direct_start(
+        &self,
+        request: &RuntimeOperationControl,
+        resolved: &ResolvedDaemonRuntime,
+    ) -> Result<(), RuntimeControlError> {
+        let (lifecycle, _, result_slot) = resolved
+            .state
+            .provider_registry()
+            .map_err(|_| RuntimeControlError::Unavailable)?
+            .lifecycle_dispatch()
+            .invocation(&request.context().operation().operation_id, &resolved.vm)?;
+        let result = dispatch_broker_vm_start(&resolved.state, lifecycle);
+        let applied = result.as_ref().is_ok_and(Self::response_applied);
+        *result_slot
+            .lock()
+            .map_err(|_| RuntimeControlError::Unavailable)? = Some(result);
+        if applied {
+            Ok(())
+        } else {
+            Err(RuntimeControlError::Unavailable)
+        }
+    }
+
+    fn invoke_direct_stop(
+        &self,
+        request: &RuntimeOperationControl,
+        resolved: &ResolvedDaemonRuntime,
+    ) -> Result<(), RuntimeControlError> {
+        let (lifecycle, caller_role, result_slot) = resolved
+            .state
+            .provider_registry()
+            .map_err(|_| RuntimeControlError::Unavailable)?
+            .lifecycle_dispatch()
+            .invocation(&request.context().operation().operation_id, &resolved.vm)?;
+        let result = dispatch_broker_vm_stop_as(&resolved.state, lifecycle, caller_role);
+        let applied = result.as_ref().is_ok_and(Self::response_applied);
+        *result_slot
+            .lock()
+            .map_err(|_| RuntimeControlError::Unavailable)? = Some(result);
+        if applied {
+            Ok(())
+        } else {
+            Err(RuntimeControlError::Unavailable)
+        }
+    }
 }
 
 #[async_trait]
@@ -473,6 +608,8 @@ impl RuntimeControlPort for DaemonLocalRuntimeControl {
         &self,
         request: RuntimeOperationControl,
     ) -> Result<RuntimeObservedState, RuntimeControlError> {
+        #[cfg(test)]
+        TEST_RUNTIME_START_CALLS.set(TEST_RUNTIME_START_CALLS.get() + 1);
         let resolved = self.validate_target(&request)?;
         if resolved
             .state
@@ -481,14 +618,7 @@ impl RuntimeControlPort for DaemonLocalRuntimeControl {
         {
             return self.observed(request.context(), &resolved);
         }
-        let response = dispatch_broker_vm_start(
-            &resolved.state,
-            Self::lifecycle_request(resolved.vm.clone()),
-        )
-        .map_err(|_| RuntimeControlError::Unavailable)?;
-        if !Self::response_applied(&response) {
-            return Err(RuntimeControlError::Unavailable);
-        }
+        self.invoke_direct_start(&request, &resolved)?;
         let observed = self.observed(request.context(), &resolved)?;
         if observed.lifecycle() == ObservedLifecycleState::Running {
             Ok(observed)
@@ -501,6 +631,8 @@ impl RuntimeControlPort for DaemonLocalRuntimeControl {
         &self,
         request: RuntimeOperationControl,
     ) -> Result<RuntimeObservedState, RuntimeControlError> {
+        #[cfg(test)]
+        TEST_RUNTIME_STOP_CALLS.set(TEST_RUNTIME_STOP_CALLS.get() + 1);
         let resolved = self.validate_target(&request)?;
         if !resolved
             .state
@@ -509,17 +641,7 @@ impl RuntimeControlPort for DaemonLocalRuntimeControl {
         {
             return self.observed(request.context(), &resolved);
         }
-        let response = dispatch_broker_vm_stop_as(
-            &resolved.state,
-            Self::lifecycle_request(resolved.vm.clone()),
-            BrokerCallerRole::AdminUid {
-                uid: resolved.state.daemon_uid,
-            },
-        )
-        .map_err(|_| RuntimeControlError::Unavailable)?;
-        if !Self::response_applied(&response) {
-            return Err(RuntimeControlError::Unavailable);
-        }
+        self.invoke_direct_stop(&request, &resolved)?;
         let observed = self.observed(request.context(), &resolved)?;
         if observed.lifecycle() == ObservedLifecycleState::Stopped {
             Ok(observed)

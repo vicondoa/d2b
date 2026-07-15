@@ -639,9 +639,8 @@ EOF
       upstreamSock = waylandHostSock;
       bridgeSock = "${config.d2b.site.clipboard.runtime.bridgeRoot}/${waylandUid}/bridge/${vmName}/${config.d2b.site.clipboard.runtime.bridgeSocketName}";
       appIdPrefix = "d2b.${vmName}.";
-      # Realm identity: unambiguous when exactly one enabled realm workload
-      # row references this VM (via legacyVmName).  Multiple rows (cross-realm
-      # VM) or no rows (classical d2b.vms entry) both fall back to the
+      # Realm identity: present when one enabled realm workload row references
+      # this VM. Multiple rows are rejected by assertions; no rows use the
       # host-local transitional defaults.
       vmRealmRows = cfg._index.realms.workloads.byVm.${vmName} or [];
       unambiguousRow = if lib.length vmRealmRows == 1 then builtins.head vmRealmRows else null;
@@ -1003,10 +1002,11 @@ use devices::virtio::vhost_user_backend::run_video_device;'
           ++ lib.optionals (!vm.graphics.enable && !vm.audio.enable) optionalSidecarBaseNodeIds
         );
       # Realm workload identity: present for VMs declared as realm workloads.
-      # Uses the first matching enabled row; absence means the VM is a
-      # classical d2b.vms.<vm> entry without a realm workload declaration.
+      # The assertion layer guarantees at most one enabled owning row; absence
+      # means a classical d2b.vms.<vm> entry.
       realmWorkloadRows = cfg._index.realms.workloads.byVm.${name} or [ ];
-      vmWorkloadRow = if realmWorkloadRows != [ ] then builtins.head realmWorkloadRows else null;
+      vmWorkloadRow =
+        if lib.length realmWorkloadRows == 1 then builtins.head realmWorkloadRows else null;
       vmWorkloadIdentity =
         if vmWorkloadRow != null then {
           workloadId = vmWorkloadRow.workloadName;
@@ -1214,9 +1214,11 @@ use devices::virtio::vhost_user_backend::run_video_device;'
     let
       emitWaylandProxy = cfg.site.waylandUser != null;
       hypervisorService = d2bLib.runtimeHypervisorService "qemu-media";
-      # Realm workload identity: present for VMs declared as realm workloads.
+      # Realm workload identity: present for VMs declared as realm workloads;
+      # the assertion layer guarantees at most one enabled owning row.
       realmWorkloadRows = cfg._index.realms.workloads.byVm.${name} or [ ];
-      vmWorkloadRow = if realmWorkloadRows != [ ] then builtins.head realmWorkloadRows else null;
+      vmWorkloadRow =
+        if lib.length realmWorkloadRows == 1 then builtins.head realmWorkloadRows else null;
       vmWorkloadIdentity =
         if vmWorkloadRow != null then {
           workloadId = vmWorkloadRow.workloadName;

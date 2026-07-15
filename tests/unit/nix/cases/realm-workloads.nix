@@ -11,9 +11,7 @@
 #     vsockCid advisory, invariants block (noSensitiveCommandPayloads)
 #   • Bundle artifact registration: installFileName, classification,
 #     sensitivity, /etc install mode
-#   • Cross-realm vsock CID collision assertion: fires when two workloads in
-#     different realms reference different VMs with the same derived CID;
-#     same-VM cross-realm references do NOT trigger the assertion
+#   • Cross-realm vsock CID collision assertion and unique legacy-VM ownership
 #   • Cross-realm external-network attachment conflict: advisory (assertion
 #     stays true) but index.realms.externalNetworkConflicts is populated
 #   • controller config: explicit workload identity is nested under `identity`
@@ -342,7 +340,6 @@ let
     };
   };
 
-  sameVmCfg = (mkEval [ sameVmTwoRealmsFixture ]).config;
   sameVmMessages = failureMessages [ sameVmTwoRealmsFixture ];
 
   # ── external-network attachment conflict fixture ─────────────────────────────
@@ -1235,6 +1232,19 @@ in
           "runtime-${workloadId}";
         firstClassRows =
           firstClassLocalVmCfg.d2b._bundle.providerRegistryV2Json.data.providers;
+        processDag = lib.findFirst
+          (dag: dag.vm == "corpbox")
+          null
+          wlCfg.d2b._bundle.processesJson.data.vms;
+        processIdentity = processDag.workloadIdentity;
+        processRealmId = identity.deriveRealmId
+          "${lib.concatStringsSep "." processIdentity.realmPath}.local-root";
+        processWorkloadId = identity.deriveWorkloadId
+          processRealmId processIdentity.workloadId;
+        runnerNode = lib.findFirst
+          (node: node.id == "cloud-hypervisor")
+          null
+          processDag.nodes;
         encoded = builtins.toJSON data;
       in {
         schemaVersion = data.schemaVersion;
@@ -1242,6 +1252,15 @@ in
         canonicalRealm = binding.realmId == realmId;
         canonicalWorkload = binding.workloadId == workloadId;
         canonicalProvider = descriptor.providerId == providerId;
+        processIdentityMatchesBinding =
+          binding.realmId == processRealmId
+          && binding.workloadId == processWorkloadId
+          && processIdentity.legacyVmName == "corpbox"
+          && processIdentity.runtimeKind == "nixos"
+          && processIdentity.providerId == "local-cloud-hypervisor";
+        runnerIsExplicit =
+          runnerNode.binaryPath != null
+          && runnerNode.argv != [ ];
         implementationId = descriptor.implementationId;
         providerType = descriptor.authority.type;
         placement = descriptor.placement.kind;
@@ -1264,6 +1283,8 @@ in
       canonicalRealm = true;
       canonicalWorkload = true;
       canonicalProvider = true;
+      processIdentityMatchesBinding = true;
+      runnerIsExplicit = true;
       implementationId = "cloud-hypervisor";
       providerType = "runtime";
       placement = "trusted-first-party-in-process";
@@ -1506,10 +1527,8 @@ in
     expected = true;
   };
 
-  # ── cross-realm vsock CID: same VM in two realms — assertion does NOT fire ────
-  # When both workloads reference the SAME VM, the cross-realm assertion must
-  # not fire (same-VM CID sharing is intentional).
-  "realm-workloads/cross-realm-same-vm-no-cid-collision" = {
+  # ── same legacy VM in two realms: unique ownership assertion fires ────────────
+  "realm-workloads/cross-realm-same-vm-rejected-as-duplicate-owner" = {
     expr =
       let
         crossRealmMessages = lib.filter
@@ -1517,11 +1536,14 @@ in
           sameVmMessages;
       in {
         noCollisionFired = crossRealmMessages == [ ];
-        configEvalsClean = lib.all (a: a.assertion) sameVmCfg.assertions;
+        duplicateOwnerRejected = hasMessage [
+          "referenced by multiple enabled explicit realm"
+          "exactly one realm/workload owner"
+        ] sameVmMessages;
       };
     expected = {
       noCollisionFired = true;
-      configEvalsClean = true;
+      duplicateOwnerRejected = true;
     };
   };
 
