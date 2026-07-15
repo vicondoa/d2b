@@ -10,22 +10,38 @@ use d2b_contracts::{
     v2_component_session::EndpointRole,
     v2_identity::ProviderType,
     v2_provider::{
-        AdoptionState, AuthorizedProviderScope, MAX_OBSERVABILITY_EXPORT_RANGE_MS,
-        MAX_OBSERVABILITY_QUERY_LIMIT, MAX_SAFE_JSON_INTEGER, MutationReceipt, MutationState,
-        ObservabilityCursor, ObservabilityExportFormat, ObservabilityProvider, ObservabilityView,
-        ObservationReason, ObservedLifecycleState, OperationBinding, Provider, ProviderCallContext,
-        ProviderCapability, ProviderCapabilitySet, ProviderContractError, ProviderDescriptor,
-        ProviderFailure, ProviderFailureKind, ProviderFuture, ProviderHandle, ProviderHealth,
-        ProviderHealthReason, ProviderHealthState, ProviderMethod, ProviderObservation,
-        ProviderOperationContext, ProviderOperationInput, ProviderOperationRequest,
-        ProviderPlacement, ProviderRemediation, ProviderTarget, RetryClass,
+        AdoptionState, AuthorizedProviderScope, ImplementationId,
+        MAX_OBSERVABILITY_EXPORT_RANGE_MS, MAX_OBSERVABILITY_QUERY_LIMIT, MAX_SAFE_JSON_INTEGER,
+        MutationReceipt, MutationState, ObservabilityCursor, ObservabilityExportFormat,
+        ObservabilityProvider, ObservabilityView, ObservationReason, ObservedLifecycleState,
+        OperationBinding, Provider, ProviderCallContext, ProviderCapability, ProviderCapabilitySet,
+        ProviderContractError, ProviderDescriptor, ProviderFactoryKey, ProviderFailure,
+        ProviderFailureKind, ProviderFuture, ProviderHandle, ProviderHealth, ProviderHealthReason,
+        ProviderHealthState, ProviderMethod, ProviderObservation, ProviderOperationContext,
+        ProviderOperationInput, ProviderOperationRequest, ProviderPlacement, ProviderRemediation,
+        ProviderTarget, RetryClass,
     },
 };
-use d2b_provider::{ProviderClock, SystemProviderClock};
+use d2b_provider::{
+    FactoryError, ProviderClock, ProviderFactory, ProviderInstance, SystemProviderClock,
+};
 use d2b_provider_toolkit::ProviderValues;
 
 pub const MAX_LOCAL_OBSERVABILITY_BYTES: u32 = 1024 * 1024;
 pub const OBSERVATION_RECORD_ENCODED_UPPER_BOUND_BYTES: u32 = 512;
+pub const IMPLEMENTATION_ID: &str = "local";
+
+pub fn implementation_id() -> ImplementationId {
+    ImplementationId::parse(IMPLEMENTATION_ID)
+        .unwrap_or_else(|_| unreachable!("static implementation id is valid"))
+}
+
+pub fn factory_key() -> ProviderFactoryKey {
+    ProviderFactoryKey {
+        provider_type: ProviderType::Observability,
+        implementation_id: implementation_id(),
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MetricLabel {
@@ -589,6 +605,69 @@ impl From<ProviderContractError> for ObservabilityProviderBuildError {
 }
 
 #[derive(Clone)]
+pub struct LocalObservabilityFactory {
+    limits: ObservabilityLimits,
+    queries: Arc<dyn ObservabilityQueryPort>,
+    exports: Arc<dyn ObservabilityExportPort>,
+    clock: Arc<dyn ProviderClock>,
+}
+
+pub type Factory = LocalObservabilityFactory;
+
+impl fmt::Debug for LocalObservabilityFactory {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LocalObservabilityFactory")
+            .field("key", &factory_key())
+            .field("limits", &self.limits)
+            .finish_non_exhaustive()
+    }
+}
+
+impl LocalObservabilityFactory {
+    pub fn new(
+        limits: ObservabilityLimits,
+        queries: Arc<dyn ObservabilityQueryPort>,
+        exports: Arc<dyn ObservabilityExportPort>,
+    ) -> Self {
+        Self::with_clock(limits, queries, exports, Arc::new(SystemProviderClock))
+    }
+
+    pub fn with_clock(
+        limits: ObservabilityLimits,
+        queries: Arc<dyn ObservabilityQueryPort>,
+        exports: Arc<dyn ObservabilityExportPort>,
+        clock: Arc<dyn ProviderClock>,
+    ) -> Self {
+        Self {
+            limits,
+            queries,
+            exports,
+            clock,
+        }
+    }
+}
+
+impl ProviderFactory for LocalObservabilityFactory {
+    fn construct(&self, descriptor: &ProviderDescriptor) -> Result<ProviderInstance, FactoryError> {
+        if descriptor.provider_type() != ProviderType::Observability
+            || descriptor.implementation_id != implementation_id()
+        {
+            return Err(FactoryError::Rejected);
+        }
+        LocalObservabilityProvider::with_clock(
+            descriptor.clone(),
+            self.limits,
+            self.queries.clone(),
+            self.exports.clone(),
+            self.clock.clone(),
+        )
+        .map(|provider| ProviderInstance::Observability(Arc::new(provider)))
+        .map_err(|_| FactoryError::Rejected)
+    }
+}
+
+#[derive(Clone)]
 pub struct LocalObservabilityProvider {
     descriptor: ProviderDescriptor,
     limits: ObservabilityLimits,
@@ -634,7 +713,7 @@ impl LocalObservabilityProvider {
         if descriptor.provider_type() != ProviderType::Observability {
             return Err(ObservabilityProviderBuildError::WrongProviderType);
         }
-        if descriptor.implementation_id.as_str() != "local" {
+        if descriptor.implementation_id != implementation_id() {
             return Err(ObservabilityProviderBuildError::WrongImplementation);
         }
         if !matches!(

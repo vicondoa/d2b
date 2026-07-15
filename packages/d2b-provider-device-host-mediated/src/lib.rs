@@ -11,14 +11,15 @@ use d2b_contracts::{
     v2_identity::ProviderType,
     v2_provider::{
         AdoptionRequest, AdoptionState, AuthorizedProviderScope, DeviceProvider, DeviceSelectorId,
-        Generation, HandleId, MutationReceipt, MutationState, ObservationReason,
+        Generation, HandleId, ImplementationId, MutationReceipt, MutationState, ObservationReason,
         ObservedLifecycleState, OperationBinding, PROVIDER_SCHEMA_VERSION, PlanId,
         PlannedResourceClass, Provider, ProviderCallContext, ProviderCapability,
-        ProviderCapabilitySet, ProviderContractError, ProviderDescriptor, ProviderFailure,
-        ProviderFailureKind, ProviderFuture, ProviderHandle, ProviderHandleKind, ProviderHealth,
-        ProviderHealthReason, ProviderHealthState, ProviderMethod, ProviderObservation,
-        ProviderOperationContext, ProviderOperationInput, ProviderOperationRequest,
-        ProviderPlacement, ProviderPlan, ProviderRemediation, ProviderTarget, RetryClass,
+        ProviderCapabilitySet, ProviderContractError, ProviderDescriptor, ProviderFactoryKey,
+        ProviderFailure, ProviderFailureKind, ProviderFuture, ProviderHandle, ProviderHandleKind,
+        ProviderHealth, ProviderHealthReason, ProviderHealthState, ProviderMethod,
+        ProviderObservation, ProviderOperationContext, ProviderOperationInput,
+        ProviderOperationRequest, ProviderPlacement, ProviderPlan, ProviderRemediation,
+        ProviderTarget, RetryClass,
     },
 };
 use d2b_host::{
@@ -29,10 +30,25 @@ use d2b_host::{
     usbip_argv::{UsbipArgvInput, UsbipSubcommand, generate_usbip_argv},
     video_argv::{VideoArgvInput, generate_video_argv},
 };
-use d2b_provider::{ProviderClock, SystemProviderClock};
+use d2b_provider::{
+    FactoryError, ProviderClock, ProviderFactory, ProviderInstance, SystemProviderClock,
+};
 use d2b_provider_toolkit::ProviderValues;
 
 pub const MAX_DEVICE_SELECTORS: usize = 32;
+pub const IMPLEMENTATION_ID: &str = "host-mediated";
+
+pub fn implementation_id() -> ImplementationId {
+    ImplementationId::parse(IMPLEMENTATION_ID)
+        .unwrap_or_else(|_| unreachable!("static implementation id is valid"))
+}
+
+pub fn factory_key() -> ProviderFactoryKey {
+    ProviderFactoryKey {
+        provider_type: ProviderType::Device,
+        implementation_id: implementation_id(),
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DeviceKind {
@@ -542,6 +558,69 @@ impl From<ProviderContractError> for DeviceProviderBuildError {
 }
 
 #[derive(Clone)]
+pub struct HostMediatedDeviceFactory {
+    selectors: Arc<Vec<DeviceSelectorDefinition>>,
+    effects: Arc<dyn DeviceEffectPort>,
+    queries: Arc<dyn DeviceQueryPort>,
+    clock: Arc<dyn ProviderClock>,
+}
+
+pub type Factory = HostMediatedDeviceFactory;
+
+impl fmt::Debug for HostMediatedDeviceFactory {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("HostMediatedDeviceFactory")
+            .field("key", &factory_key())
+            .field("selector_count", &self.selectors.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl HostMediatedDeviceFactory {
+    pub fn new(
+        selectors: Vec<DeviceSelectorDefinition>,
+        effects: Arc<dyn DeviceEffectPort>,
+        queries: Arc<dyn DeviceQueryPort>,
+    ) -> Self {
+        Self::with_clock(selectors, effects, queries, Arc::new(SystemProviderClock))
+    }
+
+    pub fn with_clock(
+        selectors: Vec<DeviceSelectorDefinition>,
+        effects: Arc<dyn DeviceEffectPort>,
+        queries: Arc<dyn DeviceQueryPort>,
+        clock: Arc<dyn ProviderClock>,
+    ) -> Self {
+        Self {
+            selectors: Arc::new(selectors),
+            effects,
+            queries,
+            clock,
+        }
+    }
+}
+
+impl ProviderFactory for HostMediatedDeviceFactory {
+    fn construct(&self, descriptor: &ProviderDescriptor) -> Result<ProviderInstance, FactoryError> {
+        if descriptor.provider_type() != ProviderType::Device
+            || descriptor.implementation_id != implementation_id()
+        {
+            return Err(FactoryError::Rejected);
+        }
+        HostMediatedDeviceProvider::with_clock(
+            descriptor.clone(),
+            self.selectors.as_ref().clone(),
+            self.effects.clone(),
+            self.queries.clone(),
+            self.clock.clone(),
+        )
+        .map(|provider| ProviderInstance::Device(Arc::new(provider)))
+        .map_err(|_| FactoryError::Rejected)
+    }
+}
+
+#[derive(Clone)]
 pub struct HostMediatedDeviceProvider {
     descriptor: ProviderDescriptor,
     selectors: Arc<BTreeMap<DeviceSelectorId, DeviceSelectorDefinition>>,
@@ -587,7 +666,7 @@ impl HostMediatedDeviceProvider {
         if descriptor.provider_type() != ProviderType::Device {
             return Err(DeviceProviderBuildError::WrongProviderType);
         }
-        if descriptor.implementation_id.as_str() != "host-mediated" {
+        if descriptor.implementation_id != implementation_id() {
             return Err(DeviceProviderBuildError::WrongImplementation);
         }
         if !matches!(

@@ -9,7 +9,8 @@ use std::{
 use crate::{
     AudioAdoptionOutcome, AudioCall, AudioConfiguration, AudioEffectPort, AudioEnsureOutcome,
     AudioHealth, AudioInspection, AudioPlanOutcome, AudioPortError, AudioQueryPort,
-    AudioSessionPlan, AudioState, PipewireVhostUserAudioProvider, live_audio_capabilities,
+    AudioSessionPlan, AudioState, Factory, PipewireVhostUserAudioProvider, factory_key,
+    implementation_id, live_audio_capabilities,
 };
 use async_trait::async_trait;
 use d2b_contracts::{
@@ -22,7 +23,7 @@ use d2b_contracts::{
     },
 };
 use d2b_host::audio_argv::{AudioArgvInput, AudioBackend};
-use d2b_provider::ProviderInstance;
+use d2b_provider::{FactoryError, ProviderFactory, ProviderInstance, ProviderRegistryBuilder};
 use d2b_provider_toolkit::{DeterministicClock, Fixture, check_provider_conformance};
 
 const NOW: u64 = 1_700_000_000_000;
@@ -122,8 +123,7 @@ fn fixture() -> Fixture {
     let mut descriptor = Fixture::new(ProviderType::Audio, 9)
         .expect("base fixture")
         .descriptor;
-    descriptor.implementation_id =
-        ImplementationId::parse("pipewire-vhost-user").expect("implementation");
+    descriptor.implementation_id = implementation_id();
     descriptor.capabilities = live_audio_capabilities().expect("capabilities");
     descriptor.placement = ProviderPlacement::TrustedFirstPartyInProcess {
         realm_id: realm_id.clone(),
@@ -164,6 +164,60 @@ fn provider(
         Arc::new(DeterministicClock::new(NOW)),
     )
     .expect("provider")
+}
+
+fn factory() -> Factory {
+    Factory::with_clock(
+        configuration(),
+        Arc::new(FakeEffects::default()),
+        Arc::new(FakeQueries::default()),
+        Arc::new(DeterministicClock::new(NOW)),
+    )
+}
+
+#[test]
+fn factory_key_constructs_only_the_exact_audio_implementation() {
+    let fixture = fixture();
+    assert_eq!(factory_key().provider_type, ProviderType::Audio);
+    assert_eq!(factory_key().implementation_id, implementation_id());
+    let instance = factory()
+        .construct(&fixture.descriptor)
+        .expect("audio instance");
+    assert!(matches!(instance, ProviderInstance::Audio(_)));
+    assert_eq!(instance.descriptor(), fixture.descriptor);
+    let mut builder = ProviderRegistryBuilder::new(
+        fixture.descriptor.registry_generation,
+        fixture.descriptor.configured_scope_digest.clone(),
+        NOW,
+    );
+    builder
+        .register_factory(factory_key(), Arc::new(factory()))
+        .expect("register factory")
+        .register_instance(fixture.descriptor.clone())
+        .expect("register instance");
+    assert_eq!(
+        builder
+            .finish()
+            .expect("registry")
+            .snapshot()
+            .providers
+            .as_slice(),
+        std::slice::from_ref(&fixture.descriptor)
+    );
+
+    let wrong_type = Fixture::new(ProviderType::Device, 12).expect("wrong-type fixture");
+    assert!(matches!(
+        factory().construct(&wrong_type.descriptor),
+        Err(FactoryError::Rejected)
+    ));
+
+    let mut wrong_implementation = fixture.descriptor.clone();
+    wrong_implementation.implementation_id =
+        ImplementationId::parse("other-audio").expect("implementation");
+    assert!(matches!(
+        factory().construct(&wrong_implementation),
+        Err(FactoryError::Rejected)
+    ));
 }
 
 #[tokio::test]

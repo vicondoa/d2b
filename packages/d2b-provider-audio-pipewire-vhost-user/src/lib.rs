@@ -16,21 +16,36 @@ use d2b_contracts::{
     v2_identity::ProviderType,
     v2_provider::{
         AdoptionRequest, AdoptionState, AudioChannel, AudioDirection, AudioProvider,
-        AuthorizedProviderScope, Generation, HandleId, MutationReceipt, MutationState,
-        ObservationReason, ObservedLifecycleState, OperationBinding, Provider, ProviderCallContext,
-        ProviderCapability, ProviderCapabilitySet, ProviderContractError, ProviderDescriptor,
-        ProviderFailure, ProviderFailureKind, ProviderFuture, ProviderHandle, ProviderHandleKind,
-        ProviderHealth, ProviderHealthReason, ProviderHealthState, ProviderMethod,
-        ProviderObservation, ProviderOperationContext, ProviderOperationInput,
-        ProviderOperationRequest, ProviderPlacement, ProviderRemediation, ProviderTarget,
-        RetryClass,
+        AuthorizedProviderScope, Generation, HandleId, ImplementationId, MutationReceipt,
+        MutationState, ObservationReason, ObservedLifecycleState, OperationBinding, Provider,
+        ProviderCallContext, ProviderCapability, ProviderCapabilitySet, ProviderContractError,
+        ProviderDescriptor, ProviderFactoryKey, ProviderFailure, ProviderFailureKind,
+        ProviderFuture, ProviderHandle, ProviderHandleKind, ProviderHealth, ProviderHealthReason,
+        ProviderHealthState, ProviderMethod, ProviderObservation, ProviderOperationContext,
+        ProviderOperationInput, ProviderOperationRequest, ProviderPlacement, ProviderRemediation,
+        ProviderTarget, RetryClass,
     },
 };
 use d2b_host::audio_argv::{AudioArgvInput, generate_audio_argv};
-use d2b_provider::{ProviderClock, SystemProviderClock};
+use d2b_provider::{
+    FactoryError, ProviderClock, ProviderFactory, ProviderInstance, SystemProviderClock,
+};
 use d2b_provider_toolkit::ProviderValues;
 
 const GENERATED_ID_DIGEST_CHARS: usize = 24;
+pub const IMPLEMENTATION_ID: &str = "pipewire-vhost-user";
+
+pub fn implementation_id() -> ImplementationId {
+    ImplementationId::parse(IMPLEMENTATION_ID)
+        .unwrap_or_else(|_| unreachable!("static implementation id is valid"))
+}
+
+pub fn factory_key() -> ProviderFactoryKey {
+    ProviderFactoryKey {
+        provider_type: ProviderType::Audio,
+        implementation_id: implementation_id(),
+    }
+}
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AudioRouteId(String);
@@ -362,6 +377,74 @@ impl From<ProviderContractError> for AudioProviderBuildError {
 }
 
 #[derive(Clone)]
+pub struct PipewireVhostUserAudioFactory {
+    configuration: AudioConfiguration,
+    effects: Arc<dyn AudioEffectPort>,
+    queries: Arc<dyn AudioQueryPort>,
+    clock: Arc<dyn ProviderClock>,
+}
+
+pub type Factory = PipewireVhostUserAudioFactory;
+
+impl fmt::Debug for PipewireVhostUserAudioFactory {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PipewireVhostUserAudioFactory")
+            .field("key", &factory_key())
+            .field("configuration", &self.configuration)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PipewireVhostUserAudioFactory {
+    pub fn new(
+        configuration: AudioConfiguration,
+        effects: Arc<dyn AudioEffectPort>,
+        queries: Arc<dyn AudioQueryPort>,
+    ) -> Self {
+        Self::with_clock(
+            configuration,
+            effects,
+            queries,
+            Arc::new(SystemProviderClock),
+        )
+    }
+
+    pub fn with_clock(
+        configuration: AudioConfiguration,
+        effects: Arc<dyn AudioEffectPort>,
+        queries: Arc<dyn AudioQueryPort>,
+        clock: Arc<dyn ProviderClock>,
+    ) -> Self {
+        Self {
+            configuration,
+            effects,
+            queries,
+            clock,
+        }
+    }
+}
+
+impl ProviderFactory for PipewireVhostUserAudioFactory {
+    fn construct(&self, descriptor: &ProviderDescriptor) -> Result<ProviderInstance, FactoryError> {
+        if descriptor.provider_type() != ProviderType::Audio
+            || descriptor.implementation_id != implementation_id()
+        {
+            return Err(FactoryError::Rejected);
+        }
+        PipewireVhostUserAudioProvider::with_clock(
+            descriptor.clone(),
+            self.configuration.clone(),
+            self.effects.clone(),
+            self.queries.clone(),
+            self.clock.clone(),
+        )
+        .map(|provider| ProviderInstance::Audio(Arc::new(provider)))
+        .map_err(|_| FactoryError::Rejected)
+    }
+}
+
+#[derive(Clone)]
 pub struct PipewireVhostUserAudioProvider {
     descriptor: ProviderDescriptor,
     configuration: AudioConfiguration,
@@ -407,7 +490,7 @@ impl PipewireVhostUserAudioProvider {
         if descriptor.provider_type() != ProviderType::Audio {
             return Err(AudioProviderBuildError::WrongProviderType);
         }
-        if descriptor.implementation_id.as_str() != "pipewire-vhost-user" {
+        if descriptor.implementation_id != implementation_id() {
             return Err(AudioProviderBuildError::WrongImplementation);
         }
         if !matches!(
