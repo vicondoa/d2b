@@ -23,6 +23,7 @@ use d2b_contracts::{
         SourceVersion,
     },
 };
+use d2b_provider::{FactoryError, ProviderFactory, ProviderInstance, ProviderRegistryBuilder};
 use d2b_provider_toolkit::{DeterministicClock, Fixture, Secret};
 
 use super::*;
@@ -635,6 +636,86 @@ fn capabilities_match_the_seven_implemented_methods_exactly() {
     let harness = Harness::container_image();
     assert!(harness.provider.capabilities() == capabilities);
     assert!(harness.provider.descriptor().capabilities == capabilities);
+}
+
+#[test]
+fn factory_key_constructs_the_runtime_through_the_registry() {
+    let harness = Harness::container_image();
+    let key = aca_provider_factory_key().unwrap();
+    assert_eq!(key.provider_type, ProviderType::Runtime);
+    assert_eq!(key.implementation_id.as_str(), ACA_IMPLEMENTATION_ID);
+    assert_eq!(
+        AzureContainerAppsRuntimeProviderFactory::key().unwrap(),
+        key
+    );
+
+    let factory = Arc::new(AzureContainerAppsRuntimeProviderFactory::with_clock(
+        harness.configuration.clone(),
+        harness.credential.clone(),
+        harness.control.clone(),
+        Arc::new(DeterministicClock::new(NOW_UNIX_MS)),
+    ));
+    let instance = factory.construct(&harness.fixture.descriptor).unwrap();
+    assert!(matches!(&instance, ProviderInstance::Runtime(_)));
+    assert_eq!(instance.descriptor(), harness.fixture.descriptor);
+    assert_eq!(
+        instance.capabilities(),
+        AzureContainerAppsRuntimeProvider::advertised_capabilities().unwrap()
+    );
+
+    let mut builder = ProviderRegistryBuilder::new(
+        harness.fixture.descriptor.registry_generation,
+        fingerprint(900),
+        NOW_UNIX_MS,
+    );
+    builder.register_factory(key.clone(), factory).unwrap();
+    builder
+        .register_instance(harness.fixture.descriptor.clone())
+        .unwrap();
+    let registry = builder.finish().unwrap();
+    assert_eq!(registry.snapshot().factories.as_slice(), [key]);
+}
+
+#[test]
+fn factory_rejects_wrong_descriptor_type_before_external_calls() {
+    let harness = Harness::container_image();
+    let factory = AzureContainerAppsRuntimeProviderFactory::with_clock(
+        harness.configuration.clone(),
+        harness.credential.clone(),
+        harness.control.clone(),
+        Arc::new(DeterministicClock::new(NOW_UNIX_MS)),
+    );
+    let mut wrong_type = Fixture::new(ProviderType::Credential, 2)
+        .unwrap()
+        .descriptor;
+    wrong_type.implementation_id = ImplementationId::parse(ACA_IMPLEMENTATION_ID).unwrap();
+
+    assert!(matches!(
+        factory.construct(&wrong_type),
+        Err(FactoryError::Rejected)
+    ));
+    assert!(harness.control.calls().is_empty());
+    assert_eq!(harness.credential.acquisition_count(), 0);
+}
+
+#[test]
+fn factory_rejects_wrong_implementation_before_external_calls() {
+    let harness = Harness::container_image();
+    let factory = AzureContainerAppsRuntimeProviderFactory::with_clock(
+        harness.configuration.clone(),
+        harness.credential.clone(),
+        harness.control.clone(),
+        Arc::new(DeterministicClock::new(NOW_UNIX_MS)),
+    );
+    let mut wrong_implementation = harness.fixture.descriptor.clone();
+    wrong_implementation.implementation_id = ImplementationId::parse("other-runtime").unwrap();
+
+    assert!(matches!(
+        factory.construct(&wrong_implementation),
+        Err(FactoryError::Rejected)
+    ));
+    assert!(harness.control.calls().is_empty());
+    assert_eq!(harness.credential.acquisition_count(), 0);
 }
 
 #[tokio::test]
