@@ -916,6 +916,7 @@ fn operation_inputs_are_closed_bounded_and_method_exact() {
         (&configured, ProviderMethod::RuntimeExecute),
         (&power, ProviderMethod::InfrastructureSetPowerState),
         (&binding, ProviderMethod::InfrastructureBootstrapBinding),
+        (&binding, ProviderMethod::TransportConnect),
         (&binding, ProviderMethod::TransportRevokeBinding),
         (&snapshot, ProviderMethod::StorageSnapshot),
         (&selector, ProviderMethod::DevicePlanAttach),

@@ -273,11 +273,11 @@ fn sample_input(method: ProviderMethod) -> Result<ProviderOperationInput, Provid
                 state: InfrastructurePowerState::Running,
             }
         }
-        ProviderMethod::InfrastructureBootstrapBinding | ProviderMethod::TransportRevokeBinding => {
-            ProviderOperationInput::TransportBinding {
-                transport_binding_id: TransportBindingId::parse("transport-binding")?,
-            }
-        }
+        ProviderMethod::InfrastructureBootstrapBinding
+        | ProviderMethod::TransportConnect
+        | ProviderMethod::TransportRevokeBinding => ProviderOperationInput::TransportBinding {
+            transport_binding_id: TransportBindingId::parse("transport-binding")?,
+        },
         ProviderMethod::StorageSnapshot => ProviderOperationInput::StorageSnapshot {
             snapshot_id: StorageSnapshotId::parse("snapshot-fixture")?,
         },

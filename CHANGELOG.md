@@ -52,6 +52,7 @@ deprecations ship one minor release before removal.
 
 - Added an exact user-agent placement binding for userd-owned Secret Service
   leases while preserving provider-agent co-location for cloud credentials.
+- Bound transport connection requests to an exact opaque transport binding ID.
 - Strengthened provider dependency policy to inspect transitive Cargo package
   identities and keep denied Azure VM scaffolds out of production graphs.
 - Split `d2b-contracts` into default-empty, least-privilege feature families,

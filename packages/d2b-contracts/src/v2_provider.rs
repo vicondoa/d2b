@@ -1366,7 +1366,8 @@ impl ProviderOperationInput {
             ProviderMethod::InfrastructureSetPowerState => {
                 matches!(self, Self::InfrastructurePowerState { .. })
             }
-            ProviderMethod::InfrastructureBootstrapBinding
+            ProviderMethod::TransportConnect
+            | ProviderMethod::InfrastructureBootstrapBinding
             | ProviderMethod::TransportRevokeBinding => {
                 matches!(self, Self::TransportBinding { .. })
             }

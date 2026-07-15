@@ -56,7 +56,7 @@ Each method accepts exactly one input shape:
 | --- | --- |
 | `runtime-execute` | configured runtime item ID |
 | `infrastructure-set-power-state` | `running` or `stopped` |
-| `infrastructure-bootstrap-binding`, `transport-revoke-binding` | transport binding ID |
+| `infrastructure-bootstrap-binding`, `transport-connect`, `transport-revoke-binding` | transport binding ID |
 | `storage-snapshot` | snapshot ID |
 | `device-plan-attach` | device selector ID |
 | `audio-set-state` | speaker/output or microphone/input plus mute and/or volume |
