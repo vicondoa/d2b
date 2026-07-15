@@ -8,7 +8,7 @@ let
   gitTownVersion = "23.0.1";
   rustStableVersion = "1.94.1";
 
-  stableRust = pkgs.rust-bin.stable.${rustStableVersion}.minimal;
+  stableRust = pkgs.rust-bin.stable.${rustStableVersion}.default;
   nightlyRust = pkgs.rust-bin.nightly.${cargoUdepsNightlyDate}.minimal;
   stableRustPlatform = pkgs.makeRustPlatform {
     cargo = stableRust;

@@ -1,0 +1,35 @@
+[package]
+name = "d2b-session-unix"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[features]
+default = []
+host-socket = [
+    "dep:async-trait",
+    "dep:d2b-contracts",
+    "dep:d2b-session",
+    "dep:rustix",
+    "dep:tokio",
+]
+
+[dependencies]
+async-trait = { workspace = true, optional = true }
+d2b-contracts = { workspace = true, default-features = false, optional = true, features = ["v2-component-session"] }
+d2b-session = { workspace = true, default-features = false, optional = true }
+rustix = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["net"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "unix_session"
+required-features = ["host-socket"]

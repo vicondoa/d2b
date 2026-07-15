@@ -1223,6 +1223,7 @@
           cargo-semver-checks semver-checks --version \
             | grep -F 'cargo-semver-checks 0.47.0'
           rustc --version | grep -F 'rustc 1.94.1'
+          clippy-driver -vV | grep -F 'release: 1.94.1'
           ${deliveryTools.nightlyRust}/bin/rustc --version \
             | grep -E '^rustc 1\.93\.0-nightly \([0-9a-f]+ 2025-11-30\)$'
 

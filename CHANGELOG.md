@@ -12,6 +12,11 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added canonical d2b 2.0 implementations for Unix sessions, authenticated
+  sessions, providers, provider tooling, state persistence, and clients.
+- Added Tokio-async client/session/provider APIs and explicit `spawn_blocking`
+  state adapters so synchronous filesystem and lock calls do not block runtime
+  workers.
 - Added independent Rust and pure-Nix canonical v2 identity derivation with
   shared vectors, plus generated schemas and references for identity,
   ComponentSession, providers, services, and state/storage/sync/audit.
@@ -45,6 +50,10 @@ deprecations ship one minor release before removal.
 - Unified all maintained host and guest Rust crates at version 2.0.0 under one
   workspace, toolchain policy, dependency graph, and canonical lockfile while
   retaining focused broker feature and static guest validation.
+- Standardized common-API implementation crates on sortable
+  `<base>-<implementation>` names, including `d2b-provider-host` and
+  `d2b-session-unix`, and made the workspace member inventory
+  alphanumerically ordered.
 - Kept sccache enabled throughout generated CI and persisted its local cache
   without exposing cache-service credentials to compiled code.
 - Replaced the unavailable GitHub stack preview dependency with locked Git
@@ -74,6 +83,23 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Closed d2b 2.0 foundation integration gaps with a driven ComponentSession,
+  authenticated two-phase descriptor binding, phase-aware peer credentials,
+  canonical provider-agent serving, lock-bound state generations, and bounded
+  application-gated logical streams, cancellation-safe async kernel adapters,
+  framed Unix streams, transport-scoped routing, adapter-owned out-of-order
+  ttrpc correlation, terminal stream cleanup, concurrent named-stream
+  demultiplexing, actionable closed error context, transfer-safe OFD locks, and
+  race-free provider drain.
+- Isolated standalone proof targets by proof and pinned Rust toolchain so
+  concurrent immutable Layer-1 validation cannot reuse incompatible rustc
+  metadata from the main workspace.
+- Pinned the exact `rustc`, `rustdoc`, and `clippy-driver` executables used by
+  workspace and proof Cargo commands, and separated proof clippy/test targets,
+  preventing intra-gate compiler selection drift.
+- Shipped the complete pinned stable Rust distribution in delivery shells and
+  asserted Clippy's compiler identity, preventing fallback to a newer host
+  `clippy-driver`.
 - Closed W2 service-contract ambiguity by making provider capability claims
   method-exact, binding response attachments and streams, rejecting mixed
   identity scopes and contradictory error outcomes, returning exact typed
@@ -492,7 +518,7 @@ deprecations ship one minor release before removal.
   `d2b-constellation-router` (the codec-neutral operation router +
   single-owner idempotency/dedup store keyed by the full operation
   namespace), `d2b-daemon-access` (the transport-neutral CLI↔daemon
-  semantic API with its current local-Unix binding), `d2b-host-providers`
+  semantic API with its current local-Unix binding), `d2b-provider-host`
   (byte-identical local adapters over the existing Cloud Hypervisor and
   cross-domain Wayland argv generators), plus compile-only constellation
   peer-module skeletons inside `d2bd`. These crates are the foundation

@@ -1,5 +1,5 @@
 [package]
-name = "d2b-host-providers"
+name = "d2b-provider-host"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

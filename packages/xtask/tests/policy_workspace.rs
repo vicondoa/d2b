@@ -6,6 +6,21 @@ use std::process::Command;
 
 const CONTRACTS_CRATE: &str = "d2b-contracts";
 const FOCUSED_POLICY_PACKAGES: &[&str] = &["d2b-priv-broker", "d2b-guest-shell-runner"];
+const V2_FOUNDATION_CRATES: &[&str] = &[
+    "d2b-client",
+    "d2b-provider",
+    "d2b-provider-toolkit",
+    "d2b-session",
+    "d2b-session-unix",
+    "d2b-state",
+];
+const IMPLEMENTATION_CRATES: &[&str] = &[
+    "d2b-provider-aca",
+    "d2b-provider-host",
+    "d2b-provider-relay",
+    "d2b-realm-codec-protobuf",
+    "d2b-session-unix",
+];
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -61,6 +76,67 @@ fn workspace_names_contract_crate_by_role() {
 }
 
 #[test]
+fn implementation_crates_are_base_first_and_workspace_members_are_sorted() {
+    let workspace = read_repo_file("packages/Cargo.toml");
+    for package in IMPLEMENTATION_CRATES {
+        assert!(
+            workspace.contains(&format!("\"{package}\"")),
+            "workspace must contain base-first implementation crate {package}"
+        );
+    }
+
+    for forbidden in ["d2b-host-providers", "d2b-unix-session"] {
+        assert!(
+            !workspace.contains(forbidden),
+            "workspace must not contain implementation-before-base crate {forbidden}"
+        );
+    }
+
+    let members = workspace
+        .split_once("members = [")
+        .and_then(|(_, rest)| rest.split_once(']'))
+        .map(|(members, _)| members)
+        .expect("workspace members array");
+    let actual = members
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix('"'))
+        .filter_map(|line| line.strip_suffix("\","))
+        .collect::<Vec<_>>();
+    let mut sorted = actual.clone();
+    sorted.sort_unstable();
+    assert_eq!(
+        actual, sorted,
+        "workspace members must remain alphanumerically sorted"
+    );
+}
+
+#[test]
+fn standalone_proofs_isolate_mixed_toolchain_targets() {
+    let script = read_repo_file("tests/test-proofs.sh");
+    assert!(
+        script.contains("CARGO_TARGET_DIR/d2b-proofs/$RUSTUP_TOOLCHAIN")
+            && script.contains("clippy_target_args=(--target-dir")
+            && script.contains("test_target_args=(--target-dir")
+            && script.contains("d2b_activate_rust_toolchain_path \"$pinned_channel\"")
+            && script.contains("CLIPPY_DRIVER=\"$proof_clippy_driver\""),
+        "standalone proof crates must not share target metadata across rustc versions"
+    );
+    let rust_gate = read_repo_file("tests/test-rust.sh");
+    assert!(
+        rust_gate.contains(
+            "export RUSTC=\"$gate_rustc\" RUSTDOC=\"$gate_rustdoc\" CLIPPY_DRIVER=\"$gate_clippy_driver\""
+        )
+            && rust_gate.contains("RUSTC does not match packages/rust-toolchain.toml"),
+        "workspace Rust gate must pin the compiler and clippy executables used by Cargo"
+    );
+    let delivery_tools = read_repo_file("pkgs/delivery-tools.nix");
+    assert!(
+        delivery_tools.contains("rust-bin.stable.${rustStableVersion}.default"),
+        "delivery shell must provide matching clippy/rustfmt with pinned stable Rust"
+    );
+}
+
+#[test]
 fn stale_ipc_crate_name_is_absent_from_current_sources() {
     let old_hyphen = format!("{}{}", "d2b", "-ipc");
     let old_underscore = format!("{}{}", "d2b", "_ipc");
@@ -102,6 +178,7 @@ fn focused_packages_share_workspace_lock_and_keep_supply_chain_policy() {
             let path = root.join("packages").join(package).join(required);
             assert!(path.exists(), "{} must exist", path.display());
         }
+
         assert!(
             !root
                 .join("packages")
@@ -115,4 +192,140 @@ fn focused_packages_share_workspace_lock_and_keep_supply_chain_policy() {
             "flake supply-chain gates must cover {package}"
         );
     }
+}
+
+#[test]
+fn v2_foundation_crates_are_default_empty_and_not_publishable() {
+    let root = repo_root();
+    let workspace = read_repo_file("packages/Cargo.toml");
+    for package in V2_FOUNDATION_CRATES {
+        assert!(
+            workspace.contains(&format!("\"{package}\""))
+                && workspace.contains(&format!(
+                    "{package} = {{ path = \"{package}\", version = \"2.0.0\", default-features = false }}"
+                )),
+            "workspace must own {package} with default features disabled"
+        );
+        let manifest = read_repo_file(&format!("packages/{package}/Cargo.toml"));
+        for required in [
+            "version.workspace = true",
+            "rust-version.workspace = true",
+            "publish = false",
+            "[features]\ndefault = []",
+            "[lints]\nworkspace = true",
+        ] {
+            assert!(
+                manifest.contains(required),
+                "{package} manifest is missing {required:?}"
+            );
+        }
+
+        assert!(
+            !root
+                .join("packages")
+                .join(package)
+                .join("Cargo.lock")
+                .exists(),
+            "{package} must use the workspace lockfile"
+        );
+        for dependency in ["d2b-contracts", "d2b-provider", "d2b-session", "ttrpc"] {
+            if manifest.contains(&format!("{dependency} =")) {
+                assert!(
+                    manifest.lines().any(|line| {
+                        line.starts_with(&format!("{dependency} ="))
+                            && line.contains("default-features = false")
+                    }),
+                    "{package} must disable default features for {dependency}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn v2_foundation_delivery_fingerprints_cover_every_tracked_file() {
+    let manifest: serde_json::Value =
+        serde_json::from_str(&read_repo_file("delivery/manifest.json")).expect("delivery manifest");
+    let actual = manifest["contract_fingerprints"]
+        .as_array()
+        .expect("contract fingerprints")
+        .iter()
+        .filter(|row| {
+            row["name"]
+                .as_str()
+                .is_some_and(|name| name.starts_with("w3-"))
+        })
+        .map(|row| row["path"].as_str().expect("fingerprint path").to_owned())
+        .collect::<BTreeSet<_>>();
+
+    let mut expected = git_tracked_files()
+        .into_iter()
+        .filter(|path| {
+            V2_FOUNDATION_CRATES
+                .iter()
+                .any(|package| path.starts_with(&format!("packages/{package}/")))
+        })
+        .collect::<BTreeSet<_>>();
+    expected.insert("docs/reference/v2-foundation-crates.md".to_owned());
+    expected.insert("packages/xtask/tests/policy_workspace.rs".to_owned());
+
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn v2_foundation_io_surfaces_are_async_first() {
+    let client = read_repo_file("packages/d2b-client/src/client.rs");
+    let connector = read_repo_file("packages/d2b-client/src/session.rs");
+    let session_driver = read_repo_file("packages/d2b-session/src/driver.rs");
+    let provider_rpc = read_repo_file("packages/d2b-provider/src/rpc.rs");
+    for required in [
+        "pub async fn connect",
+        "pub async fn invoke",
+        "pub async fn invoke_with_attachments",
+        "pub async fn named_stream",
+    ] {
+        assert!(client.contains(required), "client is missing {required}");
+    }
+    assert!(
+        connector.contains("#[async_trait]")
+            && connector.contains("pub trait ComponentSessionConnector")
+            && connector.contains("async fn connect"),
+        "client connector must be async"
+    );
+    assert!(
+        session_driver.contains("#[async_trait]")
+            && session_driver.contains("pub trait ComponentSessionDriver")
+            && session_driver.contains("async fn start_ttrpc")
+            && session_driver.contains("async fn receive_ttrpc")
+            && session_driver.contains("async fn complete_ttrpc")
+            && !session_driver.contains("async fn invoke"),
+        "canonical session driver must be async"
+    );
+    assert!(
+        provider_rpc.contains("#[async_trait]")
+            && provider_rpc.contains("pub trait AuthenticatedProviderRpc")
+            && provider_rpc.contains("async fn invoke"),
+        "provider RPC must be async"
+    );
+
+    let state_manifest = read_repo_file("packages/d2b-state/Cargo.toml");
+    let state_async = read_repo_file("packages/d2b-state/src/tokio_api.rs");
+    assert!(
+        state_manifest.contains("tokio = [\"host-fs\", \"dep:tokio\"]")
+            && state_manifest
+                .contains("tokio = { workspace = true, features = [\"rt\"], optional = true }"),
+        "state Tokio adapters must remain explicit and optional"
+    );
+    assert!(
+        state_async.contains("tokio::task::spawn_blocking")
+            && !state_async.contains("std::fs::")
+            && !state_async.contains("thread::sleep"),
+        "sync kernel state APIs must be isolated behind spawn_blocking"
+    );
+    assert!(
+        read_repo_file("packages/d2b-state/src/lib.rs").contains(
+            "#[cfg(all(feature = \"host-fs\", not(target_os = \"linux\")))]\ncompile_error!(\"the host-fs feature requires Linux\");"
+        ),
+        "state host filesystem/OFD-lock support must fail explicitly off Linux"
+    );
 }

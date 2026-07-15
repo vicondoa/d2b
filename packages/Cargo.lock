@@ -981,6 +981,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-client"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-session",
+ "d2b-session-unix",
+ "protobuf",
+ "tokio",
+ "ttrpc",
+]
+
+[[package]]
 name = "d2b-clipd"
 version = "2.0.0"
 dependencies = [
@@ -1177,19 +1190,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "d2b-host-providers"
-version = "2.0.0"
-dependencies = [
- "async-trait",
- "d2b-core",
- "d2b-host",
- "d2b-realm-core",
- "d2b-realm-provider",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "d2b-notify"
 version = "2.0.0"
 dependencies = [
@@ -1220,6 +1220,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-provider"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "tokio",
+]
+
+[[package]]
 name = "d2b-provider-aca"
 version = "2.0.0"
 dependencies = [
@@ -1234,6 +1243,19 @@ dependencies = [
  "sha2",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "d2b-provider-host"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-core",
+ "d2b-host",
+ "d2b-realm-core",
+ "d2b-realm-provider",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -1257,6 +1279,20 @@ dependencies = [
  "tracing",
  "urlencoding",
  "webpki-roots 0.26.11",
+]
+
+[[package]]
+name = "d2b-provider-toolkit"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider",
+ "d2b-session",
+ "protobuf",
+ "serde_json",
+ "tokio",
+ "ttrpc",
 ]
 
 [[package]]
@@ -1321,12 +1357,50 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-session"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "protobuf",
+ "serde_json",
+ "sha2",
+ "snow",
+ "tokio",
+ "ttrpc",
+]
+
+[[package]]
+name = "d2b-session-unix"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-session",
+ "rustix 0.38.44",
+ "tokio",
+]
+
+[[package]]
 name = "d2b-sk-frontend"
 version = "2.0.0"
 dependencies = [
  "libc",
  "tokio",
  "tokio-vsock",
+]
+
+[[package]]
+name = "d2b-state"
+version = "2.0.0"
+dependencies = [
+ "d2b-contracts",
+ "nix 0.29.0",
+ "rustix 0.38.44",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
 ]
 
 [[package]]

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "program": "adr0045",
-  "wave": "w2",
+  "wave": "w3",
   "authority_repository": "github.com/vicondoa/d2b",
   "panel_trust_root_sha256": "ce93b41c335753cbc98033b5011955967795cd1df90c903d30b8ac0be1f351d3",
   "repositories": [
@@ -9,15 +9,15 @@
       "id": "github.com/vicondoa/d2b",
       "object_format": "sha1",
       "trunk_ref": "main",
-      "integration_ref": "adr0045-w2-integrated"
+      "integration_ref": "adr0045-w3-integrated"
     }
   ],
   "stack_nodes": [
     {
-      "id": "d2b-w2",
+      "id": "d2b-w3",
       "repository": "github.com/vicondoa/d2b",
-      "branch": "adr0045-w2-integrated",
-      "pr_number": 311,
+      "branch": "adr0045-w3-integrated",
+      "pr_number": 312,
       "external_dependencies": []
     }
   ],
@@ -40,7 +40,7 @@
   ],
   "required_checks": [
     {
-      "node": "d2b-w2",
+      "node": "d2b-w3",
       "name": "check",
       "publisher": {
         "kind": "check_run",
@@ -51,7 +51,7 @@
       }
     },
     {
-      "node": "d2b-w2",
+      "node": "d2b-w3",
       "name": "eval",
       "publisher": {
         "kind": "check_run",
@@ -62,7 +62,7 @@
       }
     },
     {
-      "node": "d2b-w2",
+      "node": "d2b-w3",
       "name": "eval-shell-tests",
       "publisher": {
         "kind": "check_run",
@@ -647,6 +647,341 @@
       "name": "v2-state-schema",
       "repository": "github.com/vicondoa/d2b",
       "path": "docs/reference/schemas/v2/state-storage-sync-audit.json"
+    },
+    {
+      "name": "w3-client-cargo",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-client/Cargo.toml"
+    },
+    {
+      "name": "w3-client-client",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-client/src/client.rs"
+    },
+    {
+      "name": "w3-client-error",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-client/src/error.rs"
+    },
+    {
+      "name": "w3-client-host-socket",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-client/src/host_socket.rs"
+    },
+    {
+      "name": "w3-client-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-client/src/lib.rs"
+    },
+    {
+      "name": "w3-client-service",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-client/src/service.rs"
+    },
+    {
+      "name": "w3-client-session",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-client/src/session.rs"
+    },
+    {
+      "name": "w3-client-target",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-client/src/target.rs"
+    },
+    {
+      "name": "w3-client-tests",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-client/tests/client.rs"
+    },
+    {
+      "name": "w3-foundation-reference",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "docs/reference/v2-foundation-crates.md"
+    },
+    {
+      "name": "w3-provider-cargo",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider/Cargo.toml"
+    },
+    {
+      "name": "w3-provider-context",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider/src/context.rs"
+    },
+    {
+      "name": "w3-provider-error",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider/src/error.rs"
+    },
+    {
+      "name": "w3-provider-instance",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider/src/instance.rs"
+    },
+    {
+      "name": "w3-provider-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider/src/lib.rs"
+    },
+    {
+      "name": "w3-provider-registry",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider/src/registry.rs"
+    },
+    {
+      "name": "w3-provider-rpc",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider/src/rpc.rs"
+    },
+    {
+      "name": "w3-provider-tests",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider/tests/runtime.rs"
+    },
+    {
+      "name": "w3-provider-toolkit-adapter",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-toolkit/src/adapter.rs"
+    },
+    {
+      "name": "w3-provider-toolkit-cargo",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-toolkit/Cargo.toml"
+    },
+    {
+      "name": "w3-provider-toolkit-conformance",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-toolkit/src/conformance.rs"
+    },
+    {
+      "name": "w3-provider-toolkit-fixture",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-toolkit/src/fixture.rs"
+    },
+    {
+      "name": "w3-provider-toolkit-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-toolkit/src/lib.rs"
+    },
+    {
+      "name": "w3-provider-toolkit-redaction",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-toolkit/src/redaction.rs"
+    },
+    {
+      "name": "w3-provider-toolkit-registration",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-toolkit/src/registration.rs"
+    },
+    {
+      "name": "w3-provider-toolkit-server",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-toolkit/src/server.rs"
+    },
+    {
+      "name": "w3-provider-toolkit-tests",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-toolkit/tests/conformance.rs"
+    },
+    {
+      "name": "w3-session-attachment",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session/src/attachment.rs"
+    },
+    {
+      "name": "w3-session-bootstrap",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session/src/bootstrap.rs"
+    },
+    {
+      "name": "w3-session-cancellation",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session/src/cancellation.rs"
+    },
+    {
+      "name": "w3-session-cargo",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session/Cargo.toml"
+    },
+    {
+      "name": "w3-session-deadline",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session/src/deadline.rs"
+    },
+    {
+      "name": "w3-session-driver",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session/src/driver.rs"
+    },
+    {
+      "name": "w3-session-engine",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session/src/engine.rs"
+    },
+    {
+      "name": "w3-session-error",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session/src/error.rs"
+    },
+    {
+      "name": "w3-session-fragmentation",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session/src/fragmentation.rs"
+    },
+    {
+      "name": "w3-session-handshake",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session/src/handshake.rs"
+    },
+    {
+      "name": "w3-session-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session/src/lib.rs"
+    },
+    {
+      "name": "w3-session-lifecycle",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session/src/lifecycle.rs"
+    },
+    {
+      "name": "w3-session-metrics",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session/src/metrics.rs"
+    },
+    {
+      "name": "w3-session-record",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session/src/record.rs"
+    },
+    {
+      "name": "w3-session-scheduler",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session/src/scheduler.rs"
+    },
+    {
+      "name": "w3-session-streams",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session/src/streams.rs"
+    },
+    {
+      "name": "w3-session-tests",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session/tests/component_session.rs"
+    },
+    {
+      "name": "w3-session-transport",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session/src/transport.rs"
+    },
+    {
+      "name": "w3-session-unix-adapter",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session-unix/src/adapter.rs"
+    },
+    {
+      "name": "w3-session-unix-cargo",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session-unix/Cargo.toml"
+    },
+    {
+      "name": "w3-session-unix-credit",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session-unix/src/credit.rs"
+    },
+    {
+      "name": "w3-session-unix-descriptor",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session-unix/src/descriptor.rs"
+    },
+    {
+      "name": "w3-session-unix-error",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session-unix/src/error.rs"
+    },
+    {
+      "name": "w3-session-unix-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session-unix/src/lib.rs"
+    },
+    {
+      "name": "w3-session-unix-pidfd",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session-unix/src/pidfd.rs"
+    },
+    {
+      "name": "w3-session-unix-socket",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session-unix/src/socket.rs"
+    },
+    {
+      "name": "w3-session-unix-tests",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session-unix/tests/unix_session.rs"
+    },
+    {
+      "name": "w3-session-vectors",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session/tests/noise_vectors.rs"
+    },
+    {
+      "name": "w3-state-async-api",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-state/src/tokio_api.rs"
+    },
+    {
+      "name": "w3-state-async-tests",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-state/tests/async_state.rs"
+    },
+    {
+      "name": "w3-state-atomic",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-state/src/atomic.rs"
+    },
+    {
+      "name": "w3-state-audit",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-state/src/audit.rs"
+    },
+    {
+      "name": "w3-state-cargo",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-state/Cargo.toml"
+    },
+    {
+      "name": "w3-state-error",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-state/src/error.rs"
+    },
+    {
+      "name": "w3-state-lease",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-state/src/lease.rs"
+    },
+    {
+      "name": "w3-state-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-state/src/lib.rs"
+    },
+    {
+      "name": "w3-state-lock",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-state/src/lock.rs"
+    },
+    {
+      "name": "w3-state-path",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-state/src/path.rs"
+    },
+    {
+      "name": "w3-state-tests",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-state/tests/state.rs"
+    },
+    {
+      "name": "w3-workspace-policy",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/tests/policy_workspace.rs"
     }
   ]
 }

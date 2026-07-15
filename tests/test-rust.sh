@@ -237,6 +237,30 @@ fi
 
 log "--> rust toolchain version"
 assert_pinned_rust_toolchain
+if [ -n "${D2B_RUST_GATE_BOOTSTRAP_RUSTUP:-}" ]; then
+  gate_rustc=$(rustup which --toolchain "$pinned_channel" rustc)
+  gate_rustdoc=$(rustup which --toolchain "$pinned_channel" rustdoc)
+else
+  gate_rustc=$(type -P rustc)
+  gate_rustdoc=$(type -P rustdoc)
+fi
+gate_clippy_driver=$(type -P clippy-driver)
+[ -n "$gate_rustc" ] && [ -n "$gate_rustdoc" ] && [ -n "$gate_clippy_driver" ] || {
+  fail "pinned rustc/rustdoc/clippy-driver executables are unavailable"
+  exit 1
+}
+export RUSTC="$gate_rustc" RUSTDOC="$gate_rustdoc" CLIPPY_DRIVER="$gate_clippy_driver"
+case "$("$RUSTC" --version)" in
+  *"$pinned_channel"*) ;;
+  *)
+    fail "RUSTC does not match packages/rust-toolchain.toml channel $pinned_channel"
+    exit 1
+    ;;
+esac
+if [ "$("$CLIPPY_DRIVER" -vV)" != "$("$RUSTC" -vV)" ]; then
+  fail "CLIPPY_DRIVER does not match the pinned RUSTC executable"
+  exit 1
+fi
 
 # The privileged broker has three independent feature
 # passes (default, layer1-bootstrap, fake-backends), each on its OWN target dir.

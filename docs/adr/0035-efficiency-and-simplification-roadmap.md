@@ -873,7 +873,7 @@ Tasks:
    crates and modules are not.
 7. Rename or delete ambiguous crates and modules as part of cleanup waves
    instead of preserving compatibility aliases. Initial audit targets include
-   `d2b-host-providers` (ambiguous host/provider boundary),
+   `d2b-provider-host` (legacy host/provider boundary),
    locus-free runner names, and daemon modules that mix request handling,
    background task ownership, and presentation DTOs in one root.
 8. Extend `docs/reference/naming-conventions.md` from host-visible resource
@@ -897,7 +897,7 @@ Primary targets:
 - `packages/d2b-constellation-*`;
 - `packages/d2b-provider-*`;
 - `packages/d2b-gateway*`;
-- `packages/d2b-host-providers`;
+- `packages/d2b-provider-host`;
 - `packages/d2b-guest-shell-runner/*` once introduced;
 - `flake.nix` Rust package source construction;
 - `docs/reference/naming-conventions.md`.

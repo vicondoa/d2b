@@ -982,7 +982,7 @@ Initial placement is:
 | Runtime | `azure-vm` | Compile-tested fake-SDK agent/test scaffold only; never in a production registry. |
 | Infrastructure | `azure-vm` | Compile-tested fake-SDK agent/test scaffold only; never in a production registry. |
 | Transport | `unix-stream` | Trusted in-process adapter in the connecting/listening realm component. |
-| Transport | `unix-seqpacket` | Trusted in-process adapter in the connecting/listening realm component, using `d2b-unix-session`. |
+| Transport | `unix-seqpacket` | Trusted in-process adapter in the connecting/listening realm component, using `d2b-session-unix`. |
 | Transport | `native-vsock` | Trusted in-process adapter in the owning realm daemon or guest component. |
 | Transport | `cloud-hypervisor-vsock` | Trusted in-process adapter in the owning realm daemon; the CH `CONNECT` prelude remains external. |
 | Transport | `azure-relay` | Provider agent in the configured credential-owning workload, co-located with its credential module. |
@@ -1081,7 +1081,7 @@ d2b-provider-observability-local
 ```
 
 Axis-free names such as `d2b-provider-aca`, `d2b-provider-relay`,
-`d2b-provider-azure`, and `d2b-host-providers` are deleted.
+`d2b-provider-azure`, and `d2b-provider-host` are deleted.
 
 ### Required provider parity
 
@@ -1212,7 +1212,7 @@ Dependencies are:
   generated bindings;
 - data: the d2b named-stream mux with independent bounded credit;
 - Unix packet and FD substrate: established `rustix` or `nix` calls, wrapped by
-  Tokio `AsyncFd` in one small audited `d2b-unix-session` abstraction.
+  Tokio `AsyncFd` in one small audited `d2b-session-unix` abstraction.
 
 There is no hand-authored protobuf codec, alternate realm record layer, local
 plaintext mechanism, or second mux.
@@ -2389,17 +2389,17 @@ required by the placement table. Their explicit cloud SDK features never enter
 Focused canonical crates include:
 
 ```text
-d2b-core
-d2b-realm-core
+d2b-client
 d2b-contracts
+d2b-core
 d2b-provider
 d2b-provider-toolkit
-d2b-session
-d2b-unix-session
-d2b-state
-d2b-client
-d2b-realm-router
 d2b-realm-controller
+d2b-realm-core
+d2b-realm-router
+d2b-session
+d2b-session-unix
+d2b-state
 type-first provider implementations
 composition binaries: d2bd, broker, guestd, userd, CLI, clipd,
   notify, Wayland proxy, security-key frontend, runtime agent
@@ -2481,7 +2481,7 @@ reset/private-manifest boxes close only on the final manifest-free W11 tree.
 - [ ] Delete duplicated provider DTOs, errors, traits, registries, synthetic
       facades, and every dead provider interface without a selected v2 owner.
 - [ ] Delete or replace `d2b-realm-provider`, `d2b-realm-transport`,
-      `d2b-realm-codec-protobuf`, `d2b-host-providers`, `d2b-provider-aca`,
+      `d2b-realm-codec-protobuf`, `d2b-provider-host`, `d2b-provider-aca`,
       `d2b-provider-relay`, `d2b-gateway`, `d2b-gateway-runtime`,
       `d2b-daemon-access`, and `d2b-unsafe-local-helper` after their useful
       invariants move.
@@ -2638,7 +2638,7 @@ evaluation budget. No old type is re-exported.
 
 #### W3 - Session, provider, state, and client foundations
 
-- `d2b-unix-session`: stream/seqpacket, drain-correct `AsyncFd` readiness,
+- `d2b-session-unix`: stream/seqpacket, drain-correct `AsyncFd` readiness,
   directional local identity with parent-prearmed `SO_PASSCRED`, ancillary
   capacity derived from negotiated hard maxima, packet atomicity, truncation
   scavenging, and exact bounded FD validation and credit cleanup.
