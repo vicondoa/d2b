@@ -276,6 +276,7 @@ pub enum RelaySocketFailure {
     FrameTooLarge,
     Protocol,
     Unavailable,
+    ShutdownAmbiguous,
 }
 
 impl fmt::Display for RelaySocketFailure {
@@ -287,6 +288,7 @@ impl fmt::Display for RelaySocketFailure {
             Self::FrameTooLarge => "relay WebSocket frame exceeds its bound",
             Self::Protocol => "relay WebSocket protocol failed",
             Self::Unavailable => "relay WebSocket is unavailable",
+            Self::ShutdownAmbiguous => "relay WebSocket shutdown is ambiguous",
         })
     }
 }
@@ -358,6 +360,9 @@ pub trait RelaySocket: Send + Sync {
 const SOCKET_OPEN: u8 = 0;
 const SOCKET_CLOSING: u8 = 1;
 const SOCKET_CLOSED: u8 = 2;
+const SOURCE_END_UNOBSERVED: u8 = 0;
+const SOURCE_END_FUSED_AFTER_ERROR: u8 = 1;
+const SOURCE_END_CONFIRMED: u8 = 2;
 
 struct SocketLifecycle(AtomicU8);
 
@@ -408,6 +413,32 @@ impl SocketLifecycle {
 
     fn finish_close(&self) {
         self.0.store(SOCKET_CLOSED, Ordering::Release);
+    }
+}
+
+/// Records why the tungstenite source fused so `None` is not mistaken for EOF.
+struct SourceEndReason(AtomicU8);
+
+impl SourceEndReason {
+    fn unobserved() -> Self {
+        Self(AtomicU8::new(SOURCE_END_UNOBSERVED))
+    }
+
+    fn note_non_terminal_error(&self) {
+        let _ = self.0.compare_exchange(
+            SOURCE_END_UNOBSERVED,
+            SOURCE_END_FUSED_AFTER_ERROR,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
+    fn confirm_terminal(&self) {
+        self.0.store(SOURCE_END_CONFIRMED, Ordering::Release);
+    }
+
+    fn fused_after_non_terminal_error(&self) -> bool {
+        self.0.load(Ordering::Acquire) == SOURCE_END_FUSED_AFTER_ERROR
     }
 }
 
@@ -611,6 +642,7 @@ struct WebSocketRelaySocket {
     sink: Mutex<WebSocketSink>,
     source: Mutex<WebSocketSource>,
     lifecycle: SocketLifecycle,
+    source_end_reason: SourceEndReason,
     max_frame_bytes: usize,
 }
 
@@ -621,8 +653,14 @@ impl WebSocketRelaySocket {
             sink: Mutex::new(sink),
             source: Mutex::new(source),
             lifecycle: SocketLifecycle::open(),
+            source_end_reason: SourceEndReason::unobserved(),
             max_frame_bytes,
         }
+    }
+
+    fn finish_close(&self) {
+        self.source_end_reason.confirm_terminal();
+        self.lifecycle.finish_close();
     }
 
     fn observe_error(&self, error: &tokio_tungstenite::tungstenite::Error) {
@@ -631,10 +669,33 @@ impl WebSocketRelaySocket {
             tokio_tungstenite::tungstenite::Error::ConnectionClosed
                 | tokio_tungstenite::tungstenite::Error::AlreadyClosed
         ) {
-            self.lifecycle.finish_close();
+            self.finish_close();
         } else {
             let _ = self.lifecycle.begin_close();
         }
+    }
+
+    fn observe_receive_error(&self, error: &tokio_tungstenite::tungstenite::Error) {
+        if matches!(
+            error,
+            tokio_tungstenite::tungstenite::Error::ConnectionClosed
+                | tokio_tungstenite::tungstenite::Error::AlreadyClosed
+        ) {
+            self.finish_close();
+        } else {
+            self.source_end_reason.note_non_terminal_error();
+            let _ = self.lifecycle.begin_close();
+        }
+    }
+
+    fn observe_source_end(&self) -> Result<(), RelaySocketFailure> {
+        if self.source_end_reason.fused_after_non_terminal_error()
+            && !self.lifecycle.shutdown_completed()
+        {
+            return Err(RelaySocketFailure::ShutdownAmbiguous);
+        }
+        self.finish_close();
+        Ok(())
     }
 }
 
@@ -659,13 +720,13 @@ impl RelaySocket for WebSocketRelaySocket {
         loop {
             let message = self.source.lock().await.next().await;
             let Some(message) = message else {
-                self.lifecycle.finish_close();
+                self.observe_source_end()?;
                 return Ok(RelaySocketEvent::Closed);
             };
             let message = match message {
                 Ok(message) => message,
                 Err(error) => {
-                    self.observe_error(&error);
+                    self.observe_receive_error(&error);
                     return Err(classify_socket_error(error));
                 }
             };
@@ -743,7 +804,7 @@ impl RelaySocket for WebSocketRelaySocket {
                 tokio_tungstenite::tungstenite::Error::ConnectionClosed
                 | tokio_tungstenite::tungstenite::Error::AlreadyClosed,
             ) => {
-                self.lifecycle.finish_close();
+                self.finish_close();
                 return Ok(());
             }
             Err(error) => return Err(classify_socket_error(error)),
@@ -754,7 +815,7 @@ impl RelaySocket for WebSocketRelaySocket {
                 tokio_tungstenite::tungstenite::Error::ConnectionClosed
                 | tokio_tungstenite::tungstenite::Error::AlreadyClosed,
             ) => {
-                self.lifecycle.finish_close();
+                self.finish_close();
                 return Ok(());
             }
             Err(error) => return Err(classify_socket_error(error)),
@@ -767,7 +828,7 @@ impl RelaySocket for WebSocketRelaySocket {
                 None => {
                     // tokio-tungstenite maps ConnectionClosed and AlreadyClosed
                     // to stream termination.
-                    self.lifecycle.finish_close();
+                    self.observe_source_end()?;
                     return Ok(());
                 }
                 Some(Ok(Message::Close(_))) => {
@@ -778,10 +839,13 @@ impl RelaySocket for WebSocketRelaySocket {
                     tokio_tungstenite::tungstenite::Error::ConnectionClosed
                     | tokio_tungstenite::tungstenite::Error::AlreadyClosed,
                 )) => {
-                    self.lifecycle.finish_close();
+                    self.finish_close();
                     return Ok(());
                 }
-                Some(Err(error)) => return Err(classify_socket_error(error)),
+                Some(Err(error)) => {
+                    self.observe_receive_error(&error);
+                    return Err(classify_socket_error(error));
+                }
             }
         }
     }
@@ -2019,6 +2083,7 @@ fn map_socket_failure(failure: RelaySocketFailure) -> RelayPortFailure {
         RelaySocketFailure::InvalidEndpoint => RelayPortFailure::BindingMismatch,
         RelaySocketFailure::FrameTooLarge => RelayPortFailure::FrameTooLarge,
         RelaySocketFailure::Protocol => RelayPortFailure::Unavailable,
+        RelaySocketFailure::ShutdownAmbiguous => RelayPortFailure::CompletionAmbiguous,
     }
 }
 
@@ -2267,6 +2332,88 @@ mod internal_tests {
                 .expect("terminal receive"),
             RelaySocketEvent::Closed
         ));
+    }
+
+    #[tokio::test]
+    async fn receive_error_keeps_fused_stream_shutdown_ambiguous() {
+        use tokio::io::AsyncWriteExt;
+
+        let timeout = Duration::from_secs(2);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind peer");
+        let address = listener.local_addr().expect("peer address");
+        let (frame_sent_tx, frame_sent_rx) = tokio::sync::oneshot::channel();
+        let (drop_peer_tx, drop_peer_rx) = tokio::sync::oneshot::channel();
+        let peer_task = tokio::spawn(async move {
+            let (stream, _) = tokio::time::timeout(timeout, listener.accept())
+                .await
+                .expect("peer accept deadline")
+                .expect("peer accept");
+            let mut peer = tokio_tungstenite::accept_async(stream)
+                .await
+                .expect("peer handshake");
+            peer.get_mut()
+                .write_all(&[0xc2, 0x00])
+                .await
+                .expect("malformed peer frame");
+            peer.get_mut().flush().await.expect("flush malformed frame");
+            frame_sent_tx.send(()).expect("report malformed frame");
+            drop_peer_rx.await.expect("release peer transport");
+        });
+
+        let (stream, _) = tokio_tungstenite::connect_async(format!("ws://{address}/relay-error"))
+            .await
+            .expect("client handshake");
+        let socket = Arc::new(WebSocketRelaySocket::new(
+            stream,
+            usize::try_from(RelayTransportLimits::production().max_frame_bytes())
+                .expect("frame bound fits usize"),
+        ));
+        let external = Arc::clone(&socket);
+        tokio::time::timeout(timeout, frame_sent_rx)
+            .await
+            .expect("malformed frame deadline")
+            .expect("malformed frame observation");
+        assert_eq!(
+            tokio::time::timeout(timeout, socket.receive())
+                .await
+                .expect("receive error deadline")
+                .expect_err("malformed frame fails receive"),
+            RelaySocketFailure::Protocol
+        );
+        assert!(external.is_open());
+        assert!(external.source_end_reason.fused_after_non_terminal_error());
+
+        assert_eq!(
+            tokio::time::timeout(timeout, socket.close())
+                .await
+                .expect("ambiguous close deadline")
+                .expect_err("fused stream cannot confirm shutdown"),
+            RelaySocketFailure::ShutdownAmbiguous
+        );
+        assert!(external.is_open());
+        assert!(external.lifecycle.close_in_progress());
+        assert_eq!(
+            external
+                .receive()
+                .await
+                .expect_err("fused receive remains ambiguous"),
+            RelaySocketFailure::ShutdownAmbiguous
+        );
+        assert_eq!(
+            external
+                .send_binary(b"after-receive-error")
+                .await
+                .expect_err("ambiguous socket rejects sends"),
+            RelaySocketFailure::Unavailable
+        );
+
+        drop_peer_tx.send(()).expect("drop peer transport");
+        tokio::time::timeout(timeout, peer_task)
+            .await
+            .expect("peer task deadline")
+            .expect("peer task");
     }
 
     #[test]
