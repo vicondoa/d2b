@@ -751,7 +751,7 @@ fn map_validation_error(error: UnixSessionError) -> AttachmentValidationError {
         | UnixSessionError::PidfdEvidenceUnavailable
         | UnixSessionError::PidfdIdentityMismatch
         | UnixSessionError::CreditExceeded => AttachmentValidationError::Other,
-        UnixSessionError::Io
+        UnixSessionError::Io { .. }
         | UnixSessionError::Closed
         | UnixSessionError::InvalidSocket
         | UnixSessionError::BlockingSocket
@@ -785,7 +785,7 @@ fn map_transport_error(error: UnixSessionError) -> TransportError {
         | UnixSessionError::MissingCloexec
         | UnixSessionError::PidfdEvidenceUnavailable
         | UnixSessionError::PidfdIdentityMismatch => TransportError::InvalidAttachment,
-        UnixSessionError::Io
+        UnixSessionError::Io { .. }
         | UnixSessionError::InvalidSocket
         | UnixSessionError::BlockingSocket
         | UnixSessionError::PasscredNotPrearmed

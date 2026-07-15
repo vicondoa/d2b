@@ -301,7 +301,7 @@ impl SeqpacketSocket {
                         return Err(UnixSessionError::PacketNotAtomic);
                     }
                     let Some(packet) = queue.pop_front() else {
-                        return Err(UnixSessionError::Io);
+                        return Err(UnixSessionError::Io { errno: None });
                     };
                     sent_packets.push(SentPacket {
                         _files: packet.files,
@@ -398,7 +398,7 @@ fn recv_one(
 
     if result.bytes == 0 {
         drop(controls);
-        return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
+        return Err(semantic_io(UnixSessionError::Closed));
     }
     if result.flags.contains(RecvFlags::TRUNC) {
         drop(controls);
@@ -527,7 +527,7 @@ impl StreamSocket {
                             return Ok(());
                         }
                     }
-                    Ok(Err(_)) => return Err(UnixSessionError::Io),
+                    Ok(Err(error)) => return Err(io_error(error)),
                     Err(_) => break,
                 }
             }
@@ -567,11 +567,17 @@ fn semantic_io(error: UnixSessionError) -> io::Error {
 }
 
 fn classify_io(error: io::Error) -> UnixSessionError {
-    error
+    if let Some(semantic) = error
         .get_ref()
         .and_then(|inner| inner.downcast_ref::<UnixSessionError>())
         .copied()
-        .unwrap_or(UnixSessionError::Io)
+    {
+        semantic
+    } else {
+        UnixSessionError::Io {
+            errno: error.raw_os_error(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

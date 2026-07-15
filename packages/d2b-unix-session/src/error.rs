@@ -2,7 +2,7 @@ use std::{error::Error, fmt};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum UnixSessionError {
-    Io,
+    Io { errno: Option<i32> },
     Closed,
     InvalidSocket,
     BlockingSocket,
@@ -33,8 +33,11 @@ impl fmt::Debug for UnixSessionError {
 
 impl fmt::Display for UnixSessionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::Io => "unix-session-io",
+        let message = match self {
+            Self::Io { errno: Some(errno) } => {
+                return write!(formatter, "unix-session-io(errno={errno})");
+            }
+            Self::Io { errno: None } => "unix-session-io",
             Self::Closed => "unix-session-closed",
             Self::InvalidSocket => "unix-session-invalid-socket",
             Self::BlockingSocket => "unix-session-blocking-socket",
@@ -55,12 +58,35 @@ impl fmt::Display for UnixSessionError {
             Self::CreditExceeded => "unix-session-credit-exceeded",
             Self::PacketNotAtomic => "unix-session-packet-not-atomic",
             Self::FairnessBudget => "unix-session-fairness-budget",
-        })
+        };
+        formatter.write_str(message)
     }
 }
 
 impl Error for UnixSessionError {}
 
-pub(crate) fn io_error(_: impl std::fmt::Debug) -> UnixSessionError {
-    UnixSessionError::Io
+#[cfg(feature = "host-socket")]
+pub(crate) trait IoErrno {
+    fn errno(&self) -> Option<i32>;
+}
+
+#[cfg(feature = "host-socket")]
+impl IoErrno for std::io::Error {
+    fn errno(&self) -> Option<i32> {
+        self.raw_os_error()
+    }
+}
+
+#[cfg(feature = "host-socket")]
+impl IoErrno for rustix::io::Errno {
+    fn errno(&self) -> Option<i32> {
+        Some(self.raw_os_error())
+    }
+}
+
+#[cfg(feature = "host-socket")]
+pub(crate) fn io_error(error: impl IoErrno) -> UnixSessionError {
+    UnixSessionError::Io {
+        errno: error.errno(),
+    }
 }

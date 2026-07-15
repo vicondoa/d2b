@@ -645,6 +645,21 @@ async fn stream_socket_zero_byte_read_is_exact_graceful_eof() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn seqpacket_zero_byte_read_is_a_clean_disconnect() {
+    let (sender, receiver) = seqpacket_pair();
+    sender.close().unwrap();
+    let (credit_scopes, _pools) = scopes(1);
+    let capacity = AncillaryCapacity::from_policy(attachment_policy(1, false)).unwrap();
+    assert_eq!(
+        receiver
+            .recv_burst(LimitProfile::local_default(), capacity, &credit_scopes, 1,)
+            .await
+            .unwrap_err(),
+        UnixSessionError::Closed
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn stream_transport_rejects_oversize_and_incomplete_records() {
     let mut limits = LimitProfile::local_default();
     limits.protected_ciphertext_bytes = 4;
@@ -1096,6 +1111,14 @@ fn pidfd_fdinfo_parser_is_strict_and_redacted_errors_are_stable() {
     assert_eq!(
         format!("{:?}", UnixSessionError::PidfdIdentityMismatch),
         "unix-session-pidfd-identity-mismatch"
+    );
+}
+
+#[test]
+fn io_errors_retain_only_the_actionable_errno() {
+    assert_eq!(
+        UnixSessionError::Io { errno: Some(2) }.to_string(),
+        "unix-session-io(errno=2)"
     );
 }
 
