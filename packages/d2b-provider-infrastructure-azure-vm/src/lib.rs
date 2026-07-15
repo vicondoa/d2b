@@ -1,16 +1,14 @@
 //! Explicitly non-production Azure VM infrastructure provider scaffold.
 //!
-//! The canonical provider surface always denies lifecycle dispatch. Compile
-//! tests exercise the closed infrastructure authority through direct methods
-//! and the in-process fake SDK; there is no production constructor or registry
-//! registration path.
+//! The canonical provider surface always denies lifecycle dispatch. Explicit
+//! conformance construction and direct methods use only the in-process fake
+//! SDK; production registration remains typed unavailable.
 
 #![forbid(unsafe_code)]
 #![allow(clippy::result_large_err)]
 
 use std::{error::Error, fmt};
 
-#[cfg(any(test, feature = "conformance"))]
 use std::sync::Arc;
 
 use d2b_contracts::{
@@ -24,7 +22,6 @@ use d2b_contracts::{
     },
 };
 use d2b_provider::ProviderInstance;
-#[cfg(any(test, feature = "conformance"))]
 use {
     d2b_azure_vm_fake_sdk::{
         ApplyDisposition, BootstrapBinding, FakeAzureVmSdk, FakeSdkError, FakeSdkErrorKind,
@@ -41,7 +38,6 @@ use {
     d2b_provider_toolkit::ProviderValues,
 };
 
-#[cfg(any(test, feature = "conformance"))]
 const IMPLEMENTATION_ID: &str = "azure-vm";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,7 +83,6 @@ impl Error for ScaffoldConstructionError {}
 pub struct AzureVmInfrastructureProvider {
     descriptor: ProviderDescriptor,
     now_unix_ms: u64,
-    #[cfg(any(test, feature = "conformance"))]
     sdk: Arc<FakeAzureVmSdk>,
 }
 
@@ -118,7 +113,6 @@ impl AzureVmInfrastructureProvider {
         Err(ScaffoldUnavailable::CapabilityUnavailable)
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     pub fn new_for_conformance(
         descriptor: ProviderDescriptor,
         sdk: Arc<FakeAzureVmSdk>,
@@ -146,7 +140,6 @@ impl AzureVmInfrastructureProvider {
         })
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     pub fn conformance_instance(self: Arc<Self>) -> ProviderInstance {
         ProviderInstance::Infrastructure(self)
     }
@@ -184,7 +177,6 @@ impl AzureVmInfrastructureProvider {
         }
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     fn values(
         &self,
         context: &d2b_contracts::v2_provider::ProviderOperationContext,
@@ -200,7 +192,6 @@ impl AzureVmInfrastructureProvider {
         })
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     fn validate_call(
         &self,
         context: &ProviderCallContext<'_>,
@@ -253,7 +244,6 @@ impl AzureVmInfrastructureProvider {
             })
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     fn validate_request(
         &self,
         context: &ProviderCallContext<'_>,
@@ -278,7 +268,6 @@ impl AzureVmInfrastructureProvider {
             })
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     fn validate_handle_request(
         &self,
         request: &ProviderOperationRequest,
@@ -312,7 +301,6 @@ impl AzureVmInfrastructureProvider {
         }
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     fn validate_bound_handle(
         &self,
         context: &d2b_contracts::v2_provider::ProviderOperationContext,
@@ -339,7 +327,6 @@ impl AzureVmInfrastructureProvider {
         }
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     fn sdk_context(
         context: &ProviderCallContext<'_>,
         handle: InfrastructureHandle,
@@ -351,7 +338,6 @@ impl AzureVmInfrastructureProvider {
         ))
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     fn sdk_failure(
         &self,
         context: &d2b_contracts::v2_provider::ProviderOperationContext,
@@ -360,7 +346,6 @@ impl AzureVmInfrastructureProvider {
         self.sdk_failure_kind(context, error.kind())
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     fn sdk_failure_kind(
         &self,
         context: &d2b_contracts::v2_provider::ProviderOperationContext,
@@ -416,7 +401,6 @@ impl AzureVmInfrastructureProvider {
         self.failure(context, kind, retry, reason, remediation)
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     pub async fn plan_create(
         &self,
         context: &ProviderCallContext<'_>,
@@ -480,7 +464,6 @@ impl AzureVmInfrastructureProvider {
         Ok(AzureVmInfrastructurePlan { plan, desired })
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     pub async fn create(
         &self,
         context: &ProviderCallContext<'_>,
@@ -545,7 +528,6 @@ impl AzureVmInfrastructureProvider {
         })
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     pub async fn set_power_state_direct(
         &self,
         context: &ProviderCallContext<'_>,
@@ -580,7 +562,6 @@ impl AzureVmInfrastructureProvider {
         )
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     pub async fn inspect_direct(
         &self,
         context: &ProviderCallContext<'_>,
@@ -604,7 +585,6 @@ impl AzureVmInfrastructureProvider {
         )
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     pub async fn adopt_direct(
         &self,
         context: &ProviderCallContext<'_>,
@@ -648,7 +628,6 @@ impl AzureVmInfrastructureProvider {
         )
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     pub async fn bootstrap_direct(
         &self,
         context: &ProviderCallContext<'_>,
@@ -674,7 +653,6 @@ impl AzureVmInfrastructureProvider {
         })
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     pub async fn delete_direct(
         &self,
         context: &ProviderCallContext<'_>,
@@ -709,7 +687,6 @@ impl AzureVmInfrastructureProvider {
             })
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     fn observation(
         &self,
         context: &d2b_contracts::v2_provider::ProviderOperationContext,
@@ -739,7 +716,6 @@ impl AzureVmInfrastructureProvider {
             })
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     fn local_sdk_failure(
         &self,
         context: &d2b_contracts::v2_provider::ProviderOperationContext,
@@ -759,31 +735,13 @@ impl Provider for AzureVmInfrastructureProvider {
         context: &'a ProviderCallContext<'a>,
     ) -> ProviderFuture<'a, ProviderHealth> {
         Box::pin(async move {
-            #[cfg(any(test, feature = "conformance"))]
-            {
-                self.values(context.operation)?
-                    .health(
-                        ProviderHealthState::Unavailable,
-                        ProviderHealthReason::HealthStale,
-                        ProviderRemediation::InspectProvider,
-                    )
-                    .map_err(|_| self.capability_unavailable(context.operation))
-            }
-            #[cfg(not(any(test, feature = "conformance")))]
-            {
-                let health = ProviderHealth {
-                    provider_id: self.descriptor.provider_id.clone(),
-                    registry_generation: self.descriptor.registry_generation,
-                    observed_at_unix_ms: self.now_unix_ms,
-                    state: ProviderHealthState::Unavailable,
-                    reason: ProviderHealthReason::HealthStale,
-                    remediation: ProviderRemediation::InspectProvider,
-                };
-                health
-                    .validate()
-                    .map_err(|_| self.capability_unavailable(context.operation))?;
-                Ok(health)
-            }
+            self.values(context.operation)?
+                .health(
+                    ProviderHealthState::Unavailable,
+                    ProviderHealthReason::HealthStale,
+                    ProviderRemediation::InspectProvider,
+                )
+                .map_err(|_| self.capability_unavailable(context.operation))
         })
     }
 }
@@ -818,21 +776,18 @@ impl InfrastructureProvider for AzureVmInfrastructureProvider {
     denied_dispatch!(destroy, ProviderOperationRequest, MutationReceipt);
 }
 
-#[cfg(any(test, feature = "conformance"))]
 #[derive(Clone, PartialEq, Eq)]
 pub struct AzureVmInfrastructurePlan {
     plan: ProviderPlan,
     desired: InfrastructureHandle,
 }
 
-#[cfg(any(test, feature = "conformance"))]
 impl AzureVmInfrastructurePlan {
     pub fn provider_plan(&self) -> &ProviderPlan {
         &self.plan
     }
 }
 
-#[cfg(any(test, feature = "conformance"))]
 impl fmt::Debug for AzureVmInfrastructurePlan {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -843,14 +798,12 @@ impl fmt::Debug for AzureVmInfrastructurePlan {
     }
 }
 
-#[cfg(any(test, feature = "conformance"))]
 #[derive(Clone, PartialEq, Eq)]
 pub struct AzureVmInfrastructureHandle {
     provider: ProviderHandle,
     sdk: InfrastructureHandle,
 }
 
-#[cfg(any(test, feature = "conformance"))]
 impl AzureVmInfrastructureHandle {
     pub fn provider_handle(&self) -> &ProviderHandle {
         &self.provider
@@ -861,7 +814,6 @@ impl AzureVmInfrastructureHandle {
     }
 }
 
-#[cfg(any(test, feature = "conformance"))]
 impl fmt::Debug for AzureVmInfrastructureHandle {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -872,14 +824,12 @@ impl fmt::Debug for AzureVmInfrastructureHandle {
     }
 }
 
-#[cfg(any(test, feature = "conformance"))]
 #[derive(Clone, PartialEq, Eq)]
 pub struct AzureVmBootstrapBinding {
     infrastructure: AzureVmInfrastructureHandle,
     binding: BootstrapBinding,
 }
 
-#[cfg(any(test, feature = "conformance"))]
 impl AzureVmBootstrapBinding {
     pub fn infrastructure(&self) -> &AzureVmInfrastructureHandle {
         &self.infrastructure
@@ -890,7 +840,6 @@ impl AzureVmBootstrapBinding {
     }
 }
 
-#[cfg(any(test, feature = "conformance"))]
 impl fmt::Debug for AzureVmBootstrapBinding {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -901,7 +850,6 @@ impl fmt::Debug for AzureVmBootstrapBinding {
     }
 }
 
-#[cfg(any(test, feature = "conformance"))]
 fn contract_capabilities() -> ProviderCapabilitySet {
     ProviderCapabilitySet::new(
         AzureVmInfrastructureProvider::CONTRACT_METHODS
@@ -913,7 +861,6 @@ fn contract_capabilities() -> ProviderCapabilitySet {
     .unwrap_or_else(|_| unreachable!())
 }
 
-#[cfg(any(test, feature = "conformance"))]
 fn infrastructure_input_matches(
     request: &ProviderOperationRequest,
     method: ProviderMethod,
@@ -935,7 +882,6 @@ fn infrastructure_input_matches(
     )
 }
 
-#[cfg(any(test, feature = "conformance"))]
 fn power_lifecycle(state: PowerState) -> ObservedLifecycleState {
     match state {
         PowerState::Running => ObservedLifecycleState::Running,
@@ -943,7 +889,6 @@ fn power_lifecycle(state: PowerState) -> ObservedLifecycleState {
     }
 }
 
-#[cfg(any(test, feature = "conformance"))]
 fn bounded_hash(value: &str) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
     for byte in value.bytes() {
@@ -953,17 +898,14 @@ fn bounded_hash(value: &str) -> u64 {
     (hash % (d2b_contracts::v2_provider::MAX_SAFE_JSON_INTEGER - 1)) + 1
 }
 
-#[cfg(any(test, feature = "conformance"))]
 fn operation_key(value: &str) -> Result<d2b_azure_vm_fake_sdk::OperationKey, FakeSdkErrorKind> {
     d2b_azure_vm_fake_sdk::OperationKey::new(bounded_hash(value))
 }
 
-#[cfg(any(test, feature = "conformance"))]
 fn resource_id(value: &str) -> Result<ResourceId, FakeSdkErrorKind> {
     ResourceId::new(bounded_hash(value))
 }
 
-#[cfg(any(test, feature = "conformance"))]
 fn handle_id(prefix: &str, identity: u64) -> Result<HandleId, FakeSdkErrorKind> {
     HandleId::parse(format!("{prefix}-{identity:x}")).map_err(|_| FakeSdkErrorKind::BoundExceeded)
 }

@@ -1,15 +1,14 @@
 //! Explicitly non-production Azure VM workload runtime provider scaffold.
 //!
 //! Runtime operations require an already-bound opaque infrastructure handle.
-//! Canonical provider dispatch remains unavailable, while compile tests exercise
-//! workload-only behavior through the in-process fake SDK.
+//! Canonical dispatch and production registration remain unavailable; explicit
+//! conformance APIs exercise workload-only behavior through the fake SDK.
 
 #![forbid(unsafe_code)]
 #![allow(clippy::result_large_err)]
 
 use std::{error::Error, fmt};
 
-#[cfg(any(test, feature = "conformance"))]
 use std::sync::Arc;
 
 use d2b_contracts::{
@@ -23,7 +22,6 @@ use d2b_contracts::{
     },
 };
 use d2b_provider::ProviderInstance;
-#[cfg(any(test, feature = "conformance"))]
 use {
     d2b_azure_vm_fake_sdk::{
         ApplyDisposition, DeploymentHandle, DeploymentState, FakeAzureVmSdk, FakeSdkError,
@@ -40,7 +38,6 @@ use {
     d2b_provider_toolkit::ProviderValues,
 };
 
-#[cfg(any(test, feature = "conformance"))]
 const IMPLEMENTATION_ID: &str = "azure-vm";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,7 +78,6 @@ impl fmt::Display for ScaffoldConstructionError {
 
 impl Error for ScaffoldConstructionError {}
 
-#[cfg(any(test, feature = "conformance"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InfrastructureBindingError {
     InvalidHandle,
@@ -89,7 +85,6 @@ pub enum InfrastructureBindingError {
     GenerationMismatch,
 }
 
-#[cfg(any(test, feature = "conformance"))]
 impl fmt::Display for InfrastructureBindingError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
@@ -100,13 +95,11 @@ impl fmt::Display for InfrastructureBindingError {
     }
 }
 
-#[cfg(any(test, feature = "conformance"))]
 impl Error for InfrastructureBindingError {}
 
 pub struct AzureVmRuntimeProvider {
     descriptor: ProviderDescriptor,
     now_unix_ms: u64,
-    #[cfg(any(test, feature = "conformance"))]
     sdk: Arc<FakeAzureVmSdk>,
 }
 
@@ -137,7 +130,6 @@ impl AzureVmRuntimeProvider {
         Err(ScaffoldUnavailable::CapabilityUnavailable)
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     pub fn new_for_conformance(
         descriptor: ProviderDescriptor,
         sdk: Arc<FakeAzureVmSdk>,
@@ -165,7 +157,6 @@ impl AzureVmRuntimeProvider {
         })
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     pub fn conformance_instance(self: Arc<Self>) -> ProviderInstance {
         ProviderInstance::Runtime(self)
     }
@@ -203,7 +194,6 @@ impl AzureVmRuntimeProvider {
         }
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     fn values(
         &self,
         context: &d2b_contracts::v2_provider::ProviderOperationContext,
@@ -219,7 +209,6 @@ impl AzureVmRuntimeProvider {
         })
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     fn validate_call(
         &self,
         context: &ProviderCallContext<'_>,
@@ -272,7 +261,6 @@ impl AzureVmRuntimeProvider {
             })
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     fn validate_request(
         &self,
         context: &ProviderCallContext<'_>,
@@ -296,7 +284,6 @@ impl AzureVmRuntimeProvider {
             })
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     fn validate_infrastructure_target(
         &self,
         request: &ProviderOperationRequest,
@@ -329,7 +316,6 @@ impl AzureVmRuntimeProvider {
         }
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     fn validate_runtime_handle(
         &self,
         context: &d2b_contracts::v2_provider::ProviderOperationContext,
@@ -357,7 +343,6 @@ impl AzureVmRuntimeProvider {
         }
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     fn validate_runtime_request(
         &self,
         request: &ProviderOperationRequest,
@@ -391,7 +376,6 @@ impl AzureVmRuntimeProvider {
         }
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     fn sdk_context(
         context: &ProviderCallContext<'_>,
         infrastructure: InfrastructureHandle,
@@ -405,7 +389,6 @@ impl AzureVmRuntimeProvider {
         ))
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     fn sdk_failure(
         &self,
         context: &d2b_contracts::v2_provider::ProviderOperationContext,
@@ -414,7 +397,6 @@ impl AzureVmRuntimeProvider {
         self.sdk_failure_kind(context, error.kind())
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     fn sdk_failure_kind(
         &self,
         context: &d2b_contracts::v2_provider::ProviderOperationContext,
@@ -470,7 +452,6 @@ impl AzureVmRuntimeProvider {
         self.failure(context, kind, retry, reason, remediation)
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     fn local_sdk_failure(
         &self,
         context: &d2b_contracts::v2_provider::ProviderOperationContext,
@@ -479,7 +460,6 @@ impl AzureVmRuntimeProvider {
         self.sdk_failure_kind(context, kind)
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     pub async fn plan_deployment(
         &self,
         context: &ProviderCallContext<'_>,
@@ -543,7 +523,6 @@ impl AzureVmRuntimeProvider {
         })
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     pub async fn deploy(
         &self,
         context: &ProviderCallContext<'_>,
@@ -608,7 +587,6 @@ impl AzureVmRuntimeProvider {
         })
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     pub async fn start_direct(
         &self,
         context: &ProviderCallContext<'_>,
@@ -632,7 +610,6 @@ impl AzureVmRuntimeProvider {
         )
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     pub async fn stop_direct(
         &self,
         context: &ProviderCallContext<'_>,
@@ -656,7 +633,6 @@ impl AzureVmRuntimeProvider {
         )
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     pub async fn inspect_direct(
         &self,
         context: &ProviderCallContext<'_>,
@@ -680,7 +656,6 @@ impl AzureVmRuntimeProvider {
         )
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     pub async fn adopt_direct(
         &self,
         context: &ProviderCallContext<'_>,
@@ -724,7 +699,6 @@ impl AzureVmRuntimeProvider {
         )
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     pub async fn remove_deployment_direct(
         &self,
         context: &ProviderCallContext<'_>,
@@ -759,7 +733,6 @@ impl AzureVmRuntimeProvider {
             })
     }
 
-    #[cfg(any(test, feature = "conformance"))]
     fn observation(
         &self,
         context: &d2b_contracts::v2_provider::ProviderOperationContext,
@@ -800,31 +773,13 @@ impl Provider for AzureVmRuntimeProvider {
         context: &'a ProviderCallContext<'a>,
     ) -> ProviderFuture<'a, ProviderHealth> {
         Box::pin(async move {
-            #[cfg(any(test, feature = "conformance"))]
-            {
-                self.values(context.operation)?
-                    .health(
-                        ProviderHealthState::Unavailable,
-                        ProviderHealthReason::HealthStale,
-                        ProviderRemediation::InspectProvider,
-                    )
-                    .map_err(|_| self.capability_unavailable(context.operation))
-            }
-            #[cfg(not(any(test, feature = "conformance")))]
-            {
-                let health = ProviderHealth {
-                    provider_id: self.descriptor.provider_id.clone(),
-                    registry_generation: self.descriptor.registry_generation,
-                    observed_at_unix_ms: self.now_unix_ms,
-                    state: ProviderHealthState::Unavailable,
-                    reason: ProviderHealthReason::HealthStale,
-                    remediation: ProviderRemediation::InspectProvider,
-                };
-                health
-                    .validate()
-                    .map_err(|_| self.capability_unavailable(context.operation))?;
-                Ok(health)
-            }
+            self.values(context.operation)?
+                .health(
+                    ProviderHealthState::Unavailable,
+                    ProviderHealthReason::HealthStale,
+                    ProviderRemediation::InspectProvider,
+                )
+                .map_err(|_| self.capability_unavailable(context.operation))
         })
     }
 }
@@ -855,14 +810,12 @@ impl RuntimeProvider for AzureVmRuntimeProvider {
     denied_dispatch!(destroy, ProviderOperationRequest, MutationReceipt);
 }
 
-#[cfg(any(test, feature = "conformance"))]
 #[derive(Clone, PartialEq, Eq)]
 pub struct BoundInfrastructureHandle {
     provider: ProviderHandle,
     sdk: InfrastructureHandle,
 }
 
-#[cfg(any(test, feature = "conformance"))]
 impl BoundInfrastructureHandle {
     pub fn new(
         provider: ProviderHandle,
@@ -897,7 +850,6 @@ impl BoundInfrastructureHandle {
     }
 }
 
-#[cfg(any(test, feature = "conformance"))]
 impl fmt::Debug for BoundInfrastructureHandle {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -908,7 +860,6 @@ impl fmt::Debug for BoundInfrastructureHandle {
     }
 }
 
-#[cfg(any(test, feature = "conformance"))]
 #[derive(Clone, PartialEq, Eq)]
 pub struct AzureVmRuntimePlan {
     plan: ProviderPlan,
@@ -916,7 +867,6 @@ pub struct AzureVmRuntimePlan {
     desired: DeploymentHandle,
 }
 
-#[cfg(any(test, feature = "conformance"))]
 impl AzureVmRuntimePlan {
     pub fn provider_plan(&self) -> &ProviderPlan {
         &self.plan
@@ -927,7 +877,6 @@ impl AzureVmRuntimePlan {
     }
 }
 
-#[cfg(any(test, feature = "conformance"))]
 impl fmt::Debug for AzureVmRuntimePlan {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -939,7 +888,6 @@ impl fmt::Debug for AzureVmRuntimePlan {
     }
 }
 
-#[cfg(any(test, feature = "conformance"))]
 #[derive(Clone, PartialEq, Eq)]
 pub struct AzureVmRuntimeHandle {
     provider: ProviderHandle,
@@ -947,7 +895,6 @@ pub struct AzureVmRuntimeHandle {
     sdk: DeploymentHandle,
 }
 
-#[cfg(any(test, feature = "conformance"))]
 impl AzureVmRuntimeHandle {
     pub fn provider_handle(&self) -> &ProviderHandle {
         &self.provider
@@ -962,7 +909,6 @@ impl AzureVmRuntimeHandle {
     }
 }
 
-#[cfg(any(test, feature = "conformance"))]
 impl fmt::Debug for AzureVmRuntimeHandle {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -974,7 +920,6 @@ impl fmt::Debug for AzureVmRuntimeHandle {
     }
 }
 
-#[cfg(any(test, feature = "conformance"))]
 fn contract_capabilities() -> ProviderCapabilitySet {
     ProviderCapabilitySet::new(
         AzureVmRuntimeProvider::CONTRACT_METHODS
@@ -986,7 +931,6 @@ fn contract_capabilities() -> ProviderCapabilitySet {
     .unwrap_or_else(|_| unreachable!())
 }
 
-#[cfg(any(test, feature = "conformance"))]
 fn runtime_input_matches(request: &ProviderOperationRequest, method: ProviderMethod) -> bool {
     matches!(
         (method, &request.input),
@@ -1001,7 +945,6 @@ fn runtime_input_matches(request: &ProviderOperationRequest, method: ProviderMet
     )
 }
 
-#[cfg(any(test, feature = "conformance"))]
 fn deployment_lifecycle(state: DeploymentState) -> ObservedLifecycleState {
     match state {
         DeploymentState::Running => ObservedLifecycleState::Running,
@@ -1009,7 +952,6 @@ fn deployment_lifecycle(state: DeploymentState) -> ObservedLifecycleState {
     }
 }
 
-#[cfg(any(test, feature = "conformance"))]
 fn bounded_hash(value: &str) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
     for byte in value.bytes() {
@@ -1019,12 +961,10 @@ fn bounded_hash(value: &str) -> u64 {
     (hash % (d2b_contracts::v2_provider::MAX_SAFE_JSON_INTEGER - 1)) + 1
 }
 
-#[cfg(any(test, feature = "conformance"))]
 fn operation_key(value: &str) -> Result<d2b_azure_vm_fake_sdk::OperationKey, FakeSdkErrorKind> {
     d2b_azure_vm_fake_sdk::OperationKey::new(bounded_hash(value))
 }
 
-#[cfg(any(test, feature = "conformance"))]
 fn handle_id(prefix: &str, identity: u64) -> Result<HandleId, FakeSdkErrorKind> {
     HandleId::parse(format!("{prefix}-{identity:x}")).map_err(|_| FakeSdkErrorKind::BoundExceeded)
 }
