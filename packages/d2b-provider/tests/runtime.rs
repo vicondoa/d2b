@@ -231,8 +231,8 @@ fn closed_error_context_is_actionable_without_identity_leaks() {
 #[test]
 fn health_uses_no_input_inspection_methods_for_every_axis() {
     for provider_type in ProviderType::ALL {
-        let method = provider_inspection_method(*provider_type);
-        assert_eq!(method.provider_type(), *provider_type);
+        let method = provider_inspection_method(provider_type);
+        assert_eq!(method.provider_type(), provider_type);
         assert!(method.required());
         assert_ne!(method, ProviderMethod::DevicePlanAttach);
     }
