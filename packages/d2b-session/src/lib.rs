@@ -24,7 +24,7 @@ mod transport;
 pub use bootstrap::{AdmittedBootstrapPsk, BootstrapAdmission, BootstrapPsk, Secret32};
 pub use cancellation::{Cancellation, RequestRegistry};
 pub use deadline::DeadlineBudget;
-pub use driver::{ComponentSessionDriver, SessionDriverHandle};
+pub use driver::{ComponentSessionDriver, PendingInvocation, SessionDriverHandle};
 pub use engine::{SessionEngine, SessionEvent};
 pub use error::{Result, SessionError};
 pub use fragmentation::{Fragment, Fragmenter, Reassembler};

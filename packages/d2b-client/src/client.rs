@@ -23,6 +23,7 @@ use d2b_contracts::{
 use protobuf::MessageField;
 use tokio::sync::Notify;
 
+use crate::session::StreamDispatcher;
 use crate::{
     ClientError, ComponentSessionConnector, MethodHandle, NamedStream, OwnedAttachment,
     RemoteErrorKind, ResolvedTarget, RetryClass, ServiceHandle, ServiceKind, ServiceOwner,
@@ -274,6 +275,7 @@ where
             return Err(ClientError::ContractViolation);
         }
         let generated = ttrpc::r#async::Client::new(connected.ttrpc_socket);
+        let stream_dispatcher = StreamDispatcher::new(Arc::clone(&connected.driver));
         Ok(ConnectedClient {
             target: resolved,
             service: ServiceHandle::new(service, generated),
@@ -281,6 +283,7 @@ where
             generation,
             clock: self.clock.clone(),
             active_streams: Arc::new(AtomicU16::new(0)),
+            stream_dispatcher,
         })
     }
 }
@@ -292,6 +295,7 @@ pub struct ConnectedClient {
     generation: u64,
     clock: Arc<dyn WallClock>,
     active_streams: Arc<AtomicU16>,
+    stream_dispatcher: Arc<StreamDispatcher>,
 }
 
 impl fmt::Debug for ConnectedClient {
@@ -360,7 +364,7 @@ impl ConnectedClient {
             .collect::<Result<Vec<_>, _>>()?;
         request
             .validate_wire(spec.requires_idempotency)
-            .map_err(|_| ClientError::ContractViolation)?;
+            .map_err(ClientError::ServiceContract)?;
         validate_outbound_attachments(
             &attachments,
             method,
@@ -368,7 +372,7 @@ impl ConnectedClient {
             self.generation,
         )?;
         let request_bytes = encode_strict(&request, spec.requires_idempotency)
-            .map_err(|_| ClientError::ContractViolation)?;
+            .map_err(ClientError::ServiceContract)?;
 
         let now = self.clock.now_unix_ms();
         let wall_remaining = options
@@ -523,20 +527,33 @@ impl ConnectedClient {
             .and_then(|value| value.parse::<u16>().ok())
             .ok_or(ClientError::ContractViolation)?;
         let id = d2b_session::StreamId::new(channel).map_err(|_| ClientError::ContractViolation)?;
-        self.driver
+        self.reserve_stream()?;
+        let stream = match NamedStream::new(
+            Arc::clone(&self.driver),
+            &self.stream_dispatcher,
+            id,
+            Arc::clone(&self.active_streams),
+        ) {
+            Ok(stream) => stream,
+            Err(error) => {
+                self.active_streams.fetch_sub(1, Ordering::AcqRel);
+                return Err(error);
+            }
+        };
+        if self
+            .driver
             .open_named_stream(
                 id,
                 d2b_contracts::v2_component_session::MAX_NAMED_STREAM_QUEUE_BYTES,
                 d2b_contracts::v2_component_session::MAX_NAMED_STREAM_QUEUE_BYTES,
             )
             .await
-            .map_err(|_| ClientError::TransportFailed)?;
-        self.reserve_stream()?;
-        Ok(NamedStream::new(
-            Arc::clone(&self.driver),
-            id,
-            Arc::clone(&self.active_streams),
-        ))
+            .is_err()
+        {
+            drop(stream);
+            return Err(ClientError::TransportFailed);
+        }
+        Ok(stream)
     }
 
     fn reserve_stream(&self) -> Result<(), ClientError> {
@@ -612,10 +629,10 @@ fn validate_reply(
 ) -> Result<Response, ClientError> {
     let (bytes, attachments) = reply.packet.into_parts();
     let response: common::ServiceResponse =
-        decode_strict(&bytes, false).map_err(|_| ClientError::ContractViolation)?;
+        decode_strict(&bytes, false).map_err(ClientError::ServiceContract)?;
     response
         .validate_wire(false)
-        .map_err(|_| ClientError::ContractViolation)?;
+        .map_err(ClientError::ServiceContract)?;
     if response.attachment_indexes.len() != attachments.len()
         || response
             .attachment_indexes

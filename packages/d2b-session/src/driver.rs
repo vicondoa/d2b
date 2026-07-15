@@ -29,7 +29,15 @@ const DRIVER_EVENT_CAPACITY: usize = 128;
 pub trait ComponentSessionDriver: Send + Sync {
     fn generation(&self) -> u64;
 
-    async fn invoke(&self, request_id: RequestId, frame: Vec<u8>) -> Result<Vec<u8>>;
+    async fn begin_invoke(
+        &self,
+        request_id: RequestId,
+        frame: Vec<u8>,
+    ) -> Result<PendingInvocation>;
+
+    async fn invoke(&self, request_id: RequestId, frame: Vec<u8>) -> Result<Vec<u8>> {
+        self.begin_invoke(request_id, frame).await?.response().await
+    }
 
     async fn cancel(&self, generation: u64, request_id: RequestId) -> Result<()>;
 
@@ -77,6 +85,33 @@ pub trait ComponentSessionDriver: Send + Sync {
     async fn close(&self, reason: CloseReason, remediation: Remediation) -> Result<()>;
 }
 
+pub struct PendingInvocation {
+    response: oneshot::Receiver<Result<Vec<u8>>>,
+}
+
+impl fmt::Debug for PendingInvocation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("PendingInvocation([redacted])")
+    }
+}
+
+impl PendingInvocation {
+    pub fn from_future<F>(future: F) -> Self
+    where
+        F: std::future::Future<Output = Result<Vec<u8>>> + Send + 'static,
+    {
+        let (reply, response) = oneshot::channel();
+        tokio::spawn(async move {
+            let _ = reply.send(future.await);
+        });
+        Self { response }
+    }
+
+    pub async fn response(self) -> Result<Vec<u8>> {
+        self.response.await.map_err(|_| disconnected())?
+    }
+}
+
 #[derive(Clone)]
 pub struct SessionDriverHandle {
     commands: mpsc::Sender<DriverCommand>,
@@ -104,6 +139,23 @@ impl SessionDriverHandle {
             .map_err(|_| disconnected())?;
         receive.await.map_err(|_| disconnected())?
     }
+
+    async fn enqueue_invoke(
+        &self,
+        request_id: RequestId,
+        frame: Vec<u8>,
+    ) -> Result<PendingInvocation> {
+        let (reply, response) = oneshot::channel();
+        self.commands
+            .send(DriverCommand::Invoke {
+                request_id,
+                frame,
+                reply,
+            })
+            .await
+            .map_err(|_| disconnected())?;
+        Ok(PendingInvocation { response })
+    }
 }
 
 #[async_trait]
@@ -112,13 +164,12 @@ impl ComponentSessionDriver for SessionDriverHandle {
         self.generation.load(Ordering::Acquire)
     }
 
-    async fn invoke(&self, request_id: RequestId, frame: Vec<u8>) -> Result<Vec<u8>> {
-        self.request(|reply| DriverCommand::Invoke {
-            request_id,
-            frame,
-            reply,
-        })
-        .await
+    async fn begin_invoke(
+        &self,
+        request_id: RequestId,
+        frame: Vec<u8>,
+    ) -> Result<PendingInvocation> {
+        self.enqueue_invoke(request_id, frame).await
     }
 
     async fn cancel(&self, generation: u64, request_id: RequestId) -> Result<()> {

@@ -1,5 +1,7 @@
 use std::{error::Error, fmt};
 
+use d2b_contracts::{v2_component_session::SessionErrorCode, v2_services::ServiceContractError};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteErrorKind {
     InvalidRequest,
@@ -28,6 +30,7 @@ pub enum ClientError {
     RouteUnavailable,
     TransportPolicyMismatch,
     ConnectFailed,
+    SessionEstablishment(SessionErrorCode),
     InvalidService,
     InvalidMethod,
     InvalidMetadata,
@@ -39,6 +42,7 @@ pub enum ClientError {
     TransportFailed,
     AmbiguousMutation,
     ContractViolation,
+    ServiceContract(ServiceContractError),
     AttachmentMismatch,
     StreamLimitExceeded,
     StreamDetached,
@@ -51,11 +55,14 @@ pub enum ClientError {
 
 impl fmt::Display for ClientError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
+        let message = match self {
             Self::InvalidTarget => "client-invalid-target",
             Self::RouteUnavailable => "client-route-unavailable",
             Self::TransportPolicyMismatch => "client-transport-policy-mismatch",
             Self::ConnectFailed => "client-connect-failed",
+            Self::SessionEstablishment(code) => {
+                return write!(formatter, "client-session-establishment-{}", code.as_str());
+            }
             Self::InvalidService => "client-invalid-service",
             Self::InvalidMethod => "client-invalid-method",
             Self::InvalidMetadata => "client-invalid-metadata",
@@ -67,12 +74,16 @@ impl fmt::Display for ClientError {
             Self::TransportFailed => "client-transport-failed",
             Self::AmbiguousMutation => "client-ambiguous-mutation",
             Self::ContractViolation => "client-contract-violation",
+            Self::ServiceContract(error) => {
+                return write!(formatter, "client-{error}");
+            }
             Self::AttachmentMismatch => "client-attachment-mismatch",
             Self::StreamLimitExceeded => "client-stream-limit-exceeded",
             Self::StreamDetached => "client-stream-detached",
             Self::StreamClosed => "client-stream-closed",
             Self::Remote { .. } => "client-remote-error",
-        })
+        };
+        formatter.write_str(message)
     }
 }
 

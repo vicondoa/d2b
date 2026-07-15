@@ -12,8 +12,8 @@ use async_trait::async_trait;
 use d2b_client::{
     AttachmentPayload, AttachmentValidationError, CallOptions, CancellationToken, Client,
     ClientError, ComponentSessionConnector, ConnectedClient, ConnectedSession, MetadataInput,
-    OwnedAttachment, OwnedTransport, RemoteErrorKind, RetryClass, RetryPolicy, RouteRecord,
-    RouteTable, ServiceKind, ServiceOwner, SessionFailure, SharedDriver, TargetInput,
+    OwnedAttachment, OwnedTransport, RemoteErrorKind, Response, RetryClass, RetryPolicy,
+    RouteRecord, RouteTable, ServiceKind, ServiceOwner, SessionFailure, SharedDriver, TargetInput,
     TargetResolver, TransportKind, TransportPacket, TransportSelection, WallClock,
 };
 use d2b_contracts::{
@@ -22,14 +22,14 @@ use d2b_contracts::{
         AttachmentPolicy, AttachmentPurpose, BoundedVec, CloseReason, EndpointPolicy,
         EndpointPurpose, EndpointRole, HandshakeOffer, IdentityEvidenceRequirement,
         KernelObjectType, LimitProfile, Locality, NoiseProfile, PurposeClass, Remediation,
-        RequestId, ServicePackage, TransportBinding, TransportClass,
+        RequestId, ServicePackage, SessionErrorCode, TransportBinding, TransportClass,
     },
     v2_identity::{ProviderId, RealmId, WorkloadId},
-    v2_services::{SERVICE_INVENTORY, common, decode_strict, encode_strict},
+    v2_services::{SERVICE_INVENTORY, ServiceContractError, common, decode_strict, encode_strict},
 };
 use d2b_session::{
-    Cancellation, HandshakeCredentials, Result as SessionResult, SessionEngine, SessionEvent,
-    StreamEvent, StreamId, TransportDescriptor, TransportError,
+    Cancellation, HandshakeCredentials, PendingInvocation, Result as SessionResult, SessionEngine,
+    SessionEvent, StreamEvent, StreamId, TransportDescriptor, TransportError,
 };
 use protobuf::{EnumOrUnknown, Message, MessageField};
 use tokio::{
@@ -203,6 +203,7 @@ enum RemoteStreamEvent {
     Close,
     Reset,
     WrongStream,
+    InterleavedStreams,
 }
 
 #[derive(Debug)]
@@ -270,8 +271,12 @@ impl d2b_session::ComponentSessionDriver for GrantRecordingDriver {
         self.inner.generation()
     }
 
-    async fn invoke(&self, request_id: RequestId, frame: Vec<u8>) -> SessionResult<Vec<u8>> {
-        self.inner.invoke(request_id, frame).await
+    async fn begin_invoke(
+        &self,
+        request_id: RequestId,
+        frame: Vec<u8>,
+    ) -> SessionResult<PendingInvocation> {
+        self.inner.begin_invoke(request_id, frame).await
     }
 
     async fn cancel(&self, generation: u64, request_id: RequestId) -> SessionResult<()> {
@@ -489,6 +494,22 @@ async fn remote_streams(driver: SharedDriver, state: Arc<FakeState>) -> Result<(
                             .map_err(|_| ())?;
                         driver
                             .send_named_stream(wrong, b"wrong-stream".to_vec())
+                            .await
+                            .map_err(|_| ())?;
+                        return Ok(());
+                    }
+                    Some(RemoteStreamEvent::InterleavedStreams) => {
+                        let other = StreamId::new(0x0101).map_err(|_| ())?;
+                        driver
+                            .open_named_stream(other, 256 * 1024, 256 * 1024)
+                            .await
+                            .map_err(|_| ())?;
+                        driver
+                            .send_named_stream(other, b"other-stream".to_vec())
+                            .await
+                            .map_err(|_| ())?;
+                        driver
+                            .send_named_stream(stream, b"primary-stream".to_vec())
                             .await
                             .map_err(|_| ())?;
                         return Ok(());
@@ -1129,6 +1150,37 @@ async fn named_stream_grants_only_consumed_data_and_releases_blocked_sender() {
 }
 
 #[tokio::test]
+async fn concurrent_named_streams_route_events_without_cross_consumption() {
+    let connector = FakeConnector::new();
+    *connector.0.stream_event.lock().unwrap() = Some(RemoteStreamEvent::InterleavedStreams);
+    *connector.0.stream_id.lock().unwrap() = Some("stream-256".to_owned());
+    let (_connector, client) = daemon_client_with(connector).await;
+    let response = client
+        .invoke(
+            client.service().method(3).unwrap(),
+            common::ServiceRequest::new(),
+            options(false),
+            &CancellationToken::default(),
+        )
+        .await
+        .unwrap();
+    let primary = client.named_stream(&response).await.unwrap();
+    let mut other_message = common::ServiceResponse::new();
+    other_message.stream_id = "stream-257".to_owned();
+    let other = client
+        .named_stream(&Response {
+            message: other_message,
+            attachments: Vec::new(),
+        })
+        .await
+        .unwrap();
+
+    primary.send(b"prime").await.unwrap();
+    assert_eq!(other.receive().await.unwrap(), b"other-stream");
+    assert_eq!(primary.receive().await.unwrap(), b"primary-stream");
+}
+
+#[tokio::test]
 async fn named_stream_terminal_and_error_events_do_not_grant_credit() {
     for (event, expected) in [
         (RemoteStreamEvent::Close, ClientError::StreamClosed),
@@ -1191,4 +1243,12 @@ fn debug_and_errors_are_redacted() {
         retry: RetryClass::Never,
     };
     assert_eq!(remote.to_string(), "client-remote-error");
+    assert_eq!(
+        ClientError::SessionEstablishment(SessionErrorCode::IdentityEvidenceMismatch).to_string(),
+        "client-session-establishment-identity-evidence-mismatch"
+    );
+    assert_eq!(
+        ClientError::ServiceContract(ServiceContractError::InvalidDeadline).to_string(),
+        "client-v2-service-invalid-deadline"
+    );
 }
