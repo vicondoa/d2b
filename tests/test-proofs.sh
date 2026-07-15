@@ -47,6 +47,17 @@ fi
 export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-$pinned_channel}"
 export CARGO_BUILD_RUSTC_WRAPPER="" RUSTC_WRAPPER=""
 
+# The Layer-1 runner may provide one global target root while proof crates select
+# a different pinned rustc. Keep each proof/toolchain below its own target
+# directory so concurrent workspace and proof jobs cannot reuse incompatible
+# metadata.
+proof_target_base=
+if [ -n "${D2B_PROOF_TARGET_DIR:-}" ]; then
+  proof_target_base=$D2B_PROOF_TARGET_DIR
+elif [ -n "${CARGO_TARGET_DIR:-}" ]; then
+  proof_target_base="$CARGO_TARGET_DIR/d2b-proofs/$RUSTUP_TOOLCHAIN"
+fi
+
 # Ensure the clippy component exists for the pinned toolchain. On CI runners
 # that ship rustup pre-installed, cargo is already on PATH so the nix-shell
 # bootstrap above is skipped; but the pinned toolchain then auto-installs as
@@ -67,8 +78,12 @@ for proof in chunked-stdio-conformance w0-ch-connect-proof; do
     continue
   fi
   log "--> proofs/$proof: clippy + test"
-  if cargo clippy --manifest-path "$manifest" --all-targets -- -D warnings \
-    && cargo test --manifest-path "$manifest"; then
+  proof_target_args=()
+  if [ -n "$proof_target_base" ]; then
+    proof_target_args=(--target-dir "$proof_target_base/$proof")
+  fi
+  if cargo clippy "${proof_target_args[@]}" --manifest-path "$manifest" --all-targets -- -D warnings \
+    && cargo test "${proof_target_args[@]}" --manifest-path "$manifest"; then
     ok "proofs/$proof"
   else
     fail "proofs/$proof"

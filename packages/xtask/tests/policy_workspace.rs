@@ -84,6 +84,16 @@ fn implementation_crates_are_base_first_and_workspace_members_are_sorted() {
             "workspace must contain base-first implementation crate {package}"
         );
     }
+
+    #[test]
+    fn standalone_proofs_isolate_mixed_toolchain_targets() {
+        let script = read_repo_file("tests/test-proofs.sh");
+        assert!(
+            script.contains("CARGO_TARGET_DIR/d2b-proofs/$RUSTUP_TOOLCHAIN")
+                && script.contains("proof_target_args=(--target-dir"),
+            "standalone proof crates must not share target metadata across rustc versions"
+        );
+    }
     for forbidden in ["d2b-host-providers", "d2b-unix-session"] {
         assert!(
             !workspace.contains(forbidden),

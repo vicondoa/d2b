@@ -91,6 +91,9 @@ deprecations ship one minor release before removal.
   ttrpc correlation, terminal stream cleanup, concurrent named-stream
   demultiplexing, actionable closed error context, transfer-safe OFD locks, and
   race-free provider drain.
+- Isolated standalone proof targets by proof and pinned Rust toolchain so
+  concurrent immutable Layer-1 validation cannot reuse incompatible rustc
+  metadata from the main workspace.
 - Closed W2 service-contract ambiguity by making provider capability claims
   method-exact, binding response attachments and streams, rejecting mixed
   identity scopes and contradictory error outcomes, returning exact typed
