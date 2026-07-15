@@ -874,6 +874,51 @@
       "path": "packages/d2b-session/src/transport.rs"
     },
     {
+      "name": "w3-session-unix-adapter",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session-unix/src/adapter.rs"
+    },
+    {
+      "name": "w3-session-unix-cargo",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session-unix/Cargo.toml"
+    },
+    {
+      "name": "w3-session-unix-credit",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session-unix/src/credit.rs"
+    },
+    {
+      "name": "w3-session-unix-descriptor",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session-unix/src/descriptor.rs"
+    },
+    {
+      "name": "w3-session-unix-error",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session-unix/src/error.rs"
+    },
+    {
+      "name": "w3-session-unix-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session-unix/src/lib.rs"
+    },
+    {
+      "name": "w3-session-unix-pidfd",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session-unix/src/pidfd.rs"
+    },
+    {
+      "name": "w3-session-unix-socket",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session-unix/src/socket.rs"
+    },
+    {
+      "name": "w3-session-unix-tests",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session-unix/tests/unix_session.rs"
+    },
+    {
       "name": "w3-session-vectors",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2b-session/tests/noise_vectors.rs"
@@ -932,51 +977,6 @@
       "name": "w3-state-tests",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2b-state/tests/state.rs"
-    },
-    {
-      "name": "w3-session-unix-adapter",
-      "repository": "github.com/vicondoa/d2b",
-      "path": "packages/d2b-session-unix/src/adapter.rs"
-    },
-    {
-      "name": "w3-session-unix-cargo",
-      "repository": "github.com/vicondoa/d2b",
-      "path": "packages/d2b-session-unix/Cargo.toml"
-    },
-    {
-      "name": "w3-session-unix-credit",
-      "repository": "github.com/vicondoa/d2b",
-      "path": "packages/d2b-session-unix/src/credit.rs"
-    },
-    {
-      "name": "w3-session-unix-descriptor",
-      "repository": "github.com/vicondoa/d2b",
-      "path": "packages/d2b-session-unix/src/descriptor.rs"
-    },
-    {
-      "name": "w3-session-unix-error",
-      "repository": "github.com/vicondoa/d2b",
-      "path": "packages/d2b-session-unix/src/error.rs"
-    },
-    {
-      "name": "w3-session-unix-lib",
-      "repository": "github.com/vicondoa/d2b",
-      "path": "packages/d2b-session-unix/src/lib.rs"
-    },
-    {
-      "name": "w3-session-unix-pidfd",
-      "repository": "github.com/vicondoa/d2b",
-      "path": "packages/d2b-session-unix/src/pidfd.rs"
-    },
-    {
-      "name": "w3-session-unix-socket",
-      "repository": "github.com/vicondoa/d2b",
-      "path": "packages/d2b-session-unix/src/socket.rs"
-    },
-    {
-      "name": "w3-session-unix-tests",
-      "repository": "github.com/vicondoa/d2b",
-      "path": "packages/d2b-session-unix/tests/unix_session.rs"
     },
     {
       "name": "w3-workspace-policy",
