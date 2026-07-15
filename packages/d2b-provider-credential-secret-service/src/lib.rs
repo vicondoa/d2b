@@ -19,7 +19,7 @@ use std::{
 
 use async_trait::async_trait;
 use d2b_contracts::{
-    v2_component_session::{BoundedVec, EndpointRole, ServicePackage},
+    v2_component_session::{BoundedVec, EndpointRole},
     v2_identity::{ProviderId, ProviderType},
     v2_provider::{
         AdoptionState, AuthorizedProviderScope, CredentialLease, CredentialLeaseRequest,
@@ -589,7 +589,7 @@ impl SecretServiceCredentialProvider {
                 ProviderRemediation::RetryBounded,
             ));
         }
-        if context.service != ServicePackage::UserV2
+        if context.validate().is_err()
             || context
                 .operation
                 .validate(&self.descriptor, self.now())

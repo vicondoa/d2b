@@ -4,6 +4,7 @@ use std::sync::{
 };
 
 use d2b_contracts::{
+    v2_component_session::ServicePackage,
     v2_identity::{ProviderType, WorkloadId},
     v2_provider::{
         AuthorizedProviderScope, CredentialProvider, Fingerprint, ImplementationId, MutationState,
