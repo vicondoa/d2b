@@ -18,7 +18,15 @@ use crate::{
         MAX_REQUEST_LIFETIME_MS, RequestEnvelope, RequestId, TraceId,
     },
     v2_identity::{ProviderId, ProviderType as IdentityProviderType, RealmId, RoleId, WorkloadId},
-    v2_provider::{MAX_PROVIDER_CAPABILITIES, ProviderMethod},
+    v2_provider::{
+        AudioChannel as CanonicalAudioChannel, AudioDirection as CanonicalAudioDirection,
+        ConfiguredItemId, DeviceSelectorId,
+        InfrastructurePowerState as CanonicalInfrastructurePowerState, MAX_PROVIDER_CAPABILITIES,
+        ObservabilityCursor, ObservabilityExportFormat as CanonicalObservabilityExportFormat,
+        ObservabilityView as CanonicalObservabilityView, ProviderMethod,
+        ProviderOperationInput as CanonicalProviderOperationInput, StorageSnapshotId,
+        TransportBindingId,
+    },
     v2_state::Generation,
 };
 
@@ -38,6 +46,7 @@ pub mod clipboard_picker;
 pub mod clipboard_picker_ttrpc;
 #[path = "generated_v2_services/clipboard_ttrpc.rs"]
 pub mod clipboard_ttrpc;
+#[allow(clippy::match_single_binding, clippy::needless_borrowed_reference)]
 #[path = "generated_v2_services/common.rs"]
 pub mod common;
 #[path = "generated_v2_services/daemon.rs"]
@@ -527,6 +536,8 @@ pub enum ServiceContractError {
     InvalidId,
     InvalidDigest,
     InvalidEnum,
+    MissingOperationInput,
+    InvalidOperationInput,
     InvalidDeadline,
     MissingIdempotency,
     BoundExceeded,
@@ -546,6 +557,8 @@ impl fmt::Display for ServiceContractError {
             Self::InvalidId => "v2-service-invalid-id",
             Self::InvalidDigest => "v2-service-invalid-digest",
             Self::InvalidEnum => "v2-service-invalid-enum",
+            Self::MissingOperationInput => "v2-service-missing-operation-input",
+            Self::InvalidOperationInput => "v2-service-invalid-operation-input",
             Self::InvalidDeadline => "v2-service-invalid-deadline",
             Self::MissingIdempotency => "v2-service-missing-idempotency",
             Self::BoundExceeded => "v2-service-bound-exceeded",
@@ -832,25 +845,188 @@ pub fn provider_type(
         })
 }
 
+pub fn provider_operation_input(
+    value: &common::ProviderOperationInput,
+) -> Result<CanonicalProviderOperationInput, ServiceContractError> {
+    use common::provider_operation_input::Input;
+
+    reject_unknown(value)?;
+    let input = match value
+        .input
+        .as_ref()
+        .ok_or(ServiceContractError::MissingOperationInput)?
+    {
+        Input::NoInput(value) => {
+            reject_unknown(value)?;
+            CanonicalProviderOperationInput::NoInput
+        }
+        Input::ConfiguredRuntimeExecution(value) => {
+            reject_unknown(value)?;
+            CanonicalProviderOperationInput::ConfiguredRuntimeExecution {
+                configured_item_id: ConfiguredItemId::parse(value.configured_item_id.clone())
+                    .map_err(|_| ServiceContractError::InvalidId)?,
+            }
+        }
+        Input::InfrastructurePowerState(value) => {
+            reject_unknown(value)?;
+            let state = match value
+                .state
+                .enum_value()
+                .map_err(|_| ServiceContractError::InvalidEnum)?
+            {
+                common::InfrastructurePowerState::INFRASTRUCTURE_POWER_STATE_RUNNING => {
+                    CanonicalInfrastructurePowerState::Running
+                }
+                common::InfrastructurePowerState::INFRASTRUCTURE_POWER_STATE_STOPPED => {
+                    CanonicalInfrastructurePowerState::Stopped
+                }
+                common::InfrastructurePowerState::INFRASTRUCTURE_POWER_STATE_UNSPECIFIED => {
+                    return Err(ServiceContractError::InvalidEnum);
+                }
+            };
+            CanonicalProviderOperationInput::InfrastructurePowerState { state }
+        }
+        Input::TransportBinding(value) => {
+            reject_unknown(value)?;
+            CanonicalProviderOperationInput::TransportBinding {
+                transport_binding_id: TransportBindingId::parse(value.transport_binding_id.clone())
+                    .map_err(|_| ServiceContractError::InvalidId)?,
+            }
+        }
+        Input::StorageSnapshot(value) => {
+            reject_unknown(value)?;
+            CanonicalProviderOperationInput::StorageSnapshot {
+                snapshot_id: StorageSnapshotId::parse(value.snapshot_id.clone())
+                    .map_err(|_| ServiceContractError::InvalidId)?,
+            }
+        }
+        Input::DeviceSelector(value) => {
+            reject_unknown(value)?;
+            CanonicalProviderOperationInput::DeviceSelector {
+                device_selector_id: DeviceSelectorId::parse(value.device_selector_id.clone())
+                    .map_err(|_| ServiceContractError::InvalidId)?,
+            }
+        }
+        Input::AudioState(value) => {
+            reject_unknown(value)?;
+            let channel = match value
+                .channel
+                .enum_value()
+                .map_err(|_| ServiceContractError::InvalidEnum)?
+            {
+                common::AudioChannel::AUDIO_CHANNEL_SPEAKER => CanonicalAudioChannel::Speaker,
+                common::AudioChannel::AUDIO_CHANNEL_MICROPHONE => CanonicalAudioChannel::Microphone,
+                common::AudioChannel::AUDIO_CHANNEL_UNSPECIFIED => {
+                    return Err(ServiceContractError::InvalidEnum);
+                }
+            };
+            let direction = match value
+                .direction
+                .enum_value()
+                .map_err(|_| ServiceContractError::InvalidEnum)?
+            {
+                common::AudioDirection::AUDIO_DIRECTION_OUTPUT => CanonicalAudioDirection::Output,
+                common::AudioDirection::AUDIO_DIRECTION_INPUT => CanonicalAudioDirection::Input,
+                common::AudioDirection::AUDIO_DIRECTION_UNSPECIFIED => {
+                    return Err(ServiceContractError::InvalidEnum);
+                }
+            };
+            CanonicalProviderOperationInput::AudioState {
+                channel,
+                direction,
+                mute: value.mute,
+                volume: value
+                    .volume
+                    .map(u8::try_from)
+                    .transpose()
+                    .map_err(|_| ServiceContractError::BoundExceeded)?,
+            }
+        }
+        Input::ObservabilityQuery(value) => {
+            reject_unknown(value)?;
+            let view = match value
+                .view
+                .enum_value()
+                .map_err(|_| ServiceContractError::InvalidEnum)?
+            {
+                common::ObservabilityView::OBSERVABILITY_VIEW_HEALTH => {
+                    CanonicalObservabilityView::Health
+                }
+                common::ObservabilityView::OBSERVABILITY_VIEW_LIFECYCLE => {
+                    CanonicalObservabilityView::Lifecycle
+                }
+                common::ObservabilityView::OBSERVABILITY_VIEW_OPERATIONS => {
+                    CanonicalObservabilityView::Operations
+                }
+                common::ObservabilityView::OBSERVABILITY_VIEW_UNSPECIFIED => {
+                    return Err(ServiceContractError::InvalidEnum);
+                }
+            };
+            CanonicalProviderOperationInput::ObservabilityQuery {
+                view,
+                cursor: value
+                    .cursor
+                    .as_ref()
+                    .map(|cursor| ObservabilityCursor::parse(cursor.clone()))
+                    .transpose()
+                    .map_err(|_| ServiceContractError::InvalidId)?,
+                limit: u16::try_from(value.limit)
+                    .map_err(|_| ServiceContractError::BoundExceeded)?,
+            }
+        }
+        Input::ObservabilityExport(value) => {
+            reject_unknown(value)?;
+            let format = match value
+                .format
+                .enum_value()
+                .map_err(|_| ServiceContractError::InvalidEnum)?
+            {
+                common::ObservabilityExportFormat::OBSERVABILITY_EXPORT_FORMAT_JSON_LINES => {
+                    CanonicalObservabilityExportFormat::JsonLines
+                }
+                common::ObservabilityExportFormat::OBSERVABILITY_EXPORT_FORMAT_OTLP_PROTOBUF => {
+                    CanonicalObservabilityExportFormat::OtlpProtobuf
+                }
+                common::ObservabilityExportFormat::OBSERVABILITY_EXPORT_FORMAT_UNSPECIFIED => {
+                    return Err(ServiceContractError::InvalidEnum);
+                }
+            };
+            CanonicalProviderOperationInput::ObservabilityExport {
+                format,
+                start_at_unix_ms: value.start_at_unix_ms,
+                end_at_unix_ms: value.end_at_unix_ms,
+            }
+        }
+    };
+    input.validate().map_err(|error| match error {
+        crate::v2_provider::ProviderContractError::BoundExceeded => {
+            ServiceContractError::BoundExceeded
+        }
+        crate::v2_provider::ProviderContractError::InvalidTimeRange => {
+            ServiceContractError::InvalidDeadline
+        }
+        _ => ServiceContractError::InvalidOperationInput,
+    })?;
+    Ok(input)
+}
+
 impl StrictWireMessage for common::ProviderRequest {
     fn validate_wire(&self, requires_idempotency: bool) -> Result<(), ServiceContractError> {
         reject_unknown(self)?;
         validate_provider_context(required_message(&self.context)?, requires_idempotency)?;
-        if (!self.resource_id.is_empty()
-            && !bounded_opaque(&self.resource_id, MAX_SERVICE_STRING_BYTES))
-            || (!self.binding_id.is_empty()
-                && !bounded_opaque(&self.binding_id, MAX_SERVICE_STRING_BYTES))
-            || (!self.stream_id.is_empty()
-                && !bounded_opaque(&self.stream_id, MAX_SERVICE_STRING_BYTES))
+        if !self.resource_id.is_empty()
+            && !bounded_opaque(&self.resource_id, MAX_SERVICE_STRING_BYTES)
         {
             return Err(ServiceContractError::BoundExceeded);
         }
         if !optional_digest(&self.plan_digest) {
             return Err(ServiceContractError::InvalidDigest);
         }
-        if self.desired_state.enum_value().is_err() {
-            return Err(ServiceContractError::InvalidEnum);
-        }
+        provider_operation_input(
+            self.input
+                .as_ref()
+                .ok_or(ServiceContractError::MissingOperationInput)?,
+        )?;
         validate_attachments(&self.attachment_indexes)
     }
 }

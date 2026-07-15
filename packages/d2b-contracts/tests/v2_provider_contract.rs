@@ -204,6 +204,7 @@ fn operation_request() -> ProviderOperationRequest {
             workload_id: workload_id(),
         },
         expected_configuration_fingerprint: fingerprint(ONE),
+        input: ProviderOperationInput::NoInput,
     }
 }
 
@@ -774,6 +775,204 @@ fn serialized_contract_has_no_secret_path_argv_or_unbounded_diagnostic_entrypoin
     ] {
         assert!(!encoded.contains(canary));
     }
+}
+
+#[test]
+fn operation_inputs_are_closed_bounded_and_method_exact() {
+    let configured = ProviderOperationInput::ConfiguredRuntimeExecution {
+        configured_item_id: ConfiguredItemId::parse("configured-canary").unwrap(),
+    };
+    let power = ProviderOperationInput::InfrastructurePowerState {
+        state: InfrastructurePowerState::Stopped,
+    };
+    let binding = ProviderOperationInput::TransportBinding {
+        transport_binding_id: TransportBindingId::parse("binding-canary").unwrap(),
+    };
+    let snapshot = ProviderOperationInput::StorageSnapshot {
+        snapshot_id: StorageSnapshotId::parse("snapshot-canary").unwrap(),
+    };
+    let selector = ProviderOperationInput::DeviceSelector {
+        device_selector_id: DeviceSelectorId::parse("selector-canary").unwrap(),
+    };
+    let audio = ProviderOperationInput::AudioState {
+        channel: AudioChannel::Speaker,
+        direction: AudioDirection::Output,
+        mute: Some(false),
+        volume: Some(100),
+    };
+    let query = ProviderOperationInput::ObservabilityQuery {
+        view: ObservabilityView::Operations,
+        cursor: Some(ObservabilityCursor::parse("cursor-canary").unwrap()),
+        limit: MAX_OBSERVABILITY_QUERY_LIMIT,
+    };
+    let export = ProviderOperationInput::ObservabilityExport {
+        format: ObservabilityExportFormat::OtlpProtobuf,
+        start_at_unix_ms: 10,
+        end_at_unix_ms: 10 + MAX_OBSERVABILITY_EXPORT_RANGE_MS,
+    };
+
+    for (input, method) in [
+        (&configured, ProviderMethod::RuntimeExecute),
+        (&power, ProviderMethod::InfrastructureSetPowerState),
+        (&binding, ProviderMethod::InfrastructureBootstrapBinding),
+        (&binding, ProviderMethod::TransportRevokeBinding),
+        (&snapshot, ProviderMethod::StorageSnapshot),
+        (&selector, ProviderMethod::DevicePlanAttach),
+        (&audio, ProviderMethod::AudioSetState),
+        (&query, ProviderMethod::ObservabilityQuery),
+        (&export, ProviderMethod::ObservabilityExport),
+    ] {
+        input.validate_for(method).unwrap();
+        assert_eq!(
+            input.validate_for(ProviderMethod::RuntimeInspect),
+            Err(ProviderContractError::OperationInputMismatch)
+        );
+    }
+    ProviderOperationInput::NoInput
+        .validate_for(ProviderMethod::RuntimeInspect)
+        .unwrap();
+    assert_eq!(
+        ProviderOperationInput::NoInput.validate_for(ProviderMethod::AudioSetState),
+        Err(ProviderContractError::OperationInputMismatch)
+    );
+
+    assert_eq!(
+        ProviderOperationInput::AudioState {
+            channel: AudioChannel::Microphone,
+            direction: AudioDirection::Output,
+            mute: Some(true),
+            volume: None,
+        }
+        .validate(),
+        Err(ProviderContractError::OperationInputMismatch)
+    );
+    assert_eq!(
+        ProviderOperationInput::AudioState {
+            channel: AudioChannel::Speaker,
+            direction: AudioDirection::Output,
+            mute: None,
+            volume: None,
+        }
+        .validate(),
+        Err(ProviderContractError::OperationInputMismatch)
+    );
+    assert_eq!(
+        ProviderOperationInput::AudioState {
+            channel: AudioChannel::Speaker,
+            direction: AudioDirection::Output,
+            mute: None,
+            volume: Some(101),
+        }
+        .validate(),
+        Err(ProviderContractError::BoundExceeded)
+    );
+    assert_eq!(
+        ProviderOperationInput::ObservabilityQuery {
+            view: ObservabilityView::Health,
+            cursor: None,
+            limit: 0,
+        }
+        .validate(),
+        Err(ProviderContractError::BoundExceeded)
+    );
+    assert_eq!(
+        ProviderOperationInput::ObservabilityQuery {
+            view: ObservabilityView::Health,
+            cursor: None,
+            limit: MAX_OBSERVABILITY_QUERY_LIMIT + 1,
+        }
+        .validate(),
+        Err(ProviderContractError::BoundExceeded)
+    );
+    assert_eq!(
+        ProviderOperationInput::ObservabilityExport {
+            format: ObservabilityExportFormat::JsonLines,
+            start_at_unix_ms: 20,
+            end_at_unix_ms: 20,
+        }
+        .validate(),
+        Err(ProviderContractError::InvalidTimeRange)
+    );
+    assert_eq!(
+        ProviderOperationInput::ObservabilityExport {
+            format: ObservabilityExportFormat::JsonLines,
+            start_at_unix_ms: 20,
+            end_at_unix_ms: 21 + MAX_OBSERVABILITY_EXPORT_RANGE_MS,
+        }
+        .validate(),
+        Err(ProviderContractError::InvalidTimeRange)
+    );
+    assert_eq!(
+        ProviderOperationInput::ObservabilityExport {
+            format: ObservabilityExportFormat::JsonLines,
+            start_at_unix_ms: MAX_SAFE_JSON_INTEGER,
+            end_at_unix_ms: MAX_SAFE_JSON_INTEGER + 1,
+        }
+        .validate(),
+        Err(ProviderContractError::InvalidTimeRange)
+    );
+    assert!(ConfiguredItemId::parse("x".repeat(65)).is_err());
+    assert!(TransportBindingId::parse("x".repeat(65)).is_err());
+    assert!(StorageSnapshotId::parse("x".repeat(65)).is_err());
+    assert!(DeviceSelectorId::parse("x".repeat(65)).is_err());
+    assert!(ObservabilityCursor::parse("x".repeat(65)).is_err());
+    assert!(ObservabilityCursor::parse("cursor/escape").is_err());
+}
+
+#[test]
+fn operation_input_debug_redacts_every_identifier() {
+    for (input, canary) in [
+        (
+            ProviderOperationInput::ConfiguredRuntimeExecution {
+                configured_item_id: ConfiguredItemId::parse("configured-canary").unwrap(),
+            },
+            "configured-canary",
+        ),
+        (
+            ProviderOperationInput::TransportBinding {
+                transport_binding_id: TransportBindingId::parse("binding-canary").unwrap(),
+            },
+            "binding-canary",
+        ),
+        (
+            ProviderOperationInput::StorageSnapshot {
+                snapshot_id: StorageSnapshotId::parse("snapshot-canary").unwrap(),
+            },
+            "snapshot-canary",
+        ),
+        (
+            ProviderOperationInput::DeviceSelector {
+                device_selector_id: DeviceSelectorId::parse("selector-canary").unwrap(),
+            },
+            "selector-canary",
+        ),
+        (
+            ProviderOperationInput::ObservabilityQuery {
+                view: ObservabilityView::Health,
+                cursor: Some(ObservabilityCursor::parse("cursor-canary").unwrap()),
+                limit: 1,
+            },
+            "cursor-canary",
+        ),
+    ] {
+        assert!(!format!("{input:?}").contains(canary));
+    }
+}
+
+#[test]
+fn operation_request_rejects_method_input_mismatch() {
+    let descriptor = descriptor(
+        "f7z3k5e3awgn43aljt2a",
+        ProviderType::Runtime,
+        "azure-container-apps",
+    );
+    let mut request = operation_request();
+    request.context.method = ProviderMethod::RuntimeExecute;
+    request.context.capability = ProviderCapability(ProviderMethod::RuntimeExecute);
+    assert_eq!(
+        request.validate(&descriptor, 5_000),
+        Err(ProviderContractError::OperationInputMismatch)
+    );
 }
 
 #[test]

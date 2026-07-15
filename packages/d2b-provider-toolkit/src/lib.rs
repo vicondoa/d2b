@@ -10,6 +10,7 @@ mod fixture;
 mod redaction;
 mod registration;
 mod server;
+mod values;
 
 pub use adapter::ProviderAgentAdapter;
 pub use conformance::{ConformanceError, check_descriptor_conformance, check_provider_conformance};
@@ -17,3 +18,4 @@ pub use fixture::{DeterministicClock, FakeProvider, Fixture, sample_lease_reques
 pub use redaction::{Redacted, Secret};
 pub use registration::{ToolkitError, register_exact_instances};
 pub use server::GeneratedProviderServiceServer;
+pub use values::ProviderValues;

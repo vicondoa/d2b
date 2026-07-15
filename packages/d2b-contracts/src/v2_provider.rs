@@ -25,9 +25,11 @@ pub const MAX_CREDENTIAL_OPERATION_CLASSES: usize = 32;
 pub const MAX_PROVIDER_REQUEST_LIFETIME_MS: u64 = 15 * 60 * 1_000;
 pub const MAX_PROVIDER_LEASE_LIFETIME_MS: u64 = 60 * 60 * 1_000;
 pub const MAX_PROVIDER_DRAIN_MS: u32 = 5 * 60 * 1_000;
+pub const MAX_OBSERVABILITY_QUERY_LIMIT: u16 = 256;
+pub const MAX_OBSERVABILITY_EXPORT_RANGE_MS: u64 = 31 * 24 * 60 * 60 * 1_000;
 pub const MAX_SAFE_JSON_INTEGER: u64 = 9_007_199_254_740_991;
 pub const PROVIDER_CONTRACT_FINGERPRINT: &str =
-    "025a883c7e6975a797bae9fe74483a5f96a16adfd27d1e2d31a63f5a0fcd2312";
+    "f95fd0dbf69959090cb9ccead1b80b395597b7f0aeab5b4cf91ab603ec2773bf";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
@@ -45,8 +47,10 @@ pub enum ProviderContractError {
     PlacementMismatch,
     ScopeMismatch,
     OperationBindingMismatch,
+    OperationInputMismatch,
     RequestExpired,
     RequestLifetimeExceeded,
+    InvalidTimeRange,
     InvalidTransition,
     HandleBindingMismatch,
     OwnershipTransferInvalid,
@@ -82,8 +86,10 @@ impl fmt::Display for ProviderContractError {
             Self::PlacementMismatch => "provider placement metadata mismatch",
             Self::ScopeMismatch => "provider operation scope mismatch",
             Self::OperationBindingMismatch => "provider operation binding mismatch",
+            Self::OperationInputMismatch => "provider operation input mismatch",
             Self::RequestExpired => "provider request or lease expired",
             Self::RequestLifetimeExceeded => "provider request lifetime exceeded",
+            Self::InvalidTimeRange => "provider observability time range is invalid",
             Self::InvalidTransition => "invalid provider lifecycle transition",
             Self::HandleBindingMismatch => "provider handle binding mismatch",
             Self::OwnershipTransferInvalid => "provider ownership transfer is invalid",
@@ -178,6 +184,20 @@ bounded_id!(
 );
 bounded_id!(TransferId, "An opaque ownership-transfer identifier.");
 bounded_id!(SourceVersion, "A non-secret credential source version.");
+bounded_id!(
+    ConfiguredItemId,
+    "A bounded configured runtime item identifier."
+);
+bounded_id!(
+    TransportBindingId,
+    "An opaque transport binding identifier."
+);
+bounded_id!(StorageSnapshotId, "An opaque storage snapshot identifier.");
+bounded_id!(DeviceSelectorId, "A bounded configured device selector.");
+bounded_id!(
+    ObservabilityCursor,
+    "An opaque bounded observability pagination cursor."
+);
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, JsonSchema)]
 #[serde(transparent)]
@@ -1050,12 +1070,228 @@ impl ProviderTarget {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum InfrastructurePowerState {
+    Running,
+    Stopped,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum AudioChannel {
+    Speaker,
+    Microphone,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum AudioDirection {
+    Output,
+    Input,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ObservabilityView {
+    Health,
+    Lifecycle,
+    Operations,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ObservabilityExportFormat {
+    JsonLines,
+    OtlpProtobuf,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum ProviderOperationInput {
+    NoInput,
+    ConfiguredRuntimeExecution {
+        #[serde(rename = "configuredItemId")]
+        configured_item_id: ConfiguredItemId,
+    },
+    InfrastructurePowerState {
+        state: InfrastructurePowerState,
+    },
+    TransportBinding {
+        #[serde(rename = "transportBindingId")]
+        transport_binding_id: TransportBindingId,
+    },
+    StorageSnapshot {
+        #[serde(rename = "snapshotId")]
+        snapshot_id: StorageSnapshotId,
+    },
+    DeviceSelector {
+        #[serde(rename = "deviceSelectorId")]
+        device_selector_id: DeviceSelectorId,
+    },
+    AudioState {
+        channel: AudioChannel,
+        direction: AudioDirection,
+        mute: Option<bool>,
+        volume: Option<u8>,
+    },
+    ObservabilityQuery {
+        view: ObservabilityView,
+        cursor: Option<ObservabilityCursor>,
+        limit: u16,
+    },
+    ObservabilityExport {
+        format: ObservabilityExportFormat,
+        #[serde(rename = "startAtUnixMs")]
+        start_at_unix_ms: u64,
+        #[serde(rename = "endAtUnixMs")]
+        end_at_unix_ms: u64,
+    },
+}
+
+impl fmt::Debug for ProviderOperationInput {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoInput => formatter.write_str("ProviderOperationInput::NoInput"),
+            Self::ConfiguredRuntimeExecution { .. } => formatter
+                .write_str("ProviderOperationInput::ConfiguredRuntimeExecution(<redacted>)"),
+            Self::InfrastructurePowerState { state } => formatter
+                .debug_struct("ProviderOperationInput::InfrastructurePowerState")
+                .field("state", state)
+                .finish(),
+            Self::TransportBinding { .. } => {
+                formatter.write_str("ProviderOperationInput::TransportBinding(<redacted>)")
+            }
+            Self::StorageSnapshot { .. } => {
+                formatter.write_str("ProviderOperationInput::StorageSnapshot(<redacted>)")
+            }
+            Self::DeviceSelector { .. } => {
+                formatter.write_str("ProviderOperationInput::DeviceSelector(<redacted>)")
+            }
+            Self::AudioState {
+                channel,
+                direction,
+                mute,
+                volume,
+            } => formatter
+                .debug_struct("ProviderOperationInput::AudioState")
+                .field("channel", channel)
+                .field("direction", direction)
+                .field("mute", mute)
+                .field("volume", volume)
+                .finish(),
+            Self::ObservabilityQuery { view, limit, .. } => formatter
+                .debug_struct("ProviderOperationInput::ObservabilityQuery")
+                .field("view", view)
+                .field("cursor", &"<redacted>")
+                .field("limit", limit)
+                .finish(),
+            Self::ObservabilityExport {
+                format,
+                start_at_unix_ms,
+                end_at_unix_ms,
+            } => formatter
+                .debug_struct("ProviderOperationInput::ObservabilityExport")
+                .field("format", format)
+                .field("start_at_unix_ms", start_at_unix_ms)
+                .field("end_at_unix_ms", end_at_unix_ms)
+                .finish(),
+        }
+    }
+}
+
+impl ProviderOperationInput {
+    pub fn validate(&self) -> Result<(), ProviderContractError> {
+        match self {
+            Self::AudioState {
+                channel,
+                direction,
+                mute,
+                volume,
+            } => {
+                let direction_matches = matches!(
+                    (channel, direction),
+                    (AudioChannel::Speaker, AudioDirection::Output)
+                        | (AudioChannel::Microphone, AudioDirection::Input)
+                );
+                if !direction_matches || (mute.is_none() && volume.is_none()) {
+                    return Err(ProviderContractError::OperationInputMismatch);
+                }
+                if volume.is_some_and(|value| value > 100) {
+                    return Err(ProviderContractError::BoundExceeded);
+                }
+                Ok(())
+            }
+            Self::ObservabilityQuery { limit, .. } => {
+                if *limit == 0 || *limit > MAX_OBSERVABILITY_QUERY_LIMIT {
+                    Err(ProviderContractError::BoundExceeded)
+                } else {
+                    Ok(())
+                }
+            }
+            Self::ObservabilityExport {
+                start_at_unix_ms,
+                end_at_unix_ms,
+                ..
+            } => {
+                if *start_at_unix_ms > MAX_SAFE_JSON_INTEGER
+                    || *end_at_unix_ms > MAX_SAFE_JSON_INTEGER
+                    || *end_at_unix_ms <= *start_at_unix_ms
+                    || *end_at_unix_ms - *start_at_unix_ms > MAX_OBSERVABILITY_EXPORT_RANGE_MS
+                {
+                    Err(ProviderContractError::InvalidTimeRange)
+                } else {
+                    Ok(())
+                }
+            }
+            Self::NoInput
+            | Self::ConfiguredRuntimeExecution { .. }
+            | Self::InfrastructurePowerState { .. }
+            | Self::TransportBinding { .. }
+            | Self::StorageSnapshot { .. }
+            | Self::DeviceSelector { .. } => Ok(()),
+        }
+    }
+
+    pub fn validate_for(&self, method: ProviderMethod) -> Result<(), ProviderContractError> {
+        self.validate()?;
+        let compatible = match method {
+            ProviderMethod::RuntimeExecute => {
+                matches!(self, Self::ConfiguredRuntimeExecution { .. })
+            }
+            ProviderMethod::InfrastructureSetPowerState => {
+                matches!(self, Self::InfrastructurePowerState { .. })
+            }
+            ProviderMethod::InfrastructureBootstrapBinding
+            | ProviderMethod::TransportRevokeBinding => {
+                matches!(self, Self::TransportBinding { .. })
+            }
+            ProviderMethod::StorageSnapshot => matches!(self, Self::StorageSnapshot { .. }),
+            ProviderMethod::DevicePlanAttach => matches!(self, Self::DeviceSelector { .. }),
+            ProviderMethod::AudioSetState => matches!(self, Self::AudioState { .. }),
+            ProviderMethod::ObservabilityQuery => {
+                matches!(self, Self::ObservabilityQuery { .. })
+            }
+            ProviderMethod::ObservabilityExport => {
+                matches!(self, Self::ObservabilityExport { .. })
+            }
+            _ => matches!(self, Self::NoInput),
+        };
+        if compatible {
+            Ok(())
+        } else {
+            Err(ProviderContractError::OperationInputMismatch)
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderOperationRequest {
     pub context: ProviderOperationContext,
     pub target: ProviderTarget,
     pub expected_configuration_fingerprint: Fingerprint,
+    pub input: ProviderOperationInput,
 }
 
 impl fmt::Debug for ProviderOperationRequest {
@@ -1064,6 +1300,7 @@ impl fmt::Debug for ProviderOperationRequest {
             .debug_struct("ProviderOperationRequest")
             .field("context", &self.context)
             .field("target", &self.target)
+            .field("input", &self.input)
             .finish_non_exhaustive()
     }
 }
@@ -1082,6 +1319,7 @@ impl ProviderOperationRequest {
         {
             return Err(ProviderContractError::ScopeMismatch);
         }
+        self.input.validate_for(self.context.method)?;
         Ok(())
     }
 

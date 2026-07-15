@@ -1,5 +1,5 @@
 {
-  "contractFingerprint": "025a883c7e6975a797bae9fe74483a5f96a16adfd27d1e2d31a63f5a0fcd2312",
+  "contractFingerprint": "f95fd0dbf69959090cb9ccead1b80b395597b7f0aeab5b4cf91ab603ec2773bf",
   "credentialLease": {
     "agentBinding": {
       "agentGeneration": 3,
@@ -114,6 +114,9 @@
       "traceId": "2222222222222222222222222222222222222222222222222222222222222222"
     },
     "expectedConfigurationFingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+    "input": {
+      "kind": "no-input"
+    },
     "target": {
       "kind": "workload",
       "realmId": "yl2hpmks5td5dkeso6qq",

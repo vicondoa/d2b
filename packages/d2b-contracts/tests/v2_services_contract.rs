@@ -2,11 +2,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use d2b_contracts::v2_provider::ProviderMethod;
+use d2b_contracts::v2_provider::{
+    AudioChannel, AudioDirection, InfrastructurePowerState, ObservabilityExportFormat,
+    ObservabilityView, ProviderMethod, ProviderOperationInput,
+};
 use d2b_contracts::v2_services::{
     SERVICE_INVENTORY, SERVICE_PACKAGES, ServiceContractError, ServiceInventoryDocument,
     StrictWireMessage, common, decode_strict, encode_strict, provider_method_for_capability,
-    service_inventory_document,
+    provider_operation_input, service_inventory_document,
 };
 use protobuf::{Enum, EnumOrUnknown, MessageField};
 
@@ -293,6 +296,27 @@ fn valid_request() -> common::ServiceRequest {
     request
 }
 
+fn valid_provider_request() -> common::ProviderRequest {
+    let request = valid_request();
+    let mut context = common::ProviderOperationContext::new();
+    context.metadata = request.metadata;
+    context.scope = request.scope;
+    context.operation_id = "operation-1".to_owned();
+    context.provider_id = "caaaaaaaaaaaaaaaaaaq".to_owned();
+    context.provider_type = common::ProviderType::PROVIDER_TYPE_RUNTIME.into();
+    context.provider_generation = 1;
+    context.policy_epoch = 1;
+    context.authorization_digest = vec![0x44; 32];
+    context.request_digest = vec![0x55; 32];
+    let mut input = common::ProviderOperationInput::new();
+    input.set_no_input(common::NoProviderOperationInput::new());
+    common::ProviderRequest {
+        context: MessageField::some(context),
+        input: MessageField::some(input),
+        ..Default::default()
+    }
+}
+
 #[test]
 fn strict_wire_rejects_unknown_over_limit_and_missing_idempotency() {
     let request = valid_request();
@@ -334,6 +358,188 @@ fn strict_wire_rejects_unknown_over_limit_and_missing_idempotency() {
     assert_eq!(
         decode_strict::<common::ServiceRequest>(&oversized, true),
         Err(ServiceContractError::MessageTooLarge)
+    );
+}
+
+#[test]
+fn provider_operation_input_wire_is_exact_bounded_and_strict() {
+    let request = valid_provider_request();
+    request.validate_wire(true).unwrap();
+    assert_eq!(
+        provider_operation_input(request.input.as_ref().unwrap()).unwrap(),
+        ProviderOperationInput::NoInput
+    );
+
+    let mut missing = valid_provider_request();
+    missing.input = MessageField::none();
+    assert_eq!(
+        missing.validate_wire(true),
+        Err(ServiceContractError::MissingOperationInput)
+    );
+    missing.input = MessageField::some(common::ProviderOperationInput::new());
+    assert_eq!(
+        missing.validate_wire(true),
+        Err(ServiceContractError::MissingOperationInput)
+    );
+
+    let mut configured = valid_provider_request();
+    configured
+        .input
+        .as_mut()
+        .unwrap()
+        .set_configured_runtime_execution(common::ConfiguredRuntimeExecutionInput {
+            configured_item_id: "configured-item".to_owned(),
+            ..Default::default()
+        });
+    assert!(matches!(
+        provider_operation_input(configured.input.as_ref().unwrap()).unwrap(),
+        ProviderOperationInput::ConfiguredRuntimeExecution { .. }
+    ));
+    configured
+        .input
+        .as_mut()
+        .unwrap()
+        .mut_configured_runtime_execution()
+        .configured_item_id = "Configured/Command".to_owned();
+    assert_eq!(
+        configured.validate_wire(true),
+        Err(ServiceContractError::InvalidId)
+    );
+
+    for obsolete_field in [
+        &[0x2a, 0x01, b'x'][..],
+        &[0x38, 0x01][..],
+        &[0x42, 0x01, b'x'][..],
+    ] {
+        let mut encoded = encode_strict(&valid_provider_request(), true).unwrap();
+        encoded.extend_from_slice(obsolete_field);
+        assert_eq!(
+            decode_strict::<common::ProviderRequest>(&encoded, true),
+            Err(ServiceContractError::UnknownField)
+        );
+    }
+
+    let mut power = common::ProviderOperationInput::new();
+    power.set_infrastructure_power_state(common::InfrastructurePowerStateInput {
+        state: common::InfrastructurePowerState::INFRASTRUCTURE_POWER_STATE_STOPPED.into(),
+        ..Default::default()
+    });
+    assert_eq!(
+        provider_operation_input(&power).unwrap(),
+        ProviderOperationInput::InfrastructurePowerState {
+            state: InfrastructurePowerState::Stopped
+        }
+    );
+
+    let mut transport = common::ProviderOperationInput::new();
+    transport.set_transport_binding(common::TransportBindingInput {
+        transport_binding_id: "transport-binding".to_owned(),
+        ..Default::default()
+    });
+    assert!(matches!(
+        provider_operation_input(&transport).unwrap(),
+        ProviderOperationInput::TransportBinding { transport_binding_id }
+            if transport_binding_id.as_str() == "transport-binding"
+    ));
+
+    let mut storage = common::ProviderOperationInput::new();
+    storage.set_storage_snapshot(common::StorageSnapshotInput {
+        snapshot_id: "snapshot-id".to_owned(),
+        ..Default::default()
+    });
+    assert!(matches!(
+        provider_operation_input(&storage).unwrap(),
+        ProviderOperationInput::StorageSnapshot { snapshot_id }
+            if snapshot_id.as_str() == "snapshot-id"
+    ));
+
+    let mut device = common::ProviderOperationInput::new();
+    device.set_device_selector(common::DeviceSelectorInput {
+        device_selector_id: "selector-id".to_owned(),
+        ..Default::default()
+    });
+    assert!(matches!(
+        provider_operation_input(&device).unwrap(),
+        ProviderOperationInput::DeviceSelector { device_selector_id }
+            if device_selector_id.as_str() == "selector-id"
+    ));
+
+    let mut audio = valid_provider_request();
+    audio
+        .input
+        .as_mut()
+        .unwrap()
+        .set_audio_state(common::AudioStateInput {
+            channel: common::AudioChannel::AUDIO_CHANNEL_SPEAKER.into(),
+            direction: common::AudioDirection::AUDIO_DIRECTION_OUTPUT.into(),
+            mute: Some(false),
+            volume: Some(100),
+            ..Default::default()
+        });
+    assert_eq!(
+        provider_operation_input(audio.input.as_ref().unwrap()).unwrap(),
+        ProviderOperationInput::AudioState {
+            channel: AudioChannel::Speaker,
+            direction: AudioDirection::Output,
+            mute: Some(false),
+            volume: Some(100),
+        }
+    );
+    audio.input.as_mut().unwrap().mut_audio_state().volume = Some(101);
+    assert_eq!(
+        audio.validate_wire(true),
+        Err(ServiceContractError::BoundExceeded)
+    );
+    let audio_state = audio.input.as_mut().unwrap().mut_audio_state();
+    audio_state.volume = Some(50);
+    audio_state.channel = common::AudioChannel::AUDIO_CHANNEL_MICROPHONE.into();
+    assert_eq!(
+        audio.validate_wire(true),
+        Err(ServiceContractError::InvalidOperationInput)
+    );
+
+    let mut query = common::ProviderOperationInput::new();
+    query.set_observability_query(common::ObservabilityQueryInput {
+        view: common::ObservabilityView::OBSERVABILITY_VIEW_OPERATIONS.into(),
+        cursor: Some("cursor-one".to_owned()),
+        limit: 256,
+        ..Default::default()
+    });
+    assert_eq!(
+        provider_operation_input(&query).unwrap(),
+        ProviderOperationInput::ObservabilityQuery {
+            view: ObservabilityView::Operations,
+            cursor: Some(
+                d2b_contracts::v2_provider::ObservabilityCursor::parse("cursor-one").unwrap()
+            ),
+            limit: 256,
+        }
+    );
+    query.mut_observability_query().limit = 0;
+    assert_eq!(
+        provider_operation_input(&query),
+        Err(ServiceContractError::BoundExceeded)
+    );
+
+    let mut export = common::ProviderOperationInput::new();
+    export.set_observability_export(common::ObservabilityExportInput {
+        format: common::ObservabilityExportFormat::OBSERVABILITY_EXPORT_FORMAT_JSON_LINES.into(),
+        start_at_unix_ms: 100,
+        end_at_unix_ms: 200,
+        ..Default::default()
+    });
+    assert_eq!(
+        provider_operation_input(&export).unwrap(),
+        ProviderOperationInput::ObservabilityExport {
+            format: ObservabilityExportFormat::JsonLines,
+            start_at_unix_ms: 100,
+            end_at_unix_ms: 200,
+        }
+    );
+    export.mut_observability_export().end_at_unix_ms = 100;
+    assert_eq!(
+        provider_operation_input(&export),
+        Err(ServiceContractError::InvalidDeadline)
     );
 }
 

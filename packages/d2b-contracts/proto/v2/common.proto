@@ -187,14 +187,99 @@ message ServiceRequest {
 }
 
 message ProviderRequest {
-  reserved 3;
+  reserved 3, 5, 7, 8;
+  reserved "binding_id", "desired_state", "stream_id";
   ProviderOperationContext context = 1;
   string resource_id = 2;
   bytes plan_digest = 4;
-  string binding_id = 5;
   repeated uint32 attachment_indexes = 6;
-  DesiredState desired_state = 7;
-  string stream_id = 8;
+  ProviderOperationInput input = 9;
+}
+
+message NoProviderOperationInput {}
+
+message ConfiguredRuntimeExecutionInput {
+  string configured_item_id = 1;
+}
+
+enum InfrastructurePowerState {
+  INFRASTRUCTURE_POWER_STATE_UNSPECIFIED = 0;
+  INFRASTRUCTURE_POWER_STATE_RUNNING = 1;
+  INFRASTRUCTURE_POWER_STATE_STOPPED = 2;
+}
+
+message InfrastructurePowerStateInput {
+  InfrastructurePowerState state = 1;
+}
+
+message TransportBindingInput {
+  string transport_binding_id = 1;
+}
+
+message StorageSnapshotInput {
+  string snapshot_id = 1;
+}
+
+message DeviceSelectorInput {
+  string device_selector_id = 1;
+}
+
+enum AudioChannel {
+  AUDIO_CHANNEL_UNSPECIFIED = 0;
+  AUDIO_CHANNEL_SPEAKER = 1;
+  AUDIO_CHANNEL_MICROPHONE = 2;
+}
+
+enum AudioDirection {
+  AUDIO_DIRECTION_UNSPECIFIED = 0;
+  AUDIO_DIRECTION_OUTPUT = 1;
+  AUDIO_DIRECTION_INPUT = 2;
+}
+
+message AudioStateInput {
+  AudioChannel channel = 1;
+  AudioDirection direction = 2;
+  optional bool mute = 3;
+  optional uint32 volume = 4;
+}
+
+enum ObservabilityView {
+  OBSERVABILITY_VIEW_UNSPECIFIED = 0;
+  OBSERVABILITY_VIEW_HEALTH = 1;
+  OBSERVABILITY_VIEW_LIFECYCLE = 2;
+  OBSERVABILITY_VIEW_OPERATIONS = 3;
+}
+
+message ObservabilityQueryInput {
+  ObservabilityView view = 1;
+  optional string cursor = 2;
+  uint32 limit = 3;
+}
+
+enum ObservabilityExportFormat {
+  OBSERVABILITY_EXPORT_FORMAT_UNSPECIFIED = 0;
+  OBSERVABILITY_EXPORT_FORMAT_JSON_LINES = 1;
+  OBSERVABILITY_EXPORT_FORMAT_OTLP_PROTOBUF = 2;
+}
+
+message ObservabilityExportInput {
+  ObservabilityExportFormat format = 1;
+  uint64 start_at_unix_ms = 2;
+  uint64 end_at_unix_ms = 3;
+}
+
+message ProviderOperationInput {
+  oneof input {
+    NoProviderOperationInput no_input = 1;
+    ConfiguredRuntimeExecutionInput configured_runtime_execution = 2;
+    InfrastructurePowerStateInput infrastructure_power_state = 3;
+    TransportBindingInput transport_binding = 4;
+    StorageSnapshotInput storage_snapshot = 5;
+    DeviceSelectorInput device_selector = 6;
+    AudioStateInput audio_state = 7;
+    ObservabilityQueryInput observability_query = 8;
+    ObservabilityExportInput observability_export = 9;
+  }
 }
 
 message CapabilityRequest {

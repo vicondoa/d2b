@@ -11,6 +11,22 @@ use d2b_contracts::{
 
 use crate::FactoryError;
 
+pub const fn provider_method_is_dispatchable(
+    method: d2b_contracts::v2_provider::ProviderMethod,
+) -> bool {
+    !matches!(
+        method,
+        d2b_contracts::v2_provider::ProviderMethod::RuntimeExecute
+    )
+}
+
+pub fn provider_capabilities_are_dispatchable(capabilities: &ProviderCapabilitySet) -> bool {
+    capabilities
+        .as_slice()
+        .iter()
+        .all(|capability| provider_method_is_dispatchable(capability.0))
+}
+
 #[derive(Clone)]
 pub enum ProviderInstance {
     Runtime(Arc<dyn RuntimeProvider>),
@@ -82,12 +98,6 @@ impl ProviderInstance {
             Self::Audio(provider) => provider.capabilities(),
             Self::Observability(provider) => provider.capabilities(),
         }
-    }
-
-    pub fn validate_capability_dispatch(&self) -> bool {
-        !self
-            .capabilities()
-            .contains_method(d2b_contracts::v2_provider::ProviderMethod::RuntimeExecute)
     }
 
     pub fn provider(&self) -> &dyn Provider {

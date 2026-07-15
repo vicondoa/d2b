@@ -12,7 +12,10 @@ mod rpc;
 
 pub use context::{CancellationToken, OwnedOperationContext};
 pub use error::{FactoryError, ProviderRuntimeError, RegistryBuildError, RegistryShutdownReport};
-pub use instance::{ProviderFactory, ProviderInstance};
+pub use instance::{
+    ProviderFactory, ProviderInstance, provider_capabilities_are_dispatchable,
+    provider_method_is_dispatchable,
+};
 pub use registry::{
     AdmissionOptions, AdmittedProvider, InFlightPermit, ProviderRegistry, ProviderRegistryBuilder,
     ProviderRegistryManager, RegistryLimits,

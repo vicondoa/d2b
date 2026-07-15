@@ -24,6 +24,10 @@ deprecations ship one minor release before removal.
   axes, bounded descriptors and registries, shared in-process/agent traits,
   explicit lifecycle and adoption bindings, and co-located opaque credential
   leases.
+- Added reusable provider-toolkit value builders and exact-descriptor
+  conformance fixtures that preserve operation, owner, generation,
+  fingerprint, correlation, and time bindings without exposing identifiers in
+  diagnostics.
 - Added the complete internal ComponentSession v2 protobuf/ttrpc service
   inventory, strict bounded wire validation, schema fingerprints, reference
   artifacts, and generated asynchronous client/server bindings.
@@ -82,6 +86,9 @@ deprecations ship one minor release before removal.
   provider authorities, literal per-realm controller/broker boundaries,
   short-ID state ownership, scoped secret/key lifecycles, one Cargo workspace,
   coordinated toolkit cutover, and immutable-tree delivery seals.
+- Replaced generic provider request state, binding, and stream fields with an
+  exact closed operation-input union, method-specific compatibility checks,
+  strict protobuf conversion, and one shared provider dispatchability policy.
 
 ### Fixed
 

@@ -37,6 +37,20 @@
       ],
       "type": "object"
     },
+    "AudioChannel": {
+      "enum": [
+        "speaker",
+        "microphone"
+      ],
+      "type": "string"
+    },
+    "AudioDirection": {
+      "enum": [
+        "output",
+        "input"
+      ],
+      "type": "string"
+    },
     "AuthorizedProviderScope": {
       "oneOf": [
         {
@@ -363,11 +377,33 @@
         }
       ]
     },
+    "InfrastructurePowerState": {
+      "enum": [
+        "running",
+        "stopped"
+      ],
+      "type": "string"
+    },
     "NetworkPosture": {
       "enum": [
         "host-shared",
         "none",
         "isolated-namespace"
+      ],
+      "type": "string"
+    },
+    "ObservabilityExportFormat": {
+      "enum": [
+        "json-lines",
+        "otlp-protobuf"
+      ],
+      "type": "string"
+    },
+    "ObservabilityView": {
+      "enum": [
+        "health",
+        "lifecycle",
+        "operations"
       ],
       "type": "string"
     },
@@ -1222,6 +1258,219 @@
       ],
       "type": "object"
     },
+    "ProviderOperationInput": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "no-input"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "configuredItemId": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "configured-runtime-execution"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "configuredItemId",
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "infrastructure-power-state"
+              ],
+              "type": "string"
+            },
+            "state": {
+              "$ref": "#/definitions/InfrastructurePowerState"
+            }
+          },
+          "required": [
+            "kind",
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "transport-binding"
+              ],
+              "type": "string"
+            },
+            "transportBindingId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "transportBindingId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "storage-snapshot"
+              ],
+              "type": "string"
+            },
+            "snapshotId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "snapshotId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "deviceSelectorId": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "device-selector"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "deviceSelectorId",
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "channel": {
+              "$ref": "#/definitions/AudioChannel"
+            },
+            "direction": {
+              "$ref": "#/definitions/AudioDirection"
+            },
+            "kind": {
+              "enum": [
+                "audio-state"
+              ],
+              "type": "string"
+            },
+            "mute": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "volume": {
+              "format": "uint8",
+              "minimum": 0.0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "channel",
+            "direction",
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "cursor": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "enum": [
+                "observability-query"
+              ],
+              "type": "string"
+            },
+            "limit": {
+              "format": "uint16",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "view": {
+              "$ref": "#/definitions/ObservabilityView"
+            }
+          },
+          "required": [
+            "kind",
+            "limit",
+            "view"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "endAtUnixMs": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "format": {
+              "$ref": "#/definitions/ObservabilityExportFormat"
+            },
+            "kind": {
+              "enum": [
+                "observability-export"
+              ],
+              "type": "string"
+            },
+            "startAtUnixMs": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "endAtUnixMs",
+            "format",
+            "kind",
+            "startAtUnixMs"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "ProviderOperationRequest": {
       "additionalProperties": false,
       "properties": {
@@ -1231,6 +1480,9 @@
         "expectedConfigurationFingerprint": {
           "type": "string"
         },
+        "input": {
+          "$ref": "#/definitions/ProviderOperationInput"
+        },
         "target": {
           "$ref": "#/definitions/ProviderTarget"
         }
@@ -1238,6 +1490,7 @@
       "required": [
         "context",
         "expectedConfigurationFingerprint",
+        "input",
         "target"
       ],
       "type": "object"

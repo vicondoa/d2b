@@ -289,7 +289,7 @@ impl ProviderRegistryBuilder {
         if instance.capabilities() != descriptor.capabilities {
             return Err(RegistryBuildError::CapabilityMismatch);
         }
-        if !instance.validate_capability_dispatch() {
+        if !crate::provider_capabilities_are_dispatchable(&instance.capabilities()) {
             return Err(RegistryBuildError::CapabilityMismatch);
         }
         Ok(())
