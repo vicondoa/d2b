@@ -1,3 +1,972 @@
-//! Azure VM infrastructure provider implementation boundary.
+//! Explicitly non-production Azure VM infrastructure provider scaffold.
+//!
+//! The canonical provider surface always denies lifecycle dispatch. Compile
+//! tests exercise the closed infrastructure authority through direct methods
+//! and the in-process fake SDK; there is no production constructor or registry
+//! registration path.
 
 #![forbid(unsafe_code)]
+#![allow(clippy::result_large_err)]
+
+use std::{error::Error, fmt};
+
+#[cfg(any(test, feature = "conformance"))]
+use std::sync::Arc;
+
+use d2b_contracts::{
+    v2_identity::ProviderType,
+    v2_provider::{
+        AdoptionRequest, InfrastructureProvider, MutationReceipt, Provider, ProviderCallContext,
+        ProviderCapabilitySet, ProviderDescriptor, ProviderFailure, ProviderFailureKind,
+        ProviderFuture, ProviderHandle, ProviderHealth, ProviderHealthReason, ProviderHealthState,
+        ProviderMethod, ProviderObservation, ProviderOperationRequest, ProviderPlan,
+        ProviderRemediation, RetryClass,
+    },
+};
+use d2b_provider::ProviderInstance;
+#[cfg(any(test, feature = "conformance"))]
+use {
+    d2b_azure_vm_fake_sdk::{
+        ApplyDisposition, BootstrapBinding, FakeAzureVmSdk, FakeSdkError, FakeSdkErrorKind,
+        InfrastructureHandle, PowerState, ResourceGeneration, ResourceId, SdkCallContext,
+    },
+    d2b_contracts::{
+        v2_component_session::BoundedVec,
+        v2_provider::{
+            AdoptionState, Generation, HandleId, InfrastructurePowerState, MutationState,
+            ObservationReason, ObservedLifecycleState, PlannedResourceClass, ProviderCapability,
+            ProviderHandleKind, ProviderOperationInput,
+        },
+    },
+    d2b_provider_toolkit::ProviderValues,
+};
+
+#[cfg(any(test, feature = "conformance"))]
+const IMPLEMENTATION_ID: &str = "azure-vm";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScaffoldUnavailable {
+    CapabilityUnavailable,
+}
+
+impl fmt::Display for ScaffoldUnavailable {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Azure VM infrastructure capability is unavailable")
+    }
+}
+
+impl Error for ScaffoldUnavailable {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScaffoldConstructionError {
+    InvalidDescriptor,
+    WrongAuthority,
+    WrongImplementation,
+    CapabilityInventoryMismatch,
+    InvalidClock,
+}
+
+impl fmt::Display for ScaffoldConstructionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::InvalidDescriptor => "Azure VM infrastructure descriptor is invalid",
+            Self::WrongAuthority => "Azure VM infrastructure descriptor has the wrong authority",
+            Self::WrongImplementation => {
+                "Azure VM infrastructure descriptor has the wrong implementation"
+            }
+            Self::CapabilityInventoryMismatch => {
+                "Azure VM infrastructure descriptor has the wrong method inventory"
+            }
+            Self::InvalidClock => "Azure VM infrastructure scaffold clock is invalid",
+        })
+    }
+}
+
+impl Error for ScaffoldConstructionError {}
+
+pub struct AzureVmInfrastructureProvider {
+    descriptor: ProviderDescriptor,
+    now_unix_ms: u64,
+    #[cfg(any(test, feature = "conformance"))]
+    sdk: Arc<FakeAzureVmSdk>,
+}
+
+impl fmt::Debug for AzureVmInfrastructureProvider {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AzureVmInfrastructureProvider")
+            .field("production_available", &Self::PRODUCTION_AVAILABLE)
+            .field("provider_type", &ProviderType::Infrastructure)
+            .finish_non_exhaustive()
+    }
+}
+
+impl AzureVmInfrastructureProvider {
+    pub const PRODUCTION_AVAILABLE: bool = false;
+    pub const LIVE_PRODUCTION_CAPABILITIES: &'static [ProviderMethod] = &[];
+    pub const CONTRACT_METHODS: &'static [ProviderMethod] = &[
+        ProviderMethod::InfrastructurePlan,
+        ProviderMethod::InfrastructureApply,
+        ProviderMethod::InfrastructureSetPowerState,
+        ProviderMethod::InfrastructureInspect,
+        ProviderMethod::InfrastructureAdopt,
+        ProviderMethod::InfrastructureBootstrapBinding,
+        ProviderMethod::InfrastructureDestroy,
+    ];
+
+    pub fn production_registration() -> Result<ProviderInstance, ScaffoldUnavailable> {
+        Err(ScaffoldUnavailable::CapabilityUnavailable)
+    }
+
+    #[cfg(any(test, feature = "conformance"))]
+    pub fn new_for_conformance(
+        descriptor: ProviderDescriptor,
+        sdk: Arc<FakeAzureVmSdk>,
+        now_unix_ms: u64,
+    ) -> Result<Self, ScaffoldConstructionError> {
+        descriptor
+            .validate()
+            .map_err(|_| ScaffoldConstructionError::InvalidDescriptor)?;
+        if descriptor.provider_type() != ProviderType::Infrastructure {
+            return Err(ScaffoldConstructionError::WrongAuthority);
+        }
+        if descriptor.implementation_id.as_str() != IMPLEMENTATION_ID {
+            return Err(ScaffoldConstructionError::WrongImplementation);
+        }
+        if descriptor.capabilities != contract_capabilities() {
+            return Err(ScaffoldConstructionError::CapabilityInventoryMismatch);
+        }
+        if !(1_001..=d2b_contracts::v2_provider::MAX_SAFE_JSON_INTEGER).contains(&now_unix_ms) {
+            return Err(ScaffoldConstructionError::InvalidClock);
+        }
+        Ok(Self {
+            descriptor,
+            now_unix_ms,
+            sdk,
+        })
+    }
+
+    #[cfg(any(test, feature = "conformance"))]
+    pub fn conformance_instance(self: Arc<Self>) -> ProviderInstance {
+        ProviderInstance::Infrastructure(self)
+    }
+
+    fn capability_unavailable(
+        &self,
+        context: &d2b_contracts::v2_provider::ProviderOperationContext,
+    ) -> ProviderFailure {
+        self.failure(
+            context,
+            ProviderFailureKind::CapabilityDenied,
+            RetryClass::Never,
+            ProviderHealthReason::CapabilityMismatch,
+            ProviderRemediation::RepairConfiguration,
+        )
+    }
+
+    fn failure(
+        &self,
+        context: &d2b_contracts::v2_provider::ProviderOperationContext,
+        kind: ProviderFailureKind,
+        retry: RetryClass,
+        reason: ProviderHealthReason,
+        remediation: ProviderRemediation,
+    ) -> ProviderFailure {
+        ProviderFailure {
+            kind,
+            retry,
+            provider_type: ProviderType::Infrastructure,
+            binding: context.binding(),
+            correlation_id: context.correlation_id.clone(),
+            occurred_at_unix_ms: self.now_unix_ms,
+            reason,
+            remediation,
+        }
+    }
+
+    #[cfg(any(test, feature = "conformance"))]
+    fn values(
+        &self,
+        context: &d2b_contracts::v2_provider::ProviderOperationContext,
+    ) -> Result<ProviderValues, ProviderFailure> {
+        ProviderValues::new(&self.descriptor, self.now_unix_ms).map_err(|_| {
+            self.failure(
+                context,
+                ProviderFailureKind::InvariantViolation,
+                RetryClass::Never,
+                ProviderHealthReason::ConfigurationMismatch,
+                ProviderRemediation::RepairConfiguration,
+            )
+        })
+    }
+
+    #[cfg(any(test, feature = "conformance"))]
+    fn validate_call(
+        &self,
+        context: &ProviderCallContext<'_>,
+        expected: ProviderMethod,
+    ) -> Result<(), ProviderFailure> {
+        if expected.provider_type() != ProviderType::Infrastructure
+            || context.operation.method.provider_type() != ProviderType::Infrastructure
+            || context.operation.method != expected
+        {
+            return Err(self.capability_unavailable(context.operation));
+        }
+        if context.cancelled {
+            return Err(self.failure(
+                context.operation,
+                ProviderFailureKind::Cancelled,
+                RetryClass::Never,
+                ProviderHealthReason::ProviderDegraded,
+                ProviderRemediation::RetryBounded,
+            ));
+        }
+        if context.monotonic_deadline_remaining_ms == 0 {
+            return Err(self.failure(
+                context.operation,
+                ProviderFailureKind::DeadlineExpired,
+                RetryClass::Never,
+                ProviderHealthReason::HealthTimeout,
+                ProviderRemediation::RetryBounded,
+            ));
+        }
+        context.validate().map_err(|_| {
+            self.failure(
+                context.operation,
+                ProviderFailureKind::InvalidRequest,
+                RetryClass::Never,
+                ProviderHealthReason::ConfigurationMismatch,
+                ProviderRemediation::RepairConfiguration,
+            )
+        })?;
+        context
+            .operation
+            .validate(&self.descriptor, self.now_unix_ms)
+            .map_err(|_| {
+                self.failure(
+                    context.operation,
+                    ProviderFailureKind::InvalidRequest,
+                    RetryClass::Never,
+                    ProviderHealthReason::ConfigurationMismatch,
+                    ProviderRemediation::RepairConfiguration,
+                )
+            })
+    }
+
+    #[cfg(any(test, feature = "conformance"))]
+    fn validate_request(
+        &self,
+        context: &ProviderCallContext<'_>,
+        request: &ProviderOperationRequest,
+        expected: ProviderMethod,
+    ) -> Result<(), ProviderFailure> {
+        self.validate_call(context, expected)?;
+        if context.operation != &request.context || !infrastructure_input_matches(request, expected)
+        {
+            return Err(self.capability_unavailable(context.operation));
+        }
+        request
+            .validate_method(&self.descriptor, self.now_unix_ms, expected)
+            .map_err(|_| {
+                self.failure(
+                    context.operation,
+                    ProviderFailureKind::InvalidRequest,
+                    RetryClass::Never,
+                    ProviderHealthReason::ConfigurationMismatch,
+                    ProviderRemediation::RepairConfiguration,
+                )
+            })
+    }
+
+    #[cfg(any(test, feature = "conformance"))]
+    fn validate_handle_request(
+        &self,
+        request: &ProviderOperationRequest,
+        handle: &AzureVmInfrastructureHandle,
+    ) -> Result<(), ProviderFailure> {
+        self.validate_bound_handle(&request.context, handle)?;
+        let matches = match &request.target {
+            d2b_contracts::v2_provider::ProviderTarget::Handle {
+                realm_id,
+                workload_id,
+                handle_id,
+                handle_generation,
+            } => {
+                realm_id == &handle.provider.realm_id
+                    && workload_id.is_none()
+                    && handle_id == &handle.provider.handle_id
+                    && *handle_generation == handle.provider.resource_generation
+            }
+            _ => false,
+        };
+        if matches {
+            Ok(())
+        } else {
+            Err(self.failure(
+                &request.context,
+                ProviderFailureKind::UnauthorizedScope,
+                RetryClass::Never,
+                ProviderHealthReason::IdentityMismatch,
+                ProviderRemediation::RepairConfiguration,
+            ))
+        }
+    }
+
+    #[cfg(any(test, feature = "conformance"))]
+    fn validate_bound_handle(
+        &self,
+        context: &d2b_contracts::v2_provider::ProviderOperationContext,
+        handle: &AzureVmInfrastructureHandle,
+    ) -> Result<(), ProviderFailure> {
+        let valid = handle.provider.validate().is_ok()
+            && handle.provider.kind == ProviderHandleKind::Infrastructure
+            && handle.provider.provider_id == self.descriptor.provider_id
+            && handle.provider.provider_generation == self.descriptor.registry_generation
+            && handle.provider.configuration_fingerprint
+                == self.descriptor.configuration_schema_fingerprint
+            && handle.provider.workload_id.is_none()
+            && handle.provider.resource_generation.get() == handle.sdk.generation().get();
+        if valid {
+            Ok(())
+        } else {
+            Err(self.failure(
+                context,
+                ProviderFailureKind::AdoptionRejected,
+                RetryClass::Never,
+                ProviderHealthReason::IdentityMismatch,
+                ProviderRemediation::InspectProvider,
+            ))
+        }
+    }
+
+    #[cfg(any(test, feature = "conformance"))]
+    fn sdk_context(
+        context: &ProviderCallContext<'_>,
+        handle: InfrastructureHandle,
+    ) -> Result<SdkCallContext, FakeSdkErrorKind> {
+        Ok(SdkCallContext::infrastructure(
+            operation_key(context.operation.idempotency_key.as_str())?,
+            handle,
+            context.monotonic_deadline_remaining_ms,
+        ))
+    }
+
+    #[cfg(any(test, feature = "conformance"))]
+    fn sdk_failure(
+        &self,
+        context: &d2b_contracts::v2_provider::ProviderOperationContext,
+        error: FakeSdkError,
+    ) -> ProviderFailure {
+        self.sdk_failure_kind(context, error.kind())
+    }
+
+    #[cfg(any(test, feature = "conformance"))]
+    fn sdk_failure_kind(
+        &self,
+        context: &d2b_contracts::v2_provider::ProviderOperationContext,
+        error: FakeSdkErrorKind,
+    ) -> ProviderFailure {
+        let (kind, retry, reason, remediation) = match error {
+            FakeSdkErrorKind::Cancelled => (
+                ProviderFailureKind::Cancelled,
+                RetryClass::Never,
+                ProviderHealthReason::ProviderDegraded,
+                ProviderRemediation::RetryBounded,
+            ),
+            FakeSdkErrorKind::DeadlineExpired => (
+                ProviderFailureKind::DeadlineExpired,
+                RetryClass::Never,
+                ProviderHealthReason::HealthTimeout,
+                ProviderRemediation::RetryBounded,
+            ),
+            FakeSdkErrorKind::Unavailable => (
+                ProviderFailureKind::Unavailable,
+                RetryClass::SameOperation,
+                ProviderHealthReason::HealthStale,
+                ProviderRemediation::InspectProvider,
+            ),
+            FakeSdkErrorKind::NotFound | FakeSdkErrorKind::IdentityMismatch => (
+                ProviderFailureKind::AdoptionRejected,
+                RetryClass::Never,
+                ProviderHealthReason::IdentityMismatch,
+                ProviderRemediation::InspectProvider,
+            ),
+            FakeSdkErrorKind::GenerationMismatch => (
+                ProviderFailureKind::AdoptionRejected,
+                RetryClass::Never,
+                ProviderHealthReason::GenerationMismatch,
+                ProviderRemediation::ReplaceGeneration,
+            ),
+            FakeSdkErrorKind::AuthorityDenied => (
+                ProviderFailureKind::CapabilityDenied,
+                RetryClass::Never,
+                ProviderHealthReason::CapabilityMismatch,
+                ProviderRemediation::RepairConfiguration,
+            ),
+            FakeSdkErrorKind::IdempotencyConflict
+            | FakeSdkErrorKind::OutcomeMismatch
+            | FakeSdkErrorKind::BoundExceeded
+            | FakeSdkErrorKind::StateUnavailable => (
+                ProviderFailureKind::InvariantViolation,
+                RetryClass::Never,
+                ProviderHealthReason::ConfigurationMismatch,
+                ProviderRemediation::RepairConfiguration,
+            ),
+        };
+        self.failure(context, kind, retry, reason, remediation)
+    }
+
+    #[cfg(any(test, feature = "conformance"))]
+    pub async fn plan_create(
+        &self,
+        context: &ProviderCallContext<'_>,
+        request: &ProviderOperationRequest,
+    ) -> Result<AzureVmInfrastructurePlan, ProviderFailure> {
+        self.validate_request(context, request, ProviderMethod::InfrastructurePlan)?;
+        let values = self.values(context.operation)?;
+        let resources =
+            BoundedVec::new(vec![PlannedResourceClass::Infrastructure]).map_err(|_| {
+                self.failure(
+                    context.operation,
+                    ProviderFailureKind::InvariantViolation,
+                    RetryClass::Never,
+                    ProviderHealthReason::ConfigurationMismatch,
+                    ProviderRemediation::RepairConfiguration,
+                )
+            })?;
+        let expires_at_unix_ms = self
+            .now_unix_ms
+            .saturating_add(30_000)
+            .min(request.context.expires_at_unix_ms);
+        let plan = values
+            .plan(
+                request,
+                d2b_contracts::v2_provider::PlanId::parse("azure-vm-infrastructure-plan").map_err(
+                    |_| {
+                        self.failure(
+                            context.operation,
+                            ProviderFailureKind::InvariantViolation,
+                            RetryClass::Never,
+                            ProviderHealthReason::ConfigurationMismatch,
+                            ProviderRemediation::RepairConfiguration,
+                        )
+                    },
+                )?,
+                expires_at_unix_ms,
+                resources,
+            )
+            .map_err(|_| {
+                self.failure(
+                    context.operation,
+                    ProviderFailureKind::InvalidRequest,
+                    RetryClass::Never,
+                    ProviderHealthReason::ConfigurationMismatch,
+                    ProviderRemediation::RepairConfiguration,
+                )
+            })?;
+        let desired = InfrastructureHandle::new(
+            resource_id(request.context.request_digest.as_str())
+                .map_err(|kind| self.local_sdk_failure(context.operation, kind))?,
+            ResourceGeneration::new(1).map_err(|_| {
+                self.failure(
+                    context.operation,
+                    ProviderFailureKind::InvariantViolation,
+                    RetryClass::Never,
+                    ProviderHealthReason::ConfigurationMismatch,
+                    ProviderRemediation::RepairConfiguration,
+                )
+            })?,
+        );
+        Ok(AzureVmInfrastructurePlan { plan, desired })
+    }
+
+    #[cfg(any(test, feature = "conformance"))]
+    pub async fn create(
+        &self,
+        context: &ProviderCallContext<'_>,
+        plan: &AzureVmInfrastructurePlan,
+    ) -> Result<AzureVmInfrastructureHandle, ProviderFailure> {
+        self.validate_call(context, ProviderMethod::InfrastructureApply)?;
+        if plan.plan.method != ProviderMethod::InfrastructurePlan
+            || plan.plan.binding.provider_id != self.descriptor.provider_id
+            || plan.plan.binding.provider_generation != self.descriptor.registry_generation
+            || plan.plan.configuration_fingerprint
+                != self.descriptor.configuration_schema_fingerprint
+            || plan.plan.expires_at_unix_ms <= self.now_unix_ms
+        {
+            return Err(self.failure(
+                context.operation,
+                ProviderFailureKind::InvalidRequest,
+                RetryClass::Never,
+                ProviderHealthReason::ConfigurationMismatch,
+                ProviderRemediation::RepairConfiguration,
+            ));
+        }
+        let sdk_context = Self::sdk_context(context, plan.desired)
+            .map_err(|kind| self.local_sdk_failure(context.operation, kind))?;
+        let mutation = self
+            .sdk
+            .create_infrastructure(&sdk_context, plan.desired, PowerState::Stopped)
+            .await
+            .map_err(|error| self.sdk_failure(context.operation, error))?;
+        let values = self.values(context.operation)?;
+        let provider_handle = values
+            .handle_from_plan(
+                &plan.plan,
+                handle_id(
+                    "azure-vm-infrastructure",
+                    mutation.handle().identity().get(),
+                )
+                .map_err(|kind| self.local_sdk_failure(context.operation, kind))?,
+                values.provider_owner(&plan.plan.realm_id),
+                Generation::new(mutation.handle().generation().get()).map_err(|_| {
+                    self.failure(
+                        context.operation,
+                        ProviderFailureKind::InvariantViolation,
+                        RetryClass::Never,
+                        ProviderHealthReason::GenerationMismatch,
+                        ProviderRemediation::ReplaceGeneration,
+                    )
+                })?,
+                None,
+            )
+            .map_err(|_| {
+                self.failure(
+                    context.operation,
+                    ProviderFailureKind::InvariantViolation,
+                    RetryClass::Never,
+                    ProviderHealthReason::ConfigurationMismatch,
+                    ProviderRemediation::RepairConfiguration,
+                )
+            })?;
+        Ok(AzureVmInfrastructureHandle {
+            provider: provider_handle,
+            sdk: mutation.handle(),
+        })
+    }
+
+    #[cfg(any(test, feature = "conformance"))]
+    pub async fn set_power_state_direct(
+        &self,
+        context: &ProviderCallContext<'_>,
+        request: &ProviderOperationRequest,
+        handle: &AzureVmInfrastructureHandle,
+    ) -> Result<ProviderObservation, ProviderFailure> {
+        self.validate_request(
+            context,
+            request,
+            ProviderMethod::InfrastructureSetPowerState,
+        )?;
+        self.validate_handle_request(request, handle)?;
+        let ProviderOperationInput::InfrastructurePowerState { state } = &request.input else {
+            return Err(self.capability_unavailable(context.operation));
+        };
+        let power = match state {
+            InfrastructurePowerState::Running => PowerState::Running,
+            InfrastructurePowerState::Stopped => PowerState::Stopped,
+        };
+        let sdk_context = Self::sdk_context(context, handle.sdk)
+            .map_err(|kind| self.local_sdk_failure(context.operation, kind))?;
+        let observation = self
+            .sdk
+            .set_power_state(&sdk_context, handle.sdk, power)
+            .await
+            .map_err(|error| self.sdk_failure(context.operation, error))?;
+        self.observation(
+            context.operation,
+            handle,
+            power_lifecycle(observation.power_state()),
+            AdoptionState::NotAttempted,
+        )
+    }
+
+    #[cfg(any(test, feature = "conformance"))]
+    pub async fn inspect_direct(
+        &self,
+        context: &ProviderCallContext<'_>,
+        request: &ProviderOperationRequest,
+        handle: &AzureVmInfrastructureHandle,
+    ) -> Result<ProviderObservation, ProviderFailure> {
+        self.validate_request(context, request, ProviderMethod::InfrastructureInspect)?;
+        self.validate_handle_request(request, handle)?;
+        let sdk_context = Self::sdk_context(context, handle.sdk)
+            .map_err(|kind| self.local_sdk_failure(context.operation, kind))?;
+        let observation = self
+            .sdk
+            .inspect_infrastructure(&sdk_context, handle.sdk)
+            .await
+            .map_err(|error| self.sdk_failure(context.operation, error))?;
+        self.observation(
+            context.operation,
+            handle,
+            power_lifecycle(observation.power_state()),
+            AdoptionState::NotAttempted,
+        )
+    }
+
+    #[cfg(any(test, feature = "conformance"))]
+    pub async fn adopt_direct(
+        &self,
+        context: &ProviderCallContext<'_>,
+        request: &AdoptionRequest,
+        handle: &AzureVmInfrastructureHandle,
+    ) -> Result<ProviderObservation, ProviderFailure> {
+        self.validate_call(context, ProviderMethod::InfrastructureAdopt)?;
+        self.validate_bound_handle(context.operation, handle)?;
+        if context.operation != &request.context
+            || request.handle != handle.provider
+            || request
+                .validate(&self.descriptor, self.now_unix_ms)
+                .is_err()
+        {
+            let reason =
+                if request.expected_resource_generation != handle.provider.resource_generation {
+                    ProviderHealthReason::GenerationMismatch
+                } else {
+                    ProviderHealthReason::IdentityMismatch
+                };
+            return Err(self.failure(
+                context.operation,
+                ProviderFailureKind::AdoptionRejected,
+                RetryClass::Never,
+                reason,
+                ProviderRemediation::InspectProvider,
+            ));
+        }
+        let sdk_context = Self::sdk_context(context, handle.sdk)
+            .map_err(|kind| self.local_sdk_failure(context.operation, kind))?;
+        let observation = self
+            .sdk
+            .adopt_infrastructure(&sdk_context, handle.sdk)
+            .await
+            .map_err(|error| self.sdk_failure(context.operation, error))?;
+        self.observation(
+            context.operation,
+            handle,
+            power_lifecycle(observation.power_state()),
+            AdoptionState::Adopted,
+        )
+    }
+
+    #[cfg(any(test, feature = "conformance"))]
+    pub async fn bootstrap_direct(
+        &self,
+        context: &ProviderCallContext<'_>,
+        request: &ProviderOperationRequest,
+        handle: &AzureVmInfrastructureHandle,
+    ) -> Result<AzureVmBootstrapBinding, ProviderFailure> {
+        self.validate_request(
+            context,
+            request,
+            ProviderMethod::InfrastructureBootstrapBinding,
+        )?;
+        self.validate_handle_request(request, handle)?;
+        let sdk_context = Self::sdk_context(context, handle.sdk)
+            .map_err(|kind| self.local_sdk_failure(context.operation, kind))?;
+        let binding = self
+            .sdk
+            .bootstrap_binding(&sdk_context, handle.sdk)
+            .await
+            .map_err(|error| self.sdk_failure(context.operation, error))?;
+        Ok(AzureVmBootstrapBinding {
+            infrastructure: handle.clone(),
+            binding,
+        })
+    }
+
+    #[cfg(any(test, feature = "conformance"))]
+    pub async fn delete_direct(
+        &self,
+        context: &ProviderCallContext<'_>,
+        request: &ProviderOperationRequest,
+        handle: &AzureVmInfrastructureHandle,
+    ) -> Result<MutationReceipt, ProviderFailure> {
+        self.validate_request(context, request, ProviderMethod::InfrastructureDestroy)?;
+        self.validate_handle_request(request, handle)?;
+        let sdk_context = Self::sdk_context(context, handle.sdk)
+            .map_err(|kind| self.local_sdk_failure(context.operation, kind))?;
+        let result = self
+            .sdk
+            .delete_infrastructure(&sdk_context, handle.sdk)
+            .await
+            .map_err(|error| self.sdk_failure(context.operation, error))?;
+        self.values(context.operation)?
+            .receipt(
+                context.operation,
+                match result.disposition() {
+                    ApplyDisposition::Applied => MutationState::Applied,
+                    ApplyDisposition::AlreadyApplied => MutationState::AlreadyApplied,
+                },
+            )
+            .map_err(|_| {
+                self.failure(
+                    context.operation,
+                    ProviderFailureKind::InvariantViolation,
+                    RetryClass::Never,
+                    ProviderHealthReason::ConfigurationMismatch,
+                    ProviderRemediation::RepairConfiguration,
+                )
+            })
+    }
+
+    #[cfg(any(test, feature = "conformance"))]
+    fn observation(
+        &self,
+        context: &d2b_contracts::v2_provider::ProviderOperationContext,
+        handle: &AzureVmInfrastructureHandle,
+        lifecycle: ObservedLifecycleState,
+        adoption: AdoptionState,
+    ) -> Result<ProviderObservation, ProviderFailure> {
+        self.values(context)?
+            .observation(
+                context,
+                Some(&handle.provider),
+                lifecycle,
+                adoption,
+                ObservationReason::None,
+                ProviderHealthState::Healthy,
+                ProviderHealthReason::None,
+                ProviderRemediation::None,
+            )
+            .map_err(|_| {
+                self.failure(
+                    context,
+                    ProviderFailureKind::InvariantViolation,
+                    RetryClass::Never,
+                    ProviderHealthReason::ConfigurationMismatch,
+                    ProviderRemediation::RepairConfiguration,
+                )
+            })
+    }
+
+    #[cfg(any(test, feature = "conformance"))]
+    fn local_sdk_failure(
+        &self,
+        context: &d2b_contracts::v2_provider::ProviderOperationContext,
+        kind: FakeSdkErrorKind,
+    ) -> ProviderFailure {
+        self.sdk_failure_kind(context, kind)
+    }
+}
+
+impl Provider for AzureVmInfrastructureProvider {
+    fn descriptor(&self) -> ProviderDescriptor {
+        self.descriptor.clone()
+    }
+
+    fn health<'a>(
+        &'a self,
+        context: &'a ProviderCallContext<'a>,
+    ) -> ProviderFuture<'a, ProviderHealth> {
+        Box::pin(async move {
+            #[cfg(any(test, feature = "conformance"))]
+            {
+                self.values(context.operation)?
+                    .health(
+                        ProviderHealthState::Unavailable,
+                        ProviderHealthReason::HealthStale,
+                        ProviderRemediation::InspectProvider,
+                    )
+                    .map_err(|_| self.capability_unavailable(context.operation))
+            }
+            #[cfg(not(any(test, feature = "conformance")))]
+            {
+                let health = ProviderHealth {
+                    provider_id: self.descriptor.provider_id.clone(),
+                    registry_generation: self.descriptor.registry_generation,
+                    observed_at_unix_ms: self.now_unix_ms,
+                    state: ProviderHealthState::Unavailable,
+                    reason: ProviderHealthReason::HealthStale,
+                    remediation: ProviderRemediation::InspectProvider,
+                };
+                health
+                    .validate()
+                    .map_err(|_| self.capability_unavailable(context.operation))?;
+                Ok(health)
+            }
+        })
+    }
+}
+
+macro_rules! denied_dispatch {
+    ($name:ident, $request:ty, $result:ty) => {
+        fn $name<'a>(
+            &'a self,
+            context: &'a ProviderCallContext<'a>,
+            _request: &'a $request,
+        ) -> ProviderFuture<'a, $result> {
+            Box::pin(async move { Err(self.capability_unavailable(context.operation)) })
+        }
+    };
+}
+
+impl InfrastructureProvider for AzureVmInfrastructureProvider {
+    fn capabilities(&self) -> ProviderCapabilitySet {
+        self.descriptor.capabilities.clone()
+    }
+
+    denied_dispatch!(plan, ProviderOperationRequest, ProviderPlan);
+    denied_dispatch!(apply, ProviderPlan, ProviderHandle);
+    denied_dispatch!(
+        set_power_state,
+        ProviderOperationRequest,
+        ProviderObservation
+    );
+    denied_dispatch!(inspect, ProviderOperationRequest, ProviderObservation);
+    denied_dispatch!(adopt, AdoptionRequest, ProviderObservation);
+    denied_dispatch!(bootstrap_binding, ProviderOperationRequest, ProviderHandle);
+    denied_dispatch!(destroy, ProviderOperationRequest, MutationReceipt);
+}
+
+#[cfg(any(test, feature = "conformance"))]
+#[derive(Clone, PartialEq, Eq)]
+pub struct AzureVmInfrastructurePlan {
+    plan: ProviderPlan,
+    desired: InfrastructureHandle,
+}
+
+#[cfg(any(test, feature = "conformance"))]
+impl AzureVmInfrastructurePlan {
+    pub fn provider_plan(&self) -> &ProviderPlan {
+        &self.plan
+    }
+}
+
+#[cfg(any(test, feature = "conformance"))]
+impl fmt::Debug for AzureVmInfrastructurePlan {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AzureVmInfrastructurePlan")
+            .field("provider_plan", &self.plan)
+            .field("desired", &"<opaque>")
+            .finish()
+    }
+}
+
+#[cfg(any(test, feature = "conformance"))]
+#[derive(Clone, PartialEq, Eq)]
+pub struct AzureVmInfrastructureHandle {
+    provider: ProviderHandle,
+    sdk: InfrastructureHandle,
+}
+
+#[cfg(any(test, feature = "conformance"))]
+impl AzureVmInfrastructureHandle {
+    pub fn provider_handle(&self) -> &ProviderHandle {
+        &self.provider
+    }
+
+    pub const fn sdk_handle(&self) -> InfrastructureHandle {
+        self.sdk
+    }
+}
+
+#[cfg(any(test, feature = "conformance"))]
+impl fmt::Debug for AzureVmInfrastructureHandle {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AzureVmInfrastructureHandle")
+            .field("provider_handle", &self.provider)
+            .field("sdk_handle", &"<opaque>")
+            .finish()
+    }
+}
+
+#[cfg(any(test, feature = "conformance"))]
+#[derive(Clone, PartialEq, Eq)]
+pub struct AzureVmBootstrapBinding {
+    infrastructure: AzureVmInfrastructureHandle,
+    binding: BootstrapBinding,
+}
+
+#[cfg(any(test, feature = "conformance"))]
+impl AzureVmBootstrapBinding {
+    pub fn infrastructure(&self) -> &AzureVmInfrastructureHandle {
+        &self.infrastructure
+    }
+
+    pub const fn binding(&self) -> BootstrapBinding {
+        self.binding
+    }
+}
+
+#[cfg(any(test, feature = "conformance"))]
+impl fmt::Debug for AzureVmBootstrapBinding {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AzureVmBootstrapBinding")
+            .field("infrastructure", &"<opaque>")
+            .field("binding", &self.binding)
+            .finish()
+    }
+}
+
+#[cfg(any(test, feature = "conformance"))]
+fn contract_capabilities() -> ProviderCapabilitySet {
+    ProviderCapabilitySet::new(
+        AzureVmInfrastructureProvider::CONTRACT_METHODS
+            .iter()
+            .copied()
+            .map(ProviderCapability)
+            .collect(),
+    )
+    .unwrap_or_else(|_| unreachable!())
+}
+
+#[cfg(any(test, feature = "conformance"))]
+fn infrastructure_input_matches(
+    request: &ProviderOperationRequest,
+    method: ProviderMethod,
+) -> bool {
+    matches!(
+        (method, &request.input),
+        (
+            ProviderMethod::InfrastructureSetPowerState,
+            ProviderOperationInput::InfrastructurePowerState { .. }
+        ) | (
+            ProviderMethod::InfrastructureBootstrapBinding,
+            ProviderOperationInput::TransportBinding { .. }
+        ) | (
+            ProviderMethod::InfrastructurePlan
+                | ProviderMethod::InfrastructureInspect
+                | ProviderMethod::InfrastructureDestroy,
+            ProviderOperationInput::NoInput
+        )
+    )
+}
+
+#[cfg(any(test, feature = "conformance"))]
+fn power_lifecycle(state: PowerState) -> ObservedLifecycleState {
+    match state {
+        PowerState::Running => ObservedLifecycleState::Running,
+        PowerState::Stopped => ObservedLifecycleState::Stopped,
+    }
+}
+
+#[cfg(any(test, feature = "conformance"))]
+fn bounded_hash(value: &str) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in value.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    (hash % (d2b_contracts::v2_provider::MAX_SAFE_JSON_INTEGER - 1)) + 1
+}
+
+#[cfg(any(test, feature = "conformance"))]
+fn operation_key(value: &str) -> Result<d2b_azure_vm_fake_sdk::OperationKey, FakeSdkErrorKind> {
+    d2b_azure_vm_fake_sdk::OperationKey::new(bounded_hash(value))
+}
+
+#[cfg(any(test, feature = "conformance"))]
+fn resource_id(value: &str) -> Result<ResourceId, FakeSdkErrorKind> {
+    ResourceId::new(bounded_hash(value))
+}
+
+#[cfg(any(test, feature = "conformance"))]
+fn handle_id(prefix: &str, identity: u64) -> Result<HandleId, FakeSdkErrorKind> {
+    HandleId::parse(format!("{prefix}-{identity:x}")).map_err(|_| FakeSdkErrorKind::BoundExceeded)
+}
+
+#[cfg(test)]
+mod tests;
