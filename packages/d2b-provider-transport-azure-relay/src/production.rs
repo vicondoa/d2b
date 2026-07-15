@@ -624,6 +624,18 @@ impl WebSocketRelaySocket {
             max_frame_bytes,
         }
     }
+
+    fn observe_error(&self, error: &tokio_tungstenite::tungstenite::Error) {
+        if matches!(
+            error,
+            tokio_tungstenite::tungstenite::Error::ConnectionClosed
+                | tokio_tungstenite::tungstenite::Error::AlreadyClosed
+        ) {
+            self.lifecycle.finish_close();
+        } else {
+            let _ = self.lifecycle.begin_close();
+        }
+    }
 }
 
 impl fmt::Debug for WebSocketRelaySocket {
@@ -653,7 +665,7 @@ impl RelaySocket for WebSocketRelaySocket {
             let message = match message {
                 Ok(message) => message,
                 Err(error) => {
-                    self.lifecycle.finish_close();
+                    self.observe_error(&error);
                     return Err(classify_socket_error(error));
                 }
             };
@@ -671,7 +683,7 @@ impl RelaySocket for WebSocketRelaySocket {
                         .map(RelaySocketEvent::Ping);
                 }
                 Message::Close(_) => {
-                    self.lifecycle.finish_close();
+                    let _ = self.lifecycle.begin_close();
                     return Ok(RelaySocketEvent::Closed);
                 }
                 Message::Pong(_) | Message::Frame(_) => {}
@@ -693,7 +705,7 @@ impl RelaySocket for WebSocketRelaySocket {
         sink.send(Message::Binary(bytes.to_vec()))
             .await
             .map_err(|error| {
-                self.lifecycle.finish_close();
+                self.observe_error(&error);
                 classify_socket_error(error)
             })
     }
@@ -712,7 +724,7 @@ impl RelaySocket for WebSocketRelaySocket {
         sink.send(Message::Pong(bytes.to_vec()))
             .await
             .map_err(|error| {
-                self.lifecycle.finish_close();
+                self.observe_error(&error);
                 classify_socket_error(error)
             })
     }
@@ -726,18 +738,51 @@ impl RelaySocket for WebSocketRelaySocket {
             return Ok(());
         }
         match sink.close().await {
-            Ok(()) => {
-                self.lifecycle.finish_close();
-                Ok(())
-            }
+            Ok(()) => {}
             Err(
                 tokio_tungstenite::tungstenite::Error::ConnectionClosed
                 | tokio_tungstenite::tungstenite::Error::AlreadyClosed,
             ) => {
                 self.lifecycle.finish_close();
-                Ok(())
+                return Ok(());
             }
-            Err(error) => Err(classify_socket_error(error)),
+            Err(error) => return Err(classify_socket_error(error)),
+        }
+        match sink.flush().await {
+            Ok(()) => {}
+            Err(
+                tokio_tungstenite::tungstenite::Error::ConnectionClosed
+                | tokio_tungstenite::tungstenite::Error::AlreadyClosed,
+            ) => {
+                self.lifecycle.finish_close();
+                return Ok(());
+            }
+            Err(error) => return Err(classify_socket_error(error)),
+        }
+        drop(sink);
+
+        let mut source = self.source.lock().await;
+        loop {
+            match source.next().await {
+                None => {
+                    // tokio-tungstenite maps ConnectionClosed and AlreadyClosed
+                    // to stream termination.
+                    self.lifecycle.finish_close();
+                    return Ok(());
+                }
+                Some(Ok(Message::Close(_))) => {
+                    let _ = self.lifecycle.begin_close();
+                }
+                Some(Ok(_)) => {}
+                Some(Err(
+                    tokio_tungstenite::tungstenite::Error::ConnectionClosed
+                    | tokio_tungstenite::tungstenite::Error::AlreadyClosed,
+                )) => {
+                    self.lifecycle.finish_close();
+                    return Ok(());
+                }
+                Some(Err(error)) => return Err(classify_socket_error(error)),
+            }
         }
     }
 }
@@ -1794,6 +1839,11 @@ async fn relay_listener_task(
             &accepted,
         )
         .await;
+        let _ = tokio::time::timeout(
+            Duration::from_millis(u64::from(limits.max_reconnect_backoff_ms())),
+            control.close(),
+        )
+        .await;
         live.store(false, Ordering::Release);
         if accepted.is_closed() || !credential_is_unexpired(&credential) {
             break;
@@ -2125,6 +2175,98 @@ mod internal_tests {
         assert!(!lifecycle.is_live());
         assert!(lifecycle.shutdown_completed());
         assert!(!lifecycle.begin_close());
+    }
+
+    #[tokio::test]
+    async fn peer_close_stays_live_until_local_cleanup_observes_tcp_shutdown() {
+        let timeout = Duration::from_secs(2);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind peer");
+        let address = listener.local_addr().expect("peer address");
+        let (reply_seen_tx, reply_seen_rx) = tokio::sync::oneshot::channel();
+        let (drop_peer_tx, drop_peer_rx) = tokio::sync::oneshot::channel();
+        let peer_task = tokio::spawn(async move {
+            let (stream, _) = tokio::time::timeout(timeout, listener.accept())
+                .await
+                .expect("peer accept deadline")
+                .expect("peer accept");
+            let mut peer = tokio_tungstenite::accept_async(stream)
+                .await
+                .expect("peer handshake");
+            peer.send(Message::Close(None))
+                .await
+                .expect("peer close frame");
+            let reply = tokio::time::timeout(timeout, peer.next())
+                .await
+                .expect("close reply deadline")
+                .expect("close reply stream item")
+                .expect("close reply");
+            assert!(matches!(reply, Message::Close(_)));
+            reply_seen_tx.send(()).expect("report close reply");
+            drop_peer_rx.await.expect("release peer transport");
+        });
+
+        let (stream, _) = tokio_tungstenite::connect_async(format!("ws://{address}/relay-cleanup"))
+            .await
+            .expect("client handshake");
+        let socket = Arc::new(WebSocketRelaySocket::new(
+            stream,
+            usize::try_from(RelayTransportLimits::production().max_frame_bytes())
+                .expect("frame bound fits usize"),
+        ));
+        let external = Arc::clone(&socket);
+        let close_event = tokio::time::timeout(timeout, socket.receive())
+            .await
+            .expect("peer close receive deadline")
+            .expect("peer close receive");
+        assert!(matches!(close_event, RelaySocketEvent::Closed));
+        assert!(external.is_open());
+        assert!(external.lifecycle.close_in_progress());
+        assert_eq!(
+            external
+                .send_binary(b"after-peer-close")
+                .await
+                .expect_err("closing socket rejects sends"),
+            RelaySocketFailure::Unavailable
+        );
+
+        let close_socket = Arc::clone(&socket);
+        let close_task = tokio::spawn(async move { close_socket.close().await });
+        tokio::time::timeout(timeout, reply_seen_rx)
+            .await
+            .expect("close reply observation deadline")
+            .expect("close reply observation");
+        tokio::task::yield_now().await;
+        assert!(!close_task.is_finished());
+        assert!(external.is_open());
+
+        drop_peer_tx.send(()).expect("drop peer transport");
+        tokio::time::timeout(timeout, peer_task)
+            .await
+            .expect("peer task deadline")
+            .expect("peer task");
+        tokio::time::timeout(timeout, close_task)
+            .await
+            .expect("local cleanup deadline")
+            .expect("local cleanup task")
+            .expect("local cleanup");
+
+        assert!(!external.is_open());
+        assert_eq!(
+            external
+                .send_binary(b"after-local-cleanup")
+                .await
+                .expect_err("closed external clone rejects sends"),
+            RelaySocketFailure::Unavailable
+        );
+        assert!(matches!(
+            tokio::time::timeout(timeout, external.receive())
+                .await
+                .expect("terminal receive deadline")
+                .expect("terminal receive"),
+            RelaySocketEvent::Closed
+        ));
     }
 
     #[test]
