@@ -577,10 +577,9 @@ struct ServerState {
     pidfd_table: Arc<PidfdTable>,
     broker_reap_log: Arc<BrokerReapLog>,
     metrics_registry: Arc<metrics::Registry>,
-    /// Canonical provider registry composed once during daemon startup. The
-    /// existing v1 request paths do not dispatch through it yet.
-    #[allow(dead_code)]
-    provider_registry: Arc<provider_registry::StartupProviderRegistry>,
+    /// Canonical provider registry composed once after all daemon services
+    /// exist. Existing v1 request paths do not dispatch through it yet.
+    provider_registry: Arc<OnceLock<provider_registry::StartupProviderRegistry>>,
     /// Daemon-side audit log for supervisor events (e.g. api-ready
     /// timeout) that are not emitted by the broker.
     daemon_audit: Arc<daemon_audit::DaemonAuditLog>,
@@ -610,6 +609,65 @@ struct ServerState {
     security_key_sessions: Arc<parking_lot::Mutex<security_key::SkSessionTable>>,
     #[allow(dead_code)]
     unsafe_local_helpers: Arc<unsafe_local_helper::HelperRegistry>,
+}
+
+impl ServerState {
+    pub(crate) fn provider_registry(
+        &self,
+    ) -> Result<&provider_registry::StartupProviderRegistry, TypedError> {
+        self.provider_registry
+            .get()
+            .ok_or_else(|| TypedError::InternalConfig {
+                detail: "first-party provider registry is not initialized".to_owned(),
+            })
+    }
+}
+
+#[cfg(test)]
+fn initialized_provider_registry(
+    registry: provider_registry::StartupProviderRegistry,
+) -> Arc<OnceLock<provider_registry::StartupProviderRegistry>> {
+    let cell = Arc::new(OnceLock::new());
+    cell.set(registry)
+        .expect("new provider registry cell must initialize exactly once");
+    cell
+}
+
+async fn activate_provider_registry(
+    state: &Arc<ServerState>,
+    verification_policy: Option<&d2b_core::bundle_resolver::BundleVerifyPolicy>,
+) -> Result<(), TypedError> {
+    let artifact = match verification_policy {
+        Some(policy) => provider_registry::load_provider_registry_v2_with_policy(state, policy),
+        None => provider_registry::load_provider_registry_v2(state),
+    }
+    .map_err(|error| TypedError::InternalConfig {
+        detail: format!("load provider-registry-v2 failed: {error}"),
+    })?;
+    let registry =
+        provider_registry::compose_startup_registry(state, &artifact).map_err(|error| {
+            TypedError::InternalConfig {
+                detail: format!("first-party provider registry composition failed: {error}"),
+            }
+        })?;
+    state
+        .provider_registry
+        .set(registry)
+        .map_err(|_| TypedError::InternalConfig {
+            detail: "first-party provider registry initialized more than once".to_owned(),
+        })?;
+    let startup_registry = state.provider_registry()?;
+    provider_registry::probe_startup_registry(startup_registry, &artifact)
+        .await
+        .map_err(|error| TypedError::InternalConfig {
+            detail: format!("first-party provider registry startup probe failed: {error}"),
+        })?;
+    tracing::info!(
+        provider_count = artifact.providers.len(),
+        registry_empty = startup_registry.is_empty(),
+        "first-party provider registry activated and inspected",
+    );
+    Ok(())
 }
 
 struct GatewayDisplayRuntime {
@@ -1359,13 +1417,6 @@ fn gateway_display_config_error(detail: impl Into<String>) -> TypedError {
 pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     let mut config = load_config(&options.config_path)?;
     apply_overrides(&mut config, &options);
-    let provider_registry = Arc::new(
-        provider_registry::startup_registry_for_current_bundle().map_err(|error| {
-            TypedError::InternalConfig {
-                detail: format!("first-party provider registry composition failed: {error}"),
-            }
-        })?,
-    );
     let notify_socket = std::env::var_os("NOTIFY_SOCKET");
 
     // v1.1.1 runtime pidfs self-probe: refuse startup on kernels
@@ -1486,7 +1537,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         runtime_identity.daemon_uid.as_raw(),
         unsafe_local_helper_uids,
     ));
-    let state = ServerState {
+    let state = Arc::new(ServerState {
         daemon_uid: runtime_identity.daemon_uid.as_raw(),
         config,
         daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::new(&daemon_state_dir)),
@@ -1494,7 +1545,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         pidfd_table,
         broker_reap_log,
         metrics_registry: Arc::new(crate::metrics::Registry::new()),
-        provider_registry,
+        provider_registry: Arc::new(OnceLock::new()),
         exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
             crate::exec_session::ExecSessionCaps::default(),
         )),
@@ -1509,7 +1560,11 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             crate::security_key::SkSessionTable::default(),
         )),
         unsafe_local_helpers: Arc::clone(&unsafe_local_helpers),
-    };
+    });
+    let test_bundle_policy = options
+        .allow_unprivileged_runtime_dir
+        .then(d2b_core::bundle_resolver::BundleVerifyPolicy::for_tests);
+    activate_provider_registry(&state, test_bundle_policy.as_ref()).await?;
     if let Some(helper_listener) = unsafe_local_helper_listener {
         std::thread::Builder::new()
             .name("d2b-unsafe-local-listener".to_owned())
@@ -3993,7 +4048,9 @@ mod workload_observability_tests {
             broker_reap_log,
             metrics_registry: Arc::new(metrics::Registry::new()),
             daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::no_op()),
-            provider_registry: Arc::new(crate::provider_registry::StartupProviderRegistry::Empty),
+            provider_registry: initialized_provider_registry(
+                crate::provider_registry::StartupProviderRegistry::Empty,
+            ),
             exec_sessions: Arc::new(exec_session::SessionTable::new(
                 exec_session::ExecSessionCaps::default(),
             )),
@@ -19616,7 +19673,9 @@ mod public_status_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(metrics::Registry::new()),
-            provider_registry: Arc::new(crate::provider_registry::StartupProviderRegistry::Empty),
+            provider_registry: initialized_provider_registry(
+                crate::provider_registry::StartupProviderRegistry::Empty,
+            ),
             exec_sessions: Arc::new(exec_session::SessionTable::new(
                 exec_session::ExecSessionCaps::default(),
             )),
@@ -22528,7 +22587,9 @@ mod detached_exec_routing_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(metrics::Registry::new()),
-            provider_registry: Arc::new(crate::provider_registry::StartupProviderRegistry::Empty),
+            provider_registry: initialized_provider_registry(
+                crate::provider_registry::StartupProviderRegistry::Empty,
+            ),
             exec_sessions: Arc::new(exec_session::SessionTable::new(caps)),
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
@@ -23244,7 +23305,9 @@ mod accept_loop_concurrency_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(metrics::Registry::new()),
-            provider_registry: Arc::new(crate::provider_registry::StartupProviderRegistry::Empty),
+            provider_registry: initialized_provider_registry(
+                crate::provider_registry::StartupProviderRegistry::Empty,
+            ),
             exec_sessions: Arc::new(exec_session::SessionTable::new(
                 exec_session::ExecSessionCaps::default(),
             )),
@@ -23713,14 +23776,28 @@ mod broker_dispatch_tests {
         SignalRunnerResponse, SpawnRunnerResponse,
     };
     use d2b_contracts::guest_proto as pb;
+    use d2b_contracts::provider_registry_v2::{
+        LocalRuntimeProviderBindingV2, PROVIDER_REGISTRY_V2_SCHEMA_VERSION, ProviderBindingV2,
+        ProviderIntentId, ProviderRegistryEntryV2, ProviderRegistryV2,
+        local_runtime_configuration_schema_fingerprint, local_runtime_configured_scope_digest,
+    };
     use d2b_contracts::public_wire::{
         ActivationRequest, GcRequest, HostDestroyRequest, HostInstallRequest, HostPrepareRequest,
         KeysRotateRequest, MigrateRequest, MutationFlags, RotateKnownHostRequest, ShellCloseCause,
         ShellName, ShellSessionState, StatusRequest, TrustRequest, VmLifecycleRequest,
     };
     use d2b_contracts::types::{RoleId, VmId};
+    use d2b_contracts::v2_component_session::EndpointRole;
+    use d2b_contracts::v2_identity::{ProviderType, RealmId, WorkloadId};
+    use d2b_contracts::v2_provider::{
+        Fingerprint, Generation, ImplementationId, PROVIDER_SCHEMA_VERSION, ProviderApiVersion,
+        ProviderAuthority, ProviderDescriptor, ProviderPlacement,
+    };
     use d2b_core::bundle_resolver::BundleResolver;
     use d2b_core::processes::ProcessRole;
+    use d2b_provider_runtime_local::{
+        CLOUD_HYPERVISOR_IMPLEMENTATION_ID, LocalRuntimeKind, live_runtime_capabilities,
+    };
     use nix::sys::socket::{
         AddressFamily, Backlog, ControlMessage, MsgFlags, SockFlag, SockType, UnixAddr, accept4,
         bind, listen, recv, sendmsg, socket,
@@ -23742,17 +23819,18 @@ mod broker_dispatch_tests {
         ArtifactPaths, DaemonConfig, HostActivationMarkerState, PeerIdentity, PeerRole,
         ProviderGracefulInputs, QemuBrokerShutdownProvider, ServerState,
         UsbipBackgroundReconcileGuard, VM_RUNNER_ROLE_ID, VmShutdownOutcome, VmStartNodeMode,
-        activation_marker_path, adopt_orphaned_runners_on_startup_with, block_on_future,
-        bounded_usbip_owner_label, daemon_audit, dispatch_broker_boot, dispatch_broker_gc,
-        dispatch_broker_host_destroy, dispatch_broker_host_prepare, dispatch_broker_keys_rotate,
-        dispatch_broker_rollback, dispatch_broker_rotate_known_host,
+        activate_provider_registry, activation_marker_path, adopt_orphaned_runners_on_startup_with,
+        block_on_future, bounded_usbip_owner_label, daemon_audit, dispatch_broker_boot,
+        dispatch_broker_gc, dispatch_broker_host_destroy, dispatch_broker_host_prepare,
+        dispatch_broker_keys_rotate, dispatch_broker_rollback, dispatch_broker_rotate_known_host,
         dispatch_broker_run_host_install, dispatch_broker_run_migrate, dispatch_broker_switch,
         dispatch_broker_test, dispatch_broker_trust, dispatch_broker_vm_restart,
         dispatch_broker_vm_start, dispatch_broker_vm_stop, dispatch_broker_vm_stop_with_timeout,
-        dispatch_request, dispatch_status, force_shutdown_generation, map_shell_attach_response,
+        dispatch_request, dispatch_status, force_shutdown_generation,
+        initialized_provider_registry, load_bundle_resolver, map_shell_attach_response,
         map_shell_detach_response, map_shell_kill_response, map_shell_list_response,
-        note_force_shutdown_request, prove_role_cgroup_empty_or_escalate, provider_shutdown,
-        read_activation_marker, redact_broker_dispatch_failure_for_launcher,
+        note_force_shutdown_request, prove_role_cgroup_empty_or_escalate, provider_registry,
+        provider_shutdown, read_activation_marker, redact_broker_dispatch_failure_for_launcher,
         redact_broker_error_for_launcher, resolve_store_view_intent_for_vm,
         rollback_failed_vm_start, run_provider_graceful_shutdown,
         same_vm_declared_usbip_start_claims_with_reader,
@@ -23823,7 +23901,9 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
-            provider_registry: Arc::new(crate::provider_registry::StartupProviderRegistry::Empty),
+            provider_registry: initialized_provider_registry(
+                crate::provider_registry::StartupProviderRegistry::Empty,
+            ),
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
@@ -23862,7 +23942,9 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
-            provider_registry: Arc::new(crate::provider_registry::StartupProviderRegistry::Empty),
+            provider_registry: initialized_provider_registry(
+                crate::provider_registry::StartupProviderRegistry::Empty,
+            ),
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
@@ -23953,6 +24035,7 @@ mod broker_dispatch_tests {
         let processes_path = bundle_dir.join("processes.json");
         let bundle_path = bundle_dir.join("bundle.json");
         let privileges_path = bundle_dir.join("privileges.json");
+        let provider_registry_path = bundle_dir.join("provider-registry-v2.json");
         let api_socket = root.join("vm-a.api.sock");
 
         write_json_file(
@@ -24050,6 +24133,16 @@ mod broker_dispatch_tests {
             &json!({ "schemaVersion": "v2", "operations": [] }),
         );
         write_json_file(
+            &provider_registry_path,
+            &json!({
+                "schemaVersion": "v2",
+                "registryGeneration": 1,
+                "configurationFingerprint": "0".repeat(64),
+                "publishedAtUnixMs": 0,
+                "providers": []
+            }),
+        );
+        write_json_file(
             &bundle_path,
             &json!({
                 "bundleVersion": 4,
@@ -24058,6 +24151,7 @@ mod broker_dispatch_tests {
                 "hostPath": host_fixture_path().display().to_string(),
                 "processesPath": processes_path.display().to_string(),
                 "privilegesPath": privileges_path.display().to_string(),
+                "providerRegistryV2Path": provider_registry_path.display().to_string(),
                 "closures": [],
                 "minijailProfiles": [],
                 "managedKeys": {
@@ -24077,6 +24171,7 @@ mod broker_dispatch_tests {
             &processes_path,
             &bundle_path,
             &privileges_path,
+            &provider_registry_path,
         ] {
             fs::set_permissions(path, fs::Permissions::from_mode(0o640))
                 .expect("chmod minimal bundle fixture");
@@ -24089,6 +24184,166 @@ mod broker_dispatch_tests {
             processes_path,
             ..ArtifactPaths::default()
         }
+    }
+
+    fn local_runtime_provider_artifact(runner_intent_id: &str) -> ProviderRegistryV2 {
+        let realm_id = RealmId::parse("aaaaaaaaaaaaaaaaaaaa").expect("realm id");
+        let workload_id = WorkloadId::parse("ccccccccccccccccccca").expect("workload id");
+        let generation = Generation::new(1).expect("generation");
+        let provider_id = d2b_contracts::v2_identity::ProviderId::derive(
+            &realm_id,
+            ProviderType::Runtime,
+            &d2b_contracts::v2_identity::ConfiguredProviderId::parse(format!(
+                "runtime-{}",
+                workload_id.as_str()
+            ))
+            .expect("configured provider id"),
+        );
+        let binding = LocalRuntimeProviderBindingV2 {
+            realm_id: realm_id.clone(),
+            workload_id,
+            vm_start_intent_id: ProviderIntentId::parse("vm-start:vm:vm-a:role:cloud-hypervisor")
+                .expect("VM start intent"),
+            runner_intent_id: ProviderIntentId::parse(runner_intent_id).expect("runner intent"),
+        };
+        let descriptor = ProviderDescriptor {
+            schema_version: PROVIDER_SCHEMA_VERSION,
+            provider_id: provider_id.clone(),
+            authority: ProviderAuthority::Runtime {
+                posture: LocalRuntimeKind::CloudHypervisor.authority_posture(),
+            },
+            implementation_id: ImplementationId::parse(CLOUD_HYPERVISOR_IMPLEMENTATION_ID)
+                .expect("implementation id"),
+            api_version: ProviderApiVersion::V2,
+            capabilities: live_runtime_capabilities().expect("live capabilities"),
+            configuration_schema_fingerprint: local_runtime_configuration_schema_fingerprint()
+                .expect("configuration fingerprint"),
+            configured_scope_digest: local_runtime_configured_scope_digest(&provider_id, &binding)
+                .expect("scope digest"),
+            registry_generation: generation,
+            placement: ProviderPlacement::TrustedFirstPartyInProcess {
+                realm_id: realm_id.clone(),
+                controller_role: EndpointRole::RealmController,
+            },
+        };
+        let artifact = ProviderRegistryV2 {
+            schema_version: PROVIDER_REGISTRY_V2_SCHEMA_VERSION.to_owned(),
+            registry_generation: generation,
+            configuration_fingerprint: Fingerprint::parse("3".repeat(64))
+                .expect("registry fingerprint"),
+            published_at_unix_ms: 0,
+            providers: vec![ProviderRegistryEntryV2 {
+                descriptor,
+                binding: ProviderBindingV2::LocalRuntime(binding),
+            }],
+        };
+        artifact.validate().expect("valid provider artifact");
+        artifact
+    }
+
+    fn install_provider_registry_artifact(
+        artifacts: &ArtifactPaths,
+        artifact: &ProviderRegistryV2,
+    ) -> PathBuf {
+        let path = artifacts
+            .bundle_path
+            .parent()
+            .expect("bundle parent")
+            .join("provider-registry-v2.json");
+        write_json_file(
+            &path,
+            &serde_json::to_value(artifact).expect("serialize provider artifact"),
+        );
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640))
+            .expect("chmod provider artifact");
+
+        let host_path = path
+            .parent()
+            .expect("provider artifact parent")
+            .join("host.json");
+        fs::copy(host_fixture_path(), &host_path).expect("copy host fixture");
+        fs::set_permissions(&host_path, fs::Permissions::from_mode(0o640))
+            .expect("chmod host fixture");
+
+        let mut bundle: Value =
+            serde_json::from_slice(&fs::read(&artifacts.bundle_path).expect("read bundle"))
+                .expect("parse bundle");
+        bundle["schemaVersion"] = json!("v1");
+        bundle["hostPath"] = json!(host_path.display().to_string());
+        bundle["providerRegistryV2Path"] = json!(path.display().to_string());
+        write_json_file(&artifacts.bundle_path, &bundle);
+        fs::set_permissions(&artifacts.bundle_path, fs::Permissions::from_mode(0o640))
+            .expect("chmod bundle");
+        path
+    }
+
+    fn uninitialized_provider_registry_state(label: &str) -> Arc<ServerState> {
+        let mut state = test_state_with_broker_socket(unreachable_broker_socket_path(label));
+        state.provider_registry = Arc::new(OnceLock::new());
+        Arc::new(state)
+    }
+
+    #[tokio::test]
+    async fn provider_registry_activation_is_live_retained_and_invokes_real_mapping() {
+        let state = uninitialized_provider_registry_state("provider-registry-live");
+        let artifact = local_runtime_provider_artifact("runner:vm:vm-a:role:cloud-hypervisor");
+        let artifact_path = install_provider_registry_artifact(&state.config.artifacts, &artifact);
+        load_bundle_resolver(&state).expect("provider fixture bundle resolves");
+
+        activate_provider_registry(&state, None)
+            .await
+            .expect("activate live registry");
+        let first = state.provider_registry().expect("startup-owned registry");
+        let second = state.provider_registry().expect("retained registry");
+        assert!(std::ptr::eq(first, second));
+        assert!(!first.is_empty());
+        let registry = first.registry().expect("live registry");
+        let instance = registry
+            .instance(&artifact.providers[0].descriptor.provider_id)
+            .expect("local runtime instance");
+        assert_eq!(instance.descriptor(), artifact.providers[0].descriptor);
+        assert_eq!(instance.descriptor().provider_type(), ProviderType::Runtime);
+        assert!(
+            !instance
+                .capabilities()
+                .contains_method(d2b_contracts::v2_provider::ProviderMethod::RuntimeExecute)
+        );
+        assert!(
+            activate_provider_registry(&state, None).await.is_err(),
+            "registry must initialize exactly once"
+        );
+
+        let stale = local_runtime_provider_artifact("runner:vm:vm-a:role:missing-runtime");
+        write_json_file(
+            &artifact_path,
+            &serde_json::to_value(stale).expect("serialize stale mapping"),
+        );
+        assert!(matches!(
+            provider_registry::probe_startup_registry(first, &artifact).await,
+            Err(provider_registry::ProviderCompositionError::StartupProbeFailed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn provider_registry_activation_rejects_missing_and_unresolvable_artifacts() {
+        let missing = uninitialized_provider_registry_state("provider-registry-missing");
+        let mut bundle: Value = serde_json::from_slice(
+            &fs::read(&missing.config.artifacts.bundle_path).expect("read bundle"),
+        )
+        .expect("parse bundle");
+        bundle["schemaVersion"] = json!("v1");
+        bundle
+            .as_object_mut()
+            .expect("bundle object")
+            .remove("providerRegistryV2Path");
+        write_json_file(&missing.config.artifacts.bundle_path, &bundle);
+        assert!(activate_provider_registry(&missing, None).await.is_err());
+        assert!(missing.provider_registry().is_err());
+
+        let unresolved = uninitialized_provider_registry_state("provider-registry-unresolved");
+        let artifact = local_runtime_provider_artifact("runner:vm:vm-a:role:missing-runtime");
+        install_provider_registry_artifact(&unresolved.config.artifacts, &artifact);
+        assert!(activate_provider_registry(&unresolved, None).await.is_err());
     }
 
     fn write_usbip_lifecycle_bundle_artifacts(root: &Path) -> ArtifactPaths {
@@ -25956,7 +26211,9 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
-            provider_registry: Arc::new(crate::provider_registry::StartupProviderRegistry::Empty),
+            provider_registry: initialized_provider_registry(
+                crate::provider_registry::StartupProviderRegistry::Empty,
+            ),
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
@@ -26181,7 +26438,9 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
-            provider_registry: Arc::new(crate::provider_registry::StartupProviderRegistry::Empty),
+            provider_registry: initialized_provider_registry(
+                crate::provider_registry::StartupProviderRegistry::Empty,
+            ),
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
@@ -26440,7 +26699,9 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
-            provider_registry: Arc::new(crate::provider_registry::StartupProviderRegistry::Empty),
+            provider_registry: initialized_provider_registry(
+                crate::provider_registry::StartupProviderRegistry::Empty,
+            ),
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
@@ -28335,7 +28596,9 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
-            provider_registry: Arc::new(crate::provider_registry::StartupProviderRegistry::Empty),
+            provider_registry: initialized_provider_registry(
+                crate::provider_registry::StartupProviderRegistry::Empty,
+            ),
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
@@ -29271,7 +29534,9 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
-            provider_registry: Arc::new(crate::provider_registry::StartupProviderRegistry::Empty),
+            provider_registry: initialized_provider_registry(
+                crate::provider_registry::StartupProviderRegistry::Empty,
+            ),
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
@@ -29397,7 +29662,9 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
-            provider_registry: Arc::new(crate::provider_registry::StartupProviderRegistry::Empty),
+            provider_registry: initialized_provider_registry(
+                crate::provider_registry::StartupProviderRegistry::Empty,
+            ),
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),

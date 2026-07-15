@@ -456,7 +456,18 @@
                     icon.name = "terminal";
                   };
                 };
+
               };
+            };
+          };
+          d2b.realms.work = {
+            env = "work";
+            network.envs = [ "work" ];
+            allowedUsers = [ "alice" ];
+            workloads.corp-runtime = {
+              kind = "local-vm";
+              legacyVmName = "corp-vm";
+              launcher.enable = false;
             };
           };
         };
@@ -486,6 +497,7 @@
           cp ${bundle.realmWorkloadsLauncherJson.path} $out/realm-workloads-launcher.json
           cp ${bundle.realmWorkloadsLauncherV2Json.path} $out/realm-workloads-launcher-v2.json
           cp ${bundle.unsafeLocalWorkloadsJson.path} $out/unsafe-local-workloads.json
+          cp ${bundle.providerRegistryV2Json.path} $out/provider-registry-v2.json
           cp ${bundle.bundle.path} $out/bundle.json
           cp ${manifestPkg}/share/d2b/vms.json $out/manifest.json
           ${nixpkgs.lib.concatStringsSep "\n" (nixpkgs.lib.mapAttrsToList

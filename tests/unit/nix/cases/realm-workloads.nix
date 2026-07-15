@@ -1221,7 +1221,74 @@ in
     expected = true;
   };
 
-  "realm-workloads/unsafe-local-artifacts-and-bundle-v11" = {
+  "realm-workloads/generated-provider-registry-maps-only-explicit-live-runtime" = {
+    expr =
+      let
+        identity = import ../../../../nixos-modules/v2-identity.nix;
+        data = wlCfg.d2b._bundle.providerRegistryV2Json.data;
+        entry = builtins.head data.providers;
+        descriptor = entry.descriptor;
+        binding = entry.binding;
+        realmId = identity.deriveRealmId "work.home.local-root";
+        workloadId = identity.deriveWorkloadId realmId "corp-laptop";
+        providerId = identity.deriveProviderId realmId "runtime"
+          "runtime-${workloadId}";
+        firstClassRows =
+          firstClassLocalVmCfg.d2b._bundle.providerRegistryV2Json.data.providers;
+        encoded = builtins.toJSON data;
+      in {
+        schemaVersion = data.schemaVersion;
+        providerCount = builtins.length data.providers;
+        canonicalRealm = binding.realmId == realmId;
+        canonicalWorkload = binding.workloadId == workloadId;
+        canonicalProvider = descriptor.providerId == providerId;
+        implementationId = descriptor.implementationId;
+        providerType = descriptor.authority.type;
+        placement = descriptor.placement.kind;
+        controllerRole = descriptor.placement.controllerRole;
+        axis = binding.axis;
+        vmStartIntentId = binding.vmStartIntentId;
+        runnerIntentId = binding.runnerIntentId;
+        capabilities = descriptor.capabilities;
+        firstClassWithoutIntentUnregistered =
+          builtins.length firstClassRows == 1;
+        runtimeExecuteAbsent =
+          !(builtins.elem "runtime.execute" descriptor.capabilities);
+        azureVmAbsent = !(lib.hasInfix "azure-vm" encoded);
+        argvAbsent = !(lib.hasInfix "\"argv\"" encoded);
+        secretAbsent = !(lib.hasInfix "secret" encoded);
+      };
+    expected = {
+      schemaVersion = "v2";
+      providerCount = 1;
+      canonicalRealm = true;
+      canonicalWorkload = true;
+      canonicalProvider = true;
+      implementationId = "cloud-hypervisor";
+      providerType = "runtime";
+      placement = "trusted-first-party-in-process";
+      controllerRole = "realm-controller";
+      axis = "local-runtime";
+      vmStartIntentId = "vm-start:vm:corpbox:role:cloud-hypervisor";
+      runnerIntentId = "runner:vm:corpbox:role:cloud-hypervisor";
+      capabilities = [
+        "runtime.plan"
+        "runtime.ensure"
+        "runtime.start"
+        "runtime.stop"
+        "runtime.inspect"
+        "runtime.adopt"
+        "runtime.destroy"
+      ];
+      firstClassWithoutIntentUnregistered = true;
+      runtimeExecuteAbsent = true;
+      azureVmAbsent = true;
+      argvAbsent = true;
+      secretAbsent = true;
+    };
+  };
+
+  "realm-workloads/unsafe-local-artifacts-and-bundle-v12" = {
     expr = {
       launcherV2File =
         unsafeCfg.d2b._bundle.realmWorkloadsLauncherV2Json.installFileName;
@@ -1239,10 +1306,20 @@ in
         unsafeCfg.environment.etc ? "d2b/unsafe-local-workloads.json";
       unsafeMode =
         unsafeCfg.environment.etc."d2b/unsafe-local-workloads.json".mode;
+      providerRegistryFile =
+        unsafeCfg.d2b._bundle.providerRegistryV2Json.installFileName;
+      providerRegistryClass =
+        unsafeCfg.d2b._bundle.providerRegistryV2Json.classification;
+      providerRegistryInstalled =
+        unsafeCfg.environment.etc ? "d2b/provider-registry-v2.json";
+      providerRegistryMode =
+        unsafeCfg.environment.etc."d2b/provider-registry-v2.json".mode;
       bundleVersion = unsafeCfg.d2b._bundle.bundle.data.bundleVersion;
       launcherV2BundlePath =
         unsafeCfg.d2b._bundle.bundle.data.realmWorkloadsLauncherV2Path;
       bundlePath = unsafeCfg.d2b._bundle.bundle.data.unsafeLocalWorkloadsPath;
+      providerRegistryBundlePath =
+        unsafeCfg.d2b._bundle.bundle.data.providerRegistryV2Path;
     };
     expected = {
       launcherV2File = "realm-workloads-launcher-v2.json";
@@ -1253,9 +1330,14 @@ in
       launcherV2Mode = "0640";
       unsafeInstalled = true;
       unsafeMode = "0640";
-      bundleVersion = 11;
+      providerRegistryFile = "provider-registry-v2.json";
+      providerRegistryClass = "contractPrivateNonSecret";
+      providerRegistryInstalled = true;
+      providerRegistryMode = "0640";
+      bundleVersion = 12;
       launcherV2BundlePath = "/etc/d2b/realm-workloads-launcher-v2.json";
       bundlePath = "/etc/d2b/unsafe-local-workloads.json";
+      providerRegistryBundlePath = "/etc/d2b/provider-registry-v2.json";
     };
   };
 

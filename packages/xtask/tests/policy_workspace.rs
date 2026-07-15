@@ -41,13 +41,44 @@ const W4_PROVIDER_CRATES: &[&str] = &[
 ];
 const W4_SUPPORT_CRATE: &str = "d2b-azure-vm-fake-sdk";
 const PROVIDER_INTEGRATION_FILES: &[&str] = &[
+    "docs/reference/daemon-api.md",
+    "docs/reference/manifest-bundle.md",
+    "docs/reference/schemas/v2/bundle.json",
+    "docs/reference/schemas/v2/bundle.md",
+    "docs/reference/schemas/v2/provider-registry-v2.json",
+    "docs/reference/schemas/v2/provider-registry-v2.md",
+    "flake.nix",
+    "nixos-modules/bundle-artifacts.nix",
+    "nixos-modules/bundle.nix",
+    "nixos-modules/default.nix",
+    "nixos-modules/provider-registry-v2-json.nix",
     "packages/Cargo.lock",
     "packages/Cargo.toml",
+    "packages/d2b-contract-tests/tests/realm_workload_schema_contract.rs",
+    "packages/d2b-contracts/src/lib.rs",
+    "packages/d2b-contracts/src/provider_registry_v2.rs",
+    "packages/d2b-core/fuzz/src/bin/core.rs",
+    "packages/d2b-core/src/bundle.rs",
+    "packages/d2b-core/src/bundle_resolver.rs",
+    "packages/d2b-core/tests/bundle_resolver_runner_intent_parity.rs",
+    "packages/d2b-priv-broker/src/ops/storage_contract.rs",
+    "packages/d2b-priv-broker/src/ops/tap.rs",
+    "packages/d2b-priv-broker/src/runtime.rs",
+    "packages/d2b-priv-broker/tests/w15_install_migrate.rs",
     "packages/d2bd/Cargo.toml",
+    "packages/d2bd/src/kernel_module_check.rs",
     "packages/d2bd/src/lib.rs",
+    "packages/d2bd/src/net_vm_bundle_gate.rs",
     "packages/d2bd/src/provider_effects.rs",
     "packages/d2bd/src/provider_registry.rs",
+    "packages/d2bd/src/storage_lifecycle.rs",
+    "packages/d2bd/src/supervisor/stop_dag.rs",
+    "packages/d2bd/tests/bundle_tampered_envelope.rs",
+    "packages/d2bd/tests/common/mod.rs",
+    "packages/d2bd/tests/public_status_socket.rs",
+    "packages/xtask/src/main.rs",
     "packages/xtask/tests/policy_workspace.rs",
+    "tests/unit/nix/cases/realm-workloads.nix",
 ];
 
 fn repo_root() -> PathBuf {
@@ -313,7 +344,7 @@ fn w4_provider_workspace_inventory_is_reserved_and_dependency_minimal() {
             );
         }
         let dependency_names = transitive_package_names(&metadata, package);
-        for forbidden in ["d2bd", "d2b-priv-broker", "d2b-realm-provider"] {
+        for forbidden in ["d2bd", "d2b-priv-broker"] {
             assert!(
                 !dependency_names.contains(forbidden),
                 "{package} must not transitively depend on {forbidden}"
@@ -436,7 +467,7 @@ fn w4_provider_workspace_inventory_is_reserved_and_dependency_minimal() {
 fn daemon_provider_composition_is_exact_startup_owned_and_credential_free() {
     let metadata = workspace_metadata();
     let dependencies = declared_dependencies(&metadata, "d2bd")
-        .into_iter()
+        .iter()
         .map(|dependency| {
             dependency["name"]
                 .as_str()
@@ -491,17 +522,25 @@ fn daemon_provider_composition_is_exact_startup_owned_and_credential_free() {
 
     let daemon = read_repo_file("packages/d2bd/src/lib.rs");
     assert!(
-        daemon.contains("provider_registry: Arc<provider_registry::StartupProviderRegistry>")
-            && daemon.contains("provider_registry::startup_registry_for_current_bundle()")
-            && daemon.contains("provider_registry,"),
-        "the daemon must construct and retain one startup-owned provider registry"
+        daemon.contains(
+            "provider_registry: Arc<OnceLock<provider_registry::StartupProviderRegistry>>"
+        ) && daemon.contains("provider_registry: Arc::new(OnceLock::new())")
+            && daemon.contains("async fn activate_provider_registry")
+            && daemon.contains("provider_registry::compose_startup_registry(state, &artifact)")
+            && daemon.contains("provider_registry::probe_startup_registry")
+            && daemon.contains("fn provider_registry("),
+        "the daemon must compose, probe, retain, and expose one startup-owned provider registry"
     );
-    assert_eq!(
-        daemon
-            .matches("provider_registry::startup_registry_for_current_bundle()")
-            .count(),
-        1,
-        "the provider registry must be constructed once at startup, not per call"
+    let state_construction = daemon
+        .find("let state = Arc::new(ServerState")
+        .expect("production ServerState construction");
+    let registry_activation = daemon
+        .find("activate_provider_registry(&state, test_bundle_policy.as_ref()).await?;")
+        .expect("production provider registry activation");
+    assert!(
+        state_construction < registry_activation
+            && !daemon.contains("#[allow(dead_code)]\n    provider_registry"),
+        "the provider registry must initialize once after ServerState and remain a live field"
     );
 
     let composition = read_repo_file("packages/d2bd/src/provider_registry.rs");
@@ -581,6 +620,34 @@ fn daemon_provider_composition_is_exact_startup_owned_and_credential_free() {
             "daemon semantic effects must not bypass typed provider ports via {forbidden}"
         );
     }
+    for required in [
+        "dispatch_broker_vm_start",
+        "dispatch_broker_vm_stop_as",
+        "find_vm_start_intent",
+        "find_runner_intent",
+        "still_alive_same_start_time",
+    ] {
+        assert!(
+            effects.contains(required),
+            "live runtime adapter must invoke the existing daemon authority seam {required}"
+        );
+    }
+    let provider_contract = read_repo_file("packages/d2b-contracts/src/provider_registry_v2.rs");
+    assert!(
+        provider_contract.contains("pub struct ProviderRegistryV2")
+            && provider_contract.contains("pub enum ProviderBindingV2")
+            && provider_contract.contains("LocalRuntime(LocalRuntimeProviderBindingV2)")
+            && provider_contract.contains("deny_unknown_fields"),
+        "the private generated provider artifact must use a closed canonical DTO"
+    );
+    let provider_emitter = read_repo_file("nixos-modules/provider-registry-v2-json.nix");
+    assert!(
+        provider_emitter.contains("cfg._index.realms.workloads.enabled")
+            && provider_emitter.contains("provider-registry-v2.json")
+            && provider_emitter.contains("contractPrivateNonSecret")
+            && !provider_emitter.contains("runtime.execute"),
+        "the provider registry artifact must derive from explicit canonical workloads only"
+    );
     let instance = read_repo_file("packages/d2b-provider/src/instance.rs");
     assert!(
         instance.contains("ProviderMethod::RuntimeExecute") && instance.contains("!matches!"),

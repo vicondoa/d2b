@@ -21,6 +21,8 @@ pub mod guest_proto {
 }
 #[cfg(feature = "guest")]
 pub mod guest_wire;
+#[cfg(feature = "v2-provider")]
+pub mod provider_registry_v2;
 #[cfg(feature = "public")]
 pub mod public_wire;
 #[cfg(feature = "security-key")]

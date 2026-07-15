@@ -36,41 +36,52 @@ live SDK calls or advertise Azure VM support.
 ## Production composition
 
 `d2bd` owns one canonical provider-registry value for its full process
-lifetime. Startup accepts a typed descriptor list and an exact configuration
-binding for every descriptor, validates the complete transaction, constructs
-instances with each implementation crate's public factory, and then publishes
-the registry. Duplicate or missing bindings, descriptor/factory mismatches,
-stale generations, scope or placement mismatches, unavailable effect mappings,
-and non-dispatchable capabilities abort startup without publishing a partial
-registry. The registry is not reconstructed per request.
+lifetime. After production services and `ServerState` exist, startup loads the
+integrity-pinned private `provider-registry-v2.json` artifact, validates the
+complete transaction, constructs instances with each implementation crate's
+public factory, and initializes a one-shot registry cell. It then calls provider
+health and inspect through that retained registry before serving requests.
+Duplicate or missing bindings, descriptor/factory mismatches, stale
+generations, scope or placement mismatches, unavailable intent mappings, and
+non-dispatchable capabilities abort startup. The registry is not reconstructed
+per call. An empty registry is valid only when the artifact explicitly contains
+zero provider rows.
 
-The host composer recognizes these in-process implementations:
+The generated artifact carries canonical realm, workload, and provider IDs plus
+opaque references to existing bundle intents. It contains no argv, host path,
+credential, or secret payload. `bundleVersion` 12 adds the artifact; its own
+schema remains version `v2`.
 
-| Axis | Implementations |
-| --- | --- |
-| Runtime | `cloud-hypervisor`, `qemu-media` |
-| Transport | `unix-stream`, `unix-seqpacket`, `native-vsock`, `cloud-hypervisor-vsock` |
-| Substrate | `nixos`, `linux` |
-| Display | `wayland` |
-| Network | `local-realm` |
-| Storage | `local` |
-| Device | `host-mediated` |
-| Audio | `pipewire-vhost-user` |
-| Observability | `local` |
+The live host registry currently registers only local runtime providers:
 
-Daemon effect adapters bind each exact descriptor to semantic provider ports.
-Those ports accept generated opaque identifiers and are the only seam allowed
-to reach existing daemon and host lifecycle behavior. A descriptor without a
-generated mapping is unavailable and is not registered; there is no no-op
-success path, shell command, free-form argument bridge, or provider-to-broker
-dependency.
+| Axis | Live implementations | Mapping and daemon authority |
+| --- | --- | --- |
+| Runtime | `cloud-hypervisor`, `qemu-media` | Explicit realm workloads map to matching VM-start and runner intent IDs. The daemon adapter revalidates the current bundle, observes its pidfd table, and calls the existing lifecycle start/stop paths. |
 
-The current bundle contract declares no canonical v2 provider descriptors or
-generated effect mappings. Consequently the startup-owned registry is
-explicitly empty today, and existing v1 runtime routing remains authoritative.
-Adding a descriptor without its exact configuration and effect dependencies
-will fail the registry transaction. A later routing cutover will consume this
-registry rather than changing current v1 behavior implicitly.
+Only explicit realm workload rows with a matching generated VM process DAG are
+eligible. A first-class workload without existing VM-start and runner intents is
+not emitted as live. Azure VM IDs and `RuntimeExecute` are rejected.
+
+Other first-party host implementation crates remain dependencies so their exact
+factory contracts are checked and available for the eventual composition
+cutover, but they are not registered by the production artifact yet:
+
+- local transport needs generated endpoint bindings tied to the daemon's
+  authenticated socket/vsock authority;
+- host substrate needs opaque host-plan and host-apply intent mappings;
+- Wayland display needs generated session and proxy intent mappings;
+- local realm networking needs realm-scoped bridge, TAP, and network-operation
+  mappings;
+- local storage needs generated storage and synchronization row IDs;
+- host-mediated devices need typed device and broker-operation mappings;
+- PipeWire/vhost-user audio needs generated route and runner mappings; and
+- local observability needs bounded query/export mappings to current daemon
+  projections.
+
+These axes are intentionally absent rather than backed by no-op success. The
+existing lifecycle request paths also remain authoritative until the later
+routing cutover begins dispatching ordinary requests through the retained
+registry.
 
 ## Process placement
 

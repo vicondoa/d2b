@@ -357,7 +357,12 @@ async fn connect_and_listen_preserve_operation_id_idempotency_and_bounds() {
         .fixture
         .request(ProviderMethod::TransportConnect)
         .expect("connect request");
-    assert!(matches!(connect.input, ProviderOperationInput::NoInput));
+    assert!(matches!(
+        &connect.input,
+        ProviderOperationInput::TransportBinding {
+            transport_binding_id
+        } if transport_binding_id.as_str() == "transport-binding"
+    ));
     let context = call_context(&harness.fixture, &connect);
     let handle = harness
         .provider

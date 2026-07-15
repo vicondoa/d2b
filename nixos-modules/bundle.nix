@@ -71,6 +71,10 @@ let
         key = "/etc/d2b/unsafe-local-workloads.json";
         path = config.d2b._bundle.unsafeLocalWorkloadsJson.path;
       }
+      {
+        key = "/etc/d2b/provider-registry-v2.json";
+        path = config.d2b._bundle.providerRegistryV2Json.path;
+      }
     ]
     ++ map (ref: {
       key = ref.path;
@@ -89,7 +93,7 @@ let
   # presence of this field; the resolver nullifies it before comparing.
   dataWithoutHash = {
     artifactHashes = null;
-    bundleVersion = 11;
+    bundleVersion = 12;
     schemaVersion = "v2";
     publicManifestPath = "/run/current-system/sw/share/d2b/vms.json";
     hostPath = "/etc/d2b/host.json";
@@ -102,6 +106,7 @@ let
     realmIdentityPath = "/etc/d2b/realm-identity.json";
     realmWorkloadsLauncherV2Path = "/etc/d2b/realm-workloads-launcher-v2.json";
     unsafeLocalWorkloadsPath = "/etc/d2b/unsafe-local-workloads.json";
+    providerRegistryV2Path = "/etc/d2b/provider-registry-v2.json";
     closures = closureRefs;
     minijailProfiles = profileRefs;
     managedKeys = {

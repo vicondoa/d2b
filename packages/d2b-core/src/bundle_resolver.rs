@@ -104,6 +104,7 @@ pub struct BundleResolver {
     pub realm_identity: Option<RealmIdentityConfigJson>,
     pub realm_workloads_launcher_v2: Option<RealmWorkloadsLauncherV2Json>,
     pub unsafe_local_workloads: Option<UnsafeLocalWorkloadsJson>,
+    provider_registry_v2_bytes: Option<Vec<u8>>,
     pub manifest: ManifestV04,
     audit_bundle_version: String,
     audit_bundle_hash: String,
@@ -136,6 +137,7 @@ struct ParsedBundleArtifacts {
     realm_identity: Option<RealmIdentityConfigJson>,
     realm_workloads_launcher_v2: Option<RealmWorkloadsLauncherV2Json>,
     unsafe_local_workloads: Option<UnsafeLocalWorkloadsJson>,
+    provider_registry_v2_bytes: Option<Vec<u8>>,
     manifest: ManifestV04,
     closures: Vec<ClosureMetadata>,
 }
@@ -695,8 +697,9 @@ impl BundleVerifyPolicy {
     /// 0640 mode. Used by unit tests that materialise bundles in a
     /// per-test temp directory (cargo test runs as the invoking user,
     /// not root, so the production owner/mode check would reject every
-    /// such bundle). Outside of `#[cfg(test)]` paths, callers must use
-    /// [`Self::production`].
+    /// such bundle). Outside of `#[cfg(test)]` paths, only d2bd's hidden
+    /// `--allow-unprivileged-runtime-dir` integration-test path may use this
+    /// policy; normal daemon and broker paths must use [`Self::production`].
     #[doc(hidden)]
     pub fn for_tests() -> Self {
         // rustix is the workspace's libc replacement; getuid()/getgid()
@@ -995,6 +998,7 @@ impl BundleResolver {
                 realm_identity: None,
                 realm_workloads_launcher_v2: None,
                 unsafe_local_workloads: None,
+                provider_registry_v2_bytes: None,
                 manifest,
                 closures,
             },
@@ -1015,6 +1019,7 @@ impl BundleResolver {
             realm_identity,
             realm_workloads_launcher_v2,
             unsafe_local_workloads,
+            provider_registry_v2_bytes,
             manifest,
             closures,
         } = artifacts;
@@ -1051,6 +1056,7 @@ impl BundleResolver {
             realm_identity,
             realm_workloads_launcher_v2,
             unsafe_local_workloads,
+            provider_registry_v2_bytes,
             manifest,
             nft_intents,
             route_intents,
@@ -1101,6 +1107,7 @@ impl BundleResolver {
                 realm_identity,
                 realm_workloads_launcher_v2: None,
                 unsafe_local_workloads: None,
+                provider_registry_v2_bytes: None,
                 manifest,
                 closures: Vec::new(),
             },
@@ -1145,6 +1152,8 @@ impl BundleResolver {
             load_optional_realm_workloads_launcher_v2_artifact(&bundle, bundle_root, policy)?;
         let unsafe_local_workloads =
             load_optional_unsafe_local_workloads_artifact(&bundle, bundle_root, policy)?;
+        let provider_registry_v2_bytes =
+            load_optional_provider_registry_v2_artifact(&bundle, bundle_root, policy)?;
         // The public manifest (vms.json) lives under /run/current-system/…
         // which is root-owned 0444; skip the private-artifact policy for it.
         let manifest = ManifestV04::from_path(manifest_path)?;
@@ -1161,6 +1170,7 @@ impl BundleResolver {
                 realm_identity,
                 realm_workloads_launcher_v2,
                 unsafe_local_workloads,
+                provider_registry_v2_bytes,
                 manifest,
                 closures,
             },
@@ -1173,6 +1183,10 @@ impl BundleResolver {
 
     pub fn audit_bundle_hash(&self) -> &str {
         &self.audit_bundle_hash
+    }
+
+    pub fn provider_registry_v2_bytes(&self) -> Option<&[u8]> {
+        self.provider_registry_v2_bytes.as_deref()
     }
 
     pub fn find_unsafe_local_workload(&self, target: &str) -> Option<&UnsafeLocalWorkload> {
@@ -1213,6 +1227,16 @@ impl BundleResolver {
 
     pub fn find_runner_intent(&self, id: &str) -> Option<&ResolvedRunnerIntent> {
         self.runner_intents.get(id)
+    }
+
+    pub fn find_vm_start_intent(&self, id: &str) -> Option<ResolvedVmStartIntent> {
+        self.processes.vms.iter().find_map(|vm| {
+            vm.nodes.iter().find_map(|node| {
+                (intent_id_vm_start(&vm.vm, &node.id.0) == id)
+                    .then(|| self.resolve_vm_start_intent(&vm.vm, &node.id.0))
+                    .flatten()
+            })
+        })
     }
 
     pub fn find_socket_intent(&self, id: &str) -> Option<&ResolvedSocketIntent> {
@@ -2983,6 +3007,25 @@ fn load_optional_unsafe_local_workloads_artifact(
     Ok(Some(artifact))
 }
 
+fn load_optional_provider_registry_v2_artifact(
+    bundle: &Bundle,
+    bundle_root: &Path,
+    policy: &BundleVerifyPolicy,
+) -> Result<Option<Vec<u8>>, Error> {
+    let Some(provider_registry_ref) = bundle.provider_registry_v2_path.as_deref() else {
+        return Ok(None);
+    };
+    let path = resolve_bundle_ref(bundle_root, provider_registry_ref);
+    let bytes = secure_open_and_read(&path, policy)?;
+    verify_artifact_hash(
+        &path,
+        &bytes,
+        bundle.artifact_hashes.as_ref(),
+        provider_registry_ref,
+    )?;
+    Ok(Some(bytes))
+}
+
 fn load_optional_realm_workloads_launcher_v2_artifact(
     bundle: &Bundle,
     bundle_root: &Path,
@@ -3119,6 +3162,7 @@ mod tests {
                 realm_identity_path: None,
                 realm_workloads_launcher_v2_path: None,
                 unsafe_local_workloads_path: None,
+                provider_registry_v2_path: None,
                 closures: Vec::new(),
                 minijail_profiles: Vec::new(),
                 managed_keys: Default::default(),
@@ -3465,6 +3509,7 @@ mod tests {
             realm_identity_path: None,
             realm_workloads_launcher_v2_path: None,
             unsafe_local_workloads_path: None,
+            provider_registry_v2_path: None,
             closures: vec![BundleClosureRef {
                 vm: "personal-dev".to_owned(),
                 path: "closures/personal-dev.json".to_owned(),

@@ -21,6 +21,7 @@ use d2b_contracts::{
         VmDisplayListOutputV1, VmExecCreateOutputV1, VmExecKillOutputV1, VmExecListOutputV1,
         VmExecLogsOutputV1, VmExecStatusOutputV1,
     },
+    provider_registry_v2::ProviderRegistryV2,
     v2_services::{ServiceInventoryDocument, service_inventory_document},
     v2_state::StateStorageSyncAuditContract,
 };
@@ -742,12 +743,16 @@ fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     };
     fs::create_dir_all(&out_dir)?;
 
-    let schemas: [(&str, RootSchema); 21] = [
+    let schemas: [(&str, RootSchema); 22] = [
         ("allocator.json", schemars::schema_for!(AllocatorJson)),
         ("bundle.json", schemars::schema_for!(Bundle)),
         (
             "realm-workloads-launcher-v2.json",
             schemars::schema_for!(RealmWorkloadsLauncherV2Json),
+        ),
+        (
+            "provider-registry-v2.json",
+            schemars::schema_for!(ProviderRegistryV2),
         ),
         (
             "unsafe-local-workloads.json",

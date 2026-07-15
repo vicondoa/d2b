@@ -6,18 +6,45 @@
 //! for resolving generated opaque IDs into current daemon, host, and broker
 //! behavior; a missing or stale binding is an error, never a no-op.
 
-use std::{collections::BTreeMap, error::Error, fmt, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    error::Error,
+    fmt,
+    sync::{Arc, Weak},
+};
 
-use d2b_contracts::{v2_identity::ProviderId, v2_provider::ProviderDescriptor};
+use async_trait::async_trait;
+use d2b_contracts::{
+    broker_wire::BrokerCallerRole,
+    provider_registry_v2::{
+        LocalRuntimeProviderBindingV2, ProviderBindingV2, ProviderRegistryEntryV2,
+        ProviderRegistryV2,
+    },
+    public_wire::{MutationFlags, VmLifecycleRequest},
+    v2_identity::ProviderId,
+    v2_provider::{
+        AuthorizedProviderScope, HandleId, HandleOwner, MutationState, ObservationReason,
+        ObservedLifecycleState, PlanId, ProviderDescriptor,
+    },
+};
 use d2b_provider_audio_pipewire_vhost_user::{AudioEffectPort, AudioQueryPort};
 use d2b_provider_device_host_mediated::{DeviceEffectPort, DeviceQueryPort};
 use d2b_provider_display_wayland::DisplayEffectPort;
 use d2b_provider_network_local_realm::NetworkEffectPort;
 use d2b_provider_observability_local::{ObservabilityExportPort, ObservabilityQueryPort};
-use d2b_provider_runtime_local::RuntimeControlPort;
+use d2b_provider_runtime_local::{
+    LocalRuntimeKind, RuntimeAdoptionControl, RuntimeAdoptionMismatch, RuntimeAdoptionOutcome,
+    RuntimeConfiguredItemControl, RuntimeControlContext, RuntimeControlError, RuntimeControlPort,
+    RuntimeEnsureControl, RuntimeHealth, RuntimeMutationOutcome, RuntimeObservedState,
+    RuntimeOperationControl, RuntimePlanDecision, RuntimeResourceIdentity,
+};
 use d2b_provider_storage_local::StorageEffectPort;
 use d2b_provider_substrate_host::HostSubstratePort;
 use d2b_provider_transport_local::LocalEndpointPort;
+
+use crate::{
+    ServerState, dispatch_broker_vm_start, dispatch_broker_vm_stop_as, load_bundle_resolver,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DaemonEffectAdapterError {
@@ -200,6 +227,368 @@ impl DaemonEffectAdapters {
         descriptor: &ProviderDescriptor,
     ) -> Result<ObservabilityEffectAdapter, DaemonEffectAdapterError> {
         resolve(&self.observability, descriptor).map(|adapter| adapter.as_ref().clone())
+    }
+
+    pub(crate) fn for_server_state(
+        state: Weak<ServerState>,
+        entries: &[ProviderRegistryEntryV2],
+    ) -> Result<Self, DaemonEffectAdapterError> {
+        let mut builder = Self::builder();
+        for entry in entries {
+            match &entry.binding {
+                ProviderBindingV2::LocalRuntime(binding) => {
+                    let adapter: Arc<dyn RuntimeControlPort> =
+                        Arc::new(DaemonLocalRuntimeControl {
+                            state: state.clone(),
+                            entry: entry.clone(),
+                            binding: binding.clone(),
+                        });
+                    builder.bind_runtime(entry.descriptor.clone(), adapter)?;
+                }
+            }
+        }
+        builder.finish()
+    }
+}
+
+#[derive(Clone)]
+struct DaemonLocalRuntimeControl {
+    state: Weak<ServerState>,
+    entry: ProviderRegistryEntryV2,
+    binding: LocalRuntimeProviderBindingV2,
+}
+
+impl fmt::Debug for DaemonLocalRuntimeControl {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DaemonLocalRuntimeControl")
+            .field("descriptor", &self.entry.descriptor)
+            .finish_non_exhaustive()
+    }
+}
+
+struct ResolvedDaemonRuntime {
+    state: Arc<ServerState>,
+    vm: String,
+    role: String,
+}
+
+impl DaemonLocalRuntimeControl {
+    fn kind(&self) -> Result<LocalRuntimeKind, RuntimeControlError> {
+        match self.entry.descriptor.implementation_id.as_str() {
+            d2b_provider_runtime_local::CLOUD_HYPERVISOR_IMPLEMENTATION_ID => {
+                Ok(LocalRuntimeKind::CloudHypervisor)
+            }
+            d2b_provider_runtime_local::QEMU_MEDIA_IMPLEMENTATION_ID => {
+                Ok(LocalRuntimeKind::QemuMedia)
+            }
+            _ => Err(RuntimeControlError::InvalidRequest),
+        }
+    }
+
+    fn resolve(
+        &self,
+        context: &RuntimeControlContext,
+    ) -> Result<ResolvedDaemonRuntime, RuntimeControlError> {
+        if context.is_cancelled() {
+            return Err(RuntimeControlError::CancelledBeforeMutation);
+        }
+        if context.effective_deadline_remaining_ms() == 0 {
+            return Err(RuntimeControlError::DeadlineExpiredBeforeMutation);
+        }
+        if context.kind() != self.kind()?
+            || context.operation().provider_id != self.entry.descriptor.provider_id
+            || context.operation().provider_generation != self.entry.descriptor.registry_generation
+            || context.operation().scope.realm_id() != &self.binding.realm_id
+            || context.operation().scope.workload_id() != Some(&self.binding.workload_id)
+        {
+            return Err(RuntimeControlError::UnauthorizedScope);
+        }
+
+        let state = self
+            .state
+            .upgrade()
+            .ok_or(RuntimeControlError::Unavailable)?;
+        let resolver =
+            load_bundle_resolver(&state).map_err(|_| RuntimeControlError::Unavailable)?;
+        let current_bytes = resolver
+            .provider_registry_v2_bytes()
+            .ok_or(RuntimeControlError::Unavailable)?;
+        let current: ProviderRegistryV2 = serde_json::from_slice(current_bytes)
+            .map_err(|_| RuntimeControlError::InvalidRequest)?;
+        current
+            .validate()
+            .map_err(|_| RuntimeControlError::InvalidRequest)?;
+        if current.find(&self.entry.descriptor.provider_id) != Some(&self.entry) {
+            return Err(RuntimeControlError::InvalidRequest);
+        }
+
+        let vm_start = resolver
+            .find_vm_start_intent(self.binding.vm_start_intent_id.as_str())
+            .ok_or(RuntimeControlError::Unavailable)?;
+        let runner = resolver
+            .find_runner_intent(self.binding.runner_intent_id.as_str())
+            .ok_or(RuntimeControlError::Unavailable)?;
+        if vm_start.vm_name != runner.vm_name
+            || vm_start.role_id != runner.role_id
+            || vm_start.role != runner.role
+            || !matches!(
+                (self.kind()?, &runner.role),
+                (
+                    LocalRuntimeKind::CloudHypervisor,
+                    d2b_core::processes::ProcessRole::CloudHypervisorRunner
+                ) | (
+                    LocalRuntimeKind::QemuMedia,
+                    d2b_core::processes::ProcessRole::QemuMediaRunner
+                )
+            )
+        {
+            return Err(RuntimeControlError::InvalidRequest);
+        }
+        Ok(ResolvedDaemonRuntime {
+            state,
+            vm: runner.vm_name.clone(),
+            role: runner.role_id.clone(),
+        })
+    }
+
+    fn validate_target(
+        &self,
+        request: &RuntimeOperationControl,
+    ) -> Result<ResolvedDaemonRuntime, RuntimeControlError> {
+        if request.target().realm_id() != &self.binding.realm_id
+            || request.target().workload_id() != Some(&self.binding.workload_id)
+        {
+            return Err(RuntimeControlError::UnauthorizedScope);
+        }
+        self.resolve(request.context())
+    }
+
+    fn resource_identity(
+        &self,
+        _context: &RuntimeControlContext,
+    ) -> Result<RuntimeResourceIdentity, RuntimeControlError> {
+        let handle_id = HandleId::parse(format!(
+            "runtime-{}",
+            self.entry.descriptor.provider_id.as_str()
+        ))
+        .map_err(|_| RuntimeControlError::InvariantViolation)?;
+        Ok(RuntimeResourceIdentity::new(
+            self.kind()?,
+            self.entry.descriptor.provider_id.clone(),
+            self.entry.descriptor.registry_generation,
+            AuthorizedProviderScope::Workload {
+                realm_id: self.binding.realm_id.clone(),
+                workload_id: self.binding.workload_id.clone(),
+            },
+            handle_id,
+            HandleOwner::RealmController {
+                realm_id: self.binding.realm_id.clone(),
+            },
+            self.entry.descriptor.registry_generation,
+            self.entry
+                .descriptor
+                .configuration_schema_fingerprint
+                .clone(),
+        ))
+    }
+
+    fn observed(
+        &self,
+        context: &RuntimeControlContext,
+        resolved: &ResolvedDaemonRuntime,
+    ) -> Result<RuntimeObservedState, RuntimeControlError> {
+        let running = resolved
+            .state
+            .pidfd_table
+            .still_alive_same_start_time(&resolved.vm, &resolved.role);
+        RuntimeObservedState::new(
+            running
+                .then(|| self.resource_identity(context))
+                .transpose()?,
+            if running {
+                ObservedLifecycleState::Running
+            } else {
+                ObservedLifecycleState::Stopped
+            },
+            ObservationReason::None,
+            RuntimeHealth::healthy(),
+        )
+        .map_err(|_| RuntimeControlError::InvariantViolation)
+    }
+
+    fn lifecycle_request(vm: String) -> VmLifecycleRequest {
+        VmLifecycleRequest {
+            vm,
+            flags: MutationFlags {
+                dry_run: false,
+                apply: true,
+                json: true,
+            },
+            force: false,
+            no_wait_api: true,
+        }
+    }
+
+    fn response_applied(response: &serde_json::Value) -> bool {
+        response.get("outcome").and_then(serde_json::Value::as_str) == Some("applied")
+    }
+}
+
+#[async_trait]
+impl RuntimeControlPort for DaemonLocalRuntimeControl {
+    async fn health(
+        &self,
+        context: RuntimeControlContext,
+    ) -> Result<RuntimeHealth, RuntimeControlError> {
+        self.resolve(&context)?;
+        Ok(RuntimeHealth::healthy())
+    }
+
+    async fn plan(
+        &self,
+        request: RuntimeOperationControl,
+    ) -> Result<RuntimePlanDecision, RuntimeControlError> {
+        self.validate_target(&request)?;
+        let plan_id = PlanId::parse(format!(
+            "runtime-{}",
+            self.entry.descriptor.provider_id.as_str()
+        ))
+        .map_err(|_| RuntimeControlError::InvariantViolation)?;
+        Ok(RuntimePlanDecision::new(
+            plan_id,
+            request.context().operation().expires_at_unix_ms,
+        ))
+    }
+
+    async fn ensure(
+        &self,
+        request: RuntimeEnsureControl,
+    ) -> Result<RuntimeResourceIdentity, RuntimeControlError> {
+        self.resolve(request.context())?;
+        self.resource_identity(request.context())
+    }
+
+    async fn start(
+        &self,
+        request: RuntimeOperationControl,
+    ) -> Result<RuntimeObservedState, RuntimeControlError> {
+        let resolved = self.validate_target(&request)?;
+        if resolved
+            .state
+            .pidfd_table
+            .still_alive_same_start_time(&resolved.vm, &resolved.role)
+        {
+            return self.observed(request.context(), &resolved);
+        }
+        let response = dispatch_broker_vm_start(
+            &resolved.state,
+            Self::lifecycle_request(resolved.vm.clone()),
+        )
+        .map_err(|_| RuntimeControlError::Unavailable)?;
+        if !Self::response_applied(&response) {
+            return Err(RuntimeControlError::Unavailable);
+        }
+        let observed = self.observed(request.context(), &resolved)?;
+        if observed.lifecycle() == ObservedLifecycleState::Running {
+            Ok(observed)
+        } else {
+            Err(RuntimeControlError::CompletionAmbiguous)
+        }
+    }
+
+    async fn stop(
+        &self,
+        request: RuntimeOperationControl,
+    ) -> Result<RuntimeObservedState, RuntimeControlError> {
+        let resolved = self.validate_target(&request)?;
+        if !resolved
+            .state
+            .pidfd_table
+            .still_alive_same_start_time(&resolved.vm, &resolved.role)
+        {
+            return self.observed(request.context(), &resolved);
+        }
+        let response = dispatch_broker_vm_stop_as(
+            &resolved.state,
+            Self::lifecycle_request(resolved.vm.clone()),
+            BrokerCallerRole::AdminUid {
+                uid: resolved.state.daemon_uid,
+            },
+        )
+        .map_err(|_| RuntimeControlError::Unavailable)?;
+        if !Self::response_applied(&response) {
+            return Err(RuntimeControlError::Unavailable);
+        }
+        let observed = self.observed(request.context(), &resolved)?;
+        if observed.lifecycle() == ObservedLifecycleState::Stopped {
+            Ok(observed)
+        } else {
+            Err(RuntimeControlError::CompletionAmbiguous)
+        }
+    }
+
+    async fn inspect(
+        &self,
+        request: RuntimeOperationControl,
+    ) -> Result<RuntimeObservedState, RuntimeControlError> {
+        let resolved = self.validate_target(&request)?;
+        self.observed(request.context(), &resolved)
+    }
+
+    async fn adopt(
+        &self,
+        request: RuntimeAdoptionControl,
+    ) -> Result<RuntimeAdoptionOutcome, RuntimeControlError> {
+        let resolved = self.resolve(request.context())?;
+        let identity = self.resource_identity(request.context())?;
+        if request.expected() != &identity {
+            return Ok(RuntimeAdoptionOutcome::Rejected(
+                RuntimeAdoptionMismatch::MissingEvidence,
+            ));
+        }
+        let observed = self.observed(request.context(), &resolved)?;
+        if observed.lifecycle() == ObservedLifecycleState::Running {
+            Ok(RuntimeAdoptionOutcome::Adopted(Box::new(observed)))
+        } else {
+            Ok(RuntimeAdoptionOutcome::Rejected(
+                RuntimeAdoptionMismatch::MissingEvidence,
+            ))
+        }
+    }
+
+    async fn destroy(
+        &self,
+        request: RuntimeOperationControl,
+    ) -> Result<RuntimeMutationOutcome, RuntimeControlError> {
+        let resolved = self.validate_target(&request)?;
+        if !resolved
+            .state
+            .pidfd_table
+            .still_alive_same_start_time(&resolved.vm, &resolved.role)
+        {
+            return Ok(RuntimeMutationOutcome::new(MutationState::NotApplicable));
+        }
+        let response = dispatch_broker_vm_stop_as(
+            &resolved.state,
+            Self::lifecycle_request(resolved.vm),
+            BrokerCallerRole::AdminUid {
+                uid: resolved.state.daemon_uid,
+            },
+        )
+        .map_err(|_| RuntimeControlError::Unavailable)?;
+        if Self::response_applied(&response) {
+            Ok(RuntimeMutationOutcome::new(MutationState::Applied))
+        } else {
+            Err(RuntimeControlError::CompletionAmbiguous)
+        }
+    }
+
+    async fn execute_configured_item(
+        &self,
+        _request: RuntimeConfiguredItemControl,
+    ) -> Result<RuntimeObservedState, RuntimeControlError> {
+        Err(RuntimeControlError::InvalidRequest)
     }
 }
 

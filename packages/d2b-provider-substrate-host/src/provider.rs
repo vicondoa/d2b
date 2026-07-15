@@ -321,7 +321,8 @@ impl HostProviderCore {
                 controller_role,
                 ..
             } => controller_role,
-            d2b_contracts::v2_provider::ProviderPlacement::ProviderAgent { .. } => {
+            d2b_contracts::v2_provider::ProviderPlacement::ProviderAgent { .. }
+            | d2b_contracts::v2_provider::ProviderPlacement::UserAgent { .. } => {
                 return Err(self.invalid(context));
             }
         };

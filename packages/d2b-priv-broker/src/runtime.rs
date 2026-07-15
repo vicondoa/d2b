@@ -10145,6 +10145,7 @@ mod tests {
             realm_identity_path: None,
             realm_workloads_launcher_v2_path: None,
             unsafe_local_workloads_path: None,
+            provider_registry_v2_path: None,
             closures: vec![BundleClosureRef {
                 vm: "corp-vm".to_owned(),
                 path: "closures/corp-vm.json".to_owned(),

@@ -9,13 +9,19 @@ use std::{
     error::Error,
     fmt,
     sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use d2b_contracts::{
-    v2_component_session::EndpointRole,
+    provider_registry_v2::{ProviderBindingV2, ProviderRegistryV2},
+    v2_component_session::{EndpointRole, ServicePackage},
     v2_identity::{ProviderId, ProviderType},
     v2_provider::{
-        Fingerprint, Generation, ProviderDescriptor, ProviderFactoryKey, ProviderPlacement,
+        AuthorizedProviderScope, CorrelationId, Fingerprint, Generation, IdempotencyKey,
+        OperationId, PROVIDER_SCHEMA_VERSION, PrincipalRef, ProviderCallContext,
+        ProviderCapability, ProviderDescriptor, ProviderFactoryKey, ProviderMethod,
+        ProviderOperationContext, ProviderOperationInput, ProviderOperationRequest,
+        ProviderPlacement, ProviderTarget,
     },
 };
 use d2b_provider::{
@@ -47,7 +53,7 @@ use d2b_provider_runtime_azure_container_apps::{
 use d2b_provider_runtime_local::{
     CLOUD_HYPERVISOR_IMPLEMENTATION_ID, LocalRuntimeConfiguration, LocalRuntimeKind,
     LocalRuntimeProviderFactory, LocalRuntimeProviderFactoryEntry, QEMU_MEDIA_IMPLEMENTATION_ID,
-    SYSTEMD_USER_IMPLEMENTATION_ID,
+    RuntimeBundleIntentId, RuntimeIntentBinding, RuntimeRunnerId, SYSTEMD_USER_IMPLEMENTATION_ID,
 };
 use d2b_provider_storage_local::{
     IMPLEMENTATION_ID as STORAGE_IMPLEMENTATION_ID, LocalStorageBinding, LocalStorageFactory,
@@ -62,12 +68,17 @@ use d2b_provider_transport_azure_relay::{
 };
 use d2b_provider_transport_local::{LocalTransportFactory, LocalTransportKind, TransportBinding};
 
-use crate::provider_effects::{DaemonEffectAdapterError, DaemonEffectAdapters};
+use crate::{
+    ServerState, load_bundle_resolver,
+    provider_effects::{DaemonEffectAdapterError, DaemonEffectAdapters},
+};
 
 const AZURE_VM_IMPLEMENTATION_ID: &str = "azure-vm";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderCompositionError {
+    ArtifactMissing,
+    ArtifactMalformed,
     InvalidDescriptor,
     DuplicateDescriptor,
     DuplicateBinding,
@@ -82,11 +93,14 @@ pub enum ProviderCompositionError {
     EffectAdapter(DaemonEffectAdapterError),
     Factory(FactoryError),
     Registry(RegistryBuildError),
+    StartupProbeFailed,
 }
 
 impl fmt::Display for ProviderCompositionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::ArtifactMissing => "provider-registry-v2 artifact is missing",
+            Self::ArtifactMalformed => "provider-registry-v2 artifact is malformed",
             Self::InvalidDescriptor => "provider descriptor is invalid",
             Self::DuplicateDescriptor => "provider composition has a duplicate descriptor",
             Self::DuplicateBinding => "provider composition has a duplicate configuration binding",
@@ -111,6 +125,7 @@ impl fmt::Display for ProviderCompositionError {
             Self::EffectAdapter(error) => return error.fmt(formatter),
             Self::Factory(error) => return error.fmt(formatter),
             Self::Registry(error) => return error.fmt(formatter),
+            Self::StartupProbeFailed => "provider registry startup health/inspect probe failed",
         })
     }
 }
@@ -733,23 +748,202 @@ impl ProviderFactory for ExactConstructedFactory {
     }
 }
 
-pub fn startup_registry_for_current_bundle()
--> Result<StartupProviderRegistry, ProviderCompositionError> {
-    let generation = Generation::new(1).map_err(|_| ProviderCompositionError::InvalidDescriptor)?;
-    let configuration_fingerprint = Fingerprint::parse("0".repeat(64))
-        .map_err(|_| ProviderCompositionError::InvalidDescriptor)?;
+pub(crate) fn load_provider_registry_v2(
+    state: &ServerState,
+) -> Result<ProviderRegistryV2, ProviderCompositionError> {
+    let resolver =
+        load_bundle_resolver(state).map_err(|_| ProviderCompositionError::ArtifactMalformed)?;
+    let bytes = resolver
+        .provider_registry_v2_bytes()
+        .ok_or(ProviderCompositionError::ArtifactMissing)?;
+    let artifact: ProviderRegistryV2 =
+        serde_json::from_slice(bytes).map_err(|_| ProviderCompositionError::ArtifactMalformed)?;
+    artifact
+        .validate()
+        .map_err(|_| ProviderCompositionError::ArtifactMalformed)?;
+    Ok(artifact)
+}
+
+pub(crate) fn load_provider_registry_v2_with_policy(
+    state: &ServerState,
+    policy: &d2b_core::bundle_resolver::BundleVerifyPolicy,
+) -> Result<ProviderRegistryV2, ProviderCompositionError> {
+    let resolver = d2b_core::bundle_resolver::BundleResolver::load_with_policy(
+        &state.config.artifacts.bundle_path,
+        policy,
+    )
+    .map_err(|_| ProviderCompositionError::ArtifactMalformed)?;
+    let bytes = resolver
+        .provider_registry_v2_bytes()
+        .ok_or(ProviderCompositionError::ArtifactMissing)?;
+    let artifact: ProviderRegistryV2 =
+        serde_json::from_slice(bytes).map_err(|_| ProviderCompositionError::ArtifactMalformed)?;
+    artifact
+        .validate()
+        .map_err(|_| ProviderCompositionError::ArtifactMalformed)?;
+    Ok(artifact)
+}
+
+pub(crate) fn compose_startup_registry(
+    state: &Arc<ServerState>,
+    artifact: &ProviderRegistryV2,
+) -> Result<StartupProviderRegistry, ProviderCompositionError> {
+    artifact
+        .validate()
+        .map_err(|_| ProviderCompositionError::ArtifactMalformed)?;
+    let effects =
+        DaemonEffectAdapters::for_server_state(Arc::downgrade(state), &artifact.providers)?;
+    let bindings = artifact
+        .providers
+        .iter()
+        .map(|entry| match &entry.binding {
+            ProviderBindingV2::LocalRuntime(binding) => {
+                let intent = RuntimeIntentBinding::new(
+                    RuntimeBundleIntentId::parse(binding.vm_start_intent_id.as_str())
+                        .map_err(|_| ProviderCompositionError::ConfigurationMismatch)?,
+                    RuntimeRunnerId::parse(binding.runner_intent_id.as_str())
+                        .map_err(|_| ProviderCompositionError::ConfigurationMismatch)?,
+                );
+                let configuration = match entry.descriptor.implementation_id.as_str() {
+                    CLOUD_HYPERVISOR_IMPLEMENTATION_ID => {
+                        LocalRuntimeConfiguration::CloudHypervisor(intent)
+                    }
+                    QEMU_MEDIA_IMPLEMENTATION_ID => LocalRuntimeConfiguration::QemuMedia(intent),
+                    AZURE_VM_IMPLEMENTATION_ID => {
+                        return Err(ProviderCompositionError::AzureVmForbidden);
+                    }
+                    _ => return Err(ProviderCompositionError::UnsupportedImplementation),
+                };
+                Ok(HostProviderBinding::LocalRuntime {
+                    descriptor: entry.descriptor.clone(),
+                    configuration,
+                })
+            }
+        })
+        .collect::<Result<Vec<_>, ProviderCompositionError>>()?;
     compose_host_provider_registry(
         HostProviderComposition {
-            generation,
-            configuration_fingerprint,
-            published_at_unix_ms: 0,
-            descriptors: Vec::new(),
-            bindings: Vec::new(),
+            generation: artifact.registry_generation,
+            configuration_fingerprint: artifact.configuration_fingerprint.clone(),
+            published_at_unix_ms: artifact.published_at_unix_ms,
+            descriptors: artifact
+                .providers
+                .iter()
+                .map(|entry| entry.descriptor.clone())
+                .collect(),
+            bindings,
         },
-        &DaemonEffectAdapters::builder()
-            .finish()
-            .map_err(ProviderCompositionError::from)?,
+        &effects,
     )
+}
+
+pub(crate) async fn probe_startup_registry(
+    registry: &StartupProviderRegistry,
+    artifact: &ProviderRegistryV2,
+) -> Result<(), ProviderCompositionError> {
+    let Some(registry) = registry.registry() else {
+        return if artifact.providers.is_empty() {
+            Ok(())
+        } else {
+            Err(ProviderCompositionError::StartupProbeFailed)
+        };
+    };
+    if artifact.providers.is_empty() {
+        return Err(ProviderCompositionError::StartupProbeFailed);
+    }
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| ProviderCompositionError::StartupProbeFailed)?
+        .as_millis()
+        .try_into()
+        .map_err(|_| ProviderCompositionError::StartupProbeFailed)?;
+    for entry in &artifact.providers {
+        let ProviderBindingV2::LocalRuntime(binding) = &entry.binding;
+        let method = ProviderMethod::RuntimeInspect;
+        let operation = ProviderOperationContext {
+            schema_version: PROVIDER_SCHEMA_VERSION,
+            operation_id: OperationId::parse(format!(
+                "startup-{}",
+                entry.descriptor.provider_id.as_str()
+            ))
+            .map_err(|_| ProviderCompositionError::StartupProbeFailed)?,
+            idempotency_key: IdempotencyKey::parse(format!(
+                "startup-{}",
+                entry.descriptor.provider_id.as_str()
+            ))
+            .map_err(|_| ProviderCompositionError::StartupProbeFailed)?,
+            request_digest: entry.descriptor.configured_scope_digest.clone(),
+            scope: AuthorizedProviderScope::Workload {
+                realm_id: binding.realm_id.clone(),
+                workload_id: binding.workload_id.clone(),
+            },
+            principal: PrincipalRef::parse("daemon-startup")
+                .map_err(|_| ProviderCompositionError::StartupProbeFailed)?,
+            provider_id: entry.descriptor.provider_id.clone(),
+            provider_type: ProviderType::Runtime,
+            provider_generation: entry.descriptor.registry_generation,
+            capability: ProviderCapability(method),
+            method,
+            policy_epoch: Generation::new(1)
+                .map_err(|_| ProviderCompositionError::StartupProbeFailed)?,
+            authorization_decision_digest: entry.descriptor.configured_scope_digest.clone(),
+            issued_at_unix_ms: now,
+            expires_at_unix_ms: now
+                .checked_add(30_000)
+                .ok_or(ProviderCompositionError::StartupProbeFailed)?,
+            correlation_id: CorrelationId::parse(format!(
+                "startup-{}",
+                entry.descriptor.provider_id.as_str()
+            ))
+            .map_err(|_| ProviderCompositionError::StartupProbeFailed)?,
+            trace_id: Fingerprint::parse("0".repeat(64))
+                .map_err(|_| ProviderCompositionError::StartupProbeFailed)?,
+        };
+        let call = ProviderCallContext {
+            operation: &operation,
+            peer_role: EndpointRole::RealmController,
+            service: ServicePackage::ProviderV2,
+            monotonic_deadline_remaining_ms: 30_000,
+            cancelled: false,
+        };
+        let instance = registry
+            .instance(&entry.descriptor.provider_id)
+            .ok_or(ProviderCompositionError::StartupProbeFailed)?;
+        let health = instance
+            .provider()
+            .health(&call)
+            .await
+            .map_err(|_| ProviderCompositionError::StartupProbeFailed)?;
+        health
+            .validate()
+            .map_err(|_| ProviderCompositionError::StartupProbeFailed)?;
+        if !health.admits_operations() {
+            return Err(ProviderCompositionError::StartupProbeFailed);
+        }
+        let request = ProviderOperationRequest {
+            context: operation.clone(),
+            target: ProviderTarget::Workload {
+                realm_id: binding.realm_id.clone(),
+                workload_id: binding.workload_id.clone(),
+            },
+            expected_configuration_fingerprint: entry
+                .descriptor
+                .configuration_schema_fingerprint
+                .clone(),
+            input: ProviderOperationInput::NoInput,
+        };
+        let ProviderInstance::Runtime(runtime) = instance else {
+            return Err(ProviderCompositionError::StartupProbeFailed);
+        };
+        runtime
+            .inspect(&call, &request)
+            .await
+            .map_err(|_| ProviderCompositionError::StartupProbeFailed)?
+            .validate()
+            .map_err(|_| ProviderCompositionError::StartupProbeFailed)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -893,37 +1087,58 @@ mod tests {
     }
 
     #[test]
-    fn exact_runtime_factory_is_registered_once_with_matching_capabilities() {
-        let (descriptor, now) = runtime_descriptor(LocalRuntimeKind::CloudHypervisor);
-        let effects = runtime_effects(&descriptor);
-        let registry = compose_host_provider_registry(
-            composition(
-                descriptor.clone(),
-                now,
-                vec![HostProviderBinding::LocalRuntime {
-                    descriptor: descriptor.clone(),
-                    configuration: runtime_configuration(LocalRuntimeKind::CloudHypervisor),
-                }],
-            ),
-            &effects,
-        )
-        .expect("registry");
-        let live = registry.registry().expect("live registry");
-        let instance = live
-            .instance(&descriptor.provider_id)
-            .expect("runtime instance");
-        assert_eq!(instance.descriptor(), descriptor);
-        assert_eq!(instance.capabilities(), descriptor.capabilities);
-        assert_eq!(live.snapshot().factories.as_slice().len(), 1);
+    fn exact_live_runtime_factories_register_once_with_matching_capabilities() {
+        for kind in [
+            LocalRuntimeKind::CloudHypervisor,
+            LocalRuntimeKind::QemuMedia,
+        ] {
+            let (descriptor, now) = runtime_descriptor(kind);
+            let effects = runtime_effects(&descriptor);
+            let registry = compose_host_provider_registry(
+                composition(
+                    descriptor.clone(),
+                    now,
+                    vec![HostProviderBinding::LocalRuntime {
+                        descriptor: descriptor.clone(),
+                        configuration: runtime_configuration(kind),
+                    }],
+                ),
+                &effects,
+            )
+            .expect("registry");
+            let live = registry.registry().expect("live registry");
+            let instance = live
+                .instance(&descriptor.provider_id)
+                .expect("runtime instance");
+            assert_eq!(instance.descriptor(), descriptor);
+            assert_eq!(instance.capabilities(), descriptor.capabilities);
+            assert_eq!(live.snapshot().factories.as_slice().len(), 1);
+        }
     }
 
     #[test]
-    fn current_bundle_explicitly_declares_an_empty_registry() {
-        assert!(
-            startup_registry_for_current_bundle()
-                .expect("current bundle registry")
-                .is_empty()
-        );
+    fn explicit_zero_row_artifact_composes_an_empty_registry() {
+        let artifact = ProviderRegistryV2 {
+            schema_version:
+                d2b_contracts::provider_registry_v2::PROVIDER_REGISTRY_V2_SCHEMA_VERSION.to_owned(),
+            registry_generation: Generation::new(1).expect("generation"),
+            configuration_fingerprint: Fingerprint::parse("0".repeat(64)).expect("fingerprint"),
+            published_at_unix_ms: 0,
+            providers: Vec::new(),
+        };
+        artifact.validate().expect("valid explicit empty artifact");
+        let registry = compose_host_provider_registry(
+            HostProviderComposition {
+                generation: artifact.registry_generation,
+                configuration_fingerprint: artifact.configuration_fingerprint,
+                published_at_unix_ms: artifact.published_at_unix_ms,
+                descriptors: Vec::new(),
+                bindings: Vec::new(),
+            },
+            &DaemonEffectAdapters::default(),
+        )
+        .expect("explicit empty registry");
+        assert!(registry.is_empty());
     }
 
     #[test]

@@ -15,6 +15,9 @@ deprecations ship one minor release before removal.
 - Added default-empty, non-publishable first-party provider implementation
   crate reservations, an in-process Azure VM fake SDK boundary, and a
   fail-closed workspace policy inventory for their naming and dependencies.
+- Added the private versioned `provider-registry-v2.json` bundle artifact with
+  canonical provider descriptors, closed local-runtime mappings to opaque
+  lifecycle intents, generated schema, and bundle-wide integrity coverage.
 - Added canonical d2b 2.0 implementations for Unix sessions, authenticated
   sessions, providers, provider tooling, state persistence, and clients.
 - Added Tokio-async client/session/provider APIs and explicit `spawn_blocking`
@@ -50,11 +53,12 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
-- Added a startup-owned, transactional composition path for first-party
-  providers with exact descriptor/configuration/effect bindings, strict
-  host-versus-agent placement, explicit Azure VM and `RuntimeExecute`
-  rejection, and no change to existing v1 request routing while generated v2
-  mappings remain unavailable.
+- Activated the startup-owned transactional provider registry after daemon
+  services initialize. Explicit local-VM and qemu-media realm workloads now
+  construct live local-runtime providers, revalidate their trusted mappings,
+  and run health and inspect through concrete daemon lifecycle adapters;
+  missing or stale artifacts fail startup, while existing lifecycle request
+  routing remains unchanged until the routing cutover.
 - Changed observability provider queries to return a canonical bounded result
   through the provider trait, proxy, protobuf/ttrpc service, and toolkit
   adapter without dropping records or introducing free-form labels.

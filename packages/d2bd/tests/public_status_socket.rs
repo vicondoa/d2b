@@ -17,6 +17,7 @@ mod public_status_socket {
         let bundle_path = root.join("bundle.json");
         let host_path = root.join("host.json");
         let processes_path = root.join("processes.json");
+        let provider_registry_path = root.join("provider-registry-v2.json");
         let closures_dir = root.join("closures");
         fs::create_dir_all(&closures_dir).expect("create closures dir");
 
@@ -24,18 +25,48 @@ mod public_status_socket {
             &public_manifest_path,
             serde_json::to_vec(&json!({
                 "_manifest": { "manifestVersion": 6 },
+                "_observability": {
+                    "enabled": false,
+                    "signozUrl": "http://127.0.0.1:8080",
+                    "signozOtlpGrpcPort": 4317,
+                    "signozOtlpHttpPort": 4318,
+                    "obsVsockCid": 1000,
+                    "obsVsockHostSocket": "/run/d2b/obs.sock",
+                    "vmName": "sys-obs"
+                },
                 "vm-a": {
                     "name": "vm-a",
+                    "apiSocket": "/run/d2b/vm-a.sock",
+                    "audioService": null,
+                    "audioStateFile": null,
+                    "bridge": "br-work-lan",
                     "env": "work",
+                    "gpuSocket": null,
                     "staticIp": "10.20.0.10",
                     "sshUser": "alice",
                     "isNetVm": false,
+                    "netVm": "sys-work-net",
+                    "stateDir": root.join("vm-a-state").display().to_string(),
                     "graphics": false,
                     "tpm": false,
+                    "tpmSocket": null,
                     "usbipYubikey": false,
+                    "usbipdHostIp": null,
                     "audio": false,
+                    "tap": "work-l2",
+                    "observability": {
+                        "agentSocket": "/run/d2b/otlp.sock",
+                        "enabled": false,
+                        "vsockCid": 110,
+                        "vsockHostSocket": "/run/d2b/vm-a-vsock.sock"
+                    },
                     "runtime": {
                         "kind": "nixos",
+                        "provider": {
+                            "driver": "cloud-hypervisor",
+                            "id": "local-cloud-hypervisor",
+                            "type": "local"
+                        },
                         "capabilities": {
                             "lifecycle": true,
                             "display": false,
@@ -52,16 +83,37 @@ mod public_status_socket {
                 },
                 "vm-b": {
                     "name": "vm-b",
+                    "apiSocket": "/run/d2b/vm-b.sock",
+                    "audioService": null,
+                    "audioStateFile": null,
+                    "bridge": "br-work-lan",
                     "env": "work",
+                    "gpuSocket": null,
                     "staticIp": "10.20.0.11",
                     "sshUser": "bob",
                     "isNetVm": false,
+                    "netVm": "sys-work-net",
+                    "stateDir": root.join("vm-b-state").display().to_string(),
                     "graphics": false,
                     "tpm": false,
+                    "tpmSocket": null,
                     "usbipYubikey": false,
+                    "usbipdHostIp": null,
                     "audio": false,
+                    "tap": "work-l3",
+                    "observability": {
+                        "agentSocket": "/run/d2b/otlp.sock",
+                        "enabled": false,
+                        "vsockCid": 111,
+                        "vsockHostSocket": "/run/d2b/vm-b-vsock.sock"
+                    },
                     "runtime": {
                         "kind": "nixos",
+                        "provider": {
+                            "driver": "cloud-hypervisor",
+                            "id": "local-cloud-hypervisor",
+                            "type": "local"
+                        },
                         "capabilities": {
                             "lifecycle": true,
                             "display": false,
@@ -93,14 +145,27 @@ mod public_status_socket {
         )
         .expect("copy host fixture");
         fs::write(
+            &provider_registry_path,
+            serde_json::to_vec(&json!({
+                "schemaVersion": "v2",
+                "registryGeneration": 1,
+                "configurationFingerprint": "0".repeat(64),
+                "publishedAtUnixMs": 0,
+                "providers": []
+            }))
+            .expect("serialize explicit empty provider registry"),
+        )
+        .expect("write explicit empty provider registry");
+        fs::write(
             &bundle_path,
             serde_json::to_vec(&json!({
-                "bundleVersion": 4,
-                "schemaVersion": "v2",
-                "publicManifestPath": public_manifest_path.display().to_string(),
-                "hostPath": host_path.display().to_string(),
-                "processesPath": processes_path.display().to_string(),
-                "privilegesPath": root.join("privileges.json").display().to_string(),
+                "bundleVersion": 12,
+                "schemaVersion": "v1",
+                "publicManifestPath": "vms.json",
+                "hostPath": "host.json",
+                "processesPath": "processes.json",
+                "privilegesPath": "privileges.json",
+                "providerRegistryV2Path": "provider-registry-v2.json",
                 "closures": [],
                 "minijailProfiles": [],
                 "managedKeys": {},
@@ -118,6 +183,7 @@ mod public_status_socket {
             &bundle_path,
             &host_path,
             &processes_path,
+            &provider_registry_path,
         ] {
             fs::set_permissions(path, fs::Permissions::from_mode(0o640)).expect("chmod artifact");
         }

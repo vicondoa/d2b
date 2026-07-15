@@ -89,6 +89,7 @@ fn bundle() -> Bundle {
         realm_identity_path: None,
         realm_workloads_launcher_v2_path: None,
         unsafe_local_workloads_path: None,
+        provider_registry_v2_path: None,
         closures: Vec::new(),
         minijail_profiles: Vec::new(),
         managed_keys: Default::default(),
