@@ -17,7 +17,10 @@ pub use control::{
     AcaControlHealth, AcaCredentialLease, AcaCredentialLeaseClient, AcaCredentialLeaseRequest,
     AcaCredentialPurpose, AcaDiagnosticCode, MAX_ACA_RETRY_AFTER_MS,
 };
-pub use factory::{AzureContainerAppsRuntimeProviderFactory, aca_provider_factory_key};
+pub use factory::{
+    AcaFactoryBuildError, AcaRuntimeProviderBinding, AzureContainerAppsRuntimeProviderFactory,
+    aca_provider_factory_key,
+};
 pub use provider::{
     ACA_IMPLEMENTATION_ID, AcaProviderBuildError, AzureContainerAppsRuntimeProvider,
 };

@@ -129,7 +129,7 @@ impl AcaCredentialLeaseClient for FakeCredentialClient {
         if let Some(error) = lock(&self.fail_once).take() {
             return Err(error);
         }
-        let Some(agent_binding) = self.descriptor.placement.agent_binding() else {
+        let Some(placement_binding) = self.descriptor.placement.credential_binding() else {
             return Err(AcaControlError::closed(
                 AcaControlErrorKind::InvalidResponse,
                 AcaDiagnosticCode::InvalidResponse,
@@ -151,7 +151,7 @@ impl AcaCredentialLeaseClient for FakeCredentialClient {
             })?,
             credential_provider_id: self.descriptor.provider_id.clone(),
             consumer_provider_id: request.operation().provider_id.clone(),
-            agent_binding,
+            placement_binding,
             allowed_operations,
             issued_at_unix_ms: NOW_UNIX_MS,
             expires_at_unix_ms: request.requested_expiry_unix_ms(),
@@ -207,6 +207,7 @@ impl ControlCall {
 #[derive(Default)]
 struct FakeControlState {
     calls: Vec<ControlCall>,
+    deadlines_ms: Vec<u32>,
     sandboxes: Vec<AcaSandboxRecord>,
     disk_images: Vec<AcaDiskImageRecord>,
     fail_once: Option<(ControlCall, AcaControlError)>,
@@ -216,6 +217,20 @@ struct FakeControlState {
 struct FakeAcaControl {
     vault: Arc<Mutex<PrivateCredentialVault>>,
     state: Mutex<FakeControlState>,
+    cancelled_calls: AtomicUsize,
+}
+
+struct InFlightControlCall<'a> {
+    cancelled_calls: &'a AtomicUsize,
+    completed: bool,
+}
+
+impl Drop for InFlightControlCall<'_> {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.cancelled_calls.fetch_add(1, Ordering::AcqRel);
+        }
+    }
 }
 
 impl FakeAcaControl {
@@ -223,11 +238,20 @@ impl FakeAcaControl {
         Self {
             vault,
             state: Mutex::new(FakeControlState::default()),
+            cancelled_calls: AtomicUsize::new(0),
         }
     }
 
     fn calls(&self) -> Vec<ControlCall> {
         lock(&self.state).calls.clone()
+    }
+
+    fn deadlines_ms(&self) -> Vec<u32> {
+        lock(&self.state).deadlines_ms.clone()
+    }
+
+    fn cancelled_call_count(&self) -> usize {
+        self.cancelled_calls.load(Ordering::Acquire)
     }
 
     fn sandboxes(&self) -> Vec<AcaSandboxRecord> {
@@ -267,6 +291,7 @@ impl FakeAcaControl {
         let (failure, stall) = {
             let mut state = lock(&self.state);
             state.calls.push(call);
+            state.deadlines_ms.push(context.deadline_remaining_ms());
             let failure = match state.fail_once {
                 Some((expected, error)) if expected == call => {
                     state.fail_once = None;
@@ -284,7 +309,12 @@ impl FakeAcaControl {
             return Err(error);
         }
         if stall {
+            let mut in_flight = InFlightControlCall {
+                cancelled_calls: &self.cancelled_calls,
+                completed: false,
+            };
             tokio::time::sleep(Duration::from_millis(50)).await;
+            in_flight.completed = true;
         }
         Ok(())
     }
@@ -475,13 +505,22 @@ struct Harness {
 
 impl Harness {
     fn new(source: AcaDiskImageSource) -> Self {
-        let mut fixture = Fixture::new(ProviderType::Runtime, 0).unwrap();
+        Self::new_at(source, 0, 1)
+    }
+
+    fn new_at(
+        source: AcaDiskImageSource,
+        runtime_ordinal: usize,
+        credential_ordinal: usize,
+    ) -> Self {
+        let mut fixture = Fixture::new(ProviderType::Runtime, runtime_ordinal).unwrap();
         fixture.descriptor.implementation_id =
             ImplementationId::parse(ACA_IMPLEMENTATION_ID).unwrap();
         fixture.descriptor.capabilities =
             AzureContainerAppsRuntimeProvider::advertised_capabilities().unwrap();
 
-        let mut credential_fixture = Fixture::new(ProviderType::Credential, 1).unwrap();
+        let mut credential_fixture =
+            Fixture::new(ProviderType::Credential, credential_ordinal).unwrap();
         credential_fixture.descriptor.placement = fixture.descriptor.placement.clone();
         let vault = Arc::new(Mutex::new(PrivateCredentialVault::new()));
         let credential = Arc::new(FakeCredentialClient::new(
@@ -531,6 +570,34 @@ impl Harness {
         Self::new(AcaDiskImageSource::ConfiguredDisk {
             binding_id: AcaConfiguredDiskId::parse("disk-binding").unwrap(),
         })
+    }
+
+    fn configured_disk_at(runtime_ordinal: usize, credential_ordinal: usize) -> Self {
+        Self::new_at(
+            AcaDiskImageSource::ConfiguredDisk {
+                binding_id: AcaConfiguredDiskId::parse("disk-binding").unwrap(),
+            },
+            runtime_ordinal,
+            credential_ordinal,
+        )
+    }
+
+    fn factory_binding(&self) -> AcaRuntimeProviderBinding {
+        AcaRuntimeProviderBinding::new(
+            self.fixture.descriptor.clone(),
+            self.configuration.clone(),
+            self.credential.clone(),
+            self.control.clone(),
+        )
+        .unwrap()
+    }
+
+    fn factory(&self) -> AzureContainerAppsRuntimeProviderFactory {
+        AzureContainerAppsRuntimeProviderFactory::with_clock(
+            vec![self.factory_binding()],
+            Arc::new(DeterministicClock::new(NOW_UNIX_MS)),
+        )
+        .unwrap()
     }
 
     fn operation(&self, method: ProviderMethod, label: &str) -> ProviderOperationContext {
@@ -649,12 +716,7 @@ fn factory_key_constructs_the_runtime_through_the_registry() {
         key
     );
 
-    let factory = Arc::new(AzureContainerAppsRuntimeProviderFactory::with_clock(
-        harness.configuration.clone(),
-        harness.credential.clone(),
-        harness.control.clone(),
-        Arc::new(DeterministicClock::new(NOW_UNIX_MS)),
-    ));
+    let factory = Arc::new(harness.factory());
     let instance = factory.construct(&harness.fixture.descriptor).unwrap();
     assert!(matches!(&instance, ProviderInstance::Runtime(_)));
     assert_eq!(instance.descriptor(), harness.fixture.descriptor);
@@ -679,12 +741,7 @@ fn factory_key_constructs_the_runtime_through_the_registry() {
 #[test]
 fn factory_rejects_wrong_descriptor_type_before_external_calls() {
     let harness = Harness::container_image();
-    let factory = AzureContainerAppsRuntimeProviderFactory::with_clock(
-        harness.configuration.clone(),
-        harness.credential.clone(),
-        harness.control.clone(),
-        Arc::new(DeterministicClock::new(NOW_UNIX_MS)),
-    );
+    let factory = harness.factory();
     let mut wrong_type = Fixture::new(ProviderType::Credential, 2)
         .unwrap()
         .descriptor;
@@ -701,12 +758,7 @@ fn factory_rejects_wrong_descriptor_type_before_external_calls() {
 #[test]
 fn factory_rejects_wrong_implementation_before_external_calls() {
     let harness = Harness::container_image();
-    let factory = AzureContainerAppsRuntimeProviderFactory::with_clock(
-        harness.configuration.clone(),
-        harness.credential.clone(),
-        harness.control.clone(),
-        Arc::new(DeterministicClock::new(NOW_UNIX_MS)),
-    );
+    let factory = harness.factory();
     let mut wrong_implementation = harness.fixture.descriptor.clone();
     wrong_implementation.implementation_id = ImplementationId::parse("other-runtime").unwrap();
 
@@ -716,6 +768,97 @@ fn factory_rejects_wrong_implementation_before_external_calls() {
     ));
     assert!(harness.control.calls().is_empty());
     assert_eq!(harness.credential.acquisition_count(), 0);
+}
+
+#[test]
+fn factory_rejects_unbound_or_reconfigured_descriptor_before_external_calls() {
+    let harness = Harness::container_image();
+    let factory = harness.factory();
+    let mut mismatches = Vec::new();
+
+    let mut configuration_schema = harness.fixture.descriptor.clone();
+    configuration_schema.configuration_schema_fingerprint = fingerprint(901);
+    mismatches.push(configuration_schema);
+
+    let mut configured_scope = harness.fixture.descriptor.clone();
+    configured_scope.configured_scope_digest = fingerprint(902);
+    mismatches.push(configured_scope);
+
+    let mut placement = harness.fixture.descriptor.clone();
+    match &mut placement.placement {
+        ProviderPlacement::ProviderAgent {
+            agent_generation, ..
+        } => *agent_generation = Generation::new(2).unwrap(),
+        ProviderPlacement::TrustedFirstPartyInProcess { .. }
+        | ProviderPlacement::UserAgent { .. } => unreachable!(),
+    }
+    mismatches.push(placement);
+
+    let mut generation = harness.fixture.descriptor.clone();
+    generation.registry_generation = Generation::new(2).unwrap();
+    mismatches.push(generation);
+
+    let mut unbound = Fixture::new(ProviderType::Runtime, 2).unwrap().descriptor;
+    unbound.implementation_id = ImplementationId::parse(ACA_IMPLEMENTATION_ID).unwrap();
+    unbound.capabilities = AzureContainerAppsRuntimeProvider::advertised_capabilities().unwrap();
+    mismatches.push(unbound);
+
+    for descriptor in mismatches {
+        assert!(matches!(
+            factory.construct(&descriptor),
+            Err(FactoryError::Rejected)
+        ));
+    }
+    assert!(harness.control.calls().is_empty());
+    assert_eq!(harness.credential.acquisition_count(), 0);
+}
+
+#[test]
+fn factory_rejects_empty_and_duplicate_binding_sets() {
+    assert!(matches!(
+        AzureContainerAppsRuntimeProviderFactory::new(Vec::new()),
+        Err(AcaFactoryBuildError::EmptyBindings)
+    ));
+
+    let harness = Harness::container_image();
+    let binding = harness.factory_binding();
+    assert!(matches!(
+        AzureContainerAppsRuntimeProviderFactory::new(vec![binding.clone(), binding]),
+        Err(AcaFactoryBuildError::DuplicateProvider)
+    ));
+}
+
+#[tokio::test]
+async fn factory_selects_configuration_and_ports_by_exact_provider_id() {
+    let first = Harness::container_image();
+    let second = Harness::configured_disk_at(2, 3);
+    let factory = AzureContainerAppsRuntimeProviderFactory::with_clock(
+        vec![first.factory_binding(), second.factory_binding()],
+        Arc::new(DeterministicClock::new(NOW_UNIX_MS)),
+    )
+    .unwrap();
+
+    let first_instance = factory.construct(&first.fixture.descriptor).unwrap();
+    let ProviderInstance::Runtime(first_provider) = first_instance else {
+        unreachable!()
+    };
+    let first_operation = first.operation(ProviderMethod::RuntimeInspect, "factory-first");
+    let first_context = first.call_context(&first_operation, 1_000, false);
+    first_provider.health(&first_context).await.unwrap();
+    assert_eq!(first.control.calls(), [ControlCall::Health]);
+    assert!(second.control.calls().is_empty());
+    assert_eq!(first.credential.acquisition_count(), 1);
+    assert_eq!(second.credential.acquisition_count(), 0);
+
+    let second_instance = factory.construct(&second.fixture.descriptor).unwrap();
+    let ProviderInstance::Runtime(second_provider) = second_instance else {
+        unreachable!()
+    };
+    let second_operation = second.operation(ProviderMethod::RuntimeInspect, "factory-second");
+    let second_context = second.call_context(&second_operation, 1_000, false);
+    second_provider.health(&second_context).await.unwrap();
+    assert_eq!(second.control.calls(), [ControlCall::Health]);
+    assert_eq!(second.credential.acquisition_count(), 1);
 }
 
 #[tokio::test]
@@ -1073,6 +1216,7 @@ async fn cancellation_and_deadline_fail_closed_and_same_operation_can_retry() {
         .unwrap_err();
     assert_eq!(failure.kind, ProviderFailureKind::DeadlineExpired);
     assert_eq!(failure.retry, RetryClass::SameOperation);
+    assert_eq!(harness.control.cancelled_call_count(), 1);
 
     let retry_context = harness.call_context(&request.context, 1_000, false);
     let observation = harness
@@ -1107,6 +1251,45 @@ async fn cancellation_and_deadline_fail_closed_and_same_operation_can_retry() {
     assert_eq!(failure.kind, ProviderFailureKind::DeadlineExpired);
     assert_eq!(harness.credential.acquisition_count(), before_credentials);
     assert_eq!(harness.control.calls(), before_calls);
+}
+
+#[tokio::test]
+async fn external_budget_is_the_minimum_of_wall_and_monotonic_deadlines() {
+    let wall_limited = Harness::container_image();
+    let mut wall_request = wall_limited.request(ProviderMethod::RuntimeInspect, "wall-deadline");
+    wall_request.context.expires_at_unix_ms = NOW_UNIX_MS + 250;
+    let wall_context = wall_limited.call_context(&wall_request.context, 5_000, false);
+    wall_limited
+        .provider
+        .inspect(&wall_context, &wall_request)
+        .await
+        .unwrap();
+    let wall_deadlines = wall_limited.control.deadlines_ms();
+    assert_eq!(wall_deadlines.len(), 1);
+    assert!((1..=250).contains(&wall_deadlines[0]));
+    assert_eq!(
+        wall_limited
+            .credential
+            .last_metadata()
+            .unwrap()
+            .expires_at_unix_ms,
+        NOW_UNIX_MS + 250
+    );
+
+    let monotonic_limited = Harness::configured_disk();
+    let monotonic_request =
+        monotonic_limited.request(ProviderMethod::RuntimeInspect, "monotonic-deadline");
+    let monotonic_context = monotonic_limited.call_context(&monotonic_request.context, 200, false);
+    monotonic_limited
+        .provider
+        .inspect(&monotonic_context, &monotonic_request)
+        .await
+        .unwrap();
+    let monotonic_deadlines = monotonic_limited.control.deadlines_ms();
+    assert_eq!(monotonic_deadlines.len(), 1);
+    assert!((1..=200).contains(&monotonic_deadlines[0]));
+    assert_eq!(lock(&wall_limited.vault).redemptions, 1);
+    assert_eq!(lock(&monotonic_limited.vault).redemptions, 1);
 }
 
 #[tokio::test]
@@ -1263,7 +1446,8 @@ fn bounds_and_diagnostics_are_closed_and_secret_free() {
         harness.fixture.descriptor.placement.realm_id().clone(),
         match &harness.fixture.descriptor.placement {
             ProviderPlacement::ProviderAgent { workload_id, .. } => workload_id.clone(),
-            ProviderPlacement::TrustedFirstPartyInProcess { .. } => unreachable!(),
+            ProviderPlacement::TrustedFirstPartyInProcess { .. }
+            | ProviderPlacement::UserAgent { .. } => unreachable!(),
         },
         harness.fixture.descriptor.provider_id.clone(),
         harness.fixture.descriptor.registry_generation,

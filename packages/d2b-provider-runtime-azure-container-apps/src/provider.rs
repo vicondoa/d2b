@@ -172,10 +172,15 @@ struct CallDeadline {
 }
 
 impl CallDeadline {
-    fn new(context: &ProviderCallContext<'_>) -> Self {
+    fn new(context: &ProviderCallContext<'_>, now_unix_ms: u64) -> Self {
+        let wall_remaining_ms = context
+            .operation
+            .expires_at_unix_ms
+            .saturating_sub(now_unix_ms);
+        let remaining_ms =
+            u64::from(context.monotonic_deadline_remaining_ms).min(wall_remaining_ms);
         Self {
-            at: Instant::now()
-                + Duration::from_millis(u64::from(context.monotonic_deadline_remaining_ms)),
+            at: Instant::now() + Duration::from_millis(remaining_ms),
         }
     }
 
@@ -257,6 +262,25 @@ impl AzureContainerAppsRuntimeProvider {
         control: Arc<dyn AcaControl>,
         clock: Arc<dyn ProviderClock>,
     ) -> Result<Self, AcaProviderBuildError> {
+        Self::validate_descriptor(&descriptor)?;
+        let credential_descriptor = credential_client.descriptor();
+        Self::validate_credential_descriptor(&descriptor, &credential_descriptor)?;
+
+        Ok(Self {
+            descriptor,
+            credential_descriptor,
+            configuration,
+            credential_client,
+            control,
+            clock,
+            operation_gate: Mutex::new(()),
+            ledger: Mutex::new(OperationLedger::default()),
+        })
+    }
+
+    pub(crate) fn validate_descriptor(
+        descriptor: &ProviderDescriptor,
+    ) -> Result<(), AcaProviderBuildError> {
         descriptor.validate()?;
         if descriptor.implementation_id.as_str() != ACA_IMPLEMENTATION_ID {
             return Err(AcaProviderBuildError::WrongImplementation);
@@ -288,8 +312,13 @@ impl AzureContainerAppsRuntimeProvider {
         if descriptor.capabilities != Self::advertised_capabilities()? {
             return Err(AcaProviderBuildError::CapabilityMismatch);
         }
+        Ok(())
+    }
 
-        let credential_descriptor = credential_client.descriptor();
+    pub(crate) fn validate_credential_descriptor(
+        descriptor: &ProviderDescriptor,
+        credential_descriptor: &ProviderDescriptor,
+    ) -> Result<(), AcaProviderBuildError> {
         credential_descriptor
             .validate()
             .map_err(|_| AcaProviderBuildError::CredentialDescriptorInvalid)?;
@@ -298,11 +327,11 @@ impl AzureContainerAppsRuntimeProvider {
         }
         let consumer_binding = descriptor
             .placement
-            .agent_binding()
+            .credential_binding()
             .ok_or(AcaProviderBuildError::WrongPlacement)?;
         let credential_binding = credential_descriptor
             .placement
-            .agent_binding()
+            .credential_binding()
             .ok_or(AcaProviderBuildError::CredentialNotColocated)?;
         if consumer_binding != credential_binding
             || descriptor.provider_id == credential_descriptor.provider_id
@@ -310,16 +339,7 @@ impl AzureContainerAppsRuntimeProvider {
             return Err(AcaProviderBuildError::CredentialNotColocated);
         }
 
-        Ok(Self {
-            descriptor,
-            credential_descriptor,
-            configuration,
-            credential_client,
-            control,
-            clock,
-            operation_gate: Mutex::new(()),
-            ledger: Mutex::new(OperationLedger::default()),
-        })
+        Ok(())
     }
 
     pub fn advertised_capabilities() -> Result<ProviderCapabilitySet, ProviderContractError> {
@@ -1314,7 +1334,7 @@ impl AzureContainerAppsRuntimeProvider {
     ) -> ProviderResult<ProviderPlan> {
         let now = self.now();
         self.validate_request(context, request, ProviderMethod::RuntimePlan, now)?;
-        let deadline = CallDeadline::new(context);
+        let deadline = CallDeadline::new(context, now);
         let _gate = self.acquire_gate(&deadline, context.operation).await?;
         if let Some(cached) = self
             .cached_response(context.operation, ResponseKind::Plan)
@@ -1357,7 +1377,7 @@ impl AzureContainerAppsRuntimeProvider {
     ) -> ProviderResult<ProviderHandle> {
         let now = self.now();
         let workload_id = self.validate_ensure_plan(context, plan, now)?;
-        let deadline = CallDeadline::new(context);
+        let deadline = CallDeadline::new(context, now);
         let _gate = self.acquire_gate(&deadline, context.operation).await?;
         if let Some(cached) = self
             .cached_response(context.operation, ResponseKind::Handle)
@@ -1536,7 +1556,7 @@ impl AzureContainerAppsRuntimeProvider {
         let now = self.now();
         let workload_id =
             self.validate_request(context, request, ProviderMethod::RuntimeStart, now)?;
-        let deadline = CallDeadline::new(context);
+        let deadline = CallDeadline::new(context, now);
         let _gate = self.acquire_gate(&deadline, context.operation).await?;
         if let Some(cached) = self
             .cached_response(context.operation, ResponseKind::Observation)
@@ -1657,7 +1677,7 @@ impl AzureContainerAppsRuntimeProvider {
         let now = self.now();
         let workload_id =
             self.validate_request(context, request, ProviderMethod::RuntimeStop, now)?;
-        let deadline = CallDeadline::new(context);
+        let deadline = CallDeadline::new(context, now);
         let _gate = self.acquire_gate(&deadline, context.operation).await?;
         if let Some(cached) = self
             .cached_response(context.operation, ResponseKind::Observation)
@@ -1776,7 +1796,7 @@ impl AzureContainerAppsRuntimeProvider {
         let now = self.now();
         let workload_id =
             self.validate_request(context, request, ProviderMethod::RuntimeInspect, now)?;
-        let deadline = CallDeadline::new(context);
+        let deadline = CallDeadline::new(context, now);
         let _gate = self.acquire_gate(&deadline, context.operation).await?;
         if let Some(cached) = self
             .cached_response(context.operation, ResponseKind::Observation)
@@ -1848,7 +1868,7 @@ impl AzureContainerAppsRuntimeProvider {
     ) -> ProviderResult<ProviderObservation> {
         let now = self.now();
         let workload_id = self.validate_adoption(context, request, now)?;
-        let deadline = CallDeadline::new(context);
+        let deadline = CallDeadline::new(context, now);
         let _gate = self.acquire_gate(&deadline, context.operation).await?;
         if let Some(cached) = self
             .cached_response(context.operation, ResponseKind::Observation)
@@ -1933,7 +1953,7 @@ impl AzureContainerAppsRuntimeProvider {
         let now = self.now();
         let workload_id =
             self.validate_request(context, request, ProviderMethod::RuntimeDestroy, now)?;
-        let deadline = CallDeadline::new(context);
+        let deadline = CallDeadline::new(context, now);
         let _gate = self.acquire_gate(&deadline, context.operation).await?;
         if let Some(cached) = self
             .cached_response(context.operation, ResponseKind::Receipt)
@@ -2019,7 +2039,7 @@ impl Provider for AzureContainerAppsRuntimeProvider {
         Box::pin(async move {
             let now = self.now();
             self.validate_call(context, ProviderMethod::RuntimeInspect, now)?;
-            let deadline = CallDeadline::new(context);
+            let deadline = CallDeadline::new(context, now);
             let lease = self
                 .acquire_lease(
                     &deadline,
