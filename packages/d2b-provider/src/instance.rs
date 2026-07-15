@@ -5,7 +5,8 @@ use d2b_contracts::{
     v2_provider::{
         AudioProvider, CredentialProvider, DeviceProvider, DisplayProvider, InfrastructureProvider,
         NetworkProvider, ObservabilityProvider, Provider, ProviderCapabilitySet,
-        ProviderDescriptor, RuntimeProvider, StorageProvider, SubstrateProvider, TransportProvider,
+        ProviderDescriptor, ProviderMethod, RuntimeProvider, StorageProvider, SubstrateProvider,
+        TransportProvider,
     },
 };
 
@@ -25,6 +26,22 @@ pub fn provider_capabilities_are_dispatchable(capabilities: &ProviderCapabilityS
         .as_slice()
         .iter()
         .all(|capability| provider_method_is_dispatchable(capability.0))
+}
+
+pub const fn provider_inspection_method(provider_type: ProviderType) -> ProviderMethod {
+    match provider_type {
+        ProviderType::Runtime => ProviderMethod::RuntimeInspect,
+        ProviderType::Infrastructure => ProviderMethod::InfrastructureInspect,
+        ProviderType::Transport => ProviderMethod::TransportInspect,
+        ProviderType::Substrate => ProviderMethod::SubstrateCheck,
+        ProviderType::Credential => ProviderMethod::CredentialStatus,
+        ProviderType::Display => ProviderMethod::DisplayInspect,
+        ProviderType::Network => ProviderMethod::NetworkInspect,
+        ProviderType::Storage => ProviderMethod::StorageInspect,
+        ProviderType::Device => ProviderMethod::DeviceInspect,
+        ProviderType::Audio => ProviderMethod::AudioInspect,
+        ProviderType::Observability => ProviderMethod::ObservabilityStatus,
+    }
 }
 
 #[derive(Clone)]

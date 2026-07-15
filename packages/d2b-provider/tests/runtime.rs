@@ -20,7 +20,8 @@ use d2b_contracts::{
 use d2b_provider::{
     AdmissionOptions, CancellationToken, FactoryError, ProviderFactory, ProviderInstance,
     ProviderRegistryBuilder, ProviderRuntimeError, RegistryBuildError, RegistryLimits,
-    provider_capabilities_are_dispatchable, provider_method_is_dispatchable,
+    provider_capabilities_are_dispatchable, provider_inspection_method,
+    provider_method_is_dispatchable,
 };
 
 const NOW: u64 = 1_700_000_000_000;
@@ -225,6 +226,16 @@ fn closed_error_context_is_actionable_without_identity_leaks() {
     assert!(display.contains("type=Runtime"));
     assert!(!display.contains("correlation-test"));
     assert!(!display.contains("operation-test"));
+}
+
+#[test]
+fn health_uses_no_input_inspection_methods_for_every_axis() {
+    for provider_type in ProviderType::ALL {
+        let method = provider_inspection_method(*provider_type);
+        assert_eq!(method.provider_type(), *provider_type);
+        assert!(method.required());
+        assert_ne!(method, ProviderMethod::DevicePlanAttach);
+    }
 }
 
 #[test]

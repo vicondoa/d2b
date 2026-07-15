@@ -31,7 +31,8 @@ use d2b_contracts::{
 };
 use d2b_provider::{
     ProviderClock, ProviderInstance, RpcCall, RpcOperation, RpcPayload, RpcResponse,
-    SessionIdentity, provider_capabilities_are_dispatchable, provider_method_is_dispatchable,
+    SessionIdentity, provider_capabilities_are_dispatchable, provider_inspection_method,
+    provider_method_is_dispatchable,
 };
 use d2b_session::{
     Cancellation, ComponentSessionDriver, DeadlineBudget, OwnedAttachment, SessionDriverHandle,
@@ -874,11 +875,7 @@ fn wire_context_method(
 ) -> ttrpc::Result<ProviderMethod> {
     let provider_type =
         provider_type(context).map_err(|_| rpc_status(ttrpc::Code::INVALID_ARGUMENT))?;
-    ProviderMethod::ALL
-        .iter()
-        .find(|method| method.provider_type() == provider_type && method.required())
-        .copied()
-        .ok_or_else(|| rpc_status(ttrpc::Code::INVALID_ARGUMENT))
+    Ok(provider_inspection_method(provider_type))
 }
 
 fn method_requires_idempotency(method: ProviderMethod) -> bool {
