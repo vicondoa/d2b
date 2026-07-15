@@ -268,7 +268,10 @@ fn v2_foundation_io_surfaces_are_async_first() {
     assert!(
         session_driver.contains("#[async_trait]")
             && session_driver.contains("pub trait ComponentSessionDriver")
-            && session_driver.contains("async fn invoke"),
+            && session_driver.contains("async fn start_ttrpc")
+            && session_driver.contains("async fn receive_ttrpc")
+            && session_driver.contains("async fn complete_ttrpc")
+            && !session_driver.contains("async fn invoke"),
         "canonical session driver must be async"
     );
     assert!(
