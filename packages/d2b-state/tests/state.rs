@@ -25,6 +25,7 @@ use d2b_state::{
     SegmentBuilder, WritePolicy, checkpoint, decide_retention, detect_gap, grant_lease,
     read_audit_segment, revoke_lease, validate_lease,
 };
+use rustix::io::fcntl_dupfd_cloexec;
 use serde::{Deserialize, Serialize};
 
 fn generation(value: u64) -> Generation {
@@ -833,11 +834,45 @@ fn ofd_locks_enforce_order_contention_deadline_cancellation_and_transfer() {
     let second_guard = set_a
         .acquire(&second_spec, &second, metadata, epoch(1), &NeverCancelled)
         .unwrap();
-    assert!(
-        second_guard
-            .authorize_transfer(FdTransferPolicy::ComponentSessionAttachment)
-            .is_ok()
+    let transfer = second_guard
+        .authorize_transfer(FdTransferPolicy::ComponentSessionAttachment)
+        .unwrap();
+    let transferred_fd = fcntl_dupfd_cloexec(transfer.fd(), 0).unwrap();
+    transfer.commit();
+    set_a.release_last().unwrap();
+
+    let second_b = AnchoredResource::new(
+        resource("second-resource"),
+        &anchor_b,
+        LeafName::parse("second.lock").unwrap(),
     );
+    let mut observer_spec = second_spec.clone();
+    observer_spec.acquire_after.clear();
+    let mut observer = LockSet::new();
+    assert_eq!(
+        observer
+            .acquire(
+                &observer_spec,
+                &second_b,
+                metadata,
+                epoch(1),
+                &NeverCancelled,
+            )
+            .unwrap_err()
+            .code(),
+        ErrorCode::LockContended
+    );
+    drop(transferred_fd);
+    observer
+        .acquire(
+            &observer_spec,
+            &second_b,
+            metadata,
+            epoch(1),
+            &NeverCancelled,
+        )
+        .unwrap();
+    observer.release_last().unwrap();
 
     let third_spec = lock_spec(
         "third-lock",

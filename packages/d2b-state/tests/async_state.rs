@@ -16,8 +16,8 @@ use d2b_contracts::v2_state::{
     IdentityScope, LockClass, LockKey, LockKind, LockSpec, OwnershipEpoch, ResourceId,
 };
 use d2b_state::{
-    AnchoredDir, AnchoredResource, AtomicFilesystem, AtomicWrite, AuditRecordInput, Cancellation,
-    Clock, Error, ErrorCode, GenerationPolicy, LeafName, LockSet, MetadataExpectation,
+    AnchoredDir, AnchoredResource, AsyncLockSet, AtomicFilesystem, AtomicWrite, AuditRecordInput,
+    Cancellation, Clock, Error, ErrorCode, GenerationPolicy, LeafName, MetadataExpectation,
     NeverCancelled, QuarantineRecord, ReadPolicy, WritePolicy, async_atomic_quarantine,
     async_atomic_read, async_atomic_write, async_audit_append, async_audit_create,
     async_audit_resume, async_ofd_lock_acquire, async_ofd_lock_acquire_with_clock,
@@ -342,9 +342,10 @@ async fn acquire_state_lock(
     anchor: &AnchoredDir,
     metadata: MetadataExpectation,
     contention: ContentionPolicy,
-) -> LockSet {
+) -> AsyncLockSet {
+    let locks = AsyncLockSet::new();
     async_ofd_lock_acquire(
-        LockSet::new(),
+        &locks,
         lock_spec(contention),
         lock_resource(anchor),
         metadata,
@@ -352,7 +353,8 @@ async fn acquire_state_lock(
         Arc::new(NeverCancelled),
     )
     .await
-    .unwrap()
+    .unwrap();
+    locks
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -376,20 +378,24 @@ async fn atomic_adapters_keep_heartbeat_live_and_preserve_guard() {
         gate: Arc::clone(&gate),
     };
     let (stop, ticks, beat) = heartbeat();
-    let task = tokio::spawn(async_atomic_write(
-        AtomicWrite::new(filesystem),
-        Payload { value: 1 },
-        write_policy(1, None),
-        locks,
-    ));
+    let task_locks = locks.clone();
+    let task = tokio::spawn(async move {
+        async_atomic_write(
+            AtomicWrite::new(filesystem),
+            Payload { value: 1 },
+            write_policy(1, None),
+            &task_locks,
+        )
+        .await
+    });
     gate.wait_entered().await;
     tokio::time::sleep(Duration::from_millis(10)).await;
     let write_ticks = ticks.load(Ordering::Relaxed);
     gate.release();
     assert!(write_ticks > 0);
-    let (writer, receipt, locks) = task.await.unwrap().unwrap();
+    let (writer, receipt) = task.await.unwrap().unwrap();
     assert!(receipt.success);
-    assert!(locks.last().unwrap().is_held());
+    assert!(locks.held(&resource("state-lock")).await.unwrap());
 
     let mut filesystem = writer.into_inner();
     let read_gate = Arc::new(Gate::default());
@@ -419,20 +425,19 @@ async fn atomic_adapters_keep_heartbeat_live_and_preserve_guard() {
     let quarantine_gate = Arc::new(Gate::default());
     filesystem.gate = Arc::clone(&quarantine_gate);
     filesystem.block_at = Some(BlockAt::Quarantine);
-    let quarantine_task = tokio::spawn(async_atomic_quarantine(
-        AtomicWrite::new(filesystem),
-        record,
-        locks,
-    ));
+    let quarantine_locks = locks.clone();
+    let quarantine_task = tokio::spawn(async move {
+        async_atomic_quarantine(AtomicWrite::new(filesystem), record, &quarantine_locks).await
+    });
     quarantine_gate.wait_entered().await;
     let before_quarantine = ticks.load(Ordering::Relaxed);
     tokio::time::sleep(Duration::from_millis(10)).await;
     let after_quarantine = ticks.load(Ordering::Relaxed);
     quarantine_gate.release();
     assert!(after_quarantine > before_quarantine);
-    let (_writer, locks) = quarantine_task.await.unwrap().unwrap();
-    assert!(locks.last().unwrap().is_held());
-    async_ofd_lock_release(locks).await.unwrap();
+    let _writer = quarantine_task.await.unwrap().unwrap();
+    assert!(locks.held(&resource("state-lock")).await.unwrap());
+    async_ofd_lock_release(&locks).await.unwrap();
     stop.store(true, Ordering::Release);
     beat.await.unwrap();
 }
@@ -513,23 +518,29 @@ async fn lock_adapter_keeps_current_thread_runtime_live_with_blocking_clock() {
         started: Instant::now(),
     });
     let (stop, ticks, beat) = heartbeat();
-    let waiter = tokio::spawn(async_ofd_lock_acquire_with_clock(
-        LockSet::new(),
-        lock_spec(ContentionPolicy::BoundedWait),
-        lock_resource(&anchor),
-        metadata,
-        epoch(1),
-        Arc::new(NeverCancelled),
-        clock,
-    ));
+    let waiter_locks = AsyncLockSet::new();
+    let task_locks = waiter_locks.clone();
+    let waiter_resource = lock_resource(&anchor);
+    let waiter = tokio::spawn(async move {
+        async_ofd_lock_acquire_with_clock(
+            &task_locks,
+            lock_spec(ContentionPolicy::BoundedWait),
+            waiter_resource,
+            metadata,
+            epoch(1),
+            Arc::new(NeverCancelled),
+            clock,
+        )
+        .await
+    });
     gate.wait_entered().await;
     tokio::time::sleep(Duration::from_millis(10)).await;
     let observed_ticks = ticks.load(Ordering::Relaxed);
-    async_ofd_lock_release(holder).await.unwrap();
+    async_ofd_lock_release(&holder).await.unwrap();
     gate.release();
     assert!(observed_ticks > 0);
-    let waiter = waiter.await.unwrap().unwrap();
-    async_ofd_lock_release(waiter).await.unwrap();
+    waiter.await.unwrap().unwrap();
+    async_ofd_lock_release(&waiter_locks).await.unwrap();
     stop.store(true, Ordering::Release);
     beat.await.unwrap();
 }
@@ -544,15 +555,21 @@ async fn dropping_contended_acquire_cancels_worker_and_allows_followup_work() {
     let clock: Arc<dyn Clock + Send + Sync> = Arc::new(ProbeClock {
         probe: Arc::clone(&probe),
     });
-    let task = tokio::spawn(async_ofd_lock_acquire_with_clock(
-        LockSet::new(),
-        lock_spec(ContentionPolicy::BoundedWait),
-        lock_resource(&anchor),
-        metadata,
-        epoch(1),
-        Arc::new(NeverCancelled),
-        clock,
-    ));
+    let waiter_locks = AsyncLockSet::new();
+    let task_locks = waiter_locks.clone();
+    let waiter_resource = lock_resource(&anchor);
+    let task = tokio::spawn(async move {
+        async_ofd_lock_acquire_with_clock(
+            &task_locks,
+            lock_spec(ContentionPolicy::BoundedWait),
+            waiter_resource,
+            metadata,
+            epoch(1),
+            Arc::new(NeverCancelled),
+            clock,
+        )
+        .await
+    });
     probe.wait_entered().await;
     task.abort();
     let join_error = task.await.unwrap_err();
@@ -560,9 +577,79 @@ async fn dropping_contended_acquire_cancels_worker_and_allows_followup_work() {
     probe.wait_exited().await;
     assert_eq!(tokio::task::spawn_blocking(|| 41 + 1).await.unwrap(), 42);
 
-    async_ofd_lock_release(holder).await.unwrap();
+    async_ofd_lock_release(&holder).await.unwrap();
     let reacquired = acquire_state_lock(&anchor, metadata, ContentionPolicy::FailFast).await;
-    async_ofd_lock_release(reacquired).await.unwrap();
+    async_ofd_lock_release(&reacquired).await.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn dropping_acquire_preserves_locks_held_by_the_shared_set() {
+    let scratch = Scratch::new("drop-preserves-prior-lock");
+    let anchor = async_open_anchored_dir(scratch.0.clone()).await.unwrap();
+    let metadata = host_metadata(&scratch.0, 0o600);
+    let locks = acquire_state_lock(&anchor, metadata, ContentionPolicy::FailFast).await;
+
+    let mut second_spec = lock_spec(ContentionPolicy::FailFast);
+    second_spec.lock_id = resource("second-lock");
+    second_spec.key.resource_id = resource("second-state");
+    second_spec.global_order = 2;
+    let holder_resource = AnchoredResource::new(
+        resource("second-state"),
+        &anchor,
+        LeafName::parse("second.lock").unwrap(),
+    );
+    let waiter_resource = AnchoredResource::new(
+        resource("second-state"),
+        &anchor,
+        LeafName::parse("second.lock").unwrap(),
+    );
+    let holder = AsyncLockSet::new();
+    async_ofd_lock_acquire(
+        &holder,
+        second_spec.clone(),
+        holder_resource,
+        metadata,
+        epoch(1),
+        Arc::new(NeverCancelled),
+    )
+    .await
+    .unwrap();
+
+    second_spec.contention = ContentionPolicy::BoundedWait;
+    second_spec.acquire_after = vec![resource("state-lock")];
+    let probe = Arc::new(WorkerProbe::default());
+    let clock: Arc<dyn Clock + Send + Sync> = Arc::new(ProbeClock {
+        probe: Arc::clone(&probe),
+    });
+    let task_locks = locks.clone();
+    let task = tokio::spawn(async move {
+        async_ofd_lock_acquire_with_clock(
+            &task_locks,
+            second_spec,
+            waiter_resource,
+            metadata,
+            epoch(1),
+            Arc::new(NeverCancelled),
+            clock,
+        )
+        .await
+    });
+    probe.wait_entered().await;
+    assert_eq!(
+        locks
+            .held(&resource("state-lock"))
+            .await
+            .unwrap_err()
+            .code(),
+        ErrorCode::LockContended
+    );
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    probe.wait_exited().await;
+
+    assert!(locks.held(&resource("state-lock")).await.unwrap());
+    async_ofd_lock_release(&holder).await.unwrap();
+    async_ofd_lock_release(&locks).await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -577,10 +664,11 @@ async fn timing_out_contended_acquire_cancels_worker_and_allows_next_lock() {
     });
     let mut spec = lock_spec(ContentionPolicy::BoundedWait);
     spec.cancellation = CancellationPolicy::CompleteAtomicSection;
+    let waiter_locks = AsyncLockSet::new();
     let timed = tokio::time::timeout(
         Duration::from_millis(100),
         async_ofd_lock_acquire_with_clock(
-            LockSet::new(),
+            &waiter_locks,
             spec,
             lock_resource(&anchor),
             metadata,
@@ -595,13 +683,13 @@ async fn timing_out_contended_acquire_cancels_worker_and_allows_next_lock() {
     probe.wait_exited().await;
     assert_eq!(tokio::task::spawn_blocking(|| 6 * 7).await.unwrap(), 42);
 
-    async_ofd_lock_release(holder).await.unwrap();
+    async_ofd_lock_release(&holder).await.unwrap();
     let reacquired = acquire_state_lock(&anchor, metadata, ContentionPolicy::FailFast).await;
-    async_ofd_lock_release(reacquired).await.unwrap();
+    async_ofd_lock_release(&reacquired).await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn aborted_atomic_future_finishes_critical_section_then_releases_lock() {
+async fn aborted_atomic_future_finishes_without_losing_the_shared_lock() {
     let scratch = Scratch::new("abort-cleanup");
     let anchor = async_open_anchored_dir(scratch.0.clone()).await.unwrap();
     let metadata = host_metadata(&scratch.0, 0o600);
@@ -616,12 +704,16 @@ async fn aborted_atomic_future_finishes_critical_section_then_releases_lock() {
         block_at: Some(BlockAt::Create),
         gate: Arc::clone(&gate),
     };
-    let task = tokio::spawn(async_atomic_write(
-        AtomicWrite::new(filesystem),
-        Payload { value: 1 },
-        write_policy(1, None),
-        locks,
-    ));
+    let task_locks = locks.clone();
+    let task = tokio::spawn(async move {
+        async_atomic_write(
+            AtomicWrite::new(filesystem),
+            Payload { value: 1 },
+            write_policy(1, None),
+            &task_locks,
+        )
+        .await
+    });
     gate.wait_entered().await;
     task.abort();
     let join_error = match task.await {
@@ -630,8 +722,9 @@ async fn aborted_atomic_future_finishes_critical_section_then_releases_lock() {
     };
     assert!(join_error.is_cancelled());
 
+    let competing = AsyncLockSet::new();
     let contended = async_ofd_lock_acquire(
-        LockSet::new(),
+        &competing,
         lock_spec(ContentionPolicy::FailFast),
         lock_resource(&anchor),
         metadata,
@@ -643,15 +736,16 @@ async fn aborted_atomic_future_finishes_critical_section_then_releases_lock() {
     gate.release();
     gate.wait_dropped().await;
     let contended = match contended {
-        Ok(locks) => {
-            async_ofd_lock_release(locks).await.unwrap();
+        Ok(()) => {
+            async_ofd_lock_release(&competing).await.unwrap();
             panic!("competing lock acquired while critical section was blocked")
         }
         Err(error) => error,
     };
     assert_eq!(contended.code(), ErrorCode::LockContended);
+    async_ofd_lock_release(&locks).await.unwrap();
     let reacquired = acquire_state_lock(&anchor, metadata, ContentionPolicy::FailFast).await;
-    async_ofd_lock_release(reacquired).await.unwrap();
+    async_ofd_lock_release(&reacquired).await.unwrap();
 }
 
 struct Cancelled;
@@ -668,8 +762,9 @@ async fn cancelled_lock_wait_cleans_up_without_acquiring() {
     let anchor = async_open_anchored_dir(scratch.0.clone()).await.unwrap();
     let metadata = host_metadata(&scratch.0, 0o600);
     let holder = acquire_state_lock(&anchor, metadata, ContentionPolicy::FailFast).await;
+    let waiter = AsyncLockSet::new();
     let error = async_ofd_lock_acquire(
-        LockSet::new(),
+        &waiter,
         lock_spec(ContentionPolicy::BoundedWait),
         lock_resource(&anchor),
         metadata,
@@ -679,9 +774,9 @@ async fn cancelled_lock_wait_cleans_up_without_acquiring() {
     .await
     .unwrap_err();
     assert_eq!(error.code(), ErrorCode::Cancelled);
-    async_ofd_lock_release(holder).await.unwrap();
+    async_ofd_lock_release(&holder).await.unwrap();
     let reacquired = acquire_state_lock(&anchor, metadata, ContentionPolicy::FailFast).await;
-    async_ofd_lock_release(reacquired).await.unwrap();
+    async_ofd_lock_release(&reacquired).await.unwrap();
 }
 
 fn audit_input(sequence: u64) -> AuditRecordInput {

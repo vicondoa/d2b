@@ -54,7 +54,7 @@ impl Clock for SystemClock {
 }
 
 pub struct OfdTransfer<'a> {
-    fd: BorrowedFd<'a>,
+    guard: &'a mut LockGuard,
     policy: FdTransferPolicy,
 }
 
@@ -68,11 +68,18 @@ impl fmt::Debug for OfdTransfer<'_> {
 
 impl OfdTransfer<'_> {
     pub fn fd(&self) -> BorrowedFd<'_> {
-        self.fd
+        self.guard.fd.as_fd()
     }
 
     pub fn policy(&self) -> FdTransferPolicy {
         self.policy
+    }
+
+    /// Commits a successful descriptor transfer. The local guard then closes
+    /// its descriptor without issuing `F_UNLCK`; the recipient's duplicate
+    /// open-file description remains authoritative for the lock.
+    pub fn commit(self) {
+        self.guard.held = false;
     }
 }
 
@@ -124,7 +131,7 @@ impl LockGuard {
         self.held
     }
 
-    pub fn authorize_transfer(&self, requested: FdTransferPolicy) -> Result<OfdTransfer<'_>> {
+    pub fn authorize_transfer(&mut self, requested: FdTransferPolicy) -> Result<OfdTransfer<'_>> {
         if !self.held
             || requested == FdTransferPolicy::Never
             || requested != self.transfer
@@ -133,7 +140,7 @@ impl LockGuard {
             return Err(Error::Code(ErrorCode::TransferDenied));
         }
         Ok(OfdTransfer {
-            fd: self.fd.as_fd(),
+            guard: self,
             policy: requested,
         })
     }
@@ -208,7 +215,7 @@ impl LockSet {
         metadata: MetadataExpectation,
         ownership_epoch: OwnershipEpoch,
         cancellation: &(impl Cancellation + ?Sized),
-    ) -> Result<&LockGuard> {
+    ) -> Result<&mut LockGuard> {
         self.acquire_with_clock(
             spec,
             resource,
@@ -227,7 +234,7 @@ impl LockSet {
         ownership_epoch: OwnershipEpoch,
         cancellation: &(impl Cancellation + ?Sized),
         clock: &C,
-    ) -> Result<&LockGuard> {
+    ) -> Result<&mut LockGuard> {
         validate_lock_spec(spec, resource, metadata)?;
         if self.held(&spec.lock_id)
             || self
@@ -305,7 +312,7 @@ impl LockSet {
         });
         Ok(self
             .guards
-            .last()
+            .last_mut()
             .expect("guard was inserted immediately above"))
     }
 

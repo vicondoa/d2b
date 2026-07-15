@@ -43,7 +43,8 @@ pub use lock::{Cancellation, Clock, LockGuard, LockSet, NeverCancelled, OfdTrans
 pub use path::{AnchoredDir, AnchoredResource, LeafName, RelativePath};
 #[cfg(all(feature = "tokio", target_os = "linux"))]
 pub use tokio_api::{
-    async_anchored_dir_from_fd, async_atomic_quarantine, async_atomic_read, async_atomic_write,
-    async_audit_append, async_audit_create, async_audit_resume, async_ofd_lock_acquire,
-    async_ofd_lock_acquire_with_clock, async_ofd_lock_release, async_open_anchored_dir,
+    AsyncLockSet, async_anchored_dir_from_fd, async_atomic_quarantine, async_atomic_read,
+    async_atomic_write, async_audit_append, async_audit_create, async_audit_resume,
+    async_ofd_lock_acquire, async_ofd_lock_acquire_with_clock, async_ofd_lock_release,
+    async_open_anchored_dir,
 };
