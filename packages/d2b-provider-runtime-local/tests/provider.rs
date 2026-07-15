@@ -33,6 +33,7 @@ use d2b_provider_runtime_local::{
     RuntimeResourceIdentity, RuntimeRunnerId, live_runtime_capabilities,
 };
 use d2b_provider_toolkit::{DeterministicClock, Fixture, check_provider_conformance};
+use tokio::sync::Notify;
 
 const NOW: u64 = 1_700_000_000_000;
 
@@ -64,7 +65,11 @@ struct FakeControl {
     delay_ms: AtomicU64,
     forge_adopted_generation: AtomicBool,
     last_cancellation: Mutex<Option<CancellationToken>>,
-    mutation_count: AtomicU64,
+    mutation_count: Arc<AtomicU64>,
+    entered: Notify,
+    defer_start_mutation: AtomicBool,
+    deferred_mutation_release: Arc<Notify>,
+    deferred_mutation_finished: Arc<Notify>,
 }
 
 impl FakeControl {
@@ -77,7 +82,11 @@ impl FakeControl {
             delay_ms: AtomicU64::new(0),
             forge_adopted_generation: AtomicBool::new(false),
             last_cancellation: Mutex::new(None),
-            mutation_count: AtomicU64::new(0),
+            mutation_count: Arc::new(AtomicU64::new(0)),
+            entered: Notify::new(),
+            defer_start_mutation: AtomicBool::new(false),
+            deferred_mutation_release: Arc::new(Notify::new()),
+            deferred_mutation_finished: Arc::new(Notify::new()),
         }
     }
 
@@ -95,6 +104,7 @@ impl FakeControl {
                 operation: context.operation().clone(),
                 effective_deadline_remaining_ms: context.effective_deadline_remaining_ms(),
             });
+        self.entered.notify_one();
     }
 
     fn calls(&self) -> Vec<SeenCall> {
@@ -124,6 +134,22 @@ impl FakeControl {
 
     fn mutation_count(&self) -> u64 {
         self.mutation_count.load(Ordering::Acquire)
+    }
+
+    async fn wait_until_entered(&self) {
+        self.entered.notified().await;
+    }
+
+    fn defer_start_mutation(&self) {
+        self.defer_start_mutation.store(true, Ordering::Release);
+    }
+
+    fn release_deferred_mutation(&self) {
+        self.deferred_mutation_release.notify_one();
+    }
+
+    async fn wait_for_deferred_mutation(&self) {
+        self.deferred_mutation_finished.notified().await;
     }
 
     fn fail_next(&self, error: RuntimeControlError) {
@@ -255,6 +281,20 @@ impl RuntimeControlPort for FakeControl {
         request: RuntimeOperationControl,
     ) -> Result<RuntimeObservedState, RuntimeControlError> {
         self.record(SeenMethod::Start, request.context());
+        if self.defer_start_mutation.load(Ordering::Acquire) {
+            let cancellation = request.context().cancellation().clone();
+            let mutation_count = self.mutation_count.clone();
+            let release = self.deferred_mutation_release.clone();
+            let finished = self.deferred_mutation_finished.clone();
+            tokio::spawn(async move {
+                release.notified().await;
+                if !cancellation.is_cancelled() {
+                    mutation_count.fetch_add(1, Ordering::AcqRel);
+                }
+                finished.notify_one();
+            });
+            return std::future::pending().await;
+        }
         self.before_result(request.context(), true).await?;
         Ok(self.observed(
             request.context(),
@@ -364,6 +404,14 @@ fn workload_id() -> WorkloadId {
 
 fn role_id() -> RoleId {
     RoleId::parse("ccccccccccccccccccca").unwrap_or_else(|_| unreachable!())
+}
+
+fn second_realm_id() -> RealmId {
+    RealmId::parse(format!("b{}", "a".repeat(19))).unwrap_or_else(|_| unreachable!())
+}
+
+fn second_role_id() -> RoleId {
+    RoleId::parse(format!("d{}a", "c".repeat(18))).unwrap_or_else(|_| unreachable!())
 }
 
 fn provider_id() -> ProviderId {
@@ -488,13 +536,7 @@ fn factory_entry(
     configuration: LocalRuntimeConfiguration,
     control: Arc<dyn RuntimeControlPort>,
 ) -> LocalRuntimeProviderFactoryEntry {
-    LocalRuntimeProviderFactoryEntry::new(
-        descriptor.provider_id.clone(),
-        configuration,
-        descriptor.configuration_schema_fingerprint.clone(),
-        descriptor.configured_scope_digest.clone(),
-        control,
-    )
+    LocalRuntimeProviderFactoryEntry::new(descriptor.clone(), configuration, control)
 }
 
 fn operation_request(fixture: &Fixture, method: ProviderMethod) -> ProviderOperationRequest {
@@ -616,11 +658,12 @@ fn factory_rejects_wrong_descriptor_type_and_implementation() {
 }
 
 #[test]
-fn factory_entries_bind_provider_id_fingerprints_scope_and_runtime_kind() {
+fn factory_entries_bind_complete_descriptor_and_runtime_kind() {
     let kind = LocalRuntimeKind::CloudHypervisor;
     let expected = descriptor(kind);
     let control = Arc::new(FakeControl::new(kind, fingerprint(1)));
     let entry = factory_entry(&expected, configuration(kind), control);
+    assert_eq!(entry.descriptor(), &expected);
     let factory = named_factory(kind, vec![entry.clone()]);
 
     let mut unknown_provider = expected.clone();
@@ -665,6 +708,69 @@ fn factory_entries_bind_provider_id_fingerprints_scope_and_runtime_kind() {
         LocalRuntimeProviderFactory::cloud_hypervisor(vec![wrong_kind_entry]),
         Err(LocalRuntimeProviderBuildError::RuntimeKindMismatch)
     ));
+}
+
+#[test]
+fn factory_rejects_complete_descriptor_placement_and_generation_drift() {
+    let kind = LocalRuntimeKind::SystemdUser;
+    let expected = descriptor(kind);
+    let factory = named_factory(
+        kind,
+        vec![factory_entry(
+            &expected,
+            configuration(kind),
+            Arc::new(FakeControl::new(kind, fingerprint(1))),
+        )],
+    );
+
+    let mut wrong_realm = expected.clone();
+    match &mut wrong_realm.placement {
+        ProviderPlacement::UserAgent { realm_id, .. } => *realm_id = second_realm_id(),
+        _ => unreachable!(),
+    }
+
+    let mut wrong_role = expected.clone();
+    match &mut wrong_role.placement {
+        ProviderPlacement::UserAgent { role_id, .. } => *role_id = second_role_id(),
+        _ => unreachable!(),
+    }
+
+    let mut wrong_endpoint_role = expected.clone();
+    match &mut wrong_endpoint_role.placement {
+        ProviderPlacement::UserAgent { endpoint_role, .. } => {
+            *endpoint_role = EndpointRole::ProviderAgent;
+        }
+        _ => unreachable!(),
+    }
+
+    let mut wrong_agent_generation = expected.clone();
+    match &mut wrong_agent_generation.placement {
+        ProviderPlacement::UserAgent {
+            agent_generation, ..
+        } => {
+            *agent_generation = agent_generation.next().unwrap_or_else(|_| unreachable!());
+        }
+        _ => unreachable!(),
+    }
+
+    let mut wrong_registry_generation = expected.clone();
+    wrong_registry_generation.registry_generation = wrong_registry_generation
+        .registry_generation
+        .next()
+        .unwrap_or_else(|_| unreachable!());
+
+    for drifted in [
+        wrong_realm,
+        wrong_role,
+        wrong_endpoint_role,
+        wrong_agent_generation,
+        wrong_registry_generation,
+    ] {
+        assert_eq!(
+            factory.construct(&drifted).err(),
+            Some(FactoryError::Rejected)
+        );
+    }
 }
 
 #[tokio::test]
@@ -1232,6 +1338,32 @@ async fn cancellation_and_deadlines_are_typed_and_fail_closed() {
         .expect_err("wall-clock-expired mutation must fail before control");
     assert_eq!(failure.kind, ProviderFailureKind::DeadlineExpired);
     assert_eq!(harness.control.call_count(), calls_before_expiry);
+    assert_eq!(harness.control.mutation_count(), 0);
+}
+
+#[tokio::test]
+async fn dropping_in_flight_provider_future_cancels_control_and_prevents_later_commit() {
+    let harness = harness(LocalRuntimeKind::CloudHypervisor);
+    harness.control.defer_start_mutation();
+    let request = operation_request(&harness.fixture, ProviderMethod::RuntimeStart);
+    let call_context = context(&harness.fixture, &request.context);
+    let mut provider_future = Box::pin(harness.provider.start(&call_context, &request));
+
+    tokio::select! {
+        () = harness.control.wait_until_entered() => {}
+        result = &mut provider_future => panic!("control call completed before drop: {result:?}"),
+    }
+
+    let cancellation = harness
+        .control
+        .last_cancellation()
+        .unwrap_or_else(|| unreachable!());
+    assert!(!cancellation.is_cancelled());
+    drop(provider_future);
+    assert!(cancellation.is_cancelled());
+
+    harness.control.release_deferred_mutation();
+    harness.control.wait_for_deferred_mutation().await;
     assert_eq!(harness.control.mutation_count(), 0);
 }
 

@@ -3,8 +3,7 @@ use std::{collections::BTreeMap, fmt, sync::Arc};
 use d2b_contracts::{
     v2_identity::ProviderId,
     v2_provider::{
-        Fingerprint, ImplementationId, MAX_PROVIDER_REGISTRY_ENTRIES, ProviderDescriptor,
-        ProviderFactoryKey,
+        ImplementationId, MAX_PROVIDER_REGISTRY_ENTRIES, ProviderDescriptor, ProviderFactoryKey,
     },
 };
 use d2b_provider::{
@@ -18,11 +17,9 @@ use crate::{
 
 #[derive(Clone)]
 pub struct LocalRuntimeProviderFactoryEntry {
-    provider_id: ProviderId,
+    descriptor: ProviderDescriptor,
     configuration: LocalRuntimeConfiguration,
     control: Arc<dyn RuntimeControlPort>,
-    configuration_schema_fingerprint: Fingerprint,
-    configured_scope_digest: Fingerprint,
 }
 
 impl fmt::Debug for LocalRuntimeProviderFactoryEntry {
@@ -36,23 +33,23 @@ impl fmt::Debug for LocalRuntimeProviderFactoryEntry {
 
 impl LocalRuntimeProviderFactoryEntry {
     pub fn new(
-        provider_id: ProviderId,
+        descriptor: ProviderDescriptor,
         configuration: LocalRuntimeConfiguration,
-        configuration_schema_fingerprint: Fingerprint,
-        configured_scope_digest: Fingerprint,
         control: Arc<dyn RuntimeControlPort>,
     ) -> Self {
         Self {
-            provider_id,
+            descriptor,
             configuration,
             control,
-            configuration_schema_fingerprint,
-            configured_scope_digest,
         }
     }
 
+    pub fn descriptor(&self) -> &ProviderDescriptor {
+        &self.descriptor
+    }
+
     pub fn provider_id(&self) -> &ProviderId {
-        &self.provider_id
+        &self.descriptor.provider_id
     }
 
     pub const fn kind(&self) -> LocalRuntimeKind {
@@ -125,10 +122,16 @@ impl LocalRuntimeProviderFactory {
             if entry.kind() != kind {
                 return Err(LocalRuntimeProviderBuildError::RuntimeKindMismatch);
             }
-            if entries_by_provider
-                .insert(entry.provider_id.clone(), entry)
-                .is_some()
+            entry.descriptor.validate()?;
+            if entry.descriptor.provider_type() != d2b_contracts::v2_identity::ProviderType::Runtime
             {
+                return Err(LocalRuntimeProviderBuildError::ProviderTypeMismatch);
+            }
+            if entry.descriptor.implementation_id.as_str() != kind.implementation_id() {
+                return Err(LocalRuntimeProviderBuildError::ImplementationMismatch);
+            }
+            let provider_id = entry.descriptor.provider_id.clone();
+            if entries_by_provider.insert(provider_id, entry).is_some() {
                 return Err(LocalRuntimeProviderBuildError::DuplicateProviderEntry);
             }
         }
@@ -160,9 +163,7 @@ impl ProviderFactory for LocalRuntimeProviderFactory {
             .entries
             .get(&descriptor.provider_id)
             .ok_or(FactoryError::Rejected)?;
-        if descriptor.configuration_schema_fingerprint != entry.configuration_schema_fingerprint
-            || descriptor.configured_scope_digest != entry.configured_scope_digest
-        {
+        if descriptor != &entry.descriptor {
             return Err(FactoryError::Rejected);
         }
 

@@ -491,11 +491,17 @@ impl LocalRuntimeProvider {
     where
         F: Future<Output = Result<T, RuntimeControlError>> + Send,
     {
+        let mut cancellation_guard = ControlCancellationGuard::new(prepared.cancellation.clone());
         match tokio::time::timeout(prepared.deadline, future).await {
-            Ok(Ok(value)) => Ok(value),
-            Ok(Err(error)) => Err(self.control_failure(context, error)),
+            Ok(result) => {
+                cancellation_guard.disarm();
+                match result {
+                    Ok(value) => Ok(value),
+                    Err(error) => Err(self.control_failure(context, error)),
+                }
+            }
             Err(_) => {
-                prepared.cancellation.cancel();
+                drop(cancellation_guard);
                 Err(self.control_failure(
                     context,
                     if mutation {
@@ -1002,6 +1008,32 @@ struct PreparedCall {
     deadline: Duration,
     effective_deadline_remaining_ms: u32,
     cancellation: CancellationToken,
+}
+
+struct ControlCancellationGuard {
+    cancellation: CancellationToken,
+    armed: bool,
+}
+
+impl ControlCancellationGuard {
+    fn new(cancellation: CancellationToken) -> Self {
+        Self {
+            cancellation,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for ControlCancellationGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            self.cancellation.cancel();
+        }
+    }
 }
 
 fn adoption_health(
