@@ -26,7 +26,7 @@ pinned_channel=$(
 )
 [ -n "$pinned_channel" ] || { fail "could not read pinned Rust channel from $toolchain_file"; exit 1; }
 
-d2b_activate_rust_toolchain_path || true
+d2b_activate_rust_toolchain_path "$pinned_channel" || true
 
 # Bootstrap the pinned toolchain through rustup/nix when cargo is absent (CI).
 if [ -z "${D2B_PROOFS_IN_NIX_SHELL:-}" ] && ! command -v cargo >/dev/null 2>&1; then
@@ -71,10 +71,18 @@ if command -v rustup >/dev/null 2>&1; then
 fi
 proof_rustc=$(type -P rustc)
 proof_rustdoc=$(type -P rustdoc)
-[ -n "$proof_rustc" ] && [ -n "$proof_rustdoc" ] || {
-  fail "pinned rustc/rustdoc executables are unavailable"
+proof_clippy_driver=$(type -P clippy-driver)
+[ -n "$proof_rustc" ] && [ -n "$proof_rustdoc" ] && [ -n "$proof_clippy_driver" ] || {
+  fail "pinned rustc/rustdoc/clippy-driver executables are unavailable"
   exit 1
 }
+case "$("$proof_clippy_driver" --version)" in
+  *"$pinned_channel"*) ;;
+  *)
+    fail "clippy-driver does not match pinned Rust channel $pinned_channel"
+    exit 1
+    ;;
+esac
 
 rc=0
 for proof in chunked-stdio-conformance w0-ch-connect-proof; do
@@ -90,7 +98,7 @@ for proof in chunked-stdio-conformance w0-ch-connect-proof; do
     clippy_target_args=(--target-dir "$proof_target_base/$proof/clippy")
     test_target_args=(--target-dir "$proof_target_base/$proof/test")
   fi
-  if RUSTC="$proof_rustc" RUSTDOC="$proof_rustdoc" \
+  if RUSTC="$proof_rustc" RUSTDOC="$proof_rustdoc" CLIPPY_DRIVER="$proof_clippy_driver" \
     cargo clippy "${clippy_target_args[@]}" --manifest-path "$manifest" --all-targets -- -D warnings \
     && RUSTC="$proof_rustc" RUSTDOC="$proof_rustdoc" \
     cargo test "${test_target_args[@]}" --manifest-path "$manifest"; then

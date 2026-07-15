@@ -244,15 +244,23 @@ else
   gate_rustc=$(type -P rustc)
   gate_rustdoc=$(type -P rustdoc)
 fi
-[ -n "$gate_rustc" ] && [ -n "$gate_rustdoc" ] || {
-  fail "pinned rustc/rustdoc executables are unavailable"
+gate_clippy_driver=$(type -P clippy-driver)
+[ -n "$gate_rustc" ] && [ -n "$gate_rustdoc" ] && [ -n "$gate_clippy_driver" ] || {
+  fail "pinned rustc/rustdoc/clippy-driver executables are unavailable"
   exit 1
 }
-export RUSTC="$gate_rustc" RUSTDOC="$gate_rustdoc"
+export RUSTC="$gate_rustc" RUSTDOC="$gate_rustdoc" CLIPPY_DRIVER="$gate_clippy_driver"
 case "$("$RUSTC" --version)" in
   *"$pinned_channel"*) ;;
   *)
     fail "RUSTC does not match packages/rust-toolchain.toml channel $pinned_channel"
+    exit 1
+    ;;
+esac
+case "$("$CLIPPY_DRIVER" --version)" in
+  *"$pinned_channel"*) ;;
+  *)
+    fail "CLIPPY_DRIVER does not match packages/rust-toolchain.toml channel $pinned_channel"
     exit 1
     ;;
 esac

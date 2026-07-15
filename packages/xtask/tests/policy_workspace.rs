@@ -117,14 +117,17 @@ fn standalone_proofs_isolate_mixed_toolchain_targets() {
         script.contains("CARGO_TARGET_DIR/d2b-proofs/$RUSTUP_TOOLCHAIN")
             && script.contains("clippy_target_args=(--target-dir")
             && script.contains("test_target_args=(--target-dir")
-            && script.contains("RUSTC=\"$proof_rustc\" RUSTDOC=\"$proof_rustdoc\""),
+            && script.contains("d2b_activate_rust_toolchain_path \"$pinned_channel\"")
+            && script.contains("CLIPPY_DRIVER=\"$proof_clippy_driver\""),
         "standalone proof crates must not share target metadata across rustc versions"
     );
     let rust_gate = read_repo_file("tests/test-rust.sh");
     assert!(
-        rust_gate.contains("export RUSTC=\"$gate_rustc\" RUSTDOC=\"$gate_rustdoc\"")
+        rust_gate.contains(
+            "export RUSTC=\"$gate_rustc\" RUSTDOC=\"$gate_rustdoc\" CLIPPY_DRIVER=\"$gate_clippy_driver\""
+        )
             && rust_gate.contains("RUSTC does not match packages/rust-toolchain.toml"),
-        "workspace Rust gate must pin the compiler executable used by Cargo"
+        "workspace Rust gate must pin the compiler and clippy executables used by Cargo"
     );
 }
 
