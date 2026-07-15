@@ -237,6 +237,25 @@ fi
 
 log "--> rust toolchain version"
 assert_pinned_rust_toolchain
+if [ -n "${D2B_RUST_GATE_BOOTSTRAP_RUSTUP:-}" ]; then
+  gate_rustc=$(rustup which --toolchain "$pinned_channel" rustc)
+  gate_rustdoc=$(rustup which --toolchain "$pinned_channel" rustdoc)
+else
+  gate_rustc=$(type -P rustc)
+  gate_rustdoc=$(type -P rustdoc)
+fi
+[ -n "$gate_rustc" ] && [ -n "$gate_rustdoc" ] || {
+  fail "pinned rustc/rustdoc executables are unavailable"
+  exit 1
+}
+export RUSTC="$gate_rustc" RUSTDOC="$gate_rustdoc"
+case "$("$RUSTC" --version)" in
+  *"$pinned_channel"*) ;;
+  *)
+    fail "RUSTC does not match packages/rust-toolchain.toml channel $pinned_channel"
+    exit 1
+    ;;
+esac
 
 # The privileged broker has three independent feature
 # passes (default, layer1-bootstrap, fake-backends), each on its OWN target dir.

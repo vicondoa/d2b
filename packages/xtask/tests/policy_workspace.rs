@@ -115,8 +115,16 @@ fn standalone_proofs_isolate_mixed_toolchain_targets() {
     let script = read_repo_file("tests/test-proofs.sh");
     assert!(
         script.contains("CARGO_TARGET_DIR/d2b-proofs/$RUSTUP_TOOLCHAIN")
-            && script.contains("proof_target_args=(--target-dir"),
+            && script.contains("clippy_target_args=(--target-dir")
+            && script.contains("test_target_args=(--target-dir")
+            && script.contains("RUSTC=\"$proof_rustc\" RUSTDOC=\"$proof_rustdoc\""),
         "standalone proof crates must not share target metadata across rustc versions"
+    );
+    let rust_gate = read_repo_file("tests/test-rust.sh");
+    assert!(
+        rust_gate.contains("export RUSTC=\"$gate_rustc\" RUSTDOC=\"$gate_rustdoc\"")
+            && rust_gate.contains("RUSTC does not match packages/rust-toolchain.toml"),
+        "workspace Rust gate must pin the compiler executable used by Cargo"
     );
 }
 

@@ -94,6 +94,9 @@ deprecations ship one minor release before removal.
 - Isolated standalone proof targets by proof and pinned Rust toolchain so
   concurrent immutable Layer-1 validation cannot reuse incompatible rustc
   metadata from the main workspace.
+- Pinned the exact `rustc` and `rustdoc` executables used by workspace and proof
+  Cargo commands, and separated proof clippy/test targets, preventing
+  intra-gate compiler selection drift.
 - Closed W2 service-contract ambiguity by making provider capability claims
   method-exact, binding response attachments and streams, rejecting mixed
   identity scopes and contradictory error outcomes, returning exact typed

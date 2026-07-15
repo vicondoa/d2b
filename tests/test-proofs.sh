@@ -69,6 +69,12 @@ if command -v rustup >/dev/null 2>&1; then
   rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal >/dev/null 2>&1 || true
   rustup component add --toolchain "$RUSTUP_TOOLCHAIN" clippy
 fi
+proof_rustc=$(type -P rustc)
+proof_rustdoc=$(type -P rustdoc)
+[ -n "$proof_rustc" ] && [ -n "$proof_rustdoc" ] || {
+  fail "pinned rustc/rustdoc executables are unavailable"
+  exit 1
+}
 
 rc=0
 for proof in chunked-stdio-conformance w0-ch-connect-proof; do
@@ -78,12 +84,16 @@ for proof in chunked-stdio-conformance w0-ch-connect-proof; do
     continue
   fi
   log "--> proofs/$proof: clippy + test"
-  proof_target_args=()
+  clippy_target_args=()
+  test_target_args=()
   if [ -n "$proof_target_base" ]; then
-    proof_target_args=(--target-dir "$proof_target_base/$proof")
+    clippy_target_args=(--target-dir "$proof_target_base/$proof/clippy")
+    test_target_args=(--target-dir "$proof_target_base/$proof/test")
   fi
-  if cargo clippy "${proof_target_args[@]}" --manifest-path "$manifest" --all-targets -- -D warnings \
-    && cargo test "${proof_target_args[@]}" --manifest-path "$manifest"; then
+  if RUSTC="$proof_rustc" RUSTDOC="$proof_rustdoc" \
+    cargo clippy "${clippy_target_args[@]}" --manifest-path "$manifest" --all-targets -- -D warnings \
+    && RUSTC="$proof_rustc" RUSTDOC="$proof_rustdoc" \
+    cargo test "${test_target_args[@]}" --manifest-path "$manifest"; then
     ok "proofs/$proof"
   else
     fail "proofs/$proof"
