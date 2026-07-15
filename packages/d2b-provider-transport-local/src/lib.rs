@@ -36,7 +36,8 @@ pub use connector::{
     OwnedLocalTransport, ReachabilityEvidence, TransportHandoffError,
 };
 pub use factory::{
-    LocalTransportFactory, LocalTransportFactoryError, MAX_LOCAL_TRANSPORT_FACTORY_PROVIDERS,
+    LocalTransportConstruction, LocalTransportFactory, LocalTransportFactoryError,
+    MAX_LOCAL_TRANSPORT_FACTORY_PROVIDERS,
 };
 pub use production::{
     EndpointCapabilityId, EndpointResolveRequest, LocalEndpointResolver, TokioLocalEndpointPort,

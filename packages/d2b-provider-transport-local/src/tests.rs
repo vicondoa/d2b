@@ -728,7 +728,7 @@ fn factory_binds_exact_provider_configuration_and_scope_digest() {
 }
 
 #[test]
-fn registry_builder_constructs_transport_from_public_factory_and_key() {
+fn registry_builder_registers_explicit_construction_and_exact_handoff() {
     let kind = LocalTransportKind::UnixSeqpacket;
     let descriptor = descriptor(kind);
     let binding = binding(
@@ -750,18 +750,28 @@ fn registry_builder_constructs_transport_from_public_factory_and_key() {
         fingerprint(0x34),
         NOW_UNIX_MS,
     );
+    let construction = factory
+        .construct_with_handoff(&descriptor)
+        .expect("matching transport constructs with an isolated handoff");
+    let (instance, handoffs) = construction.into_parts();
     builder
-        .register_factory(factory.key(), factory)
+        .register_factory(factory.key(), factory.clone())
         .expect("factory registers");
     builder
-        .register_instance(descriptor.clone())
-        .expect("factory constructs instance");
+        .register_constructed(factory.key(), instance)
+        .expect("explicit construction registers");
     let registry = builder.finish().expect("registry builds");
     let instance = registry
         .instance(&descriptor.provider_id)
         .expect("constructed transport registered");
     assert!(matches!(&instance, ProviderInstance::Transport(_)));
     assert_eq!(instance.descriptor(), descriptor);
+    assert_eq!(
+        handoffs
+            .take_transport(&HandleId::parse("not-connected").expect("valid handle id"))
+            .expect_err("exact handoff starts empty"),
+        TransportHandoffError::UnknownHandle
+    );
 }
 
 #[tokio::test]
@@ -831,6 +841,130 @@ async fn retained_factory_handoff_claims_transport_after_registry_type_erasure()
     drop(registry);
     assert_eq!(port.closed_peer_count(), 1);
     drop(transport);
+    assert_eq!(port.closed_peer_count(), 2);
+}
+
+#[test]
+fn trait_factory_construction_is_single_live_instance() {
+    let kind = LocalTransportKind::UnixStream;
+    let descriptor = descriptor(kind);
+    let configured_binding = binding(
+        &descriptor,
+        kind,
+        transport_binding_id("single-live-instance"),
+        AuthorizedProviderScope::Realm {
+            realm_id: descriptor.placement.realm_id().clone(),
+        },
+        fingerprint(0x42),
+        generation(10),
+    );
+    let factory = LocalTransportFactory::unix_stream(
+        Arc::new(FakeEndpointPort::default()),
+        [configured_binding],
+    )
+    .expect("valid factory");
+
+    let first = factory
+        .construct(&descriptor)
+        .expect("first implicit instance constructs");
+    let retained_handoff = factory
+        .handoff_registry(&descriptor.provider_id)
+        .expect("factory exposes first instance handoff");
+    assert!(matches!(
+        factory.construct(&descriptor),
+        Err(FactoryError::Rejected)
+    ));
+
+    drop(first);
+    assert!(matches!(
+        factory.construct(&descriptor),
+        Err(FactoryError::Rejected)
+    ));
+    drop(retained_handoff);
+    assert!(
+        factory
+            .construct(&descriptor)
+            .is_ok_and(|instance| matches!(instance, ProviderInstance::Transport(_)))
+    );
+}
+
+#[tokio::test]
+async fn dropping_one_constructed_instance_does_not_clear_another_handoff() {
+    let harness = Harness::new(LocalTransportKind::UnixStream);
+    let configured_binding = binding(
+        &harness.descriptor,
+        LocalTransportKind::UnixStream,
+        harness.binding_id.clone(),
+        harness.scope.clone(),
+        fingerprint(0x43),
+        harness.endpoint_generation,
+    );
+    let port = Arc::new(FakeEndpointPort::default());
+    let factory = LocalTransportFactory::with_clock_and_limits(
+        LocalTransportKind::UnixStream,
+        port.clone(),
+        [configured_binding],
+        Arc::new(FixedClock),
+        LocalTransportLimits::default(),
+    )
+    .expect("valid factory");
+
+    let (first_instance, first_handoffs) = factory
+        .construct_with_handoff(&harness.descriptor)
+        .expect("first isolated instance constructs")
+        .into_parts();
+    let (second_instance, second_handoffs) = factory
+        .construct_with_handoff(&harness.descriptor)
+        .expect("second isolated instance constructs")
+        .into_parts();
+    let ProviderInstance::Transport(first_provider) = first_instance else {
+        panic!("first instance is transport");
+    };
+    let ProviderInstance::Transport(second_provider) = second_instance else {
+        panic!("second instance is transport");
+    };
+
+    let request = harness.connect_request("isolated-shared-handle");
+    let context = harness.call_context(&request.context);
+    let first_handle = first_provider
+        .connect(&context, &request)
+        .await
+        .expect("first instance connects");
+    let second_handle = second_provider
+        .connect(&context, &request)
+        .await
+        .expect("second instance connects");
+    assert_eq!(first_handle.handle_id, second_handle.handle_id);
+    assert_eq!(port.closed_peer_count(), 0);
+
+    drop(first_provider);
+    assert_eq!(port.closed_peer_count(), 1);
+    assert_eq!(
+        first_handoffs
+            .take_transport(&first_handle.handle_id)
+            .expect_err("dropped instance clears only its own handoff"),
+        TransportHandoffError::UnknownHandle
+    );
+
+    let second_transport = second_handoffs
+        .take_transport(&second_handle.handle_id)
+        .expect("second instance handoff remains claimable");
+    let mut second_socket = UnixStream::from(second_transport.into_owned_fd());
+    {
+        let mut peers = lock(&port.connection_peers);
+        peers[1]
+            .write_all(b"x")
+            .expect("second peer writes independently");
+    }
+    let mut byte = [0_u8; 1];
+    second_socket
+        .read_exact(&mut byte)
+        .expect("second transport remains live");
+    assert_eq!(byte, *b"x");
+
+    drop(second_provider);
+    assert_eq!(port.closed_peer_count(), 1);
+    drop(second_socket);
     assert_eq!(port.closed_peer_count(), 2);
 }
 

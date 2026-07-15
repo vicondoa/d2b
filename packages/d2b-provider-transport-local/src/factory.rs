@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, error::Error, fmt, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    error::Error,
+    fmt,
+    sync::{Arc, Mutex, MutexGuard, Weak},
+};
 
 use d2b_contracts::{
     v2_identity::{ProviderId, ProviderType},
@@ -47,6 +52,41 @@ impl fmt::Display for LocalTransportFactoryError {
 
 impl Error for LocalTransportFactoryError {}
 
+/// One constructed provider paired with its exact descriptor-handoff seam.
+///
+/// Register `instance` with [`ProviderRegistryBuilder::register_constructed`]
+/// and retain `handoffs` in the session layer. Each construction owns a fresh
+/// registry, so dropping another provider instance cannot clear this one.
+///
+/// [`ProviderRegistryBuilder::register_constructed`]: d2b_provider::ProviderRegistryBuilder::register_constructed
+pub struct LocalTransportConstruction {
+    instance: ProviderInstance,
+    handoffs: Arc<LocalTransportHandoffRegistry>,
+}
+
+impl LocalTransportConstruction {
+    pub fn instance(&self) -> ProviderInstance {
+        self.instance.clone()
+    }
+
+    pub fn handoff_registry(&self) -> Arc<LocalTransportHandoffRegistry> {
+        self.handoffs.clone()
+    }
+
+    pub fn into_parts(self) -> (ProviderInstance, Arc<LocalTransportHandoffRegistry>) {
+        (self.instance, self.handoffs)
+    }
+}
+
+impl fmt::Debug for LocalTransportConstruction {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LocalTransportConstruction")
+            .field("provider_id", &self.instance.descriptor().provider_id)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Registry factory for one exact local transport implementation.
 ///
 /// A factory owns no endpoint names. It groups pre-authorized bindings by their
@@ -57,7 +97,7 @@ pub struct LocalTransportFactory {
     kind: LocalTransportKind,
     endpoint_port: Arc<dyn LocalEndpointPort>,
     bindings: BTreeMap<ProviderId, Vec<TransportBinding>>,
-    handoffs: BTreeMap<ProviderId, Arc<LocalTransportHandoffRegistry>>,
+    registered_handoffs: Arc<Mutex<BTreeMap<ProviderId, Weak<LocalTransportHandoffRegistry>>>>,
     clock: Arc<dyn LocalTransportClock>,
     limits: LocalTransportLimits,
 }
@@ -199,11 +239,6 @@ impl LocalTransportFactory {
         if grouped.is_empty() {
             return Err(LocalTransportFactoryError::EmptyBindings);
         }
-        let handoffs = grouped
-            .keys()
-            .cloned()
-            .map(|provider_id| (provider_id, Arc::new(LocalTransportHandoffRegistry::new())))
-            .collect();
         Ok(Self {
             kind,
             endpoint_port,
@@ -211,7 +246,7 @@ impl LocalTransportFactory {
                 .into_iter()
                 .map(|(provider_id, bindings)| (provider_id, bindings.into_values().collect()))
                 .collect(),
-            handoffs,
+            registered_handoffs: Arc::new(Mutex::new(BTreeMap::new())),
             clock,
             limits,
         })
@@ -237,7 +272,9 @@ impl LocalTransportFactory {
         &self,
         provider_id: &ProviderId,
     ) -> Option<Arc<LocalTransportHandoffRegistry>> {
-        self.handoffs.get(provider_id).cloned()
+        lock(&self.registered_handoffs)
+            .get(provider_id)
+            .and_then(Weak::upgrade)
     }
 
     pub fn take_transport(
@@ -245,15 +282,25 @@ impl LocalTransportFactory {
         provider_id: &ProviderId,
         handle_id: &HandleId,
     ) -> Result<OwnedLocalTransport, TransportHandoffError> {
-        self.handoffs
-            .get(provider_id)
+        self.handoff_registry(provider_id)
             .ok_or(TransportHandoffError::UnknownHandle)?
             .take_transport(handle_id)
     }
-}
 
-impl ProviderFactory for LocalTransportFactory {
-    fn construct(&self, descriptor: &ProviderDescriptor) -> Result<ProviderInstance, FactoryError> {
+    pub fn construct_with_handoff(
+        &self,
+        descriptor: &ProviderDescriptor,
+    ) -> Result<LocalTransportConstruction, FactoryError> {
+        let handoffs = Arc::new(LocalTransportHandoffRegistry::new());
+        let instance = self.construct_isolated(descriptor, handoffs.clone())?;
+        Ok(LocalTransportConstruction { instance, handoffs })
+    }
+
+    fn construct_isolated(
+        &self,
+        descriptor: &ProviderDescriptor,
+        handoffs: Arc<LocalTransportHandoffRegistry>,
+    ) -> Result<ProviderInstance, FactoryError> {
         if descriptor.provider_type() != ProviderType::Transport
             || &descriptor.implementation_id != self.kind.implementation_id()
         {
@@ -274,11 +321,6 @@ impl ProviderFactory for LocalTransportFactory {
             })
             .ok_or(FactoryError::Rejected)?
             .clone();
-        let handoffs = self
-            .handoffs
-            .get(&descriptor.provider_id)
-            .ok_or(FactoryError::Rejected)?
-            .clone();
         let provider = LocalTransportProvider::with_handoff_registry(
             descriptor.clone(),
             self.kind,
@@ -291,6 +333,42 @@ impl ProviderFactory for LocalTransportFactory {
         .map_err(|_| FactoryError::Rejected)?;
         Ok(ProviderInstance::Transport(Arc::new(provider)))
     }
+}
+
+impl ProviderFactory for LocalTransportFactory {
+    fn construct(&self, descriptor: &ProviderDescriptor) -> Result<ProviderInstance, FactoryError> {
+        // The erased factory interface cannot return the instance handoff.
+        // Keep exactly one weakly registered implicit construction so callers
+        // can retrieve its seam from `handoff_registry` without sharing it.
+        {
+            let registered = lock(&self.registered_handoffs);
+            if registered
+                .get(&descriptor.provider_id)
+                .and_then(Weak::upgrade)
+                .is_some()
+            {
+                return Err(FactoryError::Rejected);
+            }
+        }
+        let construction = self.construct_with_handoff(descriptor)?;
+        let (instance, handoffs) = construction.into_parts();
+        let mut registered = lock(&self.registered_handoffs);
+        if registered
+            .get(&descriptor.provider_id)
+            .and_then(Weak::upgrade)
+            .is_some()
+        {
+            return Err(FactoryError::Rejected);
+        }
+        registered.insert(descriptor.provider_id.clone(), Arc::downgrade(&handoffs));
+        Ok(instance)
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn validate_limits(limits: LocalTransportLimits) -> Result<(), LocalTransportFactoryError> {
