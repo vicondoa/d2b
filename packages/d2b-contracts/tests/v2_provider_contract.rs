@@ -60,6 +60,20 @@ fn agent_binding() -> AgentPlacementBinding {
     }
 }
 
+fn provider_agent_credential_binding() -> CredentialPlacementBinding {
+    CredentialPlacementBinding::ProviderAgent {
+        binding: agent_binding(),
+    }
+}
+
+fn user_agent_credential_binding() -> CredentialPlacementBinding {
+    CredentialPlacementBinding::UserAgent {
+        realm_id: realm_id(),
+        role_id: role_id(),
+        agent_generation: generation(3),
+    }
+}
+
 fn agent_placement() -> ProviderPlacement {
     let binding = agent_binding();
     ProviderPlacement::ProviderAgent {
@@ -287,7 +301,7 @@ fn credential_lease() -> CredentialLease {
         lease_id: LeaseId::parse("lease-1").unwrap(),
         credential_provider_id: provider_id("caaaaaaaaaaaaaaaaaaq"),
         consumer_provider_id: provider_id("eaaaaaaaaaaaaaaaaaaq"),
-        agent_binding: agent_binding(),
+        placement_binding: provider_agent_credential_binding(),
         allowed_operations: BoundedVec::new(vec![
             SdkOperationClass::Authenticate,
             SdkOperationClass::Create,
@@ -733,6 +747,75 @@ fn credential_leases_are_opaque_colocated_revocable_and_nontransferable() {
     assert_eq!(
         refreshed.validate(credential, consumer, 9_000),
         Err(ProviderContractError::LeaseExpired)
+    );
+}
+
+#[test]
+fn user_agent_credential_leases_are_bound_to_the_exact_userd_instance() {
+    let placement = ProviderPlacement::UserAgent {
+        realm_id: realm_id(),
+        role_id: role_id(),
+        endpoint_role: EndpointRole::UserAgent,
+        service: ServicePackage::UserV2,
+        agent_generation: generation(3),
+    };
+    let mut credential = descriptor(
+        "caaaaaaaaaaaaaaaaaaq",
+        ProviderType::Credential,
+        "credential-secret-service",
+    );
+    credential.placement = placement.clone();
+    let mut consumer = descriptor(
+        "eaaaaaaaaaaaaaaaaaaq",
+        ProviderType::Runtime,
+        "runtime-user-agent-consumer",
+    );
+    consumer.placement = placement;
+
+    let mut lease = credential_lease();
+    lease.placement_binding = user_agent_credential_binding();
+    lease.validate(&credential, &consumer, 5_000).unwrap();
+
+    consumer.placement = ProviderPlacement::UserAgent {
+        realm_id: realm_id(),
+        role_id: role_id(),
+        endpoint_role: EndpointRole::UserAgent,
+        service: ServicePackage::UserV2,
+        agent_generation: generation(4),
+    };
+    assert_eq!(
+        lease.validate(&credential, &consumer, 5_000),
+        Err(ProviderContractError::LeaseNotColocated)
+    );
+
+    consumer.placement = agent_placement();
+    assert_eq!(
+        lease.validate(&credential, &consumer, 5_000),
+        Err(ProviderContractError::LeaseNotColocated)
+    );
+}
+
+#[test]
+fn user_agent_placement_requires_the_user_service_and_role() {
+    let valid = ProviderPlacement::UserAgent {
+        realm_id: realm_id(),
+        role_id: role_id(),
+        endpoint_role: EndpointRole::UserAgent,
+        service: ServicePackage::UserV2,
+        agent_generation: generation(1),
+    };
+    valid.validate().unwrap();
+
+    let invalid_service = ProviderPlacement::UserAgent {
+        realm_id: realm_id(),
+        role_id: role_id(),
+        endpoint_role: EndpointRole::UserAgent,
+        service: ServicePackage::ProviderV2,
+        agent_generation: generation(1),
+    };
+    assert_eq!(
+        invalid_service.validate(),
+        Err(ProviderContractError::PlacementMismatch)
     );
 }
 

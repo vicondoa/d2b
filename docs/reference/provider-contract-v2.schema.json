@@ -183,9 +183,6 @@
     "CredentialLease": {
       "additionalProperties": false,
       "properties": {
-        "agentBinding": {
-          "$ref": "#/definitions/AgentPlacementBinding"
-        },
         "allowedOperations": {
           "$ref": "#/definitions/BoundedVec_1_32_SdkOperationClass"
         },
@@ -218,6 +215,9 @@
         "leaseId": {
           "type": "string"
         },
+        "placementBinding": {
+          "$ref": "#/definitions/CredentialPlacementBinding"
+        },
         "revokedAtUnixMs": {
           "format": "uint64",
           "minimum": 0.0,
@@ -242,7 +242,6 @@
         }
       },
       "required": [
-        "agentBinding",
         "allowedOperations",
         "consumerProviderGeneration",
         "consumerProviderId",
@@ -251,6 +250,7 @@
         "expiresAtUnixMs",
         "issuedAtUnixMs",
         "leaseId",
+        "placementBinding",
         "rotationGeneration",
         "sourceVersion",
         "state",
@@ -271,6 +271,58 @@
         "forbidden"
       ],
       "type": "string"
+    },
+    "CredentialPlacementBinding": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "binding": {
+              "$ref": "#/definitions/AgentPlacementBinding"
+            },
+            "kind": {
+              "enum": [
+                "provider-agent"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "binding",
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "agentGeneration": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "kind": {
+              "enum": [
+                "user-agent"
+              ],
+              "type": "string"
+            },
+            "realmId": {
+              "type": "string"
+            },
+            "roleId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "agentGeneration",
+            "kind",
+            "realmId",
+            "roleId"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "DeviceMediationPosture": {
       "enum": [
@@ -1558,6 +1610,43 @@
             "roleId",
             "service",
             "workloadId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "agentGeneration": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "endpointRole": {
+              "$ref": "#/definitions/EndpointRole"
+            },
+            "kind": {
+              "enum": [
+                "user-agent"
+              ],
+              "type": "string"
+            },
+            "realmId": {
+              "type": "string"
+            },
+            "roleId": {
+              "type": "string"
+            },
+            "service": {
+              "$ref": "#/definitions/ServicePackage"
+            }
+          },
+          "required": [
+            "agentGeneration",
+            "endpointRole",
+            "kind",
+            "realmId",
+            "roleId",
+            "service"
           ],
           "type": "object"
         }

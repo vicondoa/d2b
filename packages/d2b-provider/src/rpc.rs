@@ -340,9 +340,9 @@ impl RpcProviderProxy {
         request: &CredentialLeaseRequest,
     ) -> ProviderResult<()> {
         let now = self.clock.now_unix_ms();
-        let binding = self.descriptor.placement.agent_binding();
+        let binding = self.descriptor.placement.credential_binding();
         if request.context != *context.operation
-            || binding.as_ref() != Some(&request.agent_binding)
+            || binding.as_ref() != Some(&request.placement_binding)
             || request.consumer_provider_id == self.descriptor.provider_id
             || request.allowed_operations.is_empty()
             || request.allowed_operations.len() > MAX_CREDENTIAL_OPERATION_CLASSES
@@ -368,7 +368,7 @@ impl RpcProviderProxy {
         let now = self.clock.now_unix_ms();
         if lease.credential_provider_id != self.descriptor.provider_id
             || lease.consumer_provider_id != request.consumer_provider_id
-            || lease.agent_binding != request.agent_binding
+            || lease.placement_binding != request.placement_binding
             || lease.allowed_operations != request.allowed_operations
             || lease.credential_provider_generation != self.descriptor.registry_generation
             || lease.issued_at_unix_ms > now

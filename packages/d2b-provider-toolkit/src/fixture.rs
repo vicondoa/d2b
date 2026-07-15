@@ -10,20 +10,21 @@ use d2b_contracts::{
         AdoptionRequest, AdoptionState, AgentPlacementBinding, AudioChannel, AudioDirection,
         AudioProvider, CgroupAuthority, ConfiguredItemId, CorrelationId, CredentialLease,
         CredentialLeaseRequest, CredentialLeaseState, CredentialLeaseTransferPolicy,
-        CredentialProvider, DeviceMediationPosture, DeviceProvider, DeviceSelectorId,
-        DisplayProvider, Fingerprint, Generation, IdempotencyKey, ImplementationId,
-        InfrastructurePowerState, InfrastructureProvider, LeaseId, MutationReceipt, MutationState,
-        NetworkPosture, NetworkProvider, ObservabilityExportFormat, ObservabilityProvider,
-        ObservabilityView, ObservationReason, ObservedLifecycleState, OperationId,
-        PROVIDER_SCHEMA_VERSION, PersistentIdentityPosture, PlanId, PlannedResourceClass,
-        PrincipalRef, ProcessAuthority, Provider, ProviderApiVersion, ProviderAuthority,
-        ProviderCallContext, ProviderCapability, ProviderCapabilitySet, ProviderContractError,
-        ProviderDescriptor, ProviderFuture, ProviderHandle, ProviderHealth, ProviderHealthReason,
-        ProviderHealthState, ProviderMethod, ProviderObservation, ProviderOperationContext,
-        ProviderOperationInput, ProviderOperationRequest, ProviderPlacement, ProviderPlan,
-        ProviderRemediation, ProviderTarget, RuntimeAuthorityPosture, RuntimeProvider,
-        SdkOperationClass, SourceVersion, StorageProvider, StorageSnapshotId, SubstrateProvider,
-        TransportBindingId, TransportProvider, UserNamespacePosture,
+        CredentialPlacementBinding, CredentialProvider, DeviceMediationPosture, DeviceProvider,
+        DeviceSelectorId, DisplayProvider, Fingerprint, Generation, IdempotencyKey,
+        ImplementationId, InfrastructurePowerState, InfrastructureProvider, LeaseId,
+        MutationReceipt, MutationState, NetworkPosture, NetworkProvider, ObservabilityExportFormat,
+        ObservabilityProvider, ObservabilityView, ObservationReason, ObservedLifecycleState,
+        OperationId, PROVIDER_SCHEMA_VERSION, PersistentIdentityPosture, PlanId,
+        PlannedResourceClass, PrincipalRef, ProcessAuthority, Provider, ProviderApiVersion,
+        ProviderAuthority, ProviderCallContext, ProviderCapability, ProviderCapabilitySet,
+        ProviderContractError, ProviderDescriptor, ProviderFuture, ProviderHandle, ProviderHealth,
+        ProviderHealthReason, ProviderHealthState, ProviderMethod, ProviderObservation,
+        ProviderOperationContext, ProviderOperationInput, ProviderOperationRequest,
+        ProviderPlacement, ProviderPlan, ProviderRemediation, ProviderTarget,
+        RuntimeAuthorityPosture, RuntimeProvider, SdkOperationClass, SourceVersion,
+        StorageProvider, StorageSnapshotId, SubstrateProvider, TransportBindingId,
+        TransportProvider, UserNamespacePosture,
     },
 };
 use d2b_provider::{
@@ -227,15 +228,25 @@ impl Fixture {
         &self,
         operation: &'a ProviderOperationContext,
     ) -> ProviderCallContext<'a> {
+        let (peer_role, service) = match &self.descriptor.placement {
+            ProviderPlacement::TrustedFirstPartyInProcess {
+                controller_role, ..
+            } => (*controller_role, ServicePackage::ProviderV2),
+            ProviderPlacement::ProviderAgent {
+                endpoint_role,
+                service,
+                ..
+            }
+            | ProviderPlacement::UserAgent {
+                endpoint_role,
+                service,
+                ..
+            } => (*endpoint_role, *service),
+        };
         ProviderCallContext {
             operation,
-            peer_role: match &self.descriptor.placement {
-                ProviderPlacement::TrustedFirstPartyInProcess {
-                    controller_role, ..
-                } => *controller_role,
-                ProviderPlacement::ProviderAgent { endpoint_role, .. } => *endpoint_role,
-            },
-            service: ServicePackage::ProviderV2,
+            peer_role,
+            service,
             monotonic_deadline_remaining_ms: 30_000,
             cancelled: false,
         }
@@ -568,7 +579,7 @@ impl CredentialProvider for FakeProvider {
                 lease_id: LeaseId::parse("lease-fixture").unwrap_or_else(|_| unreachable!()),
                 credential_provider_id: self.fixture.descriptor.provider_id.clone(),
                 consumer_provider_id: request.consumer_provider_id.clone(),
-                agent_binding: request.agent_binding.clone(),
+                placement_binding: request.placement_binding.clone(),
                 allowed_operations: request.allowed_operations.clone(),
                 issued_at_unix_ms: self.fixture.now_unix_ms,
                 expires_at_unix_ms: request.requested_expiry_unix_ms,
@@ -671,11 +682,13 @@ pub fn sample_lease_request(
         context: fixture.operation(ProviderMethod::CredentialAcquireLease)?,
         consumer_provider_id: ProviderId::parse("eeeeeeeeeeeeeeeeeeea")
             .map_err(|_| ProviderContractError::InvalidIdentifier)?,
-        agent_binding: AgentPlacementBinding {
-            realm_id: realm_id.clone(),
-            workload_id: workload_id.clone(),
-            role_id: role_id.clone(),
-            agent_generation: *agent_generation,
+        placement_binding: CredentialPlacementBinding::ProviderAgent {
+            binding: AgentPlacementBinding {
+                realm_id: realm_id.clone(),
+                workload_id: workload_id.clone(),
+                role_id: role_id.clone(),
+                agent_generation: *agent_generation,
+            },
         },
         allowed_operations: BoundedVec::new(vec![SdkOperationClass::Read])
             .map_err(|_| ProviderContractError::BoundExceeded)?,

@@ -29,7 +29,7 @@ pub const MAX_OBSERVABILITY_QUERY_LIMIT: u16 = 256;
 pub const MAX_OBSERVABILITY_EXPORT_RANGE_MS: u64 = 31 * 24 * 60 * 60 * 1_000;
 pub const MAX_SAFE_JSON_INTEGER: u64 = 9_007_199_254_740_991;
 pub const PROVIDER_CONTRACT_FINGERPRINT: &str =
-    "f95fd0dbf69959090cb9ccead1b80b395597b7f0aeab5b4cf91ab603ec2773bf";
+    "91e665314ffbc0fbcc2d4f3bc788dd1d7f4d694382fa2795a47e877eb4ac9b57";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
@@ -586,6 +586,17 @@ pub enum ProviderPlacement {
         #[serde(rename = "agentGeneration")]
         agent_generation: Generation,
     },
+    UserAgent {
+        #[serde(rename = "realmId")]
+        realm_id: RealmId,
+        #[serde(rename = "roleId")]
+        role_id: RoleId,
+        #[serde(rename = "endpointRole")]
+        endpoint_role: EndpointRole,
+        service: ServicePackage,
+        #[serde(rename = "agentGeneration")]
+        agent_generation: Generation,
+    },
 }
 
 impl fmt::Debug for ProviderPlacement {
@@ -608,6 +619,17 @@ impl fmt::Debug for ProviderPlacement {
                 .field("service", service)
                 .field("agent_generation", agent_generation)
                 .finish_non_exhaustive(),
+            Self::UserAgent {
+                endpoint_role,
+                service,
+                agent_generation,
+                ..
+            } => formatter
+                .debug_struct("UserAgent")
+                .field("endpoint_role", endpoint_role)
+                .field("service", service)
+                .field("agent_generation", agent_generation)
+                .finish_non_exhaustive(),
         }
     }
 }
@@ -616,7 +638,8 @@ impl ProviderPlacement {
     pub fn realm_id(&self) -> &RealmId {
         match self {
             Self::TrustedFirstPartyInProcess { realm_id, .. }
-            | Self::ProviderAgent { realm_id, .. } => realm_id,
+            | Self::ProviderAgent { realm_id, .. }
+            | Self::UserAgent { realm_id, .. } => realm_id,
         }
     }
 
@@ -635,6 +658,15 @@ impl ProviderPlacement {
             {
                 Ok(())
             }
+            Self::UserAgent {
+                endpoint_role,
+                service,
+                ..
+            } if *endpoint_role == EndpointRole::UserAgent
+                && *service == ServicePackage::UserV2 =>
+            {
+                Ok(())
+            }
             _ => Err(ProviderContractError::PlacementMismatch),
         }
     }
@@ -650,6 +682,36 @@ impl ProviderPlacement {
             } => Some(AgentPlacementBinding {
                 realm_id: realm_id.clone(),
                 workload_id: workload_id.clone(),
+                role_id: role_id.clone(),
+                agent_generation: *agent_generation,
+            }),
+            Self::TrustedFirstPartyInProcess { .. } | Self::UserAgent { .. } => None,
+        }
+    }
+
+    pub fn credential_binding(&self) -> Option<CredentialPlacementBinding> {
+        match self {
+            Self::ProviderAgent {
+                realm_id,
+                workload_id,
+                role_id,
+                agent_generation,
+                ..
+            } => Some(CredentialPlacementBinding::ProviderAgent {
+                binding: AgentPlacementBinding {
+                    realm_id: realm_id.clone(),
+                    workload_id: workload_id.clone(),
+                    role_id: role_id.clone(),
+                    agent_generation: *agent_generation,
+                },
+            }),
+            Self::UserAgent {
+                realm_id,
+                role_id,
+                agent_generation,
+                ..
+            } => Some(CredentialPlacementBinding::UserAgent {
+                realm_id: realm_id.clone(),
                 role_id: role_id.clone(),
                 agent_generation: *agent_generation,
             }),
@@ -673,6 +735,39 @@ impl fmt::Debug for AgentPlacementBinding {
             .debug_struct("AgentPlacementBinding")
             .field("agent_generation", &self.agent_generation)
             .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum CredentialPlacementBinding {
+    ProviderAgent {
+        binding: AgentPlacementBinding,
+    },
+    UserAgent {
+        #[serde(rename = "realmId")]
+        realm_id: RealmId,
+        #[serde(rename = "roleId")]
+        role_id: RoleId,
+        #[serde(rename = "agentGeneration")]
+        agent_generation: Generation,
+    },
+}
+
+impl fmt::Debug for CredentialPlacementBinding {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ProviderAgent { binding } => formatter
+                .debug_struct("CredentialPlacementBinding::ProviderAgent")
+                .field("agent_generation", &binding.agent_generation)
+                .finish_non_exhaustive(),
+            Self::UserAgent {
+                agent_generation, ..
+            } => formatter
+                .debug_struct("CredentialPlacementBinding::UserAgent")
+                .field("agent_generation", agent_generation)
+                .finish_non_exhaustive(),
+        }
     }
 }
 
@@ -1911,7 +2006,7 @@ pub struct CredentialLease {
     pub lease_id: LeaseId,
     pub credential_provider_id: ProviderId,
     pub consumer_provider_id: ProviderId,
-    pub agent_binding: AgentPlacementBinding,
+    pub placement_binding: CredentialPlacementBinding,
     pub allowed_operations: BoundedVec<SdkOperationClass, 1, MAX_CREDENTIAL_OPERATION_CLASSES>,
     pub issued_at_unix_ms: u64,
     pub expires_at_unix_ms: u64,
@@ -1944,15 +2039,15 @@ impl CredentialLease {
     ) -> Result<(), ProviderContractError> {
         credential.validate()?;
         consumer.validate()?;
-        let credential_binding = credential.placement.agent_binding();
-        let consumer_binding = consumer.placement.agent_binding();
+        let credential_binding = credential.placement.credential_binding();
+        let consumer_binding = consumer.placement.credential_binding();
         if credential.provider_type() != ProviderType::Credential
             || self.credential_provider_id != credential.provider_id
             || self.consumer_provider_id != consumer.provider_id
             || self.credential_provider_generation != credential.registry_generation
             || self.consumer_provider_generation != consumer.registry_generation
-            || credential_binding.as_ref() != Some(&self.agent_binding)
-            || consumer_binding.as_ref() != Some(&self.agent_binding)
+            || credential_binding.as_ref() != Some(&self.placement_binding)
+            || consumer_binding.as_ref() != Some(&self.placement_binding)
             || self.credential_provider_id == self.consumer_provider_id
         {
             return Err(ProviderContractError::LeaseNotColocated);
@@ -2041,7 +2136,7 @@ impl CredentialLease {
 pub struct CredentialLeaseRequest {
     pub context: ProviderOperationContext,
     pub consumer_provider_id: ProviderId,
-    pub agent_binding: AgentPlacementBinding,
+    pub placement_binding: CredentialPlacementBinding,
     pub allowed_operations: BoundedVec<SdkOperationClass, 1, MAX_CREDENTIAL_OPERATION_CLASSES>,
     pub requested_expiry_unix_ms: u64,
 }

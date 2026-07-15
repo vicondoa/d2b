@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -53,21 +53,6 @@ fn read_repo_file(rel: &str) -> String {
     std::fs::read_to_string(repo_root().join(rel)).expect("read repo file")
 }
 
-fn manifest_section<'a>(manifest: &'a str, name: &str) -> Vec<&'a str> {
-    let header = format!("[{name}]");
-    manifest
-        .split_once(&header)
-        .map(|(_, rest)| {
-            rest.lines()
-                .skip_while(|line| line.trim().is_empty())
-                .take_while(|line| !line.starts_with('['))
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 fn git_tracked_files() -> Vec<String> {
     let output = Command::new("git")
         .arg("-C")
@@ -88,6 +73,76 @@ fn git_tracked_files() -> Vec<String> {
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
+}
+
+fn workspace_metadata() -> serde_json::Value {
+    let output = Command::new("cargo")
+        .current_dir(repo_root().join("packages"))
+        .args(["metadata", "--format-version", "1", "--locked"])
+        .output()
+        .expect("run cargo metadata");
+    assert!(
+        output.status.success(),
+        "cargo metadata failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("parse cargo metadata")
+}
+
+fn transitive_package_names(metadata: &serde_json::Value, root_package: &str) -> BTreeSet<String> {
+    let package_names = metadata["packages"]
+        .as_array()
+        .expect("metadata packages")
+        .iter()
+        .map(|package| {
+            (
+                package["id"].as_str().expect("package id").to_owned(),
+                package["name"].as_str().expect("package name").to_owned(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let dependencies = metadata["resolve"]["nodes"]
+        .as_array()
+        .expect("metadata resolve nodes")
+        .iter()
+        .map(|node| {
+            let ids = node["deps"]
+                .as_array()
+                .expect("node dependencies")
+                .iter()
+                .map(|dependency| {
+                    dependency["pkg"]
+                        .as_str()
+                        .expect("dependency package id")
+                        .to_owned()
+                })
+                .collect::<Vec<_>>();
+            (
+                node["id"].as_str().expect("resolve node id").to_owned(),
+                ids,
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let root_id = package_names
+        .iter()
+        .find_map(|(id, name)| (name == root_package).then(|| id.clone()))
+        .unwrap_or_else(|| panic!("workspace package {root_package} not found"));
+
+    let mut pending = VecDeque::from([root_id]);
+    let mut visited = BTreeSet::new();
+    let mut names = BTreeSet::new();
+    while let Some(id) = pending.pop_front() {
+        if !visited.insert(id.clone()) {
+            continue;
+        }
+        if let Some(name) = package_names.get(&id) {
+            names.insert(name.clone());
+        }
+        if let Some(dependency_ids) = dependencies.get(&id) {
+            pending.extend(dependency_ids.iter().cloned());
+        }
+    }
+    names
 }
 
 #[test]
@@ -146,6 +201,7 @@ fn implementation_crates_are_base_first_and_workspace_members_are_sorted() {
 
 #[test]
 fn w4_provider_workspace_inventory_is_reserved_and_dependency_minimal() {
+    let metadata = workspace_metadata();
     let workspace = read_repo_file("packages/Cargo.toml");
     let members = workspace
         .split_once("members = [")
@@ -213,30 +269,59 @@ fn w4_provider_workspace_inventory_is_reserved_and_dependency_minimal() {
                 "{package} must depend on the canonical provider boundary: {required}"
             );
         }
-        for forbidden in ["d2bd =", "d2b-priv-broker =", "d2b-realm-provider ="] {
+        let dependency_names = transitive_package_names(&metadata, package);
+        for forbidden in ["d2bd", "d2b-priv-broker", "d2b-realm-provider"] {
             assert!(
-                !manifest.lines().any(|line| line.starts_with(forbidden)),
-                "{package} must not depend on {forbidden}"
+                !dependency_names.contains(forbidden),
+                "{package} must not transitively depend on {forbidden}"
             );
         }
     }
 
-    let fake_sdk = read_repo_file(&format!("packages/{W4_SUPPORT_CRATE}/Cargo.toml"));
-    let fake_sdk_dependencies = manifest_section(&fake_sdk, "dependencies");
-    for forbidden in [
-        "azure",
-        "hyper ",
-        "hyper-",
-        "reqwest",
-        "rustls",
-        "tungstenite",
+    for package in [
+        W4_SUPPORT_CRATE,
+        "d2b-provider-infrastructure-azure-vm",
+        "d2b-provider-runtime-azure-vm",
     ] {
-        assert!(
-            !fake_sdk_dependencies
-                .iter()
-                .any(|dependency| dependency.starts_with(forbidden)),
-            "the fake SDK must not acquire Azure or network dependency {forbidden}"
-        );
+        let dependencies = transitive_package_names(&metadata, package);
+        for dependency in dependencies {
+            let forbidden = dependency.starts_with("azure")
+                || matches!(
+                    dependency.as_str(),
+                    "curl"
+                        | "hyper"
+                        | "hyper-util"
+                        | "openssl"
+                        | "reqwest"
+                        | "rustls"
+                        | "tokio-tungstenite"
+                        | "tungstenite"
+                        | "ureq"
+                );
+            assert!(
+                !forbidden,
+                "{package} must not acquire live Azure/network dependency {dependency}"
+            );
+        }
+    }
+
+    for production_package in [
+        "d2b-gateway",
+        "d2b-gateway-runtime",
+        "d2b-guestd",
+        "d2b-userd",
+        "d2bd",
+    ] {
+        let dependencies = transitive_package_names(&metadata, production_package);
+        for forbidden in [
+            "d2b-provider-infrastructure-azure-vm",
+            "d2b-provider-runtime-azure-vm",
+        ] {
+            assert!(
+                !dependencies.contains(forbidden),
+                "{production_package} must not include unavailable Azure VM provider {forbidden}"
+            );
+        }
     }
 }
 

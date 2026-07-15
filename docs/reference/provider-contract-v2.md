@@ -21,17 +21,20 @@ namespace, persistent identity, and device-mediation posture.
 
 ## Placement and credentials
 
-Placement is either an audited trusted adapter in its owning controller or a
-provider agent identified by canonical realm, workload, and role IDs. Agent
-placement must use ComponentSession role `provider-agent` and service
-`d2b.provider.v2`.
+Placement is an audited trusted adapter in its owning controller, a provider
+agent identified by canonical realm, workload, and role IDs, or a user-agent
+provider identified by canonical realm and role IDs. Provider-agent placement
+uses ComponentSession role `provider-agent` and service `d2b.provider.v2`;
+user-agent placement uses role `user-agent` and service `d2b.user.v2`.
 
 Credential operations return only `CredentialLease`. A lease contains an
 opaque ID, closed SDK operation classes, generations, expiry, rotation, and
 revocation state. It is usable only when the credential and consumer providers
-have the same exact agent placement binding. Lease transfer is forbidden.
-There is no serialized secret, byte stream, environment, file, or descriptor
-return path.
+have the same exact provider-agent or user-agent placement binding. Cloud
+credential providers use only provider-agent placement; the user-agent binding
+exists for the userd-owned Secret Service provider. Lease transfer is
+forbidden. There is no serialized secret, byte stream, environment, file, or
+descriptor return path.
 
 ## Lifecycle
 
@@ -108,6 +111,6 @@ maintain independent method allowlists.
 - [`provider-contract-v2-fixture.json`](./provider-contract-v2-fixture.json)
   is the canonical complete fixture.
 - Fingerprint
-  `f95fd0dbf69959090cb9ccead1b80b395597b7f0aeab5b4cf91ab603ec2773bf`
+  `91e665314ffbc0fbcc2d4f3bc788dd1d7f4d694382fa2795a47e877eb4ac9b57`
   binds the canonical compact schema and fixture with its fingerprint field
   zeroed. The focused Rust contract test rejects any drift.
