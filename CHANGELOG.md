@@ -97,6 +97,9 @@ deprecations ship one minor release before removal.
 - Pinned the exact `rustc`, `rustdoc`, and `clippy-driver` executables used by
   workspace and proof Cargo commands, and separated proof clippy/test targets,
   preventing intra-gate compiler selection drift.
+- Shipped the complete pinned stable Rust distribution in delivery shells and
+  asserted Clippy's compiler identity, preventing fallback to a newer host
+  `clippy-driver`.
 - Closed W2 service-contract ambiguity by making provider capability claims
   method-exact, binding response attachments and streams, rejecting mixed
   identity scopes and contradictory error outcomes, returning exact typed

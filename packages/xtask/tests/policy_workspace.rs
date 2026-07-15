@@ -129,6 +129,11 @@ fn standalone_proofs_isolate_mixed_toolchain_targets() {
             && rust_gate.contains("RUSTC does not match packages/rust-toolchain.toml"),
         "workspace Rust gate must pin the compiler and clippy executables used by Cargo"
     );
+    let delivery_tools = read_repo_file("pkgs/delivery-tools.nix");
+    assert!(
+        delivery_tools.contains("rust-bin.stable.${rustStableVersion}.default"),
+        "delivery shell must provide matching clippy/rustfmt with pinned stable Rust"
+    );
 }
 
 #[test]
