@@ -6,11 +6,14 @@ use std::sync::{
 use d2b_contracts::{
     v2_identity::{ProviderType, WorkloadId},
     v2_provider::{
-        CredentialProvider, ImplementationId, MutationState, Provider, ProviderFailureKind,
-        ProviderMethod, ProviderOperationInput, ProviderPlacement, SdkOperationClass,
+        CredentialProvider, Fingerprint, ImplementationId, MutationState, Provider,
+        ProviderFailureKind, ProviderMethod, ProviderOperationInput, ProviderPlacement,
+        SdkOperationClass,
     },
 };
-use d2b_provider::{ProviderClock, ProviderInstance};
+use d2b_provider::{
+    FactoryError, ProviderClock, ProviderFactory, ProviderInstance, ProviderRegistryBuilder,
+};
 use d2b_provider_toolkit::{DeterministicClock, Fixture, check_provider_conformance};
 
 use super::*;
@@ -148,8 +151,7 @@ impl EntraCredentialClient for FakeEntraClient {
 fn descriptors() -> (Fixture, ProviderDescriptor, ProviderDescriptor) {
     let fixture = Fixture::new(ProviderType::Credential, 0).expect("credential fixture");
     let mut descriptor = fixture.descriptor.clone();
-    descriptor.implementation_id =
-        ImplementationId::parse(IMPLEMENTATION_ID).expect("implementation id");
+    descriptor.implementation_id = implementation_id();
     let consumer = Fixture::new(ProviderType::Runtime, 1)
         .expect("consumer fixture")
         .descriptor;
@@ -194,6 +196,65 @@ fn lease_request(provider: &EntraCredentialProvider, fixture: &Fixture) -> Crede
         .expect("operations"),
         requested_expiry_unix_ms: NOW + 30_000,
     }
+}
+
+#[test]
+fn factory_registers_and_rejects_wrong_type_or_implementation() {
+    let (_, descriptor, consumer) = descriptors();
+    let clock = Arc::new(DeterministicClock::new(NOW));
+    let client = Arc::new(FakeEntraClient::new(clock.clone()));
+    let factory = EntraCredentialProviderFactory::new_with_clock(
+        consumer,
+        vec![SdkOperationClass::Authenticate, SdkOperationClass::Read],
+        client.clone(),
+        clock,
+    )
+    .expect("factory");
+
+    assert_eq!(
+        EntraCredentialProviderFactory::key(),
+        provider_factory_key()
+    );
+    assert_eq!(
+        provider_factory_key().implementation_id,
+        implementation_id()
+    );
+
+    let mut wrong_type = Fixture::new(ProviderType::Runtime, 2)
+        .expect("runtime fixture")
+        .descriptor;
+    wrong_type.implementation_id = implementation_id();
+    assert!(matches!(
+        factory.construct(&wrong_type),
+        Err(FactoryError::Rejected)
+    ));
+
+    let mut wrong_implementation = descriptor.clone();
+    wrong_implementation.implementation_id =
+        ImplementationId::parse("other-entra").expect("implementation id");
+    assert!(matches!(
+        factory.construct(&wrong_implementation),
+        Err(FactoryError::Rejected)
+    ));
+    assert_eq!(client.state_calls.load(Ordering::Relaxed), 0);
+    assert_eq!(client.issue_calls.load(Ordering::Relaxed), 0);
+
+    let mut builder = ProviderRegistryBuilder::new(
+        descriptor.registry_generation,
+        Fingerprint::parse("e".repeat(64)).expect("fingerprint"),
+        NOW,
+    );
+    builder
+        .register_factory(provider_factory_key(), Arc::new(factory))
+        .expect("register factory");
+    builder
+        .register_instance(descriptor)
+        .expect("construct provider");
+    let registry = builder.finish().expect("registry");
+    assert_eq!(
+        registry.snapshot().factories.as_slice(),
+        &[provider_factory_key()]
+    );
 }
 
 #[tokio::test]

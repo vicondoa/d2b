@@ -23,20 +23,36 @@ use d2b_contracts::{
     v2_provider::{
         AdoptionState, AgentPlacementBinding, AuthorizedProviderScope, CredentialLease,
         CredentialLeaseRequest, CredentialLeaseState, CredentialLeaseTransferPolicy,
-        CredentialProvider, Generation, LeaseId, MAX_CREDENTIAL_OPERATION_CLASSES,
-        MAX_PROVIDER_LEASE_LIFETIME_MS, MAX_SAFE_JSON_INTEGER, MutationReceipt, MutationState,
-        ObservationReason, ObservedLifecycleState, OperationBinding, Provider, ProviderCallContext,
-        ProviderCapability, ProviderCapabilitySet, ProviderContractError, ProviderDescriptor,
-        ProviderFailure, ProviderFailureKind, ProviderFuture, ProviderHealth, ProviderHealthReason,
+        CredentialProvider, Generation, ImplementationId, LeaseId,
+        MAX_CREDENTIAL_OPERATION_CLASSES, MAX_PROVIDER_LEASE_LIFETIME_MS, MAX_SAFE_JSON_INTEGER,
+        MutationReceipt, MutationState, ObservationReason, ObservedLifecycleState,
+        OperationBinding, Provider, ProviderCallContext, ProviderCapability, ProviderCapabilitySet,
+        ProviderContractError, ProviderDescriptor, ProviderFactoryKey, ProviderFailure,
+        ProviderFailureKind, ProviderFuture, ProviderHealth, ProviderHealthReason,
         ProviderHealthState, ProviderMethod, ProviderObservation, ProviderOperationRequest,
         ProviderRemediation, RetryClass, SdkOperationClass, SourceVersion,
     },
 };
-use d2b_provider::{ProviderClock, SystemProviderClock};
+use d2b_provider::{
+    FactoryError, ProviderClock, ProviderFactory, ProviderInstance, SystemProviderClock,
+};
 use tokio::time::timeout;
 
 pub const IMPLEMENTATION_ID: &str = "entra";
 pub const MAX_LOCAL_LEASES: usize = 256;
+
+/// Canonical typed implementation identifier.
+pub fn implementation_id() -> ImplementationId {
+    ImplementationId::parse(IMPLEMENTATION_ID).unwrap_or_else(|_| unreachable!())
+}
+
+/// Canonical registry key for the Entra implementation.
+pub fn provider_factory_key() -> ProviderFactoryKey {
+    ProviderFactoryKey {
+        provider_type: ProviderType::Credential,
+        implementation_id: implementation_id(),
+    }
+}
 
 /// The credential authority is owned by one exact co-located consumer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -236,6 +252,100 @@ pub trait EntraCredentialClient: Send + Sync {
     ) -> Result<EntraLeaseRevocation, EntraClientError>;
 }
 
+/// Registry factory bound to one exact cloud consumer and Entra client.
+#[derive(Clone)]
+pub struct EntraCredentialProviderFactory {
+    consumer: ProviderDescriptor,
+    authorized_operations: Vec<SdkOperationClass>,
+    client: Arc<dyn EntraCredentialClient>,
+    clock: Arc<dyn ProviderClock>,
+}
+
+impl fmt::Debug for EntraCredentialProviderFactory {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("EntraCredentialProviderFactory")
+            .field("provider_type", &ProviderType::Credential)
+            .field("consumer_type", &self.consumer.provider_type())
+            .field("consumer_generation", &self.consumer.registry_generation)
+            .field(
+                "authorized_operation_count",
+                &self.authorized_operations.len(),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+impl EntraCredentialProviderFactory {
+    /// Construct a production-clock factory for `ProviderRegistryBuilder`.
+    pub fn new(
+        consumer: ProviderDescriptor,
+        authorized_operations: Vec<SdkOperationClass>,
+        client: Arc<dyn EntraCredentialClient>,
+    ) -> Result<Self, EntraProviderError> {
+        Self::new_with_clock(
+            consumer,
+            authorized_operations,
+            client,
+            Arc::new(SystemProviderClock),
+        )
+    }
+
+    /// Construct a factory with an injected clock.
+    pub fn new_with_clock(
+        consumer: ProviderDescriptor,
+        mut authorized_operations: Vec<SdkOperationClass>,
+        client: Arc<dyn EntraCredentialClient>,
+        clock: Arc<dyn ProviderClock>,
+    ) -> Result<Self, EntraProviderError> {
+        consumer
+            .validate()
+            .map_err(|_| EntraProviderError::InvalidConsumer)?;
+        if !consumer_type_can_hold_credential(consumer.provider_type()) {
+            return Err(EntraProviderError::InvalidConsumer);
+        }
+        authorized_operations.sort_unstable();
+        if authorized_operations.is_empty()
+            || authorized_operations.len() > MAX_CREDENTIAL_OPERATION_CLASSES
+            || authorized_operations
+                .windows(2)
+                .any(|pair| pair[0] == pair[1])
+        {
+            return Err(EntraProviderError::InvalidAuthorizedOperations);
+        }
+        Ok(Self {
+            consumer,
+            authorized_operations,
+            client,
+            clock,
+        })
+    }
+
+    /// Return the canonical registry key accepted by this factory.
+    pub fn key() -> ProviderFactoryKey {
+        provider_factory_key()
+    }
+}
+
+impl ProviderFactory for EntraCredentialProviderFactory {
+    fn construct(&self, descriptor: &ProviderDescriptor) -> Result<ProviderInstance, FactoryError> {
+        if descriptor.provider_type() != ProviderType::Credential
+            || descriptor.implementation_id != implementation_id()
+        {
+            return Err(FactoryError::Rejected);
+        }
+        let provider = EntraCredentialProvider::new_colocated_with_clock(
+            descriptor.clone(),
+            self.consumer.clone(),
+            self.authorized_operations.clone(),
+            self.client.clone(),
+            self.clock.clone(),
+        )
+        .map_err(|_| FactoryError::Rejected)?;
+        Ok(ProviderInstance::Credential(Arc::new(provider)))
+    }
+}
+
 #[derive(Clone)]
 struct LeaseRecord {
     lease: CredentialLease,
@@ -295,7 +405,7 @@ impl EntraCredentialProvider {
             .validate()
             .map_err(|_| EntraProviderError::InvalidDescriptor)?;
         if descriptor.provider_type() != ProviderType::Credential
-            || descriptor.implementation_id.as_str() != IMPLEMENTATION_ID
+            || descriptor.implementation_id != implementation_id()
             || descriptor.capabilities != exact_capabilities()
         {
             return Err(EntraProviderError::InvalidDescriptor);

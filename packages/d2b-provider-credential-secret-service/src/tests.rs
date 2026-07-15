@@ -6,11 +6,13 @@ use std::sync::{
 use d2b_contracts::{
     v2_identity::{ProviderType, WorkloadId},
     v2_provider::{
-        AuthorizedProviderScope, CredentialProvider, ImplementationId, MutationState, Provider,
-        ProviderFailureKind, ProviderMethod, ProviderOperationInput, SdkOperationClass,
+        AuthorizedProviderScope, CredentialProvider, Fingerprint, ImplementationId, MutationState,
+        Provider, ProviderFailureKind, ProviderMethod, ProviderOperationInput, SdkOperationClass,
     },
 };
-use d2b_provider::{ProviderClock, ProviderInstance};
+use d2b_provider::{
+    FactoryError, ProviderClock, ProviderFactory, ProviderInstance, ProviderRegistryBuilder,
+};
 use d2b_provider_toolkit::{DeterministicClock, Fixture, check_provider_conformance};
 
 use super::*;
@@ -157,8 +159,7 @@ fn setup() -> (
 ) {
     let fixture = Fixture::new(ProviderType::Credential, 0).expect("credential fixture");
     let mut descriptor = fixture.descriptor.clone();
-    descriptor.implementation_id =
-        ImplementationId::parse(IMPLEMENTATION_ID).expect("implementation id");
+    descriptor.implementation_id = implementation_id();
     let consumer = Fixture::new(ProviderType::Transport, 1)
         .expect("consumer fixture")
         .descriptor;
@@ -194,8 +195,7 @@ fn lease_request(
 fn construction_rejects_non_consuming_provider_types() {
     let fixture = Fixture::new(ProviderType::Credential, 0).expect("credential fixture");
     let mut descriptor = fixture.descriptor;
-    descriptor.implementation_id =
-        ImplementationId::parse(IMPLEMENTATION_ID).expect("implementation id");
+    descriptor.implementation_id = implementation_id();
     let consumer = Fixture::new(ProviderType::Audio, 1)
         .expect("audio fixture")
         .descriptor;
@@ -212,6 +212,70 @@ fn construction_rejects_non_consuming_provider_types() {
         result,
         Err(SecretServiceProviderError::InvalidConsumer)
     ));
+}
+
+#[test]
+fn factory_registers_and_rejects_wrong_type_or_implementation() {
+    let fixture = Fixture::new(ProviderType::Credential, 0).expect("credential fixture");
+    let mut descriptor = fixture.descriptor;
+    descriptor.implementation_id = implementation_id();
+    let consumer = Fixture::new(ProviderType::Transport, 1)
+        .expect("consumer fixture")
+        .descriptor;
+    let clock = Arc::new(DeterministicClock::new(NOW));
+    let port = Arc::new(FakeOo7Port::new(clock.clone()));
+    let factory = SecretServiceCredentialProviderFactory::new_with_clock(
+        consumer,
+        vec![SdkOperationClass::Read],
+        port.clone(),
+        clock,
+    )
+    .expect("factory");
+
+    assert_eq!(
+        SecretServiceCredentialProviderFactory::key(),
+        provider_factory_key()
+    );
+    assert_eq!(
+        provider_factory_key().implementation_id,
+        implementation_id()
+    );
+
+    let mut wrong_type = Fixture::new(ProviderType::Runtime, 2)
+        .expect("runtime fixture")
+        .descriptor;
+    wrong_type.implementation_id = implementation_id();
+    assert!(matches!(
+        factory.construct(&wrong_type),
+        Err(FactoryError::Rejected)
+    ));
+
+    let mut wrong_implementation = descriptor.clone();
+    wrong_implementation.implementation_id =
+        ImplementationId::parse("other-secret-service").expect("implementation id");
+    assert!(matches!(
+        factory.construct(&wrong_implementation),
+        Err(FactoryError::Rejected)
+    ));
+    assert_eq!(port.state_calls.load(Ordering::Relaxed), 0);
+    assert_eq!(port.issue_calls.load(Ordering::Relaxed), 0);
+
+    let mut builder = ProviderRegistryBuilder::new(
+        descriptor.registry_generation,
+        Fingerprint::parse("f".repeat(64)).expect("fingerprint"),
+        NOW,
+    );
+    builder
+        .register_factory(provider_factory_key(), Arc::new(factory))
+        .expect("register factory");
+    builder
+        .register_instance(descriptor)
+        .expect("construct provider");
+    let registry = builder.finish().expect("registry");
+    assert_eq!(
+        registry.snapshot().factories.as_slice(),
+        &[provider_factory_key()]
+    );
 }
 
 #[tokio::test]

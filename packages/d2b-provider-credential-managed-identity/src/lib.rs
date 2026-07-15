@@ -23,20 +23,36 @@ use d2b_contracts::{
     v2_provider::{
         AdoptionState, AgentPlacementBinding, AuthorizedProviderScope, CredentialLease,
         CredentialLeaseRequest, CredentialLeaseState, CredentialLeaseTransferPolicy,
-        CredentialProvider, Generation, LeaseId, MAX_CREDENTIAL_OPERATION_CLASSES,
-        MAX_PROVIDER_LEASE_LIFETIME_MS, MAX_SAFE_JSON_INTEGER, MutationReceipt, MutationState,
-        ObservationReason, ObservedLifecycleState, OperationBinding, Provider, ProviderCallContext,
-        ProviderCapability, ProviderCapabilitySet, ProviderContractError, ProviderDescriptor,
-        ProviderFailure, ProviderFailureKind, ProviderFuture, ProviderHealth, ProviderHealthReason,
+        CredentialProvider, Generation, ImplementationId, LeaseId,
+        MAX_CREDENTIAL_OPERATION_CLASSES, MAX_PROVIDER_LEASE_LIFETIME_MS, MAX_SAFE_JSON_INTEGER,
+        MutationReceipt, MutationState, ObservationReason, ObservedLifecycleState,
+        OperationBinding, Provider, ProviderCallContext, ProviderCapability, ProviderCapabilitySet,
+        ProviderContractError, ProviderDescriptor, ProviderFactoryKey, ProviderFailure,
+        ProviderFailureKind, ProviderFuture, ProviderHealth, ProviderHealthReason,
         ProviderHealthState, ProviderMethod, ProviderObservation, ProviderOperationRequest,
         ProviderRemediation, RetryClass, SdkOperationClass, SourceVersion,
     },
 };
-use d2b_provider::{ProviderClock, SystemProviderClock};
+use d2b_provider::{
+    FactoryError, ProviderClock, ProviderFactory, ProviderInstance, SystemProviderClock,
+};
 use tokio::time::timeout;
 
 pub const IMPLEMENTATION_ID: &str = "managed-identity";
 pub const MAX_LOCAL_LEASES: usize = 256;
+
+/// Canonical typed implementation identifier.
+pub fn implementation_id() -> ImplementationId {
+    ImplementationId::parse(IMPLEMENTATION_ID).unwrap_or_else(|_| unreachable!())
+}
+
+/// Canonical registry key for the managed identity implementation.
+pub fn provider_factory_key() -> ProviderFactoryKey {
+    ProviderFactoryKey {
+        provider_type: ProviderType::Credential,
+        implementation_id: implementation_id(),
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ManagedIdentityCredentialOwner {
@@ -234,6 +250,100 @@ pub trait ManagedIdentityCredentialClient: Send + Sync {
     ) -> Result<ManagedIdentityLeaseRevocation, ManagedIdentityClientError>;
 }
 
+/// Registry factory bound to one exact SDK consumer and identity client.
+#[derive(Clone)]
+pub struct ManagedIdentityCredentialProviderFactory {
+    consumer: ProviderDescriptor,
+    authorized_operations: Vec<SdkOperationClass>,
+    client: Arc<dyn ManagedIdentityCredentialClient>,
+    clock: Arc<dyn ProviderClock>,
+}
+
+impl fmt::Debug for ManagedIdentityCredentialProviderFactory {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ManagedIdentityCredentialProviderFactory")
+            .field("provider_type", &ProviderType::Credential)
+            .field("consumer_type", &self.consumer.provider_type())
+            .field("consumer_generation", &self.consumer.registry_generation)
+            .field(
+                "authorized_operation_count",
+                &self.authorized_operations.len(),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+impl ManagedIdentityCredentialProviderFactory {
+    /// Construct a production-clock factory for `ProviderRegistryBuilder`.
+    pub fn new(
+        consumer: ProviderDescriptor,
+        authorized_operations: Vec<SdkOperationClass>,
+        client: Arc<dyn ManagedIdentityCredentialClient>,
+    ) -> Result<Self, ManagedIdentityProviderError> {
+        Self::new_with_clock(
+            consumer,
+            authorized_operations,
+            client,
+            Arc::new(SystemProviderClock),
+        )
+    }
+
+    /// Construct a factory with an injected clock.
+    pub fn new_with_clock(
+        consumer: ProviderDescriptor,
+        mut authorized_operations: Vec<SdkOperationClass>,
+        client: Arc<dyn ManagedIdentityCredentialClient>,
+        clock: Arc<dyn ProviderClock>,
+    ) -> Result<Self, ManagedIdentityProviderError> {
+        consumer
+            .validate()
+            .map_err(|_| ManagedIdentityProviderError::InvalidConsumer)?;
+        if !consumer_type_can_hold_credential(consumer.provider_type()) {
+            return Err(ManagedIdentityProviderError::InvalidConsumer);
+        }
+        authorized_operations.sort_unstable();
+        if authorized_operations.is_empty()
+            || authorized_operations.len() > MAX_CREDENTIAL_OPERATION_CLASSES
+            || authorized_operations
+                .windows(2)
+                .any(|pair| pair[0] == pair[1])
+        {
+            return Err(ManagedIdentityProviderError::InvalidAuthorizedOperations);
+        }
+        Ok(Self {
+            consumer,
+            authorized_operations,
+            client,
+            clock,
+        })
+    }
+
+    /// Return the canonical registry key accepted by this factory.
+    pub fn key() -> ProviderFactoryKey {
+        provider_factory_key()
+    }
+}
+
+impl ProviderFactory for ManagedIdentityCredentialProviderFactory {
+    fn construct(&self, descriptor: &ProviderDescriptor) -> Result<ProviderInstance, FactoryError> {
+        if descriptor.provider_type() != ProviderType::Credential
+            || descriptor.implementation_id != implementation_id()
+        {
+            return Err(FactoryError::Rejected);
+        }
+        let provider = ManagedIdentityCredentialProvider::new_for_sdk_consumer_with_clock(
+            descriptor.clone(),
+            self.consumer.clone(),
+            self.authorized_operations.clone(),
+            self.client.clone(),
+            self.clock.clone(),
+        )
+        .map_err(|_| FactoryError::Rejected)?;
+        Ok(ProviderInstance::Credential(Arc::new(provider)))
+    }
+}
+
 #[derive(Clone)]
 struct LeaseRecord {
     lease: CredentialLease,
@@ -294,7 +404,7 @@ impl ManagedIdentityCredentialProvider {
             .validate()
             .map_err(|_| ManagedIdentityProviderError::InvalidDescriptor)?;
         if descriptor.provider_type() != ProviderType::Credential
-            || descriptor.implementation_id.as_str() != IMPLEMENTATION_ID
+            || descriptor.implementation_id != implementation_id()
             || descriptor.capabilities != exact_capabilities()
         {
             return Err(ManagedIdentityProviderError::InvalidDescriptor);

@@ -24,21 +24,37 @@ use d2b_contracts::{
     v2_provider::{
         AdoptionState, AgentPlacementBinding, AuthorizedProviderScope, CredentialLease,
         CredentialLeaseRequest, CredentialLeaseState, CredentialLeaseTransferPolicy,
-        CredentialProvider, Generation, LeaseId, MAX_CREDENTIAL_OPERATION_CLASSES,
-        MAX_PROVIDER_LEASE_LIFETIME_MS, MAX_SAFE_JSON_INTEGER, MutationReceipt, MutationState,
-        ObservationReason, ObservedLifecycleState, OperationBinding, Provider, ProviderCallContext,
-        ProviderCapability, ProviderCapabilitySet, ProviderContractError, ProviderDescriptor,
-        ProviderFailure, ProviderFailureKind, ProviderFuture, ProviderHealth, ProviderHealthReason,
+        CredentialProvider, Generation, ImplementationId, LeaseId,
+        MAX_CREDENTIAL_OPERATION_CLASSES, MAX_PROVIDER_LEASE_LIFETIME_MS, MAX_SAFE_JSON_INTEGER,
+        MutationReceipt, MutationState, ObservationReason, ObservedLifecycleState,
+        OperationBinding, Provider, ProviderCallContext, ProviderCapability, ProviderCapabilitySet,
+        ProviderContractError, ProviderDescriptor, ProviderFactoryKey, ProviderFailure,
+        ProviderFailureKind, ProviderFuture, ProviderHealth, ProviderHealthReason,
         ProviderHealthState, ProviderMethod, ProviderObservation, ProviderOperationRequest,
         ProviderRemediation, RetryClass, SdkOperationClass, SourceVersion,
     },
 };
-use d2b_provider::{ProviderClock, SystemProviderClock};
+use d2b_provider::{
+    FactoryError, ProviderClock, ProviderFactory, ProviderInstance, SystemProviderClock,
+};
 use tokio::time::timeout;
 
 /// Canonical implementation ID advertised by this provider.
 pub const IMPLEMENTATION_ID: &str = "secret-service";
 pub const MAX_LOCAL_LEASES: usize = 256;
+
+/// Canonical typed implementation identifier.
+pub fn implementation_id() -> ImplementationId {
+    ImplementationId::parse(IMPLEMENTATION_ID).unwrap_or_else(|_| unreachable!())
+}
+
+/// Canonical registry key for the Secret Service implementation.
+pub fn provider_factory_key() -> ProviderFactoryKey {
+    ProviderFactoryKey {
+        provider_type: ProviderType::Credential,
+        implementation_id: implementation_id(),
+    }
+}
 
 /// The only permitted process owner for this provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -245,6 +261,100 @@ pub trait Oo7SecretServicePort: Send + Sync {
     ) -> Result<SecretServiceLeaseRevocation, SecretServicePortError>;
 }
 
+/// Registry factory bound to one userd consumer and semantic `oo7` port.
+#[derive(Clone)]
+pub struct SecretServiceCredentialProviderFactory {
+    consumer: ProviderDescriptor,
+    authorized_operations: Vec<SdkOperationClass>,
+    port: Arc<dyn Oo7SecretServicePort>,
+    clock: Arc<dyn ProviderClock>,
+}
+
+impl fmt::Debug for SecretServiceCredentialProviderFactory {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SecretServiceCredentialProviderFactory")
+            .field("provider_type", &ProviderType::Credential)
+            .field("consumer_type", &self.consumer.provider_type())
+            .field("consumer_generation", &self.consumer.registry_generation)
+            .field(
+                "authorized_operation_count",
+                &self.authorized_operations.len(),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+impl SecretServiceCredentialProviderFactory {
+    /// Construct a production-clock factory for `ProviderRegistryBuilder`.
+    pub fn new(
+        consumer: ProviderDescriptor,
+        authorized_operations: Vec<SdkOperationClass>,
+        port: Arc<dyn Oo7SecretServicePort>,
+    ) -> Result<Self, SecretServiceProviderError> {
+        Self::new_with_clock(
+            consumer,
+            authorized_operations,
+            port,
+            Arc::new(SystemProviderClock),
+        )
+    }
+
+    /// Construct a factory with an injected clock.
+    pub fn new_with_clock(
+        consumer: ProviderDescriptor,
+        mut authorized_operations: Vec<SdkOperationClass>,
+        port: Arc<dyn Oo7SecretServicePort>,
+        clock: Arc<dyn ProviderClock>,
+    ) -> Result<Self, SecretServiceProviderError> {
+        consumer
+            .validate()
+            .map_err(|_| SecretServiceProviderError::InvalidConsumer)?;
+        if !consumer_type_can_hold_credential(consumer.provider_type()) {
+            return Err(SecretServiceProviderError::InvalidConsumer);
+        }
+        authorized_operations.sort_unstable();
+        if authorized_operations.is_empty()
+            || authorized_operations.len() > MAX_CREDENTIAL_OPERATION_CLASSES
+            || authorized_operations
+                .windows(2)
+                .any(|pair| pair[0] == pair[1])
+        {
+            return Err(SecretServiceProviderError::InvalidAuthorizedOperations);
+        }
+        Ok(Self {
+            consumer,
+            authorized_operations,
+            port,
+            clock,
+        })
+    }
+
+    /// Return the canonical registry key accepted by this factory.
+    pub fn key() -> ProviderFactoryKey {
+        provider_factory_key()
+    }
+}
+
+impl ProviderFactory for SecretServiceCredentialProviderFactory {
+    fn construct(&self, descriptor: &ProviderDescriptor) -> Result<ProviderInstance, FactoryError> {
+        if descriptor.provider_type() != ProviderType::Credential
+            || descriptor.implementation_id != implementation_id()
+        {
+            return Err(FactoryError::Rejected);
+        }
+        let provider = SecretServiceCredentialProvider::new_userd_with_clock(
+            descriptor.clone(),
+            self.consumer.clone(),
+            self.authorized_operations.clone(),
+            self.port.clone(),
+            self.clock.clone(),
+        )
+        .map_err(|_| FactoryError::Rejected)?;
+        Ok(ProviderInstance::Credential(Arc::new(provider)))
+    }
+}
+
 #[derive(Clone)]
 struct LeaseRecord {
     lease: CredentialLease,
@@ -307,7 +417,7 @@ impl SecretServiceCredentialProvider {
             .validate()
             .map_err(|_| SecretServiceProviderError::InvalidDescriptor)?;
         if descriptor.provider_type() != ProviderType::Credential
-            || descriptor.implementation_id.as_str() != IMPLEMENTATION_ID
+            || descriptor.implementation_id != implementation_id()
             || descriptor.capabilities != exact_capabilities()
         {
             return Err(SecretServiceProviderError::InvalidDescriptor);
