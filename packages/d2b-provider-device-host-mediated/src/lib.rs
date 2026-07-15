@@ -8,18 +8,18 @@ use std::{collections::BTreeMap, fmt, future::Future, sync::Arc, time::Duration}
 use async_trait::async_trait;
 use d2b_contracts::{
     v2_component_session::{BoundedVec, EndpointRole},
-    v2_identity::ProviderType,
+    v2_identity::{ProviderId, ProviderType},
     v2_provider::{
         AdoptionRequest, AdoptionState, AuthorizedProviderScope, DeviceProvider, DeviceSelectorId,
-        Generation, HandleId, ImplementationId, MutationReceipt, MutationState, ObservationReason,
-        ObservedLifecycleState, OperationBinding, PROVIDER_SCHEMA_VERSION, PlanId,
-        PlannedResourceClass, Provider, ProviderCallContext, ProviderCapability,
-        ProviderCapabilitySet, ProviderContractError, ProviderDescriptor, ProviderFactoryKey,
-        ProviderFailure, ProviderFailureKind, ProviderFuture, ProviderHandle, ProviderHandleKind,
-        ProviderHealth, ProviderHealthReason, ProviderHealthState, ProviderMethod,
-        ProviderObservation, ProviderOperationContext, ProviderOperationInput,
-        ProviderOperationRequest, ProviderPlacement, ProviderPlan, ProviderRemediation,
-        ProviderTarget, RetryClass,
+        Fingerprint, Generation, HandleId, ImplementationId, MAX_PROVIDER_REGISTRY_ENTRIES,
+        MutationReceipt, MutationState, ObservationReason, ObservedLifecycleState,
+        OperationBinding, PROVIDER_SCHEMA_VERSION, PlanId, PlannedResourceClass, Provider,
+        ProviderCallContext, ProviderCapability, ProviderCapabilitySet, ProviderContractError,
+        ProviderDescriptor, ProviderFactoryKey, ProviderFailure, ProviderFailureKind,
+        ProviderFuture, ProviderHandle, ProviderHandleKind, ProviderHealth, ProviderHealthReason,
+        ProviderHealthState, ProviderMethod, ProviderObservation, ProviderOperationContext,
+        ProviderOperationInput, ProviderOperationRequest, ProviderPlacement, ProviderPlan,
+        ProviderRemediation, ProviderTarget, RetryClass,
     },
 };
 use d2b_host::{
@@ -36,7 +36,12 @@ use d2b_provider::{
 use d2b_provider_toolkit::ProviderValues;
 
 pub const MAX_DEVICE_SELECTORS: usize = 32;
+pub const MAX_FIDO_CLIENT_PIN_CBOR_BYTES: usize = 1024;
 pub const IMPLEMENTATION_ID: &str = "host-mediated";
+
+const MAX_FIDO_CLIENT_PIN_MAP_ENTRIES: u64 = 16;
+const MAX_FIDO_CBOR_CONTAINER_ITEMS: u64 = 32;
+const MAX_FIDO_CBOR_DEPTH: u8 = 4;
 
 pub fn implementation_id() -> ImplementationId {
     ImplementationId::parse(IMPLEMENTATION_ID)
@@ -101,6 +106,185 @@ pub enum FidoCommandKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FidoClientPinSubcommand {
+    GetPinRetries,
+    GetKeyAgreement,
+    SetPin,
+    ChangePin,
+    GetPinToken,
+    GetPinUvAuthTokenUsingUvWithPermissions,
+    GetUvRetries,
+    GetPinUvAuthTokenUsingPinWithPermissions,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FidoClientPinParseError {
+    Empty,
+    TooLarge,
+    InvalidCbor,
+    MissingSubcommand,
+    DuplicateSubcommand,
+}
+
+struct BoundedCbor<'a> {
+    bytes: &'a [u8],
+    position: usize,
+}
+
+impl<'a> BoundedCbor<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, position: 0 }
+    }
+
+    fn read_byte(&mut self) -> Result<u8, FidoClientPinParseError> {
+        let byte = self
+            .bytes
+            .get(self.position)
+            .copied()
+            .ok_or(FidoClientPinParseError::InvalidCbor)?;
+        self.position += 1;
+        Ok(byte)
+    }
+
+    fn read_argument(&mut self, additional: u8) -> Result<u64, FidoClientPinParseError> {
+        match additional {
+            0..=23 => Ok(u64::from(additional)),
+            24 => Ok(u64::from(self.read_byte()?)),
+            25 => {
+                let bytes = [self.read_byte()?, self.read_byte()?];
+                Ok(u64::from(u16::from_be_bytes(bytes)))
+            }
+            26 => {
+                let bytes = [
+                    self.read_byte()?,
+                    self.read_byte()?,
+                    self.read_byte()?,
+                    self.read_byte()?,
+                ];
+                Ok(u64::from(u32::from_be_bytes(bytes)))
+            }
+            27 => {
+                let bytes = [
+                    self.read_byte()?,
+                    self.read_byte()?,
+                    self.read_byte()?,
+                    self.read_byte()?,
+                    self.read_byte()?,
+                    self.read_byte()?,
+                    self.read_byte()?,
+                    self.read_byte()?,
+                ];
+                Ok(u64::from_be_bytes(bytes))
+            }
+            _ => Err(FidoClientPinParseError::InvalidCbor),
+        }
+    }
+
+    fn read_head(&mut self) -> Result<(u8, u64), FidoClientPinParseError> {
+        let initial = self.read_byte()?;
+        Ok((initial >> 5, self.read_argument(initial & 0x1f)?))
+    }
+
+    fn advance(&mut self, length: u64) -> Result<(), FidoClientPinParseError> {
+        let length = usize::try_from(length).map_err(|_| FidoClientPinParseError::InvalidCbor)?;
+        self.position = self
+            .position
+            .checked_add(length)
+            .filter(|position| *position <= self.bytes.len())
+            .ok_or(FidoClientPinParseError::InvalidCbor)?;
+        Ok(())
+    }
+
+    fn skip_body(
+        &mut self,
+        major: u8,
+        argument: u64,
+        depth: u8,
+    ) -> Result<(), FidoClientPinParseError> {
+        if depth > MAX_FIDO_CBOR_DEPTH {
+            return Err(FidoClientPinParseError::InvalidCbor);
+        }
+        match major {
+            0 | 1 | 7 => Ok(()),
+            2 | 3 => self.advance(argument),
+            4 if argument <= MAX_FIDO_CBOR_CONTAINER_ITEMS => {
+                for _ in 0..argument {
+                    self.skip_item(depth + 1)?;
+                }
+                Ok(())
+            }
+            5 if argument <= MAX_FIDO_CBOR_CONTAINER_ITEMS => {
+                for _ in 0..argument {
+                    self.skip_item(depth + 1)?;
+                    self.skip_item(depth + 1)?;
+                }
+                Ok(())
+            }
+            6 => self.skip_item(depth + 1),
+            _ => Err(FidoClientPinParseError::InvalidCbor),
+        }
+    }
+
+    fn skip_item(&mut self, depth: u8) -> Result<(), FidoClientPinParseError> {
+        let (major, argument) = self.read_head()?;
+        self.skip_body(major, argument, depth)
+    }
+}
+
+pub fn parse_fido_client_pin_subcommand(
+    request_cbor: &[u8],
+) -> Result<FidoClientPinSubcommand, FidoClientPinParseError> {
+    if request_cbor.is_empty() {
+        return Err(FidoClientPinParseError::Empty);
+    }
+    if request_cbor.len() > MAX_FIDO_CLIENT_PIN_CBOR_BYTES {
+        return Err(FidoClientPinParseError::TooLarge);
+    }
+    let mut cursor = BoundedCbor::new(request_cbor);
+    let (major, entries) = cursor.read_head()?;
+    if major != 5 || entries > MAX_FIDO_CLIENT_PIN_MAP_ENTRIES {
+        return Err(FidoClientPinParseError::InvalidCbor);
+    }
+    let mut subcommand = None;
+    for _ in 0..entries {
+        let (key_major, key) = cursor.read_head()?;
+        if key_major != 0 {
+            cursor.skip_body(key_major, key, 1)?;
+            cursor.skip_item(1)?;
+            continue;
+        }
+        if key != 2 {
+            cursor.skip_item(1)?;
+            continue;
+        }
+        if subcommand.is_some() {
+            return Err(FidoClientPinParseError::DuplicateSubcommand);
+        }
+        let (value_major, value) = cursor.read_head()?;
+        if value_major != 0 {
+            cursor.skip_body(value_major, value, 1)?;
+            return Err(FidoClientPinParseError::InvalidCbor);
+        }
+        subcommand = Some(match value {
+            1 => FidoClientPinSubcommand::GetPinRetries,
+            2 => FidoClientPinSubcommand::GetKeyAgreement,
+            3 => FidoClientPinSubcommand::SetPin,
+            4 => FidoClientPinSubcommand::ChangePin,
+            5 => FidoClientPinSubcommand::GetPinToken,
+            6 => FidoClientPinSubcommand::GetPinUvAuthTokenUsingUvWithPermissions,
+            7 => FidoClientPinSubcommand::GetUvRetries,
+            9 => FidoClientPinSubcommand::GetPinUvAuthTokenUsingPinWithPermissions,
+            _ => FidoClientPinSubcommand::Unknown,
+        });
+    }
+    if cursor.position != request_cbor.len() {
+        return Err(FidoClientPinParseError::InvalidCbor);
+    }
+    subcommand.ok_or(FidoClientPinParseError::MissingSubcommand)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FidoCeremonyApproval {
     ApprovedTrustedSource,
     Missing,
@@ -161,7 +345,6 @@ impl FidoPolicyIntent {
             FidoCommandKind::MakeCredential
             | FidoCommandKind::GetAssertion
             | FidoCommandKind::GetNextAssertion
-            | FidoCommandKind::ClientPin
             | FidoCommandKind::Selection => {
                 if matches!(approval, FidoCeremonyApproval::ApprovedTrustedSource) {
                     FidoPolicyDecision::AllowApprovedCeremony
@@ -169,7 +352,8 @@ impl FidoPolicyIntent {
                     FidoPolicyDecision::DenyApprovalRequired
                 }
             }
-            FidoCommandKind::LargeBlobs
+            FidoCommandKind::ClientPin
+            | FidoCommandKind::LargeBlobs
             | FidoCommandKind::Reset
             | FidoCommandKind::CredentialManagement
             | FidoCommandKind::BioEnrollment
@@ -178,10 +362,42 @@ impl FidoPolicyIntent {
             | FidoCommandKind::Unknown => FidoPolicyDecision::DenyDestructive,
         }
     }
+
+    pub fn decide_client_pin(
+        self,
+        request_cbor: &[u8],
+        approval: FidoCeremonyApproval,
+    ) -> FidoPolicyDecision {
+        match parse_fido_client_pin_subcommand(request_cbor) {
+            Ok(
+                FidoClientPinSubcommand::GetPinRetries
+                | FidoClientPinSubcommand::GetKeyAgreement
+                | FidoClientPinSubcommand::GetUvRetries,
+            ) => FidoPolicyDecision::AllowReadOnly,
+            Ok(
+                FidoClientPinSubcommand::GetPinToken
+                | FidoClientPinSubcommand::GetPinUvAuthTokenUsingUvWithPermissions
+                | FidoClientPinSubcommand::GetPinUvAuthTokenUsingPinWithPermissions,
+            ) if matches!(approval, FidoCeremonyApproval::ApprovedTrustedSource) => {
+                FidoPolicyDecision::AllowApprovedCeremony
+            }
+            Ok(
+                FidoClientPinSubcommand::GetPinToken
+                | FidoClientPinSubcommand::GetPinUvAuthTokenUsingUvWithPermissions
+                | FidoClientPinSubcommand::GetPinUvAuthTokenUsingPinWithPermissions,
+            ) => FidoPolicyDecision::DenyApprovalRequired,
+            Ok(
+                FidoClientPinSubcommand::SetPin
+                | FidoClientPinSubcommand::ChangePin
+                | FidoClientPinSubcommand::Unknown,
+            )
+            | Err(_) => FidoPolicyDecision::DenyDestructive,
+        }
+    }
 }
 
 #[derive(Clone)]
-enum DevicePreparation {
+pub enum DeviceEffectPreparation {
     Tpm {
         sidecar: SwtpmArgvInput,
         flush: SwtpmIoctlFlushInput,
@@ -193,15 +409,15 @@ enum DevicePreparation {
     Mediated,
 }
 
-impl fmt::Debug for DevicePreparation {
+impl fmt::Debug for DeviceEffectPreparation {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::Tpm { .. } => "DevicePreparation::Tpm(<redacted>)",
-            Self::Usbip(_) => "DevicePreparation::Usbip(<redacted>)",
-            Self::Fido(_) => "DevicePreparation::Fido",
-            Self::Gpu(_) => "DevicePreparation::Gpu(<redacted>)",
-            Self::Video(_) => "DevicePreparation::Video(<redacted>)",
-            Self::Mediated => "DevicePreparation::Mediated",
+            Self::Tpm { .. } => "DeviceEffectPreparation::Tpm(<redacted>)",
+            Self::Usbip(_) => "DeviceEffectPreparation::Usbip(<redacted>)",
+            Self::Fido(_) => "DeviceEffectPreparation::Fido",
+            Self::Gpu(_) => "DeviceEffectPreparation::Gpu(<redacted>)",
+            Self::Video(_) => "DeviceEffectPreparation::Video(<redacted>)",
+            Self::Mediated => "DeviceEffectPreparation::Mediated",
         })
     }
 }
@@ -211,7 +427,7 @@ pub struct DeviceSelectorDefinition {
     selector_id: DeviceSelectorId,
     kind: DeviceKind,
     capability: DeviceCapabilityKind,
-    preparation: DevicePreparation,
+    preparation: DeviceEffectPreparation,
 }
 
 impl fmt::Debug for DeviceSelectorDefinition {
@@ -236,7 +452,7 @@ impl DeviceSelectorDefinition {
             selector_id,
             kind: DeviceKind::Tpm,
             capability: DeviceCapabilityKind::Tpm2Stateful,
-            preparation: DevicePreparation::Tpm { sidecar, flush },
+            preparation: DeviceEffectPreparation::Tpm { sidecar, flush },
         }
     }
 
@@ -245,7 +461,7 @@ impl DeviceSelectorDefinition {
             selector_id,
             kind: DeviceKind::Usbip,
             capability: DeviceCapabilityKind::UsbipExclusive,
-            preparation: DevicePreparation::Usbip(input),
+            preparation: DeviceEffectPreparation::Usbip(input),
         }
     }
 
@@ -254,7 +470,7 @@ impl DeviceSelectorDefinition {
             selector_id,
             kind: DeviceKind::FidoCtaphidUhid,
             capability: DeviceCapabilityKind::FidoCeremony,
-            preparation: DevicePreparation::Fido(FidoPolicyIntent::canonical()),
+            preparation: DeviceEffectPreparation::Fido(FidoPolicyIntent::canonical()),
         }
     }
 
@@ -263,7 +479,7 @@ impl DeviceSelectorDefinition {
             selector_id,
             kind: DeviceKind::Gpu,
             capability: DeviceCapabilityKind::GpuCrossDomain,
-            preparation: DevicePreparation::Gpu(input),
+            preparation: DeviceEffectPreparation::Gpu(input),
         }
     }
 
@@ -272,7 +488,7 @@ impl DeviceSelectorDefinition {
             selector_id,
             kind: DeviceKind::Video,
             capability: DeviceCapabilityKind::VideoDecode,
-            preparation: DevicePreparation::Video(input),
+            preparation: DeviceEffectPreparation::Video(input),
         }
     }
 
@@ -281,7 +497,7 @@ impl DeviceSelectorDefinition {
             selector_id,
             kind: DeviceKind::Mediated,
             capability: DeviceCapabilityKind::MediatedDevice,
-            preparation: DevicePreparation::Mediated,
+            preparation: DeviceEffectPreparation::Mediated,
         }
     }
 
@@ -302,27 +518,27 @@ impl DeviceSelectorDefinition {
             return false;
         }
         match (&self.kind, &self.preparation) {
-            (DeviceKind::Tpm, DevicePreparation::Tpm { sidecar, flush }) => {
+            (DeviceKind::Tpm, DeviceEffectPreparation::Tpm { sidecar, flush }) => {
                 sidecar.extra_args.is_empty()
                     && sidecar.vm_name == flush.vm_name
                     && sidecar.ctrl_socket_path == flush.ctrl_socket_path
                     && generate_swtpm_argv(sidecar).is_ok()
                     && generate_swtpm_ioctl_flush_argv(flush).is_ok()
             }
-            (DeviceKind::Usbip, DevicePreparation::Usbip(input)) => {
+            (DeviceKind::Usbip, DeviceEffectPreparation::Usbip(input)) => {
                 generate_usbip_argv(input, UsbipSubcommand::Bind).is_ok()
                     && generate_usbip_argv(input, UsbipSubcommand::Unbind).is_ok()
             }
-            (DeviceKind::FidoCtaphidUhid, DevicePreparation::Fido(policy)) => {
+            (DeviceKind::FidoCtaphidUhid, DeviceEffectPreparation::Fido(policy)) => {
                 *policy == FidoPolicyIntent::canonical()
             }
-            (DeviceKind::Gpu, DevicePreparation::Gpu(input)) => {
+            (DeviceKind::Gpu, DeviceEffectPreparation::Gpu(input)) => {
                 input.extra_args.is_empty() && generate_gpu_argv(input).is_ok()
             }
-            (DeviceKind::Video, DevicePreparation::Video(input)) => {
+            (DeviceKind::Video, DeviceEffectPreparation::Video(input)) => {
                 generate_video_argv(input).is_ok()
             }
-            (DeviceKind::Mediated, DevicePreparation::Mediated) => true,
+            (DeviceKind::Mediated, DeviceEffectPreparation::Mediated) => true,
             _ => false,
         }
     }
@@ -332,10 +548,7 @@ impl DeviceSelectorDefinition {
             selector_id: self.selector_id.clone(),
             kind: self.kind,
             capability: self.capability,
-            fido_policy: match self.preparation {
-                DevicePreparation::Fido(policy) => Some(policy),
-                _ => None,
-            },
+            preparation: self.preparation.clone(),
         }
     }
 }
@@ -345,7 +558,7 @@ pub struct DeviceSemanticSelector {
     selector_id: DeviceSelectorId,
     kind: DeviceKind,
     capability: DeviceCapabilityKind,
-    fido_policy: Option<FidoPolicyIntent>,
+    preparation: DeviceEffectPreparation,
 }
 
 impl fmt::Debug for DeviceSemanticSelector {
@@ -355,7 +568,7 @@ impl fmt::Debug for DeviceSemanticSelector {
             .field("selector_id", &"<redacted>")
             .field("kind", &self.kind)
             .field("capability", &self.capability)
-            .field("fido_policy", &self.fido_policy)
+            .field("preparation", &self.preparation)
             .finish()
     }
 }
@@ -373,8 +586,15 @@ impl DeviceSemanticSelector {
         self.capability
     }
 
+    pub fn preparation(&self) -> &DeviceEffectPreparation {
+        &self.preparation
+    }
+
     pub const fn fido_policy(&self) -> Option<FidoPolicyIntent> {
-        self.fido_policy
+        match self.preparation {
+            DeviceEffectPreparation::Fido(policy) => Some(policy),
+            _ => None,
+        }
     }
 }
 
@@ -425,6 +645,12 @@ pub enum DevicePortError {
     Stale,
     Ambiguous,
     Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeviceDispatch {
+    Read,
+    Mutation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -549,6 +775,9 @@ pub enum DeviceProviderBuildError {
     TooManySelectors,
     DuplicateSelector,
     InvalidSelector,
+    EmptyFactory,
+    TooManyFactoryEntries,
+    DuplicateProvider,
 }
 
 impl From<ProviderContractError> for DeviceProviderBuildError {
@@ -557,11 +786,104 @@ impl From<ProviderContractError> for DeviceProviderBuildError {
     }
 }
 
+fn validate_device_descriptor(
+    descriptor: &ProviderDescriptor,
+) -> Result<(), DeviceProviderBuildError> {
+    descriptor.validate()?;
+    if descriptor.provider_type() != ProviderType::Device {
+        return Err(DeviceProviderBuildError::WrongProviderType);
+    }
+    if descriptor.implementation_id != implementation_id() {
+        return Err(DeviceProviderBuildError::WrongImplementation);
+    }
+    if !matches!(
+        descriptor.placement,
+        ProviderPlacement::TrustedFirstPartyInProcess { .. }
+    ) {
+        return Err(DeviceProviderBuildError::WrongPlacement);
+    }
+    if descriptor.capabilities != live_device_capabilities()? {
+        return Err(DeviceProviderBuildError::CapabilityMismatch);
+    }
+    Ok(())
+}
+
+fn validate_device_selectors(
+    selectors: &[DeviceSelectorDefinition],
+) -> Result<(), DeviceProviderBuildError> {
+    if selectors.is_empty() {
+        return Err(DeviceProviderBuildError::EmptySelectorSet);
+    }
+    if selectors.len() > MAX_DEVICE_SELECTORS {
+        return Err(DeviceProviderBuildError::TooManySelectors);
+    }
+    let mut indexed = BTreeMap::new();
+    for selector in selectors {
+        if !selector.validate() {
+            return Err(DeviceProviderBuildError::InvalidSelector);
+        }
+        if indexed.insert(selector.selector_id.clone(), ()).is_some() {
+            return Err(DeviceProviderBuildError::DuplicateSelector);
+        }
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
-pub struct HostMediatedDeviceFactory {
+pub struct HostMediatedDeviceFactoryEntry {
+    provider_id: ProviderId,
+    configuration_schema_fingerprint: Fingerprint,
+    configured_scope_digest: Fingerprint,
+    placement: ProviderPlacement,
     selectors: Arc<Vec<DeviceSelectorDefinition>>,
     effects: Arc<dyn DeviceEffectPort>,
     queries: Arc<dyn DeviceQueryPort>,
+}
+
+pub type FactoryEntry = HostMediatedDeviceFactoryEntry;
+
+impl fmt::Debug for HostMediatedDeviceFactoryEntry {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("HostMediatedDeviceFactoryEntry")
+            .field("provider_id", &"<redacted>")
+            .field("selector_count", &self.selectors.len())
+            .field("placement", &self.placement)
+            .finish_non_exhaustive()
+    }
+}
+
+impl HostMediatedDeviceFactoryEntry {
+    pub fn new(
+        descriptor: &ProviderDescriptor,
+        selectors: Vec<DeviceSelectorDefinition>,
+        effects: Arc<dyn DeviceEffectPort>,
+        queries: Arc<dyn DeviceQueryPort>,
+    ) -> Result<Self, DeviceProviderBuildError> {
+        validate_device_descriptor(descriptor)?;
+        validate_device_selectors(&selectors)?;
+        Ok(Self {
+            provider_id: descriptor.provider_id.clone(),
+            configuration_schema_fingerprint: descriptor.configuration_schema_fingerprint.clone(),
+            configured_scope_digest: descriptor.configured_scope_digest.clone(),
+            placement: descriptor.placement.clone(),
+            selectors: Arc::new(selectors),
+            effects,
+            queries,
+        })
+    }
+
+    fn matches(&self, descriptor: &ProviderDescriptor) -> bool {
+        self.provider_id == descriptor.provider_id
+            && self.configuration_schema_fingerprint == descriptor.configuration_schema_fingerprint
+            && self.configured_scope_digest == descriptor.configured_scope_digest
+            && self.placement == descriptor.placement
+    }
+}
+
+#[derive(Clone)]
+pub struct HostMediatedDeviceFactory {
+    entries: Arc<BTreeMap<ProviderId, HostMediatedDeviceFactoryEntry>>,
     clock: Arc<dyn ProviderClock>,
 }
 
@@ -572,32 +894,38 @@ impl fmt::Debug for HostMediatedDeviceFactory {
         formatter
             .debug_struct("HostMediatedDeviceFactory")
             .field("key", &factory_key())
-            .field("selector_count", &self.selectors.len())
+            .field("entry_count", &self.entries.len())
             .finish_non_exhaustive()
     }
 }
 
 impl HostMediatedDeviceFactory {
     pub fn new(
-        selectors: Vec<DeviceSelectorDefinition>,
-        effects: Arc<dyn DeviceEffectPort>,
-        queries: Arc<dyn DeviceQueryPort>,
-    ) -> Self {
-        Self::with_clock(selectors, effects, queries, Arc::new(SystemProviderClock))
+        entries: Vec<HostMediatedDeviceFactoryEntry>,
+    ) -> Result<Self, DeviceProviderBuildError> {
+        Self::with_clock(entries, Arc::new(SystemProviderClock))
     }
 
     pub fn with_clock(
-        selectors: Vec<DeviceSelectorDefinition>,
-        effects: Arc<dyn DeviceEffectPort>,
-        queries: Arc<dyn DeviceQueryPort>,
+        entries: Vec<HostMediatedDeviceFactoryEntry>,
         clock: Arc<dyn ProviderClock>,
-    ) -> Self {
-        Self {
-            selectors: Arc::new(selectors),
-            effects,
-            queries,
-            clock,
+    ) -> Result<Self, DeviceProviderBuildError> {
+        if entries.is_empty() {
+            return Err(DeviceProviderBuildError::EmptyFactory);
         }
+        if entries.len() > MAX_PROVIDER_REGISTRY_ENTRIES {
+            return Err(DeviceProviderBuildError::TooManyFactoryEntries);
+        }
+        let mut indexed = BTreeMap::new();
+        for entry in entries {
+            if indexed.insert(entry.provider_id.clone(), entry).is_some() {
+                return Err(DeviceProviderBuildError::DuplicateProvider);
+            }
+        }
+        Ok(Self {
+            entries: Arc::new(indexed),
+            clock,
+        })
     }
 }
 
@@ -608,11 +936,16 @@ impl ProviderFactory for HostMediatedDeviceFactory {
         {
             return Err(FactoryError::Rejected);
         }
+        let entry = self
+            .entries
+            .get(&descriptor.provider_id)
+            .filter(|entry| entry.matches(descriptor))
+            .ok_or(FactoryError::Rejected)?;
         HostMediatedDeviceProvider::with_clock(
             descriptor.clone(),
-            self.selectors.as_ref().clone(),
-            self.effects.clone(),
-            self.queries.clone(),
+            entry.selectors.as_ref().clone(),
+            entry.effects.clone(),
+            entry.queries.clone(),
             self.clock.clone(),
         )
         .map(|provider| ProviderInstance::Device(Arc::new(provider)))
@@ -662,39 +995,11 @@ impl HostMediatedDeviceProvider {
         queries: Arc<dyn DeviceQueryPort>,
         clock: Arc<dyn ProviderClock>,
     ) -> Result<Self, DeviceProviderBuildError> {
-        descriptor.validate()?;
-        if descriptor.provider_type() != ProviderType::Device {
-            return Err(DeviceProviderBuildError::WrongProviderType);
-        }
-        if descriptor.implementation_id != implementation_id() {
-            return Err(DeviceProviderBuildError::WrongImplementation);
-        }
-        if !matches!(
-            descriptor.placement,
-            ProviderPlacement::TrustedFirstPartyInProcess { .. }
-        ) {
-            return Err(DeviceProviderBuildError::WrongPlacement);
-        }
-        if descriptor.capabilities != live_device_capabilities()? {
-            return Err(DeviceProviderBuildError::CapabilityMismatch);
-        }
-        if selectors.is_empty() {
-            return Err(DeviceProviderBuildError::EmptySelectorSet);
-        }
-        if selectors.len() > MAX_DEVICE_SELECTORS {
-            return Err(DeviceProviderBuildError::TooManySelectors);
-        }
+        validate_device_descriptor(&descriptor)?;
+        validate_device_selectors(&selectors)?;
         let mut indexed = BTreeMap::new();
         for selector in selectors {
-            if !selector.validate() {
-                return Err(DeviceProviderBuildError::InvalidSelector);
-            }
-            if indexed
-                .insert(selector.selector_id.clone(), selector)
-                .is_some()
-            {
-                return Err(DeviceProviderBuildError::DuplicateSelector);
-            }
+            indexed.insert(selector.selector_id.clone(), selector);
         }
         Ok(Self {
             descriptor,
@@ -710,7 +1015,8 @@ impl HostMediatedDeviceProvider {
             ProviderPlacement::TrustedFirstPartyInProcess {
                 controller_role, ..
             } => *controller_role,
-            ProviderPlacement::ProviderAgent { endpoint_role, .. } => *endpoint_role,
+            ProviderPlacement::ProviderAgent { endpoint_role, .. }
+            | ProviderPlacement::UserAgent { endpoint_role, .. } => *endpoint_role,
         }
     }
 
@@ -814,6 +1120,7 @@ impl HostMediatedDeviceProvider {
         &self,
         operation: &ProviderOperationContext,
         deadline_ms: u32,
+        dispatch: DeviceDispatch,
         future: F,
     ) -> Result<T, ProviderFailure>
     where
@@ -822,13 +1129,22 @@ impl HostMediatedDeviceProvider {
         match tokio::time::timeout(Duration::from_millis(u64::from(deadline_ms)), future).await {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(error)) => Err(self.port_failure(operation, error)),
-            Err(_) => Err(self.failure(
-                operation,
-                ProviderFailureKind::DeadlineExpired,
-                RetryClass::SameOperation,
-                ProviderHealthReason::HealthTimeout,
-                ProviderRemediation::RetryBounded,
-            )),
+            Err(_) => Err(match dispatch {
+                DeviceDispatch::Read => self.failure(
+                    operation,
+                    ProviderFailureKind::DeadlineExpired,
+                    RetryClass::SameOperation,
+                    ProviderHealthReason::HealthTimeout,
+                    ProviderRemediation::RetryBounded,
+                ),
+                DeviceDispatch::Mutation => self.failure(
+                    operation,
+                    ProviderFailureKind::AmbiguousMutation,
+                    RetryClass::AfterObservation,
+                    ProviderHealthReason::AdoptionAmbiguous,
+                    ProviderRemediation::InspectProvider,
+                ),
+            }),
         }
     }
 
@@ -957,7 +1273,12 @@ impl Provider for HostMediatedDeviceProvider {
             let call = self.validate_call(context, context.operation, context.operation.method)?;
             let deadline = call.monotonic_deadline_remaining_ms();
             let health = self
-                .invoke(context.operation, deadline, self.queries.health(call))
+                .invoke(
+                    context.operation,
+                    deadline,
+                    DeviceDispatch::Read,
+                    self.queries.health(call),
+                )
                 .await?;
             self.values(context.operation)?
                 .health(health.state, health.reason, health.remediation)
@@ -995,6 +1316,7 @@ impl DeviceProvider for HostMediatedDeviceProvider {
                 .invoke(
                     &request.context,
                     deadline,
+                    DeviceDispatch::Read,
                     self.effects.plan_attach(call, selector),
                 )
                 .await?;
@@ -1025,6 +1347,7 @@ impl DeviceProvider for HostMediatedDeviceProvider {
                 .invoke(
                     context.operation,
                     deadline,
+                    DeviceDispatch::Mutation,
                     self.effects.attach(call, plan.clone()),
                 )
                 .await?;
@@ -1056,6 +1379,7 @@ impl DeviceProvider for HostMediatedDeviceProvider {
                 .invoke(
                     &request.context,
                     deadline,
+                    DeviceDispatch::Read,
                     self.queries.inspect(call, request.target.clone()),
                 )
                 .await?;
@@ -1095,6 +1419,7 @@ impl DeviceProvider for HostMediatedDeviceProvider {
                 .invoke(
                     &request.context,
                     deadline,
+                    DeviceDispatch::Read,
                     self.queries.adopt(call, request.clone()),
                 )
                 .await?;
@@ -1160,6 +1485,7 @@ impl DeviceProvider for HostMediatedDeviceProvider {
                 .invoke(
                     &request.context,
                     deadline,
+                    DeviceDispatch::Mutation,
                     self.effects.detach(call, request.target.clone()),
                 )
                 .await?;

@@ -4,6 +4,7 @@
 #![allow(clippy::result_large_err)]
 
 use std::{
+    collections::BTreeMap,
     fmt,
     future::Future,
     sync::Arc,
@@ -13,17 +14,18 @@ use std::{
 use async_trait::async_trait;
 use d2b_contracts::{
     v2_component_session::EndpointRole,
-    v2_identity::ProviderType,
+    v2_identity::{ProviderId, ProviderType},
     v2_provider::{
         AdoptionRequest, AdoptionState, AudioChannel, AudioDirection, AudioProvider,
-        AuthorizedProviderScope, Generation, HandleId, ImplementationId, MutationReceipt,
-        MutationState, ObservationReason, ObservedLifecycleState, OperationBinding, Provider,
-        ProviderCallContext, ProviderCapability, ProviderCapabilitySet, ProviderContractError,
-        ProviderDescriptor, ProviderFactoryKey, ProviderFailure, ProviderFailureKind,
-        ProviderFuture, ProviderHandle, ProviderHandleKind, ProviderHealth, ProviderHealthReason,
-        ProviderHealthState, ProviderMethod, ProviderObservation, ProviderOperationContext,
-        ProviderOperationInput, ProviderOperationRequest, ProviderPlacement, ProviderRemediation,
-        ProviderTarget, RetryClass,
+        AuthorizedProviderScope, Fingerprint, Generation, HandleId, ImplementationId,
+        MAX_PROVIDER_REGISTRY_ENTRIES, MutationReceipt, MutationState, ObservationReason,
+        ObservedLifecycleState, OperationBinding, Provider, ProviderCallContext,
+        ProviderCapability, ProviderCapabilitySet, ProviderContractError, ProviderDescriptor,
+        ProviderFactoryKey, ProviderFailure, ProviderFailureKind, ProviderFuture, ProviderHandle,
+        ProviderHandleKind, ProviderHealth, ProviderHealthReason, ProviderHealthState,
+        ProviderMethod, ProviderObservation, ProviderOperationContext, ProviderOperationInput,
+        ProviderOperationRequest, ProviderPlacement, ProviderRemediation, ProviderTarget,
+        RetryClass,
     },
 };
 use d2b_host::audio_argv::{AudioArgvInput, generate_audio_argv};
@@ -99,7 +101,7 @@ fn parse_generated_id(value: String) -> Result<String, AudioProviderBuildError> 
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct AudioConfiguration {
     argv: AudioArgvInput,
 }
@@ -126,6 +128,10 @@ impl AudioConfiguration {
         } else {
             Ok(())
         }
+    }
+
+    pub fn argv(&self) -> &AudioArgvInput {
+        &self.argv
     }
 }
 
@@ -314,23 +320,32 @@ pub enum AudioPortError {
     Cancelled,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AudioDispatch {
+    Read,
+    Mutation,
+}
+
 #[async_trait]
 pub trait AudioEffectPort: Send + Sync {
     async fn plan(
         &self,
         context: AudioCall,
+        configuration: AudioConfiguration,
         plan: AudioSessionPlan,
     ) -> Result<AudioPlanOutcome, AudioPortError>;
 
     async fn ensure(
         &self,
         context: AudioCall,
+        configuration: AudioConfiguration,
         plan: AudioSessionPlan,
     ) -> Result<AudioEnsureOutcome, AudioPortError>;
 
     async fn set_state(
         &self,
         context: AudioCall,
+        configuration: AudioConfiguration,
         target: ProviderTarget,
         state: AudioState,
     ) -> Result<AudioInspection, AudioPortError>;
@@ -338,6 +353,7 @@ pub trait AudioEffectPort: Send + Sync {
     async fn destroy(
         &self,
         context: AudioCall,
+        configuration: AudioConfiguration,
         target: ProviderTarget,
     ) -> Result<MutationState, AudioPortError>;
 }
@@ -368,6 +384,9 @@ pub enum AudioProviderBuildError {
     CapabilityMismatch,
     InvalidTypedBuilder,
     InvalidGeneratedId,
+    EmptyFactory,
+    TooManyFactoryEntries,
+    DuplicateProvider,
 }
 
 impl From<ProviderContractError> for AudioProviderBuildError {
@@ -376,11 +395,83 @@ impl From<ProviderContractError> for AudioProviderBuildError {
     }
 }
 
+fn validate_audio_descriptor(
+    descriptor: &ProviderDescriptor,
+) -> Result<(), AudioProviderBuildError> {
+    descriptor.validate()?;
+    if descriptor.provider_type() != ProviderType::Audio {
+        return Err(AudioProviderBuildError::WrongProviderType);
+    }
+    if descriptor.implementation_id != implementation_id() {
+        return Err(AudioProviderBuildError::WrongImplementation);
+    }
+    if !matches!(
+        descriptor.placement,
+        ProviderPlacement::TrustedFirstPartyInProcess { .. }
+    ) {
+        return Err(AudioProviderBuildError::WrongPlacement);
+    }
+    if descriptor.capabilities != live_audio_capabilities()? {
+        return Err(AudioProviderBuildError::CapabilityMismatch);
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
-pub struct PipewireVhostUserAudioFactory {
+pub struct PipewireVhostUserAudioFactoryEntry {
+    provider_id: ProviderId,
+    configuration_schema_fingerprint: Fingerprint,
+    configured_scope_digest: Fingerprint,
+    placement: ProviderPlacement,
     configuration: AudioConfiguration,
     effects: Arc<dyn AudioEffectPort>,
     queries: Arc<dyn AudioQueryPort>,
+}
+
+pub type FactoryEntry = PipewireVhostUserAudioFactoryEntry;
+
+impl fmt::Debug for PipewireVhostUserAudioFactoryEntry {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PipewireVhostUserAudioFactoryEntry")
+            .field("provider_id", &"<redacted>")
+            .field("placement", &self.placement)
+            .field("configuration", &self.configuration)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PipewireVhostUserAudioFactoryEntry {
+    pub fn new(
+        descriptor: &ProviderDescriptor,
+        configuration: AudioConfiguration,
+        effects: Arc<dyn AudioEffectPort>,
+        queries: Arc<dyn AudioQueryPort>,
+    ) -> Result<Self, AudioProviderBuildError> {
+        validate_audio_descriptor(descriptor)?;
+        configuration.validate()?;
+        Ok(Self {
+            provider_id: descriptor.provider_id.clone(),
+            configuration_schema_fingerprint: descriptor.configuration_schema_fingerprint.clone(),
+            configured_scope_digest: descriptor.configured_scope_digest.clone(),
+            placement: descriptor.placement.clone(),
+            configuration,
+            effects,
+            queries,
+        })
+    }
+
+    fn matches(&self, descriptor: &ProviderDescriptor) -> bool {
+        self.provider_id == descriptor.provider_id
+            && self.configuration_schema_fingerprint == descriptor.configuration_schema_fingerprint
+            && self.configured_scope_digest == descriptor.configured_scope_digest
+            && self.placement == descriptor.placement
+    }
+}
+
+#[derive(Clone)]
+pub struct PipewireVhostUserAudioFactory {
+    entries: Arc<BTreeMap<ProviderId, PipewireVhostUserAudioFactoryEntry>>,
     clock: Arc<dyn ProviderClock>,
 }
 
@@ -391,37 +482,38 @@ impl fmt::Debug for PipewireVhostUserAudioFactory {
         formatter
             .debug_struct("PipewireVhostUserAudioFactory")
             .field("key", &factory_key())
-            .field("configuration", &self.configuration)
+            .field("entry_count", &self.entries.len())
             .finish_non_exhaustive()
     }
 }
 
 impl PipewireVhostUserAudioFactory {
     pub fn new(
-        configuration: AudioConfiguration,
-        effects: Arc<dyn AudioEffectPort>,
-        queries: Arc<dyn AudioQueryPort>,
-    ) -> Self {
-        Self::with_clock(
-            configuration,
-            effects,
-            queries,
-            Arc::new(SystemProviderClock),
-        )
+        entries: Vec<PipewireVhostUserAudioFactoryEntry>,
+    ) -> Result<Self, AudioProviderBuildError> {
+        Self::with_clock(entries, Arc::new(SystemProviderClock))
     }
 
     pub fn with_clock(
-        configuration: AudioConfiguration,
-        effects: Arc<dyn AudioEffectPort>,
-        queries: Arc<dyn AudioQueryPort>,
+        entries: Vec<PipewireVhostUserAudioFactoryEntry>,
         clock: Arc<dyn ProviderClock>,
-    ) -> Self {
-        Self {
-            configuration,
-            effects,
-            queries,
-            clock,
+    ) -> Result<Self, AudioProviderBuildError> {
+        if entries.is_empty() {
+            return Err(AudioProviderBuildError::EmptyFactory);
         }
+        if entries.len() > MAX_PROVIDER_REGISTRY_ENTRIES {
+            return Err(AudioProviderBuildError::TooManyFactoryEntries);
+        }
+        let mut indexed = BTreeMap::new();
+        for entry in entries {
+            if indexed.insert(entry.provider_id.clone(), entry).is_some() {
+                return Err(AudioProviderBuildError::DuplicateProvider);
+            }
+        }
+        Ok(Self {
+            entries: Arc::new(indexed),
+            clock,
+        })
     }
 }
 
@@ -432,11 +524,16 @@ impl ProviderFactory for PipewireVhostUserAudioFactory {
         {
             return Err(FactoryError::Rejected);
         }
+        let entry = self
+            .entries
+            .get(&descriptor.provider_id)
+            .filter(|entry| entry.matches(descriptor))
+            .ok_or(FactoryError::Rejected)?;
         PipewireVhostUserAudioProvider::with_clock(
             descriptor.clone(),
-            self.configuration.clone(),
-            self.effects.clone(),
-            self.queries.clone(),
+            entry.configuration.clone(),
+            entry.effects.clone(),
+            entry.queries.clone(),
             self.clock.clone(),
         )
         .map(|provider| ProviderInstance::Audio(Arc::new(provider)))
@@ -486,22 +583,7 @@ impl PipewireVhostUserAudioProvider {
         queries: Arc<dyn AudioQueryPort>,
         clock: Arc<dyn ProviderClock>,
     ) -> Result<Self, AudioProviderBuildError> {
-        descriptor.validate()?;
-        if descriptor.provider_type() != ProviderType::Audio {
-            return Err(AudioProviderBuildError::WrongProviderType);
-        }
-        if descriptor.implementation_id != implementation_id() {
-            return Err(AudioProviderBuildError::WrongImplementation);
-        }
-        if !matches!(
-            descriptor.placement,
-            ProviderPlacement::TrustedFirstPartyInProcess { .. }
-        ) {
-            return Err(AudioProviderBuildError::WrongPlacement);
-        }
-        if descriptor.capabilities != live_audio_capabilities()? {
-            return Err(AudioProviderBuildError::CapabilityMismatch);
-        }
+        validate_audio_descriptor(&descriptor)?;
         configuration.validate()?;
         Ok(Self {
             descriptor,
@@ -517,7 +599,8 @@ impl PipewireVhostUserAudioProvider {
             ProviderPlacement::TrustedFirstPartyInProcess {
                 controller_role, ..
             } => *controller_role,
-            ProviderPlacement::ProviderAgent { endpoint_role, .. } => *endpoint_role,
+            ProviderPlacement::ProviderAgent { endpoint_role, .. }
+            | ProviderPlacement::UserAgent { endpoint_role, .. } => *endpoint_role,
         }
     }
 
@@ -567,6 +650,16 @@ impl PipewireVhostUserAudioProvider {
             RetryClass::SameOperation,
             ProviderHealthReason::HealthTimeout,
             ProviderRemediation::RetryBounded,
+        )
+    }
+
+    fn ambiguous_mutation(&self, operation: &ProviderOperationContext) -> ProviderFailure {
+        self.failure(
+            operation,
+            ProviderFailureKind::AmbiguousMutation,
+            RetryClass::AfterObservation,
+            ProviderHealthReason::AdoptionAmbiguous,
+            ProviderRemediation::InspectProvider,
         )
     }
 
@@ -625,6 +718,7 @@ impl PipewireVhostUserAudioProvider {
         &self,
         operation: &ProviderOperationContext,
         deadline_ms: u32,
+        dispatch: AudioDispatch,
         future: F,
     ) -> Result<T, ProviderFailure>
     where
@@ -633,7 +727,10 @@ impl PipewireVhostUserAudioProvider {
         match tokio::time::timeout(Duration::from_millis(u64::from(deadline_ms)), future).await {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(error)) => Err(self.port_failure(operation, error)),
-            Err(_) => Err(self.deadline_failure(operation)),
+            Err(_) => Err(match dispatch {
+                AudioDispatch::Read => self.deadline_failure(operation),
+                AudioDispatch::Mutation => self.ambiguous_mutation(operation),
+            }),
         }
     }
 
@@ -756,7 +853,12 @@ impl Provider for PipewireVhostUserAudioProvider {
             let call = self.validate_call(context, context.operation, context.operation.method)?;
             let deadline = call.monotonic_deadline_remaining_ms();
             let health = self
-                .invoke(context.operation, deadline, self.queries.health(call))
+                .invoke(
+                    context.operation,
+                    deadline,
+                    AudioDispatch::Read,
+                    self.queries.health(call),
+                )
                 .await?;
             self.values(context.operation)?
                 .health(health.state, health.reason, health.remediation)
@@ -786,19 +888,26 @@ impl AudioProvider for PipewireVhostUserAudioProvider {
             self.invoke(
                 &request.context,
                 total_ms,
-                self.effects.plan(call.clone(), plan.clone()),
+                AudioDispatch::Mutation,
+                self.effects
+                    .plan(call.clone(), self.configuration.clone(), plan.clone()),
             )
             .await?;
             let elapsed_ms = u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);
             let remaining_ms = total_ms.saturating_sub(elapsed_ms);
             if remaining_ms == 0 {
-                return Err(self.deadline_failure(&request.context));
+                return Err(self.ambiguous_mutation(&request.context));
             }
             let outcome = self
                 .invoke(
                     &request.context,
                     remaining_ms,
-                    self.effects.ensure(call.with_deadline(remaining_ms), plan),
+                    AudioDispatch::Mutation,
+                    self.effects.ensure(
+                        call.with_deadline(remaining_ms),
+                        self.configuration.clone(),
+                        plan,
+                    ),
                 )
                 .await?;
             let values = self.values(&request.context)?;
@@ -831,7 +940,13 @@ impl AudioProvider for PipewireVhostUserAudioProvider {
                 .invoke(
                     &request.context,
                     deadline,
-                    self.effects.set_state(call, request.target.clone(), state),
+                    AudioDispatch::Mutation,
+                    self.effects.set_state(
+                        call,
+                        self.configuration.clone(),
+                        request.target.clone(),
+                        state,
+                    ),
                 )
                 .await?;
             self.validate_inspection(&request.context, &request.target, &inspection)?;
@@ -868,6 +983,7 @@ impl AudioProvider for PipewireVhostUserAudioProvider {
                 .invoke(
                     &request.context,
                     deadline,
+                    AudioDispatch::Read,
                     self.queries.inspect(call, request.target.clone()),
                 )
                 .await?;
@@ -906,6 +1022,7 @@ impl AudioProvider for PipewireVhostUserAudioProvider {
                 .invoke(
                     &request.context,
                     deadline,
+                    AudioDispatch::Read,
                     self.queries.adopt(call, request.clone()),
                 )
                 .await?;
@@ -971,7 +1088,9 @@ impl AudioProvider for PipewireVhostUserAudioProvider {
                 .invoke(
                     &request.context,
                     deadline,
-                    self.effects.destroy(call, request.target.clone()),
+                    AudioDispatch::Mutation,
+                    self.effects
+                        .destroy(call, self.configuration.clone(), request.target.clone()),
                 )
                 .await?;
             self.values(&request.context)?

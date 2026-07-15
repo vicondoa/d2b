@@ -7,11 +7,13 @@ use std::{
 };
 
 use crate::{
-    DeviceAdoptionOutcome, DeviceAttachOutcome, DeviceCall, DeviceEffectPort, DeviceHealth,
-    DeviceInspection, DeviceKind, DevicePlanOutcome, DevicePortError, DeviceQueryPort,
-    DeviceSelectorDefinition, DeviceSemanticSelector, Factory, FidoCeremonyApproval,
-    FidoCommandKind, FidoPolicyDecision, FidoPolicyIntent, HostMediatedDeviceProvider, factory_key,
-    implementation_id, live_device_capabilities,
+    DeviceAdoptionOutcome, DeviceAttachOutcome, DeviceCall, DeviceEffectPort,
+    DeviceEffectPreparation, DeviceHealth, DeviceInspection, DeviceKind, DevicePlanOutcome,
+    DevicePortError, DeviceQueryPort, DeviceSelectorDefinition, DeviceSemanticSelector, Factory,
+    FidoCeremonyApproval, FidoClientPinSubcommand, FidoCommandKind, FidoPolicyDecision,
+    FidoPolicyIntent, HostMediatedDeviceFactoryEntry, HostMediatedDeviceProvider,
+    MAX_FIDO_CLIENT_PIN_CBOR_BYTES, factory_key, implementation_id, live_device_capabilities,
+    parse_fido_client_pin_subcommand,
 };
 use async_trait::async_trait;
 use d2b_contracts::{
@@ -20,7 +22,7 @@ use d2b_contracts::{
     v2_provider::{
         AdoptionRequest, DeviceProvider, DeviceSelectorId, Generation, ImplementationId,
         ProviderFailureKind, ProviderMethod, ProviderOperationInput, ProviderPlacement,
-        ProviderTarget,
+        ProviderTarget, RetryClass,
     },
 };
 use d2b_host::{
@@ -39,7 +41,9 @@ struct FakeEffects {
     plan_calls: AtomicUsize,
     attach_calls: AtomicUsize,
     detach_calls: AtomicUsize,
-    slow: AtomicBool,
+    slow_plan: AtomicBool,
+    slow_attach: AtomicBool,
+    slow_detach: AtomicBool,
     observed_kinds: std::sync::Mutex<Vec<DeviceKind>>,
 }
 
@@ -55,7 +59,22 @@ impl DeviceEffectPort for FakeEffects {
             .lock()
             .expect("kind lock")
             .push(selector.kind());
-        if self.slow.load(Ordering::Relaxed) {
+        match selector.preparation() {
+            DeviceEffectPreparation::Tpm { sidecar, flush } => {
+                assert_eq!(sidecar.vm_name, flush.vm_name);
+                assert!(sidecar.extra_args.is_empty());
+            }
+            DeviceEffectPreparation::Usbip(input) => assert_eq!(input.bus_id, "1-2"),
+            DeviceEffectPreparation::Fido(policy) => {
+                assert_eq!(*policy, FidoPolicyIntent::canonical());
+            }
+            DeviceEffectPreparation::Gpu(input) => assert!(input.extra_args.is_empty()),
+            DeviceEffectPreparation::Video(input) => {
+                assert_eq!(input.backend, VideoBackend::Vaapi);
+            }
+            DeviceEffectPreparation::Mediated => {}
+        }
+        if self.slow_plan.load(Ordering::Relaxed) {
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
         Ok(DevicePlanOutcome {
@@ -70,6 +89,9 @@ impl DeviceEffectPort for FakeEffects {
         _plan: d2b_contracts::v2_provider::ProviderPlan,
     ) -> Result<DeviceAttachOutcome, DevicePortError> {
         self.attach_calls.fetch_add(1, Ordering::Relaxed);
+        if self.slow_attach.load(Ordering::Relaxed) {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
         Ok(DeviceAttachOutcome {
             handle_id: d2b_contracts::v2_provider::HandleId::parse("device-handle")
                 .expect("handle id"),
@@ -83,6 +105,9 @@ impl DeviceEffectPort for FakeEffects {
         _target: ProviderTarget,
     ) -> Result<d2b_contracts::v2_provider::MutationState, DevicePortError> {
         self.detach_calls.fetch_add(1, Ordering::Relaxed);
+        if self.slow_detach.load(Ordering::Relaxed) {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
         Ok(d2b_contracts::v2_provider::MutationState::Applied)
     }
 }
@@ -218,12 +243,15 @@ fn provider(
 }
 
 fn factory() -> Factory {
-    Factory::with_clock(
+    let fixture = fixture();
+    let entry = HostMediatedDeviceFactoryEntry::new(
+        &fixture.descriptor,
         selectors(),
         Arc::new(FakeEffects::default()),
         Arc::new(FakeQueries::default()),
-        Arc::new(DeterministicClock::new(NOW)),
     )
+    .expect("factory entry");
+    Factory::with_clock(vec![entry], Arc::new(DeterministicClock::new(NOW))).expect("factory")
 }
 
 #[test]
@@ -269,6 +297,47 @@ fn factory_key_constructs_only_the_exact_device_implementation() {
         factory().construct(&wrong_implementation),
         Err(FactoryError::Rejected)
     ));
+
+    let alternate = Fixture::new(ProviderType::Device, 44)
+        .expect("alternate fixture")
+        .descriptor;
+    let mut wrong_schema = fixture.descriptor.clone();
+    wrong_schema.configuration_schema_fingerprint =
+        alternate.configuration_schema_fingerprint.clone();
+    assert!(matches!(
+        factory().construct(&wrong_schema),
+        Err(FactoryError::Rejected)
+    ));
+    let mut wrong_scope = fixture.descriptor.clone();
+    wrong_scope.configured_scope_digest = alternate.configured_scope_digest.clone();
+    assert!(matches!(
+        factory().construct(&wrong_scope),
+        Err(FactoryError::Rejected)
+    ));
+    let mut wrong_placement = fixture.descriptor.clone();
+    wrong_placement.placement = ProviderPlacement::TrustedFirstPartyInProcess {
+        realm_id: RealmId::parse("bbbbbbbbbbbbbbbbbbba").expect("alternate realm"),
+        controller_role: EndpointRole::RealmController,
+    };
+    assert!(matches!(
+        factory().construct(&wrong_placement),
+        Err(FactoryError::Rejected)
+    ));
+    let mut wrong_provider = fixture.descriptor.clone();
+    wrong_provider.provider_id = alternate.provider_id;
+    assert!(matches!(
+        factory().construct(&wrong_provider),
+        Err(FactoryError::Rejected)
+    ));
+
+    let entry = HostMediatedDeviceFactoryEntry::new(
+        &fixture.descriptor,
+        selectors(),
+        Arc::new(FakeEffects::default()),
+        Arc::new(FakeQueries::default()),
+    )
+    .expect("entry");
+    assert!(Factory::new(vec![entry.clone(), entry]).is_err());
 }
 
 #[tokio::test]
@@ -324,6 +393,7 @@ fn fido_policy_requires_trusted_approval_and_denies_destructive_commands() {
         FidoPolicyDecision::AllowApprovedCeremony
     );
     for command in [
+        FidoCommandKind::ClientPin,
         FidoCommandKind::LargeBlobs,
         FidoCommandKind::Reset,
         FidoCommandKind::CredentialManagement,
@@ -337,6 +407,87 @@ fn fido_policy_requires_trusted_approval_and_denies_destructive_commands() {
             FidoPolicyDecision::DenyDestructive
         );
     }
+
+    let vectors = [
+        (
+            1,
+            FidoClientPinSubcommand::GetPinRetries,
+            FidoPolicyDecision::AllowReadOnly,
+        ),
+        (
+            2,
+            FidoClientPinSubcommand::GetKeyAgreement,
+            FidoPolicyDecision::AllowReadOnly,
+        ),
+        (
+            3,
+            FidoClientPinSubcommand::SetPin,
+            FidoPolicyDecision::DenyDestructive,
+        ),
+        (
+            4,
+            FidoClientPinSubcommand::ChangePin,
+            FidoPolicyDecision::DenyDestructive,
+        ),
+        (
+            5,
+            FidoClientPinSubcommand::GetPinToken,
+            FidoPolicyDecision::AllowApprovedCeremony,
+        ),
+        (
+            6,
+            FidoClientPinSubcommand::GetPinUvAuthTokenUsingUvWithPermissions,
+            FidoPolicyDecision::AllowApprovedCeremony,
+        ),
+        (
+            7,
+            FidoClientPinSubcommand::GetUvRetries,
+            FidoPolicyDecision::AllowReadOnly,
+        ),
+        (
+            9,
+            FidoClientPinSubcommand::GetPinUvAuthTokenUsingPinWithPermissions,
+            FidoPolicyDecision::AllowApprovedCeremony,
+        ),
+        (
+            8,
+            FidoClientPinSubcommand::Unknown,
+            FidoPolicyDecision::DenyDestructive,
+        ),
+    ];
+    for (subcommand, parsed, decision) in vectors {
+        let request = [0xa2, 0x01, 0x02, 0x02, subcommand];
+        assert_eq!(
+            parse_fido_client_pin_subcommand(&request),
+            Ok(parsed),
+            "subcommand {subcommand}"
+        );
+        assert_eq!(
+            policy.decide_client_pin(&request, FidoCeremonyApproval::ApprovedTrustedSource),
+            decision,
+            "subcommand {subcommand}"
+        );
+    }
+    let token = [0xa2, 0x01, 0x02, 0x02, 0x05];
+    assert_eq!(
+        policy.decide_client_pin(&token, FidoCeremonyApproval::Missing),
+        FidoPolicyDecision::DenyApprovalRequired
+    );
+    for malformed in [
+        vec![0xa1, 0x01, 0x02],
+        vec![0xa2, 0x02, 0x03, 0x02, 0x05],
+        vec![0xbf, 0x02, 0x03, 0xff],
+    ] {
+        assert_eq!(
+            policy.decide_client_pin(&malformed, FidoCeremonyApproval::ApprovedTrustedSource),
+            FidoPolicyDecision::DenyDestructive
+        );
+    }
+    let oversized = vec![0; MAX_FIDO_CLIENT_PIN_CBOR_BYTES + 1];
+    assert_eq!(
+        policy.decide_client_pin(&oversized, FidoCeremonyApproval::ApprovedTrustedSource),
+        FidoPolicyDecision::DenyDestructive
+    );
 }
 
 #[tokio::test]
@@ -423,7 +574,7 @@ async fn stale_adoption_is_rejected_before_query_port_call() {
 async fn monotonic_deadline_bounds_the_effect_future() {
     let fixture = fixture();
     let effects = Arc::new(FakeEffects::default());
-    effects.slow.store(true, Ordering::Relaxed);
+    effects.slow_plan.store(true, Ordering::Relaxed);
     let provider = provider(&fixture, effects.clone(), Arc::new(FakeQueries::default()));
     let request = fixture
         .request_with_input(
@@ -441,6 +592,61 @@ async fn monotonic_deadline_bounds_the_effect_future() {
         .expect_err("deadline");
     assert_eq!(failure.kind, ProviderFailureKind::DeadlineExpired);
     assert_eq!(effects.plan_calls.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn post_dispatch_attach_and_detach_timeouts_are_ambiguous() {
+    let fixture = fixture();
+    let effects = Arc::new(FakeEffects::default());
+    let provider = provider(&fixture, effects.clone(), Arc::new(FakeQueries::default()));
+    let plan_request = fixture
+        .request_with_input(
+            ProviderMethod::DevicePlanAttach,
+            ProviderOperationInput::DeviceSelector {
+                device_selector_id: DeviceSelectorId::parse("gpu-main").expect("selector"),
+            },
+        )
+        .expect("plan request");
+    let plan = provider
+        .plan_attach(&fixture.call_context(&plan_request.context), &plan_request)
+        .await
+        .expect("plan");
+    let attach_operation = fixture
+        .operation(ProviderMethod::DeviceAttach)
+        .expect("attach operation");
+    effects.slow_attach.store(true, Ordering::Relaxed);
+    let mut attach_context = fixture.call_context(&attach_operation);
+    attach_context.monotonic_deadline_remaining_ms = 1;
+    let failure = provider
+        .attach(&attach_context, &plan)
+        .await
+        .expect_err("ambiguous attach");
+    assert_eq!(failure.kind, ProviderFailureKind::AmbiguousMutation);
+    assert_eq!(failure.retry, RetryClass::AfterObservation);
+
+    effects.slow_attach.store(false, Ordering::Relaxed);
+    let handle = provider
+        .attach(&fixture.call_context(&attach_operation), &plan)
+        .await
+        .expect("handle");
+    let mut detach_request = fixture
+        .request(ProviderMethod::DeviceDetach)
+        .expect("detach request");
+    detach_request.target = ProviderTarget::Handle {
+        realm_id: handle.realm_id.clone(),
+        workload_id: handle.workload_id.clone(),
+        handle_id: handle.handle_id.clone(),
+        handle_generation: handle.resource_generation,
+    };
+    effects.slow_detach.store(true, Ordering::Relaxed);
+    let mut detach_context = fixture.call_context(&detach_request.context);
+    detach_context.monotonic_deadline_remaining_ms = 1;
+    let failure = provider
+        .detach(&detach_context, &detach_request)
+        .await
+        .expect_err("ambiguous detach");
+    assert_eq!(failure.kind, ProviderFailureKind::AmbiguousMutation);
+    assert_eq!(failure.retry, RetryClass::AfterObservation);
 }
 
 #[tokio::test]

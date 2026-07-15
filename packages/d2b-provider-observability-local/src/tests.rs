@@ -7,7 +7,8 @@ use std::{
 };
 
 use crate::{
-    BoundedProjection, ExportPortOutcome, Factory, LocalObservabilityProvider,
+    BoundedExportSink, BoundedProjection, ClosedMetricLabels, ExportPortOutcome, ExportSinkError,
+    ExportSinkStatus, Factory, LocalObservabilityFactoryEntry, LocalObservabilityProvider,
     LocalObservabilityStatus, LocalObservationRecord, MetricLabel, MetricLabelKey,
     OBSERVATION_RECORD_ENCODED_UPPER_BOUND_BYTES, ObservabilityCall, ObservabilityExportIntent,
     ObservabilityExportPort, ObservabilityLimits, ObservabilityPortError, ObservabilityQueryIntent,
@@ -22,7 +23,7 @@ use d2b_contracts::{
         ImplementationId, MutationState, ObservabilityCursor, ObservabilityExportFormat,
         ObservabilityProvider, ObservabilityView, ProviderFailureKind, ProviderHealthReason,
         ProviderHealthState, ProviderMethod, ProviderOperationInput, ProviderPlacement,
-        ProviderRemediation, ProviderTarget,
+        ProviderRemediation, ProviderTarget, RetryClass,
     },
 };
 use d2b_provider::{FactoryError, ProviderFactory, ProviderInstance, ProviderRegistryBuilder};
@@ -36,8 +37,13 @@ struct FakePorts {
     query_calls: AtomicUsize,
     export_calls: AtomicUsize,
     slow_query: AtomicBool,
+    slow_export: AtomicBool,
     page: Mutex<ProjectionPage>,
     export_outcome: Mutex<ExportPortOutcome>,
+    export_records: Mutex<Vec<LocalObservationRecord>>,
+    export_statuses: Mutex<Vec<ExportSinkStatus>>,
+    export_source_truncated: AtomicBool,
+    retained_sink: Mutex<Option<BoundedExportSink>>,
     query_debug: Mutex<Option<String>>,
     query_bounds: Mutex<Option<(u16, u32)>>,
     export_bounds: Mutex<Option<(u16, u32)>>,
@@ -51,11 +57,13 @@ impl FakePorts {
             query_calls: AtomicUsize::new(0),
             export_calls: AtomicUsize::new(0),
             slow_query: AtomicBool::new(false),
+            slow_export: AtomicBool::new(false),
             page: Mutex::new(page),
-            export_outcome: Mutex::new(
-                ExportPortOutcome::new(MutationState::NotApplicable, 0, 0, false)
-                    .expect("default export outcome"),
-            ),
+            export_outcome: Mutex::new(ExportPortOutcome::new(MutationState::NotApplicable)),
+            export_records: Mutex::new(Vec::new()),
+            export_statuses: Mutex::new(Vec::new()),
+            export_source_truncated: AtomicBool::new(false),
+            retained_sink: Mutex::new(None),
             query_debug: Mutex::new(None),
             query_bounds: Mutex::new(None),
             export_bounds: Mutex::new(None),
@@ -103,10 +111,34 @@ impl ObservabilityExportPort for FakePorts {
         &self,
         _context: ObservabilityCall,
         intent: ObservabilityExportIntent,
+        sink: BoundedExportSink,
     ) -> Result<ExportPortOutcome, ObservabilityPortError> {
         self.export_calls.fetch_add(1, Ordering::Relaxed);
         *self.export_bounds.lock().expect("export bounds") =
             Some((intent.bounds.max_records, intent.bounds.max_bytes));
+        *self.retained_sink.lock().expect("retained sink") = Some(sink.clone());
+        for record in self
+            .export_records
+            .lock()
+            .expect("export records")
+            .iter()
+            .copied()
+        {
+            let status = sink
+                .emit(record)
+                .map_err(|_| ObservabilityPortError::InvalidProjection)?;
+            self.export_statuses
+                .lock()
+                .expect("export statuses")
+                .push(status);
+        }
+        if self.export_source_truncated.load(Ordering::Relaxed) {
+            sink.mark_source_truncated()
+                .map_err(|_| ObservabilityPortError::InvalidProjection)?;
+        }
+        if self.slow_export.load(Ordering::Relaxed) {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
         Ok(*self.export_outcome.lock().expect("export outcome"))
     }
 }
@@ -147,10 +179,13 @@ fn record(view: ObservabilityView, value: u64) -> LocalObservationRecord {
     LocalObservationRecord::new(
         NOW,
         ProjectionKind::Metrics,
-        ProviderHealthState::Healthy,
-        metric,
-        OperationLabel::Query,
-        OutcomeLabel::Success,
+        ClosedMetricLabels::new(
+            ProviderType::Device,
+            ProviderHealthState::Healthy,
+            metric,
+            OperationLabel::Query,
+            OutcomeLabel::Success,
+        ),
         value,
     )
     .expect("record")
@@ -176,13 +211,16 @@ fn provider(
 }
 
 fn factory() -> Factory {
+    let fixture = fixture();
     let ports = Arc::new(FakePorts::new(page(vec![])));
-    Factory::with_clock(
+    let entry = LocalObservabilityFactoryEntry::new(
+        &fixture.descriptor,
         default_limits(),
         ports.clone(),
         ports,
-        Arc::new(DeterministicClock::new(NOW)),
     )
+    .expect("factory entry");
+    Factory::with_clock(vec![entry], Arc::new(DeterministicClock::new(NOW))).expect("factory")
 }
 
 #[test]
@@ -228,6 +266,48 @@ fn factory_key_constructs_only_the_exact_observability_implementation() {
         factory().construct(&wrong_implementation),
         Err(FactoryError::Rejected)
     ));
+
+    let alternate = Fixture::new(ProviderType::Observability, 46)
+        .expect("alternate fixture")
+        .descriptor;
+    let mut wrong_schema = fixture.descriptor.clone();
+    wrong_schema.configuration_schema_fingerprint =
+        alternate.configuration_schema_fingerprint.clone();
+    assert!(matches!(
+        factory().construct(&wrong_schema),
+        Err(FactoryError::Rejected)
+    ));
+    let mut wrong_scope = fixture.descriptor.clone();
+    wrong_scope.configured_scope_digest = alternate.configured_scope_digest.clone();
+    assert!(matches!(
+        factory().construct(&wrong_scope),
+        Err(FactoryError::Rejected)
+    ));
+    let mut wrong_placement = fixture.descriptor.clone();
+    wrong_placement.placement = ProviderPlacement::TrustedFirstPartyInProcess {
+        realm_id: RealmId::parse("bbbbbbbbbbbbbbbbbbba").expect("alternate realm"),
+        controller_role: EndpointRole::RealmController,
+    };
+    assert!(matches!(
+        factory().construct(&wrong_placement),
+        Err(FactoryError::Rejected)
+    ));
+    let mut wrong_provider = fixture.descriptor.clone();
+    wrong_provider.provider_id = alternate.provider_id;
+    assert!(matches!(
+        factory().construct(&wrong_provider),
+        Err(FactoryError::Rejected)
+    ));
+
+    let ports = Arc::new(FakePorts::new(page(vec![])));
+    let entry = LocalObservabilityFactoryEntry::new(
+        &fixture.descriptor,
+        default_limits(),
+        ports.clone(),
+        ports,
+    )
+    .expect("entry");
+    assert!(Factory::new(vec![entry.clone(), entry]).is_err());
 }
 
 fn default_limits() -> ObservabilityLimits {
@@ -279,6 +359,12 @@ async fn query_forwards_hard_bounds_and_truncates_by_byte_budget() {
         .expect("bounded query");
 
     assert_bounded(&projection, 2, two_records);
+    assert!(
+        projection
+            .records()
+            .iter()
+            .all(|record| record.labels().provider_type() == ProviderType::Device)
+    );
     assert_eq!(
         projection.binding().operation_id,
         request.context.operation_id
@@ -300,8 +386,12 @@ async fn export_is_single_call_bounded_and_reports_truncation() {
     let two_records = 2 * OBSERVATION_RECORD_ENCODED_UPPER_BOUND_BYTES;
     let ports = Arc::new(FakePorts::new(page(vec![])));
     *ports.export_outcome.lock().expect("export outcome") =
-        ExportPortOutcome::new(MutationState::Applied, 2, two_records, true)
-            .expect("export outcome");
+        ExportPortOutcome::new(MutationState::Applied);
+    *ports.export_records.lock().expect("export records") = vec![
+        record(ObservabilityView::Lifecycle, 1),
+        record(ObservabilityView::Lifecycle, 2),
+    ];
+    ports.export_source_truncated.store(true, Ordering::Relaxed);
     let provider = provider(&fixture, limits(2, two_records, 60_000), ports.clone());
     let request = fixture
         .request_with_input(
@@ -323,23 +413,90 @@ async fn export_is_single_call_bounded_and_reports_truncation() {
     assert_eq!(export.record_count(), 2);
     assert_eq!(export.encoded_bytes(), two_records);
     assert!(export.truncated());
+    assert_eq!(
+        *ports.export_statuses.lock().expect("export statuses"),
+        [ExportSinkStatus::Emitted, ExportSinkStatus::Emitted,]
+    );
+    assert!(
+        export
+            .records()
+            .iter()
+            .all(|record| record.labels().provider_type() == ProviderType::Device)
+    );
     assert_eq!(export.binding().operation_id, request.context.operation_id);
     assert_eq!(
         *ports.export_bounds.lock().expect("export bounds"),
         Some((2, two_records))
     );
     assert_eq!(ports.export_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        ports
+            .retained_sink
+            .lock()
+            .expect("retained sink")
+            .as_ref()
+            .expect("sink")
+            .emit(record(ObservabilityView::Lifecycle, 3)),
+        Err(ExportSinkError::Closed)
+    );
 }
 
 #[tokio::test]
-async fn export_rejects_port_results_beyond_authorized_bounds() {
+async fn export_sink_truncates_during_untrusted_port_emission() {
     let fixture = fixture();
     let two_records = 2 * OBSERVATION_RECORD_ENCODED_UPPER_BOUND_BYTES;
     let ports = Arc::new(FakePorts::new(page(vec![])));
     *ports.export_outcome.lock().expect("export outcome") =
-        ExportPortOutcome::new(MutationState::Applied, 3, two_records, true)
-            .expect("globally bounded outcome");
+        ExportPortOutcome::new(MutationState::Applied);
+    *ports.export_records.lock().expect("export records") = vec![
+        record(ObservabilityView::Lifecycle, 1),
+        record(ObservabilityView::Lifecycle, 2),
+        record(ObservabilityView::Lifecycle, 3),
+    ];
     let provider = provider(&fixture, limits(2, two_records, 60_000), ports.clone());
+    let request = fixture
+        .request(ProviderMethod::ObservabilityExport)
+        .expect("export request");
+
+    let export = provider
+        .bounded_export(&fixture.call_context(&request.context), &request)
+        .await
+        .expect("bounded export");
+
+    assert_eq!(export.record_count(), 2);
+    assert_eq!(export.encoded_bytes(), two_records);
+    assert!(export.truncated());
+    assert_eq!(
+        *ports.export_statuses.lock().expect("export statuses"),
+        [
+            ExportSinkStatus::Emitted,
+            ExportSinkStatus::Emitted,
+            ExportSinkStatus::Truncated,
+        ]
+    );
+    assert_eq!(ports.export_calls.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn export_sink_rejects_records_outside_the_authorized_window() {
+    let fixture = fixture();
+    let ports = Arc::new(FakePorts::new(page(vec![])));
+    *ports.export_records.lock().expect("export records") = vec![
+        LocalObservationRecord::new(
+            NOW - 60_001,
+            ProjectionKind::Metrics,
+            ClosedMetricLabels::new(
+                ProviderType::Device,
+                ProviderHealthState::Healthy,
+                MetricLabel::OperationTotal,
+                OperationLabel::Export,
+                OutcomeLabel::Success,
+            ),
+            1,
+        )
+        .expect("record"),
+    ];
+    let provider = provider(&fixture, default_limits(), ports.clone());
     let request = fixture
         .request(ProviderMethod::ObservabilityExport)
         .expect("export request");
@@ -347,7 +504,7 @@ async fn export_rejects_port_results_beyond_authorized_bounds() {
     let failure = provider
         .bounded_export(&fixture.call_context(&request.context), &request)
         .await
-        .expect_err("over-reported export");
+        .expect_err("outside window");
 
     assert_eq!(failure.kind, ProviderFailureKind::InvariantViolation);
     assert_eq!(ports.export_calls.load(Ordering::Relaxed), 1);
@@ -429,6 +586,58 @@ async fn projection_rejects_wrong_view_and_has_only_closed_cardinality_keys() {
 }
 
 #[tokio::test]
+async fn query_result_preserves_every_closed_provider_type() {
+    let fixture = fixture();
+    let records = ProviderType::ALL
+        .into_iter()
+        .enumerate()
+        .map(|(index, provider_type)| {
+            LocalObservationRecord::new(
+                NOW - 100 + u64::try_from(index).expect("index"),
+                ProjectionKind::Metrics,
+                ClosedMetricLabels::new(
+                    provider_type,
+                    ProviderHealthState::Healthy,
+                    MetricLabel::ProviderHealth,
+                    OperationLabel::Health,
+                    OutcomeLabel::Success,
+                ),
+                1,
+            )
+            .expect("record")
+        })
+        .collect();
+    let ports = Arc::new(FakePorts::new(page(records)));
+    let provider = provider(&fixture, default_limits(), ports);
+    let request = query_request(
+        &fixture,
+        ObservabilityView::Health,
+        None,
+        u16::try_from(ProviderType::ALL.len()).expect("provider type count"),
+    );
+
+    let result = provider
+        .query(&fixture.call_context(&request.context), &request)
+        .await
+        .expect("query result");
+
+    assert_eq!(
+        result
+            .records
+            .iter()
+            .map(|record| record.labels.provider_type)
+            .collect::<Vec<_>>(),
+        ProviderType::ALL
+    );
+    assert_eq!(
+        result.observation.provider_id,
+        fixture.descriptor.provider_id
+    );
+    assert!(!result.truncated);
+    assert!(result.next_cursor.is_none());
+}
+
+#[tokio::test]
 async fn opaque_cursor_and_projection_debug_are_canary_redacted() {
     let fixture = fixture();
     let canary = "supersecretcanary";
@@ -446,12 +655,12 @@ async fn opaque_cursor_and_projection_debug_are_canary_redacted() {
     let request = query_request(&fixture, ObservabilityView::Lifecycle, Some(cursor), 1);
     assert!(!format!("{:?}", request.input).contains(canary));
 
-    let projection = provider
-        .bounded_query(&fixture.call_context(&request.context), &request)
+    let result = provider
+        .query(&fixture.call_context(&request.context), &request)
         .await
         .expect("query");
 
-    assert!(!format!("{projection:?}").contains(canary));
+    assert!(!format!("{result:?}").contains(canary));
     assert!(
         !ports
             .query_debug
@@ -462,9 +671,11 @@ async fn opaque_cursor_and_projection_debug_are_canary_redacted() {
             .contains(canary)
     );
     assert_eq!(
-        projection.next_cursor().map(ObservabilityCursor::as_str),
+        result.next_cursor.as_ref().map(ObservabilityCursor::as_str),
         Some(canary)
     );
+    assert!(result.truncated);
+    assert_eq!(result.records.len(), 1);
 }
 
 #[tokio::test]
@@ -521,6 +732,38 @@ async fn query_deadline_cancels_the_injected_port_future() {
     assert_eq!(ports.query_calls.load(Ordering::Relaxed), 1);
 }
 
+#[tokio::test]
+async fn post_dispatch_export_timeout_is_ambiguous_and_closes_sink() {
+    let fixture = fixture();
+    let ports = Arc::new(FakePorts::new(page(vec![])));
+    ports.slow_export.store(true, Ordering::Relaxed);
+    let provider = provider(&fixture, default_limits(), ports.clone());
+    let request = fixture
+        .request(ProviderMethod::ObservabilityExport)
+        .expect("export request");
+    let mut context = fixture.call_context(&request.context);
+    context.monotonic_deadline_remaining_ms = 1;
+
+    let failure = provider
+        .bounded_export(&context, &request)
+        .await
+        .expect_err("ambiguous export");
+
+    assert_eq!(failure.kind, ProviderFailureKind::AmbiguousMutation);
+    assert_eq!(failure.retry, RetryClass::AfterObservation);
+    assert_eq!(ports.export_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        ports
+            .retained_sink
+            .lock()
+            .expect("retained sink")
+            .as_ref()
+            .expect("sink")
+            .emit(record(ObservabilityView::Operations, 1)),
+        Err(ExportSinkError::Closed)
+    );
+}
+
 #[test]
 fn limits_and_records_fail_closed() {
     assert!(ObservabilityLimits::new(0, OBSERVATION_RECORD_ENCODED_UPPER_BOUND_BYTES, 1).is_err());
@@ -532,11 +775,33 @@ fn limits_and_records_fail_closed() {
         LocalObservationRecord::new(
             d2b_contracts::v2_provider::MAX_SAFE_JSON_INTEGER + 1,
             ProjectionKind::AuditSummary,
-            ProviderHealthState::Degraded,
-            MetricLabel::OperationTotal,
-            OperationLabel::Export,
-            OutcomeLabel::Unavailable,
+            ClosedMetricLabels::new(
+                ProviderType::Observability,
+                ProviderHealthState::Degraded,
+                MetricLabel::OperationTotal,
+                OperationLabel::Export,
+                OutcomeLabel::Unavailable,
+            ),
             1,
+        )
+        .is_err()
+    );
+    assert!(
+        ProjectionPage::new(
+            vec![
+                record(ObservabilityView::Lifecycle, 2),
+                record(ObservabilityView::Lifecycle, 1),
+            ],
+            None,
+            false,
+        )
+        .is_err()
+    );
+    assert!(
+        ProjectionPage::new(
+            vec![],
+            Some(ObservabilityCursor::parse("cursor").expect("cursor")),
+            false,
         )
         .is_err()
     );

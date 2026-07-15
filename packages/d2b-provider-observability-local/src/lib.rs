@@ -3,23 +3,32 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::result_large_err)]
 
-use std::{fmt, future::Future, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    fmt,
+    future::Future,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use d2b_contracts::{
-    v2_component_session::EndpointRole,
-    v2_identity::ProviderType,
+    v2_component_session::{BoundedVec, EndpointRole},
+    v2_identity::{ProviderId, ProviderType},
     v2_provider::{
-        AdoptionState, AuthorizedProviderScope, ImplementationId,
-        MAX_OBSERVABILITY_EXPORT_RANGE_MS, MAX_OBSERVABILITY_QUERY_LIMIT, MAX_SAFE_JSON_INTEGER,
-        MutationReceipt, MutationState, ObservabilityCursor, ObservabilityExportFormat,
-        ObservabilityProvider, ObservabilityView, ObservationReason, ObservedLifecycleState,
-        OperationBinding, Provider, ProviderCallContext, ProviderCapability, ProviderCapabilitySet,
-        ProviderContractError, ProviderDescriptor, ProviderFactoryKey, ProviderFailure,
-        ProviderFailureKind, ProviderFuture, ProviderHandle, ProviderHealth, ProviderHealthReason,
-        ProviderHealthState, ProviderMethod, ProviderObservation, ProviderOperationContext,
-        ProviderOperationInput, ProviderOperationRequest, ProviderPlacement, ProviderRemediation,
-        ProviderTarget, RetryClass,
+        AdoptionState, AuthorizedProviderScope, Fingerprint, ImplementationId,
+        MAX_OBSERVABILITY_EXPORT_RANGE_MS, MAX_OBSERVABILITY_QUERY_BYTES,
+        MAX_OBSERVABILITY_QUERY_LIMIT, MAX_PROVIDER_REGISTRY_ENTRIES, MAX_SAFE_JSON_INTEGER,
+        MutationReceipt, MutationState, OBSERVABILITY_RECORD_ENCODED_UPPER_BOUND_BYTES,
+        ObservabilityCursor, ObservabilityExportFormat, ObservabilityLabels, ObservabilityProvider,
+        ObservabilityQueryResult, ObservabilityRecord, ObservabilityView, ObservationReason,
+        ObservedLifecycleState, OperationBinding, Provider, ProviderCallContext,
+        ProviderCapability, ProviderCapabilitySet, ProviderContractError, ProviderDescriptor,
+        ProviderFactoryKey, ProviderFailure, ProviderFailureKind, ProviderFuture, ProviderHandle,
+        ProviderHealth, ProviderHealthReason, ProviderHealthState, ProviderMethod,
+        ProviderObservation, ProviderOperationContext, ProviderOperationInput,
+        ProviderOperationRequest, ProviderPlacement, ProviderRemediation, ProviderTarget,
+        RetryClass,
     },
 };
 use d2b_provider::{
@@ -27,8 +36,14 @@ use d2b_provider::{
 };
 use d2b_provider_toolkit::ProviderValues;
 
-pub const MAX_LOCAL_OBSERVABILITY_BYTES: u32 = 1024 * 1024;
-pub const OBSERVATION_RECORD_ENCODED_UPPER_BOUND_BYTES: u32 = 512;
+pub use d2b_contracts::v2_provider::{
+    ObservabilityMetricLabel as MetricLabel, ObservabilityOperationLabel as OperationLabel,
+    ObservabilityOutcomeLabel as OutcomeLabel, ObservabilityProjectionKind as ProjectionKind,
+};
+
+pub const MAX_LOCAL_OBSERVABILITY_BYTES: u32 = MAX_OBSERVABILITY_QUERY_BYTES;
+pub const OBSERVATION_RECORD_ENCODED_UPPER_BOUND_BYTES: u32 =
+    OBSERVABILITY_RECORD_ENCODED_UPPER_BOUND_BYTES;
 pub const IMPLEMENTATION_ID: &str = "local";
 
 pub fn implementation_id() -> ImplementationId {
@@ -41,50 +56,6 @@ pub fn factory_key() -> ProviderFactoryKey {
         provider_type: ProviderType::Observability,
         implementation_id: implementation_id(),
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum MetricLabel {
-    ProviderHealth,
-    LifecycleTransition,
-    OperationTotal,
-    OperationDuration,
-    QueueDepth,
-    ExportTruncated,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum OperationLabel {
-    Health,
-    Plan,
-    Ensure,
-    Start,
-    Stop,
-    Attach,
-    Detach,
-    Adopt,
-    Inspect,
-    SetState,
-    Query,
-    Export,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum OutcomeLabel {
-    Success,
-    AlreadyApplied,
-    Denied,
-    Cancelled,
-    DeadlineExpired,
-    Unavailable,
-    Truncated,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ProjectionKind {
-    Metrics,
-    TraceSummary,
-    AuditSummary,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -108,12 +79,12 @@ impl MetricLabelKey {
     ];
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum LocalityLabel {
     Local,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ClosedMetricLabels {
     locality: LocalityLabel,
     provider_type: ProviderType,
@@ -124,6 +95,23 @@ pub struct ClosedMetricLabels {
 }
 
 impl ClosedMetricLabels {
+    pub const fn new(
+        provider_type: ProviderType,
+        health_state: ProviderHealthState,
+        metric: MetricLabel,
+        operation: OperationLabel,
+        outcome: OutcomeLabel,
+    ) -> Self {
+        Self {
+            locality: LocalityLabel::Local,
+            provider_type,
+            health_state,
+            metric,
+            operation,
+            outcome,
+        }
+    }
+
     pub const fn locality(self) -> LocalityLabel {
         self.locality
     }
@@ -149,7 +137,7 @@ impl ClosedMetricLabels {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LocalObservationRecord {
     observed_at_unix_ms: u64,
     projection: ProjectionKind,
@@ -161,10 +149,7 @@ impl LocalObservationRecord {
     pub fn new(
         observed_at_unix_ms: u64,
         projection: ProjectionKind,
-        health_state: ProviderHealthState,
-        metric: MetricLabel,
-        operation: OperationLabel,
-        outcome: OutcomeLabel,
+        labels: ClosedMetricLabels,
         value: u64,
     ) -> Result<Self, ObservabilityProviderBuildError> {
         if observed_at_unix_ms > MAX_SAFE_JSON_INTEGER || value > MAX_SAFE_JSON_INTEGER {
@@ -173,14 +158,7 @@ impl LocalObservationRecord {
         Ok(Self {
             observed_at_unix_ms,
             projection,
-            labels: ClosedMetricLabels {
-                locality: LocalityLabel::Local,
-                provider_type: ProviderType::Observability,
-                health_state,
-                metric,
-                operation,
-                outcome,
-            },
+            labels,
             value,
         })
     }
@@ -216,6 +194,21 @@ impl LocalObservationRecord {
                     | MetricLabel::OperationDuration
                     | MetricLabel::ExportTruncated
             ),
+        }
+    }
+
+    fn into_contract(self) -> ObservabilityRecord {
+        ObservabilityRecord {
+            observed_at_unix_ms: self.observed_at_unix_ms,
+            projection: self.projection,
+            labels: ObservabilityLabels {
+                provider_type: self.labels.provider_type(),
+                health_state: self.labels.health_state(),
+                metric: self.labels.metric(),
+                operation: self.labels.operation(),
+                outcome: self.labels.outcome(),
+            },
+            value: self.value,
         }
     }
 }
@@ -391,8 +384,9 @@ impl ProjectionPage {
             || records.iter().any(|record| {
                 record.observed_at_unix_ms() > MAX_SAFE_JSON_INTEGER
                     || record.value() > MAX_SAFE_JSON_INTEGER
-                    || record.labels().provider_type() != ProviderType::Observability
             })
+            || records.windows(2).any(|pair| pair[0] >= pair[1])
+            || source_truncated != next_cursor.is_some()
         {
             return Err(ObservabilityProviderBuildError::InvalidProjection);
         }
@@ -449,54 +443,141 @@ impl BoundedProjection {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ExportPortOutcome {
-    state: MutationState,
-    record_count: u16,
+pub enum ExportSinkStatus {
+    Emitted,
+    Truncated,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportSinkError {
+    Closed,
+    OutsideWindow,
+    Poisoned,
+}
+
+#[derive(Default)]
+struct ExportSinkState {
+    records: Vec<LocalObservationRecord>,
+    encoded_bytes: u32,
+    truncated: bool,
+    closed: bool,
+}
+
+#[derive(Clone)]
+pub struct BoundedExportSink {
+    bounds: ProjectionBounds,
+    start_at_unix_ms: u64,
+    end_at_unix_ms: u64,
+    state: Arc<Mutex<ExportSinkState>>,
+}
+
+impl fmt::Debug for BoundedExportSink {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let snapshot = self.state.lock().ok();
+        formatter
+            .debug_struct("BoundedExportSink")
+            .field("bounds", &self.bounds)
+            .field(
+                "record_count",
+                &snapshot.as_ref().map(|state| state.records.len()),
+            )
+            .field(
+                "encoded_bytes",
+                &snapshot.as_ref().map(|state| state.encoded_bytes),
+            )
+            .field("closed", &snapshot.as_ref().map(|state| state.closed))
+            .finish_non_exhaustive()
+    }
+}
+
+impl BoundedExportSink {
+    fn new(bounds: ProjectionBounds, start_at_unix_ms: u64, end_at_unix_ms: u64) -> Self {
+        Self {
+            bounds,
+            start_at_unix_ms,
+            end_at_unix_ms,
+            state: Arc::new(Mutex::new(ExportSinkState::default())),
+        }
+    }
+
+    pub fn emit(
+        &self,
+        record: LocalObservationRecord,
+    ) -> Result<ExportSinkStatus, ExportSinkError> {
+        let mut state = self.state.lock().map_err(|_| ExportSinkError::Poisoned)?;
+        if state.closed {
+            return Err(ExportSinkError::Closed);
+        }
+        if record.observed_at_unix_ms() < self.start_at_unix_ms
+            || record.observed_at_unix_ms() > self.end_at_unix_ms
+        {
+            return Err(ExportSinkError::OutsideWindow);
+        }
+        let next_bytes = state
+            .encoded_bytes
+            .saturating_add(OBSERVATION_RECORD_ENCODED_UPPER_BOUND_BYTES);
+        if state.records.len() >= self.bounds.record_capacity()
+            || next_bytes > self.bounds.max_bytes
+        {
+            state.truncated = true;
+            return Ok(ExportSinkStatus::Truncated);
+        }
+        state.records.push(record);
+        state.encoded_bytes = next_bytes;
+        Ok(ExportSinkStatus::Emitted)
+    }
+
+    pub fn mark_source_truncated(&self) -> Result<(), ExportSinkError> {
+        let mut state = self.state.lock().map_err(|_| ExportSinkError::Poisoned)?;
+        if state.closed {
+            return Err(ExportSinkError::Closed);
+        }
+        state.truncated = true;
+        Ok(())
+    }
+
+    fn finish(&self) -> Result<ExportSinkSnapshot, ExportSinkError> {
+        let mut state = self.state.lock().map_err(|_| ExportSinkError::Poisoned)?;
+        if state.closed {
+            return Err(ExportSinkError::Closed);
+        }
+        state.closed = true;
+        Ok(ExportSinkSnapshot {
+            records: std::mem::take(&mut state.records),
+            encoded_bytes: state.encoded_bytes,
+            truncated: state.truncated,
+        })
+    }
+}
+
+struct ExportSinkSnapshot {
+    records: Vec<LocalObservationRecord>,
     encoded_bytes: u32,
     truncated: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExportPortOutcome {
+    state: MutationState,
+}
+
 impl ExportPortOutcome {
-    pub fn new(
-        state: MutationState,
-        record_count: u16,
-        encoded_bytes: u32,
-        truncated: bool,
-    ) -> Result<Self, ObservabilityProviderBuildError> {
-        if record_count > MAX_OBSERVABILITY_QUERY_LIMIT
-            || encoded_bytes > MAX_LOCAL_OBSERVABILITY_BYTES
-        {
-            return Err(ObservabilityProviderBuildError::InvalidProjection);
-        }
-        Ok(Self {
-            state,
-            record_count,
-            encoded_bytes,
-            truncated,
-        })
+    pub const fn new(state: MutationState) -> Self {
+        Self { state }
     }
 
     pub const fn state(self) -> MutationState {
         self.state
-    }
-
-    pub const fn record_count(self) -> u16 {
-        self.record_count
-    }
-
-    pub const fn encoded_bytes(self) -> u32 {
-        self.encoded_bytes
-    }
-
-    pub const fn truncated(self) -> bool {
-        self.truncated
     }
 }
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct BoundedExport {
     binding: OperationBinding,
-    outcome: ExportPortOutcome,
+    state: MutationState,
+    records: Vec<LocalObservationRecord>,
+    encoded_bytes: u32,
+    truncated: bool,
 }
 
 impl fmt::Debug for BoundedExport {
@@ -504,10 +585,10 @@ impl fmt::Debug for BoundedExport {
         formatter
             .debug_struct("BoundedExport")
             .field("binding", &self.binding)
-            .field("state", &self.outcome.state)
-            .field("record_count", &self.outcome.record_count)
-            .field("encoded_bytes", &self.outcome.encoded_bytes)
-            .field("truncated", &self.outcome.truncated)
+            .field("state", &self.state)
+            .field("record_count", &self.records.len())
+            .field("encoded_bytes", &self.encoded_bytes)
+            .field("truncated", &self.truncated)
             .finish()
     }
 }
@@ -518,19 +599,23 @@ impl BoundedExport {
     }
 
     pub const fn state(&self) -> MutationState {
-        self.outcome.state()
+        self.state
     }
 
-    pub const fn record_count(&self) -> u16 {
-        self.outcome.record_count()
+    pub fn records(&self) -> &[LocalObservationRecord] {
+        &self.records
+    }
+
+    pub fn record_count(&self) -> u16 {
+        u16::try_from(self.records.len()).unwrap_or(u16::MAX)
     }
 
     pub const fn encoded_bytes(&self) -> u32 {
-        self.outcome.encoded_bytes()
+        self.encoded_bytes
     }
 
     pub const fn truncated(&self) -> bool {
-        self.outcome.truncated()
+        self.truncated
     }
 }
 
@@ -559,6 +644,12 @@ pub enum ObservabilityPortError {
     Cancelled,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ObservabilityDispatch {
+    Read,
+    Mutation,
+}
+
 #[async_trait]
 pub trait ObservabilityQueryPort: Send + Sync {
     async fn health(
@@ -584,6 +675,7 @@ pub trait ObservabilityExportPort: Send + Sync {
         &self,
         context: ObservabilityCall,
         intent: ObservabilityExportIntent,
+        sink: BoundedExportSink,
     ) -> Result<ExportPortOutcome, ObservabilityPortError>;
 }
 
@@ -596,6 +688,9 @@ pub enum ObservabilityProviderBuildError {
     CapabilityMismatch,
     InvalidLimits,
     InvalidProjection,
+    EmptyFactory,
+    TooManyFactoryEntries,
+    DuplicateProvider,
 }
 
 impl From<ProviderContractError> for ObservabilityProviderBuildError {
@@ -604,11 +699,82 @@ impl From<ProviderContractError> for ObservabilityProviderBuildError {
     }
 }
 
+fn validate_observability_descriptor(
+    descriptor: &ProviderDescriptor,
+) -> Result<(), ObservabilityProviderBuildError> {
+    descriptor.validate()?;
+    if descriptor.provider_type() != ProviderType::Observability {
+        return Err(ObservabilityProviderBuildError::WrongProviderType);
+    }
+    if descriptor.implementation_id != implementation_id() {
+        return Err(ObservabilityProviderBuildError::WrongImplementation);
+    }
+    if !matches!(
+        descriptor.placement,
+        ProviderPlacement::TrustedFirstPartyInProcess { .. }
+    ) {
+        return Err(ObservabilityProviderBuildError::WrongPlacement);
+    }
+    if descriptor.capabilities != live_observability_capabilities()? {
+        return Err(ObservabilityProviderBuildError::CapabilityMismatch);
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
-pub struct LocalObservabilityFactory {
+pub struct LocalObservabilityFactoryEntry {
+    provider_id: ProviderId,
+    configuration_schema_fingerprint: Fingerprint,
+    configured_scope_digest: Fingerprint,
+    placement: ProviderPlacement,
     limits: ObservabilityLimits,
     queries: Arc<dyn ObservabilityQueryPort>,
     exports: Arc<dyn ObservabilityExportPort>,
+}
+
+pub type FactoryEntry = LocalObservabilityFactoryEntry;
+
+impl fmt::Debug for LocalObservabilityFactoryEntry {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LocalObservabilityFactoryEntry")
+            .field("provider_id", &"<redacted>")
+            .field("placement", &self.placement)
+            .field("limits", &self.limits)
+            .finish_non_exhaustive()
+    }
+}
+
+impl LocalObservabilityFactoryEntry {
+    pub fn new(
+        descriptor: &ProviderDescriptor,
+        limits: ObservabilityLimits,
+        queries: Arc<dyn ObservabilityQueryPort>,
+        exports: Arc<dyn ObservabilityExportPort>,
+    ) -> Result<Self, ObservabilityProviderBuildError> {
+        validate_observability_descriptor(descriptor)?;
+        Ok(Self {
+            provider_id: descriptor.provider_id.clone(),
+            configuration_schema_fingerprint: descriptor.configuration_schema_fingerprint.clone(),
+            configured_scope_digest: descriptor.configured_scope_digest.clone(),
+            placement: descriptor.placement.clone(),
+            limits,
+            queries,
+            exports,
+        })
+    }
+
+    fn matches(&self, descriptor: &ProviderDescriptor) -> bool {
+        self.provider_id == descriptor.provider_id
+            && self.configuration_schema_fingerprint == descriptor.configuration_schema_fingerprint
+            && self.configured_scope_digest == descriptor.configured_scope_digest
+            && self.placement == descriptor.placement
+    }
+}
+
+#[derive(Clone)]
+pub struct LocalObservabilityFactory {
+    entries: Arc<BTreeMap<ProviderId, LocalObservabilityFactoryEntry>>,
     clock: Arc<dyn ProviderClock>,
 }
 
@@ -619,32 +785,38 @@ impl fmt::Debug for LocalObservabilityFactory {
         formatter
             .debug_struct("LocalObservabilityFactory")
             .field("key", &factory_key())
-            .field("limits", &self.limits)
+            .field("entry_count", &self.entries.len())
             .finish_non_exhaustive()
     }
 }
 
 impl LocalObservabilityFactory {
     pub fn new(
-        limits: ObservabilityLimits,
-        queries: Arc<dyn ObservabilityQueryPort>,
-        exports: Arc<dyn ObservabilityExportPort>,
-    ) -> Self {
-        Self::with_clock(limits, queries, exports, Arc::new(SystemProviderClock))
+        entries: Vec<LocalObservabilityFactoryEntry>,
+    ) -> Result<Self, ObservabilityProviderBuildError> {
+        Self::with_clock(entries, Arc::new(SystemProviderClock))
     }
 
     pub fn with_clock(
-        limits: ObservabilityLimits,
-        queries: Arc<dyn ObservabilityQueryPort>,
-        exports: Arc<dyn ObservabilityExportPort>,
+        entries: Vec<LocalObservabilityFactoryEntry>,
         clock: Arc<dyn ProviderClock>,
-    ) -> Self {
-        Self {
-            limits,
-            queries,
-            exports,
-            clock,
+    ) -> Result<Self, ObservabilityProviderBuildError> {
+        if entries.is_empty() {
+            return Err(ObservabilityProviderBuildError::EmptyFactory);
         }
+        if entries.len() > MAX_PROVIDER_REGISTRY_ENTRIES {
+            return Err(ObservabilityProviderBuildError::TooManyFactoryEntries);
+        }
+        let mut indexed = BTreeMap::new();
+        for entry in entries {
+            if indexed.insert(entry.provider_id.clone(), entry).is_some() {
+                return Err(ObservabilityProviderBuildError::DuplicateProvider);
+            }
+        }
+        Ok(Self {
+            entries: Arc::new(indexed),
+            clock,
+        })
     }
 }
 
@@ -655,11 +827,16 @@ impl ProviderFactory for LocalObservabilityFactory {
         {
             return Err(FactoryError::Rejected);
         }
+        let entry = self
+            .entries
+            .get(&descriptor.provider_id)
+            .filter(|entry| entry.matches(descriptor))
+            .ok_or(FactoryError::Rejected)?;
         LocalObservabilityProvider::with_clock(
             descriptor.clone(),
-            self.limits,
-            self.queries.clone(),
-            self.exports.clone(),
+            entry.limits,
+            entry.queries.clone(),
+            entry.exports.clone(),
             self.clock.clone(),
         )
         .map(|provider| ProviderInstance::Observability(Arc::new(provider)))
@@ -709,22 +886,7 @@ impl LocalObservabilityProvider {
         exports: Arc<dyn ObservabilityExportPort>,
         clock: Arc<dyn ProviderClock>,
     ) -> Result<Self, ObservabilityProviderBuildError> {
-        descriptor.validate()?;
-        if descriptor.provider_type() != ProviderType::Observability {
-            return Err(ObservabilityProviderBuildError::WrongProviderType);
-        }
-        if descriptor.implementation_id != implementation_id() {
-            return Err(ObservabilityProviderBuildError::WrongImplementation);
-        }
-        if !matches!(
-            descriptor.placement,
-            ProviderPlacement::TrustedFirstPartyInProcess { .. }
-        ) {
-            return Err(ObservabilityProviderBuildError::WrongPlacement);
-        }
-        if descriptor.capabilities != live_observability_capabilities()? {
-            return Err(ObservabilityProviderBuildError::CapabilityMismatch);
-        }
+        validate_observability_descriptor(&descriptor)?;
         Ok(Self {
             descriptor,
             limits,
@@ -739,7 +901,8 @@ impl LocalObservabilityProvider {
             ProviderPlacement::TrustedFirstPartyInProcess {
                 controller_role, ..
             } => *controller_role,
-            ProviderPlacement::ProviderAgent { endpoint_role, .. } => *endpoint_role,
+            ProviderPlacement::ProviderAgent { endpoint_role, .. }
+            | ProviderPlacement::UserAgent { endpoint_role, .. } => *endpoint_role,
         }
     }
 
@@ -787,6 +950,16 @@ impl LocalObservabilityProvider {
             RetryClass::SameOperation,
             ProviderHealthReason::HealthTimeout,
             ProviderRemediation::RetryBounded,
+        )
+    }
+
+    fn ambiguous_mutation(&self, operation: &ProviderOperationContext) -> ProviderFailure {
+        self.failure(
+            operation,
+            ProviderFailureKind::AmbiguousMutation,
+            RetryClass::AfterObservation,
+            ProviderHealthReason::AdoptionAmbiguous,
+            ProviderRemediation::InspectProvider,
         )
     }
 
@@ -888,6 +1061,7 @@ impl LocalObservabilityProvider {
         &self,
         operation: &ProviderOperationContext,
         deadline_ms: u32,
+        dispatch: ObservabilityDispatch,
         future: F,
     ) -> Result<T, ProviderFailure>
     where
@@ -896,7 +1070,10 @@ impl LocalObservabilityProvider {
         match tokio::time::timeout(Duration::from_millis(u64::from(deadline_ms)), future).await {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(error)) => Err(self.port_failure(operation, error)),
-            Err(_) => Err(self.deadline_failure(operation)),
+            Err(_) => Err(match dispatch {
+                ObservabilityDispatch::Read => self.deadline_failure(operation),
+                ObservabilityDispatch::Mutation => self.ambiguous_mutation(operation),
+            }),
         }
     }
 
@@ -943,6 +1120,47 @@ impl LocalObservabilityProvider {
     ) -> Result<ProviderValues, ProviderFailure> {
         ProviderValues::new(&self.descriptor, self.now_unix_ms())
             .map_err(|_| self.invalid_request(operation))
+    }
+
+    fn bind_query_result(
+        &self,
+        request: &ProviderOperationRequest,
+        projection: BoundedProjection,
+    ) -> Result<ObservabilityQueryResult, ProviderFailure> {
+        let observation = self
+            .values(&request.context)?
+            .observation(
+                &request.context,
+                None,
+                ObservedLifecycleState::Ready,
+                AdoptionState::NotAttempted,
+                ObservationReason::None,
+                ProviderHealthState::Healthy,
+                ProviderHealthReason::None,
+                ProviderRemediation::None,
+            )
+            .map_err(|_| self.invalid_request(&request.context))?;
+        let records = BoundedVec::new(
+            projection
+                .records
+                .into_iter()
+                .map(LocalObservationRecord::into_contract)
+                .collect(),
+        )
+        .map_err(|_| {
+            self.port_failure(&request.context, ObservabilityPortError::InvalidProjection)
+        })?;
+        let result = ObservabilityQueryResult {
+            observation,
+            records,
+            next_cursor: projection.next_cursor,
+            encoded_bytes_upper_bound: projection.encoded_bytes_upper_bound,
+            truncated: projection.truncated,
+        };
+        result.validate(request).map_err(|_| {
+            self.port_failure(&request.context, ObservabilityPortError::InvalidProjection)
+        })?;
+        Ok(result)
     }
 
     fn bound_page(
@@ -1014,7 +1232,12 @@ impl LocalObservabilityProvider {
         };
         let deadline = call.monotonic_deadline_remaining_ms();
         let page = self
-            .invoke(&request.context, deadline, self.queries.query(call, intent))
+            .invoke(
+                &request.context,
+                deadline,
+                ObservabilityDispatch::Read,
+                self.queries.query(call, intent),
+            )
             .await?;
         self.bound_page(&request.context, page, bounds, Some(*view))
     }
@@ -1050,23 +1273,30 @@ impl LocalObservabilityProvider {
             bounds,
         };
         let deadline = call.monotonic_deadline_remaining_ms();
+        let sink = BoundedExportSink::new(bounds, start_at_unix_ms, end_at_unix_ms);
         let outcome = self
             .invoke(
                 &request.context,
                 deadline,
-                self.exports.export(call, intent),
+                ObservabilityDispatch::Mutation,
+                self.exports.export(call, intent, sink.clone()),
             )
-            .await?;
-        if outcome.record_count() > bounds.max_records || outcome.encoded_bytes() > bounds.max_bytes
-        {
-            return Err(
-                self.port_failure(&request.context, ObservabilityPortError::InvalidProjection)
-            );
-        }
+            .await;
+        let snapshot = sink.finish();
+        let outcome = outcome?;
+        let snapshot = snapshot.map_err(|_| {
+            self.port_failure(&request.context, ObservabilityPortError::InvalidProjection)
+        })?;
         let mut binding = request.context.binding();
         binding.provider_id = self.descriptor.provider_id.clone();
         binding.provider_generation = self.descriptor.registry_generation;
-        Ok(BoundedExport { binding, outcome })
+        Ok(BoundedExport {
+            binding,
+            state: outcome.state(),
+            records: snapshot.records,
+            encoded_bytes: snapshot.encoded_bytes,
+            truncated: snapshot.truncated,
+        })
     }
 }
 
@@ -1091,7 +1321,12 @@ impl Provider for LocalObservabilityProvider {
             let call = self.validate_call(context, context.operation, context.operation.method)?;
             let deadline = call.monotonic_deadline_remaining_ms();
             let status = self
-                .invoke(context.operation, deadline, self.queries.health(call))
+                .invoke(
+                    context.operation,
+                    deadline,
+                    ObservabilityDispatch::Read,
+                    self.queries.health(call),
+                )
                 .await?;
             self.values(context.operation)?
                 .health(
@@ -1119,7 +1354,12 @@ impl ObservabilityProvider for LocalObservabilityProvider {
                 self.validate_request(context, request, ProviderMethod::ObservabilityStatus)?;
             let deadline = call.monotonic_deadline_remaining_ms();
             let status = self
-                .invoke(&request.context, deadline, self.queries.status(call))
+                .invoke(
+                    &request.context,
+                    deadline,
+                    ObservabilityDispatch::Read,
+                    self.queries.status(call),
+                )
                 .await?;
             self.values(&request.context)?
                 .observation(
@@ -1140,21 +1380,10 @@ impl ObservabilityProvider for LocalObservabilityProvider {
         &'a self,
         context: &'a ProviderCallContext<'a>,
         request: &'a ProviderOperationRequest,
-    ) -> ProviderFuture<'a, ProviderObservation> {
+    ) -> ProviderFuture<'a, ObservabilityQueryResult> {
         Box::pin(async move {
-            self.bounded_query(context, request).await?;
-            self.values(&request.context)?
-                .observation(
-                    &request.context,
-                    None,
-                    ObservedLifecycleState::Ready,
-                    AdoptionState::NotAttempted,
-                    ObservationReason::None,
-                    ProviderHealthState::Healthy,
-                    ProviderHealthReason::None,
-                    ProviderRemediation::None,
-                )
-                .map_err(|_| self.invalid_request(&request.context))
+            let projection = self.bounded_query(context, request).await?;
+            self.bind_query_result(request, projection)
         })
     }
 

@@ -9,8 +9,8 @@ use std::{
 use crate::{
     AudioAdoptionOutcome, AudioCall, AudioConfiguration, AudioEffectPort, AudioEnsureOutcome,
     AudioHealth, AudioInspection, AudioPlanOutcome, AudioPortError, AudioQueryPort,
-    AudioSessionPlan, AudioState, Factory, PipewireVhostUserAudioProvider, factory_key,
-    implementation_id, live_audio_capabilities,
+    AudioSessionPlan, AudioState, Factory, PipewireVhostUserAudioFactoryEntry,
+    PipewireVhostUserAudioProvider, factory_key, implementation_id, live_audio_capabilities,
 };
 use async_trait::async_trait;
 use d2b_contracts::{
@@ -19,7 +19,7 @@ use d2b_contracts::{
     v2_provider::{
         AdoptionRequest, AudioChannel, AudioDirection, AudioProvider, Generation, ImplementationId,
         MutationState, ProviderFailureKind, ProviderMethod, ProviderOperationInput,
-        ProviderPlacement, ProviderTarget,
+        ProviderPlacement, ProviderTarget, RetryClass,
     },
 };
 use d2b_host::audio_argv::{AudioArgvInput, AudioBackend};
@@ -35,8 +35,11 @@ struct FakeEffects {
     set_calls: AtomicUsize,
     destroy_calls: AtomicUsize,
     slow_plan: AtomicBool,
+    slow_set: AtomicBool,
+    slow_destroy: AtomicBool,
     plans: Mutex<Vec<AudioSessionPlan>>,
     states: Mutex<Vec<AudioState>>,
+    configurations: Mutex<Vec<AudioConfiguration>>,
 }
 
 #[async_trait]
@@ -44,9 +47,14 @@ impl AudioEffectPort for FakeEffects {
     async fn plan(
         &self,
         _context: AudioCall,
+        configuration: AudioConfiguration,
         plan: AudioSessionPlan,
     ) -> Result<AudioPlanOutcome, AudioPortError> {
         self.plan_calls.fetch_add(1, Ordering::Relaxed);
+        self.configurations
+            .lock()
+            .expect("configurations")
+            .push(configuration);
         self.plans.lock().expect("plans").push(plan);
         if self.slow_plan.load(Ordering::Relaxed) {
             tokio::time::sleep(Duration::from_millis(25)).await;
@@ -57,9 +65,14 @@ impl AudioEffectPort for FakeEffects {
     async fn ensure(
         &self,
         _context: AudioCall,
+        configuration: AudioConfiguration,
         _plan: AudioSessionPlan,
     ) -> Result<AudioEnsureOutcome, AudioPortError> {
         self.ensure_calls.fetch_add(1, Ordering::Relaxed);
+        self.configurations
+            .lock()
+            .expect("configurations")
+            .push(configuration);
         Ok(AudioEnsureOutcome {
             handle_id: d2b_contracts::v2_provider::HandleId::parse("audio-handle")
                 .expect("handle id"),
@@ -70,20 +83,36 @@ impl AudioEffectPort for FakeEffects {
     async fn set_state(
         &self,
         _context: AudioCall,
+        configuration: AudioConfiguration,
         _target: ProviderTarget,
         state: AudioState,
     ) -> Result<AudioInspection, AudioPortError> {
         self.set_calls.fetch_add(1, Ordering::Relaxed);
+        self.configurations
+            .lock()
+            .expect("configurations")
+            .push(configuration);
         self.states.lock().expect("states").push(state);
+        if self.slow_set.load(Ordering::Relaxed) {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
         Ok(AudioInspection::ready(None, Some(state)))
     }
 
     async fn destroy(
         &self,
         _context: AudioCall,
+        configuration: AudioConfiguration,
         _target: ProviderTarget,
     ) -> Result<MutationState, AudioPortError> {
         self.destroy_calls.fetch_add(1, Ordering::Relaxed);
+        self.configurations
+            .lock()
+            .expect("configurations")
+            .push(configuration);
+        if self.slow_destroy.load(Ordering::Relaxed) {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
         Ok(MutationState::Applied)
     }
 }
@@ -167,12 +196,15 @@ fn provider(
 }
 
 fn factory() -> Factory {
-    Factory::with_clock(
+    let fixture = fixture();
+    let entry = PipewireVhostUserAudioFactoryEntry::new(
+        &fixture.descriptor,
         configuration(),
         Arc::new(FakeEffects::default()),
         Arc::new(FakeQueries::default()),
-        Arc::new(DeterministicClock::new(NOW)),
     )
+    .expect("factory entry");
+    Factory::with_clock(vec![entry], Arc::new(DeterministicClock::new(NOW))).expect("factory")
 }
 
 #[test]
@@ -218,6 +250,47 @@ fn factory_key_constructs_only_the_exact_audio_implementation() {
         factory().construct(&wrong_implementation),
         Err(FactoryError::Rejected)
     ));
+
+    let alternate = Fixture::new(ProviderType::Audio, 45)
+        .expect("alternate fixture")
+        .descriptor;
+    let mut wrong_schema = fixture.descriptor.clone();
+    wrong_schema.configuration_schema_fingerprint =
+        alternate.configuration_schema_fingerprint.clone();
+    assert!(matches!(
+        factory().construct(&wrong_schema),
+        Err(FactoryError::Rejected)
+    ));
+    let mut wrong_scope = fixture.descriptor.clone();
+    wrong_scope.configured_scope_digest = alternate.configured_scope_digest.clone();
+    assert!(matches!(
+        factory().construct(&wrong_scope),
+        Err(FactoryError::Rejected)
+    ));
+    let mut wrong_placement = fixture.descriptor.clone();
+    wrong_placement.placement = ProviderPlacement::TrustedFirstPartyInProcess {
+        realm_id: RealmId::parse("bbbbbbbbbbbbbbbbbbba").expect("alternate realm"),
+        controller_role: EndpointRole::RealmController,
+    };
+    assert!(matches!(
+        factory().construct(&wrong_placement),
+        Err(FactoryError::Rejected)
+    ));
+    let mut wrong_provider = fixture.descriptor.clone();
+    wrong_provider.provider_id = alternate.provider_id;
+    assert!(matches!(
+        factory().construct(&wrong_provider),
+        Err(FactoryError::Rejected)
+    ));
+
+    let entry = PipewireVhostUserAudioFactoryEntry::new(
+        &fixture.descriptor,
+        configuration(),
+        Arc::new(FakeEffects::default()),
+        Arc::new(FakeQueries::default()),
+    )
+    .expect("entry");
+    assert!(Factory::new(vec![entry.clone(), entry]).is_err());
 }
 
 #[tokio::test]
@@ -241,6 +314,16 @@ async fn open_plans_and_ensures_with_generated_route_and_role_ids() {
     assert!(plans[0].role_id.as_str().starts_with("audio-role-"));
     let debug = format!("{:?}", plans[0]);
     assert!(!debug.contains("/run/"));
+    let configurations = effects.configurations.lock().expect("configurations");
+    assert_eq!(
+        configurations.as_slice(),
+        [configuration(), configuration()]
+    );
+    assert!(
+        configurations
+            .iter()
+            .all(|configuration| configuration.argv().extra_args.is_empty())
+    );
 }
 
 #[tokio::test]
@@ -343,7 +426,7 @@ async fn stale_adoption_is_rejected_before_query_port_call() {
 }
 
 #[tokio::test]
-async fn one_deadline_bounds_both_audio_plan_and_ensure() {
+async fn post_dispatch_open_timeout_is_ambiguous() {
     let fixture = fixture();
     let effects = Arc::new(FakeEffects::default());
     effects.slow_plan.store(true, Ordering::Relaxed);
@@ -357,9 +440,64 @@ async fn one_deadline_bounds_both_audio_plan_and_ensure() {
         .open(&context, &request)
         .await
         .expect_err("deadline");
-    assert_eq!(failure.kind, ProviderFailureKind::DeadlineExpired);
+    assert_eq!(failure.kind, ProviderFailureKind::AmbiguousMutation);
+    assert_eq!(failure.retry, RetryClass::AfterObservation);
     assert_eq!(effects.plan_calls.load(Ordering::Relaxed), 1);
     assert_eq!(effects.ensure_calls.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn post_dispatch_set_state_and_close_timeouts_are_ambiguous() {
+    let fixture = fixture();
+    let effects = Arc::new(FakeEffects::default());
+    let provider = provider(&fixture, effects.clone(), Arc::new(FakeQueries::default()));
+    let open = fixture
+        .request(ProviderMethod::AudioOpen)
+        .expect("open request");
+    let handle = provider
+        .open(&fixture.call_context(&open.context), &open)
+        .await
+        .expect("handle");
+
+    let set_state = fixture
+        .request_with_input(
+            ProviderMethod::AudioSetState,
+            ProviderOperationInput::AudioState {
+                channel: AudioChannel::Speaker,
+                direction: AudioDirection::Output,
+                mute: Some(true),
+                volume: None,
+            },
+        )
+        .expect("state request");
+    effects.slow_set.store(true, Ordering::Relaxed);
+    let mut set_context = fixture.call_context(&set_state.context);
+    set_context.monotonic_deadline_remaining_ms = 1;
+    let failure = provider
+        .set_state(&set_context, &set_state)
+        .await
+        .expect_err("ambiguous state");
+    assert_eq!(failure.kind, ProviderFailureKind::AmbiguousMutation);
+    assert_eq!(failure.retry, RetryClass::AfterObservation);
+
+    let mut close = fixture
+        .request(ProviderMethod::AudioClose)
+        .expect("close request");
+    close.target = ProviderTarget::Handle {
+        realm_id: handle.realm_id.clone(),
+        workload_id: handle.workload_id.clone(),
+        handle_id: handle.handle_id.clone(),
+        handle_generation: handle.resource_generation,
+    };
+    effects.slow_destroy.store(true, Ordering::Relaxed);
+    let mut close_context = fixture.call_context(&close.context);
+    close_context.monotonic_deadline_remaining_ms = 1;
+    let failure = provider
+        .close(&close_context, &close)
+        .await
+        .expect_err("ambiguous close");
+    assert_eq!(failure.kind, ProviderFailureKind::AmbiguousMutation);
+    assert_eq!(failure.retry, RetryClass::AfterObservation);
 }
 
 #[test]
