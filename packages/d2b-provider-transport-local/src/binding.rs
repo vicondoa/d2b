@@ -1,8 +1,8 @@
 use std::{
     fmt,
     num::NonZeroU32,
-    os::fd::{AsFd, OwnedFd},
-    sync::{Arc, LazyLock},
+    os::fd::OwnedFd,
+    sync::{Arc, LazyLock, Mutex},
 };
 
 use d2b_contracts::{
@@ -174,16 +174,16 @@ impl fmt::Debug for EndpointLeaseId {
     }
 }
 
-/// Validation failures for an already-owned endpoint descriptor.
+/// Claim failures for an already-owned endpoint capability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OwnedEndpointError {
-    DescriptorIo,
+    AlreadyClaimed,
 }
 
 impl fmt::Display for OwnedEndpointError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::DescriptorIo => "owned endpoint descriptor validation failed",
+            Self::AlreadyClaimed => "owned endpoint capability already claimed",
         })
     }
 }
@@ -209,12 +209,11 @@ impl CloudHypervisorVsockPort {
 
 /// A validated, already-owned connected endpoint.
 ///
-/// The raw descriptor is never exposed. Endpoint ports can request a
-/// close-on-exec duplicate, preserving ownership of the binding copy.
-#[derive(Clone)]
+/// Ownership moves exactly once into an endpoint port; the binding never
+/// duplicates a connected socket across handles.
 pub struct OwnedEndpointDescriptor {
     kind: LocalTransportKind,
-    descriptor: Arc<OwnedFd>,
+    descriptor: OwnedFd,
     identity: Fingerprint,
     generation: Generation,
     cloud_hypervisor_port: Option<CloudHypervisorVsockPort>,
@@ -224,7 +223,7 @@ impl OwnedEndpointDescriptor {
     /// Wrap a descriptor whose owner has already validated its socket class,
     /// nonblocking mode, close-on-exec flag, identity, and authorization.
     ///
-    /// The endpoint port must adapt duplicates through `AsyncFd` or an
+    /// The endpoint port must adapt the descriptor through `AsyncFd` or an
     /// equivalent Tokio transport before performing I/O.
     pub fn from_pre_authorized(
         kind: LocalTransportKind,
@@ -234,7 +233,7 @@ impl OwnedEndpointDescriptor {
     ) -> Self {
         Self {
             kind,
-            descriptor: Arc::new(descriptor),
+            descriptor,
             identity,
             generation,
             cloud_hypervisor_port: None,
@@ -249,7 +248,7 @@ impl OwnedEndpointDescriptor {
     ) -> Self {
         Self {
             kind: LocalTransportKind::CloudHypervisorVsock,
-            descriptor: Arc::new(descriptor),
+            descriptor,
             identity,
             generation,
             cloud_hypervisor_port: Some(port),
@@ -260,11 +259,8 @@ impl OwnedEndpointDescriptor {
         self.kind
     }
 
-    pub fn duplicate(&self) -> Result<OwnedFd, OwnedEndpointError> {
+    pub fn into_owned_fd(self) -> OwnedFd {
         self.descriptor
-            .as_fd()
-            .try_clone_to_owned()
-            .map_err(|_| OwnedEndpointError::DescriptorIo)
     }
 
     pub fn identity(&self) -> &Fingerprint {
@@ -277,6 +273,44 @@ impl OwnedEndpointDescriptor {
 
     pub const fn cloud_hypervisor_port(&self) -> Option<CloudHypervisorVsockPort> {
         self.cloud_hypervisor_port
+    }
+}
+
+/// Single-use ownership capability for one already-connected endpoint.
+#[derive(Clone)]
+pub struct OwnedEndpointCapability {
+    kind: LocalTransportKind,
+    descriptor: Arc<Mutex<Option<OwnedEndpointDescriptor>>>,
+}
+
+impl OwnedEndpointCapability {
+    pub fn new(descriptor: OwnedEndpointDescriptor) -> Self {
+        Self {
+            kind: descriptor.kind(),
+            descriptor: Arc::new(Mutex::new(Some(descriptor))),
+        }
+    }
+
+    pub const fn kind(&self) -> LocalTransportKind {
+        self.kind
+    }
+
+    pub fn claim(&self) -> Result<OwnedEndpointDescriptor, OwnedEndpointError> {
+        self.descriptor
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+            .ok_or(OwnedEndpointError::AlreadyClaimed)
+    }
+}
+
+impl fmt::Debug for OwnedEndpointCapability {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("OwnedEndpointCapability")
+            .field("kind", &self.kind)
+            .field("descriptor", &"<redacted>")
+            .finish()
     }
 }
 
@@ -310,7 +344,7 @@ pub enum EndpointSource {
         kind: LocalTransportKind,
         lease_id: EndpointLeaseId,
     },
-    Owned(OwnedEndpointDescriptor),
+    Owned(OwnedEndpointCapability),
 }
 
 impl EndpointSource {
@@ -323,13 +357,13 @@ impl EndpointSource {
     }
 
     pub fn owned(descriptor: OwnedEndpointDescriptor) -> Self {
-        Self::Owned(descriptor)
+        Self::Owned(OwnedEndpointCapability::new(descriptor))
     }
 
     pub const fn kind(&self) -> LocalTransportKind {
         match self {
             Self::Bundle { kind, .. } | Self::Lease { kind, .. } => *kind,
-            Self::Owned(descriptor) => descriptor.kind(),
+            Self::Owned(capability) => capability.kind(),
         }
     }
 
@@ -355,9 +389,9 @@ impl EndpointSource {
         }
     }
 
-    pub fn owned_descriptor(&self) -> Option<&OwnedEndpointDescriptor> {
+    pub fn owned_capability(&self) -> Option<&OwnedEndpointCapability> {
         match self {
-            Self::Owned(descriptor) => Some(descriptor),
+            Self::Owned(capability) => Some(capability),
             Self::Bundle { .. } | Self::Lease { .. } => None,
         }
     }

@@ -1,7 +1,8 @@
 use std::{
+    collections::VecDeque,
     future::pending,
     io::{Read, Write},
-    os::fd::OwnedFd,
+    os::fd::{AsRawFd, OwnedFd},
     os::unix::net::{UnixDatagram, UnixStream},
     sync::{
         Arc, Mutex, MutexGuard,
@@ -34,15 +35,16 @@ use crate::{
     CLOUD_HYPERVISOR_VSOCK_FACTORY_KEY, CLOUD_HYPERVISOR_VSOCK_IMPLEMENTATION_ID,
     CloudHypervisorVsockPort, EndpointCapabilityId, EndpointCloseRequest, EndpointCloseResult,
     EndpointCloseState, EndpointConnectRequest, EndpointConnection, EndpointConnectionMetadata,
-    EndpointConnectionResource, EndpointInspectRequest, EndpointLeaseId, EndpointObservation,
-    EndpointObservationState, EndpointPortError, EndpointProvenance, EndpointResolveRequest,
-    EndpointSource, LocalEndpointPort, LocalEndpointResolver, LocalTransportClock,
+    EndpointInspectRequest, EndpointLeaseId, EndpointObservation, EndpointObservationState,
+    EndpointPortError, EndpointProvenance, EndpointResolveRequest, EndpointSource,
+    LocalEndpointPort, LocalEndpointResolver, LocalTransportClock,
     LocalTransportConfigurationError, LocalTransportFactory, LocalTransportFactoryError,
     LocalTransportKind, LocalTransportLimits, LocalTransportProvider, NATIVE_VSOCK_FACTORY_KEY,
     NATIVE_VSOCK_IMPLEMENTATION_ID, OwnedEndpointConnection, OwnedEndpointDescriptor,
-    ReachabilityEvidence, TokioLocalEndpointPort, TransportBinding, TransportCapabilityProfile,
-    UNIX_SEQPACKET_FACTORY_KEY, UNIX_SEQPACKET_IMPLEMENTATION_ID, UNIX_STREAM_FACTORY_KEY,
-    UNIX_STREAM_IMPLEMENTATION_ID, local_transport_capabilities,
+    OwnedLocalTransport, ReachabilityEvidence, TokioLocalEndpointPort, TransportBinding,
+    TransportCapabilityProfile, TransportHandoffError, UNIX_SEQPACKET_FACTORY_KEY,
+    UNIX_SEQPACKET_IMPLEMENTATION_ID, UNIX_STREAM_FACTORY_KEY, UNIX_STREAM_IMPLEMENTATION_ID,
+    local_transport_capabilities,
 };
 
 const NOW_UNIX_MS: u64 = 1_700_000_000_000;
@@ -60,11 +62,14 @@ struct FakeBehavior {
     connect_operation_id: Option<OperationId>,
     connect_identity: Option<Fingerprint>,
     connect_generation: Option<Generation>,
+    connect_preclaimed: bool,
     inspect_error: Option<EndpointPortError>,
     inspect_identity: Option<Fingerprint>,
     inspect_generation: Option<Generation>,
     inspect_state: EndpointObservationState,
+    pending_close: bool,
     close_error: Option<EndpointPortError>,
+    close_operation_id: Option<OperationId>,
     close_identity: Option<Fingerprint>,
     close_generation: Option<Generation>,
     close_state: EndpointCloseState,
@@ -78,11 +83,14 @@ impl Default for FakeBehavior {
             connect_operation_id: None,
             connect_identity: None,
             connect_generation: None,
+            connect_preclaimed: false,
             inspect_error: None,
             inspect_identity: None,
             inspect_generation: None,
             inspect_state: EndpointObservationState::Connected,
+            pending_close: false,
             close_error: None,
+            close_operation_id: None,
             close_identity: None,
             close_generation: None,
             close_state: EndpointCloseState::Closed,
@@ -96,9 +104,10 @@ struct FakeEndpointPort {
     connect_calls: Mutex<Vec<EndpointConnectRequest>>,
     inspect_calls: Mutex<Vec<EndpointInspectRequest>>,
     close_calls: Mutex<Vec<EndpointCloseRequest>>,
+    connection_peers: Mutex<Vec<UnixStream>>,
     connect_started: Notify,
     pending_connect_dropped: Arc<AtomicBool>,
-    connection_closes: Arc<AtomicUsize>,
+    pending_close_dropped: Arc<AtomicBool>,
 }
 
 impl FakeEndpointPort {
@@ -121,13 +130,16 @@ impl FakeEndpointPort {
     async fn wait_for_connect(&self) {
         self.connect_started.notified().await;
     }
-}
 
-struct FakeConnectionResource(Arc<AtomicUsize>);
-
-impl EndpointConnectionResource for FakeConnectionResource {
-    fn close(&self) {
-        self.0.fetch_add(1, Ordering::AcqRel);
+    fn closed_peer_count(&self) -> usize {
+        lock(&self.connection_peers)
+            .iter_mut()
+            .map(|peer| {
+                let mut byte = [0_u8; 1];
+                matches!(peer.read(&mut byte), Ok(0))
+            })
+            .filter(|closed| *closed)
+            .count()
     }
 }
 
@@ -148,14 +160,21 @@ impl LocalEndpointResolver for RejectingResolver {
 }
 
 struct StaticResolver {
-    descriptor: OwnedEndpointDescriptor,
+    descriptors: Mutex<VecDeque<OwnedEndpointDescriptor>>,
     calls: Mutex<Vec<EndpointResolveRequest>>,
 }
 
 impl StaticResolver {
     fn new(descriptor: OwnedEndpointDescriptor) -> Self {
         Self {
-            descriptor,
+            descriptors: Mutex::new(VecDeque::from([descriptor])),
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn from_descriptors(descriptors: impl IntoIterator<Item = OwnedEndpointDescriptor>) -> Self {
+        Self {
+            descriptors: Mutex::new(descriptors.into_iter().collect()),
             calls: Mutex::new(Vec::new()),
         }
     }
@@ -172,7 +191,9 @@ impl LocalEndpointResolver for StaticResolver {
         request: EndpointResolveRequest,
     ) -> Result<OwnedEndpointDescriptor, EndpointPortError> {
         lock(&self.calls).push(request);
-        Ok(self.descriptor.clone())
+        lock(&self.descriptors)
+            .pop_front()
+            .ok_or(EndpointPortError::Unavailable)
     }
 }
 
@@ -200,7 +221,15 @@ impl LocalEndpointPort for FakeEndpointPort {
         if let Some(error) = behavior.connect_error {
             return Err(error);
         }
-        Ok(EndpointConnection::new(
+        let kind = request.kind;
+        let (socket, peer) = UnixStream::pair().expect("fake connection pair");
+        socket
+            .set_nonblocking(true)
+            .expect("nonblocking fake connection");
+        peer.set_nonblocking(true)
+            .expect("nonblocking fake connection peer");
+        lock(&self.connection_peers).push(peer);
+        let connection = EndpointConnection::new(
             EndpointConnectionMetadata {
                 operation_id: behavior
                     .connect_operation_id
@@ -213,14 +242,21 @@ impl LocalEndpointPort for FakeEndpointPort {
                 generation: behavior
                     .connect_generation
                     .unwrap_or(request.expected_generation),
-                kind: request.kind,
+                kind,
                 capabilities: request.capabilities,
                 reachability: ReachabilityEvidence::ReachableOnly,
             },
-            OwnedEndpointConnection::new(Arc::new(FakeConnectionResource(
-                self.connection_closes.clone(),
-            ))),
-        ))
+            OwnedLocalTransport::from_connected(kind, OwnedFd::from(socket)),
+        )?;
+        if behavior.connect_preclaimed {
+            drop(
+                connection
+                    .owned()
+                    .take_transport()
+                    .map_err(|_| EndpointPortError::InvariantViolation)?,
+            );
+        }
+        Ok(connection)
     }
 
     async fn inspect(
@@ -256,11 +292,15 @@ impl LocalEndpointPort for FakeEndpointPort {
     ) -> Result<EndpointCloseResult, EndpointPortError> {
         lock(&self.close_calls).push(request.clone());
         let behavior = lock(&self.behavior).clone();
+        if behavior.pending_close {
+            let _guard = PendingConnectGuard(self.pending_close_dropped.clone());
+            pending::<()>().await;
+        }
         if let Some(error) = behavior.close_error {
             return Err(error);
         }
         Ok(EndpointCloseResult {
-            operation_id: request.operation_id,
+            operation_id: behavior.close_operation_id.unwrap_or(request.operation_id),
             handle_id: request.handle_id,
             binding_id: request.binding_id,
             identity: behavior.close_identity.unwrap_or(request.expected_identity),
@@ -724,6 +764,76 @@ fn registry_builder_constructs_transport_from_public_factory_and_key() {
     assert_eq!(instance.descriptor(), descriptor);
 }
 
+#[tokio::test]
+async fn retained_factory_handoff_claims_transport_after_registry_type_erasure() {
+    let harness = Harness::new(LocalTransportKind::UnixStream);
+    let configured_binding = binding(
+        &harness.descriptor,
+        LocalTransportKind::UnixStream,
+        harness.binding_id.clone(),
+        harness.scope.clone(),
+        fingerprint(0x41),
+        harness.endpoint_generation,
+    );
+    let port = Arc::new(FakeEndpointPort::default());
+    let factory = Arc::new(
+        LocalTransportFactory::with_clock_and_limits(
+            LocalTransportKind::UnixStream,
+            port.clone(),
+            vec![configured_binding],
+            Arc::new(FixedClock),
+            LocalTransportLimits::default(),
+        )
+        .expect("valid handoff factory"),
+    );
+    let mut builder = ProviderRegistryBuilder::new(
+        harness.descriptor.registry_generation,
+        fingerprint(0x39),
+        NOW_UNIX_MS,
+    );
+    builder
+        .register_factory(factory.key(), factory.clone())
+        .expect("handoff factory registers");
+    builder
+        .register_instance(harness.descriptor.clone())
+        .expect("handoff provider constructs");
+    let registry = builder.finish().expect("handoff registry builds");
+    let ProviderInstance::Transport(provider) = registry
+        .instance(&harness.descriptor.provider_id)
+        .expect("erased transport registered")
+    else {
+        panic!("registered provider remains a transport");
+    };
+    let request = harness.connect_request("factory-handoff-connect");
+    let context = harness.call_context(&request.context);
+    let handle = provider
+        .connect(&context, &request)
+        .await
+        .expect("erased provider connects");
+    let transport = factory
+        .take_transport(&harness.descriptor.provider_id, &handle.handle_id)
+        .expect("retained factory exposes typed handoff");
+    assert_eq!(transport.kind(), LocalTransportKind::UnixStream);
+    assert_eq!(
+        factory
+            .take_transport(&harness.descriptor.provider_id, &handle.handle_id)
+            .expect_err("factory handoff remains single use"),
+        TransportHandoffError::AlreadyClaimed
+    );
+    let unclaimed_request = harness.connect_request("factory-unclaimed-connect");
+    let unclaimed_context = harness.call_context(&unclaimed_request.context);
+    provider
+        .connect(&unclaimed_context, &unclaimed_request)
+        .await
+        .expect("second erased provider connection remains unclaimed");
+    assert_eq!(port.closed_peer_count(), 0);
+    drop(provider);
+    drop(registry);
+    assert_eq!(port.closed_peer_count(), 1);
+    drop(transport);
+    assert_eq!(port.closed_peer_count(), 2);
+}
+
 #[allow(clippy::result_large_err)]
 async fn connect(harness: &Harness, operation_id: &str) -> Result<ProviderHandle, ProviderFailure> {
     let request = harness.connect_request(operation_id);
@@ -811,6 +921,50 @@ async fn connects_all_four_kinds_over_closed_bindings() {
             EndpointProvenance::VerifiedBundle
         );
     }
+}
+
+#[tokio::test]
+async fn canonical_handle_handoff_is_single_use_and_unclaimed_fds_are_raii_owned() {
+    let harness = Harness::new(LocalTransportKind::UnixSeqpacket);
+    let unknown = HandleId::parse("unknown-transport-handle").expect("valid handle id");
+    assert_eq!(
+        harness
+            .provider
+            .take_transport(&unknown)
+            .expect_err("unknown handle rejected"),
+        TransportHandoffError::UnknownHandle
+    );
+
+    let handle = connect(&harness, "handoff-connect")
+        .await
+        .expect("transport connects");
+    let transport = harness
+        .provider
+        .take_transport(&handle.handle_id)
+        .expect("canonical handle claims transport");
+    assert_eq!(transport.kind(), LocalTransportKind::UnixSeqpacket);
+    assert_eq!(
+        transport.capabilities(),
+        LocalTransportKind::UnixSeqpacket.capability_profile()
+    );
+    assert_eq!(
+        harness
+            .provider
+            .take_transport(&handle.handle_id)
+            .expect_err("transport handoff is single use"),
+        TransportHandoffError::AlreadyClaimed
+    );
+    drop(transport);
+    assert_eq!(harness.port.closed_peer_count(), 1);
+
+    let unclaimed = Harness::new(LocalTransportKind::UnixStream);
+    let port = unclaimed.port.clone();
+    connect(&unclaimed, "unclaimed-connect")
+        .await
+        .expect("unclaimed transport connects");
+    assert_eq!(port.closed_peer_count(), 0);
+    drop(unclaimed);
+    assert_eq!(port.closed_peer_count(), 1);
 }
 
 #[tokio::test]
@@ -956,7 +1110,7 @@ async fn propagates_operation_ids_through_connect_inspect_and_close() {
         harness.port.close_calls()[0].operation_id.as_str(),
         "operation-close"
     );
-    assert_eq!(harness.port.connection_closes.load(Ordering::Acquire), 1);
+    assert_eq!(harness.port.closed_peer_count(), 1);
 }
 
 #[tokio::test]
@@ -1008,6 +1162,172 @@ async fn realm_scoped_revoke_closes_every_handle_and_disables_binding() {
 }
 
 #[tokio::test]
+async fn revoke_close_error_cannot_block_local_detach_and_cleanup() {
+    let harness = Harness::new(LocalTransportKind::UnixStream);
+    let first = connect(&harness, "cleanup-error-first")
+        .await
+        .expect("first connection");
+    connect(&harness, "cleanup-error-second")
+        .await
+        .expect("second connection");
+    harness.port.update(|behavior| {
+        behavior.close_error = Some(EndpointPortError::Unavailable);
+    });
+    let request = harness.handle_request(
+        ProviderMethod::TransportRevokeBinding,
+        "cleanup-close-error",
+        &first,
+    );
+    let context = harness.call_context(&request.context);
+    assert_eq!(
+        harness
+            .provider
+            .revoke_binding(&context, &request)
+            .await
+            .expect_err("external close error remains visible")
+            .kind,
+        ProviderFailureKind::Unavailable
+    );
+    assert_eq!(harness.port.closed_peer_count(), 2);
+    assert_eq!(harness.port.close_calls().len(), 2);
+    assert_eq!(
+        harness
+            .provider
+            .take_transport(&first.handle_id)
+            .expect_err("detached handle no longer claimable"),
+        TransportHandoffError::UnknownHandle
+    );
+}
+
+#[tokio::test]
+async fn revoke_malformed_response_cannot_preserve_provider_owned_fd() {
+    let harness = Harness::new(LocalTransportKind::UnixStream);
+    let handle = connect(&harness, "cleanup-malformed-connect")
+        .await
+        .expect("connection");
+    harness.port.update(|behavior| {
+        behavior.close_operation_id =
+            Some(OperationId::parse("substituted-close").expect("valid operation id"));
+    });
+    let request = harness.handle_request(
+        ProviderMethod::TransportRevokeBinding,
+        "cleanup-malformed-close",
+        &handle,
+    );
+    let context = harness.call_context(&request.context);
+    assert_eq!(
+        harness
+            .provider
+            .revoke_binding(&context, &request)
+            .await
+            .expect_err("malformed close response remains visible")
+            .kind,
+        ProviderFailureKind::InvariantViolation
+    );
+    assert_eq!(harness.port.closed_peer_count(), 1);
+    assert_eq!(
+        harness
+            .provider
+            .take_transport(&handle.handle_id)
+            .expect_err("malformed response cannot restore detached handle"),
+        TransportHandoffError::UnknownHandle
+    );
+}
+
+#[tokio::test]
+async fn revoke_deadline_cannot_block_local_detach_and_cleanup() {
+    let harness = Harness::new(LocalTransportKind::UnixStream);
+    let handle = connect(&harness, "cleanup-deadline-connect")
+        .await
+        .expect("connection");
+    harness.port.update(|behavior| {
+        behavior.pending_close = true;
+    });
+    let request = harness.handle_request(
+        ProviderMethod::TransportRevokeBinding,
+        "cleanup-deadline-close",
+        &handle,
+    );
+    let mut context = harness.call_context(&request.context);
+    context.monotonic_deadline_remaining_ms = 5;
+    assert_eq!(
+        harness
+            .provider
+            .revoke_binding(&context, &request)
+            .await
+            .expect_err("external close deadline remains visible")
+            .kind,
+        ProviderFailureKind::DeadlineExpired
+    );
+    assert_eq!(harness.port.closed_peer_count(), 1);
+    assert!(harness.port.pending_close_dropped.load(Ordering::Acquire));
+    assert_eq!(
+        harness
+            .provider
+            .take_transport(&handle.handle_id)
+            .expect_err("deadline cannot restore detached handle"),
+        TransportHandoffError::UnknownHandle
+    );
+}
+
+#[tokio::test]
+async fn revoke_is_not_blocked_by_an_inflight_external_connect() {
+    let harness = Harness::new(LocalTransportKind::UnixStream);
+    harness.port.update(|behavior| {
+        behavior.pending_connect = true;
+    });
+    let connect_request = harness.connect_request("inflight-connect");
+    let connect_context = harness.call_context(&connect_request.context);
+    let mut connect_future = Box::pin(harness.provider.connect(&connect_context, &connect_request));
+    tokio::select! {
+        _ = harness.port.wait_for_connect() => {}
+        result = &mut connect_future => panic!("connect unexpectedly completed: {result:?}"),
+    }
+
+    let revoke_request = ProviderOperationRequest {
+        context: harness.operation(
+            ProviderMethod::TransportRevokeBinding,
+            "revoke-during-connect",
+        ),
+        target: ProviderTarget::Realm {
+            realm_id: harness.realm_id.clone(),
+        },
+        expected_configuration_fingerprint: harness
+            .descriptor
+            .configuration_schema_fingerprint
+            .clone(),
+        input: ProviderOperationInput::TransportBinding {
+            transport_binding_id: harness.binding_id.clone(),
+        },
+    };
+    let revoke_context = harness.call_context(&revoke_request.context);
+    let receipt = tokio::time::timeout(
+        Duration::from_millis(50),
+        harness
+            .provider
+            .revoke_binding(&revoke_context, &revoke_request),
+    )
+    .await
+    .expect("local revoke is independent of connector")
+    .expect("binding revokes while connect is pending");
+    assert_eq!(receipt.state, MutationState::Applied);
+    drop(connect_future);
+    assert!(harness.port.pending_connect_dropped.load(Ordering::Acquire));
+
+    harness.port.update(|behavior| {
+        behavior.pending_connect = false;
+    });
+    assert_eq!(
+        connect(&harness, "after-inflight-revoke")
+            .await
+            .expect_err("revoked binding rejects future connect")
+            .kind,
+        ProviderFailureKind::UnauthorizedScope
+    );
+    assert_eq!(harness.port.connect_calls().len(), 1);
+}
+
+#[tokio::test]
 async fn enforces_active_bound_until_close_releases_slot() {
     let harness = Harness::with_limits(
         LocalTransportKind::CloudHypervisorVsock,
@@ -1019,6 +1339,10 @@ async fn enforces_active_bound_until_close_releases_slot() {
     let first = connect(&harness, "bound-first")
         .await
         .expect("first connection succeeds");
+    let repeated = connect(&harness, "bound-first")
+        .await
+        .expect("idempotent active handle bypasses slot pressure");
+    assert_eq!(repeated, first);
     let failure = connect(&harness, "bound-second")
         .await
         .expect_err("second active connection denied");
@@ -1172,12 +1496,18 @@ async fn dropping_connect_future_cancels_injected_connector() {
     task.abort();
     assert!(task.await.expect_err("task aborted").is_cancelled());
     assert!(harness.port.pending_connect_dropped.load(Ordering::Acquire));
+    harness.port.update(|behavior| {
+        behavior.pending_connect = false;
+    });
+    connect(&harness, "abort-connect")
+        .await
+        .expect("cancelled pending reservation is released");
 }
 
 #[tokio::test]
 async fn invalid_post_connect_output_rolls_back_owned_connection_exactly_once() {
     let harness = Harness::new(LocalTransportKind::UnixStream);
-    let closes = harness.port.connection_closes.clone();
+    let port = harness.port.clone();
     harness.port.update(|behavior| {
         behavior.connect_operation_id =
             Some(OperationId::parse("substituted-operation").expect("valid operation id"));
@@ -1190,9 +1520,25 @@ async fn invalid_post_connect_output_rolls_back_owned_connection_exactly_once() 
             .kind,
         ProviderFailureKind::InvariantViolation
     );
-    assert_eq!(closes.load(Ordering::Acquire), 1);
+    assert_eq!(port.closed_peer_count(), 1);
     drop(harness);
-    assert_eq!(closes.load(Ordering::Acquire), 1);
+    assert_eq!(port.closed_peer_count(), 1);
+}
+
+#[tokio::test]
+async fn provider_refuses_to_publish_a_preclaimed_connection() {
+    let harness = Harness::new(LocalTransportKind::UnixStream);
+    harness.port.update(|behavior| {
+        behavior.connect_preclaimed = true;
+    });
+    assert_eq!(
+        connect(&harness, "preclaimed-connect")
+            .await
+            .expect_err("preclaimed connector result rejected")
+            .kind,
+        ProviderFailureKind::InvariantViolation
+    );
+    assert_eq!(harness.port.closed_peer_count(), 1);
 }
 
 #[tokio::test]
@@ -1291,7 +1637,7 @@ async fn rejects_substituted_identity_and_generation_evidence() {
             .await
             .expect("verified close succeeds")
             .state,
-        MutationState::Applied
+        MutationState::AlreadyApplied
     );
 }
 
@@ -1496,6 +1842,138 @@ async fn production_port_adapts_every_owned_transport_and_closes_idempotently() 
 }
 
 #[tokio::test]
+async fn concurrent_connects_resolve_exclusive_descriptors_without_cross_consumption() {
+    let harness = Harness::new(LocalTransportKind::UnixStream);
+    let endpoint_identity = fingerprint(0x41);
+    let mut descriptors = Vec::new();
+    let mut peers = Vec::new();
+    for _ in 0..2 {
+        let (socket, peer) = UnixStream::pair().expect("exclusive stream pair");
+        socket
+            .set_nonblocking(true)
+            .expect("nonblocking exclusive endpoint");
+        peer.set_read_timeout(Some(Duration::from_secs(1)))
+            .expect("bounded peer read");
+        descriptors.push(OwnedEndpointDescriptor::from_pre_authorized(
+            LocalTransportKind::UnixStream,
+            OwnedFd::from(socket),
+            endpoint_identity.clone(),
+            harness.endpoint_generation,
+        ));
+        peers.push(peer);
+    }
+    let resolver = Arc::new(StaticResolver::from_descriptors(descriptors));
+    let endpoint_port: Arc<dyn LocalEndpointPort> =
+        Arc::new(TokioLocalEndpointPort::new(resolver.clone()));
+    let configured_binding = binding(
+        &harness.descriptor,
+        LocalTransportKind::UnixStream,
+        harness.binding_id.clone(),
+        harness.scope.clone(),
+        endpoint_identity,
+        harness.endpoint_generation,
+    );
+    let provider = Arc::new(
+        LocalTransportProvider::with_clock_and_limits(
+            harness.descriptor.clone(),
+            LocalTransportKind::UnixStream,
+            vec![configured_binding],
+            endpoint_port,
+            Arc::new(FixedClock),
+            LocalTransportLimits::default(),
+        )
+        .expect("exclusive transport provider"),
+    );
+    let first_request = harness.connect_request("exclusive-first");
+    let second_request = harness.connect_request("exclusive-second");
+    let first_context = harness.call_context(&first_request.context);
+    let second_context = harness.call_context(&second_request.context);
+    let (first, second) = tokio::join!(
+        provider.connect(&first_context, &first_request),
+        provider.connect(&second_context, &second_request),
+    );
+    let first = first.expect("first exclusive connect");
+    let second = second.expect("second exclusive connect");
+    assert_eq!(resolver.calls().len(), 2);
+
+    let mut first_stream = UnixStream::from(
+        provider
+            .take_transport(&first.handle_id)
+            .expect("first transport handoff")
+            .into_owned_fd(),
+    );
+    let mut second_stream = UnixStream::from(
+        provider
+            .take_transport(&second.handle_id)
+            .expect("second transport handoff")
+            .into_owned_fd(),
+    );
+    assert_ne!(first_stream.as_raw_fd(), second_stream.as_raw_fd());
+    first_stream.write_all(b"A").expect("write first transport");
+    second_stream
+        .write_all(b"B")
+        .expect("write second transport");
+
+    let mut received = Vec::new();
+    for mut peer in peers {
+        let mut byte = [0_u8; 1];
+        peer.read_exact(&mut byte)
+            .expect("each independent peer receives traffic");
+        received.push(byte[0]);
+    }
+    received.sort_unstable();
+    assert_eq!(received, b"AB");
+}
+
+#[tokio::test]
+async fn already_owned_connected_capability_is_claimed_by_only_one_connect() {
+    let (socket, _peer) = UnixStream::pair().expect("single-use owned pair");
+    socket
+        .set_nonblocking(true)
+        .expect("nonblocking single-use endpoint");
+    let identity = fingerprint(0xa9);
+    let endpoint_generation = generation(109);
+    let source = EndpointSource::owned(OwnedEndpointDescriptor::from_pre_authorized(
+        LocalTransportKind::UnixStream,
+        OwnedFd::from(socket),
+        identity.clone(),
+        endpoint_generation,
+    ));
+    let port = TokioLocalEndpointPort::new(Arc::new(RejectingResolver::default()));
+    let (first, second) = tokio::join!(
+        port.connect(endpoint_connect_request(
+            LocalTransportKind::UnixStream,
+            "single-use-first",
+            source.clone(),
+            identity.clone(),
+            endpoint_generation,
+            Duration::from_secs(1),
+        )),
+        port.connect(endpoint_connect_request(
+            LocalTransportKind::UnixStream,
+            "single-use-second",
+            source,
+            identity,
+            endpoint_generation,
+            Duration::from_secs(1),
+        )),
+    );
+    let connection = match (first, second) {
+        (Ok(connection), Err(EndpointPortError::Unavailable))
+        | (Err(EndpointPortError::Unavailable), Ok(connection)) => connection,
+        _ => panic!("exactly one owned endpoint claim must succeed"),
+    };
+    assert_eq!(
+        connection
+            .owned()
+            .take_transport()
+            .expect("successful claim has actual transport")
+            .kind(),
+        LocalTransportKind::UnixStream
+    );
+}
+
+#[tokio::test]
 async fn production_resolver_accepts_only_opaque_capabilities_and_propagates_operation_id() {
     for use_lease in [false, true] {
         let (socket, _peer) = UnixStream::pair().expect("resolver stream pair");
@@ -1697,9 +2175,13 @@ fn endpoint_sources_are_opaque_or_owned_and_debug_redacted() {
         fingerprint(0x91),
         generation(91),
     );
-    let duplicate = descriptor.duplicate().expect("close-on-exec duplicate");
-    drop(duplicate);
     let owned = EndpointSource::owned(descriptor);
     assert_eq!(owned.provenance(), EndpointProvenance::OwnedDescriptor);
     assert!(!format!("{owned:?}").contains("descriptor"));
+    let capability = owned
+        .owned_capability()
+        .expect("owned capability remains closed typed");
+    let claimed = capability.claim().expect("first claim transfers ownership");
+    assert!(capability.claim().is_err());
+    drop(claimed);
 }

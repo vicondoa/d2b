@@ -3,16 +3,17 @@ use std::{collections::BTreeMap, error::Error, fmt, sync::Arc};
 use d2b_contracts::{
     v2_identity::{ProviderId, ProviderType},
     v2_provider::{
-        ImplementationId, MAX_PROVIDER_REGISTRY_ENTRIES, ProviderDescriptor, ProviderFactoryKey,
-        TransportBindingId,
+        HandleId, ImplementationId, MAX_PROVIDER_REGISTRY_ENTRIES, ProviderDescriptor,
+        ProviderFactoryKey, TransportBindingId,
     },
 };
 use d2b_provider::{FactoryError, ProviderFactory, ProviderInstance};
 
 use crate::{
-    LocalEndpointPort, LocalEndpointResolver, LocalTransportClock, LocalTransportKind,
-    LocalTransportLimits, LocalTransportProvider, MAX_ACTIVE_LOCAL_TRANSPORTS,
-    MAX_LOCAL_TRANSPORT_BINDINGS, SystemTransportClock, TokioLocalEndpointPort, TransportBinding,
+    LocalEndpointPort, LocalEndpointResolver, LocalTransportClock, LocalTransportHandoffRegistry,
+    LocalTransportKind, LocalTransportLimits, LocalTransportProvider, MAX_ACTIVE_LOCAL_TRANSPORTS,
+    MAX_LOCAL_TRANSPORT_BINDINGS, OwnedLocalTransport, SystemTransportClock,
+    TokioLocalEndpointPort, TransportBinding, TransportHandoffError,
 };
 
 pub const MAX_LOCAL_TRANSPORT_FACTORY_PROVIDERS: usize = MAX_PROVIDER_REGISTRY_ENTRIES;
@@ -56,6 +57,7 @@ pub struct LocalTransportFactory {
     kind: LocalTransportKind,
     endpoint_port: Arc<dyn LocalEndpointPort>,
     bindings: BTreeMap<ProviderId, Vec<TransportBinding>>,
+    handoffs: BTreeMap<ProviderId, Arc<LocalTransportHandoffRegistry>>,
     clock: Arc<dyn LocalTransportClock>,
     limits: LocalTransportLimits,
 }
@@ -197,6 +199,11 @@ impl LocalTransportFactory {
         if grouped.is_empty() {
             return Err(LocalTransportFactoryError::EmptyBindings);
         }
+        let handoffs = grouped
+            .keys()
+            .cloned()
+            .map(|provider_id| (provider_id, Arc::new(LocalTransportHandoffRegistry::new())))
+            .collect();
         Ok(Self {
             kind,
             endpoint_port,
@@ -204,6 +211,7 @@ impl LocalTransportFactory {
                 .into_iter()
                 .map(|(provider_id, bindings)| (provider_id, bindings.into_values().collect()))
                 .collect(),
+            handoffs,
             clock,
             limits,
         })
@@ -223,6 +231,24 @@ impl LocalTransportFactory {
 
     pub fn registered_provider_count(&self) -> usize {
         self.bindings.len()
+    }
+
+    pub fn handoff_registry(
+        &self,
+        provider_id: &ProviderId,
+    ) -> Option<Arc<LocalTransportHandoffRegistry>> {
+        self.handoffs.get(provider_id).cloned()
+    }
+
+    pub fn take_transport(
+        &self,
+        provider_id: &ProviderId,
+        handle_id: &HandleId,
+    ) -> Result<OwnedLocalTransport, TransportHandoffError> {
+        self.handoffs
+            .get(provider_id)
+            .ok_or(TransportHandoffError::UnknownHandle)?
+            .take_transport(handle_id)
     }
 }
 
@@ -248,13 +274,19 @@ impl ProviderFactory for LocalTransportFactory {
             })
             .ok_or(FactoryError::Rejected)?
             .clone();
-        let provider = LocalTransportProvider::with_clock_and_limits(
+        let handoffs = self
+            .handoffs
+            .get(&descriptor.provider_id)
+            .ok_or(FactoryError::Rejected)?
+            .clone();
+        let provider = LocalTransportProvider::with_handoff_registry(
             descriptor.clone(),
             self.kind,
             bindings,
             self.endpoint_port.clone(),
             self.clock.clone(),
             self.limits,
+            handoffs,
         )
         .map_err(|_| FactoryError::Rejected)?;
         Ok(ProviderInstance::Transport(Arc::new(provider)))

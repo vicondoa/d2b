@@ -6,6 +6,8 @@
 //! sees only opaque bundle/lease identifiers or validated owned descriptors.
 //! Reaching an endpoint is deliberately reported as reachability only;
 //! `ComponentSession` remains the authentication and descriptor-policy owner.
+//! Connected descriptors remain RAII-owned in a single-use handoff registry
+//! until the session layer claims the canonical provider handle.
 
 #![forbid(unsafe_code)]
 
@@ -23,15 +25,15 @@ pub use binding::{
     CLOUD_HYPERVISOR_VSOCK_FACTORY_KEY, CLOUD_HYPERVISOR_VSOCK_IMPLEMENTATION_ID,
     CloudHypervisorVsockPort, EndpointLeaseId, EndpointProvenance, EndpointSource,
     LocalTransportKind, NATIVE_VSOCK_FACTORY_KEY, NATIVE_VSOCK_IMPLEMENTATION_ID,
-    OwnedEndpointDescriptor, OwnedEndpointError, TransportBinding, TransportCapabilityProfile,
-    UNIX_SEQPACKET_FACTORY_KEY, UNIX_SEQPACKET_IMPLEMENTATION_ID, UNIX_STREAM_FACTORY_KEY,
-    UNIX_STREAM_IMPLEMENTATION_ID,
+    OwnedEndpointCapability, OwnedEndpointDescriptor, OwnedEndpointError, TransportBinding,
+    TransportCapabilityProfile, UNIX_SEQPACKET_FACTORY_KEY, UNIX_SEQPACKET_IMPLEMENTATION_ID,
+    UNIX_STREAM_FACTORY_KEY, UNIX_STREAM_IMPLEMENTATION_ID,
 };
 pub use connector::{
     EndpointCloseRequest, EndpointCloseResult, EndpointCloseState, EndpointConnectRequest,
-    EndpointConnection, EndpointConnectionMetadata, EndpointConnectionResource,
-    EndpointInspectRequest, EndpointObservation, EndpointObservationState, EndpointPortError,
-    LocalEndpointPort, OwnedEndpointConnection, ReachabilityEvidence,
+    EndpointConnection, EndpointConnectionMetadata, EndpointInspectRequest, EndpointObservation,
+    EndpointObservationState, EndpointPortError, LocalEndpointPort, OwnedEndpointConnection,
+    OwnedLocalTransport, ReachabilityEvidence, TransportHandoffError,
 };
 pub use factory::{
     LocalTransportFactory, LocalTransportFactoryError, MAX_LOCAL_TRANSPORT_FACTORY_PROVIDERS,
@@ -40,7 +42,7 @@ pub use production::{
     EndpointCapabilityId, EndpointResolveRequest, LocalEndpointResolver, TokioLocalEndpointPort,
 };
 pub use provider::{
-    LocalTransportClock, LocalTransportConfigurationError, LocalTransportLimits,
-    LocalTransportProvider, MAX_ACTIVE_LOCAL_TRANSPORTS, MAX_LOCAL_TRANSPORT_BINDINGS,
-    SystemTransportClock, local_transport_capabilities,
+    LocalTransportClock, LocalTransportConfigurationError, LocalTransportHandoffRegistry,
+    LocalTransportLimits, LocalTransportProvider, MAX_ACTIVE_LOCAL_TRANSPORTS,
+    MAX_LOCAL_TRANSPORT_BINDINGS, SystemTransportClock, local_transport_capabilities,
 };

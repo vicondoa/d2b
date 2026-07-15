@@ -2,7 +2,8 @@ use std::{
     fmt,
     fs::File,
     io::{ErrorKind, Read, Write},
-    sync::{Arc, Mutex},
+    os::fd::OwnedFd,
+    sync::Arc,
     time::Duration,
 };
 
@@ -12,10 +13,10 @@ use tokio::io::unix::AsyncFd;
 
 use crate::{
     BundleEndpointId, EndpointCloseRequest, EndpointCloseResult, EndpointConnectRequest,
-    EndpointConnection, EndpointConnectionMetadata, EndpointConnectionResource,
-    EndpointInspectRequest, EndpointLeaseId, EndpointObservation, EndpointObservationState,
-    EndpointPortError, EndpointSource, LocalEndpointPort, LocalTransportKind,
-    OwnedEndpointConnection, OwnedEndpointDescriptor, ReachabilityEvidence,
+    EndpointConnection, EndpointConnectionMetadata, EndpointInspectRequest, EndpointLeaseId,
+    EndpointObservation, EndpointObservationState, EndpointPortError, EndpointSource,
+    LocalEndpointPort, LocalTransportKind, OwnedEndpointConnection, OwnedEndpointDescriptor,
+    OwnedLocalTransport, ReachabilityEvidence,
 };
 
 const MAX_CLOUD_HYPERVISOR_ACK_BYTES: usize = 64;
@@ -58,9 +59,11 @@ impl fmt::Debug for EndpointResolveRequest {
 
 /// Resolver seam for opaque bundle and lease capabilities.
 ///
-/// The resolver does not connect, perform handshakes, or authorize by
-/// reachability. It can only transfer a descriptor that its owner has already
-/// authorized and bound to verified identity and generation evidence.
+/// The resolver performs only capability-owner resolution or acceptance and
+/// never authorizes by reachability or performs a transport handshake. Every
+/// call must transfer exclusive ownership of a fresh connected descriptor
+/// bound to verified identity and generation evidence; returning a duplicate
+/// of a descriptor used by another handle violates this port contract.
 #[async_trait]
 pub trait LocalEndpointResolver: Send + Sync {
     async fn resolve(
@@ -110,7 +113,9 @@ impl TokioLocalEndpointPort {
                     })
                     .await?
             }
-            EndpointSource::Owned(descriptor) => descriptor,
+            EndpointSource::Owned(capability) => capability
+                .claim()
+                .map_err(|_| EndpointPortError::Unavailable)?,
         };
 
         if descriptor.kind() != request.kind {
@@ -123,34 +128,34 @@ impl TokioLocalEndpointPort {
             return Err(EndpointPortError::GenerationMismatch);
         }
 
-        let descriptor_fd = descriptor
-            .duplicate()
-            .map_err(|_| EndpointPortError::Unavailable)?;
+        let identity = descriptor.identity().clone();
+        let generation = descriptor.generation();
+        let cloud_hypervisor_port = descriptor.cloud_hypervisor_port();
+        let descriptor_fd = descriptor.into_owned_fd();
         let mut io =
             AsyncFd::new(File::from(descriptor_fd)).map_err(|_| EndpointPortError::Unavailable)?;
         if request.kind == LocalTransportKind::CloudHypervisorVsock {
-            let port = descriptor
-                .cloud_hypervisor_port()
-                .ok_or(EndpointPortError::InvariantViolation)?;
+            let port = cloud_hypervisor_port.ok_or(EndpointPortError::InvariantViolation)?;
             cloud_hypervisor_handshake(&mut io, port.get()).await?;
         } else {
             await_writable(&io).await?;
         }
 
-        let owned = OwnedEndpointConnection::new(Arc::new(AsyncEndpointResource::new(io)));
-        Ok(EndpointConnection::new(
+        let transport =
+            OwnedLocalTransport::from_connected(request.kind, OwnedFd::from(io.into_inner()));
+        EndpointConnection::new(
             EndpointConnectionMetadata {
                 operation_id: request.operation_id,
                 handle_id: request.handle_id,
                 binding_id: request.binding_id,
-                identity: descriptor.identity().clone(),
-                generation: descriptor.generation(),
+                identity,
+                generation,
                 kind: request.kind,
                 capabilities: request.capabilities,
                 reachability: ReachabilityEvidence::ReachableOnly,
             },
-            owned,
-        ))
+            transport,
+        )
     }
 }
 
@@ -209,28 +214,6 @@ impl LocalEndpointPort for TokioLocalEndpointPort {
             generation: request.expected_generation,
             state: connection.close(),
         })
-    }
-}
-
-struct AsyncEndpointResource {
-    io: Mutex<Option<AsyncFd<File>>>,
-}
-
-impl AsyncEndpointResource {
-    fn new(io: AsyncFd<File>) -> Self {
-        Self {
-            io: Mutex::new(Some(io)),
-        }
-    }
-}
-
-impl EndpointConnectionResource for AsyncEndpointResource {
-    fn close(&self) {
-        let mut io = self
-            .io
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let _ = io.take();
     }
 }
 

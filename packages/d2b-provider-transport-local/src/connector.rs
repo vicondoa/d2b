@@ -1,9 +1,7 @@
 use std::{
     fmt,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    os::fd::OwnedFd,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -59,50 +57,152 @@ pub struct EndpointConnectionMetadata {
     pub reachability: ReachabilityEvidence,
 }
 
-/// Resource owned by one successfully connected endpoint.
-///
-/// `close` must perform only nonblocking release work. The wrapper invokes it
-/// exactly once, including when a connect result is rejected or cancelled
-/// before the provider can publish a handle.
-pub trait EndpointConnectionResource: Send + Sync {
-    fn close(&self);
+/// Actual connected descriptor transferred once to `ComponentSession`.
+pub struct OwnedLocalTransport {
+    kind: LocalTransportKind,
+    capabilities: TransportCapabilityProfile,
+    descriptor: OwnedFd,
+}
+
+impl OwnedLocalTransport {
+    pub fn from_connected(kind: LocalTransportKind, descriptor: OwnedFd) -> Self {
+        Self {
+            kind,
+            capabilities: kind.capability_profile(),
+            descriptor,
+        }
+    }
+
+    pub const fn kind(&self) -> LocalTransportKind {
+        self.kind
+    }
+
+    pub const fn capabilities(&self) -> TransportCapabilityProfile {
+        self.capabilities
+    }
+
+    pub fn into_owned_fd(self) -> OwnedFd {
+        self.descriptor
+    }
+}
+
+impl fmt::Debug for OwnedLocalTransport {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("OwnedLocalTransport")
+            .field("kind", &self.kind)
+            .field("capabilities", &self.capabilities)
+            .field("descriptor", &"<redacted>")
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportHandoffError {
+    UnknownHandle,
+    AlreadyClaimed,
+    Closed,
+}
+
+impl fmt::Display for TransportHandoffError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::UnknownHandle => "transport handoff handle unknown",
+            Self::AlreadyClaimed => "transport handoff already claimed",
+            Self::Closed => "transport handoff closed",
+        })
+    }
+}
+
+impl std::error::Error for TransportHandoffError {}
+
+enum OwnedConnectionState {
+    Available(OwnedLocalTransport),
+    Claimed,
+    Closed,
 }
 
 struct OwnedEndpointConnectionInner {
-    resource: Arc<dyn EndpointConnectionResource>,
-    closed: AtomicBool,
+    state: Mutex<OwnedConnectionState>,
 }
 
 impl OwnedEndpointConnectionInner {
     fn close_once(&self) -> EndpointCloseState {
-        if self
-            .closed
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-        {
-            self.resource.close();
-            EndpointCloseState::Closed
-        } else {
-            EndpointCloseState::AlreadyClosed
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match std::mem::replace(&mut *state, OwnedConnectionState::Closed) {
+            OwnedConnectionState::Available(transport) => {
+                drop(transport);
+                EndpointCloseState::Closed
+            }
+            OwnedConnectionState::Claimed | OwnedConnectionState::Closed => {
+                EndpointCloseState::AlreadyClosed
+            }
         }
     }
-}
 
-impl Drop for OwnedEndpointConnectionInner {
-    fn drop(&mut self) {
-        let _ = self.close_once();
+    fn take_transport(&self) -> Result<OwnedLocalTransport, TransportHandoffError> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match std::mem::replace(&mut *state, OwnedConnectionState::Claimed) {
+            OwnedConnectionState::Available(transport) => Ok(transport),
+            OwnedConnectionState::Claimed => {
+                *state = OwnedConnectionState::Claimed;
+                Err(TransportHandoffError::AlreadyClaimed)
+            }
+            OwnedConnectionState::Closed => {
+                *state = OwnedConnectionState::Closed;
+                Err(TransportHandoffError::Closed)
+            }
+        }
+    }
+
+    fn is_open(&self) -> bool {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        !matches!(&*state, OwnedConnectionState::Closed)
+    }
+
+    fn is_claimed(&self) -> bool {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        matches!(&*state, OwnedConnectionState::Claimed)
+    }
+
+    fn is_claimable(&self) -> bool {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        matches!(&*state, OwnedConnectionState::Available(_))
     }
 }
 
-/// Cloneable RAII ownership token for a connected endpoint.
-#[derive(Clone)]
+impl fmt::Debug for OwnedEndpointConnectionInner {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("OwnedEndpointConnectionInner")
+            .field("open", &self.is_open())
+            .field("claimed", &self.is_claimed())
+            .finish_non_exhaustive()
+    }
+}
+
+/// RAII ownership token for a connected endpoint.
 pub struct OwnedEndpointConnection(Arc<OwnedEndpointConnectionInner>);
 
 impl OwnedEndpointConnection {
-    pub fn new(resource: Arc<dyn EndpointConnectionResource>) -> Self {
+    fn new(transport: OwnedLocalTransport) -> Self {
         Self(Arc::new(OwnedEndpointConnectionInner {
-            resource,
-            closed: AtomicBool::new(false),
+            state: Mutex::new(OwnedConnectionState::Available(transport)),
         }))
     }
 
@@ -111,7 +211,19 @@ impl OwnedEndpointConnection {
     }
 
     pub fn is_open(&self) -> bool {
-        !self.0.closed.load(Ordering::Acquire)
+        self.0.is_open()
+    }
+
+    pub(crate) fn take_transport(&self) -> Result<OwnedLocalTransport, TransportHandoffError> {
+        self.0.take_transport()
+    }
+
+    pub(crate) fn is_claimable(&self) -> bool {
+        self.0.is_claimable()
+    }
+
+    fn share(&self) -> Self {
+        Self(self.0.clone())
     }
 }
 
@@ -124,7 +236,6 @@ impl fmt::Debug for OwnedEndpointConnection {
     }
 }
 
-#[derive(Clone)]
 pub struct EndpointConnection {
     pub operation_id: OperationId,
     pub handle_id: HandleId,
@@ -138,8 +249,14 @@ pub struct EndpointConnection {
 }
 
 impl EndpointConnection {
-    pub fn new(metadata: EndpointConnectionMetadata, owned: OwnedEndpointConnection) -> Self {
-        Self {
+    pub fn new(
+        metadata: EndpointConnectionMetadata,
+        transport: OwnedLocalTransport,
+    ) -> Result<Self, EndpointPortError> {
+        if metadata.kind != transport.kind() || metadata.capabilities != transport.capabilities() {
+            return Err(EndpointPortError::InvariantViolation);
+        }
+        Ok(Self {
             operation_id: metadata.operation_id,
             handle_id: metadata.handle_id,
             binding_id: metadata.binding_id,
@@ -148,12 +265,26 @@ impl EndpointConnection {
             kind: metadata.kind,
             capabilities: metadata.capabilities,
             reachability: metadata.reachability,
-            owned,
-        }
+            owned: OwnedEndpointConnection::new(transport),
+        })
     }
 
     pub fn owned(&self) -> &OwnedEndpointConnection {
         &self.owned
+    }
+
+    pub(crate) fn snapshot(&self) -> Self {
+        Self {
+            operation_id: self.operation_id.clone(),
+            handle_id: self.handle_id.clone(),
+            binding_id: self.binding_id.clone(),
+            identity: self.identity.clone(),
+            generation: self.generation,
+            kind: self.kind,
+            capabilities: self.capabilities,
+            reachability: self.reachability,
+            owned: self.owned.share(),
+        }
     }
 }
 

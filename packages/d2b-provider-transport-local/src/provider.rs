@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
-    sync::Arc,
+    sync::{Arc, Mutex, MutexGuard},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -20,12 +20,13 @@ use d2b_contracts::{
     },
 };
 use d2b_provider_toolkit::ProviderValues;
-use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::{
-    EndpointCloseRequest, EndpointCloseState, EndpointConnectRequest, EndpointConnection,
-    EndpointInspectRequest, EndpointObservation, EndpointObservationState, EndpointPortError,
-    LocalEndpointPort, LocalTransportKind, ReachabilityEvidence, TransportBinding,
+    EndpointCloseRequest, EndpointConnectRequest, EndpointConnection, EndpointInspectRequest,
+    EndpointObservation, EndpointObservationState, EndpointPortError, LocalEndpointPort,
+    LocalTransportKind, OwnedLocalTransport, ReachabilityEvidence, TransportBinding,
+    TransportHandoffError,
 };
 
 pub const MAX_LOCAL_TRANSPORT_BINDINGS: usize = 256;
@@ -121,7 +122,6 @@ struct ActiveTransport {
     _permit: OwnedSemaphorePermit,
 }
 
-#[derive(Clone)]
 struct ActiveSnapshot {
     binding_id: TransportBindingId,
     connection: EndpointConnection,
@@ -132,8 +132,70 @@ impl From<&ActiveTransport> for ActiveSnapshot {
     fn from(value: &ActiveTransport) -> Self {
         Self {
             binding_id: value.binding_id.clone(),
-            connection: value.connection.clone(),
+            connection: value.connection.snapshot(),
             handle: value.handle.clone(),
+        }
+    }
+}
+
+#[derive(Default)]
+struct TransportRegistryState {
+    active: BTreeMap<HandleId, ActiveTransport>,
+    pending: BTreeSet<HandleId>,
+    revoked_bindings: BTreeSet<TransportBindingId>,
+}
+
+/// In-process handoff seam retained alongside an erased provider instance.
+#[derive(Default)]
+pub struct LocalTransportHandoffRegistry {
+    state: Mutex<TransportRegistryState>,
+}
+
+impl LocalTransportHandoffRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn take_transport(
+        &self,
+        handle_id: &HandleId,
+    ) -> Result<OwnedLocalTransport, TransportHandoffError> {
+        let state = lock(&self.state);
+        let active = state
+            .active
+            .get(handle_id)
+            .ok_or(TransportHandoffError::UnknownHandle)?;
+        active.connection.owned().take_transport()
+    }
+}
+
+impl fmt::Debug for LocalTransportHandoffRegistry {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let state = lock(&self.state);
+        formatter
+            .debug_struct("LocalTransportHandoffRegistry")
+            .field("active_count", &state.active.len())
+            .finish_non_exhaustive()
+    }
+}
+
+struct PendingConnectGuard<'a> {
+    registry: &'a Mutex<TransportRegistryState>,
+    handle_id: HandleId,
+    armed: bool,
+}
+
+impl PendingConnectGuard<'_> {
+    fn disarm_in(&mut self, registry: &mut TransportRegistryState) {
+        registry.pending.remove(&self.handle_id);
+        self.armed = false;
+    }
+}
+
+impl Drop for PendingConnectGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            lock(self.registry).pending.remove(&self.handle_id);
         }
     }
 }
@@ -145,10 +207,8 @@ pub struct LocalTransportProvider {
     bindings: BTreeMap<TransportBindingId, TransportBinding>,
     endpoint_port: Arc<dyn LocalEndpointPort>,
     clock: Arc<dyn LocalTransportClock>,
-    active: Mutex<BTreeMap<HandleId, ActiveTransport>>,
-    revoked_bindings: Mutex<BTreeSet<TransportBindingId>>,
+    handoffs: Arc<LocalTransportHandoffRegistry>,
     active_slots: Arc<Semaphore>,
-    binding_gate: Mutex<()>,
 }
 
 impl fmt::Debug for LocalTransportProvider {
@@ -159,6 +219,15 @@ impl fmt::Debug for LocalTransportProvider {
             .field("kind", &self.kind)
             .field("binding_count", &self.bindings.len())
             .finish_non_exhaustive()
+    }
+}
+
+impl Drop for LocalTransportProvider {
+    fn drop(&mut self) {
+        let mut state = lock(&self.handoffs.state);
+        state.active.clear();
+        state.pending.clear();
+        state.revoked_bindings.clear();
     }
 }
 
@@ -186,6 +255,26 @@ impl LocalTransportProvider {
         endpoint_port: Arc<dyn LocalEndpointPort>,
         clock: Arc<dyn LocalTransportClock>,
         limits: LocalTransportLimits,
+    ) -> Result<Self, LocalTransportConfigurationError> {
+        Self::with_handoff_registry(
+            descriptor,
+            kind,
+            bindings,
+            endpoint_port,
+            clock,
+            limits,
+            Arc::new(LocalTransportHandoffRegistry::new()),
+        )
+    }
+
+    pub(crate) fn with_handoff_registry(
+        descriptor: ProviderDescriptor,
+        kind: LocalTransportKind,
+        bindings: Vec<TransportBinding>,
+        endpoint_port: Arc<dyn LocalEndpointPort>,
+        clock: Arc<dyn LocalTransportClock>,
+        limits: LocalTransportLimits,
+        handoffs: Arc<LocalTransportHandoffRegistry>,
     ) -> Result<Self, LocalTransportConfigurationError> {
         descriptor.validate()?;
         if descriptor.provider_type() != ProviderType::Transport {
@@ -231,10 +320,8 @@ impl LocalTransportProvider {
             bindings: binding_map,
             endpoint_port,
             clock,
-            active: Mutex::new(BTreeMap::new()),
-            revoked_bindings: Mutex::new(BTreeSet::new()),
+            handoffs,
             active_slots: Arc::new(Semaphore::new(limits.max_active)),
-            binding_gate: Mutex::new(()),
         })
     }
 
@@ -244,6 +331,22 @@ impl LocalTransportProvider {
 
     pub fn binding(&self, id: &TransportBindingId) -> Option<&TransportBinding> {
         self.bindings.get(id)
+    }
+
+    /// Claim the connected descriptor for one canonical provider handle.
+    ///
+    /// The handoff is single-use. Until claimed, the registry owns the
+    /// descriptor and closes it automatically if the handle is removed. A
+    /// successful claim transfers descriptor lifetime to the session layer.
+    pub fn take_transport(
+        &self,
+        handle_id: &HandleId,
+    ) -> Result<OwnedLocalTransport, TransportHandoffError> {
+        self.handoffs.take_transport(handle_id)
+    }
+
+    pub fn handoff_registry(&self) -> Arc<LocalTransportHandoffRegistry> {
+        self.handoffs.clone()
     }
 
     async fn connect_inner(
@@ -277,19 +380,6 @@ impl LocalTransportProvider {
         binding: &TransportBinding,
         budget: Duration,
     ) -> ProviderResult<ProviderHandle> {
-        let _binding_guard = self.binding_gate.lock().await;
-        if self
-            .revoked_bindings
-            .lock()
-            .await
-            .contains(binding.binding_id())
-        {
-            return Err(self.denial(
-                &request.context,
-                self.clock.now_unix_ms(),
-                RequestDenial::Unauthorized,
-            ));
-        }
         let handle_id =
             HandleId::parse(request.context.operation_id.as_str().to_owned()).map_err(|_| {
                 self.denial(
@@ -299,19 +389,35 @@ impl LocalTransportProvider {
                 )
             })?;
 
-        if let Some(active) = self.active.lock().await.get(&handle_id) {
-            if active.binding_id == *binding.binding_id()
-                && active.handle.created_by == request.context.binding()
-            {
-                return Ok(active.handle.clone());
+        {
+            let registry = lock(&self.handoffs.state);
+            if registry.revoked_bindings.contains(binding.binding_id()) {
+                return Err(self.denial(
+                    &request.context,
+                    self.clock.now_unix_ms(),
+                    RequestDenial::Unauthorized,
+                ));
             }
-            return Err(self.denial(
-                &request.context,
-                self.clock.now_unix_ms(),
-                RequestDenial::Invalid,
-            ));
+            if let Some(active) = registry.active.get(&handle_id) {
+                if active.binding_id == *binding.binding_id()
+                    && active.handle.created_by == request.context.binding()
+                {
+                    return Ok(active.handle.clone());
+                }
+                return Err(self.denial(
+                    &request.context,
+                    self.clock.now_unix_ms(),
+                    RequestDenial::Invalid,
+                ));
+            }
+            if registry.pending.contains(&handle_id) {
+                return Err(self.failure(
+                    &request.context,
+                    self.clock.now_unix_ms(),
+                    FailureClass::Unavailable,
+                ));
+            }
         }
-
         let permit = self.active_slots.clone().try_acquire_owned().map_err(|_| {
             self.failure(
                 &request.context,
@@ -319,6 +425,40 @@ impl LocalTransportProvider {
                 FailureClass::BoundExceeded,
             )
         })?;
+        {
+            let mut registry = lock(&self.handoffs.state);
+            if registry.revoked_bindings.contains(binding.binding_id()) {
+                return Err(self.denial(
+                    &request.context,
+                    self.clock.now_unix_ms(),
+                    RequestDenial::Unauthorized,
+                ));
+            }
+            if let Some(active) = registry.active.get(&handle_id) {
+                if active.binding_id == *binding.binding_id()
+                    && active.handle.created_by == request.context.binding()
+                {
+                    return Ok(active.handle.clone());
+                }
+                return Err(self.denial(
+                    &request.context,
+                    self.clock.now_unix_ms(),
+                    RequestDenial::Invalid,
+                ));
+            }
+            if !registry.pending.insert(handle_id.clone()) {
+                return Err(self.failure(
+                    &request.context,
+                    self.clock.now_unix_ms(),
+                    FailureClass::Unavailable,
+                ));
+            }
+        }
+        let mut pending = PendingConnectGuard {
+            registry: &self.handoffs.state,
+            handle_id: handle_id.clone(),
+            armed: true,
+        };
         let connector_request = EndpointConnectRequest {
             operation_id: request.context.operation_id.clone(),
             handle_id: handle_id.clone(),
@@ -368,6 +508,13 @@ impl LocalTransportProvider {
                 FailureClass::GenerationMismatch,
             ));
         }
+        if !connection.owned().is_claimable() {
+            return Err(self.failure(
+                &request.context,
+                self.clock.now_unix_ms(),
+                FailureClass::Invariant,
+            ));
+        }
 
         let now = self.clock.now_unix_ms();
         let values = ProviderValues::new(&self.descriptor, now)
@@ -381,7 +528,29 @@ impl LocalTransportProvider {
                 None,
             )
             .map_err(|_| self.failure(&request.context, now, FailureClass::Invariant))?;
-        self.active.lock().await.insert(
+
+        let mut registry = lock(&self.handoffs.state);
+        pending.disarm_in(&mut registry);
+        if registry.revoked_bindings.contains(binding.binding_id()) {
+            return Err(self.denial(
+                &request.context,
+                self.clock.now_unix_ms(),
+                RequestDenial::Unauthorized,
+            ));
+        }
+        if let Some(active) = registry.active.get(&handle_id) {
+            if active.binding_id == *binding.binding_id()
+                && active.handle.created_by == request.context.binding()
+            {
+                return Ok(active.handle.clone());
+            }
+            return Err(self.denial(
+                &request.context,
+                self.clock.now_unix_ms(),
+                RequestDenial::Invalid,
+            ));
+        }
+        registry.active.insert(
             handle_id,
             ActiveTransport {
                 binding_id: binding.binding_id().clone(),
@@ -390,6 +559,7 @@ impl LocalTransportProvider {
                 _permit: permit,
             },
         );
+        drop(registry);
         Ok(handle)
     }
 
@@ -409,8 +579,8 @@ impl LocalTransportProvider {
             Err(denial) => return Err(self.denial(&request.context, now, denial)),
         };
         let active = {
-            let active = self.active.lock().await;
-            active.get(&handle_id).map(ActiveSnapshot::from)
+            let registry = lock(&self.handoffs.state);
+            registry.active.get(&handle_id).map(ActiveSnapshot::from)
         };
         let Some(active) = active else {
             return self.observation_without_handle(
@@ -518,7 +688,7 @@ impl LocalTransportProvider {
         };
         if observation.state == EndpointObservationState::Closed {
             let _ = active.connection.owned().close();
-            self.remove_if_same(&handle_id, &active.connection).await;
+            self.remove_if_same(&handle_id, &active.connection);
         }
         result
     }
@@ -534,19 +704,8 @@ impl LocalTransportProvider {
             Err(denial) => return Err(self.denial(&request.context, now, denial)),
         };
         let budget = Duration::from_millis(u64::from(context.monotonic_deadline_remaining_ms));
-        match tokio::time::timeout(
-            budget,
-            self.revoke_authorized(request, &binding_id, target_handle, budget),
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(_) => Err(self.denial(
-                &request.context,
-                self.clock.now_unix_ms(),
-                RequestDenial::Deadline,
-            )),
-        }
+        self.revoke_authorized(request, &binding_id, target_handle, budget)
+            .await
     }
 
     async fn revoke_authorized(
@@ -556,11 +715,10 @@ impl LocalTransportProvider {
         target_handle: Option<(HandleId, Generation)>,
         budget: Duration,
     ) -> ProviderResult<MutationReceipt> {
-        let _binding_guard = self.binding_gate.lock().await;
-        let active = {
-            let active = self.active.lock().await;
+        let (detached, newly_revoked) = {
+            let mut registry = lock(&self.handoffs.state);
             if let Some((handle_id, expected_generation)) = &target_handle
-                && let Some(candidate) = active.get(handle_id)
+                && let Some(candidate) = registry.active.get(handle_id)
             {
                 if candidate.binding_id != *binding_id {
                     return Err(self.denial(
@@ -577,18 +735,64 @@ impl LocalTransportProvider {
                     ));
                 }
             }
-            active
+            let newly_revoked = registry.revoked_bindings.insert(binding_id.clone());
+            let handles = registry
+                .active
                 .iter()
                 .filter(|(_, candidate)| candidate.binding_id == *binding_id)
-                .map(|(handle_id, candidate)| (handle_id.clone(), ActiveSnapshot::from(candidate)))
-                .collect::<Vec<_>>()
+                .map(|(handle_id, _)| handle_id.clone())
+                .collect::<Vec<_>>();
+            let detached = handles
+                .into_iter()
+                .filter_map(|handle_id| {
+                    registry
+                        .active
+                        .remove(&handle_id)
+                        .map(|active| (handle_id, active))
+                })
+                .collect::<Vec<_>>();
+            (detached, newly_revoked)
         };
-        let newly_revoked = self
-            .revoked_bindings
-            .lock()
-            .await
-            .insert(binding_id.clone());
-        let mut closed_any = false;
+
+        let closed_any = !detached.is_empty();
+        let active = detached
+            .into_iter()
+            .map(|(handle_id, active)| {
+                let snapshot = ActiveSnapshot::from(&active);
+                let _ = active.connection.owned().close();
+                (handle_id, snapshot)
+            })
+            .collect::<Vec<_>>();
+        let notification =
+            tokio::time::timeout(budget, self.notify_revoked(request, &active, budget)).await;
+        match notification {
+            Ok(Ok(())) => {}
+            Ok(Err(class)) => {
+                return Err(self.failure(&request.context, self.clock.now_unix_ms(), class));
+            }
+            Err(_) => {
+                return Err(self.denial(
+                    &request.context,
+                    self.clock.now_unix_ms(),
+                    RequestDenial::Deadline,
+                ));
+            }
+        }
+        let state = if newly_revoked || closed_any {
+            MutationState::Applied
+        } else {
+            MutationState::AlreadyApplied
+        };
+        self.receipt(&request.context, state)
+    }
+
+    async fn notify_revoked(
+        &self,
+        request: &ProviderOperationRequest,
+        active: &[(HandleId, ActiveSnapshot)],
+        budget: Duration,
+    ) -> Result<(), FailureClass> {
+        let mut first_failure = None;
         for (handle_id, active) in active {
             let port_request = EndpointCloseRequest {
                 operation_id: request.context.operation_id.clone(),
@@ -599,52 +803,29 @@ impl LocalTransportProvider {
                 kind: active.connection.kind,
                 deadline: budget,
             };
-            let close = self
+            let close = match self
                 .endpoint_port
                 .close(port_request, active.connection.owned())
                 .await
-                .map_err(|error| {
-                    self.failure(
-                        &request.context,
-                        self.clock.now_unix_ms(),
-                        FailureClass::from(error),
-                    )
-                })?;
+            {
+                Ok(close) => close,
+                Err(error) => {
+                    first_failure.get_or_insert(FailureClass::from(error));
+                    continue;
+                }
+            };
             if close.operation_id != request.context.operation_id
-                || close.handle_id != handle_id
+                || &close.handle_id != handle_id
                 || close.binding_id != active.binding_id
             {
-                return Err(self.failure(
-                    &request.context,
-                    self.clock.now_unix_ms(),
-                    FailureClass::Invariant,
-                ));
+                first_failure.get_or_insert(FailureClass::Invariant);
+            } else if close.identity != active.connection.identity {
+                first_failure.get_or_insert(FailureClass::IdentityMismatch);
+            } else if close.generation != active.connection.generation {
+                first_failure.get_or_insert(FailureClass::GenerationMismatch);
             }
-            if close.identity != active.connection.identity {
-                return Err(self.failure(
-                    &request.context,
-                    self.clock.now_unix_ms(),
-                    FailureClass::IdentityMismatch,
-                ));
-            }
-            if close.generation != active.connection.generation {
-                return Err(self.failure(
-                    &request.context,
-                    self.clock.now_unix_ms(),
-                    FailureClass::GenerationMismatch,
-                ));
-            }
-            let owned_close = active.connection.owned().close();
-            closed_any |= close.state == EndpointCloseState::Closed
-                || owned_close == EndpointCloseState::Closed;
-            self.remove_if_same(&handle_id, &active.connection).await;
         }
-        let state = if newly_revoked || closed_any {
-            MutationState::Applied
-        } else {
-            MutationState::AlreadyApplied
-        };
-        self.receipt(&request.context, state)
+        first_failure.map_or(Ok(()), Err)
     }
 
     fn validate_connect(
@@ -790,13 +971,13 @@ impl LocalTransportProvider {
         Ok(())
     }
 
-    async fn remove_if_same(&self, handle_id: &HandleId, connection: &EndpointConnection) {
-        let mut active = self.active.lock().await;
-        if active.get(handle_id).is_some_and(|candidate| {
+    fn remove_if_same(&self, handle_id: &HandleId, connection: &EndpointConnection) {
+        let mut registry = lock(&self.handoffs.state);
+        if registry.active.get(handle_id).is_some_and(|candidate| {
             candidate.connection.identity == connection.identity
                 && candidate.connection.generation == connection.generation
         }) {
-            active.remove(handle_id);
+            registry.active.remove(handle_id);
         }
     }
 
@@ -1028,6 +1209,12 @@ pub fn local_transport_capabilities() -> ProviderCapabilitySet {
         ProviderCapability(ProviderMethod::TransportInspect),
     ])
     .unwrap_or_else(|_| unreachable!("fixed local transport capabilities are valid"))
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn validate_configured_binding(
