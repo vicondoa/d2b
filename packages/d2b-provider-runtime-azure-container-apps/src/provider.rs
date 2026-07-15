@@ -1,7 +1,16 @@
 #![allow(clippy::result_large_err)] // ProviderFailure is the canonical provider contract error.
 
 use std::{
-    collections::BTreeMap, error::Error, fmt, future::Future, ops::Deref, sync::Arc, time::Duration,
+    collections::BTreeMap,
+    error::Error,
+    fmt,
+    future::{Future, poll_fn},
+    ops::Deref,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
 };
 
 use d2b_contracts::{
@@ -282,6 +291,41 @@ struct RunningPoll<'a> {
     query: &'a AcaWorkloadQuery,
     expected: &'a AcaResourceBinding,
     created_by: &'a OperationBinding,
+    mutation_started: bool,
+}
+
+#[derive(Clone, Copy)]
+struct MutationDispatch {
+    prior_started: bool,
+    current_mutates: bool,
+}
+
+impl MutationDispatch {
+    const fn read_only(prior_started: bool) -> Self {
+        Self {
+            prior_started,
+            current_mutates: false,
+        }
+    }
+
+    const fn mutating(prior_started: bool) -> Self {
+        Self {
+            prior_started,
+            current_mutates: true,
+        }
+    }
+
+    const fn before_dispatch(self) -> bool {
+        self.prior_started
+    }
+
+    const fn after_poll(self, polled: bool) -> bool {
+        self.prior_started || (self.current_mutates && polled)
+    }
+}
+
+struct EnsuredDiskImage {
+    record: AcaDiskImageRecord,
     mutation_started: bool,
 }
 
@@ -851,11 +895,23 @@ impl AzureContainerAppsRuntimeProvider {
         &self,
         deadline: &CallDeadline,
         operation: &ProviderOperationContext,
-        mutation_started: bool,
+        dispatch: MutationDispatch,
         future: impl Future<Output = Result<T, AcaControlError>>,
     ) -> ProviderResult<T> {
-        let remaining = self.effective_remaining(deadline, operation, mutation_started)?;
-        match timeout(remaining, future).await {
+        let remaining =
+            self.effective_remaining(deadline, operation, dispatch.before_dispatch())?;
+        let polled = AtomicBool::new(false);
+        tokio::pin!(future);
+        let result = timeout(
+            remaining,
+            poll_fn(|context| {
+                polled.store(true, Ordering::Release);
+                future.as_mut().poll(context)
+            }),
+        )
+        .await;
+        let mutation_started = dispatch.after_poll(polled.load(Ordering::Acquire));
+        match result {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(error)) => Err(self.control_failure(operation, error, mutation_started)),
             Err(_) => Err(self.deadline_failure(operation, mutation_started)),
@@ -958,7 +1014,7 @@ impl AzureContainerAppsRuntimeProvider {
             .await_external(
                 deadline,
                 operation,
-                false,
+                MutationDispatch::read_only(false),
                 self.credential_client.acquire(&request),
             )
             .await?;
@@ -994,7 +1050,7 @@ impl AzureContainerAppsRuntimeProvider {
         operation: &ProviderOperationContext,
         lease: &AcaCredentialLease,
         operation_class: SdkOperationClass,
-        mutation_started: bool,
+        dispatch: MutationDispatch,
     ) -> ProviderResult<AcaControlContext> {
         if !lease
             .metadata()
@@ -1009,7 +1065,8 @@ impl AzureContainerAppsRuntimeProvider {
                 ProviderRemediation::ReEnrollPeer,
             ));
         }
-        let remaining_ms = self.effective_remaining_ms(deadline, operation, mutation_started)?;
+        let remaining_ms =
+            self.effective_remaining_ms(deadline, operation, dispatch.before_dispatch())?;
         Ok(AcaControlContext::new(
             operation.binding(),
             operation.method,
@@ -1157,17 +1214,18 @@ impl AzureContainerAppsRuntimeProvider {
         query: &AcaWorkloadQuery,
         mutation_started: bool,
     ) -> ProviderResult<crate::types::AcaSandboxCandidates> {
+        let dispatch = MutationDispatch::read_only(mutation_started);
         let control_context = self.control_context(
             deadline,
             operation,
             lease,
             SdkOperationClass::Discover,
-            mutation_started,
+            dispatch,
         )?;
         self.await_external(
             deadline,
             operation,
-            mutation_started,
+            dispatch,
             self.control.find_sandboxes(lease, &control_context, query),
         )
         .await
@@ -1415,68 +1473,80 @@ impl AzureContainerAppsRuntimeProvider {
         operation: &ProviderOperationContext,
         lease: &AcaCredentialLease,
         desired: &AcaDesiredDiskImage,
-    ) -> ProviderResult<AcaDiskImageRecord> {
-        let record = match desired.source() {
+    ) -> ProviderResult<EnsuredDiskImage> {
+        let (record, mutation_started) = match desired.source() {
             AcaDiskImageSource::ConfiguredDisk { .. } => {
+                let dispatch = MutationDispatch::read_only(false);
                 let control_context = self.control_context(
                     deadline,
                     operation,
                     lease,
                     SdkOperationClass::Read,
-                    false,
+                    dispatch,
                 )?;
-                self.await_external(
-                    deadline,
-                    operation,
+                (
+                    self.await_external(
+                        deadline,
+                        operation,
+                        dispatch,
+                        self.control
+                            .resolve_configured_disk(lease, &control_context, desired),
+                    )
+                    .await?,
                     false,
-                    self.control
-                        .resolve_configured_disk(lease, &control_context, desired),
                 )
-                .await?
             }
             AcaDiskImageSource::ConfiguredContainerImage { .. } => {
+                let discover_dispatch = MutationDispatch::read_only(false);
                 let discover_context = self.control_context(
                     deadline,
                     operation,
                     lease,
                     SdkOperationClass::Discover,
-                    false,
+                    discover_dispatch,
                 )?;
                 let candidates = self
                     .await_external(
                         deadline,
                         operation,
-                        false,
+                        discover_dispatch,
                         self.control
                             .find_disk_images(lease, &discover_context, desired),
                     )
                     .await?;
                 match candidates.as_slice() {
                     [] => {
+                        let create_dispatch = MutationDispatch::mutating(false);
                         let create_context = self.control_context(
                             deadline,
                             operation,
                             lease,
                             SdkOperationClass::Create,
-                            true,
+                            create_dispatch,
                         )?;
-                        self.await_external(
-                            deadline,
-                            operation,
+                        (
+                            self.await_external(
+                                deadline,
+                                operation,
+                                create_dispatch,
+                                self.control
+                                    .create_disk_image(lease, &create_context, desired),
+                            )
+                            .await?,
                             true,
-                            self.control
-                                .create_disk_image(lease, &create_context, desired),
                         )
-                        .await?
                     }
-                    [record] => record.clone(),
+                    [record] => (record.clone(), false),
                     _ => return Err(self.multiple_candidates_failure(operation)),
                 }
             }
         };
         self.verify_disk(&record, desired)
             .map_err(|mismatch| self.mismatch_failure(operation, mismatch))?;
-        Ok(record)
+        Ok(EnsuredDiskImage {
+            record,
+            mutation_started,
+        })
     }
 
     async fn plan_inner(
@@ -1574,20 +1644,21 @@ impl AzureContainerAppsRuntimeProvider {
                     let desired = AcaDesiredSandbox::new(
                         expected.clone(),
                         self.configuration.profile().clone(),
-                        disk.id().clone(),
+                        disk.record.id().clone(),
                     );
+                    let create_dispatch = MutationDispatch::mutating(disk.mutation_started);
                     let create_context = self.control_context(
                         &deadline,
                         context.operation,
                         &lease,
                         SdkOperationClass::Create,
-                        true,
+                        create_dispatch,
                     )?;
                     let created = self
                         .await_external(
                             &deadline,
                             context.operation,
-                            true,
+                            create_dispatch,
                             self.control
                                 .create_sandbox(&lease, &create_context, &desired),
                         )
@@ -1753,18 +1824,19 @@ impl AzureContainerAppsRuntimeProvider {
                 record.lifecycle(),
                 AcaSandboxLifecycle::Idle | AcaSandboxLifecycle::Stopped
             ) {
+                let power_dispatch = MutationDispatch::mutating(false);
                 let power_context = self.control_context(
                     &deadline,
                     context.operation,
                     &lease,
                     SdkOperationClass::Power,
-                    true,
+                    power_dispatch,
                 )?;
                 let resumed = self
                     .await_external(
                         &deadline,
                         context.operation,
-                        true,
+                        power_dispatch,
                         self.control
                             .resume_sandbox(&lease, &power_context, record.id()),
                     )
@@ -1870,18 +1942,19 @@ impl AzureContainerAppsRuntimeProvider {
                     | AcaSandboxLifecycle::Ready
                     | AcaSandboxLifecycle::Provisioning
             ) {
+                let power_dispatch = MutationDispatch::mutating(false);
                 let power_context = self.control_context(
                     &deadline,
                     context.operation,
                     &lease,
                     SdkOperationClass::Power,
-                    true,
+                    power_dispatch,
                 )?;
                 record = self
                     .await_external(
                         &deadline,
                         context.operation,
-                        true,
+                        power_dispatch,
                         self.control
                             .stop_sandbox(&lease, &power_context, record.id()),
                     )
@@ -2120,18 +2193,19 @@ impl AzureContainerAppsRuntimeProvider {
                     Self::verify_binding(record.binding(), &expected)
                         .and_then(|()| self.verify_target_handle(request, record))
                         .map_err(|mismatch| self.mismatch_failure(context.operation, mismatch))?;
+                    let delete_dispatch = MutationDispatch::mutating(false);
                     let delete_context = self.control_context(
                         &deadline,
                         context.operation,
                         &lease,
                         SdkOperationClass::Delete,
-                        true,
+                        delete_dispatch,
                     )?;
                     match self
                         .await_external(
                             &deadline,
                             context.operation,
-                            true,
+                            delete_dispatch,
                             self.control
                                 .delete_sandbox(&lease, &delete_context, record.id()),
                         )
@@ -2176,18 +2250,19 @@ impl Provider for AzureContainerAppsRuntimeProvider {
                 .acquire_lease(&deadline, context.operation, AcaCredentialPurpose::Health)
                 .await?;
             let result = async {
+                let dispatch = MutationDispatch::read_only(false);
                 let control_context = self.control_context(
                     &deadline,
                     context.operation,
                     &lease,
                     SdkOperationClass::Read,
-                    false,
+                    dispatch,
                 )?;
                 let health = self
                     .await_external(
                         &deadline,
                         context.operation,
-                        false,
+                        dispatch,
                         self.control.health(&lease, &control_context),
                     )
                     .await?;

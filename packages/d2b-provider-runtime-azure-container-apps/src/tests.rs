@@ -1462,6 +1462,69 @@ async fn forward_clock_jumps_fail_before_credential_and_control_effects() {
 }
 
 #[tokio::test]
+async fn first_mutation_expiry_before_dispatch_is_not_ambiguous() {
+    let harness = Harness::configured_disk();
+    let (_, handle) = plan_and_ensure(&harness, "pre-dispatch-expiry").await;
+    let calls_before = harness.control.calls().len();
+    let revocations_before = harness.credential.revocation_count();
+    let request = harness.handle_request(
+        ProviderMethod::RuntimeDestroy,
+        "pre-dispatch-expiry-delete",
+        &handle,
+    );
+    let clock = Arc::new(JumpOnCallClock::new(
+        NOW_UNIX_MS,
+        request.context.expires_at_unix_ms,
+        9,
+    ));
+    let provider = harness.provider_with_clock(clock);
+    let context = harness.call_context(&request.context, 1_000, false);
+
+    let failure = provider.destroy(&context, &request).await.unwrap_err();
+
+    assert_eq!(failure.kind, ProviderFailureKind::DeadlineExpired);
+    assert_eq!(failure.retry, RetryClass::SameOperation);
+    assert_eq!(
+        &harness.control.calls()[calls_before..],
+        &[ControlCall::FindSandboxes]
+    );
+    assert_eq!(harness.control.cancelled_call_count(), 0);
+    assert_eq!(
+        harness.credential.revocation_count(),
+        revocations_before + 1
+    );
+    assert_eq!(harness.control.sandboxes().len(), 1);
+}
+
+#[tokio::test]
+async fn first_mutation_timeout_after_dispatch_is_ambiguous() {
+    let harness = Harness::configured_disk();
+    let (_, handle) = plan_and_ensure(&harness, "post-dispatch-timeout").await;
+    let calls_before = harness.control.calls().len();
+    harness.control.stall_next(ControlCall::DeleteSandbox);
+    let request = harness.handle_request(
+        ProviderMethod::RuntimeDestroy,
+        "post-dispatch-timeout-delete",
+        &handle,
+    );
+    let context = harness.call_context(&request.context, 20, false);
+
+    let failure = harness
+        .provider
+        .destroy(&context, &request)
+        .await
+        .unwrap_err();
+
+    assert_eq!(failure.kind, ProviderFailureKind::AmbiguousMutation);
+    assert_eq!(failure.retry, RetryClass::AfterObservation);
+    assert_eq!(
+        &harness.control.calls()[calls_before..],
+        &[ControlCall::FindSandboxes, ControlCall::DeleteSandbox]
+    );
+    assert_eq!(harness.control.cancelled_call_count(), 1);
+}
+
+#[tokio::test]
 async fn dropping_an_in_flight_call_revokes_the_opaque_lease_once() {
     let harness = Harness::container_image();
     harness.control.stall_next(ControlCall::FindSandboxes);
