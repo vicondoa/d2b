@@ -6,9 +6,10 @@ use d2b_azure_vm_fake_sdk::{
 };
 use d2b_contracts::{
     v2_component_session::{BoundedVec, EndpointRole, ServicePackage},
-    v2_identity::ProviderType,
+    v2_identity::{ProviderType, RealmId, WorkloadId},
     v2_provider::{
-        AdoptionRequest, Generation, HandleId, InfrastructurePowerState, MutationState, PlanId,
+        AdoptionRequest, AuthorizedProviderScope, Fingerprint, Generation, HandleId,
+        IdempotencyKey, InfrastructurePowerState, MutationState, OperationId, PlanId,
         PlannedResourceClass, ProviderCallContext, ProviderCapability, ProviderFailureKind,
         ProviderHandleKind, ProviderHealthState, ProviderMethod, ProviderOperationInput,
         ProviderTarget, RuntimeProvider,
@@ -137,6 +138,18 @@ async fn runtime_handle(
         .deploy(&fixture.call_context(&operation), &plan)
         .await
         .unwrap_or_else(|_| unreachable!())
+}
+
+async fn assert_deploy_rejected(
+    provider: &AzureVmRuntimeProvider,
+    context: &ProviderCallContext<'_>,
+    plan: &AzureVmRuntimePlan,
+) {
+    let failure = provider
+        .deploy(context, plan)
+        .await
+        .expect_err("mismatched runtime plan must fail");
+    assert_eq!(failure.kind, ProviderFailureKind::InvalidRequest);
 }
 
 fn handle_fixture(handle: &AzureVmRuntimeHandle) -> Fixture {
@@ -451,6 +464,127 @@ async fn deployment_is_idempotent_and_sdk_counters_record_replay() {
         CallDisposition::AlreadyApplied
     );
     assert!(snapshot.log()[1].replayed());
+}
+
+#[tokio::test]
+async fn ensure_rejects_cross_operation_cross_workload_and_stale_resource_plans() {
+    let (provider, sdk, fixture, infrastructure) = scaffold();
+    let plan = deployment_plan(&provider, &fixture, &infrastructure).await;
+    let operation = fixture
+        .operation(ProviderMethod::RuntimeEnsure)
+        .unwrap_or_else(|_| unreachable!());
+    let context = fixture.call_context(&operation);
+    assert_eq!(plan.plan.binding, operation.binding());
+
+    let mut corruptions = Vec::new();
+
+    let mut value = plan.clone();
+    value.plan.schema_version = 0;
+    corruptions.push(value);
+
+    let mut value = plan.clone();
+    value.plan.binding.operation_id =
+        OperationId::parse("cross-operation").unwrap_or_else(|_| unreachable!());
+    corruptions.push(value);
+
+    let mut value = plan.clone();
+    value.plan.binding.idempotency_key =
+        IdempotencyKey::parse("cross-idempotency").unwrap_or_else(|_| unreachable!());
+    corruptions.push(value);
+
+    let mut value = plan.clone();
+    value.plan.binding.request_digest =
+        Fingerprint::parse("e".repeat(64)).unwrap_or_else(|_| unreachable!());
+    corruptions.push(value);
+
+    let mut value = plan.clone();
+    value.plan.binding.provider_id = Fixture::new(ProviderType::Runtime, 5)
+        .unwrap_or_else(|_| unreachable!())
+        .descriptor
+        .provider_id;
+    corruptions.push(value);
+
+    let mut value = plan.clone();
+    value.plan.binding.provider_generation = value
+        .plan
+        .binding
+        .provider_generation
+        .next()
+        .unwrap_or_else(|_| unreachable!());
+    corruptions.push(value);
+
+    let mut value = plan.clone();
+    value.plan.realm_id = RealmId::parse("eeeeeeeeeeeeeeeeeeea").unwrap_or_else(|_| unreachable!());
+    corruptions.push(value);
+
+    let mut value = plan.clone();
+    value.plan.workload_id =
+        Some(WorkloadId::parse("fffffffffffffffffffa").unwrap_or_else(|_| unreachable!()));
+    corruptions.push(value);
+
+    let mut value = plan.clone();
+    value.plan.method = ProviderMethod::InfrastructurePlan;
+    corruptions.push(value);
+
+    let mut value = plan.clone();
+    value.plan.resources = BoundedVec::new(vec![PlannedResourceClass::Infrastructure])
+        .unwrap_or_else(|_| unreachable!());
+    corruptions.push(value);
+
+    let mut value = plan.clone();
+    value.plan.configuration_fingerprint =
+        Fingerprint::parse("d".repeat(64)).unwrap_or_else(|_| unreachable!());
+    corruptions.push(value);
+
+    let mut value = plan.clone();
+    value.plan.created_at_unix_ms = fixture.now_unix_ms + 1;
+    corruptions.push(value);
+
+    let mut value = plan.clone();
+    value.plan.expires_at_unix_ms = fixture.now_unix_ms;
+    corruptions.push(value);
+
+    let mut value = plan.clone();
+    value.plan.expires_at_unix_ms = operation.expires_at_unix_ms + 1;
+    corruptions.push(value);
+
+    let mut value = plan.clone();
+    value.desired = DeploymentHandle::new(
+        value.desired.infrastructure(),
+        value.desired.identity(),
+        ResourceGeneration::new(value.desired.generation().get() + 1)
+            .unwrap_or_else(|_| unreachable!()),
+    );
+    corruptions.push(value);
+
+    let mut value = plan.clone();
+    value.infrastructure.sdk = InfrastructureHandle::new(
+        ResourceId::new(502).unwrap_or_else(|_| unreachable!()),
+        value.infrastructure.sdk.generation(),
+    );
+    corruptions.push(value);
+
+    let mut value = plan.clone();
+    value.infrastructure.provider.realm_id =
+        RealmId::parse("eeeeeeeeeeeeeeeeeeea").unwrap_or_else(|_| unreachable!());
+    corruptions.push(value);
+
+    let mut value = plan.clone();
+    value.infrastructure.provider.expires_at_unix_ms = Some(fixture.now_unix_ms);
+    corruptions.push(value);
+
+    for corrupted in &corruptions {
+        assert_deploy_rejected(&provider, &context, corrupted).await;
+    }
+
+    let mut cross_workload = operation.clone();
+    cross_workload.scope = AuthorizedProviderScope::Workload {
+        realm_id: fixture.descriptor.placement.realm_id().clone(),
+        workload_id: WorkloadId::parse("fffffffffffffffffffa").unwrap_or_else(|_| unreachable!()),
+    };
+    assert_deploy_rejected(&provider, &fixture.call_context(&cross_workload), &plan).await;
+
+    assert_eq!(sdk.snapshot().await.total_calls(), 0);
 }
 
 #[tokio::test]

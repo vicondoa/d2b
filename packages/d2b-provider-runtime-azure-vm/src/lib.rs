@@ -523,29 +523,65 @@ impl AzureVmRuntimeProvider {
         })
     }
 
+    fn validate_ensure_plan(
+        &self,
+        context: &ProviderCallContext<'_>,
+        plan: &AzureVmRuntimePlan,
+    ) -> Result<(), ProviderFailure> {
+        let expected_desired = DeploymentHandle::new(
+            plan.infrastructure.sdk,
+            ResourceId::new(bounded_hash(plan.plan.binding.request_digest.as_str()))
+                .map_err(|_| self.invalid_plan(context.operation))?,
+            ResourceGeneration::new(1).map_err(|_| self.invalid_plan(context.operation))?,
+        );
+        let valid = plan.plan.schema_version == d2b_contracts::v2_provider::PROVIDER_SCHEMA_VERSION
+            && plan.plan.binding == context.operation.binding()
+            && plan.plan.realm_id == *context.operation.scope.realm_id()
+            && plan.plan.workload_id.as_ref() == context.operation.scope.workload_id()
+            && plan.plan.workload_id.is_some()
+            && plan.plan.method == ProviderMethod::RuntimePlan
+            && plan.plan.resources.as_slice() == [PlannedResourceClass::WorkloadExecution]
+            && plan.plan.configuration_fingerprint
+                == self.descriptor.configuration_schema_fingerprint
+            && plan.plan.created_at_unix_ms <= self.now_unix_ms
+            && plan.plan.created_at_unix_ms < plan.plan.expires_at_unix_ms
+            && plan.plan.expires_at_unix_ms > self.now_unix_ms
+            && plan.plan.expires_at_unix_ms <= context.operation.expires_at_unix_ms
+            && plan.infrastructure.validate().is_ok()
+            && plan.infrastructure.provider.realm_id == plan.plan.realm_id
+            && plan
+                .infrastructure
+                .provider
+                .expires_at_unix_ms
+                .is_none_or(|expiry| expiry > self.now_unix_ms)
+            && plan.desired == expected_desired;
+        if valid {
+            Ok(())
+        } else {
+            Err(self.invalid_plan(context.operation))
+        }
+    }
+
+    fn invalid_plan(
+        &self,
+        context: &d2b_contracts::v2_provider::ProviderOperationContext,
+    ) -> ProviderFailure {
+        self.failure(
+            context,
+            ProviderFailureKind::InvalidRequest,
+            RetryClass::Never,
+            ProviderHealthReason::ConfigurationMismatch,
+            ProviderRemediation::RepairConfiguration,
+        )
+    }
+
     pub async fn deploy(
         &self,
         context: &ProviderCallContext<'_>,
         plan: &AzureVmRuntimePlan,
     ) -> Result<AzureVmRuntimeHandle, ProviderFailure> {
         self.validate_call(context, ProviderMethod::RuntimeEnsure)?;
-        if plan.plan.method != ProviderMethod::RuntimePlan
-            || plan.plan.binding.provider_id != self.descriptor.provider_id
-            || plan.plan.binding.provider_generation != self.descriptor.registry_generation
-            || plan.plan.configuration_fingerprint
-                != self.descriptor.configuration_schema_fingerprint
-            || plan.plan.expires_at_unix_ms <= self.now_unix_ms
-            || plan.infrastructure.validate().is_err()
-            || plan.desired.infrastructure() != plan.infrastructure.sdk
-        {
-            return Err(self.failure(
-                context.operation,
-                ProviderFailureKind::InvalidRequest,
-                RetryClass::Never,
-                ProviderHealthReason::ConfigurationMismatch,
-                ProviderRemediation::RepairConfiguration,
-            ));
-        }
+        self.validate_ensure_plan(context, plan)?;
         let sdk_context = Self::sdk_context(context, plan.infrastructure.sdk, plan.desired)
             .map_err(|kind| self.local_sdk_failure(context.operation, kind))?;
         let mutation = self

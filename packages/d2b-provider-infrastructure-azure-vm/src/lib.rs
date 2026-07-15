@@ -464,27 +464,57 @@ impl AzureVmInfrastructureProvider {
         Ok(AzureVmInfrastructurePlan { plan, desired })
     }
 
+    fn validate_apply_plan(
+        &self,
+        context: &ProviderCallContext<'_>,
+        plan: &AzureVmInfrastructurePlan,
+    ) -> Result<(), ProviderFailure> {
+        let expected_desired = InfrastructureHandle::new(
+            resource_id(plan.plan.binding.request_digest.as_str())
+                .map_err(|_| self.invalid_plan(context.operation))?,
+            ResourceGeneration::new(1).map_err(|_| self.invalid_plan(context.operation))?,
+        );
+        let valid = plan.plan.schema_version == d2b_contracts::v2_provider::PROVIDER_SCHEMA_VERSION
+            && plan.plan.binding == context.operation.binding()
+            && plan.plan.realm_id == *context.operation.scope.realm_id()
+            && plan.plan.workload_id.is_none()
+            && context.operation.scope.workload_id().is_none()
+            && plan.plan.method == ProviderMethod::InfrastructurePlan
+            && plan.plan.resources.as_slice() == [PlannedResourceClass::Infrastructure]
+            && plan.plan.configuration_fingerprint
+                == self.descriptor.configuration_schema_fingerprint
+            && plan.plan.created_at_unix_ms <= self.now_unix_ms
+            && plan.plan.created_at_unix_ms < plan.plan.expires_at_unix_ms
+            && plan.plan.expires_at_unix_ms > self.now_unix_ms
+            && plan.plan.expires_at_unix_ms <= context.operation.expires_at_unix_ms
+            && plan.desired == expected_desired;
+        if valid {
+            Ok(())
+        } else {
+            Err(self.invalid_plan(context.operation))
+        }
+    }
+
+    fn invalid_plan(
+        &self,
+        context: &d2b_contracts::v2_provider::ProviderOperationContext,
+    ) -> ProviderFailure {
+        self.failure(
+            context,
+            ProviderFailureKind::InvalidRequest,
+            RetryClass::Never,
+            ProviderHealthReason::ConfigurationMismatch,
+            ProviderRemediation::RepairConfiguration,
+        )
+    }
+
     pub async fn create(
         &self,
         context: &ProviderCallContext<'_>,
         plan: &AzureVmInfrastructurePlan,
     ) -> Result<AzureVmInfrastructureHandle, ProviderFailure> {
         self.validate_call(context, ProviderMethod::InfrastructureApply)?;
-        if plan.plan.method != ProviderMethod::InfrastructurePlan
-            || plan.plan.binding.provider_id != self.descriptor.provider_id
-            || plan.plan.binding.provider_generation != self.descriptor.registry_generation
-            || plan.plan.configuration_fingerprint
-                != self.descriptor.configuration_schema_fingerprint
-            || plan.plan.expires_at_unix_ms <= self.now_unix_ms
-        {
-            return Err(self.failure(
-                context.operation,
-                ProviderFailureKind::InvalidRequest,
-                RetryClass::Never,
-                ProviderHealthReason::ConfigurationMismatch,
-                ProviderRemediation::RepairConfiguration,
-            ));
-        }
+        self.validate_apply_plan(context, plan)?;
         let sdk_context = Self::sdk_context(context, plan.desired)
             .map_err(|kind| self.local_sdk_failure(context.operation, kind))?;
         let mutation = self
