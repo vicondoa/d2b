@@ -15,15 +15,14 @@ use d2b_contracts::{
         ProviderRemediation, ProviderResult, RetryClass, RuntimeProvider,
     },
 };
-use d2b_provider::{ProviderClock, SystemProviderClock};
+use d2b_provider::{CancellationToken, ProviderClock};
 use d2b_provider_toolkit::ProviderValues;
 
 use crate::{
-    LocalRuntimeConfiguration, LocalRuntimeConfigurationError, LocalRuntimeKind,
-    RuntimeAdoptionControl, RuntimeAdoptionMismatch, RuntimeAdoptionOutcome, RuntimeControlContext,
-    RuntimeControlError, RuntimeControlPort, RuntimeEnsureControl, RuntimeHealth,
-    RuntimeMutationOutcome, RuntimeObservedState, RuntimeOperationControl, RuntimePlanDecision,
-    RuntimeResourceIdentity,
+    LocalRuntimeConfiguration, LocalRuntimeKind, RuntimeAdoptionControl, RuntimeAdoptionMismatch,
+    RuntimeAdoptionOutcome, RuntimeControlContext, RuntimeControlError, RuntimeControlPort,
+    RuntimeEnsureControl, RuntimeHealth, RuntimeMutationOutcome, RuntimeObservedState,
+    RuntimeOperationControl, RuntimePlanDecision, RuntimeResourceIdentity,
 };
 
 pub const LIVE_RUNTIME_METHODS: [ProviderMethod; 7] = [
@@ -48,7 +47,10 @@ pub fn live_runtime_capabilities() -> Result<ProviderCapabilitySet, ProviderCont
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalRuntimeProviderBuildError {
     Contract(ProviderContractError),
-    Configuration(LocalRuntimeConfigurationError),
+    FactoryEntriesEmpty,
+    FactoryEntryBoundExceeded,
+    DuplicateProviderEntry,
+    RuntimeKindMismatch,
     ProviderTypeMismatch,
     ImplementationMismatch,
     CapabilityMismatch,
@@ -65,11 +67,17 @@ impl fmt::Display for LocalRuntimeProviderBuildError {
                     "local runtime provider contract is invalid ({error})"
                 )
             }
-            Self::Configuration(error) => {
-                write!(
-                    formatter,
-                    "local runtime configuration is invalid ({error})"
-                )
+            Self::FactoryEntriesEmpty => {
+                formatter.write_str("local runtime factory has no entries")
+            }
+            Self::FactoryEntryBoundExceeded => {
+                formatter.write_str("local runtime factory entry bound exceeded")
+            }
+            Self::DuplicateProviderEntry => {
+                formatter.write_str("duplicate local runtime provider entry")
+            }
+            Self::RuntimeKindMismatch => {
+                formatter.write_str("local runtime factory entry has the wrong runtime kind")
             }
             Self::ProviderTypeMismatch => {
                 formatter.write_str("local runtime descriptor has the wrong provider type")
@@ -94,7 +102,6 @@ impl Error for LocalRuntimeProviderBuildError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Contract(error) => Some(error),
-            Self::Configuration(error) => Some(error),
             _ => None,
         }
     }
@@ -103,12 +110,6 @@ impl Error for LocalRuntimeProviderBuildError {
 impl From<ProviderContractError> for LocalRuntimeProviderBuildError {
     fn from(value: ProviderContractError) -> Self {
         Self::Contract(value)
-    }
-}
-
-impl From<LocalRuntimeConfigurationError> for LocalRuntimeProviderBuildError {
-    fn from(value: LocalRuntimeConfigurationError) -> Self {
-        Self::Configuration(value)
     }
 }
 
@@ -131,27 +132,13 @@ impl fmt::Debug for LocalRuntimeProvider {
 }
 
 impl LocalRuntimeProvider {
-    pub fn new(
-        descriptor: ProviderDescriptor,
-        configuration: LocalRuntimeConfiguration,
-        control: Arc<dyn RuntimeControlPort>,
-    ) -> Result<Self, LocalRuntimeProviderBuildError> {
-        Self::with_clock(
-            descriptor,
-            configuration,
-            control,
-            Arc::new(SystemProviderClock),
-        )
-    }
-
-    pub fn with_clock(
+    pub(crate) fn with_clock(
         descriptor: ProviderDescriptor,
         configuration: LocalRuntimeConfiguration,
         control: Arc<dyn RuntimeControlPort>,
         clock: Arc<dyn ProviderClock>,
     ) -> Result<Self, LocalRuntimeProviderBuildError> {
         descriptor.validate()?;
-        configuration.validate()?;
         let kind = configuration.kind();
         if descriptor.provider_type() != d2b_contracts::v2_identity::ProviderType::Runtime {
             return Err(LocalRuntimeProviderBuildError::ProviderTypeMismatch);
@@ -169,18 +156,23 @@ impl LocalRuntimeProvider {
         {
             return Err(LocalRuntimeProviderBuildError::AuthorityMismatch);
         }
-        let placement_matches = matches!(
-            (&descriptor.placement, kind.requires_provider_agent()),
-            (ProviderPlacement::TrustedFirstPartyInProcess { .. }, false)
-                | (
-                    ProviderPlacement::ProviderAgent {
-                        endpoint_role: EndpointRole::ProviderAgent,
-                        service: ServicePackage::ProviderV2,
-                        ..
-                    },
-                    true,
-                )
-        );
+        let placement_matches = match kind {
+            LocalRuntimeKind::CloudHypervisor | LocalRuntimeKind::QemuMedia => matches!(
+                &descriptor.placement,
+                ProviderPlacement::TrustedFirstPartyInProcess {
+                    controller_role: EndpointRole::RealmController,
+                    ..
+                }
+            ),
+            LocalRuntimeKind::SystemdUser => matches!(
+                &descriptor.placement,
+                ProviderPlacement::UserAgent {
+                    endpoint_role: EndpointRole::UserAgent,
+                    service: ServicePackage::UserV2,
+                    ..
+                }
+            ),
+        };
         if !placement_matches {
             return Err(LocalRuntimeProviderBuildError::PlacementMismatch);
         }
@@ -293,15 +285,15 @@ impl LocalRuntimeProvider {
     }
 
     fn placement_matches_call(&self, context: &ProviderCallContext<'_>) -> bool {
-        match &self.descriptor.placement {
-            ProviderPlacement::TrustedFirstPartyInProcess {
-                controller_role, ..
-            } => context.peer_role == *controller_role,
-            ProviderPlacement::ProviderAgent {
-                endpoint_role,
-                service,
-                ..
-            } => context.peer_role == *endpoint_role && context.service == *service,
+        match self.kind() {
+            LocalRuntimeKind::CloudHypervisor | LocalRuntimeKind::QemuMedia => {
+                context.peer_role == EndpointRole::RealmController
+                    && context.service == ServicePackage::ProviderV2
+            }
+            LocalRuntimeKind::SystemdUser => {
+                context.peer_role == EndpointRole::UserAgent
+                    && context.service == ServicePackage::UserV2
+            }
         }
     }
 
@@ -367,19 +359,38 @@ impl LocalRuntimeProvider {
                 ProviderRemediation::ReEnrollPeer,
             ));
         }
-        if self.configuration.validate().is_err() {
+        let wall_remaining_ms = context
+            .operation
+            .expires_at_unix_ms
+            .saturating_sub(now_unix_ms);
+        let effective_deadline_remaining_ms =
+            wall_remaining_ms.min(u64::from(context.monotonic_deadline_remaining_ms));
+        if effective_deadline_remaining_ms == 0 {
             return Err(self.failure(
                 context,
                 now_unix_ms,
-                ProviderFailureKind::InvariantViolation,
+                ProviderFailureKind::DeadlineExpired,
                 RetryClass::Never,
-                ProviderHealthReason::ConfigurationMismatch,
+                ProviderHealthReason::HealthTimeout,
                 ProviderRemediation::OperatorInteraction,
             ));
         }
+        let effective_deadline_remaining_ms = u32::try_from(effective_deadline_remaining_ms)
+            .map_err(|_| {
+                self.failure(
+                    context,
+                    now_unix_ms,
+                    ProviderFailureKind::InvariantViolation,
+                    RetryClass::Never,
+                    ProviderHealthReason::HealthStale,
+                    ProviderRemediation::OperatorInteraction,
+                )
+            })?;
         Ok(PreparedCall {
             now_unix_ms,
-            deadline: Duration::from_millis(u64::from(context.monotonic_deadline_remaining_ms)),
+            deadline: Duration::from_millis(u64::from(effective_deadline_remaining_ms)),
+            effective_deadline_remaining_ms,
+            cancellation: CancellationToken::new(),
         })
     }
 
@@ -457,8 +468,17 @@ impl LocalRuntimeProvider {
         }
     }
 
-    fn control_context(&self, context: &ProviderCallContext<'_>) -> RuntimeControlContext {
-        RuntimeControlContext::new(self.kind(), context.operation.clone())
+    fn control_context(
+        &self,
+        context: &ProviderCallContext<'_>,
+        prepared: &PreparedCall,
+    ) -> RuntimeControlContext {
+        RuntimeControlContext::new(
+            self.kind(),
+            context.operation.clone(),
+            prepared.effective_deadline_remaining_ms,
+            prepared.cancellation.clone(),
+        )
     }
 
     async fn invoke_control<T, F>(
@@ -474,14 +494,17 @@ impl LocalRuntimeProvider {
         match tokio::time::timeout(prepared.deadline, future).await {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(error)) => Err(self.control_failure(context, error)),
-            Err(_) => Err(self.control_failure(
-                context,
-                if mutation {
-                    RuntimeControlError::CompletionAmbiguous
-                } else {
-                    RuntimeControlError::DeadlineExpiredBeforeMutation
-                },
-            )),
+            Err(_) => {
+                prepared.cancellation.cancel();
+                Err(self.control_failure(
+                    context,
+                    if mutation {
+                        RuntimeControlError::CompletionAmbiguous
+                    } else {
+                        RuntimeControlError::DeadlineExpiredBeforeMutation
+                    },
+                ))
+            }
         }
     }
 
@@ -581,7 +604,7 @@ impl LocalRuntimeProvider {
     }
 
     fn expected_owner(&self, scope: &AuthorizedProviderScope) -> HandleOwner {
-        if self.kind().requires_provider_agent() {
+        if self.kind().uses_user_agent() {
             HandleOwner::Provider {
                 realm_id: scope.realm_id().clone(),
                 provider_id: self.descriptor.provider_id.clone(),
@@ -781,7 +804,7 @@ impl LocalRuntimeProvider {
         context: &ProviderCallContext<'_>,
     ) -> ProviderResult<ProviderHealth> {
         let prepared = self.preflight(context, context.operation.method)?;
-        let control_context = self.control_context(context);
+        let control_context = self.control_context(context, &prepared);
         let health = self
             .invoke_control(
                 context,
@@ -806,8 +829,10 @@ impl LocalRuntimeProvider {
             prepared.now_unix_ms,
             false,
         )?;
-        let control_request =
-            RuntimeOperationControl::new(self.control_context(context), request.target.clone());
+        let control_request = RuntimeOperationControl::new(
+            self.control_context(context, &prepared),
+            request.target.clone(),
+        );
         let decision: RuntimePlanDecision = self
             .invoke_control(context, prepared, false, self.control.plan(control_request))
             .await?;
@@ -831,7 +856,7 @@ impl LocalRuntimeProvider {
         let prepared = self.preflight(context, ProviderMethod::RuntimeEnsure)?;
         self.validate_plan(context, plan, prepared.now_unix_ms)?;
         let control_request =
-            RuntimeEnsureControl::new(self.control_context(context), plan.clone());
+            RuntimeEnsureControl::new(self.control_context(context, &prepared), plan.clone());
         let identity = self
             .invoke_control(
                 context,
@@ -862,8 +887,10 @@ impl LocalRuntimeProvider {
     ) -> ProviderResult<ProviderObservation> {
         let prepared = self.preflight(context, method)?;
         self.validate_operation_request(context, request, method, prepared.now_unix_ms, true)?;
-        let control_request =
-            RuntimeOperationControl::new(self.control_context(context), request.target.clone());
+        let control_request = RuntimeOperationControl::new(
+            self.control_context(context, &prepared),
+            request.target.clone(),
+        );
         let mutation = method != ProviderMethod::RuntimeInspect;
         let future = match method {
             ProviderMethod::RuntimeStart => self.control.start(control_request),
@@ -922,7 +949,8 @@ impl LocalRuntimeProvider {
             return Err(self.adoption_failure(context, RuntimeAdoptionMismatch::Scope));
         }
         let expected = self.identity_from_handle(context.operation, &request.handle);
-        let control_request = RuntimeAdoptionControl::new(self.control_context(context), expected);
+        let control_request =
+            RuntimeAdoptionControl::new(self.control_context(context, &prepared), expected);
         let outcome = self
             .invoke_control(context, prepared, true, self.control.adopt(control_request))
             .await?;
@@ -950,8 +978,10 @@ impl LocalRuntimeProvider {
             prepared.now_unix_ms,
             true,
         )?;
-        let control_request =
-            RuntimeOperationControl::new(self.control_context(context), request.target.clone());
+        let control_request = RuntimeOperationControl::new(
+            self.control_context(context, &prepared),
+            request.target.clone(),
+        );
         let outcome: RuntimeMutationOutcome = self
             .invoke_control(
                 context,
@@ -966,10 +996,12 @@ impl LocalRuntimeProvider {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct PreparedCall {
     now_unix_ms: u64,
     deadline: Duration,
+    effective_deadline_remaining_ms: u32,
+    cancellation: CancellationToken,
 }
 
 fn adoption_health(

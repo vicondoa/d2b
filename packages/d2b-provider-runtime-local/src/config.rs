@@ -1,22 +1,18 @@
-use std::{collections::BTreeSet, error::Error, fmt};
+use std::{error::Error, fmt};
 
 use d2b_contracts::{
     v2_identity::ProviderType,
     v2_provider::{
-        CgroupAuthority, ConfiguredItemId, DeviceMediationPosture, ImplementationId,
-        NetworkPosture, PersistentIdentityPosture, ProcessAuthority, ProviderContractError,
-        ProviderFactoryKey, RuntimeAuthorityPosture, UserNamespacePosture,
+        CgroupAuthority, DeviceMediationPosture, ImplementationId, NetworkPosture,
+        PersistentIdentityPosture, ProcessAuthority, ProviderContractError, ProviderFactoryKey,
+        RuntimeAuthorityPosture, UserNamespacePosture,
     },
-};
-use d2b_host::{
-    ch_argv::{ChArgvInput, generate_ch_argv},
-    qemu_media_argv::{QemuMediaArgvInput, generate_qemu_media_argv},
 };
 
 pub const CLOUD_HYPERVISOR_IMPLEMENTATION_ID: &str = "cloud-hypervisor";
 pub const QEMU_MEDIA_IMPLEMENTATION_ID: &str = "qemu-media";
 pub const SYSTEMD_USER_IMPLEMENTATION_ID: &str = "systemd-user";
-pub const MAX_CONFIGURED_RUNTIME_ITEMS: usize = 256;
+pub const MAX_RUNTIME_OPAQUE_ID_BYTES: usize = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalRuntimeKind {
@@ -74,70 +70,131 @@ impl LocalRuntimeKind {
         }
     }
 
-    pub const fn requires_provider_agent(self) -> bool {
+    pub const fn uses_user_agent(self) -> bool {
         matches!(self, Self::SystemdUser)
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalRuntimeConfigurationError {
-    BackendConfigurationInvalid,
-    ConfiguredItemBoundExceeded,
-    DuplicateConfiguredItem,
+    InvalidOpaqueIdentifier,
 }
 
 impl fmt::Display for LocalRuntimeConfigurationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::BackendConfigurationInvalid => "local runtime backend configuration is invalid",
-            Self::ConfiguredItemBoundExceeded => "configured runtime item bound exceeded",
-            Self::DuplicateConfiguredItem => "duplicate configured runtime item",
-        })
+        formatter.write_str("local runtime opaque identifier is invalid")
     }
 }
 
 impl Error for LocalRuntimeConfigurationError {}
 
-#[derive(Clone)]
+macro_rules! opaque_runtime_id {
+    ($name:ident, $debug_name:literal) => {
+        #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        pub struct $name(String);
+
+        impl $name {
+            pub fn parse(value: impl Into<String>) -> Result<Self, LocalRuntimeConfigurationError> {
+                let value = value.into();
+                if opaque_id_is_valid(&value) {
+                    Ok(Self(value))
+                } else {
+                    Err(LocalRuntimeConfigurationError::InvalidOpaqueIdentifier)
+                }
+            }
+
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl fmt::Debug for $name {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str(concat!($debug_name, "(<redacted>)"))
+            }
+        }
+    };
+}
+
+opaque_runtime_id!(RuntimeBundleIntentId, "RuntimeBundleIntentId");
+opaque_runtime_id!(RuntimeRunnerId, "RuntimeRunnerId");
+
+fn opaque_id_is_valid(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_RUNTIME_OPAQUE_ID_BYTES
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || b":_-.".contains(&byte)
+        })
+        && value
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct RuntimeIntentBinding {
+    bundle_intent_id: RuntimeBundleIntentId,
+    runner_id: RuntimeRunnerId,
+}
+
+impl fmt::Debug for RuntimeIntentBinding {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RuntimeIntentBinding")
+            .finish_non_exhaustive()
+    }
+}
+
+impl RuntimeIntentBinding {
+    pub fn new(bundle_intent_id: RuntimeBundleIntentId, runner_id: RuntimeRunnerId) -> Self {
+        Self {
+            bundle_intent_id,
+            runner_id,
+        }
+    }
+
+    pub fn bundle_intent_id(&self) -> &RuntimeBundleIntentId {
+        &self.bundle_intent_id
+    }
+
+    pub fn runner_id(&self) -> &RuntimeRunnerId {
+        &self.runner_id
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
 pub enum LocalRuntimeConfiguration {
-    CloudHypervisor(Box<CloudHypervisorConfiguration>),
-    QemuMedia(Box<QemuMediaConfiguration>),
-    SystemdUser(SystemdUserConfiguration),
+    CloudHypervisor(RuntimeIntentBinding),
+    QemuMedia(RuntimeIntentBinding),
+    SystemdUser(RuntimeIntentBinding),
 }
 
 impl fmt::Debug for LocalRuntimeConfiguration {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut debug = formatter.debug_struct("LocalRuntimeConfiguration");
-        debug.field("kind", &self.kind());
-        if let Self::SystemdUser(configuration) = self {
-            debug.field(
-                "configured_item_count",
-                &configuration.configured_items.len(),
-            );
-        }
-        debug.finish_non_exhaustive()
+        formatter
+            .debug_struct("LocalRuntimeConfiguration")
+            .field("kind", &self.kind())
+            .finish_non_exhaustive()
     }
 }
 
 impl LocalRuntimeConfiguration {
-    pub fn cloud_hypervisor(input: ChArgvInput) -> Result<Self, LocalRuntimeConfigurationError> {
-        let configuration = CloudHypervisorConfiguration { input };
-        configuration.validate()?;
-        Ok(Self::CloudHypervisor(Box::new(configuration)))
+    pub fn cloud_hypervisor(
+        bundle_intent_id: RuntimeBundleIntentId,
+        runner_id: RuntimeRunnerId,
+    ) -> Self {
+        Self::CloudHypervisor(RuntimeIntentBinding::new(bundle_intent_id, runner_id))
     }
 
-    pub fn qemu_media(input: QemuMediaArgvInput) -> Result<Self, LocalRuntimeConfigurationError> {
-        let configuration = QemuMediaConfiguration { input };
-        configuration.validate()?;
-        Ok(Self::QemuMedia(Box::new(configuration)))
+    pub fn qemu_media(bundle_intent_id: RuntimeBundleIntentId, runner_id: RuntimeRunnerId) -> Self {
+        Self::QemuMedia(RuntimeIntentBinding::new(bundle_intent_id, runner_id))
     }
 
     pub fn systemd_user(
-        configured_items: Vec<ConfiguredItemId>,
-    ) -> Result<Self, LocalRuntimeConfigurationError> {
-        Ok(Self::SystemdUser(SystemdUserConfiguration::new(
-            configured_items,
-        )?))
+        bundle_intent_id: RuntimeBundleIntentId,
+        runner_id: RuntimeRunnerId,
+    ) -> Self {
+        Self::SystemdUser(RuntimeIntentBinding::new(bundle_intent_id, runner_id))
     }
 
     pub const fn kind(&self) -> LocalRuntimeKind {
@@ -148,98 +205,11 @@ impl LocalRuntimeConfiguration {
         }
     }
 
-    pub fn validates_configured_item(&self, item: &ConfiguredItemId) -> bool {
+    pub fn intent_binding(&self) -> &RuntimeIntentBinding {
         match self {
-            Self::SystemdUser(configuration) => configuration.configured_items.contains(item),
-            Self::CloudHypervisor(_) | Self::QemuMedia(_) => false,
-        }
-    }
-
-    pub(crate) fn validate(&self) -> Result<(), LocalRuntimeConfigurationError> {
-        match self {
-            Self::CloudHypervisor(configuration) => configuration.validate(),
-            Self::QemuMedia(configuration) => configuration.validate(),
-            Self::SystemdUser(configuration) => configuration.validate(),
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct CloudHypervisorConfiguration {
-    input: ChArgvInput,
-}
-
-impl fmt::Debug for CloudHypervisorConfiguration {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("CloudHypervisorConfiguration")
-            .finish_non_exhaustive()
-    }
-}
-
-impl CloudHypervisorConfiguration {
-    fn validate(&self) -> Result<(), LocalRuntimeConfigurationError> {
-        generate_ch_argv(&self.input)
-            .map(|_| ())
-            .map_err(|_| LocalRuntimeConfigurationError::BackendConfigurationInvalid)
-    }
-}
-
-#[derive(Clone)]
-pub struct QemuMediaConfiguration {
-    input: QemuMediaArgvInput,
-}
-
-impl fmt::Debug for QemuMediaConfiguration {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("QemuMediaConfiguration")
-            .finish_non_exhaustive()
-    }
-}
-
-impl QemuMediaConfiguration {
-    fn validate(&self) -> Result<(), LocalRuntimeConfigurationError> {
-        generate_qemu_media_argv(&self.input)
-            .map(|_| ())
-            .map_err(|_| LocalRuntimeConfigurationError::BackendConfigurationInvalid)
-    }
-}
-
-#[derive(Clone)]
-pub struct SystemdUserConfiguration {
-    configured_items: BTreeSet<ConfiguredItemId>,
-}
-
-impl fmt::Debug for SystemdUserConfiguration {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("SystemdUserConfiguration")
-            .field("configured_item_count", &self.configured_items.len())
-            .finish_non_exhaustive()
-    }
-}
-
-impl SystemdUserConfiguration {
-    fn new(
-        configured_items: Vec<ConfiguredItemId>,
-    ) -> Result<Self, LocalRuntimeConfigurationError> {
-        if configured_items.len() > MAX_CONFIGURED_RUNTIME_ITEMS {
-            return Err(LocalRuntimeConfigurationError::ConfiguredItemBoundExceeded);
-        }
-        let configured_item_count = configured_items.len();
-        let configured_items = configured_items.into_iter().collect::<BTreeSet<_>>();
-        if configured_items.len() != configured_item_count {
-            return Err(LocalRuntimeConfigurationError::DuplicateConfiguredItem);
-        }
-        Ok(Self { configured_items })
-    }
-
-    fn validate(&self) -> Result<(), LocalRuntimeConfigurationError> {
-        if self.configured_items.len() > MAX_CONFIGURED_RUNTIME_ITEMS {
-            Err(LocalRuntimeConfigurationError::ConfiguredItemBoundExceeded)
-        } else {
-            Ok(())
+            Self::CloudHypervisor(binding)
+            | Self::QemuMedia(binding)
+            | Self::SystemdUser(binding) => binding,
         }
     }
 }

@@ -8,10 +8,9 @@ mod factory;
 mod provider;
 
 pub use config::{
-    CLOUD_HYPERVISOR_IMPLEMENTATION_ID, CloudHypervisorConfiguration, LocalRuntimeConfiguration,
-    LocalRuntimeConfigurationError, LocalRuntimeKind, MAX_CONFIGURED_RUNTIME_ITEMS,
-    QEMU_MEDIA_IMPLEMENTATION_ID, QemuMediaConfiguration, SYSTEMD_USER_IMPLEMENTATION_ID,
-    SystemdUserConfiguration,
+    CLOUD_HYPERVISOR_IMPLEMENTATION_ID, LocalRuntimeConfiguration, LocalRuntimeConfigurationError,
+    LocalRuntimeKind, MAX_RUNTIME_OPAQUE_ID_BYTES, QEMU_MEDIA_IMPLEMENTATION_ID,
+    RuntimeBundleIntentId, RuntimeIntentBinding, RuntimeRunnerId, SYSTEMD_USER_IMPLEMENTATION_ID,
 };
 pub use control::{
     RuntimeAdoptionControl, RuntimeAdoptionMismatch, RuntimeAdoptionOutcome,
@@ -20,7 +19,7 @@ pub use control::{
     RuntimeMutationOutcome, RuntimeObservedState, RuntimeOperationControl, RuntimePlanDecision,
     RuntimeResourceIdentity,
 };
-pub use factory::LocalRuntimeProviderFactory;
+pub use factory::{LocalRuntimeProviderFactory, LocalRuntimeProviderFactoryEntry};
 pub use provider::{
     LIVE_RUNTIME_METHODS, LocalRuntimeProvider, LocalRuntimeProviderBuildError,
     live_runtime_capabilities,

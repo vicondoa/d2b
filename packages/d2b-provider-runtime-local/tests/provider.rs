@@ -14,25 +14,23 @@ use d2b_contracts::{
         AdoptionRequest, AdoptionState, AuthorizedProviderScope, ConfiguredItemId, CorrelationId,
         Fingerprint, Generation, HandleId, HandleOwner, IdempotencyKey, MutationState,
         ObservationReason, ObservedLifecycleState, OperationId, PROVIDER_SCHEMA_VERSION,
-        PrincipalRef, Provider, ProviderApiVersion, ProviderAuthority, ProviderCallContext,
+        PrincipalRef, ProviderApiVersion, ProviderAuthority, ProviderCallContext,
         ProviderCapability, ProviderCapabilitySet, ProviderDescriptor, ProviderFailureKind,
         ProviderHealthState, ProviderMethod, ProviderOperationContext, ProviderOperationInput,
         ProviderOperationRequest, ProviderPlacement, ProviderTarget, RetryClass, RuntimeProvider,
     },
 };
-use d2b_host::{
-    ch_argv::{ChArgvInput, ChNetHandoff},
-    qemu_media_argv::QemuMediaArgvInput,
+use d2b_provider::{
+    CancellationToken, FactoryError, ProviderFactory, ProviderInstance, ProviderRegistryBuilder,
 };
-use d2b_provider::{FactoryError, ProviderFactory, ProviderInstance, ProviderRegistryBuilder};
 use d2b_provider_runtime_local::{
     LocalRuntimeConfiguration, LocalRuntimeConfigurationError, LocalRuntimeKind,
-    LocalRuntimeProvider, LocalRuntimeProviderBuildError, LocalRuntimeProviderFactory,
-    MAX_CONFIGURED_RUNTIME_ITEMS, RuntimeAdoptionControl, RuntimeAdoptionOutcome,
-    RuntimeConfiguredItemControl, RuntimeControlContext, RuntimeControlError, RuntimeControlPort,
-    RuntimeEnsureControl, RuntimeHealth, RuntimeMutationOutcome, RuntimeObservedState,
-    RuntimeOperationControl, RuntimePlanDecision, RuntimeResourceIdentity,
-    live_runtime_capabilities,
+    LocalRuntimeProviderBuildError, LocalRuntimeProviderFactory, LocalRuntimeProviderFactoryEntry,
+    MAX_RUNTIME_OPAQUE_ID_BYTES, RuntimeAdoptionControl, RuntimeAdoptionOutcome,
+    RuntimeBundleIntentId, RuntimeConfiguredItemControl, RuntimeControlContext,
+    RuntimeControlError, RuntimeControlPort, RuntimeEnsureControl, RuntimeHealth,
+    RuntimeMutationOutcome, RuntimeObservedState, RuntimeOperationControl, RuntimePlanDecision,
+    RuntimeResourceIdentity, RuntimeRunnerId, live_runtime_capabilities,
 };
 use d2b_provider_toolkit::{DeterministicClock, Fixture, check_provider_conformance};
 
@@ -55,6 +53,7 @@ enum SeenMethod {
 struct SeenCall {
     method: SeenMethod,
     operation: ProviderOperationContext,
+    effective_deadline_remaining_ms: u32,
 }
 
 struct FakeControl {
@@ -64,6 +63,8 @@ struct FakeControl {
     next_error: Mutex<Option<RuntimeControlError>>,
     delay_ms: AtomicU64,
     forge_adopted_generation: AtomicBool,
+    last_cancellation: Mutex<Option<CancellationToken>>,
+    mutation_count: AtomicU64,
 }
 
 impl FakeControl {
@@ -75,16 +76,24 @@ impl FakeControl {
             next_error: Mutex::new(None),
             delay_ms: AtomicU64::new(0),
             forge_adopted_generation: AtomicBool::new(false),
+            last_cancellation: Mutex::new(None),
+            mutation_count: AtomicU64::new(0),
         }
     }
 
     fn record(&self, method: SeenMethod, context: &RuntimeControlContext) {
+        *self
+            .last_cancellation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            Some(context.cancellation().clone());
         self.calls
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .push(SeenCall {
                 method,
                 operation: context.operation().clone(),
+                effective_deadline_remaining_ms: context.effective_deadline_remaining_ms(),
             });
     }
 
@@ -106,6 +115,17 @@ impl FakeControl {
         self.delay_ms.store(delay_ms, Ordering::Release);
     }
 
+    fn last_cancellation(&self) -> Option<CancellationToken> {
+        self.last_cancellation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn mutation_count(&self) -> u64 {
+        self.mutation_count.load(Ordering::Acquire)
+    }
+
     fn fail_next(&self, error: RuntimeControlError) {
         *self
             .next_error
@@ -121,15 +141,27 @@ impl FakeControl {
             .map_or(Ok(()), Err)
     }
 
-    async fn delay(&self) {
+    async fn before_result(
+        &self,
+        context: &RuntimeControlContext,
+        mutation: bool,
+    ) -> Result<(), RuntimeControlError> {
         let delay_ms = self.delay_ms.load(Ordering::Acquire);
         if delay_ms != 0 {
             tokio::time::sleep(Duration::from_millis(delay_ms)).await;
         }
+        if context.is_cancelled() {
+            return Err(RuntimeControlError::CancelledBeforeMutation);
+        }
+        self.take_error()?;
+        if mutation {
+            self.mutation_count.fetch_add(1, Ordering::AcqRel);
+        }
+        Ok(())
     }
 
     fn owner(&self, context: &RuntimeControlContext) -> HandleOwner {
-        if self.kind.requires_provider_agent() {
+        if self.kind.uses_user_agent() {
             HandleOwner::Provider {
                 realm_id: context.operation().scope.realm_id().clone(),
                 provider_id: context.operation().provider_id.clone(),
@@ -192,8 +224,7 @@ impl RuntimeControlPort for FakeControl {
         request: RuntimeControlContext,
     ) -> Result<RuntimeHealth, RuntimeControlError> {
         self.record(SeenMethod::Health, &request);
-        self.delay().await;
-        self.take_error()?;
+        self.before_result(&request, false).await?;
         Ok(RuntimeHealth::healthy())
     }
 
@@ -202,8 +233,7 @@ impl RuntimeControlPort for FakeControl {
         request: RuntimeOperationControl,
     ) -> Result<RuntimePlanDecision, RuntimeControlError> {
         self.record(SeenMethod::Plan, request.context());
-        self.delay().await;
-        self.take_error()?;
+        self.before_result(request.context(), false).await?;
         Ok(RuntimePlanDecision::new(
             d2b_contracts::v2_provider::PlanId::parse("runtime-plan")
                 .unwrap_or_else(|_| unreachable!()),
@@ -216,8 +246,7 @@ impl RuntimeControlPort for FakeControl {
         request: RuntimeEnsureControl,
     ) -> Result<RuntimeResourceIdentity, RuntimeControlError> {
         self.record(SeenMethod::Ensure, request.context());
-        self.delay().await;
-        self.take_error()?;
+        self.before_result(request.context(), true).await?;
         Ok(self.identity(request.context(), None))
     }
 
@@ -226,8 +255,7 @@ impl RuntimeControlPort for FakeControl {
         request: RuntimeOperationControl,
     ) -> Result<RuntimeObservedState, RuntimeControlError> {
         self.record(SeenMethod::Start, request.context());
-        self.delay().await;
-        self.take_error()?;
+        self.before_result(request.context(), true).await?;
         Ok(self.observed(
             request.context(),
             request.target(),
@@ -240,8 +268,7 @@ impl RuntimeControlPort for FakeControl {
         request: RuntimeOperationControl,
     ) -> Result<RuntimeObservedState, RuntimeControlError> {
         self.record(SeenMethod::Stop, request.context());
-        self.delay().await;
-        self.take_error()?;
+        self.before_result(request.context(), true).await?;
         Ok(self.observed(
             request.context(),
             request.target(),
@@ -254,8 +281,7 @@ impl RuntimeControlPort for FakeControl {
         request: RuntimeOperationControl,
     ) -> Result<RuntimeObservedState, RuntimeControlError> {
         self.record(SeenMethod::Inspect, request.context());
-        self.delay().await;
-        self.take_error()?;
+        self.before_result(request.context(), false).await?;
         Ok(self.observed(
             request.context(),
             request.target(),
@@ -268,8 +294,7 @@ impl RuntimeControlPort for FakeControl {
         request: RuntimeAdoptionControl,
     ) -> Result<RuntimeAdoptionOutcome, RuntimeControlError> {
         self.record(SeenMethod::Adopt, request.context());
-        self.delay().await;
-        self.take_error()?;
+        self.before_result(request.context(), true).await?;
         let expected = request.expected();
         let generation = if self.forge_adopted_generation.load(Ordering::Acquire) {
             expected
@@ -305,8 +330,7 @@ impl RuntimeControlPort for FakeControl {
         request: RuntimeOperationControl,
     ) -> Result<RuntimeMutationOutcome, RuntimeControlError> {
         self.record(SeenMethod::Destroy, request.context());
-        self.delay().await;
-        self.take_error()?;
+        self.before_result(request.context(), true).await?;
         Ok(RuntimeMutationOutcome::new(MutationState::Applied))
     }
 
@@ -315,8 +339,7 @@ impl RuntimeControlPort for FakeControl {
         request: RuntimeConfiguredItemControl,
     ) -> Result<RuntimeObservedState, RuntimeControlError> {
         self.record(SeenMethod::ExecuteConfigured, request.context());
-        self.delay().await;
-        self.take_error()?;
+        self.before_result(request.context(), true).await?;
         RuntimeObservedState::new(
             Some(self.identity(request.context(), None)),
             ObservedLifecycleState::Running,
@@ -347,59 +370,31 @@ fn provider_id() -> ProviderId {
     ProviderId::parse("ddddddddddddddddddda").unwrap_or_else(|_| unreachable!())
 }
 
-fn ch_input() -> ChArgvInput {
-    ChArgvInput {
-        vm_name: "corp-vm".to_owned(),
-        ch_binary_path: "/nix/store/runtime-cloud-hypervisor/bin/cloud-hypervisor".to_owned(),
-        cpus: 1,
-        watchdog: false,
-        kernel_path: "/nix/store/runtime-kernel/vmlinux".to_owned(),
-        initramfs_path: None,
-        cmdline: "console=ttyS0".to_owned(),
-        seccomp: "true".to_owned(),
-        memory: "shared=on,size=512M".to_owned(),
-        platform_oem_strings: Vec::new(),
-        console: "null".to_owned(),
-        serial: "tty".to_owned(),
-        primary_vsock: None,
-        extra_vsock: Vec::new(),
-        fs_shares: Vec::new(),
-        api_socket_path: "/run/d2b/vms/corp-vm/ch-api.sock".to_owned(),
-        net_ifaces: Vec::new(),
-        net_handoff: ChNetHandoff::PersistentTap,
-        extra_args: Vec::new(),
-    }
+fn second_provider_id() -> ProviderId {
+    ProviderId::parse("eeeeeeeeeeeeeeeeeeea").unwrap_or_else(|_| unreachable!())
 }
 
-fn qemu_input() -> QemuMediaArgvInput {
-    QemuMediaArgvInput {
-        qemu_binary_path: "/nix/store/runtime-qemu/bin/qemu-system-x86_64".to_owned(),
-        vm_name: "media".to_owned(),
-        qmp_socket_path: "/run/d2b/vms/media/qmp.sock".to_owned(),
-        mac_address: "02:00:00:00:00:10".to_owned(),
-        tap_fd: 10,
-        memory_mib: 1024,
-        vcpu: 1,
-        lock_memory: false,
-        exclude_memory_from_core_dump: true,
-        disable_memory_merge: true,
-        console_fd: None,
-    }
+fn bundle_intent_id(kind: LocalRuntimeKind) -> RuntimeBundleIntentId {
+    RuntimeBundleIntentId::parse(format!("intent:{}", kind.implementation_id()))
+        .unwrap_or_else(|_| unreachable!())
+}
+
+fn runner_id(kind: LocalRuntimeKind) -> RuntimeRunnerId {
+    RuntimeRunnerId::parse(format!("runner:{}", kind.implementation_id()))
+        .unwrap_or_else(|_| unreachable!())
 }
 
 fn configuration(kind: LocalRuntimeKind) -> LocalRuntimeConfiguration {
     match kind {
         LocalRuntimeKind::CloudHypervisor => {
-            LocalRuntimeConfiguration::cloud_hypervisor(ch_input())
-                .unwrap_or_else(|_| unreachable!())
+            LocalRuntimeConfiguration::cloud_hypervisor(bundle_intent_id(kind), runner_id(kind))
         }
         LocalRuntimeKind::QemuMedia => {
-            LocalRuntimeConfiguration::qemu_media(qemu_input()).unwrap_or_else(|_| unreachable!())
+            LocalRuntimeConfiguration::qemu_media(bundle_intent_id(kind), runner_id(kind))
         }
-        LocalRuntimeKind::SystemdUser => LocalRuntimeConfiguration::systemd_user(vec![
-            ConfiguredItemId::parse("configured-editor").unwrap_or_else(|_| unreachable!()),
-        ])
-        .unwrap_or_else(|_| unreachable!()),
+        LocalRuntimeKind::SystemdUser => {
+            LocalRuntimeConfiguration::systemd_user(bundle_intent_id(kind), runner_id(kind))
+        }
     }
 }
 
@@ -418,13 +413,12 @@ fn descriptor(kind: LocalRuntimeKind) -> ProviderDescriptor {
         configuration_schema_fingerprint: fingerprint(1),
         configured_scope_digest: fingerprint(2),
         registry_generation: Generation::new(4).unwrap_or_else(|_| unreachable!()),
-        placement: if kind.requires_provider_agent() {
-            ProviderPlacement::ProviderAgent {
+        placement: if kind.uses_user_agent() {
+            ProviderPlacement::UserAgent {
                 realm_id: realm_id(),
-                workload_id: workload_id(),
                 role_id: role_id(),
-                endpoint_role: EndpointRole::ProviderAgent,
-                service: ServicePackage::ProviderV2,
+                endpoint_role: EndpointRole::UserAgent,
+                service: ServicePackage::UserV2,
                 agent_generation: Generation::new(8).unwrap_or_else(|_| unreachable!()),
             }
         } else {
@@ -437,13 +431,16 @@ fn descriptor(kind: LocalRuntimeKind) -> ProviderDescriptor {
 }
 
 struct Harness {
-    provider: LocalRuntimeProvider,
+    provider: Arc<dyn RuntimeProvider>,
     control: Arc<FakeControl>,
     fixture: Fixture,
+    configuration: LocalRuntimeConfiguration,
+    clock: Arc<DeterministicClock>,
 }
 
 fn harness(kind: LocalRuntimeKind) -> Harness {
     let descriptor = descriptor(kind);
+    let configuration = configuration(kind);
     let target = ProviderTarget::Workload {
         realm_id: realm_id(),
         workload_id: workload_id(),
@@ -455,33 +452,49 @@ fn harness(kind: LocalRuntimeKind) -> Harness {
         descriptor.configuration_schema_fingerprint.clone(),
     ));
     let clock = Arc::new(DeterministicClock::new(NOW));
-    let provider =
-        LocalRuntimeProvider::with_clock(descriptor, configuration(kind), control.clone(), clock)
-            .unwrap_or_else(|_| unreachable!());
+    let entry = factory_entry(&descriptor, configuration.clone(), control.clone());
+    let factory = LocalRuntimeProviderFactory::with_clock(kind, vec![entry], clock.clone())
+        .unwrap_or_else(|_| unreachable!());
+    let provider = match factory
+        .construct(&descriptor)
+        .unwrap_or_else(|_| unreachable!())
+    {
+        ProviderInstance::Runtime(provider) => provider,
+        _ => unreachable!(),
+    };
     Harness {
         provider,
         control,
         fixture,
+        configuration,
+        clock,
     }
 }
 
 fn named_factory(
     kind: LocalRuntimeKind,
-    control: Arc<dyn RuntimeControlPort>,
+    entries: Vec<LocalRuntimeProviderFactoryEntry>,
 ) -> LocalRuntimeProviderFactory {
     match kind {
-        LocalRuntimeKind::CloudHypervisor => {
-            LocalRuntimeProviderFactory::cloud_hypervisor(ch_input(), control)
-        }
-        LocalRuntimeKind::QemuMedia => {
-            LocalRuntimeProviderFactory::qemu_media(qemu_input(), control)
-        }
-        LocalRuntimeKind::SystemdUser => LocalRuntimeProviderFactory::systemd_user(
-            vec![ConfiguredItemId::parse("configured-editor").unwrap_or_else(|_| unreachable!())],
-            control,
-        ),
+        LocalRuntimeKind::CloudHypervisor => LocalRuntimeProviderFactory::cloud_hypervisor(entries),
+        LocalRuntimeKind::QemuMedia => LocalRuntimeProviderFactory::qemu_media(entries),
+        LocalRuntimeKind::SystemdUser => LocalRuntimeProviderFactory::systemd_user(entries),
     }
     .unwrap_or_else(|_| unreachable!())
+}
+
+fn factory_entry(
+    descriptor: &ProviderDescriptor,
+    configuration: LocalRuntimeConfiguration,
+    control: Arc<dyn RuntimeControlPort>,
+) -> LocalRuntimeProviderFactoryEntry {
+    LocalRuntimeProviderFactoryEntry::new(
+        descriptor.provider_id.clone(),
+        configuration,
+        descriptor.configuration_schema_fingerprint.clone(),
+        descriptor.configured_scope_digest.clone(),
+        control,
+    )
 }
 
 fn operation_request(fixture: &Fixture, method: ProviderMethod) -> ProviderOperationRequest {
@@ -541,10 +554,10 @@ fn descriptors_are_exact_for_all_closed_runtime_kinds() {
                 .contains_method(ProviderMethod::RuntimeExecute)
         );
         assert_eq!(
-            matches!(actual.placement, ProviderPlacement::ProviderAgent { .. }),
-            kind.requires_provider_agent()
+            matches!(actual.placement, ProviderPlacement::UserAgent { .. }),
+            kind.uses_user_agent()
         );
-        assert_eq!(harness.provider.kind(), kind);
+        assert_eq!(harness.configuration.kind(), kind);
     }
 }
 
@@ -556,7 +569,9 @@ fn named_factories_publish_canonical_keys_and_runtime_instances() {
         LocalRuntimeKind::SystemdUser,
     ] {
         let control = Arc::new(FakeControl::new(kind, fingerprint(1)));
-        let factory = named_factory(kind, control);
+        let expected_descriptor = descriptor(kind);
+        let entry = factory_entry(&expected_descriptor, configuration(kind), control);
+        let factory = named_factory(kind, vec![entry]);
         let expected_key = kind.factory_key().unwrap_or_else(|_| unreachable!());
         assert_eq!(factory.key(), expected_key);
         assert_eq!(
@@ -565,7 +580,6 @@ fn named_factories_publish_canonical_keys_and_runtime_instances() {
                 .canonical_implementation_id()
                 .unwrap_or_else(|_| unreachable!())
         );
-        let expected_descriptor = descriptor(kind);
         let instance = factory
             .construct(&expected_descriptor)
             .unwrap_or_else(|_| unreachable!());
@@ -578,7 +592,11 @@ fn named_factories_publish_canonical_keys_and_runtime_instances() {
 fn factory_rejects_wrong_descriptor_type_and_implementation() {
     let kind = LocalRuntimeKind::CloudHypervisor;
     let control = Arc::new(FakeControl::new(kind, fingerprint(1)));
-    let factory = named_factory(kind, control);
+    let expected = descriptor(kind);
+    let factory = named_factory(
+        kind,
+        vec![factory_entry(&expected, configuration(kind), control)],
+    );
 
     let mut wrong_type = descriptor(kind);
     wrong_type.authority = ProviderAuthority::Storage;
@@ -598,12 +616,129 @@ fn factory_rejects_wrong_descriptor_type_and_implementation() {
 }
 
 #[test]
+fn factory_entries_bind_provider_id_fingerprints_scope_and_runtime_kind() {
+    let kind = LocalRuntimeKind::CloudHypervisor;
+    let expected = descriptor(kind);
+    let control = Arc::new(FakeControl::new(kind, fingerprint(1)));
+    let entry = factory_entry(&expected, configuration(kind), control);
+    let factory = named_factory(kind, vec![entry.clone()]);
+
+    let mut unknown_provider = expected.clone();
+    unknown_provider.provider_id = second_provider_id();
+    assert_eq!(
+        factory.construct(&unknown_provider).err(),
+        Some(FactoryError::Rejected)
+    );
+
+    let mut wrong_configuration_fingerprint = expected.clone();
+    wrong_configuration_fingerprint.configuration_schema_fingerprint = fingerprint(8);
+    assert_eq!(
+        factory.construct(&wrong_configuration_fingerprint).err(),
+        Some(FactoryError::Rejected)
+    );
+
+    let mut wrong_scope_digest = expected.clone();
+    wrong_scope_digest.configured_scope_digest = fingerprint(8);
+    assert_eq!(
+        factory.construct(&wrong_scope_digest).err(),
+        Some(FactoryError::Rejected)
+    );
+
+    assert!(matches!(
+        LocalRuntimeProviderFactory::cloud_hypervisor(Vec::new()),
+        Err(LocalRuntimeProviderBuildError::FactoryEntriesEmpty)
+    ));
+    assert!(matches!(
+        LocalRuntimeProviderFactory::cloud_hypervisor(vec![entry.clone(), entry]),
+        Err(LocalRuntimeProviderBuildError::DuplicateProviderEntry)
+    ));
+
+    let wrong_kind_entry = factory_entry(
+        &expected,
+        configuration(LocalRuntimeKind::QemuMedia),
+        Arc::new(FakeControl::new(
+            LocalRuntimeKind::QemuMedia,
+            fingerprint(1),
+        )),
+    );
+    assert!(matches!(
+        LocalRuntimeProviderFactory::cloud_hypervisor(vec![wrong_kind_entry]),
+        Err(LocalRuntimeProviderBuildError::RuntimeKindMismatch)
+    ));
+}
+
+#[tokio::test]
+async fn one_factory_routes_each_provider_id_to_its_bound_control_port() {
+    let kind = LocalRuntimeKind::CloudHypervisor;
+    let first_descriptor = descriptor(kind);
+    let mut second_descriptor = descriptor(kind);
+    second_descriptor.provider_id = second_provider_id();
+    second_descriptor.configuration_schema_fingerprint = fingerprint(3);
+    second_descriptor.configured_scope_digest = fingerprint(4);
+
+    let first_control = Arc::new(FakeControl::new(kind, fingerprint(1)));
+    let second_control = Arc::new(FakeControl::new(kind, fingerprint(3)));
+    let factory = LocalRuntimeProviderFactory::with_clock(
+        kind,
+        vec![
+            factory_entry(
+                &first_descriptor,
+                configuration(kind),
+                first_control.clone(),
+            ),
+            factory_entry(
+                &second_descriptor,
+                configuration(kind),
+                second_control.clone(),
+            ),
+        ],
+        Arc::new(DeterministicClock::new(NOW)),
+    )
+    .unwrap_or_else(|_| unreachable!());
+
+    for descriptor in [&first_descriptor, &second_descriptor] {
+        let provider = match factory
+            .construct(descriptor)
+            .unwrap_or_else(|_| unreachable!())
+        {
+            ProviderInstance::Runtime(provider) => provider,
+            _ => unreachable!(),
+        };
+        let fixture = Fixture::from_descriptor(
+            descriptor.clone(),
+            ProviderTarget::Workload {
+                realm_id: realm_id(),
+                workload_id: workload_id(),
+            },
+            NOW,
+        )
+        .unwrap_or_else(|_| unreachable!());
+        let request = operation_request(&fixture, ProviderMethod::RuntimeInspect);
+        let call_context = context(&fixture, &request.context);
+        provider
+            .inspect(&call_context, &request)
+            .await
+            .unwrap_or_else(|_| unreachable!());
+    }
+
+    assert_eq!(first_control.call_count(), 1);
+    assert_eq!(second_control.call_count(), 1);
+}
+
+#[test]
 fn factory_registers_directly_with_provider_registry_builder() {
     let kind = LocalRuntimeKind::CloudHypervisor;
     let control = Arc::new(FakeControl::new(kind, fingerprint(1)));
-    let factory = named_factory(kind, control);
-    let key = factory.key();
     let expected_descriptor = descriptor(kind);
+    let factory = named_factory(
+        kind,
+        vec![factory_entry(
+            &expected_descriptor,
+            configuration(kind),
+            control,
+        )],
+    );
+    let key = factory.key();
     let mut builder =
         ProviderRegistryBuilder::new(expected_descriptor.registry_generation, fingerprint(9), NOW);
     builder
@@ -629,7 +764,7 @@ async fn all_closed_runtime_kinds_pass_common_conformance() {
         LocalRuntimeKind::SystemdUser,
     ] {
         let harness = harness(kind);
-        let instance = ProviderInstance::Runtime(Arc::new(harness.provider.clone()));
+        let instance = ProviderInstance::Runtime(harness.provider.clone());
         check_provider_conformance(&instance, &harness.fixture)
             .await
             .unwrap_or_else(|_| unreachable!());
@@ -637,79 +772,115 @@ async fn all_closed_runtime_kinds_pass_common_conformance() {
 }
 
 #[test]
-fn closed_configurations_validate_typed_builders_and_configured_items() {
-    let configured_item =
-        ConfiguredItemId::parse("configured-editor").unwrap_or_else(|_| unreachable!());
-    let systemd = LocalRuntimeConfiguration::systemd_user(vec![configured_item.clone()])
-        .unwrap_or_else(|_| unreachable!());
-    assert!(systemd.validates_configured_item(&configured_item));
-    assert!(
-        !configuration(LocalRuntimeKind::CloudHypervisor)
-            .validates_configured_item(&configured_item)
-    );
-    assert!(matches!(
-        LocalRuntimeConfiguration::systemd_user(vec![configured_item.clone(), configured_item]),
-        Err(LocalRuntimeConfigurationError::DuplicateConfiguredItem)
-    ));
-    let too_many = (0..=MAX_CONFIGURED_RUNTIME_ITEMS)
-        .map(|index| {
-            ConfiguredItemId::parse(format!("configured-{index}"))
-                .unwrap_or_else(|_| unreachable!())
-        })
-        .collect();
-    assert!(matches!(
-        LocalRuntimeConfiguration::systemd_user(too_many),
-        Err(LocalRuntimeConfigurationError::ConfiguredItemBoundExceeded)
-    ));
+fn closed_configurations_bind_only_opaque_bundle_intents_and_runners() {
+    for kind in [
+        LocalRuntimeKind::CloudHypervisor,
+        LocalRuntimeKind::QemuMedia,
+        LocalRuntimeKind::SystemdUser,
+    ] {
+        let configuration = configuration(kind);
+        assert_eq!(configuration.kind(), kind);
+        assert_eq!(
+            configuration.intent_binding().bundle_intent_id().as_str(),
+            format!("intent:{}", kind.implementation_id())
+        );
+        assert_eq!(
+            configuration.intent_binding().runner_id().as_str(),
+            format!("runner:{}", kind.implementation_id())
+        );
+        let debug = format!("{configuration:?}");
+        assert!(!debug.contains("intent:"));
+        assert!(!debug.contains("runner:"));
+    }
 
-    let mut invalid_ch = ch_input();
-    invalid_ch.cpus = 0;
-    assert!(matches!(
-        LocalRuntimeConfiguration::cloud_hypervisor(invalid_ch),
-        Err(LocalRuntimeConfigurationError::BackendConfigurationInvalid)
-    ));
-    let mut invalid_qemu = qemu_input();
-    invalid_qemu.tap_fd = 2;
-    assert!(matches!(
-        LocalRuntimeConfiguration::qemu_media(invalid_qemu),
-        Err(LocalRuntimeConfigurationError::BackendConfigurationInvalid)
-    ));
+    for invalid in ["", "UPPERCASE", "/host/path", "contains space"] {
+        assert_eq!(
+            RuntimeBundleIntentId::parse(invalid).err(),
+            Some(LocalRuntimeConfigurationError::InvalidOpaqueIdentifier)
+        );
+        assert_eq!(
+            RuntimeRunnerId::parse(invalid).err(),
+            Some(LocalRuntimeConfigurationError::InvalidOpaqueIdentifier)
+        );
+    }
+    assert_eq!(
+        RuntimeRunnerId::parse("a".repeat(MAX_RUNTIME_OPAQUE_ID_BYTES + 1)).err(),
+        Some(LocalRuntimeConfigurationError::InvalidOpaqueIdentifier)
+    );
+    assert!(RuntimeRunnerId::parse("7runner").is_ok());
 }
 
 #[test]
-fn constructor_rejects_capability_and_placement_drift() {
+fn factories_accept_exact_placement_and_reject_cross_placement_or_capability_drift() {
+    for kind in [
+        LocalRuntimeKind::CloudHypervisor,
+        LocalRuntimeKind::QemuMedia,
+        LocalRuntimeKind::SystemdUser,
+    ] {
+        let exact = descriptor(kind);
+        let control = Arc::new(FakeControl::new(kind, fingerprint(1)));
+        let factory = named_factory(
+            kind,
+            vec![factory_entry(&exact, configuration(kind), control.clone())],
+        );
+        assert!(factory.construct(&exact).is_ok());
+
+        let mut wrong_placement = exact.clone();
+        wrong_placement.placement = if kind.uses_user_agent() {
+            ProviderPlacement::TrustedFirstPartyInProcess {
+                realm_id: realm_id(),
+                controller_role: EndpointRole::RealmController,
+            }
+        } else {
+            ProviderPlacement::UserAgent {
+                realm_id: realm_id(),
+                role_id: role_id(),
+                endpoint_role: EndpointRole::UserAgent,
+                service: ServicePackage::UserV2,
+                agent_generation: Generation::new(8).unwrap_or_else(|_| unreachable!()),
+            }
+        };
+        assert_eq!(
+            factory.construct(&wrong_placement).err(),
+            Some(FactoryError::Rejected)
+        );
+        if kind.uses_user_agent() {
+            let mut provider_agent = exact.clone();
+            provider_agent.placement = ProviderPlacement::ProviderAgent {
+                realm_id: realm_id(),
+                workload_id: workload_id(),
+                role_id: role_id(),
+                endpoint_role: EndpointRole::ProviderAgent,
+                service: ServicePackage::ProviderV2,
+                agent_generation: Generation::new(8).unwrap_or_else(|_| unreachable!()),
+            };
+            assert_eq!(
+                factory.construct(&provider_agent).err(),
+                Some(FactoryError::Rejected)
+            );
+        }
+    }
+
     let kind = LocalRuntimeKind::SystemdUser;
-    let control = Arc::new(FakeControl::new(kind, fingerprint(1)));
-    let mut wrong_capabilities = descriptor(kind);
+    let exact = descriptor(kind);
+    let factory = named_factory(
+        kind,
+        vec![factory_entry(
+            &exact,
+            configuration(kind),
+            Arc::new(FakeControl::new(kind, fingerprint(1))),
+        )],
+    );
+    let mut wrong_capabilities = exact;
     let capabilities = live_runtime_capabilities().unwrap_or_else(|_| unreachable!());
     let mut capabilities = capabilities.as_slice().to_vec();
     capabilities.push(ProviderCapability(ProviderMethod::RuntimeExecute));
     wrong_capabilities.capabilities =
         ProviderCapabilitySet::new(capabilities).unwrap_or_else(|_| unreachable!());
-    assert!(matches!(
-        LocalRuntimeProvider::with_clock(
-            wrong_capabilities,
-            configuration(kind),
-            control.clone(),
-            Arc::new(DeterministicClock::new(NOW)),
-        ),
-        Err(LocalRuntimeProviderBuildError::CapabilityMismatch)
-    ));
-
-    let mut wrong_placement = descriptor(kind);
-    wrong_placement.placement = ProviderPlacement::TrustedFirstPartyInProcess {
-        realm_id: realm_id(),
-        controller_role: EndpointRole::RealmController,
-    };
-    assert!(matches!(
-        LocalRuntimeProvider::with_clock(
-            wrong_placement,
-            configuration(kind),
-            control,
-            Arc::new(DeterministicClock::new(NOW)),
-        ),
-        Err(LocalRuntimeProviderBuildError::PlacementMismatch)
-    ));
+    assert_eq!(
+        factory.construct(&wrong_capabilities).err(),
+        Some(FactoryError::Rejected)
+    );
 }
 
 #[tokio::test]
@@ -842,6 +1013,44 @@ async fn validation_denials_never_invoke_control() {
 }
 
 #[tokio::test]
+async fn runtime_kinds_reject_cross_placement_callers_before_control() {
+    for kind in [
+        LocalRuntimeKind::CloudHypervisor,
+        LocalRuntimeKind::QemuMedia,
+        LocalRuntimeKind::SystemdUser,
+    ] {
+        let harness = harness(kind);
+        let request = operation_request(&harness.fixture, ProviderMethod::RuntimeInspect);
+        let mut call_context = context(&harness.fixture, &request.context);
+        (call_context.peer_role, call_context.service) = if kind.uses_user_agent() {
+            (EndpointRole::RealmController, ServicePackage::ProviderV2)
+        } else {
+            (EndpointRole::UserAgent, ServicePackage::UserV2)
+        };
+        let failure = harness
+            .provider
+            .inspect(&call_context, &request)
+            .await
+            .expect_err("cross-placement caller must fail");
+        assert_eq!(failure.kind, ProviderFailureKind::UnauthorizedScope);
+        assert_eq!(harness.control.call_count(), 0);
+    }
+
+    let harness = harness(LocalRuntimeKind::SystemdUser);
+    let request = operation_request(&harness.fixture, ProviderMethod::RuntimeInspect);
+    let mut provider_agent = context(&harness.fixture, &request.context);
+    provider_agent.peer_role = EndpointRole::ProviderAgent;
+    provider_agent.service = ServicePackage::ProviderV2;
+    let failure = harness
+        .provider
+        .inspect(&provider_agent, &request)
+        .await
+        .expect_err("systemd-user must not require the provider agent");
+    assert_eq!(failure.kind, ProviderFailureKind::UnauthorizedScope);
+    assert_eq!(harness.control.call_count(), 0);
+}
+
+#[tokio::test]
 async fn ensure_rejects_a_plan_from_another_operation_binding() {
     let harness = harness(LocalRuntimeKind::CloudHypervisor);
     let plan_request = operation_request(&harness.fixture, ProviderMethod::RuntimePlan);
@@ -919,16 +1128,19 @@ async fn semantic_control_failures_map_to_bounded_canonical_failures() {
 #[tokio::test]
 async fn cancellation_and_deadlines_are_typed_and_fail_closed() {
     let harness = harness(LocalRuntimeKind::QemuMedia);
-    let request = operation_request(&harness.fixture, ProviderMethod::RuntimeInspect);
-    let mut cancelled = context(&harness.fixture, &request.context);
+    let cancelled_request = operation_request(&harness.fixture, ProviderMethod::RuntimeStart);
+    let mut cancelled = context(&harness.fixture, &cancelled_request.context);
     cancelled.cancelled = true;
     let failure = harness
         .provider
-        .inspect(&cancelled, &request)
+        .start(&cancelled, &cancelled_request)
         .await
-        .expect_err("cancelled request must fail");
+        .expect_err("cancelled mutation must fail");
     assert_eq!(failure.kind, ProviderFailureKind::Cancelled);
+    assert_eq!(harness.control.call_count(), 0);
+    assert_eq!(harness.control.mutation_count(), 0);
 
+    let request = operation_request(&harness.fixture, ProviderMethod::RuntimeInspect);
     let mut expired = context(&harness.fixture, &request.context);
     expired.monotonic_deadline_remaining_ms = 0;
     let failure = harness
@@ -948,6 +1160,21 @@ async fn cancellation_and_deadlines_are_typed_and_fail_closed() {
         .await
         .expect_err("read timeout must fail");
     assert_eq!(failure.kind, ProviderFailureKind::DeadlineExpired);
+    assert!(
+        harness
+            .control
+            .last_cancellation()
+            .is_some_and(|token| token.is_cancelled())
+    );
+    assert_eq!(
+        harness
+            .control
+            .calls()
+            .last()
+            .map(|call| call.effective_deadline_remaining_ms),
+        Some(1)
+    );
+    assert_eq!(harness.control.mutation_count(), 0);
 
     let start_request = operation_request(&harness.fixture, ProviderMethod::RuntimeStart);
     let mut mutation_timeout = context(&harness.fixture, &start_request.context);
@@ -958,6 +1185,54 @@ async fn cancellation_and_deadlines_are_typed_and_fail_closed() {
         .await
         .expect_err("mutation timeout must be ambiguous");
     assert_eq!(failure.kind, ProviderFailureKind::AmbiguousMutation);
+    assert!(
+        harness
+            .control
+            .last_cancellation()
+            .is_some_and(|token| token.is_cancelled())
+    );
+    assert_eq!(harness.control.mutation_count(), 0);
+
+    let mut wall_bounded = operation_request(&harness.fixture, ProviderMethod::RuntimeInspect);
+    wall_bounded.context.expires_at_unix_ms = NOW + 5;
+    let mut wall_bounded_context = context(&harness.fixture, &wall_bounded.context);
+    wall_bounded_context.monotonic_deadline_remaining_ms = 100;
+    let failure = harness
+        .provider
+        .inspect(&wall_bounded_context, &wall_bounded)
+        .await
+        .expect_err("wall-clock deadline must bound the control call");
+    assert_eq!(failure.kind, ProviderFailureKind::DeadlineExpired);
+    assert_eq!(
+        harness
+            .control
+            .calls()
+            .last()
+            .map(|call| call.effective_deadline_remaining_ms),
+        Some(5)
+    );
+    assert!(
+        harness
+            .control
+            .last_cancellation()
+            .is_some_and(|token| token.is_cancelled())
+    );
+    assert_eq!(harness.control.mutation_count(), 0);
+
+    let expired_request = operation_request(&harness.fixture, ProviderMethod::RuntimeStart);
+    harness
+        .clock
+        .set(expired_request.context.expires_at_unix_ms);
+    let expired_context = context(&harness.fixture, &expired_request.context);
+    let calls_before_expiry = harness.control.call_count();
+    let failure = harness
+        .provider
+        .start(&expired_context, &expired_request)
+        .await
+        .expect_err("wall-clock-expired mutation must fail before control");
+    assert_eq!(failure.kind, ProviderFailureKind::DeadlineExpired);
+    assert_eq!(harness.control.call_count(), calls_before_expiry);
+    assert_eq!(harness.control.mutation_count(), 0);
 }
 
 #[tokio::test]
@@ -995,7 +1270,7 @@ async fn adoption_rejects_forged_resource_generation() {
 #[tokio::test]
 async fn diagnostics_are_closed_and_bounded() {
     let harness = harness(LocalRuntimeKind::CloudHypervisor);
-    let configuration_debug = format!("{:?}", harness.provider.configuration());
+    let configuration_debug = format!("{:?}", harness.configuration);
     assert!(!configuration_debug.contains("/nix/store"));
     assert!(!configuration_debug.contains("/run/d2b"));
 
@@ -1059,9 +1334,17 @@ fn operation_input_has_no_argv_path_endpoint_or_json_variant() {
         include_str!("../src/control.rs"),
         include_str!("../src/factory.rs"),
         include_str!("../src/provider.rs"),
+        include_str!("../Cargo.toml"),
     ]
     .concat();
-    for forbidden in ["Command::new", "std::process"] {
+    for forbidden in [
+        "Command::new",
+        "std::process",
+        "ChArgvInput",
+        "QemuMediaArgvInput",
+        "d2b-host",
+        "extra_args",
+    ] {
         assert!(!all_source.contains(forbidden), "{forbidden}");
     }
     assert!(

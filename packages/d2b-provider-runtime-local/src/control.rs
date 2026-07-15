@@ -10,6 +10,7 @@ use d2b_contracts::{
         ProviderRemediation, ProviderTarget,
     },
 };
+use d2b_provider::CancellationToken;
 
 use crate::LocalRuntimeKind;
 
@@ -73,18 +74,35 @@ impl fmt::Display for RuntimeControlError {
 
 impl Error for RuntimeControlError {}
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct RuntimeControlContext {
     kind: LocalRuntimeKind,
     operation: ProviderOperationContext,
+    effective_deadline_remaining_ms: u32,
+    cancellation: CancellationToken,
 }
+
+impl PartialEq for RuntimeControlContext {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind
+            && self.operation == other.operation
+            && self.effective_deadline_remaining_ms == other.effective_deadline_remaining_ms
+            && self.cancellation.is_cancelled() == other.cancellation.is_cancelled()
+    }
+}
+
+impl Eq for RuntimeControlContext {}
 
 impl fmt::Debug for RuntimeControlContext {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("RuntimeControlContext")
             .field("kind", &self.kind)
-            .field("operation", &self.operation)
+            .field(
+                "effective_deadline_remaining_ms",
+                &self.effective_deadline_remaining_ms,
+            )
+            .field("cancelled", &self.cancellation.is_cancelled())
             .finish_non_exhaustive()
     }
 }
@@ -98,8 +116,30 @@ impl RuntimeControlContext {
         &self.operation
     }
 
-    pub(crate) fn new(kind: LocalRuntimeKind, operation: ProviderOperationContext) -> Self {
-        Self { kind, operation }
+    pub const fn effective_deadline_remaining_ms(&self) -> u32 {
+        self.effective_deadline_remaining_ms
+    }
+
+    pub fn cancellation(&self) -> &CancellationToken {
+        &self.cancellation
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancellation.is_cancelled()
+    }
+
+    pub(crate) fn new(
+        kind: LocalRuntimeKind,
+        operation: ProviderOperationContext,
+        effective_deadline_remaining_ms: u32,
+        cancellation: CancellationToken,
+    ) -> Self {
+        Self {
+            kind,
+            operation,
+            effective_deadline_remaining_ms,
+            cancellation,
+        }
     }
 }
 
