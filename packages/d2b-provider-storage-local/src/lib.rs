@@ -16,21 +16,38 @@ use d2b_contracts::{
     v2_identity::{ProviderId, ProviderType, RealmId, WorkloadId},
     v2_provider::{
         AdoptionRequest, AdoptionState, AuthorizedProviderScope, Fingerprint, Generation, HandleId,
-        HandleOwner, IdempotencyKey, MAX_PROVIDER_PLAN_RESOURCES, MutationReceipt, MutationState,
-        ObservationReason, ObservedLifecycleState, OperationBinding, PlanId, PlannedResourceClass,
-        PrincipalRef, Provider, ProviderCallContext, ProviderCapabilitySet, ProviderDescriptor,
+        HandleOwner, IdempotencyKey, ImplementationId, MAX_PROVIDER_PLAN_RESOURCES,
+        MutationReceipt, MutationState, ObservationReason, ObservedLifecycleState,
+        OperationBinding, PlanId, PlannedResourceClass, PrincipalRef, Provider,
+        ProviderCallContext, ProviderCapabilitySet, ProviderDescriptor, ProviderFactoryKey,
         ProviderFailure, ProviderFailureKind, ProviderFuture, ProviderHandle, ProviderHealth,
         ProviderHealthReason, ProviderHealthState, ProviderMethod, ProviderObservation,
         ProviderOperationInput, ProviderOperationRequest, ProviderPlacement, ProviderPlan,
         ProviderRemediation, ProviderResult, ProviderTarget, RetryClass, StorageSnapshotId,
     },
 };
-use d2b_provider::{ProviderClock, StorageProvider, SystemProviderClock};
+use d2b_provider::{
+    FactoryError, ProviderClock, ProviderFactory, ProviderInstance, StorageProvider,
+    SystemProviderClock,
+};
 use d2b_provider_toolkit::ProviderValues;
 use tokio::sync::Mutex;
 
 const MAX_TRACKED_OPERATIONS: usize = 128;
 const PLAN_TTL_MS: u64 = 30_000;
+pub const IMPLEMENTATION_ID: &str = "local";
+
+pub fn implementation_id() -> ImplementationId {
+    ImplementationId::parse(IMPLEMENTATION_ID)
+        .unwrap_or_else(|_| unreachable!("local implementation ID is valid"))
+}
+
+pub fn provider_factory_key() -> ProviderFactoryKey {
+    ProviderFactoryKey {
+        provider_type: ProviderType::Storage,
+        implementation_id: implementation_id(),
+    }
+}
 
 macro_rules! opaque_id {
     ($name:ident, $description:literal) => {
@@ -449,6 +466,61 @@ impl fmt::Display for StorageBuildError {
 impl Error for StorageBuildError {}
 
 #[derive(Clone)]
+pub struct LocalStorageFactory {
+    binding: LocalStorageBinding,
+    effects: Arc<dyn StorageEffectPort>,
+    clock: Arc<dyn ProviderClock>,
+}
+
+impl fmt::Debug for LocalStorageFactory {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LocalStorageFactory")
+            .field("binding", &self.binding)
+            .finish_non_exhaustive()
+    }
+}
+
+impl LocalStorageFactory {
+    pub fn new(binding: LocalStorageBinding, effects: Arc<dyn StorageEffectPort>) -> Self {
+        Self::with_clock(binding, effects, Arc::new(SystemProviderClock))
+    }
+
+    pub fn with_clock(
+        binding: LocalStorageBinding,
+        effects: Arc<dyn StorageEffectPort>,
+        clock: Arc<dyn ProviderClock>,
+    ) -> Self {
+        Self {
+            binding,
+            effects,
+            clock,
+        }
+    }
+}
+
+impl ProviderFactory for LocalStorageFactory {
+    fn construct(&self, descriptor: &ProviderDescriptor) -> Result<ProviderInstance, FactoryError> {
+        if descriptor.provider_type() != ProviderType::Storage
+            || descriptor.implementation_id != implementation_id()
+        {
+            return Err(FactoryError::Rejected);
+        }
+        let provider = LocalStorageProvider::with_clock(
+            descriptor.clone(),
+            self.binding.clone(),
+            self.effects.clone(),
+            self.clock.clone(),
+        )
+        .map_err(|error| match error {
+            StorageBuildError::MissingLiveCapability => FactoryError::Unavailable,
+            _ => FactoryError::Rejected,
+        })?;
+        Ok(ProviderInstance::Storage(Arc::new(provider)))
+    }
+}
+
+#[derive(Clone)]
 enum CachedResult {
     Plan {
         method: ProviderMethod,
@@ -534,7 +606,7 @@ impl LocalStorageProvider {
         if descriptor.provider_type() != ProviderType::Storage {
             return Err(StorageBuildError::WrongProviderType);
         }
-        if descriptor.implementation_id.as_str() != "local" {
+        if descriptor.implementation_id != implementation_id() {
             return Err(StorageBuildError::WrongImplementation);
         }
         if !matches!(
@@ -1575,8 +1647,7 @@ mod tests {
             schema_version: PROVIDER_SCHEMA_VERSION,
             provider_id: ProviderId::parse(short_id('b')).expect("provider"),
             authority: ProviderAuthority::Storage,
-            implementation_id: d2b_contracts::v2_provider::ImplementationId::parse("local")
-                .expect("implementation"),
+            implementation_id: implementation_id(),
             api_version: ProviderApiVersion::V2,
             capabilities: ProviderCapabilitySet::new(vec![
                 ProviderCapability(ProviderMethod::StoragePlan),
@@ -1717,6 +1788,54 @@ mod tests {
         let provider = provider(effects);
         assert_eq!(provider.capabilities(), descriptor().capabilities);
         assert!(StorageLiveCapabilities::REQUIRED.is_complete());
+    }
+
+    #[test]
+    fn factory_registers_and_rejects_wrong_descriptor_axis() {
+        let effects = Arc::new(FakeEffects::default());
+        let factory = Arc::new(LocalStorageFactory::with_clock(
+            binding(),
+            effects,
+            Arc::new(TestClock),
+        ));
+        let descriptor = descriptor();
+        let key = provider_factory_key();
+        assert_eq!(key.provider_type, ProviderType::Storage);
+        assert_eq!(key.implementation_id, implementation_id());
+
+        let mut wrong_type = descriptor.clone();
+        wrong_type.authority = ProviderAuthority::Display;
+        assert!(matches!(
+            factory.construct(&wrong_type),
+            Err(FactoryError::Rejected)
+        ));
+
+        let mut wrong_implementation = descriptor.clone();
+        wrong_implementation.implementation_id =
+            ImplementationId::parse("other-storage").expect("implementation");
+        assert!(matches!(
+            factory.construct(&wrong_implementation),
+            Err(FactoryError::Rejected)
+        ));
+
+        let mut builder = d2b_provider::ProviderRegistryBuilder::new(
+            descriptor.registry_generation,
+            fingerprint(12),
+            NOW,
+        );
+        builder
+            .register_factory(key, factory)
+            .expect("register factory")
+            .register_instance(descriptor.clone())
+            .expect("register provider");
+        let registry = builder.finish().expect("registry");
+        assert_eq!(
+            registry
+                .instance(&descriptor.provider_id)
+                .expect("instance")
+                .descriptor(),
+            descriptor
+        );
     }
 
     #[tokio::test]

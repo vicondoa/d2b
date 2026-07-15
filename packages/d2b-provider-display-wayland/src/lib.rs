@@ -15,19 +15,36 @@ use d2b_contracts::{
     v2_identity::{ProviderId, ProviderType, RealmId, RoleId, WorkloadId},
     v2_provider::{
         AdoptionRequest, AdoptionState, AuthorizedProviderScope, Fingerprint, Generation, HandleId,
-        HandleOwner, IdempotencyKey, MutationReceipt, MutationState, ObservationReason,
-        ObservedLifecycleState, OperationBinding, PlanId, PrincipalRef, Provider,
-        ProviderCallContext, ProviderCapabilitySet, ProviderDescriptor, ProviderFailure,
-        ProviderFailureKind, ProviderFuture, ProviderHandle, ProviderHealth, ProviderHealthReason,
-        ProviderHealthState, ProviderMethod, ProviderObservation, ProviderOperationRequest,
-        ProviderPlacement, ProviderRemediation, ProviderResult, ProviderTarget, RetryClass,
+        HandleOwner, IdempotencyKey, ImplementationId, MutationReceipt, MutationState,
+        ObservationReason, ObservedLifecycleState, OperationBinding, PlanId, PrincipalRef,
+        Provider, ProviderCallContext, ProviderCapabilitySet, ProviderDescriptor,
+        ProviderFactoryKey, ProviderFailure, ProviderFailureKind, ProviderFuture, ProviderHandle,
+        ProviderHealth, ProviderHealthReason, ProviderHealthState, ProviderMethod,
+        ProviderObservation, ProviderOperationRequest, ProviderPlacement, ProviderRemediation,
+        ProviderResult, ProviderTarget, RetryClass,
     },
 };
-use d2b_provider::{DisplayProvider, ProviderClock, SystemProviderClock};
+use d2b_provider::{
+    DisplayProvider, FactoryError, ProviderClock, ProviderFactory, ProviderInstance,
+    SystemProviderClock,
+};
 use d2b_provider_toolkit::ProviderValues;
 use tokio::sync::Mutex;
 
 const MAX_TRACKED_OPERATIONS: usize = 128;
+pub const IMPLEMENTATION_ID: &str = "wayland";
+
+pub fn implementation_id() -> ImplementationId {
+    ImplementationId::parse(IMPLEMENTATION_ID)
+        .unwrap_or_else(|_| unreachable!("wayland implementation ID is valid"))
+}
+
+pub fn provider_factory_key() -> ProviderFactoryKey {
+    ProviderFactoryKey {
+        provider_type: ProviderType::Display,
+        implementation_id: implementation_id(),
+    }
+}
 
 macro_rules! opaque_id {
     ($name:ident, $description:literal) => {
@@ -418,6 +435,61 @@ impl fmt::Display for DisplayBuildError {
 impl Error for DisplayBuildError {}
 
 #[derive(Clone)]
+pub struct WaylandDisplayFactory {
+    binding: WaylandDisplayBinding,
+    effects: Arc<dyn DisplayEffectPort>,
+    clock: Arc<dyn ProviderClock>,
+}
+
+impl fmt::Debug for WaylandDisplayFactory {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WaylandDisplayFactory")
+            .field("binding", &self.binding)
+            .finish_non_exhaustive()
+    }
+}
+
+impl WaylandDisplayFactory {
+    pub fn new(binding: WaylandDisplayBinding, effects: Arc<dyn DisplayEffectPort>) -> Self {
+        Self::with_clock(binding, effects, Arc::new(SystemProviderClock))
+    }
+
+    pub fn with_clock(
+        binding: WaylandDisplayBinding,
+        effects: Arc<dyn DisplayEffectPort>,
+        clock: Arc<dyn ProviderClock>,
+    ) -> Self {
+        Self {
+            binding,
+            effects,
+            clock,
+        }
+    }
+}
+
+impl ProviderFactory for WaylandDisplayFactory {
+    fn construct(&self, descriptor: &ProviderDescriptor) -> Result<ProviderInstance, FactoryError> {
+        if descriptor.provider_type() != ProviderType::Display
+            || descriptor.implementation_id != implementation_id()
+        {
+            return Err(FactoryError::Rejected);
+        }
+        let provider = WaylandDisplayProvider::with_clock(
+            descriptor.clone(),
+            self.binding.clone(),
+            self.effects.clone(),
+            self.clock.clone(),
+        )
+        .map_err(|error| match error {
+            DisplayBuildError::MissingLiveCapability => FactoryError::Unavailable,
+            _ => FactoryError::Rejected,
+        })?;
+        Ok(ProviderInstance::Display(Arc::new(provider)))
+    }
+}
+
+#[derive(Clone)]
 enum CachedResult {
     Handle {
         method: ProviderMethod,
@@ -493,7 +565,7 @@ impl WaylandDisplayProvider {
         if descriptor.provider_type() != ProviderType::Display {
             return Err(DisplayBuildError::WrongProviderType);
         }
-        if descriptor.implementation_id.as_str() != "wayland" {
+        if descriptor.implementation_id != implementation_id() {
             return Err(DisplayBuildError::WrongImplementation);
         }
         if !matches!(
@@ -1345,8 +1417,7 @@ mod tests {
             schema_version: PROVIDER_SCHEMA_VERSION,
             provider_id: ProviderId::parse(short_id('b')).expect("provider"),
             authority: ProviderAuthority::Display,
-            implementation_id: d2b_contracts::v2_provider::ImplementationId::parse("wayland")
-                .expect("implementation"),
+            implementation_id: implementation_id(),
             api_version: ProviderApiVersion::V2,
             capabilities: ProviderCapabilitySet::new(vec![
                 ProviderCapability(ProviderMethod::DisplayOpen),
@@ -1517,6 +1588,54 @@ mod tests {
             WaylandDisplayProvider::new(descriptor(), binding(), Arc::new(MissingCapability)),
             Err(DisplayBuildError::MissingLiveCapability)
         ));
+    }
+
+    #[test]
+    fn factory_registers_and_rejects_wrong_descriptor_axis() {
+        let effects = Arc::new(FakeEffects::default());
+        let factory = Arc::new(WaylandDisplayFactory::with_clock(
+            binding(),
+            effects,
+            Arc::new(TestClock),
+        ));
+        let descriptor = descriptor();
+        let key = provider_factory_key();
+        assert_eq!(key.provider_type, ProviderType::Display);
+        assert_eq!(key.implementation_id, implementation_id());
+
+        let mut wrong_type = descriptor.clone();
+        wrong_type.authority = ProviderAuthority::Network;
+        assert!(matches!(
+            factory.construct(&wrong_type),
+            Err(FactoryError::Rejected)
+        ));
+
+        let mut wrong_implementation = descriptor.clone();
+        wrong_implementation.implementation_id =
+            ImplementationId::parse("other-display").expect("implementation");
+        assert!(matches!(
+            factory.construct(&wrong_implementation),
+            Err(FactoryError::Rejected)
+        ));
+
+        let mut builder = d2b_provider::ProviderRegistryBuilder::new(
+            descriptor.registry_generation,
+            fingerprint(11),
+            NOW,
+        );
+        builder
+            .register_factory(key, factory)
+            .expect("register factory")
+            .register_instance(descriptor.clone())
+            .expect("register provider");
+        let registry = builder.finish().expect("registry");
+        assert_eq!(
+            registry
+                .instance(&descriptor.provider_id)
+                .expect("instance")
+                .descriptor(),
+            descriptor
+        );
     }
 
     #[tokio::test]

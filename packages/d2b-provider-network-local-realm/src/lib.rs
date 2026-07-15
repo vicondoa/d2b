@@ -16,21 +16,38 @@ use d2b_contracts::{
     v2_identity::{ProviderId, ProviderType, RealmId, RoleId},
     v2_provider::{
         AdoptionRequest, AdoptionState, AuthorizedProviderScope, Fingerprint, Generation, HandleId,
-        HandleOwner, IdempotencyKey, MAX_PROVIDER_PLAN_RESOURCES, MutationReceipt, MutationState,
-        ObservationReason, ObservedLifecycleState, OperationBinding, PlanId, PlannedResourceClass,
-        PrincipalRef, Provider, ProviderCallContext, ProviderCapabilitySet, ProviderDescriptor,
+        HandleOwner, IdempotencyKey, ImplementationId, MAX_PROVIDER_PLAN_RESOURCES,
+        MutationReceipt, MutationState, ObservationReason, ObservedLifecycleState,
+        OperationBinding, PlanId, PlannedResourceClass, PrincipalRef, Provider,
+        ProviderCallContext, ProviderCapabilitySet, ProviderDescriptor, ProviderFactoryKey,
         ProviderFailure, ProviderFailureKind, ProviderFuture, ProviderHandle, ProviderHealth,
         ProviderHealthReason, ProviderHealthState, ProviderMethod, ProviderObservation,
         ProviderOperationRequest, ProviderPlacement, ProviderPlan, ProviderRemediation,
         ProviderResult, ProviderTarget, RetryClass,
     },
 };
-use d2b_provider::{NetworkProvider, ProviderClock, SystemProviderClock};
+use d2b_provider::{
+    FactoryError, NetworkProvider, ProviderClock, ProviderFactory, ProviderInstance,
+    SystemProviderClock,
+};
 use d2b_provider_toolkit::ProviderValues;
 use tokio::sync::Mutex;
 
 const MAX_TRACKED_OPERATIONS: usize = 128;
 const PLAN_TTL_MS: u64 = 30_000;
+pub const IMPLEMENTATION_ID: &str = "local-realm";
+
+pub fn implementation_id() -> ImplementationId {
+    ImplementationId::parse(IMPLEMENTATION_ID)
+        .unwrap_or_else(|_| unreachable!("local-realm implementation ID is valid"))
+}
+
+pub fn provider_factory_key() -> ProviderFactoryKey {
+    ProviderFactoryKey {
+        provider_type: ProviderType::Network,
+        implementation_id: implementation_id(),
+    }
+}
 
 macro_rules! opaque_id {
     ($name:ident, $description:literal) => {
@@ -462,6 +479,61 @@ impl fmt::Display for NetworkBuildError {
 impl Error for NetworkBuildError {}
 
 #[derive(Clone)]
+pub struct LocalRealmNetworkFactory {
+    binding: LocalRealmNetworkBinding,
+    effects: Arc<dyn NetworkEffectPort>,
+    clock: Arc<dyn ProviderClock>,
+}
+
+impl fmt::Debug for LocalRealmNetworkFactory {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LocalRealmNetworkFactory")
+            .field("binding", &self.binding)
+            .finish_non_exhaustive()
+    }
+}
+
+impl LocalRealmNetworkFactory {
+    pub fn new(binding: LocalRealmNetworkBinding, effects: Arc<dyn NetworkEffectPort>) -> Self {
+        Self::with_clock(binding, effects, Arc::new(SystemProviderClock))
+    }
+
+    pub fn with_clock(
+        binding: LocalRealmNetworkBinding,
+        effects: Arc<dyn NetworkEffectPort>,
+        clock: Arc<dyn ProviderClock>,
+    ) -> Self {
+        Self {
+            binding,
+            effects,
+            clock,
+        }
+    }
+}
+
+impl ProviderFactory for LocalRealmNetworkFactory {
+    fn construct(&self, descriptor: &ProviderDescriptor) -> Result<ProviderInstance, FactoryError> {
+        if descriptor.provider_type() != ProviderType::Network
+            || descriptor.implementation_id != implementation_id()
+        {
+            return Err(FactoryError::Rejected);
+        }
+        let provider = LocalRealmNetworkProvider::with_clock(
+            descriptor.clone(),
+            self.binding.clone(),
+            self.effects.clone(),
+            self.clock.clone(),
+        )
+        .map_err(|error| match error {
+            NetworkBuildError::MissingLiveCapability => FactoryError::Unavailable,
+            _ => FactoryError::Rejected,
+        })?;
+        Ok(ProviderInstance::Network(Arc::new(provider)))
+    }
+}
+
+#[derive(Clone)]
 enum CachedResult {
     Plan {
         method: ProviderMethod,
@@ -547,7 +619,7 @@ impl LocalRealmNetworkProvider {
         if descriptor.provider_type() != ProviderType::Network {
             return Err(NetworkBuildError::WrongProviderType);
         }
-        if descriptor.implementation_id.as_str() != "local-realm" {
+        if descriptor.implementation_id != implementation_id() {
             return Err(NetworkBuildError::WrongImplementation);
         }
         if !matches!(
@@ -1488,8 +1560,7 @@ mod tests {
             schema_version: PROVIDER_SCHEMA_VERSION,
             provider_id: ProviderId::parse(short_id('b')).expect("provider"),
             authority: ProviderAuthority::Network,
-            implementation_id: d2b_contracts::v2_provider::ImplementationId::parse("local-realm")
-                .expect("implementation"),
+            implementation_id: implementation_id(),
             api_version: ProviderApiVersion::V2,
             capabilities: ProviderCapabilitySet::new(vec![
                 ProviderCapability(ProviderMethod::NetworkPlan),
@@ -1613,6 +1684,54 @@ mod tests {
         let provider = provider(effects);
         assert_eq!(provider.capabilities(), descriptor().capabilities);
         assert!(NetworkLiveCapabilities::REQUIRED.is_complete());
+    }
+
+    #[test]
+    fn factory_registers_and_rejects_wrong_descriptor_axis() {
+        let effects = Arc::new(FakeEffects::default());
+        let factory = Arc::new(LocalRealmNetworkFactory::with_clock(
+            binding(),
+            effects,
+            Arc::new(TestClock),
+        ));
+        let descriptor = descriptor();
+        let key = provider_factory_key();
+        assert_eq!(key.provider_type, ProviderType::Network);
+        assert_eq!(key.implementation_id, implementation_id());
+
+        let mut wrong_type = descriptor.clone();
+        wrong_type.authority = ProviderAuthority::Storage;
+        assert!(matches!(
+            factory.construct(&wrong_type),
+            Err(FactoryError::Rejected)
+        ));
+
+        let mut wrong_implementation = descriptor.clone();
+        wrong_implementation.implementation_id =
+            ImplementationId::parse("other-network").expect("implementation");
+        assert!(matches!(
+            factory.construct(&wrong_implementation),
+            Err(FactoryError::Rejected)
+        ));
+
+        let mut builder = d2b_provider::ProviderRegistryBuilder::new(
+            descriptor.registry_generation,
+            fingerprint(11),
+            NOW,
+        );
+        builder
+            .register_factory(key, factory)
+            .expect("register factory")
+            .register_instance(descriptor.clone())
+            .expect("register provider");
+        let registry = builder.finish().expect("registry");
+        assert_eq!(
+            registry
+                .instance(&descriptor.provider_id)
+                .expect("instance")
+                .descriptor(),
+            descriptor
+        );
     }
 
     #[tokio::test]
