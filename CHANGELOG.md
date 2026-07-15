@@ -83,7 +83,8 @@ deprecations ship one minor release before removal.
   authenticated two-phase descriptor binding, phase-aware peer credentials,
   canonical provider-agent serving, lock-bound state generations, and bounded
   application-gated logical streams, cancellation-safe async kernel adapters,
-  framed Unix streams, transport-scoped routing, and race-free provider drain.
+  framed Unix streams, transport-scoped routing, concurrent ttrpc and named
+  stream demultiplexing, transfer-safe OFD locks, and race-free provider drain.
 - Closed W2 service-contract ambiguity by making provider capability claims
   method-exact, binding response attachments and streams, rejecting mixed
   identity scopes and contradictory error outcomes, returning exact typed

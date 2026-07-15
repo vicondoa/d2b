@@ -60,6 +60,12 @@ full picture and threat model.
 │   ├── d2b-core/              <- shared bundle DTOs, typed errors, privilege metadata
 │   ├── d2b-host/              <- host-side lifecycle primitives (argv, hardlink farm, ifnames)
 │   ├── d2b-contracts/          <- public + private wire contracts
+│   ├── d2b-unix-session/       <- async Unix transport, credentials, and descriptor validation
+│   ├── d2b-session/            <- authenticated ComponentSession runtime
+│   ├── d2b-provider/           <- provider traits, registries, lifecycle, and RPC
+│   ├── d2b-provider-toolkit/   <- provider-agent adapter and conformance kit
+│   ├── d2b-state/              <- atomic state, locks, leases, and audit segments
+│   ├── d2b-client/             <- typed async resolver, session, and service clients
 │   ├── d2b/                   <- rust-native CLI
 │   ├── d2bd/                  <- unprivileged public daemon / supervisor
 │   ├── d2b-priv-broker/       <- privileged broker for audited host mutations

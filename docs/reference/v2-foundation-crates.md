@@ -11,7 +11,7 @@ six are versioned with the workspace, use the workspace lockfile, set
 | `d2b-provider` | Provider traits, registry generations, operation admission, lifecycle, and authenticated RPC proxy | none |
 | `d2b-provider-toolkit` | Provider-agent adapter, exact registration, fixtures, redaction, and shared conformance | none |
 | `d2b-state` | Atomic JSON, quarantine, generations, anchored paths, locks, leases, and audit segments | `host-fs` (Linux), `tokio` |
-| `d2b-client` | Typed target resolution, session connection, generated service clients, retries, cancellation, attachments, and named streams | none |
+| `d2b-client` | Typed target resolution, session connection, generated service clients, retries, cancellation, attachments, and named streams | `host-socket` (Linux) |
 
 ## Dependency and authority boundaries
 
@@ -65,11 +65,16 @@ descriptor batch before binding and invoking object-specific validation.
 `SessionEngine` drives handshake, protected records, control RPC, cancellation,
 attachments, lifecycle, and named streams through one owned transport.
 `SessionDriverHandle` is the clonable object-safe seam consumed by clients and
-provider-agent servers. Logical named-stream messages remain bounded at 1 MiB
-and are fragmented, scheduled, and reassembled internally under a 256 KiB
-credit window. Final-fragment credit remains withheld until the application
-consumes the logical message and explicitly grants its length; the driver maps
-that grant to the exact withheld transport bytes.
+provider-agent servers. `begin_invoke` registers an outbound request before
+returning a `PendingInvocation`, so a later cancellation cannot overtake work
+that has not entered the session driver. Logical named-stream messages remain
+bounded at 1 MiB and are fragmented, scheduled, and reassembled internally
+under a 256 KiB credit window. Final-fragment credit remains withheld until the
+application consumes the logical message and explicitly grants its length; the
+driver maps that grant to the exact withheld transport bytes. The canonical
+client owns one session-level receive dispatcher and routes events into
+byte-bounded per-stream queues under the 4 MiB aggregate session limit, so
+concurrent streams cannot consume or discard each other's events.
 
 ## State invariants
 
@@ -82,16 +87,23 @@ a success-shaped default.
 
 Path operations are relative to a caller-supplied anchored directory and accept
 only validated relative components. OFD locks are ordered, deadline-bound, and
-`CLOEXEC`; leases and audit segments retain the exact typed identity and
-generation bindings from `d2b-contracts`.
+`CLOEXEC`. Transfer is two-phase: after the recipient duplicates the open-file
+description, the sender commits the transfer so dropping its local guard closes
+the descriptor without issuing `F_UNLCK`. Leases and audit segments retain the
+exact typed identity and generation bindings from `d2b-contracts`.
 
 The `tokio` feature adds async atomic-state, lock, and audit adapters. Blocking
 filesystem and kernel lock operations run only through
 `tokio::task::spawn_blocking`; they are never executed directly on a Tokio
 worker. Dropping or timing out a contended async lock acquisition signals its
-blocking cancellation token so the worker terminates. The Linux-only `host-fs`
-feature remains usable without Tokio for synchronous broker-side composition
-and fails explicitly when selected on another platform.
+blocking cancellation token so the worker terminates. Async lock operations use
+a cloneable `AsyncLockSet` handle so cancelling a future cannot lose or release
+locks acquired by an earlier operation. Each acquisition reserves a set-local
+handoff slot until the result is claimed; an unclaimed blocking result rolls
+back only its newly acquired final guard before reopening the set. The
+Linux-only `host-fs` feature remains usable without Tokio for synchronous
+broker-side composition and fails explicitly when selected on another
+platform.
 
 ## Client invariants
 
@@ -100,9 +112,13 @@ attachment, and named-stream APIs. It resolves a typed target through an
 explicit route table, selects one declared transport, and never retries through
 another transport. Mutating retries reuse one bounded idempotency identity.
 Response outcomes, remote errors, attachment indexes, cancellation, and
-named-stream transitions are validated before being exposed to a caller. Debug
-and error output omits target values, endpoints, payloads, credentials, and
-attachment contents.
+named-stream transitions are validated before being exposed to a caller. The
+local ttrpc bridge multiplexes registered invocations, continues admitting
+cancellation when normal work is saturated, serializes response writes, and
+returns closed per-request status errors without tearing down unrelated calls.
+Debug and error output omits target values, endpoints, payloads, credentials,
+and attachment contents while retaining closed contract, session, and errno
+diagnostics.
 
 These crates provide foundations, not compatibility adapters. Concrete
 first-party providers and control-plane service migration are separate runtime
