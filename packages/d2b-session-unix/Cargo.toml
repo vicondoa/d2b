@@ -1,5 +1,5 @@
 [package]
-name = "d2b-unix-session"
+name = "d2b-session-unix"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

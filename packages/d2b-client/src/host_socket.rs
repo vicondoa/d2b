@@ -1,4 +1,4 @@
-use std::{fmt, sync::Arc, time::Instant};
+use std::{collections::BTreeMap, fmt, sync::Arc, time::Instant};
 
 use async_trait::async_trait;
 use d2b_contracts::{
@@ -7,17 +7,16 @@ use d2b_contracts::{
     },
     v2_services::{common, decode_strict},
 };
-use d2b_session::{ComponentSessionDriver, HandshakeCredentials, PendingInvocation, SessionEngine};
-use d2b_unix_session::UnixSeqpacketTransport;
+use d2b_session::{ComponentSessionDriver, HandshakeCredentials, SessionEngine};
+use d2b_session_unix::UnixSeqpacketTransport;
 use protobuf::{EnumOrUnknown, Message, MessageField};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt, DuplexStream},
-    sync::{Mutex, Semaphore, mpsc},
-    task::JoinSet,
+    sync::{Mutex, OwnedSemaphorePermit, Semaphore, mpsc},
 };
 use ttrpc::{
     r#async::transport::Socket,
-    proto::{MESSAGE_HEADER_LENGTH, MessageHeader},
+    proto::{MESSAGE_HEADER_LENGTH, MESSAGE_TYPE_REQUEST, MESSAGE_TYPE_RESPONSE, MessageHeader},
 };
 
 use crate::{
@@ -108,24 +107,57 @@ async fn pump_ttrpc(
     const MAX_IN_FLIGHT_REQUESTS: usize = 128;
     let (reader, mut writer) = tokio::io::split(socket);
     let (responses, mut response_receiver) = mpsc::channel(MAX_IN_FLIGHT_REQUESTS);
+    let in_flight = Arc::new(Mutex::new(BTreeMap::new()));
     let mut dispatcher = tokio::spawn(dispatch_ttrpc_requests(
         reader,
-        driver,
-        responses,
+        Arc::clone(&driver),
+        responses.clone(),
         MAX_IN_FLIGHT_REQUESTS,
+        Arc::clone(&in_flight),
     ));
+    let mut receiver = tokio::spawn(receive_ttrpc_responses(
+        Arc::clone(&driver),
+        responses,
+        in_flight,
+    ));
+    let mut control = tokio::spawn(drain_session_controls(driver));
     loop {
         tokio::select! {
             result = &mut dispatcher => {
+                receiver.abort();
+                control.abort();
+                return result.map_err(|_| ())?;
+            }
+            result = &mut receiver => {
+                dispatcher.abort();
+                control.abort();
+                return result.map_err(|_| ())?;
+            }
+            result = &mut control => {
+                dispatcher.abort();
+                receiver.abort();
                 return result.map_err(|_| ())?;
             }
             response = response_receiver.recv() => {
                 let response = response.ok_or(())??;
                 if writer.write_all(&response).await.is_err() {
                     dispatcher.abort();
+                    receiver.abort();
+                    control.abort();
                     return Err(());
                 }
             }
+        }
+    }
+}
+
+async fn drain_session_controls(driver: Arc<dyn ComponentSessionDriver>) -> Result<(), ()> {
+    loop {
+        if matches!(
+            driver.receive_control().await.map_err(|_| ())?,
+            d2b_session::SessionEvent::Close(_)
+        ) {
+            return Err(());
         }
     }
 }
@@ -135,26 +167,23 @@ async fn dispatch_ttrpc_requests<R>(
     driver: Arc<dyn ComponentSessionDriver>,
     responses: mpsc::Sender<Result<Vec<u8>, ()>>,
     maximum_in_flight: usize,
+    in_flight: Arc<Mutex<BTreeMap<u32, InFlightRequest>>>,
 ) -> Result<(), ()>
 where
     R: AsyncRead + Unpin,
 {
     let permits = Arc::new(Semaphore::new(maximum_in_flight));
-    let mut requests = JoinSet::new();
     loop {
-        while let Some(completed) = requests.try_join_next() {
-            completed.map_err(|_| ())??;
-        }
         let (header, request, frame) = match read_ttrpc_request(&mut reader).await {
             Ok(request) => request,
-            Err(()) => {
-                requests.abort_all();
-                while requests.join_next().await.is_some() {}
-                return Err(());
-            }
+            Err(()) => return Err(()),
         };
+        if header.type_ != MESSAGE_TYPE_REQUEST {
+            return Err(());
+        }
         if request.method == "Cancel" {
-            let response = dispatch_cancel_request(header, request, Arc::clone(&driver)).await;
+            let response =
+                dispatch_cancel_request(header, request, Arc::clone(&driver), &in_flight).await;
             responses.send(response).await.map_err(|_| ())?;
             continue;
         }
@@ -173,22 +202,60 @@ where
             }
         };
         let request_id = request_id(&request)?;
-        let pending = match driver.begin_invoke(request_id, frame).await {
-            Ok(pending) => pending,
+        {
+            let mut requests = in_flight.lock().await;
+            if requests
+                .insert(
+                    header.stream_id,
+                    InFlightRequest {
+                        request_id: request_id.clone(),
+                        _permit: permit,
+                    },
+                )
+                .is_some()
+            {
+                return Err(());
+            }
+        }
+        match driver.start_ttrpc(request_id, frame).await {
+            Ok(()) => {}
             Err(error) => {
+                in_flight.lock().await.remove(&header.stream_id);
                 responses
                     .send(session_error_response(header.stream_id, error))
                     .await
                     .map_err(|_| ())?;
                 continue;
             }
-        };
-        let responses = responses.clone();
-        requests.spawn(async move {
-            let _permit = permit;
-            let response = dispatch_pending_response(header.stream_id, pending).await;
-            responses.send(response).await.map_err(|_| ())
-        });
+        }
+    }
+}
+
+struct InFlightRequest {
+    request_id: RequestId,
+    _permit: OwnedSemaphorePermit,
+}
+
+async fn receive_ttrpc_responses(
+    driver: Arc<dyn ComponentSessionDriver>,
+    responses: mpsc::Sender<Result<Vec<u8>, ()>>,
+    in_flight: Arc<Mutex<BTreeMap<u32, InFlightRequest>>>,
+) -> Result<(), ()> {
+    loop {
+        let frame = driver.receive_ttrpc().await.map_err(|_| ())?;
+        let header = ttrpc_frame_header(&frame)?;
+        if header.type_ != MESSAGE_TYPE_RESPONSE {
+            return Err(());
+        }
+        let request = in_flight.lock().await.remove(&header.stream_id).ok_or(())?;
+        if !driver
+            .complete_ttrpc(request.request_id)
+            .await
+            .map_err(|_| ())?
+        {
+            return Err(());
+        }
+        responses.send(Ok(frame)).await.map_err(|_| ())?;
     }
 }
 
@@ -218,11 +285,23 @@ async fn dispatch_cancel_request(
     header: MessageHeader,
     request: ttrpc::Request,
     driver: Arc<dyn ComponentSessionDriver>,
+    in_flight: &Mutex<BTreeMap<u32, InFlightRequest>>,
 ) -> Result<Vec<u8>, ()> {
     if request.method == "Cancel" {
         let cancel =
             decode_strict::<common::CancelRequest>(&request.payload, false).map_err(|_| ())?;
         let request_id = RequestId::new(cancel.request_id).map_err(|_| ())?;
+        if !in_flight
+            .lock()
+            .await
+            .values()
+            .any(|request| request.request_id == request_id)
+        {
+            let mut response = common::CancelResponse::new();
+            response.outcome =
+                EnumOrUnknown::new(common::CancelOutcome::CANCEL_OUTCOME_UNKNOWN_REQUEST);
+            return ttrpc_response(header.stream_id, response.write_to_bytes().map_err(|_| ())?);
+        }
         if let Err(error) = driver.cancel(cancel.session_generation, request_id).await {
             return session_error_response(header.stream_id, error);
         }
@@ -234,14 +313,17 @@ async fn dispatch_cancel_request(
     Err(())
 }
 
-async fn dispatch_pending_response(
-    stream_id: u32,
-    pending: PendingInvocation,
-) -> Result<Vec<u8>, ()> {
-    match pending.response().await {
-        Ok(response) => Ok(response),
-        Err(error) => session_error_response(stream_id, error),
+fn ttrpc_frame_header(frame: &[u8]) -> Result<MessageHeader, ()> {
+    let header_bytes: [u8; MESSAGE_HEADER_LENGTH] = frame
+        .get(..MESSAGE_HEADER_LENGTH)
+        .ok_or(())?
+        .try_into()
+        .map_err(|_| ())?;
+    let header = MessageHeader::from(header_bytes);
+    if header.length as usize != frame.len().saturating_sub(MESSAGE_HEADER_LENGTH) {
+        return Err(());
     }
+    Ok(header)
 }
 
 fn ttrpc_response(stream_id: u32, payload: Vec<u8>) -> Result<Vec<u8>, ()> {
@@ -361,18 +443,23 @@ mod tests {
 
     struct BlockingDriver {
         started: AtomicUsize,
+        completed: AtomicUsize,
         cancelled: AtomicUsize,
         progress: Notify,
-        release: Arc<Notify>,
+        responses: mpsc::Sender<Vec<u8>>,
+        response_receiver: Mutex<mpsc::Receiver<Vec<u8>>>,
     }
 
     impl BlockingDriver {
         fn new() -> Self {
+            let (responses, response_receiver) = mpsc::channel(4);
             Self {
                 started: AtomicUsize::new(0),
+                completed: AtomicUsize::new(0),
                 cancelled: AtomicUsize::new(0),
                 progress: Notify::new(),
-                release: Arc::new(Notify::new()),
+                responses,
+                response_receiver: Mutex::new(response_receiver),
             }
         }
 
@@ -397,18 +484,16 @@ mod tests {
             1
         }
 
-        async fn begin_invoke(
-            &self,
-            _request_id: RequestId,
-            _frame: Vec<u8>,
-        ) -> SessionResult<PendingInvocation> {
+        async fn start_ttrpc(&self, _request_id: RequestId, _frame: Vec<u8>) -> SessionResult<()> {
             self.started.fetch_add(1, Ordering::AcqRel);
             self.progress.notify_waiters();
-            let release = Arc::clone(&self.release);
-            Ok(PendingInvocation::from_future(async move {
-                release.notified().await;
-                Err(SessionError::new(SessionErrorCode::Cancelled))
-            }))
+            Ok(())
+        }
+
+        async fn complete_ttrpc(&self, _request_id: RequestId) -> SessionResult<bool> {
+            self.completed.fetch_add(1, Ordering::AcqRel);
+            self.progress.notify_waiters();
+            Ok(true)
         }
 
         async fn cancel(&self, generation: u64, _request_id: RequestId) -> SessionResult<()> {
@@ -416,7 +501,6 @@ mod tests {
                 return Err(SessionError::new(SessionErrorCode::GenerationMismatch));
             }
             self.cancelled.fetch_add(1, Ordering::AcqRel);
-            self.release.notify_one();
             self.progress.notify_waiters();
             Ok(())
         }
@@ -426,7 +510,12 @@ mod tests {
         }
 
         async fn receive_ttrpc(&self) -> SessionResult<Vec<u8>> {
-            unsupported()
+            self.response_receiver
+                .lock()
+                .await
+                .recv()
+                .await
+                .ok_or_else(|| SessionError::new(SessionErrorCode::SessionDisconnected))
         }
 
         async fn register_inbound_call(
@@ -490,7 +579,7 @@ mod tests {
         }
 
         async fn receive_control(&self) -> SessionResult<SessionEvent> {
-            unsupported()
+            std::future::pending().await
         }
 
         async fn close(
@@ -540,6 +629,17 @@ mod tests {
         request.write_to_bytes().unwrap()
     }
 
+    async fn read_response_frame(socket: &mut DuplexStream) -> Vec<u8> {
+        let mut header = [0_u8; MESSAGE_HEADER_LENGTH];
+        socket.read_exact(&mut header).await.unwrap();
+        let parsed = MessageHeader::from(header);
+        let mut body = vec![0_u8; parsed.length as usize];
+        socket.read_exact(&mut body).await.unwrap();
+        let mut frame = header.to_vec();
+        frame.extend_from_slice(&body);
+        frame
+    }
+
     #[tokio::test]
     async fn ttrpc_pump_reads_cancel_while_invoke_is_pending() {
         let driver = Arc::new(BlockingDriver::new());
@@ -577,7 +677,10 @@ mod tests {
         let (mut client, bridge) = tokio::io::duplex(64 * 1024);
         let (reader, _writer) = tokio::io::split(bridge);
         let (responses, mut response_receiver) = mpsc::channel(4);
-        let dispatcher = tokio::spawn(dispatch_ttrpc_requests(reader, shared, responses, 1));
+        let in_flight = Arc::new(Mutex::new(BTreeMap::new()));
+        let dispatcher = tokio::spawn(dispatch_ttrpc_requests(
+            reader, shared, responses, 1, in_flight,
+        ));
         let request_id = vec![8; 16];
 
         client
@@ -608,5 +711,41 @@ mod tests {
 
         assert!(!dispatcher.is_finished());
         dispatcher.abort();
+    }
+
+    #[tokio::test]
+    async fn pump_forwards_out_of_order_responses_by_ttrpc_stream() {
+        let driver = Arc::new(BlockingDriver::new());
+        let shared: Arc<dyn ComponentSessionDriver> = driver.clone();
+        let (mut client, bridge) = tokio::io::duplex(64 * 1024);
+        let pump = tokio::spawn(pump_ttrpc(bridge, shared));
+
+        client
+            .write_all(&request_frame(11, "Inspect", service_payload(vec![1; 16])))
+            .await
+            .unwrap();
+        client
+            .write_all(&request_frame(12, "Inspect", service_payload(vec![2; 16])))
+            .await
+            .unwrap();
+        driver.wait_for(&driver.started, 2).await;
+        driver
+            .responses
+            .send(ttrpc_response(12, b"second".to_vec()).unwrap())
+            .await
+            .unwrap();
+        driver
+            .responses
+            .send(ttrpc_response(11, b"first".to_vec()).unwrap())
+            .await
+            .unwrap();
+
+        let second = read_response_frame(&mut client).await;
+        let first = read_response_frame(&mut client).await;
+        assert_eq!(ttrpc_frame_header(&second).unwrap().stream_id, 12);
+        assert_eq!(ttrpc_frame_header(&first).unwrap().stream_id, 11);
+        driver.wait_for(&driver.completed, 2).await;
+        assert!(!pump.is_finished());
+        pump.abort();
     }
 }

@@ -36,23 +36,36 @@ pub enum RegistryBuildError {
 
 impl fmt::Display for RegistryBuildError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::Contract(_) => "provider contract validation failed",
+        let message = match self {
+            Self::Contract(error) => {
+                return write!(formatter, "provider contract validation failed ({error})");
+            }
             Self::DuplicateFactory => "duplicate provider factory",
             Self::DuplicateProvider => "duplicate provider instance",
             Self::MissingFactory => "provider factory is not registered",
-            Self::FactoryFailed(_) => "provider factory construction failed",
+            Self::FactoryFailed(error) => {
+                return write!(formatter, "provider factory construction failed ({error})");
+            }
             Self::DescriptorMismatch => "provider descriptor does not match registry axis",
             Self::CapabilityMismatch => "provider capability publication does not match descriptor",
             Self::GenerationMismatch => "provider generation does not match registry generation",
             Self::BoundExceeded => "provider registry bound exceeded",
             Self::EmptyRegistry => "provider registry has no configured instances",
             Self::TransactionAborted => "provider registry transaction was aborted",
-        })
+        };
+        formatter.write_str(message)
     }
 }
 
-impl Error for RegistryBuildError {}
+impl Error for RegistryBuildError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Contract(error) => Some(error),
+            Self::FactoryFailed(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 impl From<ProviderContractError> for RegistryBuildError {
     fn from(value: ProviderContractError) -> Self {
@@ -95,9 +108,17 @@ impl fmt::Debug for ProviderRuntimeError {
 
 impl fmt::Display for ProviderRuntimeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::Contract(_) => "provider contract validation failed",
-            Self::Provider(_) => "provider operation failed",
+        let message = match self {
+            Self::Contract(error) => {
+                return write!(formatter, "provider contract validation failed ({error})");
+            }
+            Self::Provider(error) => {
+                return write!(
+                    formatter,
+                    "provider operation failed ({:?}, retry={:?}, type={:?}, reason={:?}, remediation={:?})",
+                    error.kind, error.retry, error.provider_type, error.reason, error.remediation
+                );
+            }
             Self::NotAccepting => "provider registry is not accepting calls",
             Self::UnknownProvider => "provider is not registered",
             Self::CapabilityDenied => "provider capability is not registered",
@@ -107,11 +128,19 @@ impl fmt::Display for ProviderRuntimeError {
             Self::SessionIdentityMismatch => "authenticated provider session identity mismatch",
             Self::ResponseMismatch => "provider response binding mismatch",
             Self::InvalidLifecycleTransition => "invalid provider registry lifecycle transition",
-        })
+        };
+        formatter.write_str(message)
     }
 }
 
-impl Error for ProviderRuntimeError {}
+impl Error for ProviderRuntimeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Contract(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 impl From<ProviderContractError> for ProviderRuntimeError {
     fn from(value: ProviderContractError) -> Self {

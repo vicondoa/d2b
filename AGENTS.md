@@ -60,7 +60,7 @@ full picture and threat model.
 │   ├── d2b-core/              <- shared bundle DTOs, typed errors, privilege metadata
 │   ├── d2b-host/              <- host-side lifecycle primitives (argv, hardlink farm, ifnames)
 │   ├── d2b-contracts/          <- public + private wire contracts
-│   ├── d2b-unix-session/       <- async Unix transport, credentials, and descriptor validation
+│   ├── d2b-session-unix/       <- async Unix transport, credentials, and descriptor validation
 │   ├── d2b-session/            <- authenticated ComponentSession runtime
 │   ├── d2b-provider/           <- provider traits, registries, lifecycle, and RPC
 │   ├── d2b-provider-toolkit/   <- provider-agent adapter and conformance kit
@@ -334,6 +334,13 @@ This rule applies to AGENTS.md too: if you change a load-bearing
 behaviour described here, update this file in the same commit.
 
 ### Naming conventions
+
+Crates that implement a common API use `<base>-<implementation>` names so every
+family sorts together: `d2b-provider-{aca,host,relay}`,
+`d2b-realm-codec-protobuf`, and `d2b-session-unix`. Do not place the
+implementation before the base (for example, no `d2b-unix-session` or
+`d2b-host-providers`). Keep the root workspace member list alphanumerically
+sorted; the workspace policy tests enforce both rules.
 
 The accepted d2b 2.0 local-root endpoint set consists of these four
 unsuffixed PID1 units:

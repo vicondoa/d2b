@@ -28,8 +28,8 @@ use d2b_contracts::{
     v2_services::{SERVICE_INVENTORY, ServiceContractError, common, decode_strict, encode_strict},
 };
 use d2b_session::{
-    Cancellation, HandshakeCredentials, PendingInvocation, Result as SessionResult, SessionEngine,
-    SessionEvent, StreamEvent, StreamId, TransportDescriptor, TransportError,
+    Cancellation, HandshakeCredentials, Result as SessionResult, SessionEngine, SessionEvent,
+    StreamEvent, StreamId, TransportDescriptor, TransportError,
 };
 use protobuf::{EnumOrUnknown, Message, MessageField};
 use tokio::{
@@ -271,12 +271,12 @@ impl d2b_session::ComponentSessionDriver for GrantRecordingDriver {
         self.inner.generation()
     }
 
-    async fn begin_invoke(
-        &self,
-        request_id: RequestId,
-        frame: Vec<u8>,
-    ) -> SessionResult<PendingInvocation> {
-        self.inner.begin_invoke(request_id, frame).await
+    async fn start_ttrpc(&self, request_id: RequestId, frame: Vec<u8>) -> SessionResult<()> {
+        self.inner.start_ttrpc(request_id, frame).await
+    }
+
+    async fn complete_ttrpc(&self, request_id: RequestId) -> SessionResult<bool> {
+        self.inner.complete_ttrpc(request_id).await
     }
 
     async fn cancel(&self, generation: u64, request_id: RequestId) -> SessionResult<()> {
@@ -375,7 +375,14 @@ async fn ttrpc_bridge(
         let request_id = RequestId::new(metadata.request_id.clone()).map_err(|_| ())?;
         let mut frame = header_bytes.to_vec();
         frame.extend_from_slice(&body);
-        let reply = driver.invoke(request_id, frame).await.map_err(|_| ())?;
+        driver
+            .start_ttrpc(request_id.clone(), frame)
+            .await
+            .map_err(|_| ())?;
+        let reply = driver.receive_ttrpc().await.map_err(|_| ())?;
+        if !driver.complete_ttrpc(request_id).await.map_err(|_| ())? {
+            return Err(());
+        }
         socket.write_all(&reply).await.map_err(|_| ())?;
         state.calls.fetch_add(1, Ordering::SeqCst);
     }
@@ -1242,7 +1249,7 @@ fn debug_and_errors_are_redacted() {
         kind: RemoteErrorKind::Internal,
         retry: RetryClass::Never,
     };
-    assert_eq!(remote.to_string(), "client-remote-error");
+    assert_eq!(remote.to_string(), "client-remote-internal-retry-never");
     assert_eq!(
         ClientError::SessionEstablishment(SessionErrorCode::IdentityEvidenceMismatch).to_string(),
         "client-session-establishment-identity-evidence-mismatch"

@@ -996,29 +996,37 @@ async fn engine_drives_fragmented_ttrpc_and_request_cancellation() {
 }
 
 #[tokio::test]
-async fn driver_handle_is_clonable_object_safe_and_routes_concurrent_operations() {
+async fn driver_handle_is_clonable_object_safe_and_leaves_ttrpc_correlation_to_adapters() {
     let (initiator, responder, _) = engine_pair().await;
     let initiator: Arc<dyn ComponentSessionDriver> = Arc::new(initiator.into_driver());
     let responder: Arc<dyn ComponentSessionDriver> = Arc::new(responder.into_driver());
     assert_eq!(initiator.generation(), 7);
 
-    let request_id = RequestId::new(vec![0x41; 16]).unwrap();
-    let caller = Arc::clone(&initiator);
-    let invoke = tokio::spawn(async move {
-        caller
-            .invoke(request_id, b"request".to_vec())
-            .await
-            .unwrap()
-    });
-    assert_eq!(responder.receive_ttrpc().await.unwrap(), b"request");
-    responder.send_ttrpc(b"response".to_vec()).await.unwrap();
-    assert_eq!(invoke.await.unwrap(), b"response");
+    let first_id = RequestId::new(vec![0x41; 16]).unwrap();
+    let second_id = RequestId::new(vec![0x43; 16]).unwrap();
+    initiator
+        .start_ttrpc(first_id.clone(), b"request-1".to_vec())
+        .await
+        .unwrap();
+    initiator
+        .start_ttrpc(second_id.clone(), b"request-2".to_vec())
+        .await
+        .unwrap();
+    assert_eq!(responder.receive_ttrpc().await.unwrap(), b"request-1");
+    assert_eq!(responder.receive_ttrpc().await.unwrap(), b"request-2");
+    responder.send_ttrpc(b"response-2".to_vec()).await.unwrap();
+    responder.send_ttrpc(b"response-1".to_vec()).await.unwrap();
+    assert_eq!(initiator.receive_ttrpc().await.unwrap(), b"response-2");
+    assert_eq!(initiator.receive_ttrpc().await.unwrap(), b"response-1");
+    assert!(initiator.complete_ttrpc(second_id).await.unwrap());
+    assert!(initiator.complete_ttrpc(first_id).await.unwrap());
 
     let request_id = RequestId::new(vec![0x42; 16]).unwrap();
     let inbound_request_id = request_id.clone();
-    let caller = Arc::clone(&initiator);
-    let invoke =
-        tokio::spawn(async move { caller.invoke(request_id, b"cancel-me".to_vec()).await });
+    initiator
+        .start_ttrpc(request_id, b"cancel-me".to_vec())
+        .await
+        .unwrap();
     assert_eq!(responder.receive_ttrpc().await.unwrap(), b"cancel-me");
     let inbound_cancellation = responder
         .register_inbound_call(inbound_request_id.clone())
@@ -1043,9 +1051,11 @@ async fn driver_handle_is_clonable_object_safe_and_routes_concurrent_operations(
         SessionEvent::CancelAck(_)
     ));
     assert!(inbound_cancellation.is_cancelled());
-    assert_eq!(
-        invoke.await.unwrap().unwrap_err().code(),
-        SessionErrorCode::Cancelled
+    assert!(
+        initiator
+            .complete_ttrpc(RequestId::new(vec![0x42; 16]).unwrap())
+            .await
+            .unwrap()
     );
     assert!(
         responder
@@ -1053,6 +1063,88 @@ async fn driver_handle_is_clonable_object_safe_and_routes_concurrent_operations(
             .await
             .unwrap()
     );
+
+    let stream = StreamId::new(0x0200).unwrap();
+    initiator
+        .open_named_stream(stream, 1024, 1024)
+        .await
+        .unwrap();
+    responder
+        .open_named_stream(stream, 1024, 1024)
+        .await
+        .unwrap();
+
+    let blocked_stream = StreamId::new(0x0201).unwrap();
+    initiator
+        .open_named_stream(blocked_stream, 0, 1024)
+        .await
+        .unwrap();
+    responder
+        .open_named_stream(blocked_stream, 1024, 1024)
+        .await
+        .unwrap();
+    let blocked_sender = Arc::clone(&initiator);
+    let pending_send = tokio::spawn(async move {
+        blocked_sender
+            .send_named_stream(blocked_stream, b"stale".to_vec())
+            .await
+    });
+    tokio::task::yield_now().await;
+    responder.reset_named_stream(blocked_stream).await.unwrap();
+    assert!(matches!(
+        initiator.receive_named_stream().await.unwrap(),
+        StreamEvent::Reset { stream: received } if received == blocked_stream
+    ));
+    assert_eq!(
+        pending_send.await.unwrap().unwrap_err().code(),
+        SessionErrorCode::Cancelled
+    );
+    initiator
+        .open_named_stream(blocked_stream, 1024, 1024)
+        .await
+        .unwrap();
+    responder
+        .open_named_stream(blocked_stream, 1024, 1024)
+        .await
+        .unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), responder.receive_named_stream(),)
+            .await
+            .is_err(),
+        "stale queued data must not cross stream reuse"
+    );
+    initiator.reset_named_stream(stream).await.unwrap();
+    assert!(matches!(
+        responder.receive_named_stream().await.unwrap(),
+        StreamEvent::Reset { stream: received } if received == stream
+    ));
+    initiator
+        .open_named_stream(stream, 1024, 1024)
+        .await
+        .unwrap();
+    responder
+        .open_named_stream(stream, 1024, 1024)
+        .await
+        .unwrap();
+
+    initiator.close_named_stream(stream).await.unwrap();
+    assert!(matches!(
+        responder.receive_named_stream().await.unwrap(),
+        StreamEvent::RemoteClosed { stream: received } if received == stream
+    ));
+    responder.close_named_stream(stream).await.unwrap();
+    assert!(matches!(
+        initiator.receive_named_stream().await.unwrap(),
+        StreamEvent::RemoteClosed { stream: received } if received == stream
+    ));
+    initiator
+        .open_named_stream(stream, 1024, 1024)
+        .await
+        .unwrap();
+    responder
+        .open_named_stream(stream, 1024, 1024)
+        .await
+        .unwrap();
 
     let removed_request = RequestId::new(vec![0x43; 16]).unwrap();
     let removed_cancellation = responder

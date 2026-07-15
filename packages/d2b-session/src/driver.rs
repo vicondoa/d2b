@@ -29,15 +29,13 @@ const DRIVER_EVENT_CAPACITY: usize = 128;
 pub trait ComponentSessionDriver: Send + Sync {
     fn generation(&self) -> u64;
 
-    async fn begin_invoke(
-        &self,
-        request_id: RequestId,
-        frame: Vec<u8>,
-    ) -> Result<PendingInvocation>;
+    /// Registers and sends one outbound ttrpc request. Response correlation
+    /// remains with the ttrpc adapter through `receive_ttrpc`.
+    async fn start_ttrpc(&self, request_id: RequestId, frame: Vec<u8>) -> Result<()>;
 
-    async fn invoke(&self, request_id: RequestId, frame: Vec<u8>) -> Result<Vec<u8>> {
-        self.begin_invoke(request_id, frame).await?.response().await
-    }
+    /// Removes a completed outbound request after the ttrpc adapter has paired
+    /// the response frame with its local stream.
+    async fn complete_ttrpc(&self, request_id: RequestId) -> Result<bool>;
 
     async fn cancel(&self, generation: u64, request_id: RequestId) -> Result<()>;
 
@@ -85,33 +83,6 @@ pub trait ComponentSessionDriver: Send + Sync {
     async fn close(&self, reason: CloseReason, remediation: Remediation) -> Result<()>;
 }
 
-pub struct PendingInvocation {
-    response: oneshot::Receiver<Result<Vec<u8>>>,
-}
-
-impl fmt::Debug for PendingInvocation {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("PendingInvocation([redacted])")
-    }
-}
-
-impl PendingInvocation {
-    pub fn from_future<F>(future: F) -> Self
-    where
-        F: std::future::Future<Output = Result<Vec<u8>>> + Send + 'static,
-    {
-        let (reply, response) = oneshot::channel();
-        tokio::spawn(async move {
-            let _ = reply.send(future.await);
-        });
-        Self { response }
-    }
-
-    pub async fn response(self) -> Result<Vec<u8>> {
-        self.response.await.map_err(|_| disconnected())?
-    }
-}
-
 #[derive(Clone)]
 pub struct SessionDriverHandle {
     commands: mpsc::Sender<DriverCommand>,
@@ -139,23 +110,6 @@ impl SessionDriverHandle {
             .map_err(|_| disconnected())?;
         receive.await.map_err(|_| disconnected())?
     }
-
-    async fn enqueue_invoke(
-        &self,
-        request_id: RequestId,
-        frame: Vec<u8>,
-    ) -> Result<PendingInvocation> {
-        let (reply, response) = oneshot::channel();
-        self.commands
-            .send(DriverCommand::Invoke {
-                request_id,
-                frame,
-                reply,
-            })
-            .await
-            .map_err(|_| disconnected())?;
-        Ok(PendingInvocation { response })
-    }
 }
 
 #[async_trait]
@@ -164,12 +118,18 @@ impl ComponentSessionDriver for SessionDriverHandle {
         self.generation.load(Ordering::Acquire)
     }
 
-    async fn begin_invoke(
-        &self,
-        request_id: RequestId,
-        frame: Vec<u8>,
-    ) -> Result<PendingInvocation> {
-        self.enqueue_invoke(request_id, frame).await
+    async fn start_ttrpc(&self, request_id: RequestId, frame: Vec<u8>) -> Result<()> {
+        self.request(|reply| DriverCommand::StartTtrpc {
+            request_id,
+            frame,
+            reply,
+        })
+        .await
+    }
+
+    async fn complete_ttrpc(&self, request_id: RequestId) -> Result<bool> {
+        self.request(|reply| DriverCommand::CompleteTtrpc { request_id, reply })
+            .await
     }
 
     async fn cancel(&self, generation: u64, request_id: RequestId) -> Result<()> {
@@ -293,10 +253,14 @@ impl<T: OwnedTransport + 'static> SessionEngine<T> {
 }
 
 enum DriverCommand {
-    Invoke {
+    StartTtrpc {
         request_id: RequestId,
         frame: Vec<u8>,
-        reply: Reply<Vec<u8>>,
+        reply: Reply<()>,
+    },
+    CompleteTtrpc {
+        request_id: RequestId,
+        reply: Reply<bool>,
     },
     Cancel {
         generation: u64,
@@ -364,13 +328,6 @@ enum DriverCommand {
 
 type Reply<T> = oneshot::Sender<Result<T>>;
 
-struct PendingInvoke {
-    request_id: RequestId,
-    frame: Vec<u8>,
-    cancellation: Option<Cancellation>,
-    reply: Reply<Vec<u8>>,
-}
-
 struct PendingNamedSend {
     stream: StreamId,
     fragments: VecDeque<Fragment>,
@@ -379,8 +336,6 @@ struct PendingNamedSend {
 }
 
 struct DriverQueues {
-    invokes: VecDeque<PendingInvoke>,
-    active_invoke: Option<PendingInvoke>,
     named_sends: VecDeque<PendingNamedSend>,
     named_send_bytes: usize,
     ttrpc: EventQueue<Vec<u8>>,
@@ -392,8 +347,6 @@ struct DriverQueues {
 impl DriverQueues {
     fn new() -> Self {
         Self {
-            invokes: VecDeque::new(),
-            active_invoke: None,
             named_sends: VecDeque::new(),
             named_send_bytes: 0,
             ttrpc: EventQueue::new(),
@@ -401,14 +354,6 @@ impl DriverQueues {
             streams: EventQueue::new(),
             control: EventQueue::new(),
         }
-    }
-
-    fn enqueue_invoke(&mut self, invoke: PendingInvoke) -> Result<()> {
-        if self.invokes.len() >= DRIVER_COMMAND_CAPACITY {
-            return Err(backpressure());
-        }
-        self.invokes.push_back(invoke);
-        Ok(())
     }
 
     fn can_enqueue_named_send(
@@ -451,13 +396,7 @@ impl DriverQueues {
         self.named_sends = retained;
     }
 
-    fn fail(mut self, error: SessionError) {
-        if let Some(active) = self.active_invoke.take() {
-            let _ = active.reply.send(Err(error));
-        }
-        for invoke in self.invokes {
-            let _ = invoke.reply.send(Err(error));
-        }
+    fn fail(self, error: SessionError) {
         for pending in self.named_sends {
             let _ = pending.reply.send(Err(error));
         }
@@ -493,15 +432,20 @@ impl<T> EventQueue<T> {
         Ok(())
     }
 
-    fn deliver(&mut self, event: T) -> Result<()> {
-        if let Some(waiter) = self.waiters.pop_front() {
-            let _ = waiter.send(Ok(event));
-        } else {
-            if self.events.len() >= DRIVER_EVENT_CAPACITY {
-                return Err(backpressure());
+    fn deliver(&mut self, mut event: T) -> Result<()> {
+        while let Some(waiter) = self.waiters.pop_front() {
+            match waiter.send(Ok(event)) {
+                Ok(()) => return Ok(()),
+                Err(Ok(returned)) => event = returned,
+                Err(Err(_)) => {
+                    return Err(SessionError::new(SessionErrorCode::InternalInvariant));
+                }
             }
-            self.events.push_back(event);
         }
+        if self.events.len() >= DRIVER_EVENT_CAPACITY {
+            return Err(backpressure());
+        }
+        self.events.push_back(event);
         Ok(())
     }
 
@@ -518,23 +462,6 @@ async fn run_driver<T: OwnedTransport>(
 ) {
     let mut queues = DriverQueues::new();
     let result = loop {
-        if queues.active_invoke.is_none()
-            && let Some(mut invoke) = queues.invokes.pop_front()
-        {
-            match engine
-                .call(invoke.request_id.clone(), invoke.frame.clone())
-                .await
-            {
-                Ok(cancellation) => {
-                    invoke.cancellation = Some(cancellation);
-                    queues.active_invoke = Some(invoke);
-                }
-                Err(error) => {
-                    let _ = invoke.reply.send(Err(error));
-                    continue;
-                }
-            }
-        }
         match pump_named_stream(&mut engine, &mut queues).await {
             Ok(true) => {
                 tokio::task::yield_now().await;
@@ -543,28 +470,8 @@ async fn run_driver<T: OwnedTransport>(
             Ok(false) => {}
             Err(error) => break Err(error),
         }
-        let active_cancellation = queues
-            .active_invoke
-            .as_ref()
-            .and_then(|invoke| invoke.cancellation.clone());
-
         tokio::select! {
             biased;
-            () = await_cancellation(active_cancellation) => {
-                let invoke = queues
-                    .active_invoke
-                    .take()
-                    .ok_or_else(|| SessionError::new(SessionErrorCode::InternalInvariant));
-                match invoke {
-                    Ok(invoke) => {
-                        engine.complete_call(&invoke.request_id);
-                        let _ = invoke
-                            .reply
-                            .send(Err(SessionError::new(SessionErrorCode::Cancelled)));
-                    }
-                    Err(error) => break Err(error),
-                }
-            }
             command = commands.recv() => {
                 let Some(command) = command else {
                     break Err(disconnected());
@@ -576,7 +483,7 @@ async fn run_driver<T: OwnedTransport>(
                 }
             }
             event = engine.receive() => {
-                match event.and_then(|event| route_event(&mut engine, &mut queues, event)) {
+                match event.and_then(|event| route_event(&mut queues, event)) {
                     Ok(()) => {}
                     Err(error) => break Err(error),
                 }
@@ -586,13 +493,6 @@ async fn run_driver<T: OwnedTransport>(
 
     let error = result.err().unwrap_or_else(disconnected);
     queues.fail(error);
-}
-
-async fn await_cancellation(cancellation: Option<Cancellation>) {
-    match cancellation {
-        Some(cancellation) => cancellation.cancelled().await,
-        None => std::future::pending().await,
-    }
 }
 
 enum DriverAction {
@@ -606,16 +506,17 @@ async fn handle_command<T: OwnedTransport>(
     command: DriverCommand,
 ) -> Result<DriverAction> {
     match command {
-        DriverCommand::Invoke {
+        DriverCommand::StartTtrpc {
             request_id,
             frame,
             reply,
-        } => queues.enqueue_invoke(PendingInvoke {
-            request_id,
-            frame,
-            cancellation: None,
-            reply,
-        })?,
+        } => {
+            let result = engine.call(request_id, frame).await.map(|_| ());
+            let _ = reply.send(result);
+        }
+        DriverCommand::CompleteTtrpc { request_id, reply } => {
+            let _ = reply.send(Ok(engine.complete_call(&request_id)));
+        }
         DriverCommand::Cancel {
             generation,
             request_id,
@@ -768,22 +669,18 @@ async fn pump_named_stream<T: OwnedTransport>(
     Ok(false)
 }
 
-fn route_event<T: OwnedTransport>(
-    engine: &mut SessionEngine<T>,
-    queues: &mut DriverQueues,
-    event: SessionEvent,
-) -> Result<()> {
+fn route_event(queues: &mut DriverQueues, event: SessionEvent) -> Result<()> {
     match event {
         SessionEvent::Ttrpc(frame) => {
-            if let Some(invoke) = queues.active_invoke.take() {
-                engine.complete_call(&invoke.request_id);
-                let _ = invoke.reply.send(Ok(frame));
-            } else {
-                queues.ttrpc.deliver(frame)?;
-            }
+            queues.ttrpc.deliver(frame)?;
         }
         SessionEvent::Attachments(attachments) => queues.attachments.deliver(attachments)?,
-        SessionEvent::NamedStream(event) => queues.streams.deliver(event)?,
+        SessionEvent::NamedStream(event) => {
+            if let StreamEvent::Reset { stream } = &event {
+                queues.cancel_named_send(*stream, SessionError::new(SessionErrorCode::Cancelled));
+            }
+            queues.streams.deliver(event)?;
+        }
         event => queues.control.deliver(event)?,
     }
     Ok(())

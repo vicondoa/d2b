@@ -1214,6 +1214,12 @@ fn leases_bind_generation_expiry_revocation_and_explicit_transfer() {
 fn errors_and_paths_are_redacted() {
     let error = Error::Code(ErrorCode::PathRejected);
     assert!(!format!("{error:?}").contains("secret"));
+    let io = Error::Os {
+        code: ErrorCode::Io,
+        errno: Some(13),
+    };
+    assert_eq!(io.to_string(), "d2b state operation failed (Io, errno=13)");
+    assert!(format!("{io:?}").contains("errno: Some(13)"));
     let path = RelativePath::from_components(["realm", "private"]).unwrap();
     assert_eq!(format!("{path:?}"), "RelativePath([redacted])");
 }

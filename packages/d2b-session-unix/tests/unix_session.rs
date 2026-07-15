@@ -9,7 +9,7 @@ use d2b_session::{
     AttachmentPayload, AttachmentValidationError, HandshakeCredentials, OwnedAttachment,
     OwnedTransport, SessionEngine, SessionEvent, TransportPacket,
 };
-use d2b_unix_session::{
+use d2b_session_unix::{
     AncillaryCapacity, CreditPool, CreditScopeSet, DescriptorPolicy, ObjectIdentity,
     OutboundPacket, OwnedUnixAttachment, PeerIdentityPolicy, PidfdEvidence, PidfdIdentityPolicy,
     PidfdInfoSource, ProcPidfdIdentityVerifier, ProcSelfFdInfoSource, ProcessCreditLimit,
@@ -216,8 +216,8 @@ fn staged_credit_reservations_release_once_at_each_scope() {
     );
     credits.acquire_dispatch(&set, 1).unwrap();
     assert!(pools.iter().all(|pool| pool.used() == 1));
-    credits.release(d2b_unix_session::CreditScope::Packet);
-    credits.release(d2b_unix_session::CreditScope::Packet);
+    credits.release(d2b_session_unix::CreditScope::Packet);
+    credits.release(d2b_session_unix::CreditScope::Packet);
     assert_eq!(pools[0].used(), 0);
     assert!(pools[1..].iter().all(|pool| pool.used() == 1));
     drop(credits);
@@ -335,7 +335,7 @@ async fn seqpacket_transfer_is_atomic_cloexec_and_object_exact() {
             &receiver_scopes,
         )
         .unwrap();
-    let d2b_unix_session::AcceptedAttachment::File(received_fd) = &verified.attachments()[0] else {
+    let d2b_session_unix::AcceptedAttachment::File(received_fd) = &verified.attachments()[0] else {
         panic!("expected file");
     };
     assert!(fcntl_getfd(received_fd).unwrap().contains(FdFlags::CLOEXEC));

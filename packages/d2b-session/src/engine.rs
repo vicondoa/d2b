@@ -17,7 +17,8 @@ use crate::{
     Cancellation, FairScheduler, Fragment, Fragmenter, HandshakeCredentials, HandshakeRole,
     KeepaliveAction, NamedStreamMux, NoiseHandshake, OutboundFrame, OwnedAttachment,
     OwnedTransport, QueueClass, Reassembler, RecordProtector, Result, SessionError,
-    SessionLifecycle, StreamEvent, StreamId, TransportPacket, encode_offer, negotiate_offer,
+    SessionLifecycle, StreamEvent, StreamId, StreamPhase, TransportPacket, encode_offer,
+    negotiate_offer,
 };
 
 const ATTACHMENT_BATCH: u8 = 1;
@@ -417,14 +418,18 @@ impl<T: OwnedTransport> SessionEngine<T> {
     }
 
     pub async fn close_named_stream(&mut self, stream: StreamId) -> Result<()> {
-        self.streams.close_local(stream)?;
+        let phase = self.streams.close_local(stream)?;
         self.send_logical(
             RecordKind::SessionControl,
             ChannelId::SESSION_CONTROL,
             encode_stream_control(STREAM_CLOSE, stream, 0),
             Vec::new(),
         )
-        .await
+        .await?;
+        if phase == StreamPhase::Closed {
+            self.remove_terminal_stream(stream);
+        }
+        Ok(())
     }
 
     pub async fn reset_named_stream(&mut self, stream: StreamId) -> Result<()> {
@@ -437,7 +442,9 @@ impl<T: OwnedTransport> SessionEngine<T> {
             encode_stream_control(STREAM_RESET, stream, 0),
             Vec::new(),
         )
-        .await
+        .await?;
+        self.remove_terminal_stream(stream);
+        Ok(())
     }
 
     pub async fn send_attachments(&mut self, mut attachments: Vec<OwnedAttachment>) -> Result<()> {
@@ -761,9 +768,11 @@ impl<T: OwnedTransport> SessionEngine<T> {
     fn receive_stream_control(&mut self, payload: &[u8]) -> Result<SessionEvent> {
         let (kind, stream, value) = decode_stream_control(payload)?;
         match kind {
-            STREAM_CLOSE => Ok(SessionEvent::NamedStream(
-                self.streams.receive_close(stream)?,
-            )),
+            STREAM_CLOSE => {
+                let event = self.streams.receive_close(stream)?;
+                self.remove_terminal_stream(stream);
+                Ok(SessionEvent::NamedStream(event))
+            }
             STREAM_CREDIT => {
                 self.streams.grant_send_credit(stream, value)?;
                 Ok(SessionEvent::ControlProcessed)
@@ -771,9 +780,20 @@ impl<T: OwnedTransport> SessionEngine<T> {
             STREAM_RESET => {
                 self.scheduler.remove_stream(stream);
                 self.withheld_stream_credits.remove(&stream);
-                Ok(SessionEvent::NamedStream(self.streams.reset(stream)?))
+                let event = self.streams.reset(stream)?;
+                self.remove_terminal_stream(stream);
+                Ok(SessionEvent::NamedStream(event))
             }
             _ => Err(SessionError::new(SessionErrorCode::UnknownControl)),
+        }
+    }
+
+    fn remove_terminal_stream(&mut self, stream: StreamId) {
+        if self.streams.remove_terminal(stream) {
+            self.scheduler.remove_stream(stream);
+            self.withheld_stream_credits.remove(&stream);
+            self.reassemblers
+                .remove(&(RecordKind::NamedStream, stream.channel()));
         }
     }
 

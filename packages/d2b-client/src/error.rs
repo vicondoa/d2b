@@ -24,6 +24,34 @@ pub enum RetryClass {
     Observe,
 }
 
+impl RemoteErrorKind {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::InvalidRequest => "invalid-request",
+            Self::Unauthorized => "unauthorized",
+            Self::Forbidden => "forbidden",
+            Self::NotFound => "not-found",
+            Self::Conflict => "conflict",
+            Self::ResourceExhausted => "resource-exhausted",
+            Self::Unavailable => "unavailable",
+            Self::DeadlineExceeded => "deadline-exceeded",
+            Self::Cancelled => "cancelled",
+            Self::FailedPrecondition => "failed-precondition",
+            Self::Internal => "internal",
+        }
+    }
+}
+
+impl RetryClass {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Never => "never",
+            Self::Safe => "safe",
+            Self::Observe => "observe",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientError {
     InvalidTarget,
@@ -81,7 +109,14 @@ impl fmt::Display for ClientError {
             Self::StreamLimitExceeded => "client-stream-limit-exceeded",
             Self::StreamDetached => "client-stream-detached",
             Self::StreamClosed => "client-stream-closed",
-            Self::Remote { .. } => "client-remote-error",
+            Self::Remote { kind, retry } => {
+                return write!(
+                    formatter,
+                    "client-remote-{}-retry-{}",
+                    kind.as_str(),
+                    retry.as_str()
+                );
+            }
         };
         formatter.write_str(message)
     }

@@ -11,8 +11,15 @@ const V2_FOUNDATION_CRATES: &[&str] = &[
     "d2b-provider",
     "d2b-provider-toolkit",
     "d2b-session",
+    "d2b-session-unix",
     "d2b-state",
-    "d2b-unix-session",
+];
+const IMPLEMENTATION_CRATES: &[&str] = &[
+    "d2b-provider-aca",
+    "d2b-provider-host",
+    "d2b-provider-relay",
+    "d2b-realm-codec-protobuf",
+    "d2b-session-unix",
 ];
 
 fn repo_root() -> PathBuf {
@@ -65,6 +72,40 @@ fn workspace_names_contract_crate_by_role() {
     assert!(
         manifest.contains(&format!("name = \"{CONTRACTS_CRATE}\"")),
         "contract crate manifest must use the role-based package name"
+    );
+}
+
+#[test]
+fn implementation_crates_are_base_first_and_workspace_members_are_sorted() {
+    let workspace = read_repo_file("packages/Cargo.toml");
+    for package in IMPLEMENTATION_CRATES {
+        assert!(
+            workspace.contains(&format!("\"{package}\"")),
+            "workspace must contain base-first implementation crate {package}"
+        );
+    }
+    for forbidden in ["d2b-host-providers", "d2b-unix-session"] {
+        assert!(
+            !workspace.contains(forbidden),
+            "workspace must not contain implementation-before-base crate {forbidden}"
+        );
+    }
+
+    let members = workspace
+        .split_once("members = [")
+        .and_then(|(_, rest)| rest.split_once(']'))
+        .map(|(members, _)| members)
+        .expect("workspace members array");
+    let actual = members
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix('"'))
+        .filter_map(|line| line.strip_suffix("\","))
+        .collect::<Vec<_>>();
+    let mut sorted = actual.clone();
+    sorted.sort_unstable();
+    assert_eq!(
+        actual, sorted,
+        "workspace members must remain alphanumerically sorted"
     );
 }
 

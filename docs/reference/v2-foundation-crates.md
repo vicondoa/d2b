@@ -6,7 +6,7 @@ six are versioned with the workspace, use the workspace lockfile, set
 
 | Crate | Role | Optional host feature |
 | --- | --- | --- |
-| `d2b-unix-session` | Linux Unix stream/seqpacket, peer identity, ancillary data, descriptor validation, and attachment credits | `host-socket` |
+| `d2b-session-unix` | Linux Unix stream/seqpacket, peer identity, ancillary data, descriptor validation, and attachment credits | `host-socket` |
 | `d2b-session` | Portable authenticated ComponentSession handshake, record, lifecycle, cancellation, and named-stream runtime | none |
 | `d2b-provider` | Provider traits, registry generations, operation admission, lifecycle, and authenticated RPC proxy | none |
 | `d2b-provider-toolkit` | Provider-agent adapter, exact registration, fixtures, redaction, and shared conformance | none |
@@ -65,16 +65,19 @@ descriptor batch before binding and invoking object-specific validation.
 `SessionEngine` drives handshake, protected records, control RPC, cancellation,
 attachments, lifecycle, and named streams through one owned transport.
 `SessionDriverHandle` is the clonable object-safe seam consumed by clients and
-provider-agent servers. `begin_invoke` registers an outbound request before
-returning a `PendingInvocation`, so a later cancellation cannot overtake work
-that has not entered the session driver. Logical named-stream messages remain
-bounded at 1 MiB and are fragmented, scheduled, and reassembled internally
-under a 256 KiB credit window. Final-fragment credit remains withheld until the
-application consumes the logical message and explicitly grants its length; the
-driver maps that grant to the exact withheld transport bytes. The canonical
-client owns one session-level receive dispatcher and routes events into
-byte-bounded per-stream queues under the 4 MiB aggregate session limit, so
-concurrent streams cannot consume or discard each other's events.
+provider-agent servers. Outbound ttrpc requests are registered and sent through
+`start_ttrpc`, while raw responses are received separately and correlated by
+the ttrpc adapter before `complete_ttrpc` retires request state. The portable
+session layer never guesses response ordering or parses ttrpc headers. Logical
+named-stream messages remain bounded at 1 MiB and are fragmented, scheduled,
+and reassembled internally under a 256 KiB credit window. Final-fragment credit
+remains withheld until the application consumes the logical message and
+explicitly grants its length; the driver maps that grant to the exact withheld
+transport bytes. Terminal stream state is removed after reset or two-sided
+close. The canonical client owns one session-level receive dispatcher and
+routes events into byte-bounded per-stream queues under the 4 MiB aggregate
+session limit, so concurrent streams cannot consume or discard each other's
+events.
 
 ## State invariants
 
@@ -115,10 +118,10 @@ Response outcomes, remote errors, attachment indexes, cancellation, and
 named-stream transitions are validated before being exposed to a caller. The
 local ttrpc bridge multiplexes registered invocations, continues admitting
 cancellation when normal work is saturated, serializes response writes, and
-returns closed per-request status errors without tearing down unrelated calls.
-Debug and error output omits target values, endpoints, payloads, credentials,
-and attachment contents while retaining closed contract, session, and errno
-diagnostics.
+correlates out-of-order response frames by ttrpc stream id without tearing down
+unrelated calls. Debug and error output omits target values, endpoints,
+payloads, credentials, and attachment contents while retaining closed contract,
+session, remote-kind/retry, and errno diagnostics.
 
 These crates provide foundations, not compatibility adapters. Concrete
 first-party providers and control-plane service migration are separate runtime

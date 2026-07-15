@@ -50,6 +50,10 @@ deprecations ship one minor release before removal.
 - Unified all maintained host and guest Rust crates at version 2.0.0 under one
   workspace, toolchain policy, dependency graph, and canonical lockfile while
   retaining focused broker feature and static guest validation.
+- Standardized common-API implementation crates on sortable
+  `<base>-<implementation>` names, including `d2b-provider-host` and
+  `d2b-session-unix`, and made the workspace member inventory
+  alphanumerically ordered.
 - Kept sccache enabled throughout generated CI and persisted its local cache
   without exposing cache-service credentials to compiled code.
 - Replaced the unavailable GitHub stack preview dependency with locked Git
@@ -83,8 +87,10 @@ deprecations ship one minor release before removal.
   authenticated two-phase descriptor binding, phase-aware peer credentials,
   canonical provider-agent serving, lock-bound state generations, and bounded
   application-gated logical streams, cancellation-safe async kernel adapters,
-  framed Unix streams, transport-scoped routing, concurrent ttrpc and named
-  stream demultiplexing, transfer-safe OFD locks, and race-free provider drain.
+  framed Unix streams, transport-scoped routing, adapter-owned out-of-order
+  ttrpc correlation, terminal stream cleanup, concurrent named-stream
+  demultiplexing, actionable closed error context, transfer-safe OFD locks, and
+  race-free provider drain.
 - Closed W2 service-contract ambiguity by making provider capability claims
   method-exact, binding response attachments and streams, rejecting mixed
   identity scopes and contradictory error outcomes, returning exact typed
@@ -503,7 +509,7 @@ deprecations ship one minor release before removal.
   `d2b-constellation-router` (the codec-neutral operation router +
   single-owner idempotency/dedup store keyed by the full operation
   namespace), `d2b-daemon-access` (the transport-neutral CLI↔daemon
-  semantic API with its current local-Unix binding), `d2b-host-providers`
+  semantic API with its current local-Unix binding), `d2b-provider-host`
   (byte-identical local adapters over the existing Cloud Hypervisor and
   cross-domain Wayland argv generators), plus compile-only constellation
   peer-module skeletons inside `d2bd`. These crates are the foundation

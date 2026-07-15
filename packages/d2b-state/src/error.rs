@@ -108,15 +108,27 @@ impl Error {
 
 impl fmt::Debug for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("StateError")
-            .field("code", &self.code())
-            .finish_non_exhaustive()
+        let mut debug = f.debug_struct("StateError");
+        debug.field("code", &self.code());
+        if let Self::Os { errno, .. } = self {
+            debug.field("errno", errno);
+        }
+        debug.finish_non_exhaustive()
     }
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "d2b state operation failed ({:?})", self.code())
+        match self {
+            Self::Os {
+                errno: Some(errno), ..
+            } => write!(
+                f,
+                "d2b state operation failed ({:?}, errno={errno})",
+                self.code()
+            ),
+            _ => write!(f, "d2b state operation failed ({:?})", self.code()),
+        }
     }
 }
 

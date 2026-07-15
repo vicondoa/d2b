@@ -198,6 +198,35 @@ fn operation(descriptor: &ProviderDescriptor) -> ProviderOperationContext {
 }
 
 #[test]
+fn closed_error_context_is_actionable_without_identity_leaks() {
+    let contract = RegistryBuildError::Contract(
+        d2b_contracts::v2_provider::ProviderContractError::InvalidGeneration,
+    );
+    assert_eq!(
+        contract.to_string(),
+        "provider contract validation failed (invalid provider generation)"
+    );
+    assert!(std::error::Error::source(&contract).is_some());
+
+    let descriptor = descriptor('a', 1, 1);
+    let operation = operation(&descriptor);
+    let context = ProviderCallContext {
+        operation: &operation,
+        peer_role: EndpointRole::RealmController,
+        service: ServicePackage::ProviderV2,
+        monotonic_deadline_remaining_ms: 1,
+        cancelled: false,
+    };
+    let error = ProviderRuntimeError::from(denied(&context));
+    let display = error.to_string();
+    assert!(display.contains("Unavailable"));
+    assert!(display.contains("retry=Never"));
+    assert!(display.contains("type=Runtime"));
+    assert!(!display.contains("correlation-test"));
+    assert!(!display.contains("operation-test"));
+}
+
+#[test]
 fn all_provider_traits_are_object_safe() {
     fn provider(_: Option<&dyn Provider>) {}
     fn runtime(_: Option<&dyn RuntimeProvider>) {}
