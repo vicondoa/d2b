@@ -257,13 +257,10 @@ case "$("$RUSTC" --version)" in
     exit 1
     ;;
 esac
-case "$("$CLIPPY_DRIVER" --version)" in
-  *"$pinned_channel"*) ;;
-  *)
-    fail "CLIPPY_DRIVER does not match packages/rust-toolchain.toml channel $pinned_channel"
-    exit 1
-    ;;
-esac
+if [ "$("$CLIPPY_DRIVER" -vV)" != "$("$RUSTC" -vV)" ]; then
+  fail "CLIPPY_DRIVER does not match the pinned RUSTC executable"
+  exit 1
+fi
 
 # The privileged broker has three independent feature
 # passes (default, layer1-bootstrap, fake-backends), each on its OWN target dir.

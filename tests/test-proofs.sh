@@ -76,13 +76,10 @@ proof_clippy_driver=$(type -P clippy-driver)
   fail "pinned rustc/rustdoc/clippy-driver executables are unavailable"
   exit 1
 }
-case "$("$proof_clippy_driver" --version)" in
-  *"$pinned_channel"*) ;;
-  *)
-    fail "clippy-driver does not match pinned Rust channel $pinned_channel"
-    exit 1
-    ;;
-esac
+if [ "$("$proof_clippy_driver" -vV)" != "$("$proof_rustc" -vV)" ]; then
+  fail "clippy-driver does not match pinned rustc"
+  exit 1
+fi
 
 rc=0
 for proof in chunked-stdio-conformance w0-ch-connect-proof; do
