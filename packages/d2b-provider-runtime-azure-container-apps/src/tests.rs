@@ -3,7 +3,7 @@ use std::{
     fmt,
     sync::{
         Arc, Mutex, MutexGuard,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -23,13 +23,44 @@ use d2b_contracts::{
         SourceVersion,
     },
 };
-use d2b_provider::{FactoryError, ProviderFactory, ProviderInstance, ProviderRegistryBuilder};
+use d2b_provider::{
+    FactoryError, ProviderClock, ProviderFactory, ProviderInstance, ProviderRegistryBuilder,
+};
 use d2b_provider_toolkit::{DeterministicClock, Fixture, Secret};
 
 use super::*;
 
 const NOW_UNIX_MS: u64 = 1_700_000_000_000;
 const SECRET_CANARY: &str = "aca-private-token-canary-do-not-emit";
+
+struct JumpOnCallClock {
+    before_unix_ms: u64,
+    after_unix_ms: u64,
+    jump_on_call: usize,
+    calls: AtomicUsize,
+}
+
+impl JumpOnCallClock {
+    fn new(before_unix_ms: u64, after_unix_ms: u64, jump_on_call: usize) -> Self {
+        Self {
+            before_unix_ms,
+            after_unix_ms,
+            jump_on_call,
+            calls: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl ProviderClock for JumpOnCallClock {
+    fn now_unix_ms(&self) -> u64 {
+        let call = self.calls.fetch_add(1, Ordering::AcqRel) + 1;
+        if call >= self.jump_on_call {
+            self.after_unix_ms
+        } else {
+            self.before_unix_ms
+        }
+    }
+}
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
@@ -68,6 +99,10 @@ impl PrivateCredentialVault {
     fn revoke(&mut self, lease: &AcaCredentialLease) -> bool {
         self.active_leases.remove(&lease.metadata().lease_id)
     }
+
+    fn active_lease_count(&self) -> usize {
+        self.active_leases.len()
+    }
 }
 
 impl fmt::Debug for PrivateCredentialVault {
@@ -86,6 +121,9 @@ struct FakeCredentialClient {
     vault: Arc<Mutex<PrivateCredentialVault>>,
     acquisitions: AtomicUsize,
     revocations: AtomicUsize,
+    completed_revocations: AtomicUsize,
+    cancelled_revocations: AtomicUsize,
+    stall_revoke_once: AtomicBool,
     purposes: Mutex<Vec<AcaCredentialPurpose>>,
     fail_once: Mutex<Option<AcaControlError>>,
     revoke_fail_once: Mutex<Option<AcaControlError>>,
@@ -102,6 +140,9 @@ impl FakeCredentialClient {
             vault,
             acquisitions: AtomicUsize::new(0),
             revocations: AtomicUsize::new(0),
+            completed_revocations: AtomicUsize::new(0),
+            cancelled_revocations: AtomicUsize::new(0),
+            stall_revoke_once: AtomicBool::new(false),
             purposes: Mutex::new(Vec::new()),
             fail_once: Mutex::new(None),
             revoke_fail_once: Mutex::new(None),
@@ -117,6 +158,18 @@ impl FakeCredentialClient {
         self.revocations.load(Ordering::Acquire)
     }
 
+    fn completed_revocation_count(&self) -> usize {
+        self.completed_revocations.load(Ordering::Acquire)
+    }
+
+    fn cancelled_revocation_count(&self) -> usize {
+        self.cancelled_revocations.load(Ordering::Acquire)
+    }
+
+    fn stall_next_revoke(&self) {
+        self.stall_revoke_once.store(true, Ordering::Release);
+    }
+
     fn fail_next(&self, error: AcaControlError) {
         *lock(&self.fail_once) = Some(error);
     }
@@ -127,6 +180,19 @@ impl FakeCredentialClient {
 
     fn last_metadata(&self) -> Option<CredentialLease> {
         lock(&self.last_metadata).clone()
+    }
+}
+
+struct InFlightRevoke<'a> {
+    cancelled_revocations: &'a AtomicUsize,
+    completed: bool,
+}
+
+impl Drop for InFlightRevoke<'_> {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.cancelled_revocations.fetch_add(1, Ordering::AcqRel);
+        }
     }
 }
 
@@ -194,17 +260,26 @@ impl AcaCredentialLeaseClient for FakeCredentialClient {
         Ok(AcaCredentialLease::from_canonical(metadata))
     }
 
-    async fn revoke(&self, lease: AcaCredentialLease) -> Result<(), AcaControlError> {
+    async fn revoke(&self, lease: &AcaCredentialLease) -> Result<(), AcaControlError> {
         self.revocations.fetch_add(1, Ordering::AcqRel);
         if let Some(error) = lock(&self.revoke_fail_once).take() {
             return Err(error);
         }
-        if !lock(&self.vault).revoke(&lease) {
+        if self.stall_revoke_once.swap(false, Ordering::AcqRel) {
+            let mut in_flight = InFlightRevoke {
+                cancelled_revocations: &self.cancelled_revocations,
+                completed: false,
+            };
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            in_flight.completed = true;
+        }
+        if !lock(&self.vault).revoke(lease) {
             return Err(AcaControlError::closed(
                 AcaControlErrorKind::InvalidResponse,
                 AcaDiagnosticCode::InvalidResponse,
             ));
         }
+        self.completed_revocations.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
 }
@@ -626,6 +701,20 @@ impl Harness {
         AzureContainerAppsRuntimeProviderFactory::with_clock(
             vec![self.factory_binding()],
             Arc::new(DeterministicClock::new(NOW_UNIX_MS)),
+        )
+        .unwrap()
+    }
+
+    fn provider_with_clock(
+        &self,
+        clock: Arc<dyn ProviderClock>,
+    ) -> AzureContainerAppsRuntimeProvider {
+        AzureContainerAppsRuntimeProvider::with_clock(
+            self.fixture.descriptor.clone(),
+            self.configuration.clone(),
+            self.credential.clone(),
+            self.control.clone(),
+            clock,
         )
         .unwrap()
     }
@@ -1332,6 +1421,47 @@ async fn external_budget_is_the_minimum_of_wall_and_monotonic_deadlines() {
 }
 
 #[tokio::test]
+async fn forward_clock_jumps_fail_before_credential_and_control_effects() {
+    let credential_jump = Harness::container_image();
+    let credential_request =
+        credential_jump.request(ProviderMethod::RuntimeInspect, "credential-clock-jump");
+    let credential_clock = Arc::new(JumpOnCallClock::new(
+        NOW_UNIX_MS,
+        credential_request.context.expires_at_unix_ms,
+        5,
+    ));
+    let credential_provider = credential_jump.provider_with_clock(credential_clock);
+    let credential_context =
+        credential_jump.call_context(&credential_request.context, 1_000, false);
+    let failure = credential_provider
+        .inspect(&credential_context, &credential_request)
+        .await
+        .unwrap_err();
+    assert_eq!(failure.kind, ProviderFailureKind::DeadlineExpired);
+    assert_eq!(credential_jump.credential.acquisition_count(), 0);
+    assert!(credential_jump.control.calls().is_empty());
+
+    let control_jump = Harness::configured_disk();
+    let control_request =
+        control_jump.request(ProviderMethod::RuntimeInspect, "control-clock-jump");
+    let control_clock = Arc::new(JumpOnCallClock::new(
+        NOW_UNIX_MS,
+        control_request.context.expires_at_unix_ms,
+        8,
+    ));
+    let control_provider = control_jump.provider_with_clock(control_clock);
+    let control_context = control_jump.call_context(&control_request.context, 1_000, false);
+    let failure = control_provider
+        .inspect(&control_context, &control_request)
+        .await
+        .unwrap_err();
+    assert_eq!(failure.kind, ProviderFailureKind::DeadlineExpired);
+    assert_eq!(control_jump.credential.acquisition_count(), 1);
+    assert_eq!(control_jump.credential.revocation_count(), 1);
+    assert!(control_jump.control.calls().is_empty());
+}
+
+#[tokio::test]
 async fn dropping_an_in_flight_call_revokes_the_opaque_lease_once() {
     let harness = Harness::container_image();
     harness.control.stall_next(ControlCall::FindSandboxes);
@@ -1360,6 +1490,43 @@ async fn dropping_an_in_flight_call_revokes_the_opaque_lease_once() {
     .unwrap();
     tokio::task::yield_now().await;
     assert_eq!(harness.credential.revocation_count(), 1);
+}
+
+#[tokio::test]
+async fn dropping_mid_revoke_schedules_one_completion_with_lease_ownership() {
+    let harness = Harness::container_image();
+    harness.control.fail_next(
+        ControlCall::FindSandboxes,
+        AcaControlError::closed(AcaControlErrorKind::Unavailable, AcaDiagnosticCode::Unknown),
+    );
+    harness.credential.stall_next_revoke();
+    let request = harness.request(ProviderMethod::RuntimeInspect, "drop-mid-revoke");
+    let context = harness.call_context(&request.context, 1_000, false);
+    let mut call = harness.provider.inspect(&context, &request);
+
+    tokio::select! {
+        result = &mut call => panic!("provider call completed before revoke drop: {result:?}"),
+        () = async {
+            while harness.credential.revocation_count() == 0 {
+                tokio::task::yield_now().await;
+            }
+        } => {}
+    }
+    assert_eq!(harness.credential.revocation_count(), 1);
+    assert_eq!(harness.credential.completed_revocation_count(), 0);
+    drop(call);
+
+    tokio::time::timeout(Duration::from_millis(100), async {
+        while harness.credential.completed_revocation_count() == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(harness.credential.cancelled_revocation_count(), 1);
+    assert_eq!(harness.credential.revocation_count(), 2);
+    assert_eq!(harness.credential.completed_revocation_count(), 1);
+    assert_eq!(lock(&harness.vault).active_lease_count(), 0);
 }
 
 #[tokio::test]

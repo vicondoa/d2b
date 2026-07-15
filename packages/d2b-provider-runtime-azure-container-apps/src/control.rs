@@ -149,7 +149,7 @@ pub trait AcaCredentialLeaseClient: Send + Sync {
     ) -> Result<AcaCredentialLease, AcaControlError>;
 
     /// Idempotently revokes or abandons only the supplied opaque lease.
-    async fn revoke(&self, lease: AcaCredentialLease) -> Result<(), AcaControlError>;
+    async fn revoke(&self, lease: &AcaCredentialLease) -> Result<(), AcaControlError>;
 }
 
 #[derive(Clone, PartialEq, Eq)]

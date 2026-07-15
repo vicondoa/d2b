@@ -190,11 +190,6 @@ impl CallDeadline {
     fn remaining(&self) -> Option<Duration> {
         self.at.checked_duration_since(Instant::now())
     }
-
-    fn remaining_ms(&self) -> Option<u32> {
-        let remaining_ms = self.remaining()?.as_millis();
-        (remaining_ms > 0).then(|| remaining_ms.min(u128::from(u32::MAX)) as u32)
-    }
 }
 
 struct ActiveCredentialLease {
@@ -217,7 +212,7 @@ impl ActiveCredentialLease {
     }
 
     async fn revoke(mut self) -> Result<(), ()> {
-        let Some(lease) = self.lease.take() else {
+        let Some(lease) = self.lease.as_ref() else {
             return Err(());
         };
         match timeout(
@@ -226,8 +221,15 @@ impl ActiveCredentialLease {
         )
         .await
         {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(_)) | Err(_) => Err(()),
+            Ok(Ok(())) => {
+                self.lease.take();
+                Ok(())
+            }
+            Ok(Err(_)) => {
+                self.lease.take();
+                Err(())
+            }
+            Err(_) => Err(()),
         }
     }
 }
@@ -252,7 +254,7 @@ impl Drop for ActiveCredentialLease {
         let _cleanup = runtime.spawn(async move {
             let _ = timeout(
                 Duration::from_millis(u64::from(MAX_ACA_LEASE_CLEANUP_MS)),
-                client.revoke(lease),
+                client.revoke(&lease),
             )
             .await;
         });
@@ -527,6 +529,39 @@ impl AzureContainerAppsRuntimeProvider {
                 ProviderRemediation::RetryBounded,
             )
         }
+    }
+
+    fn effective_remaining(
+        &self,
+        deadline: &CallDeadline,
+        operation: &ProviderOperationContext,
+        mutation_started: bool,
+    ) -> ProviderResult<Duration> {
+        let monotonic_remaining = deadline
+            .remaining()
+            .ok_or_else(|| self.deadline_failure(operation, mutation_started))?;
+        let wall_remaining_ms = operation.expires_at_unix_ms.saturating_sub(self.now());
+        if wall_remaining_ms == 0 {
+            return Err(self.deadline_failure(operation, mutation_started));
+        }
+        let effective = monotonic_remaining.min(Duration::from_millis(wall_remaining_ms));
+        if effective.as_millis() == 0 {
+            Err(self.deadline_failure(operation, mutation_started))
+        } else {
+            Ok(effective)
+        }
+    }
+
+    fn effective_remaining_ms(
+        &self,
+        deadline: &CallDeadline,
+        operation: &ProviderOperationContext,
+        mutation_started: bool,
+    ) -> ProviderResult<u32> {
+        let remaining_ms = self
+            .effective_remaining(deadline, operation, mutation_started)?
+            .as_millis();
+        Ok(remaining_ms.min(u128::from(u32::MAX)) as u32)
     }
 
     fn lease_cleanup_ambiguous_failure(
@@ -819,15 +854,10 @@ impl AzureContainerAppsRuntimeProvider {
         mutation_started: bool,
         future: impl Future<Output = Result<T, AcaControlError>>,
     ) -> ProviderResult<T> {
-        let Some(remaining) = deadline.remaining() else {
-            return Err(self.deadline_failure(operation, mutation_started));
-        };
-        match timeout_at(deadline.at, future).await {
+        let remaining = self.effective_remaining(deadline, operation, mutation_started)?;
+        match timeout(remaining, future).await {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(error)) => Err(self.control_failure(operation, error, mutation_started)),
-            Err(_) if remaining.is_zero() => {
-                Err(self.deadline_failure(operation, mutation_started))
-            }
             Err(_) => Err(self.deadline_failure(operation, mutation_started)),
         }
     }
@@ -908,9 +938,7 @@ impl AzureContainerAppsRuntimeProvider {
         purpose: AcaCredentialPurpose,
     ) -> ProviderResult<ActiveCredentialLease> {
         let now = self.now();
-        let effective_remaining_ms = deadline
-            .remaining_ms()
-            .ok_or_else(|| self.deadline_failure(operation, false))?;
+        let effective_remaining_ms = self.effective_remaining_ms(deadline, operation, false)?;
         let requested_expiry_unix_ms = operation
             .expires_at_unix_ms
             .min(
@@ -966,6 +994,7 @@ impl AzureContainerAppsRuntimeProvider {
         operation: &ProviderOperationContext,
         lease: &AcaCredentialLease,
         operation_class: SdkOperationClass,
+        mutation_started: bool,
     ) -> ProviderResult<AcaControlContext> {
         if !lease
             .metadata()
@@ -980,9 +1009,7 @@ impl AzureContainerAppsRuntimeProvider {
                 ProviderRemediation::ReEnrollPeer,
             ));
         }
-        let remaining_ms = deadline
-            .remaining_ms()
-            .ok_or_else(|| self.deadline_failure(operation, false))?;
+        let remaining_ms = self.effective_remaining_ms(deadline, operation, mutation_started)?;
         Ok(AcaControlContext::new(
             operation.binding(),
             operation.method,
@@ -1130,8 +1157,13 @@ impl AzureContainerAppsRuntimeProvider {
         query: &AcaWorkloadQuery,
         mutation_started: bool,
     ) -> ProviderResult<crate::types::AcaSandboxCandidates> {
-        let control_context =
-            self.control_context(deadline, operation, lease, SdkOperationClass::Discover)?;
+        let control_context = self.control_context(
+            deadline,
+            operation,
+            lease,
+            SdkOperationClass::Discover,
+            mutation_started,
+        )?;
         self.await_external(
             deadline,
             operation,
@@ -1386,8 +1418,13 @@ impl AzureContainerAppsRuntimeProvider {
     ) -> ProviderResult<AcaDiskImageRecord> {
         let record = match desired.source() {
             AcaDiskImageSource::ConfiguredDisk { .. } => {
-                let control_context =
-                    self.control_context(deadline, operation, lease, SdkOperationClass::Read)?;
+                let control_context = self.control_context(
+                    deadline,
+                    operation,
+                    lease,
+                    SdkOperationClass::Read,
+                    false,
+                )?;
                 self.await_external(
                     deadline,
                     operation,
@@ -1398,8 +1435,13 @@ impl AzureContainerAppsRuntimeProvider {
                 .await?
             }
             AcaDiskImageSource::ConfiguredContainerImage { .. } => {
-                let discover_context =
-                    self.control_context(deadline, operation, lease, SdkOperationClass::Discover)?;
+                let discover_context = self.control_context(
+                    deadline,
+                    operation,
+                    lease,
+                    SdkOperationClass::Discover,
+                    false,
+                )?;
                 let candidates = self
                     .await_external(
                         deadline,
@@ -1416,6 +1458,7 @@ impl AzureContainerAppsRuntimeProvider {
                             operation,
                             lease,
                             SdkOperationClass::Create,
+                            true,
                         )?;
                         self.await_external(
                             deadline,
@@ -1538,6 +1581,7 @@ impl AzureContainerAppsRuntimeProvider {
                         context.operation,
                         &lease,
                         SdkOperationClass::Create,
+                        true,
                     )?;
                     let created = self
                         .await_external(
@@ -1714,6 +1758,7 @@ impl AzureContainerAppsRuntimeProvider {
                     context.operation,
                     &lease,
                     SdkOperationClass::Power,
+                    true,
                 )?;
                 let resumed = self
                     .await_external(
@@ -1830,6 +1875,7 @@ impl AzureContainerAppsRuntimeProvider {
                     context.operation,
                     &lease,
                     SdkOperationClass::Power,
+                    true,
                 )?;
                 record = self
                     .await_external(
@@ -2079,6 +2125,7 @@ impl AzureContainerAppsRuntimeProvider {
                         context.operation,
                         &lease,
                         SdkOperationClass::Delete,
+                        true,
                     )?;
                     match self
                         .await_external(
@@ -2134,6 +2181,7 @@ impl Provider for AzureContainerAppsRuntimeProvider {
                     context.operation,
                     &lease,
                     SdkOperationClass::Read,
+                    false,
                 )?;
                 let health = self
                     .await_external(
