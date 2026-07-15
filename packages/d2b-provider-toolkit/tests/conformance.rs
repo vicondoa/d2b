@@ -29,8 +29,8 @@ use d2b_provider_toolkit::{
 };
 use d2b_session::{
     AttachmentPayload, AttachmentValidationError, Cancellation, ComponentSessionDriver,
-    OwnedAttachment, RequestRegistry, SessionDriverHandle, SessionError, SessionEvent, StreamEvent,
-    StreamId,
+    OwnedAttachment, PendingInvocation, RequestRegistry, SessionDriverHandle, SessionError,
+    SessionEvent, StreamEvent, StreamId,
 };
 use protobuf::{EnumOrUnknown, MessageField};
 use tokio::sync::Notify;
@@ -307,7 +307,11 @@ impl ComponentSessionDriver for FakeSessionDriver {
             .unwrap_or_else(|error| error.into_inner())
     }
 
-    async fn invoke(&self, _: RequestId, _: Vec<u8>) -> d2b_session::Result<Vec<u8>> {
+    async fn begin_invoke(
+        &self,
+        _: RequestId,
+        _: Vec<u8>,
+    ) -> d2b_session::Result<PendingInvocation> {
         Err(unsupported_session_operation())
     }
 

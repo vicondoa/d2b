@@ -22,10 +22,11 @@ use d2b_contracts::{
         ProviderPlan, ProviderTarget, RetryClass,
     },
     v2_services::{
-        StrictWireMessage, common, provider_audio_ttrpc, provider_credential_ttrpc,
-        provider_device_ttrpc, provider_display_ttrpc, provider_infrastructure_ttrpc,
-        provider_network_ttrpc, provider_observability_ttrpc, provider_runtime_ttrpc,
-        provider_storage_ttrpc, provider_substrate_ttrpc, provider_transport_ttrpc, provider_type,
+        ServiceContractError, StrictWireMessage, common, provider_audio_ttrpc,
+        provider_credential_ttrpc, provider_device_ttrpc, provider_display_ttrpc,
+        provider_infrastructure_ttrpc, provider_network_ttrpc, provider_observability_ttrpc,
+        provider_runtime_ttrpc, provider_storage_ttrpc, provider_substrate_ttrpc,
+        provider_transport_ttrpc, provider_type,
     },
 };
 use d2b_provider::{
@@ -177,7 +178,7 @@ impl GeneratedProviderServiceServer {
         let _admission = self.admit_request()?;
         request
             .validate_wire(false)
-            .map_err(|_| rpc_status(ttrpc::Code::INVALID_ARGUMENT))?;
+            .map_err(invalid_request_contract)?;
         let wire_context = request
             .context
             .as_ref()
@@ -218,14 +219,14 @@ impl GeneratedProviderServiceServer {
                 wire.descriptor_digest =
                     decode_fingerprint(&self.descriptor.configured_scope_digest)?;
                 wire.validate_wire(false)
-                    .map_err(|_| rpc_status(ttrpc::Code::INTERNAL))?;
+                    .map_err(invalid_response_contract)?;
                 Ok(wire)
             }
             Ok(_) => Err(rpc_status(ttrpc::Code::INTERNAL)),
             Err(failure) => {
                 let wire = capability_failure(&failure);
                 wire.validate_wire(false)
-                    .map_err(|_| rpc_status(ttrpc::Code::INTERNAL))?;
+                    .map_err(invalid_response_contract)?;
                 Ok(wire)
             }
         }
@@ -252,7 +253,7 @@ impl GeneratedProviderServiceServer {
         let requires_idempotency = matches!(operation, RpcOperation::Method(method) if method_requires_idempotency(method));
         request
             .validate_wire(requires_idempotency)
-            .map_err(|_| rpc_status(ttrpc::Code::INVALID_ARGUMENT))?;
+            .map_err(invalid_request_contract)?;
         let wire_context = request
             .context
             .as_ref()
@@ -507,7 +508,7 @@ impl GeneratedProviderServiceServer {
                         );
                         response
                             .validate_wire(false)
-                            .map_err(|_| rpc_status(ttrpc::Code::INTERNAL))?;
+                            .map_err(invalid_response_contract)?;
                         return Ok(response);
                     }
                     MutationState::CompletionAmbiguous => common::Outcome::OUTCOME_DEGRADED,
@@ -532,13 +533,13 @@ impl GeneratedProviderServiceServer {
                 let response = failure_to_wire(request, &failure);
                 response
                     .validate_wire(false)
-                    .map_err(|_| rpc_status(ttrpc::Code::INTERNAL))?;
+                    .map_err(invalid_response_contract)?;
                 return Ok(response);
             }
         }
         wire.result_digest = decode_fingerprint(&self.descriptor.configuration_schema_fingerprint)?;
         wire.validate_wire(false)
-            .map_err(|_| rpc_status(ttrpc::Code::INTERNAL))?;
+            .map_err(invalid_response_contract)?;
         Ok(wire)
     }
 
@@ -1068,7 +1069,7 @@ fn alpha_hex(value: &[u8]) -> String {
 }
 
 fn session_error(error: SessionError) -> ttrpc::Error {
-    rpc_status(match error.code() {
+    let code = match error.code() {
         SessionErrorCode::GenerationMismatch => ttrpc::Code::FAILED_PRECONDITION,
         SessionErrorCode::DeadlineInvalid | SessionErrorCode::DeadlineExpired => {
             ttrpc::Code::DEADLINE_EXCEEDED
@@ -1079,11 +1080,34 @@ fn session_error(error: SessionError) -> ttrpc::Error {
         | SessionErrorCode::AttachmentAccessMismatch
         | SessionErrorCode::AttachmentMissingCloexec => ttrpc::Code::INVALID_ARGUMENT,
         _ => ttrpc::Code::UNAVAILABLE,
-    })
+    };
+    rpc_status_with_reason(code, error.code().as_str())
 }
 
 fn rpc_status(code: ttrpc::Code) -> ttrpc::Error {
-    ttrpc::Error::RpcStatus(ttrpc::get_status(code, "provider session request rejected"))
+    let reason = match code {
+        ttrpc::Code::INVALID_ARGUMENT => "provider request invalid",
+        ttrpc::Code::FAILED_PRECONDITION => "provider precondition failed",
+        ttrpc::Code::RESOURCE_EXHAUSTED => "provider resource limit exceeded",
+        ttrpc::Code::PERMISSION_DENIED => "provider authorization denied",
+        ttrpc::Code::DEADLINE_EXCEEDED => "provider request deadline exceeded",
+        ttrpc::Code::CANCELLED => "provider request cancelled",
+        ttrpc::Code::UNAVAILABLE => "provider unavailable",
+        _ => "provider internal invariant failed",
+    };
+    rpc_status_with_reason(code, reason)
+}
+
+fn invalid_request_contract(error: ServiceContractError) -> ttrpc::Error {
+    rpc_status_with_reason(ttrpc::Code::INVALID_ARGUMENT, error.to_string())
+}
+
+fn invalid_response_contract(error: ServiceContractError) -> ttrpc::Error {
+    rpc_status_with_reason(ttrpc::Code::INTERNAL, error.to_string())
+}
+
+fn rpc_status_with_reason(code: ttrpc::Code, reason: impl Into<String>) -> ttrpc::Error {
+    ttrpc::Error::RpcStatus(ttrpc::get_status(code, reason.into()))
 }
 
 fn ttrpc_timeout(context: &ttrpc::r#async::TtrpcContext) -> Option<u64> {
@@ -1155,6 +1179,38 @@ provider_service!(
         destroy => RuntimeDestroy,
     }
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn status_message(error: ttrpc::Error) -> String {
+        match error {
+            ttrpc::Error::RpcStatus(status) => status.message,
+            _ => panic!("expected typed rpc status"),
+        }
+    }
+
+    #[test]
+    fn rpc_statuses_retain_closed_actionable_reasons() {
+        assert_eq!(
+            status_message(rpc_status(ttrpc::Code::FAILED_PRECONDITION)),
+            "provider precondition failed"
+        );
+        assert_eq!(
+            status_message(invalid_request_contract(
+                ServiceContractError::InvalidDeadline
+            )),
+            "v2-service-invalid-deadline"
+        );
+        assert_eq!(
+            status_message(session_error(SessionError::new(
+                SessionErrorCode::GenerationMismatch
+            ))),
+            "generation-mismatch"
+        );
+    }
+}
 provider_service!(
     provider_infrastructure_ttrpc::InfrastructureProviderService,
     health,
