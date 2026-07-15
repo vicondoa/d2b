@@ -166,6 +166,19 @@ fn declared_dependencies<'a>(
         .unwrap_or_else(|| panic!("workspace package {package_name} dependencies not found"))
 }
 
+fn declared_features<'a>(
+    metadata: &'a serde_json::Value,
+    package_name: &str,
+) -> &'a serde_json::Map<String, serde_json::Value> {
+    metadata["packages"]
+        .as_array()
+        .expect("metadata packages")
+        .iter()
+        .find(|package| package["name"].as_str() == Some(package_name))
+        .and_then(|package| package["features"].as_object())
+        .unwrap_or_else(|| panic!("workspace package {package_name} features not found"))
+}
+
 #[test]
 fn workspace_names_contract_crate_by_role() {
     let workspace = read_repo_file("packages/Cargo.toml");
@@ -304,6 +317,21 @@ fn w4_provider_workspace_inventory_is_reserved_and_dependency_minimal() {
         "d2b-provider-infrastructure-azure-vm",
         "d2b-provider-runtime-azure-vm",
     ] {
+        let package_features = declared_features(&metadata, package);
+        assert_eq!(
+            package_features
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["default"],
+            "{package} must not add feature-forwarding escape hatches"
+        );
+        assert_eq!(
+            package_features["default"].as_array().map(Vec::as_slice),
+            Some([].as_slice()),
+            "{package} default feature set must remain empty"
+        );
+
         let allowed_direct = if package == W4_SUPPORT_CRATE {
             ["async-trait", "serde", "tokio"].as_slice()
         } else {
