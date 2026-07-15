@@ -12,27 +12,27 @@ use d2b_contracts::{
     v2_identity::{ProviderId, ProviderType, RealmId, RoleId, WorkloadId},
     v2_provider::{
         AdoptionRequest, AdoptionState, AuthorizedProviderScope, ConfiguredItemId, CorrelationId,
-        Fingerprint, Generation, HandleId, HandleOwner, IdempotencyKey, ImplementationId,
-        MutationState, ObservationReason, ObservedLifecycleState, OperationId,
-        PROVIDER_SCHEMA_VERSION, PrincipalRef, Provider, ProviderApiVersion, ProviderAuthority,
-        ProviderCallContext, ProviderCapability, ProviderCapabilitySet, ProviderDescriptor,
-        ProviderFailureKind, ProviderHealthState, ProviderMethod, ProviderOperationContext,
-        ProviderOperationInput, ProviderOperationRequest, ProviderPlacement, ProviderTarget,
-        RetryClass, RuntimeProvider,
+        Fingerprint, Generation, HandleId, HandleOwner, IdempotencyKey, MutationState,
+        ObservationReason, ObservedLifecycleState, OperationId, PROVIDER_SCHEMA_VERSION,
+        PrincipalRef, Provider, ProviderApiVersion, ProviderAuthority, ProviderCallContext,
+        ProviderCapability, ProviderCapabilitySet, ProviderDescriptor, ProviderFailureKind,
+        ProviderHealthState, ProviderMethod, ProviderOperationContext, ProviderOperationInput,
+        ProviderOperationRequest, ProviderPlacement, ProviderTarget, RetryClass, RuntimeProvider,
     },
 };
 use d2b_host::{
     ch_argv::{ChArgvInput, ChNetHandoff},
     qemu_media_argv::QemuMediaArgvInput,
 };
-use d2b_provider::ProviderInstance;
+use d2b_provider::{FactoryError, ProviderFactory, ProviderInstance, ProviderRegistryBuilder};
 use d2b_provider_runtime_local::{
     LocalRuntimeConfiguration, LocalRuntimeConfigurationError, LocalRuntimeKind,
-    LocalRuntimeProvider, LocalRuntimeProviderBuildError, MAX_CONFIGURED_RUNTIME_ITEMS,
-    RuntimeAdoptionControl, RuntimeAdoptionOutcome, RuntimeConfiguredItemControl,
-    RuntimeControlContext, RuntimeControlError, RuntimeControlPort, RuntimeEnsureControl,
-    RuntimeHealth, RuntimeMutationOutcome, RuntimeObservedState, RuntimeOperationControl,
-    RuntimePlanDecision, RuntimeResourceIdentity, live_runtime_capabilities,
+    LocalRuntimeProvider, LocalRuntimeProviderBuildError, LocalRuntimeProviderFactory,
+    MAX_CONFIGURED_RUNTIME_ITEMS, RuntimeAdoptionControl, RuntimeAdoptionOutcome,
+    RuntimeConfiguredItemControl, RuntimeControlContext, RuntimeControlError, RuntimeControlPort,
+    RuntimeEnsureControl, RuntimeHealth, RuntimeMutationOutcome, RuntimeObservedState,
+    RuntimeOperationControl, RuntimePlanDecision, RuntimeResourceIdentity,
+    live_runtime_capabilities,
 };
 use d2b_provider_toolkit::{DeterministicClock, Fixture, check_provider_conformance};
 
@@ -410,7 +410,8 @@ fn descriptor(kind: LocalRuntimeKind) -> ProviderDescriptor {
         authority: ProviderAuthority::Runtime {
             posture: kind.authority_posture(),
         },
-        implementation_id: ImplementationId::parse(kind.implementation_id())
+        implementation_id: kind
+            .canonical_implementation_id()
             .unwrap_or_else(|_| unreachable!()),
         api_version: ProviderApiVersion::V2,
         capabilities: live_runtime_capabilities().unwrap_or_else(|_| unreachable!()),
@@ -462,6 +463,25 @@ fn harness(kind: LocalRuntimeKind) -> Harness {
         control,
         fixture,
     }
+}
+
+fn named_factory(
+    kind: LocalRuntimeKind,
+    control: Arc<dyn RuntimeControlPort>,
+) -> LocalRuntimeProviderFactory {
+    match kind {
+        LocalRuntimeKind::CloudHypervisor => {
+            LocalRuntimeProviderFactory::cloud_hypervisor(ch_input(), control)
+        }
+        LocalRuntimeKind::QemuMedia => {
+            LocalRuntimeProviderFactory::qemu_media(qemu_input(), control)
+        }
+        LocalRuntimeKind::SystemdUser => LocalRuntimeProviderFactory::systemd_user(
+            vec![ConfiguredItemId::parse("configured-editor").unwrap_or_else(|_| unreachable!())],
+            control,
+        ),
+    }
+    .unwrap_or_else(|_| unreachable!())
 }
 
 fn operation_request(fixture: &Fixture, method: ProviderMethod) -> ProviderOperationRequest {
@@ -526,6 +546,79 @@ fn descriptors_are_exact_for_all_closed_runtime_kinds() {
         );
         assert_eq!(harness.provider.kind(), kind);
     }
+}
+
+#[test]
+fn named_factories_publish_canonical_keys_and_runtime_instances() {
+    for kind in [
+        LocalRuntimeKind::CloudHypervisor,
+        LocalRuntimeKind::QemuMedia,
+        LocalRuntimeKind::SystemdUser,
+    ] {
+        let control = Arc::new(FakeControl::new(kind, fingerprint(1)));
+        let factory = named_factory(kind, control);
+        let expected_key = kind.factory_key().unwrap_or_else(|_| unreachable!());
+        assert_eq!(factory.key(), expected_key);
+        assert_eq!(
+            factory.implementation_id(),
+            &kind
+                .canonical_implementation_id()
+                .unwrap_or_else(|_| unreachable!())
+        );
+        let expected_descriptor = descriptor(kind);
+        let instance = factory
+            .construct(&expected_descriptor)
+            .unwrap_or_else(|_| unreachable!());
+        assert!(matches!(instance, ProviderInstance::Runtime(_)));
+        assert_eq!(instance.descriptor(), expected_descriptor);
+    }
+}
+
+#[test]
+fn factory_rejects_wrong_descriptor_type_and_implementation() {
+    let kind = LocalRuntimeKind::CloudHypervisor;
+    let control = Arc::new(FakeControl::new(kind, fingerprint(1)));
+    let factory = named_factory(kind, control);
+
+    let mut wrong_type = descriptor(kind);
+    wrong_type.authority = ProviderAuthority::Storage;
+    assert_eq!(
+        factory.construct(&wrong_type).err(),
+        Some(FactoryError::Rejected)
+    );
+
+    let mut wrong_implementation = descriptor(kind);
+    wrong_implementation.implementation_id = LocalRuntimeKind::QemuMedia
+        .canonical_implementation_id()
+        .unwrap_or_else(|_| unreachable!());
+    assert_eq!(
+        factory.construct(&wrong_implementation).err(),
+        Some(FactoryError::Rejected)
+    );
+}
+
+#[test]
+fn factory_registers_directly_with_provider_registry_builder() {
+    let kind = LocalRuntimeKind::CloudHypervisor;
+    let control = Arc::new(FakeControl::new(kind, fingerprint(1)));
+    let factory = named_factory(kind, control);
+    let key = factory.key();
+    let expected_descriptor = descriptor(kind);
+    let mut builder =
+        ProviderRegistryBuilder::new(expected_descriptor.registry_generation, fingerprint(9), NOW);
+    builder
+        .register_factory(key, Arc::new(factory))
+        .unwrap_or_else(|_| unreachable!());
+    builder
+        .register_instance(expected_descriptor.clone())
+        .unwrap_or_else(|_| unreachable!());
+    let registry = builder.finish().unwrap_or_else(|_| unreachable!());
+    assert_eq!(
+        registry
+            .snapshot()
+            .descriptor(&expected_descriptor.provider_id),
+        Some(&expected_descriptor)
+    );
 }
 
 #[tokio::test]
@@ -964,6 +1057,7 @@ fn operation_input_has_no_argv_path_endpoint_or_json_variant() {
     let all_source = [
         include_str!("../src/config.rs"),
         include_str!("../src/control.rs"),
+        include_str!("../src/factory.rs"),
         include_str!("../src/provider.rs"),
     ]
     .concat();

@@ -4,6 +4,7 @@
 
 mod config;
 mod control;
+mod factory;
 mod provider;
 
 pub use config::{
@@ -19,6 +20,7 @@ pub use control::{
     RuntimeMutationOutcome, RuntimeObservedState, RuntimeOperationControl, RuntimePlanDecision,
     RuntimeResourceIdentity,
 };
+pub use factory::LocalRuntimeProviderFactory;
 pub use provider::{
     LIVE_RUNTIME_METHODS, LocalRuntimeProvider, LocalRuntimeProviderBuildError,
     live_runtime_capabilities,

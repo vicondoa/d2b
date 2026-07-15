@@ -1,8 +1,12 @@
 use std::{collections::BTreeSet, error::Error, fmt};
 
-use d2b_contracts::v2_provider::{
-    CgroupAuthority, ConfiguredItemId, DeviceMediationPosture, NetworkPosture,
-    PersistentIdentityPosture, ProcessAuthority, RuntimeAuthorityPosture, UserNamespacePosture,
+use d2b_contracts::{
+    v2_identity::ProviderType,
+    v2_provider::{
+        CgroupAuthority, ConfiguredItemId, DeviceMediationPosture, ImplementationId,
+        NetworkPosture, PersistentIdentityPosture, ProcessAuthority, ProviderContractError,
+        ProviderFactoryKey, RuntimeAuthorityPosture, UserNamespacePosture,
+    },
 };
 use d2b_host::{
     ch_argv::{ChArgvInput, generate_ch_argv},
@@ -28,6 +32,17 @@ impl LocalRuntimeKind {
             Self::QemuMedia => QEMU_MEDIA_IMPLEMENTATION_ID,
             Self::SystemdUser => SYSTEMD_USER_IMPLEMENTATION_ID,
         }
+    }
+
+    pub fn canonical_implementation_id(self) -> Result<ImplementationId, ProviderContractError> {
+        ImplementationId::parse(self.implementation_id())
+    }
+
+    pub fn factory_key(self) -> Result<ProviderFactoryKey, ProviderContractError> {
+        Ok(ProviderFactoryKey {
+            provider_type: ProviderType::Runtime,
+            implementation_id: self.canonical_implementation_id()?,
+        })
     }
 
     pub fn authority_posture(self) -> RuntimeAuthorityPosture {
