@@ -21,6 +21,25 @@ const IMPLEMENTATION_CRATES: &[&str] = &[
     "d2b-realm-codec-protobuf",
     "d2b-session-unix",
 ];
+const W4_PROVIDER_CRATES: &[&str] = &[
+    "d2b-provider-audio-pipewire-vhost-user",
+    "d2b-provider-credential-entra",
+    "d2b-provider-credential-managed-identity",
+    "d2b-provider-credential-secret-service",
+    "d2b-provider-device-host-mediated",
+    "d2b-provider-display-wayland",
+    "d2b-provider-infrastructure-azure-vm",
+    "d2b-provider-network-local-realm",
+    "d2b-provider-observability-local",
+    "d2b-provider-runtime-azure-container-apps",
+    "d2b-provider-runtime-azure-vm",
+    "d2b-provider-runtime-local",
+    "d2b-provider-storage-local",
+    "d2b-provider-substrate-host",
+    "d2b-provider-transport-azure-relay",
+    "d2b-provider-transport-local",
+];
+const W4_SUPPORT_CRATE: &str = "d2b-azure-vm-fake-sdk";
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -32,6 +51,21 @@ fn repo_root() -> PathBuf {
 
 fn read_repo_file(rel: &str) -> String {
     std::fs::read_to_string(repo_root().join(rel)).expect("read repo file")
+}
+
+fn manifest_section<'a>(manifest: &'a str, name: &str) -> Vec<&'a str> {
+    let header = format!("[{name}]");
+    manifest
+        .split_once(&header)
+        .map(|(_, rest)| {
+            rest.lines()
+                .skip_while(|line| line.trim().is_empty())
+                .take_while(|line| !line.starts_with('['))
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn git_tracked_files() -> Vec<String> {
@@ -107,6 +141,145 @@ fn implementation_crates_are_base_first_and_workspace_members_are_sorted() {
     assert_eq!(
         actual, sorted,
         "workspace members must remain alphanumerically sorted"
+    );
+}
+
+#[test]
+fn w4_provider_workspace_inventory_is_reserved_and_dependency_minimal() {
+    let root = repo_root();
+    let workspace = read_repo_file("packages/Cargo.toml");
+    let members = workspace
+        .split_once("members = [")
+        .and_then(|(_, rest)| rest.split_once(']'))
+        .map(|(members, _)| members)
+        .expect("workspace members array")
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix('"'))
+        .filter_map(|line| line.strip_suffix("\","))
+        .collect::<Vec<_>>();
+    let mut sorted_members = members.clone();
+    sorted_members.sort_unstable();
+    assert_eq!(
+        members, sorted_members,
+        "workspace members must remain alphanumerically sorted"
+    );
+
+    for package in W4_PROVIDER_CRATES
+        .iter()
+        .copied()
+        .chain(std::iter::once(W4_SUPPORT_CRATE))
+    {
+        assert!(
+            members.contains(&package),
+            "workspace members must include {package}"
+        );
+        assert!(
+            workspace.contains(&format!(
+                "{package} = {{ path = \"{package}\", version = \"2.0.0\", default-features = false }}"
+            )),
+            "workspace dependencies must own default-empty {package}"
+        );
+
+        let package_root = root.join("packages").join(package);
+        let mut package_entries = std::fs::read_dir(&package_root)
+            .expect("read reserved package directory")
+            .map(|entry| {
+                entry
+                    .expect("read reserved package entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect::<Vec<_>>();
+        package_entries.sort();
+        assert_eq!(
+            package_entries,
+            ["Cargo.toml", "src"],
+            "{package} must contain only its manifest and source directory"
+        );
+        let source_entries = std::fs::read_dir(package_root.join("src"))
+            .expect("read reserved package source directory")
+            .map(|entry| {
+                entry
+                    .expect("read reserved source entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            source_entries,
+            ["lib.rs"],
+            "{package} source must contain only lib.rs"
+        );
+
+        let manifest = read_repo_file(&format!("packages/{package}/Cargo.toml"));
+        assert!(
+            manifest.contains(&format!("name = \"{package}\"")),
+            "{package} manifest has the wrong package name"
+        );
+        for required in [
+            "version.workspace = true",
+            "edition.workspace = true",
+            "publish = false",
+            "[features]\ndefault = []",
+        ] {
+            assert!(
+                manifest.contains(required),
+                "{package} manifest is missing {required:?}"
+            );
+        }
+        let source = read_repo_file(&format!("packages/{package}/src/lib.rs"));
+        assert!(
+            source.starts_with("//!")
+                && source.contains("#![forbid(unsafe_code)]")
+                && source
+                    .lines()
+                    .filter(|line| !line.trim().is_empty())
+                    .count()
+                    == 2,
+            "{package} must remain a purpose-only, behavior-free crate reservation"
+        );
+    }
+
+    let expected_dependencies = [
+        "async-trait.workspace = true",
+        "d2b-contracts = { workspace = true, default-features = false, features = [\"v2-provider\"] }",
+        "d2b-provider = { workspace = true, default-features = false }",
+    ];
+    let expected_dev_dependencies = [
+        "d2b-provider-toolkit = { workspace = true, default-features = false }",
+        "tokio = { workspace = true, features = [\"macros\", \"rt\", \"sync\", \"time\"] }",
+    ];
+    for package in W4_PROVIDER_CRATES {
+        let manifest = read_repo_file(&format!("packages/{package}/Cargo.toml"));
+        assert_eq!(
+            manifest_section(&manifest, "dependencies"),
+            expected_dependencies,
+            "{package} must use only the common canonical provider dependencies"
+        );
+        assert_eq!(
+            manifest_section(&manifest, "dev-dependencies"),
+            expected_dev_dependencies,
+            "{package} must use only the common provider test dependencies"
+        );
+        for forbidden in ["d2bd =", "d2b-priv-broker =", "d2b-realm-provider ="] {
+            assert!(
+                !manifest.lines().any(|line| line.starts_with(forbidden)),
+                "{package} must not depend on {forbidden}"
+            );
+        }
+    }
+
+    let fake_sdk = read_repo_file(&format!("packages/{W4_SUPPORT_CRATE}/Cargo.toml"));
+    assert_eq!(
+        manifest_section(&fake_sdk, "dependencies"),
+        ["serde = { workspace = true, features = [\"derive\"] }"],
+        "the fake SDK must remain serde-only without Azure, network, or runtime dependencies"
+    );
+    assert!(
+        manifest_section(&fake_sdk, "dev-dependencies").is_empty(),
+        "the fake SDK must not acquire hidden development dependencies"
     );
 }
 

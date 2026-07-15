@@ -981,6 +981,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-azure-vm-fake-sdk"
+version = "2.0.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "d2b-client"
 version = "2.0.0"
 dependencies = [
@@ -1246,6 +1253,72 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-provider-audio-pipewire-vhost-user"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider",
+ "d2b-provider-toolkit",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-provider-credential-entra"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider",
+ "d2b-provider-toolkit",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-provider-credential-managed-identity"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider",
+ "d2b-provider-toolkit",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-provider-credential-secret-service"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider",
+ "d2b-provider-toolkit",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-provider-device-host-mediated"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider",
+ "d2b-provider-toolkit",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-provider-display-wayland"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider",
+ "d2b-provider-toolkit",
+ "tokio",
+]
+
+[[package]]
 name = "d2b-provider-host"
 version = "2.0.0"
 dependencies = [
@@ -1255,6 +1328,39 @@ dependencies = [
  "d2b-realm-core",
  "d2b-realm-provider",
  "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-provider-infrastructure-azure-vm"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider",
+ "d2b-provider-toolkit",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-provider-network-local-realm"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider",
+ "d2b-provider-toolkit",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-provider-observability-local"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider",
+ "d2b-provider-toolkit",
  "tokio",
 ]
 
@@ -1282,6 +1388,61 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-provider-runtime-azure-container-apps"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider",
+ "d2b-provider-toolkit",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-provider-runtime-azure-vm"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider",
+ "d2b-provider-toolkit",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-provider-runtime-local"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider",
+ "d2b-provider-toolkit",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-provider-storage-local"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider",
+ "d2b-provider-toolkit",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-provider-substrate-host"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider",
+ "d2b-provider-toolkit",
+ "tokio",
+]
+
+[[package]]
 name = "d2b-provider-toolkit"
 version = "2.0.0"
 dependencies = [
@@ -1293,6 +1454,28 @@ dependencies = [
  "serde_json",
  "tokio",
  "ttrpc",
+]
+
+[[package]]
+name = "d2b-provider-transport-azure-relay"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider",
+ "d2b-provider-toolkit",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-provider-transport-local"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider",
+ "d2b-provider-toolkit",
+ "tokio",
 ]
 
 [[package]]

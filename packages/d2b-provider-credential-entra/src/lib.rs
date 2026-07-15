@@ -1,0 +1,3 @@
+//! Entra credential provider implementation boundary.
+
+#![forbid(unsafe_code)]
