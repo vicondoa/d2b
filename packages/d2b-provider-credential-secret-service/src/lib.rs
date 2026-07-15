@@ -19,11 +19,11 @@ use std::{
 
 use async_trait::async_trait;
 use d2b_contracts::{
-    v2_component_session::{BoundedVec, EndpointRole},
+    v2_component_session::{BoundedVec, EndpointRole, ServicePackage},
     v2_identity::{ProviderId, ProviderType},
     v2_provider::{
-        AdoptionState, AgentPlacementBinding, AuthorizedProviderScope, CredentialLease,
-        CredentialLeaseRequest, CredentialLeaseState, CredentialLeaseTransferPolicy,
+        AdoptionState, AuthorizedProviderScope, CredentialLease, CredentialLeaseRequest,
+        CredentialLeaseState, CredentialLeaseTransferPolicy, CredentialPlacementBinding,
         CredentialProvider, Generation, ImplementationId, LeaseId,
         MAX_CREDENTIAL_OPERATION_CLASSES, MAX_PROVIDER_LEASE_LIFETIME_MS, MAX_SAFE_JSON_INTEGER,
         MutationReceipt, MutationState, ObservationReason, ObservedLifecycleState,
@@ -138,7 +138,7 @@ pub struct SecretServiceLeaseRequest {
     pub credential_provider_generation: Generation,
     pub consumer_provider_id: ProviderId,
     pub consumer_provider_generation: Generation,
-    pub agent_binding: AgentPlacementBinding,
+    pub placement_binding: CredentialPlacementBinding,
     pub allowed_operations: BoundedVec<SdkOperationClass, 1, MAX_CREDENTIAL_OPERATION_CLASSES>,
     pub requested_expiry_unix_ms: u64,
 }
@@ -155,7 +155,7 @@ impl fmt::Debug for SecretServiceLeaseRequest {
                 "consumer_provider_generation",
                 &self.consumer_provider_generation,
             )
-            .field("agent_binding", &self.agent_binding)
+            .field("placement_binding", &self.placement_binding)
             .field("operation_count", &self.allowed_operations.len())
             .field("requested_expiry_unix_ms", &self.requested_expiry_unix_ms)
             .finish_non_exhaustive()
@@ -171,7 +171,7 @@ pub struct SecretServiceLeaseRef {
     pub credential_provider_generation: Generation,
     pub consumer_provider_id: ProviderId,
     pub consumer_provider_generation: Generation,
-    pub agent_binding: AgentPlacementBinding,
+    pub placement_binding: CredentialPlacementBinding,
     pub allowed_operations: BoundedVec<SdkOperationClass, 1, MAX_CREDENTIAL_OPERATION_CLASSES>,
     pub source_version: SourceVersion,
     pub rotation_generation: Generation,
@@ -190,7 +190,7 @@ impl fmt::Debug for SecretServiceLeaseRef {
                 "consumer_provider_generation",
                 &self.consumer_provider_generation,
             )
-            .field("agent_binding", &self.agent_binding)
+            .field("placement_binding", &self.placement_binding)
             .field("operation_count", &self.allowed_operations.len())
             .field("rotation_generation", &self.rotation_generation)
             .field("requested_expiry_unix_ms", &self.requested_expiry_unix_ms)
@@ -310,7 +310,12 @@ impl SecretServiceCredentialProviderFactory {
         consumer
             .validate()
             .map_err(|_| SecretServiceProviderError::InvalidConsumer)?;
-        if !consumer_type_can_hold_credential(consumer.provider_type()) {
+        if !consumer_type_can_hold_credential(consumer.provider_type())
+            || !matches!(
+                consumer.placement.credential_binding(),
+                Some(CredentialPlacementBinding::UserAgent { .. })
+            )
+        {
             return Err(SecretServiceProviderError::InvalidConsumer);
         }
         authorized_operations.sort_unstable();
@@ -365,7 +370,7 @@ struct LeaseRecord {
 pub struct SecretServiceCredentialProvider {
     descriptor: ProviderDescriptor,
     consumer: ProviderDescriptor,
-    agent_binding: AgentPlacementBinding,
+    placement_binding: CredentialPlacementBinding,
     authorized_operations: Vec<SdkOperationClass>,
     port: Arc<dyn Oo7SecretServicePort>,
     clock: Arc<dyn ProviderClock>,
@@ -379,7 +384,7 @@ impl fmt::Debug for SecretServiceCredentialProvider {
             .debug_struct("SecretServiceCredentialProvider")
             .field("owner", &SecretServiceOwner::Userd)
             .field("generation", &self.descriptor.registry_generation)
-            .field("agent_binding", &self.agent_binding)
+            .field("placement_binding", &self.placement_binding)
             .field(
                 "authorized_operation_count",
                 &self.authorized_operations.len(),
@@ -422,9 +427,10 @@ impl SecretServiceCredentialProvider {
         {
             return Err(SecretServiceProviderError::InvalidDescriptor);
         }
-        let agent_binding = descriptor
+        let placement_binding = descriptor
             .placement
-            .agent_binding()
+            .credential_binding()
+            .filter(|binding| matches!(binding, CredentialPlacementBinding::UserAgent { .. }))
             .ok_or(SecretServiceProviderError::InvalidDescriptor)?;
 
         consumer
@@ -435,7 +441,7 @@ impl SecretServiceCredentialProvider {
         {
             return Err(SecretServiceProviderError::InvalidConsumer);
         }
-        if consumer.placement.agent_binding().as_ref() != Some(&agent_binding) {
+        if consumer.placement.credential_binding().as_ref() != Some(&placement_binding) {
             return Err(SecretServiceProviderError::NotColocated);
         }
 
@@ -452,7 +458,7 @@ impl SecretServiceCredentialProvider {
         Ok(Self {
             descriptor,
             consumer,
-            agent_binding,
+            placement_binding,
             authorized_operations,
             port,
             clock,
@@ -549,25 +555,15 @@ impl SecretServiceCredentialProvider {
     }
 
     fn scope_matches_owner(&self, scope: &AuthorizedProviderScope) -> bool {
-        match scope {
-            AuthorizedProviderScope::Workload {
-                realm_id,
-                workload_id,
-            } => {
-                realm_id == &self.agent_binding.realm_id
-                    && workload_id == &self.agent_binding.workload_id
-            }
-            AuthorizedProviderScope::WorkloadRole {
-                realm_id,
-                workload_id,
-                role_id,
-            } => {
-                realm_id == &self.agent_binding.realm_id
-                    && workload_id == &self.agent_binding.workload_id
-                    && role_id == &self.agent_binding.role_id
-            }
-            AuthorizedProviderScope::Realm { .. } => false,
-        }
+        let CredentialPlacementBinding::UserAgent { realm_id, .. } = &self.placement_binding else {
+            return false;
+        };
+        matches!(
+            scope,
+            AuthorizedProviderScope::Realm {
+                realm_id: scoped_realm
+            } if scoped_realm == realm_id
+        )
     }
 
     fn preflight(
@@ -593,7 +589,7 @@ impl SecretServiceCredentialProvider {
                 ProviderRemediation::RetryBounded,
             ));
         }
-        if context.validate().is_err()
+        if context.service != ServicePackage::UserV2
             || context
                 .operation
                 .validate(&self.descriptor, self.now())
@@ -602,10 +598,8 @@ impl SecretServiceCredentialProvider {
         {
             return Err(self.invalid_request(context));
         }
-        if !matches!(
-            context.peer_role,
-            EndpointRole::ProviderAgent | EndpointRole::RealmController
-        ) || !self.scope_matches_owner(&context.operation.scope)
+        if context.peer_role != EndpointRole::UserAgent
+            || !self.scope_matches_owner(&context.operation.scope)
         {
             return Err(self.unauthorized(context));
         }
@@ -771,7 +765,7 @@ impl SecretServiceCredentialProvider {
         let now = self.now();
         if request.context != *context.operation
             || request.consumer_provider_id != self.consumer.provider_id
-            || request.agent_binding != self.agent_binding
+            || request.placement_binding != self.placement_binding
             || !self.operations_authorized(&request.allowed_operations)
             || request.requested_expiry_unix_ms <= now
             || request.requested_expiry_unix_ms > MAX_SAFE_JSON_INTEGER
@@ -794,7 +788,7 @@ impl SecretServiceCredentialProvider {
             || lease.credential_provider_generation != self.descriptor.registry_generation
             || lease.consumer_provider_id != self.consumer.provider_id
             || lease.consumer_provider_generation != self.consumer.registry_generation
-            || lease.agent_binding != self.agent_binding
+            || lease.placement_binding != self.placement_binding
             || lease.transfer_policy != CredentialLeaseTransferPolicy::Forbidden
             || !self.operations_authorized(&lease.allowed_operations)
         {
@@ -833,7 +827,7 @@ impl SecretServiceCredentialProvider {
             credential_provider_generation: record.lease.credential_provider_generation,
             consumer_provider_id: record.lease.consumer_provider_id.clone(),
             consumer_provider_generation: record.lease.consumer_provider_generation,
-            agent_binding: record.lease.agent_binding.clone(),
+            placement_binding: record.lease.placement_binding.clone(),
             allowed_operations: record.lease.allowed_operations.clone(),
             source_version: record.lease.source_version.clone(),
             rotation_generation: record.lease.rotation_generation,
@@ -933,7 +927,7 @@ impl CredentialProvider for SecretServiceCredentialProvider {
                 }) {
                     if record.acquired_by == acquisition
                         && record.lease.consumer_provider_id == request.consumer_provider_id
-                        && record.lease.agent_binding == request.agent_binding
+                        && record.lease.placement_binding == request.placement_binding
                         && record.lease.allowed_operations == request.allowed_operations
                         && record.lease.expires_at_unix_ms <= request.requested_expiry_unix_ms
                     {
@@ -952,7 +946,7 @@ impl CredentialProvider for SecretServiceCredentialProvider {
                 credential_provider_generation: self.descriptor.registry_generation,
                 consumer_provider_id: self.consumer.provider_id.clone(),
                 consumer_provider_generation: self.consumer.registry_generation,
-                agent_binding: self.agent_binding.clone(),
+                placement_binding: self.placement_binding.clone(),
                 allowed_operations: request.allowed_operations.clone(),
                 requested_expiry_unix_ms: request.requested_expiry_unix_ms,
             };
@@ -975,7 +969,7 @@ impl CredentialProvider for SecretServiceCredentialProvider {
                 lease_id: grant.lease_id,
                 credential_provider_id: self.descriptor.provider_id.clone(),
                 consumer_provider_id: self.consumer.provider_id.clone(),
-                agent_binding: self.agent_binding.clone(),
+                placement_binding: self.placement_binding.clone(),
                 allowed_operations: request.allowed_operations.clone(),
                 issued_at_unix_ms: now,
                 expires_at_unix_ms: grant.expires_at_unix_ms,

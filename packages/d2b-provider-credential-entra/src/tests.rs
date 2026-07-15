@@ -78,6 +78,10 @@ impl EntraCredentialClient for FakeEntraClient {
         request: &EntraLeaseRequest,
     ) -> Result<EntraLeaseGrant, EntraClientError> {
         self.issue_calls.fetch_add(1, Ordering::Relaxed);
+        assert!(matches!(
+            &request.placement_binding,
+            CredentialPlacementBinding::ProviderAgent { .. }
+        ));
         if *self.state.lock().expect("state lock") == EntraClientState::InteractionRequired {
             return Err(EntraClientError::InteractionRequired);
         }
@@ -105,6 +109,10 @@ impl EntraCredentialClient for FakeEntraClient {
         lease: &EntraLeaseRef,
     ) -> Result<EntraLeaseInspection, EntraClientError> {
         self.inspect_calls.fetch_add(1, Ordering::Relaxed);
+        assert!(matches!(
+            &lease.placement_binding,
+            CredentialPlacementBinding::ProviderAgent { .. }
+        ));
         assert_eq!(
             self.acquired_by.lock().expect("operation lock").as_ref(),
             Some(&lease.acquired_by)
@@ -188,7 +196,7 @@ fn lease_request(provider: &EntraCredentialProvider, fixture: &Fixture) -> Crede
             .operation(ProviderMethod::CredentialAcquireLease)
             .expect("operation"),
         consumer_provider_id: provider.consumer.provider_id.clone(),
-        agent_binding: provider.agent_binding.clone(),
+        placement_binding: provider.placement_binding(),
         allowed_operations: BoundedVec::new(vec![
             SdkOperationClass::Authenticate,
             SdkOperationClass::Read,
@@ -359,7 +367,11 @@ async fn lease_lifecycle_is_exact_consumer_and_operation_bound() {
     assert_eq!(replay, lease);
     assert_eq!(client.issue_calls.load(Ordering::Relaxed), 1);
     assert_eq!(lease.consumer_provider_id, provider.consumer.provider_id);
-    assert_eq!(lease.agent_binding, provider.agent_binding);
+    assert_eq!(lease.placement_binding, provider.placement_binding());
+    assert!(matches!(
+        &lease.placement_binding,
+        CredentialPlacementBinding::ProviderAgent { .. }
+    ));
 
     let refresh_operation = fixture
         .operation(ProviderMethod::CredentialRefreshLease)

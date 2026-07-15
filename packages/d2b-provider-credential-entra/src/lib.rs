@@ -23,7 +23,7 @@ use d2b_contracts::{
     v2_provider::{
         AdoptionState, AgentPlacementBinding, AuthorizedProviderScope, CredentialLease,
         CredentialLeaseRequest, CredentialLeaseState, CredentialLeaseTransferPolicy,
-        CredentialProvider, Generation, ImplementationId, LeaseId,
+        CredentialPlacementBinding, CredentialProvider, Generation, ImplementationId, LeaseId,
         MAX_CREDENTIAL_OPERATION_CLASSES, MAX_PROVIDER_LEASE_LIFETIME_MS, MAX_SAFE_JSON_INTEGER,
         MutationReceipt, MutationState, ObservationReason, ObservedLifecycleState,
         OperationBinding, Provider, ProviderCallContext, ProviderCapability, ProviderCapabilitySet,
@@ -132,7 +132,7 @@ pub struct EntraLeaseRequest {
     pub credential_provider_generation: Generation,
     pub consumer_provider_id: ProviderId,
     pub consumer_provider_generation: Generation,
-    pub agent_binding: AgentPlacementBinding,
+    pub placement_binding: CredentialPlacementBinding,
     pub allowed_operations: BoundedVec<SdkOperationClass, 1, MAX_CREDENTIAL_OPERATION_CLASSES>,
     pub requested_expiry_unix_ms: u64,
 }
@@ -149,7 +149,7 @@ impl fmt::Debug for EntraLeaseRequest {
                 "consumer_provider_generation",
                 &self.consumer_provider_generation,
             )
-            .field("agent_binding", &self.agent_binding)
+            .field("placement_binding", &self.placement_binding)
             .field("operation_count", &self.allowed_operations.len())
             .field("requested_expiry_unix_ms", &self.requested_expiry_unix_ms)
             .finish_non_exhaustive()
@@ -165,7 +165,7 @@ pub struct EntraLeaseRef {
     pub credential_provider_generation: Generation,
     pub consumer_provider_id: ProviderId,
     pub consumer_provider_generation: Generation,
-    pub agent_binding: AgentPlacementBinding,
+    pub placement_binding: CredentialPlacementBinding,
     pub allowed_operations: BoundedVec<SdkOperationClass, 1, MAX_CREDENTIAL_OPERATION_CLASSES>,
     pub source_version: SourceVersion,
     pub rotation_generation: Generation,
@@ -184,7 +184,7 @@ impl fmt::Debug for EntraLeaseRef {
                 "consumer_provider_generation",
                 &self.consumer_provider_generation,
             )
-            .field("agent_binding", &self.agent_binding)
+            .field("placement_binding", &self.placement_binding)
             .field("operation_count", &self.allowed_operations.len())
             .field("rotation_generation", &self.rotation_generation)
             .field("requested_expiry_unix_ms", &self.requested_expiry_unix_ms)
@@ -301,7 +301,9 @@ impl EntraCredentialProviderFactory {
         consumer
             .validate()
             .map_err(|_| EntraProviderError::InvalidConsumer)?;
-        if !consumer_type_can_hold_credential(consumer.provider_type()) {
+        if !consumer_type_can_hold_credential(consumer.provider_type())
+            || consumer.placement.agent_binding().is_none()
+        {
             return Err(EntraProviderError::InvalidConsumer);
         }
         authorized_operations.sort_unstable();
@@ -459,6 +461,12 @@ impl EntraCredentialProvider {
 
     fn now(&self) -> u64 {
         self.clock.now_unix_ms().min(MAX_SAFE_JSON_INTEGER)
+    }
+
+    fn placement_binding(&self) -> CredentialPlacementBinding {
+        CredentialPlacementBinding::ProviderAgent {
+            binding: self.agent_binding.clone(),
+        }
     }
 
     fn failure(
@@ -763,7 +771,7 @@ impl EntraCredentialProvider {
         let now = self.now();
         if request.context != *context.operation
             || request.consumer_provider_id != self.consumer.provider_id
-            || request.agent_binding != self.agent_binding
+            || request.placement_binding != self.placement_binding()
             || !self.operations_authorized(&request.allowed_operations)
             || request.requested_expiry_unix_ms <= now
             || request.requested_expiry_unix_ms > MAX_SAFE_JSON_INTEGER
@@ -786,7 +794,7 @@ impl EntraCredentialProvider {
             || lease.credential_provider_generation != self.descriptor.registry_generation
             || lease.consumer_provider_id != self.consumer.provider_id
             || lease.consumer_provider_generation != self.consumer.registry_generation
-            || lease.agent_binding != self.agent_binding
+            || lease.placement_binding != self.placement_binding()
             || lease.transfer_policy != CredentialLeaseTransferPolicy::Forbidden
             || !self.operations_authorized(&lease.allowed_operations)
         {
@@ -825,7 +833,7 @@ impl EntraCredentialProvider {
             credential_provider_generation: record.lease.credential_provider_generation,
             consumer_provider_id: record.lease.consumer_provider_id.clone(),
             consumer_provider_generation: record.lease.consumer_provider_generation,
-            agent_binding: record.lease.agent_binding.clone(),
+            placement_binding: record.lease.placement_binding.clone(),
             allowed_operations: record.lease.allowed_operations.clone(),
             source_version: record.lease.source_version.clone(),
             rotation_generation: record.lease.rotation_generation,
@@ -925,7 +933,7 @@ impl CredentialProvider for EntraCredentialProvider {
                 }) {
                     if record.acquired_by == acquisition
                         && record.lease.consumer_provider_id == request.consumer_provider_id
-                        && record.lease.agent_binding == request.agent_binding
+                        && record.lease.placement_binding == request.placement_binding
                         && record.lease.allowed_operations == request.allowed_operations
                         && record.lease.expires_at_unix_ms <= request.requested_expiry_unix_ms
                     {
@@ -943,7 +951,7 @@ impl CredentialProvider for EntraCredentialProvider {
                 credential_provider_generation: self.descriptor.registry_generation,
                 consumer_provider_id: self.consumer.provider_id.clone(),
                 consumer_provider_generation: self.consumer.registry_generation,
-                agent_binding: self.agent_binding.clone(),
+                placement_binding: self.placement_binding(),
                 allowed_operations: request.allowed_operations.clone(),
                 requested_expiry_unix_ms: request.requested_expiry_unix_ms,
             };
@@ -965,7 +973,7 @@ impl CredentialProvider for EntraCredentialProvider {
                 lease_id: grant.lease_id,
                 credential_provider_id: self.descriptor.provider_id.clone(),
                 consumer_provider_id: self.consumer.provider_id.clone(),
-                agent_binding: self.agent_binding.clone(),
+                placement_binding: self.placement_binding(),
                 allowed_operations: request.allowed_operations.clone(),
                 issued_at_unix_ms: now,
                 expires_at_unix_ms: grant.expires_at_unix_ms,

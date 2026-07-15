@@ -7,7 +7,8 @@ use d2b_contracts::{
     v2_identity::{ProviderType, WorkloadId},
     v2_provider::{
         AuthorizedProviderScope, CredentialProvider, Fingerprint, ImplementationId, MutationState,
-        Provider, ProviderFailureKind, ProviderMethod, ProviderOperationInput, SdkOperationClass,
+        Provider, ProviderFailureKind, ProviderMethod, ProviderOperationInput, ProviderPlacement,
+        ProviderTarget, SdkOperationClass,
     },
 };
 use d2b_provider::{
@@ -81,6 +82,10 @@ impl Oo7SecretServicePort for FakeOo7Port {
         request: &SecretServiceLeaseRequest,
     ) -> Result<SecretServiceLeaseGrant, SecretServicePortError> {
         self.issue_calls.fetch_add(1, Ordering::Relaxed);
+        assert!(matches!(
+            &request.placement_binding,
+            CredentialPlacementBinding::UserAgent { .. }
+        ));
         if *self.state.lock().expect("state lock") == SecretServiceState::Locked {
             return Err(SecretServicePortError::Locked);
         }
@@ -108,6 +113,10 @@ impl Oo7SecretServicePort for FakeOo7Port {
         lease: &SecretServiceLeaseRef,
     ) -> Result<SecretServiceLeaseInspection, SecretServicePortError> {
         self.inspect_calls.fetch_add(1, Ordering::Relaxed);
+        assert!(matches!(
+            &lease.placement_binding,
+            CredentialPlacementBinding::UserAgent { .. }
+        ));
         assert_eq!(
             self.acquired_by.lock().expect("operation lock").as_ref(),
             Some(&lease.acquired_by)
@@ -151,18 +160,45 @@ impl Oo7SecretServicePort for FakeOo7Port {
     }
 }
 
+fn descriptors() -> (Fixture, ProviderDescriptor, ProviderDescriptor) {
+    let base = Fixture::new(ProviderType::Credential, 0).expect("credential fixture");
+    let mut descriptor = base.descriptor;
+    descriptor.implementation_id = implementation_id();
+    let ProviderPlacement::ProviderAgent {
+        realm_id,
+        role_id,
+        agent_generation,
+        ..
+    } = &descriptor.placement
+    else {
+        panic!("provider-agent fixture");
+    };
+    let realm_id = realm_id.clone();
+    let placement = ProviderPlacement::UserAgent {
+        realm_id: realm_id.clone(),
+        role_id: role_id.clone(),
+        endpoint_role: EndpointRole::UserAgent,
+        service: ServicePackage::UserV2,
+        agent_generation: *agent_generation,
+    };
+    descriptor.placement = placement.clone();
+    let fixture =
+        Fixture::from_descriptor(descriptor.clone(), ProviderTarget::Realm { realm_id }, NOW)
+            .expect("user-agent fixture");
+    let mut consumer = Fixture::new(ProviderType::Transport, 1)
+        .expect("consumer fixture")
+        .descriptor;
+    consumer.placement = placement;
+    (fixture, descriptor, consumer)
+}
+
 fn setup() -> (
     SecretServiceCredentialProvider,
     Fixture,
     Arc<FakeOo7Port>,
     Arc<DeterministicClock>,
 ) {
-    let fixture = Fixture::new(ProviderType::Credential, 0).expect("credential fixture");
-    let mut descriptor = fixture.descriptor.clone();
-    descriptor.implementation_id = implementation_id();
-    let consumer = Fixture::new(ProviderType::Transport, 1)
-        .expect("consumer fixture")
-        .descriptor;
+    let (fixture, descriptor, consumer) = descriptors();
     let clock = Arc::new(DeterministicClock::new(NOW));
     let port = Arc::new(FakeOo7Port::new(Arc::clone(&clock)));
     let provider = SecretServiceCredentialProvider::new_userd_with_clock(
@@ -185,20 +221,19 @@ fn lease_request(
             .operation(ProviderMethod::CredentialAcquireLease)
             .expect("operation"),
         consumer_provider_id: provider.consumer.provider_id.clone(),
-        agent_binding: provider.agent_binding.clone(),
+        placement_binding: provider.placement_binding.clone(),
         allowed_operations: BoundedVec::new(vec![SdkOperationClass::Read]).expect("operations"),
         requested_expiry_unix_ms: NOW + 30_000,
     }
 }
 
 #[test]
-fn construction_rejects_non_consuming_provider_types() {
-    let fixture = Fixture::new(ProviderType::Credential, 0).expect("credential fixture");
-    let mut descriptor = fixture.descriptor;
-    descriptor.implementation_id = implementation_id();
-    let consumer = Fixture::new(ProviderType::Audio, 1)
+fn construction_requires_user_agent_and_a_consuming_provider_type() {
+    let (_, descriptor, _) = descriptors();
+    let mut consumer = Fixture::new(ProviderType::Audio, 1)
         .expect("audio fixture")
         .descriptor;
+    consumer.placement = descriptor.placement.clone();
     let clock = Arc::new(DeterministicClock::new(NOW));
     let port = Arc::new(FakeOo7Port::new(clock.clone()));
     let result = SecretServiceCredentialProvider::new_userd_with_clock(
@@ -212,16 +247,31 @@ fn construction_rejects_non_consuming_provider_types() {
         result,
         Err(SecretServiceProviderError::InvalidConsumer)
     ));
-}
 
-#[test]
-fn factory_registers_and_rejects_wrong_type_or_implementation() {
     let fixture = Fixture::new(ProviderType::Credential, 0).expect("credential fixture");
     let mut descriptor = fixture.descriptor;
     descriptor.implementation_id = implementation_id();
     let consumer = Fixture::new(ProviderType::Transport, 1)
         .expect("consumer fixture")
         .descriptor;
+    let clock = Arc::new(DeterministicClock::new(NOW));
+    let port = Arc::new(FakeOo7Port::new(clock.clone()));
+    let result = SecretServiceCredentialProvider::new_userd_with_clock(
+        descriptor,
+        consumer,
+        vec![SdkOperationClass::Read],
+        port,
+        clock,
+    );
+    assert!(matches!(
+        result,
+        Err(SecretServiceProviderError::InvalidDescriptor)
+    ));
+}
+
+#[test]
+fn factory_registers_and_rejects_wrong_type_or_implementation() {
+    let (_, descriptor, consumer) = descriptors();
     let clock = Arc::new(DeterministicClock::new(NOW));
     let port = Arc::new(FakeOo7Port::new(clock.clone()));
     let factory = SecretServiceCredentialProviderFactory::new_with_clock(
@@ -290,12 +340,11 @@ async fn passes_common_provider_conformance() {
     let request = fixture
         .request(ProviderMethod::CredentialStatus)
         .expect("status request");
-    let mut production_context = fixture.call_context(&request.context);
-    production_context.peer_role = EndpointRole::RealmController;
+    let production_context = fixture.call_context(&request.context);
     provider
         .status(&production_context, &request)
         .await
-        .expect("provider-agent server caller");
+        .expect("user-agent caller");
     let instance = ProviderInstance::Credential(Arc::new(provider));
     check_provider_conformance(&instance, &fixture)
         .await
@@ -360,7 +409,11 @@ async fn opaque_lease_refresh_revoke_and_inspection_are_bound() {
         lease.consumer_provider_generation,
         provider.consumer.registry_generation
     );
-    assert_eq!(lease.agent_binding, provider.agent_binding);
+    assert_eq!(lease.placement_binding, provider.placement_binding);
+    assert!(matches!(
+        &lease.placement_binding,
+        CredentialPlacementBinding::UserAgent { .. }
+    ));
     assert_eq!(lease.state, CredentialLeaseState::Active);
 
     let refresh_operation = fixture
@@ -447,7 +500,7 @@ async fn denial_and_wrong_input_make_zero_client_calls() {
 
     let mut request = lease_request(&provider, &fixture);
     request.context.scope = AuthorizedProviderScope::Workload {
-        realm_id: provider.agent_binding.realm_id.clone(),
+        realm_id: provider.descriptor.placement.realm_id().clone(),
         workload_id: WorkloadId::parse("ddddddddddddddddddda").expect("other workload"),
     };
     let context = fixture.call_context(&request.context);
