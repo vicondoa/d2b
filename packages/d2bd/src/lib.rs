@@ -299,6 +299,7 @@ const PUBLIC_STATUS_PROVIDER_PROBE_TIMEOUT: Duration = Duration::from_millis(100
 const PUBLIC_STATUS_GUEST_USBIP_TIMEOUT: Duration = Duration::from_millis(250);
 const USBIP_SYSFS_PRESENCE_TIMEOUT: Duration = Duration::from_millis(250);
 const EMPTY_VMM_CLEANUP_GRACE: Duration = Duration::from_secs(5);
+const CGROUP_KILL_BROKER_TIMEOUT: Duration = Duration::from_secs(5);
 const CGROUP_EMPTY_POST_KILL_WAIT: Duration = Duration::from_secs(5);
 const GATEWAY_DISPLAY_SESSION_TTL: Duration = Duration::from_secs(3600);
 
@@ -3291,7 +3292,9 @@ fn dispatch_request(
     // stop/start helpers invoked by restart/rollback do NOT re-acquire it,
     // so there is no nested self-deadlock.
     let invalidates_status_model = request_invalidates_public_status_model(&request);
-    let _op_lock = state.op_locks.acquire(&request.lock_class());
+    let lock_class = request.lock_class();
+    let _op_lock = state.op_locks.acquire(&lock_class);
+    state.op_locks.wait_for_mapped_lifecycle(&lock_class);
     let result = dispatch_request_locked(state, peer, request);
     if invalidates_status_model {
         state.public_status_read_model.invalidate();
@@ -14367,7 +14370,7 @@ fn request_cgroup_kill_if_populated(
         state,
         request,
         caller_role,
-        Duration::from_secs(5),
+        CGROUP_KILL_BROKER_TIMEOUT,
     ) {
         Ok(response) => {
             tracing::info!(vm = %vm, role = %role_id, response = ?response, "broker CgroupKill requested for populated runner leaf")
@@ -14625,61 +14628,129 @@ fn vm_start_api_and_readiness_timeouts() -> (Duration, Duration) {
     (api_timeout, readiness_timeout)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MappedRuntimeLifecycleBudgets {
+    pub start: Duration,
+    pub stop: Duration,
+    pub restart: Duration,
+}
+
+fn bounded_duration_count(count: usize) -> u32 {
+    count.max(1).min(u32::MAX as usize) as u32
+}
+
+fn mapped_runtime_start_budget_for_dag(
+    dag: &d2b_core::processes::VmProcessDag,
+    api_timeout: Duration,
+    readiness_timeout: Duration,
+) -> Duration {
+    let node_budget = supervisor::dag::NodeBudget {
+        readiness: readiness_timeout,
+        ..supervisor::dag::NodeBudget::default()
+    };
+    let sequential_nodes = dag.nodes.iter().fold(Duration::ZERO, |total, node| {
+        let spawn = if matches!(
+            vm_start_node_mode(&node.role),
+            VmStartNodeMode::OneShot(_) | VmStartNodeMode::LongLived(_)
+        ) {
+            node_budget.spawn
+        } else {
+            Duration::ZERO
+        };
+        let readiness = if supervisor::dag::uses_split_readiness(&node.readiness) {
+            api_timeout
+        } else {
+            node_budget.readiness
+        };
+        let qemu_boot = if node.role == ProcessRole::QemuMediaRunner {
+            node_budget.readiness
+        } else {
+            Duration::ZERO
+        };
+        total
+            .saturating_add(spawn)
+            .saturating_add(readiness)
+            .saturating_add(qemu_boot)
+    });
+    let rollback_roles = bounded_duration_count(
+        dag.nodes
+            .iter()
+            .filter(|node| {
+                matches!(
+                    vm_start_node_mode(&node.role),
+                    VmStartNodeMode::LongLived(_)
+                )
+            })
+            .count(),
+    );
+    let rollback = (VM_START_ROLLBACK_TERM_TIMEOUT + VM_START_ROLLBACK_KILL_TIMEOUT)
+        .saturating_mul(rollback_roles)
+        .saturating_add(LIFECYCLE_SNAPSHOT_MARGIN);
+    sequential_nodes.saturating_add(rollback)
+}
+
+fn mapped_runtime_stop_budget_for_roles(graceful: Duration, stop_roles: usize) -> Duration {
+    let per_role = VM_STOP_TIMEOUT
+        .saturating_add(VM_STOP_TIMEOUT)
+        .saturating_add(CGROUP_KILL_BROKER_TIMEOUT)
+        .saturating_add(CGROUP_EMPTY_POST_KILL_WAIT);
+    graceful
+        .saturating_add(per_role.saturating_mul(bounded_duration_count(stop_roles)))
+        .saturating_add(LIFECYCLE_SNAPSHOT_MARGIN)
+}
+
+pub(crate) fn mapped_runtime_lifecycle_budgets(
+    state: &ServerState,
+    request: &public_wire::VmLifecycleRequest,
+) -> Result<MappedRuntimeLifecycleBudgets, TypedError> {
+    let resolver = load_bundle_resolver(state)?;
+    let dag = resolver
+        .processes
+        .vms
+        .iter()
+        .find(|dag| dag.vm == request.vm)
+        .ok_or_else(|| TypedError::InternalConfig {
+            detail: "mapped runtime lifecycle has no process DAG".to_owned(),
+        })?;
+    let manifest_entry =
+        manifest_entry_for_vm(state, &request.vm).ok_or_else(|| TypedError::InternalConfig {
+            detail: "mapped runtime lifecycle has no manifest entry".to_owned(),
+        })?;
+    let (api_timeout, readiness_timeout) = vm_start_api_and_readiness_timeouts();
+    let start = mapped_runtime_start_budget_for_dag(dag, api_timeout, readiness_timeout);
+    let graceful = if request.force || !graceful_shutdown_enabled(&manifest_entry) {
+        Duration::ZERO
+    } else {
+        graceful_shutdown_timeout_for(state, &manifest_entry)
+    };
+    let declared_roles = dag
+        .nodes
+        .iter()
+        .filter(|node| {
+            matches!(
+                vm_start_node_mode(&node.role),
+                VmStartNodeMode::LongLived(_)
+            )
+        })
+        .count();
+    let stop_roles = declared_roles.max(ordered_vm_stop_entries(state, &request.vm).len());
+    let stop = mapped_runtime_stop_budget_for_roles(graceful, stop_roles);
+    Ok(MappedRuntimeLifecycleBudgets {
+        start,
+        stop,
+        restart: stop.saturating_add(start),
+    })
+}
+
 pub(crate) fn mapped_runtime_lifecycle_budget(
     state: &ServerState,
     request: &public_wire::VmLifecycleRequest,
     method: d2b_contracts::v2_provider::ProviderMethod,
 ) -> Result<Duration, TypedError> {
+    let budgets = mapped_runtime_lifecycle_budgets(state, request)?;
     match method {
-        d2b_contracts::v2_provider::ProviderMethod::RuntimeStart => {
-            let resolver = load_bundle_resolver(state)?;
-            let dag = resolver
-                .processes
-                .vms
-                .iter()
-                .find(|dag| dag.vm == request.vm)
-                .ok_or_else(|| TypedError::InternalConfig {
-                    detail: "mapped runtime start has no process DAG".to_owned(),
-                })?;
-            let rollback_roles = dag
-                .nodes
-                .iter()
-                .filter(|node| {
-                    matches!(
-                        vm_start_node_mode(&node.role),
-                        VmStartNodeMode::LongLived(_)
-                    )
-                })
-                .count()
-                .max(1)
-                .min(u32::MAX as usize) as u32;
-            let (api_timeout, readiness_timeout) = vm_start_api_and_readiness_timeouts();
-            let readiness_max = api_timeout.max(readiness_timeout);
-            let rollback_margin = (VM_START_ROLLBACK_TERM_TIMEOUT + VM_START_ROLLBACK_KILL_TIMEOUT)
-                .saturating_mul(rollback_roles)
-                .saturating_add(LIFECYCLE_SNAPSHOT_MARGIN);
-            Ok(readiness_max.saturating_add(rollback_margin))
-        }
-        d2b_contracts::v2_provider::ProviderMethod::RuntimeStop => {
-            let manifest_entry = manifest_entry_for_vm(state, &request.vm).ok_or_else(|| {
-                TypedError::InternalConfig {
-                    detail: "mapped runtime stop has no manifest entry".to_owned(),
-                }
-            })?;
-            let graceful = if request.force || !graceful_shutdown_enabled(&manifest_entry) {
-                Duration::ZERO
-            } else {
-                graceful_shutdown_timeout_for(state, &manifest_entry)
-            };
-            let stop_roles = ordered_vm_stop_entries(state, &request.vm)
-                .len()
-                .max(1)
-                .min(u32::MAX as usize) as u32;
-            let forced_cleanup = (VM_STOP_TIMEOUT + VM_STOP_TIMEOUT)
-                .saturating_mul(stop_roles)
-                .saturating_add(LIFECYCLE_SNAPSHOT_MARGIN);
-            Ok(graceful.saturating_add(forced_cleanup))
-        }
+        d2b_contracts::v2_provider::ProviderMethod::RuntimeStart => Ok(budgets.start),
+        d2b_contracts::v2_provider::ProviderMethod::RuntimeStop => Ok(budgets.stop),
         _ => Err(TypedError::InternalConfig {
             detail: "unsupported mapped runtime lifecycle budget".to_owned(),
         }),
@@ -16948,6 +17019,7 @@ fn dispatch_provider_or_broker_vm_restart_as(
         TEST_DIRECT_RUNTIME_FALLBACKS.set(TEST_DIRECT_RUNTIME_FALLBACKS.get() + 1);
         return dispatch_broker_vm_restart_as(state, request, caller_role);
     }
+    provider_registry::ensure_runtime_restart_budget(state, &request)?;
 
     let stop_response =
         dispatch_provider_or_broker_vm_stop_as(state, request.clone(), caller_role.clone())?;
@@ -23992,7 +24064,7 @@ mod broker_dispatch_tests {
     use std::path::{Path, PathBuf};
     use std::process::{Child, Command};
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+    use std::sync::{Arc, Mutex, MutexGuard, OnceLock, mpsc};
     use std::time::{Duration, Instant};
     use std::{fs, thread};
 
@@ -24914,43 +24986,208 @@ mod broker_dispatch_tests {
             no_wait_api: true,
         };
 
-        let start_budget = crate::mapped_runtime_lifecycle_budget(
-            &state,
-            &request,
-            d2b_contracts::v2_provider::ProviderMethod::RuntimeStart,
-        )
-        .expect("start lifecycle budget");
+        let budgets =
+            crate::mapped_runtime_lifecycle_budgets(&state, &request).expect("lifecycle budgets");
+        let start_budget = budgets.start;
         let start_deadline = provider_registry::provider_lifecycle_deadline(
             &state,
             &request,
             d2b_contracts::v2_provider::ProviderMethod::RuntimeStart,
         )
         .expect("start provider deadline");
-        assert!(start_budget >= Duration::from_secs(300));
+        assert_eq!(start_budget, Duration::from_secs(300 + 10 + 10 + 5 + 5));
         assert!(start_deadline.duration > Duration::from_secs(30));
         assert_eq!(
             u128::from(start_deadline.milliseconds),
             start_deadline.duration.as_millis()
         );
 
-        let stop_budget = crate::mapped_runtime_lifecycle_budget(
-            &state,
-            &request,
-            d2b_contracts::v2_provider::ProviderMethod::RuntimeStop,
-        )
-        .expect("stop lifecycle budget");
+        let stop_budget = budgets.stop;
         let stop_deadline = provider_registry::provider_lifecycle_deadline(
             &state,
             &request,
             d2b_contracts::v2_provider::ProviderMethod::RuntimeStop,
         )
         .expect("stop provider deadline");
-        assert!(stop_budget >= Duration::from_secs(90 + 30 + 30 + 5));
+        assert_eq!(stop_budget, Duration::from_secs(90 + 30 + 30 + 5 + 5 + 5));
+        assert_eq!(budgets.restart, start_budget + stop_budget);
         assert!(stop_deadline.duration > Duration::from_secs(30));
         assert_eq!(
             u128::from(stop_deadline.milliseconds),
             stop_deadline.duration.as_millis()
         );
+    }
+
+    #[test]
+    fn mapped_provider_budget_sums_sequential_nodes_roles_and_restart() {
+        let state = mapped_cloud_hypervisor_state("provider-lifecycle-budget-sum");
+        let resolver = load_bundle_resolver(&state).expect("load provider bundle");
+        let mut dag = resolver.processes.vms[0].clone();
+        let mut second = dag.nodes[0].clone();
+        second.id = d2b_core::processes::NodeId("virtiofsd".to_owned());
+        second.role = ProcessRole::Virtiofsd;
+        dag.nodes.push(second);
+
+        let start = crate::mapped_runtime_start_budget_for_dag(
+            &dag,
+            Duration::from_secs(60),
+            Duration::from_secs(300),
+        );
+        let stop =
+            crate::mapped_runtime_stop_budget_for_roles(Duration::from_secs(90), dag.nodes.len());
+        assert_eq!(
+            start,
+            Duration::from_secs((2 * (10 + 300)) + (2 * (10 + 5)) + 5)
+        );
+        assert_eq!(stop, Duration::from_secs(90 + (2 * (30 + 30 + 5 + 5)) + 5));
+        assert_eq!(start + stop, Duration::from_secs(890));
+
+        let mut third = dag.nodes[0].clone();
+        third.id = d2b_core::processes::NodeId("swtpm".to_owned());
+        third.role = ProcessRole::Swtpm;
+        dag.nodes.push(third);
+        let over_limit_start = crate::mapped_runtime_start_budget_for_dag(
+            &dag,
+            Duration::from_secs(60),
+            Duration::from_secs(300),
+        );
+        let over_limit_stop =
+            crate::mapped_runtime_stop_budget_for_roles(Duration::from_secs(90), dag.nodes.len());
+        assert!(
+            (over_limit_start + over_limit_stop).as_millis()
+                > u128::from(d2b_contracts::v2_provider::MAX_PROVIDER_REQUEST_LIFETIME_MS)
+        );
+    }
+
+    #[test]
+    fn startup_rejects_mapped_runtime_whose_full_budget_exceeds_contract() {
+        fn add_budget_role(processes: &mut Value, template: &Value, id: &str, role: &str) {
+            let mut node = template.clone();
+            node["id"] = json!(id);
+            node["role"] = json!(role);
+            node["profile"]["profileId"] = json!(format!("vm-vm-a-{id}"));
+            node["profile"]["cgroupPlacement"]["subtree"] = json!(format!("d2b.slice/vm-a/{id}"));
+            processes["vms"][0]["nodes"]
+                .as_array_mut()
+                .expect("process nodes")
+                .push(node);
+        }
+
+        let state = uninitialized_provider_registry_state("provider-lifecycle-budget-reject");
+        let artifact = local_runtime_provider_artifact("runner:vm:vm-a:role:cloud-hypervisor");
+        install_provider_registry_artifact(&state.config.artifacts, &artifact);
+
+        let mut processes: Value = serde_json::from_slice(
+            &fs::read(&state.config.artifacts.processes_path).expect("read processes"),
+        )
+        .expect("parse processes");
+        let template = processes["vms"][0]["nodes"][0].clone();
+        add_budget_role(&mut processes, &template, "virtiofsd", "virtiofsd");
+        write_json_file(&state.config.artifacts.processes_path, &processes);
+        reseal_provider_test_bundle(&state.config.artifacts);
+        assert!(
+            provider_registry::compose_startup_registry_with_policy(&state, &artifact, None)
+                .is_ok(),
+            "a two-role 890-second restart budget must remain admissible"
+        );
+
+        add_budget_role(&mut processes, &template, "swtpm", "swtpm");
+        write_json_file(&state.config.artifacts.processes_path, &processes);
+        reseal_provider_test_bundle(&state.config.artifacts);
+
+        assert!(matches!(
+            provider_registry::compose_startup_registry_with_policy(&state, &artifact, None),
+            Err(provider_registry::ProviderCompositionError::LifecycleBudgetExceeded)
+        ));
+    }
+
+    #[test]
+    fn timed_out_mapped_cleanup_blocks_fresh_start_stop_and_usb_requests() {
+        let state = mapped_cloud_hypervisor_state("provider-lifecycle-serialization");
+        let lifecycle = state.op_locks.begin_mapped_lifecycle("vm-a");
+        let (started_tx, started_rx) = mpsc::channel();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let mut handles = Vec::new();
+        let lifecycle_flags = MutationFlags {
+            apply: true,
+            dry_run: false,
+            json: true,
+        };
+        let requests = [
+            (
+                "fresh-start",
+                super::wire::Request::VmStart(VmLifecycleRequest {
+                    vm: "vm-a".to_owned(),
+                    flags: lifecycle_flags.clone(),
+                    force: false,
+                    no_wait_api: false,
+                }),
+            ),
+            (
+                "fresh-stop",
+                super::wire::Request::VmStop(VmLifecycleRequest {
+                    vm: "vm-a".to_owned(),
+                    flags: lifecycle_flags.clone(),
+                    force: false,
+                    no_wait_api: false,
+                }),
+            ),
+            (
+                "usb-style",
+                super::wire::Request::UsbipBind(d2b_contracts::public_wire::UsbipBindCliRequest {
+                    vm: "vm-a".to_owned(),
+                    bus_id: "1-1".to_owned(),
+                    flags: lifecycle_flags,
+                }),
+            ),
+        ];
+        for (label, request) in requests {
+            let state = Arc::clone(&state);
+            let started_tx = started_tx.clone();
+            let entered_tx = entered_tx.clone();
+            handles.push(thread::spawn(move || {
+                started_tx.send(label).expect("record started request");
+                let response = dispatch_request(
+                    &state,
+                    &PeerIdentity {
+                        role: PeerRole::Admin,
+                        uid: 0,
+                    },
+                    request,
+                );
+                entered_tx
+                    .send((label, response))
+                    .expect("record admitted request");
+            }));
+        }
+        drop(started_tx);
+        drop(entered_tx);
+        for _ in 0..3 {
+            started_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("fresh request started");
+        }
+
+        assert!(
+            entered_rx.recv_timeout(Duration::from_millis(30)).is_err(),
+            "fresh operation identities must remain blocked while detached cleanup is active"
+        );
+        drop(lifecycle);
+        let admitted = (0..3)
+            .map(|_| {
+                entered_rx
+                    .recv_timeout(Duration::from_secs(1))
+                    .expect("request admitted after cleanup")
+                    .0
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            admitted,
+            std::collections::BTreeSet::from(["fresh-start", "fresh-stop", "usb-style"])
+        );
+        for handle in handles {
+            handle.join().expect("join per-VM request");
+        }
     }
 
     #[test]

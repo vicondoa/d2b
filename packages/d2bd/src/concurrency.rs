@@ -24,12 +24,14 @@
 //!    cleanup); inner stop/start helpers invoked by restart/rollback do
 //!    NOT re-acquire it, so there is no nested self-deadlock.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use parking_lot::{
-    ArcMutexGuard, ArcRwLockReadGuard, ArcRwLockWriteGuard, Mutex, RawMutex, RawRwLock, RwLock,
+    ArcMutexGuard, ArcRwLockReadGuard, ArcRwLockWriteGuard, Condvar, Mutex, RawMutex, RawRwLock,
+    RwLock,
 };
 
 /// Non-blocking, bounded admission gate for connection-handler threads.
@@ -124,6 +126,31 @@ pub struct OpLockManager {
     /// a per-VM op takes the read side (shared) plus its own per-VM lock.
     global: Arc<RwLock<()>>,
     per_vm: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+    mapped_lifecycle: Arc<MappedLifecycleState>,
+}
+
+#[derive(Debug, Default)]
+struct MappedLifecycleState {
+    active_vms: Mutex<HashSet<String>>,
+    idle: Condvar,
+}
+
+/// Send-owned authority retained by a detached mapped lifecycle worker.
+///
+/// Public request dispatch waits for this permit to drop after acquiring its
+/// ordinary operation lock. This closes the interval between a timed-out
+/// provider waiter and completion of daemon rollback or cleanup.
+pub struct MappedLifecyclePermit {
+    vm: String,
+    state: Arc<MappedLifecycleState>,
+}
+
+impl fmt::Debug for MappedLifecyclePermit {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MappedLifecyclePermit")
+            .finish_non_exhaustive()
+    }
 }
 
 /// RAII guard for a held op lock. Holds the owned parking_lot guards so
@@ -168,6 +195,61 @@ impl OpLockManager {
             }
             OpLockClass::Global => OpLockGuard::Global(self.global.write_arc()),
         }
+    }
+
+    /// Wait for detached mapped lifecycle work that conflicts with `class`.
+    ///
+    /// Call this after acquiring the ordinary operation lock. The worker does
+    /// not need that lock after its public waiter returns, so waiting while
+    /// holding the lock cannot block worker completion. Acquiring in this
+    /// order also closes the race where a mapped worker becomes active just
+    /// before the originating request releases its operation lock.
+    pub fn wait_for_mapped_lifecycle(&self, class: &OpLockClass) {
+        let mut active = self.mapped_lifecycle.active_vms.lock();
+        match class {
+            OpLockClass::ReadOnly => {}
+            OpLockClass::PerVm(vm) => {
+                while active.contains(vm) {
+                    self.mapped_lifecycle.idle.wait(&mut active);
+                }
+            }
+            OpLockClass::Global => {
+                while !active.is_empty() {
+                    self.mapped_lifecycle.idle.wait(&mut active);
+                }
+            }
+        }
+    }
+
+    /// Acquire exclusive detached-lifecycle authority for one VM.
+    ///
+    /// The returned permit is `Send` and is moved into the owned worker. A
+    /// direct provider call that bypasses public request dispatch still
+    /// serializes here rather than starting a second mutation.
+    pub fn begin_mapped_lifecycle(&self, vm: &str) -> MappedLifecyclePermit {
+        let mut active = self.mapped_lifecycle.active_vms.lock();
+        while active.contains(vm) {
+            self.mapped_lifecycle.idle.wait(&mut active);
+        }
+        active.insert(vm.to_owned());
+        MappedLifecyclePermit {
+            vm: vm.to_owned(),
+            state: Arc::clone(&self.mapped_lifecycle),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn mapped_lifecycle_active(&self, vm: &str) -> bool {
+        self.mapped_lifecycle.active_vms.lock().contains(vm)
+    }
+}
+
+impl Drop for MappedLifecyclePermit {
+    fn drop(&mut self) {
+        let mut active = self.state.active_vms.lock();
+        active.remove(&self.vm);
+        drop(active);
+        self.state.idle.notify_all();
     }
 }
 
@@ -260,6 +342,51 @@ mod tests {
         drop(guard);
         handle.join().expect("join second op");
         assert_eq!(*order.lock(), vec![1, 2], "ops ran in serialized order");
+    }
+
+    #[test]
+    fn mapped_lifecycle_permit_outlives_request_lock_and_blocks_conflicting_ops() {
+        let manager = OpLockManager::new();
+        let originating_lock = manager.acquire(&OpLockClass::PerVm("work".to_owned()));
+        let lifecycle = manager.begin_mapped_lifecycle("work");
+        drop(originating_lock);
+
+        let entered = Arc::new(AtomicUsize::new(0));
+        let mut handles = Vec::new();
+        for class in [
+            OpLockClass::PerVm("work".to_owned()),
+            OpLockClass::PerVm("work".to_owned()),
+            OpLockClass::Global,
+        ] {
+            let manager = manager.clone();
+            let entered = Arc::clone(&entered);
+            handles.push(thread::spawn(move || {
+                let _lock = manager.acquire(&class);
+                manager.wait_for_mapped_lifecycle(&class);
+                entered.fetch_add(1, Ordering::SeqCst);
+            }));
+        }
+
+        thread::sleep(Duration::from_millis(30));
+        assert_eq!(
+            entered.load(Ordering::SeqCst),
+            0,
+            "same-VM and global operations must remain excluded after request timeout"
+        );
+        drop(lifecycle);
+        for handle in handles {
+            handle.join().expect("join mapped lifecycle waiter");
+        }
+        assert_eq!(entered.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn mapped_lifecycle_permit_does_not_block_another_vm() {
+        let manager = OpLockManager::new();
+        let _lifecycle = manager.begin_mapped_lifecycle("work");
+        let class = OpLockClass::PerVm("personal".to_owned());
+        let _lock = manager.acquire(&class);
+        manager.wait_for_mapped_lifecycle(&class);
     }
 
     #[test]

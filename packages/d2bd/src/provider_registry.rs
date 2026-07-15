@@ -115,6 +115,7 @@ pub enum ProviderCompositionError {
     ProcessIdentityMismatch,
     DuplicateRuntimeMapping,
     LegacyRunnerForbidden,
+    LifecycleBudgetExceeded,
 }
 
 impl fmt::Display for ProviderCompositionError {
@@ -158,6 +159,9 @@ impl fmt::Display for ProviderCompositionError {
             }
             Self::LegacyRunnerForbidden => {
                 "provider runtime binding resolves through a legacy runner fallback"
+            }
+            Self::LifecycleBudgetExceeded => {
+                "mapped runtime lifecycle exceeds the provider request lifetime contract"
             }
         })
     }
@@ -1045,6 +1049,7 @@ pub(crate) fn compose_startup_registry_with_policy(
         }
     };
     let runtime_routes = validate_runtime_routes(&resolver, artifact)?;
+    validate_runtime_lifecycle_budgets(state, &runtime_routes)?;
     let effects =
         DaemonEffectAdapters::for_server_state(Arc::downgrade(state), &artifact.providers)?;
     let bindings = artifact
@@ -1105,15 +1110,60 @@ pub(crate) struct ProviderLifecycleDeadline {
     pub milliseconds: u32,
 }
 
+fn lifecycle_budget_within_provider_contract(duration: Duration) -> bool {
+    !duration.is_zero() && duration.as_millis() <= u128::from(MAX_PROVIDER_REQUEST_LIFETIME_MS)
+}
+
+fn validate_runtime_lifecycle_budgets(
+    state: &ServerState,
+    routes: &BTreeMap<String, ProviderRegistryEntryV2>,
+) -> Result<(), ProviderCompositionError> {
+    for vm in routes.keys() {
+        let request = d2b_contracts::public_wire::VmLifecycleRequest {
+            vm: vm.clone(),
+            flags: d2b_contracts::public_wire::MutationFlags {
+                dry_run: false,
+                apply: true,
+                json: true,
+            },
+            force: false,
+            no_wait_api: false,
+        };
+        let budgets = crate::mapped_runtime_lifecycle_budgets(state, &request)
+            .map_err(|_| ProviderCompositionError::ConfigurationMismatch)?;
+        if !lifecycle_budget_within_provider_contract(budgets.restart) {
+            return Err(ProviderCompositionError::LifecycleBudgetExceeded);
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn ensure_runtime_restart_budget(
+    state: &ServerState,
+    request: &d2b_contracts::public_wire::VmLifecycleRequest,
+) -> Result<(), crate::TypedError> {
+    let budgets = crate::mapped_runtime_lifecycle_budgets(state, request)?;
+    if lifecycle_budget_within_provider_contract(budgets.restart) {
+        Ok(())
+    } else {
+        Err(crate::TypedError::InternalConfig {
+            detail: "mapped runtime restart exceeds provider contract lifetime".to_owned(),
+        })
+    }
+}
+
 pub(crate) fn provider_lifecycle_deadline(
     state: &ServerState,
     request: &d2b_contracts::public_wire::VmLifecycleRequest,
     method: ProviderMethod,
 ) -> Result<ProviderLifecycleDeadline, crate::TypedError> {
     let actual = crate::mapped_runtime_lifecycle_budget(state, request, method)?;
-    let milliseconds = actual
-        .as_millis()
-        .clamp(1, u128::from(MAX_PROVIDER_REQUEST_LIFETIME_MS));
+    if !lifecycle_budget_within_provider_contract(actual) {
+        return Err(crate::TypedError::InternalConfig {
+            detail: "mapped runtime lifecycle exceeds provider contract lifetime".to_owned(),
+        });
+    }
+    let milliseconds = actual.as_millis();
     let milliseconds =
         u32::try_from(milliseconds).map_err(|_| crate::TypedError::InternalConfig {
             detail: "provider lifecycle deadline exceeds contract bounds".to_owned(),

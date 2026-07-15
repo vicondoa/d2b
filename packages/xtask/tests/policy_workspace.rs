@@ -655,6 +655,35 @@ fn daemon_provider_composition_is_exact_startup_owned_and_credential_free() {
             "mapped runtime lifecycle is missing bounded admission or ambiguous-timeout handling {required}"
         );
     }
+    for required in [
+        "validate_runtime_lifecycle_budgets",
+        "LifecycleBudgetExceeded",
+        "mapped_runtime_lifecycle_budgets",
+        "MAX_PROVIDER_REQUEST_LIFETIME_MS",
+    ] {
+        assert!(
+            composition.contains(required),
+            "provider startup must reject underbudgeted lifecycle mapping without truncation {required}"
+        );
+    }
+    assert!(
+        !composition.contains(".clamp("),
+        "provider lifecycle deadlines must never silently truncate daemon cleanup budgets"
+    );
+    for required in [
+        "mapped_runtime_start_budget_for_dag",
+        "mapped_runtime_stop_budget_for_roles",
+        "restart: stop.saturating_add(start)",
+        "CGROUP_KILL_BROKER_TIMEOUT",
+        "CGROUP_EMPTY_POST_KILL_WAIT",
+        "ensure_runtime_restart_budget",
+        "wait_for_mapped_lifecycle(&lock_class)",
+    ] {
+        assert!(
+            daemon.contains(required),
+            "mapped runtime routing is missing full budget or retained serialization surface {required}"
+        );
+    }
 
     let effects = read_repo_file("packages/d2bd/src/provider_effects.rs");
     for forbidden in ["d2b_priv_broker", "std::process::Command", "Command::new"] {
@@ -672,10 +701,24 @@ fn daemon_provider_composition_is_exact_startup_owned_and_credential_free() {
         "LifecycleMutationKey::from_request",
         "std::thread::Builder::new()",
         "task.wait().await",
+        "begin_mapped_lifecycle",
+        "let _lifecycle_permit = lifecycle_permit",
     ] {
         assert!(
             effects.contains(required),
             "live runtime adapter must invoke the existing daemon authority seam {required}"
+        );
+    }
+    let concurrency = read_repo_file("packages/d2bd/src/concurrency.rs");
+    for required in [
+        "pub struct MappedLifecyclePermit",
+        "pub fn wait_for_mapped_lifecycle",
+        "pub fn begin_mapped_lifecycle",
+        "impl Drop for MappedLifecyclePermit",
+    ] {
+        assert!(
+            concurrency.contains(required),
+            "detached lifecycle workers must retain same-VM serialization authority {required}"
         );
     }
     assert!(

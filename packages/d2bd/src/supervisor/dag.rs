@@ -292,7 +292,7 @@ pub fn topo_sort(dag: &VmProcessDag) -> Result<Vec<NodeId>, DagError> {
     Ok(sorted)
 }
 
-fn uses_split_readiness(readiness: &[ReadinessPredicate]) -> bool {
+pub(crate) fn uses_split_readiness(readiness: &[ReadinessPredicate]) -> bool {
     readiness
         .iter()
         .any(|predicate| matches!(predicate, ReadinessPredicate::ApiSocketInfo(_)))

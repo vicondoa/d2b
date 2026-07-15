@@ -1289,6 +1289,11 @@
       "path": "packages/d2bd/tests/public_status_socket.rs"
     },
     {
+      "name": "w4-integration-d2bd-src-concurrency-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2bd/src/concurrency.rs"
+    },
+    {
       "name": "w4-integration-d2bd-src-lib-rs",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2bd/src/lib.rs"
@@ -1302,6 +1307,11 @@
       "name": "w4-integration-d2bd-src-provider-registry-rs",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2bd/src/provider_registry.rs"
+    },
+    {
+      "name": "w4-integration-d2bd-src-supervisor-dag-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2bd/src/supervisor/dag.rs"
     },
     {
       "name": "w4-integration-d2bd-stop-dag-rs",

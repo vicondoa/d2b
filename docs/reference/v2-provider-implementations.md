@@ -77,15 +77,24 @@ provider start, and host-shutdown stop uses the same route. VMs without an
 explicit provider row retain the direct compatibility path.
 
 Mutation deadlines cover the daemon's complete lifecycle budget rather than a
-fixed provider timeout. Start includes the configured readiness wait and
-rollback/snapshot margin; stop and restart include graceful shutdown,
-SIGTERM/SIGKILL cleanup, and snapshot margin. These budgets are capped by the
-provider contract maximum. Runtime adapters retain each admitted mutation in an
-owned task keyed by its operation and idempotency identity. If the provider
+fixed provider timeout. Start sums each sequential DAG node's spawn and
+readiness or API-readiness budget, qemu-media boot readiness, every possible
+rollback TERM/KILL wait, and snapshot margin. Stop sums graceful shutdown,
+every declared or currently tracked role's TERM/KILL waits, broker cgroup-kill
+request and post-kill emptiness waits, and snapshot margin. Restart is the sum
+of stop and start. Startup rejects a mapped runtime whose full restart budget
+exceeds the provider contract maximum; it never truncates a required cleanup
+budget.
+
+Runtime adapters retain each admitted mutation in an owned task keyed by its
+operation and idempotency identity. The task also retains exclusive per-VM
+lifecycle authority until cleanup and snapshot work ends. If the provider
 waiter expires after dispatch, it reports an ambiguous result requiring
 observation while the daemon task continues through normal cleanup. A retry of
 that operation joins the retained task and cannot dispatch the mutation twice.
-Read-only inspection does not need this retention and remains cancellable.
+Fresh operation identities and other mutations for that VM wait for the
+retained lifecycle authority; unrelated VMs remain independent. Read-only
+inspection does not need this retention and remains cancellable.
 
 Other first-party host implementation crates remain dependencies so their exact
 factory contracts are checked and available for the eventual composition

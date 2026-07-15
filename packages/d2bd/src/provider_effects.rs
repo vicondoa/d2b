@@ -687,6 +687,7 @@ impl DaemonLocalRuntimeControl {
         &self,
         request: &RuntimeOperationControl,
         resolved: &ResolvedDaemonRuntime,
+        lifecycle_permit: Option<crate::concurrency::MappedLifecyclePermit>,
     ) -> Result<(), RuntimeControlError> {
         let key = LifecycleMutationKey::from_request(request);
         if let Some(task) = self.lifecycle_tasks.existing(&key)? {
@@ -701,6 +702,7 @@ impl DaemonLocalRuntimeControl {
         if request.context().is_cancelled() {
             return Err(RuntimeControlError::CancelledBeforeMutation);
         }
+        let lifecycle_permit = lifecycle_permit.ok_or(RuntimeControlError::InvariantViolation)?;
         let (lifecycle, _, result_slot) = resolved
             .state
             .provider_registry()
@@ -709,6 +711,7 @@ impl DaemonLocalRuntimeControl {
             .invocation(&request.context().operation().operation_id, &resolved.vm)?;
         let state = Arc::clone(&resolved.state);
         let task = self.lifecycle_tasks.spawn(key, move || {
+            let _lifecycle_permit = lifecycle_permit;
             let result = block_on_future(dispatch_broker_vm_start_async(&state, lifecycle));
             let _ = Self::publish_lifecycle_result(&result_slot, &result);
             result
@@ -726,6 +729,7 @@ impl DaemonLocalRuntimeControl {
         &self,
         request: &RuntimeOperationControl,
         resolved: &ResolvedDaemonRuntime,
+        lifecycle_permit: Option<crate::concurrency::MappedLifecyclePermit>,
     ) -> Result<(), RuntimeControlError> {
         let key = LifecycleMutationKey::from_request(request);
         if let Some(task) = self.lifecycle_tasks.existing(&key)? {
@@ -740,6 +744,7 @@ impl DaemonLocalRuntimeControl {
         if request.context().is_cancelled() {
             return Err(RuntimeControlError::CancelledBeforeMutation);
         }
+        let lifecycle_permit = lifecycle_permit.ok_or(RuntimeControlError::InvariantViolation)?;
         let (lifecycle, caller_role, result_slot) = resolved
             .state
             .provider_registry()
@@ -748,6 +753,7 @@ impl DaemonLocalRuntimeControl {
             .invocation(&request.context().operation().operation_id, &resolved.vm)?;
         let state = Arc::clone(&resolved.state);
         let task = self.lifecycle_tasks.spawn(key, move || {
+            let _lifecycle_permit = lifecycle_permit;
             let result = block_on_future(dispatch_broker_vm_stop_as_async(
                 &state,
                 lifecycle,
@@ -807,19 +813,24 @@ impl RuntimeControlPort for DaemonLocalRuntimeControl {
         #[cfg(test)]
         TEST_RUNTIME_START_CALLS.set(TEST_RUNTIME_START_CALLS.get() + 1);
         let resolved = self.validate_target(&request)?;
-        let tracked = self
+        if self
             .lifecycle_tasks
             .existing(&LifecycleMutationKey::from_request(&request))?
-            .is_some();
-        if !tracked
-            && resolved
-                .state
-                .pidfd_table
-                .still_alive_same_start_time(&resolved.vm, &resolved.role)
+            .is_some()
+        {
+            self.invoke_direct_start(&request, &resolved, None).await?;
+            return self.observed(request.context(), &resolved);
+        }
+        let lifecycle_permit = resolved.state.op_locks.begin_mapped_lifecycle(&resolved.vm);
+        if resolved
+            .state
+            .pidfd_table
+            .still_alive_same_start_time(&resolved.vm, &resolved.role)
         {
             return self.observed(request.context(), &resolved);
         }
-        self.invoke_direct_start(&request, &resolved).await?;
+        self.invoke_direct_start(&request, &resolved, Some(lifecycle_permit))
+            .await?;
         let observed = self.observed(request.context(), &resolved)?;
         if observed.lifecycle() == ObservedLifecycleState::Running {
             Ok(observed)
@@ -835,19 +846,24 @@ impl RuntimeControlPort for DaemonLocalRuntimeControl {
         #[cfg(test)]
         TEST_RUNTIME_STOP_CALLS.set(TEST_RUNTIME_STOP_CALLS.get() + 1);
         let resolved = self.validate_target(&request)?;
-        let tracked = self
+        if self
             .lifecycle_tasks
             .existing(&LifecycleMutationKey::from_request(&request))?
-            .is_some();
-        if !tracked
-            && !resolved
-                .state
-                .pidfd_table
-                .still_alive_same_start_time(&resolved.vm, &resolved.role)
+            .is_some()
+        {
+            self.invoke_direct_stop(&request, &resolved, None).await?;
+            return self.observed(request.context(), &resolved);
+        }
+        let lifecycle_permit = resolved.state.op_locks.begin_mapped_lifecycle(&resolved.vm);
+        if !resolved
+            .state
+            .pidfd_table
+            .still_alive_same_start_time(&resolved.vm, &resolved.role)
         {
             return self.observed(request.context(), &resolved);
         }
-        self.invoke_direct_stop(&request, &resolved).await?;
+        self.invoke_direct_stop(&request, &resolved, Some(lifecycle_permit))
+            .await?;
         let observed = self.observed(request.context(), &resolved)?;
         if observed.lifecycle() == ObservedLifecycleState::Stopped {
             Ok(observed)
@@ -892,6 +908,9 @@ impl RuntimeControlPort for DaemonLocalRuntimeControl {
         let resolved = self.validate_target(&request)?;
         let key = LifecycleMutationKey::from_request(&request);
         let existing = self.lifecycle_tasks.existing(&key)?;
+        let lifecycle_permit = existing
+            .is_none()
+            .then(|| resolved.state.op_locks.begin_mapped_lifecycle(&resolved.vm));
         if existing.is_none()
             && !resolved
                 .state
@@ -906,12 +925,15 @@ impl RuntimeControlPort for DaemonLocalRuntimeControl {
         let task = match existing {
             Some(task) => task,
             None => {
+                let lifecycle_permit =
+                    lifecycle_permit.ok_or(RuntimeControlError::InvariantViolation)?;
                 let state = Arc::clone(&resolved.state);
                 let lifecycle = Self::lifecycle_request(resolved.vm);
                 let caller_role = BrokerCallerRole::AdminUid {
                     uid: state.daemon_uid,
                 };
                 self.lifecycle_tasks.spawn(key, move || {
+                    let _lifecycle_permit = lifecycle_permit;
                     block_on_future(dispatch_broker_vm_stop_as_async(
                         &state,
                         lifecycle,
@@ -1063,7 +1085,11 @@ fn resolve<T: ?Sized>(
 #[cfg(test)]
 mod tests {
     use std::{
-        sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+        sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+            mpsc,
+        },
         time::Duration,
     };
 
@@ -1099,6 +1125,8 @@ mod tests {
     #[tokio::test]
     async fn cancelled_waiter_leaves_cleanup_running_and_retry_joins() {
         let tasks = ProviderLifecycleTasks::default();
+        let locks = Arc::new(crate::concurrency::OpLockManager::default());
+        let lifecycle = locks.begin_mapped_lifecycle("vm-a");
         let key = LifecycleMutationKey {
             operation_id: OperationId::parse("lifecycle-cancellation").expect("operation id"),
             idempotency_key: IdempotencyKey::parse("lifecycle-cancellation")
@@ -1111,6 +1139,7 @@ mod tests {
         let task_cleanup = Arc::clone(&cleanup_complete);
         let first = tasks
             .spawn(key.clone(), move || {
+                let _lifecycle = lifecycle;
                 task_dispatches.fetch_add(1, Ordering::SeqCst);
                 std::thread::sleep(Duration::from_millis(100));
                 task_cleanup.store(true, Ordering::SeqCst);
@@ -1123,6 +1152,20 @@ mod tests {
                 .await
                 .is_err(),
             "the provider waiter must time out before cleanup completes"
+        );
+        assert!(
+            locks.mapped_lifecycle_active("vm-a"),
+            "the tracked worker must retain VM serialization after waiter timeout"
+        );
+        let (fresh_tx, fresh_rx) = mpsc::channel();
+        let fresh_locks = Arc::clone(&locks);
+        let fresh = std::thread::spawn(move || {
+            let _fresh_lifecycle = fresh_locks.begin_mapped_lifecycle("vm-a");
+            fresh_tx.send(()).expect("signal fresh lifecycle admission");
+        });
+        assert!(
+            fresh_rx.recv_timeout(Duration::from_millis(10)).is_err(),
+            "a fresh operation identity must wait for the timed-out cleanup"
         );
         let retry_dispatches = Arc::clone(&dispatches);
         let retry = tasks
@@ -1140,5 +1183,10 @@ mod tests {
             1,
             "retry must not dispatch a second lifecycle mutation"
         );
+        fresh_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("fresh lifecycle admitted after cleanup");
+        fresh.join().expect("join fresh lifecycle");
+        assert!(!locks.mapped_lifecycle_active("vm-a"));
     }
 }
