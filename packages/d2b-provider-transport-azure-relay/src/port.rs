@@ -84,6 +84,48 @@ impl RelayTransportLimits {
     }
 }
 
+/// Closed operations implemented by one co-located Relay control port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RelayPortCapabilities {
+    connect: bool,
+    listen: bool,
+    inspect: bool,
+    close: bool,
+    adopt: bool,
+}
+
+impl RelayPortCapabilities {
+    pub const fn production() -> Self {
+        Self {
+            connect: true,
+            listen: true,
+            inspect: true,
+            close: true,
+            adopt: true,
+        }
+    }
+
+    pub const fn connect(self) -> bool {
+        self.connect
+    }
+
+    pub const fn listen(self) -> bool {
+        self.listen
+    }
+
+    pub const fn inspect(self) -> bool {
+        self.inspect
+    }
+
+    pub const fn close(self) -> bool {
+        self.close
+    }
+
+    pub const fn adopt(self) -> bool {
+        self.adopt
+    }
+}
+
 /// An agent-local Azure Relay rendezvous identifier.
 ///
 /// It is deliberately not serializable. The co-located port resolves it to
@@ -558,6 +600,9 @@ impl Error for RelayPortFailure {}
 /// mutation is reported as [`RelayPortFailure::CompletionAmbiguous`].
 #[async_trait]
 pub trait RelayControlPort: Send + Sync {
+    /// Report only operations backed by this port implementation.
+    fn capabilities(&self) -> RelayPortCapabilities;
+
     /// Connect the sender side using only the exact `Connect` credential lease.
     async fn connect(&self, request: RelayOpenRequest) -> Result<RelayResource, RelayPortFailure>;
 

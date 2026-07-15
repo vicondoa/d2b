@@ -3,7 +3,8 @@ use std::{collections::BTreeMap, error::Error, fmt, sync::Arc};
 use d2b_contracts::{
     v2_identity::{ProviderId, ProviderType},
     v2_provider::{
-        ImplementationId, MAX_PROVIDER_REGISTRY_ENTRIES, ProviderDescriptor, ProviderFactoryKey,
+        Fingerprint, ImplementationId, MAX_PROVIDER_REGISTRY_ENTRIES, ProviderDescriptor,
+        ProviderFactoryKey,
     },
 };
 use d2b_provider::{
@@ -51,12 +52,60 @@ impl fmt::Display for AzureRelayFactoryBuildError {
 
 impl Error for AzureRelayFactoryBuildError {}
 
+/// One configured instance and the exact descriptor digests it was built for.
+#[derive(Clone)]
+pub struct AzureRelayFactoryEntry {
+    provider_id: ProviderId,
+    configuration_schema_fingerprint: Fingerprint,
+    configured_scope_digest: Fingerprint,
+    configuration: AzureRelayConfiguration,
+}
+
+impl AzureRelayFactoryEntry {
+    pub fn new(
+        provider_id: ProviderId,
+        configuration_schema_fingerprint: Fingerprint,
+        configured_scope_digest: Fingerprint,
+        configuration: AzureRelayConfiguration,
+    ) -> Self {
+        Self {
+            provider_id,
+            configuration_schema_fingerprint,
+            configured_scope_digest,
+            configuration,
+        }
+    }
+
+    pub fn for_descriptor(
+        descriptor: &ProviderDescriptor,
+        configuration: AzureRelayConfiguration,
+    ) -> Self {
+        Self::new(
+            descriptor.provider_id.clone(),
+            descriptor.configuration_schema_fingerprint.clone(),
+            descriptor.configured_scope_digest.clone(),
+            configuration,
+        )
+    }
+}
+
+impl fmt::Debug for AzureRelayFactoryEntry {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AzureRelayFactoryEntry")
+            .field("provider_id", &"<redacted>")
+            .field("configuration_digests", &"<redacted>")
+            .field("configuration", &self.configuration)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Registry factory for all configured Azure Relay instances in one agent.
 ///
 /// The shared semantic port remains co-located with the credential owner. Each
 /// constructed instance receives only its agent-local opaque configuration.
 pub struct AzureRelayProviderFactory {
-    configurations: BTreeMap<ProviderId, AzureRelayConfiguration>,
+    configurations: BTreeMap<ProviderId, AzureRelayFactoryEntry>,
     port: Arc<dyn RelayControlPort>,
     clock: Arc<dyn ProviderClock>,
 }
@@ -64,19 +113,22 @@ pub struct AzureRelayProviderFactory {
 impl AzureRelayProviderFactory {
     pub fn new(
         port: Arc<dyn RelayControlPort>,
-        configurations: impl IntoIterator<Item = (ProviderId, AzureRelayConfiguration)>,
+        configurations: impl IntoIterator<Item = AzureRelayFactoryEntry>,
     ) -> Result<Self, AzureRelayFactoryBuildError> {
         Self::with_clock(port, configurations, Arc::new(SystemProviderClock))
     }
 
     pub fn with_clock(
         port: Arc<dyn RelayControlPort>,
-        configurations: impl IntoIterator<Item = (ProviderId, AzureRelayConfiguration)>,
+        configurations: impl IntoIterator<Item = AzureRelayFactoryEntry>,
         clock: Arc<dyn ProviderClock>,
     ) -> Result<Self, AzureRelayFactoryBuildError> {
         let mut by_provider = BTreeMap::new();
-        for (provider_id, configuration) in configurations {
-            if by_provider.insert(provider_id, configuration).is_some() {
+        for entry in configurations {
+            if by_provider
+                .insert(entry.provider_id.clone(), entry)
+                .is_some()
+            {
                 return Err(AzureRelayFactoryBuildError::DuplicateProvider);
             }
             if by_provider.len() > MAX_PROVIDER_REGISTRY_ENTRIES {
@@ -120,14 +172,18 @@ impl ProviderFactory for AzureRelayProviderFactory {
         {
             return Err(FactoryError::Rejected);
         }
-        let configuration = self
+        let entry = self
             .configurations
             .get(&descriptor.provider_id)
-            .cloned()
             .ok_or(FactoryError::Rejected)?;
+        if entry.configuration_schema_fingerprint != descriptor.configuration_schema_fingerprint
+            || entry.configured_scope_digest != descriptor.configured_scope_digest
+        {
+            return Err(FactoryError::Rejected);
+        }
         let provider = AzureRelayTransportProvider::with_clock(
             descriptor.clone(),
-            configuration,
+            entry.configuration.clone(),
             Arc::clone(&self.port),
             Arc::clone(&self.clock),
         )

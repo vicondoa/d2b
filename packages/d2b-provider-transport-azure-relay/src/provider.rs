@@ -20,7 +20,8 @@ use d2b_provider_toolkit::ProviderValues;
 use crate::port::{
     RelayAdoptRequest, RelayCloseOutcome, RelayCloseRequest, RelayControlPort,
     RelayExpectedResource, RelayInspectRequest, RelayInspection, RelayOpenRequest,
-    RelayPortFailure, RelayRendezvousId, RelayResource, RelayResourceState, RelayTransportLimits,
+    RelayPortCapabilities, RelayPortFailure, RelayRendezvousId, RelayResource, RelayResourceState,
+    RelayTransportLimits,
 };
 
 pub const AZURE_RELAY_IMPLEMENTATION_ID: &str = "azure-relay";
@@ -128,13 +129,24 @@ impl Error for AzureRelayProviderBuildError {}
 /// has no safe endpoint/credential input and the production path uses an
 /// already-configured opaque binding.
 pub fn azure_relay_capabilities() -> ProviderCapabilitySet {
-    ProviderCapabilitySet::new(vec![
-        ProviderCapability(ProviderMethod::TransportConnect),
-        ProviderCapability(ProviderMethod::TransportListen),
-        ProviderCapability(ProviderMethod::TransportRevokeBinding),
-        ProviderCapability(ProviderMethod::TransportInspect),
-    ])
-    .expect("the static Azure Relay capability set is valid")
+    capabilities_for_port(RelayPortCapabilities::production())
+}
+
+fn capabilities_for_port(capabilities: RelayPortCapabilities) -> ProviderCapabilitySet {
+    let mut methods = Vec::with_capacity(4);
+    if capabilities.connect() {
+        methods.push(ProviderCapability(ProviderMethod::TransportConnect));
+    }
+    if capabilities.listen() {
+        methods.push(ProviderCapability(ProviderMethod::TransportListen));
+    }
+    if capabilities.close() {
+        methods.push(ProviderCapability(ProviderMethod::TransportRevokeBinding));
+    }
+    if capabilities.inspect() && capabilities.adopt() {
+        methods.push(ProviderCapability(ProviderMethod::TransportInspect));
+    }
+    ProviderCapabilitySet::new(methods).expect("the static Azure Relay capability set is valid")
 }
 
 /// Canonical async Azure Relay transport provider.
@@ -170,7 +182,7 @@ impl AzureRelayTransportProvider {
         port: Arc<dyn RelayControlPort>,
         clock: Arc<dyn ProviderClock>,
     ) -> Result<Self, AzureRelayProviderBuildError> {
-        validate_descriptor(&descriptor, &configuration)?;
+        validate_descriptor(&descriptor, &configuration, port.capabilities())?;
         Ok(Self {
             descriptor,
             configuration,
@@ -284,10 +296,10 @@ impl AzureRelayTransportProvider {
         if context.monotonic_deadline_remaining_ms == 0 {
             return Err(self.deadline_failure(context.operation, false));
         }
-        if context.peer_role != EndpointRole::ProviderAgent
-            || context.service != ServicePackage::ProviderV2
-            || context.operation.scope != self.configuration.scope
-        {
+        context
+            .validate()
+            .map_err(|_| self.invalid_request(context.operation))?;
+        if context.operation.scope != self.configuration.scope {
             return Err(self.failure(
                 context.operation,
                 ProviderFailureKind::UnauthorizedScope,
@@ -310,8 +322,8 @@ impl AzureRelayTransportProvider {
             return Err(self.deadline_failure(context.operation, false));
         }
         context
-            .validate()
-            .and_then(|()| context.operation.validate(&self.descriptor, now))
+            .operation
+            .validate(&self.descriptor, now)
             .map_err(|_| self.invalid_request(context.operation))?;
         let wall_remaining = context.operation.expires_at_unix_ms - now;
         let wall_remaining = u32::try_from(wall_remaining).unwrap_or(u32::MAX).max(1);
@@ -866,7 +878,7 @@ impl Provider for AzureRelayTransportProvider {
 
 impl TransportProvider for AzureRelayTransportProvider {
     fn capabilities(&self) -> ProviderCapabilitySet {
-        azure_relay_capabilities()
+        self.descriptor.capabilities.clone()
     }
 
     fn connect<'a>(
@@ -955,6 +967,7 @@ impl PortCallClass {
 fn validate_descriptor(
     descriptor: &ProviderDescriptor,
     configuration: &AzureRelayConfiguration,
+    port_capabilities: RelayPortCapabilities,
 ) -> Result<(), AzureRelayProviderBuildError> {
     descriptor
         .validate()
@@ -965,7 +978,12 @@ fn validate_descriptor(
     if descriptor.implementation_id.as_str() != AZURE_RELAY_IMPLEMENTATION_ID {
         return Err(AzureRelayProviderBuildError::WrongImplementation);
     }
-    if descriptor.capabilities != azure_relay_capabilities() {
+    if !port_capabilities.connect()
+        || !port_capabilities.close()
+        || !port_capabilities.inspect()
+        || !port_capabilities.adopt()
+        || descriptor.capabilities != capabilities_for_port(port_capabilities)
+    {
         return Err(AzureRelayProviderBuildError::WrongCapabilities);
     }
     let ProviderPlacement::ProviderAgent {
