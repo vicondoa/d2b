@@ -422,7 +422,13 @@ impl<T> EventQueue<T> {
 
     fn receive(&mut self, waiter: Reply<T>) -> Result<()> {
         if let Some(event) = self.events.pop_front() {
-            let _ = waiter.send(Ok(event));
+            match waiter.send(Ok(event)) {
+                Ok(()) => {}
+                Err(Ok(returned)) => self.events.push_front(returned),
+                Err(Err(_)) => {
+                    return Err(SessionError::new(SessionErrorCode::InternalInvariant));
+                }
+            }
         } else {
             if self.waiters.len() >= DRIVER_COMMAND_CAPACITY {
                 return Err(backpressure());
@@ -692,4 +698,22 @@ fn disconnected() -> SessionError {
 
 fn backpressure() -> SessionError {
     SessionError::new(SessionErrorCode::QueueBackpressure)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cancelled_immediate_receiver_restores_queued_event() {
+        let mut queue = EventQueue::new();
+        queue.deliver(7_u8).unwrap();
+        let (waiter, receiver) = oneshot::channel();
+        drop(receiver);
+        queue.receive(waiter).unwrap();
+
+        let (waiter, mut receiver) = oneshot::channel();
+        queue.receive(waiter).unwrap();
+        assert_eq!(receiver.try_recv().unwrap().unwrap(), 7);
+    }
 }
