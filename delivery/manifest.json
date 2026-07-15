@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "program": "adr0045",
-  "wave": "w3",
+  "wave": "w4",
   "authority_repository": "github.com/vicondoa/d2b",
   "panel_trust_root_sha256": "ce93b41c335753cbc98033b5011955967795cd1df90c903d30b8ac0be1f351d3",
   "repositories": [
@@ -9,15 +9,15 @@
       "id": "github.com/vicondoa/d2b",
       "object_format": "sha1",
       "trunk_ref": "main",
-      "integration_ref": "adr0045-w3-integrated"
+      "integration_ref": "adr0045-w4-integrated"
     }
   ],
   "stack_nodes": [
     {
-      "id": "d2b-w3",
+      "id": "d2b-w4",
       "repository": "github.com/vicondoa/d2b",
-      "branch": "adr0045-w3-integrated",
-      "pr_number": 312,
+      "branch": "adr0045-w4-integrated",
+      "pr_number": 313,
       "external_dependencies": []
     }
   ],
@@ -40,7 +40,7 @@
   ],
   "required_checks": [
     {
-      "node": "d2b-w3",
+      "node": "d2b-w4",
       "name": "check",
       "publisher": {
         "kind": "check_run",
@@ -51,7 +51,7 @@
       }
     },
     {
-      "node": "d2b-w3",
+      "node": "d2b-w4",
       "name": "eval",
       "publisher": {
         "kind": "check_run",
@@ -62,7 +62,7 @@
       }
     },
     {
-      "node": "d2b-w3",
+      "node": "d2b-w4",
       "name": "eval-shell-tests",
       "publisher": {
         "kind": "check_run",
@@ -982,6 +982,186 @@
       "name": "w3-workspace-policy",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/xtask/tests/policy_workspace.rs"
+    },
+    {
+      "name": "w4-azure-vm-fake-sdk-cargo",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-azure-vm-fake-sdk/Cargo.toml"
+    },
+    {
+      "name": "w4-azure-vm-fake-sdk-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-azure-vm-fake-sdk/src/lib.rs"
+    },
+    {
+      "name": "w4-provider-audio-pipewire-vhost-user-cargo",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-audio-pipewire-vhost-user/Cargo.toml"
+    },
+    {
+      "name": "w4-provider-audio-pipewire-vhost-user-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-audio-pipewire-vhost-user/src/lib.rs"
+    },
+    {
+      "name": "w4-provider-credential-entra-cargo",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-credential-entra/Cargo.toml"
+    },
+    {
+      "name": "w4-provider-credential-entra-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-credential-entra/src/lib.rs"
+    },
+    {
+      "name": "w4-provider-credential-managed-identity-cargo",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-credential-managed-identity/Cargo.toml"
+    },
+    {
+      "name": "w4-provider-credential-managed-identity-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-credential-managed-identity/src/lib.rs"
+    },
+    {
+      "name": "w4-provider-credential-secret-service-cargo",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-credential-secret-service/Cargo.toml"
+    },
+    {
+      "name": "w4-provider-credential-secret-service-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-credential-secret-service/src/lib.rs"
+    },
+    {
+      "name": "w4-provider-device-host-mediated-cargo",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-device-host-mediated/Cargo.toml"
+    },
+    {
+      "name": "w4-provider-device-host-mediated-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-device-host-mediated/src/lib.rs"
+    },
+    {
+      "name": "w4-provider-display-wayland-cargo",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-display-wayland/Cargo.toml"
+    },
+    {
+      "name": "w4-provider-display-wayland-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-display-wayland/src/lib.rs"
+    },
+    {
+      "name": "w4-provider-implementations-reference",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "docs/reference/v2-provider-implementations.md"
+    },
+    {
+      "name": "w4-provider-infrastructure-azure-vm-cargo",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-infrastructure-azure-vm/Cargo.toml"
+    },
+    {
+      "name": "w4-provider-infrastructure-azure-vm-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-infrastructure-azure-vm/src/lib.rs"
+    },
+    {
+      "name": "w4-provider-network-local-realm-cargo",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-network-local-realm/Cargo.toml"
+    },
+    {
+      "name": "w4-provider-network-local-realm-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-network-local-realm/src/lib.rs"
+    },
+    {
+      "name": "w4-provider-observability-local-cargo",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-observability-local/Cargo.toml"
+    },
+    {
+      "name": "w4-provider-observability-local-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-observability-local/src/lib.rs"
+    },
+    {
+      "name": "w4-provider-runtime-azure-container-apps-cargo",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-runtime-azure-container-apps/Cargo.toml"
+    },
+    {
+      "name": "w4-provider-runtime-azure-container-apps-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-runtime-azure-container-apps/src/lib.rs"
+    },
+    {
+      "name": "w4-provider-runtime-azure-vm-cargo",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-runtime-azure-vm/Cargo.toml"
+    },
+    {
+      "name": "w4-provider-runtime-azure-vm-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-runtime-azure-vm/src/lib.rs"
+    },
+    {
+      "name": "w4-provider-runtime-local-cargo",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-runtime-local/Cargo.toml"
+    },
+    {
+      "name": "w4-provider-runtime-local-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-runtime-local/src/lib.rs"
+    },
+    {
+      "name": "w4-provider-storage-local-cargo",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-storage-local/Cargo.toml"
+    },
+    {
+      "name": "w4-provider-storage-local-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-storage-local/src/lib.rs"
+    },
+    {
+      "name": "w4-provider-substrate-host-cargo",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-substrate-host/Cargo.toml"
+    },
+    {
+      "name": "w4-provider-substrate-host-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-substrate-host/src/lib.rs"
+    },
+    {
+      "name": "w4-provider-toolkit-values",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-toolkit/src/values.rs"
+    },
+    {
+      "name": "w4-provider-transport-azure-relay-cargo",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-transport-azure-relay/Cargo.toml"
+    },
+    {
+      "name": "w4-provider-transport-azure-relay-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-transport-azure-relay/src/lib.rs"
+    },
+    {
+      "name": "w4-provider-transport-local-cargo",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-transport-local/Cargo.toml"
+    },
+    {
+      "name": "w4-provider-transport-local-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-transport-local/src/lib.rs"
     }
   ]
 }

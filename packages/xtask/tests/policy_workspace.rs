@@ -397,12 +397,14 @@ fn v2_foundation_delivery_fingerprints_cover_every_tracked_file() {
         .as_array()
         .expect("contract fingerprints")
         .iter()
-        .filter(|row| {
-            row["name"]
-                .as_str()
-                .is_some_and(|name| name.starts_with("w3-"))
-        })
         .map(|row| row["path"].as_str().expect("fingerprint path").to_owned())
+        .filter(|path| {
+            V2_FOUNDATION_CRATES
+                .iter()
+                .any(|package| path.starts_with(&format!("packages/{package}/")))
+                || path == "docs/reference/v2-foundation-crates.md"
+                || path == "packages/xtask/tests/policy_workspace.rs"
+        })
         .collect::<BTreeSet<_>>();
 
     let mut expected = git_tracked_files()
@@ -417,6 +419,36 @@ fn v2_foundation_delivery_fingerprints_cover_every_tracked_file() {
     expected.insert("packages/xtask/tests/policy_workspace.rs".to_owned());
 
     assert_eq!(actual, expected);
+}
+
+#[test]
+fn w4_provider_delivery_fingerprints_cover_every_reserved_file() {
+    let manifest: serde_json::Value =
+        serde_json::from_str(&read_repo_file("delivery/manifest.json")).expect("delivery manifest");
+    let actual = manifest["contract_fingerprints"]
+        .as_array()
+        .expect("contract fingerprints")
+        .iter()
+        .map(|row| row["path"].as_str().expect("fingerprint path").to_owned())
+        .collect::<BTreeSet<_>>();
+
+    let mut expected = git_tracked_files()
+        .into_iter()
+        .filter(|path| {
+            W4_PROVIDER_CRATES
+                .iter()
+                .chain(std::iter::once(&W4_SUPPORT_CRATE))
+                .any(|package| path.starts_with(&format!("packages/{package}/")))
+        })
+        .collect::<BTreeSet<_>>();
+    expected.insert("docs/reference/v2-provider-implementations.md".to_owned());
+
+    let missing = expected.difference(&actual).cloned().collect::<Vec<_>>();
+    assert!(
+        missing.is_empty(),
+        "W4 provider delivery fingerprints are missing:\n{}",
+        missing.join("\n")
+    );
 }
 
 #[test]
