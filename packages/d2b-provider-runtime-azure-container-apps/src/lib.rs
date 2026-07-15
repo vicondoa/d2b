@@ -15,7 +15,7 @@ mod types;
 pub use control::{
     AcaControl, AcaControlContext, AcaControlError, AcaControlErrorBuildError, AcaControlErrorKind,
     AcaControlHealth, AcaCredentialLease, AcaCredentialLeaseClient, AcaCredentialLeaseRequest,
-    AcaCredentialPurpose, AcaDiagnosticCode, MAX_ACA_RETRY_AFTER_MS,
+    AcaCredentialPurpose, AcaDiagnosticCode, MAX_ACA_LEASE_CLEANUP_MS, MAX_ACA_RETRY_AFTER_MS,
 };
 pub use factory::{
     AcaFactoryBuildError, AcaRuntimeProviderBinding, AzureContainerAppsRuntimeProviderFactory,

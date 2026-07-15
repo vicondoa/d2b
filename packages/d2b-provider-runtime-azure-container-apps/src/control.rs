@@ -16,6 +16,7 @@ use crate::types::{
 };
 
 pub const MAX_ACA_RETRY_AFTER_MS: u32 = 5 * 60 * 1_000;
+pub const MAX_ACA_LEASE_CLEANUP_MS: u32 = 1_000;
 
 const HEALTH_OPERATIONS: &[SdkOperationClass] =
     &[SdkOperationClass::Authenticate, SdkOperationClass::Read];
@@ -146,6 +147,9 @@ pub trait AcaCredentialLeaseClient: Send + Sync {
         &self,
         request: &AcaCredentialLeaseRequest,
     ) -> Result<AcaCredentialLease, AcaControlError>;
+
+    /// Idempotently revokes or abandons only the supplied opaque lease.
+    async fn revoke(&self, lease: AcaCredentialLease) -> Result<(), AcaControlError>;
 }
 
 #[derive(Clone, PartialEq, Eq)]

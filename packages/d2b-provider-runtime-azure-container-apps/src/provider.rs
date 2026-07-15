@@ -1,6 +1,8 @@
 #![allow(clippy::result_large_err)] // ProviderFailure is the canonical provider contract error.
 
-use std::{collections::BTreeMap, error::Error, fmt, future::Future, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap, error::Error, fmt, future::Future, ops::Deref, sync::Arc, time::Duration,
+};
 
 use d2b_contracts::{
     v2_component_session::{BoundedVec, EndpointRole, ServicePackage},
@@ -22,15 +24,16 @@ use d2b_contracts::{
 use d2b_provider::{ProviderClock, SystemProviderClock};
 use d2b_provider_toolkit::ProviderValues;
 use tokio::{
+    runtime::Handle,
     sync::{Mutex, MutexGuard},
-    time::{Instant, timeout_at},
+    time::{Instant, timeout, timeout_at},
 };
 
 use crate::{
     control::{
         AcaControl, AcaControlContext, AcaControlError, AcaControlErrorKind, AcaControlHealth,
         AcaCredentialLease, AcaCredentialLeaseClient, AcaCredentialLeaseRequest,
-        AcaCredentialPurpose,
+        AcaCredentialPurpose, MAX_ACA_LEASE_CLEANUP_MS,
     },
     types::{
         AcaDeleteOutcome, AcaDesiredDiskImage, AcaDesiredSandbox, AcaDiskImageRecord,
@@ -189,8 +192,70 @@ impl CallDeadline {
     }
 
     fn remaining_ms(&self) -> Option<u32> {
-        self.remaining()
-            .map(|remaining| remaining.as_millis().clamp(1, u128::from(u32::MAX)) as u32)
+        let remaining_ms = self.remaining()?.as_millis();
+        (remaining_ms > 0).then(|| remaining_ms.min(u128::from(u32::MAX)) as u32)
+    }
+}
+
+struct ActiveCredentialLease {
+    lease: Option<AcaCredentialLease>,
+    client: Arc<dyn AcaCredentialLeaseClient>,
+    runtime: Option<Handle>,
+}
+
+impl ActiveCredentialLease {
+    fn new(lease: AcaCredentialLease, client: Arc<dyn AcaCredentialLeaseClient>) -> Self {
+        Self {
+            lease: Some(lease),
+            client,
+            runtime: Handle::try_current().ok(),
+        }
+    }
+
+    fn disarm(mut self) {
+        self.lease.take();
+    }
+
+    async fn revoke(mut self) -> Result<(), ()> {
+        let Some(lease) = self.lease.take() else {
+            return Err(());
+        };
+        match timeout(
+            Duration::from_millis(u64::from(MAX_ACA_LEASE_CLEANUP_MS)),
+            self.client.revoke(lease),
+        )
+        .await
+        {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(_)) | Err(_) => Err(()),
+        }
+    }
+}
+
+impl Deref for ActiveCredentialLease {
+    type Target = AcaCredentialLease;
+
+    fn deref(&self) -> &Self::Target {
+        let Some(lease) = self.lease.as_ref() else {
+            unreachable!()
+        };
+        lease
+    }
+}
+
+impl Drop for ActiveCredentialLease {
+    fn drop(&mut self) {
+        let (Some(lease), Some(runtime)) = (self.lease.take(), self.runtime.as_ref()) else {
+            return;
+        };
+        let client = Arc::clone(&self.client);
+        let _cleanup = runtime.spawn(async move {
+            let _ = timeout(
+                Duration::from_millis(u64::from(MAX_ACA_LEASE_CLEANUP_MS)),
+                client.revoke(lease),
+            )
+            .await;
+        });
     }
 }
 
@@ -461,6 +526,47 @@ impl AzureContainerAppsRuntimeProvider {
                 ProviderHealthReason::HealthTimeout,
                 ProviderRemediation::RetryBounded,
             )
+        }
+    }
+
+    fn lease_cleanup_ambiguous_failure(
+        &self,
+        operation: &ProviderOperationContext,
+    ) -> ProviderFailure {
+        self.failure(
+            operation,
+            ProviderFailureKind::AmbiguousMutation,
+            RetryClass::AfterObservation,
+            ProviderHealthReason::AuthenticationFailed,
+            ProviderRemediation::ReEnrollPeer,
+        )
+    }
+
+    async fn revoke_failed_lease(
+        &self,
+        operation: &ProviderOperationContext,
+        lease: ActiveCredentialLease,
+        failure: ProviderFailure,
+    ) -> ProviderFailure {
+        if lease.revoke().await.is_ok() {
+            failure
+        } else {
+            self.lease_cleanup_ambiguous_failure(operation)
+        }
+    }
+
+    async fn finish_lease<T>(
+        &self,
+        operation: &ProviderOperationContext,
+        lease: ActiveCredentialLease,
+        result: ProviderResult<T>,
+    ) -> ProviderResult<T> {
+        match result {
+            Ok(value) => {
+                lease.disarm();
+                Ok(value)
+            }
+            Err(failure) => Err(self.revoke_failed_lease(operation, lease, failure).await),
         }
     }
 
@@ -800,12 +906,21 @@ impl AzureContainerAppsRuntimeProvider {
         deadline: &CallDeadline,
         operation: &ProviderOperationContext,
         purpose: AcaCredentialPurpose,
-        now: u64,
-    ) -> ProviderResult<AcaCredentialLease> {
-        let requested_expiry_unix_ms = operation.expires_at_unix_ms.min(
-            now.saturating_add(MAX_PROVIDER_LEASE_LIFETIME_MS)
-                .min(MAX_SAFE_JSON_INTEGER),
-        );
+    ) -> ProviderResult<ActiveCredentialLease> {
+        let now = self.now();
+        let effective_remaining_ms = deadline
+            .remaining_ms()
+            .ok_or_else(|| self.deadline_failure(operation, false))?;
+        let requested_expiry_unix_ms = operation
+            .expires_at_unix_ms
+            .min(
+                now.saturating_add(u64::from(effective_remaining_ms))
+                    .min(MAX_SAFE_JSON_INTEGER),
+            )
+            .min(
+                now.saturating_add(MAX_PROVIDER_LEASE_LIFETIME_MS)
+                    .min(MAX_SAFE_JSON_INTEGER),
+            );
         if requested_expiry_unix_ms <= now {
             return Err(self.deadline_failure(operation, false));
         }
@@ -819,34 +934,28 @@ impl AzureContainerAppsRuntimeProvider {
                 self.credential_client.acquire(&request),
             )
             .await?;
-        lease
+        let lease = ActiveCredentialLease::new(lease, Arc::clone(&self.credential_client));
+        let validation_failed = lease
             .metadata()
             .validate(&self.credential_descriptor, &self.descriptor, self.now())
-            .map_err(|_| {
-                self.failure(
-                    operation,
-                    ProviderFailureKind::CredentialLeaseInvalid,
-                    RetryClass::AfterInteraction,
-                    ProviderHealthReason::AuthenticationFailed,
-                    ProviderRemediation::ReEnrollPeer,
-                )
-            })?;
-        if lease.metadata().state != CredentialLeaseState::Active
+            .is_err()
+            || lease.metadata().state != CredentialLeaseState::Active
             || lease.metadata().transfer_policy != CredentialLeaseTransferPolicy::Forbidden
             || purpose.required_operations().iter().any(|operation_class| {
                 !lease
                     .metadata()
                     .allowed_operations
                     .contains(operation_class)
-            })
-        {
-            return Err(self.failure(
+            });
+        if validation_failed {
+            let failure = self.failure(
                 operation,
                 ProviderFailureKind::CredentialLeaseInvalid,
                 RetryClass::AfterInteraction,
                 ProviderHealthReason::AuthenticationFailed,
                 ProviderRemediation::ReEnrollPeer,
-            ));
+            );
+            return Err(self.revoke_failed_lease(operation, lease, failure).await);
         }
         Ok(lease)
     }
@@ -1389,15 +1498,10 @@ impl AzureContainerAppsRuntimeProvider {
             };
         }
 
+        let lease = self
+            .acquire_lease(&deadline, context.operation, AcaCredentialPurpose::Ensure)
+            .await?;
         let result = async {
-            let lease = self
-                .acquire_lease(
-                    &deadline,
-                    context.operation,
-                    AcaCredentialPurpose::Ensure,
-                    now,
-                )
-                .await?;
             let query = self.query(context.operation, &workload_id);
             let candidates = self
                 .find_sandboxes(&deadline, context.operation, &lease, &query, false)
@@ -1468,6 +1572,7 @@ impl AzureContainerAppsRuntimeProvider {
             self.handle_from_plan(context.operation, plan, &record, now)
         }
         .await;
+        let result = self.finish_lease(context.operation, lease, result).await;
         self.record_response(
             context.operation,
             CachedResponse::Handle(Box::new(result.clone())),
@@ -1568,15 +1673,10 @@ impl AzureContainerAppsRuntimeProvider {
             };
         }
 
+        let lease = self
+            .acquire_lease(&deadline, context.operation, AcaCredentialPurpose::Start)
+            .await?;
         let result = async {
-            let lease = self
-                .acquire_lease(
-                    &deadline,
-                    context.operation,
-                    AcaCredentialPurpose::Start,
-                    now,
-                )
-                .await?;
             let query = self.query(context.operation, &workload_id);
             let candidates = self
                 .find_sandboxes(&deadline, context.operation, &lease, &query, false)
@@ -1661,6 +1761,7 @@ impl AzureContainerAppsRuntimeProvider {
             )
         }
         .await;
+        let result = self.finish_lease(context.operation, lease, result).await;
         self.record_response(
             context.operation,
             CachedResponse::Observation(Box::new(result.clone())),
@@ -1689,15 +1790,10 @@ impl AzureContainerAppsRuntimeProvider {
             };
         }
 
+        let lease = self
+            .acquire_lease(&deadline, context.operation, AcaCredentialPurpose::Stop)
+            .await?;
         let result = async {
-            let lease = self
-                .acquire_lease(
-                    &deadline,
-                    context.operation,
-                    AcaCredentialPurpose::Stop,
-                    now,
-                )
-                .await?;
             let query = self.query(context.operation, &workload_id);
             let candidates = self
                 .find_sandboxes(&deadline, context.operation, &lease, &query, false)
@@ -1780,6 +1876,7 @@ impl AzureContainerAppsRuntimeProvider {
             )
         }
         .await;
+        let result = self.finish_lease(context.operation, lease, result).await;
         self.record_response(
             context.operation,
             CachedResponse::Observation(Box::new(result.clone())),
@@ -1808,15 +1905,10 @@ impl AzureContainerAppsRuntimeProvider {
             };
         }
 
+        let lease = self
+            .acquire_lease(&deadline, context.operation, AcaCredentialPurpose::Inspect)
+            .await?;
         let result = async {
-            let lease = self
-                .acquire_lease(
-                    &deadline,
-                    context.operation,
-                    AcaCredentialPurpose::Inspect,
-                    now,
-                )
-                .await?;
             let query = self.query(context.operation, &workload_id);
             let candidates = self
                 .find_sandboxes(&deadline, context.operation, &lease, &query, false)
@@ -1853,6 +1945,7 @@ impl AzureContainerAppsRuntimeProvider {
             )
         }
         .await;
+        let result = self.finish_lease(context.operation, lease, result).await;
         self.record_response(
             context.operation,
             CachedResponse::Observation(Box::new(result.clone())),
@@ -1880,15 +1973,10 @@ impl AzureContainerAppsRuntimeProvider {
             };
         }
 
+        let lease = self
+            .acquire_lease(&deadline, context.operation, AcaCredentialPurpose::Adopt)
+            .await?;
         let result = async {
-            let lease = self
-                .acquire_lease(
-                    &deadline,
-                    context.operation,
-                    AcaCredentialPurpose::Adopt,
-                    now,
-                )
-                .await?;
             let query = self.query(context.operation, &workload_id);
             let candidates = self
                 .find_sandboxes(&deadline, context.operation, &lease, &query, false)
@@ -1937,6 +2025,7 @@ impl AzureContainerAppsRuntimeProvider {
             )
         }
         .await;
+        let result = self.finish_lease(context.operation, lease, result).await;
         self.record_response(
             context.operation,
             CachedResponse::Observation(Box::new(result.clone())),
@@ -1965,15 +2054,10 @@ impl AzureContainerAppsRuntimeProvider {
             };
         }
 
+        let lease = self
+            .acquire_lease(&deadline, context.operation, AcaCredentialPurpose::Destroy)
+            .await?;
         let result = async {
-            let lease = self
-                .acquire_lease(
-                    &deadline,
-                    context.operation,
-                    AcaCredentialPurpose::Destroy,
-                    now,
-                )
-                .await?;
             let query = self.query(context.operation, &workload_id);
             let candidates = self
                 .find_sandboxes(&deadline, context.operation, &lease, &query, false)
@@ -2018,6 +2102,7 @@ impl AzureContainerAppsRuntimeProvider {
                 .map_err(|error| self.contract_failure(context.operation, error))
         }
         .await;
+        let result = self.finish_lease(context.operation, lease, result).await;
         self.record_response(
             context.operation,
             CachedResponse::Receipt(Box::new(result.clone())),
@@ -2041,48 +2126,47 @@ impl Provider for AzureContainerAppsRuntimeProvider {
             self.validate_call(context, ProviderMethod::RuntimeInspect, now)?;
             let deadline = CallDeadline::new(context, now);
             let lease = self
-                .acquire_lease(
+                .acquire_lease(&deadline, context.operation, AcaCredentialPurpose::Health)
+                .await?;
+            let result = async {
+                let control_context = self.control_context(
                     &deadline,
                     context.operation,
-                    AcaCredentialPurpose::Health,
-                    now,
-                )
-                .await?;
-            let control_context = self.control_context(
-                &deadline,
-                context.operation,
-                &lease,
-                SdkOperationClass::Read,
-            )?;
-            let health = self
-                .await_external(
-                    &deadline,
-                    context.operation,
-                    false,
-                    self.control.health(&lease, &control_context),
-                )
-                .await?;
-            let (state, reason, remediation) = match health {
-                AcaControlHealth::Ready => (
-                    ProviderHealthState::Healthy,
-                    ProviderHealthReason::None,
-                    ProviderRemediation::None,
-                ),
-                AcaControlHealth::Degraded => (
-                    ProviderHealthState::Degraded,
-                    ProviderHealthReason::ProviderDegraded,
-                    ProviderRemediation::InspectProvider,
-                ),
-                AcaControlHealth::Unavailable => (
-                    ProviderHealthState::Unavailable,
-                    ProviderHealthReason::HealthStale,
-                    ProviderRemediation::RetryBounded,
-                ),
-            };
-            self.values(now)
-                .map_err(|_| self.internal_failure(context.operation))?
-                .health(state, reason, remediation)
-                .map_err(|error| self.contract_failure(context.operation, error))
+                    &lease,
+                    SdkOperationClass::Read,
+                )?;
+                let health = self
+                    .await_external(
+                        &deadline,
+                        context.operation,
+                        false,
+                        self.control.health(&lease, &control_context),
+                    )
+                    .await?;
+                let (state, reason, remediation) = match health {
+                    AcaControlHealth::Ready => (
+                        ProviderHealthState::Healthy,
+                        ProviderHealthReason::None,
+                        ProviderRemediation::None,
+                    ),
+                    AcaControlHealth::Degraded => (
+                        ProviderHealthState::Degraded,
+                        ProviderHealthReason::ProviderDegraded,
+                        ProviderRemediation::InspectProvider,
+                    ),
+                    AcaControlHealth::Unavailable => (
+                        ProviderHealthState::Unavailable,
+                        ProviderHealthReason::HealthStale,
+                        ProviderRemediation::RetryBounded,
+                    ),
+                };
+                self.values(now)
+                    .map_err(|_| self.internal_failure(context.operation))?
+                    .health(state, reason, remediation)
+                    .map_err(|error| self.contract_failure(context.operation, error))
+            }
+            .await;
+            self.finish_lease(context.operation, lease, result).await
         })
     }
 }
