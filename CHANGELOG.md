@@ -75,6 +75,8 @@ deprecations ship one minor release before removal.
   speculative Git Town PR stacks, exact-tree concurrent CI/validator/panel lanes,
   external `xtask` evidence and seals, full ten-role end-of-wave review, and the
   accepted local-root plus parent-spawned per-realm controller/broker model.
+- Made post-wave cleanup delete merged remote branches, finished worktrees and
+  their real Cargo targets, and local feature branches before running Nix GC.
 - Expanded and accepted ADR 0045 as the d2b 2.0 clean-break contract: destructive
   no-backup reset, universal authenticated ComponentSession IPC, eleven typed
   provider authorities, literal per-realm controller/broker boundaries,

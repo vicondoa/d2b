@@ -137,6 +137,23 @@ fn standalone_proofs_isolate_mixed_toolchain_targets() {
 }
 
 #[test]
+fn post_wave_cleanup_removes_branches_worktree_targets_and_gc_roots() {
+    let agents = read_repo_file("AGENTS.md");
+    for required in [
+        "Delete the merged remote feature branch.",
+        "Remove the finished local worktree.",
+        "Delete the corresponding local feature branch.",
+        "Run `nix-collect-garbage`",
+        "verify `git worktree list` contains only",
+    ] {
+        assert!(
+            agents.contains(required),
+            "post-wave cleanup contract is missing: {required}"
+        );
+    }
+}
+
+#[test]
 fn stale_ipc_crate_name_is_absent_from_current_sources() {
     let old_hyphen = format!("{}{}", "d2b", "-ipc");
     let old_underscore = format!("{}{}", "d2b", "_ipc");

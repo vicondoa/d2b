@@ -859,7 +859,15 @@ feature branches; `main` itself is maintained as a by-release history.
   under `packages/`. Focus broker feature passes with
   `-p d2b-priv-broker`; focus the persistent-shell helper's real bridge with
   `-p d2b-guest-shell-runner --features real-libshpool`.
-- The integrator MUST run `nix-collect-garbage` after each wave merge.
+- After each wave merge, the integrator MUST complete the whole post-wave
+  cleanup sequence:
+  1. Delete the merged remote feature branch.
+  2. If the finished worktree has a real `packages/target/`, clean that build
+     output; otherwise confirm the target is the shared-cache symlink or absent.
+  3. Remove the finished local worktree.
+  4. Delete the corresponding local feature branch.
+  5. Run `nix-collect-garbage` and verify `git worktree list` contains only
+     active work.
 - For the operator host running heavy iteration: prune OLD
   NixOS system generations periodically:
 
@@ -897,7 +905,7 @@ feature branches; `main` itself is maintained as a by-release history.
   the affected revision.
 - Before `git worktree remove`, confirm the worktree's
   `packages/target/` is the shared-cache symlink (or absent), not a
-  real per-worktree directory.
+  real per-worktree directory. Clean a real target before removal.
 - `tests/tools/preflight-disk-space.sh` fails the wave when free disk under
   `$ROOT` drops below 10 GiB. Runs after the orphan reapers but BEFORE
   the rust toolchain bootstrap so the fail-closed guard cannot be
