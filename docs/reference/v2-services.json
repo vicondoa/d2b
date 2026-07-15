@@ -273,7 +273,7 @@
     {
       "package": "d2b.provider.v2",
       "service": "RuntimeProviderService",
-      "schemaFingerprint": "1b016d2f54285f00ad63a3998c1823c2d224252d11f2d9f1763b41de7fca06d1",
+      "schemaFingerprint": "a704f7b4427378fb2610578ae8ade9829917e8840cf631d82b634d80b127e49b",
       "methods": [
         {
           "name": "Health",
@@ -360,7 +360,7 @@
     {
       "package": "d2b.provider.v2",
       "service": "InfrastructureProviderService",
-      "schemaFingerprint": "fd2cef7d357e84356abde07ff908ef531339fa92d36e776f34b6a52913e1300c",
+      "schemaFingerprint": "76d6bbf4569ffb19f0a9177577447b09fe1b5b81ce52072028018d845221a9aa",
       "methods": [
         {
           "name": "Health",
@@ -439,7 +439,7 @@
     {
       "package": "d2b.provider.v2",
       "service": "TransportProviderService",
-      "schemaFingerprint": "03c6676917b25ea298a0b71753ffe322be32a932146b12f8692391421416a7c0",
+      "schemaFingerprint": "e6809ce631725c4220a2e95f430be5c8d5d30b25cb588dab3d173143467689d5",
       "methods": [
         {
           "name": "Health",
@@ -502,7 +502,7 @@
     {
       "package": "d2b.provider.v2",
       "service": "SubstrateProviderService",
-      "schemaFingerprint": "8bee62ff608378eb7a7507c9cd9ba02971f583556e47d2a3ee0ca606bf0d09a2",
+      "schemaFingerprint": "787e70787fa75783a167c20173a4c8551f3f2b20c14e85e6b729994109822930",
       "methods": [
         {
           "name": "Health",
@@ -549,7 +549,7 @@
     {
       "package": "d2b.provider.v2",
       "service": "CredentialProviderService",
-      "schemaFingerprint": "1bb7ee3da13e36b19dec350147bcd2978749634cff4e2f48ef726bcad7cef7d5",
+      "schemaFingerprint": "839925fe5d9820a99ba81f86ebdc2f236504f4c0a023c610d6d89b911b373e3b",
       "methods": [
         {
           "name": "Health",
@@ -604,7 +604,7 @@
     {
       "package": "d2b.provider.v2",
       "service": "DisplayProviderService",
-      "schemaFingerprint": "61fae07fad1382ecd2734bd25d7bef42d783ee34dfa9ceb191846f1728424405",
+      "schemaFingerprint": "71613d6408754f6aed4b4fd3a4fca3cd570918f116cb02fdbb7088198bfbc570",
       "methods": [
         {
           "name": "Health",
@@ -659,7 +659,7 @@
     {
       "package": "d2b.provider.v2",
       "service": "NetworkProviderService",
-      "schemaFingerprint": "f84594752e88d7c7486800f2ddbbc99e4226445ba30df750cfa5c42edf1aa399",
+      "schemaFingerprint": "40cfe14b7a482bcc9368246cca79be9902981cb18971f608a70ce8c2ed64891d",
       "methods": [
         {
           "name": "Health",
@@ -722,7 +722,7 @@
     {
       "package": "d2b.provider.v2",
       "service": "StorageProviderService",
-      "schemaFingerprint": "770c3be0e680532c6ba0613a28dff94d665472af013f10ee55e142f45133ac36",
+      "schemaFingerprint": "10f5dd00ad05715e34b77445b6ae0ba7876cd4188924d4b145d713a2091d63f2",
       "methods": [
         {
           "name": "Health",
@@ -793,7 +793,7 @@
     {
       "package": "d2b.provider.v2",
       "service": "DeviceProviderService",
-      "schemaFingerprint": "42ed00bb7a3591f11fef5edc6614c85b8f3f6cfa402f4fd262e6132d1eed7e34",
+      "schemaFingerprint": "1c2a6f20c00deef20fe938cf5dbd31570c91326db3b5f80229afabde1a46ddf2",
       "methods": [
         {
           "name": "Health",
@@ -856,7 +856,7 @@
     {
       "package": "d2b.provider.v2",
       "service": "AudioProviderService",
-      "schemaFingerprint": "a6e63f607ac7f8af200ad5f4e962428a1e4b7ffeac1b8edcb2eeffde93e1744a",
+      "schemaFingerprint": "8a8b9da069ef48f22dc893a33fd993237eb8508accbb4f95f4dce332ecf296c8",
       "methods": [
         {
           "name": "Health",
@@ -919,7 +919,7 @@
     {
       "package": "d2b.provider.v2",
       "service": "ObservabilityProviderService",
-      "schemaFingerprint": "dc10e98031e0a4187449f3295763d18cf35d573db9fccc67b9f09626acbf4aad",
+      "schemaFingerprint": "00fbb71d5d2d8c36a8b47011943568d3dfbdabd674d39df7fb96b7924d1d35a8",
       "methods": [
         {
           "name": "Health",

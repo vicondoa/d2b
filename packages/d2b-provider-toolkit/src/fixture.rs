@@ -13,10 +13,13 @@ use d2b_contracts::{
         CredentialPlacementBinding, CredentialProvider, DeviceMediationPosture, DeviceProvider,
         DeviceSelectorId, DisplayProvider, Fingerprint, Generation, IdempotencyKey,
         ImplementationId, InfrastructurePowerState, InfrastructureProvider, LeaseId,
-        MutationReceipt, MutationState, NetworkPosture, NetworkProvider, ObservabilityExportFormat,
-        ObservabilityProvider, ObservabilityView, ObservationReason, ObservedLifecycleState,
-        OperationId, PROVIDER_SCHEMA_VERSION, PersistentIdentityPosture, PlanId,
-        PlannedResourceClass, PrincipalRef, ProcessAuthority, Provider, ProviderApiVersion,
+        MutationReceipt, MutationState, NetworkPosture, NetworkProvider,
+        OBSERVABILITY_RECORD_ENCODED_UPPER_BOUND_BYTES, ObservabilityExportFormat,
+        ObservabilityLabels, ObservabilityMetricLabel, ObservabilityOperationLabel,
+        ObservabilityOutcomeLabel, ObservabilityProjectionKind, ObservabilityProvider,
+        ObservabilityQueryResult, ObservabilityRecord, ObservabilityView, ObservationReason,
+        ObservedLifecycleState, OperationId, PROVIDER_SCHEMA_VERSION, PersistentIdentityPosture,
+        PlanId, PlannedResourceClass, PrincipalRef, ProcessAuthority, Provider, ProviderApiVersion,
         ProviderAuthority, ProviderCallContext, ProviderCapability, ProviderCapabilitySet,
         ProviderContractError, ProviderDescriptor, ProviderFuture, ProviderHandle, ProviderHealth,
         ProviderHealthReason, ProviderHealthState, ProviderMethod, ProviderObservation,
@@ -413,6 +416,45 @@ impl FakeProvider {
             .receipt(context, MutationState::Applied)
             .unwrap_or_else(|_| unreachable!())
     }
+
+    fn query_result(&self, request: &ProviderOperationRequest) -> ObservabilityQueryResult {
+        let metric = match &request.input {
+            ProviderOperationInput::ObservabilityQuery {
+                view: ObservabilityView::Health,
+                ..
+            } => ObservabilityMetricLabel::ProviderHealth,
+            ProviderOperationInput::ObservabilityQuery {
+                view: ObservabilityView::Lifecycle,
+                ..
+            } => ObservabilityMetricLabel::LifecycleTransition,
+            ProviderOperationInput::ObservabilityQuery {
+                view: ObservabilityView::Operations,
+                ..
+            } => ObservabilityMetricLabel::OperationTotal,
+            _ => ObservabilityMetricLabel::ProviderHealth,
+        };
+        let result = ObservabilityQueryResult {
+            observation: self.observation(&request.context, AdoptionState::NotAttempted, None),
+            records: BoundedVec::new(vec![ObservabilityRecord {
+                observed_at_unix_ms: self.fixture.now_unix_ms,
+                projection: ObservabilityProjectionKind::Metrics,
+                labels: ObservabilityLabels {
+                    provider_type: ProviderType::Runtime,
+                    health_state: ProviderHealthState::Healthy,
+                    metric,
+                    operation: ObservabilityOperationLabel::Inspect,
+                    outcome: ObservabilityOutcomeLabel::Success,
+                },
+                value: 1,
+            }])
+            .unwrap_or_else(|_| unreachable!()),
+            next_cursor: None,
+            encoded_bytes_upper_bound: OBSERVABILITY_RECORD_ENCODED_UPPER_BOUND_BYTES,
+            truncated: false,
+        };
+        result.validate(request).unwrap_or_else(|_| unreachable!());
+        result
+    }
 }
 
 impl Provider for FakeProvider {
@@ -660,7 +702,13 @@ impl AudioProvider for FakeProvider {
 impl ObservabilityProvider for FakeProvider {
     fake_capabilities!();
     fake_observation!(status);
-    fake_observation!(query);
+    fn query<'a>(
+        &'a self,
+        _context: &'a ProviderCallContext<'a>,
+        request: &'a ProviderOperationRequest,
+    ) -> ProviderFuture<'a, ObservabilityQueryResult> {
+        Box::pin(async move { Ok(self.query_result(request)) })
+    }
     fake_handle!(subscribe);
     fake_mutation!(export);
 }

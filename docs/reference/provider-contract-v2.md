@@ -78,6 +78,26 @@ days. The input union has no JSON escape hatch, endpoint, credential, command,
 filesystem path, raw query, or arbitrary label field. Identifier-bearing
 inputs redact their values from `Debug`.
 
+### Bounded observability results
+
+`ObservabilityProvider::query` returns `ObservabilityQueryResult`, not a generic
+observation. The result contains the request-bound `ProviderObservation`, at
+most 256 deterministically sorted `ObservabilityRecord` values, an optional
+opaque continuation cursor, a conservative encoded-byte upper bound, and an
+exact truncation flag. The record projection, metric, operation, outcome,
+provider type, and health state are closed enums. The provider-type label
+identifies the provider actually observed and therefore may be any of the
+eleven provider types; it is not forced to `observability`.
+
+Validation binds the observation to the query provider generation and
+realm/workload scope, rejects handle-scoped results, enforces the requested
+view and limit, checks safe timestamp/value bounds, and requires strictly
+increasing duplicate-free records. The encoded-byte upper bound is at least
+512 bytes per returned record and at most 1 MiB. `truncated` is true exactly
+when a continuation cursor is present. Records contain no identifiers,
+provider-instance or workload labels, arbitrary strings, paths, commands,
+secrets, or free-form JSON.
+
 Handles bind realm, optional workload, owner, provider and resource
 generations, and configuration fingerprint. Ownership transfer is explicit,
 single-use, expiring, and realm-local. Adoption verifies all bindings.

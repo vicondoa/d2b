@@ -50,6 +50,9 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Changed observability provider queries to return a canonical bounded result
+  through the provider trait, proxy, protobuf/ttrpc service, and toolkit
+  adapter without dropping records or introducing free-form labels.
 - Added an exact user-agent placement binding for userd-owned Secret Service
   leases while preserving provider-agent co-location for cloud credentials.
 - Bound transport connection requests to an exact opaque transport binding ID.

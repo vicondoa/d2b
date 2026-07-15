@@ -523,7 +523,7 @@ impl AuthenticatedProviderRpc for ProviderAgentAdapter {
                         query,
                         call.context,
                         call.payload,
-                        Observation
+                        ObservabilityQuery
                     ),
                     (
                         ProviderInstance::Observability(provider),

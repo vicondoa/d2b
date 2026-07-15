@@ -17,14 +17,20 @@ use d2b_contracts::{
     v2_identity::{ProviderId, ProviderType, RealmId, RoleId, WorkloadId},
     v2_provider::{
         AdoptionRequest, AdoptionState, Fingerprint, Generation, HandleId, ImplementationId,
-        MutationState, ObservationReason, ObservedLifecycleState, PlanId, PlannedResourceClass,
-        ProviderCapability, ProviderCapabilitySet, ProviderFailureKind, ProviderHealthReason,
-        ProviderHealthState, ProviderMethod, ProviderOperationInput, ProviderPlacement,
-        ProviderRemediation, ProviderTarget, RetryClass, RuntimeProvider,
+        MutationState, ObservabilityProvider, ObservationReason, ObservedLifecycleState, PlanId,
+        PlannedResourceClass, ProviderCapability, ProviderCapabilitySet, ProviderFailureKind,
+        ProviderHealthReason, ProviderHealthState, ProviderMethod, ProviderOperationInput,
+        ProviderPlacement, ProviderRemediation, ProviderTarget, RetryClass, RuntimeProvider,
     },
-    v2_services::{StrictWireMessage, common, provider_credential_ttrpc, provider_runtime_ttrpc},
+    v2_services::{
+        StrictWireMessage, common, observability_query_response_from_wire,
+        provider_credential_ttrpc, provider_observability_ttrpc, provider_runtime_ttrpc,
+    },
 };
-use d2b_provider::{ProviderInstance, ProviderRegistryBuilder, RpcProviderProxy, SessionIdentity};
+use d2b_provider::{
+    AuthenticatedProviderRpc, ProviderInstance, ProviderRegistryBuilder, RpcCall, RpcProviderProxy,
+    RpcResponse, SessionIdentity,
+};
 use d2b_provider_toolkit::{
     DeterministicClock, FakeProvider, Fixture, GeneratedProviderServiceServer,
     ProviderAgentAdapter, ProviderValues, Redacted, Secret, check_provider_conformance,
@@ -350,6 +356,57 @@ async fn rpc_proxy_preserves_plan_handle_and_adoption_bindings() {
     let mut mismatch = adoption;
     mismatch.expected_resource_generation = Generation::new(2).unwrap_or_else(|_| unreachable!());
     assert!(proxy.adopt(&adoption_context, &mismatch).await.is_err());
+}
+
+struct MismatchedQueryRpc {
+    inner: Arc<ProviderAgentAdapter>,
+}
+
+#[async_trait]
+impl AuthenticatedProviderRpc for MismatchedQueryRpc {
+    fn session_identity(&self) -> SessionIdentity {
+        self.inner.session_identity()
+    }
+
+    async fn invoke(
+        &self,
+        call: RpcCall<'_>,
+    ) -> d2b_contracts::v2_provider::ProviderResult<RpcResponse> {
+        let mut response = self.inner.invoke(call).await?;
+        if let RpcResponse::ObservabilityQuery(result) = &mut response {
+            result.observation.provider_generation =
+                Generation::new(result.observation.provider_generation.get() + 1)
+                    .unwrap_or_else(|_| unreachable!());
+        }
+        Ok(response)
+    }
+}
+
+#[tokio::test]
+async fn rpc_proxy_rejects_mismatched_observability_query_results() {
+    let fixture = Fixture::new(ProviderType::Observability, 10).unwrap_or_else(|_| unreachable!());
+    let clock = Arc::new(DeterministicClock::new(fixture.now_unix_ms));
+    let instance = Arc::new(FakeProvider::new(fixture.clone())).instance();
+    let adapter = Arc::new(
+        ProviderAgentAdapter::new(instance, fixture.session_identity(), clock.clone())
+            .unwrap_or_else(|_| unreachable!()),
+    );
+    let proxy = RpcProviderProxy::new(
+        fixture.descriptor.clone(),
+        Arc::new(MismatchedQueryRpc { inner: adapter }),
+        clock,
+    )
+    .unwrap_or_else(|_| unreachable!());
+    let request = fixture
+        .request(ProviderMethod::ObservabilityQuery)
+        .unwrap_or_else(|_| unreachable!());
+    let context = fixture.call_context(&request.context);
+
+    let failure = proxy
+        .query(&context, &request)
+        .await
+        .expect_err("mismatched query result must fail closed");
+    assert_eq!(failure.kind, ProviderFailureKind::InvariantViolation);
 }
 
 #[test]
@@ -861,6 +918,43 @@ async fn generated_server_dispatches_closed_methods_over_authenticated_session()
         .validate_wire(false)
         .unwrap_or_else(|_| unreachable!());
     assert!(!handle.resource_handle.is_empty());
+}
+
+#[tokio::test]
+async fn generated_server_preserves_the_exact_bounded_observability_result() {
+    let fixture = Fixture::new(ProviderType::Observability, 10).unwrap_or_else(|_| unreachable!());
+    let driver = Arc::new(FakeSessionDriver::new(&fixture));
+    let server = GeneratedProviderServiceServer::new(
+        Arc::new(FakeProvider::new(fixture.clone())).instance(),
+        driver,
+        Arc::new(DeterministicClock::new(fixture.now_unix_ms)),
+    )
+    .unwrap_or_else(|_| unreachable!());
+    let context = ttrpc::r#async::TtrpcContext {
+        mh: Default::default(),
+        metadata: Default::default(),
+        timeout_nano: 30_000_000_000,
+    };
+    let response = provider_observability_ttrpc::ObservabilityProviderService::query(
+        &server,
+        &context,
+        generated_request(&fixture, ProviderMethod::ObservabilityQuery),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("{error:?}"));
+    let request = fixture
+        .request(ProviderMethod::ObservabilityQuery)
+        .unwrap_or_else(|_| unreachable!());
+    let result = observability_query_response_from_wire(&response, &request)
+        .unwrap_or_else(|error| panic!("{error:?}"));
+
+    assert!(response.observations.is_empty());
+    assert!(response.result_digest.is_empty());
+    assert_eq!(result.records.len(), 1);
+    assert_eq!(
+        result.records[0].labels.provider_type,
+        ProviderType::Runtime
+    );
 }
 
 #[tokio::test]

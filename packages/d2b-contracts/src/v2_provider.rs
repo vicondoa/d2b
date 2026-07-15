@@ -26,6 +26,8 @@ pub const MAX_PROVIDER_REQUEST_LIFETIME_MS: u64 = 15 * 60 * 1_000;
 pub const MAX_PROVIDER_LEASE_LIFETIME_MS: u64 = 60 * 60 * 1_000;
 pub const MAX_PROVIDER_DRAIN_MS: u32 = 5 * 60 * 1_000;
 pub const MAX_OBSERVABILITY_QUERY_LIMIT: u16 = 256;
+pub const MAX_OBSERVABILITY_QUERY_BYTES: u32 = 1024 * 1024;
+pub const OBSERVABILITY_RECORD_ENCODED_UPPER_BOUND_BYTES: u32 = 512;
 pub const MAX_OBSERVABILITY_EXPORT_RANGE_MS: u64 = 31 * 24 * 60 * 60 * 1_000;
 pub const MAX_SAFE_JSON_INTEGER: u64 = 9_007_199_254_740_991;
 pub const PROVIDER_CONTRACT_FINGERPRINT: &str =
@@ -814,7 +816,9 @@ impl ProviderDescriptor {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProviderHealthState {
     Healthy,
@@ -1201,6 +1205,120 @@ pub enum ObservabilityView {
     Health,
     Lifecycle,
     Operations,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum ObservabilityProjectionKind {
+    Metrics,
+    TraceSummary,
+    AuditSummary,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum ObservabilityMetricLabel {
+    ProviderHealth,
+    LifecycleTransition,
+    OperationTotal,
+    OperationDuration,
+    QueueDepth,
+    ExportTruncated,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum ObservabilityOperationLabel {
+    Health,
+    Plan,
+    Ensure,
+    Start,
+    Stop,
+    Attach,
+    Detach,
+    Adopt,
+    Inspect,
+    SetState,
+    Query,
+    Export,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum ObservabilityOutcomeLabel {
+    Success,
+    AlreadyApplied,
+    Denied,
+    Cancelled,
+    DeadlineExpired,
+    Unavailable,
+    Truncated,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ObservabilityLabels {
+    pub provider_type: ProviderType,
+    pub health_state: ProviderHealthState,
+    pub metric: ObservabilityMetricLabel,
+    pub operation: ObservabilityOperationLabel,
+    pub outcome: ObservabilityOutcomeLabel,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ObservabilityRecord {
+    pub observed_at_unix_ms: u64,
+    pub projection: ObservabilityProjectionKind,
+    pub labels: ObservabilityLabels,
+    pub value: u64,
+}
+
+impl ObservabilityRecord {
+    pub fn validate(
+        &self,
+        view: ObservabilityView,
+        result_observed_at_unix_ms: u64,
+    ) -> Result<(), ProviderContractError> {
+        if self.observed_at_unix_ms > MAX_SAFE_JSON_INTEGER
+            || self.observed_at_unix_ms > result_observed_at_unix_ms
+            || self.value > MAX_SAFE_JSON_INTEGER
+        {
+            return Err(ProviderContractError::BoundExceeded);
+        }
+        let allowed = match view {
+            ObservabilityView::Health => matches!(
+                self.labels.metric,
+                ObservabilityMetricLabel::ProviderHealth | ObservabilityMetricLabel::QueueDepth
+            ),
+            ObservabilityView::Lifecycle => {
+                self.labels.metric == ObservabilityMetricLabel::LifecycleTransition
+            }
+            ObservabilityView::Operations => matches!(
+                self.labels.metric,
+                ObservabilityMetricLabel::OperationTotal
+                    | ObservabilityMetricLabel::OperationDuration
+                    | ObservabilityMetricLabel::ExportTruncated
+            ),
+        };
+        if allowed {
+            Ok(())
+        } else {
+            Err(ProviderContractError::OperationInputMismatch)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1790,6 +1908,97 @@ impl ProviderObservation {
         self.adoption != AdoptionState::Ambiguous
             && self.lifecycle != ObservedLifecycleState::Quarantined
             && self.health.admits_operations()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ObservabilityQueryResult {
+    pub observation: ProviderObservation,
+    pub records: BoundedVec<ObservabilityRecord, 0, { MAX_OBSERVABILITY_QUERY_LIMIT as usize }>,
+    pub next_cursor: Option<ObservabilityCursor>,
+    pub encoded_bytes_upper_bound: u32,
+    pub truncated: bool,
+}
+
+impl fmt::Debug for ObservabilityQueryResult {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ObservabilityQueryResult")
+            .field("observation", &self.observation)
+            .field("record_count", &self.records.len())
+            .field("has_next_cursor", &self.next_cursor.is_some())
+            .field("encoded_bytes_upper_bound", &self.encoded_bytes_upper_bound)
+            .field("truncated", &self.truncated)
+            .finish()
+    }
+}
+
+impl ObservabilityQueryResult {
+    pub fn validate(
+        &self,
+        request: &ProviderOperationRequest,
+    ) -> Result<(), ProviderContractError> {
+        let ProviderOperationInput::ObservabilityQuery { view, limit, .. } = &request.input else {
+            return Err(ProviderContractError::OperationInputMismatch);
+        };
+        request
+            .input
+            .validate_for(ProviderMethod::ObservabilityQuery)?;
+        if request.context.method != ProviderMethod::ObservabilityQuery
+            || request.context.capability.0 != ProviderMethod::ObservabilityQuery
+            || request.context.provider_type != ProviderType::Observability
+        {
+            return Err(ProviderContractError::OperationBindingMismatch);
+        }
+        if matches!(request.target, ProviderTarget::Handle { .. })
+            || request.target.realm_id() != request.context.scope.realm_id()
+            || request.target.workload_id() != request.context.scope.workload_id()
+        {
+            return Err(ProviderContractError::ScopeMismatch);
+        }
+
+        self.observation.validate()?;
+        if self.observation.provider_id != request.context.provider_id
+            || self.observation.provider_generation != request.context.provider_generation
+            || self.observation.handle_id.is_some()
+            || self.observation.resource_generation.is_some()
+        {
+            return Err(ProviderContractError::OperationBindingMismatch);
+        }
+        if self.observation.realm_id != *request.context.scope.realm_id()
+            || self.observation.workload_id.as_ref() != request.context.scope.workload_id()
+        {
+            return Err(ProviderContractError::ScopeMismatch);
+        }
+        if self.observation.observed_at_unix_ms < request.context.issued_at_unix_ms
+            || self.observation.observed_at_unix_ms > request.context.expires_at_unix_ms
+        {
+            return Err(ProviderContractError::InvalidTimeRange);
+        }
+        if self.records.len() > usize::from(*limit) {
+            return Err(ProviderContractError::BoundExceeded);
+        }
+        for record in self.records.iter() {
+            record.validate(*view, self.observation.observed_at_unix_ms)?;
+        }
+        if self.records.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err(ProviderContractError::RegistryNotCanonical);
+        }
+
+        let minimum_encoded_bytes = u32::try_from(self.records.len())
+            .map_err(|_| ProviderContractError::BoundExceeded)?
+            .checked_mul(OBSERVABILITY_RECORD_ENCODED_UPPER_BOUND_BYTES)
+            .ok_or(ProviderContractError::BoundExceeded)?;
+        if self.encoded_bytes_upper_bound < minimum_encoded_bytes
+            || self.encoded_bytes_upper_bound > MAX_OBSERVABILITY_QUERY_BYTES
+        {
+            return Err(ProviderContractError::BoundExceeded);
+        }
+        if self.truncated != self.next_cursor.is_some() {
+            return Err(ProviderContractError::OperationInputMismatch);
+        }
+        Ok(())
     }
 }
 
@@ -2612,7 +2821,7 @@ lifecycle_provider_trait!(AudioProvider {
 
 lifecycle_provider_trait!(ObservabilityProvider {
     status(ProviderOperationRequest) -> ProviderObservation;
-    query(ProviderOperationRequest) -> ProviderObservation;
+    query(ProviderOperationRequest) -> ObservabilityQueryResult;
     subscribe(ProviderOperationRequest) -> ProviderHandle;
     export(ProviderOperationRequest) -> MutationReceipt;
 });

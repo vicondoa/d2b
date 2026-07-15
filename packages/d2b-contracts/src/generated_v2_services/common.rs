@@ -2229,6 +2229,803 @@ impl ::protobuf::reflect::ProtobufValue for ObservabilityQueryInput {
     type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
 }
 
+// @@protoc_insertion_point(message:d2b.common.v2.ObservabilityBoundObservation)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ObservabilityBoundObservation {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityBoundObservation.observed_at_unix_ms)
+    pub observed_at_unix_ms: u64,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityBoundObservation.lifecycle)
+    pub lifecycle: ::protobuf::EnumOrUnknown<ObservabilityLifecycleState>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityBoundObservation.adoption)
+    pub adoption: ::protobuf::EnumOrUnknown<ObservabilityAdoptionState>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityBoundObservation.reason)
+    pub reason: ::protobuf::EnumOrUnknown<ObservabilityObservationReason>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityBoundObservation.health_state)
+    pub health_state: ::protobuf::EnumOrUnknown<ObservabilityHealthState>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityBoundObservation.health_reason)
+    pub health_reason: ::protobuf::EnumOrUnknown<ObservabilityHealthReason>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityBoundObservation.health_remediation)
+    pub health_remediation: ::protobuf::EnumOrUnknown<ObservabilityRemediation>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.common.v2.ObservabilityBoundObservation.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ObservabilityBoundObservation {
+    fn default() -> &'a ObservabilityBoundObservation {
+        <ObservabilityBoundObservation as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ObservabilityBoundObservation {
+    pub fn new() -> ObservabilityBoundObservation {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(7);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "observed_at_unix_ms",
+            |m: &ObservabilityBoundObservation| { &m.observed_at_unix_ms },
+            |m: &mut ObservabilityBoundObservation| { &mut m.observed_at_unix_ms },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "lifecycle",
+            |m: &ObservabilityBoundObservation| { &m.lifecycle },
+            |m: &mut ObservabilityBoundObservation| { &mut m.lifecycle },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "adoption",
+            |m: &ObservabilityBoundObservation| { &m.adoption },
+            |m: &mut ObservabilityBoundObservation| { &mut m.adoption },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "reason",
+            |m: &ObservabilityBoundObservation| { &m.reason },
+            |m: &mut ObservabilityBoundObservation| { &mut m.reason },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "health_state",
+            |m: &ObservabilityBoundObservation| { &m.health_state },
+            |m: &mut ObservabilityBoundObservation| { &mut m.health_state },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "health_reason",
+            |m: &ObservabilityBoundObservation| { &m.health_reason },
+            |m: &mut ObservabilityBoundObservation| { &mut m.health_reason },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "health_remediation",
+            |m: &ObservabilityBoundObservation| { &m.health_remediation },
+            |m: &mut ObservabilityBoundObservation| { &mut m.health_remediation },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ObservabilityBoundObservation>(
+            "ObservabilityBoundObservation",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ObservabilityBoundObservation {
+    const NAME: &'static str = "ObservabilityBoundObservation";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.observed_at_unix_ms = is.read_uint64()?;
+                },
+                16 => {
+                    self.lifecycle = is.read_enum_or_unknown()?;
+                },
+                24 => {
+                    self.adoption = is.read_enum_or_unknown()?;
+                },
+                32 => {
+                    self.reason = is.read_enum_or_unknown()?;
+                },
+                40 => {
+                    self.health_state = is.read_enum_or_unknown()?;
+                },
+                48 => {
+                    self.health_reason = is.read_enum_or_unknown()?;
+                },
+                56 => {
+                    self.health_remediation = is.read_enum_or_unknown()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.observed_at_unix_ms != 0 {
+            my_size += ::protobuf::rt::uint64_size(1, self.observed_at_unix_ms);
+        }
+        if self.lifecycle != ::protobuf::EnumOrUnknown::new(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(2, self.lifecycle.value());
+        }
+        if self.adoption != ::protobuf::EnumOrUnknown::new(ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(3, self.adoption.value());
+        }
+        if self.reason != ::protobuf::EnumOrUnknown::new(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(4, self.reason.value());
+        }
+        if self.health_state != ::protobuf::EnumOrUnknown::new(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(5, self.health_state.value());
+        }
+        if self.health_reason != ::protobuf::EnumOrUnknown::new(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(6, self.health_reason.value());
+        }
+        if self.health_remediation != ::protobuf::EnumOrUnknown::new(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(7, self.health_remediation.value());
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.observed_at_unix_ms != 0 {
+            os.write_uint64(1, self.observed_at_unix_ms)?;
+        }
+        if self.lifecycle != ::protobuf::EnumOrUnknown::new(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_UNSPECIFIED) {
+            os.write_enum(2, ::protobuf::EnumOrUnknown::value(&self.lifecycle))?;
+        }
+        if self.adoption != ::protobuf::EnumOrUnknown::new(ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_UNSPECIFIED) {
+            os.write_enum(3, ::protobuf::EnumOrUnknown::value(&self.adoption))?;
+        }
+        if self.reason != ::protobuf::EnumOrUnknown::new(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_UNSPECIFIED) {
+            os.write_enum(4, ::protobuf::EnumOrUnknown::value(&self.reason))?;
+        }
+        if self.health_state != ::protobuf::EnumOrUnknown::new(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_UNSPECIFIED) {
+            os.write_enum(5, ::protobuf::EnumOrUnknown::value(&self.health_state))?;
+        }
+        if self.health_reason != ::protobuf::EnumOrUnknown::new(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_UNSPECIFIED) {
+            os.write_enum(6, ::protobuf::EnumOrUnknown::value(&self.health_reason))?;
+        }
+        if self.health_remediation != ::protobuf::EnumOrUnknown::new(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_UNSPECIFIED) {
+            os.write_enum(7, ::protobuf::EnumOrUnknown::value(&self.health_remediation))?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ObservabilityBoundObservation {
+        ObservabilityBoundObservation::new()
+    }
+
+    fn clear(&mut self) {
+        self.observed_at_unix_ms = 0;
+        self.lifecycle = ::protobuf::EnumOrUnknown::new(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_UNSPECIFIED);
+        self.adoption = ::protobuf::EnumOrUnknown::new(ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_UNSPECIFIED);
+        self.reason = ::protobuf::EnumOrUnknown::new(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_UNSPECIFIED);
+        self.health_state = ::protobuf::EnumOrUnknown::new(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_UNSPECIFIED);
+        self.health_reason = ::protobuf::EnumOrUnknown::new(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_UNSPECIFIED);
+        self.health_remediation = ::protobuf::EnumOrUnknown::new(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_UNSPECIFIED);
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ObservabilityBoundObservation {
+        static instance: ObservabilityBoundObservation = ObservabilityBoundObservation {
+            observed_at_unix_ms: 0,
+            lifecycle: ::protobuf::EnumOrUnknown::from_i32(0),
+            adoption: ::protobuf::EnumOrUnknown::from_i32(0),
+            reason: ::protobuf::EnumOrUnknown::from_i32(0),
+            health_state: ::protobuf::EnumOrUnknown::from_i32(0),
+            health_reason: ::protobuf::EnumOrUnknown::from_i32(0),
+            health_remediation: ::protobuf::EnumOrUnknown::from_i32(0),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ObservabilityBoundObservation {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ObservabilityBoundObservation").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ObservabilityBoundObservation {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ObservabilityBoundObservation {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.common.v2.ObservabilityLabels)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ObservabilityLabels {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityLabels.provider_type)
+    pub provider_type: ::protobuf::EnumOrUnknown<ProviderType>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityLabels.health_state)
+    pub health_state: ::protobuf::EnumOrUnknown<ObservabilityHealthState>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityLabels.metric)
+    pub metric: ::protobuf::EnumOrUnknown<ObservabilityMetricLabel>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityLabels.operation)
+    pub operation: ::protobuf::EnumOrUnknown<ObservabilityOperationLabel>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityLabels.outcome)
+    pub outcome: ::protobuf::EnumOrUnknown<ObservabilityOutcomeLabel>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.common.v2.ObservabilityLabels.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ObservabilityLabels {
+    fn default() -> &'a ObservabilityLabels {
+        <ObservabilityLabels as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ObservabilityLabels {
+    pub fn new() -> ObservabilityLabels {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(5);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "provider_type",
+            |m: &ObservabilityLabels| { &m.provider_type },
+            |m: &mut ObservabilityLabels| { &mut m.provider_type },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "health_state",
+            |m: &ObservabilityLabels| { &m.health_state },
+            |m: &mut ObservabilityLabels| { &mut m.health_state },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "metric",
+            |m: &ObservabilityLabels| { &m.metric },
+            |m: &mut ObservabilityLabels| { &mut m.metric },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "operation",
+            |m: &ObservabilityLabels| { &m.operation },
+            |m: &mut ObservabilityLabels| { &mut m.operation },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "outcome",
+            |m: &ObservabilityLabels| { &m.outcome },
+            |m: &mut ObservabilityLabels| { &mut m.outcome },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ObservabilityLabels>(
+            "ObservabilityLabels",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ObservabilityLabels {
+    const NAME: &'static str = "ObservabilityLabels";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.provider_type = is.read_enum_or_unknown()?;
+                },
+                16 => {
+                    self.health_state = is.read_enum_or_unknown()?;
+                },
+                24 => {
+                    self.metric = is.read_enum_or_unknown()?;
+                },
+                32 => {
+                    self.operation = is.read_enum_or_unknown()?;
+                },
+                40 => {
+                    self.outcome = is.read_enum_or_unknown()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.provider_type != ::protobuf::EnumOrUnknown::new(ProviderType::PROVIDER_TYPE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(1, self.provider_type.value());
+        }
+        if self.health_state != ::protobuf::EnumOrUnknown::new(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(2, self.health_state.value());
+        }
+        if self.metric != ::protobuf::EnumOrUnknown::new(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(3, self.metric.value());
+        }
+        if self.operation != ::protobuf::EnumOrUnknown::new(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(4, self.operation.value());
+        }
+        if self.outcome != ::protobuf::EnumOrUnknown::new(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(5, self.outcome.value());
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.provider_type != ::protobuf::EnumOrUnknown::new(ProviderType::PROVIDER_TYPE_UNSPECIFIED) {
+            os.write_enum(1, ::protobuf::EnumOrUnknown::value(&self.provider_type))?;
+        }
+        if self.health_state != ::protobuf::EnumOrUnknown::new(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_UNSPECIFIED) {
+            os.write_enum(2, ::protobuf::EnumOrUnknown::value(&self.health_state))?;
+        }
+        if self.metric != ::protobuf::EnumOrUnknown::new(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_UNSPECIFIED) {
+            os.write_enum(3, ::protobuf::EnumOrUnknown::value(&self.metric))?;
+        }
+        if self.operation != ::protobuf::EnumOrUnknown::new(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_UNSPECIFIED) {
+            os.write_enum(4, ::protobuf::EnumOrUnknown::value(&self.operation))?;
+        }
+        if self.outcome != ::protobuf::EnumOrUnknown::new(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_UNSPECIFIED) {
+            os.write_enum(5, ::protobuf::EnumOrUnknown::value(&self.outcome))?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ObservabilityLabels {
+        ObservabilityLabels::new()
+    }
+
+    fn clear(&mut self) {
+        self.provider_type = ::protobuf::EnumOrUnknown::new(ProviderType::PROVIDER_TYPE_UNSPECIFIED);
+        self.health_state = ::protobuf::EnumOrUnknown::new(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_UNSPECIFIED);
+        self.metric = ::protobuf::EnumOrUnknown::new(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_UNSPECIFIED);
+        self.operation = ::protobuf::EnumOrUnknown::new(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_UNSPECIFIED);
+        self.outcome = ::protobuf::EnumOrUnknown::new(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_UNSPECIFIED);
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ObservabilityLabels {
+        static instance: ObservabilityLabels = ObservabilityLabels {
+            provider_type: ::protobuf::EnumOrUnknown::from_i32(0),
+            health_state: ::protobuf::EnumOrUnknown::from_i32(0),
+            metric: ::protobuf::EnumOrUnknown::from_i32(0),
+            operation: ::protobuf::EnumOrUnknown::from_i32(0),
+            outcome: ::protobuf::EnumOrUnknown::from_i32(0),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ObservabilityLabels {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ObservabilityLabels").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ObservabilityLabels {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ObservabilityLabels {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.common.v2.ObservabilityRecord)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ObservabilityRecord {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityRecord.observed_at_unix_ms)
+    pub observed_at_unix_ms: u64,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityRecord.projection)
+    pub projection: ::protobuf::EnumOrUnknown<ObservabilityProjectionKind>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityRecord.labels)
+    pub labels: ::protobuf::MessageField<ObservabilityLabels>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityRecord.value)
+    pub value: u64,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.common.v2.ObservabilityRecord.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ObservabilityRecord {
+    fn default() -> &'a ObservabilityRecord {
+        <ObservabilityRecord as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ObservabilityRecord {
+    pub fn new() -> ObservabilityRecord {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(4);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "observed_at_unix_ms",
+            |m: &ObservabilityRecord| { &m.observed_at_unix_ms },
+            |m: &mut ObservabilityRecord| { &mut m.observed_at_unix_ms },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "projection",
+            |m: &ObservabilityRecord| { &m.projection },
+            |m: &mut ObservabilityRecord| { &mut m.projection },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, ObservabilityLabels>(
+            "labels",
+            |m: &ObservabilityRecord| { &m.labels },
+            |m: &mut ObservabilityRecord| { &mut m.labels },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "value",
+            |m: &ObservabilityRecord| { &m.value },
+            |m: &mut ObservabilityRecord| { &mut m.value },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ObservabilityRecord>(
+            "ObservabilityRecord",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ObservabilityRecord {
+    const NAME: &'static str = "ObservabilityRecord";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.observed_at_unix_ms = is.read_uint64()?;
+                },
+                16 => {
+                    self.projection = is.read_enum_or_unknown()?;
+                },
+                26 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.labels)?;
+                },
+                32 => {
+                    self.value = is.read_uint64()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.observed_at_unix_ms != 0 {
+            my_size += ::protobuf::rt::uint64_size(1, self.observed_at_unix_ms);
+        }
+        if self.projection != ::protobuf::EnumOrUnknown::new(ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(2, self.projection.value());
+        }
+        if let Some(v) = self.labels.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if self.value != 0 {
+            my_size += ::protobuf::rt::uint64_size(4, self.value);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.observed_at_unix_ms != 0 {
+            os.write_uint64(1, self.observed_at_unix_ms)?;
+        }
+        if self.projection != ::protobuf::EnumOrUnknown::new(ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_UNSPECIFIED) {
+            os.write_enum(2, ::protobuf::EnumOrUnknown::value(&self.projection))?;
+        }
+        if let Some(v) = self.labels.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(3, v, os)?;
+        }
+        if self.value != 0 {
+            os.write_uint64(4, self.value)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ObservabilityRecord {
+        ObservabilityRecord::new()
+    }
+
+    fn clear(&mut self) {
+        self.observed_at_unix_ms = 0;
+        self.projection = ::protobuf::EnumOrUnknown::new(ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_UNSPECIFIED);
+        self.labels.clear();
+        self.value = 0;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ObservabilityRecord {
+        static instance: ObservabilityRecord = ObservabilityRecord {
+            observed_at_unix_ms: 0,
+            projection: ::protobuf::EnumOrUnknown::from_i32(0),
+            labels: ::protobuf::MessageField::none(),
+            value: 0,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ObservabilityRecord {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ObservabilityRecord").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ObservabilityRecord {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ObservabilityRecord {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.common.v2.ObservabilityQueryResult)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ObservabilityQueryResult {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityQueryResult.observation)
+    pub observation: ::protobuf::MessageField<ObservabilityBoundObservation>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityQueryResult.records)
+    pub records: ::std::vec::Vec<ObservabilityRecord>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityQueryResult.next_cursor)
+    pub next_cursor: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityQueryResult.encoded_bytes_upper_bound)
+    pub encoded_bytes_upper_bound: u32,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityQueryResult.truncated)
+    pub truncated: bool,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.common.v2.ObservabilityQueryResult.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ObservabilityQueryResult {
+    fn default() -> &'a ObservabilityQueryResult {
+        <ObservabilityQueryResult as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ObservabilityQueryResult {
+    pub fn new() -> ObservabilityQueryResult {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(5);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, ObservabilityBoundObservation>(
+            "observation",
+            |m: &ObservabilityQueryResult| { &m.observation },
+            |m: &mut ObservabilityQueryResult| { &mut m.observation },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "records",
+            |m: &ObservabilityQueryResult| { &m.records },
+            |m: &mut ObservabilityQueryResult| { &mut m.records },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_option_accessor::<_, _>(
+            "next_cursor",
+            |m: &ObservabilityQueryResult| { &m.next_cursor },
+            |m: &mut ObservabilityQueryResult| { &mut m.next_cursor },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "encoded_bytes_upper_bound",
+            |m: &ObservabilityQueryResult| { &m.encoded_bytes_upper_bound },
+            |m: &mut ObservabilityQueryResult| { &mut m.encoded_bytes_upper_bound },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "truncated",
+            |m: &ObservabilityQueryResult| { &m.truncated },
+            |m: &mut ObservabilityQueryResult| { &mut m.truncated },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ObservabilityQueryResult>(
+            "ObservabilityQueryResult",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ObservabilityQueryResult {
+    const NAME: &'static str = "ObservabilityQueryResult";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.observation)?;
+                },
+                18 => {
+                    self.records.push(is.read_message()?);
+                },
+                26 => {
+                    self.next_cursor = ::std::option::Option::Some(is.read_string()?);
+                },
+                32 => {
+                    self.encoded_bytes_upper_bound = is.read_uint32()?;
+                },
+                40 => {
+                    self.truncated = is.read_bool()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.observation.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        for value in &self.records {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
+        if let Some(v) = self.next_cursor.as_ref() {
+            my_size += ::protobuf::rt::string_size(3, &v);
+        }
+        if self.encoded_bytes_upper_bound != 0 {
+            my_size += ::protobuf::rt::uint32_size(4, self.encoded_bytes_upper_bound);
+        }
+        if self.truncated != false {
+            my_size += 1 + 1;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.observation.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        }
+        for v in &self.records {
+            ::protobuf::rt::write_message_field_with_cached_size(2, v, os)?;
+        };
+        if let Some(v) = self.next_cursor.as_ref() {
+            os.write_string(3, v)?;
+        }
+        if self.encoded_bytes_upper_bound != 0 {
+            os.write_uint32(4, self.encoded_bytes_upper_bound)?;
+        }
+        if self.truncated != false {
+            os.write_bool(5, self.truncated)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ObservabilityQueryResult {
+        ObservabilityQueryResult::new()
+    }
+
+    fn clear(&mut self) {
+        self.observation.clear();
+        self.records.clear();
+        self.next_cursor = ::std::option::Option::None;
+        self.encoded_bytes_upper_bound = 0;
+        self.truncated = false;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ObservabilityQueryResult {
+        static instance: ObservabilityQueryResult = ObservabilityQueryResult {
+            observation: ::protobuf::MessageField::none(),
+            records: ::std::vec::Vec::new(),
+            next_cursor: ::std::option::Option::None,
+            encoded_bytes_upper_bound: 0,
+            truncated: false,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ObservabilityQueryResult {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ObservabilityQueryResult").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ObservabilityQueryResult {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ObservabilityQueryResult {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
 // @@protoc_insertion_point(message:d2b.common.v2.ObservabilityExportInput)
 #[derive(PartialEq,Clone,Default,Debug)]
 pub struct ObservabilityExportInput {
@@ -3893,6 +4690,8 @@ pub struct ProviderResponse {
     pub stream_id: ::std::string::String,
     // @@protoc_insertion_point(field:d2b.common.v2.ProviderResponse.attachment_indexes)
     pub attachment_indexes: ::std::vec::Vec<u32>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ProviderResponse.observability_query_result)
+    pub observability_query_result: ::protobuf::MessageField<ObservabilityQueryResult>,
     // special fields
     // @@protoc_insertion_point(special_field:d2b.common.v2.ProviderResponse.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -3910,7 +4709,7 @@ impl ProviderResponse {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(8);
+        let mut fields = ::std::vec::Vec::with_capacity(9);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "outcome",
@@ -3951,6 +4750,11 @@ impl ProviderResponse {
             "attachment_indexes",
             |m: &ProviderResponse| { &m.attachment_indexes },
             |m: &mut ProviderResponse| { &mut m.attachment_indexes },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, ObservabilityQueryResult>(
+            "observability_query_result",
+            |m: &ProviderResponse| { &m.observability_query_result },
+            |m: &mut ProviderResponse| { &mut m.observability_query_result },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ProviderResponse>(
             "ProviderResponse",
@@ -3997,6 +4801,9 @@ impl ::protobuf::Message for ProviderResponse {
                 64 => {
                     self.attachment_indexes.push(is.read_uint32()?);
                 },
+                74 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.observability_query_result)?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -4033,6 +4840,10 @@ impl ::protobuf::Message for ProviderResponse {
             my_size += ::protobuf::rt::string_size(7, &self.stream_id);
         }
         my_size += ::protobuf::rt::vec_packed_uint32_size(8, &self.attachment_indexes);
+        if let Some(v) = self.observability_query_result.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -4061,6 +4872,9 @@ impl ::protobuf::Message for ProviderResponse {
             os.write_string(7, &self.stream_id)?;
         }
         os.write_repeated_packed_uint32(8, &self.attachment_indexes)?;
+        if let Some(v) = self.observability_query_result.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(9, v, os)?;
+        }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -4086,6 +4900,7 @@ impl ::protobuf::Message for ProviderResponse {
         self.error.clear();
         self.stream_id.clear();
         self.attachment_indexes.clear();
+        self.observability_query_result.clear();
         self.special_fields.clear();
     }
 
@@ -4099,6 +4914,7 @@ impl ::protobuf::Message for ProviderResponse {
             error: ::protobuf::MessageField::none(),
             stream_id: ::std::string::String::new(),
             attachment_indexes: ::std::vec::Vec::new(),
+            observability_query_result: ::protobuf::MessageField::none(),
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -5778,6 +6594,946 @@ impl ObservabilityView {
 }
 
 #[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.common.v2.ObservabilityProjectionKind)
+pub enum ObservabilityProjectionKind {
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityProjectionKind.OBSERVABILITY_PROJECTION_KIND_UNSPECIFIED)
+    OBSERVABILITY_PROJECTION_KIND_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityProjectionKind.OBSERVABILITY_PROJECTION_KIND_METRICS)
+    OBSERVABILITY_PROJECTION_KIND_METRICS = 1,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityProjectionKind.OBSERVABILITY_PROJECTION_KIND_TRACE_SUMMARY)
+    OBSERVABILITY_PROJECTION_KIND_TRACE_SUMMARY = 2,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityProjectionKind.OBSERVABILITY_PROJECTION_KIND_AUDIT_SUMMARY)
+    OBSERVABILITY_PROJECTION_KIND_AUDIT_SUMMARY = 3,
+}
+
+impl ::protobuf::Enum for ObservabilityProjectionKind {
+    const NAME: &'static str = "ObservabilityProjectionKind";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ObservabilityProjectionKind> {
+        match value {
+            0 => ::std::option::Option::Some(ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_METRICS),
+            2 => ::std::option::Option::Some(ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_TRACE_SUMMARY),
+            3 => ::std::option::Option::Some(ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_AUDIT_SUMMARY),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ObservabilityProjectionKind> {
+        match str {
+            "OBSERVABILITY_PROJECTION_KIND_UNSPECIFIED" => ::std::option::Option::Some(ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_UNSPECIFIED),
+            "OBSERVABILITY_PROJECTION_KIND_METRICS" => ::std::option::Option::Some(ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_METRICS),
+            "OBSERVABILITY_PROJECTION_KIND_TRACE_SUMMARY" => ::std::option::Option::Some(ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_TRACE_SUMMARY),
+            "OBSERVABILITY_PROJECTION_KIND_AUDIT_SUMMARY" => ::std::option::Option::Some(ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_AUDIT_SUMMARY),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ObservabilityProjectionKind] = &[
+        ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_UNSPECIFIED,
+        ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_METRICS,
+        ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_TRACE_SUMMARY,
+        ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_AUDIT_SUMMARY,
+    ];
+}
+
+impl ::protobuf::EnumFull for ObservabilityProjectionKind {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ObservabilityProjectionKind").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ObservabilityProjectionKind {
+    fn default() -> Self {
+        ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_UNSPECIFIED
+    }
+}
+
+impl ObservabilityProjectionKind {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ObservabilityProjectionKind>("ObservabilityProjectionKind")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.common.v2.ObservabilityMetricLabel)
+pub enum ObservabilityMetricLabel {
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityMetricLabel.OBSERVABILITY_METRIC_LABEL_UNSPECIFIED)
+    OBSERVABILITY_METRIC_LABEL_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityMetricLabel.OBSERVABILITY_METRIC_LABEL_PROVIDER_HEALTH)
+    OBSERVABILITY_METRIC_LABEL_PROVIDER_HEALTH = 1,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityMetricLabel.OBSERVABILITY_METRIC_LABEL_LIFECYCLE_TRANSITION)
+    OBSERVABILITY_METRIC_LABEL_LIFECYCLE_TRANSITION = 2,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityMetricLabel.OBSERVABILITY_METRIC_LABEL_OPERATION_TOTAL)
+    OBSERVABILITY_METRIC_LABEL_OPERATION_TOTAL = 3,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityMetricLabel.OBSERVABILITY_METRIC_LABEL_OPERATION_DURATION)
+    OBSERVABILITY_METRIC_LABEL_OPERATION_DURATION = 4,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityMetricLabel.OBSERVABILITY_METRIC_LABEL_QUEUE_DEPTH)
+    OBSERVABILITY_METRIC_LABEL_QUEUE_DEPTH = 5,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityMetricLabel.OBSERVABILITY_METRIC_LABEL_EXPORT_TRUNCATED)
+    OBSERVABILITY_METRIC_LABEL_EXPORT_TRUNCATED = 6,
+}
+
+impl ::protobuf::Enum for ObservabilityMetricLabel {
+    const NAME: &'static str = "ObservabilityMetricLabel";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ObservabilityMetricLabel> {
+        match value {
+            0 => ::std::option::Option::Some(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_PROVIDER_HEALTH),
+            2 => ::std::option::Option::Some(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_LIFECYCLE_TRANSITION),
+            3 => ::std::option::Option::Some(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_OPERATION_TOTAL),
+            4 => ::std::option::Option::Some(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_OPERATION_DURATION),
+            5 => ::std::option::Option::Some(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_QUEUE_DEPTH),
+            6 => ::std::option::Option::Some(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_EXPORT_TRUNCATED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ObservabilityMetricLabel> {
+        match str {
+            "OBSERVABILITY_METRIC_LABEL_UNSPECIFIED" => ::std::option::Option::Some(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_UNSPECIFIED),
+            "OBSERVABILITY_METRIC_LABEL_PROVIDER_HEALTH" => ::std::option::Option::Some(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_PROVIDER_HEALTH),
+            "OBSERVABILITY_METRIC_LABEL_LIFECYCLE_TRANSITION" => ::std::option::Option::Some(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_LIFECYCLE_TRANSITION),
+            "OBSERVABILITY_METRIC_LABEL_OPERATION_TOTAL" => ::std::option::Option::Some(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_OPERATION_TOTAL),
+            "OBSERVABILITY_METRIC_LABEL_OPERATION_DURATION" => ::std::option::Option::Some(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_OPERATION_DURATION),
+            "OBSERVABILITY_METRIC_LABEL_QUEUE_DEPTH" => ::std::option::Option::Some(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_QUEUE_DEPTH),
+            "OBSERVABILITY_METRIC_LABEL_EXPORT_TRUNCATED" => ::std::option::Option::Some(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_EXPORT_TRUNCATED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ObservabilityMetricLabel] = &[
+        ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_UNSPECIFIED,
+        ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_PROVIDER_HEALTH,
+        ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_LIFECYCLE_TRANSITION,
+        ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_OPERATION_TOTAL,
+        ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_OPERATION_DURATION,
+        ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_QUEUE_DEPTH,
+        ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_EXPORT_TRUNCATED,
+    ];
+}
+
+impl ::protobuf::EnumFull for ObservabilityMetricLabel {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ObservabilityMetricLabel").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ObservabilityMetricLabel {
+    fn default() -> Self {
+        ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_UNSPECIFIED
+    }
+}
+
+impl ObservabilityMetricLabel {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ObservabilityMetricLabel>("ObservabilityMetricLabel")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.common.v2.ObservabilityOperationLabel)
+pub enum ObservabilityOperationLabel {
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOperationLabel.OBSERVABILITY_OPERATION_LABEL_UNSPECIFIED)
+    OBSERVABILITY_OPERATION_LABEL_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOperationLabel.OBSERVABILITY_OPERATION_LABEL_HEALTH)
+    OBSERVABILITY_OPERATION_LABEL_HEALTH = 1,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOperationLabel.OBSERVABILITY_OPERATION_LABEL_PLAN)
+    OBSERVABILITY_OPERATION_LABEL_PLAN = 2,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOperationLabel.OBSERVABILITY_OPERATION_LABEL_ENSURE)
+    OBSERVABILITY_OPERATION_LABEL_ENSURE = 3,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOperationLabel.OBSERVABILITY_OPERATION_LABEL_START)
+    OBSERVABILITY_OPERATION_LABEL_START = 4,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOperationLabel.OBSERVABILITY_OPERATION_LABEL_STOP)
+    OBSERVABILITY_OPERATION_LABEL_STOP = 5,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOperationLabel.OBSERVABILITY_OPERATION_LABEL_ATTACH)
+    OBSERVABILITY_OPERATION_LABEL_ATTACH = 6,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOperationLabel.OBSERVABILITY_OPERATION_LABEL_DETACH)
+    OBSERVABILITY_OPERATION_LABEL_DETACH = 7,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOperationLabel.OBSERVABILITY_OPERATION_LABEL_ADOPT)
+    OBSERVABILITY_OPERATION_LABEL_ADOPT = 8,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOperationLabel.OBSERVABILITY_OPERATION_LABEL_INSPECT)
+    OBSERVABILITY_OPERATION_LABEL_INSPECT = 9,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOperationLabel.OBSERVABILITY_OPERATION_LABEL_SET_STATE)
+    OBSERVABILITY_OPERATION_LABEL_SET_STATE = 10,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOperationLabel.OBSERVABILITY_OPERATION_LABEL_QUERY)
+    OBSERVABILITY_OPERATION_LABEL_QUERY = 11,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOperationLabel.OBSERVABILITY_OPERATION_LABEL_EXPORT)
+    OBSERVABILITY_OPERATION_LABEL_EXPORT = 12,
+}
+
+impl ::protobuf::Enum for ObservabilityOperationLabel {
+    const NAME: &'static str = "ObservabilityOperationLabel";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ObservabilityOperationLabel> {
+        match value {
+            0 => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_HEALTH),
+            2 => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_PLAN),
+            3 => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_ENSURE),
+            4 => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_START),
+            5 => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_STOP),
+            6 => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_ATTACH),
+            7 => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_DETACH),
+            8 => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_ADOPT),
+            9 => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_INSPECT),
+            10 => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_SET_STATE),
+            11 => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_QUERY),
+            12 => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_EXPORT),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ObservabilityOperationLabel> {
+        match str {
+            "OBSERVABILITY_OPERATION_LABEL_UNSPECIFIED" => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_UNSPECIFIED),
+            "OBSERVABILITY_OPERATION_LABEL_HEALTH" => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_HEALTH),
+            "OBSERVABILITY_OPERATION_LABEL_PLAN" => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_PLAN),
+            "OBSERVABILITY_OPERATION_LABEL_ENSURE" => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_ENSURE),
+            "OBSERVABILITY_OPERATION_LABEL_START" => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_START),
+            "OBSERVABILITY_OPERATION_LABEL_STOP" => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_STOP),
+            "OBSERVABILITY_OPERATION_LABEL_ATTACH" => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_ATTACH),
+            "OBSERVABILITY_OPERATION_LABEL_DETACH" => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_DETACH),
+            "OBSERVABILITY_OPERATION_LABEL_ADOPT" => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_ADOPT),
+            "OBSERVABILITY_OPERATION_LABEL_INSPECT" => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_INSPECT),
+            "OBSERVABILITY_OPERATION_LABEL_SET_STATE" => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_SET_STATE),
+            "OBSERVABILITY_OPERATION_LABEL_QUERY" => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_QUERY),
+            "OBSERVABILITY_OPERATION_LABEL_EXPORT" => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_EXPORT),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ObservabilityOperationLabel] = &[
+        ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_UNSPECIFIED,
+        ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_HEALTH,
+        ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_PLAN,
+        ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_ENSURE,
+        ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_START,
+        ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_STOP,
+        ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_ATTACH,
+        ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_DETACH,
+        ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_ADOPT,
+        ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_INSPECT,
+        ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_SET_STATE,
+        ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_QUERY,
+        ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_EXPORT,
+    ];
+}
+
+impl ::protobuf::EnumFull for ObservabilityOperationLabel {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ObservabilityOperationLabel").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ObservabilityOperationLabel {
+    fn default() -> Self {
+        ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_UNSPECIFIED
+    }
+}
+
+impl ObservabilityOperationLabel {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ObservabilityOperationLabel>("ObservabilityOperationLabel")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.common.v2.ObservabilityOutcomeLabel)
+pub enum ObservabilityOutcomeLabel {
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOutcomeLabel.OBSERVABILITY_OUTCOME_LABEL_UNSPECIFIED)
+    OBSERVABILITY_OUTCOME_LABEL_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOutcomeLabel.OBSERVABILITY_OUTCOME_LABEL_SUCCESS)
+    OBSERVABILITY_OUTCOME_LABEL_SUCCESS = 1,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOutcomeLabel.OBSERVABILITY_OUTCOME_LABEL_ALREADY_APPLIED)
+    OBSERVABILITY_OUTCOME_LABEL_ALREADY_APPLIED = 2,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOutcomeLabel.OBSERVABILITY_OUTCOME_LABEL_DENIED)
+    OBSERVABILITY_OUTCOME_LABEL_DENIED = 3,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOutcomeLabel.OBSERVABILITY_OUTCOME_LABEL_CANCELLED)
+    OBSERVABILITY_OUTCOME_LABEL_CANCELLED = 4,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOutcomeLabel.OBSERVABILITY_OUTCOME_LABEL_DEADLINE_EXPIRED)
+    OBSERVABILITY_OUTCOME_LABEL_DEADLINE_EXPIRED = 5,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOutcomeLabel.OBSERVABILITY_OUTCOME_LABEL_UNAVAILABLE)
+    OBSERVABILITY_OUTCOME_LABEL_UNAVAILABLE = 6,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOutcomeLabel.OBSERVABILITY_OUTCOME_LABEL_TRUNCATED)
+    OBSERVABILITY_OUTCOME_LABEL_TRUNCATED = 7,
+}
+
+impl ::protobuf::Enum for ObservabilityOutcomeLabel {
+    const NAME: &'static str = "ObservabilityOutcomeLabel";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ObservabilityOutcomeLabel> {
+        match value {
+            0 => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_SUCCESS),
+            2 => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_ALREADY_APPLIED),
+            3 => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_DENIED),
+            4 => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_CANCELLED),
+            5 => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_DEADLINE_EXPIRED),
+            6 => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_UNAVAILABLE),
+            7 => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_TRUNCATED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ObservabilityOutcomeLabel> {
+        match str {
+            "OBSERVABILITY_OUTCOME_LABEL_UNSPECIFIED" => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_UNSPECIFIED),
+            "OBSERVABILITY_OUTCOME_LABEL_SUCCESS" => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_SUCCESS),
+            "OBSERVABILITY_OUTCOME_LABEL_ALREADY_APPLIED" => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_ALREADY_APPLIED),
+            "OBSERVABILITY_OUTCOME_LABEL_DENIED" => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_DENIED),
+            "OBSERVABILITY_OUTCOME_LABEL_CANCELLED" => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_CANCELLED),
+            "OBSERVABILITY_OUTCOME_LABEL_DEADLINE_EXPIRED" => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_DEADLINE_EXPIRED),
+            "OBSERVABILITY_OUTCOME_LABEL_UNAVAILABLE" => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_UNAVAILABLE),
+            "OBSERVABILITY_OUTCOME_LABEL_TRUNCATED" => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_TRUNCATED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ObservabilityOutcomeLabel] = &[
+        ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_UNSPECIFIED,
+        ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_SUCCESS,
+        ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_ALREADY_APPLIED,
+        ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_DENIED,
+        ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_CANCELLED,
+        ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_DEADLINE_EXPIRED,
+        ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_UNAVAILABLE,
+        ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_TRUNCATED,
+    ];
+}
+
+impl ::protobuf::EnumFull for ObservabilityOutcomeLabel {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ObservabilityOutcomeLabel").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ObservabilityOutcomeLabel {
+    fn default() -> Self {
+        ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_UNSPECIFIED
+    }
+}
+
+impl ObservabilityOutcomeLabel {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ObservabilityOutcomeLabel>("ObservabilityOutcomeLabel")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.common.v2.ObservabilityHealthState)
+pub enum ObservabilityHealthState {
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthState.OBSERVABILITY_HEALTH_STATE_UNSPECIFIED)
+    OBSERVABILITY_HEALTH_STATE_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthState.OBSERVABILITY_HEALTH_STATE_HEALTHY)
+    OBSERVABILITY_HEALTH_STATE_HEALTHY = 1,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthState.OBSERVABILITY_HEALTH_STATE_DEGRADED)
+    OBSERVABILITY_HEALTH_STATE_DEGRADED = 2,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthState.OBSERVABILITY_HEALTH_STATE_UNAVAILABLE)
+    OBSERVABILITY_HEALTH_STATE_UNAVAILABLE = 3,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthState.OBSERVABILITY_HEALTH_STATE_FAILED)
+    OBSERVABILITY_HEALTH_STATE_FAILED = 4,
+}
+
+impl ::protobuf::Enum for ObservabilityHealthState {
+    const NAME: &'static str = "ObservabilityHealthState";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ObservabilityHealthState> {
+        match value {
+            0 => ::std::option::Option::Some(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_HEALTHY),
+            2 => ::std::option::Option::Some(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_DEGRADED),
+            3 => ::std::option::Option::Some(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_UNAVAILABLE),
+            4 => ::std::option::Option::Some(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_FAILED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ObservabilityHealthState> {
+        match str {
+            "OBSERVABILITY_HEALTH_STATE_UNSPECIFIED" => ::std::option::Option::Some(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_UNSPECIFIED),
+            "OBSERVABILITY_HEALTH_STATE_HEALTHY" => ::std::option::Option::Some(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_HEALTHY),
+            "OBSERVABILITY_HEALTH_STATE_DEGRADED" => ::std::option::Option::Some(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_DEGRADED),
+            "OBSERVABILITY_HEALTH_STATE_UNAVAILABLE" => ::std::option::Option::Some(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_UNAVAILABLE),
+            "OBSERVABILITY_HEALTH_STATE_FAILED" => ::std::option::Option::Some(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_FAILED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ObservabilityHealthState] = &[
+        ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_UNSPECIFIED,
+        ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_HEALTHY,
+        ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_DEGRADED,
+        ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_UNAVAILABLE,
+        ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_FAILED,
+    ];
+}
+
+impl ::protobuf::EnumFull for ObservabilityHealthState {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ObservabilityHealthState").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ObservabilityHealthState {
+    fn default() -> Self {
+        ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_UNSPECIFIED
+    }
+}
+
+impl ObservabilityHealthState {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ObservabilityHealthState>("ObservabilityHealthState")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.common.v2.ObservabilityLifecycleState)
+pub enum ObservabilityLifecycleState {
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityLifecycleState.OBSERVABILITY_LIFECYCLE_STATE_UNSPECIFIED)
+    OBSERVABILITY_LIFECYCLE_STATE_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityLifecycleState.OBSERVABILITY_LIFECYCLE_STATE_PLANNED)
+    OBSERVABILITY_LIFECYCLE_STATE_PLANNED = 1,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityLifecycleState.OBSERVABILITY_LIFECYCLE_STATE_READY)
+    OBSERVABILITY_LIFECYCLE_STATE_READY = 2,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityLifecycleState.OBSERVABILITY_LIFECYCLE_STATE_RUNNING)
+    OBSERVABILITY_LIFECYCLE_STATE_RUNNING = 3,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityLifecycleState.OBSERVABILITY_LIFECYCLE_STATE_STOPPED)
+    OBSERVABILITY_LIFECYCLE_STATE_STOPPED = 4,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityLifecycleState.OBSERVABILITY_LIFECYCLE_STATE_RELEASED)
+    OBSERVABILITY_LIFECYCLE_STATE_RELEASED = 5,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityLifecycleState.OBSERVABILITY_LIFECYCLE_STATE_DESTROYED)
+    OBSERVABILITY_LIFECYCLE_STATE_DESTROYED = 6,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityLifecycleState.OBSERVABILITY_LIFECYCLE_STATE_UNKNOWN)
+    OBSERVABILITY_LIFECYCLE_STATE_UNKNOWN = 7,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityLifecycleState.OBSERVABILITY_LIFECYCLE_STATE_QUARANTINED)
+    OBSERVABILITY_LIFECYCLE_STATE_QUARANTINED = 8,
+}
+
+impl ::protobuf::Enum for ObservabilityLifecycleState {
+    const NAME: &'static str = "ObservabilityLifecycleState";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ObservabilityLifecycleState> {
+        match value {
+            0 => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_PLANNED),
+            2 => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_READY),
+            3 => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_RUNNING),
+            4 => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_STOPPED),
+            5 => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_RELEASED),
+            6 => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_DESTROYED),
+            7 => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_UNKNOWN),
+            8 => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_QUARANTINED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ObservabilityLifecycleState> {
+        match str {
+            "OBSERVABILITY_LIFECYCLE_STATE_UNSPECIFIED" => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_UNSPECIFIED),
+            "OBSERVABILITY_LIFECYCLE_STATE_PLANNED" => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_PLANNED),
+            "OBSERVABILITY_LIFECYCLE_STATE_READY" => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_READY),
+            "OBSERVABILITY_LIFECYCLE_STATE_RUNNING" => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_RUNNING),
+            "OBSERVABILITY_LIFECYCLE_STATE_STOPPED" => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_STOPPED),
+            "OBSERVABILITY_LIFECYCLE_STATE_RELEASED" => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_RELEASED),
+            "OBSERVABILITY_LIFECYCLE_STATE_DESTROYED" => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_DESTROYED),
+            "OBSERVABILITY_LIFECYCLE_STATE_UNKNOWN" => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_UNKNOWN),
+            "OBSERVABILITY_LIFECYCLE_STATE_QUARANTINED" => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_QUARANTINED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ObservabilityLifecycleState] = &[
+        ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_UNSPECIFIED,
+        ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_PLANNED,
+        ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_READY,
+        ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_RUNNING,
+        ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_STOPPED,
+        ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_RELEASED,
+        ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_DESTROYED,
+        ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_UNKNOWN,
+        ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_QUARANTINED,
+    ];
+}
+
+impl ::protobuf::EnumFull for ObservabilityLifecycleState {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ObservabilityLifecycleState").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ObservabilityLifecycleState {
+    fn default() -> Self {
+        ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_UNSPECIFIED
+    }
+}
+
+impl ObservabilityLifecycleState {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ObservabilityLifecycleState>("ObservabilityLifecycleState")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.common.v2.ObservabilityAdoptionState)
+pub enum ObservabilityAdoptionState {
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityAdoptionState.OBSERVABILITY_ADOPTION_STATE_UNSPECIFIED)
+    OBSERVABILITY_ADOPTION_STATE_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityAdoptionState.OBSERVABILITY_ADOPTION_STATE_NOT_ATTEMPTED)
+    OBSERVABILITY_ADOPTION_STATE_NOT_ATTEMPTED = 1,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityAdoptionState.OBSERVABILITY_ADOPTION_STATE_ADOPTED)
+    OBSERVABILITY_ADOPTION_STATE_ADOPTED = 2,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityAdoptionState.OBSERVABILITY_ADOPTION_STATE_REJECTED)
+    OBSERVABILITY_ADOPTION_STATE_REJECTED = 3,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityAdoptionState.OBSERVABILITY_ADOPTION_STATE_AMBIGUOUS)
+    OBSERVABILITY_ADOPTION_STATE_AMBIGUOUS = 4,
+}
+
+impl ::protobuf::Enum for ObservabilityAdoptionState {
+    const NAME: &'static str = "ObservabilityAdoptionState";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ObservabilityAdoptionState> {
+        match value {
+            0 => ::std::option::Option::Some(ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_NOT_ATTEMPTED),
+            2 => ::std::option::Option::Some(ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_ADOPTED),
+            3 => ::std::option::Option::Some(ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_REJECTED),
+            4 => ::std::option::Option::Some(ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_AMBIGUOUS),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ObservabilityAdoptionState> {
+        match str {
+            "OBSERVABILITY_ADOPTION_STATE_UNSPECIFIED" => ::std::option::Option::Some(ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_UNSPECIFIED),
+            "OBSERVABILITY_ADOPTION_STATE_NOT_ATTEMPTED" => ::std::option::Option::Some(ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_NOT_ATTEMPTED),
+            "OBSERVABILITY_ADOPTION_STATE_ADOPTED" => ::std::option::Option::Some(ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_ADOPTED),
+            "OBSERVABILITY_ADOPTION_STATE_REJECTED" => ::std::option::Option::Some(ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_REJECTED),
+            "OBSERVABILITY_ADOPTION_STATE_AMBIGUOUS" => ::std::option::Option::Some(ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_AMBIGUOUS),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ObservabilityAdoptionState] = &[
+        ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_UNSPECIFIED,
+        ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_NOT_ATTEMPTED,
+        ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_ADOPTED,
+        ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_REJECTED,
+        ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_AMBIGUOUS,
+    ];
+}
+
+impl ::protobuf::EnumFull for ObservabilityAdoptionState {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ObservabilityAdoptionState").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ObservabilityAdoptionState {
+    fn default() -> Self {
+        ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_UNSPECIFIED
+    }
+}
+
+impl ObservabilityAdoptionState {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ObservabilityAdoptionState>("ObservabilityAdoptionState")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.common.v2.ObservabilityObservationReason)
+pub enum ObservabilityObservationReason {
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityObservationReason.OBSERVABILITY_OBSERVATION_REASON_UNSPECIFIED)
+    OBSERVABILITY_OBSERVATION_REASON_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityObservationReason.OBSERVABILITY_OBSERVATION_REASON_NONE)
+    OBSERVABILITY_OBSERVATION_REASON_NONE = 1,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityObservationReason.OBSERVABILITY_OBSERVATION_REASON_IDENTITY_MISMATCH)
+    OBSERVABILITY_OBSERVATION_REASON_IDENTITY_MISMATCH = 2,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityObservationReason.OBSERVABILITY_OBSERVATION_REASON_CONFIGURATION_MISMATCH)
+    OBSERVABILITY_OBSERVATION_REASON_CONFIGURATION_MISMATCH = 3,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityObservationReason.OBSERVABILITY_OBSERVATION_REASON_GENERATION_MISMATCH)
+    OBSERVABILITY_OBSERVATION_REASON_GENERATION_MISMATCH = 4,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityObservationReason.OBSERVABILITY_OBSERVATION_REASON_OWNER_MISMATCH)
+    OBSERVABILITY_OBSERVATION_REASON_OWNER_MISMATCH = 5,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityObservationReason.OBSERVABILITY_OBSERVATION_REASON_MULTIPLE_CANDIDATES)
+    OBSERVABILITY_OBSERVATION_REASON_MULTIPLE_CANDIDATES = 6,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityObservationReason.OBSERVABILITY_OBSERVATION_REASON_MISSING_EVIDENCE)
+    OBSERVABILITY_OBSERVATION_REASON_MISSING_EVIDENCE = 7,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityObservationReason.OBSERVABILITY_OBSERVATION_REASON_CANCELLED)
+    OBSERVABILITY_OBSERVATION_REASON_CANCELLED = 8,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityObservationReason.OBSERVABILITY_OBSERVATION_REASON_DEADLINE_EXPIRED)
+    OBSERVABILITY_OBSERVATION_REASON_DEADLINE_EXPIRED = 9,
+}
+
+impl ::protobuf::Enum for ObservabilityObservationReason {
+    const NAME: &'static str = "ObservabilityObservationReason";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ObservabilityObservationReason> {
+        match value {
+            0 => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_NONE),
+            2 => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_IDENTITY_MISMATCH),
+            3 => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_CONFIGURATION_MISMATCH),
+            4 => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_GENERATION_MISMATCH),
+            5 => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_OWNER_MISMATCH),
+            6 => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_MULTIPLE_CANDIDATES),
+            7 => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_MISSING_EVIDENCE),
+            8 => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_CANCELLED),
+            9 => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_DEADLINE_EXPIRED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ObservabilityObservationReason> {
+        match str {
+            "OBSERVABILITY_OBSERVATION_REASON_UNSPECIFIED" => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_UNSPECIFIED),
+            "OBSERVABILITY_OBSERVATION_REASON_NONE" => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_NONE),
+            "OBSERVABILITY_OBSERVATION_REASON_IDENTITY_MISMATCH" => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_IDENTITY_MISMATCH),
+            "OBSERVABILITY_OBSERVATION_REASON_CONFIGURATION_MISMATCH" => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_CONFIGURATION_MISMATCH),
+            "OBSERVABILITY_OBSERVATION_REASON_GENERATION_MISMATCH" => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_GENERATION_MISMATCH),
+            "OBSERVABILITY_OBSERVATION_REASON_OWNER_MISMATCH" => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_OWNER_MISMATCH),
+            "OBSERVABILITY_OBSERVATION_REASON_MULTIPLE_CANDIDATES" => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_MULTIPLE_CANDIDATES),
+            "OBSERVABILITY_OBSERVATION_REASON_MISSING_EVIDENCE" => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_MISSING_EVIDENCE),
+            "OBSERVABILITY_OBSERVATION_REASON_CANCELLED" => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_CANCELLED),
+            "OBSERVABILITY_OBSERVATION_REASON_DEADLINE_EXPIRED" => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_DEADLINE_EXPIRED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ObservabilityObservationReason] = &[
+        ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_UNSPECIFIED,
+        ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_NONE,
+        ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_IDENTITY_MISMATCH,
+        ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_CONFIGURATION_MISMATCH,
+        ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_GENERATION_MISMATCH,
+        ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_OWNER_MISMATCH,
+        ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_MULTIPLE_CANDIDATES,
+        ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_MISSING_EVIDENCE,
+        ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_CANCELLED,
+        ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_DEADLINE_EXPIRED,
+    ];
+}
+
+impl ::protobuf::EnumFull for ObservabilityObservationReason {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ObservabilityObservationReason").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ObservabilityObservationReason {
+    fn default() -> Self {
+        ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_UNSPECIFIED
+    }
+}
+
+impl ObservabilityObservationReason {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ObservabilityObservationReason>("ObservabilityObservationReason")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.common.v2.ObservabilityHealthReason)
+pub enum ObservabilityHealthReason {
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthReason.OBSERVABILITY_HEALTH_REASON_UNSPECIFIED)
+    OBSERVABILITY_HEALTH_REASON_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthReason.OBSERVABILITY_HEALTH_REASON_NONE)
+    OBSERVABILITY_HEALTH_REASON_NONE = 1,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthReason.OBSERVABILITY_HEALTH_REASON_PROVIDER_DEGRADED)
+    OBSERVABILITY_HEALTH_REASON_PROVIDER_DEGRADED = 2,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthReason.OBSERVABILITY_HEALTH_REASON_HEALTH_TIMEOUT)
+    OBSERVABILITY_HEALTH_REASON_HEALTH_TIMEOUT = 3,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthReason.OBSERVABILITY_HEALTH_REASON_HEALTH_STALE)
+    OBSERVABILITY_HEALTH_REASON_HEALTH_STALE = 4,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthReason.OBSERVABILITY_HEALTH_REASON_SESSION_DISCONNECTED)
+    OBSERVABILITY_HEALTH_REASON_SESSION_DISCONNECTED = 5,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthReason.OBSERVABILITY_HEALTH_REASON_QUEUE_PRESSURE)
+    OBSERVABILITY_HEALTH_REASON_QUEUE_PRESSURE = 6,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthReason.OBSERVABILITY_HEALTH_REASON_HANDSHAKE_TIMEOUT)
+    OBSERVABILITY_HEALTH_REASON_HANDSHAKE_TIMEOUT = 7,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthReason.OBSERVABILITY_HEALTH_REASON_AUTHENTICATION_FAILED)
+    OBSERVABILITY_HEALTH_REASON_AUTHENTICATION_FAILED = 8,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthReason.OBSERVABILITY_HEALTH_REASON_IDENTITY_MISMATCH)
+    OBSERVABILITY_HEALTH_REASON_IDENTITY_MISMATCH = 9,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthReason.OBSERVABILITY_HEALTH_REASON_CONFIGURATION_MISMATCH)
+    OBSERVABILITY_HEALTH_REASON_CONFIGURATION_MISMATCH = 10,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthReason.OBSERVABILITY_HEALTH_REASON_GENERATION_MISMATCH)
+    OBSERVABILITY_HEALTH_REASON_GENERATION_MISMATCH = 11,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthReason.OBSERVABILITY_HEALTH_REASON_CAPABILITY_MISMATCH)
+    OBSERVABILITY_HEALTH_REASON_CAPABILITY_MISMATCH = 12,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthReason.OBSERVABILITY_HEALTH_REASON_ADOPTION_AMBIGUOUS)
+    OBSERVABILITY_HEALTH_REASON_ADOPTION_AMBIGUOUS = 13,
+}
+
+impl ::protobuf::Enum for ObservabilityHealthReason {
+    const NAME: &'static str = "ObservabilityHealthReason";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ObservabilityHealthReason> {
+        match value {
+            0 => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_NONE),
+            2 => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_PROVIDER_DEGRADED),
+            3 => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_HEALTH_TIMEOUT),
+            4 => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_HEALTH_STALE),
+            5 => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_SESSION_DISCONNECTED),
+            6 => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_QUEUE_PRESSURE),
+            7 => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_HANDSHAKE_TIMEOUT),
+            8 => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_AUTHENTICATION_FAILED),
+            9 => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_IDENTITY_MISMATCH),
+            10 => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_CONFIGURATION_MISMATCH),
+            11 => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_GENERATION_MISMATCH),
+            12 => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_CAPABILITY_MISMATCH),
+            13 => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_ADOPTION_AMBIGUOUS),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ObservabilityHealthReason> {
+        match str {
+            "OBSERVABILITY_HEALTH_REASON_UNSPECIFIED" => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_UNSPECIFIED),
+            "OBSERVABILITY_HEALTH_REASON_NONE" => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_NONE),
+            "OBSERVABILITY_HEALTH_REASON_PROVIDER_DEGRADED" => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_PROVIDER_DEGRADED),
+            "OBSERVABILITY_HEALTH_REASON_HEALTH_TIMEOUT" => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_HEALTH_TIMEOUT),
+            "OBSERVABILITY_HEALTH_REASON_HEALTH_STALE" => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_HEALTH_STALE),
+            "OBSERVABILITY_HEALTH_REASON_SESSION_DISCONNECTED" => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_SESSION_DISCONNECTED),
+            "OBSERVABILITY_HEALTH_REASON_QUEUE_PRESSURE" => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_QUEUE_PRESSURE),
+            "OBSERVABILITY_HEALTH_REASON_HANDSHAKE_TIMEOUT" => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_HANDSHAKE_TIMEOUT),
+            "OBSERVABILITY_HEALTH_REASON_AUTHENTICATION_FAILED" => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_AUTHENTICATION_FAILED),
+            "OBSERVABILITY_HEALTH_REASON_IDENTITY_MISMATCH" => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_IDENTITY_MISMATCH),
+            "OBSERVABILITY_HEALTH_REASON_CONFIGURATION_MISMATCH" => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_CONFIGURATION_MISMATCH),
+            "OBSERVABILITY_HEALTH_REASON_GENERATION_MISMATCH" => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_GENERATION_MISMATCH),
+            "OBSERVABILITY_HEALTH_REASON_CAPABILITY_MISMATCH" => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_CAPABILITY_MISMATCH),
+            "OBSERVABILITY_HEALTH_REASON_ADOPTION_AMBIGUOUS" => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_ADOPTION_AMBIGUOUS),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ObservabilityHealthReason] = &[
+        ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_UNSPECIFIED,
+        ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_NONE,
+        ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_PROVIDER_DEGRADED,
+        ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_HEALTH_TIMEOUT,
+        ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_HEALTH_STALE,
+        ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_SESSION_DISCONNECTED,
+        ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_QUEUE_PRESSURE,
+        ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_HANDSHAKE_TIMEOUT,
+        ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_AUTHENTICATION_FAILED,
+        ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_IDENTITY_MISMATCH,
+        ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_CONFIGURATION_MISMATCH,
+        ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_GENERATION_MISMATCH,
+        ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_CAPABILITY_MISMATCH,
+        ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_ADOPTION_AMBIGUOUS,
+    ];
+}
+
+impl ::protobuf::EnumFull for ObservabilityHealthReason {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ObservabilityHealthReason").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ObservabilityHealthReason {
+    fn default() -> Self {
+        ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_UNSPECIFIED
+    }
+}
+
+impl ObservabilityHealthReason {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ObservabilityHealthReason>("ObservabilityHealthReason")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.common.v2.ObservabilityRemediation)
+pub enum ObservabilityRemediation {
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityRemediation.OBSERVABILITY_REMEDIATION_UNSPECIFIED)
+    OBSERVABILITY_REMEDIATION_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityRemediation.OBSERVABILITY_REMEDIATION_NONE)
+    OBSERVABILITY_REMEDIATION_NONE = 1,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityRemediation.OBSERVABILITY_REMEDIATION_RETRY_BOUNDED)
+    OBSERVABILITY_REMEDIATION_RETRY_BOUNDED = 2,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityRemediation.OBSERVABILITY_REMEDIATION_INSPECT_PROVIDER)
+    OBSERVABILITY_REMEDIATION_INSPECT_PROVIDER = 3,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityRemediation.OBSERVABILITY_REMEDIATION_RESTART_AGENT)
+    OBSERVABILITY_REMEDIATION_RESTART_AGENT = 4,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityRemediation.OBSERVABILITY_REMEDIATION_RE_ENROLL_PEER)
+    OBSERVABILITY_REMEDIATION_RE_ENROLL_PEER = 5,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityRemediation.OBSERVABILITY_REMEDIATION_REPAIR_CONFIGURATION)
+    OBSERVABILITY_REMEDIATION_REPAIR_CONFIGURATION = 6,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityRemediation.OBSERVABILITY_REMEDIATION_REPLACE_GENERATION)
+    OBSERVABILITY_REMEDIATION_REPLACE_GENERATION = 7,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityRemediation.OBSERVABILITY_REMEDIATION_OPERATOR_INTERACTION)
+    OBSERVABILITY_REMEDIATION_OPERATOR_INTERACTION = 8,
+}
+
+impl ::protobuf::Enum for ObservabilityRemediation {
+    const NAME: &'static str = "ObservabilityRemediation";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ObservabilityRemediation> {
+        match value {
+            0 => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_NONE),
+            2 => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_RETRY_BOUNDED),
+            3 => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_INSPECT_PROVIDER),
+            4 => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_RESTART_AGENT),
+            5 => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_RE_ENROLL_PEER),
+            6 => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_REPAIR_CONFIGURATION),
+            7 => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_REPLACE_GENERATION),
+            8 => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_OPERATOR_INTERACTION),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ObservabilityRemediation> {
+        match str {
+            "OBSERVABILITY_REMEDIATION_UNSPECIFIED" => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_UNSPECIFIED),
+            "OBSERVABILITY_REMEDIATION_NONE" => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_NONE),
+            "OBSERVABILITY_REMEDIATION_RETRY_BOUNDED" => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_RETRY_BOUNDED),
+            "OBSERVABILITY_REMEDIATION_INSPECT_PROVIDER" => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_INSPECT_PROVIDER),
+            "OBSERVABILITY_REMEDIATION_RESTART_AGENT" => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_RESTART_AGENT),
+            "OBSERVABILITY_REMEDIATION_RE_ENROLL_PEER" => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_RE_ENROLL_PEER),
+            "OBSERVABILITY_REMEDIATION_REPAIR_CONFIGURATION" => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_REPAIR_CONFIGURATION),
+            "OBSERVABILITY_REMEDIATION_REPLACE_GENERATION" => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_REPLACE_GENERATION),
+            "OBSERVABILITY_REMEDIATION_OPERATOR_INTERACTION" => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_OPERATOR_INTERACTION),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ObservabilityRemediation] = &[
+        ObservabilityRemediation::OBSERVABILITY_REMEDIATION_UNSPECIFIED,
+        ObservabilityRemediation::OBSERVABILITY_REMEDIATION_NONE,
+        ObservabilityRemediation::OBSERVABILITY_REMEDIATION_RETRY_BOUNDED,
+        ObservabilityRemediation::OBSERVABILITY_REMEDIATION_INSPECT_PROVIDER,
+        ObservabilityRemediation::OBSERVABILITY_REMEDIATION_RESTART_AGENT,
+        ObservabilityRemediation::OBSERVABILITY_REMEDIATION_RE_ENROLL_PEER,
+        ObservabilityRemediation::OBSERVABILITY_REMEDIATION_REPAIR_CONFIGURATION,
+        ObservabilityRemediation::OBSERVABILITY_REMEDIATION_REPLACE_GENERATION,
+        ObservabilityRemediation::OBSERVABILITY_REMEDIATION_OPERATOR_INTERACTION,
+    ];
+}
+
+impl ::protobuf::EnumFull for ObservabilityRemediation {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ObservabilityRemediation").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ObservabilityRemediation {
+    fn default() -> Self {
+        ObservabilityRemediation::OBSERVABILITY_REMEDIATION_UNSPECIFIED
+    }
+}
+
+impl ObservabilityRemediation {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ObservabilityRemediation>("ObservabilityRemediation")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
 // @@protoc_insertion_point(enum:d2b.common.v2.ObservabilityExportFormat)
 pub enum ObservabilityExportFormat {
     // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityExportFormat.OBSERVABILITY_EXPORT_FORMAT_UNSPECIFIED)
@@ -5981,157 +7737,259 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \x124\n\x04view\x18\x01\x20\x01(\x0e2\x20.d2b.common.v2.ObservabilityVie\
     wR\x04view\x12\x1b\n\x06cursor\x18\x02\x20\x01(\tH\0R\x06cursor\x88\x01\
     \x01\x12\x14\n\x05limit\x18\x03\x20\x01(\rR\x05limitB\t\n\x07_cursor\"\
-    \xaa\x01\n\x18ObservabilityExportInput\x12@\n\x06format\x18\x01\x20\x01(\
-    \x0e2(.d2b.common.v2.ObservabilityExportFormatR\x06format\x12'\n\x10star\
-    t_at_unix_ms\x18\x02\x20\x01(\x04R\rstartAtUnixMs\x12#\n\x0eend_at_unix_\
-    ms\x18\x03\x20\x01(\x04R\x0bendAtUnixMs\"\xbb\x06\n\x16ProviderOperation\
-    Input\x12D\n\x08no_input\x18\x01\x20\x01(\x0b2'.d2b.common.v2.NoProvider\
-    OperationInputH\0R\x07noInput\x12r\n\x1cconfigured_runtime_execution\x18\
-    \x02\x20\x01(\x0b2..d2b.common.v2.ConfiguredRuntimeExecutionInputH\0R\
-    \x1aconfiguredRuntimeExecution\x12l\n\x1ainfrastructure_power_state\x18\
-    \x03\x20\x01(\x0b2,.d2b.common.v2.InfrastructurePowerStateInputH\0R\x18i\
-    nfrastructurePowerState\x12S\n\x11transport_binding\x18\x04\x20\x01(\x0b\
-    2$.d2b.common.v2.TransportBindingInputH\0R\x10transportBinding\x12P\n\
-    \x10storage_snapshot\x18\x05\x20\x01(\x0b2#.d2b.common.v2.StorageSnapsho\
-    tInputH\0R\x0fstorageSnapshot\x12M\n\x0fdevice_selector\x18\x06\x20\x01(\
-    \x0b2\".d2b.common.v2.DeviceSelectorInputH\0R\x0edeviceSelector\x12A\n\
-    \x0baudio_state\x18\x07\x20\x01(\x0b2\x1e.d2b.common.v2.AudioStateInputH\
-    \0R\naudioState\x12Y\n\x13observability_query\x18\x08\x20\x01(\x0b2&.d2b\
-    .common.v2.ObservabilityQueryInputH\0R\x12observabilityQuery\x12\\\n\x14\
-    observability_export\x18\t\x20\x01(\x0b2'.d2b.common.v2.ObservabilityExp\
-    ortInputH\0R\x13observabilityExportB\x07\n\x05input\"V\n\x11CapabilityRe\
-    quest\x12A\n\x07context\x18\x01\x20\x01(\x0b2'.d2b.common.v2.ProviderOpe\
-    rationContextR\x07context\"\x95\x01\n\rErrorEnvelope\x12,\n\x04kind\x18\
-    \x01\x20\x01(\x0e2\x18.d2b.common.v2.ErrorKindR\x04kind\x12/\n\x05retry\
-    \x18\x02\x20\x01(\x0e2\x19.d2b.common.v2.RetryClassR\x05retry\x12%\n\x0e\
-    correlation_id\x18\x03\x20\x01(\tR\rcorrelationId\"\x9d\x01\n\x0bObserva\
-    tion\x12\x1f\n\x0bresource_id\x18\x01\x20\x01(\tR\nresourceId\x125\n\x05\
-    state\x18\x02\x20\x01(\x0e2\x1f.d2b.common.v2.ObservationStateR\x05state\
-    \x12\x1e\n\ngeneration\x18\x03\x20\x01(\x04R\ngeneration\x12\x16\n\x06di\
-    gest\x18\x04\x20\x01(\x0cR\x06digest\"\x9e\x03\n\x0fServiceResponse\x120\
-    \n\x07outcome\x18\x01\x20\x01(\x0e2\x16.d2b.common.v2.OutcomeR\x07outcom\
-    e\x12!\n\x0coperation_id\x18\x02\x20\x01(\tR\x0boperationId\x12'\n\x0fre\
-    source_handle\x18\x03\x20\x01(\tR\x0eresourceHandle\x12\x1b\n\tstream_id\
-    \x18\x04\x20\x01(\tR\x08streamId\x12#\n\rresult_digest\x18\x05\x20\x01(\
-    \x0cR\x0cresultDigest\x12>\n\x0cobservations\x18\x06\x20\x03(\x0b2\x1a.d\
-    2b.common.v2.ObservationR\x0cobservations\x12(\n\x10next_page_cursor\x18\
-    \x07\x20\x01(\tR\x0enextPageCursor\x122\n\x05error\x18\x08\x20\x01(\x0b2\
-    \x1c.d2b.common.v2.ErrorEnvelopeR\x05error\x12-\n\x12attachment_indexes\
-    \x18\t\x20\x03(\rR\x11attachmentIndexes\"\xf5\x02\n\x10ProviderResponse\
-    \x120\n\x07outcome\x18\x01\x20\x01(\x0e2\x16.d2b.common.v2.OutcomeR\x07o\
-    utcome\x12!\n\x0coperation_id\x18\x02\x20\x01(\tR\x0boperationId\x12'\n\
-    \x0fresource_handle\x18\x03\x20\x01(\tR\x0eresourceHandle\x12#\n\rresult\
-    _digest\x18\x04\x20\x01(\x0cR\x0cresultDigest\x12>\n\x0cobservations\x18\
-    \x05\x20\x03(\x0b2\x1a.d2b.common.v2.ObservationR\x0cobservations\x122\n\
-    \x05error\x18\x06\x20\x01(\x0b2\x1c.d2b.common.v2.ErrorEnvelopeR\x05erro\
-    r\x12\x1b\n\tstream_id\x18\x07\x20\x01(\tR\x08streamId\x12-\n\x12attachm\
-    ent_indexes\x18\x08\x20\x03(\rR\x11attachmentIndexes\"\xed\x01\n\x12Capa\
-    bilityResponse\x12E\n\x0ccapabilities\x18\x01\x20\x03(\x0e2!.d2b.common.\
-    v2.ProviderCapabilityR\x0ccapabilities\x12/\n\x13provider_generation\x18\
-    \x02\x20\x01(\x04R\x12providerGeneration\x12+\n\x11descriptor_digest\x18\
-    \x03\x20\x01(\x0cR\x10descriptorDigest\x122\n\x05error\x18\x04\x20\x01(\
-    \x0b2\x1c.d2b.common.v2.ErrorEnvelopeR\x05error\"]\n\rCancelRequest\x12-\
-    \n\x12session_generation\x18\x01\x20\x01(\x04R\x11sessionGeneration\x12\
-    \x1d\n\nrequest_id\x18\x02\x20\x01(\x0cR\trequestId\"H\n\x0eCancelRespon\
-    se\x126\n\x07outcome\x18\x01\x20\x01(\x0e2\x1c.d2b.common.v2.CancelOutco\
-    meR\x07outcome*\xe7\x02\n\x0cProviderType\x12\x1d\n\x19PROVIDER_TYPE_UNS\
-    PECIFIED\x10\0\x12\x19\n\x15PROVIDER_TYPE_RUNTIME\x10\x01\x12\x20\n\x1cP\
-    ROVIDER_TYPE_INFRASTRUCTURE\x10\x02\x12\x1b\n\x17PROVIDER_TYPE_TRANSPORT\
-    \x10\x03\x12\x1b\n\x17PROVIDER_TYPE_SUBSTRATE\x10\x04\x12\x1c\n\x18PROVI\
-    DER_TYPE_CREDENTIAL\x10\x05\x12\x19\n\x15PROVIDER_TYPE_DISPLAY\x10\x06\
-    \x12\x19\n\x15PROVIDER_TYPE_NETWORK\x10\x07\x12\x19\n\x15PROVIDER_TYPE_S\
-    TORAGE\x10\x08\x12\x18\n\x14PROVIDER_TYPE_DEVICE\x10\t\x12\x17\n\x13PROV\
-    IDER_TYPE_AUDIO\x10\n\x12\x1f\n\x1bPROVIDER_TYPE_OBSERVABILITY\x10\x0b*\
-    \xa6\x01\n\nRetryClass\x12\x1b\n\x17RETRY_CLASS_UNSPECIFIED\x10\0\x12\
-    \x15\n\x11RETRY_CLASS_NEVER\x10\x01\x12\x1e\n\x1aRETRY_CLASS_SAME_OPERAT\
-    ION\x10\x02\x12!\n\x1dRETRY_CLASS_AFTER_OBSERVATION\x10\x03\x12!\n\x1dRE\
-    TRY_CLASS_AFTER_INTERACTION\x10\x04*\xc0\x01\n\x07Outcome\x12\x17\n\x13O\
-    UTCOME_UNSPECIFIED\x10\0\x12\x14\n\x10OUTCOME_ACCEPTED\x10\x01\x12\x15\n\
-    \x11OUTCOME_SUCCEEDED\x10\x02\x12\x1a\n\x16OUTCOME_NOT_APPLICABLE\x10\
-    \x03\x12\x12\n\x0eOUTCOME_DENIED\x10\x04\x12\x15\n\x11OUTCOME_CANCELLED\
-    \x10\x05\x12\x14\n\x10OUTCOME_DEGRADED\x10\x06\x12\x12\n\x0eOUTCOME_FAIL\
-    ED\x10\x07*\xb5\x03\n\tErrorKind\x12\x1a\n\x16ERROR_KIND_UNSPECIFIED\x10\
-    \0\x12\x1e\n\x1aERROR_KIND_INVALID_REQUEST\x10\x01\x12\x1e\n\x1aERROR_KI\
-    ND_UNAUTHENTICATED\x10\x02\x12\x1b\n\x17ERROR_KIND_UNAUTHORIZED\x10\x03\
-    \x12\x18\n\x14ERROR_KIND_NOT_FOUND\x10\x04\x12\x17\n\x13ERROR_KIND_CONFL\
-    ICT\x10\x05\x12\x20\n\x1cERROR_KIND_CAPABILITY_DENIED\x10\x06\x12\x20\n\
-    \x1cERROR_KIND_DEADLINE_EXCEEDED\x10\x07\x12\x18\n\x14ERROR_KIND_CANCELL\
-    ED\x10\x08\x12\"\n\x1eERROR_KIND_GENERATION_MISMATCH\x10\t\x12!\n\x1dERR\
-    OR_KIND_RESOURCE_EXHAUSTED\x10\n\x12\x1a\n\x16ERROR_KIND_UNAVAILABLE\x10\
-    \x0b\x12\"\n\x1eERROR_KIND_INVARIANT_VIOLATION\x10\x0c\x12\x17\n\x13ERRO\
-    R_KIND_INTERNAL\x10\r*\xb9\x02\n\x0cDesiredState\x12\x1d\n\x19DESIRED_ST\
-    ATE_UNSPECIFIED\x10\0\x12\x19\n\x15DESIRED_STATE_PRESENT\x10\x01\x12\x18\
-    \n\x14DESIRED_STATE_ABSENT\x10\x02\x12\x19\n\x15DESIRED_STATE_RUNNING\
-    \x10\x03\x12\x19\n\x15DESIRED_STATE_STOPPED\x10\x04\x12\x19\n\x15DESIRED\
-    _STATE_ENABLED\x10\x05\x12\x1a\n\x16DESIRED_STATE_DISABLED\x10\x06\x12\
-    \x16\n\x12DESIRED_STATE_OPEN\x10\x07\x12\x18\n\x14DESIRED_STATE_CLOSED\
-    \x10\x08\x12\x1a\n\x16DESIRED_STATE_ATTACHED\x10\t\x12\x1a\n\x16DESIRED_\
-    STATE_DETACHED\x10\n*\xae\x02\n\x10ObservationState\x12!\n\x1dOBSERVATIO\
-    N_STATE_UNSPECIFIED\x10\0\x12\x1c\n\x18OBSERVATION_STATE_ABSENT\x10\x01\
-    \x12\x1d\n\x19OBSERVATION_STATE_PENDING\x10\x02\x12\x1b\n\x17OBSERVATION\
-    _STATE_READY\x10\x03\x12\x1d\n\x19OBSERVATION_STATE_RUNNING\x10\x04\x12\
-    \x1d\n\x19OBSERVATION_STATE_STOPPED\x10\x05\x12\x1e\n\x1aOBSERVATION_STA\
-    TE_DEGRADED\x10\x06\x12!\n\x1dOBSERVATION_STATE_UNAVAILABLE\x10\x07\x12\
-    \x1c\n\x18OBSERVATION_STATE_FAILED\x10\x08*\x8f\x13\n\x12ProviderCapabil\
-    ity\x12#\n\x1fPROVIDER_CAPABILITY_UNSPECIFIED\x10\0\x12$\n\x20PROVIDER_C\
-    APABILITY_RUNTIME_PLAN\x10\x01\x12&\n\"PROVIDER_CAPABILITY_RUNTIME_ENSUR\
-    E\x10\x02\x12%\n!PROVIDER_CAPABILITY_RUNTIME_START\x10\x03\x12$\n\x20PRO\
-    VIDER_CAPABILITY_RUNTIME_STOP\x10\x04\x12'\n#PROVIDER_CAPABILITY_RUNTIME\
-    _EXECUTE\x10\x05\x12'\n#PROVIDER_CAPABILITY_RUNTIME_INSPECT\x10\x06\x12%\
-    \n!PROVIDER_CAPABILITY_RUNTIME_ADOPT\x10\x07\x12'\n#PROVIDER_CAPABILITY_\
-    RUNTIME_DESTROY\x10\x08\x12+\n'PROVIDER_CAPABILITY_INFRASTRUCTURE_PLAN\
-    \x10\t\x12,\n(PROVIDER_CAPABILITY_INFRASTRUCTURE_APPLY\x10\n\x126\n2PROV\
-    IDER_CAPABILITY_INFRASTRUCTURE_SET_POWER_STATE\x10\x0b\x12.\n*PROVIDER_C\
-    APABILITY_INFRASTRUCTURE_INSPECT\x10\x0c\x12,\n(PROVIDER_CAPABILITY_INFR\
-    ASTRUCTURE_ADOPT\x10\r\x128\n4PROVIDER_CAPABILITY_INFRASTRUCTURE_BOOTSTR\
-    AP_BINDING\x10\x0e\x12.\n*PROVIDER_CAPABILITY_INFRASTRUCTURE_DESTROY\x10\
-    \x0f\x12)\n%PROVIDER_CAPABILITY_TRANSPORT_CONNECT\x10\x10\x12(\n$PROVIDE\
-    R_CAPABILITY_TRANSPORT_LISTEN\x10\x11\x12/\n+PROVIDER_CAPABILITY_TRANSPO\
-    RT_ISSUE_BINDING\x10\x12\x120\n,PROVIDER_CAPABILITY_TRANSPORT_REVOKE_BIN\
-    DING\x10\x13\x12)\n%PROVIDER_CAPABILITY_TRANSPORT_INSPECT\x10\x14\x12'\n\
-    #PROVIDER_CAPABILITY_SUBSTRATE_CHECK\x10\x15\x122\n.PROVIDER_CAPABILITY_\
-    SUBSTRATE_PLAN_REMEDIATION\x10\x16\x12'\n#PROVIDER_CAPABILITY_SUBSTRATE_\
-    APPLY\x10\x17\x12)\n%PROVIDER_CAPABILITY_CREDENTIAL_STATUS\x10\x18\x120\
-    \n,PROVIDER_CAPABILITY_CREDENTIAL_ACQUIRE_LEASE\x10\x19\x120\n,PROVIDER_\
-    CAPABILITY_CREDENTIAL_REFRESH_LEASE\x10\x1a\x12/\n+PROVIDER_CAPABILITY_C\
-    REDENTIAL_REVOKE_LEASE\x10\x1b\x12$\n\x20PROVIDER_CAPABILITY_DISPLAY_OPE\
-    N\x10\x1c\x12'\n#PROVIDER_CAPABILITY_DISPLAY_INSPECT\x10\x1d\x12%\n!PROV\
-    IDER_CAPABILITY_DISPLAY_ADOPT\x10\x1e\x12%\n!PROVIDER_CAPABILITY_DISPLAY\
-    _CLOSE\x10\x1f\x12$\n\x20PROVIDER_CAPABILITY_NETWORK_PLAN\x10\x20\x12&\n\
-    \"PROVIDER_CAPABILITY_NETWORK_ENSURE\x10!\x12'\n#PROVIDER_CAPABILITY_NET\
-    WORK_INSPECT\x10\"\x12%\n!PROVIDER_CAPABILITY_NETWORK_ADOPT\x10#\x12'\n#\
-    PROVIDER_CAPABILITY_NETWORK_RELEASE\x10$\x12$\n\x20PROVIDER_CAPABILITY_S\
-    TORAGE_PLAN\x10%\x12&\n\"PROVIDER_CAPABILITY_STORAGE_ENSURE\x10&\x12'\n#\
-    PROVIDER_CAPABILITY_STORAGE_INSPECT\x10'\x12%\n!PROVIDER_CAPABILITY_STOR\
-    AGE_ADOPT\x10(\x12(\n$PROVIDER_CAPABILITY_STORAGE_SNAPSHOT\x10)\x12'\n#P\
-    ROVIDER_CAPABILITY_STORAGE_DESTROY\x10*\x12*\n&PROVIDER_CAPABILITY_DEVIC\
-    E_PLAN_ATTACH\x10+\x12%\n!PROVIDER_CAPABILITY_DEVICE_ATTACH\x10,\x12&\n\
-    \"PROVIDER_CAPABILITY_DEVICE_INSPECT\x10-\x12$\n\x20PROVIDER_CAPABILITY_\
-    DEVICE_ADOPT\x10.\x12%\n!PROVIDER_CAPABILITY_DEVICE_DETACH\x10/\x12\"\n\
-    \x1ePROVIDER_CAPABILITY_AUDIO_OPEN\x100\x12'\n#PROVIDER_CAPABILITY_AUDIO\
-    _SET_STATE\x101\x12%\n!PROVIDER_CAPABILITY_AUDIO_INSPECT\x102\x12#\n\x1f\
-    PROVIDER_CAPABILITY_AUDIO_ADOPT\x103\x12#\n\x1fPROVIDER_CAPABILITY_AUDIO\
-    _CLOSE\x104\x12,\n(PROVIDER_CAPABILITY_OBSERVABILITY_STATUS\x105\x12+\n'\
-    PROVIDER_CAPABILITY_OBSERVABILITY_QUERY\x106\x12/\n+PROVIDER_CAPABILITY_\
-    OBSERVABILITY_SUBSCRIBE\x107\x12,\n(PROVIDER_CAPABILITY_OBSERVABILITY_EX\
-    PORT\x108*\x96\x01\n\x18InfrastructurePowerState\x12*\n&INFRASTRUCTURE_P\
-    OWER_STATE_UNSPECIFIED\x10\0\x12&\n\"INFRASTRUCTURE_POWER_STATE_RUNNING\
-    \x10\x01\x12&\n\"INFRASTRUCTURE_POWER_STATE_STOPPED\x10\x02*f\n\x0cAudio\
-    Channel\x12\x1d\n\x19AUDIO_CHANNEL_UNSPECIFIED\x10\0\x12\x19\n\x15AUDIO_\
-    CHANNEL_SPEAKER\x10\x01\x12\x1c\n\x18AUDIO_CHANNEL_MICROPHONE\x10\x02*h\
-    \n\x0eAudioDirection\x12\x1f\n\x1bAUDIO_DIRECTION_UNSPECIFIED\x10\0\x12\
-    \x1a\n\x16AUDIO_DIRECTION_OUTPUT\x10\x01\x12\x19\n\x15AUDIO_DIRECTION_IN\
-    PUT\x10\x02*\x9b\x01\n\x11ObservabilityView\x12\"\n\x1eOBSERVABILITY_VIE\
-    W_UNSPECIFIED\x10\0\x12\x1d\n\x19OBSERVABILITY_VIEW_HEALTH\x10\x01\x12\
-    \x20\n\x1cOBSERVABILITY_VIEW_LIFECYCLE\x10\x02\x12!\n\x1dOBSERVABILITY_V\
-    IEW_OPERATIONS\x10\x03*\xa3\x01\n\x19ObservabilityExportFormat\x12+\n'OB\
-    SERVABILITY_EXPORT_FORMAT_UNSPECIFIED\x10\0\x12*\n&OBSERVABILITY_EXPORT_\
-    FORMAT_JSON_LINES\x10\x01\x12-\n)OBSERVABILITY_EXPORT_FORMAT_OTLP_PROTOB\
-    UF\x10\x02*\xf9\x01\n\rCancelOutcome\x12\x1e\n\x1aCANCEL_OUTCOME_UNSPECI\
-    FIED\x10\0\x12,\n(CANCEL_OUTCOME_CANCELLED_BEFORE_DISPATCH\x10\x01\x12)\
-    \n%CANCEL_OUTCOME_CANCELLATION_SIGNALLED\x10\x02\x12#\n\x1fCANCEL_OUTCOM\
-    E_ALREADY_TERMINAL\x10\x03\x12\"\n\x1eCANCEL_OUTCOME_UNKNOWN_REQUEST\x10\
-    \x04\x12&\n\"CANCEL_OUTCOME_GENERATION_MISMATCH\x10\x05b\x06proto3\
+    \x99\x04\n\x1dObservabilityBoundObservation\x12-\n\x13observed_at_unix_m\
+    s\x18\x01\x20\x01(\x04R\x10observedAtUnixMs\x12H\n\tlifecycle\x18\x02\
+    \x20\x01(\x0e2*.d2b.common.v2.ObservabilityLifecycleStateR\tlifecycle\
+    \x12E\n\x08adoption\x18\x03\x20\x01(\x0e2).d2b.common.v2.ObservabilityAd\
+    optionStateR\x08adoption\x12E\n\x06reason\x18\x04\x20\x01(\x0e2-.d2b.com\
+    mon.v2.ObservabilityObservationReasonR\x06reason\x12J\n\x0chealth_state\
+    \x18\x05\x20\x01(\x0e2'.d2b.common.v2.ObservabilityHealthStateR\x0bhealt\
+    hState\x12M\n\rhealth_reason\x18\x06\x20\x01(\x0e2(.d2b.common.v2.Observ\
+    abilityHealthReasonR\x0chealthReason\x12V\n\x12health_remediation\x18\
+    \x07\x20\x01(\x0e2'.d2b.common.v2.ObservabilityRemediationR\x11healthRem\
+    ediation\"\xf2\x02\n\x13ObservabilityLabels\x12@\n\rprovider_type\x18\
+    \x01\x20\x01(\x0e2\x1b.d2b.common.v2.ProviderTypeR\x0cproviderType\x12J\
+    \n\x0chealth_state\x18\x02\x20\x01(\x0e2'.d2b.common.v2.ObservabilityHea\
+    lthStateR\x0bhealthState\x12?\n\x06metric\x18\x03\x20\x01(\x0e2'.d2b.com\
+    mon.v2.ObservabilityMetricLabelR\x06metric\x12H\n\toperation\x18\x04\x20\
+    \x01(\x0e2*.d2b.common.v2.ObservabilityOperationLabelR\toperation\x12B\n\
+    \x07outcome\x18\x05\x20\x01(\x0e2(.d2b.common.v2.ObservabilityOutcomeLab\
+    elR\x07outcome\"\xe2\x01\n\x13ObservabilityRecord\x12-\n\x13observed_at_\
+    unix_ms\x18\x01\x20\x01(\x04R\x10observedAtUnixMs\x12J\n\nprojection\x18\
+    \x02\x20\x01(\x0e2*.d2b.common.v2.ObservabilityProjectionKindR\nprojecti\
+    on\x12:\n\x06labels\x18\x03\x20\x01(\x0b2\".d2b.common.v2.ObservabilityL\
+    abelsR\x06labels\x12\x14\n\x05value\x18\x04\x20\x01(\x04R\x05value\"\xb7\
+    \x02\n\x18ObservabilityQueryResult\x12N\n\x0bobservation\x18\x01\x20\x01\
+    (\x0b2,.d2b.common.v2.ObservabilityBoundObservationR\x0bobservation\x12<\
+    \n\x07records\x18\x02\x20\x03(\x0b2\".d2b.common.v2.ObservabilityRecordR\
+    \x07records\x12$\n\x0bnext_cursor\x18\x03\x20\x01(\tH\0R\nnextCursor\x88\
+    \x01\x01\x129\n\x19encoded_bytes_upper_bound\x18\x04\x20\x01(\rR\x16enco\
+    dedBytesUpperBound\x12\x1c\n\ttruncated\x18\x05\x20\x01(\x08R\ttruncated\
+    B\x0e\n\x0c_next_cursor\"\xaa\x01\n\x18ObservabilityExportInput\x12@\n\
+    \x06format\x18\x01\x20\x01(\x0e2(.d2b.common.v2.ObservabilityExportForma\
+    tR\x06format\x12'\n\x10start_at_unix_ms\x18\x02\x20\x01(\x04R\rstartAtUn\
+    ixMs\x12#\n\x0eend_at_unix_ms\x18\x03\x20\x01(\x04R\x0bendAtUnixMs\"\xbb\
+    \x06\n\x16ProviderOperationInput\x12D\n\x08no_input\x18\x01\x20\x01(\x0b\
+    2'.d2b.common.v2.NoProviderOperationInputH\0R\x07noInput\x12r\n\x1cconfi\
+    gured_runtime_execution\x18\x02\x20\x01(\x0b2..d2b.common.v2.ConfiguredR\
+    untimeExecutionInputH\0R\x1aconfiguredRuntimeExecution\x12l\n\x1ainfrast\
+    ructure_power_state\x18\x03\x20\x01(\x0b2,.d2b.common.v2.InfrastructureP\
+    owerStateInputH\0R\x18infrastructurePowerState\x12S\n\x11transport_bindi\
+    ng\x18\x04\x20\x01(\x0b2$.d2b.common.v2.TransportBindingInputH\0R\x10tra\
+    nsportBinding\x12P\n\x10storage_snapshot\x18\x05\x20\x01(\x0b2#.d2b.comm\
+    on.v2.StorageSnapshotInputH\0R\x0fstorageSnapshot\x12M\n\x0fdevice_selec\
+    tor\x18\x06\x20\x01(\x0b2\".d2b.common.v2.DeviceSelectorInputH\0R\x0edev\
+    iceSelector\x12A\n\x0baudio_state\x18\x07\x20\x01(\x0b2\x1e.d2b.common.v\
+    2.AudioStateInputH\0R\naudioState\x12Y\n\x13observability_query\x18\x08\
+    \x20\x01(\x0b2&.d2b.common.v2.ObservabilityQueryInputH\0R\x12observabili\
+    tyQuery\x12\\\n\x14observability_export\x18\t\x20\x01(\x0b2'.d2b.common.\
+    v2.ObservabilityExportInputH\0R\x13observabilityExportB\x07\n\x05input\"\
+    V\n\x11CapabilityRequest\x12A\n\x07context\x18\x01\x20\x01(\x0b2'.d2b.co\
+    mmon.v2.ProviderOperationContextR\x07context\"\x95\x01\n\rErrorEnvelope\
+    \x12,\n\x04kind\x18\x01\x20\x01(\x0e2\x18.d2b.common.v2.ErrorKindR\x04ki\
+    nd\x12/\n\x05retry\x18\x02\x20\x01(\x0e2\x19.d2b.common.v2.RetryClassR\
+    \x05retry\x12%\n\x0ecorrelation_id\x18\x03\x20\x01(\tR\rcorrelationId\"\
+    \x9d\x01\n\x0bObservation\x12\x1f\n\x0bresource_id\x18\x01\x20\x01(\tR\n\
+    resourceId\x125\n\x05state\x18\x02\x20\x01(\x0e2\x1f.d2b.common.v2.Obser\
+    vationStateR\x05state\x12\x1e\n\ngeneration\x18\x03\x20\x01(\x04R\ngener\
+    ation\x12\x16\n\x06digest\x18\x04\x20\x01(\x0cR\x06digest\"\x9e\x03\n\
+    \x0fServiceResponse\x120\n\x07outcome\x18\x01\x20\x01(\x0e2\x16.d2b.comm\
+    on.v2.OutcomeR\x07outcome\x12!\n\x0coperation_id\x18\x02\x20\x01(\tR\x0b\
+    operationId\x12'\n\x0fresource_handle\x18\x03\x20\x01(\tR\x0eresourceHan\
+    dle\x12\x1b\n\tstream_id\x18\x04\x20\x01(\tR\x08streamId\x12#\n\rresult_\
+    digest\x18\x05\x20\x01(\x0cR\x0cresultDigest\x12>\n\x0cobservations\x18\
+    \x06\x20\x03(\x0b2\x1a.d2b.common.v2.ObservationR\x0cobservations\x12(\n\
+    \x10next_page_cursor\x18\x07\x20\x01(\tR\x0enextPageCursor\x122\n\x05err\
+    or\x18\x08\x20\x01(\x0b2\x1c.d2b.common.v2.ErrorEnvelopeR\x05error\x12-\
+    \n\x12attachment_indexes\x18\t\x20\x03(\rR\x11attachmentIndexes\"\xdc\
+    \x03\n\x10ProviderResponse\x120\n\x07outcome\x18\x01\x20\x01(\x0e2\x16.d\
+    2b.common.v2.OutcomeR\x07outcome\x12!\n\x0coperation_id\x18\x02\x20\x01(\
+    \tR\x0boperationId\x12'\n\x0fresource_handle\x18\x03\x20\x01(\tR\x0ereso\
+    urceHandle\x12#\n\rresult_digest\x18\x04\x20\x01(\x0cR\x0cresultDigest\
+    \x12>\n\x0cobservations\x18\x05\x20\x03(\x0b2\x1a.d2b.common.v2.Observat\
+    ionR\x0cobservations\x122\n\x05error\x18\x06\x20\x01(\x0b2\x1c.d2b.commo\
+    n.v2.ErrorEnvelopeR\x05error\x12\x1b\n\tstream_id\x18\x07\x20\x01(\tR\
+    \x08streamId\x12-\n\x12attachment_indexes\x18\x08\x20\x03(\rR\x11attachm\
+    entIndexes\x12e\n\x1aobservability_query_result\x18\t\x20\x01(\x0b2'.d2b\
+    .common.v2.ObservabilityQueryResultR\x18observabilityQueryResult\"\xed\
+    \x01\n\x12CapabilityResponse\x12E\n\x0ccapabilities\x18\x01\x20\x03(\x0e\
+    2!.d2b.common.v2.ProviderCapabilityR\x0ccapabilities\x12/\n\x13provider_\
+    generation\x18\x02\x20\x01(\x04R\x12providerGeneration\x12+\n\x11descrip\
+    tor_digest\x18\x03\x20\x01(\x0cR\x10descriptorDigest\x122\n\x05error\x18\
+    \x04\x20\x01(\x0b2\x1c.d2b.common.v2.ErrorEnvelopeR\x05error\"]\n\rCance\
+    lRequest\x12-\n\x12session_generation\x18\x01\x20\x01(\x04R\x11sessionGe\
+    neration\x12\x1d\n\nrequest_id\x18\x02\x20\x01(\x0cR\trequestId\"H\n\x0e\
+    CancelResponse\x126\n\x07outcome\x18\x01\x20\x01(\x0e2\x1c.d2b.common.v2\
+    .CancelOutcomeR\x07outcome*\xe7\x02\n\x0cProviderType\x12\x1d\n\x19PROVI\
+    DER_TYPE_UNSPECIFIED\x10\0\x12\x19\n\x15PROVIDER_TYPE_RUNTIME\x10\x01\
+    \x12\x20\n\x1cPROVIDER_TYPE_INFRASTRUCTURE\x10\x02\x12\x1b\n\x17PROVIDER\
+    _TYPE_TRANSPORT\x10\x03\x12\x1b\n\x17PROVIDER_TYPE_SUBSTRATE\x10\x04\x12\
+    \x1c\n\x18PROVIDER_TYPE_CREDENTIAL\x10\x05\x12\x19\n\x15PROVIDER_TYPE_DI\
+    SPLAY\x10\x06\x12\x19\n\x15PROVIDER_TYPE_NETWORK\x10\x07\x12\x19\n\x15PR\
+    OVIDER_TYPE_STORAGE\x10\x08\x12\x18\n\x14PROVIDER_TYPE_DEVICE\x10\t\x12\
+    \x17\n\x13PROVIDER_TYPE_AUDIO\x10\n\x12\x1f\n\x1bPROVIDER_TYPE_OBSERVABI\
+    LITY\x10\x0b*\xa6\x01\n\nRetryClass\x12\x1b\n\x17RETRY_CLASS_UNSPECIFIED\
+    \x10\0\x12\x15\n\x11RETRY_CLASS_NEVER\x10\x01\x12\x1e\n\x1aRETRY_CLASS_S\
+    AME_OPERATION\x10\x02\x12!\n\x1dRETRY_CLASS_AFTER_OBSERVATION\x10\x03\
+    \x12!\n\x1dRETRY_CLASS_AFTER_INTERACTION\x10\x04*\xc0\x01\n\x07Outcome\
+    \x12\x17\n\x13OUTCOME_UNSPECIFIED\x10\0\x12\x14\n\x10OUTCOME_ACCEPTED\
+    \x10\x01\x12\x15\n\x11OUTCOME_SUCCEEDED\x10\x02\x12\x1a\n\x16OUTCOME_NOT\
+    _APPLICABLE\x10\x03\x12\x12\n\x0eOUTCOME_DENIED\x10\x04\x12\x15\n\x11OUT\
+    COME_CANCELLED\x10\x05\x12\x14\n\x10OUTCOME_DEGRADED\x10\x06\x12\x12\n\
+    \x0eOUTCOME_FAILED\x10\x07*\xb5\x03\n\tErrorKind\x12\x1a\n\x16ERROR_KIND\
+    _UNSPECIFIED\x10\0\x12\x1e\n\x1aERROR_KIND_INVALID_REQUEST\x10\x01\x12\
+    \x1e\n\x1aERROR_KIND_UNAUTHENTICATED\x10\x02\x12\x1b\n\x17ERROR_KIND_UNA\
+    UTHORIZED\x10\x03\x12\x18\n\x14ERROR_KIND_NOT_FOUND\x10\x04\x12\x17\n\
+    \x13ERROR_KIND_CONFLICT\x10\x05\x12\x20\n\x1cERROR_KIND_CAPABILITY_DENIE\
+    D\x10\x06\x12\x20\n\x1cERROR_KIND_DEADLINE_EXCEEDED\x10\x07\x12\x18\n\
+    \x14ERROR_KIND_CANCELLED\x10\x08\x12\"\n\x1eERROR_KIND_GENERATION_MISMAT\
+    CH\x10\t\x12!\n\x1dERROR_KIND_RESOURCE_EXHAUSTED\x10\n\x12\x1a\n\x16ERRO\
+    R_KIND_UNAVAILABLE\x10\x0b\x12\"\n\x1eERROR_KIND_INVARIANT_VIOLATION\x10\
+    \x0c\x12\x17\n\x13ERROR_KIND_INTERNAL\x10\r*\xb9\x02\n\x0cDesiredState\
+    \x12\x1d\n\x19DESIRED_STATE_UNSPECIFIED\x10\0\x12\x19\n\x15DESIRED_STATE\
+    _PRESENT\x10\x01\x12\x18\n\x14DESIRED_STATE_ABSENT\x10\x02\x12\x19\n\x15\
+    DESIRED_STATE_RUNNING\x10\x03\x12\x19\n\x15DESIRED_STATE_STOPPED\x10\x04\
+    \x12\x19\n\x15DESIRED_STATE_ENABLED\x10\x05\x12\x1a\n\x16DESIRED_STATE_D\
+    ISABLED\x10\x06\x12\x16\n\x12DESIRED_STATE_OPEN\x10\x07\x12\x18\n\x14DES\
+    IRED_STATE_CLOSED\x10\x08\x12\x1a\n\x16DESIRED_STATE_ATTACHED\x10\t\x12\
+    \x1a\n\x16DESIRED_STATE_DETACHED\x10\n*\xae\x02\n\x10ObservationState\
+    \x12!\n\x1dOBSERVATION_STATE_UNSPECIFIED\x10\0\x12\x1c\n\x18OBSERVATION_\
+    STATE_ABSENT\x10\x01\x12\x1d\n\x19OBSERVATION_STATE_PENDING\x10\x02\x12\
+    \x1b\n\x17OBSERVATION_STATE_READY\x10\x03\x12\x1d\n\x19OBSERVATION_STATE\
+    _RUNNING\x10\x04\x12\x1d\n\x19OBSERVATION_STATE_STOPPED\x10\x05\x12\x1e\
+    \n\x1aOBSERVATION_STATE_DEGRADED\x10\x06\x12!\n\x1dOBSERVATION_STATE_UNA\
+    VAILABLE\x10\x07\x12\x1c\n\x18OBSERVATION_STATE_FAILED\x10\x08*\x8f\x13\
+    \n\x12ProviderCapability\x12#\n\x1fPROVIDER_CAPABILITY_UNSPECIFIED\x10\0\
+    \x12$\n\x20PROVIDER_CAPABILITY_RUNTIME_PLAN\x10\x01\x12&\n\"PROVIDER_CAP\
+    ABILITY_RUNTIME_ENSURE\x10\x02\x12%\n!PROVIDER_CAPABILITY_RUNTIME_START\
+    \x10\x03\x12$\n\x20PROVIDER_CAPABILITY_RUNTIME_STOP\x10\x04\x12'\n#PROVI\
+    DER_CAPABILITY_RUNTIME_EXECUTE\x10\x05\x12'\n#PROVIDER_CAPABILITY_RUNTIM\
+    E_INSPECT\x10\x06\x12%\n!PROVIDER_CAPABILITY_RUNTIME_ADOPT\x10\x07\x12'\
+    \n#PROVIDER_CAPABILITY_RUNTIME_DESTROY\x10\x08\x12+\n'PROVIDER_CAPABILIT\
+    Y_INFRASTRUCTURE_PLAN\x10\t\x12,\n(PROVIDER_CAPABILITY_INFRASTRUCTURE_AP\
+    PLY\x10\n\x126\n2PROVIDER_CAPABILITY_INFRASTRUCTURE_SET_POWER_STATE\x10\
+    \x0b\x12.\n*PROVIDER_CAPABILITY_INFRASTRUCTURE_INSPECT\x10\x0c\x12,\n(PR\
+    OVIDER_CAPABILITY_INFRASTRUCTURE_ADOPT\x10\r\x128\n4PROVIDER_CAPABILITY_\
+    INFRASTRUCTURE_BOOTSTRAP_BINDING\x10\x0e\x12.\n*PROVIDER_CAPABILITY_INFR\
+    ASTRUCTURE_DESTROY\x10\x0f\x12)\n%PROVIDER_CAPABILITY_TRANSPORT_CONNECT\
+    \x10\x10\x12(\n$PROVIDER_CAPABILITY_TRANSPORT_LISTEN\x10\x11\x12/\n+PROV\
+    IDER_CAPABILITY_TRANSPORT_ISSUE_BINDING\x10\x12\x120\n,PROVIDER_CAPABILI\
+    TY_TRANSPORT_REVOKE_BINDING\x10\x13\x12)\n%PROVIDER_CAPABILITY_TRANSPORT\
+    _INSPECT\x10\x14\x12'\n#PROVIDER_CAPABILITY_SUBSTRATE_CHECK\x10\x15\x122\
+    \n.PROVIDER_CAPABILITY_SUBSTRATE_PLAN_REMEDIATION\x10\x16\x12'\n#PROVIDE\
+    R_CAPABILITY_SUBSTRATE_APPLY\x10\x17\x12)\n%PROVIDER_CAPABILITY_CREDENTI\
+    AL_STATUS\x10\x18\x120\n,PROVIDER_CAPABILITY_CREDENTIAL_ACQUIRE_LEASE\
+    \x10\x19\x120\n,PROVIDER_CAPABILITY_CREDENTIAL_REFRESH_LEASE\x10\x1a\x12\
+    /\n+PROVIDER_CAPABILITY_CREDENTIAL_REVOKE_LEASE\x10\x1b\x12$\n\x20PROVID\
+    ER_CAPABILITY_DISPLAY_OPEN\x10\x1c\x12'\n#PROVIDER_CAPABILITY_DISPLAY_IN\
+    SPECT\x10\x1d\x12%\n!PROVIDER_CAPABILITY_DISPLAY_ADOPT\x10\x1e\x12%\n!PR\
+    OVIDER_CAPABILITY_DISPLAY_CLOSE\x10\x1f\x12$\n\x20PROVIDER_CAPABILITY_NE\
+    TWORK_PLAN\x10\x20\x12&\n\"PROVIDER_CAPABILITY_NETWORK_ENSURE\x10!\x12'\
+    \n#PROVIDER_CAPABILITY_NETWORK_INSPECT\x10\"\x12%\n!PROVIDER_CAPABILITY_\
+    NETWORK_ADOPT\x10#\x12'\n#PROVIDER_CAPABILITY_NETWORK_RELEASE\x10$\x12$\
+    \n\x20PROVIDER_CAPABILITY_STORAGE_PLAN\x10%\x12&\n\"PROVIDER_CAPABILITY_\
+    STORAGE_ENSURE\x10&\x12'\n#PROVIDER_CAPABILITY_STORAGE_INSPECT\x10'\x12%\
+    \n!PROVIDER_CAPABILITY_STORAGE_ADOPT\x10(\x12(\n$PROVIDER_CAPABILITY_STO\
+    RAGE_SNAPSHOT\x10)\x12'\n#PROVIDER_CAPABILITY_STORAGE_DESTROY\x10*\x12*\
+    \n&PROVIDER_CAPABILITY_DEVICE_PLAN_ATTACH\x10+\x12%\n!PROVIDER_CAPABILIT\
+    Y_DEVICE_ATTACH\x10,\x12&\n\"PROVIDER_CAPABILITY_DEVICE_INSPECT\x10-\x12\
+    $\n\x20PROVIDER_CAPABILITY_DEVICE_ADOPT\x10.\x12%\n!PROVIDER_CAPABILITY_\
+    DEVICE_DETACH\x10/\x12\"\n\x1ePROVIDER_CAPABILITY_AUDIO_OPEN\x100\x12'\n\
+    #PROVIDER_CAPABILITY_AUDIO_SET_STATE\x101\x12%\n!PROVIDER_CAPABILITY_AUD\
+    IO_INSPECT\x102\x12#\n\x1fPROVIDER_CAPABILITY_AUDIO_ADOPT\x103\x12#\n\
+    \x1fPROVIDER_CAPABILITY_AUDIO_CLOSE\x104\x12,\n(PROVIDER_CAPABILITY_OBSE\
+    RVABILITY_STATUS\x105\x12+\n'PROVIDER_CAPABILITY_OBSERVABILITY_QUERY\x10\
+    6\x12/\n+PROVIDER_CAPABILITY_OBSERVABILITY_SUBSCRIBE\x107\x12,\n(PROVIDE\
+    R_CAPABILITY_OBSERVABILITY_EXPORT\x108*\x96\x01\n\x18InfrastructurePower\
+    State\x12*\n&INFRASTRUCTURE_POWER_STATE_UNSPECIFIED\x10\0\x12&\n\"INFRAS\
+    TRUCTURE_POWER_STATE_RUNNING\x10\x01\x12&\n\"INFRASTRUCTURE_POWER_STATE_\
+    STOPPED\x10\x02*f\n\x0cAudioChannel\x12\x1d\n\x19AUDIO_CHANNEL_UNSPECIFI\
+    ED\x10\0\x12\x19\n\x15AUDIO_CHANNEL_SPEAKER\x10\x01\x12\x1c\n\x18AUDIO_C\
+    HANNEL_MICROPHONE\x10\x02*h\n\x0eAudioDirection\x12\x1f\n\x1bAUDIO_DIREC\
+    TION_UNSPECIFIED\x10\0\x12\x1a\n\x16AUDIO_DIRECTION_OUTPUT\x10\x01\x12\
+    \x19\n\x15AUDIO_DIRECTION_INPUT\x10\x02*\x9b\x01\n\x11ObservabilityView\
+    \x12\"\n\x1eOBSERVABILITY_VIEW_UNSPECIFIED\x10\0\x12\x1d\n\x19OBSERVABIL\
+    ITY_VIEW_HEALTH\x10\x01\x12\x20\n\x1cOBSERVABILITY_VIEW_LIFECYCLE\x10\
+    \x02\x12!\n\x1dOBSERVABILITY_VIEW_OPERATIONS\x10\x03*\xd9\x01\n\x1bObser\
+    vabilityProjectionKind\x12-\n)OBSERVABILITY_PROJECTION_KIND_UNSPECIFIED\
+    \x10\0\x12)\n%OBSERVABILITY_PROJECTION_KIND_METRICS\x10\x01\x12/\n+OBSER\
+    VABILITY_PROJECTION_KIND_TRACE_SUMMARY\x10\x02\x12/\n+OBSERVABILITY_PROJ\
+    ECTION_KIND_AUDIT_SUMMARY\x10\x03*\xeb\x02\n\x18ObservabilityMetricLabel\
+    \x12*\n&OBSERVABILITY_METRIC_LABEL_UNSPECIFIED\x10\0\x12.\n*OBSERVABILIT\
+    Y_METRIC_LABEL_PROVIDER_HEALTH\x10\x01\x123\n/OBSERVABILITY_METRIC_LABEL\
+    _LIFECYCLE_TRANSITION\x10\x02\x12.\n*OBSERVABILITY_METRIC_LABEL_OPERATIO\
+    N_TOTAL\x10\x03\x121\n-OBSERVABILITY_METRIC_LABEL_OPERATION_DURATION\x10\
+    \x04\x12*\n&OBSERVABILITY_METRIC_LABEL_QUEUE_DEPTH\x10\x05\x12/\n+OBSERV\
+    ABILITY_METRIC_LABEL_EXPORT_TRUNCATED\x10\x06*\xc1\x04\n\x1bObservabilit\
+    yOperationLabel\x12-\n)OBSERVABILITY_OPERATION_LABEL_UNSPECIFIED\x10\0\
+    \x12(\n$OBSERVABILITY_OPERATION_LABEL_HEALTH\x10\x01\x12&\n\"OBSERVABILI\
+    TY_OPERATION_LABEL_PLAN\x10\x02\x12(\n$OBSERVABILITY_OPERATION_LABEL_ENS\
+    URE\x10\x03\x12'\n#OBSERVABILITY_OPERATION_LABEL_START\x10\x04\x12&\n\"O\
+    BSERVABILITY_OPERATION_LABEL_STOP\x10\x05\x12(\n$OBSERVABILITY_OPERATION\
+    _LABEL_ATTACH\x10\x06\x12(\n$OBSERVABILITY_OPERATION_LABEL_DETACH\x10\
+    \x07\x12'\n#OBSERVABILITY_OPERATION_LABEL_ADOPT\x10\x08\x12)\n%OBSERVABI\
+    LITY_OPERATION_LABEL_INSPECT\x10\t\x12+\n'OBSERVABILITY_OPERATION_LABEL_\
+    SET_STATE\x10\n\x12'\n#OBSERVABILITY_OPERATION_LABEL_QUERY\x10\x0b\x12(\
+    \n$OBSERVABILITY_OPERATION_LABEL_EXPORT\x10\x0c*\xff\x02\n\x19Observabil\
+    ityOutcomeLabel\x12+\n'OBSERVABILITY_OUTCOME_LABEL_UNSPECIFIED\x10\0\x12\
+    '\n#OBSERVABILITY_OUTCOME_LABEL_SUCCESS\x10\x01\x12/\n+OBSERVABILITY_OUT\
+    COME_LABEL_ALREADY_APPLIED\x10\x02\x12&\n\"OBSERVABILITY_OUTCOME_LABEL_D\
+    ENIED\x10\x03\x12)\n%OBSERVABILITY_OUTCOME_LABEL_CANCELLED\x10\x04\x120\
+    \n,OBSERVABILITY_OUTCOME_LABEL_DEADLINE_EXPIRED\x10\x05\x12+\n'OBSERVABI\
+    LITY_OUTCOME_LABEL_UNAVAILABLE\x10\x06\x12)\n%OBSERVABILITY_OUTCOME_LABE\
+    L_TRUNCATED\x10\x07*\xea\x01\n\x18ObservabilityHealthState\x12*\n&OBSERV\
+    ABILITY_HEALTH_STATE_UNSPECIFIED\x10\0\x12&\n\"OBSERVABILITY_HEALTH_STAT\
+    E_HEALTHY\x10\x01\x12'\n#OBSERVABILITY_HEALTH_STATE_DEGRADED\x10\x02\x12\
+    *\n&OBSERVABILITY_HEALTH_STATE_UNAVAILABLE\x10\x03\x12%\n!OBSERVABILITY_\
+    HEALTH_STATE_FAILED\x10\x04*\xa9\x03\n\x1bObservabilityLifecycleState\
+    \x12-\n)OBSERVABILITY_LIFECYCLE_STATE_UNSPECIFIED\x10\0\x12)\n%OBSERVABI\
+    LITY_LIFECYCLE_STATE_PLANNED\x10\x01\x12'\n#OBSERVABILITY_LIFECYCLE_STAT\
+    E_READY\x10\x02\x12)\n%OBSERVABILITY_LIFECYCLE_STATE_RUNNING\x10\x03\x12\
+    )\n%OBSERVABILITY_LIFECYCLE_STATE_STOPPED\x10\x04\x12*\n&OBSERVABILITY_L\
+    IFECYCLE_STATE_RELEASED\x10\x05\x12+\n'OBSERVABILITY_LIFECYCLE_STATE_DES\
+    TROYED\x10\x06\x12)\n%OBSERVABILITY_LIFECYCLE_STATE_UNKNOWN\x10\x07\x12-\
+    \n)OBSERVABILITY_LIFECYCLE_STATE_QUARANTINED\x10\x08*\xfb\x01\n\x1aObser\
+    vabilityAdoptionState\x12,\n(OBSERVABILITY_ADOPTION_STATE_UNSPECIFIED\
+    \x10\0\x12.\n*OBSERVABILITY_ADOPTION_STATE_NOT_ATTEMPTED\x10\x01\x12(\n$\
+    OBSERVABILITY_ADOPTION_STATE_ADOPTED\x10\x02\x12)\n%OBSERVABILITY_ADOPTI\
+    ON_STATE_REJECTED\x10\x03\x12*\n&OBSERVABILITY_ADOPTION_STATE_AMBIGUOUS\
+    \x10\x04*\xb9\x04\n\x1eObservabilityObservationReason\x120\n,OBSERVABILI\
+    TY_OBSERVATION_REASON_UNSPECIFIED\x10\0\x12)\n%OBSERVABILITY_OBSERVATION\
+    _REASON_NONE\x10\x01\x126\n2OBSERVABILITY_OBSERVATION_REASON_IDENTITY_MI\
+    SMATCH\x10\x02\x12;\n7OBSERVABILITY_OBSERVATION_REASON_CONFIGURATION_MIS\
+    MATCH\x10\x03\x128\n4OBSERVABILITY_OBSERVATION_REASON_GENERATION_MISMATC\
+    H\x10\x04\x123\n/OBSERVABILITY_OBSERVATION_REASON_OWNER_MISMATCH\x10\x05\
+    \x128\n4OBSERVABILITY_OBSERVATION_REASON_MULTIPLE_CANDIDATES\x10\x06\x12\
+    5\n1OBSERVABILITY_OBSERVATION_REASON_MISSING_EVIDENCE\x10\x07\x12.\n*OBS\
+    ERVABILITY_OBSERVATION_REASON_CANCELLED\x10\x08\x125\n1OBSERVABILITY_OBS\
+    ERVATION_REASON_DEADLINE_EXPIRED\x10\t*\xd8\x05\n\x19ObservabilityHealth\
+    Reason\x12+\n'OBSERVABILITY_HEALTH_REASON_UNSPECIFIED\x10\0\x12$\n\x20OB\
+    SERVABILITY_HEALTH_REASON_NONE\x10\x01\x121\n-OBSERVABILITY_HEALTH_REASO\
+    N_PROVIDER_DEGRADED\x10\x02\x12.\n*OBSERVABILITY_HEALTH_REASON_HEALTH_TI\
+    MEOUT\x10\x03\x12,\n(OBSERVABILITY_HEALTH_REASON_HEALTH_STALE\x10\x04\
+    \x124\n0OBSERVABILITY_HEALTH_REASON_SESSION_DISCONNECTED\x10\x05\x12.\n*\
+    OBSERVABILITY_HEALTH_REASON_QUEUE_PRESSURE\x10\x06\x121\n-OBSERVABILITY_\
+    HEALTH_REASON_HANDSHAKE_TIMEOUT\x10\x07\x125\n1OBSERVABILITY_HEALTH_REAS\
+    ON_AUTHENTICATION_FAILED\x10\x08\x121\n-OBSERVABILITY_HEALTH_REASON_IDEN\
+    TITY_MISMATCH\x10\t\x126\n2OBSERVABILITY_HEALTH_REASON_CONFIGURATION_MIS\
+    MATCH\x10\n\x123\n/OBSERVABILITY_HEALTH_REASON_GENERATION_MISMATCH\x10\
+    \x0b\x123\n/OBSERVABILITY_HEALTH_REASON_CAPABILITY_MISMATCH\x10\x0c\x122\
+    \n.OBSERVABILITY_HEALTH_REASON_ADOPTION_AMBIGUOUS\x10\r*\xbb\x03\n\x18Ob\
+    servabilityRemediation\x12)\n%OBSERVABILITY_REMEDIATION_UNSPECIFIED\x10\
+    \0\x12\"\n\x1eOBSERVABILITY_REMEDIATION_NONE\x10\x01\x12+\n'OBSERVABILIT\
+    Y_REMEDIATION_RETRY_BOUNDED\x10\x02\x12.\n*OBSERVABILITY_REMEDIATION_INS\
+    PECT_PROVIDER\x10\x03\x12+\n'OBSERVABILITY_REMEDIATION_RESTART_AGENT\x10\
+    \x04\x12,\n(OBSERVABILITY_REMEDIATION_RE_ENROLL_PEER\x10\x05\x122\n.OBSE\
+    RVABILITY_REMEDIATION_REPAIR_CONFIGURATION\x10\x06\x120\n,OBSERVABILITY_\
+    REMEDIATION_REPLACE_GENERATION\x10\x07\x122\n.OBSERVABILITY_REMEDIATION_\
+    OPERATOR_INTERACTION\x10\x08*\xa3\x01\n\x19ObservabilityExportFormat\x12\
+    +\n'OBSERVABILITY_EXPORT_FORMAT_UNSPECIFIED\x10\0\x12*\n&OBSERVABILITY_E\
+    XPORT_FORMAT_JSON_LINES\x10\x01\x12-\n)OBSERVABILITY_EXPORT_FORMAT_OTLP_\
+    PROTOBUF\x10\x02*\xf9\x01\n\rCancelOutcome\x12\x1e\n\x1aCANCEL_OUTCOME_U\
+    NSPECIFIED\x10\0\x12,\n(CANCEL_OUTCOME_CANCELLED_BEFORE_DISPATCH\x10\x01\
+    \x12)\n%CANCEL_OUTCOME_CANCELLATION_SIGNALLED\x10\x02\x12#\n\x1fCANCEL_O\
+    UTCOME_ALREADY_TERMINAL\x10\x03\x12\"\n\x1eCANCEL_OUTCOME_UNKNOWN_REQUES\
+    T\x10\x04\x12&\n\"CANCEL_OUTCOME_GENERATION_MISMATCH\x10\x05b\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file
@@ -6149,7 +8007,7 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
     file_descriptor.get(|| {
         let generated_file_descriptor = generated_file_descriptor_lazy.get(|| {
             let mut deps = ::std::vec::Vec::with_capacity(0);
-            let mut messages = ::std::vec::Vec::with_capacity(23);
+            let mut messages = ::std::vec::Vec::with_capacity(27);
             messages.push(RequestMetadata::generated_message_descriptor_data());
             messages.push(IdentityScope::generated_message_descriptor_data());
             messages.push(ProviderOperationContext::generated_message_descriptor_data());
@@ -6163,6 +8021,10 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
             messages.push(DeviceSelectorInput::generated_message_descriptor_data());
             messages.push(AudioStateInput::generated_message_descriptor_data());
             messages.push(ObservabilityQueryInput::generated_message_descriptor_data());
+            messages.push(ObservabilityBoundObservation::generated_message_descriptor_data());
+            messages.push(ObservabilityLabels::generated_message_descriptor_data());
+            messages.push(ObservabilityRecord::generated_message_descriptor_data());
+            messages.push(ObservabilityQueryResult::generated_message_descriptor_data());
             messages.push(ObservabilityExportInput::generated_message_descriptor_data());
             messages.push(ProviderOperationInput::generated_message_descriptor_data());
             messages.push(CapabilityRequest::generated_message_descriptor_data());
@@ -6173,7 +8035,7 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
             messages.push(CapabilityResponse::generated_message_descriptor_data());
             messages.push(CancelRequest::generated_message_descriptor_data());
             messages.push(CancelResponse::generated_message_descriptor_data());
-            let mut enums = ::std::vec::Vec::with_capacity(13);
+            let mut enums = ::std::vec::Vec::with_capacity(23);
             enums.push(ProviderType::generated_enum_descriptor_data());
             enums.push(RetryClass::generated_enum_descriptor_data());
             enums.push(Outcome::generated_enum_descriptor_data());
@@ -6185,6 +8047,16 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
             enums.push(AudioChannel::generated_enum_descriptor_data());
             enums.push(AudioDirection::generated_enum_descriptor_data());
             enums.push(ObservabilityView::generated_enum_descriptor_data());
+            enums.push(ObservabilityProjectionKind::generated_enum_descriptor_data());
+            enums.push(ObservabilityMetricLabel::generated_enum_descriptor_data());
+            enums.push(ObservabilityOperationLabel::generated_enum_descriptor_data());
+            enums.push(ObservabilityOutcomeLabel::generated_enum_descriptor_data());
+            enums.push(ObservabilityHealthState::generated_enum_descriptor_data());
+            enums.push(ObservabilityLifecycleState::generated_enum_descriptor_data());
+            enums.push(ObservabilityAdoptionState::generated_enum_descriptor_data());
+            enums.push(ObservabilityObservationReason::generated_enum_descriptor_data());
+            enums.push(ObservabilityHealthReason::generated_enum_descriptor_data());
+            enums.push(ObservabilityRemediation::generated_enum_descriptor_data());
             enums.push(ObservabilityExportFormat::generated_enum_descriptor_data());
             enums.push(CancelOutcome::generated_enum_descriptor_data());
             ::protobuf::reflect::GeneratedFileDescriptor::new_generated(

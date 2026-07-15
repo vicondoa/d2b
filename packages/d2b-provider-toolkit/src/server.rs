@@ -22,11 +22,12 @@ use d2b_contracts::{
         ProviderPlan, ProviderTarget, RetryClass,
     },
     v2_services::{
-        ServiceContractError, StrictWireMessage, common, provider_audio_ttrpc,
-        provider_credential_ttrpc, provider_device_ttrpc, provider_display_ttrpc,
-        provider_infrastructure_ttrpc, provider_network_ttrpc, provider_observability_ttrpc,
-        provider_operation_input, provider_runtime_ttrpc, provider_storage_ttrpc,
-        provider_substrate_ttrpc, provider_transport_ttrpc, provider_type,
+        ServiceContractError, StrictWireMessage, common, observability_query_result_to_wire,
+        provider_audio_ttrpc, provider_credential_ttrpc, provider_device_ttrpc,
+        provider_display_ttrpc, provider_infrastructure_ttrpc, provider_network_ttrpc,
+        provider_observability_ttrpc, provider_operation_input, provider_runtime_ttrpc,
+        provider_storage_ttrpc, provider_substrate_ttrpc, provider_transport_ttrpc, provider_type,
+        validate_provider_response_for_method,
     },
 };
 use d2b_provider::{
@@ -507,6 +508,13 @@ impl GeneratedProviderServiceServer {
                 wire.outcome = EnumOrUnknown::new(common::Outcome::OUTCOME_SUCCEEDED);
                 wire.observations.push(observation_to_wire(&observation)?);
             }
+            Ok(RpcResponse::ObservabilityQuery(result)) => {
+                wire.outcome = EnumOrUnknown::new(common::Outcome::OUTCOME_SUCCEEDED);
+                wire.observability_query_result = MessageField::some(
+                    observability_query_result_to_wire(&result, request)
+                        .map_err(invalid_response_contract)?,
+                );
+            }
             Ok(RpcResponse::Mutation(receipt)) => {
                 wire.outcome = EnumOrUnknown::new(match receipt.state {
                     MutationState::Applied | MutationState::AlreadyApplied => {
@@ -550,8 +558,11 @@ impl GeneratedProviderServiceServer {
                 return Ok(response);
             }
         }
-        wire.result_digest = decode_fingerprint(&self.descriptor.configuration_schema_fingerprint)?;
-        wire.validate_wire(false)
+        if wire.observability_query_result.is_none() {
+            wire.result_digest =
+                decode_fingerprint(&self.descriptor.configuration_schema_fingerprint)?;
+        }
+        validate_provider_response_for_method(&wire, request.context.method)
             .map_err(invalid_response_contract)?;
         Ok(wire)
     }

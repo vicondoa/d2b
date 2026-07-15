@@ -15,11 +15,12 @@ use d2b_contracts::{
         CredentialLeaseState, CredentialLeaseTransferPolicy, CredentialProvider, DeviceProvider,
         DisplayProvider, InfrastructureProvider, MAX_CREDENTIAL_OPERATION_CLASSES,
         MAX_PROVIDER_LEASE_LIFETIME_MS, MutationReceipt, NetworkProvider, ObservabilityProvider,
-        PROVIDER_SCHEMA_VERSION, Provider, ProviderCallContext, ProviderCapabilitySet,
-        ProviderDescriptor, ProviderFailure, ProviderFailureKind, ProviderFuture, ProviderHandle,
-        ProviderHealth, ProviderHealthReason, ProviderMethod, ProviderObservation,
-        ProviderOperationRequest, ProviderPlan, ProviderRemediation, ProviderResult, RetryClass,
-        RuntimeProvider, StorageProvider, SubstrateProvider, TransportProvider,
+        ObservabilityQueryResult, PROVIDER_SCHEMA_VERSION, Provider, ProviderCallContext,
+        ProviderCapabilitySet, ProviderDescriptor, ProviderFailure, ProviderFailureKind,
+        ProviderFuture, ProviderHandle, ProviderHealth, ProviderHealthReason, ProviderMethod,
+        ProviderObservation, ProviderOperationRequest, ProviderPlan, ProviderRemediation,
+        ProviderResult, RetryClass, RuntimeProvider, StorageProvider, SubstrateProvider,
+        TransportProvider,
     },
 };
 
@@ -101,6 +102,7 @@ pub enum RpcResponse {
     Plan(Box<ProviderPlan>),
     Handle(Box<ProviderHandle>),
     Observation(Box<ProviderObservation>),
+    ObservabilityQuery(Box<ObservabilityQueryResult>),
     Mutation(Box<MutationReceipt>),
     Lease(Box<CredentialLease>),
 }
@@ -113,6 +115,7 @@ impl fmt::Debug for RpcResponse {
             Self::Plan(_) => "RpcResponse::Plan(<redacted>)",
             Self::Handle(_) => "RpcResponse::Handle(<redacted>)",
             Self::Observation(_) => "RpcResponse::Observation(<redacted>)",
+            Self::ObservabilityQuery(_) => "RpcResponse::ObservabilityQuery(<redacted>)",
             Self::Mutation(_) => "RpcResponse::Mutation(<redacted>)",
             Self::Lease(_) => "RpcResponse::Lease(<redacted>)",
         })
@@ -478,6 +481,36 @@ impl RpcProviderProxy {
         {
             RpcResponse::Observation(observation) => {
                 self.validate_observation(context, *observation)
+            }
+            _ => Err(self.response_mismatch(context)),
+        }
+    }
+
+    async fn call_observability_query(
+        &self,
+        context: &ProviderCallContext<'_>,
+        request: &ProviderOperationRequest,
+    ) -> ProviderResult<ObservabilityQueryResult> {
+        if request
+            .validate_method(
+                &self.descriptor,
+                self.clock.now_unix_ms(),
+                ProviderMethod::ObservabilityQuery,
+            )
+            .is_err()
+        {
+            return Err(self.response_mismatch(context));
+        }
+        match self
+            .call(
+                context,
+                ProviderMethod::ObservabilityQuery,
+                RpcPayload::Operation(request),
+            )
+            .await?
+        {
+            RpcResponse::ObservabilityQuery(result) if result.validate(request).is_ok() => {
+                Ok(*result)
             }
             _ => Err(self.response_mismatch(context)),
         }
@@ -915,7 +948,13 @@ impl AudioProvider for RpcProviderProxy {
 impl ObservabilityProvider for RpcProviderProxy {
     capabilities!();
     operation_observation!(status, ObservabilityStatus);
-    operation_observation!(query, ObservabilityQuery);
+    fn query<'a>(
+        &'a self,
+        context: &'a ProviderCallContext<'a>,
+        request: &'a ProviderOperationRequest,
+    ) -> ProviderFuture<'a, ObservabilityQueryResult> {
+        Box::pin(self.call_observability_query(context, request))
+    }
     operation_handle!(subscribe, ObservabilitySubscribe);
     operation_mutation!(export, ObservabilityExport);
 }

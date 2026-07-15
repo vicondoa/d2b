@@ -1,6 +1,6 @@
 #![cfg(feature = "v2-provider")]
 
-use std::{fs, path::PathBuf};
+use std::{collections::BTreeSet, fs, path::PathBuf};
 
 use d2b_contracts::{
     v2_component_session::{BoundedVec, EndpointRole, ServicePackage},
@@ -293,6 +293,69 @@ fn observation() -> ProviderObservation {
         adoption: AdoptionState::Adopted,
         reason: ObservationReason::None,
         health: healthy("f7z3k5e3awgn43aljt2a", 4_000),
+    }
+}
+
+fn observability_query_request(limit: u16) -> ProviderOperationRequest {
+    let mut context = operation_context();
+    context.provider_type = ProviderType::Observability;
+    context.capability = ProviderCapability(ProviderMethod::ObservabilityQuery);
+    context.method = ProviderMethod::ObservabilityQuery;
+    ProviderOperationRequest {
+        context,
+        target: ProviderTarget::Workload {
+            realm_id: realm_id(),
+            workload_id: workload_id(),
+        },
+        expected_configuration_fingerprint: fingerprint(ONE),
+        input: ProviderOperationInput::ObservabilityQuery {
+            view: ObservabilityView::Health,
+            cursor: None,
+            limit,
+        },
+    }
+}
+
+fn observability_record(
+    observed_at_unix_ms: u64,
+    provider_type: ProviderType,
+    value: u64,
+) -> ObservabilityRecord {
+    ObservabilityRecord {
+        observed_at_unix_ms,
+        projection: ObservabilityProjectionKind::Metrics,
+        labels: ObservabilityLabels {
+            provider_type,
+            health_state: ProviderHealthState::Healthy,
+            metric: ObservabilityMetricLabel::ProviderHealth,
+            operation: ObservabilityOperationLabel::Health,
+            outcome: ObservabilityOutcomeLabel::Success,
+        },
+        value,
+    }
+}
+
+fn observability_query_result(records: Vec<ObservabilityRecord>) -> ObservabilityQueryResult {
+    let observation = ProviderObservation {
+        provider_id: provider_id("f7z3k5e3awgn43aljt2a"),
+        provider_generation: generation(7),
+        realm_id: realm_id(),
+        workload_id: Some(workload_id()),
+        handle_id: None,
+        resource_generation: None,
+        observed_at_unix_ms: 4_000,
+        lifecycle: ObservedLifecycleState::Ready,
+        adoption: AdoptionState::NotAttempted,
+        reason: ObservationReason::None,
+        health: healthy("f7z3k5e3awgn43aljt2a", 4_000),
+    };
+    ObservabilityQueryResult {
+        observation,
+        encoded_bytes_upper_bound: u32::try_from(records.len()).unwrap()
+            * OBSERVABILITY_RECORD_ENCODED_UPPER_BOUND_BYTES,
+        records: BoundedVec::new(records).unwrap(),
+        next_cursor: None,
+        truncated: false,
     }
 }
 
@@ -1145,4 +1208,115 @@ fn every_provider_trait_is_object_safe_for_in_process_or_agent_proxies() {
     assert_device(None);
     assert_audio(None);
     assert_observability(None);
+}
+
+#[test]
+fn observability_query_result_accepts_closed_labels_with_actual_provider_type() {
+    let request = observability_query_request(2);
+    let result = observability_query_result(vec![
+        observability_record(3_000, ProviderType::Runtime, 1),
+        observability_record(3_001, ProviderType::Observability, 2),
+    ]);
+
+    result.validate(&request).unwrap();
+}
+
+#[test]
+fn observability_query_result_enforces_record_byte_and_cursor_bounds() {
+    let request = observability_query_request(MAX_OBSERVABILITY_QUERY_LIMIT);
+    let records = (0..MAX_OBSERVABILITY_QUERY_LIMIT)
+        .map(|index| {
+            observability_record(
+                3_000 + u64::from(index),
+                ProviderType::Runtime,
+                u64::from(index),
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut result = observability_query_result(records);
+    result.next_cursor = Some(ObservabilityCursor::parse(format!("c{}", "1".repeat(63))).unwrap());
+    result.truncated = true;
+    result.validate(&request).unwrap();
+
+    result.encoded_bytes_upper_bound = MAX_OBSERVABILITY_QUERY_BYTES;
+    result.validate(&request).unwrap();
+    result.encoded_bytes_upper_bound = MAX_OBSERVABILITY_QUERY_BYTES + 1;
+    assert!(result.validate(&request).is_err());
+    result.encoded_bytes_upper_bound = MAX_OBSERVABILITY_QUERY_BYTES;
+    result.truncated = false;
+    assert!(result.validate(&request).is_err());
+    result.truncated = true;
+    result.next_cursor = None;
+    assert!(result.validate(&request).is_err());
+}
+
+#[test]
+fn observability_query_result_rejects_binding_order_and_value_mismatches() {
+    let request = observability_query_request(2);
+    let mut result =
+        observability_query_result(vec![observability_record(3_000, ProviderType::Runtime, 1)]);
+
+    result.observation.provider_generation = generation(8);
+    assert!(result.validate(&request).is_err());
+    result.observation.provider_generation = generation(7);
+
+    result.observation.workload_id = None;
+    assert!(result.validate(&request).is_err());
+    result.observation.workload_id = Some(workload_id());
+
+    result.records = BoundedVec::new(vec![
+        observability_record(3_001, ProviderType::Runtime, 1),
+        observability_record(3_000, ProviderType::Runtime, 2),
+    ])
+    .unwrap();
+    result.encoded_bytes_upper_bound = 2 * OBSERVABILITY_RECORD_ENCODED_UPPER_BOUND_BYTES;
+    assert!(result.validate(&request).is_err());
+
+    result.records = BoundedVec::new(vec![ObservabilityRecord {
+        value: MAX_SAFE_JSON_INTEGER + 1,
+        ..observability_record(3_000, ProviderType::Runtime, 1)
+    }])
+    .unwrap();
+    result.encoded_bytes_upper_bound = OBSERVABILITY_RECORD_ENCODED_UPPER_BOUND_BYTES;
+    assert!(result.validate(&request).is_err());
+}
+
+#[test]
+fn observability_query_result_serialization_has_no_free_form_fields() {
+    let result =
+        observability_query_result(vec![observability_record(3_000, ProviderType::Runtime, 1)]);
+    let value = serde_json::to_value(result).unwrap();
+    let record = value["records"].as_array().unwrap()[0].as_object().unwrap();
+    let labels = record["labels"].as_object().unwrap();
+
+    assert_eq!(
+        record.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        ["labels", "observedAtUnixMs", "projection", "value"]
+            .into_iter()
+            .collect()
+    );
+    assert_eq!(
+        labels.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        [
+            "healthState",
+            "metric",
+            "operation",
+            "outcome",
+            "providerType"
+        ]
+        .into_iter()
+        .collect()
+    );
+    let encoded = serde_json::to_string(&value).unwrap();
+    for forbidden in [
+        "providerInstance",
+        "workloadLabel",
+        "identifier",
+        "command",
+        "path",
+        "secret",
+        "json",
+    ] {
+        assert!(!encoded.contains(forbidden));
+    }
 }

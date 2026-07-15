@@ -1,6 +1,6 @@
 use std::{error::Error, fmt};
 
-use d2b_contracts::v2_provider::{ProviderDescriptor, ProviderFailure};
+use d2b_contracts::v2_provider::{ProviderDescriptor, ProviderFailure, ProviderMethod};
 use d2b_provider::{ProviderInstance, provider_inspection_method};
 
 use crate::Fixture;
@@ -12,6 +12,7 @@ pub enum ConformanceError {
     FixtureMismatch,
     Provider(Box<ProviderFailure>),
     Observation,
+    ObservabilityQueryResult,
 }
 
 impl fmt::Debug for ConformanceError {
@@ -22,6 +23,7 @@ impl fmt::Debug for ConformanceError {
             Self::FixtureMismatch => formatter.write_str("FixtureMismatch"),
             Self::Provider(error) => formatter.debug_tuple("Provider").field(error).finish(),
             Self::Observation => formatter.write_str("Observation"),
+            Self::ObservabilityQueryResult => formatter.write_str("ObservabilityQueryResult"),
         }
     }
 }
@@ -34,6 +36,7 @@ impl fmt::Display for ConformanceError {
             Self::FixtureMismatch => "provider conformance fixture mismatch",
             Self::Provider(_) => "provider conformance call failed",
             Self::Observation => "provider observation conformance failed",
+            Self::ObservabilityQueryResult => "provider query-result conformance failed",
         })
     }
 }
@@ -107,6 +110,17 @@ pub async fn check_provider_conformance(
         || observation.workload_id.as_ref() != request.target.workload_id()
     {
         return Err(ConformanceError::Observation);
+    }
+    if let ProviderInstance::Observability(provider) = instance {
+        let query = fixture
+            .request(ProviderMethod::ObservabilityQuery)
+            .map_err(|_| ConformanceError::FixtureMismatch)?;
+        let query_context = fixture.call_context(&query.context);
+        provider
+            .query(&query_context, &query)
+            .await?
+            .validate(&query)
+            .map_err(|_| ConformanceError::ObservabilityQueryResult)?;
     }
     Ok(())
 }

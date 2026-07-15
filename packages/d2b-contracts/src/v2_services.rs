@@ -7,25 +7,31 @@
 
 use std::{collections::BTreeSet, error::Error, fmt};
 
-use protobuf::{Enum, Message, MessageField};
+use protobuf::{Enum, EnumOrUnknown, Message, MessageField};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 use crate::{
     v2_component_session::{
-        CorrelationId, IdempotencyKey, MAX_LOGICAL_MESSAGE_BYTES, MAX_REQUEST_ATTACHMENTS,
-        MAX_REQUEST_LIFETIME_MS, RequestEnvelope, RequestId, TraceId,
+        BoundedVec, CorrelationId, IdempotencyKey, MAX_LOGICAL_MESSAGE_BYTES,
+        MAX_REQUEST_ATTACHMENTS, MAX_REQUEST_LIFETIME_MS, RequestEnvelope, RequestId, TraceId,
     },
     v2_identity::{ProviderId, ProviderType as IdentityProviderType, RealmId, RoleId, WorkloadId},
     v2_provider::{
-        AudioChannel as CanonicalAudioChannel, AudioDirection as CanonicalAudioDirection,
-        ConfiguredItemId, DeviceSelectorId,
-        InfrastructurePowerState as CanonicalInfrastructurePowerState, MAX_PROVIDER_CAPABILITIES,
-        ObservabilityCursor, ObservabilityExportFormat as CanonicalObservabilityExportFormat,
-        ObservabilityView as CanonicalObservabilityView, ProviderMethod,
-        ProviderOperationInput as CanonicalProviderOperationInput, StorageSnapshotId,
-        TransportBindingId,
+        AdoptionState, AudioChannel as CanonicalAudioChannel,
+        AudioDirection as CanonicalAudioDirection, ConfiguredItemId, DeviceSelectorId,
+        Generation as ProviderGeneration,
+        InfrastructurePowerState as CanonicalInfrastructurePowerState,
+        MAX_OBSERVABILITY_QUERY_BYTES, MAX_OBSERVABILITY_QUERY_LIMIT, MAX_PROVIDER_CAPABILITIES,
+        MAX_SAFE_JSON_INTEGER, OBSERVABILITY_RECORD_ENCODED_UPPER_BOUND_BYTES, ObservabilityCursor,
+        ObservabilityExportFormat as CanonicalObservabilityExportFormat, ObservabilityLabels,
+        ObservabilityMetricLabel, ObservabilityOperationLabel, ObservabilityOutcomeLabel,
+        ObservabilityProjectionKind, ObservabilityQueryResult, ObservabilityRecord,
+        ObservabilityView as CanonicalObservabilityView, ObservationReason, ObservedLifecycleState,
+        ProviderHealth, ProviderHealthReason, ProviderHealthState, ProviderMethod,
+        ProviderObservation, ProviderOperationInput as CanonicalProviderOperationInput,
+        ProviderOperationRequest, ProviderRemediation, StorageSnapshotId, TransportBindingId,
     },
     v2_state::Generation,
 };
@@ -472,6 +478,9 @@ pub fn service_schema_fingerprint(service: &ServiceSpec) -> [u8; 32] {
     digest.update(service.package.as_bytes());
     digest.update(b"\0");
     digest.update(service.service.as_bytes());
+    if service.package == "d2b.provider.v2" {
+        digest.update(b"\0provider-response-observability-query-result-v1");
+    }
     for method in service.methods {
         digest.update(b"\0");
         digest.update(method.name.as_bytes());
@@ -1010,6 +1019,900 @@ pub fn provider_operation_input(
     Ok(input)
 }
 
+fn provider_type_from_wire(
+    value: EnumOrUnknown<common::ProviderType>,
+) -> Result<IdentityProviderType, ServiceContractError> {
+    match value
+        .enum_value()
+        .map_err(|_| ServiceContractError::InvalidEnum)?
+    {
+        common::ProviderType::PROVIDER_TYPE_RUNTIME => Ok(IdentityProviderType::Runtime),
+        common::ProviderType::PROVIDER_TYPE_INFRASTRUCTURE => {
+            Ok(IdentityProviderType::Infrastructure)
+        }
+        common::ProviderType::PROVIDER_TYPE_TRANSPORT => Ok(IdentityProviderType::Transport),
+        common::ProviderType::PROVIDER_TYPE_SUBSTRATE => Ok(IdentityProviderType::Substrate),
+        common::ProviderType::PROVIDER_TYPE_CREDENTIAL => Ok(IdentityProviderType::Credential),
+        common::ProviderType::PROVIDER_TYPE_DISPLAY => Ok(IdentityProviderType::Display),
+        common::ProviderType::PROVIDER_TYPE_NETWORK => Ok(IdentityProviderType::Network),
+        common::ProviderType::PROVIDER_TYPE_STORAGE => Ok(IdentityProviderType::Storage),
+        common::ProviderType::PROVIDER_TYPE_DEVICE => Ok(IdentityProviderType::Device),
+        common::ProviderType::PROVIDER_TYPE_AUDIO => Ok(IdentityProviderType::Audio),
+        common::ProviderType::PROVIDER_TYPE_OBSERVABILITY => {
+            Ok(IdentityProviderType::Observability)
+        }
+        common::ProviderType::PROVIDER_TYPE_UNSPECIFIED => Err(ServiceContractError::InvalidEnum),
+    }
+}
+
+fn provider_type_to_wire(value: IdentityProviderType) -> common::ProviderType {
+    match value {
+        IdentityProviderType::Runtime => common::ProviderType::PROVIDER_TYPE_RUNTIME,
+        IdentityProviderType::Infrastructure => common::ProviderType::PROVIDER_TYPE_INFRASTRUCTURE,
+        IdentityProviderType::Transport => common::ProviderType::PROVIDER_TYPE_TRANSPORT,
+        IdentityProviderType::Substrate => common::ProviderType::PROVIDER_TYPE_SUBSTRATE,
+        IdentityProviderType::Credential => common::ProviderType::PROVIDER_TYPE_CREDENTIAL,
+        IdentityProviderType::Display => common::ProviderType::PROVIDER_TYPE_DISPLAY,
+        IdentityProviderType::Network => common::ProviderType::PROVIDER_TYPE_NETWORK,
+        IdentityProviderType::Storage => common::ProviderType::PROVIDER_TYPE_STORAGE,
+        IdentityProviderType::Device => common::ProviderType::PROVIDER_TYPE_DEVICE,
+        IdentityProviderType::Audio => common::ProviderType::PROVIDER_TYPE_AUDIO,
+        IdentityProviderType::Observability => common::ProviderType::PROVIDER_TYPE_OBSERVABILITY,
+    }
+}
+
+fn projection_from_wire(
+    value: EnumOrUnknown<common::ObservabilityProjectionKind>,
+) -> Result<ObservabilityProjectionKind, ServiceContractError> {
+    match value
+        .enum_value()
+        .map_err(|_| ServiceContractError::InvalidEnum)?
+    {
+        common::ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_METRICS => {
+            Ok(ObservabilityProjectionKind::Metrics)
+        }
+        common::ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_TRACE_SUMMARY => {
+            Ok(ObservabilityProjectionKind::TraceSummary)
+        }
+        common::ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_AUDIT_SUMMARY => {
+            Ok(ObservabilityProjectionKind::AuditSummary)
+        }
+        common::ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_UNSPECIFIED => {
+            Err(ServiceContractError::InvalidEnum)
+        }
+    }
+}
+
+fn projection_to_wire(value: ObservabilityProjectionKind) -> common::ObservabilityProjectionKind {
+    match value {
+        ObservabilityProjectionKind::Metrics => {
+            common::ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_METRICS
+        }
+        ObservabilityProjectionKind::TraceSummary => {
+            common::ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_TRACE_SUMMARY
+        }
+        ObservabilityProjectionKind::AuditSummary => {
+            common::ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_AUDIT_SUMMARY
+        }
+    }
+}
+
+fn metric_from_wire(
+    value: EnumOrUnknown<common::ObservabilityMetricLabel>,
+) -> Result<ObservabilityMetricLabel, ServiceContractError> {
+    match value
+        .enum_value()
+        .map_err(|_| ServiceContractError::InvalidEnum)?
+    {
+        common::ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_PROVIDER_HEALTH => {
+            Ok(ObservabilityMetricLabel::ProviderHealth)
+        }
+        common::ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_LIFECYCLE_TRANSITION => {
+            Ok(ObservabilityMetricLabel::LifecycleTransition)
+        }
+        common::ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_OPERATION_TOTAL => {
+            Ok(ObservabilityMetricLabel::OperationTotal)
+        }
+        common::ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_OPERATION_DURATION => {
+            Ok(ObservabilityMetricLabel::OperationDuration)
+        }
+        common::ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_QUEUE_DEPTH => {
+            Ok(ObservabilityMetricLabel::QueueDepth)
+        }
+        common::ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_EXPORT_TRUNCATED => {
+            Ok(ObservabilityMetricLabel::ExportTruncated)
+        }
+        common::ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_UNSPECIFIED => {
+            Err(ServiceContractError::InvalidEnum)
+        }
+    }
+}
+
+fn metric_to_wire(value: ObservabilityMetricLabel) -> common::ObservabilityMetricLabel {
+    match value {
+        ObservabilityMetricLabel::ProviderHealth => {
+            common::ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_PROVIDER_HEALTH
+        }
+        ObservabilityMetricLabel::LifecycleTransition => {
+            common::ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_LIFECYCLE_TRANSITION
+        }
+        ObservabilityMetricLabel::OperationTotal => {
+            common::ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_OPERATION_TOTAL
+        }
+        ObservabilityMetricLabel::OperationDuration => {
+            common::ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_OPERATION_DURATION
+        }
+        ObservabilityMetricLabel::QueueDepth => {
+            common::ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_QUEUE_DEPTH
+        }
+        ObservabilityMetricLabel::ExportTruncated => {
+            common::ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_EXPORT_TRUNCATED
+        }
+    }
+}
+
+fn operation_label_from_wire(
+    value: EnumOrUnknown<common::ObservabilityOperationLabel>,
+) -> Result<ObservabilityOperationLabel, ServiceContractError> {
+    match value
+        .enum_value()
+        .map_err(|_| ServiceContractError::InvalidEnum)?
+    {
+        common::ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_HEALTH => {
+            Ok(ObservabilityOperationLabel::Health)
+        }
+        common::ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_PLAN => {
+            Ok(ObservabilityOperationLabel::Plan)
+        }
+        common::ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_ENSURE => {
+            Ok(ObservabilityOperationLabel::Ensure)
+        }
+        common::ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_START => {
+            Ok(ObservabilityOperationLabel::Start)
+        }
+        common::ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_STOP => {
+            Ok(ObservabilityOperationLabel::Stop)
+        }
+        common::ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_ATTACH => {
+            Ok(ObservabilityOperationLabel::Attach)
+        }
+        common::ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_DETACH => {
+            Ok(ObservabilityOperationLabel::Detach)
+        }
+        common::ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_ADOPT => {
+            Ok(ObservabilityOperationLabel::Adopt)
+        }
+        common::ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_INSPECT => {
+            Ok(ObservabilityOperationLabel::Inspect)
+        }
+        common::ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_SET_STATE => {
+            Ok(ObservabilityOperationLabel::SetState)
+        }
+        common::ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_QUERY => {
+            Ok(ObservabilityOperationLabel::Query)
+        }
+        common::ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_EXPORT => {
+            Ok(ObservabilityOperationLabel::Export)
+        }
+        common::ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_UNSPECIFIED => {
+            Err(ServiceContractError::InvalidEnum)
+        }
+    }
+}
+
+fn operation_label_to_wire(
+    value: ObservabilityOperationLabel,
+) -> common::ObservabilityOperationLabel {
+    match value {
+        ObservabilityOperationLabel::Health => {
+            common::ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_HEALTH
+        }
+        ObservabilityOperationLabel::Plan => {
+            common::ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_PLAN
+        }
+        ObservabilityOperationLabel::Ensure => {
+            common::ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_ENSURE
+        }
+        ObservabilityOperationLabel::Start => {
+            common::ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_START
+        }
+        ObservabilityOperationLabel::Stop => {
+            common::ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_STOP
+        }
+        ObservabilityOperationLabel::Attach => {
+            common::ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_ATTACH
+        }
+        ObservabilityOperationLabel::Detach => {
+            common::ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_DETACH
+        }
+        ObservabilityOperationLabel::Adopt => {
+            common::ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_ADOPT
+        }
+        ObservabilityOperationLabel::Inspect => {
+            common::ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_INSPECT
+        }
+        ObservabilityOperationLabel::SetState => {
+            common::ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_SET_STATE
+        }
+        ObservabilityOperationLabel::Query => {
+            common::ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_QUERY
+        }
+        ObservabilityOperationLabel::Export => {
+            common::ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_EXPORT
+        }
+    }
+}
+
+fn outcome_label_from_wire(
+    value: EnumOrUnknown<common::ObservabilityOutcomeLabel>,
+) -> Result<ObservabilityOutcomeLabel, ServiceContractError> {
+    match value
+        .enum_value()
+        .map_err(|_| ServiceContractError::InvalidEnum)?
+    {
+        common::ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_SUCCESS => {
+            Ok(ObservabilityOutcomeLabel::Success)
+        }
+        common::ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_ALREADY_APPLIED => {
+            Ok(ObservabilityOutcomeLabel::AlreadyApplied)
+        }
+        common::ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_DENIED => {
+            Ok(ObservabilityOutcomeLabel::Denied)
+        }
+        common::ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_CANCELLED => {
+            Ok(ObservabilityOutcomeLabel::Cancelled)
+        }
+        common::ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_DEADLINE_EXPIRED => {
+            Ok(ObservabilityOutcomeLabel::DeadlineExpired)
+        }
+        common::ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_UNAVAILABLE => {
+            Ok(ObservabilityOutcomeLabel::Unavailable)
+        }
+        common::ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_TRUNCATED => {
+            Ok(ObservabilityOutcomeLabel::Truncated)
+        }
+        common::ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_UNSPECIFIED => {
+            Err(ServiceContractError::InvalidEnum)
+        }
+    }
+}
+
+fn outcome_label_to_wire(value: ObservabilityOutcomeLabel) -> common::ObservabilityOutcomeLabel {
+    match value {
+        ObservabilityOutcomeLabel::Success => {
+            common::ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_SUCCESS
+        }
+        ObservabilityOutcomeLabel::AlreadyApplied => {
+            common::ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_ALREADY_APPLIED
+        }
+        ObservabilityOutcomeLabel::Denied => {
+            common::ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_DENIED
+        }
+        ObservabilityOutcomeLabel::Cancelled => {
+            common::ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_CANCELLED
+        }
+        ObservabilityOutcomeLabel::DeadlineExpired => {
+            common::ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_DEADLINE_EXPIRED
+        }
+        ObservabilityOutcomeLabel::Unavailable => {
+            common::ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_UNAVAILABLE
+        }
+        ObservabilityOutcomeLabel::Truncated => {
+            common::ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_TRUNCATED
+        }
+    }
+}
+
+fn health_state_from_wire(
+    value: EnumOrUnknown<common::ObservabilityHealthState>,
+) -> Result<ProviderHealthState, ServiceContractError> {
+    match value
+        .enum_value()
+        .map_err(|_| ServiceContractError::InvalidEnum)?
+    {
+        common::ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_HEALTHY => {
+            Ok(ProviderHealthState::Healthy)
+        }
+        common::ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_DEGRADED => {
+            Ok(ProviderHealthState::Degraded)
+        }
+        common::ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_UNAVAILABLE => {
+            Ok(ProviderHealthState::Unavailable)
+        }
+        common::ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_FAILED => {
+            Ok(ProviderHealthState::Failed)
+        }
+        common::ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_UNSPECIFIED => {
+            Err(ServiceContractError::InvalidEnum)
+        }
+    }
+}
+
+fn health_state_to_wire(value: ProviderHealthState) -> common::ObservabilityHealthState {
+    match value {
+        ProviderHealthState::Healthy => {
+            common::ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_HEALTHY
+        }
+        ProviderHealthState::Degraded => {
+            common::ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_DEGRADED
+        }
+        ProviderHealthState::Unavailable => {
+            common::ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_UNAVAILABLE
+        }
+        ProviderHealthState::Failed => {
+            common::ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_FAILED
+        }
+    }
+}
+
+fn lifecycle_from_wire(
+    value: EnumOrUnknown<common::ObservabilityLifecycleState>,
+) -> Result<ObservedLifecycleState, ServiceContractError> {
+    match value
+        .enum_value()
+        .map_err(|_| ServiceContractError::InvalidEnum)?
+    {
+        common::ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_PLANNED => {
+            Ok(ObservedLifecycleState::Planned)
+        }
+        common::ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_READY => {
+            Ok(ObservedLifecycleState::Ready)
+        }
+        common::ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_RUNNING => {
+            Ok(ObservedLifecycleState::Running)
+        }
+        common::ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_STOPPED => {
+            Ok(ObservedLifecycleState::Stopped)
+        }
+        common::ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_RELEASED => {
+            Ok(ObservedLifecycleState::Released)
+        }
+        common::ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_DESTROYED => {
+            Ok(ObservedLifecycleState::Destroyed)
+        }
+        common::ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_UNKNOWN => {
+            Ok(ObservedLifecycleState::Unknown)
+        }
+        common::ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_QUARANTINED => {
+            Ok(ObservedLifecycleState::Quarantined)
+        }
+        common::ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_UNSPECIFIED => {
+            Err(ServiceContractError::InvalidEnum)
+        }
+    }
+}
+
+fn lifecycle_to_wire(value: ObservedLifecycleState) -> common::ObservabilityLifecycleState {
+    match value {
+        ObservedLifecycleState::Planned => {
+            common::ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_PLANNED
+        }
+        ObservedLifecycleState::Ready => {
+            common::ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_READY
+        }
+        ObservedLifecycleState::Running => {
+            common::ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_RUNNING
+        }
+        ObservedLifecycleState::Stopped => {
+            common::ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_STOPPED
+        }
+        ObservedLifecycleState::Released => {
+            common::ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_RELEASED
+        }
+        ObservedLifecycleState::Destroyed => {
+            common::ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_DESTROYED
+        }
+        ObservedLifecycleState::Unknown => {
+            common::ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_UNKNOWN
+        }
+        ObservedLifecycleState::Quarantined => {
+            common::ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_QUARANTINED
+        }
+    }
+}
+
+fn adoption_from_wire(
+    value: EnumOrUnknown<common::ObservabilityAdoptionState>,
+) -> Result<AdoptionState, ServiceContractError> {
+    match value
+        .enum_value()
+        .map_err(|_| ServiceContractError::InvalidEnum)?
+    {
+        common::ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_NOT_ATTEMPTED => {
+            Ok(AdoptionState::NotAttempted)
+        }
+        common::ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_ADOPTED => {
+            Ok(AdoptionState::Adopted)
+        }
+        common::ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_REJECTED => {
+            Ok(AdoptionState::Rejected)
+        }
+        common::ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_AMBIGUOUS => {
+            Ok(AdoptionState::Ambiguous)
+        }
+        common::ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_UNSPECIFIED => {
+            Err(ServiceContractError::InvalidEnum)
+        }
+    }
+}
+
+fn adoption_to_wire(value: AdoptionState) -> common::ObservabilityAdoptionState {
+    match value {
+        AdoptionState::NotAttempted => {
+            common::ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_NOT_ATTEMPTED
+        }
+        AdoptionState::Adopted => {
+            common::ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_ADOPTED
+        }
+        AdoptionState::Rejected => {
+            common::ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_REJECTED
+        }
+        AdoptionState::Ambiguous => {
+            common::ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_AMBIGUOUS
+        }
+    }
+}
+
+fn observation_reason_from_wire(
+    value: EnumOrUnknown<common::ObservabilityObservationReason>,
+) -> Result<ObservationReason, ServiceContractError> {
+    match value
+        .enum_value()
+        .map_err(|_| ServiceContractError::InvalidEnum)?
+    {
+        common::ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_NONE => {
+            Ok(ObservationReason::None)
+        }
+        common::ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_IDENTITY_MISMATCH => {
+            Ok(ObservationReason::IdentityMismatch)
+        }
+        common::ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_CONFIGURATION_MISMATCH => {
+            Ok(ObservationReason::ConfigurationMismatch)
+        }
+        common::ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_GENERATION_MISMATCH => {
+            Ok(ObservationReason::GenerationMismatch)
+        }
+        common::ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_OWNER_MISMATCH => {
+            Ok(ObservationReason::OwnerMismatch)
+        }
+        common::ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_MULTIPLE_CANDIDATES => {
+            Ok(ObservationReason::MultipleCandidates)
+        }
+        common::ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_MISSING_EVIDENCE => {
+            Ok(ObservationReason::MissingEvidence)
+        }
+        common::ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_CANCELLED => {
+            Ok(ObservationReason::Cancelled)
+        }
+        common::ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_DEADLINE_EXPIRED => {
+            Ok(ObservationReason::DeadlineExpired)
+        }
+        common::ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_UNSPECIFIED => {
+            Err(ServiceContractError::InvalidEnum)
+        }
+    }
+}
+
+fn observation_reason_to_wire(value: ObservationReason) -> common::ObservabilityObservationReason {
+    match value {
+        ObservationReason::None => {
+            common::ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_NONE
+        }
+        ObservationReason::IdentityMismatch => {
+            common::ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_IDENTITY_MISMATCH
+        }
+        ObservationReason::ConfigurationMismatch => {
+            common::ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_CONFIGURATION_MISMATCH
+        }
+        ObservationReason::GenerationMismatch => {
+            common::ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_GENERATION_MISMATCH
+        }
+        ObservationReason::OwnerMismatch => {
+            common::ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_OWNER_MISMATCH
+        }
+        ObservationReason::MultipleCandidates => {
+            common::ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_MULTIPLE_CANDIDATES
+        }
+        ObservationReason::MissingEvidence => {
+            common::ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_MISSING_EVIDENCE
+        }
+        ObservationReason::Cancelled => {
+            common::ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_CANCELLED
+        }
+        ObservationReason::DeadlineExpired => {
+            common::ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_DEADLINE_EXPIRED
+        }
+    }
+}
+
+fn health_reason_from_wire(
+    value: EnumOrUnknown<common::ObservabilityHealthReason>,
+) -> Result<ProviderHealthReason, ServiceContractError> {
+    match value
+        .enum_value()
+        .map_err(|_| ServiceContractError::InvalidEnum)?
+    {
+        common::ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_NONE => {
+            Ok(ProviderHealthReason::None)
+        }
+        common::ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_PROVIDER_DEGRADED => {
+            Ok(ProviderHealthReason::ProviderDegraded)
+        }
+        common::ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_HEALTH_TIMEOUT => {
+            Ok(ProviderHealthReason::HealthTimeout)
+        }
+        common::ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_HEALTH_STALE => {
+            Ok(ProviderHealthReason::HealthStale)
+        }
+        common::ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_SESSION_DISCONNECTED => {
+            Ok(ProviderHealthReason::SessionDisconnected)
+        }
+        common::ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_QUEUE_PRESSURE => {
+            Ok(ProviderHealthReason::QueuePressure)
+        }
+        common::ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_HANDSHAKE_TIMEOUT => {
+            Ok(ProviderHealthReason::HandshakeTimeout)
+        }
+        common::ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_AUTHENTICATION_FAILED => {
+            Ok(ProviderHealthReason::AuthenticationFailed)
+        }
+        common::ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_IDENTITY_MISMATCH => {
+            Ok(ProviderHealthReason::IdentityMismatch)
+        }
+        common::ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_CONFIGURATION_MISMATCH => {
+            Ok(ProviderHealthReason::ConfigurationMismatch)
+        }
+        common::ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_GENERATION_MISMATCH => {
+            Ok(ProviderHealthReason::GenerationMismatch)
+        }
+        common::ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_CAPABILITY_MISMATCH => {
+            Ok(ProviderHealthReason::CapabilityMismatch)
+        }
+        common::ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_ADOPTION_AMBIGUOUS => {
+            Ok(ProviderHealthReason::AdoptionAmbiguous)
+        }
+        common::ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_UNSPECIFIED => {
+            Err(ServiceContractError::InvalidEnum)
+        }
+    }
+}
+
+fn health_reason_to_wire(value: ProviderHealthReason) -> common::ObservabilityHealthReason {
+    match value {
+        ProviderHealthReason::None => {
+            common::ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_NONE
+        }
+        ProviderHealthReason::ProviderDegraded => {
+            common::ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_PROVIDER_DEGRADED
+        }
+        ProviderHealthReason::HealthTimeout => {
+            common::ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_HEALTH_TIMEOUT
+        }
+        ProviderHealthReason::HealthStale => {
+            common::ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_HEALTH_STALE
+        }
+        ProviderHealthReason::SessionDisconnected => {
+            common::ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_SESSION_DISCONNECTED
+        }
+        ProviderHealthReason::QueuePressure => {
+            common::ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_QUEUE_PRESSURE
+        }
+        ProviderHealthReason::HandshakeTimeout => {
+            common::ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_HANDSHAKE_TIMEOUT
+        }
+        ProviderHealthReason::AuthenticationFailed => {
+            common::ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_AUTHENTICATION_FAILED
+        }
+        ProviderHealthReason::IdentityMismatch => {
+            common::ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_IDENTITY_MISMATCH
+        }
+        ProviderHealthReason::ConfigurationMismatch => {
+            common::ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_CONFIGURATION_MISMATCH
+        }
+        ProviderHealthReason::GenerationMismatch => {
+            common::ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_GENERATION_MISMATCH
+        }
+        ProviderHealthReason::CapabilityMismatch => {
+            common::ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_CAPABILITY_MISMATCH
+        }
+        ProviderHealthReason::AdoptionAmbiguous => {
+            common::ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_ADOPTION_AMBIGUOUS
+        }
+    }
+}
+
+fn remediation_from_wire(
+    value: EnumOrUnknown<common::ObservabilityRemediation>,
+) -> Result<ProviderRemediation, ServiceContractError> {
+    match value
+        .enum_value()
+        .map_err(|_| ServiceContractError::InvalidEnum)?
+    {
+        common::ObservabilityRemediation::OBSERVABILITY_REMEDIATION_NONE => {
+            Ok(ProviderRemediation::None)
+        }
+        common::ObservabilityRemediation::OBSERVABILITY_REMEDIATION_RETRY_BOUNDED => {
+            Ok(ProviderRemediation::RetryBounded)
+        }
+        common::ObservabilityRemediation::OBSERVABILITY_REMEDIATION_INSPECT_PROVIDER => {
+            Ok(ProviderRemediation::InspectProvider)
+        }
+        common::ObservabilityRemediation::OBSERVABILITY_REMEDIATION_RESTART_AGENT => {
+            Ok(ProviderRemediation::RestartAgent)
+        }
+        common::ObservabilityRemediation::OBSERVABILITY_REMEDIATION_RE_ENROLL_PEER => {
+            Ok(ProviderRemediation::ReEnrollPeer)
+        }
+        common::ObservabilityRemediation::OBSERVABILITY_REMEDIATION_REPAIR_CONFIGURATION => {
+            Ok(ProviderRemediation::RepairConfiguration)
+        }
+        common::ObservabilityRemediation::OBSERVABILITY_REMEDIATION_REPLACE_GENERATION => {
+            Ok(ProviderRemediation::ReplaceGeneration)
+        }
+        common::ObservabilityRemediation::OBSERVABILITY_REMEDIATION_OPERATOR_INTERACTION => {
+            Ok(ProviderRemediation::OperatorInteraction)
+        }
+        common::ObservabilityRemediation::OBSERVABILITY_REMEDIATION_UNSPECIFIED => {
+            Err(ServiceContractError::InvalidEnum)
+        }
+    }
+}
+
+fn remediation_to_wire(value: ProviderRemediation) -> common::ObservabilityRemediation {
+    match value {
+        ProviderRemediation::None => {
+            common::ObservabilityRemediation::OBSERVABILITY_REMEDIATION_NONE
+        }
+        ProviderRemediation::RetryBounded => {
+            common::ObservabilityRemediation::OBSERVABILITY_REMEDIATION_RETRY_BOUNDED
+        }
+        ProviderRemediation::InspectProvider => {
+            common::ObservabilityRemediation::OBSERVABILITY_REMEDIATION_INSPECT_PROVIDER
+        }
+        ProviderRemediation::RestartAgent => {
+            common::ObservabilityRemediation::OBSERVABILITY_REMEDIATION_RESTART_AGENT
+        }
+        ProviderRemediation::ReEnrollPeer => {
+            common::ObservabilityRemediation::OBSERVABILITY_REMEDIATION_RE_ENROLL_PEER
+        }
+        ProviderRemediation::RepairConfiguration => {
+            common::ObservabilityRemediation::OBSERVABILITY_REMEDIATION_REPAIR_CONFIGURATION
+        }
+        ProviderRemediation::ReplaceGeneration => {
+            common::ObservabilityRemediation::OBSERVABILITY_REMEDIATION_REPLACE_GENERATION
+        }
+        ProviderRemediation::OperatorInteraction => {
+            common::ObservabilityRemediation::OBSERVABILITY_REMEDIATION_OPERATOR_INTERACTION
+        }
+    }
+}
+
+fn validate_observability_query_result_wire(
+    value: &common::ObservabilityQueryResult,
+) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    let observation = required_message(&value.observation)?;
+    reject_unknown(observation)?;
+    lifecycle_from_wire(observation.lifecycle)?;
+    adoption_from_wire(observation.adoption)?;
+    observation_reason_from_wire(observation.reason)?;
+    let health_state = health_state_from_wire(observation.health_state)?;
+    let health_reason = health_reason_from_wire(observation.health_reason)?;
+    let remediation = remediation_from_wire(observation.health_remediation)?;
+    let health = ProviderHealth {
+        provider_id: ProviderId::parse("aaaaaaaaaaaaaaaaaaaa")
+            .map_err(|_| ServiceContractError::InvalidId)?,
+        registry_generation: ProviderGeneration::new(1)
+            .map_err(|_| ServiceContractError::InvalidId)?,
+        observed_at_unix_ms: observation.observed_at_unix_ms,
+        state: health_state,
+        reason: health_reason,
+        remediation,
+    };
+    health
+        .validate()
+        .map_err(|_| ServiceContractError::InconsistentResponse)?;
+    if observation.observed_at_unix_ms > MAX_SAFE_JSON_INTEGER
+        || value.records.len() > usize::from(MAX_OBSERVABILITY_QUERY_LIMIT)
+        || value.encoded_bytes_upper_bound > MAX_OBSERVABILITY_QUERY_BYTES
+        || value.encoded_bytes_upper_bound
+            < u32::try_from(value.records.len())
+                .map_err(|_| ServiceContractError::BoundExceeded)?
+                .saturating_mul(OBSERVABILITY_RECORD_ENCODED_UPPER_BOUND_BYTES)
+        || value.truncated != value.next_cursor.is_some()
+    {
+        return Err(ServiceContractError::BoundExceeded);
+    }
+    if let Some(cursor) = &value.next_cursor {
+        ObservabilityCursor::parse(cursor.clone()).map_err(|_| ServiceContractError::InvalidId)?;
+    }
+    let mut previous = None;
+    for record in &value.records {
+        reject_unknown(record)?;
+        if record.observed_at_unix_ms > MAX_SAFE_JSON_INTEGER
+            || record.observed_at_unix_ms > observation.observed_at_unix_ms
+            || record.value > MAX_SAFE_JSON_INTEGER
+        {
+            return Err(ServiceContractError::BoundExceeded);
+        }
+        let projection = projection_from_wire(record.projection)?;
+        let labels = required_message(&record.labels)?;
+        reject_unknown(labels)?;
+        let canonical = ObservabilityRecord {
+            observed_at_unix_ms: record.observed_at_unix_ms,
+            projection,
+            labels: ObservabilityLabels {
+                provider_type: provider_type_from_wire(labels.provider_type)?,
+                health_state: health_state_from_wire(labels.health_state)?,
+                metric: metric_from_wire(labels.metric)?,
+                operation: operation_label_from_wire(labels.operation)?,
+                outcome: outcome_label_from_wire(labels.outcome)?,
+            },
+            value: record.value,
+        };
+        if previous.is_some_and(|candidate| candidate >= canonical) {
+            return Err(ServiceContractError::InconsistentResponse);
+        }
+        previous = Some(canonical);
+    }
+    Ok(())
+}
+
+pub fn observability_query_result_to_wire(
+    value: &ObservabilityQueryResult,
+    request: &ProviderOperationRequest,
+) -> Result<common::ObservabilityQueryResult, ServiceContractError> {
+    value
+        .validate(request)
+        .map_err(|_| ServiceContractError::InconsistentResponse)?;
+    let observation = &value.observation;
+    let records = value
+        .records
+        .iter()
+        .map(|record| common::ObservabilityRecord {
+            observed_at_unix_ms: record.observed_at_unix_ms,
+            projection: EnumOrUnknown::new(projection_to_wire(record.projection)),
+            labels: MessageField::some(common::ObservabilityLabels {
+                provider_type: EnumOrUnknown::new(provider_type_to_wire(
+                    record.labels.provider_type,
+                )),
+                health_state: EnumOrUnknown::new(health_state_to_wire(record.labels.health_state)),
+                metric: EnumOrUnknown::new(metric_to_wire(record.labels.metric)),
+                operation: EnumOrUnknown::new(operation_label_to_wire(record.labels.operation)),
+                outcome: EnumOrUnknown::new(outcome_label_to_wire(record.labels.outcome)),
+                ..Default::default()
+            }),
+            value: record.value,
+            ..Default::default()
+        })
+        .collect();
+    let wire = common::ObservabilityQueryResult {
+        observation: MessageField::some(common::ObservabilityBoundObservation {
+            observed_at_unix_ms: observation.observed_at_unix_ms,
+            lifecycle: EnumOrUnknown::new(lifecycle_to_wire(observation.lifecycle)),
+            adoption: EnumOrUnknown::new(adoption_to_wire(observation.adoption)),
+            reason: EnumOrUnknown::new(observation_reason_to_wire(observation.reason)),
+            health_state: EnumOrUnknown::new(health_state_to_wire(observation.health.state)),
+            health_reason: EnumOrUnknown::new(health_reason_to_wire(observation.health.reason)),
+            health_remediation: EnumOrUnknown::new(remediation_to_wire(
+                observation.health.remediation,
+            )),
+            ..Default::default()
+        }),
+        records,
+        next_cursor: value
+            .next_cursor
+            .as_ref()
+            .map(|cursor| cursor.as_str().to_owned()),
+        encoded_bytes_upper_bound: value.encoded_bytes_upper_bound,
+        truncated: value.truncated,
+        ..Default::default()
+    };
+    validate_observability_query_result_wire(&wire)?;
+    Ok(wire)
+}
+
+pub fn observability_query_result_from_wire(
+    value: &common::ObservabilityQueryResult,
+    request: &ProviderOperationRequest,
+) -> Result<ObservabilityQueryResult, ServiceContractError> {
+    validate_observability_query_result_wire(value)?;
+    let observation = required_message(&value.observation)?;
+    let records = value
+        .records
+        .iter()
+        .map(|record| {
+            let labels = required_message(&record.labels)?;
+            Ok(ObservabilityRecord {
+                observed_at_unix_ms: record.observed_at_unix_ms,
+                projection: projection_from_wire(record.projection)?,
+                labels: ObservabilityLabels {
+                    provider_type: provider_type_from_wire(labels.provider_type)?,
+                    health_state: health_state_from_wire(labels.health_state)?,
+                    metric: metric_from_wire(labels.metric)?,
+                    operation: operation_label_from_wire(labels.operation)?,
+                    outcome: outcome_label_from_wire(labels.outcome)?,
+                },
+                value: record.value,
+            })
+        })
+        .collect::<Result<Vec<_>, ServiceContractError>>()?;
+    let canonical = ObservabilityQueryResult {
+        observation: ProviderObservation {
+            provider_id: request.context.provider_id.clone(),
+            provider_generation: request.context.provider_generation,
+            realm_id: request.target.realm_id().clone(),
+            workload_id: request.target.workload_id().cloned(),
+            handle_id: None,
+            resource_generation: None,
+            observed_at_unix_ms: observation.observed_at_unix_ms,
+            lifecycle: lifecycle_from_wire(observation.lifecycle)?,
+            adoption: adoption_from_wire(observation.adoption)?,
+            reason: observation_reason_from_wire(observation.reason)?,
+            health: ProviderHealth {
+                provider_id: request.context.provider_id.clone(),
+                registry_generation: request.context.provider_generation,
+                observed_at_unix_ms: observation.observed_at_unix_ms,
+                state: health_state_from_wire(observation.health_state)?,
+                reason: health_reason_from_wire(observation.health_reason)?,
+                remediation: remediation_from_wire(observation.health_remediation)?,
+            },
+        },
+        records: BoundedVec::new(records).map_err(|_| ServiceContractError::BoundExceeded)?,
+        next_cursor: value
+            .next_cursor
+            .as_ref()
+            .map(|cursor| ObservabilityCursor::parse(cursor.clone()))
+            .transpose()
+            .map_err(|_| ServiceContractError::InvalidId)?,
+        encoded_bytes_upper_bound: value.encoded_bytes_upper_bound,
+        truncated: value.truncated,
+    };
+    canonical
+        .validate(request)
+        .map_err(|_| ServiceContractError::InconsistentResponse)?;
+    Ok(canonical)
+}
+
+pub fn validate_provider_response_for_method(
+    response: &common::ProviderResponse,
+    method: ProviderMethod,
+) -> Result<(), ServiceContractError> {
+    response.validate_wire(false)?;
+    if method == ProviderMethod::ObservabilityQuery {
+        if response.error.is_none() && response.observability_query_result.is_none() {
+            return Err(ServiceContractError::InconsistentResponse);
+        }
+    } else if response.observability_query_result.is_some() {
+        return Err(ServiceContractError::InconsistentResponse);
+    }
+    Ok(())
+}
+
+pub fn observability_query_response_from_wire(
+    response: &common::ProviderResponse,
+    request: &ProviderOperationRequest,
+) -> Result<ObservabilityQueryResult, ServiceContractError> {
+    validate_provider_response_for_method(response, ProviderMethod::ObservabilityQuery)?;
+    if response.operation_id != request.context.operation_id.as_str()
+        || response.error.is_some()
+        || response
+            .outcome
+            .enum_value()
+            .map_err(|_| ServiceContractError::InvalidEnum)?
+            != common::Outcome::OUTCOME_SUCCEEDED
+    {
+        return Err(ServiceContractError::InconsistentResponse);
+    }
+    observability_query_result_from_wire(
+        response
+            .observability_query_result
+            .as_ref()
+            .ok_or(ServiceContractError::InconsistentResponse)?,
+        request,
+    )
+}
+
 impl StrictWireMessage for common::ProviderRequest {
     fn validate_wire(&self, requires_idempotency: bool) -> Result<(), ServiceContractError> {
         reject_unknown(self)?;
@@ -1344,12 +2247,28 @@ impl StrictWireMessage for common::ProviderResponse {
         }
         validate_observations(&self.observations)?;
         validate_attachments(&self.attachment_indexes)?;
-        validate_outcome_error(
-            self.outcome
-                .enum_value()
-                .map_err(|_| ServiceContractError::InvalidEnum)?,
-            self.error.as_ref(),
-        )
+        let outcome = self
+            .outcome
+            .enum_value()
+            .map_err(|_| ServiceContractError::InvalidEnum)?;
+        validate_outcome_error(outcome, self.error.as_ref())?;
+        if let Some(result) = self.observability_query_result.as_ref() {
+            if outcome != common::Outcome::OUTCOME_SUCCEEDED
+                || self.error.is_some()
+                || !self.resource_handle.is_empty()
+                || !self.result_digest.is_empty()
+                || !self.observations.is_empty()
+                || !self.stream_id.is_empty()
+                || !self.attachment_indexes.is_empty()
+            {
+                return Err(ServiceContractError::InconsistentResponse);
+            }
+            validate_observability_query_result_wire(result)?;
+        }
+        if self.error.is_some() && self.observability_query_result.is_some() {
+            return Err(ServiceContractError::InconsistentResponse);
+        }
+        Ok(())
     }
 }
 
