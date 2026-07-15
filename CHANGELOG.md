@@ -114,6 +114,10 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Removed nested Tokio runtime bridging from mapped runtime-provider start,
+  graceful stop, and restart dispatch. Provider adapters now await daemon
+  lifecycle effects directly, and Cloud Hypervisor observations use the
+  daemon's canonical registered runner role.
 - Closed d2b 2.0 foundation integration gaps with a driven ComponentSession,
   authenticated two-phase descriptor binding, phase-aware peer credentials,
   canonical provider-agent serving, lock-bound state generations, and bounded

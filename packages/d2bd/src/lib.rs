@@ -14874,7 +14874,7 @@ struct ProviderStopInputs<'a> {
     force_requested: bool,
 }
 
-fn stop_vmm_runner_with_provider(
+async fn stop_vmm_runner_with_provider_async(
     state: &ServerState,
     input: ProviderStopInputs<'_>,
 ) -> Option<Result<VmStopRoleReport, Value>> {
@@ -14977,7 +14977,7 @@ fn stop_vmm_runner_with_provider(
             timeout: ch_api::DEFAULT_TIMEOUT,
         }),
     };
-    let (outcome, report) = block_on_future(run_provider_graceful_shutdown(
+    let (outcome, report) = run_provider_graceful_shutdown(
         state,
         ProviderGracefulInputs {
             provider: provider.as_ref(),
@@ -14988,7 +14988,8 @@ fn stop_vmm_runner_with_provider(
             force_generation_baseline,
             caller_role: input.caller_role.clone(),
         },
-    ));
+    )
+    .await;
     if let Some(report) = report {
         record_vm_shutdown_metric(
             state,
@@ -15772,6 +15773,13 @@ fn dispatch_broker_vm_start(
     state: &ServerState,
     request: public_wire::VmLifecycleRequest,
 ) -> Result<Value, TypedError> {
+    block_on_future(dispatch_broker_vm_start_async(state, request))
+}
+
+async fn dispatch_broker_vm_start_async(
+    state: &ServerState,
+    request: public_wire::VmLifecycleRequest,
+) -> Result<Value, TypedError> {
     const VERB: &str = "vm start";
 
     if let Some(response) = mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
@@ -16124,13 +16132,10 @@ fn dispatch_broker_vm_start(
         ..supervisor::dag::NodeBudget::default()
     };
     let dag_start = Instant::now();
-    let report = match block_on_future(
-        supervisor::dag::DagExecutor::with_budget(runner, budget).run_split(
-            dag,
-            split_mode,
-            api_timeout,
-        ),
-    ) {
+    let report = match supervisor::dag::DagExecutor::with_budget(runner, budget)
+        .run_split(dag, split_mode, api_timeout)
+        .await
+    {
         Ok(report) => report,
         Err(error) => {
             tracing::warn!(vm = %request.vm, error = ?error, "vm start DAG validation failed");
@@ -16576,13 +16581,26 @@ fn dispatch_broker_vm_stop_as(
     request: public_wire::VmLifecycleRequest,
     caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
-    dispatch_broker_vm_stop_with_timeout_as(
+    block_on_future(dispatch_broker_vm_stop_as_async(
+        state,
+        request,
+        caller_role,
+    ))
+}
+
+async fn dispatch_broker_vm_stop_as_async(
+    state: &ServerState,
+    request: public_wire::VmLifecycleRequest,
+    caller_role: BrokerCallerRole,
+) -> Result<Value, TypedError> {
+    dispatch_broker_vm_stop_with_timeout_as_async(
         state,
         request,
         caller_role,
         VM_STOP_TIMEOUT,
         VM_STOP_TIMEOUT,
     )
+    .await
 }
 
 #[cfg(test)]
@@ -16592,16 +16610,16 @@ fn dispatch_broker_vm_stop_with_timeout(
     term_timeout: Duration,
     kill_timeout: Duration,
 ) -> Result<Value, TypedError> {
-    dispatch_broker_vm_stop_with_timeout_as(
+    block_on_future(dispatch_broker_vm_stop_with_timeout_as_async(
         state,
         request,
         BrokerCallerRole::LauncherUid { uid: 0 },
         term_timeout,
         kill_timeout,
-    )
+    ))
 }
 
-fn dispatch_broker_vm_stop_with_timeout_as(
+async fn dispatch_broker_vm_stop_with_timeout_as_async(
     state: &ServerState,
     request: public_wire::VmLifecycleRequest,
     caller_role: BrokerCallerRole,
@@ -16664,7 +16682,7 @@ fn dispatch_broker_vm_stop_with_timeout_as(
     let mut shutdown_outcomes = Vec::new();
     let force_requested = vm_lifecycle_force_requested(&request);
     for entry in &stop_entries {
-        let provider_report = stop_vmm_runner_with_provider(
+        let provider_report = stop_vmm_runner_with_provider_async(
             state,
             ProviderStopInputs {
                 caller_role: caller_role.clone(),
@@ -16676,7 +16694,8 @@ fn dispatch_broker_vm_stop_with_timeout_as(
                 kill_timeout,
                 force_requested,
             },
-        );
+        )
+        .await;
         let report = match provider_report.unwrap_or_else(|| {
             stop_vm_pidfd_role(
                 state,
@@ -23923,7 +23942,7 @@ mod broker_dispatch_tests {
     };
     use nix::sys::socket::{
         AddressFamily, Backlog, ControlMessage, MsgFlags, SockFlag, SockType, UnixAddr, accept4,
-        bind, listen, recv, sendmsg, socket,
+        bind, listen, recv, sendmsg, socket, socketpair,
     };
     use nix::unistd::close;
     use serde::Serialize;
@@ -24536,7 +24555,220 @@ mod broker_dispatch_tests {
     fn uninitialized_provider_registry_state(label: &str) -> Arc<ServerState> {
         let mut state = test_state_with_broker_socket(unreachable_broker_socket_path(label));
         state.provider_registry = Arc::new(OnceLock::new());
+        state.config.locks_dir = state.daemon_state_dir.join("locks");
+        fs::create_dir_all(&state.config.locks_dir).expect("create provider test locks directory");
         Arc::new(state)
+    }
+
+    fn mapped_cloud_hypervisor_state(label: &str) -> Arc<ServerState> {
+        let state = uninitialized_provider_registry_state(label);
+        let artifact = local_runtime_provider_artifact("runner:vm:vm-a:role:cloud-hypervisor");
+        install_provider_registry_artifact(&state.config.artifacts, &artifact);
+        let mut manifest: Value = serde_json::from_slice(
+            &fs::read(&state.config.artifacts.public_manifest_path).expect("read manifest fixture"),
+        )
+        .expect("parse manifest fixture");
+        manifest["vm-a"]["runtime"]["capabilities"]["storeSync"] = json!(false);
+        write_json_file(&state.config.artifacts.public_manifest_path, &manifest);
+        fs::set_permissions(
+            &state.config.artifacts.public_manifest_path,
+            fs::Permissions::from_mode(0o640),
+        )
+        .expect("chmod manifest fixture");
+        block_on_future(activate_provider_registry(&state, None)).expect("activate mapped runtime");
+        state
+    }
+
+    fn spawn_single_runner_broker(
+        socket_path: &Path,
+        expected_role_id: &'static str,
+        expected_role: RunnerRole,
+    ) -> thread::JoinHandle<ChildGuard> {
+        if let Some(parent) = socket_path.parent() {
+            fs::create_dir_all(parent).expect("create broker socket parent");
+        }
+        fs::remove_file(socket_path).ok();
+        let listener = socket(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            SockFlag::SOCK_CLOEXEC,
+            None,
+        )
+        .expect("create broker listener");
+        let address = UnixAddr::new(socket_path).expect("broker socket address");
+        bind(listener.as_raw_fd(), &address).expect("bind broker listener");
+        listen(&listener, Backlog::new(1).expect("listener backlog"))
+            .expect("listen on broker socket");
+        let socket_path = socket_path.to_path_buf();
+
+        thread::spawn(move || {
+            loop {
+                let accepted_fd = accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC)
+                    .expect("accept broker peer");
+                let frame = read_test_frame(accepted_fd).expect("read broker request frame");
+                let envelope: BrokerRequestEnvelope =
+                    serde_json::from_slice(&frame).expect("decode broker request frame");
+                match envelope.request {
+                    BrokerRequest::PollChildReaped => {
+                        write_test_json_frame(
+                            accepted_fd,
+                            &BrokerResponse::PollChildReaped(PollChildReapedResponse {
+                                notifications: Vec::new(),
+                            }),
+                        )
+                        .expect("write PollChildReaped response");
+                        close(accepted_fd).expect("close PollChildReaped broker peer");
+                    }
+                    BrokerRequest::DeregisterRunnerPidfd(request) => {
+                        write_test_json_frame(
+                            accepted_fd,
+                            &BrokerResponse::DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse {
+                                vm_id: request.vm_id,
+                                role_id: request.role_id,
+                                removed: true,
+                            }),
+                        )
+                        .expect("write DeregisterRunnerPidfd response");
+                        close(accepted_fd).expect("close DeregisterRunnerPidfd broker peer");
+                    }
+                    BrokerRequest::StoreSync(request) => {
+                        assert_eq!(request.vm_id.as_str(), "vm-a");
+                        write_test_json_frame(
+                            accepted_fd,
+                            &BrokerResponse::StoreSync(
+                                d2b_contracts::broker_wire::StoreSyncResponse {
+                                    vm: "vm-a".to_owned(),
+                                    generation_id: "test-generation".to_owned(),
+                                    generation_token: request.generation_token,
+                                    hardlink_farm_path: "/var/lib/d2b/vms/vm-a/store-view"
+                                        .to_owned(),
+                                    closure_count: 0,
+                                    retained_generations: Vec::new(),
+                                    swept_count: 0,
+                                    cleanup_deferred: false,
+                                },
+                            ),
+                        )
+                        .expect("write StoreSync response");
+                        close(accepted_fd).expect("close StoreSync broker peer");
+                    }
+                    BrokerRequest::SpawnRunner(request) => {
+                        assert_eq!(request.vm_id.as_str(), "vm-a");
+                        assert_eq!(request.role_id.as_str(), expected_role_id);
+                        assert_eq!(request.role, expected_role);
+
+                        let child = ChildGuard::new(
+                            Command::new("sleep")
+                                .arg("600")
+                                .spawn()
+                                .expect("spawn child for broker reply"),
+                        );
+                        let pidfd = open_child_pidfd(child.child());
+                        write_test_json_frame_with_fds(
+                            accepted_fd,
+                            &BrokerResponse::SpawnRunner(SpawnRunnerResponse {
+                                vm_id: VmId::new("vm-a"),
+                                role_id: RoleId::new(expected_role_id),
+                                role: expected_role,
+                                pid: child.child().id() as i32,
+                                start_time_ticks: read_child_start_time(child.child()),
+                                pidfd_index: 0,
+                                console_fd_index: None,
+                            }),
+                            &[pidfd.as_raw_fd()],
+                        )
+                        .expect("write spawn response with pidfd");
+                        close(accepted_fd).expect("close SpawnRunner broker peer");
+                        fs::remove_file(socket_path).ok();
+                        return child;
+                    }
+                    other => panic!("unexpected broker request: {other:?}"),
+                }
+            }
+        })
+    }
+
+    fn dispatch_lifecycle_on_connection_thread(
+        state: Arc<ServerState>,
+        request_type: &'static str,
+        request: &VmLifecycleRequest,
+    ) -> (Value, (usize, usize), usize) {
+        let (daemon, client) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("connection socketpair");
+        let daemon = super::Socket::from(daemon);
+        let client = super::Socket::from(client);
+        let handler = thread::Builder::new()
+            .name("d2bd-connection-test".to_owned())
+            .spawn(move || {
+                provider_effects::reset_test_runtime_lifecycle_calls();
+                reset_test_direct_runtime_fallbacks();
+                let result = super::handle_connection_authorized(
+                    daemon,
+                    &state,
+                    PeerIdentity {
+                        role: PeerRole::Admin,
+                        uid: 0,
+                    },
+                    None,
+                );
+                (
+                    result,
+                    provider_effects::test_runtime_lifecycle_calls(),
+                    test_direct_runtime_fallbacks(),
+                )
+            })
+            .expect("spawn connection handler");
+
+        super::write_frame(
+            &client,
+            &serde_json::to_vec(&json!({
+                "type": "hello",
+                "clientVersion": ">=0.4.0, <0.5.0"
+            }))
+            .expect("serialize hello"),
+        )
+        .expect("write hello");
+        let hello: Value = serde_json::from_slice(
+            &super::read_frame(&client).expect("read connection hello response"),
+        )
+        .expect("decode connection hello response");
+        assert_eq!(hello["type"], "helloOk");
+
+        let mut frame = serde_json::to_value(request).expect("serialize lifecycle request");
+        frame["type"] = json!(request_type);
+        super::write_frame(
+            &client,
+            &serde_json::to_vec(&frame).expect("serialize lifecycle frame"),
+        )
+        .expect("write lifecycle frame");
+        let response: Value =
+            serde_json::from_slice(&super::read_frame(&client).expect("read lifecycle response"))
+                .expect("decode lifecycle response");
+        drop(client);
+
+        let (handler_result, provider_calls, direct_fallbacks) = handler
+            .join()
+            .expect("connection handler must not panic in a nested Tokio runtime");
+        handler_result.expect("connection handler exits after client EOF");
+        (response, provider_calls, direct_fallbacks)
+    }
+
+    fn terminate_started_runner(state: &ServerState, role_id: &str, child: ChildGuard) {
+        state
+            .pidfd_table
+            .signal("vm-a", role_id, libc::SIGKILL)
+            .expect("signal started runner");
+        let _ = state
+            .pidfd_table
+            .wait_terminated("vm-a", role_id, Duration::from_secs(5))
+            .expect("wait for started runner");
+        let _ = state.pidfd_table.deregister("vm-a", role_id);
+        let _ = child.wait();
     }
 
     #[tokio::test]
@@ -24578,6 +24810,103 @@ mod broker_dispatch_tests {
             provider_registry::probe_startup_registry(first, &artifact).await,
             Err(provider_registry::ProviderCompositionError::StartupProbeFailed)
         ));
+    }
+
+    #[test]
+    fn mapped_start_on_connection_thread_uses_one_async_provider_dispatch() {
+        let state = mapped_cloud_hypervisor_state("provider-connection-start");
+        let broker = spawn_single_runner_broker(
+            &state.config.broker_socket_path,
+            VM_RUNNER_ROLE_ID,
+            RunnerRole::CloudHypervisor,
+        );
+        let request = VmLifecycleRequest {
+            vm: "vm-a".to_owned(),
+            flags: MutationFlags {
+                apply: true,
+                dry_run: false,
+                json: true,
+            },
+            force: false,
+            no_wait_api: true,
+        };
+
+        let (response, provider_calls, direct_fallbacks) =
+            dispatch_lifecycle_on_connection_thread(Arc::clone(&state), "vmStart", &request);
+        assert_eq!(
+            super::response_outcome(&response),
+            Some("applied"),
+            "unexpected mapped start response: {response}"
+        );
+        assert_eq!(provider_calls, (1, 0));
+        assert_eq!(direct_fallbacks, 0);
+
+        let child = broker.join().expect("join broker thread");
+        terminate_started_runner(&state, VM_RUNNER_ROLE_ID, child);
+    }
+
+    #[test]
+    fn mapped_stop_on_connection_thread_awaits_graceful_path_once() {
+        let state = mapped_cloud_hypervisor_state("provider-connection-stop");
+        let _child = register_sleep_runner_for_role(
+            &state,
+            "vm-a",
+            VM_RUNNER_ROLE_ID,
+            RunnerRole::CloudHypervisor,
+            false,
+        );
+        let request = VmLifecycleRequest {
+            vm: "vm-a".to_owned(),
+            flags: MutationFlags {
+                apply: true,
+                dry_run: false,
+                json: true,
+            },
+            force: false,
+            no_wait_api: true,
+        };
+
+        let (response, provider_calls, direct_fallbacks) =
+            dispatch_lifecycle_on_connection_thread(state, "vmStop", &request);
+        assert_eq!(super::response_outcome(&response), Some("applied"));
+        assert_eq!(provider_calls, (0, 1));
+        assert_eq!(direct_fallbacks, 0);
+    }
+
+    #[test]
+    fn mapped_restart_on_connection_thread_uses_each_provider_method_once() {
+        let state = mapped_cloud_hypervisor_state("provider-connection-restart");
+        let _stopped_child = register_sleep_runner_for_role(
+            &state,
+            "vm-a",
+            VM_RUNNER_ROLE_ID,
+            RunnerRole::CloudHypervisor,
+            false,
+        );
+        let broker = spawn_single_runner_broker(
+            &state.config.broker_socket_path,
+            VM_RUNNER_ROLE_ID,
+            RunnerRole::CloudHypervisor,
+        );
+        let request = VmLifecycleRequest {
+            vm: "vm-a".to_owned(),
+            flags: MutationFlags {
+                apply: true,
+                dry_run: false,
+                json: true,
+            },
+            force: false,
+            no_wait_api: true,
+        };
+
+        let (response, provider_calls, direct_fallbacks) =
+            dispatch_lifecycle_on_connection_thread(Arc::clone(&state), "vmRestart", &request);
+        assert_eq!(super::response_outcome(&response), Some("applied"));
+        assert_eq!(provider_calls, (1, 1));
+        assert_eq!(direct_fallbacks, 0);
+
+        let child = broker.join().expect("join broker thread");
+        terminate_started_runner(&state, VM_RUNNER_ROLE_ID, child);
     }
 
     #[test]
@@ -24641,16 +24970,18 @@ mod broker_dispatch_tests {
 
     #[test]
     fn mapped_cloud_hypervisor_and_qemu_stops_use_provider_adapters_only() {
-        for (label, kind, role_id, runner_role) in [
+        for (label, kind, role_id, registration_role_id, runner_role) in [
             (
                 "provider-stop-cloud-hypervisor",
                 LocalRuntimeKind::CloudHypervisor,
                 "cloud-hypervisor",
+                VM_RUNNER_ROLE_ID,
                 RunnerRole::CloudHypervisor,
             ),
             (
                 "provider-stop-qemu-media",
                 LocalRuntimeKind::QemuMedia,
+                "qemu-media",
                 "qemu-media",
                 RunnerRole::QemuMedia,
             ),
@@ -24663,8 +24994,13 @@ mod broker_dispatch_tests {
             install_provider_registry_artifact(&state.config.artifacts, &artifact);
             block_on_future(activate_provider_registry(&state, None))
                 .expect("activate mapped runtime");
-            let _child =
-                register_sleep_runner_for_role(&state, "vm-a", role_id, runner_role, false);
+            let _child = register_sleep_runner_for_role(
+                &state,
+                "vm-a",
+                registration_role_id,
+                runner_role,
+                false,
+            );
             provider_effects::reset_test_runtime_lifecycle_calls();
             reset_test_direct_runtime_fallbacks();
 

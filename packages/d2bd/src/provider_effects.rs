@@ -42,7 +42,7 @@ use d2b_provider_substrate_host::HostSubstratePort;
 use d2b_provider_transport_local::LocalEndpointPort;
 
 use crate::{
-    ServerState, TypedError, dispatch_broker_vm_start, dispatch_broker_vm_stop_as,
+    ServerState, TypedError, dispatch_broker_vm_start_async, dispatch_broker_vm_stop_as_async,
     provider_registry::resolve_current_runtime_route,
 };
 
@@ -523,7 +523,7 @@ impl DaemonLocalRuntimeControl {
         response.get("outcome").and_then(serde_json::Value::as_str) == Some("applied")
     }
 
-    fn invoke_direct_start(
+    async fn invoke_direct_start(
         &self,
         request: &RuntimeOperationControl,
         resolved: &ResolvedDaemonRuntime,
@@ -534,7 +534,7 @@ impl DaemonLocalRuntimeControl {
             .map_err(|_| RuntimeControlError::Unavailable)?
             .lifecycle_dispatch()
             .invocation(&request.context().operation().operation_id, &resolved.vm)?;
-        let result = dispatch_broker_vm_start(&resolved.state, lifecycle);
+        let result = dispatch_broker_vm_start_async(&resolved.state, lifecycle).await;
         let applied = result.as_ref().is_ok_and(Self::response_applied);
         *result_slot
             .lock()
@@ -546,7 +546,7 @@ impl DaemonLocalRuntimeControl {
         }
     }
 
-    fn invoke_direct_stop(
+    async fn invoke_direct_stop(
         &self,
         request: &RuntimeOperationControl,
         resolved: &ResolvedDaemonRuntime,
@@ -557,7 +557,8 @@ impl DaemonLocalRuntimeControl {
             .map_err(|_| RuntimeControlError::Unavailable)?
             .lifecycle_dispatch()
             .invocation(&request.context().operation().operation_id, &resolved.vm)?;
-        let result = dispatch_broker_vm_stop_as(&resolved.state, lifecycle, caller_role);
+        let result =
+            dispatch_broker_vm_stop_as_async(&resolved.state, lifecycle, caller_role).await;
         let applied = result.as_ref().is_ok_and(Self::response_applied);
         *result_slot
             .lock()
@@ -618,7 +619,7 @@ impl RuntimeControlPort for DaemonLocalRuntimeControl {
         {
             return self.observed(request.context(), &resolved);
         }
-        self.invoke_direct_start(&request, &resolved)?;
+        self.invoke_direct_start(&request, &resolved).await?;
         let observed = self.observed(request.context(), &resolved)?;
         if observed.lifecycle() == ObservedLifecycleState::Running {
             Ok(observed)
@@ -641,7 +642,7 @@ impl RuntimeControlPort for DaemonLocalRuntimeControl {
         {
             return self.observed(request.context(), &resolved);
         }
-        self.invoke_direct_stop(&request, &resolved)?;
+        self.invoke_direct_stop(&request, &resolved).await?;
         let observed = self.observed(request.context(), &resolved)?;
         if observed.lifecycle() == ObservedLifecycleState::Stopped {
             Ok(observed)
@@ -691,13 +692,14 @@ impl RuntimeControlPort for DaemonLocalRuntimeControl {
         {
             return Ok(RuntimeMutationOutcome::new(MutationState::NotApplicable));
         }
-        let response = dispatch_broker_vm_stop_as(
+        let response = dispatch_broker_vm_stop_as_async(
             &resolved.state,
             Self::lifecycle_request(resolved.vm),
             BrokerCallerRole::AdminUid {
                 uid: resolved.state.daemon_uid,
             },
         )
+        .await
         .map_err(|_| RuntimeControlError::Unavailable)?;
         if Self::response_applied(&response) {
             Ok(RuntimeMutationOutcome::new(MutationState::Applied))

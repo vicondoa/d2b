@@ -980,7 +980,12 @@ pub(crate) fn resolve_current_runtime_route(
     if routes.get(&runner.vm_name) != Some(expected) {
         return Err(ProviderCompositionError::ProcessIdentityMismatch);
     }
-    Ok((runner.vm_name.clone(), runner.role_id.clone()))
+    let registration_role = match runner.role {
+        ProcessRole::CloudHypervisorRunner => crate::VM_RUNNER_ROLE_ID.to_owned(),
+        ProcessRole::QemuMediaRunner => runner.role_id.clone(),
+        _ => return Err(ProviderCompositionError::ProcessIdentityMismatch),
+    };
+    Ok((runner.vm_name.clone(), registration_role))
 }
 
 pub(crate) fn load_provider_registry_v2(

@@ -651,8 +651,8 @@ fn daemon_provider_composition_is_exact_startup_owned_and_credential_free() {
         );
     }
     for required in [
-        "dispatch_broker_vm_start",
-        "dispatch_broker_vm_stop_as",
+        "dispatch_broker_vm_start_async",
+        "dispatch_broker_vm_stop_as_async",
         "resolve_current_runtime_route",
         "still_alive_same_start_time",
     ] {
@@ -661,6 +661,11 @@ fn daemon_provider_composition_is_exact_startup_owned_and_credential_free() {
             "live runtime adapter must invoke the existing daemon authority seam {required}"
         );
     }
+    assert!(
+        !effects.contains("dispatch_broker_vm_start(&")
+            && !effects.contains("dispatch_broker_vm_stop_as(&"),
+        "async provider ports must not re-enter synchronous Tokio lifecycle bridges"
+    );
     let provider_contract = read_repo_file("packages/d2b-contracts/src/provider_registry_v2.rs");
     assert!(
         provider_contract.contains("pub struct ProviderRegistryV2")
