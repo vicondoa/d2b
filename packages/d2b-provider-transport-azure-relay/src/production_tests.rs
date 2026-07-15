@@ -2,7 +2,7 @@ use std::{
     future::pending,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
     },
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -102,15 +102,19 @@ impl RelayCredentialSource for FakeCredentialSource {
 }
 
 struct FakeSocket {
-    open: AtomicBool,
+    lifecycle: AtomicU8,
     close_calls: AtomicUsize,
     close_gate: Arc<OneShotGate>,
 }
 
+const FAKE_SOCKET_OPEN: u8 = 0;
+const FAKE_SOCKET_CLOSING: u8 = 1;
+const FAKE_SOCKET_CLOSED: u8 = 2;
+
 impl FakeSocket {
     fn new(close_gate: Arc<OneShotGate>) -> Self {
         Self {
-            open: AtomicBool::new(true),
+            lifecycle: AtomicU8::new(FAKE_SOCKET_OPEN),
             close_calls: AtomicUsize::new(0),
             close_gate,
         }
@@ -120,7 +124,7 @@ impl FakeSocket {
 #[async_trait]
 impl RelaySocket for FakeSocket {
     fn is_open(&self) -> bool {
-        self.open.load(Ordering::Acquire)
+        self.lifecycle.load(Ordering::Acquire) != FAKE_SOCKET_CLOSED
     }
 
     async fn receive(&self) -> Result<RelaySocketEvent, RelaySocketFailure> {
@@ -131,17 +135,28 @@ impl RelaySocket for FakeSocket {
         if bytes.len() > usize::try_from(RELAY_MAX_FRAME_BYTES).expect("frame bound fits usize") {
             return Err(RelaySocketFailure::FrameTooLarge);
         }
+        if self.lifecycle.load(Ordering::Acquire) != FAKE_SOCKET_OPEN {
+            return Err(RelaySocketFailure::Unavailable);
+        }
         Ok(())
     }
 
     async fn send_pong(&self, _bytes: &[u8]) -> Result<(), RelaySocketFailure> {
-        Ok(())
+        if self.lifecycle.load(Ordering::Acquire) == FAKE_SOCKET_OPEN {
+            Ok(())
+        } else {
+            Err(RelaySocketFailure::Unavailable)
+        }
     }
 
     async fn close(&self) -> Result<(), RelaySocketFailure> {
+        if self.lifecycle.load(Ordering::Acquire) == FAKE_SOCKET_CLOSED {
+            return Ok(());
+        }
         self.close_calls.fetch_add(1, Ordering::AcqRel);
-        self.open.store(false, Ordering::Release);
+        self.lifecycle.store(FAKE_SOCKET_CLOSING, Ordering::Release);
         self.close_gate.block_if_armed().await;
+        self.lifecycle.store(FAKE_SOCKET_CLOSED, Ordering::Release);
         Ok(())
     }
 }
@@ -416,11 +431,19 @@ fn other_inspect_request(
 }
 
 fn close_request(harness: &ProductionHarness, operation: OperationBinding) -> RelayCloseRequest {
+    close_request_with_deadline(harness, operation, 5_000)
+}
+
+fn close_request_with_deadline(
+    harness: &ProductionHarness,
+    operation: OperationBinding,
+    deadline_remaining_ms: u32,
+) -> RelayCloseRequest {
     RelayCloseRequest::new(
         operation,
         harness.binding_id.clone(),
         harness.rendezvous_id.clone(),
-        5_000,
+        deadline_remaining_ms,
         RelayTransportLimits::production(),
     )
 }
@@ -868,7 +891,7 @@ async fn slow_close_keeps_inspection_and_other_bindings_responsive() {
     assert!(matches!(
         primary,
         RelayInspection::Present(ref resource)
-            if resource.state() == RelayResourceState::Closed
+            if resource.state() == RelayResourceState::Connected
     ));
 
     let other = tokio::time::timeout(
@@ -892,6 +915,111 @@ async fn slow_close_keeps_inspection_and_other_bindings_responsive() {
         RelayCloseOutcome::Closed
     );
     assert_eq!(harness.port.test_state_counts().3, 0);
+}
+
+#[tokio::test]
+async fn cancelled_close_retries_shutdown_and_disables_external_socket_clones() {
+    let harness = production_harness(FakeCredentialSource::available());
+    let resource = harness
+        .port
+        .connect(open_request(
+            &harness,
+            unique_operation(ProviderMethod::TransportConnect, "cancel-close-open", 0),
+            5_000,
+        ))
+        .await
+        .expect("connect");
+    let external_socket = harness
+        .port
+        .connected_socket(resource.handle_id())
+        .await
+        .expect("external socket clone");
+    external_socket
+        .send_binary(b"before-close")
+        .await
+        .expect("open socket accepts sends");
+
+    harness.connector.close_gate.arm();
+    let close_operation =
+        unique_operation(ProviderMethod::TransportRevokeBinding, "cancel-close", 0);
+    let close_request = close_request(&harness, close_operation);
+    let close_port = Arc::clone(&harness.port);
+    let request_to_cancel = close_request.clone();
+    let cancelled = tokio::spawn(async move { close_port.close(request_to_cancel).await });
+    harness.connector.close_gate.wait_started().await;
+    assert!(external_socket.is_open());
+    assert_eq!(
+        external_socket
+            .send_binary(b"during-close")
+            .await
+            .expect_err("closing socket rejects sends"),
+        RelaySocketFailure::Unavailable
+    );
+
+    cancelled.abort();
+    assert!(
+        cancelled
+            .await
+            .expect_err("close task was cancelled")
+            .is_cancelled()
+    );
+    assert_eq!(harness.port.test_state_counts().3, 0);
+    assert!(external_socket.is_open());
+    assert_eq!(
+        external_socket
+            .send_binary(b"after-cancel")
+            .await
+            .expect_err("cancelled shutdown remains non-writable"),
+        RelaySocketFailure::Unavailable
+    );
+
+    let inspection = harness
+        .port
+        .inspect(inspect_request(
+            &harness,
+            unique_operation(ProviderMethod::TransportInspect, "cancel-close-inspect", 0),
+        ))
+        .await
+        .expect("inspect after cancellation");
+    assert!(matches!(
+        inspection,
+        RelayInspection::Present(ref current)
+            if current.state() == RelayResourceState::Connected
+    ));
+
+    assert_eq!(
+        harness
+            .port
+            .close(close_request)
+            .await
+            .expect("retry completes shutdown"),
+        RelayCloseOutcome::Closed
+    );
+    assert!(!external_socket.is_open());
+    assert_eq!(
+        external_socket
+            .send_binary(b"after-close")
+            .await
+            .expect_err("completed shutdown rejects sends"),
+        RelaySocketFailure::Unavailable
+    );
+    assert!(
+        harness
+            .port
+            .connected_socket(resource.handle_id())
+            .await
+            .is_none()
+    );
+    assert_eq!(
+        harness
+            .connector
+            .sockets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)[0]
+            .close_calls
+            .load(Ordering::Acquire),
+        2
+    );
 }
 
 #[tokio::test]

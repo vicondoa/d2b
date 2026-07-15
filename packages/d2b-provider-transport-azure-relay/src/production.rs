@@ -4,7 +4,7 @@ use std::{
     fmt,
     sync::{
         Arc, Mutex as StdMutex, Once,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -345,11 +345,70 @@ impl fmt::Debug for RelaySocketEvent {
 /// One bounded, live Relay WebSocket.
 #[async_trait]
 pub trait RelaySocket: Send + Sync {
+    /// Return false only after transport shutdown has completed.
+    ///
+    /// A close in progress remains live so cancellation can be retried.
     fn is_open(&self) -> bool;
     async fn receive(&self) -> Result<RelaySocketEvent, RelaySocketFailure>;
     async fn send_binary(&self, bytes: &[u8]) -> Result<(), RelaySocketFailure>;
     async fn send_pong(&self, bytes: &[u8]) -> Result<(), RelaySocketFailure>;
     async fn close(&self) -> Result<(), RelaySocketFailure>;
+}
+
+const SOCKET_OPEN: u8 = 0;
+const SOCKET_CLOSING: u8 = 1;
+const SOCKET_CLOSED: u8 = 2;
+
+struct SocketLifecycle(AtomicU8);
+
+impl SocketLifecycle {
+    fn open() -> Self {
+        Self(AtomicU8::new(SOCKET_OPEN))
+    }
+
+    fn accepts_sends(&self) -> bool {
+        self.0.load(Ordering::Acquire) == SOCKET_OPEN
+    }
+
+    fn close_in_progress(&self) -> bool {
+        self.0.load(Ordering::Acquire) == SOCKET_CLOSING
+    }
+
+    fn shutdown_completed(&self) -> bool {
+        self.0.load(Ordering::Acquire) == SOCKET_CLOSED
+    }
+
+    fn is_live(&self) -> bool {
+        !self.shutdown_completed()
+    }
+
+    fn begin_close(&self) -> bool {
+        loop {
+            match self.0.load(Ordering::Acquire) {
+                SOCKET_CLOSED => return false,
+                SOCKET_CLOSING => return true,
+                SOCKET_OPEN => {
+                    if self
+                        .0
+                        .compare_exchange(
+                            SOCKET_OPEN,
+                            SOCKET_CLOSING,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        )
+                        .is_ok()
+                    {
+                        return true;
+                    }
+                }
+                _ => return false,
+            }
+        }
+    }
+
+    fn finish_close(&self) {
+        self.0.store(SOCKET_CLOSED, Ordering::Release);
+    }
 }
 
 #[derive(Clone)]
@@ -395,6 +454,7 @@ pub struct RelaySocketConnection {
     accepted: Option<AcceptedRelaySockets>,
     listener_live: Option<Arc<AtomicBool>>,
     listener_task: StdMutex<Option<JoinHandle<()>>>,
+    lifecycle: SocketLifecycle,
 }
 
 impl RelaySocketConnection {
@@ -404,6 +464,7 @@ impl RelaySocketConnection {
             accepted: None,
             listener_live: None,
             listener_task: StdMutex::new(None),
+            lifecycle: SocketLifecycle::open(),
         }
     }
 
@@ -418,10 +479,17 @@ impl RelaySocketConnection {
             accepted: Some(Arc::new(Mutex::new(accepted))),
             listener_live: Some(listener_live),
             listener_task: StdMutex::new(Some(listener_task)),
+            lifecycle: SocketLifecycle::open(),
         }
     }
 
     pub fn is_open(&self) -> bool {
+        if self.lifecycle.shutdown_completed() {
+            return false;
+        }
+        if self.lifecycle.close_in_progress() {
+            return true;
+        }
         self.listener_live.as_ref().map_or_else(
             || self.socket.is_open(),
             |live| live.load(Ordering::Acquire),
@@ -447,6 +515,9 @@ impl RelaySocketConnection {
     }
 
     async fn close(&self) -> Result<(), RelaySocketFailure> {
+        if !self.lifecycle.begin_close() {
+            return Ok(());
+        }
         if let Some(live) = &self.listener_live {
             live.store(false, Ordering::Release);
         }
@@ -458,7 +529,9 @@ impl RelaySocketConnection {
         {
             task.abort();
         }
-        self.socket.close().await
+        self.socket.close().await?;
+        self.lifecycle.finish_close();
+        Ok(())
     }
 }
 
@@ -537,7 +610,7 @@ impl RelaySocketConnector for TungsteniteRelaySocketConnector {
 struct WebSocketRelaySocket {
     sink: Mutex<WebSocketSink>,
     source: Mutex<WebSocketSource>,
-    open: AtomicBool,
+    lifecycle: SocketLifecycle,
     max_frame_bytes: usize,
 }
 
@@ -547,7 +620,7 @@ impl WebSocketRelaySocket {
         Self {
             sink: Mutex::new(sink),
             source: Mutex::new(source),
-            open: AtomicBool::new(true),
+            lifecycle: SocketLifecycle::open(),
             max_frame_bytes,
         }
     }
@@ -557,7 +630,8 @@ impl fmt::Debug for WebSocketRelaySocket {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("WebSocketRelaySocket")
-            .field("open", &self.is_open())
+            .field("live", &self.is_open())
+            .field("accepts_sends", &self.lifecycle.accepts_sends())
             .field("max_frame_bytes", &self.max_frame_bytes)
             .finish_non_exhaustive()
     }
@@ -566,20 +640,20 @@ impl fmt::Debug for WebSocketRelaySocket {
 #[async_trait]
 impl RelaySocket for WebSocketRelaySocket {
     fn is_open(&self) -> bool {
-        self.open.load(Ordering::Acquire)
+        self.lifecycle.is_live()
     }
 
     async fn receive(&self) -> Result<RelaySocketEvent, RelaySocketFailure> {
         loop {
             let message = self.source.lock().await.next().await;
             let Some(message) = message else {
-                self.open.store(false, Ordering::Release);
+                self.lifecycle.finish_close();
                 return Ok(RelaySocketEvent::Closed);
             };
             let message = match message {
                 Ok(message) => message,
                 Err(error) => {
-                    self.open.store(false, Ordering::Release);
+                    self.lifecycle.finish_close();
                     return Err(classify_socket_error(error));
                 }
             };
@@ -597,7 +671,7 @@ impl RelaySocket for WebSocketRelaySocket {
                         .map(RelaySocketEvent::Ping);
                 }
                 Message::Close(_) => {
-                    self.open.store(false, Ordering::Release);
+                    self.lifecycle.finish_close();
                     return Ok(RelaySocketEvent::Closed);
                 }
                 Message::Pong(_) | Message::Frame(_) => {}
@@ -609,13 +683,17 @@ impl RelaySocket for WebSocketRelaySocket {
         if bytes.len() > self.max_frame_bytes {
             return Err(RelaySocketFailure::FrameTooLarge);
         }
-        self.sink
-            .lock()
-            .await
-            .send(Message::Binary(bytes.to_vec()))
+        if !self.lifecycle.accepts_sends() {
+            return Err(RelaySocketFailure::Unavailable);
+        }
+        let mut sink = self.sink.lock().await;
+        if !self.lifecycle.accepts_sends() {
+            return Err(RelaySocketFailure::Unavailable);
+        }
+        sink.send(Message::Binary(bytes.to_vec()))
             .await
             .map_err(|error| {
-                self.open.store(false, Ordering::Release);
+                self.lifecycle.finish_close();
                 classify_socket_error(error)
             })
     }
@@ -624,25 +702,43 @@ impl RelaySocket for WebSocketRelaySocket {
         if bytes.len() > MAX_WEBSOCKET_CONTROL_BYTES {
             return Err(RelaySocketFailure::FrameTooLarge);
         }
-        self.sink
-            .lock()
-            .await
-            .send(Message::Pong(bytes.to_vec()))
+        if !self.lifecycle.accepts_sends() {
+            return Err(RelaySocketFailure::Unavailable);
+        }
+        let mut sink = self.sink.lock().await;
+        if !self.lifecycle.accepts_sends() {
+            return Err(RelaySocketFailure::Unavailable);
+        }
+        sink.send(Message::Pong(bytes.to_vec()))
             .await
             .map_err(|error| {
-                self.open.store(false, Ordering::Release);
+                self.lifecycle.finish_close();
                 classify_socket_error(error)
             })
     }
 
     async fn close(&self) -> Result<(), RelaySocketFailure> {
-        self.open.store(false, Ordering::Release);
-        self.sink
-            .lock()
-            .await
-            .close()
-            .await
-            .map_err(classify_socket_error)
+        if !self.lifecycle.begin_close() {
+            return Ok(());
+        }
+        let mut sink = self.sink.lock().await;
+        if self.lifecycle.shutdown_completed() {
+            return Ok(());
+        }
+        match sink.close().await {
+            Ok(()) => {
+                self.lifecycle.finish_close();
+                Ok(())
+            }
+            Err(
+                tokio_tungstenite::tungstenite::Error::ConnectionClosed
+                | tokio_tungstenite::tungstenite::Error::AlreadyClosed,
+            ) => {
+                self.lifecycle.finish_close();
+                Ok(())
+            }
+            Err(error) => Err(classify_socket_error(error)),
+        }
     }
 }
 
@@ -1275,13 +1371,11 @@ impl ProductionRelayControlPort {
             } => (reservation, targets, empty_outcome),
         };
         for target in &targets {
-            if target.connection.is_open() {
-                target
-                    .connection
-                    .close()
-                    .await
-                    .map_err(|_| RelayPortFailure::CompletionAmbiguous)?;
-            }
+            target
+                .connection
+                .close()
+                .await
+                .map_err(|_| RelayPortFailure::CompletionAmbiguous)?;
         }
 
         let mut state = self
@@ -2015,6 +2109,22 @@ mod internal_tests {
             RelayFrame::new(vec![b'x'; bound + 1], bound).expect_err("frame above bound"),
             RelaySocketFailure::FrameTooLarge
         );
+    }
+
+    #[test]
+    fn socket_lifecycle_distinguishes_closing_from_completed_shutdown() {
+        let lifecycle = SocketLifecycle::open();
+        assert!(lifecycle.is_live());
+        assert!(lifecycle.accepts_sends());
+        assert!(lifecycle.begin_close());
+        assert!(lifecycle.is_live());
+        assert!(lifecycle.close_in_progress());
+        assert!(!lifecycle.accepts_sends());
+        assert!(lifecycle.begin_close());
+        lifecycle.finish_close();
+        assert!(!lifecycle.is_live());
+        assert!(lifecycle.shutdown_completed());
+        assert!(!lifecycle.begin_close());
     }
 
     #[test]
