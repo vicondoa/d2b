@@ -56,7 +56,11 @@ fn infrastructure_binding(realm_fixture: &Fixture) -> BoundInfrastructureHandle 
         ResourceId::new(501).unwrap_or_else(|_| unreachable!()),
         ResourceGeneration::new(1).unwrap_or_else(|_| unreachable!()),
     );
-    BoundInfrastructureHandle::new(provider, sdk).unwrap_or_else(|_| unreachable!())
+    let binding = InfrastructureBindingFingerprint::compute(
+        &infrastructure_binding_material(&provider).unwrap_or_else(|_| unreachable!()),
+        sdk,
+    );
+    BoundInfrastructureHandle::new(provider, sdk, binding).unwrap_or_else(|_| unreachable!())
 }
 
 fn runtime_fixture(infrastructure: &BoundInfrastructureHandle) -> Fixture {
@@ -558,9 +562,15 @@ async fn ensure_rejects_cross_operation_cross_workload_and_stale_resource_plans(
     corruptions.push(value);
 
     let mut value = plan.clone();
-    value.infrastructure.sdk = InfrastructureHandle::new(
+    let swapped = InfrastructureHandle::new(
         ResourceId::new(502).unwrap_or_else(|_| unreachable!()),
         value.infrastructure.sdk.generation(),
+    );
+    value.infrastructure.sdk = swapped;
+    value.desired = DeploymentHandle::new(
+        swapped,
+        value.desired.identity(),
+        value.desired.generation(),
     );
     corruptions.push(value);
 
@@ -584,6 +594,84 @@ async fn ensure_rejects_cross_operation_cross_workload_and_stale_resource_plans(
     };
     assert_deploy_rejected(&provider, &fixture.call_context(&cross_workload), &plan).await;
 
+    assert_eq!(sdk.snapshot().await.total_calls(), 0);
+}
+
+#[tokio::test]
+async fn swapped_same_generation_infrastructure_is_rejected_at_every_boundary() {
+    let (provider, sdk, fixture, infrastructure) = scaffold();
+    let swapped = InfrastructureHandle::new(
+        ResourceId::new(infrastructure.sdk.identity().get() + 1).unwrap_or_else(|_| unreachable!()),
+        infrastructure.sdk.generation(),
+    );
+    assert!(matches!(
+        BoundInfrastructureHandle::new(
+            infrastructure.provider.clone(),
+            swapped,
+            infrastructure.binding,
+        ),
+        Err(InfrastructureBindingError::BindingMismatch)
+    ));
+    let mut changed_identity = infrastructure.provider.clone();
+    changed_identity.handle_id =
+        HandleId::parse("swapped-infrastructure").unwrap_or_else(|_| unreachable!());
+    assert!(matches!(
+        BoundInfrastructureHandle::new(
+            changed_identity,
+            infrastructure.sdk,
+            infrastructure.binding,
+        ),
+        Err(InfrastructureBindingError::BindingMismatch)
+    ));
+    let mut changed_configuration = infrastructure.provider.clone();
+    changed_configuration.configuration_fingerprint =
+        Fingerprint::parse("f".repeat(64)).unwrap_or_else(|_| unreachable!());
+    assert!(matches!(
+        BoundInfrastructureHandle::new(
+            changed_configuration,
+            infrastructure.sdk,
+            infrastructure.binding,
+        ),
+        Err(InfrastructureBindingError::BindingMismatch)
+    ));
+    let mut changed_generation = infrastructure.provider.clone();
+    changed_generation.provider_generation = changed_generation
+        .provider_generation
+        .next()
+        .unwrap_or_else(|_| unreachable!());
+    changed_generation.created_by.provider_generation = changed_generation.provider_generation;
+    assert!(matches!(
+        BoundInfrastructureHandle::new(
+            changed_generation,
+            infrastructure.sdk,
+            infrastructure.binding,
+        ),
+        Err(InfrastructureBindingError::BindingMismatch)
+    ));
+
+    let mut tampered = infrastructure.clone();
+    tampered.sdk = swapped;
+    let request = fixture
+        .request(ProviderMethod::RuntimePlan)
+        .unwrap_or_else(|_| unreachable!());
+    let failure = provider
+        .plan_deployment(&fixture.call_context(&request.context), &request, &tampered)
+        .await
+        .expect_err("runtime plan must reject a swapped infrastructure resource");
+    assert_eq!(failure.kind, ProviderFailureKind::UnauthorizedScope);
+
+    let mut plan = deployment_plan(&provider, &fixture, &infrastructure).await;
+    plan.infrastructure.sdk = swapped;
+    plan.desired =
+        DeploymentHandle::new(swapped, plan.desired.identity(), plan.desired.generation());
+    let operation = fixture
+        .operation(ProviderMethod::RuntimeEnsure)
+        .unwrap_or_else(|_| unreachable!());
+    let failure = provider
+        .deploy(&fixture.call_context(&operation), &plan)
+        .await
+        .expect_err("runtime ensure must reject a swapped infrastructure resource");
+    assert_eq!(failure.kind, ProviderFailureKind::InvalidRequest);
     assert_eq!(sdk.snapshot().await.total_calls(), 0);
 }
 
@@ -668,7 +756,11 @@ async fn cancellation_deadline_and_bad_infrastructure_binding_do_no_sdk_work() {
         .next()
         .unwrap_or_else(|_| unreachable!());
     assert!(matches!(
-        BoundInfrastructureHandle::new(wrong_generation, infrastructure.sdk),
+        BoundInfrastructureHandle::new(
+            wrong_generation,
+            infrastructure.sdk,
+            infrastructure.binding,
+        ),
         Err(InfrastructureBindingError::GenerationMismatch)
     ));
     assert_eq!(sdk.snapshot().await.total_calls(), calls_before);

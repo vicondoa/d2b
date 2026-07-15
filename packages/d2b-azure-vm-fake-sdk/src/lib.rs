@@ -6,9 +6,13 @@
 
 #![forbid(unsafe_code)]
 
+mod binding;
 mod client;
 mod types;
 
+pub use binding::{
+    BindingMaterialError, InfrastructureBindingFingerprint, InfrastructureBindingMaterial,
+};
 pub use client::FakeAzureVmSdk;
 pub use types::{
     ApplyDisposition, BootstrapBinding, CallDisposition, CallRecord, CallSnapshot,

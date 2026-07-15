@@ -24,13 +24,15 @@ use d2b_contracts::{
 use d2b_provider::ProviderInstance;
 use {
     d2b_azure_vm_fake_sdk::{
-        ApplyDisposition, DeploymentHandle, DeploymentState, FakeAzureVmSdk, FakeSdkError,
-        FakeSdkErrorKind, InfrastructureHandle, ResourceGeneration, ResourceId, SdkCallContext,
+        ApplyDisposition, BindingMaterialError, DeploymentHandle, DeploymentState, FakeAzureVmSdk,
+        FakeSdkError, FakeSdkErrorKind, InfrastructureBindingFingerprint,
+        InfrastructureBindingMaterial, InfrastructureHandle, ResourceGeneration, ResourceId,
+        SdkCallContext,
     },
     d2b_contracts::{
         v2_component_session::BoundedVec,
         v2_provider::{
-            AdoptionState, Generation, HandleId, MutationState, ObservationReason,
+            AdoptionState, Generation, HandleId, HandleOwner, MutationState, ObservationReason,
             ObservedLifecycleState, PlannedResourceClass, ProviderCapability, ProviderHandleKind,
             ProviderOperationInput,
         },
@@ -83,6 +85,7 @@ pub enum InfrastructureBindingError {
     InvalidHandle,
     WrongHandleKind,
     GenerationMismatch,
+    BindingMismatch,
 }
 
 impl fmt::Display for InfrastructureBindingError {
@@ -91,6 +94,7 @@ impl fmt::Display for InfrastructureBindingError {
             Self::InvalidHandle => "opaque infrastructure handle is invalid",
             Self::WrongHandleKind => "opaque infrastructure handle has the wrong authority",
             Self::GenerationMismatch => "opaque infrastructure handle generation mismatch",
+            Self::BindingMismatch => "opaque infrastructure handle binding mismatch",
         })
     }
 }
@@ -329,6 +333,7 @@ impl AzureVmRuntimeProvider {
                 == self.descriptor.configuration_schema_fingerprint
             && handle.provider.workload_id.is_some()
             && handle.provider.resource_generation.get() == handle.sdk.generation().get()
+            && handle.infrastructure.validate().is_ok()
             && handle.infrastructure.sdk == handle.sdk.infrastructure();
         if valid {
             Ok(())
@@ -850,14 +855,20 @@ impl RuntimeProvider for AzureVmRuntimeProvider {
 pub struct BoundInfrastructureHandle {
     provider: ProviderHandle,
     sdk: InfrastructureHandle,
+    binding: InfrastructureBindingFingerprint,
 }
 
 impl BoundInfrastructureHandle {
     pub fn new(
         provider: ProviderHandle,
         sdk: InfrastructureHandle,
+        binding: InfrastructureBindingFingerprint,
     ) -> Result<Self, InfrastructureBindingError> {
-        let value = Self { provider, sdk };
+        let value = Self {
+            provider,
+            sdk,
+            binding,
+        };
         value.validate()?;
         Ok(value)
     }
@@ -868,6 +879,10 @@ impl BoundInfrastructureHandle {
 
     pub const fn sdk_handle(&self) -> InfrastructureHandle {
         self.sdk
+    }
+
+    pub const fn binding_fingerprint(&self) -> InfrastructureBindingFingerprint {
+        self.binding
     }
 
     fn validate(&self) -> Result<(), InfrastructureBindingError> {
@@ -881,6 +896,20 @@ impl BoundInfrastructureHandle {
         }
         if self.provider.resource_generation.get() != self.sdk.generation().get() {
             return Err(InfrastructureBindingError::GenerationMismatch);
+        }
+        if !matches!(
+            &self.provider.owner,
+            HandleOwner::Provider {
+                realm_id,
+                provider_id,
+            } if realm_id == &self.provider.realm_id && provider_id == &self.provider.provider_id
+        ) {
+            return Err(InfrastructureBindingError::BindingMismatch);
+        }
+        let material = infrastructure_binding_material(&self.provider)
+            .map_err(|_| InfrastructureBindingError::InvalidHandle)?;
+        if !self.binding.verifies(&material, self.sdk) {
+            return Err(InfrastructureBindingError::BindingMismatch);
         }
         Ok(())
     }
@@ -1003,6 +1032,20 @@ fn operation_key(value: &str) -> Result<d2b_azure_vm_fake_sdk::OperationKey, Fak
 
 fn handle_id(prefix: &str, identity: u64) -> Result<HandleId, FakeSdkErrorKind> {
     HandleId::parse(format!("{prefix}-{identity:x}")).map_err(|_| FakeSdkErrorKind::BoundExceeded)
+}
+
+fn infrastructure_binding_material(
+    handle: &ProviderHandle,
+) -> Result<InfrastructureBindingMaterial<'_>, BindingMaterialError> {
+    InfrastructureBindingMaterial::new(
+        handle.schema_version,
+        handle.provider_id.as_str(),
+        handle.handle_id.as_str(),
+        handle.realm_id.as_str(),
+        handle.provider_generation.get(),
+        handle.resource_generation.get(),
+        handle.configuration_fingerprint.as_str(),
+    )
 }
 
 #[cfg(test)]

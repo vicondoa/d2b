@@ -136,9 +136,14 @@ fn synthetic_handle(
             None,
         )
         .unwrap_or_else(|_| unreachable!());
+    let binding = InfrastructureBindingFingerprint::compute(
+        &infrastructure_binding_material(&provider_handle).unwrap_or_else(|_| unreachable!()),
+        sdk,
+    );
     AzureVmInfrastructureHandle {
         provider: provider_handle,
         sdk,
+        binding,
     }
 }
 
@@ -616,4 +621,17 @@ fn bound_handle_kind_is_infrastructure() {
         handle.provider_handle().kind,
         ProviderHandleKind::Infrastructure
     );
+    let material = infrastructure_binding_material(handle.provider_handle())
+        .unwrap_or_else(|_| unreachable!());
+    assert!(
+        handle
+            .binding_fingerprint()
+            .verifies(&material, handle.sdk_handle())
+    );
+    let swapped = InfrastructureHandle::new(
+        ResourceId::new(handle.sdk_handle().identity().get() + 1)
+            .unwrap_or_else(|_| unreachable!()),
+        handle.sdk_handle().generation(),
+    );
+    assert!(!handle.binding_fingerprint().verifies(&material, swapped));
 }

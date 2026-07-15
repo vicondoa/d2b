@@ -24,15 +24,16 @@ use d2b_contracts::{
 use d2b_provider::ProviderInstance;
 use {
     d2b_azure_vm_fake_sdk::{
-        ApplyDisposition, BootstrapBinding, FakeAzureVmSdk, FakeSdkError, FakeSdkErrorKind,
+        ApplyDisposition, BindingMaterialError, BootstrapBinding, FakeAzureVmSdk, FakeSdkError,
+        FakeSdkErrorKind, InfrastructureBindingFingerprint, InfrastructureBindingMaterial,
         InfrastructureHandle, PowerState, ResourceGeneration, ResourceId, SdkCallContext,
     },
     d2b_contracts::{
         v2_component_session::BoundedVec,
         v2_provider::{
-            AdoptionState, Generation, HandleId, InfrastructurePowerState, MutationState,
-            ObservationReason, ObservedLifecycleState, PlannedResourceClass, ProviderCapability,
-            ProviderHandleKind, ProviderOperationInput,
+            AdoptionState, Generation, HandleId, HandleOwner, InfrastructurePowerState,
+            MutationState, ObservationReason, ObservedLifecycleState, PlannedResourceClass,
+            ProviderCapability, ProviderHandleKind, ProviderOperationInput,
         },
     },
     d2b_provider_toolkit::ProviderValues,
@@ -313,18 +314,38 @@ impl AzureVmInfrastructureProvider {
             && handle.provider.configuration_fingerprint
                 == self.descriptor.configuration_schema_fingerprint
             && handle.provider.workload_id.is_none()
-            && handle.provider.resource_generation.get() == handle.sdk.generation().get();
+            && matches!(
+                &handle.provider.owner,
+                HandleOwner::Provider {
+                    realm_id,
+                    provider_id,
+                } if realm_id == &handle.provider.realm_id
+                    && provider_id == &handle.provider.provider_id
+            )
+            && handle.provider.resource_generation.get() == handle.sdk.generation().get()
+            && handle.binding.verifies(
+                &infrastructure_binding_material(&handle.provider)
+                    .map_err(|_| self.invalid_bound_handle(context))?,
+                handle.sdk,
+            );
         if valid {
             Ok(())
         } else {
-            Err(self.failure(
-                context,
-                ProviderFailureKind::AdoptionRejected,
-                RetryClass::Never,
-                ProviderHealthReason::IdentityMismatch,
-                ProviderRemediation::InspectProvider,
-            ))
+            Err(self.invalid_bound_handle(context))
         }
+    }
+
+    fn invalid_bound_handle(
+        &self,
+        context: &d2b_contracts::v2_provider::ProviderOperationContext,
+    ) -> ProviderFailure {
+        self.failure(
+            context,
+            ProviderFailureKind::AdoptionRejected,
+            RetryClass::Never,
+            ProviderHealthReason::IdentityMismatch,
+            ProviderRemediation::InspectProvider,
+        )
     }
 
     fn sdk_context(
@@ -552,9 +573,23 @@ impl AzureVmInfrastructureProvider {
                     ProviderRemediation::RepairConfiguration,
                 )
             })?;
+        let sdk_handle = mutation.handle();
+        let binding = InfrastructureBindingFingerprint::compute(
+            &infrastructure_binding_material(&provider_handle).map_err(|_| {
+                self.failure(
+                    context.operation,
+                    ProviderFailureKind::InvariantViolation,
+                    RetryClass::Never,
+                    ProviderHealthReason::ConfigurationMismatch,
+                    ProviderRemediation::RepairConfiguration,
+                )
+            })?,
+            sdk_handle,
+        );
         Ok(AzureVmInfrastructureHandle {
             provider: provider_handle,
-            sdk: mutation.handle(),
+            sdk: sdk_handle,
+            binding,
         })
     }
 
@@ -832,6 +867,7 @@ impl fmt::Debug for AzureVmInfrastructurePlan {
 pub struct AzureVmInfrastructureHandle {
     provider: ProviderHandle,
     sdk: InfrastructureHandle,
+    binding: InfrastructureBindingFingerprint,
 }
 
 impl AzureVmInfrastructureHandle {
@@ -841,6 +877,10 @@ impl AzureVmInfrastructureHandle {
 
     pub const fn sdk_handle(&self) -> InfrastructureHandle {
         self.sdk
+    }
+
+    pub const fn binding_fingerprint(&self) -> InfrastructureBindingFingerprint {
+        self.binding
     }
 }
 
@@ -938,6 +978,20 @@ fn resource_id(value: &str) -> Result<ResourceId, FakeSdkErrorKind> {
 
 fn handle_id(prefix: &str, identity: u64) -> Result<HandleId, FakeSdkErrorKind> {
     HandleId::parse(format!("{prefix}-{identity:x}")).map_err(|_| FakeSdkErrorKind::BoundExceeded)
+}
+
+fn infrastructure_binding_material(
+    handle: &ProviderHandle,
+) -> Result<InfrastructureBindingMaterial<'_>, BindingMaterialError> {
+    InfrastructureBindingMaterial::new(
+        handle.schema_version,
+        handle.provider_id.as_str(),
+        handle.handle_id.as_str(),
+        handle.realm_id.as_str(),
+        handle.provider_generation.get(),
+        handle.resource_generation.get(),
+        handle.configuration_fingerprint.as_str(),
+    )
 }
 
 #[cfg(test)]

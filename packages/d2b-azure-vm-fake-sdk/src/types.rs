@@ -5,7 +5,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 pub const MAX_CONFIGURED_OUTCOMES: usize = 16;
 pub const MAX_REPLAY_ENTRIES: usize = 128;
 pub const MAX_CALL_LOG_ENTRIES: usize = 256;
-const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+pub(crate) const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
 macro_rules! bounded_number {
     ($name:ident, $label:literal) => {

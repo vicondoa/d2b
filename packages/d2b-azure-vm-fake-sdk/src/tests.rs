@@ -38,6 +38,62 @@ fn operation_inventory_is_closed_and_axis_separated() {
     );
 }
 
+#[test]
+fn infrastructure_binding_fingerprint_is_deterministic_bounded_and_resource_specific() {
+    let configuration = "c".repeat(64);
+    let material = InfrastructureBindingMaterial::new(
+        2,
+        "aaaaaaaaaaaaaaaaaaaa",
+        "azure-vm-infrastructure-1",
+        "bbbbbbbbbbbbbbbbbbba",
+        4,
+        1,
+        &configuration,
+    )
+    .unwrap_or_else(|_| unreachable!());
+    let resource = infrastructure(7);
+    let fingerprint = InfrastructureBindingFingerprint::compute(&material, resource);
+    assert_eq!(
+        fingerprint,
+        InfrastructureBindingFingerprint::compute(&material, resource)
+    );
+    assert!(fingerprint.verifies(&material, resource));
+    assert!(!fingerprint.verifies(&material, infrastructure(8)));
+
+    let other_identity = InfrastructureBindingMaterial::new(
+        2,
+        "aaaaaaaaaaaaaaaaaaaa",
+        "azure-vm-infrastructure-2",
+        "bbbbbbbbbbbbbbbbbbba",
+        4,
+        1,
+        &configuration,
+    )
+    .unwrap_or_else(|_| unreachable!());
+    assert_ne!(
+        fingerprint,
+        InfrastructureBindingFingerprint::compute(&other_identity, resource)
+    );
+    assert!(
+        InfrastructureBindingMaterial::new(
+            2,
+            "aaaaaaaaaaaaaaaaaaaa",
+            "/home/alice/private",
+            "bbbbbbbbbbbbbbbbbbba",
+            4,
+            1,
+            &configuration,
+        )
+        .is_err()
+    );
+
+    for rendered in [format!("{material:?}"), format!("{fingerprint:?}")] {
+        assert!(!rendered.contains("azure-vm-infrastructure"));
+        assert!(!rendered.contains("aaaaaaaa"));
+        assert!(!rendered.contains("/home/"));
+    }
+}
+
 #[tokio::test]
 async fn configured_outcomes_are_idempotent_and_count_every_call() {
     let sdk = FakeAzureVmSdk::new();
