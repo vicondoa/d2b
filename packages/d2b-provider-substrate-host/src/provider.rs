@@ -116,6 +116,45 @@ impl fmt::Debug for HostProviderCore {
     }
 }
 
+pub(crate) fn validate_host_descriptor(
+    descriptor: &ProviderDescriptor,
+    configuration: HostSubstrateConfiguration,
+) -> Result<(), HostProviderConstructionError> {
+    descriptor
+        .validate()
+        .map_err(|_| HostProviderConstructionError::DescriptorInvalid)?;
+    if descriptor.authority != ProviderAuthority::Substrate
+        || descriptor.provider_type() != ProviderType::Substrate
+    {
+        return Err(HostProviderConstructionError::DescriptorInvalid);
+    }
+    if descriptor.implementation_id.as_str() != configuration.substrate().implementation_id() {
+        return Err(HostProviderConstructionError::ImplementationMismatch);
+    }
+    let exact_methods = [
+        ProviderMethod::SubstrateCheck,
+        ProviderMethod::SubstratePlanRemediation,
+        ProviderMethod::SubstrateApply,
+    ];
+    if descriptor.capabilities.as_slice().len() != exact_methods.len()
+        || !exact_methods
+            .into_iter()
+            .all(|method| descriptor.capabilities.contains_method(method))
+    {
+        return Err(HostProviderConstructionError::CapabilityMismatch);
+    }
+    if !matches!(
+        descriptor.placement,
+        d2b_contracts::v2_provider::ProviderPlacement::TrustedFirstPartyInProcess {
+            controller_role: EndpointRole::LocalRootController,
+            ..
+        }
+    ) {
+        return Err(HostProviderConstructionError::PlacementMismatch);
+    }
+    Ok(())
+}
+
 impl HostProviderCore {
     fn new(
         descriptor: ProviderDescriptor,
@@ -123,38 +162,7 @@ impl HostProviderCore {
         port: Arc<dyn HostSubstratePort>,
         clock: Arc<dyn ProviderClock>,
     ) -> Result<Self, HostProviderConstructionError> {
-        descriptor
-            .validate()
-            .map_err(|_| HostProviderConstructionError::DescriptorInvalid)?;
-        if descriptor.authority != ProviderAuthority::Substrate
-            || descriptor.provider_type() != ProviderType::Substrate
-        {
-            return Err(HostProviderConstructionError::DescriptorInvalid);
-        }
-        if descriptor.implementation_id.as_str() != configuration.substrate().implementation_id() {
-            return Err(HostProviderConstructionError::ImplementationMismatch);
-        }
-        let exact_methods = [
-            ProviderMethod::SubstrateCheck,
-            ProviderMethod::SubstratePlanRemediation,
-            ProviderMethod::SubstrateApply,
-        ];
-        if descriptor.capabilities.as_slice().len() != exact_methods.len()
-            || !exact_methods
-                .into_iter()
-                .all(|method| descriptor.capabilities.contains_method(method))
-        {
-            return Err(HostProviderConstructionError::CapabilityMismatch);
-        }
-        if !matches!(
-            descriptor.placement,
-            d2b_contracts::v2_provider::ProviderPlacement::TrustedFirstPartyInProcess {
-                controller_role: EndpointRole::LocalRootController,
-                ..
-            }
-        ) {
-            return Err(HostProviderConstructionError::PlacementMismatch);
-        }
+        validate_host_descriptor(&descriptor, configuration)?;
         let descriptor_binding = HostDescriptorBinding::from_descriptor(&descriptor);
         Ok(Self {
             descriptor,
@@ -392,8 +400,9 @@ impl HostProviderCore {
     fn health_from_report(&self, report: Option<&HostCheckReport>, now: u64) -> ProviderHealth {
         let (state, reason, remediation) = match report {
             Some(report)
-                if !report.support().has_unknown()
-                    && !report.support().has_unsupported()
+                if report
+                    .support()
+                    .confirms_required_capabilities(self.configuration.check_profile())
                     && report
                         .findings()
                         .iter()
@@ -406,7 +415,9 @@ impl HostProviderCore {
                 )
             }
             Some(report)
-                if report.support().has_unsupported()
+                if report
+                    .support()
+                    .has_unsupported_required_capability(self.configuration.check_profile())
                     || report
                         .findings()
                         .iter()
@@ -440,15 +451,20 @@ impl HostProviderCore {
         report: &HostCheckReport,
     ) -> ProviderObservation {
         let health = self.health_from_report(Some(report), report.observed_at_unix_ms());
-        let reason = if report.support().has_unknown() {
-            ObservationReason::MissingEvidence
-        } else if report.support().has_unsupported()
+        let reason = if report
+            .support()
+            .has_unsupported_required_capability(self.configuration.check_profile())
             || report
                 .findings()
                 .iter()
                 .any(|finding| finding.severity() != HostFindingSeverity::Advisory)
         {
             ObservationReason::ConfigurationMismatch
+        } else if report
+            .support()
+            .has_missing_required_evidence(self.configuration.check_profile())
+        {
+            ObservationReason::MissingEvidence
         } else {
             ObservationReason::None
         };

@@ -162,6 +162,22 @@ impl HostCapability {
     ];
 }
 
+impl HostCheckProfile {
+    pub const fn required_capabilities(self) -> &'static [HostCapability] {
+        match self {
+            Self::NixOsFullHost | Self::GenericLinuxFullHost => &HostCapability::ALL,
+        }
+    }
+
+    pub fn requires(self, capability: HostCapability) -> bool {
+        self.required_capabilities().contains(&capability)
+    }
+
+    pub fn excludes(self, capability: HostCapability) -> bool {
+        !self.requires(capability)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum HostEvidenceSource {
     KernelApiProbe,
@@ -250,6 +266,29 @@ impl HostSupportEvidence {
         HostCapability::ALL
             .into_iter()
             .any(|capability| self.status(capability) == HostSupportStatus::Unsupported)
+    }
+
+    pub fn confirms_required_capabilities(&self, profile: HostCheckProfile) -> bool {
+        profile
+            .required_capabilities()
+            .iter()
+            .all(|capability| self.status(*capability).is_confirmed())
+    }
+
+    pub fn has_missing_required_evidence(&self, profile: HostCheckProfile) -> bool {
+        profile.required_capabilities().iter().any(|capability| {
+            matches!(
+                self.status(*capability),
+                HostSupportStatus::Unknown | HostSupportStatus::NotApplicable
+            )
+        })
+    }
+
+    pub fn has_unsupported_required_capability(&self, profile: HostCheckProfile) -> bool {
+        profile
+            .required_capabilities()
+            .iter()
+            .any(|capability| self.status(*capability) == HostSupportStatus::Unsupported)
     }
 }
 
@@ -822,8 +861,9 @@ impl HostSubstrateInspection {
         apply: Option<HostApplyInspection>,
     ) -> Self {
         let report_is_ready = report.as_ref().is_some_and(|report| {
-            !report.support().has_unknown()
-                && !report.support().has_unsupported()
+            report
+                .support()
+                .confirms_required_capabilities(report.configuration().check_profile())
                 && report
                     .findings()
                     .iter()
@@ -834,8 +874,18 @@ impl HostSubstrateInspection {
             .is_some_and(|plan| plan.disposition() == HostRemediationPlanDisposition::Authorized);
         let state = match apply.as_ref().map(HostApplyInspection::outcome) {
             Some(HostApplyOutcome::CompletionAmbiguous) => HostSubstrateState::CompletionAmbiguous,
-            Some(HostApplyOutcome::Applied | HostApplyOutcome::AlreadyApplied) => {
+            Some(HostApplyOutcome::Applied | HostApplyOutcome::AlreadyApplied)
+                if report_is_ready =>
+            {
                 HostSubstrateState::Ready
+            }
+            Some(HostApplyOutcome::Applied | HostApplyOutcome::AlreadyApplied)
+                if report.is_some() =>
+            {
+                HostSubstrateState::Checked
+            }
+            Some(HostApplyOutcome::Applied | HostApplyOutcome::AlreadyApplied) => {
+                HostSubstrateState::Unknown
             }
             Some(HostApplyOutcome::CancelledBeforeMutation) => {
                 if remediation_is_authorized {

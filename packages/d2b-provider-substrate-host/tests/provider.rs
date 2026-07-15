@@ -9,7 +9,7 @@ use std::{
 use async_trait::async_trait;
 use d2b_contracts::{
     v2_component_session::EndpointRole,
-    v2_identity::ProviderType,
+    v2_identity::{ProviderId, ProviderType, RealmId},
     v2_provider::{
         Fingerprint, Generation, IdempotencyKey, ImplementationId, MutationState, OperationId,
         Provider, ProviderAuthority, ProviderCallContext, ProviderCapability, ProviderFailureKind,
@@ -25,10 +25,10 @@ use d2b_provider_substrate_host::{
     HostCheckRequest, HostDiagnostic, HostEvidenceSource, HostFinding, HostFindingKind,
     HostFindingSeverity, HostKernelModule, HostModelError, HostPlanRequest, HostPortError,
     HostRemediationClass, HostRemediationId, HostRemediationPlan, HostSubstrateConfiguration,
-    HostSubstrateKind, HostSubstratePort, HostSubstrateProviderFactory, HostSupportEntry,
-    HostSupportEvidence, HostSupportStatus, LINUX_IMPLEMENTATION_ID, LinuxSubstrateProvider,
-    MAX_CHECK_FINDINGS, MAX_FINDING_DIAGNOSTICS, MAX_PLAN_FINDINGS, MAX_REPORT_DIAGNOSTICS,
-    NIXOS_IMPLEMENTATION_ID, NixOsSubstrateProvider,
+    HostSubstrateFactoryEntry, HostSubstrateFactoryError, HostSubstrateKind, HostSubstratePort,
+    HostSubstrateProviderFactory, HostSupportEntry, HostSupportEvidence, HostSupportStatus,
+    LINUX_IMPLEMENTATION_ID, LinuxSubstrateProvider, MAX_CHECK_FINDINGS, MAX_FINDING_DIAGNOSTICS,
+    MAX_PLAN_FINDINGS, MAX_REPORT_DIAGNOSTICS, NIXOS_IMPLEMENTATION_ID, NixOsSubstrateProvider,
 };
 use d2b_provider_toolkit::{DeterministicClock, Fixture, check_provider_conformance};
 
@@ -284,6 +284,16 @@ fn explicit_support() -> HostSupportEvidence {
     .expect("test support evidence")
 }
 
+fn not_applicable_support() -> HostSupportEvidence {
+    HostSupportEvidence::new(
+        HostCapability::ALL
+            .into_iter()
+            .map(|capability| HostSupportEntry::new(capability, HostSupportStatus::NotApplicable))
+            .collect(),
+    )
+    .expect("not-applicable support evidence")
+}
+
 fn fixture(implementation: &str) -> Fixture {
     let base = Fixture::new(ProviderType::Substrate, 3).expect("base fixture");
     let mut descriptor = base.descriptor.clone();
@@ -301,6 +311,33 @@ fn fixture(implementation: &str) -> Fixture {
         NOW,
     )
     .expect("host substrate fixture")
+}
+
+fn fixture_with_provider(implementation: &str, suffix: char) -> Fixture {
+    let base = fixture(implementation);
+    let mut descriptor = base.descriptor.clone();
+    descriptor.provider_id =
+        ProviderId::parse(format!("{}{suffix}a", "b".repeat(18))).expect("provider ID");
+    Fixture::from_descriptor(
+        descriptor,
+        ProviderTarget::Realm {
+            realm_id: base.descriptor.placement.realm_id().clone(),
+        },
+        NOW,
+    )
+    .expect("host substrate fixture")
+}
+
+fn factory_entry(
+    kind: HostSubstrateKind,
+    descriptor: d2b_contracts::v2_provider::ProviderDescriptor,
+    port: Arc<FakePort>,
+) -> HostSubstrateFactoryEntry {
+    match kind {
+        HostSubstrateKind::NixOs => HostSubstrateFactoryEntry::nixos(descriptor, port),
+        HostSubstrateKind::GenericLinux => HostSubstrateFactoryEntry::linux(descriptor, port),
+    }
+    .expect("host substrate factory entry")
 }
 
 fn request(fixture: &Fixture, method: ProviderMethod) -> ProviderOperationRequest {
@@ -363,18 +400,20 @@ fn factories_publish_canonical_keys_and_construct_exact_substrate_instances() {
         (HostSubstrateKind::NixOs, NIXOS_IMPLEMENTATION_ID),
         (HostSubstrateKind::GenericLinux, LINUX_IMPLEMENTATION_ID),
     ] {
+        let fixture = fixture(implementation);
         let port = Arc::new(FakePort::new(PortBehavior::default()));
+        let entry = factory_entry(kind, fixture.descriptor.clone(), port);
         let factory = HostSubstrateProviderFactory::with_clock(
             kind,
-            port,
+            [entry],
             Arc::new(DeterministicClock::new(NOW)),
         )
         .expect("host substrate factory");
         assert_eq!(factory.kind(), kind);
         assert_eq!(factory.implementation_id().as_str(), implementation);
         assert_eq!(factory.key(), kind.factory_key().expect("canonical key"));
+        assert_eq!(factory.registered_provider_count(), 1);
 
-        let fixture = fixture(implementation);
         let instance = factory
             .construct(&fixture.descriptor)
             .expect("substrate provider instance");
@@ -386,27 +425,76 @@ fn factories_publish_canonical_keys_and_construct_exact_substrate_instances() {
 #[test]
 fn factory_rejects_wrong_descriptor_type_and_implementation() {
     let port = Arc::new(FakePort::new(PortBehavior::default()));
-    let factory = HostSubstrateProviderFactory::nixos(port).expect("NixOS factory");
+    let fixture = fixture(NIXOS_IMPLEMENTATION_ID);
+    let entry = HostSubstrateFactoryEntry::nixos(fixture.descriptor.clone(), port.clone())
+        .expect("NixOS entry");
+    let factory = HostSubstrateProviderFactory::nixos([entry]).expect("NixOS factory");
 
-    let mut wrong_type = fixture(NIXOS_IMPLEMENTATION_ID).descriptor;
+    let mut wrong_type = fixture.descriptor.clone();
     wrong_type.authority = ProviderAuthority::Storage;
-    assert_eq!(
-        factory.construct(&wrong_type).err(),
-        Some(FactoryError::Rejected)
-    );
+    let mut wrong_implementation = fixture.descriptor.clone();
+    wrong_implementation.implementation_id = HostSubstrateKind::GenericLinux
+        .canonical_implementation_id()
+        .expect("Linux implementation ID");
+    let mut wrong_configuration_fingerprint = fixture.descriptor.clone();
+    wrong_configuration_fingerprint.configuration_schema_fingerprint = fingerprint(904);
+    let mut wrong_scope_digest = fixture.descriptor.clone();
+    wrong_scope_digest.configured_scope_digest = fingerprint(905);
+    let mut wrong_generation = fixture.descriptor.clone();
+    wrong_generation.registry_generation = Generation::new(4).expect("alternate generation");
+    let mut wrong_controller_placement = fixture.descriptor.clone();
+    wrong_controller_placement.placement = ProviderPlacement::TrustedFirstPartyInProcess {
+        realm_id: fixture.descriptor.placement.realm_id().clone(),
+        controller_role: EndpointRole::RealmController,
+    };
+    let mut wrong_realm_placement = fixture.descriptor.clone();
+    wrong_realm_placement.placement = ProviderPlacement::TrustedFirstPartyInProcess {
+        realm_id: RealmId::parse("bbbbbbbbbbbbbbbbbbba").expect("alternate realm"),
+        controller_role: EndpointRole::LocalRootController,
+    };
+    let mut unknown_provider = fixture.descriptor.clone();
+    unknown_provider.provider_id =
+        ProviderId::parse(format!("{}ca", "b".repeat(18))).expect("unknown provider ID");
 
-    let wrong_implementation = fixture(LINUX_IMPLEMENTATION_ID).descriptor;
-    assert_eq!(
-        factory.construct(&wrong_implementation).err(),
-        Some(FactoryError::Rejected)
-    );
+    for descriptor in [
+        wrong_type,
+        wrong_implementation,
+        wrong_configuration_fingerprint,
+        wrong_scope_digest,
+        wrong_generation,
+        wrong_controller_placement,
+        wrong_realm_placement,
+        unknown_provider,
+    ] {
+        assert_eq!(
+            factory.construct(&descriptor).err(),
+            Some(FactoryError::Rejected)
+        );
+    }
+    assert_eq!(port.check_calls.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn factory_rejects_cross_implementation_entries() {
+    let fixture = fixture(LINUX_IMPLEMENTATION_ID);
+    let entry = HostSubstrateFactoryEntry::linux(
+        fixture.descriptor,
+        Arc::new(FakePort::new(PortBehavior::default())),
+    )
+    .expect("Linux entry");
+    assert!(matches!(
+        HostSubstrateProviderFactory::nixos([entry]),
+        Err(HostSubstrateFactoryError::ConfigurationMismatch)
+    ));
 }
 
 #[test]
 fn factory_registers_directly_with_provider_registry_builder() {
     let port = Arc::new(FakePort::new(PortBehavior::default()));
-    let factory = HostSubstrateProviderFactory::linux(port).expect("Linux factory");
     let fixture = fixture(LINUX_IMPLEMENTATION_ID);
+    let entry =
+        HostSubstrateFactoryEntry::linux(fixture.descriptor.clone(), port).expect("Linux entry");
+    let factory = HostSubstrateProviderFactory::linux([entry]).expect("Linux factory");
     let mut builder = ProviderRegistryBuilder::new(
         fixture.descriptor.registry_generation,
         fingerprint(903),
@@ -425,6 +513,61 @@ fn factory_registers_directly_with_provider_registry_builder() {
             .descriptor(&fixture.descriptor.provider_id),
         Some(&fixture.descriptor)
     );
+}
+
+#[tokio::test]
+async fn factory_routes_each_provider_id_to_its_bound_semantic_port() {
+    let fixture_a = fixture_with_provider(NIXOS_IMPLEMENTATION_ID, 'c');
+    let fixture_b = fixture_with_provider(NIXOS_IMPLEMENTATION_ID, 'd');
+    let port_a = Arc::new(FakePort::new(PortBehavior {
+        support: explicit_support(),
+        ..PortBehavior::default()
+    }));
+    let port_b = Arc::new(FakePort::new(PortBehavior {
+        support: explicit_support(),
+        ..PortBehavior::default()
+    }));
+    let factory = HostSubstrateProviderFactory::with_clock(
+        HostSubstrateKind::NixOs,
+        [
+            HostSubstrateFactoryEntry::nixos(fixture_a.descriptor.clone(), port_a.clone())
+                .expect("first NixOS entry"),
+            HostSubstrateFactoryEntry::nixos(fixture_b.descriptor.clone(), port_b.clone())
+                .expect("second NixOS entry"),
+        ],
+        Arc::new(DeterministicClock::new(NOW)),
+    )
+    .expect("NixOS factory");
+
+    let instance_a = factory
+        .construct(&fixture_a.descriptor)
+        .expect("first provider");
+    let provider_a = match instance_a {
+        ProviderInstance::Substrate(provider) => provider,
+        _ => panic!("expected substrate provider"),
+    };
+    let request_a = request(&fixture_a, ProviderMethod::SubstrateCheck);
+    provider_a
+        .check(&context(&fixture_a, &request_a), &request_a)
+        .await
+        .expect("first provider check");
+    assert_eq!(port_a.check_calls.load(Ordering::Acquire), 1);
+    assert_eq!(port_b.check_calls.load(Ordering::Acquire), 0);
+
+    let instance_b = factory
+        .construct(&fixture_b.descriptor)
+        .expect("second provider");
+    let provider_b = match instance_b {
+        ProviderInstance::Substrate(provider) => provider,
+        _ => panic!("expected substrate provider"),
+    };
+    let request_b = request(&fixture_b, ProviderMethod::SubstrateCheck);
+    provider_b
+        .check(&context(&fixture_b, &request_b), &request_b)
+        .await
+        .expect("second provider check");
+    assert_eq!(port_a.check_calls.load(Ordering::Acquire), 1);
+    assert_eq!(port_b.check_calls.load(Ordering::Acquire), 1);
 }
 
 #[tokio::test]
@@ -591,6 +734,86 @@ async fn zero_findings_do_not_overclaim_unproven_host_support() {
     assert_eq!(
         observation.health.state,
         d2b_contracts::v2_provider::ProviderHealthState::Degraded
+    );
+}
+
+#[tokio::test]
+async fn not_applicable_required_capabilities_do_not_report_healthy_or_ready() {
+    for profile in [
+        HostCheckProfile::NixOsFullHost,
+        HostCheckProfile::GenericLinuxFullHost,
+    ] {
+        assert_eq!(profile.required_capabilities(), &HostCapability::ALL);
+        for capability in HostCapability::ALL {
+            assert!(profile.requires(capability));
+            assert!(!profile.excludes(capability));
+        }
+    }
+
+    let nix_port = Arc::new(FakePort::new(PortBehavior {
+        support: not_applicable_support(),
+        ..PortBehavior::default()
+    }));
+    let nix_clock = Arc::new(DeterministicClock::new(NOW));
+    let (nix_fixture, nix_provider) = nixos_provider(nix_port, nix_clock);
+    let nix_request = request(&nix_fixture, ProviderMethod::SubstrateCheck);
+    let nix_context = context(&nix_fixture, &nix_request);
+    let nix_observation = nix_provider
+        .check(&nix_context, &nix_request)
+        .await
+        .expect("NixOS not-applicable check");
+    assert_eq!(
+        nix_observation.health.state,
+        d2b_contracts::v2_provider::ProviderHealthState::Degraded
+    );
+    assert_eq!(
+        nix_observation.reason,
+        d2b_contracts::v2_provider::ObservationReason::MissingEvidence
+    );
+    assert_eq!(
+        nix_observation.lifecycle,
+        d2b_contracts::v2_provider::ObservedLifecycleState::Unknown
+    );
+    assert_eq!(
+        nix_provider
+            .inspect(&nix_context, &nix_request)
+            .await
+            .expect("NixOS inspection")
+            .state(),
+        d2b_provider_substrate_host::HostSubstrateState::Checked
+    );
+
+    let linux_port = Arc::new(FakePort::new(PortBehavior {
+        support: not_applicable_support(),
+        ..PortBehavior::default()
+    }));
+    let linux_clock = Arc::new(DeterministicClock::new(NOW));
+    let (linux_fixture, linux_provider) = linux_provider(linux_port, linux_clock);
+    let linux_request = request(&linux_fixture, ProviderMethod::SubstrateCheck);
+    let linux_context = context(&linux_fixture, &linux_request);
+    let linux_observation = linux_provider
+        .check(&linux_context, &linux_request)
+        .await
+        .expect("Linux not-applicable check");
+    assert_eq!(
+        linux_observation.health.state,
+        d2b_contracts::v2_provider::ProviderHealthState::Degraded
+    );
+    assert_eq!(
+        linux_observation.reason,
+        d2b_contracts::v2_provider::ObservationReason::MissingEvidence
+    );
+    assert_eq!(
+        linux_observation.lifecycle,
+        d2b_contracts::v2_provider::ObservedLifecycleState::Unknown
+    );
+    assert_eq!(
+        linux_provider
+            .inspect(&linux_context, &linux_request)
+            .await
+            .expect("Linux inspection")
+            .state(),
+        d2b_provider_substrate_host::HostSubstrateState::Checked
     );
 }
 

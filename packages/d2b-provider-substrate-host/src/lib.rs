@@ -9,7 +9,10 @@ mod model;
 mod port;
 mod provider;
 
-pub use factory::HostSubstrateProviderFactory;
+pub use factory::{
+    HostSubstrateFactoryEntry, HostSubstrateFactoryError, HostSubstrateProviderFactory,
+    MAX_HOST_SUBSTRATE_FACTORY_PROVIDERS,
+};
 pub use model::{
     HostApplyInspection, HostApplyOutcome, HostCapability, HostCheckKind, HostCheckProfile,
     HostCheckReport, HostCheckSummary, HostDescriptorBinding, HostDiagnostic, HostEvidenceSource,
