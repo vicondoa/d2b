@@ -14,9 +14,10 @@ default = []
 async-trait.workspace = true
 d2b-contracts = { workspace = true, default-features = false, features = ["v2-provider"] }
 d2b-provider = { workspace = true, default-features = false }
+d2b-provider-toolkit = { workspace = true, default-features = false }
+tokio = { workspace = true, features = ["time"] }
 
 [dev-dependencies]
-d2b-provider-toolkit = { workspace = true, default-features = false }
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 
 [lints]
