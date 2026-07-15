@@ -3,7 +3,7 @@
   "program": "adr0045",
   "wave": "w4",
   "authority_repository": "github.com/vicondoa/d2b",
-  "panel_trust_root_sha256": "ce93b41c335753cbc98033b5011955967795cd1df90c903d30b8ac0be1f351d3",
+  "panel_trust_root_sha256": "7abd63f590296e7dfcb4d12ca9f66837c7b925c75cf07f89ee777d8eb4c0f135",
   "repositories": [
     {
       "id": "github.com/vicondoa/d2b",
