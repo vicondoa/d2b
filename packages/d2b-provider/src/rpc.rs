@@ -597,71 +597,6 @@ fn session_identity_matches_placement(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use d2b_contracts::{
-        v2_component_session::{EndpointRole, ServicePackage},
-        v2_identity::{ProviderId, ProviderType, RealmId, RoleId, WorkloadId},
-        v2_provider::{Generation, ProviderPlacement},
-    };
-
-    use super::{SessionIdentity, session_identity_matches_placement};
-
-    fn generation(value: u64) -> Generation {
-        Generation::new(value).unwrap_or_else(|_| unreachable!())
-    }
-
-    fn identity(peer_role: EndpointRole, service: ServicePackage) -> SessionIdentity {
-        SessionIdentity {
-            peer_role,
-            service,
-            provider_id: ProviderId::parse("bbbbbbbbbbbbbbbbbbba")
-                .unwrap_or_else(|_| unreachable!()),
-            provider_type: ProviderType::Credential,
-            provider_generation: generation(1),
-        }
-    }
-
-    #[test]
-    fn provider_and_user_agent_session_identities_are_placement_exact() {
-        let realm_id = RealmId::parse("aaaaaaaaaaaaaaaaaaaa").unwrap_or_else(|_| unreachable!());
-        let role_id = RoleId::parse("ccccccccccccccccccca").unwrap_or_else(|_| unreachable!());
-        let provider_agent = ProviderPlacement::ProviderAgent {
-            realm_id: realm_id.clone(),
-            workload_id: WorkloadId::parse("ddddddddddddddddddda")
-                .unwrap_or_else(|_| unreachable!()),
-            role_id: role_id.clone(),
-            endpoint_role: EndpointRole::ProviderAgent,
-            service: ServicePackage::ProviderV2,
-            agent_generation: generation(1),
-        };
-        let user_agent = ProviderPlacement::UserAgent {
-            realm_id,
-            role_id,
-            endpoint_role: EndpointRole::UserAgent,
-            service: ServicePackage::UserV2,
-            agent_generation: generation(1),
-        };
-
-        assert!(session_identity_matches_placement(
-            &provider_agent,
-            &identity(EndpointRole::ProviderAgent, ServicePackage::ProviderV2)
-        ));
-        assert!(session_identity_matches_placement(
-            &user_agent,
-            &identity(EndpointRole::UserAgent, ServicePackage::UserV2)
-        ));
-        assert!(!session_identity_matches_placement(
-            &user_agent,
-            &identity(EndpointRole::ProviderAgent, ServicePackage::ProviderV2)
-        ));
-        assert!(!session_identity_matches_placement(
-            &provider_agent,
-            &identity(EndpointRole::UserAgent, ServicePackage::UserV2)
-        ));
-    }
-}
-
 impl Provider for RpcProviderProxy {
     fn descriptor(&self) -> ProviderDescriptor {
         self.descriptor.clone()
@@ -957,4 +892,69 @@ impl ObservabilityProvider for RpcProviderProxy {
     }
     operation_handle!(subscribe, ObservabilitySubscribe);
     operation_mutation!(export, ObservabilityExport);
+}
+
+#[cfg(test)]
+mod tests {
+    use d2b_contracts::{
+        v2_component_session::{EndpointRole, ServicePackage},
+        v2_identity::{ProviderId, ProviderType, RealmId, RoleId, WorkloadId},
+        v2_provider::{Generation, ProviderPlacement},
+    };
+
+    use super::{SessionIdentity, session_identity_matches_placement};
+
+    fn generation(value: u64) -> Generation {
+        Generation::new(value).unwrap_or_else(|_| unreachable!())
+    }
+
+    fn identity(peer_role: EndpointRole, service: ServicePackage) -> SessionIdentity {
+        SessionIdentity {
+            peer_role,
+            service,
+            provider_id: ProviderId::parse("bbbbbbbbbbbbbbbbbbba")
+                .unwrap_or_else(|_| unreachable!()),
+            provider_type: ProviderType::Credential,
+            provider_generation: generation(1),
+        }
+    }
+
+    #[test]
+    fn provider_and_user_agent_session_identities_are_placement_exact() {
+        let realm_id = RealmId::parse("aaaaaaaaaaaaaaaaaaaa").unwrap_or_else(|_| unreachable!());
+        let role_id = RoleId::parse("ccccccccccccccccccca").unwrap_or_else(|_| unreachable!());
+        let provider_agent = ProviderPlacement::ProviderAgent {
+            realm_id: realm_id.clone(),
+            workload_id: WorkloadId::parse("ddddddddddddddddddda")
+                .unwrap_or_else(|_| unreachable!()),
+            role_id: role_id.clone(),
+            endpoint_role: EndpointRole::ProviderAgent,
+            service: ServicePackage::ProviderV2,
+            agent_generation: generation(1),
+        };
+        let user_agent = ProviderPlacement::UserAgent {
+            realm_id,
+            role_id,
+            endpoint_role: EndpointRole::UserAgent,
+            service: ServicePackage::UserV2,
+            agent_generation: generation(1),
+        };
+
+        assert!(session_identity_matches_placement(
+            &provider_agent,
+            &identity(EndpointRole::ProviderAgent, ServicePackage::ProviderV2)
+        ));
+        assert!(session_identity_matches_placement(
+            &user_agent,
+            &identity(EndpointRole::UserAgent, ServicePackage::UserV2)
+        ));
+        assert!(!session_identity_matches_placement(
+            &user_agent,
+            &identity(EndpointRole::ProviderAgent, ServicePackage::ProviderV2)
+        ));
+        assert!(!session_identity_matches_placement(
+            &provider_agent,
+            &identity(EndpointRole::UserAgent, ServicePackage::UserV2)
+        ));
+    }
 }
