@@ -92,6 +92,43 @@ let
   };
 in
 {
+  options.d2b._hostToolPackages = {
+    d2b = lib.mkOption {
+      type = lib.types.nullOr lib.types.package;
+      default = null;
+      internal = true;
+      description = "Internal resolved d2b CLI package.";
+    };
+
+    d2bd = lib.mkOption {
+      type = lib.types.nullOr lib.types.package;
+      default = null;
+      internal = true;
+      description = "Internal resolved realm controller package.";
+    };
+
+    d2bUnsafeLocalHelper = lib.mkOption {
+      type = lib.types.nullOr lib.types.package;
+      default = null;
+      internal = true;
+      description = "Internal resolved same-uid workload helper package.";
+    };
+
+    d2bWaylandProxy = lib.mkOption {
+      type = lib.types.nullOr lib.types.package;
+      default = null;
+      internal = true;
+      description = "Internal resolved mediated Wayland proxy package.";
+    };
+
+    d2bGatewayRuntime = lib.mkOption {
+      type = lib.types.nullOr lib.types.package;
+      default = null;
+      internal = true;
+      description = "Internal resolved provider-agent runtime package.";
+    };
+  };
+
   options.d2b.host.usb.securityKey = {
     enable = lib.mkEnableOption ''
       Host-side USB security-key proxy.
