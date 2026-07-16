@@ -49,7 +49,7 @@ deprecations ship one minor release before removal.
   complete example/documentation/fixture/test ownership, a parent-trusted
   component diff gate with sanitized Git/rewrite metadata handling, cross-wave
   documentation reservations, exact deletion-coupled contract-test and
-  retirement-ledger ownership behind a narrow shared-root seam, the landed
+  retirement-ledger ownership through a narrow shared-root seam, the landed
   provider-registry-v2 consumer seam, old-surface deletion inventory, and
   dispatch-ready component prompts.
 - Added authenticated fixed user-manager service contracts for user secrets and
