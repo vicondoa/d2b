@@ -1,0 +1,165 @@
+{
+  "schema_version": 1,
+  "shared_root_branch": "adr0045-post-w4-contracts",
+  "waves": [
+    {
+      "wave": "w5",
+      "manifest_path": "delivery/manifests/w5.json",
+      "responsibility": "runtime-service-and-dispatch-implementation",
+      "additional_protected_paths": [
+        "nixos-modules/provider-registry-v2-json.nix",
+        "packages/d2b-contracts/src/provider_registry_v2.rs"
+      ]
+    },
+    {
+      "wave": "w6",
+      "manifest_path": "delivery/manifests/w6.json",
+      "responsibility": "user-desktop-device-service-implementation",
+      "additional_protected_paths": [
+        "nixos-modules/provider-registry-v2-json.nix",
+        "packages/d2b-contracts/src/provider_registry_v2.rs"
+      ]
+    },
+    {
+      "wave": "w7",
+      "manifest_path": "delivery/manifests/w7.json",
+      "responsibility": "declarative-nix-process-and-resource-emission",
+      "additional_protected_paths": []
+    }
+  ],
+  "protected_paths": [
+    "AGENTS.md",
+    "Makefile",
+    "delivery/manifest.json",
+    "delivery/shared-contracts.json",
+    "docs/reference/delivery-tooling.md",
+    "docs/reference/v2-services-schema.json",
+    "docs/reference/v2-services.json",
+    "docs/reference/v2-services.md",
+    "packages/Cargo.lock",
+    "packages/Cargo.toml",
+    "packages/d2b-contracts/src/v2_services.rs",
+    "packages/d2b-contracts/tests/v2_services_contract.rs",
+    "packages/d2b-realm-core/src/allocator.rs",
+    "packages/d2b-realm-core/src/allocator_engine.rs",
+    "packages/xtask/Cargo.toml",
+    "packages/xtask/src/heavy_gate.rs",
+    "packages/xtask/src/lib.rs",
+    "packages/xtask/src/main.rs",
+    "packages/xtask/src/wave_policy.rs",
+    "packages/xtask/tests/heavy_gate_cli.rs"
+  ],
+  "protected_prefixes": [
+    "packages/d2b-contracts/proto/v2/",
+    "packages/d2b-contracts/src/generated_v2_services/",
+    "packages/xtask/src/delivery/",
+    "packages/xtask/tests/delivery_"
+  ],
+  "frozen_service_packages": [
+    "d2b.activation.v2",
+    "d2b.broker.v2",
+    "d2b.clipboard.picker.v2",
+    "d2b.clipboard.v2",
+    "d2b.daemon.v2",
+    "d2b.guest.v2",
+    "d2b.notify.v2",
+    "d2b.provider.v2",
+    "d2b.realm.v2",
+    "d2b.runtime.systemd-user.v2",
+    "d2b.security-key.v2",
+    "d2b.shell.v2",
+    "d2b.tty.v2",
+    "d2b.user.v2",
+    "d2b.wayland.v2"
+  ],
+  "broker_typed_methods": [
+    {
+      "method": "Allocate",
+      "request": "AllocateRequest",
+      "response": "AllocateResponse"
+    },
+    {
+      "method": "Spawn",
+      "request": "SpawnRealmChildrenRequest",
+      "response": "SpawnRealmChildrenResponse"
+    }
+  ],
+  "workspace_dependencies": [
+    {
+      "name": "async-trait",
+      "requirement": "0.1"
+    },
+    {
+      "name": "command-fds",
+      "requirement": "0.3"
+    },
+    {
+      "name": "futures",
+      "requirement": "0.3"
+    },
+    {
+      "name": "futures-util",
+      "requirement": "0.3"
+    },
+    {
+      "name": "libc",
+      "requirement": "0.2"
+    },
+    {
+      "name": "nix",
+      "requirement": "0.29"
+    },
+    {
+      "name": "oo7",
+      "requirement": "0.6"
+    },
+    {
+      "name": "protobuf",
+      "requirement": "=3.7.2"
+    },
+    {
+      "name": "rustix",
+      "requirement": "0.38"
+    },
+    {
+      "name": "serde",
+      "requirement": "1"
+    },
+    {
+      "name": "serde_json",
+      "requirement": "1"
+    },
+    {
+      "name": "sha2",
+      "requirement": "0.10"
+    },
+    {
+      "name": "signal-hook",
+      "requirement": "0.4"
+    },
+    {
+      "name": "thiserror",
+      "requirement": "2"
+    },
+    {
+      "name": "tokio",
+      "requirement": "1"
+    },
+    {
+      "name": "tracing",
+      "requirement": "0.1"
+    },
+    {
+      "name": "ttrpc",
+      "requirement": "=0.9.0"
+    },
+    {
+      "name": "zbus",
+      "requirement": "5.16"
+    },
+    {
+      "name": "zeroize",
+      "requirement": "1"
+    }
+  ]
+}

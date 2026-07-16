@@ -17,7 +17,8 @@ pub const EVIDENCE_ARTIFACT_KIND: &str = "d2b-delivery/validation-evidence";
 pub const PANEL_PROVIDER_POLICY: &str = "github-copilot";
 pub const PANEL_MODEL_POLICY: &str = "gemini-3.1-pro-preview";
 pub const PANEL_SIGNATURE_POLICY: &str = "rsa-sha256";
-pub const AUTHORITATIVE_MANIFEST_PATH: &str = "delivery/manifest.json";
+pub const LEGACY_AUTHORITATIVE_MANIFEST_PATH: &str = "delivery/manifest.json";
+pub const WAVE_MANIFEST_DIRECTORY: &str = "delivery/manifests";
 
 pub const MAX_REPOSITORIES: usize = 16;
 pub const MAX_STACK_NODES: usize = 128;
@@ -74,7 +75,7 @@ impl DeliveryManifest {
     pub fn validate(&self) -> Result<()> {
         ensure_schema(self.schema_version, "delivery manifest")?;
         validate_identifier(&self.program, "program")?;
-        validate_identifier(&self.wave, "wave")?;
+        validate_wave_identifier(&self.wave)?;
         validate_repository_id(&self.authority_repository)?;
         validate_sha256(&self.panel_trust_root_sha256, "panel trust-root digest")?;
         ensure_count(self.repositories.len(), 1, MAX_REPOSITORIES, "repositories")?;
@@ -218,6 +219,53 @@ impl DeliveryManifest {
             .iter()
             .find(|repository| repository.id == id)
     }
+}
+
+pub fn validate_wave_identifier(wave: &str) -> Result<()> {
+    let Some(number) = wave.strip_prefix('w') else {
+        return Err(DeliveryError::new(
+            "delivery wave must use the canonical w<N> identifier",
+        ));
+    };
+    if number.is_empty()
+        || number.starts_with('0')
+        || !number.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(DeliveryError::new(
+            "delivery wave must use the canonical w<N> identifier",
+        ));
+    }
+    validate_identifier(wave, "wave")
+}
+
+pub fn is_authoritative_manifest_path(path: &Path) -> bool {
+    if path == Path::new(LEGACY_AUTHORITATIVE_MANIFEST_PATH) {
+        return true;
+    }
+    let Some(file_name) = path
+        .strip_prefix(WAVE_MANIFEST_DIRECTORY)
+        .ok()
+        .and_then(|relative| {
+            let mut components = relative.components();
+            let file = components.next()?;
+            components.next().is_none().then_some(file)
+        })
+        .and_then(|component| match component {
+            Component::Normal(value) => value.to_str(),
+            _ => None,
+        })
+    else {
+        return false;
+    };
+    let Some(wave) = file_name.strip_suffix(".json") else {
+        return false;
+    };
+    validate_wave_identifier(wave).is_ok()
+}
+
+pub fn expected_wave_manifest_path(wave: &str) -> Result<PathBuf> {
+    validate_wave_identifier(wave)?;
+    Ok(Path::new(WAVE_MANIFEST_DIRECTORY).join(format!("{wave}.json")))
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -1545,6 +1593,33 @@ mod tests {
         delivery_manifest()
             .validate()
             .expect("valid delivery manifest");
+    }
+
+    #[test]
+    fn delivery_authority_paths_are_closed_and_wave_bound() {
+        assert!(is_authoritative_manifest_path(Path::new(
+            "delivery/manifest.json"
+        )));
+        assert!(is_authoritative_manifest_path(Path::new(
+            "delivery/manifests/w5.json"
+        )));
+        for rejected in [
+            "delivery/manifests/w0.json",
+            "delivery/manifests/w05.json",
+            "delivery/manifests/w5.yaml",
+            "delivery/manifests/nested/w5.json",
+            "delivery/other/w5.json",
+        ] {
+            assert!(
+                !is_authoritative_manifest_path(Path::new(rejected)),
+                "{rejected}"
+            );
+        }
+        assert_eq!(
+            expected_wave_manifest_path("w7").expect("wave path"),
+            PathBuf::from("delivery/manifests/w7.json")
+        );
+        assert!(expected_wave_manifest_path("wave7").is_err());
     }
 
     #[test]

@@ -305,6 +305,28 @@ speculative until it lands. Contract changes require dependent branches to
 restack and lose any prior validation or panel seal; never land a prep commit
 directly on local `main`.
 
+The post-W4 shared root is the exclusive owner of the frozen ComponentSession
+service DTOs/bindings, allocator and child-realm spawn wire, workspace dependency
+table and `Cargo.lock`, delivery tooling, and `delivery/shared-contracts.json`.
+W5 owns runtime service/dispatch implementation, W6 owns user/desktop/device
+service implementation, and W7 owns declarative Nix/process/resource emission
+against the frozen allocator API. W7 extends the existing
+`provider-registry-v2` family; no wave creates a second registry.
+
+W5, W6, and W7 each edit only their authority at
+`delivery/manifests/w<N>.json`; `delivery/manifest.json` remains the unchanged W4
+authority. Before publishing a wave branch, run:
+
+```bash
+make wave-policy-check WAVE=w5 BASE=adr0045-post-w4-contracts
+```
+
+Use the wave's actual immediate parent as `BASE` after delivery linearization.
+The check rejects edits to another wave's manifest, the workspace lock/shared
+dependency table, frozen cross-wave contracts, or shared delivery/policy
+tooling. A newly required shared contract returns to the shared-root PR and all
+consumers restack.
+
 #### Anti-serialization invariant
 
 Serial ownership ends at the smallest coherent shared contract boundary. A
@@ -345,6 +367,33 @@ Exception: a security-sensitive cross-cutting invariant may stay serial only
 when the plan names the exact files, invariant, and unblock commit. Dispatch all
 downstream components as soon as that commit lands; the exception cannot expand
 silently into the rest of the wave.
+
+#### Heavy local validation gate
+
+`cargo xtask heavy-gate -- <command> [args...]` is the sole host-wide heavy-lane
+semaphore. It owns two per-UID OFD-locked slots in
+`${XDG_RUNTIME_DIR}/d2b-heavy-gates`, or
+`${TMPDIR:-/tmp}/d2b-heavy-gates-$UID` when no runtime directory is available.
+The directory must be a non-symlink, invoking-UID-owned `0700` directory. The
+persistent `slot-0.lock` and `slot-1.lock` files must be regular, invoking-UID
+owned, single-link `0600` files opened with
+`O_RDWR|O_CREAT|O_CLOEXEC|O_NOFOLLOW`.
+
+Acquisition tries slot 0 then slot 1 with nonblocking OFD write locks every
+250 ms for at most 30 minutes. Unsupported OFD locking, unsafe metadata, or
+timeout fails closed; there is no `flock` fallback. The parent retains its
+original CLOEXEC descriptor. The child receives a duplicate of the same locked
+open-file description at the numeric FD named by `D2B_HEAVY_GATE_FD`, with
+CLOEXEC cleared. The child runs in its own process group; the wrapper forwards
+termination signals, waits for the complete group, then closes its original FD.
+Thus a wrapper crash does not release a permit while its child hierarchy lives.
+Slot files are never unlinked during acquisition.
+
+Use `make heavy-check`, `make heavy-test-integration`,
+`make heavy-test-host-integration`, `make heavy-test-hardware`,
+`make heavy-cargo-test`, or `make heavy-flake-check` for the expensive local
+lanes. Existing focused targets and CI do not consume a slot, and the ungated
+targets retain their prior semantics.
 
 ### Edit → commit → validate
 

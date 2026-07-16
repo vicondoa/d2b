@@ -9,10 +9,11 @@ use super::{
         PullRequestStatus, PullRequestStatusSource, RepositoryProbe, StackGraphSource, TrackedBlob,
     },
     model::{
-        AUTHORITATIVE_MANIFEST_PATH, AuthorityBinding, DeliveryManifest, Fingerprint,
-        FingerprintSpec, PullRequestState, RepositoryPolicy, RepositoryRecord,
-        SNAPSHOT_ARTIFACT_KIND, SnapshotRequest, StackGraph, StackNode, WaveSnapshot,
-        canonical_digest, prospective_content_id, validate_hash_for_format,
+        AuthorityBinding, DeliveryManifest, Fingerprint, FingerprintSpec,
+        LEGACY_AUTHORITATIVE_MANIFEST_PATH, PullRequestState, RepositoryPolicy, RepositoryRecord,
+        SNAPSHOT_ARTIFACT_KIND, SnapshotRequest, StackGraph, StackNode, WAVE_MANIFEST_DIRECTORY,
+        WaveSnapshot, canonical_digest, expected_wave_manifest_path,
+        is_authoritative_manifest_path, prospective_content_id, validate_hash_for_format,
         validate_repo_relative_path, validate_repository_id,
     },
     storage::{
@@ -49,10 +50,10 @@ pub fn create_snapshot<P: RepositoryProbe, G: StackGraphSource, S: PullRequestSt
 ) -> Result<PathBuf> {
     validate_repository_id(&request.authority_repository)?;
     validate_repo_relative_path(&request.manifest_path)?;
-    if request.manifest_path != Path::new(AUTHORITATIVE_MANIFEST_PATH) {
-        return Err(DeliveryError::new(format!(
-            "authoritative delivery manifest must be read from {AUTHORITATIVE_MANIFEST_PATH}"
-        )));
+    if !is_authoritative_manifest_path(&request.manifest_path) {
+        return Err(DeliveryError::new(
+            "authoritative delivery manifest must be delivery/manifest.json or delivery/manifests/w<N>.json",
+        ));
     }
     let preliminary_roots = canonicalize_roots(probe, &request.repository_roots)?;
     let authority = load_authority(probe, request, &preliminary_roots)?;
@@ -184,6 +185,8 @@ fn load_authority<P: RepositoryProbe>(
         .ok_or_else(|| DeliveryError::new("authority repository mapping is missing"))?;
     let commit_oid = probe.resolve_commit(root, &request.authority_ref)?;
     let tree_oid = probe.tree_for_commit(root, &commit_oid)?;
+    let authority_paths =
+        authoritative_manifest_paths(probe, root, &commit_oid, &request.manifest_path)?;
     let blob = probe.tracked_blob(root, &commit_oid, &request.manifest_path)?;
     if blob.bytes.len() > MAX_JSON_BYTES {
         return Err(DeliveryError::new(format!(
@@ -196,10 +199,97 @@ fn load_authority<P: RepositoryProbe>(
         ))
     })?;
     manifest.validate()?;
+    if request.manifest_path != Path::new(LEGACY_AUTHORITATIVE_MANIFEST_PATH)
+        && request.manifest_path != expected_wave_manifest_path(&manifest.wave)?
+    {
+        return Err(DeliveryError::new(
+            "per-wave delivery manifest path does not match its declared wave",
+        ));
+    }
+    verify_unique_wave_authority(probe, root, &commit_oid, &authority_paths, &manifest.wave)?;
+    if !manifest.contract_fingerprints.iter().any(|fingerprint| {
+        fingerprint.repository == request.authority_repository
+            && Path::new(&fingerprint.path) == request.manifest_path
+    }) {
+        return Err(DeliveryError::new(
+            "selected checked-in delivery manifest is absent from contract_fingerprints",
+        ));
+    }
     if manifest.authority_repository != request.authority_repository {
         return Err(DeliveryError::new(
             "manifest authority repository differs from invocation",
         ));
+    }
+
+    fn authoritative_manifest_paths<P: RepositoryProbe>(
+        probe: &P,
+        root: &Path,
+        commit_oid: &str,
+        selected: &Path,
+    ) -> Result<Vec<PathBuf>> {
+        let mut paths = probe
+            .tracked_paths(root, commit_oid, Path::new("delivery"))?
+            .into_iter()
+            .filter(|path| is_authoritative_manifest_path(path))
+            .collect::<Vec<_>>();
+        if !paths.iter().any(|path| path == selected) {
+            return Err(DeliveryError::new(
+                "selected delivery manifest is not a tracked authority file",
+            ));
+        }
+        paths.sort();
+        paths.dedup();
+        Ok(paths)
+    }
+
+    fn verify_unique_wave_authority<P: RepositoryProbe>(
+        probe: &P,
+        root: &Path,
+        commit_oid: &str,
+        paths: &[PathBuf],
+        selected_wave: &str,
+    ) -> Result<()> {
+        let mut authorities = BTreeMap::<String, PathBuf>::new();
+        for path in paths {
+            let blob = probe.tracked_blob(root, commit_oid, path)?;
+            if blob.bytes.len() > MAX_JSON_BYTES {
+                return Err(DeliveryError::new(format!(
+                    "checked-in delivery manifest {} exceeds {MAX_JSON_BYTES} bytes",
+                    path.display()
+                )));
+            }
+            let manifest: DeliveryManifest =
+                serde_json::from_slice(&blob.bytes).map_err(|error| {
+                    DeliveryError::new(format!(
+                        "checked-in delivery manifest {} is invalid JSON: {error}",
+                        path.display()
+                    ))
+                })?;
+            manifest.validate()?;
+            if path.starts_with(WAVE_MANIFEST_DIRECTORY)
+                && *path != expected_wave_manifest_path(&manifest.wave)?
+            {
+                return Err(DeliveryError::new(format!(
+                    "per-wave delivery manifest {} does not match declared wave {}",
+                    path.display(),
+                    manifest.wave
+                )));
+            }
+            if let Some(existing) = authorities.insert(manifest.wave.clone(), path.clone()) {
+                return Err(DeliveryError::new(format!(
+                    "duplicate delivery authority for wave {}: {} and {}",
+                    manifest.wave,
+                    existing.display(),
+                    path.display()
+                )));
+            }
+        }
+        if !authorities.contains_key(selected_wave) {
+            return Err(DeliveryError::new(
+                "selected delivery wave has no checked-in authority",
+            ));
+        }
+        Ok(())
     }
     let policy = manifest
         .repository(&request.authority_repository)

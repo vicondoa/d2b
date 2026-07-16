@@ -1448,6 +1448,109 @@ fn w4_provider_delivery_fingerprints_cover_every_reserved_file() {
 }
 
 #[test]
+fn shared_contract_policy_freezes_services_dependencies_and_ownership() {
+    let root = repo_root();
+    let policy = xtask::wave_policy::read_policy(&root).expect("shared-contract policy");
+    let frozen = policy
+        .frozen_service_packages
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        frozen,
+        d2b_contracts::v2_services::SERVICE_PACKAGES
+            .into_iter()
+            .collect()
+    );
+    assert_eq!(
+        policy
+            .waves
+            .iter()
+            .map(|wave| (wave.wave.as_str(), wave.responsibility.as_str()))
+            .collect::<BTreeMap<_, _>>(),
+        BTreeMap::from([
+            ("w5", "runtime-service-and-dispatch-implementation"),
+            ("w6", "user-desktop-device-service-implementation"),
+            ("w7", "declarative-nix-process-and-resource-emission"),
+        ])
+    );
+
+    let generated =
+        read_repo_file("packages/d2b-contracts/src/generated_v2_services/broker_ttrpc.rs");
+    for method in &policy.broker_typed_methods {
+        let method_name = method.method.to_ascii_lowercase();
+        assert!(
+            generated.contains(&format!(
+                "pub async fn {method_name}(&self, ctx: ttrpc::context::Context, req: &super::broker::{}) -> ::ttrpc::Result<super::broker::{}>",
+                method.request, method.response
+            )),
+            "generated broker binding does not freeze {} as {} -> {}",
+            method.method,
+            method.request,
+            method.response
+        );
+    }
+
+    let workspace = read_repo_file("packages/Cargo.toml");
+    for dependency in &policy.workspace_dependencies {
+        let line = workspace
+            .lines()
+            .find(|line| line.starts_with(&format!("{} = ", dependency.name)))
+            .unwrap_or_else(|| panic!("workspace dependency {} is absent", dependency.name));
+        assert!(
+            line.contains(&format!("\"{}\"", dependency.requirement)),
+            "workspace dependency {} does not retain requirement {}",
+            dependency.name,
+            dependency.requirement
+        );
+    }
+    let lock = read_repo_file("packages/Cargo.lock");
+    for (name, version) in [("command-fds", "0.3.3"), ("oo7", "0.6.0")] {
+        assert!(
+            lock.contains(&format!("name = \"{name}\"\nversion = \"{version}\"")),
+            "{name} {version} must be frozen in the workspace lock"
+        );
+    }
+
+    for required in [
+        "packages/Cargo.lock",
+        "packages/Cargo.toml",
+        "packages/d2b-contracts/src/v2_services.rs",
+        "packages/d2b-realm-core/src/allocator.rs",
+    ] {
+        assert!(
+            policy
+                .protected_paths
+                .binary_search(&required.to_owned())
+                .is_ok(),
+            "shared contract policy does not protect {required}"
+        );
+    }
+}
+
+#[test]
+fn provider_registry_v2_has_one_canonical_artifact_family() {
+    let actual = git_tracked_files()
+        .into_iter()
+        .filter(|path| {
+            path.ends_with("/provider-registry-v2.json")
+                || path.ends_with("/provider-registry-v2.md")
+                || path.ends_with("/provider-registry-v2-json.nix")
+                || path.ends_with("/provider_registry_v2.rs")
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        actual,
+        BTreeSet::from([
+            "docs/reference/schemas/v2/provider-registry-v2.json".to_owned(),
+            "docs/reference/schemas/v2/provider-registry-v2.md".to_owned(),
+            "nixos-modules/provider-registry-v2-json.nix".to_owned(),
+            "packages/d2b-contracts/src/provider_registry_v2.rs".to_owned(),
+        ])
+    );
+}
+
+#[test]
 fn v2_foundation_io_surfaces_are_async_first() {
     let client = read_repo_file("packages/d2b-client/src/client.rs");
     let connector = read_repo_file("packages/d2b-client/src/session.rs");

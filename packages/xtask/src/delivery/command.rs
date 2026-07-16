@@ -976,6 +976,7 @@ pub trait RepositoryProbe {
     fn tree_for_commit(&self, root: &Path, commit_oid: &str) -> Result<String>;
     fn is_dirty(&self, root: &Path) -> Result<bool>;
     fn is_ancestor(&self, root: &Path, ancestor: &str, descendant: &str) -> Result<bool>;
+    fn tracked_paths(&self, root: &Path, commit_oid: &str, prefix: &Path) -> Result<Vec<PathBuf>>;
     fn tracked_blob(&self, root: &Path, commit_oid: &str, path: &Path) -> Result<TrackedBlob>;
     fn canonical_diff(
         &self,
@@ -1167,6 +1168,46 @@ impl<A: CommandOutputAdapter> RepositoryProbe for GitProbe<A> {
                 &output,
             )),
         }
+    }
+
+    fn tracked_paths(&self, root: &Path, commit_oid: &str, prefix: &Path) -> Result<Vec<PathBuf>> {
+        validate_hash(commit_oid, "tree commit")?;
+        super::model::validate_repo_relative_path(prefix)?;
+        let prefix = path_string(prefix)?;
+        let listing = self.git_output(
+            root,
+            &[
+                "ls-tree".to_owned(),
+                "-r".to_owned(),
+                "-z".to_owned(),
+                "--name-only".to_owned(),
+                commit_oid.to_owned(),
+                "--".to_owned(),
+                format!(":(literal){prefix}"),
+            ],
+            CommandLimits {
+                stdout_bytes: MAX_GIT_BLOB_BYTES,
+                ..CommandLimits::default()
+            },
+        )?;
+        if !listing.success {
+            return Err(command_failed("git ls-tree failed", &listing));
+        }
+        let mut paths = listing
+            .stdout
+            .split(|byte| *byte == 0)
+            .filter(|entry| !entry.is_empty())
+            .map(|entry| {
+                let entry = std::str::from_utf8(entry)
+                    .map_err(|_| DeliveryError::new("git ls-tree path was not UTF-8"))?;
+                let path = PathBuf::from(entry);
+                super::model::validate_repo_relative_path(&path)?;
+                Ok(path)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        paths.sort();
+        paths.dedup();
+        Ok(paths)
     }
 
     fn tracked_blob(&self, root: &Path, commit_oid: &str, path: &Path) -> Result<TrackedBlob> {

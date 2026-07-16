@@ -323,6 +323,18 @@ impl Fixture {
         )
         .expect("seal")
     }
+
+    fn refresh_head(&mut self) {
+        let probe = GitProbe::new(ProcessCommandOutput);
+        let head = probe
+            .resolve_commit(&self.repository, "feature")
+            .expect("updated head");
+        let base = self.status.base_oid.clone();
+        self.graph = StaticGraph {
+            graph: graph(&base, &head),
+        };
+        self.status = status(&base, &head);
+    }
 }
 
 fn manifest(authority: ValidationAuthority) -> DeliveryManifest {
@@ -369,11 +381,18 @@ fn manifest(authority: ValidationAuthority) -> DeliveryManifest {
             repository: REPOSITORY_ID.to_owned(),
             path: "dependencies.txt".to_owned(),
         }],
-        contract_fingerprints: vec![FingerprintSpec {
-            name: "contract".to_owned(),
-            repository: REPOSITORY_ID.to_owned(),
-            path: "contract.json".to_owned(),
-        }],
+        contract_fingerprints: vec![
+            FingerprintSpec {
+                name: "contract".to_owned(),
+                repository: REPOSITORY_ID.to_owned(),
+                path: "contract.json".to_owned(),
+            },
+            FingerprintSpec {
+                name: "delivery-authority".to_owned(),
+                repository: REPOSITORY_ID.to_owned(),
+                path: "delivery/manifest.json".to_owned(),
+            },
+        ],
     }
 }
 
@@ -415,6 +434,153 @@ fn publisher() -> CheckPublisher {
 
 fn status(base: &str, head: &str) -> PullRequestStatus {
     status_for(42, PullRequestState::Open, "main", base, "feature", head)
+}
+
+#[test]
+fn per_wave_manifest_is_selected_fingerprinted_authority() {
+    let mut fixture = Fixture::new("per-wave-manifest", ValidationAuthority::LocalRunner);
+    let legacy = fixture.repository.join("delivery/manifest.json");
+    let selected = fixture.repository.join("delivery/manifests/w1.json");
+    let mut manifest: DeliveryManifest =
+        serde_json::from_slice(&fs::read(&legacy).expect("legacy manifest"))
+            .expect("manifest JSON");
+    manifest
+        .contract_fingerprints
+        .iter_mut()
+        .find(|fingerprint| fingerprint.name == "delivery-authority")
+        .expect("delivery authority fingerprint")
+        .path = "delivery/manifests/w1.json".to_owned();
+    fs::create_dir(fixture.repository.join("delivery/manifests")).expect("manifest directory");
+    write_source_json(&selected, &manifest);
+    fs::remove_file(&legacy).expect("remove legacy manifest");
+    git(
+        &fixture.repository,
+        &[
+            "add",
+            "delivery/manifest.json",
+            "delivery/manifests/w1.json",
+        ],
+    );
+    git(
+        &fixture.repository,
+        &[
+            "-c",
+            "commit.gpgSign=false",
+            "commit",
+            "--amend",
+            "--no-edit",
+        ],
+    );
+    fixture.request.manifest_path = PathBuf::from("delivery/manifests/w1.json");
+    fixture.refresh_head();
+
+    let snapshot = read_snapshot(&fixture.snapshot()).expect("snapshot");
+    assert_eq!(
+        snapshot.authority.manifest_path,
+        "delivery/manifests/w1.json"
+    );
+    assert_eq!(
+        snapshot
+            .contract_fingerprints
+            .iter()
+            .find(|fingerprint| fingerprint.name == "contract")
+            .expect("contract fingerprint")
+            .path,
+        "contract.json"
+    );
+    assert!(
+        snapshot
+            .contract_fingerprints
+            .iter()
+            .any(|fingerprint| fingerprint.path == "delivery/manifests/w1.json")
+    );
+}
+
+#[test]
+fn duplicate_checked_in_authority_for_one_wave_is_rejected() {
+    let mut fixture = Fixture::new("duplicate-wave-authority", ValidationAuthority::LocalRunner);
+    let legacy = fixture.repository.join("delivery/manifest.json");
+    let duplicate = fixture.repository.join("delivery/manifests/w1.json");
+    fs::create_dir(fixture.repository.join("delivery/manifests")).expect("manifest directory");
+    fs::copy(&legacy, &duplicate).expect("duplicate manifest");
+    git(&fixture.repository, &["add", "delivery/manifests/w1.json"]);
+    git(
+        &fixture.repository,
+        &[
+            "-c",
+            "commit.gpgSign=false",
+            "commit",
+            "--amend",
+            "--no-edit",
+        ],
+    );
+    fixture.refresh_head();
+
+    let error = create_snapshot(
+        &GitProbe::new(ProcessCommandOutput),
+        &fixture.graph,
+        &StaticStatus {
+            status: fixture.status.clone(),
+        },
+        &fixture.request,
+    )
+    .expect_err("duplicate authority");
+    assert!(
+        error
+            .to_string()
+            .contains("duplicate delivery authority for wave w1")
+    );
+}
+
+#[test]
+fn per_wave_selection_preserves_exact_git_town_graph_validation() {
+    let mut fixture = Fixture::new("per-wave-graph", ValidationAuthority::LocalRunner);
+    let legacy = fixture.repository.join("delivery/manifest.json");
+    let selected = fixture.repository.join("delivery/manifests/w1.json");
+    let mut manifest: DeliveryManifest =
+        serde_json::from_slice(&fs::read(&legacy).expect("legacy manifest"))
+            .expect("manifest JSON");
+    manifest
+        .contract_fingerprints
+        .iter_mut()
+        .find(|fingerprint| fingerprint.name == "delivery-authority")
+        .expect("delivery authority fingerprint")
+        .path = "delivery/manifests/w1.json".to_owned();
+    fs::create_dir(fixture.repository.join("delivery/manifests")).expect("manifest directory");
+    write_source_json(&selected, &manifest);
+    fs::remove_file(&legacy).expect("remove legacy manifest");
+    git(
+        &fixture.repository,
+        &[
+            "add",
+            "delivery/manifest.json",
+            "delivery/manifests/w1.json",
+        ],
+    );
+    git(
+        &fixture.repository,
+        &[
+            "-c",
+            "commit.gpgSign=false",
+            "commit",
+            "--amend",
+            "--no-edit",
+        ],
+    );
+    fixture.request.manifest_path = PathBuf::from("delivery/manifests/w1.json");
+    fixture.refresh_head();
+    fixture.graph.graph.branches[0].parent = "wrong-parent".to_owned();
+
+    let error = create_snapshot(
+        &GitProbe::new(ProcessCommandOutput),
+        &fixture.graph,
+        &StaticStatus {
+            status: fixture.status.clone(),
+        },
+        &fixture.request,
+    )
+    .expect_err("wrong Git Town parent");
+    assert!(error.to_string().contains("parent topology"));
 }
 
 fn status_for(
@@ -1354,6 +1520,10 @@ impl RepositoryProbe for MutatingBlobProbe {
 
     fn is_ancestor(&self, root: &Path, ancestor: &str, descendant: &str) -> Result<bool> {
         self.inner.is_ancestor(root, ancestor, descendant)
+    }
+
+    fn tracked_paths(&self, root: &Path, commit_oid: &str, prefix: &Path) -> Result<Vec<PathBuf>> {
+        self.inner.tracked_paths(root, commit_oid, prefix)
     }
 
     fn tracked_blob(&self, root: &Path, commit_oid: &str, path: &Path) -> Result<TrackedBlob> {

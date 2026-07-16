@@ -168,6 +168,12 @@ machine-readable command/option index. Those payloads live outside the
 repository; never add evidence or panel output to this manifest or another
 tracked test artifact.
 
+Snapshot authority may be the historical `delivery/manifest.json` or one
+selected `delivery/manifests/w<N>.json`. The selected tracked path must match
+and fingerprint its declared wave. Delivery rejects a second checked-in
+authority for the same wave and still requires the exact ordered Git Town
+branch, PR, and parent graph.
+
 ### Unified Rust workspace
 
 Every maintained host and guest crate is a member of `packages/Cargo.toml` and

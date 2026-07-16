@@ -46,6 +46,14 @@ advanced local branch ref does not erase merge authority. The checked-in
 manifest remains the expected ordered graph. `xtask` never accepts a
 caller-authored graph, edits PR topology, or rewrites branches.
 
+The historical authority remains `delivery/manifest.json`. New independent
+delivery lines select a checked-in `delivery/manifests/w<N>.json` path. The file
+name must match its declared wave, its own path must appear in
+`contract_fingerprints`, and only one tracked authority may declare a given
+wave. Selecting a per-wave path does not relax graph checks: the ordered
+branches, ordinary PR numbers, active terminal integration ref, and every
+immediate Git Town parent must still match exactly.
+
 The capability probe verifies the supported Git Town major, noninteractive
 propose flags, GitHub authentication, repository read access, and the
 ordinary pull-request API:
