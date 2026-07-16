@@ -49,7 +49,8 @@ let
     schemaVersion = 2;
     realms = realmIndex;
     inherit workloads;
-    inherit (resourceIndex) providers roles resources storage;
+    inherit (resourceIndex)
+      providerRegistryV2Mappings providers roles resources storage;
     identities = {
       realmIds = map (row: row.realmId) realmIndex.list;
       workloadIds = map (row: row.workloadId) workloadIndex.list;

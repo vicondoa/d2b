@@ -147,20 +147,34 @@ in
         schemaIndex = evalRealmSchema {
           local-root = {
             path = "local-root";
-            providers.runtime = {
-              type = "runtime";
-              implementationId = "cloud-hypervisor";
-              capabilities = [ "exec" "shell" ];
+            providers = {
+              display = {
+                type = "display";
+                implementationId = "wayland";
+              };
+              runtime = {
+                type = "runtime";
+                implementationId = "cloud-hypervisor";
+                capabilities = [ "exec" "shell" ];
+              };
             };
             workloads.app = {
               name = "Application";
               provider = "runtime";
               shell.enable = true;
+              launcher = {
+                enable = true;
+                defaultItem = "app";
+                items.app.graphical = true;
+              };
             };
           };
         };
         app = builtins.head schemaIndex.workloads.list;
-        runtime = builtins.head schemaIndex.providers.list;
+        runtime = lib.findFirst
+          (provider: provider.providerType == "runtime")
+          null
+          schemaIndex.providers.list;
       in
       {
         realmId = (builtins.head schemaIndex.realms.list).realmId;
@@ -188,6 +202,7 @@ in
         "store-virtiofs-preflight"
         "virtiofsd"
         "vsock-relay"
+        "wayland-proxy"
       ];
     };
   };

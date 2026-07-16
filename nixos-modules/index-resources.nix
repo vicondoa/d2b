@@ -68,8 +68,12 @@ let
       securityKeyRoles = lib.optional
         (attrPathOr [ "securityKey" "enable" ] false spec)
         "security-key-frontend";
+      graphicalLauncher = lib.any
+        (item: item.graphical or false)
+        (lib.attrValues workload.launcher.items);
       waylandRoles = lib.optional
-        (attrPathOr [ "display" "wayland" ] graphicsEnabled spec)
+        (attrPathOr [ "display" "wayland" ]
+          (graphicsEnabled || graphicalLauncher) spec)
         "wayland-proxy";
       relayRoles = lib.optional
         (attrPathOr [ "guestControl" "vsockRelay" ] (runtime == "cloud-hypervisor") spec)
@@ -181,6 +185,76 @@ let
         })
         (rolesFor runtime workload))
     workloadIndex.list;
+
+  controllerRoleFor = realmId:
+    if (realmIndex.byId.${realmId}).realmPath == "local-root"
+    then "local-root-controller"
+    else "realm-controller";
+
+  localTransportImplementations = [
+    "cloud-hypervisor-vsock"
+    "native-vsock"
+    "unix-seqpacket"
+    "unix-stream"
+  ];
+  transportMappings = map
+    (provider: {
+      inherit (provider) implementationId providerId realmId;
+      controllerRole = controllerRoleFor provider.realmId;
+      transportBindingIds = [ "transport-${provider.providerId}" ];
+    })
+    (lib.filter
+      (provider:
+        provider.enabled
+        && provider.providerType == "transport"
+        && builtins.elem provider.implementationId localTransportImplementations)
+      providerRows);
+
+  substrateMappings = map
+    (provider: {
+      inherit (provider) implementationId providerId realmId;
+      controllerRole = controllerRoleFor provider.realmId;
+    })
+    (lib.filter
+      (provider:
+        provider.enabled
+        && provider.providerType == "substrate"
+        && builtins.elem provider.implementationId [ "linux" "nixos" ]
+        && (realmIndex.byId.${provider.realmId}).realmPath == "local-root")
+      providerRows);
+
+  enabledWaylandRoles = lib.filter
+    (role: role.enabled && role.roleKind == "wayland-proxy")
+    roleRows;
+  displayMappings = map
+    (role:
+      let
+        candidates = lib.filter
+          (provider:
+            provider.enabled
+            && provider.realmId == role.realmId
+            && provider.providerType == "display"
+            && provider.implementationId == "wayland")
+          providerRows;
+        provider =
+          if builtins.length candidates == 1
+          then builtins.head candidates
+          else throw
+            "normalized index: workload ${role.workloadId} requires exactly one enabled same-realm wayland display provider";
+      in
+      {
+        inherit (provider) implementationId providerId;
+        inherit (role) realmId workloadId;
+        ownerRoleId = role.roleId;
+        controllerRole = controllerRoleFor role.realmId;
+        endpointIds = {
+          wayland = "wayland-${role.roleId}";
+          crossDomain = "cross-domain-${role.roleId}";
+          waypipe = "waypipe-${role.roleId}";
+          proxy = "proxy-${role.roleId}";
+        };
+      })
+    enabledWaylandRoles;
 
   realmStorage = lib.concatMap
     (realm: [
@@ -375,8 +449,33 @@ let
     })
     roleRows;
 
+  transportResources = lib.concatMap
+    (mapping:
+      map
+        (resourceId: mkResource {
+          inherit resourceId;
+          kind = "transport-binding";
+          inherit (mapping) providerId realmId;
+        })
+        mapping.transportBindingIds)
+    transportMappings;
+
+  displayResources = lib.concatMap
+    (mapping:
+      lib.mapAttrsToList
+        (endpointKind: resourceId: mkResource {
+          inherit resourceId;
+          kind = "display-endpoint-${
+            if endpointKind == "crossDomain" then "cross-domain" else endpointKind
+          }";
+          inherit (mapping) providerId realmId workloadId;
+          roleId = mapping.ownerRoleId;
+        })
+        mapping.endpointIds)
+    displayMappings;
+
   storageRows = realmStorage ++ providerStorage ++ workloadStorage ++ roleResources;
-  resourceRows = storageRows;
+  resourceRows = storageRows ++ transportResources ++ displayResources;
   byId = rows: lib.listToAttrs (map (row: {
     name = row.resourceId;
     value = row;
@@ -398,8 +497,15 @@ let
   };
   resourcesValid = requireUnique "resource id"
     (map (row: row.resourceId) resourceRows);
+  providerMappingsValid =
+    requireUnique "transport provider mapping"
+      (map (row: row.providerId) transportMappings)
+    && requireUnique "substrate provider mapping"
+      (map (row: row.providerId) substrateMappings)
+    && requireUnique "display provider mapping"
+      (map (row: row.providerId) displayMappings);
 in
-assert identitiesValid && resourcesValid;
+assert identitiesValid && resourcesValid && providerMappingsValid;
 {
   providers = {
     list = providerRows;
@@ -429,5 +535,10 @@ assert identitiesValid && resourcesValid;
     byWorkloadId = groupBy "workloadId" resourceRows;
     byProviderId = groupBy "providerId" resourceRows;
     byRoleId = groupBy "roleId" resourceRows;
+  };
+  providerRegistryV2Mappings = {
+    transport = transportMappings;
+    substrate = substrateMappings;
+    display = displayMappings;
   };
 }
