@@ -10,8 +10,11 @@ use std::{
     collections::BTreeMap,
     error::Error,
     fmt,
-    sync::{Arc, Mutex, Weak},
-    time::{SystemTime, UNIX_EPOCH},
+    sync::{
+        Arc, Mutex, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
@@ -29,6 +32,7 @@ use d2b_contracts::{
         ProviderMethod, ProviderRemediation,
     },
 };
+use d2b_provider::CancellationToken;
 use d2b_provider_audio_pipewire_vhost_user::{AudioEffectPort, AudioQueryPort};
 use d2b_provider_device_host_mediated::{DeviceEffectPort, DeviceQueryPort};
 use d2b_provider_display_wayland::DisplayEffectPort;
@@ -836,6 +840,71 @@ struct ResolvedDaemonRuntime {
     role: String,
 }
 
+struct PendingLifecycleAdmission {
+    abandoned: Arc<AtomicBool>,
+    armed: bool,
+}
+
+impl PendingLifecycleAdmission {
+    fn new(abandoned: Arc<AtomicBool>) -> Self {
+        Self {
+            abandoned,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for PendingLifecycleAdmission {
+    fn drop(&mut self) {
+        if self.armed {
+            self.abandoned.store(true, Ordering::Release);
+        }
+    }
+}
+
+async fn acquire_mapped_lifecycle_permit(
+    locks: crate::concurrency::OpLockManager,
+    vm: String,
+    cancellation: CancellationToken,
+    deadline_remaining_ms: u32,
+) -> Result<crate::concurrency::MappedLifecyclePermit, RuntimeControlError> {
+    let deadline = Instant::now()
+        .checked_add(Duration::from_millis(u64::from(deadline_remaining_ms)))
+        .ok_or(RuntimeControlError::DeadlineExpiredBeforeMutation)?;
+    let abandoned = Arc::new(AtomicBool::new(false));
+    let mut pending = PendingLifecycleAdmission::new(Arc::clone(&abandoned));
+    let worker_cancellation = cancellation.clone();
+    let worker_abandoned = Arc::clone(&abandoned);
+    let permit = tokio::task::spawn_blocking(move || {
+        locks.begin_mapped_lifecycle_until(&vm, deadline, || {
+            worker_cancellation.is_cancelled() || worker_abandoned.load(Ordering::Acquire)
+        })
+    })
+    .await
+    .map_err(|_| RuntimeControlError::Unavailable)?
+    .map_err(|error| match error {
+        crate::concurrency::MappedLifecycleAdmissionError::Cancelled => {
+            RuntimeControlError::CancelledBeforeMutation
+        }
+        crate::concurrency::MappedLifecycleAdmissionError::DeadlineExpired => {
+            RuntimeControlError::DeadlineExpiredBeforeMutation
+        }
+    })?;
+
+    if cancellation.is_cancelled() || abandoned.load(Ordering::Acquire) {
+        return Err(RuntimeControlError::CancelledBeforeMutation);
+    }
+    if Instant::now() >= deadline {
+        return Err(RuntimeControlError::DeadlineExpiredBeforeMutation);
+    }
+    pending.disarm();
+    Ok(permit)
+}
+
 impl DaemonLocalRuntimeControl {
     fn kind(&self) -> Result<LocalRuntimeKind, RuntimeControlError> {
         match self.entry.descriptor.implementation_id.as_str() {
@@ -1131,7 +1200,13 @@ impl RuntimeControlPort for DaemonLocalRuntimeControl {
             self.invoke_direct_start(&request, &resolved, None).await?;
             return self.observed(request.context(), &resolved);
         }
-        let lifecycle_permit = resolved.state.op_locks.begin_mapped_lifecycle(&resolved.vm);
+        let lifecycle_permit = acquire_mapped_lifecycle_permit(
+            resolved.state.op_locks.clone(),
+            resolved.vm.clone(),
+            request.context().cancellation().clone(),
+            request.context().effective_deadline_remaining_ms(),
+        )
+        .await?;
         if resolved
             .state
             .pidfd_table
@@ -1164,7 +1239,13 @@ impl RuntimeControlPort for DaemonLocalRuntimeControl {
             self.invoke_direct_stop(&request, &resolved, None).await?;
             return self.observed(request.context(), &resolved);
         }
-        let lifecycle_permit = resolved.state.op_locks.begin_mapped_lifecycle(&resolved.vm);
+        let lifecycle_permit = acquire_mapped_lifecycle_permit(
+            resolved.state.op_locks.clone(),
+            resolved.vm.clone(),
+            request.context().cancellation().clone(),
+            request.context().effective_deadline_remaining_ms(),
+        )
+        .await?;
         if !resolved
             .state
             .pidfd_table
@@ -1218,9 +1299,19 @@ impl RuntimeControlPort for DaemonLocalRuntimeControl {
         let resolved = self.validate_target(&request)?;
         let key = LifecycleMutationKey::from_request(&request);
         let existing = self.lifecycle_tasks.existing(&key)?;
-        let lifecycle_permit = existing
-            .is_none()
-            .then(|| resolved.state.op_locks.begin_mapped_lifecycle(&resolved.vm));
+        let lifecycle_permit = if existing.is_none() {
+            Some(
+                acquire_mapped_lifecycle_permit(
+                    resolved.state.op_locks.clone(),
+                    resolved.vm.clone(),
+                    request.context().cancellation().clone(),
+                    request.context().effective_deadline_remaining_ms(),
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
         if existing.is_none()
             && !resolved
                 .state
@@ -1718,5 +1809,93 @@ mod tests {
             .expect("fresh lifecycle admitted after cleanup");
         fresh.join().expect("join fresh lifecycle");
         assert!(!locks.mapped_lifecycle_active("vm-a"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mapped_lifecycle_admission_is_async_and_abandonment_safe() {
+        let locks = crate::concurrency::OpLockManager::default();
+        let held = locks.begin_mapped_lifecycle("vm-a");
+        assert_eq!(locks.mapped_lifecycle_admission_count(), 1);
+
+        let waiter = tokio::spawn(acquire_mapped_lifecycle_permit(
+            locks.clone(),
+            "vm-a".to_owned(),
+            CancellationToken::new(),
+            1_000,
+        ));
+        tokio::time::timeout(
+            Duration::from_millis(100),
+            tokio::time::sleep(Duration::from_millis(20)),
+        )
+        .await
+        .expect("executor timer must progress while admission is contended");
+
+        waiter.abort();
+        assert!(
+            waiter
+                .await
+                .expect_err("aborted admission waiter")
+                .is_cancelled()
+        );
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        drop(held);
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(!locks.mapped_lifecycle_active("vm-a"));
+        assert_eq!(
+            locks.mapped_lifecycle_admission_count(),
+            1,
+            "an abandoned waiter must not acquire authority after its caller is gone"
+        );
+
+        let fresh = acquire_mapped_lifecycle_permit(
+            locks.clone(),
+            "vm-a".to_owned(),
+            CancellationToken::new(),
+            100,
+        )
+        .await
+        .expect("fresh admission");
+        assert_eq!(locks.mapped_lifecycle_admission_count(), 2);
+        drop(fresh);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mapped_lifecycle_admission_honors_cancellation_and_deadline() {
+        let locks = crate::concurrency::OpLockManager::default();
+        let held = locks.begin_mapped_lifecycle("vm-a");
+        let cancellation = CancellationToken::new();
+        let cancel_waiter = tokio::spawn(acquire_mapped_lifecycle_permit(
+            locks.clone(),
+            "vm-a".to_owned(),
+            cancellation.clone(),
+            1_000,
+        ));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        cancellation.cancel();
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_millis(100), cancel_waiter)
+                .await
+                .expect("cancelled admission must wake")
+                .expect("join cancelled admission"),
+            Err(RuntimeControlError::CancelledBeforeMutation)
+        ));
+        assert_eq!(locks.mapped_lifecycle_admission_count(), 1);
+
+        assert!(matches!(
+            tokio::time::timeout(
+                Duration::from_millis(100),
+                acquire_mapped_lifecycle_permit(
+                    locks.clone(),
+                    "vm-a".to_owned(),
+                    CancellationToken::new(),
+                    20,
+                ),
+            )
+            .await
+            .expect("deadline-bounded admission must return"),
+            Err(RuntimeControlError::DeadlineExpiredBeforeMutation)
+        ));
+        assert_eq!(locks.mapped_lifecycle_admission_count(), 1);
+        drop(held);
     }
 }

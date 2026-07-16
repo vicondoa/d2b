@@ -142,6 +142,9 @@ deprecations ship one minor release before removal.
 - Derive unavailable-Azure dependency exclusions from every production Cargo
   binary target, the gateway library boundary, and the exact Rust package set
   exported by the flake, with a drift-pinned output mapping.
+- Move mapped lifecycle permit admission off the provider executor, with
+  cancellation, deadline, and abandoned-waiter checks that prevent a cancelled
+  contender from starting work later.
 - Split provider-registry identity failures into actionable provider-ID,
   configuration-schema-fingerprint, and configured-scope-digest diagnostics.
   Local-runtime bindings now derive realm identity exclusively from descriptor

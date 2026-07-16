@@ -123,6 +123,12 @@ Fresh operation identities and other mutations for that VM wait for the
 retained lifecycle authority; unrelated VMs remain independent. Read-only
 inspection does not need this retention and remains cancellable.
 
+Per-VM lifecycle admission runs on the daemon's blocking adapter rather than
+the provider executor. The wait observes both the provider cancellation token
+and its effective deadline. If the provider drops an admission future, the
+abandoned waiter cannot later acquire authority or dispatch work after the
+active mutation completes.
+
 Mapped lifecycle polls the retained synchronous broker, cgroup, and readiness
 implementation through a dedicated Tokio blocking adapter. The provider's
 current-thread bridge remains free to drive deadlines, cancellation

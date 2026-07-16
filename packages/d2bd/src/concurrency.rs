@@ -28,6 +28,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use parking_lot::{
     ArcMutexGuard, ArcRwLockReadGuard, ArcRwLockWriteGuard, Condvar, Mutex, RawMutex, RawRwLock,
@@ -133,6 +134,8 @@ pub struct OpLockManager {
 struct MappedLifecycleState {
     active_vms: Mutex<HashSet<String>>,
     idle: Condvar,
+    #[cfg(test)]
+    admissions: AtomicUsize,
 }
 
 /// Send-owned authority retained by a detached mapped lifecycle worker.
@@ -143,6 +146,12 @@ struct MappedLifecycleState {
 pub struct MappedLifecyclePermit {
     vm: String,
     state: Arc<MappedLifecycleState>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MappedLifecycleAdmissionError {
+    Cancelled,
+    DeadlineExpired,
 }
 
 impl fmt::Debug for MappedLifecyclePermit {
@@ -226,21 +235,62 @@ impl OpLockManager {
     /// The returned permit is `Send` and is moved into the owned worker. A
     /// direct provider call that bypasses public request dispatch still
     /// serializes here rather than starting a second mutation.
+    #[cfg(test)]
     pub fn begin_mapped_lifecycle(&self, vm: &str) -> MappedLifecyclePermit {
+        self.begin_mapped_lifecycle_until(vm, Instant::now() + Duration::from_secs(60), || false)
+            .expect("uncontended test lifecycle admission")
+    }
+
+    /// Acquire detached-lifecycle authority without indefinitely occupying the
+    /// caller's executor thread.
+    ///
+    /// Callers run this blocking wait on a dedicated blocking adapter. The
+    /// bounded poll is necessary because cancellation does not signal this
+    /// condition variable.
+    pub fn begin_mapped_lifecycle_until<F>(
+        &self,
+        vm: &str,
+        deadline: Instant,
+        is_cancelled: F,
+    ) -> Result<MappedLifecyclePermit, MappedLifecycleAdmissionError>
+    where
+        F: Fn() -> bool,
+    {
+        const CANCELLATION_POLL: Duration = Duration::from_millis(10);
         let mut active = self.mapped_lifecycle.active_vms.lock();
-        while active.contains(vm) {
-            self.mapped_lifecycle.idle.wait(&mut active);
-        }
-        active.insert(vm.to_owned());
-        MappedLifecyclePermit {
-            vm: vm.to_owned(),
-            state: Arc::clone(&self.mapped_lifecycle),
+        loop {
+            if is_cancelled() {
+                return Err(MappedLifecycleAdmissionError::Cancelled);
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(MappedLifecycleAdmissionError::DeadlineExpired);
+            }
+            if !active.contains(vm) {
+                active.insert(vm.to_owned());
+                #[cfg(test)]
+                self.mapped_lifecycle
+                    .admissions
+                    .fetch_add(1, Ordering::AcqRel);
+                return Ok(MappedLifecyclePermit {
+                    vm: vm.to_owned(),
+                    state: Arc::clone(&self.mapped_lifecycle),
+                });
+            }
+            self.mapped_lifecycle
+                .idle
+                .wait_for(&mut active, remaining.min(CANCELLATION_POLL));
         }
     }
 
     #[cfg(test)]
     pub fn mapped_lifecycle_active(&self, vm: &str) -> bool {
         self.mapped_lifecycle.active_vms.lock().contains(vm)
+    }
+
+    #[cfg(test)]
+    pub fn mapped_lifecycle_admission_count(&self) -> usize {
+        self.mapped_lifecycle.admissions.load(Ordering::Acquire)
     }
 }
 
