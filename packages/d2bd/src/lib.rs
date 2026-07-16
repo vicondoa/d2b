@@ -10,7 +10,7 @@ use std::fs::{self, File, OpenOptions};
 use std::future::Future;
 use std::io::{self, IoSliceMut, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, IntoRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
@@ -91,11 +91,9 @@ use d2b_provider_aca::{AcaConfig, AcaDiskImageSource, AcaSandboxDefaults, AcaWor
 use d2b_provider_relay::{LocalTarget, RelayEndpoint};
 use d2b_realm_core::{RealmIdentityConfigJson, RealmIdentityConfigSummary, TargetName};
 use d2b_realm_provider::provider::WorkloadProvider;
-use nix::cmsg_space;
 use nix::fcntl::{FcntlArg, FdFlag, Flock, FlockArg, fcntl};
 use nix::sys::socket::{
-    AddressFamily, ControlMessageOwned, MsgFlags, SockFlag, SockType, UnixAddr, connect, recv,
-    recvmsg, send, sendto, socket,
+    AddressFamily, MsgFlags, SockFlag, SockType, UnixAddr, connect, recv, send, sendto, socket,
 };
 use nix::unistd::{self, Gid, Group, Uid, User};
 use serde::{Deserialize, Serialize};
@@ -22611,17 +22609,35 @@ fn duplicate_fd_cloexec(fd: RawFd, context: &str) -> Result<OwnedFd, TypedError>
     Ok(duplicated)
 }
 
-fn read_frame_with_fds(socket: &impl AsRawFd) -> Result<(Vec<u8>, Vec<RawFd>), TypedError> {
+const LINUX_SCM_MAX_FD: usize = 253;
+const MSG_CTRUNC_FLAG: u32 = nix::libc::MSG_CTRUNC as u32;
+
+fn read_frame_with_fds(socket: &impl AsFd) -> Result<(Vec<u8>, Vec<RawFd>), TypedError> {
+    read_frame_with_fds_capacity(socket, LINUX_SCM_MAX_FD)
+}
+
+fn read_frame_with_fds_capacity(
+    socket: &impl AsFd,
+    fd_capacity: usize,
+) -> Result<(Vec<u8>, Vec<RawFd>), TypedError> {
+    if fd_capacity > LINUX_SCM_MAX_FD {
+        return Err(TypedError::InternalIo {
+            context: "recv seqpacket frame with fds".to_owned(),
+            detail: "SCM_RIGHTS receive capacity exceeds the Linux limit".to_owned(),
+        });
+    }
     let mut buffer = vec![0u8; wire::MAX_FRAME_SIZE + 5];
     let mut iov = [IoSliceMut::new(&mut buffer)];
-    let mut control = cmsg_space!([RawFd; 8]);
+    let mut control_space =
+        vec![0_u8; rustix::cmsg_space!(ScmRights(fd_capacity), ScmCredentials(1))];
+    let mut control = rustix::net::RecvAncillaryBuffer::new(&mut control_space);
     // MSG_CMSG_CLOEXEC makes SCM_RIGHTS installation close-on-exec in the
     // kernel, eliminating the recvmsg-to-fcntl fork/exec leak window.
-    let message = recvmsg::<UnixAddr>(
-        socket.as_raw_fd(),
+    let message = rustix::net::recvmsg(
+        socket,
         &mut iov,
-        Some(&mut control),
-        MsgFlags::MSG_CMSG_CLOEXEC,
+        &mut control,
+        rustix::net::RecvFlags::CMSG_CLOEXEC,
     )
     .map_err(|err| TypedError::InternalIo {
         context: "recv seqpacket frame with fds".to_owned(),
@@ -22629,26 +22645,27 @@ fn read_frame_with_fds(socket: &impl AsRawFd) -> Result<(Vec<u8>, Vec<RawFd>), T
     })?;
     let read = message.bytes;
     let mut received_fds = Vec::new();
-    for cmsg in message.cmsgs().map_err(|err| TypedError::InternalIo {
-        context: "recv seqpacket frame with fds".to_owned(),
-        detail: err.to_string(),
-    })? {
-        if let ControlMessageOwned::ScmRights(fds) = cmsg {
+    for cmsg in control.drain() {
+        if let rustix::net::RecvAncillaryMessage::ScmRights(fds) = cmsg {
             received_fds.extend(fds);
         }
     }
+    if message.flags.bits() & MSG_CTRUNC_FLAG != 0 {
+        return Err(TypedError::InternalIo {
+            context: "recv seqpacket frame with fds".to_owned(),
+            detail: "SCM_RIGHTS ancillary data was truncated".to_owned(),
+        });
+    }
     #[cfg(test)]
-    run_received_fd_test_hook(&received_fds);
+    run_received_fd_test_hook(
+        &received_fds
+            .iter()
+            .map(AsRawFd::as_raw_fd)
+            .collect::<Vec<_>>(),
+    );
     for fd in &received_fds {
-        let cloexec = match fd_is_cloexec(*fd, "verify received fd cloexec") {
-            Ok(cloexec) => cloexec,
-            Err(error) => {
-                close_received_fds(&received_fds);
-                return Err(error);
-            }
-        };
+        let cloexec = fd_is_cloexec(fd.as_raw_fd(), "verify received fd cloexec")?;
         if !cloexec {
-            close_received_fds(&received_fds);
             return Err(TypedError::InternalIo {
                 context: "verify received fd cloexec".to_owned(),
                 detail: "SCM_RIGHTS descriptor was not installed close-on-exec".to_owned(),
@@ -22656,30 +22673,32 @@ fn read_frame_with_fds(socket: &impl AsRawFd) -> Result<(Vec<u8>, Vec<RawFd>), T
         }
     }
     if read == 0 {
-        close_received_fds(&received_fds);
         return Err(TypedError::InternalIo {
             context: "recv seqpacket frame with fds".to_owned(),
             detail: "peer closed the socket".to_owned(),
         });
     }
     if read < 4 {
-        close_received_fds(&received_fds);
         return Err(TypedError::WireInvalidFrame {
             detail: format!("frame too short: {read} bytes"),
         });
     }
     let declared = u32::from_le_bytes(buffer[..4].try_into().expect("prefix slice")) as usize;
     if declared > wire::MAX_FRAME_SIZE {
-        close_received_fds(&received_fds);
         return Err(TypedError::WireFrameTooLarge { declared });
     }
     if read - 4 != declared {
-        close_received_fds(&received_fds);
         return Err(TypedError::WireInvalidFrame {
             detail: format!("declared {declared} bytes but received {}", read - 4),
         });
     }
-    Ok((buffer[4..read].to_vec(), received_fds))
+    Ok((
+        buffer[4..read].to_vec(),
+        received_fds
+            .into_iter()
+            .map(IntoRawFd::into_raw_fd)
+            .collect(),
+    ))
 }
 
 #[cfg(test)]
@@ -24277,7 +24296,7 @@ mod broker_dispatch_tests {
     };
     use nix::sys::socket::{
         AddressFamily, Backlog, ControlMessage, MsgFlags, SockFlag, SockType, UnixAddr, accept4,
-        bind, listen, recv, sendmsg, socket, socketpair,
+        bind, listen, recv, sendmsg, setsockopt, socket, socketpair, sockopt,
     };
     use nix::unistd::close;
     use serde::Serialize;
@@ -25687,6 +25706,104 @@ mod broker_dispatch_tests {
             .expect("read duplicated descriptor flags");
         assert!(
             nix::fcntl::FdFlag::from_bits_truncate(flags).contains(nix::fcntl::FdFlag::FD_CLOEXEC)
+        );
+    }
+
+    fn count_named_memfd_descriptors(marker: &str) -> usize {
+        fs::read_dir("/proc/self/fd")
+            .expect("read process descriptor table")
+            .filter_map(Result::ok)
+            .filter_map(|entry| fs::read_link(entry.path()).ok())
+            .filter(|target| target.to_string_lossy().contains(marker))
+            .count()
+    }
+
+    #[test]
+    fn scm_rights_receive_accepts_more_than_eight_and_linux_maximum() {
+        for (count, receive_credentials) in [(9, false), (super::LINUX_SCM_MAX_FD, true)] {
+            let (receiver, sender) = socketpair(
+                AddressFamily::Unix,
+                SockType::SeqPacket,
+                None,
+                SockFlag::SOCK_CLOEXEC,
+            )
+            .expect("create SCM_RIGHTS socketpair");
+            if receive_credentials {
+                setsockopt(&receiver, sockopt::PassCred, &true)
+                    .expect("enable credential ancillary message");
+            }
+            let marker = format!(
+                "d2b-scm-rights-capacity-{}-{}",
+                count,
+                NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed)
+            );
+            let source = rustix::fs::memfd_create(marker.as_str(), rustix::fs::MemfdFlags::CLOEXEC)
+                .expect("create descriptor source");
+            let sent_fds = vec![source.as_raw_fd(); count];
+            assert_eq!(count_named_memfd_descriptors(&marker), 1);
+
+            write_test_json_frame_with_fds(
+                sender.as_raw_fd(),
+                &json!({ "kind": "capacity-test" }),
+                &sent_fds,
+            )
+            .expect("send SCM_RIGHTS descriptors");
+            let (_, received_fds) =
+                super::read_frame_with_fds(&receiver).expect("receive SCM_RIGHTS descriptors");
+            assert_eq!(received_fds.len(), count);
+            assert_eq!(count_named_memfd_descriptors(&marker), count + 1);
+            for fd in &received_fds {
+                assert!(
+                    super::fd_is_cloexec(*fd, "verify capacity-test descriptor")
+                        .expect("read descriptor flags")
+                );
+            }
+            super::close_received_fds(&received_fds);
+            assert_eq!(
+                count_named_memfd_descriptors(&marker),
+                1,
+                "receiver must release every installed descriptor"
+            );
+        }
+    }
+
+    #[test]
+    fn scm_rights_truncation_fails_closed_without_descriptor_growth() {
+        let (receiver, sender) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("create SCM_RIGHTS socketpair");
+        setsockopt(&receiver, sockopt::PassCred, &true)
+            .expect("enable credential ancillary message");
+        let marker = format!(
+            "d2b-scm-rights-truncation-{}",
+            NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed)
+        );
+        let source = rustix::fs::memfd_create(marker.as_str(), rustix::fs::MemfdFlags::CLOEXEC)
+            .expect("create descriptor source");
+        let sent_fds = vec![source.as_raw_fd(); 32];
+        assert_eq!(count_named_memfd_descriptors(&marker), 1);
+
+        write_test_json_frame_with_fds(
+            sender.as_raw_fd(),
+            &json!({ "kind": "truncation-test" }),
+            &sent_fds,
+        )
+        .expect("send SCM_RIGHTS descriptors");
+        let error = super::read_frame_with_fds_capacity(&receiver, 8)
+            .expect_err("truncated ancillary data must fail closed");
+        assert!(matches!(
+            error,
+            super::TypedError::InternalIo { ref detail, .. }
+                if detail == "SCM_RIGHTS ancillary data was truncated"
+        ));
+        assert_eq!(
+            count_named_memfd_descriptors(&marker),
+            1,
+            "truncation must close every descriptor installed by recvmsg"
         );
     }
 

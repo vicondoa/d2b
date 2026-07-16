@@ -769,6 +769,12 @@ process starts. The broker adopts the fd via `SD_LISTEN_FDS`.
   upstream classification) result in `denied-refused` audit
   emission at the broker.
 
+The daemon receives broker `SCM_RIGHTS` messages with
+`MSG_CMSG_CLOEXEC`. Its ancillary buffer covers Linux's full 253-descriptor
+limit plus peer credentials. Received descriptors enter an owning parser before
+any frame validation; malformed or still-truncated ancillary data fails closed,
+and all installed descriptors are closed on every error path.
+
 ### Per-operation cap usage
 
 The table below maps each broker operation to the specific

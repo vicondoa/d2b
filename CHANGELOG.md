@@ -145,6 +145,9 @@ deprecations ship one minor release before removal.
 - Move mapped lifecycle permit admission off the provider executor, with
   cancellation, deadline, and abandoned-waiter checks that prevent a cancelled
   contender from starting work later.
+- Receive broker file-descriptor handoffs with atomic close-on-exec, capacity
+  for Linux's full descriptor limit plus credentials, and owning truncation
+  cleanup so malformed ancillary messages cannot leak installed descriptors.
 - Split provider-registry identity failures into actionable provider-ID,
   configuration-schema-fingerprint, and configured-scope-digest diagnostics.
   Local-runtime bindings now derive realm identity exclusively from descriptor

@@ -675,6 +675,32 @@ fn unavailable_azure_vm_scaffold_descriptors_have_no_live_provider_surface() {
 }
 
 #[test]
+fn daemon_scm_rights_receive_is_atomic_bounded_and_raii_owned() {
+    let daemon = read_repo_file("packages/d2bd/src/lib.rs");
+    for required in [
+        "const LINUX_SCM_MAX_FD: usize = 253;",
+        "rustix::cmsg_space!(ScmRights(fd_capacity), ScmCredentials(1))",
+        "rustix::net::RecvFlags::CMSG_CLOEXEC",
+        "rustix::net::RecvAncillaryMessage::ScmRights",
+        "message.flags.bits() & MSG_CTRUNC_FLAG != 0",
+        ".map(IntoRawFd::into_raw_fd)",
+        "scm_rights_receive_accepts_more_than_eight_and_linux_maximum",
+        "scm_rights_truncation_fails_closed_without_descriptor_growth",
+    ] {
+        assert!(
+            daemon.contains(required),
+            "daemon SCM_RIGHTS receive policy is missing {required}"
+        );
+    }
+    for forbidden in ["cmsg_space!([RawFd; 8])", "recvmsg::<UnixAddr>"] {
+        assert!(
+            !daemon.contains(forbidden),
+            "daemon SCM_RIGHTS receive policy still contains {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn daemon_provider_composition_is_exact_startup_owned_and_credential_free() {
     let metadata = workspace_metadata();
     let dependencies = declared_dependencies(&metadata, "d2bd")
