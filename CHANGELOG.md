@@ -138,6 +138,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Parsed the evaluated delivery wrapper with the maintained Tree-sitter Bash
+  grammar, requiring an exact AST shape and rejecting quote, escape,
+  concatenation, substitution, array, inactive-command, and wrong-target decoys.
 - Required the evaluated delivery `postFixup` to contain exactly one
   unconditional `wrapProgram` command for `$out/bin/xtask`, rejecting inactive
   branches, function bodies, wrong targets, extra commands, and extra wrappers.
