@@ -26,6 +26,10 @@ response DTO, session preface, frame codec, handshake, resolver, or provider
 record. The canonical SDK crates remain `publish = false`; crates.io is not a
 fallback.
 
+The current client and provider distributions pin the landed source revision
+`4018d9c9652bd826c2e6a9abccdcdcafb832d944`. Coordination records and contract
+gates must use that full revision rather than a feature-branch commit.
+
 Source ownership is package-complete rather than module-selected. For each
 canonical package, the inventory includes every non-ignored file reported by
 Git below the package root. This deliberately covers the complete `src/` tree,

@@ -4,13 +4,13 @@
   "distributionSources": [
     {
       "id": "d2b-client-toolkit",
-      "sourceRevision": "7e94327951d30913a1a6e0e7a47d4a24b462deff",
-      "fingerprint": "0401d1f463d9dad49efd663d1493184e42954f624a029fbfd41c49f0323e5708"
+      "sourceRevision": "4018d9c9652bd826c2e6a9abccdcdcafb832d944",
+      "fingerprint": "c2c99bdd77ba66948fce81161dcc3efde608eefefb96f28fa934c9f58d96d838"
     },
     {
       "id": "d2b-provider-toolkit",
-      "sourceRevision": "7e94327951d30913a1a6e0e7a47d4a24b462deff",
-      "fingerprint": "75bebbafe99d2ba65e5ce80bc44e644b5d073b7045d5058cbb0fb1f4c539a8f6"
+      "sourceRevision": "4018d9c9652bd826c2e6a9abccdcdcafb832d944",
+      "fingerprint": "89f76b9ab63515ecccf46c642676ac5d3c6b4e53bfc642d1dacb69818e3e8588"
     }
   ],
   "contractGates": [
@@ -18,7 +18,7 @@
       "id": "client-provider-foundation",
       "planMilestone": "W4-F",
       "status": "available",
-      "sourceRevision": "7e94327951d30913a1a6e0e7a47d4a24b462deff",
+      "sourceRevision": "4018d9c9652bd826c2e6a9abccdcdcafb832d944",
       "provides": [
         "canonical client and provider toolkit crates",
         "provider and session contracts",

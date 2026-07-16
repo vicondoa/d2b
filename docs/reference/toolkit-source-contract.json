@@ -223,7 +223,7 @@
         ]
       },
       "fileCount": 157,
-      "fingerprint": "0401d1f463d9dad49efd663d1493184e42954f624a029fbfd41c49f0323e5708",
+      "fingerprint": "c2c99bdd77ba66948fce81161dcc3efde608eefefb96f28fa934c9f58d96d838",
       "id": "d2b-client-toolkit",
       "sourceGroups": [
         "workspace-manifest",
@@ -244,7 +244,7 @@
         "d2b-session": []
       },
       "fileCount": 157,
-      "fingerprint": "75bebbafe99d2ba65e5ce80bc44e644b5d073b7045d5058cbb0fb1f4c539a8f6",
+      "fingerprint": "89f76b9ab63515ecccf46c642676ac5d3c6b4e53bfc642d1dacb69818e3e8588",
       "id": "d2b-provider-toolkit",
       "sourceGroups": [
         "workspace-manifest",
@@ -1271,7 +1271,7 @@
         },
         {
           "path": "docs/reference/toolkit-source-contract.md",
-          "sha256": "c84aaacf6df71e402b0c317abc523068ba1c125179f5222d9083201b48d85e65"
+          "sha256": "a10a22b9830a23901eadf525f6885006a9483c20b33a859877d2dc438999a56c"
         },
         {
           "path": "docs/reference/v2-foundation-crates.md",
@@ -1298,7 +1298,7 @@
           "sha256": "21a62cdc14d18023c947853b75ceb2fc9bfc88af3d7a3a4bcdb5a518826f9b92"
         }
       ],
-      "fingerprint": "c3a37248d7376827409d897eac7a1b30dcd39f3187261cf4098b6dbcc577459b",
+      "fingerprint": "d421154a2ecfbde33561f9d0efc1aa7da2d1fe6acf5f039deda3a24545662646",
       "id": "public-contract-artifacts"
     }
   ]

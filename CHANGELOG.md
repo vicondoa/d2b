@@ -326,6 +326,9 @@ deprecations ship one minor release before removal.
   preserving strict wire variants, and added a registered consumer view whose
   explicit daemon fallback rejects newly declared bindings until an adapter is
   implemented.
+- Pinned both toolkit distributions and their shared foundation contract gate to
+  the landed canonical source revision, replacing the deleted feature-branch
+  commit while refreshing complete source inventories and fingerprints.
 - Made dependency-ready wave launch and file-overlap-based component dispatch
   mandatory after shared contract prep, preventing one persistent agent from
   serializing unrelated implementation and review scopes, with shipped-package

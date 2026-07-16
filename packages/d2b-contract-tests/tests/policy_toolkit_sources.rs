@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 
 const INVENTORY_PATH: &str = "docs/reference/toolkit-source-contract.json";
 const COORDINATION_PATH: &str = "docs/adr/0045-toolkit-sibling-coordination.json";
+const FOUNDATION_SOURCE_REVISION: &str = "4018d9c9652bd826c2e6a9abccdcdcafb832d944";
 const CANONICAL_PACKAGE_GROUPS: [(&str, &str); 6] = [
     ("d2b-contracts", "contracts-package"),
     ("d2b-client", "client"),
@@ -1016,6 +1017,10 @@ fn sibling_coordination_graph_has_disjoint_repository_ownership() {
         .find(|gate| gate["id"] == "client-provider-foundation")
         .and_then(|gate| gate["sourceRevision"].as_str())
         .expect("foundation source revision");
+    assert_eq!(
+        source_revision, FOUNDATION_SOURCE_REVISION,
+        "foundation source revision must be the landed canonical source"
+    );
     let inventory_fingerprints = inventory["distributions"]
         .as_array()
         .expect("distributions array")
