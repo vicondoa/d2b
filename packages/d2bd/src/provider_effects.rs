@@ -20,7 +20,7 @@ use d2b_contracts::{
         LocalRuntimeProviderBindingV2, ProviderBindingV2, ProviderRegistryEntryV2,
     },
     public_wire::{MutationFlags, VmLifecycleRequest},
-    v2_identity::ProviderId,
+    v2_identity::{ProviderId, RealmId},
     v2_provider::{
         AuthorizedProviderScope, HandleId, HandleOwner, IdempotencyKey, MutationState,
         ObservationReason, ObservedLifecycleState, OperationId, PlanId, ProviderDescriptor,
@@ -494,6 +494,7 @@ impl DaemonEffectAdapters {
                         Arc::new(DaemonLocalRuntimeControl {
                             state: state.clone(),
                             entry: entry.clone(),
+                            realm_id: entry.descriptor.placement.realm_id().clone(),
                             binding: binding.clone(),
                             lifecycle_tasks: Arc::new(ProviderLifecycleTasks::default()),
                         });
@@ -509,6 +510,7 @@ impl DaemonEffectAdapters {
 struct DaemonLocalRuntimeControl {
     state: Weak<ServerState>,
     entry: ProviderRegistryEntryV2,
+    realm_id: RealmId,
     binding: LocalRuntimeProviderBindingV2,
     lifecycle_tasks: Arc<ProviderLifecycleTasks>,
 }
@@ -554,7 +556,7 @@ impl DaemonLocalRuntimeControl {
         if context.kind() != self.kind()?
             || context.operation().provider_id != self.entry.descriptor.provider_id
             || context.operation().provider_generation != self.entry.descriptor.registry_generation
-            || context.operation().scope.realm_id() != &self.binding.realm_id
+            || context.operation().scope.realm_id() != &self.realm_id
             || context.operation().scope.workload_id() != Some(&self.binding.workload_id)
         {
             return Err(RuntimeControlError::UnauthorizedScope);
@@ -573,7 +575,7 @@ impl DaemonLocalRuntimeControl {
         &self,
         request: &RuntimeOperationControl,
     ) -> Result<ResolvedDaemonRuntime, RuntimeControlError> {
-        if request.target().realm_id() != &self.binding.realm_id
+        if request.target().realm_id() != &self.realm_id
             || request.target().workload_id() != Some(&self.binding.workload_id)
         {
             return Err(RuntimeControlError::UnauthorizedScope);
@@ -595,12 +597,12 @@ impl DaemonLocalRuntimeControl {
             self.entry.descriptor.provider_id.clone(),
             self.entry.descriptor.registry_generation,
             AuthorizedProviderScope::Workload {
-                realm_id: self.binding.realm_id.clone(),
+                realm_id: self.realm_id.clone(),
                 workload_id: self.binding.workload_id.clone(),
             },
             handle_id,
             HandleOwner::RealmController {
-                realm_id: self.binding.realm_id.clone(),
+                realm_id: self.realm_id.clone(),
             },
             self.entry.descriptor.registry_generation,
             self.entry

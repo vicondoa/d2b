@@ -1249,11 +1249,12 @@ in
       in {
         schemaVersion = data.schemaVersion;
         providerCount = builtins.length data.providers;
-        canonicalRealm = binding.realmId == realmId;
+        canonicalRealm = descriptor.placement.realmId == realmId;
+        bindingRealmAbsent = !(binding ? realmId);
         canonicalWorkload = binding.workloadId == workloadId;
         canonicalProvider = descriptor.providerId == providerId;
         processIdentityMatchesBinding =
-          binding.realmId == processRealmId
+          descriptor.placement.realmId == processRealmId
           && binding.workloadId == processWorkloadId
           && processIdentity.legacyVmName == "corpbox"
           && processIdentity.runtimeKind == "nixos"
@@ -1281,6 +1282,7 @@ in
       schemaVersion = "v2";
       providerCount = 1;
       canonicalRealm = true;
+      bindingRealmAbsent = true;
       canonicalWorkload = true;
       canonicalProvider = true;
       processIdentityMatchesBinding = true;

@@ -16,7 +16,9 @@ use std::{
 };
 
 use d2b_contracts::{
-    provider_registry_v2::{ProviderBindingV2, ProviderRegistryEntryV2, ProviderRegistryV2},
+    provider_registry_v2::{
+        ProviderBindingV2, ProviderRegistryEntryV2, ProviderRegistryV2, ProviderRegistryV2Error,
+    },
     v2_component_session::{EndpointRole, ServicePackage},
     v2_identity::{
         ProviderId, ProviderType, RealmId, RealmPath as ProviderRealmPath, WorkloadId, WorkloadName,
@@ -107,6 +109,9 @@ pub enum ProviderCompositionError {
     AzureVmForbidden,
     NondispatchableCapability,
     ConfigurationMismatch,
+    ProviderIdMismatch,
+    ConfigurationSchemaFingerprintMismatch,
+    ConfiguredScopeDigestMismatch,
     EffectAdapter(DaemonEffectAdapterError),
     Factory(FactoryError),
     Registry(RegistryBuildError),
@@ -144,6 +149,15 @@ impl fmt::Display for ProviderCompositionError {
             Self::ConfigurationMismatch => {
                 "provider factory rejected its exact configuration binding"
             }
+            Self::ProviderIdMismatch => {
+                "provider-registry-v2 provider ID does not match descriptor placement and workload binding"
+            }
+            Self::ConfigurationSchemaFingerprintMismatch => {
+                "provider-registry-v2 configuration schema fingerprint does not match the first-party provider contract"
+            }
+            Self::ConfiguredScopeDigestMismatch => {
+                "provider-registry-v2 configured scope digest does not match the closed provider binding"
+            }
             Self::EffectAdapter(error) => return error.fmt(formatter),
             Self::Factory(error) => return error.fmt(formatter),
             Self::Registry(error) => return error.fmt(formatter),
@@ -168,6 +182,24 @@ impl fmt::Display for ProviderCompositionError {
 }
 
 impl Error for ProviderCompositionError {}
+
+fn map_provider_registry_validation_error(
+    error: ProviderRegistryV2Error,
+) -> ProviderCompositionError {
+    match error {
+        ProviderRegistryV2Error::InvalidDescriptor => ProviderCompositionError::InvalidDescriptor,
+        ProviderRegistryV2Error::GenerationMismatch => ProviderCompositionError::GenerationMismatch,
+        ProviderRegistryV2Error::DuplicateProvider => ProviderCompositionError::DuplicateDescriptor,
+        ProviderRegistryV2Error::ProviderIdMismatch => ProviderCompositionError::ProviderIdMismatch,
+        ProviderRegistryV2Error::ConfigurationSchemaFingerprintMismatch => {
+            ProviderCompositionError::ConfigurationSchemaFingerprintMismatch
+        }
+        ProviderRegistryV2Error::ConfiguredScopeDigestMismatch => {
+            ProviderCompositionError::ConfiguredScopeDigestMismatch
+        }
+        _ => ProviderCompositionError::ArtifactMalformed,
+    }
+}
 
 impl From<DaemonEffectAdapterError> for ProviderCompositionError {
     fn from(value: DaemonEffectAdapterError) -> Self {
@@ -887,6 +919,7 @@ fn validate_runtime_routes(
     let mut runner_intents = BTreeSet::new();
     for entry in &artifact.providers {
         let ProviderBindingV2::LocalRuntime(binding) = &entry.binding;
+        let realm_id = entry.descriptor.placement.realm_id();
         let vm_start = resolver
             .find_vm_start_intent(binding.vm_start_intent_id.as_str())
             .ok_or(ProviderCompositionError::ProcessIdentityMismatch)?;
@@ -938,7 +971,7 @@ fn validate_runtime_routes(
         let workload_name = WorkloadName::parse(identity.workload_id.as_str())
             .map_err(|_| ProviderCompositionError::ProcessIdentityMismatch)?;
         let expected_workload_id = WorkloadId::derive(&expected_realm_id, &workload_name);
-        if binding.realm_id != expected_realm_id
+        if realm_id != &expected_realm_id
             || binding.workload_id != expected_workload_id
             || identity.legacy_vm_name.as_ref().map(|value| value.as_str())
                 != Some(runner.vm_name.as_str())
@@ -976,7 +1009,7 @@ pub(crate) fn resolve_current_runtime_route(
     .map_err(|_| ProviderCompositionError::ArtifactMalformed)?;
     artifact
         .validate()
-        .map_err(|_| ProviderCompositionError::ArtifactMalformed)?;
+        .map_err(map_provider_registry_validation_error)?;
     let routes = validate_runtime_routes(&resolver, &artifact)?;
     let ProviderBindingV2::LocalRuntime(binding) = &expected.binding;
     let runner = resolver
@@ -1006,7 +1039,7 @@ pub(crate) fn load_provider_registry_v2(
         serde_json::from_slice(bytes).map_err(|_| ProviderCompositionError::ArtifactMalformed)?;
     artifact
         .validate()
-        .map_err(|_| ProviderCompositionError::ArtifactMalformed)?;
+        .map_err(map_provider_registry_validation_error)?;
     Ok(artifact)
 }
 
@@ -1027,7 +1060,7 @@ pub(crate) fn load_provider_registry_v2_with_policy(
         serde_json::from_slice(bytes).map_err(|_| ProviderCompositionError::ArtifactMalformed)?;
     artifact
         .validate()
-        .map_err(|_| ProviderCompositionError::ArtifactMalformed)?;
+        .map_err(map_provider_registry_validation_error)?;
     Ok(artifact)
 }
 
@@ -1038,7 +1071,7 @@ pub(crate) fn compose_startup_registry_with_policy(
 ) -> Result<StartupProviderRegistry, ProviderCompositionError> {
     artifact
         .validate()
-        .map_err(|_| ProviderCompositionError::ArtifactMalformed)?;
+        .map_err(map_provider_registry_validation_error)?;
     let resolver = match policy {
         Some(policy) => {
             BundleResolver::load_with_policy(&state.config.artifacts.bundle_path, policy)
@@ -1193,6 +1226,7 @@ pub(crate) async fn invoke_runtime_lifecycle(
         return Ok(RuntimeLifecycleInvocation::Unmapped);
     };
     let ProviderBindingV2::LocalRuntime(binding) = &entry.binding;
+    let realm_id = entry.descriptor.placement.realm_id();
     let registry = startup
         .registry()
         .ok_or_else(|| crate::TypedError::InternalConfig {
@@ -1224,7 +1258,7 @@ pub(crate) async fn invoke_runtime_lifecycle(
         "{}:{}:{}:{}:{}:{}",
         method.as_str(),
         entry.descriptor.provider_id.as_str(),
-        binding.realm_id.as_str(),
+        realm_id.as_str(),
         binding.workload_id.as_str(),
         request.force,
         request.no_wait_api,
@@ -1241,7 +1275,7 @@ pub(crate) async fn invoke_runtime_lifecycle(
         idempotency_key,
         request_digest: request_digest.clone(),
         scope: AuthorizedProviderScope::Workload {
-            realm_id: binding.realm_id.clone(),
+            realm_id: realm_id.clone(),
             workload_id: binding.workload_id.clone(),
         },
         principal: PrincipalRef::parse("daemon-lifecycle").map_err(|_| {
@@ -1280,7 +1314,7 @@ pub(crate) async fn invoke_runtime_lifecycle(
     let provider_request = ProviderOperationRequest {
         context: operation.clone(),
         target: ProviderTarget::Workload {
-            realm_id: binding.realm_id.clone(),
+            realm_id: realm_id.clone(),
             workload_id: binding.workload_id.clone(),
         },
         expected_configuration_fingerprint: entry
@@ -1381,6 +1415,7 @@ pub(crate) async fn probe_startup_registry(
         .map_err(|_| ProviderCompositionError::StartupProbeFailed)?;
     for entry in &artifact.providers {
         let ProviderBindingV2::LocalRuntime(binding) = &entry.binding;
+        let realm_id = entry.descriptor.placement.realm_id();
         let method = ProviderMethod::RuntimeInspect;
         let operation = ProviderOperationContext {
             schema_version: PROVIDER_SCHEMA_VERSION,
@@ -1396,7 +1431,7 @@ pub(crate) async fn probe_startup_registry(
             .map_err(|_| ProviderCompositionError::StartupProbeFailed)?,
             request_digest: entry.descriptor.configured_scope_digest.clone(),
             scope: AuthorizedProviderScope::Workload {
-                realm_id: binding.realm_id.clone(),
+                realm_id: realm_id.clone(),
                 workload_id: binding.workload_id.clone(),
             },
             principal: PrincipalRef::parse("daemon-startup")
@@ -1445,7 +1480,7 @@ pub(crate) async fn probe_startup_registry(
         let request = ProviderOperationRequest {
             context: operation.clone(),
             target: ProviderTarget::Workload {
-                realm_id: binding.realm_id.clone(),
+                realm_id: realm_id.clone(),
                 workload_id: binding.workload_id.clone(),
             },
             expected_configuration_fingerprint: entry
@@ -1692,6 +1727,32 @@ mod tests {
             result,
             Err(ProviderCompositionError::ConfigurationMismatch)
         ));
+    }
+
+    #[test]
+    fn registry_identity_mismatches_remain_exact_and_actionable() {
+        let cases = [
+            (
+                ProviderRegistryV2Error::ProviderIdMismatch,
+                ProviderCompositionError::ProviderIdMismatch,
+                "provider-registry-v2 provider ID does not match descriptor placement and workload binding",
+            ),
+            (
+                ProviderRegistryV2Error::ConfigurationSchemaFingerprintMismatch,
+                ProviderCompositionError::ConfigurationSchemaFingerprintMismatch,
+                "provider-registry-v2 configuration schema fingerprint does not match the first-party provider contract",
+            ),
+            (
+                ProviderRegistryV2Error::ConfiguredScopeDigestMismatch,
+                ProviderCompositionError::ConfiguredScopeDigestMismatch,
+                "provider-registry-v2 configured scope digest does not match the closed provider binding",
+            ),
+        ];
+        for (contract, composition, message) in cases {
+            let mapped = map_provider_registry_validation_error(contract);
+            assert_eq!(mapped, composition);
+            assert_eq!(mapped.to_string(), message);
+        }
     }
 
     #[test]

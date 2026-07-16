@@ -35,6 +35,9 @@ pub enum ProviderRegistryV2Error {
     ProviderTypeMismatch,
     PlacementMismatch,
     BindingMismatch,
+    ProviderIdMismatch,
+    ConfigurationSchemaFingerprintMismatch,
+    ConfiguredScopeDigestMismatch,
     InvalidOpaqueIntent,
 }
 
@@ -51,6 +54,15 @@ impl fmt::Display for ProviderRegistryV2Error {
             Self::ProviderTypeMismatch => "provider registry binding has the wrong provider type",
             Self::PlacementMismatch => "provider registry binding has the wrong placement",
             Self::BindingMismatch => "provider registry descriptor and binding do not match",
+            Self::ProviderIdMismatch => {
+                "provider ID does not match descriptor placement and workload binding"
+            }
+            Self::ConfigurationSchemaFingerprintMismatch => {
+                "configuration schema fingerprint does not match the first-party provider contract"
+            }
+            Self::ConfiguredScopeDigestMismatch => {
+                "configured scope digest does not match the closed provider binding"
+            }
             Self::InvalidOpaqueIntent => "provider registry contains an invalid opaque intent ID",
         })
     }
@@ -106,7 +118,6 @@ impl<'de> Deserialize<'de> for ProviderIntentId {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LocalRuntimeProviderBindingV2 {
-    pub realm_id: RealmId,
     pub workload_id: WorkloadId,
     pub vm_start_intent_id: ProviderIntentId,
     pub runner_intent_id: ProviderIntentId,
@@ -122,12 +133,6 @@ impl ProviderBindingV2 {
     pub const fn provider_type(&self) -> ProviderType {
         match self {
             Self::LocalRuntime(_) => ProviderType::Runtime,
-        }
-    }
-
-    pub fn realm_id(&self) -> &RealmId {
-        match self {
-            Self::LocalRuntime(binding) => &binding.realm_id,
         }
     }
 }
@@ -150,9 +155,6 @@ impl ProviderRegistryEntryV2 {
         if self.descriptor.provider_type() != self.binding.provider_type() {
             return Err(ProviderRegistryV2Error::ProviderTypeMismatch);
         }
-        if self.descriptor.placement.realm_id() != self.binding.realm_id() {
-            return Err(ProviderRegistryV2Error::BindingMismatch);
-        }
         if !matches!(
             self.descriptor.placement,
             ProviderPlacement::TrustedFirstPartyInProcess { .. }
@@ -161,26 +163,30 @@ impl ProviderRegistryEntryV2 {
         }
         match &self.binding {
             ProviderBindingV2::LocalRuntime(binding) => {
+                let realm_id = self.descriptor.placement.realm_id();
                 let configured_provider_id = ConfiguredProviderId::parse(format!(
                     "runtime-{}",
                     binding.workload_id.as_str()
                 ))
                 .map_err(|_| ProviderRegistryV2Error::BindingMismatch)?;
-                let expected_provider_id = ProviderId::derive(
-                    &binding.realm_id,
-                    ProviderType::Runtime,
-                    &configured_provider_id,
-                );
-                if self.descriptor.provider_id != expected_provider_id
-                    || self.descriptor.configuration_schema_fingerprint
-                        != local_runtime_configuration_schema_fingerprint()?
-                    || self.descriptor.configured_scope_digest
-                        != local_runtime_configured_scope_digest(
-                            &self.descriptor.provider_id,
-                            binding,
-                        )?
+                let expected_provider_id =
+                    ProviderId::derive(realm_id, ProviderType::Runtime, &configured_provider_id);
+                if self.descriptor.provider_id != expected_provider_id {
+                    return Err(ProviderRegistryV2Error::ProviderIdMismatch);
+                }
+                if self.descriptor.configuration_schema_fingerprint
+                    != local_runtime_configuration_schema_fingerprint()?
                 {
-                    return Err(ProviderRegistryV2Error::BindingMismatch);
+                    return Err(ProviderRegistryV2Error::ConfigurationSchemaFingerprintMismatch);
+                }
+                if self.descriptor.configured_scope_digest
+                    != local_runtime_configured_scope_digest(
+                        &self.descriptor.provider_id,
+                        realm_id,
+                        binding,
+                    )?
+                {
+                    return Err(ProviderRegistryV2Error::ConfiguredScopeDigestMismatch);
                 }
             }
         }
@@ -248,6 +254,7 @@ pub fn local_runtime_configuration_schema_fingerprint()
 
 pub fn local_runtime_configured_scope_digest(
     provider_id: &ProviderId,
+    realm_id: &RealmId,
     binding: &LocalRuntimeProviderBindingV2,
 ) -> Result<Fingerprint, ProviderRegistryV2Error> {
     let canonical_scope = format!(
@@ -257,7 +264,7 @@ pub fn local_runtime_configured_scope_digest(
             r#""workloadId":"{}"}}"#
         ),
         provider_id.as_str(),
-        binding.realm_id.as_str(),
+        realm_id.as_str(),
         binding.runner_intent_id.as_str(),
         binding.vm_start_intent_id.as_str(),
         binding.workload_id.as_str(),
@@ -300,7 +307,6 @@ mod tests {
             &ConfiguredProviderId::parse(format!("runtime-{}", workload_id.as_str())).unwrap(),
         );
         let binding = LocalRuntimeProviderBindingV2 {
-            realm_id: realm_id.clone(),
             workload_id,
             vm_start_intent_id: ProviderIntentId::parse(
                 "vm-start:vm:corp-vm:role:cloud-hypervisor",
@@ -313,7 +319,7 @@ mod tests {
         let configuration_schema_fingerprint =
             local_runtime_configuration_schema_fingerprint().unwrap();
         let configured_scope_digest =
-            local_runtime_configured_scope_digest(&provider_id, &binding).unwrap();
+            local_runtime_configured_scope_digest(&provider_id, &realm_id, &binding).unwrap();
         ProviderRegistryV2 {
             schema_version: PROVIDER_REGISTRY_V2_SCHEMA_VERSION.to_owned(),
             registry_generation: generation,
@@ -370,12 +376,19 @@ mod tests {
         let encoded = serde_json::to_string(&registry).unwrap();
         assert!(!encoded.contains("argv"));
         assert!(!encoded.contains("secret"));
+        let encoded_value = serde_json::to_value(&registry).unwrap();
+        assert!(
+            encoded_value["providers"][0]["binding"]
+                .get("realmId")
+                .is_none(),
+            "the binding must not duplicate descriptor placement realm"
+        );
         let decoded: ProviderRegistryV2 = serde_json::from_str(&encoded).unwrap();
         assert_eq!(decoded, registry);
     }
 
     #[test]
-    fn rejects_generation_and_binding_mismatch() {
+    fn rejects_generation_and_exact_identity_mismatches() {
         let mut registry = fixture();
         registry.providers[0].descriptor.registry_generation = Generation::new(2).unwrap();
         assert_eq!(
@@ -385,11 +398,14 @@ mod tests {
 
         let mut registry = fixture();
         let other = RealmId::derive(&RealmPath::parse("other.local-root").unwrap());
-        let ProviderBindingV2::LocalRuntime(binding) = &mut registry.providers[0].binding;
-        binding.realm_id = other;
+        registry.providers[0].descriptor.provider_id = ProviderId::derive(
+            &other,
+            ProviderType::Runtime,
+            &ConfiguredProviderId::parse("runtime-other").unwrap(),
+        );
         assert_eq!(
             registry.validate(),
-            Err(ProviderRegistryV2Error::BindingMismatch)
+            Err(ProviderRegistryV2Error::ProviderIdMismatch)
         );
 
         let mut registry = fixture();
@@ -398,7 +414,7 @@ mod tests {
             .configuration_schema_fingerprint = Fingerprint::parse("4".repeat(64)).unwrap();
         assert_eq!(
             registry.validate(),
-            Err(ProviderRegistryV2Error::BindingMismatch)
+            Err(ProviderRegistryV2Error::ConfigurationSchemaFingerprintMismatch)
         );
 
         let mut registry = fixture();
@@ -407,7 +423,31 @@ mod tests {
             ProviderIntentId::parse("runner:vm:other:role:cloud-hypervisor").unwrap();
         assert_eq!(
             registry.validate(),
-            Err(ProviderRegistryV2Error::BindingMismatch)
+            Err(ProviderRegistryV2Error::ConfiguredScopeDigestMismatch)
+        );
+    }
+
+    #[test]
+    fn contradictory_binding_realm_json_is_unrepresentable() {
+        let mut encoded = serde_json::to_value(fixture()).unwrap();
+        encoded["providers"][0]["binding"]["realmId"] =
+            serde_json::Value::String("contradictory-realm".to_owned());
+        assert!(serde_json::from_value::<ProviderRegistryV2>(encoded).is_err());
+    }
+
+    #[test]
+    fn identity_mismatch_messages_name_the_failed_contract() {
+        assert_eq!(
+            ProviderRegistryV2Error::ProviderIdMismatch.to_string(),
+            "provider ID does not match descriptor placement and workload binding"
+        );
+        assert_eq!(
+            ProviderRegistryV2Error::ConfigurationSchemaFingerprintMismatch.to_string(),
+            "configuration schema fingerprint does not match the first-party provider contract"
+        );
+        assert_eq!(
+            ProviderRegistryV2Error::ConfiguredScopeDigestMismatch.to_string(),
+            "configured scope digest does not match the closed provider binding"
         );
     }
 

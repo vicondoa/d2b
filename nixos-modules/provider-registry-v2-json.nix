@@ -88,7 +88,6 @@ let
       };
       binding = {
         axis = "local-runtime";
-        realmId = canonicalRealmId;
         workloadId = canonicalWorkloadId;
         inherit vmStartIntentId runnerIntentId;
       };

@@ -47,13 +47,18 @@ non-dispatchable capabilities abort startup. The registry is not reconstructed
 per call. An empty registry is valid only when the artifact explicitly contains
 zero provider rows.
 
-The generated artifact carries canonical realm, workload, and provider IDs plus
-opaque references to existing bundle intents. It contains no argv, host path,
-credential, or secret payload. `bundleVersion` 12 adds the artifact; its own
-schema remains version `v2`. Provider activation accepts exactly bundle version
-12 with bundle schema `v2`, a declared provider artifact path, a bundle hash,
-and an artifact-hash entry for that path. Older bundle versions remain readable
-by compatibility consumers but cannot activate this registry.
+The generated artifact carries canonical realm and provider IDs in descriptor
+placement, a target workload ID in each local-runtime binding, and opaque
+references to existing bundle intents. Descriptor placement is the sole realm
+authority: the binding deliberately cannot encode a contradictory realm.
+Keeping `workloadId` is necessary because a realm-scoped trusted in-process
+descriptor does not identify its target workload. The artifact contains no
+argv, host path, credential, or secret payload. `bundleVersion` 12 adds the
+artifact; its own schema remains version `v2`. Provider activation accepts
+exactly bundle version 12 with bundle schema `v2`, a declared provider artifact
+path, a bundle hash, and an artifact-hash entry for that path. Older bundle
+versions remain readable by compatibility consumers but cannot activate this
+registry.
 
 The live host registry currently registers only local runtime providers:
 

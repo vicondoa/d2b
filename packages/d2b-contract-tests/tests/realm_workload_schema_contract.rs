@@ -461,6 +461,16 @@ fn generated_provider_registry_schema_is_closed_and_authority_free() {
     assert!(schema_text.contains("\"local-runtime\""));
     assert!(schema_text.contains("\"vmStartIntentId\""));
     assert!(schema_text.contains("\"runnerIntentId\""));
+    let local_runtime = &schema["definitions"]["ProviderBindingV2"]["oneOf"][0];
+    assert_eq!(
+        local_runtime["additionalProperties"],
+        serde_json::json!(false)
+    );
+    assert!(
+        local_runtime["properties"].get("realmId").is_none(),
+        "local runtime binding realm must come exclusively from descriptor placement"
+    );
+    assert!(local_runtime["properties"].get("workloadId").is_some());
 }
 
 #[test]
@@ -618,6 +628,8 @@ fn rendered_launcher_metadata_hides_argv_and_private_bundle_resolves_it() {
         &provider_entry.binding,
         ProviderBindingV2::LocalRuntime(_)
     ));
+    let binding_json = serde_json::to_value(&provider_entry.binding).unwrap();
+    assert!(binding_json.get("realmId").is_none());
     let provider_json = serde_json::to_string(&provider_registry).unwrap();
     for forbidden in ["\"argv\"", "\"secret\"", "\"azure-vm\"", "runtime.execute"] {
         assert!(

@@ -24618,7 +24618,6 @@ mod broker_dispatch_tests {
             LocalRuntimeKind::SystemdUser => panic!("systemd-user is not a host runtime"),
         };
         let binding = LocalRuntimeProviderBindingV2 {
-            realm_id: realm_id.clone(),
             workload_id,
             vm_start_intent_id: ProviderIntentId::parse(format!("vm-start:vm:vm-a:role:{role_id}"))
                 .expect("VM start intent"),
@@ -24636,8 +24635,12 @@ mod broker_dispatch_tests {
             capabilities: live_runtime_capabilities().expect("live capabilities"),
             configuration_schema_fingerprint: local_runtime_configuration_schema_fingerprint()
                 .expect("configuration fingerprint"),
-            configured_scope_digest: local_runtime_configured_scope_digest(&provider_id, &binding)
-                .expect("scope digest"),
+            configured_scope_digest: local_runtime_configured_scope_digest(
+                &provider_id,
+                &realm_id,
+                &binding,
+            )
+            .expect("scope digest"),
             registry_generation: generation,
             placement: ProviderPlacement::TrustedFirstPartyInProcess {
                 realm_id: realm_id.clone(),

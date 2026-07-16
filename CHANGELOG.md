@@ -114,6 +114,10 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Split provider-registry identity failures into actionable provider-ID,
+  configuration-schema-fingerprint, and configured-scope-digest diagnostics.
+  Local-runtime bindings now derive realm identity exclusively from descriptor
+  placement while retaining workload identity for exact target selection.
 - Made mapped runtime-provider lifecycle deadlines cover readiness, graceful
   shutdown, rollback, forced cleanup, and state snapshots. Timed-out mutation
   waiters now return an observation-required ambiguous result while an owned

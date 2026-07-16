@@ -298,7 +298,6 @@
           "type": "object",
           "required": [
             "axis",
-            "realmId",
             "runnerIntentId",
             "vmStartIntentId",
             "workloadId"
@@ -309,9 +308,6 @@
               "enum": [
                 "local-runtime"
               ]
-            },
-            "realmId": {
-              "type": "string"
             },
             "runnerIntentId": {
               "type": "string"
