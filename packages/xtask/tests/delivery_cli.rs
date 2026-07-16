@@ -2,7 +2,10 @@
 
 use std::process::Command;
 
-use xtask::delivery::DeliveryManifest;
+use xtask::delivery::{
+    DeliveryManifest,
+    model::{expected_wave_manifest_path, is_authoritative_manifest_path},
+};
 
 #[test]
 fn checked_in_delivery_manifest_is_valid() {
@@ -13,6 +16,57 @@ fn checked_in_delivery_manifest_is_valid() {
     let bytes = std::fs::read(root.join("delivery/manifest.json")).expect("delivery manifest");
     let manifest: DeliveryManifest = serde_json::from_slice(&bytes).expect("manifest JSON");
     manifest.validate().expect("valid delivery manifest");
+}
+
+#[test]
+fn checked_in_per_wave_delivery_manifests_are_unique_and_self_fingerprinted() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("repository root");
+    let mut authorities = std::collections::BTreeMap::new();
+    let paths = std::iter::once(root.join("delivery/manifest.json")).chain(
+        std::fs::read_dir(root.join("delivery/manifests"))
+            .expect("per-wave manifest directory")
+            .map(|entry| entry.expect("manifest entry").path()),
+    );
+    for path in paths {
+        let relative = path.strip_prefix(root).expect("repository-relative path");
+        assert!(
+            is_authoritative_manifest_path(relative),
+            "{} is not an authority path",
+            relative.display()
+        );
+        let manifest: DeliveryManifest =
+            serde_json::from_slice(&std::fs::read(&path).expect("manifest bytes"))
+                .expect("manifest JSON");
+        manifest.validate().expect("valid manifest");
+        if relative != std::path::Path::new("delivery/manifest.json") {
+            assert_eq!(
+                relative,
+                expected_wave_manifest_path(&manifest.wave).expect("wave path")
+            );
+        }
+        assert!(
+            manifest
+                .contract_fingerprints
+                .iter()
+                .any(|fingerprint| fingerprint.path == relative.to_string_lossy()),
+            "{} does not fingerprint itself",
+            relative.display()
+        );
+        assert!(
+            authorities
+                .insert(manifest.wave.clone(), relative.to_path_buf())
+                .is_none(),
+            "duplicate authority for {}",
+            manifest.wave
+        );
+    }
+    assert_eq!(
+        authorities.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["w4", "w5", "w6", "w7"]
+    );
 }
 
 #[test]
