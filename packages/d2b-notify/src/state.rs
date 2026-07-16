@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Durable JSON state format for the d2b notification layer.
+//! Bounded presentation projection for desktop status consumers.
 //!
-//! The host runtime writes `sk-state.json` to
-//! `/run/d2b/notify/` (the `d2b.notifications.runtime.stateDir` path)
-//! whenever the set of active or recently terminal security-key ceremonies
-//! changes.  The Waybar helper and `d2b-wlcontrol` read this file on demand.
+//! A ComponentSession observer may materialize this read model for Waybar or
+//! other desktop renderers. The file is never an endpoint, authorization
+//! source, repair input, or fallback control channel.
 //!
 //! ## File format
 //!
@@ -19,6 +18,12 @@ use crate::events::SecurityKeyEvent;
 
 /// Current schema version for `sk-state.json`.
 pub const STATE_SCHEMA_VERSION: u32 = 1;
+pub const MAX_PROJECTION_BYTES: usize = 32 * 1024;
+pub const MAX_ACTIVE_CEREMONIES: usize = 16;
+pub const MAX_PROJECTION_SESSION_ID_CHARS: usize = 64;
+pub const MAX_PROJECTION_VM_NAME_CHARS: usize = 64;
+pub const MAX_PROJECTION_RP_ID_CHARS: usize = 128;
+pub const MAX_EVENT_KIND_CHARS: usize = 32;
 
 /// Summary of one security-key ceremony, as recorded in the durable state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -51,10 +56,10 @@ impl CeremonySummary {
             _ => None,
         };
         Self {
-            session_id: event.session_id().to_owned(),
-            vm_name: event.vm_name().to_owned(),
-            rp_id,
-            last_event_kind: kind,
+            session_id: projection_text(event.session_id(), MAX_PROJECTION_SESSION_ID_CHARS),
+            vm_name: projection_text(event.vm_name(), MAX_PROJECTION_VM_NAME_CHARS),
+            rp_id: rp_id.map(|value| projection_text(&value, MAX_PROJECTION_RP_ID_CHARS)),
+            last_event_kind: projection_text(&kind, MAX_EVENT_KIND_CHARS),
             last_event_at: now_secs,
             is_terminal: event.is_terminal(),
         }
@@ -64,7 +69,7 @@ impl CeremonySummary {
 /// Durable state file contents written by the host runtime and read by
 /// the Waybar helper and wlcontrol.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct SkNotifyState {
     /// Must equal [`STATE_SCHEMA_VERSION`].
     pub schema_version: u32,
@@ -117,6 +122,11 @@ impl SkNotifyState {
             } else {
                 self.active.push(summary);
             }
+            self.active.sort_by_key(|entry| entry.last_event_at);
+            if self.active.len() > MAX_ACTIVE_CEREMONIES {
+                let excess = self.active.len() - MAX_ACTIVE_CEREMONIES;
+                self.active.drain(..excess);
+            }
         }
         self
     }
@@ -130,23 +140,60 @@ impl SkNotifyState {
     }
 
     /// Serialize to a compact JSON string.
-    pub fn to_json(&self) -> serde_json::Result<String> {
-        serde_json::to_string(self)
+    pub fn to_json(&self) -> Result<String, StateWriteError> {
+        self.validate()
+            .map_err(StateWriteError::InvalidProjection)?;
+        let encoded = serde_json::to_string(self).map_err(StateWriteError::Json)?;
+        if encoded.len() > MAX_PROJECTION_BYTES {
+            return Err(StateWriteError::ProjectionTooLarge);
+        }
+        Ok(encoded)
     }
 
     /// Deserialize from a JSON string.  Returns an error if the schema
     /// version is not [`STATE_SCHEMA_VERSION`].
     pub fn from_json(s: &str) -> Result<Self, StateReadError> {
+        if s.len() > MAX_PROJECTION_BYTES {
+            return Err(StateReadError::ProjectionTooLarge);
+        }
         let state: Self = serde_json::from_str(s).map_err(StateReadError::Json)?;
         if state.schema_version != STATE_SCHEMA_VERSION {
             return Err(StateReadError::UnsupportedVersion(state.schema_version));
         }
+        state
+            .validate()
+            .map_err(StateReadError::InvalidProjection)?;
         Ok(state)
+    }
+
+    pub fn from_slice(bytes: &[u8]) -> Result<Self, StateReadError> {
+        if bytes.len() > MAX_PROJECTION_BYTES {
+            return Err(StateReadError::ProjectionTooLarge);
+        }
+        let text = std::str::from_utf8(bytes).map_err(|_| StateReadError::InvalidEncoding)?;
+        Self::from_json(text)
     }
 
     /// True if there are any active (non-terminal) ceremonies.
     pub fn has_active(&self) -> bool {
         !self.active.is_empty()
+    }
+
+    fn validate(&self) -> Result<(), ProjectionValidationError> {
+        if self.active.len() > MAX_ACTIVE_CEREMONIES
+            || self.recent_terminal.len() > Self::MAX_RECENT_TERMINAL
+        {
+            return Err(ProjectionValidationError::EntryLimit);
+        }
+        for summary in self.active.iter().chain(&self.recent_terminal) {
+            validate_text(&summary.session_id, MAX_PROJECTION_SESSION_ID_CHARS, false)?;
+            validate_text(&summary.vm_name, MAX_PROJECTION_VM_NAME_CHARS, false)?;
+            if let Some(rp_id) = &summary.rp_id {
+                validate_text(rp_id, MAX_PROJECTION_RP_ID_CHARS, true)?;
+            }
+            validate_text(&summary.last_event_kind, MAX_EVENT_KIND_CHARS, false)?;
+        }
+        Ok(())
     }
 }
 
@@ -155,6 +202,9 @@ impl SkNotifyState {
 pub enum StateReadError {
     Json(serde_json::Error),
     UnsupportedVersion(u32),
+    ProjectionTooLarge,
+    InvalidEncoding,
+    InvalidProjection(ProjectionValidationError),
 }
 
 impl std::fmt::Display for StateReadError {
@@ -164,11 +214,79 @@ impl std::fmt::Display for StateReadError {
             Self::UnsupportedVersion(v) => {
                 write!(f, "unsupported sk-state.json schema version {v}")
             }
+            Self::ProjectionTooLarge => f.write_str("state projection exceeds size limit"),
+            Self::InvalidEncoding => f.write_str("state projection is not UTF-8"),
+            Self::InvalidProjection(error) => write!(f, "invalid state projection: {error}"),
         }
     }
 }
 
 impl std::error::Error for StateReadError {}
+
+#[derive(Debug)]
+pub enum StateWriteError {
+    Json(serde_json::Error),
+    ProjectionTooLarge,
+    InvalidProjection(ProjectionValidationError),
+}
+
+impl std::fmt::Display for StateWriteError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Json(_) => formatter.write_str("cannot encode state projection"),
+            Self::ProjectionTooLarge => formatter.write_str("state projection exceeds size limit"),
+            Self::InvalidProjection(error) => {
+                write!(formatter, "invalid state projection: {error}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for StateWriteError {}
+
+#[derive(Debug)]
+pub enum ProjectionValidationError {
+    EntryLimit,
+    InvalidText,
+}
+
+impl std::fmt::Display for ProjectionValidationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EntryLimit => formatter.write_str("entry count exceeds limit"),
+            Self::InvalidText => formatter.write_str("text field exceeds limit"),
+        }
+    }
+}
+
+fn projection_text(input: &str, max_chars: usize) -> String {
+    input
+        .chars()
+        .take(max_chars)
+        .map(|character| {
+            if character.is_control() {
+                '\u{fffd}'
+            } else {
+                character
+            }
+        })
+        .collect()
+}
+
+fn validate_text(
+    input: &str,
+    max_chars: usize,
+    allow_empty: bool,
+) -> Result<(), ProjectionValidationError> {
+    if (!allow_empty && input.is_empty())
+        || input.chars().count() > max_chars
+        || input.chars().any(char::is_control)
+    {
+        Err(ProjectionValidationError::InvalidText)
+    } else {
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -260,6 +378,16 @@ mod tests {
     }
 
     #[test]
+    fn active_projection_is_bounded_and_keeps_newest_entries() {
+        let mut state = SkNotifyState::empty(T0);
+        for index in 0..(MAX_ACTIVE_CEREMONIES + 3) {
+            state = state.apply(&started(&format!("s{index}"), "vm"), T0 + index as u64);
+        }
+        assert_eq!(state.active.len(), MAX_ACTIVE_CEREMONIES);
+        assert_eq!(state.active[0].session_id, "s3");
+    }
+
+    #[test]
     fn recent_terminal_is_most_recent_first() {
         let state = SkNotifyState::empty(T0)
             .apply(&started("s1", "vm"), T0)
@@ -306,6 +434,24 @@ mod tests {
     fn malformed_json_is_rejected() {
         let err = SkNotifyState::from_json("{not json}").unwrap_err();
         assert!(matches!(err, StateReadError::Json(_)));
+    }
+
+    #[test]
+    fn oversized_projection_is_rejected_before_decode() {
+        let input = vec![b' '; MAX_PROJECTION_BYTES + 1];
+        assert!(matches!(
+            SkNotifyState::from_slice(&input),
+            Err(StateReadError::ProjectionTooLarge)
+        ));
+    }
+
+    #[test]
+    fn projection_text_is_sanitized_and_bounded() {
+        let state =
+            SkNotifyState::empty(T0).apply(&started("s1", &format!("vm\n{}", "x".repeat(100))), T0);
+        assert!(state.active[0].vm_name.chars().count() <= MAX_PROJECTION_VM_NAME_CHARS);
+        assert!(!state.active[0].vm_name.contains('\n'));
+        assert!(state.to_json().unwrap().len() <= MAX_PROJECTION_BYTES);
     }
 
     #[test]

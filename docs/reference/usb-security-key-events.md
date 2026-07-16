@@ -1,233 +1,127 @@
-# USB security-key notification and event JSON
+# USB security-key desktop observer events
 
-> Reference for the machine-readable events emitted by the d2b USB
-> security-key proxy through the d2b notification subsystem.
-> Event files are written to `/run/d2b/usb-sk/events.jsonl` (one JSON object
-> per line) and consumed by `d2b usb security-key sessions`, the Waybar
-> helper, and `d2b-wlcontrol`.
+The desktop observer receives security-key presentation events only through an
+authenticated ComponentSession. The exact session contract is:
 
-## Event envelope
+| Field | Value |
+| --- | --- |
+| endpoint purpose | `desktop-observer` |
+| endpoint role | `desktop-observer` |
+| service package | `d2b.notify.v2` |
+| service | `NotifyService` |
+| observer methods | `Subscribe`, `Acknowledge` |
 
-Every security-key event is a JSON object with a common envelope:
+The composition layer supplies a pre-authorized local transport. The observer
+does not discover socket paths, retry a second endpoint, read an event JSONL
+file, or treat a presentation projection as a control channel. Authentication,
+service selection, limits, and transport binding come from the negotiated
+ComponentSession.
+
+## Bounded event payload
+
+Each queued event has a monotonic `sequence`, `observedAtUnixMs`, and one
+`event`. A subscription page contains at most 32 events and 16 KiB. The
+observer retains at most 64 events and 64 KiB. If retention pressure drops an
+older event, the next page reports `gapBeforePage: true`; consumers must refresh
+their projection rather than infer missing state.
+
+The event object is one of:
+
+| `kind` | Additional fields | Terminal | Desktop notification |
+| --- | --- | --- | --- |
+| `started` | optional `rpId` | no | yes |
+| `touchNeeded` | none | no | yes |
+| `busy` | `detail.holderVm`, bounded `detail.waitingVms` | no | yes |
+| `queued` | `queuePosition` | no | no |
+| `blocked` | closed `reason` | no | yes |
+| `timedOut` | none | yes | yes |
+| `failed` | bounded presentation `reason` | yes | yes |
+| `canceled` | none | yes | yes |
+| `completed` | none | yes | no |
+
+Every event also carries bounded `sessionId` and `vmName` fields. The maximum
+encoded event size is 4 KiB. Session IDs are opaque correlation values; they
+are not credentials or callback tokens.
+
+Example:
 
 ```json
 {
-  "app":      "d2b.usb.security-key",
-  "severity": "info",
-  "ts":       "2025-11-01T10:23:44.123456Z",
-  "session":  "sk_7f3a2b91c04e",
-  "vm":       "personal-dev",
-  "realm":    "personal",
-  "body":     { ... }
+  "sequence": 42,
+  "observedAtUnixMs": 1784243985000,
+  "event": {
+    "kind": "touchNeeded",
+    "sessionId": "session-42",
+    "vmName": "personal"
+  }
 }
 ```
 
-### Envelope fields
+`Acknowledge` is monotonic and idempotent. It releases retained events through
+the acknowledged sequence. Acknowledging a sequence that the observer has
+never published fails closed.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `app` | `string` | yes | Always `"d2b.usb.security-key"` for this subsystem. |
-| `severity` | `"info" \| "warning" \| "critical"` | yes | `"info"` for normal lifecycle events; `"warning"` for contention/queue events; `"critical"` for broker errors and unexpected failures. |
-| `ts` | RFC 3339 string | yes | UTC timestamp of the event. |
-| `session` | `string \| null` | yes | Opaque session identifier for this CTAP ceremony request. `null` for broker-level events not tied to a specific session. |
-| `vm` | `string \| null` | yes | d2b VM name that initiated the request. `null` for host-level events. |
-| `realm` | `string \| null` | yes | d2b env/realm the VM belongs to. `null` when `vm` is `null`. |
-| `body` | `object` | yes | Event-type-specific payload; see [Event types](#event-types) below. |
+## Notification projection
 
-## Event types
+Desktop notification summaries and bodies are sanitized, bounded presentation
+text. They carry no nonce, callback authority, endpoint, command, or host path.
+Actions, when composed, invoke the authenticated `InvokeAction` service method;
+notification payloads and files never authorize an action.
 
-The `body.kind` field identifies the event type.
+Successful completion and queue bookkeeping are silent. Other lifecycle states
+produce a user-visible notification without exposing transport diagnostics or
+raw provider output.
 
-### `ceremony_started`
+## State projection
 
-Emitted when a VM's guest frontend initiates a new CTAP ceremony and the
-host broker grants the lease.
-
-```json
-{
-  "kind":    "ceremony_started",
-  "key_id":  "FIDO:1050:0407:XXXXXXXXXXXX",
-  "rp_id":   "github.com"
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `key_id` | `string` | Stable key selector string identifying the physical device. |
-| `rp_id` | `string \| null` | Relying-party ID parsed from the CTAP request, if available and `notifications.showRpId = true`; `null` otherwise. |
-
-Desktop notification summary: `personal-dev is using security key`.
-
-### `user_presence_wait`
-
-Emitted when the broker is waiting for user presence (physical touch) on the
-key.
+The observer may materialize `sk-state.json` for presentation consumers. This
+file is a bounded read model, not durable authority:
 
 ```json
 {
-  "kind":       "user_presence_wait",
-  "key_id":     "FIDO:1050:0407:XXXXXXXXXXXX",
-  "rp_id":      "github.com",
-  "timeout_at": "2025-11-01T10:25:44.123456Z"
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `key_id` | `string` | Stable key selector. |
-| `rp_id` | `string \| null` | Relying-party ID, if available. |
-| `timeout_at` | RFC 3339 string | UTC time when the broker will cancel the ceremony if no touch is received. |
-
-Desktop notification summary: `Touch security key for personal-dev`.
-
-### `ceremony_completed`
-
-Emitted when a CTAP ceremony completes successfully.
-
-```json
-{
-  "kind":        "ceremony_completed",
-  "key_id":      "FIDO:1050:0407:XXXXXXXXXXXX",
-  "duration_ms": 3147
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `key_id` | `string` | Stable key selector. |
-| `duration_ms` | `integer` | Ceremony duration from lease acquisition to completion in milliseconds. |
-
-No desktop notification emitted for successful completions (reduces noise for
-normal WebAuthn use).
-
-### `ceremony_failed`
-
-Emitted when a CTAP ceremony fails — timeout, broker error, guest disconnect,
-or `CTAPHID_ERROR` from the device.
-
-```json
-{
-  "kind":        "ceremony_failed",
-  "key_id":      "FIDO:1050:0407:XXXXXXXXXXXX",
-  "reason":      "timeout",
-  "duration_ms": 120003
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `key_id` | `string` | Stable key selector. |
-| `reason` | `"timeout" \| "guest_disconnect" \| "ctap_error" \| "broker_error" \| "cancelled"` | Failure cause. |
-| `duration_ms` | `integer` | Time from lease acquisition to failure in milliseconds. |
-
-Desktop notification summary: `Security key request failed (personal-dev): timeout`.
-
-### `queue_wait_started`
-
-Emitted when a VM's request is queued because another VM holds the active
-lease.
-
-```json
-{
-  "kind":          "queue_wait_started",
-  "key_id":        "FIDO:1050:0407:XXXXXXXXXXXX",
-  "active_vm":     "personal-dev",
-  "queue_timeout": "2025-11-01T10:23:59.123456Z"
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `key_id` | `string` | Stable key selector. |
-| `active_vm` | `string` | VM that currently holds the lease. |
-| `queue_timeout` | RFC 3339 string | UTC time when the queued request will be cancelled if the active ceremony is still in progress. |
-
-Desktop notification summary: `Security key busy: personal-dev is authenticating`.
-
-Desktop notification actions (when supported by the notification daemon):
-
-| Action ID | Label | Effect |
-|-----------|-------|--------|
-| `cancel_active` | `Cancel active request` | Sends `d2b usb security-key cancel <active-session>` with a single-use nonce bound to the session/action/expiry. |
-| `open_status` | `Open status` | Opens `d2b-wlcontrol` at the USB security-key panel. |
-
-### `queue_wait_expired`
-
-Emitted when a queued VM's request times out while the active ceremony is
-still in progress.
-
-```json
-{
-  "kind":      "queue_wait_expired",
-  "key_id":    "FIDO:1050:0407:XXXXXXXXXXXX",
-  "active_vm": "personal-dev"
-}
-```
-
-Desktop notification summary: `Security key request timed out (work-aad)`.
-
-### `lease_revoked`
-
-Emitted when the broker forcibly revokes a lease — for example, when a VM
-stops or the guest frontend disconnects mid-ceremony.
-
-```json
-{
-  "kind":   "lease_revoked",
-  "key_id": "FIDO:1050:0407:XXXXXXXXXXXX",
-  "reason": "guest_disconnect"
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `key_id` | `string` | Stable key selector. |
-| `reason` | `"vm_stop" \| "guest_disconnect" \| "daemon_restart" \| "explicit_cancel"` | Revocation reason. |
-
-## Notification action nonce semantics
-
-Notification actions that trigger privileged operations (such as
-`cancel_active`) include a single-use, high-entropy nonce in the action
-callback payload. The nonce is bound to:
-
-- The session ID of the target operation.
-- The action type (e.g., `cancel_active`).
-- An expiry timestamp (defaults to 60 seconds after the notification is sent).
-
-`d2bd` rejects action callbacks with:
-- A missing nonce.
-- An expired nonce (past the expiry timestamp).
-- A previously consumed nonce (single-use).
-- A nonce bound to a different session ID or action type.
-
-This prevents other desktop clients from spoofing privileged security-key
-actions by replaying or crafting notification callbacks.
-
-## Lease state file
-
-The current lease state is also available as a machine-readable JSON file at
-`/run/d2b/usb-sk/lease.json`. `d2b usb security-key status` reads this file
-directly when `d2bd` is not reachable, enabling offline inspection.
-
-```json
-{
-  "active": {
-    "session":    "sk_7f3a2b91c04e",
-    "vm":         "personal-dev",
-    "key_id":     "FIDO:1050:0407:XXXXXXXXXXXX",
-    "started_at": "2025-11-01T10:23:44.123456Z",
-    "rp_id":      "github.com"
-  },
-  "queued": [
+  "schemaVersion": 1,
+  "updatedAt": 1784243985,
+  "active": [
     {
-      "session":    "sk_9a1d4f02e77b",
-      "vm":         "work-aad",
-      "queued_at":  "2025-11-01T10:23:51.456789Z",
-      "timeout_at": "2025-11-01T10:24:06.456789Z"
+      "sessionId": "session-42",
+      "vmName": "personal",
+      "lastEventKind": "touchNeeded",
+      "lastEventAt": 1784243985,
+      "isTerminal": false
     }
-  ]
+  ],
+  "recentTerminal": []
 }
 ```
 
-`active` is `null` when no ceremony is in progress. `queued` is an empty array
-when no VMs are waiting.
+The projection is limited to 32 KiB, 16 active ceremonies, and eight recent
+terminal ceremonies. Active entries older than five minutes are omitted by
+readers. Unknown schema versions and projections that exceed count, text, or
+byte limits are rejected.
+
+Projection absence never triggers a daemon, socket, alternate-file, or legacy
+protocol fallback. Operators must repair the ComponentSession service rather
+than use the read model as an offline control path.
+
+## Waybar read model
+
+`d2b-sk-waybar-helper` requires exactly one explicit projection path:
+
+```console
+d2b-sk-waybar-helper "$XDG_RUNTIME_DIR/d2b/sk-state.json"
+```
+
+It reads at most 32 KiB and emits at most 4 KiB of Waybar JSON. Missing or
+unreadable input exits `1`; malformed, oversized, or unsupported input exits
+`2`; an omitted or extra path exits `64`. The helper never connects to an
+endpoint and never searches a fallback location.
+
+The Waybar output contains only `text`, `tooltip`, and a closed CSS class:
+`d2b-sk-idle`, `d2b-sk-active`, `d2b-sk-touch`, or `d2b-sk-busy`.
+
+## Observability
+
+The observer exposes four closed, low-cardinality measures for the local
+observability provider: accepted events, dropped events, queue depth, and
+projection entry count. VM names, session IDs, relying-party IDs, endpoint
+paths, and event payloads are never observability labels.
