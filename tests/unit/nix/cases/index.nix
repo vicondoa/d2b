@@ -56,6 +56,16 @@ let
           primaryAuthority = "storage";
           implementation = "local";
         };
+        local-transport = {
+          id = "local-transport";
+          primaryAuthority = "transport";
+          implementation = "unix-stream";
+        };
+        wayland = {
+          id = "wayland";
+          primaryAuthority = "display";
+          implementation = "wayland";
+        };
       };
       workloads.personal-dev = {
         enable = true;
@@ -200,6 +210,7 @@ in
         resourceIdsUnique = lib.length ids == lib.length (lib.unique ids);
         inherit rolePath;
       };
+
     expected = {
       noHumanRealmName = true;
       noHumanWorkloadName = true;
@@ -208,6 +219,231 @@ in
       resourceIdsUnique = true;
       rolePath = "/run/d2b/r/yl2hpmks5td5dkeso6qq/w/q5h7jtqteem7kua4tfva/roles/7xrbjonser3hpi7hqojq";
     };
+  };
+
+  "index/provider-registry-mappings-have-resource-parity" = {
+    expr =
+      let
+        mappings = index.providerRegistryV2Mappings;
+        transport = builtins.head mappings.transport;
+        display = builtins.head mappings.display;
+        resourceIds = lib.attrNames index.resources.byId;
+        displayIds = lib.attrValues display.endpointIds;
+      in
+      {
+        transportShape = builtins.attrNames transport;
+        transportIdsExist = builtins.all
+          (resourceId: builtins.elem resourceId resourceIds)
+          transport.transportBindingIds;
+        transportResourceKinds = map
+          (resourceId: index.resources.byId.${resourceId}.kind)
+          transport.transportBindingIds;
+        substrate = mappings.substrate;
+        displayShape = builtins.attrNames display;
+        displayIdsDistinct =
+          lib.length displayIds == lib.length (lib.unique displayIds);
+        displayIdsExist = builtins.all
+          (resourceId: builtins.elem resourceId resourceIds)
+          displayIds;
+        displayResourceKinds = map
+          (resourceId: index.resources.byId.${resourceId}.kind)
+          displayIds;
+        displayResourceOwners = map
+          (resourceId:
+            let resource = index.resources.byId.${resourceId};
+            in {
+              inherit (resource) providerId realmId roleId workloadId;
+            })
+          displayIds;
+        ownerRoleKind = index.roles.byId.${display.ownerRoleId}.roleKind;
+      };
+    expected =
+      let display = builtins.head index.providerRegistryV2Mappings.display;
+      in
+      {
+        transportShape = [
+          "controllerRole"
+          "implementationId"
+          "providerId"
+          "realmId"
+          "transportBindingIds"
+        ];
+        transportIdsExist = true;
+        transportResourceKinds = [ "transport-binding" ];
+        substrate = [ ];
+        displayShape = [
+          "controllerRole"
+          "endpointIds"
+          "implementationId"
+          "ownerRoleId"
+          "providerId"
+          "realmId"
+          "workloadId"
+        ];
+        displayIdsDistinct = true;
+        displayIdsExist = true;
+        displayResourceKinds = [
+          "display-endpoint-cross-domain"
+          "display-endpoint-proxy"
+          "display-endpoint-wayland"
+          "display-endpoint-waypipe"
+        ];
+        displayResourceOwners = map
+          (_: {
+            inherit (display) providerId realmId workloadId;
+            roleId = display.ownerRoleId;
+          })
+          (lib.attrValues display.endpointIds);
+        ownerRoleKind = "wayland-proxy";
+      };
+  };
+
+  "index/provider-registry-mappings-satisfy-extension-contracts" = {
+    expr =
+      let
+        mappings = index.providerRegistryV2Mappings;
+        transportExtension = import
+          (flakeRoot + "/nixos-modules/provider-registry-v2-extensions/transport.nix")
+          { inherit lib; };
+        displayExtension = import
+          (flakeRoot + "/nixos-modules/provider-registry-v2-extensions/display.nix")
+          { inherit lib; };
+        transportEntry = builtins.head
+          (transportExtension.mkEntries mappings.transport);
+        displayEntry = builtins.head
+          (displayExtension.mkEntries mappings.display);
+      in
+      {
+        transportProviderId = transportEntry.descriptor.providerId;
+        transportPlacement = transportEntry.descriptor.placement;
+        transportAxis = transportEntry.binding.axis;
+        transportBindingIds = transportEntry.binding.transportBindingIds;
+        displayProviderId = displayEntry.descriptor.providerId;
+        displayPlacement = displayEntry.descriptor.placement;
+        displayAxis = displayEntry.binding.axis;
+        displayWorkloadId = displayEntry.binding.workloadId;
+        displayOwnerRoleId = displayEntry.binding.ownerRoleId;
+        displayEndpointIds = displayEntry.binding.endpointIds;
+      };
+    expected =
+      let
+        transport = builtins.head index.providerRegistryV2Mappings.transport;
+        display = builtins.head index.providerRegistryV2Mappings.display;
+      in
+      {
+        transportProviderId = transport.providerId;
+        transportPlacement = {
+          kind = "trusted-first-party-in-process";
+          inherit (transport) realmId controllerRole;
+        };
+        transportAxis = "local-transport";
+        transportBindingIds = transport.transportBindingIds;
+        displayProviderId = display.providerId;
+        displayPlacement = {
+          kind = "trusted-first-party-in-process";
+          inherit (display) realmId controllerRole;
+        };
+        displayAxis = "local-display";
+        displayWorkloadId = display.workloadId;
+        displayOwnerRoleId = display.ownerRoleId;
+        displayEndpointIds = display.endpointIds;
+      };
+  };
+
+  "index/provider-registry-mappings-include-local-root-substrate" = {
+    expr =
+      let
+        mappings = (evalIndex {
+          local-root = {
+            path = "local-root";
+            providers.host = {
+              type = "substrate";
+              implementationId = "nixos";
+            };
+          };
+        }).providerRegistryV2Mappings;
+        substrateExtension = import
+          (flakeRoot + "/nixos-modules/provider-registry-v2-extensions/substrate.nix")
+          { inherit lib; };
+        entry = builtins.head
+          (substrateExtension.mkEntries mappings.substrate);
+      in
+      {
+        count = lib.length mappings.substrate;
+        row = builtins.head mappings.substrate;
+        placement = entry.descriptor.placement;
+        axis = entry.binding.axis;
+      };
+    expected =
+      let
+        localRootId = (import
+          (flakeRoot + "/nixos-modules/v2-identity.nix")).deriveRealmId
+            "local-root";
+        providerId = (import
+          (flakeRoot + "/nixos-modules/v2-identity.nix")).deriveProviderId
+            localRootId "substrate" "host";
+      in
+      {
+        count = 1;
+        axis = "local-substrate";
+        placement = {
+          kind = "trusted-first-party-in-process";
+          realmId = localRootId;
+          controllerRole = "local-root-controller";
+        };
+        row = {
+          controllerRole = "local-root-controller";
+          implementationId = "nixos";
+          inherit providerId;
+          realmId = localRootId;
+        };
+      };
+  };
+
+  "index/display-mapping-requires-one-provider" = {
+    expr = attempt ((evalIndex {
+      dev = {
+        path = "dev.local-root";
+        providers.runtime = {
+          type = "runtime";
+          implementationId = "cloud-hypervisor";
+        };
+        workloads.app = {
+          provider = "runtime";
+          launcher.items.app.graphical = true;
+        };
+      };
+    }).providerRegistryV2Mappings.display);
+    expected = false;
+  };
+
+  "index/display-provider-cannot-bind-multiple-workloads" = {
+    expr = attempt ((evalIndex {
+      dev = {
+        path = "dev.local-root";
+        providers = {
+          runtime = {
+            type = "runtime";
+            implementationId = "cloud-hypervisor";
+          };
+          wayland = {
+            type = "display";
+            implementationId = "wayland";
+          };
+        };
+        workloads = {
+          first = {
+            provider = "runtime";
+            launcher.items.app.graphical = true;
+          };
+          second = {
+            provider = "runtime";
+            launcher.items.app.graphical = true;
+          };
+        };
+      };
+    }).providerRegistryV2Mappings.display);
+    expected = false;
   };
 
   "index/duplicate-realm-paths-fail-closed" = {
