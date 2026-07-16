@@ -138,6 +138,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Rejected shell heredocs in the delivery package wrapper policy so quoted,
+  unquoted, and tab-stripping heredoc bodies cannot masquerade as executable
+  runtime PATH configuration.
 - Bound delivery runtime-tool coverage to the active package wrapper's PATH
   expression, so commented or unused package lists cannot satisfy the policy.
 - Made the delivery runtime-tool policy inspect the scoped Nix package list

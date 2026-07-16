@@ -263,6 +263,9 @@ fn shell_logical_commands(source: &str) -> Result<Vec<String>, String> {
             }
             continue;
         }
+        if bytes.get(cursor..cursor + 2) == Some(b"<<") {
+            return Err("shell heredocs are forbidden in delivery postFixup".into());
+        }
 
         match byte {
             b'\'' | b'"' => {
@@ -726,9 +729,8 @@ fn delivery_tool_sources_and_toolchains_are_exactly_pinned() {
     }
 }
 
-#[test]
-fn delivery_runtime_package_parser_binds_active_wrap_program_path() {
-    let flake = r#"
+fn delivery_runtime_policy_fixture() -> &'static str {
+    r#"
       decoy = pkgs.lib.makeBinPath [
         pkgs.git pkgs.openssl pkgs.shellcheck
       ];
@@ -764,7 +766,12 @@ fn delivery_runtime_package_parser_binds_active_wrap_program_path() {
             deliveryTools . rustStableVersion ;
         })
         else null;
-    "#;
+    "#
+}
+
+#[test]
+fn delivery_runtime_package_parser_binds_active_wrap_program_path() {
+    let flake = delivery_runtime_policy_fixture();
 
     assert_eq!(
         required_delivery_runtime_packages(flake).expect("formatting variant must parse"),
@@ -799,6 +806,29 @@ fn delivery_runtime_package_parser_binds_active_wrap_program_path() {
         error.contains("missing active wrapProgram PATH prefix"),
         "inactive wrapper must fail specifically: {error}"
     );
+}
+
+#[test]
+fn delivery_runtime_package_parser_rejects_heredoc_decoys() {
+    for opener in ["cat <<EOF", "cat <<'EOF'", "cat <<\"EOF\"", "cat <<-EOF"] {
+        let heredoc_decoy = delivery_runtime_policy_fixture()
+            .replacen(
+                "            wrapProgram \\",
+                &format!("            {opener}\n            wrapProgram \\"),
+                1,
+            )
+            .replacen(
+                "                  ]}\n",
+                "                  ]}\n            EOF\n",
+                1,
+            );
+        let error = required_delivery_runtime_packages(&heredoc_decoy)
+            .expect_err("a wrapper-looking heredoc body must not satisfy runtime PATH policy");
+        assert!(
+            error.contains("heredocs are forbidden"),
+            "{opener} must fail closed before its body is parsed: {error}"
+        );
+    }
 }
 
 #[test]
