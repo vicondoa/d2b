@@ -1,9 +1,15 @@
-{ lib
+{ config ? null
+, cfg ? null
+, lib
 , identity ? import ../v2-identity.nix
 , generation ? 1
 }:
 
 let
+  effectiveCfg =
+    if cfg != null then cfg
+    else if config != null then config.d2b
+    else null;
   implementations = [
     "cloud-hypervisor-vsock"
     "native-vsock"
@@ -39,14 +45,12 @@ let
       controllerRole = validateControllerRole mapping.controllerRole;
       transportBindingIds = lib.sort lib.lessThan
         (map validateOpaqueId mapping.transportBindingIds);
-      bindingIdsAreUnique =
-        builtins.length transportBindingIds
-        == builtins.length (lib.unique transportBindingIds);
       binding =
         if transportBindingIds == [ ] then
           throw "provider transport mapping: at least one generated binding id is required"
-        else if !bindingIdsAreUnique then
-          throw "provider transport mapping: duplicate generated binding id"
+        else if builtins.length transportBindingIds
+          != builtins.length (lib.unique transportBindingIds)
+        then throw "provider transport mapping: duplicate generated binding id"
         else {
           axis = "local-transport";
           inherit transportBindingIds;
@@ -91,7 +95,14 @@ let
         (left: right:
           lib.lessThan left.descriptor.providerId right.descriptor.providerId)
         entries;
+
+  configuredMappings =
+    if effectiveCfg == null then [ ]
+    else if !(effectiveCfg._index ? providerRegistryV2Mappings) then
+      throw "provider transport mapping: authoritative normalized mapping seam is missing"
+    else effectiveCfg._index.providerRegistryV2Mappings.transport;
+  providers = mkEntries configuredMappings;
 in
 {
-  inherit implementations mkEntries;
+  inherit implementations mkEntries providers;
 }

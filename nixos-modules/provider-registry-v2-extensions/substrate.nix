@@ -1,9 +1,15 @@
-{ lib
+{ config ? null
+, cfg ? null
+, lib
 , identity ? import ../v2-identity.nix
 , generation ? 1
 }:
 
 let
+  effectiveCfg =
+    if cfg != null then cfg
+    else if config != null then config.d2b
+    else null;
   implementations = [ "linux" "nixos" ];
   capabilities = [
     "substrate.check"
@@ -61,7 +67,14 @@ let
         (left: right:
           lib.lessThan left.descriptor.providerId right.descriptor.providerId)
         entries;
+
+  configuredMappings =
+    if effectiveCfg == null then [ ]
+    else if !(effectiveCfg._index ? providerRegistryV2Mappings) then
+      throw "provider substrate mapping: authoritative normalized mapping seam is missing"
+    else effectiveCfg._index.providerRegistryV2Mappings.substrate;
+  providers = mkEntries configuredMappings;
 in
 {
-  inherit implementations mkEntries;
+  inherit implementations mkEntries providers;
 }
