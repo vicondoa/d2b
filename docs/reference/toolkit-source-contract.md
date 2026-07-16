@@ -26,6 +26,15 @@ response DTO, session preface, frame codec, handshake, resolver, or provider
 record. The canonical SDK crates remain `publish = false`; crates.io is not a
 fallback.
 
+Source ownership is package-complete rather than module-selected. For each
+canonical package, the inventory includes every non-ignored file reported by
+Git below the package root. This deliberately covers the complete `src/` tree,
+the manifest and any `build.rs`, bins, examples, tests, fixtures, protobuf
+inputs, and feature-gated modules. Cargo metadata independently supplies every
+package target source, and the policy test requires each target to appear in
+the Git-derived list. A feature gate cannot make an unlisted compilation input
+acceptable.
+
 Each distribution owns its own lockfile and packaging metadata. It does not
 copy or modify the d2b workspace lockfile. The d2b workspace manifest remains
 part of the fingerprinted source context because canonical crate manifests
@@ -48,14 +57,29 @@ The distribution fingerprint covers the sorted union of its source groups.
 Changing, adding, removing, or renaming an owned source file requires an
 intentional inventory update. The inventory does not fingerprint itself.
 
+Regenerate the inventory and coordination fingerprints from the repository
+root with:
+
+```text
+cd packages
+D2B_UPDATE_TOOLKIT_SOURCE_INVENTORY=1 \
+  cargo test --locked -p d2b-contract-tests \
+  --test policy_toolkit_sources regenerate_toolkit_source_inventory \
+  -- --ignored --exact
+```
+
+The normal focused test runs the same Cargo-metadata and Git enumeration
+without writing files and fails on any omission or stale digest.
+
 ## Distribution profiles
 
 ### Client toolkit
 
 The client distribution contains the canonical client, session, Unix-session,
-and v2 contract source groups plus their public contract artifacts. Its portable
-profile selects no default features. Its Linux local-session profile selects
-`d2b-client/host-socket`, which in turn selects the Unix session substrate.
+and complete contracts-package source groups plus their public contract
+artifacts. Its portable profile selects no default features. Its Linux
+local-session profile selects `d2b-client/host-socket`, which in turn selects
+the Unix session substrate.
 
 The distribution may retain presentation-only Wayland color and Waybar helpers.
 It must remove the old client crate, public JSON framing, hello negotiation,
@@ -65,10 +89,11 @@ canonical `d2b-wayland-proxy` package and binary name to the d2b repository.
 ### Provider toolkit
 
 The provider distribution contains the canonical provider runtime, provider
-toolkit, session, and v2 contract source groups plus their public contract
-artifacts. It may add templates, fake-SDK examples, conformance entrypoints,
-provider-author documentation, and Nix packaging. Those additions consume the
-canonical crates; they cannot redefine their DTOs or provider-agent protocol.
+toolkit, session, and complete contracts-package source groups plus their
+public contract artifacts. It may add templates, fake-SDK examples, conformance
+entrypoints, provider-author documentation, and Nix packaging. Those additions
+consume the canonical crates; they cannot redefine their DTOs or provider-agent
+protocol.
 
 ## Redaction boundary
 

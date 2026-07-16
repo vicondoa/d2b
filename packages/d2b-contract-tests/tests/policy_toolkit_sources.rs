@@ -5,14 +5,49 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::Path,
+    process::Command,
 };
 
 use d2b_contract_tests::{read_repo_file, repo_root};
 use regex::Regex;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 const INVENTORY_PATH: &str = "docs/reference/toolkit-source-contract.json";
 const COORDINATION_PATH: &str = "docs/adr/0045-toolkit-sibling-coordination.json";
+const CANONICAL_PACKAGE_GROUPS: [(&str, &str); 6] = [
+    ("d2b-contracts", "contracts-package"),
+    ("d2b-client", "client"),
+    ("d2b-session", "session-runtime"),
+    ("d2b-session-unix", "unix-session"),
+    ("d2b-provider", "provider-runtime"),
+    ("d2b-provider-toolkit", "provider-toolkit"),
+];
+const SOURCE_GROUP_ORDER: [&str; 8] = [
+    "workspace-manifest",
+    "contracts-package",
+    "client",
+    "session-runtime",
+    "unix-session",
+    "provider-runtime",
+    "provider-toolkit",
+    "public-contract-artifacts",
+];
+const PUBLIC_CONTRACT_ARTIFACTS: [&str; 14] = [
+    "docs/reference/component-session-v2-schema.json",
+    "docs/reference/component-session-v2-vectors.json",
+    "docs/reference/component-session-v2.md",
+    "docs/reference/d2b-contracts-features.md",
+    "docs/reference/provider-contract-v2-fixture.json",
+    "docs/reference/provider-contract-v2.md",
+    "docs/reference/provider-contract-v2.schema.json",
+    "docs/reference/toolkit-source-contract.md",
+    "docs/reference/v2-foundation-crates.md",
+    "docs/reference/v2-identity-vectors.json",
+    "docs/reference/v2-identity.md",
+    "docs/reference/v2-services-schema.json",
+    "docs/reference/v2-services.json",
+    "docs/reference/v2-services.md",
+];
 
 fn string_array(value: &Value, context: &str) -> Vec<String> {
     value
@@ -195,81 +230,307 @@ fn files_below(rel: &str) -> Vec<String> {
     files
 }
 
-fn exact_source_groups() -> BTreeMap<String, Vec<String>> {
+fn command_output(command: &mut Command, context: &str) -> Vec<u8> {
+    let output = command
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run {context}: {error}"));
+    assert!(
+        output.status.success(),
+        "{context} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output.stdout
+}
+
+fn cargo_metadata() -> Value {
     let root = repo_root();
-    let mut contracts = vec![
-        "packages/d2b-contracts/Cargo.toml".to_owned(),
-        "packages/d2b-contracts/src/lib.rs".to_owned(),
-        "packages/d2b-contracts/tests/component_session_v2.rs".to_owned(),
-    ];
-    contracts.extend(files_below("packages/d2b-contracts/proto/v2"));
-    contracts.extend(files_below(
-        "packages/d2b-contracts/src/generated_v2_services",
-    ));
-    for directory in ["packages/d2b-contracts/src", "packages/d2b-contracts/tests"] {
-        for entry in fs::read_dir(root.join(directory)).expect("read d2b-contracts directory") {
-            let path = entry.expect("valid directory entry").path();
-            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-                continue;
-            };
-            if path.is_file() && name.starts_with("v2_") && name.ends_with(".rs") {
-                contracts.push(
-                    path.strip_prefix(&root)
-                        .expect("contract path below root")
-                        .to_string_lossy()
-                        .into_owned(),
-                );
-            }
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let bytes = command_output(
+        Command::new(cargo)
+            .current_dir(root.join("packages"))
+            .args(["metadata", "--locked", "--no-deps", "--format-version", "1"]),
+        "cargo metadata",
+    );
+    serde_json::from_slice(&bytes).expect("cargo metadata JSON")
+}
+
+fn git_listed_files(rel: &str) -> Vec<String> {
+    let root = repo_root();
+    let bytes = command_output(
+        Command::new("git").arg("-C").arg(&root).args([
+            "-c",
+            "core.quotePath=false",
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+            rel,
+        ]),
+        "git ls-files",
+    );
+    let mut files = bytes
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| String::from_utf8(path.to_vec()).expect("UTF-8 repository path"))
+        .collect::<Vec<_>>();
+    files.sort();
+    files.dedup();
+    files
+}
+
+fn canonical_package_groups(metadata: &Value) -> BTreeMap<String, Vec<String>> {
+    let root = repo_root();
+    let packages = metadata["packages"]
+        .as_array()
+        .expect("cargo metadata packages");
+    let mut groups = BTreeMap::new();
+    for (package_name, group_id) in CANONICAL_PACKAGE_GROUPS {
+        let package = packages
+            .iter()
+            .find(|package| package["name"] == package_name)
+            .unwrap_or_else(|| panic!("cargo metadata is missing {package_name}"));
+        let manifest = Path::new(
+            package["manifest_path"]
+                .as_str()
+                .expect("package manifest_path"),
+        );
+        let package_root = manifest
+            .parent()
+            .expect("package manifest has a parent")
+            .strip_prefix(&root)
+            .expect("canonical package is inside the repository")
+            .to_string_lossy()
+            .into_owned();
+        let files = git_listed_files(&package_root);
+        assert!(
+            !files.is_empty(),
+            "{package_name} has no tracked source/build inputs"
+        );
+        for target in package["targets"].as_array().expect("package targets") {
+            let source = Path::new(target["src_path"].as_str().expect("target src_path"))
+                .strip_prefix(&root)
+                .expect("Cargo target is inside the repository")
+                .to_string_lossy()
+                .into_owned();
+            assert!(
+                files.contains(&source),
+                "{package_name} Cargo target is absent from its complete Git inventory: {source}"
+            );
         }
+        assert!(
+            groups.insert(group_id.to_owned(), files).is_none(),
+            "duplicate canonical source group {group_id}"
+        );
     }
-    contracts.sort();
-    contracts.dedup();
+    groups
+}
 
-    let public_artifacts = [
-        "docs/reference/component-session-v2-schema.json",
-        "docs/reference/component-session-v2-vectors.json",
-        "docs/reference/component-session-v2.md",
-        "docs/reference/d2b-contracts-features.md",
-        "docs/reference/provider-contract-v2-fixture.json",
-        "docs/reference/provider-contract-v2.md",
-        "docs/reference/provider-contract-v2.schema.json",
-        "docs/reference/toolkit-source-contract.md",
-        "docs/reference/v2-foundation-crates.md",
-        "docs/reference/v2-identity-vectors.json",
-        "docs/reference/v2-identity.md",
-        "docs/reference/v2-services-schema.json",
-        "docs/reference/v2-services.json",
-        "docs/reference/v2-services.md",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect();
+fn exact_source_groups() -> BTreeMap<String, Vec<String>> {
+    let mut groups = canonical_package_groups(&cargo_metadata());
+    groups.insert(
+        "workspace-manifest".to_owned(),
+        vec!["packages/Cargo.toml".to_owned()],
+    );
+    groups.insert(
+        "public-contract-artifacts".to_owned(),
+        PUBLIC_CONTRACT_ARTIFACTS
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+    );
+    groups
+}
 
-    BTreeMap::from([
-        (
+fn distribution_source_groups(id: &str) -> &'static [&'static str] {
+    match id {
+        "d2b-client-toolkit" => &[
+            "workspace-manifest",
+            "contracts-package",
+            "session-runtime",
+            "unix-session",
+            "client",
+            "public-contract-artifacts",
+        ],
+        "d2b-provider-toolkit" => &[
+            "workspace-manifest",
+            "contracts-package",
+            "session-runtime",
+            "provider-runtime",
+            "provider-toolkit",
+            "public-contract-artifacts",
+        ],
+        _ => panic!("unknown toolkit distribution {id}"),
+    }
+}
+
+fn distribution_feature_profile(id: &str) -> Value {
+    match id {
+        "d2b-client-toolkit" => json!({
+            "d2b-client": ["host-socket"],
+            "d2b-contracts": ["v2-services"],
+            "d2b-session": [],
+            "d2b-session-unix": ["host-socket"]
+        }),
+        "d2b-provider-toolkit" => json!({
+            "d2b-contracts": ["v2-services"],
+            "d2b-provider": [],
+            "d2b-provider-toolkit": [],
+            "d2b-session": []
+        }),
+        _ => panic!("unknown toolkit distribution {id}"),
+    }
+}
+
+fn refresh_inventory(inventory: &mut Value) {
+    let metadata = cargo_metadata();
+    let groups = {
+        let mut groups = canonical_package_groups(&metadata);
+        groups.insert(
             "workspace-manifest".to_owned(),
             vec!["packages/Cargo.toml".to_owned()],
-        ),
-        ("contracts-v2".to_owned(), contracts),
-        ("client".to_owned(), files_below("packages/d2b-client")),
-        (
-            "session-runtime".to_owned(),
-            files_below("packages/d2b-session"),
-        ),
-        (
-            "unix-session".to_owned(),
-            files_below("packages/d2b-session-unix"),
-        ),
-        (
-            "provider-runtime".to_owned(),
-            files_below("packages/d2b-provider"),
-        ),
-        (
-            "provider-toolkit".to_owned(),
-            files_below("packages/d2b-provider-toolkit"),
-        ),
-        ("public-contract-artifacts".to_owned(), public_artifacts),
-    ])
+        );
+        groups.insert(
+            "public-contract-artifacts".to_owned(),
+            PUBLIC_CONTRACT_ARTIFACTS
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+        );
+        groups
+    };
+
+    inventory["canonicalPackages"] = Value::Array(
+        CANONICAL_PACKAGE_GROUPS
+            .into_iter()
+            .map(|(package_name, group_id)| {
+                let package = metadata["packages"]
+                    .as_array()
+                    .expect("cargo metadata packages")
+                    .iter()
+                    .find(|package| package["name"] == package_name)
+                    .expect("canonical package metadata");
+                let manifest = Path::new(
+                    package["manifest_path"]
+                        .as_str()
+                        .expect("package manifest_path"),
+                )
+                .strip_prefix(repo_root())
+                .expect("package manifest inside repository")
+                .to_string_lossy()
+                .into_owned();
+                json!({
+                    "package": package_name,
+                    "manifest": manifest,
+                    "sourceGroup": group_id
+                })
+            })
+            .collect(),
+    );
+
+    inventory["sourceGroups"] = Value::Array(
+        SOURCE_GROUP_ORDER
+            .into_iter()
+            .map(|id| {
+                let paths = groups
+                    .get(id)
+                    .unwrap_or_else(|| panic!("missing source group {id}"));
+                json!({
+                    "id": id,
+                    "fileCount": paths.len(),
+                    "fingerprint": bytes_fingerprint(
+                        "d2b-toolkit-source-group-v1",
+                        id,
+                        paths
+                    ),
+                    "files": paths.iter().map(|path| json!({
+                        "path": path,
+                        "sha256": file_sha256(path)
+                    })).collect::<Vec<_>>()
+                })
+            })
+            .collect(),
+    );
+
+    for distribution in inventory["distributions"]
+        .as_array_mut()
+        .expect("distributions array")
+    {
+        let id = distribution["id"]
+            .as_str()
+            .expect("distribution id")
+            .to_owned();
+        let source_groups = distribution_source_groups(&id);
+        let paths = source_groups
+            .iter()
+            .flat_map(|group| groups[*group].iter().cloned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        distribution["sourceGroups"] = json!(source_groups);
+        distribution["featureProfile"] = distribution_feature_profile(&id);
+        distribution["fileCount"] = json!(paths.len());
+        distribution["fingerprint"] = json!(bytes_fingerprint(
+            "d2b-toolkit-distribution-v1",
+            &id,
+            &paths
+        ));
+    }
+    inventory["excludedPaths"] = json!([{
+        "path": "packages/Cargo.lock",
+        "reason": "each distribution owns its lockfile; the d2b lockfile is not copied"
+    }]);
+}
+
+fn refresh_coordination_revisions(inventory: &Value) {
+    let mut source = read_repo_file(COORDINATION_PATH);
+    let coordination: Value =
+        serde_json::from_str(&source).expect("valid toolkit sibling coordination graph");
+    let source_revision = coordination["contractGates"]
+        .as_array()
+        .expect("contractGates array")
+        .iter()
+        .find(|gate| gate["id"] == "client-provider-foundation")
+        .and_then(|gate| gate["sourceRevision"].as_str())
+        .expect("foundation source revision")
+        .to_owned();
+    let records = inventory["distributions"]
+        .as_array()
+        .expect("distributions array");
+    let mut block = String::from("  \"distributionSources\": [\n");
+    for (index, distribution) in records.iter().enumerate() {
+        let separator = if index + 1 == records.len() { "" } else { "," };
+        block.push_str(&format!(
+            "    {{\n      \"id\": \"{}\",\n      \"sourceRevision\": \
+             \"{}\",\n      \"fingerprint\": \"{}\"\n    }}{separator}\n",
+            distribution["id"].as_str().expect("distribution id"),
+            source_revision,
+            distribution["fingerprint"]
+                .as_str()
+                .expect("distribution fingerprint")
+        ));
+    }
+    block.push_str("  ],\n");
+
+    let contract_anchor = "  \"contractGates\": [";
+    let contract_start = source
+        .find(contract_anchor)
+        .expect("coordination contractGates anchor");
+    if let Some(distributions_start) = source.find("  \"distributionSources\": [") {
+        source.replace_range(distributions_start..contract_start, &block);
+    } else {
+        source.insert_str(contract_start, &block);
+    }
+    fs::write(repo_root().join(COORDINATION_PATH), source)
+        .expect("write toolkit sibling coordination graph");
+}
+
+fn write_json(rel: &str, value: &Value) {
+    let mut rendered = serde_json::to_string_pretty(value).expect("render JSON");
+    rendered.push('\n');
+    fs::write(repo_root().join(rel), rendered)
+        .unwrap_or_else(|error| panic!("failed to write {rel}: {error}"));
 }
 
 fn parse_features(manifest: &str) -> BTreeMap<String, Vec<String>> {
@@ -349,6 +610,77 @@ fn toolkit_source_inventory_is_exact_and_fingerprinted() {
     assert_eq!(policy["sourceGroupDomain"], "d2b-toolkit-source-group-v1");
     assert_eq!(policy["distributionDomain"], "d2b-toolkit-distribution-v1");
 
+    let canonical_packages = inventory["canonicalPackages"]
+        .as_array()
+        .expect("canonicalPackages array")
+        .iter()
+        .map(|package| {
+            (
+                package["package"]
+                    .as_str()
+                    .expect("canonical package name")
+                    .to_owned(),
+                (
+                    package["manifest"]
+                        .as_str()
+                        .expect("canonical package manifest")
+                        .to_owned(),
+                    package["sourceGroup"]
+                        .as_str()
+                        .expect("canonical package sourceGroup")
+                        .to_owned(),
+                ),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        canonical_packages,
+        BTreeMap::from([
+            (
+                "d2b-client".to_owned(),
+                (
+                    "packages/d2b-client/Cargo.toml".to_owned(),
+                    "client".to_owned(),
+                ),
+            ),
+            (
+                "d2b-contracts".to_owned(),
+                (
+                    "packages/d2b-contracts/Cargo.toml".to_owned(),
+                    "contracts-package".to_owned(),
+                ),
+            ),
+            (
+                "d2b-provider".to_owned(),
+                (
+                    "packages/d2b-provider/Cargo.toml".to_owned(),
+                    "provider-runtime".to_owned(),
+                ),
+            ),
+            (
+                "d2b-provider-toolkit".to_owned(),
+                (
+                    "packages/d2b-provider-toolkit/Cargo.toml".to_owned(),
+                    "provider-toolkit".to_owned(),
+                ),
+            ),
+            (
+                "d2b-session".to_owned(),
+                (
+                    "packages/d2b-session/Cargo.toml".to_owned(),
+                    "session-runtime".to_owned(),
+                ),
+            ),
+            (
+                "d2b-session-unix".to_owned(),
+                (
+                    "packages/d2b-session-unix/Cargo.toml".to_owned(),
+                    "unix-session".to_owned(),
+                ),
+            ),
+        ])
+    );
+
     let expected_groups = exact_source_groups();
     let mut actual_groups = BTreeMap::new();
     for group in inventory["sourceGroups"]
@@ -358,6 +690,11 @@ fn toolkit_source_inventory_is_exact_and_fingerprinted() {
         let group = object(group, "source group");
         let id = group["id"].as_str().expect("source group id").to_owned();
         let entries = group["files"].as_array().expect("source group files");
+        assert_eq!(
+            group["fileCount"].as_u64(),
+            Some(entries.len() as u64),
+            "{id} fileCount drifted"
+        );
         let mut paths = Vec::new();
         for entry in entries {
             let entry = object(entry, "source file");
@@ -430,7 +767,7 @@ fn toolkit_source_inventory_is_exact_and_fingerprinted() {
             "d2b-client-toolkit",
             vec![
                 "workspace-manifest",
-                "contracts-v2",
+                "contracts-package",
                 "session-runtime",
                 "unix-session",
                 "client",
@@ -441,7 +778,7 @@ fn toolkit_source_inventory_is_exact_and_fingerprinted() {
             "d2b-provider-toolkit",
             vec![
                 "workspace-manifest",
-                "contracts-v2",
+                "contracts-package",
                 "session-runtime",
                 "provider-runtime",
                 "provider-toolkit",
@@ -471,6 +808,16 @@ fn toolkit_source_inventory_is_exact_and_fingerprinted() {
             );
         }
         let paths = paths.into_iter().collect::<Vec<_>>();
+        assert_eq!(
+            distribution["fileCount"].as_u64(),
+            Some(paths.len() as u64),
+            "{id} distribution fileCount drifted"
+        );
+        assert_eq!(
+            distribution["featureProfile"],
+            distribution_feature_profile(&id),
+            "{id} feature profile drifted"
+        );
         assert_eq!(
             bytes_fingerprint("d2b-toolkit-distribution-v1", &id, &paths),
             distribution["fingerprint"]
@@ -637,6 +984,8 @@ fn toolkit_runtime_crates_do_not_duplicate_serialized_protocol_dtos() {
 
 #[test]
 fn sibling_coordination_graph_has_disjoint_repository_ownership() {
+    let inventory: Value =
+        serde_json::from_str(&read_repo_file(INVENTORY_PATH)).expect("valid toolkit inventory");
     let graph: Value = serde_json::from_str(&read_repo_file(COORDINATION_PATH))
         .expect("valid toolkit sibling coordination graph");
     assert_eq!(graph["schemaVersion"], 1);
@@ -661,6 +1010,54 @@ fn sibling_coordination_graph_has_disjoint_repository_ownership() {
             "core-control-services".to_owned(),
             "edge-user-desktop-services".to_owned(),
         ])
+    );
+    let source_revision = gates
+        .iter()
+        .find(|gate| gate["id"] == "client-provider-foundation")
+        .and_then(|gate| gate["sourceRevision"].as_str())
+        .expect("foundation source revision");
+    let inventory_fingerprints = inventory["distributions"]
+        .as_array()
+        .expect("distributions array")
+        .iter()
+        .map(|distribution| {
+            (
+                distribution["id"]
+                    .as_str()
+                    .expect("distribution id")
+                    .to_owned(),
+                distribution["fingerprint"]
+                    .as_str()
+                    .expect("distribution fingerprint")
+                    .to_owned(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let coordination_sources = graph["distributionSources"]
+        .as_array()
+        .expect("distributionSources array")
+        .iter()
+        .map(|source| {
+            assert_eq!(
+                source["sourceRevision"].as_str(),
+                Some(source_revision),
+                "coordination source revision drifted"
+            );
+            (
+                source["id"]
+                    .as_str()
+                    .expect("coordination distribution id")
+                    .to_owned(),
+                source["fingerprint"]
+                    .as_str()
+                    .expect("coordination distribution fingerprint")
+                    .to_owned(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        coordination_sources, inventory_fingerprints,
+        "coordination distribution revisions must match the source inventory"
     );
 
     let expected = BTreeMap::from([
@@ -707,4 +1104,20 @@ fn sibling_coordination_graph_has_disjoint_repository_ownership() {
         assert!(components.insert(id, repository).is_none());
     }
     assert_eq!(components, expected);
+}
+
+#[test]
+#[ignore = "opt-in source inventory regeneration"]
+fn regenerate_toolkit_source_inventory() {
+    assert_eq!(
+        std::env::var("D2B_UPDATE_TOOLKIT_SOURCE_INVENTORY").as_deref(),
+        Ok("1"),
+        "set D2B_UPDATE_TOOLKIT_SOURCE_INVENTORY=1 to rewrite tracked inventory artifacts"
+    );
+    let mut inventory: Value =
+        serde_json::from_str(&read_repo_file(INVENTORY_PATH)).expect("valid toolkit inventory");
+    refresh_inventory(&mut inventory);
+    write_json(INVENTORY_PATH, &inventory);
+
+    refresh_coordination_revisions(&inventory);
 }

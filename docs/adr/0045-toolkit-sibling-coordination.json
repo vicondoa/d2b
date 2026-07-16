@@ -1,6 +1,18 @@
 {
   "schemaVersion": 1,
   "protocolSource": "docs/reference/toolkit-source-contract.json",
+  "distributionSources": [
+    {
+      "id": "d2b-client-toolkit",
+      "sourceRevision": "7e94327951d30913a1a6e0e7a47d4a24b462deff",
+      "fingerprint": "0401d1f463d9dad49efd663d1493184e42954f624a029fbfd41c49f0323e5708"
+    },
+    {
+      "id": "d2b-provider-toolkit",
+      "sourceRevision": "7e94327951d30913a1a6e0e7a47d4a24b462deff",
+      "fingerprint": "75bebbafe99d2ba65e5ce80bc44e644b5d073b7045d5058cbb0fb1f4c539a8f6"
+    }
+  ],
   "contractGates": [
     {
       "id": "client-provider-foundation",

@@ -597,6 +597,9 @@ deprecations ship one minor release before removal.
   attempts.
 - Aligned the v2 bundle and provider-registry schema references with every
   canonical top-level field.
+- Made toolkit source fingerprints cover every Git-listed file in each
+  canonical package and every Cargo metadata target, preventing feature-gated
+  Rust modules or build inputs from being omitted by a handpicked inventory.
 - Bound child-realm singleton spawn authority to one attachment per role and
   kind, keyed multiple resource and lease descriptors by opaque resource ID, and
   made successful responses prove distinct nonzero controller/broker PIDs plus
