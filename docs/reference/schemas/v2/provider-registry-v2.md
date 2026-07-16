@@ -8,6 +8,17 @@ IDs; bindings carry only target identity that placement cannot express plus
 opaque intent IDs resolved through the integrity-verified bundle. They never
 carry argv, host paths, or credential material.
 
+## Top-level fields
+
+- `schemaVersion` — schema version for this artifact.
+- `registryGeneration` — generation shared by the registry and every provider
+  descriptor.
+- `configurationFingerprint` — SHA-256 fingerprint of the schema version,
+  registry generation, and provider entries.
+- `publishedAtUnixMs` — publication time in Unix milliseconds.
+- `providers` — canonical provider descriptor and binding entries, sorted by
+  provider ID.
+
 ## Contract notes
 
 - `schemaVersion` is `v2`.
