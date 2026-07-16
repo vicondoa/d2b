@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs,
+    env, fs,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -72,7 +72,7 @@ const OWNED_PACKAGE_PREFIXES: &[&str] = &[
     "packages/d2b-wlcontrol/",
 ];
 
-const BASELINE_ROOT: &str = "b2b50e67cfab4fb8601ebb1a63946e84eccba5c1";
+const AUTHORITY_REPOSITORY: &str = "vicondoa/d2b";
 const PREP_INTEGRATOR_FILES: &[&str] = &[
     "CHANGELOG.md",
     "delivery/manifests/w6.json",
@@ -112,8 +112,11 @@ const BLOCKERS: &[FrozenParentBlocker] = &[
         paths: &[
             "packages/d2b-priv-broker/src/live_handlers.rs",
             "packages/d2b-priv-broker/src/ops/exec_reconcile.rs",
+            "packages/d2b-priv-broker/src/ops/store_sync.rs",
+            "packages/d2b-priv-broker/src/ops/store_verify.rs",
             "packages/d2b-priv-broker/src/ops/store_view_farm.rs",
             "packages/d2b-host/src/bin/d2b-activation-helper.rs",
+            "packages/d2b-host/src/hardlink_farm.rs",
         ],
     },
     FrozenParentBlocker {
@@ -844,8 +847,11 @@ const LEGACY_BOUNDARIES: &[LegacyBoundary] = &[
         call_graph: &[
             "packages/d2b-priv-broker/src/live_handlers.rs",
             "packages/d2b-priv-broker/src/ops/exec_reconcile.rs",
+            "packages/d2b-priv-broker/src/ops/store_sync.rs",
+            "packages/d2b-priv-broker/src/ops/store_verify.rs",
             "packages/d2b-priv-broker/src/ops/store_view_farm.rs",
             "packages/d2b-host/src/bin/d2b-activation-helper.rs",
+            "packages/d2b-host/src/hardlink_farm.rs",
         ],
         legacy_handshake: "argv verbs plus untyped stdin JSON or process exit status",
         disposition: "fold-or-component-session",
@@ -1306,8 +1312,11 @@ fn frozen_parent_blockers_are_external_to_local_ownership() {
         [
             "packages/d2b-priv-broker/src/live_handlers.rs",
             "packages/d2b-priv-broker/src/ops/exec_reconcile.rs",
+            "packages/d2b-priv-broker/src/ops/store_sync.rs",
+            "packages/d2b-priv-broker/src/ops/store_verify.rs",
             "packages/d2b-priv-broker/src/ops/store_view_farm.rs",
             "packages/d2b-host/src/bin/d2b-activation-helper.rs",
+            "packages/d2b-host/src/hardlink_farm.rs",
         ]
     );
 
@@ -1369,51 +1378,245 @@ fn frozen_contract_dependencies_are_known_and_external() {
     }
 }
 
-fn git_output(root: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .current_dir(root)
-        .env("GIT_NO_REPLACE_OBJECTS", "1")
-        .args(["-c", "diff.ignoreSubmodules=none"])
-        .args(args)
-        .output()
-        .expect("execute git");
+fn sanitized_command(program: &str, root: &Path) -> Command {
+    let mut command = Command::new(program);
+    command.current_dir(root);
+    for (key, _) in env::vars_os() {
+        if key.to_string_lossy().starts_with("GIT_") {
+            command.env_remove(key);
+        }
+    }
+    command
+        .env_remove("GH_HOST")
+        .env_remove("GH_REPO")
+        .env("GIT_NO_REPLACE_OBJECTS", "1");
+    command
+}
+
+fn command_output(mut command: Command, args: &[&str], label: &str) -> String {
+    let output = command.args(args).output().expect(label);
     assert!(
         output.status.success(),
-        "git command failed: {}",
+        "{label}: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout)
-        .expect("git output is UTF-8")
+        .expect("command output is UTF-8")
         .trim()
         .to_owned()
 }
 
-#[test]
-fn committed_diff_gate_covers_code_tests_docs_and_examples() {
-    let root = repository_root();
-    assert_eq!(
-        git_output(&root, &["merge-base", BASELINE_ROOT, "HEAD"]),
-        BASELINE_ROOT
+fn git_output(root: &Path, args: &[&str]) -> String {
+    let mut command = sanitized_command("git", root);
+    command.args(["--no-optional-locks", "-c", "diff.ignoreSubmodules=none"]);
+    command_output(command, args, "git command failed")
+}
+
+fn reject_graph_metadata(root: &Path) {
+    assert!(
+        git_output(
+            root,
+            &["for-each-ref", "--format=%(refname)", "refs/replace"]
+        )
+        .is_empty(),
+        "repository contains forbidden replacement refs"
     );
-    let changed = git_output(
-        &root,
+    assert_eq!(
+        git_output(root, &["rev-parse", "--is-shallow-repository"]),
+        "false",
+        "shallow history cannot establish a wave segment"
+    );
+    let common_dir = PathBuf::from(git_output(
+        root,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    ));
+    for path in [common_dir.join("info/grafts"), common_dir.join("shallow")] {
+        assert!(
+            !path.exists(),
+            "repository contains forbidden graph-rewrite metadata"
+        );
+    }
+}
+
+fn manifest_stack_authority(root: &Path) -> (String, String, u64) {
+    let manifest = fs::read_to_string(root.join("delivery/manifests/w6.json"))
+        .expect("read W6 delivery authority");
+    let integration_ref = manifest
+        .lines()
+        .map(str::trim)
+        .find_map(|line| {
+            line.strip_prefix(r#""integration_ref": ""#)
+                .map(|value| value.trim_end_matches(','))
+                .and_then(|value| value.strip_suffix('"'))
+        })
+        .expect("manifest integration ref")
+        .to_owned();
+    let mut pending_branch = None;
+    let mut nodes = Vec::new();
+    for line in manifest.lines().map(str::trim) {
+        if let Some(branch) = line
+            .strip_prefix(r#""branch": ""#)
+            .and_then(|value| value.strip_suffix("\","))
+        {
+            pending_branch = Some(branch.to_owned());
+        } else if let Some(number) = line
+            .strip_prefix(r#""pr_number": "#)
+            .and_then(|value| value.strip_suffix(','))
+        {
+            nodes.push((
+                pending_branch.take().expect("manifest branch before PR"),
+                number.parse::<u64>().expect("manifest PR number"),
+            ));
+        }
+    }
+    assert!(nodes.len() >= 2, "manifest stack is incomplete");
+    let (head_branch, head_pr) = nodes.last().expect("manifest head node");
+    let parent_branch = &nodes[nodes.len() - 2].0;
+    assert_eq!(&integration_ref, head_branch);
+    (head_branch.clone(), parent_branch.clone(), *head_pr)
+}
+
+fn is_commit_oid(value: &str) -> bool {
+    value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+#[derive(Debug)]
+struct SegmentAuthority {
+    base_oid: String,
+    head_oid: String,
+}
+
+fn verified_w6_segment(root: &Path) -> SegmentAuthority {
+    reject_graph_metadata(root);
+    let (manifest_head, manifest_parent, manifest_pr) = manifest_stack_authority(root);
+    let head_oid = git_output(root, &["rev-parse", "HEAD"]);
+    assert!(is_commit_oid(&head_oid), "local W6 head is not a commit");
+
+    let ci = env::var("GITHUB_ACTIONS").as_deref() == Ok("true");
+    let (branch, parent, base_oid) = if ci {
+        let branch = env::var("GITHUB_HEAD_REF").expect("GitHub PR head ref");
+        let parent = env::var("GITHUB_BASE_REF").expect("GitHub PR base ref");
+        assert_eq!(branch, manifest_head);
+        assert_eq!(parent, manifest_parent);
+        let remote_parent = format!("refs/remotes/origin/{parent}");
+        let base_oid = git_output(root, &["rev-parse", &remote_parent]);
+        (branch, parent, base_oid)
+    } else {
+        let branch = git_output(root, &["symbolic-ref", "--quiet", "--short", "HEAD"]);
+        assert_eq!(branch, manifest_head);
+        let parent_key = format!("git-town-branch.{branch}.parent");
+        let parent = git_output(root, &["config", "--get", &parent_key]);
+        assert_eq!(parent, manifest_parent);
+        let base_oid = git_output(root, &["rev-parse", &parent]);
+
+        let mut gh = sanitized_command("gh", root);
+        let pr_rows = command_output(
+            gh,
+            &[
+                "pr",
+                "list",
+                "--repo",
+                AUTHORITY_REPOSITORY,
+                "--state",
+                "open",
+                "--head",
+                &branch,
+                "--limit",
+                "2",
+                "--json",
+                "number",
+                "--jq",
+                ".[].number",
+            ],
+            "discover W6 pull request",
+        );
+        let rows = pr_rows.lines().collect::<Vec<_>>();
+        assert_eq!(rows.len(), 1, "W6 branch must have one open PR");
+        let pr_number = rows[0].parse::<u64>().expect("GitHub PR number");
+        assert_eq!(pr_number, manifest_pr);
+
+        gh = sanitized_command("gh", root);
+        let pr_number_arg = pr_number.to_string();
+        let status = command_output(
+            gh,
+            &[
+                "pr",
+                "view",
+                &pr_number_arg,
+                "--repo",
+                AUTHORITY_REPOSITORY,
+                "--json",
+                "state,baseRefName,baseRefOid,headRefName,headRefOid,isCrossRepository",
+                "--jq",
+                "[.state,.baseRefName,.baseRefOid,.headRefName,.headRefOid,.isCrossRepository] | @tsv",
+            ],
+            "read W6 pull request authority",
+        );
+        let fields = status.split('\t').collect::<Vec<_>>();
+        assert_eq!(fields.len(), 6, "invalid GitHub PR authority row");
+        assert_eq!(fields[0], "OPEN");
+        assert_eq!(fields[1], parent);
+        assert_eq!(fields[2], base_oid);
+        assert_eq!(fields[3], branch);
+        assert_eq!(fields[4], head_oid);
+        assert_eq!(fields[5], "false");
+        (branch, parent, base_oid)
+    };
+
+    assert_eq!(branch, manifest_head);
+    assert_eq!(parent, manifest_parent);
+    assert!(is_commit_oid(&base_oid), "W6 segment base is not a commit");
+    assert_ne!(base_oid, head_oid, "W6 segment is empty");
+    let ancestor_status = {
+        let mut command = sanitized_command("git", root);
+        command
+            .args(["--no-optional-locks", "merge-base", "--is-ancestor"])
+            .arg(&base_oid)
+            .arg(&head_oid)
+            .status()
+            .expect("verify W6 segment ancestry")
+    };
+    assert!(
+        ancestor_status.success(),
+        "W6 segment base is not an ancestor"
+    );
+    SegmentAuthority { base_oid, head_oid }
+}
+
+fn changed_paths_between(root: &Path, base_oid: &str, head_oid: &str) -> Vec<String> {
+    git_output(
+        root,
         &[
             "diff",
             "--name-only",
             "--no-renames",
             "--ignore-submodules=none",
-            &format!("{BASELINE_ROOT}..HEAD"),
+            base_oid,
+            head_oid,
             "--",
         ],
-    );
-    assert!(!changed.is_empty(), "edge preparation diff is empty");
-    for path in changed.lines() {
-        assert_eq!(
-            owner_for(path).len(),
-            1,
-            "changed path {path} must have one component or prep-integrator owner"
-        );
+    )
+    .lines()
+    .map(str::to_owned)
+    .collect()
+}
+
+fn validate_owned_segment(paths: &[String]) -> Result<(), String> {
+    for path in paths {
+        if owner_for(path).len() != 1 {
+            return Err(format!("W6 segment contains unowned path {path}"));
+        }
     }
+    Ok(())
+}
+
+#[test]
+fn committed_diff_gate_uses_verified_w6_segment() {
+    let root = repository_root();
+    let authority = verified_w6_segment(&root);
+    let changed = changed_paths_between(&root, &authority.base_oid, &authority.head_oid);
+    assert!(!changed.is_empty(), "edge preparation diff is empty");
+    validate_owned_segment(&changed).expect("W6 segment has exact local ownership");
 
     assert_eq!(
         owner_for("packages/d2b-userd/tests/user/future_service.rs"),
@@ -1426,6 +1629,18 @@ fn committed_diff_gate_covers_code_tests_docs_and_examples() {
     assert!(
         owner_for("examples/graphics-workstation/configuration.nix").is_empty(),
         "examples remain foreign declarative-host ownership"
+    );
+}
+
+#[test]
+fn linearized_stack_excludes_w5_foreign_paths_from_w6_segment() {
+    let w5_foreign = "packages/d2bd/src/lib.rs".to_owned();
+    let w6_owned = "packages/d2b-userd/src/lib.rs".to_owned();
+    assert!(owner_for(&w5_foreign).is_empty());
+    assert!(validate_owned_segment(std::slice::from_ref(&w6_owned)).is_ok());
+    assert!(
+        validate_owned_segment(&[w5_foreign, w6_owned]).is_err(),
+        "a shared-root-to-head diff would incorrectly include W5 history"
     );
 }
 
@@ -1496,8 +1711,11 @@ fn legacy_ipc_inventory_has_no_specialized_exception() {
         [
             "packages/d2b-priv-broker/src/live_handlers.rs",
             "packages/d2b-priv-broker/src/ops/exec_reconcile.rs",
+            "packages/d2b-priv-broker/src/ops/store_sync.rs",
+            "packages/d2b-priv-broker/src/ops/store_verify.rs",
             "packages/d2b-priv-broker/src/ops/store_view_farm.rs",
             "packages/d2b-host/src/bin/d2b-activation-helper.rs",
+            "packages/d2b-host/src/hardlink_farm.rs",
         ]
     );
 }
