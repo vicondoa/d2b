@@ -138,6 +138,10 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Decoupled successful Azure Container Apps operations from opaque credential
+  lease cleanup. A bounded process-owned executor now revokes each lease exactly
+  once and emits only closed, redacted cleanup outcomes across request-runtime
+  shutdown, failure, timeout, unavailability, and saturation.
 - Persist bounded local-observability exports as atomically renamed private
   artifacts keyed by opaque operation ID. JSON Lines and OTLP protobuf now honor
   the requested format and exact streaming record/byte limits; storage failures
