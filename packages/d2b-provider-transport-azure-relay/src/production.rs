@@ -26,8 +26,8 @@ use hmac::{Hmac, Mac};
 use rustls_pki_types::{CertificateDer, pem::PemObject};
 use sha2::Sha256;
 use tokio::{
-    sync::{Mutex, mpsc},
-    task::JoinHandle,
+    sync::{Mutex, Notify, mpsc},
+    task::{AbortHandle, JoinHandle},
 };
 use tokio_tungstenite::tungstenite::{
     Message, client::IntoClientRequest, http::HeaderValue, protocol::WebSocketConfig,
@@ -528,8 +528,47 @@ pub struct RelaySocketConnection {
     socket: SharedRelaySocket,
     accepted: Option<AcceptedRelaySockets>,
     listener_live: Option<Arc<AtomicBool>>,
-    listener_task: StdMutex<Option<JoinHandle<()>>>,
+    listener_shutdown: Option<Arc<ListenerTaskShutdown>>,
     lifecycle: SocketLifecycle,
+}
+
+struct ListenerTaskShutdown {
+    abort_handle: AbortHandle,
+    drained: AtomicBool,
+    drained_notify: Notify,
+}
+
+impl ListenerTaskShutdown {
+    fn supervise(task: JoinHandle<()>, live: Arc<AtomicBool>) -> Arc<Self> {
+        let shutdown = Arc::new(Self {
+            abort_handle: task.abort_handle(),
+            drained: AtomicBool::new(false),
+            drained_notify: Notify::new(),
+        });
+        let monitor = Arc::clone(&shutdown);
+        tokio::spawn(async move {
+            let _ = task.await;
+            live.store(false, Ordering::Release);
+            monitor.drained.store(true, Ordering::Release);
+            monitor.drained_notify.notify_waiters();
+        });
+        shutdown
+    }
+
+    async fn abort_and_drain(&self) {
+        self.abort_handle.abort();
+        loop {
+            let notified = self.drained_notify.notified();
+            if self.drained.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    fn abort(&self) {
+        self.abort_handle.abort();
+    }
 }
 
 impl RelaySocketConnection {
@@ -538,7 +577,7 @@ impl RelaySocketConnection {
             socket,
             accepted: None,
             listener_live: None,
-            listener_task: StdMutex::new(None),
+            listener_shutdown: None,
             lifecycle: SocketLifecycle::open(),
         }
     }
@@ -549,11 +588,13 @@ impl RelaySocketConnection {
         listener_live: Arc<AtomicBool>,
         listener_task: JoinHandle<()>,
     ) -> Self {
+        let listener_shutdown =
+            ListenerTaskShutdown::supervise(listener_task, Arc::clone(&listener_live));
         Self {
             socket,
             accepted: Some(Arc::new(Mutex::new(accepted))),
             listener_live: Some(listener_live),
-            listener_task: StdMutex::new(Some(listener_task)),
+            listener_shutdown: Some(listener_shutdown),
             lifecycle: SocketLifecycle::open(),
         }
     }
@@ -596,13 +637,8 @@ impl RelaySocketConnection {
         if let Some(live) = &self.listener_live {
             live.store(false, Ordering::Release);
         }
-        if let Some(task) = self
-            .listener_task
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
-        {
-            task.abort();
+        if let Some(shutdown) = &self.listener_shutdown {
+            shutdown.abort_and_drain().await;
         }
         self.socket.close().await?;
         self.lifecycle.finish_close();
@@ -615,13 +651,8 @@ impl Drop for RelaySocketConnection {
         if let Some(live) = &self.listener_live {
             live.store(false, Ordering::Release);
         }
-        if let Some(task) = self
-            .listener_task
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
-        {
-            task.abort();
+        if let Some(shutdown) = &self.listener_shutdown {
+            shutdown.abort();
         }
     }
 }
@@ -2262,6 +2293,92 @@ fn valid_servicebus_host(host: &str) -> bool {
 #[cfg(test)]
 mod internal_tests {
     use super::*;
+    use std::future::pending;
+
+    struct ListenerTaskDrop(Arc<AtomicU8>);
+
+    impl Drop for ListenerTaskDrop {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+
+    struct ListenerCloseSocket {
+        listener_drops: Arc<AtomicU8>,
+        close_calls: AtomicU8,
+        fail_first_close: AtomicBool,
+    }
+
+    #[async_trait]
+    impl RelaySocket for ListenerCloseSocket {
+        fn is_open(&self) -> bool {
+            true
+        }
+
+        async fn receive(&self) -> Result<RelaySocketEvent, RelaySocketFailure> {
+            pending().await
+        }
+
+        async fn send_binary(&self, _bytes: &[u8]) -> Result<(), RelaySocketFailure> {
+            Ok(())
+        }
+
+        async fn send_pong(&self, _bytes: &[u8]) -> Result<(), RelaySocketFailure> {
+            Ok(())
+        }
+
+        async fn close(&self) -> Result<(), RelaySocketFailure> {
+            assert_eq!(
+                self.listener_drops.load(Ordering::Acquire),
+                1,
+                "listener resources must be drained before socket close"
+            );
+            self.close_calls.fetch_add(1, Ordering::AcqRel);
+            if self.fail_first_close.swap(false, Ordering::AcqRel) {
+                Err(RelaySocketFailure::Unavailable)
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    async fn listening_test_connection(
+        fail_first_close: bool,
+    ) -> (
+        Arc<RelaySocketConnection>,
+        Arc<AtomicU8>,
+        Arc<ListenerCloseSocket>,
+    ) {
+        let listener_drops = Arc::new(AtomicU8::new(0));
+        let listener_started = Arc::new(tokio::sync::Semaphore::new(0));
+        let task_drops = Arc::clone(&listener_drops);
+        let task_started = Arc::clone(&listener_started);
+        let listener_task = tokio::spawn(async move {
+            let _drop = ListenerTaskDrop(task_drops);
+            task_started.add_permits(1);
+            pending::<()>().await;
+        });
+        listener_started
+            .acquire()
+            .await
+            .expect("listener start semaphore remains open")
+            .forget();
+
+        let socket = Arc::new(ListenerCloseSocket {
+            listener_drops: Arc::clone(&listener_drops),
+            close_calls: AtomicU8::new(0),
+            fail_first_close: AtomicBool::new(fail_first_close),
+        });
+        let shared_socket: Arc<dyn RelaySocket> = socket.clone();
+        let (_accepted_tx, accepted_rx) = mpsc::channel(1);
+        let connection = Arc::new(RelaySocketConnection::listening(
+            shared_socket,
+            accepted_rx,
+            Arc::new(AtomicBool::new(true)),
+            listener_task,
+        ));
+        (connection, listener_drops, socket)
+    }
 
     fn test_binding() -> AzureRelayBinding {
         AzureRelayBinding::new(
@@ -2338,6 +2455,56 @@ mod internal_tests {
         assert!(!lifecycle.is_live());
         assert!(lifecycle.shutdown_completed());
         assert!(!lifecycle.begin_close());
+    }
+
+    #[tokio::test]
+    async fn listener_close_drains_before_normal_and_repeated_shutdown_returns() {
+        let (connection, listener_drops, socket) = listening_test_connection(false).await;
+
+        let (first, repeated) = tokio::join!(connection.close(), connection.close());
+        first.expect("first close");
+        repeated.expect("concurrent repeated close");
+        connection.close().await.expect("completed close replay");
+
+        assert_eq!(listener_drops.load(Ordering::Acquire), 1);
+        assert!(!connection.is_open());
+        assert!((1..=2).contains(&socket.close_calls.load(Ordering::Acquire)));
+    }
+
+    #[tokio::test]
+    async fn listener_close_failure_retries_only_after_the_task_is_drained() {
+        let (connection, listener_drops, socket) = listening_test_connection(true).await;
+
+        assert_eq!(
+            connection
+                .close()
+                .await
+                .expect_err("first socket close fails"),
+            RelaySocketFailure::Unavailable
+        );
+        assert_eq!(listener_drops.load(Ordering::Acquire), 1);
+        assert!(connection.is_open());
+
+        connection.close().await.expect("close retry");
+        assert_eq!(listener_drops.load(Ordering::Acquire), 1);
+        assert_eq!(socket.close_calls.load(Ordering::Acquire), 2);
+        assert!(!connection.is_open());
+    }
+
+    #[tokio::test]
+    async fn dropping_listener_connection_aborts_its_supervised_task() {
+        let (connection, listener_drops, _socket) = listening_test_connection(false).await;
+
+        drop(connection);
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while listener_drops.load(Ordering::Acquire) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("listener task drain deadline");
+
+        assert_eq!(listener_drops.load(Ordering::Acquire), 1);
     }
 
     #[tokio::test]
