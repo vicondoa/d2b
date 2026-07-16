@@ -114,6 +114,7 @@ pub mod exec_session_real;
 pub mod guest_control_bridge;
 pub mod guest_control_health;
 pub mod guest_control_vsock;
+pub(crate) mod observability_export;
 pub mod provider_effects;
 pub mod provider_registry;
 pub mod realm_access_resolver;

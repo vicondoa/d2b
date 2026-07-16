@@ -12,8 +12,9 @@ use crate::{
     LocalObservabilityStatus, LocalObservationRecord, MetricLabel, MetricLabelKey,
     OBSERVATION_RECORD_ENCODED_UPPER_BOUND_BYTES, ObservabilityCall, ObservabilityExportIntent,
     ObservabilityExportPort, ObservabilityLimits, ObservabilityPortError, ObservabilityQueryIntent,
-    ObservabilityQueryPort, OperationLabel, OutcomeLabel, ProjectionKind, ProjectionPage,
-    factory_key, implementation_id, live_observability_capabilities,
+    ObservabilityQueryPort, OperationLabel, OutcomeLabel, ProjectionBounds, ProjectionKind,
+    ProjectionPage, encode_export_payload, factory_key, implementation_id,
+    live_observability_capabilities,
 };
 use async_trait::async_trait;
 use d2b_contracts::{
@@ -208,6 +209,141 @@ fn provider(
         Arc::new(DeterministicClock::new(NOW)),
     )
     .expect("provider")
+}
+
+fn protobuf_varint_at(input: &[u8], offset: &mut usize) -> u64 {
+    let mut value = 0_u64;
+    let mut shift = 0_u32;
+    loop {
+        let byte = input[*offset];
+        *offset += 1;
+        value |= u64::from(byte & 0x7f) << shift;
+        if byte & 0x80 == 0 {
+            return value;
+        }
+        shift += 7;
+        assert!(shift < 64, "bounded protobuf varint");
+    }
+}
+
+fn protobuf_fields(input: &[u8]) -> Vec<(u32, u8, &[u8])> {
+    let mut fields = Vec::new();
+    let mut offset = 0;
+    while offset < input.len() {
+        let key = protobuf_varint_at(input, &mut offset);
+        let field = u32::try_from(key >> 3).expect("field number");
+        let wire_type = u8::try_from(key & 0x07).expect("wire type");
+        let start;
+        let end;
+        match wire_type {
+            0 => {
+                start = offset;
+                let _ = protobuf_varint_at(input, &mut offset);
+                end = offset;
+            }
+            1 => {
+                start = offset;
+                offset += 8;
+                end = offset;
+            }
+            2 => {
+                let len =
+                    usize::try_from(protobuf_varint_at(input, &mut offset)).expect("field length");
+                start = offset;
+                offset += len;
+                end = offset;
+            }
+            5 => {
+                start = offset;
+                offset += 4;
+                end = offset;
+            }
+            other => panic!("unsupported protobuf wire type {other}"),
+        }
+        assert!(end <= input.len(), "protobuf field remains bounded");
+        fields.push((field, wire_type, &input[start..end]));
+    }
+    fields
+}
+
+fn protobuf_message_field(input: &[u8], field: u32) -> &[u8] {
+    protobuf_fields(input)
+        .into_iter()
+        .find_map(|(candidate, wire_type, value)| {
+            (candidate == field && wire_type == 2).then_some(value)
+        })
+        .expect("protobuf message field")
+}
+
+#[test]
+fn provider_owned_export_sink_formats_exact_json_lines_and_otlp_protobuf() {
+    let observation = record(ObservabilityView::Operations, 7);
+    let json = encode_export_payload(ObservabilityExportFormat::JsonLines, &[observation])
+        .expect("JSON Lines");
+    assert_eq!(json.last(), Some(&b'\n'));
+    let value: serde_json::Value =
+        serde_json::from_slice(&json[..json.len() - 1]).expect("JSON record");
+    assert_eq!(value["observedAtUnixMs"], NOW);
+    assert_eq!(value["projection"], "metrics");
+    assert_eq!(value["labels"]["providerType"], "device");
+    assert_eq!(value["labels"]["metric"], "operation-total");
+    assert_eq!(value["value"], 7);
+
+    let otlp = encode_export_payload(ObservabilityExportFormat::OtlpProtobuf, &[observation])
+        .expect("OTLP protobuf");
+    let resource_metrics = protobuf_message_field(&otlp, 1);
+    let scope_metrics = protobuf_message_field(resource_metrics, 2);
+    let scope = protobuf_message_field(scope_metrics, 1);
+    assert_eq!(
+        protobuf_message_field(scope, 1),
+        b"d2b.provider.observability.local"
+    );
+    let metric = protobuf_message_field(scope_metrics, 2);
+    assert_eq!(protobuf_message_field(metric, 1), b"d2b.operation.total");
+    let gauge = protobuf_message_field(metric, 5);
+    let point = protobuf_message_field(gauge, 1);
+    let point_fields = protobuf_fields(point);
+    assert!(
+        point_fields
+            .iter()
+            .any(|(field, wire_type, _)| *field == 3 && *wire_type == 1)
+    );
+    assert!(
+        point_fields
+            .iter()
+            .any(|(field, wire_type, _)| *field == 6 && *wire_type == 1)
+    );
+    assert_eq!(
+        point_fields
+            .iter()
+            .filter(|(field, wire_type, _)| *field == 7 && *wire_type == 2)
+            .count(),
+        7
+    );
+}
+
+#[test]
+fn provider_owned_export_sink_enforces_exact_streaming_byte_bound() {
+    let first = record(ObservabilityView::Operations, 1);
+    let exact_one = encode_export_payload(ObservabilityExportFormat::JsonLines, &[first])
+        .expect("one JSON record");
+    let sink = BoundedExportSink::new(
+        ObservabilityExportFormat::JsonLines,
+        ProjectionBounds {
+            max_records: 2,
+            max_bytes: u32::try_from(exact_one.len()).expect("bounded payload"),
+        },
+        NOW,
+        NOW,
+    );
+    assert_eq!(sink.emit(first), Ok(ExportSinkStatus::Emitted));
+    assert_eq!(
+        sink.emit(record(ObservabilityView::Operations, 2)),
+        Ok(ExportSinkStatus::Truncated)
+    );
+    assert_eq!(sink.record_count(), Ok(1));
+    assert_eq!(sink.encoded_payload(), Ok(exact_one));
+    assert_eq!(sink.truncated(), Ok(true));
 }
 
 fn factory() -> Factory {
@@ -411,7 +547,8 @@ async fn export_is_single_call_bounded_and_reports_truncation() {
 
     assert_eq!(export.state(), MutationState::Applied);
     assert_eq!(export.record_count(), 2);
-    assert_eq!(export.encoded_bytes(), two_records);
+    assert!(export.encoded_bytes() > 0);
+    assert!(export.encoded_bytes() <= two_records);
     assert!(export.truncated());
     assert_eq!(
         *ports.export_statuses.lock().expect("export statuses"),
@@ -464,7 +601,8 @@ async fn export_sink_truncates_during_untrusted_port_emission() {
         .expect("bounded export");
 
     assert_eq!(export.record_count(), 2);
-    assert_eq!(export.encoded_bytes(), two_records);
+    assert!(export.encoded_bytes() > 0);
+    assert!(export.encoded_bytes() <= two_records);
     assert!(export.truncated());
     assert_eq!(
         *ports.export_statuses.lock().expect("export statuses"),

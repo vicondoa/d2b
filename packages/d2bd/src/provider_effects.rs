@@ -518,6 +518,11 @@ impl DaemonEffectAdapters {
                         metrics: Arc::clone(&state.metrics_registry),
                         audit: Arc::clone(&state.daemon_audit),
                         connections: state.conn_semaphore.clone(),
+                        export_store: Arc::new(
+                            crate::observability_export::ObservabilityExportStore::new(
+                                &state.daemon_state_dir,
+                            ),
+                        ),
                     });
                     builder.bind_observability(
                         entry.descriptor.clone(),
@@ -537,6 +542,7 @@ struct DaemonLocalObservability {
     metrics: Arc<crate::metrics::Registry>,
     audit: Arc<crate::daemon_audit::DaemonAuditLog>,
     connections: crate::concurrency::ConnSemaphore,
+    export_store: Arc<crate::observability_export::ObservabilityExportStore>,
 }
 
 impl fmt::Debug for DaemonLocalObservability {
@@ -759,6 +765,44 @@ impl ObservabilityExportPort for DaemonLocalObservability {
                     break;
                 }
             }
+        }
+        let payload = sink
+            .encoded_payload()
+            .map_err(|_| ObservabilityPortError::InvalidProjection)?;
+        let record_count = sink
+            .record_count()
+            .map_err(|_| ObservabilityPortError::InvalidProjection)?;
+        let encoded_bytes = sink
+            .encoded_bytes()
+            .map_err(|_| ObservabilityPortError::InvalidProjection)?;
+        let operation_id = context.operation().operation_id.clone();
+        let store = Arc::clone(&self.export_store);
+        let format = intent.format;
+        let max_records = intent.bounds.max_records;
+        let max_bytes = intent.bounds.max_bytes;
+        let inspection = tokio::task::spawn_blocking(move || {
+            store.persist(
+                &operation_id,
+                format,
+                &payload,
+                record_count,
+                max_records,
+                max_bytes,
+            )
+        })
+        .await
+        .map_err(|_| ObservabilityPortError::Unavailable)?
+        .map_err(|error| match error {
+            crate::observability_export::ObservabilityExportStoreError::StorageUnavailable => {
+                ObservabilityPortError::Unavailable
+            }
+            crate::observability_export::ObservabilityExportStoreError::BoundsExceeded
+            | crate::observability_export::ObservabilityExportStoreError::InvalidArtifact => {
+                ObservabilityPortError::InvalidProjection
+            }
+        })?;
+        if inspection.encoded_bytes != encoded_bytes {
+            return Err(ObservabilityPortError::InvalidProjection);
         }
         Ok(ExportPortOutcome::new(if emitted {
             MutationState::Applied
@@ -1434,17 +1478,21 @@ mod tests {
         );
         let connections = crate::concurrency::ConnSemaphore::new(2);
         let _connection = connections.try_acquire().expect("connection permit");
+        let export_state = tempfile::tempdir().expect("export state");
         let adapter = Arc::new(DaemonLocalObservability {
             realm_id,
             metrics,
             audit: Arc::new(crate::daemon_audit::DaemonAuditLog::no_op()),
             connections,
+            export_store: Arc::new(crate::observability_export::ObservabilityExportStore::new(
+                export_state.path(),
+            )),
         });
         let provider = LocalObservabilityProvider::new(
             fixture.descriptor.clone(),
             ObservabilityLimits::new(2, 1_024, 60_000).expect("limits"),
             adapter.clone(),
-            adapter,
+            adapter.clone(),
         )
         .expect("provider");
 
@@ -1502,10 +1550,106 @@ mod tests {
             .expect("bounded export");
         assert!(export.record_count() <= 2);
         assert!(export.encoded_bytes() <= 1_024);
-        let debug = format!("{first:?}{second:?}{export:?}");
+        let json_export = adapter
+            .export_store
+            .read(
+                &export_request.context.operation_id,
+                ObservabilityExportFormat::JsonLines,
+            )
+            .expect("read durable JSON Lines export");
+        assert_eq!(
+            json_export.iter().filter(|byte| **byte == b'\n').count(),
+            usize::from(export.record_count())
+        );
+        assert_eq!(
+            json_export.len(),
+            usize::try_from(export.encoded_bytes()).expect("encoded byte count")
+        );
+        for line in json_export.split(|byte| *byte == b'\n') {
+            if !line.is_empty() {
+                let value: serde_json::Value =
+                    serde_json::from_slice(line).expect("JSON Lines record");
+                assert!(value.get("observedAtUnixMs").is_some());
+                assert!(value.get("labels").is_some());
+            }
+        }
+
+        let otlp_request = fixture
+            .request_with_input(
+                ProviderMethod::ObservabilityExport,
+                ProviderOperationInput::ObservabilityExport {
+                    format: ObservabilityExportFormat::OtlpProtobuf,
+                    start_at_unix_ms: now.saturating_sub(1_000),
+                    end_at_unix_ms: now.saturating_add(1_000),
+                },
+            )
+            .expect("OTLP export request");
+        let otlp_call = fixture.call_context(&otlp_request.context);
+        let otlp_export = provider
+            .bounded_export(&otlp_call, &otlp_request)
+            .await
+            .expect("bounded OTLP export");
+        let otlp_bytes = adapter
+            .export_store
+            .read(
+                &otlp_request.context.operation_id,
+                ObservabilityExportFormat::OtlpProtobuf,
+            )
+            .expect("read durable OTLP export");
+        assert_eq!(otlp_bytes.first(), Some(&0x0a));
+        assert_eq!(
+            otlp_bytes.len(),
+            usize::try_from(otlp_export.encoded_bytes()).expect("encoded byte count")
+        );
+        let blocked_state = tempfile::tempdir().expect("blocked export state");
+        std::fs::write(
+            blocked_state.path().join("observability-exports"),
+            b"not-a-directory",
+        )
+        .expect("block export directory");
+        let blocked_adapter = Arc::new(DaemonLocalObservability {
+            realm_id: adapter.realm_id.clone(),
+            metrics: Arc::clone(&adapter.metrics),
+            audit: Arc::new(crate::daemon_audit::DaemonAuditLog::no_op()),
+            connections: crate::concurrency::ConnSemaphore::new(1),
+            export_store: Arc::new(crate::observability_export::ObservabilityExportStore::new(
+                blocked_state.path(),
+            )),
+        });
+        let blocked_provider = LocalObservabilityProvider::new(
+            fixture.descriptor.clone(),
+            ObservabilityLimits::new(2, 1_024, 60_000).expect("limits"),
+            blocked_adapter.clone(),
+            blocked_adapter,
+        )
+        .expect("blocked provider");
+        let blocked_request = fixture
+            .request_with_input(
+                ProviderMethod::ObservabilityExport,
+                ProviderOperationInput::ObservabilityExport {
+                    format: ObservabilityExportFormat::JsonLines,
+                    start_at_unix_ms: now.saturating_sub(1_000),
+                    end_at_unix_ms: now.saturating_add(1_000),
+                },
+            )
+            .expect("blocked export request");
+        let blocked_error = blocked_provider
+            .bounded_export(
+                &fixture.call_context(&blocked_request.context),
+                &blocked_request,
+            )
+            .await
+            .expect_err("storage failure must precede Applied");
+        assert_eq!(
+            blocked_error.kind,
+            d2b_contracts::v2_provider::ProviderFailureKind::Unavailable
+        );
+
+        let debug = format!("{first:?}{second:?}{export:?}{adapter:?}");
         for forbidden in ["private-cardinality-canary", "private-vm-canary"] {
             assert!(!debug.contains(forbidden));
         }
+        assert!(!debug.contains(&export_state.path().display().to_string()));
     }
 
     #[tokio::test]

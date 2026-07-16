@@ -134,6 +134,11 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Persist bounded local-observability exports as atomically renamed private
+  artifacts keyed by opaque operation ID. JSON Lines and OTLP protobuf now honor
+  the requested format and exact streaming record/byte limits; storage failures
+  and post-dispatch timeouts fail or remain ambiguous before an operation can
+  report `Applied`.
 - Split provider-registry identity failures into actionable provider-ID,
   configuration-schema-fingerprint, and configured-scope-digest diagnostics.
   Local-runtime bindings now derive realm identity exclusively from descriptor

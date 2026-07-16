@@ -1304,6 +1304,11 @@
       "path": "packages/d2bd/src/metrics.rs"
     },
     {
+      "name": "w4-integration-d2bd-src-observability-export-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2bd/src/observability_export.rs"
+    },
+    {
       "name": "w4-integration-d2bd-src-provider-effects-rs",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2bd/src/provider_effects.rs"

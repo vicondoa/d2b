@@ -76,6 +76,7 @@ const PROVIDER_INTEGRATION_FILES: &[&str] = &[
     "packages/d2bd/src/kernel_module_check.rs",
     "packages/d2bd/src/lib.rs",
     "packages/d2bd/src/net_vm_bundle_gate.rs",
+    "packages/d2bd/src/observability_export.rs",
     "packages/d2bd/src/provider_effects.rs",
     "packages/d2bd/src/provider_registry.rs",
     "packages/d2bd/src/storage_lifecycle.rs",
@@ -784,6 +785,46 @@ fn daemon_provider_composition_is_exact_startup_owned_and_credential_free() {
             && !effects.contains("dispatch_broker_vm_stop_as(&"),
         "async provider ports must not re-enter synchronous Tokio lifecycle bridges"
     );
+    let export_store = read_repo_file("packages/d2bd/src/observability_export.rs");
+    for required in [
+        "create_new(true)",
+        ".mode(0o600)",
+        "file.sync_all()",
+        "fs::rename(&temp_path, &artifact_path)",
+        "directory.sync_all()",
+        "pub(crate) fn inspect(",
+    ] {
+        assert!(
+            export_store.contains(required),
+            "durable observability export store is missing {required}"
+        );
+    }
+    assert!(
+        !export_store.contains("tracing::") && !export_store.contains(".display()"),
+        "observability export persistence must not log or format raw host paths"
+    );
+    let observability = read_repo_file("packages/d2b-provider-observability-local/src/lib.rs");
+    for required in [
+        "encode_json_lines",
+        "encode_otlp_export",
+        "encoded_payload",
+        "encoded_bytes > self.bounds.max_bytes",
+    ] {
+        assert!(
+            observability.contains(required),
+            "provider-owned bounded export sink is missing {required}"
+        );
+    }
+    for required in [
+        "tokio::task::spawn_blocking",
+        "store.persist(",
+        "inspection.encoded_bytes != encoded_bytes",
+    ] {
+        assert!(
+            effects.contains(required),
+            "daemon observability export adapter is missing {required}"
+        );
+    }
     let provider_contract = read_repo_file("packages/d2b-contracts/src/provider_registry_v2.rs");
     assert!(
         provider_contract.contains("pub struct ProviderRegistryV2")

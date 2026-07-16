@@ -452,12 +452,197 @@ pub enum ExportSinkStatus {
 pub enum ExportSinkError {
     Closed,
     OutsideWindow,
+    Encoding,
     Poisoned,
+}
+
+fn projection_label(projection: ProjectionKind) -> &'static str {
+    match projection {
+        ProjectionKind::Metrics => "metrics",
+        ProjectionKind::TraceSummary => "trace-summary",
+        ProjectionKind::AuditSummary => "audit-summary",
+    }
+}
+
+fn health_label(health: ProviderHealthState) -> &'static str {
+    match health {
+        ProviderHealthState::Healthy => "healthy",
+        ProviderHealthState::Degraded => "degraded",
+        ProviderHealthState::Unavailable => "unavailable",
+        ProviderHealthState::Failed => "failed",
+    }
+}
+
+fn metric_label(metric: MetricLabel) -> &'static str {
+    match metric {
+        MetricLabel::ProviderHealth => "provider-health",
+        MetricLabel::LifecycleTransition => "lifecycle-transition",
+        MetricLabel::OperationTotal => "operation-total",
+        MetricLabel::OperationDuration => "operation-duration",
+        MetricLabel::QueueDepth => "queue-depth",
+        MetricLabel::ExportTruncated => "export-truncated",
+    }
+}
+
+fn operation_label(operation: OperationLabel) -> &'static str {
+    match operation {
+        OperationLabel::Health => "health",
+        OperationLabel::Plan => "plan",
+        OperationLabel::Ensure => "ensure",
+        OperationLabel::Start => "start",
+        OperationLabel::Stop => "stop",
+        OperationLabel::Attach => "attach",
+        OperationLabel::Detach => "detach",
+        OperationLabel::Adopt => "adopt",
+        OperationLabel::Inspect => "inspect",
+        OperationLabel::SetState => "set-state",
+        OperationLabel::Query => "query",
+        OperationLabel::Export => "export",
+    }
+}
+
+fn outcome_label(outcome: OutcomeLabel) -> &'static str {
+    match outcome {
+        OutcomeLabel::Success => "success",
+        OutcomeLabel::AlreadyApplied => "already-applied",
+        OutcomeLabel::Denied => "denied",
+        OutcomeLabel::Cancelled => "cancelled",
+        OutcomeLabel::DeadlineExpired => "deadline-expired",
+        OutcomeLabel::Unavailable => "unavailable",
+        OutcomeLabel::Truncated => "truncated",
+    }
+}
+
+fn otlp_metric_name(metric: MetricLabel) -> &'static str {
+    match metric {
+        MetricLabel::ProviderHealth => "d2b.provider.health",
+        MetricLabel::LifecycleTransition => "d2b.lifecycle.transition",
+        MetricLabel::OperationTotal => "d2b.operation.total",
+        MetricLabel::OperationDuration => "d2b.operation.duration",
+        MetricLabel::QueueDepth => "d2b.queue.depth",
+        MetricLabel::ExportTruncated => "d2b.export.truncated",
+    }
+}
+
+fn protobuf_varint(mut value: u64, output: &mut Vec<u8>) {
+    while value >= 0x80 {
+        output.push((value as u8) | 0x80);
+        value >>= 7;
+    }
+    output.push(value as u8);
+}
+
+fn protobuf_key(field: u32, wire_type: u8, output: &mut Vec<u8>) {
+    protobuf_varint((u64::from(field) << 3) | u64::from(wire_type), output);
+}
+
+fn protobuf_message(field: u32, value: &[u8], output: &mut Vec<u8>) {
+    protobuf_key(field, 2, output);
+    protobuf_varint(value.len() as u64, output);
+    output.extend_from_slice(value);
+}
+
+fn protobuf_string(field: u32, value: &str, output: &mut Vec<u8>) {
+    protobuf_message(field, value.as_bytes(), output);
+}
+
+fn protobuf_fixed64(field: u32, value: u64, output: &mut Vec<u8>) {
+    protobuf_key(field, 1, output);
+    output.extend_from_slice(&value.to_le_bytes());
+}
+
+fn otlp_string_value(value: &str) -> Vec<u8> {
+    let mut encoded = Vec::new();
+    protobuf_string(1, value, &mut encoded);
+    encoded
+}
+
+fn otlp_attribute(key: &str, value: &str) -> Vec<u8> {
+    let mut encoded = Vec::new();
+    protobuf_string(1, key, &mut encoded);
+    protobuf_message(2, &otlp_string_value(value), &mut encoded);
+    encoded
+}
+
+fn encode_otlp_metric(record: LocalObservationRecord) -> Result<Vec<u8>, ExportSinkError> {
+    let labels = record.labels();
+    let observed_at_unix_nano = record
+        .observed_at_unix_ms()
+        .checked_mul(1_000_000)
+        .ok_or(ExportSinkError::Encoding)?;
+    let value = i64::try_from(record.value()).map_err(|_| ExportSinkError::Encoding)?;
+
+    let mut point = Vec::new();
+    for (key, value) in [
+        ("d2b.locality", "local"),
+        ("d2b.projection", projection_label(record.projection())),
+        ("d2b.provider.type", labels.provider_type().as_str()),
+        ("d2b.health.state", health_label(labels.health_state())),
+        ("d2b.metric", metric_label(labels.metric())),
+        ("d2b.operation", operation_label(labels.operation())),
+        ("d2b.outcome", outcome_label(labels.outcome())),
+    ] {
+        protobuf_message(7, &otlp_attribute(key, value), &mut point);
+    }
+    protobuf_fixed64(3, observed_at_unix_nano, &mut point);
+    protobuf_fixed64(6, value as u64, &mut point);
+
+    let mut gauge = Vec::new();
+    protobuf_message(1, &point, &mut gauge);
+
+    let mut metric = Vec::new();
+    protobuf_string(1, otlp_metric_name(labels.metric()), &mut metric);
+    protobuf_message(5, &gauge, &mut metric);
+    Ok(metric)
+}
+
+fn encode_otlp_export(records: &[LocalObservationRecord]) -> Result<Vec<u8>, ExportSinkError> {
+    if records.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut scope = Vec::new();
+    protobuf_string(1, "d2b.provider.observability.local", &mut scope);
+
+    let mut scope_metrics = Vec::new();
+    protobuf_message(1, &scope, &mut scope_metrics);
+    for record in records {
+        protobuf_message(2, &encode_otlp_metric(*record)?, &mut scope_metrics);
+    }
+
+    let mut resource_metrics = Vec::new();
+    protobuf_message(2, &scope_metrics, &mut resource_metrics);
+
+    let mut request = Vec::new();
+    protobuf_message(1, &resource_metrics, &mut request);
+    Ok(request)
+}
+
+fn encode_json_lines(records: &[LocalObservationRecord]) -> Result<Vec<u8>, ExportSinkError> {
+    let mut output = Vec::new();
+    for record in records {
+        output.extend_from_slice(
+            &serde_json::to_vec(&record.into_contract()).map_err(|_| ExportSinkError::Encoding)?,
+        );
+        output.push(b'\n');
+    }
+    Ok(output)
+}
+
+fn encode_export_payload(
+    format: ObservabilityExportFormat,
+    records: &[LocalObservationRecord],
+) -> Result<Vec<u8>, ExportSinkError> {
+    match format {
+        ObservabilityExportFormat::JsonLines => encode_json_lines(records),
+        ObservabilityExportFormat::OtlpProtobuf => encode_otlp_export(records),
+    }
 }
 
 #[derive(Default)]
 struct ExportSinkState {
     records: Vec<LocalObservationRecord>,
+    payload: Vec<u8>,
     encoded_bytes: u32,
     truncated: bool,
     closed: bool,
@@ -465,6 +650,7 @@ struct ExportSinkState {
 
 #[derive(Clone)]
 pub struct BoundedExportSink {
+    format: ObservabilityExportFormat,
     bounds: ProjectionBounds,
     start_at_unix_ms: u64,
     end_at_unix_ms: u64,
@@ -476,6 +662,7 @@ impl fmt::Debug for BoundedExportSink {
         let snapshot = self.state.lock().ok();
         formatter
             .debug_struct("BoundedExportSink")
+            .field("format", &self.format)
             .field("bounds", &self.bounds)
             .field(
                 "record_count",
@@ -491,8 +678,14 @@ impl fmt::Debug for BoundedExportSink {
 }
 
 impl BoundedExportSink {
-    fn new(bounds: ProjectionBounds, start_at_unix_ms: u64, end_at_unix_ms: u64) -> Self {
+    fn new(
+        format: ObservabilityExportFormat,
+        bounds: ProjectionBounds,
+        start_at_unix_ms: u64,
+        end_at_unix_ms: u64,
+    ) -> Self {
         Self {
+            format,
             bounds,
             start_at_unix_ms,
             end_at_unix_ms,
@@ -513,17 +706,21 @@ impl BoundedExportSink {
         {
             return Err(ExportSinkError::OutsideWindow);
         }
-        let next_bytes = state
-            .encoded_bytes
-            .saturating_add(OBSERVATION_RECORD_ENCODED_UPPER_BOUND_BYTES);
-        if state.records.len() >= self.bounds.record_capacity()
-            || next_bytes > self.bounds.max_bytes
-        {
+        if state.records.len() >= usize::from(self.bounds.max_records) {
             state.truncated = true;
             return Ok(ExportSinkStatus::Truncated);
         }
-        state.records.push(record);
-        state.encoded_bytes = next_bytes;
+        let mut candidate = state.records.clone();
+        candidate.push(record);
+        let payload = encode_export_payload(self.format, &candidate)?;
+        let encoded_bytes = u32::try_from(payload.len()).map_err(|_| ExportSinkError::Encoding)?;
+        if encoded_bytes > self.bounds.max_bytes {
+            state.truncated = true;
+            return Ok(ExportSinkStatus::Truncated);
+        }
+        state.records = candidate;
+        state.payload = payload;
+        state.encoded_bytes = encoded_bytes;
         Ok(ExportSinkStatus::Emitted)
     }
 
@@ -534,6 +731,38 @@ impl BoundedExportSink {
         }
         state.truncated = true;
         Ok(())
+    }
+
+    pub fn encoded_payload(&self) -> Result<Vec<u8>, ExportSinkError> {
+        let state = self.state.lock().map_err(|_| ExportSinkError::Poisoned)?;
+        if state.closed {
+            return Err(ExportSinkError::Closed);
+        }
+        Ok(state.payload.clone())
+    }
+
+    pub fn record_count(&self) -> Result<u16, ExportSinkError> {
+        let state = self.state.lock().map_err(|_| ExportSinkError::Poisoned)?;
+        if state.closed {
+            return Err(ExportSinkError::Closed);
+        }
+        u16::try_from(state.records.len()).map_err(|_| ExportSinkError::Encoding)
+    }
+
+    pub fn encoded_bytes(&self) -> Result<u32, ExportSinkError> {
+        let state = self.state.lock().map_err(|_| ExportSinkError::Poisoned)?;
+        if state.closed {
+            return Err(ExportSinkError::Closed);
+        }
+        Ok(state.encoded_bytes)
+    }
+
+    pub fn truncated(&self) -> Result<bool, ExportSinkError> {
+        let state = self.state.lock().map_err(|_| ExportSinkError::Poisoned)?;
+        if state.closed {
+            return Err(ExportSinkError::Closed);
+        }
+        Ok(state.truncated)
     }
 
     fn finish(&self) -> Result<ExportSinkSnapshot, ExportSinkError> {
@@ -1273,7 +1502,7 @@ impl LocalObservabilityProvider {
             bounds,
         };
         let deadline = call.monotonic_deadline_remaining_ms();
-        let sink = BoundedExportSink::new(bounds, start_at_unix_ms, end_at_unix_ms);
+        let sink = BoundedExportSink::new(format, bounds, start_at_unix_ms, end_at_unix_ms);
         let outcome = self
             .invoke(
                 &request.context,
