@@ -1,4 +1,4 @@
-{ config, lib, ... }:
+{ config, lib, pkgs, ... }:
 
 let
   cfg = config.d2b;
@@ -28,31 +28,39 @@ let
     "observability.export"
   ];
 
-  mappedRuntimeRows = lib.filter
-    (row:
-      row.enable
-      && builtins.elem row.kind [ "local-vm" "qemu-media" ]
-      && row.legacyVmName != null
-      && builtins.hasAttr row.legacyVmName cfg._index.enabledVms
-      && (cfg._index.runtime.byVm.${row.legacyVmName}.kind
-        == (if row.kind == "qemu-media" then "qemu-media" else "nixos")))
-    cfg._index.realms.workloads.enabled;
+  mappedRuntimeRows = import ./workload-process-rows.nix {
+    inherit config lib pkgs;
+  };
 
   runtimeEntry = row:
     let
-      canonicalRealmId = identity.deriveRealmId "${row.realmPath}.local-root";
-      canonicalWorkloadId =
-        identity.deriveWorkloadId canonicalRealmId row.workloadName;
+      canonicalRealmId = row.realmId;
+      canonicalWorkloadId = row.workloadId;
+      runtimeBinding =
+        if row.runtimeBinding == null
+        then throw "provider registry local-runtime mapping has no normalized runtime provider"
+        else row.runtimeBinding;
+      runtimeProvider =
+        cfg._index.providers.byId.${runtimeBinding.providerId}
+          or (throw "provider registry local-runtime mapping references an unknown provider");
+      realm =
+        cfg._index.realms.byId.${canonicalRealmId}
+          or (throw "provider registry local-runtime mapping references an unknown realm");
       configuredProviderId = "runtime-${canonicalWorkloadId}";
       canonicalProviderId = identity.deriveProviderId
         canonicalRealmId "runtime" configuredProviderId;
-      implementationId =
-        if row.kind == "qemu-media" then "qemu-media" else "cloud-hypervisor";
-      roleId = implementationId;
-      vmStartIntentId =
-        "vm-start:vm:${row.legacyVmName}:role:${roleId}";
-      runnerIntentId =
-        "runner:vm:${row.legacyVmName}:role:${roleId}";
+      implementationId = row.runtimeImplementation;
+      vmStartIntentId = row.vmStartIntentId;
+      runnerIntentId = row.runnerIntentId;
+      normalizedAuthorityMatches =
+        runtimeBinding.providerType == "runtime"
+        && runtimeBinding.implementationId == implementationId
+        && runtimeProvider.enabled
+        && runtimeProvider.providerType == "runtime"
+        && runtimeProvider.realmId == canonicalRealmId
+        && runtimeProvider.implementationId == implementationId
+        && runtimeProvider.placement == "host-local"
+        && builtins.elem implementationId [ "cloud-hypervisor" "qemu-media" ];
       scopeDigest = builtins.hashString "sha256" (builtins.toJSON {
         providerId = canonicalProviderId;
         realmId = canonicalRealmId;
@@ -75,7 +83,14 @@ let
           persistentIdentity = "none";
           deviceMediation = "broker-delegated-typed";
         };
-    in {
+      controllerRole =
+        if realm.realmPath == "local-root"
+        then "local-root-controller"
+        else "realm-controller";
+    in
+    if !normalizedAuthorityMatches
+    then throw "provider registry local-runtime mapping disagrees with normalized authority"
+    else {
       descriptor = {
         schemaVersion = 2;
         providerId = canonicalProviderId;
@@ -95,25 +110,24 @@ let
         placement = {
           kind = "trusted-first-party-in-process";
           realmId = canonicalRealmId;
-          controllerRole = "realm-controller";
+          inherit controllerRole;
         };
       };
       binding = {
         axis = "local-runtime";
-        workloadId = canonicalWorkloadId;
-        inherit vmStartIntentId runnerIntentId;
+        inherit (row) workloadId vmStartIntentId runnerIntentId;
       };
     };
 
-  mappedObservabilityRealms = lib.filter
-    (realm:
-      realm.placement == "host-local"
-      && realm.parentPath == null)
-    cfg._index.realms.enabledList;
+  localRootRealm =
+    cfg._index.realms.enabledByPath."local-root" or null;
+  mappedObservabilityRealms = lib.optional
+    (localRootRealm != null && localRootRealm.placement == "host-local")
+    localRootRealm;
 
   observabilityEntry = realm:
     let
-      canonicalRealmId = identity.deriveRealmId "${realm.path}.local-root";
+      canonicalRealmId = realm.realmId;
       canonicalProviderId = identity.deriveProviderId
         canonicalRealmId "observability" "observability-local";
       scopeDigest = builtins.hashString "sha256" (builtins.toJSON ({
@@ -147,11 +161,36 @@ let
       } // observabilityLimits;
     };
 
+  extensionFragmentPaths = [
+    ./provider-registry-v2-extensions/transport.nix
+    ./provider-registry-v2-extensions/substrate.nix
+    ./provider-registry-v2-extensions/display.nix
+    ./provider-registry-v2-extensions/network.nix
+    ./provider-registry-v2-extensions/storage.nix
+    ./provider-registry-v2-extensions/device.nix
+    ./provider-registry-v2-extensions/audio.nix
+  ];
+  fragmentContext = {
+    inherit config cfg generation identity lib pkgs;
+  };
+  loadFragment = path:
+    let
+      fragment = lib.callPackageWith fragmentContext path { };
+    in
+    if builtins.isAttrs fragment
+      && fragment ? providers
+      && builtins.isList fragment.providers
+    then fragment.providers
+    else throw "provider-registry-v2 fragment must return { providers = [ ... ]; }";
+  extensionProviders =
+    lib.concatMap loadFragment extensionFragmentPaths;
+
   providers = lib.sort
     (left: right:
       lib.lessThan left.descriptor.providerId right.descriptor.providerId)
     ((map runtimeEntry mappedRuntimeRows)
-      ++ (map observabilityEntry mappedObservabilityRealms));
+      ++ (map observabilityEntry mappedObservabilityRealms)
+      ++ extensionProviders);
   configurationFingerprint = builtins.hashString "sha256" (builtins.toJSON {
     schemaVersion = "v2";
     registryGeneration = generation;

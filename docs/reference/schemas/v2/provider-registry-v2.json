@@ -75,6 +75,30 @@
         "remote-peer"
       ]
     },
+    "LocalDisplayEndpointIdsV2": {
+      "type": "object",
+      "required": [
+        "crossDomain",
+        "proxy",
+        "wayland",
+        "waypipe"
+      ],
+      "properties": {
+        "crossDomain": {
+          "type": "string"
+        },
+        "proxy": {
+          "type": "string"
+        },
+        "wayland": {
+          "type": "string"
+        },
+        "waypipe": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
     "NetworkPosture": {
       "type": "string",
       "enum": [
@@ -354,6 +378,254 @@
               "format": "uint64",
               "maximum": 2678400000.0,
               "minimum": 1.0
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "axis",
+            "transportBindingIds"
+          ],
+          "properties": {
+            "axis": {
+              "type": "string",
+              "enum": [
+                "local-transport"
+              ]
+            },
+            "transportBindingIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 64,
+              "minItems": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "axis"
+          ],
+          "properties": {
+            "axis": {
+              "type": "string",
+              "enum": [
+                "local-substrate"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "axis",
+            "endpointIds",
+            "ownerRoleId",
+            "workloadId"
+          ],
+          "properties": {
+            "axis": {
+              "type": "string",
+              "enum": [
+                "local-display"
+              ]
+            },
+            "endpointIds": {
+              "$ref": "#/definitions/LocalDisplayEndpointIdsV2"
+            },
+            "ownerRoleId": {
+              "type": "string"
+            },
+            "workloadId": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "allocatorLeaseId",
+            "axis",
+            "bridgeSetId",
+            "dhcpPolicyId",
+            "natPolicyId",
+            "netVmRoleId",
+            "netlinkPolicyId",
+            "networkId",
+            "nftPolicyId",
+            "resourceGeneration",
+            "tapSetId"
+          ],
+          "properties": {
+            "allocatorLeaseId": {
+              "type": "string"
+            },
+            "axis": {
+              "type": "string",
+              "enum": [
+                "network"
+              ]
+            },
+            "bridgeSetId": {
+              "type": "string"
+            },
+            "dhcpPolicyId": {
+              "type": "string"
+            },
+            "externalAttachmentId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "natPolicyId": {
+              "type": "string"
+            },
+            "netVmRoleId": {
+              "type": "string"
+            },
+            "netlinkPolicyId": {
+              "type": "string"
+            },
+            "networkId": {
+              "type": "string"
+            },
+            "nftPolicyId": {
+              "type": "string"
+            },
+            "resourceGeneration": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "tapSetId": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "axis",
+            "closureSyncId",
+            "diskSetId",
+            "localStateId",
+            "mediaSetId",
+            "realmId",
+            "resourceGeneration",
+            "storeViewId",
+            "workloadId"
+          ],
+          "properties": {
+            "axis": {
+              "type": "string",
+              "enum": [
+                "local-storage"
+              ]
+            },
+            "closureSyncId": {
+              "type": "string"
+            },
+            "diskSetId": {
+              "type": "string"
+            },
+            "localStateId": {
+              "type": "string"
+            },
+            "mediaSetId": {
+              "type": "string"
+            },
+            "realmId": {
+              "type": "string"
+            },
+            "resourceGeneration": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "storeViewId": {
+              "type": "string"
+            },
+            "workloadId": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "axis",
+            "deviceResourceIds"
+          ],
+          "properties": {
+            "axis": {
+              "type": "string",
+              "enum": [
+                "local-device"
+              ]
+            },
+            "deviceResourceIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 64
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "axis",
+            "endpointId",
+            "leaseId",
+            "lockStorageId",
+            "mediationStorageId",
+            "processId",
+            "roleId",
+            "stateStorageId",
+            "workloadId"
+          ],
+          "properties": {
+            "axis": {
+              "type": "string",
+              "enum": [
+                "local-audio"
+              ]
+            },
+            "endpointId": {
+              "type": "string"
+            },
+            "leaseId": {
+              "type": "string"
+            },
+            "lockStorageId": {
+              "type": "string"
+            },
+            "mediationStorageId": {
+              "type": "string"
+            },
+            "processId": {
+              "type": "string"
+            },
+            "roleId": {
+              "type": "string"
+            },
+            "stateStorageId": {
+              "type": "string"
+            },
+            "workloadId": {
+              "type": "string"
             }
           },
           "additionalProperties": false
