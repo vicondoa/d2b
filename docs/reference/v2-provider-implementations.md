@@ -82,6 +82,12 @@ carry explicit executable and argv data rather than the legacy synthesis
 fallback. A first-class workload without existing VM-start and runner intents is
 not emitted as live. Azure VM IDs and `RuntimeExecute` are rejected.
 
+Unavailable Azure VM scaffold crates remain outside every shipped production
+graph. The workspace policy derives roots from Cargo binary-target metadata,
+adds the gateway library boundary, and reconciles them with the exact Rust
+package outputs declared by the flake. A pinned output-to-package map makes a
+new or renamed flake package fail policy until its dependency root is reviewed.
+
 Start, stop, and restart requests for a mapped VM enter registry admission and
 the retained `RuntimeProvider` instance. The daemon constructs a bounded,
 workload-scoped operation context from the trusted mapping, and the concrete

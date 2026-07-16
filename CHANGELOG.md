@@ -139,6 +139,9 @@ deprecations ship one minor release before removal.
   the requested format and exact streaming record/byte limits; storage failures
   and post-dispatch timeouts fail or remain ambiguous before an operation can
   report `Applied`.
+- Derive unavailable-Azure dependency exclusions from every production Cargo
+  binary target, the gateway library boundary, and the exact Rust package set
+  exported by the flake, with a drift-pinned output mapping.
 - Split provider-registry identity failures into actionable provider-ID,
   configuration-schema-fingerprint, and configured-scope-digest diagnostics.
   Local-runtime bindings now derive realm identity exclusively from descriptor

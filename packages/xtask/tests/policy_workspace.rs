@@ -44,6 +44,35 @@ const W4_UNAVAILABLE_PROVIDER_SCAFFOLDS: &[&str] = &[
     "d2b-provider-infrastructure-azure-vm",
     "d2b-provider-runtime-azure-vm",
 ];
+const NON_PRODUCTION_BINARY_PACKAGES: &[&str] = &["d2b-core-fuzz"];
+const REQUIRED_SHIPPED_PRODUCTION_PACKAGES: &[&str] = &[
+    "d2b",
+    "d2b-clipd",
+    "d2b-exec-runner",
+    "d2b-gateway",
+    "d2b-gateway-runtime",
+    "d2b-guest-shell-runner",
+    "d2b-guestd",
+    "d2b-host",
+    "d2b-host-activation-helper",
+    "d2b-notify",
+    "d2b-priv-broker",
+    "d2b-unsafe-local-helper",
+    "d2b-userd",
+    "d2b-wayland-proxy",
+    "d2bd",
+];
+const NON_RUST_FLAKE_PACKAGE_OUTPUTS: &[&str] = &[
+    "cargo-semver-checks",
+    "cargo-udeps-nightly",
+    "completions",
+    "gh",
+    "git-town",
+    "manpages",
+    "signoz",
+    "signozOtelCollector",
+    "signozSchemaMigrator",
+];
 const PROVIDER_INTEGRATION_FILES: &[&str] = &[
     "docs/reference/daemon-api.md",
     "docs/reference/manifest-bundle.md",
@@ -227,6 +256,100 @@ fn declared_features<'a>(
         .find(|package| package["name"].as_str() == Some(package_name))
         .and_then(|package| package["features"].as_object())
         .unwrap_or_else(|| panic!("workspace package {package_name} features not found"))
+}
+
+fn flake_package_blocks() -> BTreeMap<String, String> {
+    let flake = read_repo_file("flake.nix");
+    let body = flake
+        .split_once("      in {\n        manpages =")
+        .map(|(_, rest)| format!("        manpages ={rest}"))
+        .and_then(|body| {
+            body.split_once("\n      });\n\n      apps =")
+                .map(|(packages, _)| packages.to_owned())
+        })
+        .expect("flake packages body");
+    let mut starts = Vec::new();
+    let mut offset = 0;
+    for line in body.split_inclusive('\n') {
+        if let Some(candidate) = line.strip_prefix("        ")
+            && !candidate.starts_with(char::is_whitespace)
+            && let Some((name, _)) = candidate.split_once(" =")
+            && name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            starts.push((offset, name.to_owned()));
+        }
+        offset += line.len();
+    }
+    starts
+        .iter()
+        .enumerate()
+        .map(|(index, (start, name))| {
+            let end = starts
+                .get(index + 1)
+                .map(|(start, _)| *start)
+                .unwrap_or(body.len());
+            (name.clone(), body[*start..end].to_owned())
+        })
+        .collect()
+}
+
+fn first_quoted_after<'a>(block: &'a str, marker: &str) -> Option<&'a str> {
+    let rest = block.split_once(marker)?.1;
+    let start = rest.find('"')? + 1;
+    let rest = &rest[start..];
+    let end = rest.find('"')?;
+    Some(&rest[..end])
+}
+
+fn flake_shipped_rust_packages() -> BTreeMap<String, String> {
+    flake_package_blocks()
+        .into_iter()
+        .filter_map(|(output, block)| {
+            let package = if block.contains("guestStaticPackage") {
+                first_quoted_after(&block, "guestStaticPackage").map(str::to_owned)
+            } else if block.contains("guestShellRunnerStatic") {
+                Some("d2b-guest-shell-runner".to_owned())
+            } else if block.contains("rustWorkspace {") || block.contains("deliveryRustWorkspace {")
+            {
+                first_quoted_after(&block, "\"--package\"").map(str::to_owned)
+            } else {
+                assert!(
+                    NON_RUST_FLAKE_PACKAGE_OUTPUTS.contains(&output.as_str()),
+                    "unclassified flake package output {output}"
+                );
+                None
+            };
+            package.map(|package| (output, package))
+        })
+        .collect()
+}
+
+fn shipped_production_rust_packages(metadata: &serde_json::Value) -> BTreeSet<String> {
+    let mut packages = metadata["packages"]
+        .as_array()
+        .expect("metadata packages")
+        .iter()
+        .filter(|package| {
+            package["targets"]
+                .as_array()
+                .expect("package targets")
+                .iter()
+                .any(|target| {
+                    target["kind"]
+                        .as_array()
+                        .expect("target kind")
+                        .iter()
+                        .any(|kind| kind.as_str() == Some("bin"))
+                })
+        })
+        .map(|package| package["name"].as_str().expect("package name").to_owned())
+        .filter(|package| !NON_PRODUCTION_BINARY_PACKAGES.contains(&package.as_str()))
+        .collect::<BTreeSet<_>>();
+    packages.insert("d2b-gateway".to_owned());
+    packages.extend(flake_shipped_rust_packages().into_values());
+    packages
 }
 
 #[test]
@@ -452,20 +575,57 @@ fn w4_provider_workspace_inventory_is_reserved_and_dependency_minimal() {
         }
     }
 
-    for production_package in [
-        "d2b-gateway",
-        "d2b-gateway-runtime",
-        "d2b-guestd",
-        "d2b-userd",
-        "d2bd",
-    ] {
-        let dependencies = transitive_package_names(&metadata, production_package);
+    for production_package in shipped_production_rust_packages(&metadata) {
+        let dependencies = transitive_package_names(&metadata, &production_package);
         for forbidden in W4_UNAVAILABLE_PROVIDER_SCAFFOLDS.iter().copied() {
             assert!(
                 !dependencies.contains(forbidden),
                 "{production_package} must not include unavailable Azure VM provider {forbidden}"
             );
         }
+    }
+}
+
+#[test]
+fn shipped_rust_package_policy_tracks_the_flake_package_set() {
+    let flake_packages = flake_shipped_rust_packages();
+    assert_eq!(
+        flake_packages,
+        BTreeMap::from([
+            ("d2b-clipd".to_owned(), "d2b-clipd".to_owned()),
+            ("d2b-delivery".to_owned(), "xtask".to_owned(),),
+            (
+                "d2b-exec-runner-static".to_owned(),
+                "d2b-exec-runner".to_owned(),
+            ),
+            (
+                "d2b-guest-shell-runner-static".to_owned(),
+                "d2b-guest-shell-runner".to_owned(),
+            ),
+            ("d2b-guestd-static".to_owned(), "d2b-guestd".to_owned(),),
+            (
+                "d2b-sk-frontend-static".to_owned(),
+                "d2b-sk-frontend".to_owned(),
+            ),
+            (
+                "d2b-unsafe-local-helper".to_owned(),
+                "d2b-unsafe-local-helper".to_owned(),
+            ),
+            ("d2b-userd-static".to_owned(), "d2b-userd".to_owned(),),
+            (
+                "d2b-wayland-proxy".to_owned(),
+                "d2b-wayland-proxy".to_owned(),
+            ),
+        ])
+    );
+
+    let metadata = workspace_metadata();
+    let shipped = shipped_production_rust_packages(&metadata);
+    for required in REQUIRED_SHIPPED_PRODUCTION_PACKAGES {
+        assert!(
+            shipped.contains(*required),
+            "shipped production package inventory is missing {required}"
+        );
     }
 }
 
