@@ -175,12 +175,20 @@ fn acquire_permit(
     }
     let directory = open_verified_gate_directory(path)?;
     let started = Instant::now();
+    let mut attempted = false;
     loop {
         if let Some(signal) = pending_signal() {
             return Err(HeavyGateError::new(format!(
                 "interrupted by signal {signal} while waiting for a heavy gate slot"
             )));
         }
+        if attempted && started.elapsed() >= timeout {
+            return Err(HeavyGateError::new(format!(
+                "timed out after {} seconds waiting for a heavy gate slot",
+                timeout.as_secs()
+            )));
+        }
+        attempted = true;
         for (slot, name) in SLOT_NAMES.iter().enumerate() {
             let fd = open_verified_slot(&directory, name)?;
             match try_ofd_lock(&fd)? {
@@ -480,6 +488,15 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn production_gate_shape_is_exact() {
+        assert_eq!(SLOT_NAMES, ["slot-0.lock", "slot-1.lock"]);
+        assert_eq!(GATE_POLL_INTERVAL, Duration::from_millis(250));
+        assert_eq!(GATE_TIMEOUT, Duration::from_secs(30 * 60));
+        assert_eq!(GATE_DIRECTORY_MODE, 0o700);
+        assert_eq!(SLOT_MODE, 0o600);
     }
 
     #[test]

@@ -1529,6 +1529,104 @@ fn shared_contract_policy_freezes_services_dependencies_and_ownership() {
 }
 
 #[test]
+fn typed_allocator_wire_matches_canonical_allocator_inventory() {
+    use d2b_contracts::v2_services::broker;
+    use d2b_realm_core::allocator::{AllocatorReasonCode, HostResourceKind};
+
+    let canonical_kinds = [
+        HostResourceKind::Bridge,
+        HostResourceKind::Tap,
+        HostResourceKind::VethPair,
+        HostResourceKind::NftablesTable,
+        HostResourceKind::NftablesPartition,
+        HostResourceKind::CgroupSubtree,
+        HostResourceKind::HostFilePartition,
+        HostResourceKind::NamespaceBoundary,
+    ]
+    .map(HostResourceKind::as_metric_label);
+    let wire_kinds = [
+        broker::HostResourceKind::HOST_RESOURCE_KIND_BRIDGE,
+        broker::HostResourceKind::HOST_RESOURCE_KIND_TAP,
+        broker::HostResourceKind::HOST_RESOURCE_KIND_VETH_PAIR,
+        broker::HostResourceKind::HOST_RESOURCE_KIND_NFTABLES_TABLE,
+        broker::HostResourceKind::HOST_RESOURCE_KIND_NFTABLES_PARTITION,
+        broker::HostResourceKind::HOST_RESOURCE_KIND_CGROUP_SUBTREE,
+        broker::HostResourceKind::HOST_RESOURCE_KIND_HOST_FILE_PARTITION,
+        broker::HostResourceKind::HOST_RESOURCE_KIND_NAMESPACE_BOUNDARY,
+    ]
+    .map(|kind| match kind {
+        broker::HostResourceKind::HOST_RESOURCE_KIND_BRIDGE => "bridge",
+        broker::HostResourceKind::HOST_RESOURCE_KIND_TAP => "tap",
+        broker::HostResourceKind::HOST_RESOURCE_KIND_VETH_PAIR => "veth-pair",
+        broker::HostResourceKind::HOST_RESOURCE_KIND_NFTABLES_TABLE => "nftables-table",
+        broker::HostResourceKind::HOST_RESOURCE_KIND_NFTABLES_PARTITION => "nftables-partition",
+        broker::HostResourceKind::HOST_RESOURCE_KIND_CGROUP_SUBTREE => "cgroup-subtree",
+        broker::HostResourceKind::HOST_RESOURCE_KIND_HOST_FILE_PARTITION => "host-file-partition",
+        broker::HostResourceKind::HOST_RESOURCE_KIND_NAMESPACE_BOUNDARY => "namespace-boundary",
+        broker::HostResourceKind::HOST_RESOURCE_KIND_UNSPECIFIED => "unspecified",
+    });
+    assert_eq!(wire_kinds, canonical_kinds);
+
+    let canonical_reasons = [
+        AllocatorReasonCode::ResourceConflict,
+        AllocatorReasonCode::OwnershipConflict,
+        AllocatorReasonCode::AcquisitionOrderViolation,
+        AllocatorReasonCode::InvalidRequest,
+        AllocatorReasonCode::CapacityExhausted,
+        AllocatorReasonCode::DriftDetected,
+        AllocatorReasonCode::ReconcileMismatch,
+        AllocatorReasonCode::OwnerNotLive,
+        AllocatorReasonCode::PolicyDenied,
+        AllocatorReasonCode::UnsupportedKind,
+        AllocatorReasonCode::StorageContractViolation,
+        AllocatorReasonCode::KernelStateUnknown,
+    ]
+    .map(AllocatorReasonCode::as_metric_label);
+    let wire_reasons = [
+        broker::AllocatorReason::ALLOCATOR_REASON_RESOURCE_CONFLICT,
+        broker::AllocatorReason::ALLOCATOR_REASON_OWNERSHIP_CONFLICT,
+        broker::AllocatorReason::ALLOCATOR_REASON_ACQUISITION_ORDER_VIOLATION,
+        broker::AllocatorReason::ALLOCATOR_REASON_INVALID_REQUEST,
+        broker::AllocatorReason::ALLOCATOR_REASON_CAPACITY_EXHAUSTED,
+        broker::AllocatorReason::ALLOCATOR_REASON_DRIFT_DETECTED,
+        broker::AllocatorReason::ALLOCATOR_REASON_RECONCILE_MISMATCH,
+        broker::AllocatorReason::ALLOCATOR_REASON_OWNER_NOT_LIVE,
+        broker::AllocatorReason::ALLOCATOR_REASON_POLICY_DENIED,
+        broker::AllocatorReason::ALLOCATOR_REASON_UNSUPPORTED_KIND,
+        broker::AllocatorReason::ALLOCATOR_REASON_STORAGE_CONTRACT_VIOLATION,
+        broker::AllocatorReason::ALLOCATOR_REASON_KERNEL_STATE_UNKNOWN,
+    ]
+    .map(|reason| match reason {
+        broker::AllocatorReason::ALLOCATOR_REASON_RESOURCE_CONFLICT => "resource-conflict",
+        broker::AllocatorReason::ALLOCATOR_REASON_OWNERSHIP_CONFLICT => "ownership-conflict",
+        broker::AllocatorReason::ALLOCATOR_REASON_ACQUISITION_ORDER_VIOLATION => {
+            "acquisition-order-violation"
+        }
+        broker::AllocatorReason::ALLOCATOR_REASON_INVALID_REQUEST => "invalid-request",
+        broker::AllocatorReason::ALLOCATOR_REASON_CAPACITY_EXHAUSTED => "capacity-exhausted",
+        broker::AllocatorReason::ALLOCATOR_REASON_DRIFT_DETECTED => "drift-detected",
+        broker::AllocatorReason::ALLOCATOR_REASON_RECONCILE_MISMATCH => "reconcile-mismatch",
+        broker::AllocatorReason::ALLOCATOR_REASON_OWNER_NOT_LIVE => "owner-not-live",
+        broker::AllocatorReason::ALLOCATOR_REASON_POLICY_DENIED => "policy-denied",
+        broker::AllocatorReason::ALLOCATOR_REASON_UNSUPPORTED_KIND => "unsupported-kind",
+        broker::AllocatorReason::ALLOCATOR_REASON_STORAGE_CONTRACT_VIOLATION => {
+            "storage-contract-violation"
+        }
+        broker::AllocatorReason::ALLOCATOR_REASON_KERNEL_STATE_UNKNOWN => "kernel-state-unknown",
+        broker::AllocatorReason::ALLOCATOR_REASON_UNSPECIFIED => "unspecified",
+    });
+    assert_eq!(wire_reasons, canonical_reasons);
+    assert_eq!(
+        d2b_contracts::v2_services::MAX_ALLOCATOR_REQUEST_RESOURCES,
+        d2b_realm_core::allocator::MAX_ALLOCATOR_REQUEST_RESOURCES
+    );
+    assert_eq!(
+        d2b_contracts::v2_services::MAX_ALLOCATOR_CONFLICTS,
+        d2b_realm_core::allocator::MAX_ALLOCATOR_CONFLICTS
+    );
+}
+
+#[test]
 fn provider_registry_v2_has_one_canonical_artifact_family() {
     let actual = git_tracked_files()
         .into_iter()

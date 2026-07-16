@@ -35,6 +35,8 @@ pub struct WaveOwnership {
     pub responsibility: String,
     #[serde(default)]
     pub additional_protected_paths: Vec<String>,
+    #[serde(default)]
+    pub allowed_protected_paths: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
@@ -84,6 +86,9 @@ impl SharedContractPolicy {
             }
             if !wave.additional_protected_paths.is_empty() {
                 validate_sorted_paths(&wave.additional_protected_paths)?;
+            }
+            if !wave.allowed_protected_paths.is_empty() {
+                validate_sorted_paths(&wave.allowed_protected_paths)?;
             }
         }
         validate_sorted_paths(&self.protected_paths)?;
@@ -154,6 +159,7 @@ fn run(args: &[String]) -> Result<(), String> {
         .arg(&root)
         .args([
             "diff",
+            "--no-renames",
             "--name-only",
             "-z",
             &format!("{base_oid}..HEAD"),
@@ -196,6 +202,13 @@ pub fn check_changed_paths(
     for path in paths {
         validate_relative_path(Path::new(path))?;
         if path == &ownership.manifest_path {
+            continue;
+        }
+        if ownership
+            .allowed_protected_paths
+            .binary_search(path)
+            .is_ok()
+        {
             continue;
         }
         let candidate = Path::new(path);
@@ -376,5 +389,14 @@ mod tests {
         for path in ["Cargo.lock", "user.proto", "w7.json"] {
             assert!(error.contains(path), "{error}");
         }
+    }
+
+    #[test]
+    fn provider_registry_extension_is_owned_only_by_declarative_wave() {
+        let policy = policy();
+        let path = "packages/d2b-contracts/src/provider_registry_v2.rs".to_owned();
+        check_changed_paths(&policy, "w7", std::slice::from_ref(&path))
+            .expect("w7 provider registry ownership");
+        assert!(check_changed_paths(&policy, "w5", &[path]).is_err());
     }
 }

@@ -6,25 +6,27 @@
       "wave": "w5",
       "manifest_path": "delivery/manifests/w5.json",
       "responsibility": "runtime-service-and-dispatch-implementation",
-      "additional_protected_paths": [
-        "nixos-modules/provider-registry-v2-json.nix",
-        "packages/d2b-contracts/src/provider_registry_v2.rs"
-      ]
+      "additional_protected_paths": [],
+      "allowed_protected_paths": []
     },
     {
       "wave": "w6",
       "manifest_path": "delivery/manifests/w6.json",
       "responsibility": "user-desktop-device-service-implementation",
-      "additional_protected_paths": [
-        "nixos-modules/provider-registry-v2-json.nix",
-        "packages/d2b-contracts/src/provider_registry_v2.rs"
-      ]
+      "additional_protected_paths": [],
+      "allowed_protected_paths": []
     },
     {
       "wave": "w7",
       "manifest_path": "delivery/manifests/w7.json",
       "responsibility": "declarative-nix-process-and-resource-emission",
-      "additional_protected_paths": []
+      "additional_protected_paths": [],
+      "allowed_protected_paths": [
+        "docs/reference/schemas/v2/provider-registry-v2.json",
+        "docs/reference/schemas/v2/provider-registry-v2.md",
+        "nixos-modules/provider-registry-v2-json.nix",
+        "packages/d2b-contracts/src/provider_registry_v2.rs"
+      ]
     }
   ],
   "protected_paths": [
@@ -33,9 +35,12 @@
     "delivery/manifest.json",
     "delivery/shared-contracts.json",
     "docs/reference/delivery-tooling.md",
+    "docs/reference/schemas/v2/provider-registry-v2.json",
+    "docs/reference/schemas/v2/provider-registry-v2.md",
     "docs/reference/v2-services-schema.json",
     "docs/reference/v2-services.json",
     "docs/reference/v2-services.md",
+    "nixos-modules/provider-registry-v2-json.nix",
     "packages/Cargo.lock",
     "packages/Cargo.toml",
     "packages/d2b-contracts/src/v2_services.rs",
@@ -50,8 +55,7 @@
     "packages/xtask/tests/heavy_gate_cli.rs"
   ],
   "protected_prefixes": [
-    "packages/d2b-contracts/proto/v2/",
-    "packages/d2b-contracts/src/generated_v2_services/",
+    "packages/d2b-contracts/",
     "packages/xtask/src/delivery/",
     "packages/xtask/tests/delivery_"
   ],
