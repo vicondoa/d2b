@@ -9,7 +9,7 @@
       "id": "github.com/vicondoa/d2b",
       "object_format": "sha1",
       "trunk_ref": "main",
-      "integration_ref": "adr0045-post-w4-contracts"
+      "integration_ref": "adr0045-w7-realm-host"
     }
   ],
   "stack_nodes": [
@@ -25,6 +25,13 @@
       "repository": "github.com/vicondoa/d2b",
       "branch": "adr0045-post-w4-contracts",
       "pr_number": 315,
+      "external_dependencies": []
+    },
+    {
+      "id": "d2b-w7",
+      "repository": "github.com/vicondoa/d2b",
+      "branch": "adr0045-w7-realm-host",
+      "pr_number": 316,
       "external_dependencies": []
     }
   ],
@@ -103,6 +110,39 @@
     },
     {
       "node": "d2b-w4",
+      "name": "eval-shell-tests",
+      "publisher": {
+        "kind": "check_run",
+        "app_slug": "github-actions",
+        "app_id": 15368,
+        "workflow": "pr-eval-shell-tests",
+        "workflow_id": 289704928
+      }
+    },
+    {
+      "node": "d2b-w7",
+      "name": "check",
+      "publisher": {
+        "kind": "check_run",
+        "app_slug": "github-actions",
+        "app_id": 15368,
+        "workflow": "pr-l1-static-fast",
+        "workflow_id": 286033206
+      }
+    },
+    {
+      "node": "d2b-w7",
+      "name": "eval",
+      "publisher": {
+        "kind": "check_run",
+        "app_slug": "github-actions",
+        "app_id": 15368,
+        "workflow": "eval-with-entra-id",
+        "workflow_id": 283041463
+      }
+    },
+    {
+      "node": "d2b-w7",
       "name": "eval-shell-tests",
       "publisher": {
         "kind": "check_run",
