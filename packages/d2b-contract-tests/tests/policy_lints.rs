@@ -80,14 +80,7 @@ fn shell_gap_separates_words(gap: &str) -> bool {
             index += 2;
             continue;
         }
-        if bytes[index] == b'\\'
-            && bytes.get(index + 1) == Some(&b'\r')
-            && bytes.get(index + 2) == Some(&b'\n')
-        {
-            index += 3;
-            continue;
-        }
-        if bytes[index].is_ascii_whitespace() {
+        if matches!(bytes[index], b' ' | b'\t' | b'\n') {
             has_separator = true;
             index += 1;
             continue;
@@ -95,6 +88,13 @@ fn shell_gap_separates_words(gap: &str) -> bool {
         return false;
     }
     has_separator
+}
+
+fn shell_outer_padding_is_safe(padding: &str) -> bool {
+    padding
+        .as_bytes()
+        .iter()
+        .all(|byte| matches!(byte, b' ' | b'\t' | b'\n'))
 }
 
 fn exact_xtask_target(node: Node<'_>, source: &str) -> Result<(), String> {
@@ -156,9 +156,9 @@ fn exact_wrapper_command(post_fixup: &str, canonical_path: &str) -> Result<(), S
     let mut root_cursor = root.walk();
     if root
         .children(&mut root_cursor)
-        .any(|node| node.id() != command.id() && node.kind() != "comment")
+        .any(|node| node.id() != command.id())
     {
-        return Err("delivery postFixup contains a non-comment command terminator or node".into());
+        return Err("delivery postFixup contains an unexpected command terminator or node".into());
     }
     if command.kind() != "command" {
         return Err(format!(
@@ -197,6 +197,15 @@ fn exact_wrapper_command(post_fixup: &str, canonical_path: &str) -> Result<(), S
                 "delivery wrapper arguments must be separated by unescaped shell whitespace".into(),
             );
         }
+    }
+    if !shell_outer_padding_is_safe(&post_fixup[..command.start_byte()])
+        || !shell_outer_padding_is_safe(
+            &post_fixup[arguments.last().expect("five arguments").end_byte()..],
+        )
+    {
+        return Err(
+            "delivery wrapper source boundaries contain unsafe shell bytes or continuations".into(),
+        );
     }
     exact_xtask_target(arguments[0], post_fixup)?;
     exact_word(arguments[1], "--prefix", post_fixup)?;
@@ -650,8 +659,6 @@ fn delivery_tool_sources_and_toolchains_are_exactly_pinned() {
 
 fn delivery_runtime_policy_fixture() -> &'static str {
     r#"
-      # wrapProgram "$out/bin/decoy" --prefix PATH : /nix/store/decoy/bin
-      # Benign comment input-redirection text must remain inert: < << <<<.
       wrapProgram \
         "$out/bin/xtask" \
           --prefix   PATH : /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-git/bin:/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-openssl/bin:/nix/store/cccccccccccccccccccccccccccccccc-shellcheck/bin:/nix/store/dddddddddddddddddddddddddddddddd-gh/bin:/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-git-town/bin
@@ -779,6 +786,22 @@ fn delivery_runtime_shell_ast_rejects_inactive_or_wrong_wrappers() {
             format!("wrapProgram \"$out/bin/xtask\"\\\n--prefix PATH : {canonical_path}"),
         ),
         (
+            "vertical-tab separator",
+            format!("wrapProgram\u{000b}\"$out/bin/xtask\" --prefix PATH : {canonical_path}"),
+        ),
+        (
+            "form-feed separator",
+            format!("wrapProgram\u{000c}\"$out/bin/xtask\" --prefix PATH : {canonical_path}"),
+        ),
+        (
+            "carriage-return separator",
+            format!("wrapProgram\r\"$out/bin/xtask\" --prefix PATH : {canonical_path}"),
+        ),
+        (
+            "crlf continuation",
+            format!("wrapProgram \\\r\n\"$out/bin/xtask\" --prefix PATH : {canonical_path}"),
+        ),
+        (
             "literal target",
             post_fixup.replace("\"$out/bin/xtask\"", "'$out/bin/xtask'"),
         ),
@@ -812,6 +835,7 @@ fn delivery_runtime_shell_ast_rejects_inactive_or_wrong_wrappers() {
         ),
         ("extra wrapper", format!("{post_fixup}\n{post_fixup}")),
         ("backgrounded wrapper", format!("{post_fixup} &")),
+        ("escaped trailing tab", format!("{post_fixup}\\\t")),
     ];
     for (name, script) in cases {
         let error = required_delivery_runtime_paths(&script, &tools)
@@ -822,7 +846,8 @@ fn delivery_runtime_shell_ast_rejects_inactive_or_wrong_wrappers() {
                 || error.contains("unconditional command")
                 || error.contains("command name")
                 || error.contains("target")
-                || error.contains("unescaped shell whitespace"),
+                || error.contains("unescaped shell whitespace")
+                || error.contains("source boundaries"),
             "{name} must fail the whole-script grammar: {error}"
         );
     }
