@@ -145,7 +145,8 @@ message RealmChildFd {
   RealmChildRole role = 1;
   RealmChildFdKind kind = 2;
   uint32 attachment_index = 3;
-  // Required only for RESOURCE and LEASE. Singleton authority kinds must omit it.
+  // Required only for RESOURCE and LEASE, which may repeat with distinct IDs.
+  // Singleton authority kinds must omit it.
   optional string resource_id = 4;
 }
 

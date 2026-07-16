@@ -94,11 +94,12 @@ controller and one broker record with distinct nonzero numeric PIDs, distinct
 opaque process IDs, executable digests, and role-bound pidfd attachments:
 controller is response attachment zero and broker is response attachment one.
 
-Each request attachment has at most one binding for a `(role, kind)` pair.
 Listener, bootstrap-session, namespace, cgroup, state-root, and audit-root
-bindings are singleton authority and must omit `resource_id`. Only `resource`
-and `lease` bindings carry a mandatory opaque `resource_id`; changing that ID
-cannot create a second binding for the same role and kind.
+bindings are singleton authority: each request has at most one binding for a
+`(role, kind)` pair, and each such binding must omit `resource_id`. `Resource`
+and `lease` bindings instead carry a mandatory opaque `resource_id` and are
+unique by `(role, kind, resource_id)`, so one child may receive multiple
+distinct delegated resources or leases without duplicating one authority.
 
 Before accepting a response, the receiver validates it against the originating
 request. The operation ID and launch-record digest must match, and each child

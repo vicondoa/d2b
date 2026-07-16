@@ -16,12 +16,13 @@ use d2b_contracts::v2_provider::{
     ProviderOperationRequest, ProviderRemediation, ProviderTarget,
 };
 use d2b_contracts::v2_services::{
-    BROKER_PIDFD_ATTACHMENT_INDEX, CONTROLLER_PIDFD_ATTACHMENT_INDEX, SERVICE_INVENTORY,
-    SERVICE_PACKAGES, ServiceContractError, ServiceInventoryDocument, StrictWireMessage, broker,
-    common, decode_spawn_response_for_request, decode_strict, encode_strict,
-    observability_query_response_from_wire, observability_query_result_to_wire,
-    provider_method_for_capability, provider_operation_input, service_inventory_document,
-    validate_provider_response_for_method, validate_spawn_response_for_request,
+    BROKER_PIDFD_ATTACHMENT_INDEX, CONTROLLER_PIDFD_ATTACHMENT_INDEX, MAX_REALM_CHILD_FDS,
+    MAX_SERVICE_STRING_BYTES, SERVICE_INVENTORY, SERVICE_PACKAGES, ServiceContractError,
+    ServiceInventoryDocument, StrictWireMessage, broker, common, decode_spawn_response_for_request,
+    decode_strict, encode_strict, observability_query_response_from_wire,
+    observability_query_result_to_wire, provider_method_for_capability, provider_operation_input,
+    service_inventory_document, validate_provider_response_for_method,
+    validate_spawn_response_for_request,
 };
 use protobuf::{Enum, EnumOrUnknown, Message, MessageField};
 
@@ -720,22 +721,82 @@ fn realm_child_fd_resource_ids_cannot_expand_singleton_authority() {
         missing_resource_id.validate_wire(true).unwrap();
     }
 
-    let mut duplicate_resource_kind = valid_spawn_request();
-    for (attachment, resource_id) in [(4, "resource-a"), (5, "resource-b")] {
+    for (kind, prefix) in [
+        (
+            broker::RealmChildFdKind::REALM_CHILD_FD_KIND_RESOURCE,
+            "resource",
+        ),
+        (broker::RealmChildFdKind::REALM_CHILD_FD_KIND_LEASE, "lease"),
+    ] {
+        let mut distinct_resources = valid_spawn_request();
+        for (attachment, suffix) in [(4, "a"), (5, "b")] {
+            let mut resource = child_fd(
+                broker::RealmChildRole::REALM_CHILD_ROLE_CONTROLLER,
+                kind,
+                attachment,
+            );
+            resource.resource_id = Some(format!("{prefix}-{suffix}"));
+            distinct_resources.fds.push(resource);
+        }
+        let raw = distinct_resources
+            .write_to_bytes()
+            .expect("distinct delegated resources");
+        assert_eq!(
+            decode_strict::<broker::SpawnRealmChildrenRequest>(&raw, true)
+                .expect("distinct resource IDs are valid"),
+            distinct_resources
+        );
+
+        let mut duplicate_resource = distinct_resources;
+        duplicate_resource.fds.last_mut().unwrap().resource_id = Some(format!("{prefix}-a"));
+        let raw = duplicate_resource
+            .write_to_bytes()
+            .expect("adversarial duplicate resource");
+        assert_eq!(
+            decode_strict::<broker::SpawnRealmChildrenRequest>(&raw, true),
+            Err(ServiceContractError::InvalidOperationInput)
+        );
+    }
+
+    let mut resource_id_bound = valid_spawn_request();
+    let mut resource = child_fd(
+        broker::RealmChildRole::REALM_CHILD_ROLE_CONTROLLER,
+        broker::RealmChildFdKind::REALM_CHILD_FD_KIND_RESOURCE,
+        4,
+    );
+    resource.resource_id = Some("r".repeat(MAX_SERVICE_STRING_BYTES));
+    resource_id_bound.fds.push(resource);
+    resource_id_bound.validate_wire(true).unwrap();
+    resource_id_bound.fds.last_mut().unwrap().resource_id =
+        Some("r".repeat(MAX_SERVICE_STRING_BYTES + 1));
+    assert_eq!(
+        resource_id_bound.validate_wire(true),
+        Err(ServiceContractError::InvalidId)
+    );
+
+    let mut max_fds = valid_spawn_request();
+    for attachment in max_fds.fds.len()..MAX_REALM_CHILD_FDS {
         let mut resource = child_fd(
             broker::RealmChildRole::REALM_CHILD_ROLE_CONTROLLER,
             broker::RealmChildFdKind::REALM_CHILD_FD_KIND_RESOURCE,
-            attachment,
+            attachment as u32,
         );
-        resource.resource_id = Some(resource_id.to_owned());
-        duplicate_resource_kind.fds.push(resource);
+        resource.resource_id = Some(format!("resource-{attachment}"));
+        max_fds.fds.push(resource);
     }
-    let raw = duplicate_resource_kind
-        .write_to_bytes()
-        .expect("adversarial protobuf");
+    assert_eq!(max_fds.fds.len(), MAX_REALM_CHILD_FDS);
+    max_fds.validate_wire(true).unwrap();
+
+    let mut over_bound = child_fd(
+        broker::RealmChildRole::REALM_CHILD_ROLE_CONTROLLER,
+        broker::RealmChildFdKind::REALM_CHILD_FD_KIND_RESOURCE,
+        MAX_REALM_CHILD_FDS as u32,
+    );
+    over_bound.resource_id = Some("resource-over-bound".to_owned());
+    max_fds.fds.push(over_bound);
     assert_eq!(
-        decode_strict::<broker::SpawnRealmChildrenRequest>(&raw, true),
-        Err(ServiceContractError::InvalidOperationInput)
+        max_fds.validate_wire(true),
+        Err(ServiceContractError::BoundExceeded)
     );
 }
 

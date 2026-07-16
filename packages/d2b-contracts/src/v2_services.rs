@@ -487,7 +487,7 @@ pub fn service_schema_fingerprint(service: &ServiceSpec) -> [u8; 32] {
         digest.update(b"\0provider-response-observability-query-result-v1");
     }
     if service.package == "d2b.broker.v2" {
-        digest.update(b"\0typed-allocator-and-realm-child-spawn-v2");
+        digest.update(b"\0typed-allocator-and-realm-child-spawn-v3");
     }
     for method in service.methods {
         digest.update(b"\0");
@@ -1017,7 +1017,14 @@ impl StrictWireMessage for broker::AllocateResponse {
 
 fn validate_realm_child_fd(
     value: &broker::RealmChildFd,
-) -> Result<(broker::RealmChildRole, broker::RealmChildFdKind), ServiceContractError> {
+) -> Result<
+    (
+        broker::RealmChildRole,
+        broker::RealmChildFdKind,
+        Option<&str>,
+    ),
+    ServiceContractError,
+> {
     reject_unknown(value)?;
     let role = value
         .role
@@ -1039,7 +1046,8 @@ fn validate_realm_child_fd(
     );
     match (resource_scoped, value.resource_id.as_deref()) {
         (true, Some(resource)) if bounded_opaque(resource, MAX_SERVICE_STRING_BYTES) => {}
-        (true, _) => return Err(ServiceContractError::MissingOperationInput),
+        (true, Some(_)) => return Err(ServiceContractError::InvalidId),
+        (true, None) => return Err(ServiceContractError::MissingOperationInput),
         (false, None) => {}
         (false, Some(_)) => return Err(ServiceContractError::InvalidOperationInput),
     }
@@ -1050,7 +1058,7 @@ fn validate_realm_child_fd(
     {
         return Err(ServiceContractError::InvalidOperationInput);
     }
-    Ok((role, kind))
+    Ok((role, kind, value.resource_id.as_deref()))
 }
 
 impl StrictWireMessage for broker::SpawnRealmChildrenRequest {
@@ -1081,11 +1089,18 @@ impl StrictWireMessage for broker::SpawnRealmChildrenRequest {
         if self.fds.len() < 4 || self.fds.len() > MAX_REALM_CHILD_FDS {
             return Err(ServiceContractError::BoundExceeded);
         }
-        let mut bindings = BTreeSet::new();
+        let mut singleton_bindings = BTreeSet::new();
+        let mut resource_bindings = BTreeSet::new();
         let mut attachments = Vec::with_capacity(self.fds.len());
         for fd in &self.fds {
-            let (role, kind) = validate_realm_child_fd(fd)?;
-            if !bindings.insert((role.value(), kind.value())) {
+            let (role, kind, resource_id) = validate_realm_child_fd(fd)?;
+            let unique = match resource_id {
+                Some(resource_id) => {
+                    resource_bindings.insert((role.value(), kind.value(), resource_id))
+                }
+                None => singleton_bindings.insert((role.value(), kind.value())),
+            };
+            if !unique {
                 return Err(ServiceContractError::InvalidOperationInput);
             }
             attachments.push(fd.attachment_index);
@@ -1109,7 +1124,7 @@ impl StrictWireMessage for broker::SpawnRealmChildrenRequest {
                 broker::RealmChildFdKind::REALM_CHILD_FD_KIND_BOOTSTRAP_SESSION,
             ),
         ] {
-            if !bindings.contains(&(required.0.value(), required.1.value())) {
+            if !singleton_bindings.contains(&(required.0.value(), required.1.value())) {
                 return Err(ServiceContractError::MissingOperationInput);
             }
         }
