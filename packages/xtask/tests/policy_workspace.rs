@@ -1265,7 +1265,7 @@ fn adr_delivery_rules_require_dependency_ready_parallelism() {
         "before W6/W7 create final snapshots or run final panels",
         "`adr0045-w8-integration` as a Git Town child of the linearized W7 head",
         "Serial ownership stops at the smallest connected component",
-        "the gate child duplicates that same locked open-file description",
+        "duplicates that same locked open-file description",
     ] {
         assert!(
             adr.contains(required),
