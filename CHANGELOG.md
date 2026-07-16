@@ -138,6 +138,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Evaluated each supported system's delivery derivation before checking its
+  wrapper PATH, with one canonical exported runtime-tool list grounding the
+  exact expected Nix store paths.
 - Rejected every executable shell input-redirection token in the delivery
   package wrapper policy, including continuation-split, here-string, and
   file-descriptor-prefixed forms.

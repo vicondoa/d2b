@@ -247,6 +247,34 @@
         rustWorkspace = rustWorkspaceWith pkgs.rustPlatform;
         deliveryRustWorkspace =
           rustWorkspaceWith deliveryTools.stableRustPlatform;
+        deliveryRuntimeToolSpecs = [
+          {
+            name = "git";
+            package = pkgs.git;
+          }
+          {
+            name = "openssl";
+            package = pkgs.openssl;
+          }
+          {
+            name = "shellcheck";
+            package = pkgs.shellcheck;
+          }
+          {
+            name = "gh";
+            package = deliveryTools.gh;
+          }
+          {
+            name = "git-town";
+            package = deliveryTools.gitTown;
+          }
+        ];
+        deliveryRuntimePackages =
+          map (tool: tool.package) deliveryRuntimeToolSpecs;
+        deliveryRuntimeTools = map (tool: {
+          inherit (tool) name;
+          binPath = "${tool.package}/bin";
+        }) deliveryRuntimeToolSpecs;
         guestStaticPackage = packageName: binName:
           pkgs.pkgsStatic.rustPlatform.buildRustPackage {
             pname = "${binName}-static";
@@ -360,15 +388,12 @@
                   nativeBuildInputs = [ pkgs.makeWrapper pkgs.protobuf ];
                   postFixup = ''
                     wrapProgram "$out/bin/${spec.binary}" \
-                      --prefix PATH : ${pkgs.lib.makeBinPath [
-                        pkgs.git
-                        pkgs.openssl
-                        pkgs.shellcheck
-                        deliveryTools.gh
-                        deliveryTools.gitTown
-                      ]}
+                      --prefix PATH : ${pkgs.lib.makeBinPath deliveryRuntimePackages}
                   '';
-                  passthru.rustToolchainVersion = deliveryTools.rustStableVersion;
+                  passthru = {
+                    rustToolchainVersion = deliveryTools.rustStableVersion;
+                    inherit deliveryRuntimeTools;
+                  };
                 })
               else
                 throw "unsupported shipped Rust package build kind ${spec.buildKind}";

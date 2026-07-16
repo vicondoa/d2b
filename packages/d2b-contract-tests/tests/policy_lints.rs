@@ -8,7 +8,12 @@
 
 use d2b_contract_tests::{read_repo_file, repo_path_exists, repo_root};
 use regex::Regex;
-use std::path::{Path, PathBuf};
+use serde::Deserialize;
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 /// Assert `haystack` contains a line matching `pattern` (multi-line, `^`/`$`
 /// anchor lines), with a descriptive failure message.
@@ -32,218 +37,14 @@ fn collect_markdown_files(dir: &Path, files: &mut Vec<PathBuf>) {
     }
 }
 
-fn is_nix_ident_start(byte: u8) -> bool {
-    byte.is_ascii_alphabetic() || byte == b'_'
-}
-
-fn is_nix_ident_continue(byte: u8) -> bool {
-    is_nix_ident_start(byte) || byte.is_ascii_digit() || matches!(byte, b'-' | b'\'')
-}
-
-fn skip_nix_trivia(source: &[u8], cursor: &mut usize) -> Result<(), String> {
-    loop {
-        while source.get(*cursor).is_some_and(u8::is_ascii_whitespace) {
-            *cursor += 1;
-        }
-        if source.get(*cursor) == Some(&b'#') {
-            while source.get(*cursor).is_some_and(|byte| *byte != b'\n') {
-                *cursor += 1;
-            }
-            continue;
-        }
-        if source.get(*cursor..*cursor + 2) == Some(b"/*") {
-            *cursor += 2;
-            let mut depth = 1;
-            while depth > 0 {
-                match source.get(*cursor..*cursor + 2) {
-                    Some(b"/*") => {
-                        depth += 1;
-                        *cursor += 2;
-                    }
-                    Some(b"*/") => {
-                        depth -= 1;
-                        *cursor += 2;
-                    }
-                    Some(_) => *cursor += 1,
-                    None => return Err("unterminated block comment in Nix package list".into()),
-                }
-            }
-            continue;
-        }
-        return Ok(());
-    }
-}
-
-fn parse_nix_path_list(source: &str, list_open: usize) -> Result<(Vec<String>, usize), String> {
-    let source = source.as_bytes();
-    if source.get(list_open) != Some(&b'[') {
-        return Err("Nix package list does not start with `[`".into());
-    }
-
-    let mut cursor = list_open + 1;
-    let mut paths = Vec::new();
-    loop {
-        skip_nix_trivia(source, &mut cursor)?;
-        let Some(&byte) = source.get(cursor) else {
-            return Err("unterminated Nix package list".into());
-        };
-        if byte == b']' {
-            return Ok((paths, cursor));
-        }
-        if !is_nix_ident_start(byte) {
-            return Err(format!(
-                "delivery runtime package list contains unsupported token `{}`",
-                char::from(byte)
-            ));
-        }
-
-        let mut path = String::new();
-        loop {
-            let segment_start = cursor;
-            cursor += 1;
-            while source
-                .get(cursor)
-                .is_some_and(|byte| is_nix_ident_continue(*byte))
-            {
-                cursor += 1;
-            }
-            if !path.is_empty() {
-                path.push('.');
-            }
-            path.push_str(
-                std::str::from_utf8(&source[segment_start..cursor])
-                    .map_err(|_| "non-UTF-8 Nix identifier in delivery runtime package list")?,
-            );
-
-            skip_nix_trivia(source, &mut cursor)?;
-            if source.get(cursor) != Some(&b'.') {
-                break;
-            }
-            cursor += 1;
-            skip_nix_trivia(source, &mut cursor)?;
-            if !source
-                .get(cursor)
-                .is_some_and(|byte| is_nix_ident_start(*byte))
-            {
-                return Err(
-                    "incomplete Nix attribute path in delivery runtime package list".into(),
-                );
-            }
-        }
-        paths.push(path);
-    }
-}
-
-fn find_nix_indented_string_end(source: &str, content_start: usize) -> Result<usize, String> {
-    source[content_start..]
-        .find("''")
-        .map(|offset| content_start + offset)
-        .ok_or("unterminated Nix indented string".into())
-}
-
-fn skip_nix_quoted_string(source: &[u8], cursor: &mut usize) -> Result<(), String> {
-    *cursor += 1;
-    while let Some(&byte) = source.get(*cursor) {
-        match byte {
-            b'\\' => {
-                *cursor += 1;
-                if source.get(*cursor).is_none() {
-                    return Err("unterminated escape in Nix quoted string".into());
-                }
-                *cursor += 1;
-            }
-            b'"' => {
-                *cursor += 1;
-                return Ok(());
-            }
-            _ => *cursor += 1,
-        }
-    }
-    Err("unterminated Nix quoted string".into())
-}
-
-fn nix_indented_attribute<'a>(source: &'a str, name: &str) -> Result<&'a str, String> {
-    let bytes = source.as_bytes();
-    let mut cursor = 0;
-    let mut value = None;
-    while cursor < bytes.len() {
-        skip_nix_trivia(bytes, &mut cursor)?;
-        let Some(&byte) = bytes.get(cursor) else {
-            break;
-        };
-        if bytes.get(cursor..cursor + 2) == Some(b"''") {
-            let content_start = cursor + 2;
-            cursor = find_nix_indented_string_end(source, content_start)? + 2;
-            continue;
-        }
-        if byte == b'"' {
-            skip_nix_quoted_string(bytes, &mut cursor)?;
-            continue;
-        }
-        if !is_nix_ident_start(byte) {
-            cursor += 1;
-            continue;
-        }
-
-        let ident_start = cursor;
-        cursor += 1;
-        while bytes
-            .get(cursor)
-            .is_some_and(|byte| is_nix_ident_continue(*byte))
-        {
-            cursor += 1;
-        }
-        if &source[ident_start..cursor] != name {
-            continue;
-        }
-
-        skip_nix_trivia(bytes, &mut cursor)?;
-        if bytes.get(cursor) != Some(&b'=') {
-            continue;
-        }
-        cursor += 1;
-        skip_nix_trivia(bytes, &mut cursor)?;
-        if bytes.get(cursor..cursor + 2) != Some(b"''") {
-            return Err(format!("{name} must be a Nix indented string"));
-        }
-        let content_start = cursor + 2;
-        let content_end = find_nix_indented_string_end(source, content_start)?;
-        if value.replace(&source[content_start..content_end]).is_some() {
-            return Err(format!(
-                "multiple active {name} attributes in delivery package"
-            ));
-        }
-        cursor = content_end + 2;
-    }
-
-    value.ok_or_else(|| format!("delivery package is missing active {name}"))
-}
-
 fn shell_logical_commands(source: &str) -> Result<Vec<String>, String> {
     let bytes = source.as_bytes();
     let mut commands = Vec::new();
     let mut command = String::new();
     let mut cursor = 0;
     let mut quote = None;
-    let mut nix_interpolation_depth = 0;
 
     while let Some(&byte) = bytes.get(cursor) {
-        if bytes.get(cursor..cursor + 2) == Some(b"${") {
-            nix_interpolation_depth += 1;
-            command.push_str("${");
-            cursor += 2;
-            continue;
-        }
-        if nix_interpolation_depth > 0 {
-            command.push(char::from(byte));
-            cursor += 1;
-            match byte {
-                b'{' => nix_interpolation_depth += 1,
-                b'}' => nix_interpolation_depth -= 1,
-                _ => {}
-            }
-            continue;
-        }
         if byte == b'\\' && bytes.get(cursor + 1) == Some(&b'\n') && quote != Some(b'\'') {
             command.push(' ');
             cursor += 2;
@@ -301,80 +102,129 @@ fn shell_logical_commands(source: &str) -> Result<Vec<String>, String> {
     if quote.is_some() {
         return Err("unterminated shell quote in postFixup".into());
     }
-    if nix_interpolation_depth != 0 {
-        return Err("unterminated Nix interpolation in postFixup".into());
-    }
     if !command.trim().is_empty() {
         commands.push(command.trim().to_owned());
     }
     Ok(commands)
 }
 
-fn wrap_program_path_packages(post_fixup: &str) -> Result<Vec<String>, String> {
-    let prefix = Regex::new(
-        r#"^wrapProgram\s+(?:"(?:\\.|[^"\\])*"|'[^']*'|\S+)\s+--prefix\s+PATH\s+:\s+\$\{\s*pkgs\s*\.\s*lib\s*\.\s*makeBinPath\s*\["#,
+fn wrap_program_path_entries(post_fixup: &str) -> Result<Vec<String>, String> {
+    let wrapper = Regex::new(
+        r#"^wrapProgram\s+(?:"(?:\\.|[^"\\])*"|'[^']*'|\S+)\s+--prefix\s+PATH\s+:\s+(\S+)$"#,
     )
-    .expect("valid wrapProgram PATH regex");
+    .expect("valid evaluated wrapProgram PATH regex");
     let mut matches = Vec::new();
     for command in shell_logical_commands(post_fixup)? {
-        let Some(runtime_path) = prefix.find(&command) else {
+        let Some(captures) = wrapper.captures(&command) else {
             continue;
         };
-        let (packages, list_close) = parse_nix_path_list(&command, runtime_path.end() - 1)?;
-        let bytes = command.as_bytes();
-        let mut cursor = list_close + 1;
-        skip_nix_trivia(bytes, &mut cursor)?;
-        if bytes.get(cursor) != Some(&b'}') || !command[cursor + 1..].trim().is_empty() {
-            return Err("wrapProgram PATH must end with the makeBinPath interpolation".into());
+        let entries = captures[1]
+            .split(':')
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        if entries.iter().any(String::is_empty) {
+            return Err("delivery wrapProgram PATH contains an empty entry".into());
         }
-        matches.push(packages);
+        matches.push(entries);
     }
     match matches.as_slice() {
-        [packages] => Ok(packages.clone()),
+        [entries] => Ok(entries.clone()),
         [] => Err("delivery postFixup is missing active wrapProgram PATH prefix".into()),
         _ => Err("delivery postFixup has multiple wrapProgram PATH prefixes".into()),
     }
 }
 
-fn delivery_runtime_packages(flake: &str) -> Result<Vec<String>, String> {
-    let branch_start = Regex::new(r#"spec\s*\.\s*buildKind\s*==\s*"deliveryWorkspace"\s*then"#)
-        .expect("valid delivery branch regex")
-        .find(flake)
-        .ok_or("missing deliveryWorkspace package branch")?;
-    let branch_tail = &flake[branch_start.end()..];
-    let branch_end = Regex::new(
-        r#"passthru\s*\.\s*rustToolchainVersion\s*=\s*deliveryTools\s*\.\s*rustStableVersion\s*;"#,
-    )
-    .expect("valid delivery branch end regex")
-    .find(branch_tail)
-    .ok_or("deliveryWorkspace package branch is missing its pinned toolchain passthru")?;
-    let branch = &branch_tail[..branch_end.start()];
-    wrap_program_path_packages(nix_indented_attribute(branch, "postFixup")?)
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EvaluatedDeliveryRuntimeTool {
+    name: String,
+    bin_path: String,
 }
 
-const REQUIRED_DELIVERY_RUNTIME_PACKAGES: [&str; 5] = [
-    "pkgs.git",
-    "pkgs.openssl",
-    "pkgs.shellcheck",
-    "deliveryTools.gh",
-    "deliveryTools.gitTown",
-];
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EvaluatedDeliveryRuntime {
+    post_fixup: String,
+    delivery_runtime_tools: Vec<EvaluatedDeliveryRuntimeTool>,
+}
 
-fn required_delivery_runtime_packages(flake: &str) -> Result<Vec<String>, String> {
-    let packages = delivery_runtime_packages(flake)?;
-    for required in REQUIRED_DELIVERY_RUNTIME_PACKAGES {
-        if !packages.iter().any(|package| package == required) {
-            return Err(format!(
-                "delivery wrapProgram PATH is missing {required}; found {packages:?}"
-            ));
-        }
-    }
-    if packages.len() != REQUIRED_DELIVERY_RUNTIME_PACKAGES.len() {
+const REQUIRED_DELIVERY_RUNTIME_TOOLS: [&str; 5] =
+    ["git", "openssl", "shellcheck", "gh", "git-town"];
+
+fn required_delivery_runtime_paths(
+    post_fixup: &str,
+    tools: &[EvaluatedDeliveryRuntimeTool],
+) -> Result<Vec<String>, String> {
+    let names = tools
+        .iter()
+        .map(|tool| tool.name.as_str())
+        .collect::<Vec<_>>();
+    if names != REQUIRED_DELIVERY_RUNTIME_TOOLS {
         return Err(format!(
-            "delivery wrapProgram PATH must contain exactly the required tools; found {packages:?}"
+            "evaluated delivery runtime tools differ from the required set: {names:?}"
         ));
     }
-    Ok(packages)
+    let expected_paths = tools
+        .iter()
+        .map(|tool| tool.bin_path.clone())
+        .collect::<Vec<_>>();
+    if expected_paths
+        .iter()
+        .any(|path| !path.starts_with("/nix/store/") || !path.ends_with("/bin"))
+    {
+        return Err(format!(
+            "evaluated delivery runtime tool paths must be Nix store bin paths: {expected_paths:?}"
+        ));
+    }
+    let actual_paths = wrap_program_path_entries(post_fixup)?;
+    if actual_paths != expected_paths {
+        return Err(format!(
+            "evaluated delivery wrapProgram PATH {actual_paths:?} differs from canonical runtime tools {expected_paths:?}"
+        ));
+    }
+    Ok(actual_paths)
+}
+
+fn evaluated_delivery_runtime_contracts() -> BTreeMap<String, EvaluatedDeliveryRuntime> {
+    let root = repo_root();
+    let flake_ref = format!("git+file://{}", root.display());
+    let flake_ref = serde_json::to_string(&flake_ref).expect("serialize flake reference");
+    let expression = format!(
+        r#"
+          let
+            flake = builtins.getFlake {flake_ref};
+          in
+          builtins.listToAttrs (map (system:
+            let package = flake.packages.${{system}}.d2b-delivery;
+            in {{
+              name = system;
+              value = {{
+                inherit (package) postFixup deliveryRuntimeTools;
+              }};
+            }}
+          ) flake.lib.supportedSystems)
+        "#
+    );
+    let output = Command::new("nix")
+        .args([
+            "eval",
+            "--impure",
+            "--quiet",
+            "--no-warn-dirty",
+            "--no-write-lock-file",
+            "--json",
+            "--expr",
+            &expression,
+        ])
+        .current_dir(root)
+        .output()
+        .expect("run nix eval for delivery runtime contracts");
+    assert!(
+        output.status.success(),
+        "all-system delivery runtime eval failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("parse all-system delivery runtime eval")
 }
 
 // Migrated from tests/daemon-experimental-warning-eval.sh.
@@ -603,8 +453,6 @@ fn delivery_tool_sources_and_toolchains_are_exactly_pinned() {
         "Git Town and GitHub CLI must be repository-owned source builds, not nixpkgs aliases"
     );
     let flake = read_repo_file("flake.nix");
-    required_delivery_runtime_packages(&flake)
-        .unwrap_or_else(|err| panic!("invalid delivery runtime package list: {err}"));
     assert!(
         flake.contains("gh --version | grep -F 'gh version 2.92.0'")
             && flake.contains("git-town --version | grep -Fx 'Git Town 23.0.1'")
@@ -646,9 +494,10 @@ fn delivery_tool_sources_and_toolchains_are_exactly_pinned() {
         ) && flake.contains(r#"output = "d2b-delivery";"#)
             && flake.contains(r#"buildKind = "deliveryWorkspace";"#)
             && flake.contains("deliveryRustWorkspace (workspaceArgs // {")
-            && flake.contains(
-                "passthru.rustToolchainVersion = deliveryTools.rustStableVersion;"
-            )
+            && flake.contains("deliveryRuntimeToolSpecs = [")
+            && flake.contains("pkgs.lib.makeBinPath deliveryRuntimePackages")
+            && flake.contains("rustToolchainVersion = deliveryTools.rustStableVersion;")
+            && flake.contains("inherit deliveryRuntimeTools;")
             && flake.contains(
                 r#"outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";"#
             ),
@@ -733,79 +582,84 @@ fn delivery_tool_sources_and_toolchains_are_exactly_pinned() {
 
 fn delivery_runtime_policy_fixture() -> &'static str {
     r#"
-      decoy = pkgs.lib.makeBinPath [
-        pkgs.git pkgs.openssl pkgs.shellcheck
-      ];
-      value =
-        if spec . buildKind == "deliveryWorkspace"
-        then deliveryRustWorkspace (workspaceArgs // {
-          # commentedRuntime = pkgs.lib.makeBinPath [
-          #   pkgs.git pkgs.openssl pkgs.shellcheck
-          #   deliveryTools.gh deliveryTools.gitTown
-          # ];
-          unusedRuntime = pkgs.lib.makeBinPath [
-            pkgs.git pkgs.openssl pkgs.shellcheck
-            deliveryTools.gh deliveryTools.gitTown
-          ];
-          stringDecoy = "postFixup pkgs.lib.makeBinPath [ pkgs.openssl ]";
-          postFixup = ''
-            # wrapProgram "$out/bin/decoy" --prefix PATH : ${pkgs.lib.makeBinPath [
-            #   pkgs.git pkgs.openssl pkgs.shellcheck
-            #   deliveryTools.gh deliveryTools.gitTown
-            # ]}
-            # Benign quoted/comment input-redirection text must remain inert: < << <<<.
-            printf '%s\n' '<not-redirection'
-            wrapProgram \
-              "$out/bin/${spec.binary}" \
-                --prefix   PATH : ${pkgs . lib . makeBinPath
-                  [
-                    pkgs . git
-                    # Layout and comments are not package entries.
-                    pkgs.openssl  pkgs . shellcheck
-                    deliveryTools . gh
-                    deliveryTools.gitTown
-                  ]}
-          '';
-          passthru . rustToolchainVersion =
-            deliveryTools . rustStableVersion ;
-        })
-        else null;
+      # wrapProgram "$out/bin/decoy" --prefix PATH : /nix/store/decoy/bin
+      unused_path='/nix/store/decoy-git/bin:/nix/store/decoy-openssl/bin'
+      # Benign quoted/comment input-redirection text must remain inert: < << <<<.
+      printf '%s\n' '<not-redirection'
+      wrapProgram \
+        "$out/bin/xtask" \
+          --prefix   PATH : /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-git/bin:/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-openssl/bin:/nix/store/cccccccccccccccccccccccccccccccc-shellcheck/bin:/nix/store/dddddddddddddddddddddddddddddddd-gh/bin:/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-git-town/bin
     "#
 }
 
+fn delivery_runtime_policy_tools() -> Vec<EvaluatedDeliveryRuntimeTool> {
+    [
+        ("git", "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-git/bin"),
+        (
+            "openssl",
+            "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-openssl/bin",
+        ),
+        (
+            "shellcheck",
+            "/nix/store/cccccccccccccccccccccccccccccccc-shellcheck/bin",
+        ),
+        ("gh", "/nix/store/dddddddddddddddddddddddddddddddd-gh/bin"),
+        (
+            "git-town",
+            "/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-git-town/bin",
+        ),
+    ]
+    .into_iter()
+    .map(|(name, bin_path)| EvaluatedDeliveryRuntimeTool {
+        name: name.to_owned(),
+        bin_path: bin_path.to_owned(),
+    })
+    .collect()
+}
+
 #[test]
-fn delivery_runtime_package_parser_binds_active_wrap_program_path() {
-    let flake = delivery_runtime_policy_fixture();
+fn delivery_runtime_wrapper_eval_matches_canonical_tools_on_all_systems() {
+    let contracts = evaluated_delivery_runtime_contracts();
+    assert_eq!(
+        contracts.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["aarch64-linux", "x86_64-linux"],
+        "delivery runtime policy must evaluate every supported flake system"
+    );
+    for (system, contract) in contracts {
+        required_delivery_runtime_paths(&contract.post_fixup, &contract.delivery_runtime_tools)
+            .unwrap_or_else(|err| panic!("{system} delivery runtime policy failed: {err}"));
+    }
+}
+
+#[test]
+fn delivery_runtime_shell_parser_binds_active_wrap_program_path() {
+    let post_fixup = delivery_runtime_policy_fixture();
+    let tools = delivery_runtime_policy_tools();
 
     assert_eq!(
-        required_delivery_runtime_packages(flake).expect("formatting variant must parse"),
-        [
-            "pkgs.git",
-            "pkgs.openssl",
-            "pkgs.shellcheck",
-            "deliveryTools.gh",
-            "deliveryTools.gitTown",
-        ]
+        required_delivery_runtime_paths(post_fixup, &tools)
+            .expect("evaluated formatting variant must parse"),
+        tools
+            .iter()
+            .map(|tool| tool.bin_path.clone())
+            .collect::<Vec<_>>()
     );
 
-    let missing_active_tool = flake.replace(
-        "                    pkgs.openssl  pkgs . shellcheck",
-        "                    pkgs . shellcheck",
+    let missing_active_tool = post_fixup.replace(
+        ":/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-openssl/bin",
+        "",
     );
-    let error = required_delivery_runtime_packages(&missing_active_tool)
-        .expect_err("commented and unused in-branch decoys must not mask a missing runtime tool");
+    let error = required_delivery_runtime_paths(&missing_active_tool, &tools)
+        .expect_err("commented and unused shell decoys must not mask a missing runtime tool");
     assert!(
-        error.contains("missing pkgs.openssl"),
+        error.contains("differs from canonical runtime tools"),
         "missing active tool must fail specifically: {error}"
     );
 
-    let inactive_wrapper = flake.replacen(
-        "            wrapProgram \\",
-        "            echo wrapProgram \\",
-        1,
-    );
-    let error = required_delivery_runtime_packages(&inactive_wrapper)
-        .expect_err("commented, string, and unused decoys must not replace the active wrapper");
+    let inactive_wrapper =
+        post_fixup.replacen("      wrapProgram \\", "      echo wrapProgram \\", 1);
+    let error = required_delivery_runtime_paths(&inactive_wrapper, &tools)
+        .expect_err("commented, quoted, and unused decoys must not replace the active wrapper");
     assert!(
         error.contains("missing active wrapProgram PATH prefix"),
         "inactive wrapper must fail specifically: {error}"
@@ -813,21 +667,12 @@ fn delivery_runtime_package_parser_binds_active_wrap_program_path() {
 }
 
 #[test]
-fn delivery_runtime_package_parser_rejects_heredoc_decoys() {
+fn delivery_runtime_shell_parser_rejects_heredoc_decoys() {
     for opener in ["cat <<EOF", "cat <<'EOF'", "cat <<\"EOF\"", "cat <<-EOF"] {
-        let heredoc_decoy = delivery_runtime_policy_fixture()
-            .replacen(
-                "            wrapProgram \\",
-                &format!("            {opener}\n            wrapProgram \\"),
-                1,
-            )
-            .replacen(
-                "                  ]}\n",
-                "                  ]}\n            EOF\n",
-                1,
-            );
-        let error = required_delivery_runtime_packages(&heredoc_decoy)
-            .expect_err("a wrapper-looking heredoc body must not satisfy runtime PATH policy");
+        let heredoc_decoy = format!("{opener}\n{}\nEOF\n", delivery_runtime_policy_fixture());
+        let error =
+            required_delivery_runtime_paths(&heredoc_decoy, &delivery_runtime_policy_tools())
+                .expect_err("a wrapper-looking heredoc body must not satisfy runtime PATH policy");
         assert!(
             error.contains("heredocs are forbidden"),
             "{opener} must fail closed before its body is parsed: {error}"
@@ -836,7 +681,7 @@ fn delivery_runtime_package_parser_rejects_heredoc_decoys() {
 }
 
 #[test]
-fn delivery_runtime_package_parser_rejects_input_redirection_decoys() {
+fn delivery_runtime_shell_parser_rejects_input_redirection_decoys() {
     for redirection in [
         "cat <input",
         "cat < <EOF",
@@ -844,13 +689,10 @@ fn delivery_runtime_package_parser_rejects_input_redirection_decoys() {
         "cat <<<value",
         "cat 3<input",
     ] {
-        let redirection_decoy = delivery_runtime_policy_fixture().replacen(
-            "            wrapProgram \\",
-            &format!("            {redirection}\n            wrapProgram \\"),
-            1,
-        );
-        let error = required_delivery_runtime_packages(&redirection_decoy)
-            .expect_err("delivery postFixup input redirection must fail closed");
+        let redirection_decoy = format!("{redirection}\n{}", delivery_runtime_policy_fixture());
+        let error =
+            required_delivery_runtime_paths(&redirection_decoy, &delivery_runtime_policy_tools())
+                .expect_err("delivery postFixup input redirection must fail closed");
         assert!(
             error.contains("input redirection"),
             "{redirection:?} must fail before wrapper matching: {error}"
