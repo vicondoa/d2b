@@ -11667,13 +11667,33 @@ fn broker_remaining_before_op(
     deadline: Instant,
     socket_path: &Path,
 ) -> Result<Duration, TypedError> {
-    let remaining = deadline.saturating_duration_since(Instant::now());
+    broker_remaining_at(deadline, Instant::now(), socket_path)
+}
+
+fn broker_remaining_at(
+    deadline: Instant,
+    now: Instant,
+    socket_path: &Path,
+) -> Result<Duration, TypedError> {
+    let remaining = deadline.saturating_duration_since(now);
     if remaining.is_zero() {
         return Err(TypedError::InternalBrokerTimeout {
             path: socket_path.to_path_buf(),
         });
     }
     Ok(remaining)
+}
+
+fn checked_broker_deadline(
+    start: Instant,
+    timeout: Duration,
+    socket_path: &Path,
+) -> Result<Instant, TypedError> {
+    start
+        .checked_add(timeout)
+        .ok_or_else(|| TypedError::InternalBrokerTimeout {
+            path: socket_path.to_path_buf(),
+        })
 }
 
 /// Run connect + write + read so that each blocking op is bounded by the
@@ -11751,36 +11771,59 @@ fn dispatch_broker_request_with_fds_timeout(
     timeout: Duration,
 ) -> Result<(BrokerResponse, Vec<RawFd>), TypedError> {
     let socket_path = broker_socket_path(state);
-    let socket = Socket::from(connect_seqpacket_with_timeout(&socket_path, Some(timeout))?);
-    socket
-        .set_read_timeout(Some(timeout))
-        .map_err(|err| TypedError::InternalIo {
-            context: format!("set broker read timeout to {timeout:?}"),
-            detail: err.to_string(),
+    let deadline = checked_broker_deadline(Instant::now(), timeout, &socket_path)?;
+    let result = (|| {
+        let remaining = broker_remaining_before_op(deadline, &socket_path)?;
+        let socket = Socket::from(connect_seqpacket_with_timeout(
+            &socket_path,
+            Some(remaining),
+        )?);
+
+        let remaining = broker_remaining_before_op(deadline, &socket_path)?;
+        socket
+            .set_write_timeout(Some(remaining))
+            .map_err(|err| TypedError::InternalIo {
+                context: format!("set broker write timeout to {remaining:?}"),
+                detail: err.to_string(),
+            })?;
+        write_json_frame(
+            &socket,
+            &BrokerRequestEnvelope {
+                request,
+                caller_role: Default::default(),
+                test_peer_uid: None,
+            },
+        )?;
+
+        let remaining = broker_remaining_before_op(deadline, &socket_path)?;
+        socket
+            .set_read_timeout(Some(remaining))
+            .map_err(|err| TypedError::InternalIo {
+                context: format!("set broker read timeout to {remaining:?}"),
+                detail: err.to_string(),
+            })?;
+        let (response, received_fds) = read_frame_with_fds(&socket)?;
+        let decoded = serde_json::from_slice(&response).map_err(|err| {
+            close_received_fds(&received_fds);
+            TypedError::InternalBrokerUnavailable {
+                path: socket_path.clone(),
+                detail: err.to_string(),
+            }
         })?;
-    socket
-        .set_write_timeout(Some(timeout))
-        .map_err(|err| TypedError::InternalIo {
-            context: format!("set broker write timeout to {timeout:?}"),
-            detail: err.to_string(),
-        })?;
-    write_json_frame(
-        &socket,
-        &BrokerRequestEnvelope {
-            request,
-            caller_role: Default::default(),
-            test_peer_uid: None,
-        },
-    )?;
-    let (response, received_fds) = read_frame_with_fds(&socket)?;
-    let decoded = serde_json::from_slice(&response).map_err(|err| {
-        close_received_fds(&received_fds);
-        TypedError::InternalBrokerUnavailable {
-            path: socket_path,
-            detail: err.to_string(),
+        Ok((decoded, received_fds))
+    })();
+
+    match result {
+        Ok((response, received_fds)) if Instant::now() < deadline => Ok((response, received_fds)),
+        Ok((_, received_fds)) => {
+            close_received_fds(&received_fds);
+            Err(TypedError::InternalBrokerTimeout { path: socket_path })
         }
-    })?;
-    Ok((decoded, received_fds))
+        Err(_) if Instant::now() >= deadline => {
+            Err(TypedError::InternalBrokerTimeout { path: socket_path })
+        }
+        Err(err) => Err(err),
+    }
 }
 
 fn broker_response_kind(response: &BrokerResponse) -> String {
@@ -27038,6 +27081,54 @@ mod broker_dispatch_tests {
         assert!(matches!(
             err,
             crate::typed_error::TypedError::InternalBrokerTimeout { .. }
+        ));
+    }
+
+    #[test]
+    fn broker_fd_dispatch_budget_uses_one_checked_deadline() {
+        let path = Path::new("/run/d2b/priv.sock");
+        let start = Instant::now();
+        let timeout = Duration::from_secs(30);
+        let deadline = super::checked_broker_deadline(start, timeout, path)
+            .expect("deadline is representable");
+
+        assert_eq!(
+            super::broker_remaining_at(deadline, start, path).expect("connect budget"),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            super::broker_remaining_at(
+                deadline,
+                start.checked_add(Duration::from_secs(7)).unwrap(),
+                path,
+            )
+            .expect("write budget"),
+            Duration::from_secs(23)
+        );
+        assert_eq!(
+            super::broker_remaining_at(
+                deadline,
+                start.checked_add(Duration::from_secs(29)).unwrap(),
+                path,
+            )
+            .expect("read budget"),
+            Duration::from_secs(1)
+        );
+    }
+
+    #[test]
+    fn broker_fd_dispatch_deadline_fails_closed_for_zero_and_overflow() {
+        let path = Path::new("/run/d2b/priv.sock");
+        let start = Instant::now();
+        let exhausted =
+            super::checked_broker_deadline(start, Duration::ZERO, path).expect("zero deadline");
+        assert!(matches!(
+            super::broker_remaining_at(exhausted, start, path),
+            Err(crate::typed_error::TypedError::InternalBrokerTimeout { .. })
+        ));
+        assert!(matches!(
+            super::checked_broker_deadline(start, Duration::MAX, path),
+            Err(crate::typed_error::TypedError::InternalBrokerTimeout { .. })
         ));
     }
 
