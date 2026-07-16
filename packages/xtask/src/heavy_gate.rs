@@ -11,6 +11,7 @@ use std::{
     },
     path::{Path, PathBuf},
     process::{Child, Command, ExitCode, ExitStatus},
+    sync::{Arc, atomic::AtomicBool},
     thread,
     time::{Duration, Instant},
 };
@@ -23,7 +24,8 @@ use nix::{
 };
 use rustix::fs::{AtFlags, FileType, Mode, OFlags};
 use signal_hook::{
-    consts::{SIGHUP, SIGINT, SIGQUIT, SIGTERM},
+    consts::{SIGCHLD, SIGHUP, SIGINT, SIGQUIT, SIGTERM},
+    flag,
     iterator::Signals,
 };
 
@@ -34,6 +36,7 @@ const SLOT_MODE: u32 = 0o600;
 const GATE_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const GATE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(20);
+const GROUP_OBSERVATION_FAILURE_LIMIT: usize = 5;
 const HEAVY_GATE_CHILD_FD: i32 = 198;
 pub const HEAVY_GATE_FD_ENV: &str = "D2B_HEAVY_GATE_FD";
 
@@ -130,6 +133,10 @@ fn run(args: &[String]) -> Result<ExitStatus, HeavyGateError> {
         ));
     }
 
+    let _sigchld_handler =
+        flag::register(SIGCHLD, Arc::new(AtomicBool::new(false))).map_err(|error| {
+            HeavyGateError::new(format!("cannot make gate children waitable: {error}"))
+        })?;
     let mut signals = Signals::new([SIGHUP, SIGINT, SIGQUIT, SIGTERM])
         .map_err(|error| HeavyGateError::new(format!("cannot install signal handlers: {error}")))?;
     let gate_directory = gate_directory_from_environment()?;
@@ -820,16 +827,25 @@ fn terminate_group_with_anchor(
         ));
     }
 
+    let mut observation_failures = 0;
     loop {
         match cleanup.has_nonleader_members() {
             Ok(false) => break,
             Ok(true) => {
+                observation_failures = 0;
                 if let Err(error) = cleanup.signal_group() {
                     remember_cleanup_error(&mut first_error, error.to_string());
                 }
             }
             Err(error) => {
                 remember_cleanup_error(&mut first_error, error.to_string());
+                observation_failures += 1;
+                if observation_failures >= GROUP_OBSERVATION_FAILURE_LIMIT {
+                    if let Err(error) = cleanup.signal_group() {
+                        remember_cleanup_error(&mut first_error, error.to_string());
+                    }
+                    break;
+                }
             }
         }
         cleanup.pause();
@@ -883,9 +899,15 @@ mod tests {
         ReapLeader,
     }
 
+    enum MemberObservation {
+        Present,
+        Empty,
+        Failure,
+    }
+
     struct ReuseAwareCleanup {
         events: Vec<CleanupEvent>,
-        member_observations: VecDeque<bool>,
+        member_observations: VecDeque<MemberObservation>,
         leader_reaped: bool,
         touched_reused_group: bool,
     }
@@ -912,7 +934,17 @@ mod tests {
 
         fn has_nonleader_members(&mut self) -> Result<bool, HeavyGateError> {
             self.group_operation(CleanupEvent::InspectMembers);
-            Ok(self.member_observations.pop_front().unwrap_or(false))
+            match self
+                .member_observations
+                .pop_front()
+                .unwrap_or(MemberObservation::Empty)
+            {
+                MemberObservation::Present => Ok(true),
+                MemberObservation::Empty => Ok(false),
+                MemberObservation::Failure => {
+                    Err(HeavyGateError::new("injected process-table failure"))
+                }
+            }
         }
 
         fn reap_leader(&mut self) -> Result<(), HeavyGateError> {
@@ -957,6 +989,7 @@ mod tests {
         assert_eq!(GATE_TIMEOUT, Duration::from_secs(30 * 60));
         assert_eq!(GATE_DIRECTORY_MODE, 0o700);
         assert_eq!(SLOT_MODE, 0o600);
+        assert_eq!(GROUP_OBSERVATION_FAILURE_LIMIT, 5);
         assert!(parent_directory_values_are_safe(
             FileType::Directory,
             1000,
@@ -1202,7 +1235,10 @@ mod tests {
     fn cleanup_never_touches_reused_pgid_after_leader_reap() {
         let mut cleanup = ReuseAwareCleanup {
             events: Vec::new(),
-            member_observations: VecDeque::from([true, false]),
+            member_observations: VecDeque::from([
+                MemberObservation::Present,
+                MemberObservation::Empty,
+            ]),
             leader_reaped: false,
             touched_reused_group: false,
         };
@@ -1224,6 +1260,46 @@ mod tests {
         assert!(
             !cleanup.touched_reused_group,
             "a bare PGID operation ran after the simulated immediate reuse"
+        );
+    }
+
+    #[test]
+    fn persistent_proc_errors_end_with_anchored_kill_before_reap() {
+        let mut cleanup = ReuseAwareCleanup {
+            events: Vec::new(),
+            member_observations: (0..GROUP_OBSERVATION_FAILURE_LIMIT)
+                .map(|_| MemberObservation::Failure)
+                .collect(),
+            leader_reaped: false,
+            touched_reused_group: false,
+        };
+
+        let error =
+            terminate_group_with_anchor(&mut cleanup).expect_err("persistent proc failures");
+
+        assert!(error.to_string().contains("injected process-table failure"));
+        assert_eq!(
+            cleanup
+                .events
+                .iter()
+                .filter(|event| **event == CleanupEvent::InspectMembers)
+                .count(),
+            GROUP_OBSERVATION_FAILURE_LIMIT
+        );
+        assert_eq!(
+            cleanup.events.first(),
+            Some(&CleanupEvent::Signal),
+            "cleanup must begin with an anchored kill"
+        );
+        assert_eq!(
+            cleanup.events[cleanup.events.len() - 2..],
+            [CleanupEvent::Signal, CleanupEvent::ReapLeader],
+            "persistent observation failure needs a final anchored kill before reap"
+        );
+        assert!(cleanup.leader_reaped);
+        assert!(
+            !cleanup.touched_reused_group,
+            "cleanup touched the simulated reused PGID after reaping"
         );
     }
 

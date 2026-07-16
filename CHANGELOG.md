@@ -186,9 +186,10 @@ deprecations ship one minor release before removal.
   correlation.
 - Hardened the shared heavy-validation gate against unsafe or replaced parent
   directories and renamed gate/slot entries, and retained permits through
-  byte-safe process-group observation, forced cleanup, and complete reaping on
+  byte-safe process-group observation, forced cleanup, and leader reaping on
   supervision errors while keeping the leader unreaped until every bare process
-  group operation is complete.
+  group operation is complete, normalizing inherited no-wait `SIGCHLD` state,
+  and bounding persistent process-table failures with a final anchored kill.
 - Persist bounded local-observability exports as atomically renamed private
   artifacts keyed by opaque operation ID. JSON Lines and OTLP protobuf now honor
   the requested format and exact streaming record/byte limits; storage failures

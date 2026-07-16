@@ -86,6 +86,88 @@ fn launch_gate(
     command.spawn().expect("spawn heavy gate")
 }
 
+fn build_sigchld_inheritance_helper(scratch: &Scratch) -> PathBuf {
+    let source = scratch.0.join("sigchld-inheritance.c");
+    let binary = scratch.0.join("sigchld-inheritance");
+    fs::write(
+        &source,
+        br#"#define _GNU_SOURCE
+#include <errno.h>
+#include <signal.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+int main(int argc, char **argv) {
+    if (argc < 4) return 2;
+    struct sigaction action;
+    memset(&action, 0, sizeof(action));
+    sigemptyset(&action.sa_mask);
+    if (strcmp(argv[1], "ignore") == 0) {
+        action.sa_handler = SIG_IGN;
+    } else if (strcmp(argv[1], "nocldwait") == 0) {
+        action.sa_handler = SIG_DFL;
+        action.sa_flags = SA_NOCLDWAIT;
+    } else {
+        return 3;
+    }
+    if (sigaction(SIGCHLD, &action, 0) != 0) return 4;
+
+    pid_t probe = fork();
+    if (probe < 0) return 5;
+    if (probe == 0) _exit(0);
+    errno = 0;
+    if (waitpid(probe, 0, 0) != -1 || errno != ECHILD) return 6;
+
+    execv(argv[2], &argv[2]);
+    return 7;
+}
+"#,
+    )
+    .expect("write SIGCHLD inheritance helper");
+    let status = Command::new("cc")
+        .arg(&source)
+        .arg("-O2")
+        .arg("-o")
+        .arg(&binary)
+        .status()
+        .expect("compile SIGCHLD inheritance helper");
+    assert!(
+        status.success(),
+        "cc must build the SIGCHLD inheritance helper"
+    );
+    binary
+}
+
+fn launch_gate_with_sigchld_disposition(
+    runtime: &Path,
+    helper: &Path,
+    disposition: &str,
+    ready: &Path,
+) -> Child {
+    let test_binary = std::env::current_exe().expect("test executable");
+    Command::new(helper)
+        .arg(disposition)
+        .arg(env!("CARGO_BIN_EXE_xtask"))
+        .args([
+            "heavy-gate",
+            "--",
+            test_binary.to_str().expect("UTF-8 test executable"),
+            "heavy_gate_test_child",
+            "--exact",
+            "--nocapture",
+        ])
+        .env("XDG_RUNTIME_DIR", runtime)
+        .env("D2B_HEAVY_GATE_TEST_ROLE", "quick")
+        .env("D2B_HEAVY_GATE_TEST_READY", ready)
+        .env("D2B_HEAVY_GATE_TEST_DURATION_MS", "0")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn inherited-SIGCHLD heavy gate")
+}
+
 fn send_signal(child: &Child, signal: rustix::process::Signal) {
     let pid = i32::try_from(child.id())
         .ok()
@@ -171,6 +253,22 @@ fn heavy_gate_test_child() {
             .expect("done marker");
         }
         other => panic!("unknown helper role {other}"),
+    }
+}
+
+#[test]
+fn inherited_sigchld_no_wait_dispositions_are_replaced() {
+    let scratch = Scratch::new("sigchld-inheritance");
+    let helper = build_sigchld_inheritance_helper(&scratch);
+    for disposition in ["ignore", "nocldwait"] {
+        let ready = scratch.0.join(format!("{disposition}-ready"));
+        let mut wrapper =
+            launch_gate_with_sigchld_disposition(&scratch.0, &helper, disposition, &ready);
+        wait_for(&ready, Duration::from_secs(2));
+        assert!(
+            wrapper.wait().expect("wait for heavy gate").success(),
+            "heavy gate did not restore waitable children after inherited {disposition}"
+        );
     }
 }
 

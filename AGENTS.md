@@ -404,15 +404,21 @@ Acquisition tries slot 0 then slot 1 with nonblocking OFD write locks every
 timeout fails closed; there is no `flock` fallback. The parent retains its
 original CLOEXEC descriptor. The child receives a duplicate of the same locked
 open-file description at the numeric FD named by `D2B_HEAVY_GATE_FD`, with
-CLOEXEC cleared. The child runs in its own process group; the wrapper forwards
-termination signals, waits for the complete group, then closes its original FD.
+CLOEXEC cleared. Before spawning, the wrapper replaces inherited
+`SIGCHLD=SIG_IGN` or `SA_NOCLDWAIT` state with a caught handler; `exec` resets
+that handler to default, while the wrapper can retain a waitable leader. The
+child runs in its own process group; the wrapper forwards termination signals,
+normally waits for the complete group, then closes its original FD.
 `/proc/<pid>/stat` is parsed as bytes. Any pidfd wait, process-table, namespace,
 or process-group observation failure retains the parent permit while the
 wrapper kills the group and keeps its exited leader unreaped as the PID/PGID
 identity anchor while inspecting and terminating descendants. The leader is
 reaped only after the final group signal and membership check, so a reused PGID
-can never be targeted. Thus a wrapper crash does not release a permit while its
-child hierarchy lives. Slot files are never unlinked during acquisition.
+can never be targeted. Five consecutive process-table failures trigger one
+final anchored `SIGKILL` followed by leader reap and failure; descendants keep
+their inherited locked FD until that kill takes effect. Thus a wrapper crash
+does not release a permit while its child hierarchy lives. Slot files are never
+unlinked during acquisition.
 
 Use `make heavy-check`, `make heavy-test-integration`,
 `make heavy-test-host-integration`, `make heavy-test-hardware`,
