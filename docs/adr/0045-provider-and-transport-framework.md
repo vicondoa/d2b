@@ -2614,10 +2614,13 @@ The post-W4 execution rules are:
    parent commit, and diffs parent to head. Every wave ancestor is walked and
    corroborated to the shared root. All Git object and graph operations disable
    replace objects and bypass graft/shallow traversal; either worktree is
-   rejected if `refs/replace`, `info/grafts`, or `shallow` metadata exists. The
-   checker accepts no caller-selected wave or base and rejects a self/`HEAD`
-   base. Before linearization the shared root is valid for all three; after
-   linearization only W5 -> W6 -> W7 is valid.
+   rejected if `refs/replace`, `info/grafts`, or `shallow` metadata exists.
+   Ownership/canonical diffs and cleanliness checks force submodule handling to
+   `none`, overriding local `diff.ignoreSubmodules` configuration so gitlink
+   additions and type changes remain visible. The checker accepts no
+   caller-selected wave or base and rejects a self/`HEAD` base. Before
+   linearization the shared root is valid for all three; after linearization
+   only W5 -> W6 -> W7 is valid.
 5. W5/W6/W7 remain siblings during implementation. At content freeze, delivery
    is deterministically linearized W5 -> W6 -> W7 through Git Town parent
    changes **before W6/W7 create final snapshots or run final panels**. W6 and

@@ -28,6 +28,8 @@ edge back to the shared root are derived and corroborated; caller-selected
 wave/base options do not exist, partial linearization is rejected, and a
 self/`HEAD` base fails. Git object reads and diffs disable replacements, grafts,
 and shallow traversal, and any repository carrying the corresponding metadata
-is rejected. A new shared DTO, dependency, generated contract, or policy
-requirement returns to
+is rejected. Diffs and cleanliness checks also force
+`diff.ignoreSubmodules=none` and `--ignore-submodules=none`, so repository-local
+configuration cannot conceal gitlink additions or type changes. A new shared
+DTO, dependency, generated contract, or policy requirement returns to
 `adr0045-post-w4-contracts`; it is not added on a wave branch.

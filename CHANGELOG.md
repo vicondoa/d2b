@@ -16,7 +16,8 @@ deprecations ship one minor release before removal.
   authorities, typed allocator and child-realm broker DTOs, frozen service and
   dependency inventories, parent-commit-trusted ownership checks with explicit
   positive cross-wave/frozen implementation partitions and replacement-safe Git
-  object traversal, and a crash-safe two-slot OFD heavy-validation gate.
+  object traversal, submodule-ignore-resistant gitlink detection, and a
+  crash-safe two-slot OFD heavy-validation gate.
 - Added default-empty, non-publishable first-party provider implementation
   crate reservations, an in-process Azure VM fake SDK boundary, and a
   fail-closed workspace policy inventory for their naming and dependencies.

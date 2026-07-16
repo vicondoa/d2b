@@ -512,6 +512,8 @@ impl ProcessOwnershipProbe {
     ) -> Result<CommandOutput, String> {
         let mut args = vec![
             "--no-replace-objects".to_owned(),
+            "-c".to_owned(),
+            "diff.ignoreSubmodules=none".to_owned(),
             "-C".to_owned(),
             root.to_str()
                 .ok_or_else(|| "repository path is not UTF-8".to_owned())?
@@ -737,6 +739,7 @@ impl OwnershipProbe for ProcessOwnershipProbe {
             &[
                 "diff".to_owned(),
                 "--no-renames".to_owned(),
+                "--ignore-submodules=none".to_owned(),
                 "--name-only".to_owned(),
                 "-z".to_owned(),
                 base.to_owned(),
@@ -1217,6 +1220,10 @@ mod tests {
 
         fn commit(&self, message: &str) -> String {
             run_test_git(&self.root, &["add", "--all"]);
+            self.commit_index(message)
+        }
+
+        fn commit_index(&self, message: &str) -> String {
             run_test_git(&self.root, &["commit", "--quiet", "-m", message]);
             run_test_git(&self.root, &["rev-parse", "HEAD"])
         }
@@ -1754,6 +1761,80 @@ mod tests {
             .reject_history_rewrites(&repository.root)
             .expect_err("shallow metadata");
         assert!(error.contains("shallow"), "{error}");
+    }
+
+    #[test]
+    fn local_ignore_submodules_cannot_hide_gitlink_ownership_changes() {
+        let repository = TestRepository::new("gitlinks");
+        repository.write("marker", b"base\n");
+        repository.write("packages/unowned", b"regular file\n");
+        let base = repository.commit("base");
+
+        std::fs::remove_file(repository.root.join("packages/unowned"))
+            .expect("remove regular file before gitlink type change");
+        for path in [
+            "packages/d2b-contracts",
+            "packages/d2b-userd",
+            "packages/unowned",
+        ] {
+            run_test_git(
+                &repository.root,
+                &[
+                    "update-index",
+                    "--add",
+                    "--cacheinfo",
+                    &format!("160000,{base},{path}"),
+                ],
+            );
+        }
+        let head = repository.commit_index("gitlinks");
+        run_test_git(
+            &repository.root,
+            &["config", "diff.ignoreSubmodules", "all"],
+        );
+
+        let hidden = run_test_git(
+            &repository.root,
+            &["diff", "--name-only", &base, &head, "--"],
+        );
+        assert!(!hidden.contains("packages/d2b-contracts"));
+        assert!(!hidden.contains("packages/d2b-userd"));
+
+        let probe = ProcessOwnershipProbe::default();
+        let changed = probe
+            .changed_paths(&repository.root, &base, &head)
+            .expect("ownership diff");
+        for path in [
+            "packages/d2b-contracts",
+            "packages/d2b-userd",
+            "packages/unowned",
+        ] {
+            assert!(changed.iter().any(|changed| changed == path), "{changed:?}");
+        }
+        let error = check_changed_paths(&policy(), "w5", &changed)
+            .expect_err("protected, foreign, and unowned gitlink roots");
+        for path in changed {
+            assert!(error.contains(&path), "{error}");
+        }
+
+        let canonical = GitProbe::new(ProcessCommandOutput)
+            .canonical_diff(&repository.root, &base, &head, &[])
+            .expect("canonical diff");
+        let canonical = String::from_utf8(canonical).expect("canonical diff is UTF-8");
+        for path in [
+            "packages/d2b-contracts",
+            "packages/d2b-userd",
+            "packages/unowned",
+        ] {
+            assert!(canonical.contains(path), "{canonical}");
+        }
+
+        assert!(run_test_git(&repository.root, &["status", "--porcelain=v1"]).is_empty());
+        assert!(
+            probe
+                .is_dirty(&repository.root)
+                .expect("forced submodule cleanliness")
+        );
     }
 
     #[test]

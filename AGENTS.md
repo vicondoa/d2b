@@ -342,12 +342,14 @@ to be that exact immediate parent. Before linearization every wave may use the
 shared root; afterward only the complete W5 -> W6 -> W7 chain is valid. The
 checker disables Git replacement, graft, and shallow traversal for every object
 read and diff, and rejects repositories containing `refs/replace`,
-`info/grafts`, or `shallow` metadata. The check rejects another wave's
-implementation, an unowned or frozen implementation, an implementation-prefix
-root, another wave's manifest, the workspace lock/shared dependency table,
-frozen cross-wave contracts, or shared delivery/policy tooling. A newly
-required shared contract returns to the shared-root PR and all consumers
-restack.
+`info/grafts`, or `shallow` metadata. Ownership and canonical diffs plus
+cleanliness checks force submodule handling to `none`, overriding a local
+`diff.ignoreSubmodules=all` that could otherwise hide gitlink changes. The check
+rejects another wave's implementation, an unowned or frozen implementation, an
+implementation-prefix root, another wave's manifest, the workspace lock/shared
+dependency table, frozen cross-wave contracts, or shared delivery/policy
+tooling. A newly required shared contract returns to the shared-root PR and all
+consumers restack.
 
 #### Anti-serialization invariant
 

@@ -1028,6 +1028,8 @@ impl<A: CommandOutputAdapter> GitProbe<A> {
         let root_string = path_string(root)?;
         let mut args = vec![
             "--no-replace-objects".to_owned(),
+            "-c".to_owned(),
+            "diff.ignoreSubmodules=none".to_owned(),
             "-C".to_owned(),
             root_string,
         ];
@@ -1170,6 +1172,7 @@ impl<A: CommandOutputAdapter> RepositoryProbe for GitProbe<A> {
                     "status".to_owned(),
                     "--porcelain=v1".to_owned(),
                     "--untracked-files=normal".to_owned(),
+                    "--ignore-submodules=none".to_owned(),
                 ],
             )?
             .is_empty())
@@ -1326,6 +1329,7 @@ impl<A: CommandOutputAdapter> RepositoryProbe for GitProbe<A> {
             "--binary".to_owned(),
             "--no-ext-diff".to_owned(),
             "--no-renames".to_owned(),
+            "--ignore-submodules=none".to_owned(),
             "--full-index".to_owned(),
             "--src-prefix=a/".to_owned(),
             "--dst-prefix=b/".to_owned(),
@@ -1886,20 +1890,7 @@ impl<A: CommandOutputAdapter> GitTownStackSource<'_, A> {
     }
 
     fn reject_ambiguous_worktree(&self, checkout_root: &Path) -> Result<()> {
-        let status = self.command.output(
-            "git",
-            &[
-                "status".to_owned(),
-                "--porcelain=v1".to_owned(),
-                "-z".to_owned(),
-                "--untracked-files=normal".to_owned(),
-            ],
-            Some(checkout_root),
-        )?;
-        if !status.success {
-            return Err(command_failed("cannot inspect stack worktree", &status));
-        }
-        if !status.stdout.is_empty() {
+        if GitProbe::new(&self.command).is_dirty(checkout_root)? {
             return Err(DeliveryError::new(
                 "Git Town stack worktree is dirty or ambiguous",
             ));

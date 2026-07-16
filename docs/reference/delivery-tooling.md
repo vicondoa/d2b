@@ -119,7 +119,10 @@ Every authority Git command disables replacement objects and bypasses graft and
 shallow traversal. Verification also fails if either worktree's common Git
 directory contains `refs/replace`, `info/grafts`, or `shallow` metadata, so
 replacement commits cannot substitute the trusted policy, selected manifest,
-or parent-to-head diff.
+or parent-to-head diff. Ownership and canonical diffs and every authority
+cleanliness check force `diff.ignoreSubmodules=none` plus
+`--ignore-submodules=none`; local configuration cannot hide committed gitlink
+additions or type changes.
 
 The policy's implementation partition is fail-closed across waves:
 
