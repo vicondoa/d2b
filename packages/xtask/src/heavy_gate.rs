@@ -181,8 +181,8 @@ fn acquire_permit(
                 "interrupted by signal {signal} while waiting for a heavy gate slot"
             )));
         }
-        for slot in 0..SLOT_COUNT {
-            let fd = open_verified_slot(&directory, SLOT_NAMES[slot])?;
+        for (slot, name) in SLOT_NAMES.iter().enumerate() {
+            let fd = open_verified_slot(&directory, name)?;
             match try_ofd_lock(&fd)? {
                 LockAttempt::Acquired => return Ok(HeavyGatePermit { fd, slot }),
                 LockAttempt::Contended => {}
