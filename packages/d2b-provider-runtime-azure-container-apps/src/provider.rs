@@ -35,6 +35,7 @@ use d2b_provider_toolkit::ProviderValues;
 use tokio::{
     runtime::Handle,
     sync::{Mutex, MutexGuard},
+    task::JoinHandle,
     time::{Instant, timeout, timeout_at},
 };
 
@@ -204,7 +205,7 @@ impl CallDeadline {
 struct ActiveCredentialLease {
     lease: Option<AcaCredentialLease>,
     client: Arc<dyn AcaCredentialLeaseClient>,
-    runtime: Option<Handle>,
+    runtime: Handle,
 }
 
 impl ActiveCredentialLease {
@@ -212,32 +213,30 @@ impl ActiveCredentialLease {
         Self {
             lease: Some(lease),
             client,
-            runtime: Handle::try_current().ok(),
+            runtime: Handle::current(),
         }
     }
 
-    fn disarm(mut self) {
-        self.lease.take();
+    fn start_revoke(&mut self) -> Result<JoinHandle<Result<(), ()>>, ()> {
+        let lease = self.lease.take().ok_or(())?;
+        let client = Arc::clone(&self.client);
+        Ok(self.runtime.spawn(async move {
+            match timeout(
+                Duration::from_millis(u64::from(MAX_ACA_LEASE_CLEANUP_MS)),
+                client.revoke(&lease),
+            )
+            .await
+            {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(_)) | Err(_) => Err(()),
+            }
+        }))
     }
 
     async fn revoke(mut self) -> Result<(), ()> {
-        let Some(lease) = self.lease.as_ref() else {
-            return Err(());
-        };
-        match timeout(
-            Duration::from_millis(u64::from(MAX_ACA_LEASE_CLEANUP_MS)),
-            self.client.revoke(lease),
-        )
-        .await
-        {
-            Ok(Ok(())) => {
-                self.lease.take();
-                Ok(())
-            }
-            Ok(Err(_)) => {
-                self.lease.take();
-                Err(())
-            }
+        let cleanup = self.start_revoke()?;
+        match cleanup.await {
+            Ok(result) => result,
             Err(_) => Err(()),
         }
     }
@@ -256,17 +255,7 @@ impl Deref for ActiveCredentialLease {
 
 impl Drop for ActiveCredentialLease {
     fn drop(&mut self) {
-        let (Some(lease), Some(runtime)) = (self.lease.take(), self.runtime.as_ref()) else {
-            return;
-        };
-        let client = Arc::clone(&self.client);
-        let _cleanup = runtime.spawn(async move {
-            let _ = timeout(
-                Duration::from_millis(u64::from(MAX_ACA_LEASE_CLEANUP_MS)),
-                client.revoke(&lease),
-            )
-            .await;
-        });
+        let _cleanup = self.start_revoke();
     }
 }
 
@@ -640,12 +629,10 @@ impl AzureContainerAppsRuntimeProvider {
         lease: ActiveCredentialLease,
         result: ProviderResult<T>,
     ) -> ProviderResult<T> {
-        match result {
-            Ok(value) => {
-                lease.disarm();
-                Ok(value)
-            }
-            Err(failure) => Err(self.revoke_failed_lease(operation, lease, failure).await),
+        if lease.revoke().await.is_ok() {
+            result
+        } else {
+            Err(self.lease_cleanup_ambiguous_failure(operation))
         }
     }
 
