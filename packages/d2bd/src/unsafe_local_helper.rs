@@ -1129,14 +1129,11 @@ fn duplicate_received_fd(raw: RawFd) -> Result<OwnedFd, HelperRegistryError> {
         .ok_or(HelperRegistryError::InvalidTerminalFd)?;
     let pidfd = rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty())
         .map_err(|_| HelperRegistryError::InvalidTerminalFd)?;
+    // pidfd_getfd(2) reserves flags (they must be zero) and atomically sets
+    // FD_CLOEXEC on the returned descriptor.
     let duplicated =
         rustix::process::pidfd_getfd(&pidfd, raw, rustix::process::PidfdGetfdFlags::empty())
             .map_err(|_| HelperRegistryError::InvalidTerminalFd)?;
-    fcntl(
-        duplicated.as_raw_fd(),
-        FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC),
-    )
-    .map_err(|_| HelperRegistryError::InvalidTerminalFd)?;
     Ok(duplicated)
 }
 

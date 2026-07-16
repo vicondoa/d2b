@@ -73,6 +73,9 @@ deprecations ship one minor release before removal.
   behind a dedicated blocking adapter so provider deadlines and unrelated
   executor timers continue progressing without weakening owned-task cleanup or
   per-VM serialization.
+- Removed redundant post-duplication `fcntl` calls and rely on
+  `pidfd_getfd(2)` to atomically return close-on-exec descriptors with its
+  required zero flags.
 - Changed observability provider queries to return a canonical bounded result
   through the provider trait, proxy, protobuf/ttrpc service, and toolkit
   adapter without dropping records or introducing free-form labels.

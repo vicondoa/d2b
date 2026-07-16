@@ -22604,16 +22604,14 @@ fn duplicate_fd_cloexec(fd: RawFd, context: &str) -> Result<OwnedFd, TypedError>
             context: context.to_owned(),
             detail: err.to_string(),
         })?;
+    // pidfd_getfd(2) reserves flags (they must be zero) and atomically sets
+    // FD_CLOEXEC on the returned descriptor.
     let duplicated =
         rustix::process::pidfd_getfd(&self_pidfd, fd, rustix::process::PidfdGetfdFlags::empty())
             .map_err(|err| TypedError::InternalIo {
                 context: context.to_owned(),
                 detail: err.to_string(),
             })?;
-    if let Err(error) = mark_fd_cloexec(duplicated.as_raw_fd(), context) {
-        drop(duplicated);
-        return Err(error);
-    }
     Ok(duplicated)
 }
 
@@ -25636,6 +25634,25 @@ mod broker_dispatch_tests {
 
         timer.await.expect("concurrent timer task");
         assert!(timer_progressed);
+    }
+
+    #[test]
+    fn pidfd_getfd_duplicate_is_atomically_close_on_exec() {
+        let (source, _peer) = socketpair(
+            AddressFamily::Unix,
+            SockType::Stream,
+            None,
+            SockFlag::empty(),
+        )
+        .expect("create source descriptor");
+        let duplicated =
+            super::duplicate_fd_cloexec(source.as_raw_fd(), "verify pidfd_getfd close-on-exec")
+                .expect("duplicate descriptor through pidfd_getfd");
+        let flags = nix::fcntl::fcntl(duplicated.as_raw_fd(), nix::fcntl::FcntlArg::F_GETFD)
+            .expect("read duplicated descriptor flags");
+        assert!(
+            nix::fcntl::FdFlag::from_bits_truncate(flags).contains(nix::fcntl::FdFlag::FD_CLOEXEC)
+        );
     }
 
     #[test]

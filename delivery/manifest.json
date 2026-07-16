@@ -1329,6 +1329,11 @@
       "path": "packages/d2bd/src/storage_lifecycle.rs"
     },
     {
+      "name": "w4-integration-d2bd-unsafe-local-helper-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2bd/src/unsafe_local_helper.rs"
+    },
+    {
       "name": "w4-integration-docs-reference-daemon-api-md",
       "repository": "github.com/vicondoa/d2b",
       "path": "docs/reference/daemon-api.md"
