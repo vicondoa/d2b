@@ -30,6 +30,7 @@ use d2b_provider_toolkit::{DeterministicClock, Fixture, Secret};
 use tokio::sync::Notify;
 
 use super::*;
+use crate::provider::{LeaseCleanupEvent, LeaseCleanupObserver};
 
 const NOW_UNIX_MS: u64 = 1_700_000_000_000;
 const SECRET_CANARY: &str = "aca-private-token-canary-do-not-emit";
@@ -77,6 +78,23 @@ async fn wait_for_within(duration: Duration, condition: impl Fn() -> bool) {
     })
     .await
     .unwrap();
+}
+
+#[derive(Debug, Default)]
+struct RecordingCleanupObserver {
+    events: Mutex<Vec<LeaseCleanupEvent>>,
+}
+
+impl RecordingCleanupObserver {
+    fn events(&self) -> Vec<LeaseCleanupEvent> {
+        lock(&self.events).clone()
+    }
+}
+
+impl LeaseCleanupObserver for RecordingCleanupObserver {
+    fn observe(&self, event: LeaseCleanupEvent) {
+        lock(&self.events).push(event);
+    }
 }
 
 struct PrivateCredentialVault {
@@ -754,6 +772,21 @@ impl Harness {
             self.credential.clone(),
             self.control.clone(),
             clock,
+        )
+        .unwrap()
+    }
+
+    fn provider_with_cleanup_observer(
+        &self,
+        observer: Arc<dyn LeaseCleanupObserver>,
+    ) -> AzureContainerAppsRuntimeProvider {
+        AzureContainerAppsRuntimeProvider::with_cleanup_observer_for_test(
+            self.fixture.descriptor.clone(),
+            self.configuration.clone(),
+            self.credential.clone(),
+            self.control.clone(),
+            Arc::new(DeterministicClock::new(NOW_UNIX_MS)),
+            observer,
         )
         .unwrap()
     }
@@ -1765,6 +1798,126 @@ async fn error_branch_revoke_timeout_is_bounded_typed_ambiguity_once() {
     assert_eq!(harness.credential.completed_revocation_count(), 0);
     assert_eq!(harness.credential.cancelled_revocation_count(), 1);
     assert_eq!(lock(&harness.vault).active_lease_count(), 1);
+}
+
+#[tokio::test]
+async fn lease_cleanup_telemetry_is_closed_and_redacted_for_every_outcome() {
+    let observer = Arc::new(RecordingCleanupObserver::default());
+
+    let revoked = Harness::container_image();
+    let revoked_provider = revoked.provider_with_cleanup_observer(observer.clone());
+    let revoked_request = revoked.request(ProviderMethod::RuntimeInspect, "telemetry-revoked");
+    let revoked_context = revoked.call_context(&revoked_request.context, 2_000, false);
+    let revoked_observation = revoked_provider
+        .inspect(&revoked_context, &revoked_request)
+        .await
+        .unwrap();
+    assert_eq!(
+        revoked_observation.lifecycle,
+        ObservedLifecycleState::Destroyed
+    );
+    wait_for_within(Duration::from_millis(500), || !observer.events().is_empty()).await;
+
+    let failed = Harness::container_image();
+    let failed_provider = failed.provider_with_cleanup_observer(observer.clone());
+    failed.credential.fail_next_revoke(AcaControlError::closed(
+        AcaControlErrorKind::Ambiguous,
+        AcaDiagnosticCode::Unknown,
+    ));
+    let failed_request = failed.request(ProviderMethod::RuntimeInspect, "telemetry-failed");
+    let failed_context = failed.call_context(&failed_request.context, 2_000, false);
+    let failed_observation = failed_provider
+        .inspect(&failed_context, &failed_request)
+        .await
+        .unwrap();
+    assert_eq!(
+        failed_observation.lifecycle,
+        ObservedLifecycleState::Destroyed
+    );
+    wait_for_within(Duration::from_millis(500), || observer.events().len() >= 2).await;
+
+    let timed_out = Harness::container_image();
+    let timeout_provider = timed_out.provider_with_cleanup_observer(observer.clone());
+    timed_out.credential.timeout_next_revoke();
+    let timeout_request = timed_out.request(ProviderMethod::RuntimeInspect, "telemetry-timeout");
+    let timeout_context = timed_out.call_context(&timeout_request.context, 2_000, false);
+    let timeout_observation = timeout_provider
+        .inspect(&timeout_context, &timeout_request)
+        .await
+        .unwrap();
+    assert_eq!(
+        timeout_observation.lifecycle,
+        ObservedLifecycleState::Destroyed
+    );
+    wait_for_within(Duration::from_millis(2_000), || {
+        observer.events().len() >= 3
+    })
+    .await;
+
+    let unavailable = Harness::container_image();
+    let unavailable_operation = unavailable.operation(
+        ProviderMethod::RuntimeInspect,
+        "telemetry-runtime-unavailable",
+    );
+    let provider_canary = unavailable
+        .fixture
+        .descriptor
+        .provider_id
+        .as_str()
+        .to_owned();
+    let workload_canary = unavailable_operation
+        .scope
+        .workload_id()
+        .unwrap()
+        .as_str()
+        .to_owned();
+    let unavailable_request = AcaCredentialLeaseRequest::new(
+        unavailable_operation,
+        AcaCredentialPurpose::Inspect,
+        NOW_UNIX_MS + 1_000,
+    );
+    let unavailable_lease = unavailable
+        .credential
+        .acquire(&unavailable_request)
+        .await
+        .unwrap();
+    let unavailable_client: Arc<dyn AcaCredentialLeaseClient> = unavailable.credential.clone();
+    crate::provider::drop_lease_without_runtime_for_test(
+        unavailable_lease,
+        unavailable_client,
+        observer.clone(),
+    );
+
+    let events = observer.events();
+    assert_eq!(events.len(), 4);
+    let outcomes = events
+        .iter()
+        .map(|event| {
+            assert_eq!(event.component(), "credential-lease");
+            assert_eq!(event.operation(), "revoke");
+            event.outcome().as_str().to_owned()
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        outcomes,
+        ["failed", "revoked", "runtime-unavailable", "timeout"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    );
+
+    let rendered = format!("{events:?}");
+    for canary in [
+        SECRET_CANARY,
+        "aca-lease-",
+        provider_canary.as_str(),
+        workload_canary.as_str(),
+        "ServiceUnavailable",
+    ] {
+        assert!(!rendered.contains(canary));
+    }
+    assert_eq!(unavailable.credential.revocation_count(), 0);
+    assert_eq!(lock(&unavailable.vault).active_lease_count(), 1);
 }
 
 #[tokio::test]

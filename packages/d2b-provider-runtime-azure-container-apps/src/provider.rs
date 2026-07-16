@@ -205,39 +205,134 @@ impl CallDeadline {
 struct ActiveCredentialLease {
     lease: Option<AcaCredentialLease>,
     client: Arc<dyn AcaCredentialLeaseClient>,
-    runtime: Handle,
+    runtime: Option<Handle>,
+    observer: Arc<dyn LeaseCleanupObserver>,
 }
 
-impl ActiveCredentialLease {
-    fn new(lease: AcaCredentialLease, client: Arc<dyn AcaCredentialLeaseClient>) -> Self {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LeaseCleanupOutcome {
+    Revoked,
+    Timeout,
+    Failed,
+    RuntimeUnavailable,
+}
+
+impl LeaseCleanupOutcome {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Revoked => "revoked",
+            Self::Timeout => "timeout",
+            Self::Failed => "failed",
+            Self::RuntimeUnavailable => "runtime-unavailable",
+        }
+    }
+}
+
+pub(crate) const ACA_LEASE_CLEANUP_TARGET: &str =
+    "d2b_provider_runtime_azure_container_apps::credential_lease_cleanup";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LeaseCleanupEvent {
+    component: &'static str,
+    operation: &'static str,
+    outcome: LeaseCleanupOutcome,
+}
+
+impl LeaseCleanupEvent {
+    const fn new(outcome: LeaseCleanupOutcome) -> Self {
         Self {
-            lease: Some(lease),
-            client,
-            runtime: Handle::current(),
+            component: "credential-lease",
+            operation: "revoke",
+            outcome,
         }
     }
 
-    fn start_revoke(&mut self) -> Result<JoinHandle<Result<(), ()>>, ()> {
+    pub(crate) const fn component(self) -> &'static str {
+        self.component
+    }
+
+    pub(crate) const fn operation(self) -> &'static str {
+        self.operation
+    }
+
+    pub(crate) const fn outcome(self) -> LeaseCleanupOutcome {
+        self.outcome
+    }
+}
+
+pub(crate) trait LeaseCleanupObserver: Send + Sync {
+    fn observe(&self, event: LeaseCleanupEvent);
+}
+
+struct TracingLeaseCleanupObserver;
+
+impl LeaseCleanupObserver for TracingLeaseCleanupObserver {
+    fn observe(&self, event: LeaseCleanupEvent) {
+        tracing::info!(
+            target: ACA_LEASE_CLEANUP_TARGET,
+            component = event.component(),
+            operation = event.operation(),
+            outcome = event.outcome().as_str(),
+        );
+    }
+}
+
+impl ActiveCredentialLease {
+    fn new(
+        lease: AcaCredentialLease,
+        client: Arc<dyn AcaCredentialLeaseClient>,
+        observer: Arc<dyn LeaseCleanupObserver>,
+    ) -> Self {
+        Self {
+            lease: Some(lease),
+            client,
+            runtime: Handle::try_current().ok(),
+            observer,
+        }
+    }
+
+    fn start_revoke(&mut self) -> Result<Option<JoinHandle<LeaseCleanupOutcome>>, ()> {
         let lease = self.lease.take().ok_or(())?;
+        let Some(runtime) = self.runtime.as_ref() else {
+            self.observer.observe(LeaseCleanupEvent::new(
+                LeaseCleanupOutcome::RuntimeUnavailable,
+            ));
+            return Ok(None);
+        };
         let client = Arc::clone(&self.client);
-        Ok(self.runtime.spawn(async move {
-            match timeout(
+        let observer = Arc::clone(&self.observer);
+        Ok(Some(runtime.spawn(async move {
+            let outcome = match timeout(
                 Duration::from_millis(u64::from(MAX_ACA_LEASE_CLEANUP_MS)),
                 client.revoke(&lease),
             )
             .await
             {
-                Ok(Ok(())) => Ok(()),
-                Ok(Err(_)) | Err(_) => Err(()),
-            }
-        }))
+                Ok(Ok(())) => LeaseCleanupOutcome::Revoked,
+                Ok(Err(_)) => LeaseCleanupOutcome::Failed,
+                Err(_) => LeaseCleanupOutcome::Timeout,
+            };
+            observer.observe(LeaseCleanupEvent::new(outcome));
+            outcome
+        })))
     }
 
     async fn revoke(mut self) -> Result<(), ()> {
-        let cleanup = self.start_revoke()?;
+        let Some(cleanup) = self.start_revoke()? else {
+            return Err(());
+        };
         match cleanup.await {
-            Ok(result) => result,
-            Err(_) => Err(()),
+            Ok(LeaseCleanupOutcome::Revoked) => Ok(()),
+            Ok(
+                LeaseCleanupOutcome::Timeout
+                | LeaseCleanupOutcome::Failed
+                | LeaseCleanupOutcome::RuntimeUnavailable,
+            ) => Err(()),
+            Err(_) => {
+                self.observer
+                    .observe(LeaseCleanupEvent::new(LeaseCleanupOutcome::Failed));
+                Err(())
+            }
         }
     }
 }
@@ -257,6 +352,20 @@ impl Drop for ActiveCredentialLease {
     fn drop(&mut self) {
         let _cleanup = self.start_revoke();
     }
+}
+
+#[cfg(test)]
+pub(crate) fn drop_lease_without_runtime_for_test(
+    lease: AcaCredentialLease,
+    client: Arc<dyn AcaCredentialLeaseClient>,
+    observer: Arc<dyn LeaseCleanupObserver>,
+) {
+    drop(ActiveCredentialLease {
+        lease: Some(lease),
+        client,
+        runtime: None,
+        observer,
+    });
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -325,6 +434,7 @@ pub struct AzureContainerAppsRuntimeProvider {
     credential_client: Arc<dyn AcaCredentialLeaseClient>,
     control: Arc<dyn AcaControl>,
     clock: Arc<dyn ProviderClock>,
+    lease_cleanup_observer: Arc<dyn LeaseCleanupObserver>,
     operation_gate: Mutex<()>,
     ledger: Mutex<OperationLedger>,
 }
@@ -362,6 +472,24 @@ impl AzureContainerAppsRuntimeProvider {
         control: Arc<dyn AcaControl>,
         clock: Arc<dyn ProviderClock>,
     ) -> Result<Self, AcaProviderBuildError> {
+        Self::with_clock_and_cleanup_observer(
+            descriptor,
+            configuration,
+            credential_client,
+            control,
+            clock,
+            Arc::new(TracingLeaseCleanupObserver),
+        )
+    }
+
+    fn with_clock_and_cleanup_observer(
+        descriptor: ProviderDescriptor,
+        configuration: AcaRuntimeConfig,
+        credential_client: Arc<dyn AcaCredentialLeaseClient>,
+        control: Arc<dyn AcaControl>,
+        clock: Arc<dyn ProviderClock>,
+        lease_cleanup_observer: Arc<dyn LeaseCleanupObserver>,
+    ) -> Result<Self, AcaProviderBuildError> {
         Self::validate_descriptor(&descriptor)?;
         let credential_descriptor = credential_client.descriptor();
         Self::validate_credential_descriptor(&descriptor, &credential_descriptor)?;
@@ -373,9 +501,29 @@ impl AzureContainerAppsRuntimeProvider {
             credential_client,
             control,
             clock,
+            lease_cleanup_observer,
             operation_gate: Mutex::new(()),
             ledger: Mutex::new(OperationLedger::default()),
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_cleanup_observer_for_test(
+        descriptor: ProviderDescriptor,
+        configuration: AcaRuntimeConfig,
+        credential_client: Arc<dyn AcaCredentialLeaseClient>,
+        control: Arc<dyn AcaControl>,
+        clock: Arc<dyn ProviderClock>,
+        lease_cleanup_observer: Arc<dyn LeaseCleanupObserver>,
+    ) -> Result<Self, AcaProviderBuildError> {
+        Self::with_clock_and_cleanup_observer(
+            descriptor,
+            configuration,
+            credential_client,
+            control,
+            clock,
+            lease_cleanup_observer,
+        )
     }
 
     pub(crate) fn validate_descriptor(
@@ -1007,7 +1155,11 @@ impl AzureContainerAppsRuntimeProvider {
                 self.credential_client.acquire(&request),
             )
             .await?;
-        let lease = ActiveCredentialLease::new(lease, Arc::clone(&self.credential_client));
+        let lease = ActiveCredentialLease::new(
+            lease,
+            Arc::clone(&self.credential_client),
+            Arc::clone(&self.lease_cleanup_observer),
+        );
         let validation_failed = lease
             .metadata()
             .validate(&self.credential_descriptor, &self.descriptor, self.now())
