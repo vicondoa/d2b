@@ -1664,6 +1664,7 @@ version = "2.0.0"
 dependencies = [
  "arc-swap",
  "async-trait",
+ "base64",
  "clap",
  "d2b-contracts",
  "d2b-core",

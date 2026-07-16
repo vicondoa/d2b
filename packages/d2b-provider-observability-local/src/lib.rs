@@ -869,6 +869,7 @@ impl LocalObservabilityStatus {
 pub enum ObservabilityPortError {
     Denied,
     Unavailable,
+    AmbiguousMutation,
     InvalidProjection,
     Cancelled,
 }
@@ -1326,6 +1327,7 @@ impl LocalObservabilityProvider {
                 ProviderHealthReason::ProviderDegraded,
                 ProviderRemediation::RetryBounded,
             ),
+            ObservabilityPortError::AmbiguousMutation => self.ambiguous_mutation(operation),
             ObservabilityPortError::InvalidProjection => self.failure(
                 operation,
                 ProviderFailureKind::InvariantViolation,

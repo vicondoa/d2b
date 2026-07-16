@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 arc-swap = "1"
 async-trait.workspace = true
+base64 = "0.22"
 clap = { version = "4.5", features = ["derive"] }
 getrandom = "0.2"
 libc = "0.2"

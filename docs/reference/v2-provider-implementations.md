@@ -73,7 +73,7 @@ observability providers:
 | Axis | Live implementations | Mapping and daemon authority |
 | --- | --- | --- |
 | Runtime | `cloud-hypervisor`, `qemu-media` | Explicit realm workloads map to matching VM-start and runner intent IDs. The daemon authenticates the mapping against the process DAG, observes its pidfd table, and calls the existing lifecycle start/stop authority through the provider adapter. |
-| Observability | `local` | Each enabled host-local root realm receives a closed binding containing only query/export limits. The daemon projects bounded aggregate metrics and audit-sink health into closed records. The provider-owned sink streams exact JSON Lines or OTLP `ExportMetricsServiceRequest` protobuf within the configured record, byte, and time-window limits, then atomically persists a private `0600` artifact under daemon-owned state keyed only by the opaque operation ID. Internal inspection resolves that ID without exposing a host path through provider DTOs or diagnostics. |
+| Observability | `local` | Each enabled host-local root realm receives a closed binding containing only query/export limits. The daemon projects bounded aggregate metrics and audit-sink health into closed records. The provider-owned sink streams exact JSON Lines or OTLP `ExportMetricsServiceRequest` protobuf within the configured record, byte, and time-window limits, then atomically persists a private `0600` artifact under daemon-owned state keyed only by the opaque operation ID. An admin-only bounded public-socket inspection retrieves the artifact by operation ID without exposing a host path. |
 
 Only explicit realm workload rows with a matching generated VM process DAG are
 eligible. Realm and workload IDs must derive exactly from the DAG's
@@ -145,6 +145,17 @@ drops VM and source labels; audit projection exposes only closed sink-health
 states. Export writes only those bounded projections to the provider-owned sink
 and has no audit repair or unbounded-read authority. Startup probes
 `ObservabilityStatus` through the retained registry.
+
+A successful export is `Applied` even when its selected time window contains
+zero records, because the empty artifact is still durably committed. Failure
+before rename is unavailable and cannot report success. Failure syncing the
+parent directory after rename is completion-ambiguous and returns
+`AmbiguousMutation` with `AfterObservation`; operation-ID inspection can then
+confirm whether the valid artifact exists. Inspection is restricted to local
+admins, returns the exact format, whole-artifact SHA-256 digest, total byte
+count, and a base64 chunk capped at 512 KiB, and supports bounded offsets for a
+larger artifact. Missing IDs are represented explicitly. Neither responses nor
+errors contain filesystem paths.
 
 Other first-party host implementation crates remain dependencies so their exact
 factory contracts are checked and available for the eventual composition

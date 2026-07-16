@@ -1029,6 +1029,11 @@
       "path": "packages/d2b-contract-tests/tests/realm_workload_schema_contract.rs"
     },
     {
+      "name": "w4-integration-d2b-contracts-cargo-toml",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/Cargo.toml"
+    },
+    {
       "name": "w4-integration-d2b-contracts-lib-rs",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2b-contracts/src/lib.rs"
@@ -1037,6 +1042,11 @@
       "name": "w4-integration-d2b-contracts-provider-registry-v2-rs",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2b-contracts/src/provider_registry_v2.rs"
+    },
+    {
+      "name": "w4-integration-d2b-contracts-public-wire-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/public_wire.rs"
     },
     {
       "name": "w4-integration-d2b-core-bundle-resolver-rs",
@@ -1289,6 +1299,11 @@
       "path": "packages/d2bd/tests/public_status_socket.rs"
     },
     {
+      "name": "w4-integration-d2bd-src-admission-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2bd/src/admission.rs"
+    },
+    {
       "name": "w4-integration-d2bd-src-concurrency-rs",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2bd/src/concurrency.rs"
@@ -1322,6 +1337,11 @@
       "name": "w4-integration-d2bd-src-supervisor-dag-rs",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2bd/src/supervisor/dag.rs"
+    },
+    {
+      "name": "w4-integration-d2bd-src-wire-rs",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2bd/src/wire.rs"
     },
     {
       "name": "w4-integration-d2bd-startup-smoke-test-pin",
@@ -1372,6 +1392,11 @@
       "name": "w4-integration-docs-reference-schemas-v2-provider-registry-v2-md",
       "repository": "github.com/vicondoa/d2b",
       "path": "docs/reference/schemas/v2/provider-registry-v2.md"
+    },
+    {
+      "name": "w4-integration-docs-reference-schemas-v2-wire-protocol-json",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "docs/reference/schemas/v2/wire-protocol.json"
     },
     {
       "name": "w4-integration-flake-nix",

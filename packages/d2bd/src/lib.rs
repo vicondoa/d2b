@@ -26,6 +26,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwapOption;
 use async_trait::async_trait;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use d2b_contracts::{
     BROKER_SOCKET_PATH, KnownFeatureFlag,
     broker_wire::{
@@ -3310,6 +3311,7 @@ fn request_invalidates_public_status_model(request: &wire::Request) -> bool {
         wire::Request::List(_)
             | wire::Request::Status(_)
             | wire::Request::Audit(_)
+            | wire::Request::ObservabilityExportInspect(_)
             | wire::Request::HostCheck(_)
             | wire::Request::AuthStatus
             | wire::Request::KeysList
@@ -3336,6 +3338,9 @@ fn dispatch_request_locked(
         wire::Request::List(request) => dispatch_list(state, request),
         wire::Request::Status(request) => dispatch_status(state, request),
         wire::Request::Audit(request) => dispatch_audit(state, peer, request),
+        wire::Request::ObservabilityExportInspect(request) => {
+            dispatch_observability_export_inspect(state, peer, request)
+        }
         wire::Request::HostCheck(request) => dispatch_host_check(state, request),
         wire::Request::AuthStatus => Ok(dispatch_auth_status(state, peer)),
         wire::Request::KeysList => dispatch_keys_list(state),
@@ -22174,6 +22179,68 @@ mod public_status_tests {
     }
 }
 
+fn dispatch_observability_export_inspect(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    request: public_wire::ObservabilityExportInspectRequest,
+) -> Result<Value, TypedError> {
+    use observability_export::{
+        ObservabilityExportLookup, ObservabilityExportStore, ObservabilityExportStoreError,
+    };
+
+    if peer.role != PeerRole::Admin {
+        return Err(TypedError::AuthzNotAdmin {
+            verb: "observabilityExportInspect".to_owned(),
+        });
+    }
+    if request.max_bytes == 0
+        || request.max_bytes > public_wire::OBSERVABILITY_EXPORT_INSPECT_MAX_BYTES
+    {
+        return Err(TypedError::WireInvalidFrame {
+            detail: "observability export inspection maxBytes is outside the bounded range"
+                .to_owned(),
+        });
+    }
+    let lookup = ObservabilityExportStore::new(&state.daemon_state_dir)
+        .lookup(&request.operation_id, request.offset, request.max_bytes)
+        .map_err(|error| match error {
+            ObservabilityExportStoreError::BoundsExceeded => TypedError::WireInvalidFrame {
+                detail: "observability export inspection bounds are invalid".to_owned(),
+            },
+            ObservabilityExportStoreError::StorageUnavailable
+            | ObservabilityExportStoreError::CompletionAmbiguous
+            | ObservabilityExportStoreError::NotFound
+            | ObservabilityExportStoreError::InvalidArtifact => TypedError::InternalIo {
+                context: "inspect observability export".to_owned(),
+                detail: "private export artifact is unavailable or invalid".to_owned(),
+            },
+        })?;
+    let response = match lookup {
+        ObservabilityExportLookup::Missing => {
+            public_wire::ObservabilityExportInspectResponse::Missing {
+                operation_id: request.operation_id,
+            }
+        }
+        ObservabilityExportLookup::Available(chunk) => {
+            let returned_bytes =
+                u32::try_from(chunk.bytes.len()).map_err(|_| TypedError::WireInvalidFrame {
+                    detail: "observability export inspection result exceeds its bound".to_owned(),
+                })?;
+            public_wire::ObservabilityExportInspectResponse::Available {
+                operation_id: request.operation_id,
+                format: chunk.inspection.format,
+                digest: chunk.inspection.digest,
+                encoded_bytes: chunk.inspection.encoded_bytes,
+                offset: chunk.offset,
+                returned_bytes,
+                bytes_base64: BASE64_STANDARD.encode(chunk.bytes),
+                complete: chunk.complete,
+            }
+        }
+    };
+    Ok(wire::observability_export_inspect_response(response))
+}
+
 fn dispatch_audit(
     state: &ServerState,
     peer: &PeerIdentity,
@@ -24258,6 +24325,7 @@ mod broker_dispatch_tests {
     use std::time::{Duration, Instant};
     use std::{fs, thread};
 
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use d2b_contracts::broker_wire::{
         ActivationMode as BrokerActivationMode, ActivationPhase as BrokerActivationPhase,
         BrokerCallerRole, BrokerErrorResponse, BrokerRequest, BrokerRequestEnvelope,
@@ -24276,8 +24344,9 @@ mod broker_dispatch_tests {
     };
     use d2b_contracts::public_wire::{
         ActivationRequest, GcRequest, HostDestroyRequest, HostInstallRequest, HostPrepareRequest,
-        KeysRotateRequest, MigrateRequest, MutationFlags, RotateKnownHostRequest, ShellCloseCause,
-        ShellName, ShellSessionState, StatusRequest, TrustRequest, VmLifecycleRequest,
+        KeysRotateRequest, MigrateRequest, MutationFlags, ObservabilityExportInspectRequest,
+        RotateKnownHostRequest, ShellCloseCause, ShellName, ShellSessionState, StatusRequest,
+        TrustRequest, VmLifecycleRequest,
     };
     use d2b_contracts::types::{RoleId, VmId};
     use d2b_contracts::v2_component_session::EndpointRole;
@@ -24285,8 +24354,9 @@ mod broker_dispatch_tests {
         ProviderType, RealmId, RealmPath as ProviderRealmPath, WorkloadId, WorkloadName,
     };
     use d2b_contracts::v2_provider::{
-        Fingerprint, Generation, ImplementationId, PROVIDER_SCHEMA_VERSION, ProviderApiVersion,
-        ProviderAuthority, ProviderDescriptor, ProviderPlacement,
+        Fingerprint, Generation, ImplementationId, ObservabilityExportFormat, OperationId,
+        PROVIDER_SCHEMA_VERSION, ProviderApiVersion, ProviderAuthority, ProviderDescriptor,
+        ProviderPlacement,
     };
     use d2b_core::bundle_resolver::BundleResolver;
     use d2b_core::processes::ProcessRole;
@@ -24314,7 +24384,7 @@ mod broker_dispatch_tests {
     };
     use super::{
         ArtifactPaths, DaemonConfig, HostActivationMarkerState, PeerIdentity, PeerRole,
-        ProviderGracefulInputs, QemuBrokerShutdownProvider, ServerState,
+        ProviderGracefulInputs, QemuBrokerShutdownProvider, ServerState, TypedError,
         UsbipBackgroundReconcileGuard, VM_RUNNER_ROLE_ID, VmShutdownOutcome, VmStartNodeMode,
         activate_provider_registry, activation_marker_path, adopt_orphaned_runners_on_startup_with,
         block_on_future, bounded_usbip_owner_label, daemon_audit, dispatch_broker_boot,
@@ -25317,6 +25387,117 @@ mod broker_dispatch_tests {
         provider_registry::probe_startup_registry(startup, &artifact)
             .await
             .expect("local observability health and status probe");
+    }
+
+    #[test]
+    fn observability_export_inspection_is_authorized_bounded_and_resolves_ambiguity() {
+        fn fail_directory_sync(_path: &Path) -> io::Result<()> {
+            Err(io::Error::other("injected directory sync failure"))
+        }
+
+        let state = test_state_with_broker_socket(unreachable_broker_socket_path(
+            "observability-export-inspect",
+        ));
+        let operation_id = OperationId::parse("inspect-ambiguous-export").expect("operation id");
+        let payload = b"bounded-observability-export";
+        let store = crate::observability_export::ObservabilityExportStore::with_directory_sync(
+            &state.daemon_state_dir,
+            fail_directory_sync,
+        );
+        assert_eq!(
+            store.persist(
+                &operation_id,
+                ObservabilityExportFormat::JsonLines,
+                payload,
+                1,
+                1,
+                1_024,
+            ),
+            Err(crate::observability_export::ObservabilityExportStoreError::CompletionAmbiguous)
+        );
+
+        let request = |operation_id: OperationId, offset, max_bytes| {
+            crate::wire::Request::ObservabilityExportInspect(ObservabilityExportInspectRequest {
+                operation_id,
+                offset,
+                max_bytes,
+            })
+        };
+        let launcher = PeerIdentity {
+            role: PeerRole::Launcher,
+            uid: 1000,
+        };
+        assert!(matches!(
+            dispatch_request(&state, &launcher, request(operation_id.clone(), 0, 7),),
+            Err(TypedError::AuthzNotAdmin { .. })
+        ));
+
+        let admin = PeerIdentity {
+            role: PeerRole::Admin,
+            uid: 0,
+        };
+        let first = dispatch_request(&state, &admin, request(operation_id.clone(), 0, 7))
+            .expect("inspect ambiguous completion");
+        assert_eq!(first["type"], "observabilityExportInspectResponse");
+        assert_eq!(first["state"], "available");
+        assert_eq!(first["format"], "json-lines");
+        assert_eq!(first["encodedBytes"], payload.len() as u64);
+        assert_eq!(first["offset"], 0);
+        assert_eq!(first["returnedBytes"], 7);
+        assert_eq!(first["complete"], false);
+        assert_eq!(
+            BASE64_STANDARD
+                .decode(first["bytesBase64"].as_str().expect("base64 chunk"))
+                .expect("decode chunk"),
+            b"bounded"
+        );
+        assert_eq!(first["digest"], format!("{:x}", Sha256::digest(payload)));
+        assert!(
+            !first
+                .to_string()
+                .contains(&state.daemon_state_dir.display().to_string())
+        );
+
+        let remainder =
+            dispatch_request(&state, &admin, request(operation_id.clone(), 7, 512 * 1024))
+                .expect("inspect remaining bytes");
+        assert_eq!(remainder["complete"], true);
+        assert_eq!(
+            BASE64_STANDARD
+                .decode(remainder["bytesBase64"].as_str().expect("base64 remainder"))
+                .expect("decode remainder"),
+            &payload[7..]
+        );
+
+        let missing = dispatch_request(
+            &state,
+            &admin,
+            request(
+                OperationId::parse("missing-observability-export").expect("operation id"),
+                0,
+                1,
+            ),
+        )
+        .expect("missing inspection is an observation");
+        assert_eq!(missing["state"], "missing");
+        assert!(missing.get("bytesBase64").is_none());
+
+        assert!(matches!(
+            dispatch_request(&state, &admin, request(operation_id.clone(), 0, 0),),
+            Err(TypedError::WireInvalidFrame { .. })
+        ));
+        assert!(matches!(
+            dispatch_request(
+                &state,
+                &admin,
+                request(
+                    operation_id,
+                    u32::try_from(payload.len() + 1).expect("offset"),
+                    1,
+                ),
+            ),
+            Err(TypedError::WireInvalidFrame { .. })
+        ));
     }
 
     #[test]

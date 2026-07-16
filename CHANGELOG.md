@@ -139,6 +139,10 @@ deprecations ship one minor release before removal.
   the requested format and exact streaming record/byte limits; storage failures
   and post-dispatch timeouts fail or remain ambiguous before an operation can
   report `Applied`.
+- Treat post-rename observability directory-sync failure as completion-ambiguous,
+  report persisted zero-record exports as `Applied`, and provide an admin-only,
+  path-free, operation-ID inspection route with bounded base64 chunks, exact
+  format, total bytes, and whole-artifact digest.
 - Generate Rust flake package definitions from the evaluated
   `lib.shippedRustPackages` inventory and require exact agreement with Cargo
   production roots and evaluated flake outputs, so aliases, variables, unknown

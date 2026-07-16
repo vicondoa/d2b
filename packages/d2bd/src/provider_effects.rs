@@ -753,7 +753,6 @@ impl ObservabilityExportPort for DaemonLocalObservability {
         sink: BoundedExportSink,
     ) -> Result<ExportPortOutcome, ObservabilityPortError> {
         self.validate_call(&context)?;
-        let mut emitted = false;
         for record in self.records_for(None)?.into_iter().filter(|record| {
             record.observed_at_unix_ms() >= intent.start_at_unix_ms
                 && record.observed_at_unix_ms() <= intent.end_at_unix_ms
@@ -762,7 +761,7 @@ impl ObservabilityExportPort for DaemonLocalObservability {
                 .emit(record)
                 .map_err(|_| ObservabilityPortError::InvalidProjection)?
             {
-                ExportSinkStatus::Emitted => emitted = true,
+                ExportSinkStatus::Emitted => {}
                 ExportSinkStatus::Truncated => {
                     sink.mark_source_truncated()
                         .map_err(|_| ObservabilityPortError::InvalidProjection)?;
@@ -795,12 +794,16 @@ impl ObservabilityExportPort for DaemonLocalObservability {
             )
         })
         .await
-        .map_err(|_| ObservabilityPortError::Unavailable)?
+        .map_err(|_| ObservabilityPortError::AmbiguousMutation)?
         .map_err(|error| match error {
             crate::observability_export::ObservabilityExportStoreError::StorageUnavailable => {
                 ObservabilityPortError::Unavailable
             }
+            crate::observability_export::ObservabilityExportStoreError::CompletionAmbiguous => {
+                ObservabilityPortError::AmbiguousMutation
+            }
             crate::observability_export::ObservabilityExportStoreError::BoundsExceeded
+            | crate::observability_export::ObservabilityExportStoreError::NotFound
             | crate::observability_export::ObservabilityExportStoreError::InvalidArtifact => {
                 ObservabilityPortError::InvalidProjection
             }
@@ -808,11 +811,7 @@ impl ObservabilityExportPort for DaemonLocalObservability {
         if inspection.encoded_bytes != encoded_bytes {
             return Err(ObservabilityPortError::InvalidProjection);
         }
-        Ok(ExportPortOutcome::new(if emitted {
-            MutationState::Applied
-        } else {
-            MutationState::NotApplicable
-        }))
+        Ok(ExportPortOutcome::new(MutationState::Applied))
     }
 }
 
@@ -1692,6 +1691,113 @@ mod tests {
             otlp_bytes.len(),
             usize::try_from(otlp_export.encoded_bytes()).expect("encoded byte count")
         );
+
+        let empty_state = tempfile::tempdir().expect("empty export state");
+        let empty_adapter = Arc::new(DaemonLocalObservability {
+            realm_id: adapter.realm_id.clone(),
+            metrics: Arc::clone(&adapter.metrics),
+            audit: Arc::new(crate::daemon_audit::DaemonAuditLog::no_op()),
+            connections: crate::concurrency::ConnSemaphore::new(1),
+            export_store: Arc::new(crate::observability_export::ObservabilityExportStore::new(
+                empty_state.path(),
+            )),
+        });
+        let empty_provider = LocalObservabilityProvider::new(
+            fixture.descriptor.clone(),
+            ObservabilityLimits::new(2, 1_024, 60_000).expect("limits"),
+            empty_adapter.clone(),
+            empty_adapter.clone(),
+        )
+        .expect("empty provider");
+        let empty_request = fixture
+            .request_with_input(
+                ProviderMethod::ObservabilityExport,
+                ProviderOperationInput::ObservabilityExport {
+                    format: ObservabilityExportFormat::JsonLines,
+                    start_at_unix_ms: 0,
+                    end_at_unix_ms: 1,
+                },
+            )
+            .expect("empty export request");
+        let empty_export = empty_provider
+            .bounded_export(
+                &fixture.call_context(&empty_request.context),
+                &empty_request,
+            )
+            .await
+            .expect("persisted empty export");
+        assert_eq!(empty_export.state(), MutationState::Applied);
+        assert_eq!(empty_export.record_count(), 0);
+        assert_eq!(empty_export.encoded_bytes(), 0);
+        assert_eq!(
+            empty_adapter
+                .export_store
+                .read(
+                    &empty_request.context.operation_id,
+                    ObservabilityExportFormat::JsonLines,
+                )
+                .expect("read empty export"),
+            Vec::<u8>::new()
+        );
+
+        fn fail_directory_sync(_path: &std::path::Path) -> std::io::Result<()> {
+            Err(std::io::Error::other("injected directory sync failure"))
+        }
+        let ambiguous_state = tempfile::tempdir().expect("ambiguous export state");
+        let ambiguous_adapter = Arc::new(DaemonLocalObservability {
+            realm_id: adapter.realm_id.clone(),
+            metrics: Arc::clone(&adapter.metrics),
+            audit: Arc::new(crate::daemon_audit::DaemonAuditLog::no_op()),
+            connections: crate::concurrency::ConnSemaphore::new(1),
+            export_store: Arc::new(
+                crate::observability_export::ObservabilityExportStore::with_directory_sync(
+                    ambiguous_state.path(),
+                    fail_directory_sync,
+                ),
+            ),
+        });
+        let ambiguous_provider = LocalObservabilityProvider::new(
+            fixture.descriptor.clone(),
+            ObservabilityLimits::new(2, 1_024, 60_000).expect("limits"),
+            ambiguous_adapter.clone(),
+            ambiguous_adapter.clone(),
+        )
+        .expect("ambiguous provider");
+        let ambiguous_request = fixture
+            .request_with_input(
+                ProviderMethod::ObservabilityExport,
+                ProviderOperationInput::ObservabilityExport {
+                    format: ObservabilityExportFormat::JsonLines,
+                    start_at_unix_ms: now.saturating_sub(1_000),
+                    end_at_unix_ms: now.saturating_add(1_000),
+                },
+            )
+            .expect("ambiguous export request");
+        let ambiguous_error = ambiguous_provider
+            .bounded_export(
+                &fixture.call_context(&ambiguous_request.context),
+                &ambiguous_request,
+            )
+            .await
+            .expect_err("post-rename sync failure is ambiguous");
+        assert_eq!(
+            ambiguous_error.kind,
+            d2b_contracts::v2_provider::ProviderFailureKind::AmbiguousMutation
+        );
+        assert_eq!(
+            ambiguous_error.retry,
+            d2b_contracts::v2_provider::RetryClass::AfterObservation
+        );
+        assert!(
+            crate::observability_export::ObservabilityExportStore::new(ambiguous_state.path())
+                .inspect(
+                    &ambiguous_request.context.operation_id,
+                    ObservabilityExportFormat::JsonLines,
+                )
+                .is_ok(),
+            "operation-id inspection resolves the renamed artifact"
+        );
+
         let blocked_state = tempfile::tempdir().expect("blocked export state");
         std::fs::write(
             blocked_state.path().join("observability-exports"),
