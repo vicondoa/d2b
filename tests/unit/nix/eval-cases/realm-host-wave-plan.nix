@@ -87,7 +87,9 @@ let
     "realm-principals" = {
       branch = "adr0045-w7-realm-principals";
       dependsOn = [ "normalized-index" ];
-      externalDependsOn = [ ];
+      externalDependsOn = [
+        "shared-root-deletion-contract-test-seam"
+      ];
       ownedFiles = [
         "docs/explanation/realm-controller-boundaries.md"
         "docs/reference/realm-principals.md"
@@ -95,6 +97,7 @@ let
         "nixos-modules/host-users.nix"
         "nixos-modules/realm-access.nix"
         "nixos-modules/realm-users.nix"
+        "tests/migration-state.d/polkit-allowlist-eval.toml"
         "tests/unit/nix/cases/principal-uid-collision.nix"
       ];
       reservedPaths = [
@@ -213,7 +216,9 @@ let
         "normalized-index"
         "realm-schema"
       ];
-      externalDependsOn = [ ];
+      externalDependsOn = [
+        "shared-root-deletion-contract-test-seam"
+      ];
       ownedFiles = [
         "docs/how-to/host-prepare.d/network.md"
         "docs/how-to/route-conflicts.md"
@@ -227,6 +232,9 @@ let
         "nixos-modules/network.nix"
         "nixos-modules/provider-registry-v2-extensions/network.nix"
         "nixos-modules/realm-network-rows.nix"
+        "packages/d2b-contract-tests/tests/policy_host_realm_relay.rs"
+        "packages/d2b-contract-tests/tests/policy_source.rs"
+        "packages/d2b-contract-tests/tests/storage_sync_contracts.rs"
         "tests/unit/nix/cases/bridge-ipv6-boot-sysctl.nix"
         "tests/unit/nix/cases/gateway-vm.nix"
         "tests/unit/nix/cases/ifname-nix-rust-parity.nix"
@@ -484,7 +492,9 @@ let
         "realm-observability"
         "realm-storage"
       ];
-      externalDependsOn = [ ];
+      externalDependsOn = [
+        "shared-root-deletion-contract-test-seam"
+      ];
       ownedFiles = [
         "docs/how-to/edit-vm-config-from-inside.md"
         "docs/how-to/qemu-media.md"
@@ -510,6 +520,10 @@ let
         "nixos-modules/vm-options.nix"
         "nixos-modules/vm-submodule.nix"
         "nixos-modules/workload-process-rows.nix"
+        "packages/d2b-contract-tests/tests/policy_misc.rs"
+        "packages/d2b-contract-tests/tests/policy_modules.rs"
+        "tests/migration-state.d/vm-submodule-cutover-eval.toml"
+        "tests/migration-state.d/vm-submodule-eval.toml"
         "tests/unit/nix/cases/external-vm-kind.nix"
         "tests/unit/nix/cases/guest-config-containment.nix"
         "tests/unit/nix/cases/guest-control-auth.nix"
@@ -569,7 +583,9 @@ let
         "normalized-index"
         "realm-schema"
       ];
-      externalDependsOn = [ ];
+      externalDependsOn = [
+        "shared-root-deletion-contract-test-seam"
+      ];
       ownedFiles = [
         "docs/how-to/configure-desktop-terminal-integration.md"
         "docs/how-to/migrate-to-wayland-proxy.md"
@@ -586,6 +602,7 @@ let
         "nixos-modules/realm-workloads-launcher-v2-json.nix"
         "nixos-modules/ui-colors.nix"
         "nixos-modules/unsafe-local-workloads-json.nix"
+        "packages/d2b-contract-tests/tests/realm_workload_schema_contract.rs"
         "tests/unit/nix/cases/clipboard.nix"
         "tests/unit/nix/cases/niri-vm-borders.nix"
       ];
@@ -639,13 +656,13 @@ let
         "Use only the shared-root-approved protected emitter, binding, schema, reference, and flake seams."
       ];
       prompt = ''
-        BLOCKED until the shared-root provider-registry open-consumer seam lands
-        and W7 rebases. After unblock, compose the existing provider-registry-v2
-        family in exactly the owned files after all fragment owners land.
-        Extend bindings for transport, substrate, display, network, storage,
-        device, and audio while preserving local-runtime/local-observability.
-        Never edit W5 d2bd consumers, create a second registry, or edit other
-        contracts, Cargo.lock, or tooling.
+        The shared-root provider-registry open-consumer seam is present. Compose
+        the existing provider-registry-v2 family in exactly the owned files
+        after every fragment owner is unblocked and lands. Extend bindings for
+        transport, substrate, display, network, storage, device, and audio while
+        preserving local-runtime/local-observability. Never edit W5 d2bd
+        consumers, create a second registry, or edit other contracts,
+        Cargo.lock, or tooling.
       '';
     };
 
@@ -667,7 +684,9 @@ let
         "realm-storage"
         "workload-processes"
       ];
-      externalDependsOn = [ ];
+      externalDependsOn = [
+        "shared-root-deletion-contract-test-seam"
+      ];
       ownedFiles = [
         "CHANGELOG.md"
         "README.md"
@@ -693,6 +712,8 @@ let
         "templates/default/configuration.nix"
         "templates/default/flake.nix"
         "templates/default/README.md"
+        "tests/migration-ledger.toml"
+        "tests/static.sh"
         "tests/fixtures/deny-unknown/bundle-invalid.json"
         "tests/fixtures/deny-unknown/bundle-valid.json"
         "tests/fixtures/deny-unknown/host-invalid.json"
@@ -780,7 +801,7 @@ in
 {
   schemaVersion = 1;
   wave = "w7";
-  sharedRoot = "b2b50e67cfab4fb8601ebb1a63946e84eccba5c1";
+  sharedRoot = "47a55e101b5b62e6a89e342512125de43bac4e68";
   branch = "adr0045-w7-realm-host";
   pullRequestBase = "adr0045-post-w4-contracts";
   inherit componentOrder components;
@@ -799,6 +820,9 @@ in
   };
 
   affectedInventory = {
+    contractTests = inventoryFor [ ] [
+      "packages/d2b-contract-tests/"
+    ];
     docs = inventoryFor [ "README.md" ] [
       "docs/explanation/"
       "docs/how-to/"
@@ -812,7 +836,13 @@ in
       "tests/fixtures/"
       "tests/golden/"
     ];
-    tests = inventoryFor [ ] [
+    tests = inventoryFor [
+      "tests/migration-ledger.toml"
+      "tests/migration-state.d/polkit-allowlist-eval.toml"
+      "tests/migration-state.d/vm-submodule-cutover-eval.toml"
+      "tests/migration-state.d/vm-submodule-eval.toml"
+      "tests/static.sh"
+    ] [
       "tests/unit/nix/"
       "tests/unit/smoke/"
     ];
@@ -821,8 +851,9 @@ in
   externalDependencies = {
     shared-root-provider-registry-open-consumer-seam = {
       owner = "adr0045-post-w4-contracts";
-      status = "blocked";
-      requiredRebase = true;
+      status = "ready";
+      requiredRebase = false;
+      landedCommit = "fa18c34741b8a898b4786a14e19e86e395d37325";
       contractFiles = [
         "packages/d2b-contracts/src/provider_registry_v2.rs"
       ];
@@ -835,6 +866,17 @@ in
         "ProviderBindingV2 exposes a non-exhaustive or equivalent forward-compatible consumer seam."
         "W5 d2bd consumers use that seam or explicit unknown-axis handling without W7 edits."
         "The W7 branch is rebased onto the accepted shared-root seam commit."
+      ];
+    };
+    shared-root-deletion-contract-test-seam = {
+      owner = "adr0045-post-w4-contracts";
+      status = "blocked";
+      requiredRebase = true;
+      acceptance = [
+        "The trusted wave policy grants W7 only the enumerated d2b-contract-tests, migration ledger, migration-state, and static orchestrator paths."
+        "Every granted path remains assigned to exactly one W7 component."
+        "No Cargo lock, workspace, runtime consumer, or other frozen test path is opened."
+        "W7 rebases onto the accepted narrow extension-seam commit before any affected component starts."
       ];
     };
     shared-root-w7-fixture-path-ownership = {
@@ -1041,6 +1083,59 @@ in
         path = "nixos-modules/provider-registry-v2-extensions/transport.nix";
       };
     };
+  };
+
+  deletionContractTestExtensionSeam = {
+    dependency = "shared-root-deletion-contract-test-seam";
+    owners = [
+      {
+        component = "realm-principals";
+        deletedFiles = [ "nixos-modules/host-polkit.nix" ];
+        extensionPaths = [
+          "tests/migration-state.d/polkit-allowlist-eval.toml"
+        ];
+      }
+      {
+        component = "realm-network";
+        deletedFiles = [ "nixos-modules/gateway-vm.nix" ];
+        extensionPaths = [
+          "packages/d2b-contract-tests/tests/policy_host_realm_relay.rs"
+          "packages/d2b-contract-tests/tests/policy_source.rs"
+          "packages/d2b-contract-tests/tests/storage_sync_contracts.rs"
+        ];
+      }
+      {
+        component = "workload-processes";
+        deletedFiles = [ "nixos-modules/vm-submodule.nix" ];
+        extensionPaths = [
+          "packages/d2b-contract-tests/tests/policy_misc.rs"
+          "packages/d2b-contract-tests/tests/policy_modules.rs"
+          "tests/migration-state.d/vm-submodule-cutover-eval.toml"
+          "tests/migration-state.d/vm-submodule-eval.toml"
+        ];
+        coupledRetirement =
+          "policy_misc.rs also retires the host-polkit assertion after realm-principals lands";
+      }
+      {
+        component = "desktop-metadata";
+        deletedFiles = [
+          "nixos-modules/realm-workloads-launcher-json.nix"
+        ];
+        extensionPaths = [
+          "packages/d2b-contract-tests/tests/realm_workload_schema_contract.rs"
+        ];
+      }
+      {
+        component = "bundle-integration";
+        deletedFiles = [ ];
+        extensionPaths = [
+          "tests/migration-ledger.toml"
+          "tests/static.sh"
+        ];
+        coupledRetirement =
+          "integrator regenerates the shared retirement ledger and static source inventory after all four deletions";
+      }
+    ];
   };
 
   deletionInventory = {
