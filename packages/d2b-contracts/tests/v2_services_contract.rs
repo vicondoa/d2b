@@ -16,13 +16,14 @@ use d2b_contracts::v2_provider::{
     ProviderOperationRequest, ProviderRemediation, ProviderTarget,
 };
 use d2b_contracts::v2_services::{
-    SERVICE_INVENTORY, SERVICE_PACKAGES, ServiceContractError, ServiceInventoryDocument,
-    StrictWireMessage, broker, common, decode_strict, encode_strict,
+    BROKER_PIDFD_ATTACHMENT_INDEX, CONTROLLER_PIDFD_ATTACHMENT_INDEX, SERVICE_INVENTORY,
+    SERVICE_PACKAGES, ServiceContractError, ServiceInventoryDocument, StrictWireMessage, broker,
+    common, decode_spawn_response_for_request, decode_strict, encode_strict,
     observability_query_response_from_wire, observability_query_result_to_wire,
     provider_method_for_capability, provider_operation_input, service_inventory_document,
-    validate_provider_response_for_method,
+    validate_provider_response_for_method, validate_spawn_response_for_request,
 };
-use protobuf::{Enum, EnumOrUnknown, MessageField};
+use protobuf::{Enum, EnumOrUnknown, Message, MessageField};
 
 const TTRPC_SOURCES: &[(&str, &str, &str)] = &[
     (
@@ -428,13 +429,15 @@ fn valid_spawn_request() -> broker::SpawnRealmChildrenRequest {
 fn valid_spawn_response() -> broker::SpawnRealmChildrenResponse {
     let child = |role: broker::RealmChildRole,
                  process_id: &str,
-                 attachment: u32|
+                 attachment: u32,
+                 pid: u32|
      -> broker::SpawnedRealmChild {
         broker::SpawnedRealmChild {
             role: role.into(),
             process_id: process_id.to_owned(),
             pidfd_attachment_index: attachment,
             executable_digest: vec![0x88; 32],
+            pid,
             ..Default::default()
         }
     };
@@ -446,12 +449,14 @@ fn valid_spawn_response() -> broker::SpawnRealmChildrenResponse {
             child(
                 broker::RealmChildRole::REALM_CHILD_ROLE_CONTROLLER,
                 "process-controller-1",
-                0,
+                CONTROLLER_PIDFD_ATTACHMENT_INDEX,
+                1001,
             ),
             child(
                 broker::RealmChildRole::REALM_CHILD_ROLE_BROKER,
                 "process-broker-1",
-                1,
+                BROKER_PIDFD_ATTACHMENT_INDEX,
+                1002,
             ),
         ],
         ..Default::default()
@@ -613,6 +618,10 @@ fn allocator_and_realm_child_contracts_round_trip_strictly() {
             .expect("spawn response decode"),
         spawned
     );
+    assert_eq!(
+        decode_spawn_response_for_request(&spawn, &encoded).expect("bound spawn response"),
+        spawned
+    );
 }
 
 #[test]
@@ -652,12 +661,155 @@ fn allocator_and_realm_child_contracts_fail_closed() {
         Err(ServiceContractError::InvalidOperationInput)
     );
 
+    let mut duplicate_process_id = valid_spawn_request();
+    duplicate_process_id.broker_process_id = duplicate_process_id.controller_process_id.clone();
+    assert_eq!(
+        duplicate_process_id.validate_wire(true),
+        Err(ServiceContractError::InvalidId)
+    );
+
     let mut duplicate_pidfd = valid_spawn_response();
     duplicate_pidfd.children[1].pidfd_attachment_index =
         duplicate_pidfd.children[0].pidfd_attachment_index;
     assert_eq!(
         duplicate_pidfd.validate_wire(false),
         Err(ServiceContractError::DuplicateAttachment)
+    );
+}
+
+#[test]
+fn realm_child_fd_resource_ids_cannot_expand_singleton_authority() {
+    let mut singleton_with_resource = valid_spawn_request();
+    singleton_with_resource.fds[0].resource_id = Some("resource-listener-alias".to_owned());
+    assert_eq!(
+        singleton_with_resource.validate_wire(true),
+        Err(ServiceContractError::InvalidOperationInput)
+    );
+
+    let mut duplicate_singleton = valid_spawn_request();
+    let mut duplicate = duplicate_singleton.fds[0].clone();
+    duplicate.attachment_index = 4;
+    duplicate_singleton.fds.push(duplicate);
+    assert_eq!(
+        duplicate_singleton.validate_wire(true),
+        Err(ServiceContractError::InvalidOperationInput)
+    );
+
+    for (kind, resource_id) in [
+        (
+            broker::RealmChildFdKind::REALM_CHILD_FD_KIND_RESOURCE,
+            "resource-a",
+        ),
+        (
+            broker::RealmChildFdKind::REALM_CHILD_FD_KIND_LEASE,
+            "lease-a",
+        ),
+    ] {
+        let mut missing_resource_id = valid_spawn_request();
+        missing_resource_id.fds.push(child_fd(
+            broker::RealmChildRole::REALM_CHILD_ROLE_CONTROLLER,
+            kind,
+            4,
+        ));
+        assert_eq!(
+            missing_resource_id.validate_wire(true),
+            Err(ServiceContractError::MissingOperationInput)
+        );
+
+        missing_resource_id.fds.last_mut().unwrap().resource_id = Some(resource_id.to_owned());
+        missing_resource_id.validate_wire(true).unwrap();
+    }
+
+    let mut duplicate_resource_kind = valid_spawn_request();
+    for (attachment, resource_id) in [(4, "resource-a"), (5, "resource-b")] {
+        let mut resource = child_fd(
+            broker::RealmChildRole::REALM_CHILD_ROLE_CONTROLLER,
+            broker::RealmChildFdKind::REALM_CHILD_FD_KIND_RESOURCE,
+            attachment,
+        );
+        resource.resource_id = Some(resource_id.to_owned());
+        duplicate_resource_kind.fds.push(resource);
+    }
+    let raw = duplicate_resource_kind
+        .write_to_bytes()
+        .expect("adversarial protobuf");
+    assert_eq!(
+        decode_strict::<broker::SpawnRealmChildrenRequest>(&raw, true),
+        Err(ServiceContractError::InvalidOperationInput)
+    );
+}
+
+#[test]
+fn realm_child_spawn_response_rejects_pid_and_pidfd_aliases() {
+    let mut zero_pid = valid_spawn_response();
+    zero_pid.children[0].pid = 0;
+    assert_eq!(
+        zero_pid.validate_wire(false),
+        Err(ServiceContractError::InvalidId)
+    );
+
+    let mut same_pid = valid_spawn_response();
+    same_pid.children[1].pid = same_pid.children[0].pid;
+    let raw = same_pid.write_to_bytes().expect("adversarial protobuf");
+    assert_eq!(
+        decode_strict::<broker::SpawnRealmChildrenResponse>(&raw, false),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+
+    let mut same_process_id = valid_spawn_response();
+    same_process_id.children[1].process_id = same_process_id.children[0].process_id.clone();
+    assert_eq!(
+        same_process_id.validate_wire(false),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+
+    let mut swapped_roles = valid_spawn_response();
+    swapped_roles.children[0].role = broker::RealmChildRole::REALM_CHILD_ROLE_BROKER.into();
+    swapped_roles.children[1].role = broker::RealmChildRole::REALM_CHILD_ROLE_CONTROLLER.into();
+    assert_eq!(
+        swapped_roles.validate_wire(false),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+
+    let mut swapped_pidfds = valid_spawn_response();
+    swapped_pidfds.children.swap(0, 1);
+    swapped_pidfds.children[0].pidfd_attachment_index = CONTROLLER_PIDFD_ATTACHMENT_INDEX;
+    swapped_pidfds.children[1].pidfd_attachment_index = BROKER_PIDFD_ATTACHMENT_INDEX;
+    assert_eq!(
+        swapped_pidfds.validate_wire(false),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+}
+
+#[test]
+fn realm_child_spawn_response_is_bound_to_the_exact_request() {
+    let request = valid_spawn_request();
+    let response = valid_spawn_response();
+    validate_spawn_response_for_request(&request, &response).expect("valid pair");
+
+    let mut swapped_process_ids = response.clone();
+    swapped_process_ids.children[0].process_id = request.broker_process_id.clone();
+    swapped_process_ids.children[1].process_id = request.controller_process_id.clone();
+    let raw = swapped_process_ids
+        .write_to_bytes()
+        .expect("adversarial protobuf");
+    assert_eq!(
+        decode_spawn_response_for_request(&request, &raw),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+
+    let mut wrong_operation = response.clone();
+    wrong_operation.operation_id = "operation-spawn-other".to_owned();
+    assert_eq!(
+        validate_spawn_response_for_request(&request, &wrong_operation),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+
+    let mut wrong_launch_record = response;
+    wrong_launch_record.launch_record_digest = vec![0x99; 32];
+    assert_eq!(
+        validate_spawn_response_for_request(&request, &wrong_launch_record),
+        Err(ServiceContractError::InconsistentResponse)
     );
 }
 
@@ -1185,6 +1337,26 @@ fn inventory_fixture_and_schema_are_local_and_strict() {
         .unwrap()
         .insert("legacy".to_owned(), serde_json::Value::Bool(true));
     assert!(serde_json::from_value::<ServiceInventoryDocument>(value).is_err());
+
+    let mut nested = serde_json::to_value(&fixture).unwrap();
+    nested["services"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|service| service["service"] == "BrokerService")
+        .unwrap()["methods"][0]
+        .as_object_mut()
+        .unwrap()
+        .insert("legacyAuthority".to_owned(), serde_json::Value::Bool(true));
+    assert!(serde_json::from_value::<ServiceInventoryDocument>(nested).is_err());
+    assert_eq!(
+        schema["definitions"]["ServiceDocument"]["additionalProperties"],
+        false
+    );
+    assert_eq!(
+        schema["definitions"]["MethodDocument"]["additionalProperties"],
+        false
+    );
 }
 
 #[test]

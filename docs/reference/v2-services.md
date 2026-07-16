@@ -90,9 +90,23 @@ names opaque controller/broker process records and binds the exact public
 listener, broker listener, bootstrap-session, namespace, cgroup, state, audit,
 resource, and lease attachment roles. It carries no executable argv, host path,
 credential, UID map, or free-form authority. Success returns exactly one
-controller and one broker record with distinct pidfd attachment indexes and
-executable digests. The service schema fingerprint includes these allocator and
-child-spawn message shapes.
+controller and one broker record with distinct nonzero numeric PIDs, distinct
+opaque process IDs, executable digests, and role-bound pidfd attachments:
+controller is response attachment zero and broker is response attachment one.
+
+Each request attachment has at most one binding for a `(role, kind)` pair.
+Listener, bootstrap-session, namespace, cgroup, state-root, and audit-root
+bindings are singleton authority and must omit `resource_id`. Only `resource`
+and `lease` bindings carry a mandatory opaque `resource_id`; changing that ID
+cannot create a second binding for the same role and kind.
+
+Before accepting a response, the receiver validates it against the originating
+request. The operation ID and launch-record digest must match, and each child
+role must retain the request's exact controller or broker process ID. A swapped
+role, pidfd attachment, process ID, duplicate PID, or duplicate pidfd attachment
+is rejected. `decode_spawn_response_for_request` performs strict protobuf
+decoding and this correlation as one acceptance step. The service schema
+fingerprint includes these allocator and child-spawn message shapes.
 
 ## Bounds and strictness
 

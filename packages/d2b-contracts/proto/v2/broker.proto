@@ -145,6 +145,7 @@ message RealmChildFd {
   RealmChildRole role = 1;
   RealmChildFdKind kind = 2;
   uint32 attachment_index = 3;
+  // Required only for RESOURCE and LEASE. Singleton authority kinds must omit it.
   optional string resource_id = 4;
 }
 
@@ -163,8 +164,11 @@ message SpawnRealmChildrenRequest {
 message SpawnedRealmChild {
   RealmChildRole role = 1;
   string process_id = 2;
+  // Controller is attachment 0; broker is attachment 1.
   uint32 pidfd_attachment_index = 3;
   bytes executable_digest = 4;
+  // The spawned Linux PID. Successful pairs require two distinct nonzero values.
+  uint32 pid = 5;
 }
 
 message SpawnRealmChildrenResponse {

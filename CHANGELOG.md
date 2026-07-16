@@ -178,6 +178,10 @@ deprecations ship one minor release before removal.
   attempts.
 - Aligned the v2 bundle and provider-registry schema references with every
   canonical top-level field.
+- Bound child-realm spawn authority to one attachment per role and kind,
+  restricted resource IDs to resource and lease descriptors, and made successful
+  responses prove distinct nonzero controller/broker PIDs plus exact
+  request-to-response process, role, digest, and pidfd attachment correlation.
 - Persist bounded local-observability exports as atomically renamed private
   artifacts keyed by opaque operation ID. JSON Lines and OTLP protobuf now honor
   the requested format and exact streaming record/byte limits; storage failures

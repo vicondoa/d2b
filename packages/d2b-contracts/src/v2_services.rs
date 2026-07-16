@@ -151,6 +151,8 @@ pub const DIGEST_BYTES: usize = 32;
 pub const MAX_ALLOCATOR_REQUEST_RESOURCES: usize = 32;
 pub const MAX_ALLOCATOR_CONFLICTS: usize = 16;
 pub const MAX_REALM_CHILD_FDS: usize = 64;
+pub const CONTROLLER_PIDFD_ATTACHMENT_INDEX: u32 = 0;
+pub const BROKER_PIDFD_ATTACHMENT_INDEX: u32 = 1;
 
 pub const SERVICE_PACKAGES: [&str; 15] = [
     "d2b.daemon.v2",
@@ -485,7 +487,7 @@ pub fn service_schema_fingerprint(service: &ServiceSpec) -> [u8; 32] {
         digest.update(b"\0provider-response-observability-query-result-v1");
     }
     if service.package == "d2b.broker.v2" {
-        digest.update(b"\0typed-allocator-and-realm-child-spawn-v1");
+        digest.update(b"\0typed-allocator-and-realm-child-spawn-v2");
     }
     for method in service.methods {
         digest.update(b"\0");
@@ -1027,12 +1029,19 @@ fn validate_realm_child_fd(
         .map_err(|_| ServiceContractError::InvalidEnum)?;
     if role == broker::RealmChildRole::REALM_CHILD_ROLE_UNSPECIFIED
         || kind == broker::RealmChildFdKind::REALM_CHILD_FD_KIND_UNSPECIFIED
-        || value
-            .resource_id
-            .as_deref()
-            .is_some_and(|resource| !bounded_opaque(resource, MAX_SERVICE_STRING_BYTES))
     {
         return Err(ServiceContractError::InvalidEnum);
+    }
+    let resource_scoped = matches!(
+        kind,
+        broker::RealmChildFdKind::REALM_CHILD_FD_KIND_RESOURCE
+            | broker::RealmChildFdKind::REALM_CHILD_FD_KIND_LEASE
+    );
+    match (resource_scoped, value.resource_id.as_deref()) {
+        (true, Some(resource)) if bounded_opaque(resource, MAX_SERVICE_STRING_BYTES) => {}
+        (true, _) => return Err(ServiceContractError::MissingOperationInput),
+        (false, None) => {}
+        (false, Some(_)) => return Err(ServiceContractError::InvalidOperationInput),
     }
     if (kind == broker::RealmChildFdKind::REALM_CHILD_FD_KIND_PUBLIC_LISTENER
         && role != broker::RealmChildRole::REALM_CHILD_ROLE_CONTROLLER)
@@ -1076,7 +1085,7 @@ impl StrictWireMessage for broker::SpawnRealmChildrenRequest {
         let mut attachments = Vec::with_capacity(self.fds.len());
         for fd in &self.fds {
             let (role, kind) = validate_realm_child_fd(fd)?;
-            if !bindings.insert((role.value(), kind.value(), fd.resource_id.as_deref())) {
+            if !bindings.insert((role.value(), kind.value())) {
                 return Err(ServiceContractError::InvalidOperationInput);
             }
             attachments.push(fd.attachment_index);
@@ -1100,10 +1109,7 @@ impl StrictWireMessage for broker::SpawnRealmChildrenRequest {
                 broker::RealmChildFdKind::REALM_CHILD_FD_KIND_BOOTSTRAP_SESSION,
             ),
         ] {
-            if !bindings
-                .iter()
-                .any(|(role, kind, _)| *role == required.0.value() && *kind == required.1.value())
-            {
+            if !bindings.contains(&(required.0.value(), required.1.value())) {
                 return Err(ServiceContractError::MissingOperationInput);
             }
         }
@@ -1113,7 +1119,7 @@ impl StrictWireMessage for broker::SpawnRealmChildrenRequest {
 
 fn validate_spawned_child(
     value: &broker::SpawnedRealmChild,
-) -> Result<(broker::RealmChildRole, u32), ServiceContractError> {
+) -> Result<(broker::RealmChildRole, u32, u32), ServiceContractError> {
     reject_unknown(value)?;
     let role = value
         .role
@@ -1122,13 +1128,13 @@ fn validate_spawned_child(
     if role == broker::RealmChildRole::REALM_CHILD_ROLE_UNSPECIFIED {
         return Err(ServiceContractError::InvalidEnum);
     }
-    if !bounded_opaque(&value.process_id, MAX_SERVICE_STRING_BYTES) {
+    if !bounded_opaque(&value.process_id, MAX_SERVICE_STRING_BYTES) || value.pid == 0 {
         return Err(ServiceContractError::InvalidId);
     }
     if !required_digest(&value.executable_digest) {
         return Err(ServiceContractError::InvalidDigest);
     }
-    Ok((role, value.pidfd_attachment_index))
+    Ok((role, value.pidfd_attachment_index, value.pid))
 }
 
 impl StrictWireMessage for broker::SpawnRealmChildrenResponse {
@@ -1149,15 +1155,40 @@ impl StrictWireMessage for broker::SpawnRealmChildrenResponse {
                 return Err(ServiceContractError::InconsistentResponse);
             }
             let mut roles = BTreeSet::new();
+            let mut process_ids = BTreeSet::new();
+            let mut pids = BTreeSet::new();
             let mut attachments = Vec::with_capacity(2);
             for child in &self.children {
-                let (role, attachment) = validate_spawned_child(child)?;
-                if !roles.insert(role.value()) {
+                let (role, attachment, pid) = validate_spawned_child(child)?;
+                if !roles.insert(role.value())
+                    || !process_ids.insert(child.process_id.as_str())
+                    || !pids.insert(pid)
+                {
                     return Err(ServiceContractError::InconsistentResponse);
                 }
                 attachments.push(attachment);
             }
             validate_attachments(&attachments)?;
+            for child in &self.children {
+                let expected_attachment = match child
+                    .role
+                    .enum_value()
+                    .map_err(|_| ServiceContractError::InvalidEnum)?
+                {
+                    broker::RealmChildRole::REALM_CHILD_ROLE_CONTROLLER => {
+                        CONTROLLER_PIDFD_ATTACHMENT_INDEX
+                    }
+                    broker::RealmChildRole::REALM_CHILD_ROLE_BROKER => {
+                        BROKER_PIDFD_ATTACHMENT_INDEX
+                    }
+                    broker::RealmChildRole::REALM_CHILD_ROLE_UNSPECIFIED => {
+                        return Err(ServiceContractError::InvalidEnum);
+                    }
+                };
+                if child.pidfd_attachment_index != expected_attachment {
+                    return Err(ServiceContractError::InconsistentResponse);
+                }
+            }
             if !roles.contains(&broker::RealmChildRole::REALM_CHILD_ROLE_CONTROLLER.value())
                 || !roles.contains(&broker::RealmChildRole::REALM_CHILD_ROLE_BROKER.value())
             {
@@ -1178,6 +1209,52 @@ impl StrictWireMessage for broker::SpawnRealmChildrenResponse {
         }
     }
 }
+
+pub fn validate_spawn_response_for_request(
+    request: &broker::SpawnRealmChildrenRequest,
+    response: &broker::SpawnRealmChildrenResponse,
+) -> Result<(), ServiceContractError> {
+    request.validate_wire(true)?;
+    response.validate_wire(false)?;
+    if response.operation_id != request.operation_id {
+        return Err(ServiceContractError::InconsistentResponse);
+    }
+    if response.outcome.enum_value().ok() != Some(common::Outcome::OUTCOME_SUCCEEDED) {
+        return Ok(());
+    }
+    if response.launch_record_digest != request.launch_record_digest {
+        return Err(ServiceContractError::InconsistentResponse);
+    }
+    for child in &response.children {
+        let expected_process_id = match child
+            .role
+            .enum_value()
+            .map_err(|_| ServiceContractError::InvalidEnum)?
+        {
+            broker::RealmChildRole::REALM_CHILD_ROLE_CONTROLLER => {
+                request.controller_process_id.as_str()
+            }
+            broker::RealmChildRole::REALM_CHILD_ROLE_BROKER => request.broker_process_id.as_str(),
+            broker::RealmChildRole::REALM_CHILD_ROLE_UNSPECIFIED => {
+                return Err(ServiceContractError::InvalidEnum);
+            }
+        };
+        if child.process_id != expected_process_id {
+            return Err(ServiceContractError::InconsistentResponse);
+        }
+    }
+    Ok(())
+}
+
+pub fn decode_spawn_response_for_request(
+    request: &broker::SpawnRealmChildrenRequest,
+    bytes: &[u8],
+) -> Result<broker::SpawnRealmChildrenResponse, ServiceContractError> {
+    let response = decode_strict(bytes, false)?;
+    validate_spawn_response_for_request(request, &response)?;
+    Ok(response)
+}
+
 fn validate_provider_context(
     value: &common::ProviderOperationContext,
     requires_idempotency: bool,

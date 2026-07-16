@@ -974,7 +974,7 @@
     {
       "package": "d2b.broker.v2",
       "service": "BrokerService",
-      "schemaFingerprint": "e8d6a7f52c892ca57b004f08e0ad3793351034cb9c7df0a5a950f28f20e1d428",
+      "schemaFingerprint": "e7c8a0372bc35f824c98890f968137947b14ebe6f03a219297b39f15ba53da45",
       "methods": [
         {
           "name": "ValidateLease",

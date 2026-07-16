@@ -1834,6 +1834,8 @@ pub struct SpawnedRealmChild {
     pub pidfd_attachment_index: u32,
     // @@protoc_insertion_point(field:d2b.broker.v2.SpawnedRealmChild.executable_digest)
     pub executable_digest: ::std::vec::Vec<u8>,
+    // @@protoc_insertion_point(field:d2b.broker.v2.SpawnedRealmChild.pid)
+    pub pid: u32,
     // special fields
     // @@protoc_insertion_point(special_field:d2b.broker.v2.SpawnedRealmChild.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -1851,7 +1853,7 @@ impl SpawnedRealmChild {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(4);
+        let mut fields = ::std::vec::Vec::with_capacity(5);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "role",
@@ -1872,6 +1874,11 @@ impl SpawnedRealmChild {
             "executable_digest",
             |m: &SpawnedRealmChild| { &m.executable_digest },
             |m: &mut SpawnedRealmChild| { &mut m.executable_digest },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "pid",
+            |m: &SpawnedRealmChild| { &m.pid },
+            |m: &mut SpawnedRealmChild| { &mut m.pid },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<SpawnedRealmChild>(
             "SpawnedRealmChild",
@@ -1903,6 +1910,9 @@ impl ::protobuf::Message for SpawnedRealmChild {
                 34 => {
                     self.executable_digest = is.read_bytes()?;
                 },
+                40 => {
+                    self.pid = is.read_uint32()?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -1927,6 +1937,9 @@ impl ::protobuf::Message for SpawnedRealmChild {
         if !self.executable_digest.is_empty() {
             my_size += ::protobuf::rt::bytes_size(4, &self.executable_digest);
         }
+        if self.pid != 0 {
+            my_size += ::protobuf::rt::uint32_size(5, self.pid);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -1944,6 +1957,9 @@ impl ::protobuf::Message for SpawnedRealmChild {
         }
         if !self.executable_digest.is_empty() {
             os.write_bytes(4, &self.executable_digest)?;
+        }
+        if self.pid != 0 {
+            os.write_uint32(5, self.pid)?;
         }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
@@ -1966,6 +1982,7 @@ impl ::protobuf::Message for SpawnedRealmChild {
         self.process_id.clear();
         self.pidfd_attachment_index = 0;
         self.executable_digest.clear();
+        self.pid = 0;
         self.special_fields.clear();
     }
 
@@ -1975,6 +1992,7 @@ impl ::protobuf::Message for SpawnedRealmChild {
             process_id: ::std::string::String::new(),
             pidfd_attachment_index: 0,
             executable_digest: ::std::vec::Vec::new(),
+            pid: 0,
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -2869,70 +2887,71 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     id\x18\x06\x20\x01(\tR\x13controllerProcessId\x12*\n\x11broker_process_i\
     d\x18\x07\x20\x01(\tR\x0fbrokerProcessId\x120\n\x14launch_record_digest\
     \x18\x08\x20\x01(\x0cR\x12launchRecordDigest\x12-\n\x03fds\x18\t\x20\x03\
-    (\x0b2\x1b.d2b.broker.v2.RealmChildFdR\x03fds\"\xc8\x01\n\x11SpawnedReal\
+    (\x0b2\x1b.d2b.broker.v2.RealmChildFdR\x03fds\"\xda\x01\n\x11SpawnedReal\
     mChild\x121\n\x04role\x18\x01\x20\x01(\x0e2\x1d.d2b.broker.v2.RealmChild\
     RoleR\x04role\x12\x1d\n\nprocess_id\x18\x02\x20\x01(\tR\tprocessId\x124\
     \n\x16pidfd_attachment_index\x18\x03\x20\x01(\rR\x14pidfdAttachmentIndex\
-    \x12+\n\x11executable_digest\x18\x04\x20\x01(\x0cR\x10executableDigest\"\
-    \x95\x02\n\x1aSpawnRealmChildrenResponse\x120\n\x07outcome\x18\x01\x20\
-    \x01(\x0e2\x16.d2b.common.v2.OutcomeR\x07outcome\x12!\n\x0coperation_id\
-    \x18\x02\x20\x01(\tR\x0boperationId\x120\n\x14launch_record_digest\x18\
-    \x03\x20\x01(\x0cR\x12launchRecordDigest\x12<\n\x08children\x18\x04\x20\
-    \x03(\x0b2\x20.d2b.broker.v2.SpawnedRealmChildR\x08children\x122\n\x05er\
-    ror\x18\x05\x20\x01(\x0b2\x1c.d2b.common.v2.ErrorEnvelopeR\x05error*\xe3\
-    \x02\n\x10HostResourceKind\x12\"\n\x1eHOST_RESOURCE_KIND_UNSPECIFIED\x10\
-    \0\x12\x1d\n\x19HOST_RESOURCE_KIND_BRIDGE\x10\x01\x12\x1a\n\x16HOST_RESO\
-    URCE_KIND_TAP\x10\x02\x12\x20\n\x1cHOST_RESOURCE_KIND_VETH_PAIR\x10\x03\
-    \x12%\n!HOST_RESOURCE_KIND_NFTABLES_TABLE\x10\x04\x12)\n%HOST_RESOURCE_K\
-    IND_NFTABLES_PARTITION\x10\x05\x12%\n!HOST_RESOURCE_KIND_CGROUP_SUBTREE\
-    \x10\x06\x12*\n&HOST_RESOURCE_KIND_HOST_FILE_PARTITION\x10\x07\x12)\n%HO\
-    ST_RESOURCE_KIND_NAMESPACE_BOUNDARY\x10\x08*\x85\x01\n\x11ResourceShareM\
-    ode\x12#\n\x1fRESOURCE_SHARE_MODE_UNSPECIFIED\x10\0\x12!\n\x1dRESOURCE_S\
-    HARE_MODE_EXCLUSIVE\x10\x01\x12(\n$RESOURCE_SHARE_MODE_SHARED_PARTITION\
-    \x10\x02*\xf4\x01\n\x16ResourceDelegationKind\x12(\n$RESOURCE_DELEGATION\
-    _KIND_UNSPECIFIED\x10\0\x12(\n$RESOURCE_DELEGATION_KIND_OPAQUE_NAME\x10\
-    \x01\x12,\n(RESOURCE_DELEGATION_KIND_FILE_DESCRIPTOR\x10\x02\x12)\n%RESO\
-    URCE_DELEGATION_KIND_PARTITION_ID\x10\x03\x12-\n)RESOURCE_DELEGATION_KIN\
-    D_NAMESPACE_HANDLE\x10\x04*\x9f\x04\n\x0fAllocatorReason\x12\x20\n\x1cAL\
-    LOCATOR_REASON_UNSPECIFIED\x10\0\x12&\n\"ALLOCATOR_REASON_RESOURCE_CONFL\
-    ICT\x10\x01\x12'\n#ALLOCATOR_REASON_OWNERSHIP_CONFLICT\x10\x02\x120\n,AL\
-    LOCATOR_REASON_ACQUISITION_ORDER_VIOLATION\x10\x03\x12$\n\x20ALLOCATOR_R\
-    EASON_INVALID_REQUEST\x10\x04\x12'\n#ALLOCATOR_REASON_CAPACITY_EXHAUSTED\
-    \x10\x05\x12#\n\x1fALLOCATOR_REASON_DRIFT_DETECTED\x10\x06\x12'\n#ALLOCA\
-    TOR_REASON_RECONCILE_MISMATCH\x10\x07\x12#\n\x1fALLOCATOR_REASON_OWNER_N\
-    OT_LIVE\x10\x08\x12\"\n\x1eALLOCATOR_REASON_POLICY_DENIED\x10\t\x12%\n!A\
-    LLOCATOR_REASON_UNSUPPORTED_KIND\x10\n\x12/\n+ALLOCATOR_REASON_STORAGE_C\
-    ONTRACT_VIOLATION\x10\x0b\x12)\n%ALLOCATOR_REASON_KERNEL_STATE_UNKNOWN\
-    \x10\x0c*r\n\x10AllocationStatus\x12!\n\x1dALLOCATION_STATUS_UNSPECIFIED\
-    \x10\0\x12\x1d\n\x19ALLOCATION_STATUS_GRANTED\x10\x01\x12\x1c\n\x18ALLOC\
-    ATION_STATUS_DENIED\x10\x02*p\n\x0eRealmChildRole\x12\x20\n\x1cREALM_CHI\
-    LD_ROLE_UNSPECIFIED\x10\0\x12\x1f\n\x1bREALM_CHILD_ROLE_CONTROLLER\x10\
-    \x01\x12\x1b\n\x17REALM_CHILD_ROLE_BROKER\x10\x02*\xd6\x04\n\x10RealmChi\
-    ldFdKind\x12#\n\x1fREALM_CHILD_FD_KIND_UNSPECIFIED\x10\0\x12'\n#REALM_CH\
-    ILD_FD_KIND_PUBLIC_LISTENER\x10\x01\x12'\n#REALM_CHILD_FD_KIND_BROKER_LI\
-    STENER\x10\x02\x12&\n\"REALM_CHILD_FD_KIND_USER_NAMESPACE\x10\x03\x12'\n\
-    #REALM_CHILD_FD_KIND_MOUNT_NAMESPACE\x10\x04\x12)\n%REALM_CHILD_FD_KIND_\
-    NETWORK_NAMESPACE\x10\x05\x12%\n!REALM_CHILD_FD_KIND_IPC_NAMESPACE\x10\
-    \x06\x12%\n!REALM_CHILD_FD_KIND_PID_NAMESPACE\x10\x07\x12(\n$REALM_CHILD\
-    _FD_KIND_CGROUP_NAMESPACE\x10\x08\x12#\n\x1fREALM_CHILD_FD_KIND_CGROUP_L\
-    EAF\x10\t\x12\"\n\x1eREALM_CHILD_FD_KIND_STATE_ROOT\x10\n\x12\"\n\x1eREA\
-    LM_CHILD_FD_KIND_AUDIT_ROOT\x10\x0b\x12\x20\n\x1cREALM_CHILD_FD_KIND_RES\
-    OURCE\x10\x0c\x12\x1d\n\x19REALM_CHILD_FD_KIND_LEASE\x10\r\x12)\n%REALM_\
-    CHILD_FD_KIND_BOOTSTRAP_SESSION\x10\x0e2\x99\x06\n\rBrokerService\x12N\n\
-    \rValidateLease\x12\x1d.d2b.common.v2.ServiceRequest\x1a\x1e.d2b.common.\
-    v2.ServiceResponse\x12K\n\x08Allocate\x12\x1e.d2b.broker.v2.AllocateRequ\
-    est\x1a\x1f.d2b.broker.v2.AllocateResponse\x12I\n\x08Delegate\x12\x1d.d2\
-    b.common.v2.ServiceRequest\x1a\x1e.d2b.common.v2.ServiceResponse\x12\\\n\
-    \x05Spawn\x12(.d2b.broker.v2.SpawnRealmChildrenRequest\x1a).d2b.broker.v\
-    2.SpawnRealmChildrenResponse\x12M\n\x0cOpenResource\x12\x1d.d2b.common.v\
-    2.ServiceRequest\x1a\x1e.d2b.common.v2.ServiceResponse\x12F\n\x05Apply\
-    \x12\x1d.d2b.common.v2.ServiceRequest\x1a\x1e.d2b.common.v2.ServiceRespo\
-    nse\x12H\n\x07Observe\x12\x1d.d2b.common.v2.ServiceRequest\x1a\x1e.d2b.c\
-    ommon.v2.ServiceResponse\x12L\n\x0bRevokeLease\x12\x1d.d2b.common.v2.Ser\
-    viceRequest\x1a\x1e.d2b.common.v2.ServiceResponse\x12L\n\x0bExportAudit\
-    \x12\x1d.d2b.common.v2.ServiceRequest\x1a\x1e.d2b.common.v2.ServiceRespo\
-    nse\x12E\n\x06Cancel\x12\x1c.d2b.common.v2.CancelRequest\x1a\x1d.d2b.com\
-    mon.v2.CancelResponseb\x06proto3\
+    \x12+\n\x11executable_digest\x18\x04\x20\x01(\x0cR\x10executableDigest\
+    \x12\x10\n\x03pid\x18\x05\x20\x01(\rR\x03pid\"\x95\x02\n\x1aSpawnRealmCh\
+    ildrenResponse\x120\n\x07outcome\x18\x01\x20\x01(\x0e2\x16.d2b.common.v2\
+    .OutcomeR\x07outcome\x12!\n\x0coperation_id\x18\x02\x20\x01(\tR\x0bopera\
+    tionId\x120\n\x14launch_record_digest\x18\x03\x20\x01(\x0cR\x12launchRec\
+    ordDigest\x12<\n\x08children\x18\x04\x20\x03(\x0b2\x20.d2b.broker.v2.Spa\
+    wnedRealmChildR\x08children\x122\n\x05error\x18\x05\x20\x01(\x0b2\x1c.d2\
+    b.common.v2.ErrorEnvelopeR\x05error*\xe3\x02\n\x10HostResourceKind\x12\"\
+    \n\x1eHOST_RESOURCE_KIND_UNSPECIFIED\x10\0\x12\x1d\n\x19HOST_RESOURCE_KI\
+    ND_BRIDGE\x10\x01\x12\x1a\n\x16HOST_RESOURCE_KIND_TAP\x10\x02\x12\x20\n\
+    \x1cHOST_RESOURCE_KIND_VETH_PAIR\x10\x03\x12%\n!HOST_RESOURCE_KIND_NFTAB\
+    LES_TABLE\x10\x04\x12)\n%HOST_RESOURCE_KIND_NFTABLES_PARTITION\x10\x05\
+    \x12%\n!HOST_RESOURCE_KIND_CGROUP_SUBTREE\x10\x06\x12*\n&HOST_RESOURCE_K\
+    IND_HOST_FILE_PARTITION\x10\x07\x12)\n%HOST_RESOURCE_KIND_NAMESPACE_BOUN\
+    DARY\x10\x08*\x85\x01\n\x11ResourceShareMode\x12#\n\x1fRESOURCE_SHARE_MO\
+    DE_UNSPECIFIED\x10\0\x12!\n\x1dRESOURCE_SHARE_MODE_EXCLUSIVE\x10\x01\x12\
+    (\n$RESOURCE_SHARE_MODE_SHARED_PARTITION\x10\x02*\xf4\x01\n\x16ResourceD\
+    elegationKind\x12(\n$RESOURCE_DELEGATION_KIND_UNSPECIFIED\x10\0\x12(\n$R\
+    ESOURCE_DELEGATION_KIND_OPAQUE_NAME\x10\x01\x12,\n(RESOURCE_DELEGATION_K\
+    IND_FILE_DESCRIPTOR\x10\x02\x12)\n%RESOURCE_DELEGATION_KIND_PARTITION_ID\
+    \x10\x03\x12-\n)RESOURCE_DELEGATION_KIND_NAMESPACE_HANDLE\x10\x04*\x9f\
+    \x04\n\x0fAllocatorReason\x12\x20\n\x1cALLOCATOR_REASON_UNSPECIFIED\x10\
+    \0\x12&\n\"ALLOCATOR_REASON_RESOURCE_CONFLICT\x10\x01\x12'\n#ALLOCATOR_R\
+    EASON_OWNERSHIP_CONFLICT\x10\x02\x120\n,ALLOCATOR_REASON_ACQUISITION_ORD\
+    ER_VIOLATION\x10\x03\x12$\n\x20ALLOCATOR_REASON_INVALID_REQUEST\x10\x04\
+    \x12'\n#ALLOCATOR_REASON_CAPACITY_EXHAUSTED\x10\x05\x12#\n\x1fALLOCATOR_\
+    REASON_DRIFT_DETECTED\x10\x06\x12'\n#ALLOCATOR_REASON_RECONCILE_MISMATCH\
+    \x10\x07\x12#\n\x1fALLOCATOR_REASON_OWNER_NOT_LIVE\x10\x08\x12\"\n\x1eAL\
+    LOCATOR_REASON_POLICY_DENIED\x10\t\x12%\n!ALLOCATOR_REASON_UNSUPPORTED_K\
+    IND\x10\n\x12/\n+ALLOCATOR_REASON_STORAGE_CONTRACT_VIOLATION\x10\x0b\x12\
+    )\n%ALLOCATOR_REASON_KERNEL_STATE_UNKNOWN\x10\x0c*r\n\x10AllocationStatu\
+    s\x12!\n\x1dALLOCATION_STATUS_UNSPECIFIED\x10\0\x12\x1d\n\x19ALLOCATION_\
+    STATUS_GRANTED\x10\x01\x12\x1c\n\x18ALLOCATION_STATUS_DENIED\x10\x02*p\n\
+    \x0eRealmChildRole\x12\x20\n\x1cREALM_CHILD_ROLE_UNSPECIFIED\x10\0\x12\
+    \x1f\n\x1bREALM_CHILD_ROLE_CONTROLLER\x10\x01\x12\x1b\n\x17REALM_CHILD_R\
+    OLE_BROKER\x10\x02*\xd6\x04\n\x10RealmChildFdKind\x12#\n\x1fREALM_CHILD_\
+    FD_KIND_UNSPECIFIED\x10\0\x12'\n#REALM_CHILD_FD_KIND_PUBLIC_LISTENER\x10\
+    \x01\x12'\n#REALM_CHILD_FD_KIND_BROKER_LISTENER\x10\x02\x12&\n\"REALM_CH\
+    ILD_FD_KIND_USER_NAMESPACE\x10\x03\x12'\n#REALM_CHILD_FD_KIND_MOUNT_NAME\
+    SPACE\x10\x04\x12)\n%REALM_CHILD_FD_KIND_NETWORK_NAMESPACE\x10\x05\x12%\
+    \n!REALM_CHILD_FD_KIND_IPC_NAMESPACE\x10\x06\x12%\n!REALM_CHILD_FD_KIND_\
+    PID_NAMESPACE\x10\x07\x12(\n$REALM_CHILD_FD_KIND_CGROUP_NAMESPACE\x10\
+    \x08\x12#\n\x1fREALM_CHILD_FD_KIND_CGROUP_LEAF\x10\t\x12\"\n\x1eREALM_CH\
+    ILD_FD_KIND_STATE_ROOT\x10\n\x12\"\n\x1eREALM_CHILD_FD_KIND_AUDIT_ROOT\
+    \x10\x0b\x12\x20\n\x1cREALM_CHILD_FD_KIND_RESOURCE\x10\x0c\x12\x1d\n\x19\
+    REALM_CHILD_FD_KIND_LEASE\x10\r\x12)\n%REALM_CHILD_FD_KIND_BOOTSTRAP_SES\
+    SION\x10\x0e2\x99\x06\n\rBrokerService\x12N\n\rValidateLease\x12\x1d.d2b\
+    .common.v2.ServiceRequest\x1a\x1e.d2b.common.v2.ServiceResponse\x12K\n\
+    \x08Allocate\x12\x1e.d2b.broker.v2.AllocateRequest\x1a\x1f.d2b.broker.v2\
+    .AllocateResponse\x12I\n\x08Delegate\x12\x1d.d2b.common.v2.ServiceReques\
+    t\x1a\x1e.d2b.common.v2.ServiceResponse\x12\\\n\x05Spawn\x12(.d2b.broker\
+    .v2.SpawnRealmChildrenRequest\x1a).d2b.broker.v2.SpawnRealmChildrenRespo\
+    nse\x12M\n\x0cOpenResource\x12\x1d.d2b.common.v2.ServiceRequest\x1a\x1e.\
+    d2b.common.v2.ServiceResponse\x12F\n\x05Apply\x12\x1d.d2b.common.v2.Serv\
+    iceRequest\x1a\x1e.d2b.common.v2.ServiceResponse\x12H\n\x07Observe\x12\
+    \x1d.d2b.common.v2.ServiceRequest\x1a\x1e.d2b.common.v2.ServiceResponse\
+    \x12L\n\x0bRevokeLease\x12\x1d.d2b.common.v2.ServiceRequest\x1a\x1e.d2b.\
+    common.v2.ServiceResponse\x12L\n\x0bExportAudit\x12\x1d.d2b.common.v2.Se\
+    rviceRequest\x1a\x1e.d2b.common.v2.ServiceResponse\x12E\n\x06Cancel\x12\
+    \x1c.d2b.common.v2.CancelRequest\x1a\x1d.d2b.common.v2.CancelResponseb\
+    \x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file
