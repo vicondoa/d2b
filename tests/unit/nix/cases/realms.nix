@@ -500,7 +500,6 @@ let
     || path == "tests/migration-state.d/polkit-allowlist-eval.toml"
     || path == "tests/migration-state.d/vm-submodule-cutover-eval.toml"
     || path == "tests/migration-state.d/vm-submodule-eval.toml"
-    || path == "tests/static.sh"
     || lib.hasPrefix "docs/explanation/" path
     || lib.hasPrefix "docs/how-to/" path
     || lib.hasPrefix "docs/reference/" path
@@ -524,7 +523,8 @@ let
     w5ReservedPaths
     ++ realmHostPlan.crossWaveOwnership.deferredPurgeDocs.paths
     ++ realmHostPlan.crossWaveOwnership.w6RuntimeDocs.paths
-    ++ realmHostPlan.crossWaveOwnership.frozenContractDocs.paths;
+    ++ realmHostPlan.crossWaveOwnership.frozenContractDocs.paths
+    ++ realmHostPlan.sharedRootRetainedTests.paths;
   foreignAffectedOverlaps =
     lib.intersectLists allOwnedFiles allForeignAffectedPaths;
   deferredPurgeOverlaps = lib.intersectLists
@@ -544,12 +544,12 @@ let
     branch = "adr0045-w7-realm-schema";
     pathsJson = builtins.toJSON [ "nixos-modules/index.nix" ];
   };
-  blockedProviderRegistryDiff = componentPolicy {
+  providerRegistryDiff = componentPolicy {
     branch = "adr0045-w7-provider-registry-composition";
     pathsJson =
       builtins.toJSON [ "nixos-modules/provider-registry-v2-json.nix" ];
   };
-  blockedDeletionContractDiff = componentPolicy {
+  deletionContractDiff = componentPolicy {
     branch = "adr0045-w7-workload-processes";
     pathsJson = builtins.toJSON [
       "packages/d2b-contract-tests/tests/policy_misc.rs"
@@ -565,7 +565,7 @@ let
     pathsJson =
       builtins.toJSON [ "docs/reference/local-root-allocator.md" ];
   };
-  blockedBundleIntegrationDiff = componentPolicy {
+  bundleIntegrationDiff = componentPolicy {
     branch = "adr0045-w7-bundle-integration";
     pathsJson = builtins.toJSON [ "flake.nix" ];
   };
@@ -1865,11 +1865,12 @@ in
         w6 = realmHostPlan.crossWaveOwnership.w6RuntimeDocs.owner;
         purge = realmHostPlan.crossWaveOwnership.deferredPurgeDocs.owner;
         frozen = realmHostPlan.crossWaveOwnership.frozenContractDocs.owner;
+        sharedTests = realmHostPlan.sharedRootRetainedTests.owner;
       };
       inherit forbiddenOwnedFiles;
     };
     expected = {
-      sharedRoot = "47a55e101b5b62e6a89e342512125de43bac4e68";
+      sharedRoot = "c5816944fdbcbb3c8985040742b267b1372b0ede";
       bundleVersion = 12;
       bundleSchemaVersion = "v2";
       allocatorOwner = "w5";
@@ -1899,6 +1900,7 @@ in
         w6 = "w6";
         purge = "w10";
         frozen = "shared-root";
+        sharedTests = "shared-root";
       };
       forbiddenOwnedFiles = [ ];
     };
@@ -2016,7 +2018,6 @@ in
         "tests/migration-state.d/polkit-allowlist-eval.toml"
         "tests/migration-state.d/vm-submodule-cutover-eval.toml"
         "tests/migration-state.d/vm-submodule-eval.toml"
-        "tests/static.sh"
       ];
     };
   };
@@ -2029,16 +2030,16 @@ in
       deniedCrossComponent = {
         inherit (deniedCrossComponentDiff) component valid violations;
       };
-      blockedProviderRegistry = {
-        inherit (blockedProviderRegistryDiff)
+      providerRegistry = {
+        inherit (providerRegistryDiff)
           blockedExternalDependencies
           component
           valid
           violations
           ;
       };
-      blockedDeletionContract = {
-        inherit (blockedDeletionContractDiff)
+      deletionContract = {
+        inherit (deletionContractDiff)
           blockedExternalDependencies
           component
           valid
@@ -2061,8 +2062,8 @@ in
           violations
           ;
       };
-      blockedBundleIntegration = {
-        inherit (blockedBundleIntegrationDiff)
+      bundleIntegration = {
+        inherit (bundleIntegrationDiff)
           blockedExternalDependencies
           component
           valid
@@ -2102,21 +2103,17 @@ in
         valid = false;
         violations = [ "nixos-modules/index.nix" ];
       };
-      blockedProviderRegistry = {
+      providerRegistry = {
         component = "provider-registry-composition";
-        valid = false;
+        valid = true;
         violations = [ ];
-        blockedExternalDependencies = [
-          "shared-root-deletion-contract-test-seam"
-        ];
+        blockedExternalDependencies = [ ];
       };
-      blockedDeletionContract = {
+      deletionContract = {
         component = "workload-processes";
-        valid = false;
+        valid = true;
         violations = [ ];
-        blockedExternalDependencies = [
-          "shared-root-deletion-contract-test-seam"
-        ];
+        blockedExternalDependencies = [ ];
       };
       blockedFixture = {
         component = "realm-devices";
@@ -2131,17 +2128,14 @@ in
         valid = false;
         violations = [ ];
         blockedExternalDependencies = [
-          "shared-root-deletion-contract-test-seam"
           "w5-runtime-document-split"
         ];
       };
-      blockedBundleIntegration = {
+      bundleIntegration = {
         component = "bundle-integration";
-        valid = false;
+        valid = true;
         violations = [ ];
-        blockedExternalDependencies = [
-          "shared-root-deletion-contract-test-seam"
-        ];
+        blockedExternalDependencies = [ ];
       };
       gitEnvironmentHardening = {
         sanitizedEnvironment = true;

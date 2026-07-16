@@ -713,7 +713,6 @@ let
         "templates/default/flake.nix"
         "templates/default/README.md"
         "tests/migration-ledger.toml"
-        "tests/static.sh"
         "tests/fixtures/deny-unknown/bundle-invalid.json"
         "tests/fixtures/deny-unknown/bundle-valid.json"
         "tests/fixtures/deny-unknown/host-invalid.json"
@@ -801,7 +800,7 @@ in
 {
   schemaVersion = 1;
   wave = "w7";
-  sharedRoot = "47a55e101b5b62e6a89e342512125de43bac4e68";
+  sharedRoot = "c5816944fdbcbb3c8985040742b267b1372b0ede";
   branch = "adr0045-w7-realm-host";
   pullRequestBase = "adr0045-post-w4-contracts";
   inherit componentOrder components;
@@ -841,10 +840,15 @@ in
       "tests/migration-state.d/polkit-allowlist-eval.toml"
       "tests/migration-state.d/vm-submodule-cutover-eval.toml"
       "tests/migration-state.d/vm-submodule-eval.toml"
-      "tests/static.sh"
     ] [
       "tests/unit/nix/"
       "tests/unit/smoke/"
+    ];
+  };
+  sharedRootRetainedTests = {
+    owner = "shared-root";
+    paths = [
+      "tests/static.sh"
     ];
   };
 
@@ -870,10 +874,11 @@ in
     };
     shared-root-deletion-contract-test-seam = {
       owner = "adr0045-post-w4-contracts";
-      status = "blocked";
-      requiredRebase = true;
+      status = "ready";
+      requiredRebase = false;
+      landedCommit = "c5816944fdbcbb3c8985040742b267b1372b0ede";
       acceptance = [
-        "The trusted wave policy grants W7 only the enumerated d2b-contract-tests, migration ledger, migration-state, and static orchestrator paths."
+        "The trusted wave policy grants W7 only the enumerated d2b-contract-tests, migration ledger, and migration-state paths."
         "Every granted path remains assigned to exactly one W7 component."
         "No Cargo lock, workspace, runtime consumer, or other frozen test path is opened."
         "W7 rebases onto the accepted narrow extension-seam commit before any affected component starts."
@@ -1130,10 +1135,9 @@ in
         deletedFiles = [ ];
         extensionPaths = [
           "tests/migration-ledger.toml"
-          "tests/static.sh"
         ];
         coupledRetirement =
-          "integrator regenerates the shared retirement ledger and static source inventory after all four deletions";
+          "integrator regenerates the shared retirement ledger after all four deletions";
       }
     ];
   };
