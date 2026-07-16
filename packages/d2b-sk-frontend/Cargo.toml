@@ -12,6 +12,12 @@ description = "d2b guest-side virtual FIDO/security-key UHID frontend"
 workspace = true
 
 [dependencies]
+async-trait.workspace = true
+d2b-contracts.workspace = true
+d2b-provider-device-host-mediated.workspace = true
+d2b-provider-observability-local.workspace = true
+d2b-provider-transport-local.workspace = true
+d2b-session.workspace = true
 libc = "0.2"
 tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread", "time", "fs"] }
 tokio-vsock = "0.7.2"
