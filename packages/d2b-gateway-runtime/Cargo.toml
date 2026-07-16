@@ -21,13 +21,15 @@ workspace = true
 # display byte stream. Nothing else depends on it (it is the composition root
 # consumed by the gateway-mode daemon).
 [dependencies]
+async-trait.workspace = true
+d2b-contracts = { workspace = true, default-features = false, features = ["v2-services"] }
 d2b-gateway = { workspace = true }
 d2b-provider-relay = { workspace = true }
 d2b-provider-aca = { workspace = true }
 d2b-realm-core = { workspace = true }
 d2b-realm-provider = { workspace = true }
-async-trait.workspace = true
-tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
+d2b-session = { workspace = true, default-features = false }
+tokio = { workspace = true, default-features = false, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
 base64 = "0.22"
 chacha20poly1305 = "0.10"
 getrandom = "0.2"

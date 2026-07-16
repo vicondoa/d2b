@@ -1451,7 +1451,7 @@ fn w4_provider_delivery_fingerprints_cover_every_reserved_file() {
 fn shared_contract_policy_freezes_services_dependencies_and_ownership() {
     let root = repo_root();
     let policy = xtask::wave_policy::read_policy(&root).expect("shared-contract policy");
-    assert_eq!(policy.schema_version, 3);
+    assert_eq!(policy.schema_version, 4);
     assert_eq!(policy.authority_repository, "github.com/vicondoa/d2b");
     let frozen = policy
         .frozen_service_packages
@@ -1631,6 +1631,77 @@ fn shared_contract_policy_freezes_services_dependencies_and_ownership() {
                 .is_ok(),
             "shared contract policy does not protect {required}"
         );
+    }
+}
+
+#[test]
+fn w5_service_dependency_edges_are_locked_and_directional() {
+    let policy =
+        xtask::wave_policy::read_policy(&repo_root()).expect("shared-contract dependency policy");
+    let metadata = workspace_metadata();
+    let packages = metadata["packages"].as_array().expect("metadata packages");
+
+    for edge in &policy.service_dependency_edges {
+        let package = packages
+            .iter()
+            .find(|package| package["name"] == edge.consumer)
+            .unwrap_or_else(|| panic!("missing consumer package {}", edge.consumer));
+        let dependencies = package["dependencies"]
+            .as_array()
+            .expect("package dependencies")
+            .iter()
+            .filter(|dependency| {
+                dependency["name"] == edge.dependency && dependency["kind"].is_null()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            dependencies.len(),
+            1,
+            "{} must have exactly one normal dependency on {}",
+            edge.consumer,
+            edge.dependency
+        );
+        let dependency = dependencies[0];
+        assert_eq!(
+            dependency["uses_default_features"],
+            serde_json::Value::Bool(edge.default_features),
+            "{} -> {} default-feature policy drifted",
+            edge.consumer,
+            edge.dependency
+        );
+        let actual_features = dependency["features"]
+            .as_array()
+            .expect("dependency features")
+            .iter()
+            .map(|feature| feature.as_str().expect("feature").to_owned())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            actual_features,
+            edge.features.iter().cloned().collect(),
+            "{} -> {} feature policy drifted",
+            edge.consumer,
+            edge.dependency
+        );
+        assert!(
+            transitive_package_names(&metadata, &edge.consumer).contains(&edge.dependency),
+            "locked resolve omits {} -> {}",
+            edge.consumer,
+            edge.dependency
+        );
+    }
+
+    for (consumer, forbidden) in [
+        ("d2b-client", ["d2b", "d2b-guestd"]),
+        ("d2b-session", ["d2b-guestd", "d2b-gateway-runtime"]),
+        ("d2b-contracts", ["d2b-gateway-runtime", "d2b-guestd"]),
+    ] {
+        let transitive = transitive_package_names(&metadata, consumer);
+        for forbidden in forbidden {
+            assert!(
+                !transitive.contains(forbidden),
+                "dependency direction inverted: {consumer} reaches {forbidden}"
+            );
+        }
     }
 }
 

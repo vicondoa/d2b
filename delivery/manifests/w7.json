@@ -392,6 +392,21 @@
       "path": "packages/Cargo.lock"
     },
     {
+      "name": "cargo-package-d2b",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b/Cargo.toml"
+    },
+    {
+      "name": "cargo-package-d2b-gateway-runtime",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-gateway-runtime/Cargo.toml"
+    },
+    {
+      "name": "cargo-package-d2b-guestd",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-guestd/Cargo.toml"
+    },
+    {
       "name": "cargo-workspace",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/Cargo.toml"

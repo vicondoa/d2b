@@ -1000,6 +1000,7 @@ name = "d2b"
 version = "2.0.0"
 dependencies = [
  "clap",
+ "d2b-client",
  "d2b-contracts",
  "d2b-core",
  "d2b-realm-core",
@@ -1011,6 +1012,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -1155,11 +1157,13 @@ dependencies = [
  "azure_core",
  "base64",
  "chacha20poly1305",
+ "d2b-contracts",
  "d2b-gateway",
  "d2b-provider-aca",
  "d2b-provider-relay",
  "d2b-realm-core",
  "d2b-realm-provider",
+ "d2b-session",
  "getrandom 0.2.17",
  "libc",
  "serde",
@@ -1193,6 +1197,7 @@ dependencies = [
  "d2b-contracts",
  "d2b-exec-runner",
  "d2b-realm-core",
+ "d2b-session",
  "futures",
  "hmac",
  "protobuf",

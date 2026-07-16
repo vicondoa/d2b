@@ -17,10 +17,11 @@ hmac = "0.12"
 d2b-contracts = { workspace = true, features = ["guest"] }
 d2b-exec-runner = { workspace = true }
 d2b-realm-core = { workspace = true }
+d2b-session = { workspace = true, default-features = false }
 protobuf.workspace = true
 rustix = { workspace = true }
 sha2 = { workspace = true }
-tokio = { workspace = true, features = ["io-util", "macros", "process", "rt-multi-thread", "sync", "time", "signal"] }
+tokio = { workspace = true, default-features = false, features = ["io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-vsock = "0.7.2"
 ttrpc = { workspace = true, default-features = false, features = ["async", "sync"] }
 

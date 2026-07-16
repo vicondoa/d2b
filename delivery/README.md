@@ -39,3 +39,10 @@ may add a schema-declared `ProviderBindingV2` variant through its narrow
 exception, but the non-exhaustive consumer view and protected daemon consumer
 files keep it unsupported until a shared-root adapter change lands. Unknown
 wire variants remain rejected.
+
+The inventory also freezes service dependency edges before implementation
+slices diverge: the CLI consumes `d2b-client` with host-socket support,
+`d2b-guestd` consumes `d2b-session`, and the `d2b-provider-agent` binary in
+`d2b-gateway-runtime` consumes the v2-services-only `d2b-contracts` surface plus
+`d2b-session`. Every edge disables default features and records its exact Tokio
+feature set.

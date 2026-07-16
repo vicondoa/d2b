@@ -14,8 +14,8 @@ use crate::delivery::{
     },
     model::{
         DeliveryManifest, PullRequestState, expected_wave_manifest_path,
-        is_authoritative_manifest_path, validate_git_ref, validate_hash, validate_repository_id,
-        validate_wave_identifier,
+        is_authoritative_manifest_path, validate_git_ref, validate_hash, validate_identifier,
+        validate_repository_id, validate_wave_identifier,
     },
 };
 
@@ -60,6 +60,7 @@ pub struct SharedContractPolicy {
     pub documentation_prefixes: Vec<String>,
     pub frozen_service_packages: Vec<String>,
     pub broker_typed_methods: Vec<TypedBrokerMethod>,
+    pub service_dependency_edges: Vec<ServiceDependencyEdge>,
     pub workspace_dependencies: Vec<WorkspaceDependency>,
 }
 
@@ -94,9 +95,18 @@ pub struct WorkspaceDependency {
     pub requirement: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[serde(deny_unknown_fields)]
+pub struct ServiceDependencyEdge {
+    pub consumer: String,
+    pub dependency: String,
+    pub default_features: bool,
+    pub features: Vec<String>,
+}
+
 impl SharedContractPolicy {
     pub fn validate(&self) -> Result<(), String> {
-        if self.schema_version != 3 {
+        if self.schema_version != 4 {
             return Err("unsupported shared-contract policy schema".to_owned());
         }
         if self.authority_repository != "github.com/vicondoa/d2b" {
@@ -195,6 +205,20 @@ impl SharedContractPolicy {
         validate_sorted_directory_prefixes(&self.documentation_prefixes, "documentation prefixes")?;
         validate_sorted_strings(&self.frozen_service_packages, "frozen service packages")?;
         validate_sorted_values(&self.broker_typed_methods, "typed broker methods")?;
+        validate_sorted_values(&self.service_dependency_edges, "service dependency edges")?;
+        for edge in &self.service_dependency_edges {
+            validate_identifier(&edge.consumer, "service dependency consumer")
+                .map_err(|error| error.to_string())?;
+            validate_identifier(&edge.dependency, "service dependency")
+                .map_err(|error| error.to_string())?;
+            validate_sorted_strings_allow_empty(&edge.features, "service dependency features")?;
+            if edge.default_features {
+                return Err(format!(
+                    "{} -> {} must disable default features",
+                    edge.consumer, edge.dependency
+                ));
+            }
+        }
         validate_sorted_values(&self.workspace_dependencies, "workspace dependencies")?;
         for required in REQUIRED_PROTECTED_PATHS {
             if self

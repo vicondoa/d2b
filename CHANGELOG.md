@@ -59,6 +59,9 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Predeclared the CLI-to-client, guestd-to-session, and provider-agent
+  service/session dependency edges with least-privilege contract and Tokio
+  features in the shared workspace lock.
 - Made provider-registry bindings non-exhaustive for Rust consumers while
   preserving strict wire variants, and added a registered consumer view whose
   explicit daemon fallback rejects newly declared bindings until an adapter is
