@@ -78,6 +78,22 @@ resource or stream handles, result digests, attachments, or errors. Error
 responses carry no query result, and every non-query provider method rejects
 that field. Provider-service schema fingerprints include this response shape.
 
+`BrokerService.Allocate` uses typed bounded allocator messages rather than the
+generic service envelope. A request names one owner generation and at most 32
+opaque resources with closed kind/share and acquisition-order fields. A grant
+returns an opaque lease and closed delegations; only file-descriptor
+delegations may name attachment indexes. Denials carry one closed reason and at
+most 16 opaque conflicts.
+
+`BrokerService.Spawn` uses the typed realm-child pair contract. Its request
+names opaque controller/broker process records and binds the exact public
+listener, broker listener, bootstrap-session, namespace, cgroup, state, audit,
+resource, and lease attachment roles. It carries no executable argv, host path,
+credential, UID map, or free-form authority. Success returns exactly one
+controller and one broker record with distinct pidfd attachment indexes and
+executable digests. The service schema fingerprint includes these allocator and
+child-spawn message shapes.
+
 ## Bounds and strictness
 
 A protobuf message is at most 1 MiB. Strings and opaque IDs are at most 64

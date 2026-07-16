@@ -32,8 +32,8 @@ impl BrokerServiceClient {
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.broker.v2.BrokerService", "ValidateLease", cres);
     }
 
-    pub async fn allocate(&self, ctx: ttrpc::context::Context, req: &super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
-        let mut cres = super::common::ServiceResponse::new();
+    pub async fn allocate(&self, ctx: ttrpc::context::Context, req: &super::broker::AllocateRequest) -> ::ttrpc::Result<super::broker::AllocateResponse> {
+        let mut cres = super::broker::AllocateResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.broker.v2.BrokerService", "Allocate", cres);
     }
 
@@ -42,8 +42,8 @@ impl BrokerServiceClient {
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.broker.v2.BrokerService", "Delegate", cres);
     }
 
-    pub async fn spawn(&self, ctx: ttrpc::context::Context, req: &super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
-        let mut cres = super::common::ServiceResponse::new();
+    pub async fn spawn(&self, ctx: ttrpc::context::Context, req: &super::broker::SpawnRealmChildrenRequest) -> ::ttrpc::Result<super::broker::SpawnRealmChildrenResponse> {
+        let mut cres = super::broker::SpawnRealmChildrenResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.broker.v2.BrokerService", "Spawn", cres);
     }
 
@@ -96,7 +96,7 @@ struct AllocateMethod {
 #[async_trait]
 impl ::ttrpc::r#async::MethodHandler for AllocateMethod {
     async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
-        ::ttrpc::async_request_handler!(self, ctx, req, common, ServiceRequest, allocate);
+        ::ttrpc::async_request_handler!(self, ctx, req, broker, AllocateRequest, allocate);
     }
 }
 
@@ -118,7 +118,7 @@ struct SpawnMethod {
 #[async_trait]
 impl ::ttrpc::r#async::MethodHandler for SpawnMethod {
     async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
-        ::ttrpc::async_request_handler!(self, ctx, req, common, ServiceRequest, spawn);
+        ::ttrpc::async_request_handler!(self, ctx, req, broker, SpawnRealmChildrenRequest, spawn);
     }
 }
 
@@ -193,13 +193,13 @@ pub trait BrokerService: Sync {
     async fn validate_lease(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.broker.v2.BrokerService/ValidateLease is not supported".to_string())))
     }
-    async fn allocate(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
+    async fn allocate(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::broker::AllocateRequest) -> ::ttrpc::Result<super::broker::AllocateResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.broker.v2.BrokerService/Allocate is not supported".to_string())))
     }
     async fn delegate(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.broker.v2.BrokerService/Delegate is not supported".to_string())))
     }
-    async fn spawn(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
+    async fn spawn(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::broker::SpawnRealmChildrenRequest) -> ::ttrpc::Result<super::broker::SpawnRealmChildrenResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.broker.v2.BrokerService/Spawn is not supported".to_string())))
     }
     async fn open_resource(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {

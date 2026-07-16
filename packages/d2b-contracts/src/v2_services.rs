@@ -148,6 +148,9 @@ pub const MAX_PAGE_CURSOR_BYTES: usize = 128;
 pub const MAX_PAGE_SIZE: u32 = 256;
 pub const MAX_OBSERVATIONS: usize = 256;
 pub const DIGEST_BYTES: usize = 32;
+pub const MAX_ALLOCATOR_REQUEST_RESOURCES: usize = 32;
+pub const MAX_ALLOCATOR_CONFLICTS: usize = 16;
+pub const MAX_REALM_CHILD_FDS: usize = 64;
 
 pub const SERVICE_PACKAGES: [&str; 15] = [
     "d2b.daemon.v2",
@@ -481,6 +484,9 @@ pub fn service_schema_fingerprint(service: &ServiceSpec) -> [u8; 32] {
     if service.package == "d2b.provider.v2" {
         digest.update(b"\0provider-response-observability-query-result-v1");
     }
+    if service.package == "d2b.broker.v2" {
+        digest.update(b"\0typed-allocator-and-realm-child-spawn-v1");
+    }
     for method in service.methods {
         digest.update(b"\0");
         digest.update(method.name.as_bytes());
@@ -799,6 +805,379 @@ impl StrictWireMessage for common::ServiceRequest {
     }
 }
 
+fn validate_realm_path(value: &str) -> Result<(), ServiceContractError> {
+    let labels = value.split('.').collect::<Vec<_>>();
+    if value.is_empty()
+        || value.len() > 255
+        || labels.is_empty()
+        || labels.len() > 16
+        || labels.iter().any(|label| {
+            let mut bytes = label.bytes();
+            !bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
+                || !bytes
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        })
+    {
+        return Err(ServiceContractError::InvalidIdentity);
+    }
+    Ok(())
+}
+
+fn validate_lease_owner(value: &broker::LeaseOwner) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    validate_realm_path(&value.realm_path)?;
+    if !bounded_opaque(&value.controller_generation_id, MAX_SERVICE_STRING_BYTES)
+        || value
+            .node_id
+            .as_deref()
+            .is_some_and(|node| !bounded_opaque(node, MAX_SERVICE_STRING_BYTES))
+    {
+        return Err(ServiceContractError::InvalidId);
+    }
+    Ok(())
+}
+
+fn validate_acquisition_order(
+    value: &broker::ResourceAcquisitionOrder,
+) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    if value.phase > u32::from(u16::MAX) || value.ordinal > u32::from(u16::MAX) {
+        return Err(ServiceContractError::BoundExceeded);
+    }
+    Ok(())
+}
+
+fn validate_requested_resource(
+    value: &broker::LeaseResourceRequest,
+) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    if !bounded_opaque(&value.resource_id, MAX_SERVICE_STRING_BYTES) {
+        return Err(ServiceContractError::InvalidId);
+    }
+    if value.kind.enum_value().is_err()
+        || value.kind.value() == broker::HostResourceKind::HOST_RESOURCE_KIND_UNSPECIFIED.value()
+        || value.share.enum_value().is_err()
+        || value.share.value() == broker::ResourceShareMode::RESOURCE_SHARE_MODE_UNSPECIFIED.value()
+    {
+        return Err(ServiceContractError::InvalidEnum);
+    }
+    validate_acquisition_order(required_message(&value.acquisition_order)?)
+}
+
+impl StrictWireMessage for broker::AllocateRequest {
+    fn validate_wire(&self, requires_idempotency: bool) -> Result<(), ServiceContractError> {
+        reject_unknown(self)?;
+        validate_metadata(required_message(&self.metadata)?, requires_idempotency)?;
+        validate_scope(required_message(&self.scope)?)?;
+        validate_lease_owner(required_message(&self.owner)?)?;
+        if !bounded_opaque(&self.operation_id, MAX_SERVICE_STRING_BYTES) {
+            return Err(ServiceContractError::InvalidId);
+        }
+        if !required_digest(&self.request_digest) {
+            return Err(ServiceContractError::InvalidDigest);
+        }
+        if self.resources.is_empty() || self.resources.len() > MAX_ALLOCATOR_REQUEST_RESOURCES {
+            return Err(ServiceContractError::BoundExceeded);
+        }
+        let mut resource_ids = BTreeSet::new();
+        for resource in &self.resources {
+            validate_requested_resource(resource)?;
+            if !resource_ids.insert(resource.resource_id.as_str()) {
+                return Err(ServiceContractError::InvalidId);
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_granted_resource(
+    value: &broker::GrantedHostResource,
+) -> Result<Option<u32>, ServiceContractError> {
+    reject_unknown(value)?;
+    if !bounded_opaque(&value.resource_id, MAX_SERVICE_STRING_BYTES)
+        || !bounded_opaque(&value.delegation_id, MAX_SERVICE_STRING_BYTES)
+    {
+        return Err(ServiceContractError::InvalidId);
+    }
+    let kind = value
+        .kind
+        .enum_value()
+        .map_err(|_| ServiceContractError::InvalidEnum)?;
+    let share = value
+        .share
+        .enum_value()
+        .map_err(|_| ServiceContractError::InvalidEnum)?;
+    let delegation = value
+        .delegation
+        .enum_value()
+        .map_err(|_| ServiceContractError::InvalidEnum)?;
+    if kind == broker::HostResourceKind::HOST_RESOURCE_KIND_UNSPECIFIED
+        || share == broker::ResourceShareMode::RESOURCE_SHARE_MODE_UNSPECIFIED
+        || delegation == broker::ResourceDelegationKind::RESOURCE_DELEGATION_KIND_UNSPECIFIED
+    {
+        return Err(ServiceContractError::InvalidEnum);
+    }
+    if (delegation == broker::ResourceDelegationKind::RESOURCE_DELEGATION_KIND_FILE_DESCRIPTOR)
+        != value.attachment_index.is_some()
+    {
+        return Err(ServiceContractError::InconsistentResponse);
+    }
+    validate_acquisition_order(required_message(&value.acquisition_order)?)?;
+    Ok(value.attachment_index)
+}
+
+fn validate_allocator_conflict(
+    value: &broker::AllocatorConflict,
+) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    if !bounded_opaque(&value.resource_id, MAX_SERVICE_STRING_BYTES)
+        || value
+            .existing_lease_id
+            .as_deref()
+            .is_some_and(|lease| !bounded_opaque(lease, MAX_SERVICE_STRING_BYTES))
+    {
+        return Err(ServiceContractError::InvalidId);
+    }
+    if value.kind.enum_value().is_err()
+        || value.kind.value() == broker::HostResourceKind::HOST_RESOURCE_KIND_UNSPECIFIED.value()
+        || value.reason.enum_value().is_err()
+        || value.reason.value() == broker::AllocatorReason::ALLOCATOR_REASON_UNSPECIFIED.value()
+    {
+        return Err(ServiceContractError::InvalidEnum);
+    }
+    Ok(())
+}
+
+impl StrictWireMessage for broker::AllocateResponse {
+    fn validate_wire(&self, _: bool) -> Result<(), ServiceContractError> {
+        reject_unknown(self)?;
+        let outcome = self
+            .outcome
+            .enum_value()
+            .map_err(|_| ServiceContractError::InvalidEnum)?;
+        let status = self
+            .status
+            .enum_value()
+            .map_err(|_| ServiceContractError::InvalidEnum)?;
+        let reason = self
+            .reason
+            .enum_value()
+            .map_err(|_| ServiceContractError::InvalidEnum)?;
+        if outcome == common::Outcome::OUTCOME_UNSPECIFIED
+            || status == broker::AllocationStatus::ALLOCATION_STATUS_UNSPECIFIED
+            || !bounded_opaque(&self.operation_id, MAX_SERVICE_STRING_BYTES)
+            || self.resources.len() > MAX_ALLOCATOR_REQUEST_RESOURCES
+            || self.conflicts.len() > MAX_ALLOCATOR_CONFLICTS
+        {
+            return Err(ServiceContractError::InvalidEnum);
+        }
+        let mut resource_ids = BTreeSet::new();
+        let mut attachments = Vec::new();
+        for resource in &self.resources {
+            if !resource_ids.insert(resource.resource_id.as_str()) {
+                return Err(ServiceContractError::InvalidId);
+            }
+            if let Some(index) = validate_granted_resource(resource)? {
+                attachments.push(index);
+            }
+        }
+        validate_attachments(&attachments)?;
+        for conflict in &self.conflicts {
+            validate_allocator_conflict(conflict)?;
+        }
+        validate_outcome_error(outcome, self.error.as_ref())?;
+        match status {
+            broker::AllocationStatus::ALLOCATION_STATUS_GRANTED
+                if outcome == common::Outcome::OUTCOME_SUCCEEDED
+                    && bounded_opaque(&self.lease_id, MAX_SERVICE_STRING_BYTES)
+                    && !self.resources.is_empty()
+                    && reason == broker::AllocatorReason::ALLOCATOR_REASON_UNSPECIFIED
+                    && self.conflicts.is_empty() =>
+            {
+                Ok(())
+            }
+            broker::AllocationStatus::ALLOCATION_STATUS_DENIED
+                if matches!(
+                    outcome,
+                    common::Outcome::OUTCOME_DENIED
+                        | common::Outcome::OUTCOME_CANCELLED
+                        | common::Outcome::OUTCOME_FAILED
+                ) && self.lease_id.is_empty()
+                    && self.resources.is_empty()
+                    && reason != broker::AllocatorReason::ALLOCATOR_REASON_UNSPECIFIED =>
+            {
+                Ok(())
+            }
+            _ => Err(ServiceContractError::InconsistentResponse),
+        }
+    }
+}
+
+fn validate_realm_child_fd(
+    value: &broker::RealmChildFd,
+) -> Result<(broker::RealmChildRole, broker::RealmChildFdKind), ServiceContractError> {
+    reject_unknown(value)?;
+    let role = value
+        .role
+        .enum_value()
+        .map_err(|_| ServiceContractError::InvalidEnum)?;
+    let kind = value
+        .kind
+        .enum_value()
+        .map_err(|_| ServiceContractError::InvalidEnum)?;
+    if role == broker::RealmChildRole::REALM_CHILD_ROLE_UNSPECIFIED
+        || kind == broker::RealmChildFdKind::REALM_CHILD_FD_KIND_UNSPECIFIED
+        || value
+            .resource_id
+            .as_deref()
+            .is_some_and(|resource| !bounded_opaque(resource, MAX_SERVICE_STRING_BYTES))
+    {
+        return Err(ServiceContractError::InvalidEnum);
+    }
+    if (kind == broker::RealmChildFdKind::REALM_CHILD_FD_KIND_PUBLIC_LISTENER
+        && role != broker::RealmChildRole::REALM_CHILD_ROLE_CONTROLLER)
+        || (kind == broker::RealmChildFdKind::REALM_CHILD_FD_KIND_BROKER_LISTENER
+            && role != broker::RealmChildRole::REALM_CHILD_ROLE_BROKER)
+    {
+        return Err(ServiceContractError::InvalidOperationInput);
+    }
+    Ok((role, kind))
+}
+
+impl StrictWireMessage for broker::SpawnRealmChildrenRequest {
+    fn validate_wire(&self, requires_idempotency: bool) -> Result<(), ServiceContractError> {
+        reject_unknown(self)?;
+        validate_metadata(required_message(&self.metadata)?, requires_idempotency)?;
+        let scope = required_message(&self.scope)?;
+        validate_scope(scope)?;
+        RealmId::parse(self.realm_id.clone()).map_err(|_| ServiceContractError::InvalidIdentity)?;
+        if scope.realm_id != self.realm_id
+            || !scope.workload_id.is_empty()
+            || !scope.provider_id.is_empty()
+            || !scope.role_id.is_empty()
+        {
+            return Err(ServiceContractError::InvalidIdentity);
+        }
+        if !bounded_opaque(&self.operation_id, MAX_SERVICE_STRING_BYTES)
+            || !bounded_opaque(&self.controller_generation_id, MAX_SERVICE_STRING_BYTES)
+            || !bounded_opaque(&self.controller_process_id, MAX_SERVICE_STRING_BYTES)
+            || !bounded_opaque(&self.broker_process_id, MAX_SERVICE_STRING_BYTES)
+            || self.controller_process_id == self.broker_process_id
+        {
+            return Err(ServiceContractError::InvalidId);
+        }
+        if !required_digest(&self.launch_record_digest) {
+            return Err(ServiceContractError::InvalidDigest);
+        }
+        if self.fds.len() < 4 || self.fds.len() > MAX_REALM_CHILD_FDS {
+            return Err(ServiceContractError::BoundExceeded);
+        }
+        let mut bindings = BTreeSet::new();
+        let mut attachments = Vec::with_capacity(self.fds.len());
+        for fd in &self.fds {
+            let (role, kind) = validate_realm_child_fd(fd)?;
+            if !bindings.insert((role.value(), kind.value(), fd.resource_id.as_deref())) {
+                return Err(ServiceContractError::InvalidOperationInput);
+            }
+            attachments.push(fd.attachment_index);
+        }
+        validate_attachments(&attachments)?;
+        for required in [
+            (
+                broker::RealmChildRole::REALM_CHILD_ROLE_CONTROLLER,
+                broker::RealmChildFdKind::REALM_CHILD_FD_KIND_PUBLIC_LISTENER,
+            ),
+            (
+                broker::RealmChildRole::REALM_CHILD_ROLE_BROKER,
+                broker::RealmChildFdKind::REALM_CHILD_FD_KIND_BROKER_LISTENER,
+            ),
+            (
+                broker::RealmChildRole::REALM_CHILD_ROLE_CONTROLLER,
+                broker::RealmChildFdKind::REALM_CHILD_FD_KIND_BOOTSTRAP_SESSION,
+            ),
+            (
+                broker::RealmChildRole::REALM_CHILD_ROLE_BROKER,
+                broker::RealmChildFdKind::REALM_CHILD_FD_KIND_BOOTSTRAP_SESSION,
+            ),
+        ] {
+            if !bindings
+                .iter()
+                .any(|(role, kind, _)| *role == required.0.value() && *kind == required.1.value())
+            {
+                return Err(ServiceContractError::MissingOperationInput);
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_spawned_child(
+    value: &broker::SpawnedRealmChild,
+) -> Result<(broker::RealmChildRole, u32), ServiceContractError> {
+    reject_unknown(value)?;
+    let role = value
+        .role
+        .enum_value()
+        .map_err(|_| ServiceContractError::InvalidEnum)?;
+    if role == broker::RealmChildRole::REALM_CHILD_ROLE_UNSPECIFIED {
+        return Err(ServiceContractError::InvalidEnum);
+    }
+    if !bounded_opaque(&value.process_id, MAX_SERVICE_STRING_BYTES) {
+        return Err(ServiceContractError::InvalidId);
+    }
+    if !required_digest(&value.executable_digest) {
+        return Err(ServiceContractError::InvalidDigest);
+    }
+    Ok((role, value.pidfd_attachment_index))
+}
+
+impl StrictWireMessage for broker::SpawnRealmChildrenResponse {
+    fn validate_wire(&self, _: bool) -> Result<(), ServiceContractError> {
+        reject_unknown(self)?;
+        let outcome = self
+            .outcome
+            .enum_value()
+            .map_err(|_| ServiceContractError::InvalidEnum)?;
+        if outcome == common::Outcome::OUTCOME_UNSPECIFIED
+            || !bounded_opaque(&self.operation_id, MAX_SERVICE_STRING_BYTES)
+        {
+            return Err(ServiceContractError::InvalidEnum);
+        }
+        validate_outcome_error(outcome, self.error.as_ref())?;
+        if outcome == common::Outcome::OUTCOME_SUCCEEDED {
+            if !required_digest(&self.launch_record_digest) || self.children.len() != 2 {
+                return Err(ServiceContractError::InconsistentResponse);
+            }
+            let mut roles = BTreeSet::new();
+            let mut attachments = Vec::with_capacity(2);
+            for child in &self.children {
+                let (role, attachment) = validate_spawned_child(child)?;
+                if !roles.insert(role.value()) {
+                    return Err(ServiceContractError::InconsistentResponse);
+                }
+                attachments.push(attachment);
+            }
+            validate_attachments(&attachments)?;
+            if !roles.contains(&broker::RealmChildRole::REALM_CHILD_ROLE_CONTROLLER.value())
+                || !roles.contains(&broker::RealmChildRole::REALM_CHILD_ROLE_BROKER.value())
+            {
+                return Err(ServiceContractError::InconsistentResponse);
+            }
+            Ok(())
+        } else if matches!(
+            outcome,
+            common::Outcome::OUTCOME_DENIED
+                | common::Outcome::OUTCOME_CANCELLED
+                | common::Outcome::OUTCOME_FAILED
+        ) && self.launch_record_digest.is_empty()
+            && self.children.is_empty()
+        {
+            Ok(())
+        } else {
+            Err(ServiceContractError::InconsistentResponse)
+        }
+    }
+}
 fn validate_provider_context(
     value: &common::ProviderOperationContext,
     requires_idempotency: bool,

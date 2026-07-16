@@ -17,7 +17,7 @@ use d2b_contracts::v2_provider::{
 };
 use d2b_contracts::v2_services::{
     SERVICE_INVENTORY, SERVICE_PACKAGES, ServiceContractError, ServiceInventoryDocument,
-    StrictWireMessage, common, decode_strict, encode_strict,
+    StrictWireMessage, broker, common, decode_strict, encode_strict,
     observability_query_response_from_wire, observability_query_result_to_wire,
     provider_method_for_capability, provider_operation_input, service_inventory_document,
     validate_provider_response_for_method,
@@ -328,6 +328,136 @@ fn valid_provider_request() -> common::ProviderRequest {
     }
 }
 
+fn valid_allocate_request() -> broker::AllocateRequest {
+    let request = valid_request();
+    let mut owner = broker::LeaseOwner::new();
+    owner.realm_path = "work".to_owned();
+    owner.controller_generation_id = "controller-generation-1".to_owned();
+    let mut order = broker::ResourceAcquisitionOrder::new();
+    order.phase = 1;
+    order.ordinal = 2;
+    let mut resource = broker::LeaseResourceRequest::new();
+    resource.resource_id = "resource-bridge-1".to_owned();
+    resource.kind = broker::HostResourceKind::HOST_RESOURCE_KIND_BRIDGE.into();
+    resource.share = broker::ResourceShareMode::RESOURCE_SHARE_MODE_EXCLUSIVE.into();
+    resource.acquisition_order = MessageField::some(order);
+    broker::AllocateRequest {
+        metadata: request.metadata,
+        scope: request.scope,
+        operation_id: "operation-allocate-1".to_owned(),
+        owner: MessageField::some(owner),
+        resources: vec![resource],
+        request_digest: vec![0x66; 32],
+        ..Default::default()
+    }
+}
+
+fn valid_allocate_response() -> broker::AllocateResponse {
+    let mut order = broker::ResourceAcquisitionOrder::new();
+    order.phase = 1;
+    order.ordinal = 2;
+    let mut resource = broker::GrantedHostResource::new();
+    resource.resource_id = "resource-bridge-1".to_owned();
+    resource.kind = broker::HostResourceKind::HOST_RESOURCE_KIND_BRIDGE.into();
+    resource.share = broker::ResourceShareMode::RESOURCE_SHARE_MODE_EXCLUSIVE.into();
+    resource.delegation =
+        broker::ResourceDelegationKind::RESOURCE_DELEGATION_KIND_FILE_DESCRIPTOR.into();
+    resource.delegation_id = "delegation-bridge-1".to_owned();
+    resource.acquisition_order = MessageField::some(order);
+    resource.attachment_index = Some(0);
+    broker::AllocateResponse {
+        outcome: common::Outcome::OUTCOME_SUCCEEDED.into(),
+        operation_id: "operation-allocate-1".to_owned(),
+        status: broker::AllocationStatus::ALLOCATION_STATUS_GRANTED.into(),
+        lease_id: "lease-1".to_owned(),
+        resources: vec![resource],
+        ..Default::default()
+    }
+}
+
+fn child_fd(
+    role: broker::RealmChildRole,
+    kind: broker::RealmChildFdKind,
+    attachment_index: u32,
+) -> broker::RealmChildFd {
+    broker::RealmChildFd {
+        role: role.into(),
+        kind: kind.into(),
+        attachment_index,
+        ..Default::default()
+    }
+}
+
+fn valid_spawn_request() -> broker::SpawnRealmChildrenRequest {
+    let request = valid_request();
+    broker::SpawnRealmChildrenRequest {
+        metadata: request.metadata,
+        scope: request.scope,
+        operation_id: "operation-spawn-1".to_owned(),
+        realm_id: "aaaaaaaaaaaaaaaaaaaa".to_owned(),
+        controller_generation_id: "controller-generation-1".to_owned(),
+        controller_process_id: "process-controller-1".to_owned(),
+        broker_process_id: "process-broker-1".to_owned(),
+        launch_record_digest: vec![0x77; 32],
+        fds: vec![
+            child_fd(
+                broker::RealmChildRole::REALM_CHILD_ROLE_CONTROLLER,
+                broker::RealmChildFdKind::REALM_CHILD_FD_KIND_PUBLIC_LISTENER,
+                0,
+            ),
+            child_fd(
+                broker::RealmChildRole::REALM_CHILD_ROLE_BROKER,
+                broker::RealmChildFdKind::REALM_CHILD_FD_KIND_BROKER_LISTENER,
+                1,
+            ),
+            child_fd(
+                broker::RealmChildRole::REALM_CHILD_ROLE_CONTROLLER,
+                broker::RealmChildFdKind::REALM_CHILD_FD_KIND_BOOTSTRAP_SESSION,
+                2,
+            ),
+            child_fd(
+                broker::RealmChildRole::REALM_CHILD_ROLE_BROKER,
+                broker::RealmChildFdKind::REALM_CHILD_FD_KIND_BOOTSTRAP_SESSION,
+                3,
+            ),
+        ],
+        ..Default::default()
+    }
+}
+
+fn valid_spawn_response() -> broker::SpawnRealmChildrenResponse {
+    let child = |role: broker::RealmChildRole,
+                 process_id: &str,
+                 attachment: u32|
+     -> broker::SpawnedRealmChild {
+        broker::SpawnedRealmChild {
+            role: role.into(),
+            process_id: process_id.to_owned(),
+            pidfd_attachment_index: attachment,
+            executable_digest: vec![0x88; 32],
+            ..Default::default()
+        }
+    };
+    broker::SpawnRealmChildrenResponse {
+        outcome: common::Outcome::OUTCOME_SUCCEEDED.into(),
+        operation_id: "operation-spawn-1".to_owned(),
+        launch_record_digest: vec![0x77; 32],
+        children: vec![
+            child(
+                broker::RealmChildRole::REALM_CHILD_ROLE_CONTROLLER,
+                "process-controller-1",
+                0,
+            ),
+            child(
+                broker::RealmChildRole::REALM_CHILD_ROLE_BROKER,
+                "process-broker-1",
+                1,
+            ),
+        ],
+        ..Default::default()
+    }
+}
+
 fn canonical_observability_request() -> ProviderOperationRequest {
     let realm_id = RealmId::parse("aaaaaaaaaaaaaaaaaaaa").unwrap();
     let workload_id = WorkloadId::parse("bbbbbbbbbbbbbbbbbbba").unwrap();
@@ -450,6 +580,84 @@ fn strict_wire_rejects_unknown_over_limit_and_missing_idempotency() {
     assert_eq!(
         decode_strict::<common::ServiceRequest>(&oversized, true),
         Err(ServiceContractError::MessageTooLarge)
+    );
+}
+
+#[test]
+fn allocator_and_realm_child_contracts_round_trip_strictly() {
+    let allocate = valid_allocate_request();
+    let encoded = encode_strict(&allocate, true).expect("allocate request");
+    assert_eq!(
+        decode_strict::<broker::AllocateRequest>(&encoded, true).expect("allocate decode"),
+        allocate
+    );
+
+    let allocation = valid_allocate_response();
+    let encoded = encode_strict(&allocation, false).expect("allocate response");
+    assert_eq!(
+        decode_strict::<broker::AllocateResponse>(&encoded, false).expect("response decode"),
+        allocation
+    );
+
+    let spawn = valid_spawn_request();
+    let encoded = encode_strict(&spawn, true).expect("spawn request");
+    assert_eq!(
+        decode_strict::<broker::SpawnRealmChildrenRequest>(&encoded, true).expect("spawn decode"),
+        spawn
+    );
+
+    let spawned = valid_spawn_response();
+    let encoded = encode_strict(&spawned, false).expect("spawn response");
+    assert_eq!(
+        decode_strict::<broker::SpawnRealmChildrenResponse>(&encoded, false)
+            .expect("spawn response decode"),
+        spawned
+    );
+}
+
+#[test]
+fn allocator_and_realm_child_contracts_fail_closed() {
+    let mut duplicate_resource = valid_allocate_request();
+    duplicate_resource
+        .resources
+        .push(duplicate_resource.resources[0].clone());
+    assert_eq!(
+        duplicate_resource.validate_wire(true),
+        Err(ServiceContractError::InvalidId)
+    );
+
+    let mut wrong_delegation = valid_allocate_response();
+    wrong_delegation.resources[0].attachment_index = None;
+    assert_eq!(
+        wrong_delegation.validate_wire(false),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+
+    let mut missing_bootstrap = valid_spawn_request();
+    missing_bootstrap.fds.pop();
+    missing_bootstrap.fds.push(child_fd(
+        broker::RealmChildRole::REALM_CHILD_ROLE_BROKER,
+        broker::RealmChildFdKind::REALM_CHILD_FD_KIND_STATE_ROOT,
+        3,
+    ));
+    assert_eq!(
+        missing_bootstrap.validate_wire(true),
+        Err(ServiceContractError::MissingOperationInput)
+    );
+
+    let mut wrong_listener_owner = valid_spawn_request();
+    wrong_listener_owner.fds[0].role = broker::RealmChildRole::REALM_CHILD_ROLE_BROKER.into();
+    assert_eq!(
+        wrong_listener_owner.validate_wire(true),
+        Err(ServiceContractError::InvalidOperationInput)
+    );
+
+    let mut duplicate_pidfd = valid_spawn_response();
+    duplicate_pidfd.children[1].pidfd_attachment_index =
+        duplicate_pidfd.children[0].pidfd_attachment_index;
+    assert_eq!(
+        duplicate_pidfd.validate_wire(false),
+        Err(ServiceContractError::DuplicateAttachment)
     );
 }
 
