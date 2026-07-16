@@ -14,11 +14,12 @@ host-attached FIDO2 security key (YubiKey, Security Key NFC, etc.) through
 Firefox or any other WebAuthn-capable browser, without USB device transfer.
 
 The guest receives a virtual FIDO2 HID device at `/dev/hidraw*` created by the
-guest frontend via Linux `/dev/uhid`. The host broker serializes CTAP HID
-traffic from the virtual device to the physical key over a daemon-controlled
-AF_VSOCK channel. Only one active CTAP ceremony runs per physical key at any
-time; concurrent requests from multiple VMs are serialized with a configurable
-queue timeout.
+guest frontend via Linux `/dev/uhid`. Fixed 64-byte CTAPHID reports travel on a
+credit-bounded named stream inside an authenticated `security-key`
+ComponentSession over the allocator-provided AF_VSOCK endpoint. The frontend
+does not accept the former unauthenticated length-prefixed relay. Only one
+active CTAP ceremony runs per physical key at any time; concurrent requests
+from multiple VMs are serialized with a configurable queue timeout.
 
 This component does **not** share, clone, or simultaneously forward USB
 ownership to multiple guests. It is a protocol-level CTAP proxy that enforces
@@ -120,6 +121,21 @@ When `usb.securityKey.enable = true`, the guest NixOS config includes:
 The DAG node lifecycle (start, retry/backoff on disconnect, stop on VM
 shutdown) is supervised entirely by `d2bd` on the host. No per-VM systemd
 unit is declared in the guest or host NixOS config for this component.
+
+The allocator supplies a nonzero reconnect generation and a 32-byte channel
+binding to both ComponentSession peers. Missing or malformed session material
+fails the frontend closed; it never retries with the old raw relay. UHID
+remains active across authenticated session reconnects, but reports are queued
+only within the fixed ComponentSession credit window.
+
+Before forwarding a complete browser request, the frontend buffers at most one
+bounded CTAPHID message per channel and applies the canonical host-mediated
+device policy. Read-only discovery is allowed. Credential creation and
+assertion ceremonies are marked as requiring approval from the authenticated
+controller. Reset, credential management or deletion, biometric enrollment,
+authenticator configuration, vendor commands, legacy CTAPHID message commands,
+and unknown commands are denied locally. UHID traffic is never treated as
+approval.
 
 ## CLI surface
 
