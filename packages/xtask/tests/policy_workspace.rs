@@ -1208,6 +1208,41 @@ fn post_wave_cleanup_removes_branches_worktree_targets_and_gc_roots() {
 }
 
 #[test]
+fn adr_delivery_rules_require_dependency_ready_parallelism() {
+    let agents = read_repo_file("AGENTS.md");
+    for required in [
+        "This is a positive launch requirement, not merely permission.",
+        "launch every newly ready speculative wave in the same coordination cycle",
+        "Anti-serialization invariant",
+        "Build a file-overlap graph for all ready scopes.",
+        "distinct components MUST run concurrently",
+        "A persistent agent owns one coherent component.",
+        "Do not repeatedly expand one",
+        "A launch count below the ready count",
+        "Resource limits constrain heavy validation, not implementation parallelism.",
+    ] {
+        assert!(
+            agents.contains(required),
+            "AGENTS.md anti-serialization contract is missing: {required}"
+        );
+    }
+
+    let adr = read_repo_file("docs/adr/0045-provider-and-transport-framework.md");
+    for required in [
+        "Create `adr0045-post-w4-contracts` from `W4-F`.",
+        "before W6/W7 create final snapshots or run final panels",
+        "`adr0045-w8-integration` as a Git Town child of the linearized W7 head",
+        "Serial ownership stops at the smallest connected component",
+        "the gate child duplicates that same locked open-file description",
+    ] {
+        assert!(
+            adr.contains(required),
+            "ADR 0045 post-W4 parallel execution contract is missing: {required}"
+        );
+    }
+}
+
+#[test]
 fn stale_ipc_crate_name_is_absent_from_current_sources() {
     let old_hyphen = format!("{}{}", "d2b", "-ipc");
     let old_underscore = format!("{}{}", "d2b", "_ipc");
