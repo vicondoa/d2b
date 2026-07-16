@@ -997,14 +997,10 @@ pub struct ProviderRequest {
     pub resource_id: ::std::string::String,
     // @@protoc_insertion_point(field:d2b.common.v2.ProviderRequest.plan_digest)
     pub plan_digest: ::std::vec::Vec<u8>,
-    // @@protoc_insertion_point(field:d2b.common.v2.ProviderRequest.binding_id)
-    pub binding_id: ::std::string::String,
     // @@protoc_insertion_point(field:d2b.common.v2.ProviderRequest.attachment_indexes)
     pub attachment_indexes: ::std::vec::Vec<u32>,
-    // @@protoc_insertion_point(field:d2b.common.v2.ProviderRequest.desired_state)
-    pub desired_state: ::protobuf::EnumOrUnknown<DesiredState>,
-    // @@protoc_insertion_point(field:d2b.common.v2.ProviderRequest.stream_id)
-    pub stream_id: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.common.v2.ProviderRequest.input)
+    pub input: ::protobuf::MessageField<ProviderOperationInput>,
     // special fields
     // @@protoc_insertion_point(special_field:d2b.common.v2.ProviderRequest.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -1022,7 +1018,7 @@ impl ProviderRequest {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(7);
+        let mut fields = ::std::vec::Vec::with_capacity(5);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, ProviderOperationContext>(
             "context",
@@ -1039,25 +1035,15 @@ impl ProviderRequest {
             |m: &ProviderRequest| { &m.plan_digest },
             |m: &mut ProviderRequest| { &mut m.plan_digest },
         ));
-        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
-            "binding_id",
-            |m: &ProviderRequest| { &m.binding_id },
-            |m: &mut ProviderRequest| { &mut m.binding_id },
-        ));
         fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
             "attachment_indexes",
             |m: &ProviderRequest| { &m.attachment_indexes },
             |m: &mut ProviderRequest| { &mut m.attachment_indexes },
         ));
-        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
-            "desired_state",
-            |m: &ProviderRequest| { &m.desired_state },
-            |m: &mut ProviderRequest| { &mut m.desired_state },
-        ));
-        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
-            "stream_id",
-            |m: &ProviderRequest| { &m.stream_id },
-            |m: &mut ProviderRequest| { &mut m.stream_id },
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, ProviderOperationInput>(
+            "input",
+            |m: &ProviderRequest| { &m.input },
+            |m: &mut ProviderRequest| { &mut m.input },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ProviderRequest>(
             "ProviderRequest",
@@ -1086,20 +1072,14 @@ impl ::protobuf::Message for ProviderRequest {
                 34 => {
                     self.plan_digest = is.read_bytes()?;
                 },
-                42 => {
-                    self.binding_id = is.read_string()?;
-                },
                 50 => {
                     is.read_repeated_packed_uint32_into(&mut self.attachment_indexes)?;
                 },
                 48 => {
                     self.attachment_indexes.push(is.read_uint32()?);
                 },
-                56 => {
-                    self.desired_state = is.read_enum_or_unknown()?;
-                },
-                66 => {
-                    self.stream_id = is.read_string()?;
+                74 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.input)?;
                 },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
@@ -1123,15 +1103,10 @@ impl ::protobuf::Message for ProviderRequest {
         if !self.plan_digest.is_empty() {
             my_size += ::protobuf::rt::bytes_size(4, &self.plan_digest);
         }
-        if !self.binding_id.is_empty() {
-            my_size += ::protobuf::rt::string_size(5, &self.binding_id);
-        }
         my_size += ::protobuf::rt::vec_packed_uint32_size(6, &self.attachment_indexes);
-        if self.desired_state != ::protobuf::EnumOrUnknown::new(DesiredState::DESIRED_STATE_UNSPECIFIED) {
-            my_size += ::protobuf::rt::int32_size(7, self.desired_state.value());
-        }
-        if !self.stream_id.is_empty() {
-            my_size += ::protobuf::rt::string_size(8, &self.stream_id);
+        if let Some(v) = self.input.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
         }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
@@ -1148,15 +1123,9 @@ impl ::protobuf::Message for ProviderRequest {
         if !self.plan_digest.is_empty() {
             os.write_bytes(4, &self.plan_digest)?;
         }
-        if !self.binding_id.is_empty() {
-            os.write_string(5, &self.binding_id)?;
-        }
         os.write_repeated_packed_uint32(6, &self.attachment_indexes)?;
-        if self.desired_state != ::protobuf::EnumOrUnknown::new(DesiredState::DESIRED_STATE_UNSPECIFIED) {
-            os.write_enum(7, ::protobuf::EnumOrUnknown::value(&self.desired_state))?;
-        }
-        if !self.stream_id.is_empty() {
-            os.write_string(8, &self.stream_id)?;
+        if let Some(v) = self.input.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(9, v, os)?;
         }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
@@ -1178,10 +1147,8 @@ impl ::protobuf::Message for ProviderRequest {
         self.context.clear();
         self.resource_id.clear();
         self.plan_digest.clear();
-        self.binding_id.clear();
         self.attachment_indexes.clear();
-        self.desired_state = ::protobuf::EnumOrUnknown::new(DesiredState::DESIRED_STATE_UNSPECIFIED);
-        self.stream_id.clear();
+        self.input.clear();
         self.special_fields.clear();
     }
 
@@ -1190,10 +1157,8 @@ impl ::protobuf::Message for ProviderRequest {
             context: ::protobuf::MessageField::none(),
             resource_id: ::std::string::String::new(),
             plan_digest: ::std::vec::Vec::new(),
-            binding_id: ::std::string::String::new(),
             attachment_indexes: ::std::vec::Vec::new(),
-            desired_state: ::protobuf::EnumOrUnknown::from_i32(0),
-            stream_id: ::std::string::String::new(),
+            input: ::protobuf::MessageField::none(),
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -1215,6 +1180,2770 @@ impl ::std::fmt::Display for ProviderRequest {
 
 impl ::protobuf::reflect::ProtobufValue for ProviderRequest {
     type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.common.v2.NoProviderOperationInput)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct NoProviderOperationInput {
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.common.v2.NoProviderOperationInput.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a NoProviderOperationInput {
+    fn default() -> &'a NoProviderOperationInput {
+        <NoProviderOperationInput as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl NoProviderOperationInput {
+    pub fn new() -> NoProviderOperationInput {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(0);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<NoProviderOperationInput>(
+            "NoProviderOperationInput",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for NoProviderOperationInput {
+    const NAME: &'static str = "NoProviderOperationInput";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> NoProviderOperationInput {
+        NoProviderOperationInput::new()
+    }
+
+    fn clear(&mut self) {
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static NoProviderOperationInput {
+        static instance: NoProviderOperationInput = NoProviderOperationInput {
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for NoProviderOperationInput {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("NoProviderOperationInput").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for NoProviderOperationInput {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for NoProviderOperationInput {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.common.v2.ConfiguredRuntimeExecutionInput)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ConfiguredRuntimeExecutionInput {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.common.v2.ConfiguredRuntimeExecutionInput.configured_item_id)
+    pub configured_item_id: ::std::string::String,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.common.v2.ConfiguredRuntimeExecutionInput.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ConfiguredRuntimeExecutionInput {
+    fn default() -> &'a ConfiguredRuntimeExecutionInput {
+        <ConfiguredRuntimeExecutionInput as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ConfiguredRuntimeExecutionInput {
+    pub fn new() -> ConfiguredRuntimeExecutionInput {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(1);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "configured_item_id",
+            |m: &ConfiguredRuntimeExecutionInput| { &m.configured_item_id },
+            |m: &mut ConfiguredRuntimeExecutionInput| { &mut m.configured_item_id },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ConfiguredRuntimeExecutionInput>(
+            "ConfiguredRuntimeExecutionInput",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ConfiguredRuntimeExecutionInput {
+    const NAME: &'static str = "ConfiguredRuntimeExecutionInput";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.configured_item_id = is.read_string()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if !self.configured_item_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(1, &self.configured_item_id);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if !self.configured_item_id.is_empty() {
+            os.write_string(1, &self.configured_item_id)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ConfiguredRuntimeExecutionInput {
+        ConfiguredRuntimeExecutionInput::new()
+    }
+
+    fn clear(&mut self) {
+        self.configured_item_id.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ConfiguredRuntimeExecutionInput {
+        static instance: ConfiguredRuntimeExecutionInput = ConfiguredRuntimeExecutionInput {
+            configured_item_id: ::std::string::String::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ConfiguredRuntimeExecutionInput {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ConfiguredRuntimeExecutionInput").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ConfiguredRuntimeExecutionInput {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ConfiguredRuntimeExecutionInput {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.common.v2.InfrastructurePowerStateInput)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct InfrastructurePowerStateInput {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.common.v2.InfrastructurePowerStateInput.state)
+    pub state: ::protobuf::EnumOrUnknown<InfrastructurePowerState>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.common.v2.InfrastructurePowerStateInput.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a InfrastructurePowerStateInput {
+    fn default() -> &'a InfrastructurePowerStateInput {
+        <InfrastructurePowerStateInput as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl InfrastructurePowerStateInput {
+    pub fn new() -> InfrastructurePowerStateInput {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(1);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "state",
+            |m: &InfrastructurePowerStateInput| { &m.state },
+            |m: &mut InfrastructurePowerStateInput| { &mut m.state },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<InfrastructurePowerStateInput>(
+            "InfrastructurePowerStateInput",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for InfrastructurePowerStateInput {
+    const NAME: &'static str = "InfrastructurePowerStateInput";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.state = is.read_enum_or_unknown()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.state != ::protobuf::EnumOrUnknown::new(InfrastructurePowerState::INFRASTRUCTURE_POWER_STATE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(1, self.state.value());
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.state != ::protobuf::EnumOrUnknown::new(InfrastructurePowerState::INFRASTRUCTURE_POWER_STATE_UNSPECIFIED) {
+            os.write_enum(1, ::protobuf::EnumOrUnknown::value(&self.state))?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> InfrastructurePowerStateInput {
+        InfrastructurePowerStateInput::new()
+    }
+
+    fn clear(&mut self) {
+        self.state = ::protobuf::EnumOrUnknown::new(InfrastructurePowerState::INFRASTRUCTURE_POWER_STATE_UNSPECIFIED);
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static InfrastructurePowerStateInput {
+        static instance: InfrastructurePowerStateInput = InfrastructurePowerStateInput {
+            state: ::protobuf::EnumOrUnknown::from_i32(0),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for InfrastructurePowerStateInput {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("InfrastructurePowerStateInput").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for InfrastructurePowerStateInput {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for InfrastructurePowerStateInput {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.common.v2.TransportBindingInput)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct TransportBindingInput {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.common.v2.TransportBindingInput.transport_binding_id)
+    pub transport_binding_id: ::std::string::String,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.common.v2.TransportBindingInput.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TransportBindingInput {
+    fn default() -> &'a TransportBindingInput {
+        <TransportBindingInput as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TransportBindingInput {
+    pub fn new() -> TransportBindingInput {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(1);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "transport_binding_id",
+            |m: &TransportBindingInput| { &m.transport_binding_id },
+            |m: &mut TransportBindingInput| { &mut m.transport_binding_id },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TransportBindingInput>(
+            "TransportBindingInput",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for TransportBindingInput {
+    const NAME: &'static str = "TransportBindingInput";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.transport_binding_id = is.read_string()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if !self.transport_binding_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(1, &self.transport_binding_id);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if !self.transport_binding_id.is_empty() {
+            os.write_string(1, &self.transport_binding_id)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TransportBindingInput {
+        TransportBindingInput::new()
+    }
+
+    fn clear(&mut self) {
+        self.transport_binding_id.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TransportBindingInput {
+        static instance: TransportBindingInput = TransportBindingInput {
+            transport_binding_id: ::std::string::String::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for TransportBindingInput {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("TransportBindingInput").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for TransportBindingInput {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TransportBindingInput {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.common.v2.StorageSnapshotInput)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct StorageSnapshotInput {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.common.v2.StorageSnapshotInput.snapshot_id)
+    pub snapshot_id: ::std::string::String,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.common.v2.StorageSnapshotInput.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a StorageSnapshotInput {
+    fn default() -> &'a StorageSnapshotInput {
+        <StorageSnapshotInput as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl StorageSnapshotInput {
+    pub fn new() -> StorageSnapshotInput {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(1);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "snapshot_id",
+            |m: &StorageSnapshotInput| { &m.snapshot_id },
+            |m: &mut StorageSnapshotInput| { &mut m.snapshot_id },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<StorageSnapshotInput>(
+            "StorageSnapshotInput",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for StorageSnapshotInput {
+    const NAME: &'static str = "StorageSnapshotInput";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.snapshot_id = is.read_string()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if !self.snapshot_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(1, &self.snapshot_id);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if !self.snapshot_id.is_empty() {
+            os.write_string(1, &self.snapshot_id)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> StorageSnapshotInput {
+        StorageSnapshotInput::new()
+    }
+
+    fn clear(&mut self) {
+        self.snapshot_id.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static StorageSnapshotInput {
+        static instance: StorageSnapshotInput = StorageSnapshotInput {
+            snapshot_id: ::std::string::String::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for StorageSnapshotInput {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("StorageSnapshotInput").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for StorageSnapshotInput {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for StorageSnapshotInput {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.common.v2.DeviceSelectorInput)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct DeviceSelectorInput {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.common.v2.DeviceSelectorInput.device_selector_id)
+    pub device_selector_id: ::std::string::String,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.common.v2.DeviceSelectorInput.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a DeviceSelectorInput {
+    fn default() -> &'a DeviceSelectorInput {
+        <DeviceSelectorInput as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl DeviceSelectorInput {
+    pub fn new() -> DeviceSelectorInput {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(1);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "device_selector_id",
+            |m: &DeviceSelectorInput| { &m.device_selector_id },
+            |m: &mut DeviceSelectorInput| { &mut m.device_selector_id },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<DeviceSelectorInput>(
+            "DeviceSelectorInput",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for DeviceSelectorInput {
+    const NAME: &'static str = "DeviceSelectorInput";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.device_selector_id = is.read_string()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if !self.device_selector_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(1, &self.device_selector_id);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if !self.device_selector_id.is_empty() {
+            os.write_string(1, &self.device_selector_id)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> DeviceSelectorInput {
+        DeviceSelectorInput::new()
+    }
+
+    fn clear(&mut self) {
+        self.device_selector_id.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static DeviceSelectorInput {
+        static instance: DeviceSelectorInput = DeviceSelectorInput {
+            device_selector_id: ::std::string::String::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for DeviceSelectorInput {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("DeviceSelectorInput").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for DeviceSelectorInput {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for DeviceSelectorInput {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.common.v2.AudioStateInput)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct AudioStateInput {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.common.v2.AudioStateInput.channel)
+    pub channel: ::protobuf::EnumOrUnknown<AudioChannel>,
+    // @@protoc_insertion_point(field:d2b.common.v2.AudioStateInput.direction)
+    pub direction: ::protobuf::EnumOrUnknown<AudioDirection>,
+    // @@protoc_insertion_point(field:d2b.common.v2.AudioStateInput.mute)
+    pub mute: ::std::option::Option<bool>,
+    // @@protoc_insertion_point(field:d2b.common.v2.AudioStateInput.volume)
+    pub volume: ::std::option::Option<u32>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.common.v2.AudioStateInput.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a AudioStateInput {
+    fn default() -> &'a AudioStateInput {
+        <AudioStateInput as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl AudioStateInput {
+    pub fn new() -> AudioStateInput {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(4);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "channel",
+            |m: &AudioStateInput| { &m.channel },
+            |m: &mut AudioStateInput| { &mut m.channel },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "direction",
+            |m: &AudioStateInput| { &m.direction },
+            |m: &mut AudioStateInput| { &mut m.direction },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_option_accessor::<_, _>(
+            "mute",
+            |m: &AudioStateInput| { &m.mute },
+            |m: &mut AudioStateInput| { &mut m.mute },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_option_accessor::<_, _>(
+            "volume",
+            |m: &AudioStateInput| { &m.volume },
+            |m: &mut AudioStateInput| { &mut m.volume },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<AudioStateInput>(
+            "AudioStateInput",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for AudioStateInput {
+    const NAME: &'static str = "AudioStateInput";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.channel = is.read_enum_or_unknown()?;
+                },
+                16 => {
+                    self.direction = is.read_enum_or_unknown()?;
+                },
+                24 => {
+                    self.mute = ::std::option::Option::Some(is.read_bool()?);
+                },
+                32 => {
+                    self.volume = ::std::option::Option::Some(is.read_uint32()?);
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.channel != ::protobuf::EnumOrUnknown::new(AudioChannel::AUDIO_CHANNEL_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(1, self.channel.value());
+        }
+        if self.direction != ::protobuf::EnumOrUnknown::new(AudioDirection::AUDIO_DIRECTION_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(2, self.direction.value());
+        }
+        if let Some(v) = self.mute {
+            my_size += 1 + 1;
+        }
+        if let Some(v) = self.volume {
+            my_size += ::protobuf::rt::uint32_size(4, v);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.channel != ::protobuf::EnumOrUnknown::new(AudioChannel::AUDIO_CHANNEL_UNSPECIFIED) {
+            os.write_enum(1, ::protobuf::EnumOrUnknown::value(&self.channel))?;
+        }
+        if self.direction != ::protobuf::EnumOrUnknown::new(AudioDirection::AUDIO_DIRECTION_UNSPECIFIED) {
+            os.write_enum(2, ::protobuf::EnumOrUnknown::value(&self.direction))?;
+        }
+        if let Some(v) = self.mute {
+            os.write_bool(3, v)?;
+        }
+        if let Some(v) = self.volume {
+            os.write_uint32(4, v)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> AudioStateInput {
+        AudioStateInput::new()
+    }
+
+    fn clear(&mut self) {
+        self.channel = ::protobuf::EnumOrUnknown::new(AudioChannel::AUDIO_CHANNEL_UNSPECIFIED);
+        self.direction = ::protobuf::EnumOrUnknown::new(AudioDirection::AUDIO_DIRECTION_UNSPECIFIED);
+        self.mute = ::std::option::Option::None;
+        self.volume = ::std::option::Option::None;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static AudioStateInput {
+        static instance: AudioStateInput = AudioStateInput {
+            channel: ::protobuf::EnumOrUnknown::from_i32(0),
+            direction: ::protobuf::EnumOrUnknown::from_i32(0),
+            mute: ::std::option::Option::None,
+            volume: ::std::option::Option::None,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for AudioStateInput {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("AudioStateInput").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for AudioStateInput {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for AudioStateInput {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.common.v2.ObservabilityQueryInput)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ObservabilityQueryInput {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityQueryInput.view)
+    pub view: ::protobuf::EnumOrUnknown<ObservabilityView>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityQueryInput.cursor)
+    pub cursor: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityQueryInput.limit)
+    pub limit: u32,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.common.v2.ObservabilityQueryInput.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ObservabilityQueryInput {
+    fn default() -> &'a ObservabilityQueryInput {
+        <ObservabilityQueryInput as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ObservabilityQueryInput {
+    pub fn new() -> ObservabilityQueryInput {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(3);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "view",
+            |m: &ObservabilityQueryInput| { &m.view },
+            |m: &mut ObservabilityQueryInput| { &mut m.view },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_option_accessor::<_, _>(
+            "cursor",
+            |m: &ObservabilityQueryInput| { &m.cursor },
+            |m: &mut ObservabilityQueryInput| { &mut m.cursor },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "limit",
+            |m: &ObservabilityQueryInput| { &m.limit },
+            |m: &mut ObservabilityQueryInput| { &mut m.limit },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ObservabilityQueryInput>(
+            "ObservabilityQueryInput",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ObservabilityQueryInput {
+    const NAME: &'static str = "ObservabilityQueryInput";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.view = is.read_enum_or_unknown()?;
+                },
+                18 => {
+                    self.cursor = ::std::option::Option::Some(is.read_string()?);
+                },
+                24 => {
+                    self.limit = is.read_uint32()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.view != ::protobuf::EnumOrUnknown::new(ObservabilityView::OBSERVABILITY_VIEW_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(1, self.view.value());
+        }
+        if let Some(v) = self.cursor.as_ref() {
+            my_size += ::protobuf::rt::string_size(2, &v);
+        }
+        if self.limit != 0 {
+            my_size += ::protobuf::rt::uint32_size(3, self.limit);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.view != ::protobuf::EnumOrUnknown::new(ObservabilityView::OBSERVABILITY_VIEW_UNSPECIFIED) {
+            os.write_enum(1, ::protobuf::EnumOrUnknown::value(&self.view))?;
+        }
+        if let Some(v) = self.cursor.as_ref() {
+            os.write_string(2, v)?;
+        }
+        if self.limit != 0 {
+            os.write_uint32(3, self.limit)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ObservabilityQueryInput {
+        ObservabilityQueryInput::new()
+    }
+
+    fn clear(&mut self) {
+        self.view = ::protobuf::EnumOrUnknown::new(ObservabilityView::OBSERVABILITY_VIEW_UNSPECIFIED);
+        self.cursor = ::std::option::Option::None;
+        self.limit = 0;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ObservabilityQueryInput {
+        static instance: ObservabilityQueryInput = ObservabilityQueryInput {
+            view: ::protobuf::EnumOrUnknown::from_i32(0),
+            cursor: ::std::option::Option::None,
+            limit: 0,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ObservabilityQueryInput {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ObservabilityQueryInput").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ObservabilityQueryInput {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ObservabilityQueryInput {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.common.v2.ObservabilityBoundObservation)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ObservabilityBoundObservation {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityBoundObservation.observed_at_unix_ms)
+    pub observed_at_unix_ms: u64,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityBoundObservation.lifecycle)
+    pub lifecycle: ::protobuf::EnumOrUnknown<ObservabilityLifecycleState>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityBoundObservation.adoption)
+    pub adoption: ::protobuf::EnumOrUnknown<ObservabilityAdoptionState>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityBoundObservation.reason)
+    pub reason: ::protobuf::EnumOrUnknown<ObservabilityObservationReason>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityBoundObservation.health_state)
+    pub health_state: ::protobuf::EnumOrUnknown<ObservabilityHealthState>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityBoundObservation.health_reason)
+    pub health_reason: ::protobuf::EnumOrUnknown<ObservabilityHealthReason>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityBoundObservation.health_remediation)
+    pub health_remediation: ::protobuf::EnumOrUnknown<ObservabilityRemediation>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.common.v2.ObservabilityBoundObservation.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ObservabilityBoundObservation {
+    fn default() -> &'a ObservabilityBoundObservation {
+        <ObservabilityBoundObservation as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ObservabilityBoundObservation {
+    pub fn new() -> ObservabilityBoundObservation {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(7);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "observed_at_unix_ms",
+            |m: &ObservabilityBoundObservation| { &m.observed_at_unix_ms },
+            |m: &mut ObservabilityBoundObservation| { &mut m.observed_at_unix_ms },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "lifecycle",
+            |m: &ObservabilityBoundObservation| { &m.lifecycle },
+            |m: &mut ObservabilityBoundObservation| { &mut m.lifecycle },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "adoption",
+            |m: &ObservabilityBoundObservation| { &m.adoption },
+            |m: &mut ObservabilityBoundObservation| { &mut m.adoption },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "reason",
+            |m: &ObservabilityBoundObservation| { &m.reason },
+            |m: &mut ObservabilityBoundObservation| { &mut m.reason },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "health_state",
+            |m: &ObservabilityBoundObservation| { &m.health_state },
+            |m: &mut ObservabilityBoundObservation| { &mut m.health_state },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "health_reason",
+            |m: &ObservabilityBoundObservation| { &m.health_reason },
+            |m: &mut ObservabilityBoundObservation| { &mut m.health_reason },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "health_remediation",
+            |m: &ObservabilityBoundObservation| { &m.health_remediation },
+            |m: &mut ObservabilityBoundObservation| { &mut m.health_remediation },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ObservabilityBoundObservation>(
+            "ObservabilityBoundObservation",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ObservabilityBoundObservation {
+    const NAME: &'static str = "ObservabilityBoundObservation";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.observed_at_unix_ms = is.read_uint64()?;
+                },
+                16 => {
+                    self.lifecycle = is.read_enum_or_unknown()?;
+                },
+                24 => {
+                    self.adoption = is.read_enum_or_unknown()?;
+                },
+                32 => {
+                    self.reason = is.read_enum_or_unknown()?;
+                },
+                40 => {
+                    self.health_state = is.read_enum_or_unknown()?;
+                },
+                48 => {
+                    self.health_reason = is.read_enum_or_unknown()?;
+                },
+                56 => {
+                    self.health_remediation = is.read_enum_or_unknown()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.observed_at_unix_ms != 0 {
+            my_size += ::protobuf::rt::uint64_size(1, self.observed_at_unix_ms);
+        }
+        if self.lifecycle != ::protobuf::EnumOrUnknown::new(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(2, self.lifecycle.value());
+        }
+        if self.adoption != ::protobuf::EnumOrUnknown::new(ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(3, self.adoption.value());
+        }
+        if self.reason != ::protobuf::EnumOrUnknown::new(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(4, self.reason.value());
+        }
+        if self.health_state != ::protobuf::EnumOrUnknown::new(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(5, self.health_state.value());
+        }
+        if self.health_reason != ::protobuf::EnumOrUnknown::new(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(6, self.health_reason.value());
+        }
+        if self.health_remediation != ::protobuf::EnumOrUnknown::new(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(7, self.health_remediation.value());
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.observed_at_unix_ms != 0 {
+            os.write_uint64(1, self.observed_at_unix_ms)?;
+        }
+        if self.lifecycle != ::protobuf::EnumOrUnknown::new(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_UNSPECIFIED) {
+            os.write_enum(2, ::protobuf::EnumOrUnknown::value(&self.lifecycle))?;
+        }
+        if self.adoption != ::protobuf::EnumOrUnknown::new(ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_UNSPECIFIED) {
+            os.write_enum(3, ::protobuf::EnumOrUnknown::value(&self.adoption))?;
+        }
+        if self.reason != ::protobuf::EnumOrUnknown::new(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_UNSPECIFIED) {
+            os.write_enum(4, ::protobuf::EnumOrUnknown::value(&self.reason))?;
+        }
+        if self.health_state != ::protobuf::EnumOrUnknown::new(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_UNSPECIFIED) {
+            os.write_enum(5, ::protobuf::EnumOrUnknown::value(&self.health_state))?;
+        }
+        if self.health_reason != ::protobuf::EnumOrUnknown::new(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_UNSPECIFIED) {
+            os.write_enum(6, ::protobuf::EnumOrUnknown::value(&self.health_reason))?;
+        }
+        if self.health_remediation != ::protobuf::EnumOrUnknown::new(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_UNSPECIFIED) {
+            os.write_enum(7, ::protobuf::EnumOrUnknown::value(&self.health_remediation))?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ObservabilityBoundObservation {
+        ObservabilityBoundObservation::new()
+    }
+
+    fn clear(&mut self) {
+        self.observed_at_unix_ms = 0;
+        self.lifecycle = ::protobuf::EnumOrUnknown::new(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_UNSPECIFIED);
+        self.adoption = ::protobuf::EnumOrUnknown::new(ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_UNSPECIFIED);
+        self.reason = ::protobuf::EnumOrUnknown::new(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_UNSPECIFIED);
+        self.health_state = ::protobuf::EnumOrUnknown::new(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_UNSPECIFIED);
+        self.health_reason = ::protobuf::EnumOrUnknown::new(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_UNSPECIFIED);
+        self.health_remediation = ::protobuf::EnumOrUnknown::new(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_UNSPECIFIED);
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ObservabilityBoundObservation {
+        static instance: ObservabilityBoundObservation = ObservabilityBoundObservation {
+            observed_at_unix_ms: 0,
+            lifecycle: ::protobuf::EnumOrUnknown::from_i32(0),
+            adoption: ::protobuf::EnumOrUnknown::from_i32(0),
+            reason: ::protobuf::EnumOrUnknown::from_i32(0),
+            health_state: ::protobuf::EnumOrUnknown::from_i32(0),
+            health_reason: ::protobuf::EnumOrUnknown::from_i32(0),
+            health_remediation: ::protobuf::EnumOrUnknown::from_i32(0),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ObservabilityBoundObservation {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ObservabilityBoundObservation").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ObservabilityBoundObservation {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ObservabilityBoundObservation {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.common.v2.ObservabilityLabels)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ObservabilityLabels {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityLabels.provider_type)
+    pub provider_type: ::protobuf::EnumOrUnknown<ProviderType>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityLabels.health_state)
+    pub health_state: ::protobuf::EnumOrUnknown<ObservabilityHealthState>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityLabels.metric)
+    pub metric: ::protobuf::EnumOrUnknown<ObservabilityMetricLabel>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityLabels.operation)
+    pub operation: ::protobuf::EnumOrUnknown<ObservabilityOperationLabel>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityLabels.outcome)
+    pub outcome: ::protobuf::EnumOrUnknown<ObservabilityOutcomeLabel>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.common.v2.ObservabilityLabels.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ObservabilityLabels {
+    fn default() -> &'a ObservabilityLabels {
+        <ObservabilityLabels as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ObservabilityLabels {
+    pub fn new() -> ObservabilityLabels {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(5);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "provider_type",
+            |m: &ObservabilityLabels| { &m.provider_type },
+            |m: &mut ObservabilityLabels| { &mut m.provider_type },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "health_state",
+            |m: &ObservabilityLabels| { &m.health_state },
+            |m: &mut ObservabilityLabels| { &mut m.health_state },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "metric",
+            |m: &ObservabilityLabels| { &m.metric },
+            |m: &mut ObservabilityLabels| { &mut m.metric },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "operation",
+            |m: &ObservabilityLabels| { &m.operation },
+            |m: &mut ObservabilityLabels| { &mut m.operation },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "outcome",
+            |m: &ObservabilityLabels| { &m.outcome },
+            |m: &mut ObservabilityLabels| { &mut m.outcome },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ObservabilityLabels>(
+            "ObservabilityLabels",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ObservabilityLabels {
+    const NAME: &'static str = "ObservabilityLabels";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.provider_type = is.read_enum_or_unknown()?;
+                },
+                16 => {
+                    self.health_state = is.read_enum_or_unknown()?;
+                },
+                24 => {
+                    self.metric = is.read_enum_or_unknown()?;
+                },
+                32 => {
+                    self.operation = is.read_enum_or_unknown()?;
+                },
+                40 => {
+                    self.outcome = is.read_enum_or_unknown()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.provider_type != ::protobuf::EnumOrUnknown::new(ProviderType::PROVIDER_TYPE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(1, self.provider_type.value());
+        }
+        if self.health_state != ::protobuf::EnumOrUnknown::new(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(2, self.health_state.value());
+        }
+        if self.metric != ::protobuf::EnumOrUnknown::new(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(3, self.metric.value());
+        }
+        if self.operation != ::protobuf::EnumOrUnknown::new(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(4, self.operation.value());
+        }
+        if self.outcome != ::protobuf::EnumOrUnknown::new(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(5, self.outcome.value());
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.provider_type != ::protobuf::EnumOrUnknown::new(ProviderType::PROVIDER_TYPE_UNSPECIFIED) {
+            os.write_enum(1, ::protobuf::EnumOrUnknown::value(&self.provider_type))?;
+        }
+        if self.health_state != ::protobuf::EnumOrUnknown::new(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_UNSPECIFIED) {
+            os.write_enum(2, ::protobuf::EnumOrUnknown::value(&self.health_state))?;
+        }
+        if self.metric != ::protobuf::EnumOrUnknown::new(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_UNSPECIFIED) {
+            os.write_enum(3, ::protobuf::EnumOrUnknown::value(&self.metric))?;
+        }
+        if self.operation != ::protobuf::EnumOrUnknown::new(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_UNSPECIFIED) {
+            os.write_enum(4, ::protobuf::EnumOrUnknown::value(&self.operation))?;
+        }
+        if self.outcome != ::protobuf::EnumOrUnknown::new(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_UNSPECIFIED) {
+            os.write_enum(5, ::protobuf::EnumOrUnknown::value(&self.outcome))?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ObservabilityLabels {
+        ObservabilityLabels::new()
+    }
+
+    fn clear(&mut self) {
+        self.provider_type = ::protobuf::EnumOrUnknown::new(ProviderType::PROVIDER_TYPE_UNSPECIFIED);
+        self.health_state = ::protobuf::EnumOrUnknown::new(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_UNSPECIFIED);
+        self.metric = ::protobuf::EnumOrUnknown::new(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_UNSPECIFIED);
+        self.operation = ::protobuf::EnumOrUnknown::new(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_UNSPECIFIED);
+        self.outcome = ::protobuf::EnumOrUnknown::new(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_UNSPECIFIED);
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ObservabilityLabels {
+        static instance: ObservabilityLabels = ObservabilityLabels {
+            provider_type: ::protobuf::EnumOrUnknown::from_i32(0),
+            health_state: ::protobuf::EnumOrUnknown::from_i32(0),
+            metric: ::protobuf::EnumOrUnknown::from_i32(0),
+            operation: ::protobuf::EnumOrUnknown::from_i32(0),
+            outcome: ::protobuf::EnumOrUnknown::from_i32(0),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ObservabilityLabels {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ObservabilityLabels").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ObservabilityLabels {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ObservabilityLabels {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.common.v2.ObservabilityRecord)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ObservabilityRecord {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityRecord.observed_at_unix_ms)
+    pub observed_at_unix_ms: u64,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityRecord.projection)
+    pub projection: ::protobuf::EnumOrUnknown<ObservabilityProjectionKind>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityRecord.labels)
+    pub labels: ::protobuf::MessageField<ObservabilityLabels>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityRecord.value)
+    pub value: u64,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.common.v2.ObservabilityRecord.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ObservabilityRecord {
+    fn default() -> &'a ObservabilityRecord {
+        <ObservabilityRecord as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ObservabilityRecord {
+    pub fn new() -> ObservabilityRecord {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(4);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "observed_at_unix_ms",
+            |m: &ObservabilityRecord| { &m.observed_at_unix_ms },
+            |m: &mut ObservabilityRecord| { &mut m.observed_at_unix_ms },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "projection",
+            |m: &ObservabilityRecord| { &m.projection },
+            |m: &mut ObservabilityRecord| { &mut m.projection },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, ObservabilityLabels>(
+            "labels",
+            |m: &ObservabilityRecord| { &m.labels },
+            |m: &mut ObservabilityRecord| { &mut m.labels },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "value",
+            |m: &ObservabilityRecord| { &m.value },
+            |m: &mut ObservabilityRecord| { &mut m.value },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ObservabilityRecord>(
+            "ObservabilityRecord",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ObservabilityRecord {
+    const NAME: &'static str = "ObservabilityRecord";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.observed_at_unix_ms = is.read_uint64()?;
+                },
+                16 => {
+                    self.projection = is.read_enum_or_unknown()?;
+                },
+                26 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.labels)?;
+                },
+                32 => {
+                    self.value = is.read_uint64()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.observed_at_unix_ms != 0 {
+            my_size += ::protobuf::rt::uint64_size(1, self.observed_at_unix_ms);
+        }
+        if self.projection != ::protobuf::EnumOrUnknown::new(ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(2, self.projection.value());
+        }
+        if let Some(v) = self.labels.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if self.value != 0 {
+            my_size += ::protobuf::rt::uint64_size(4, self.value);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.observed_at_unix_ms != 0 {
+            os.write_uint64(1, self.observed_at_unix_ms)?;
+        }
+        if self.projection != ::protobuf::EnumOrUnknown::new(ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_UNSPECIFIED) {
+            os.write_enum(2, ::protobuf::EnumOrUnknown::value(&self.projection))?;
+        }
+        if let Some(v) = self.labels.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(3, v, os)?;
+        }
+        if self.value != 0 {
+            os.write_uint64(4, self.value)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ObservabilityRecord {
+        ObservabilityRecord::new()
+    }
+
+    fn clear(&mut self) {
+        self.observed_at_unix_ms = 0;
+        self.projection = ::protobuf::EnumOrUnknown::new(ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_UNSPECIFIED);
+        self.labels.clear();
+        self.value = 0;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ObservabilityRecord {
+        static instance: ObservabilityRecord = ObservabilityRecord {
+            observed_at_unix_ms: 0,
+            projection: ::protobuf::EnumOrUnknown::from_i32(0),
+            labels: ::protobuf::MessageField::none(),
+            value: 0,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ObservabilityRecord {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ObservabilityRecord").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ObservabilityRecord {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ObservabilityRecord {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.common.v2.ObservabilityQueryResult)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ObservabilityQueryResult {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityQueryResult.observation)
+    pub observation: ::protobuf::MessageField<ObservabilityBoundObservation>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityQueryResult.records)
+    pub records: ::std::vec::Vec<ObservabilityRecord>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityQueryResult.next_cursor)
+    pub next_cursor: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityQueryResult.encoded_bytes_upper_bound)
+    pub encoded_bytes_upper_bound: u32,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityQueryResult.truncated)
+    pub truncated: bool,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.common.v2.ObservabilityQueryResult.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ObservabilityQueryResult {
+    fn default() -> &'a ObservabilityQueryResult {
+        <ObservabilityQueryResult as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ObservabilityQueryResult {
+    pub fn new() -> ObservabilityQueryResult {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(5);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, ObservabilityBoundObservation>(
+            "observation",
+            |m: &ObservabilityQueryResult| { &m.observation },
+            |m: &mut ObservabilityQueryResult| { &mut m.observation },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "records",
+            |m: &ObservabilityQueryResult| { &m.records },
+            |m: &mut ObservabilityQueryResult| { &mut m.records },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_option_accessor::<_, _>(
+            "next_cursor",
+            |m: &ObservabilityQueryResult| { &m.next_cursor },
+            |m: &mut ObservabilityQueryResult| { &mut m.next_cursor },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "encoded_bytes_upper_bound",
+            |m: &ObservabilityQueryResult| { &m.encoded_bytes_upper_bound },
+            |m: &mut ObservabilityQueryResult| { &mut m.encoded_bytes_upper_bound },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "truncated",
+            |m: &ObservabilityQueryResult| { &m.truncated },
+            |m: &mut ObservabilityQueryResult| { &mut m.truncated },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ObservabilityQueryResult>(
+            "ObservabilityQueryResult",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ObservabilityQueryResult {
+    const NAME: &'static str = "ObservabilityQueryResult";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.observation)?;
+                },
+                18 => {
+                    self.records.push(is.read_message()?);
+                },
+                26 => {
+                    self.next_cursor = ::std::option::Option::Some(is.read_string()?);
+                },
+                32 => {
+                    self.encoded_bytes_upper_bound = is.read_uint32()?;
+                },
+                40 => {
+                    self.truncated = is.read_bool()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.observation.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        for value in &self.records {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
+        if let Some(v) = self.next_cursor.as_ref() {
+            my_size += ::protobuf::rt::string_size(3, &v);
+        }
+        if self.encoded_bytes_upper_bound != 0 {
+            my_size += ::protobuf::rt::uint32_size(4, self.encoded_bytes_upper_bound);
+        }
+        if self.truncated != false {
+            my_size += 1 + 1;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.observation.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        }
+        for v in &self.records {
+            ::protobuf::rt::write_message_field_with_cached_size(2, v, os)?;
+        };
+        if let Some(v) = self.next_cursor.as_ref() {
+            os.write_string(3, v)?;
+        }
+        if self.encoded_bytes_upper_bound != 0 {
+            os.write_uint32(4, self.encoded_bytes_upper_bound)?;
+        }
+        if self.truncated != false {
+            os.write_bool(5, self.truncated)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ObservabilityQueryResult {
+        ObservabilityQueryResult::new()
+    }
+
+    fn clear(&mut self) {
+        self.observation.clear();
+        self.records.clear();
+        self.next_cursor = ::std::option::Option::None;
+        self.encoded_bytes_upper_bound = 0;
+        self.truncated = false;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ObservabilityQueryResult {
+        static instance: ObservabilityQueryResult = ObservabilityQueryResult {
+            observation: ::protobuf::MessageField::none(),
+            records: ::std::vec::Vec::new(),
+            next_cursor: ::std::option::Option::None,
+            encoded_bytes_upper_bound: 0,
+            truncated: false,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ObservabilityQueryResult {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ObservabilityQueryResult").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ObservabilityQueryResult {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ObservabilityQueryResult {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.common.v2.ObservabilityExportInput)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ObservabilityExportInput {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityExportInput.format)
+    pub format: ::protobuf::EnumOrUnknown<ObservabilityExportFormat>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityExportInput.start_at_unix_ms)
+    pub start_at_unix_ms: u64,
+    // @@protoc_insertion_point(field:d2b.common.v2.ObservabilityExportInput.end_at_unix_ms)
+    pub end_at_unix_ms: u64,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.common.v2.ObservabilityExportInput.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ObservabilityExportInput {
+    fn default() -> &'a ObservabilityExportInput {
+        <ObservabilityExportInput as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ObservabilityExportInput {
+    pub fn new() -> ObservabilityExportInput {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(3);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "format",
+            |m: &ObservabilityExportInput| { &m.format },
+            |m: &mut ObservabilityExportInput| { &mut m.format },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "start_at_unix_ms",
+            |m: &ObservabilityExportInput| { &m.start_at_unix_ms },
+            |m: &mut ObservabilityExportInput| { &mut m.start_at_unix_ms },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "end_at_unix_ms",
+            |m: &ObservabilityExportInput| { &m.end_at_unix_ms },
+            |m: &mut ObservabilityExportInput| { &mut m.end_at_unix_ms },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ObservabilityExportInput>(
+            "ObservabilityExportInput",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ObservabilityExportInput {
+    const NAME: &'static str = "ObservabilityExportInput";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.format = is.read_enum_or_unknown()?;
+                },
+                16 => {
+                    self.start_at_unix_ms = is.read_uint64()?;
+                },
+                24 => {
+                    self.end_at_unix_ms = is.read_uint64()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.format != ::protobuf::EnumOrUnknown::new(ObservabilityExportFormat::OBSERVABILITY_EXPORT_FORMAT_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(1, self.format.value());
+        }
+        if self.start_at_unix_ms != 0 {
+            my_size += ::protobuf::rt::uint64_size(2, self.start_at_unix_ms);
+        }
+        if self.end_at_unix_ms != 0 {
+            my_size += ::protobuf::rt::uint64_size(3, self.end_at_unix_ms);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.format != ::protobuf::EnumOrUnknown::new(ObservabilityExportFormat::OBSERVABILITY_EXPORT_FORMAT_UNSPECIFIED) {
+            os.write_enum(1, ::protobuf::EnumOrUnknown::value(&self.format))?;
+        }
+        if self.start_at_unix_ms != 0 {
+            os.write_uint64(2, self.start_at_unix_ms)?;
+        }
+        if self.end_at_unix_ms != 0 {
+            os.write_uint64(3, self.end_at_unix_ms)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ObservabilityExportInput {
+        ObservabilityExportInput::new()
+    }
+
+    fn clear(&mut self) {
+        self.format = ::protobuf::EnumOrUnknown::new(ObservabilityExportFormat::OBSERVABILITY_EXPORT_FORMAT_UNSPECIFIED);
+        self.start_at_unix_ms = 0;
+        self.end_at_unix_ms = 0;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ObservabilityExportInput {
+        static instance: ObservabilityExportInput = ObservabilityExportInput {
+            format: ::protobuf::EnumOrUnknown::from_i32(0),
+            start_at_unix_ms: 0,
+            end_at_unix_ms: 0,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ObservabilityExportInput {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ObservabilityExportInput").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ObservabilityExportInput {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ObservabilityExportInput {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.common.v2.ProviderOperationInput)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ProviderOperationInput {
+    // message oneof groups
+    pub input: ::std::option::Option<provider_operation_input::Input>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.common.v2.ProviderOperationInput.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ProviderOperationInput {
+    fn default() -> &'a ProviderOperationInput {
+        <ProviderOperationInput as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ProviderOperationInput {
+    pub fn new() -> ProviderOperationInput {
+        ::std::default::Default::default()
+    }
+
+    // .d2b.common.v2.NoProviderOperationInput no_input = 1;
+
+    pub fn no_input(&self) -> &NoProviderOperationInput {
+        match self.input {
+            ::std::option::Option::Some(provider_operation_input::Input::NoInput(ref v)) => v,
+            _ => <NoProviderOperationInput as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_no_input(&mut self) {
+        self.input = ::std::option::Option::None;
+    }
+
+    pub fn has_no_input(&self) -> bool {
+        match self.input {
+            ::std::option::Option::Some(provider_operation_input::Input::NoInput(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_no_input(&mut self, v: NoProviderOperationInput) {
+        self.input = ::std::option::Option::Some(provider_operation_input::Input::NoInput(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_no_input(&mut self) -> &mut NoProviderOperationInput {
+        if let ::std::option::Option::Some(provider_operation_input::Input::NoInput(_)) = self.input {
+        } else {
+            self.input = ::std::option::Option::Some(provider_operation_input::Input::NoInput(NoProviderOperationInput::new()));
+        }
+        match self.input {
+            ::std::option::Option::Some(provider_operation_input::Input::NoInput(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_no_input(&mut self) -> NoProviderOperationInput {
+        if self.has_no_input() {
+            match self.input.take() {
+                ::std::option::Option::Some(provider_operation_input::Input::NoInput(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            NoProviderOperationInput::new()
+        }
+    }
+
+    // .d2b.common.v2.ConfiguredRuntimeExecutionInput configured_runtime_execution = 2;
+
+    pub fn configured_runtime_execution(&self) -> &ConfiguredRuntimeExecutionInput {
+        match self.input {
+            ::std::option::Option::Some(provider_operation_input::Input::ConfiguredRuntimeExecution(ref v)) => v,
+            _ => <ConfiguredRuntimeExecutionInput as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_configured_runtime_execution(&mut self) {
+        self.input = ::std::option::Option::None;
+    }
+
+    pub fn has_configured_runtime_execution(&self) -> bool {
+        match self.input {
+            ::std::option::Option::Some(provider_operation_input::Input::ConfiguredRuntimeExecution(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_configured_runtime_execution(&mut self, v: ConfiguredRuntimeExecutionInput) {
+        self.input = ::std::option::Option::Some(provider_operation_input::Input::ConfiguredRuntimeExecution(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_configured_runtime_execution(&mut self) -> &mut ConfiguredRuntimeExecutionInput {
+        if let ::std::option::Option::Some(provider_operation_input::Input::ConfiguredRuntimeExecution(_)) = self.input {
+        } else {
+            self.input = ::std::option::Option::Some(provider_operation_input::Input::ConfiguredRuntimeExecution(ConfiguredRuntimeExecutionInput::new()));
+        }
+        match self.input {
+            ::std::option::Option::Some(provider_operation_input::Input::ConfiguredRuntimeExecution(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_configured_runtime_execution(&mut self) -> ConfiguredRuntimeExecutionInput {
+        if self.has_configured_runtime_execution() {
+            match self.input.take() {
+                ::std::option::Option::Some(provider_operation_input::Input::ConfiguredRuntimeExecution(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            ConfiguredRuntimeExecutionInput::new()
+        }
+    }
+
+    // .d2b.common.v2.InfrastructurePowerStateInput infrastructure_power_state = 3;
+
+    pub fn infrastructure_power_state(&self) -> &InfrastructurePowerStateInput {
+        match self.input {
+            ::std::option::Option::Some(provider_operation_input::Input::InfrastructurePowerState(ref v)) => v,
+            _ => <InfrastructurePowerStateInput as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_infrastructure_power_state(&mut self) {
+        self.input = ::std::option::Option::None;
+    }
+
+    pub fn has_infrastructure_power_state(&self) -> bool {
+        match self.input {
+            ::std::option::Option::Some(provider_operation_input::Input::InfrastructurePowerState(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_infrastructure_power_state(&mut self, v: InfrastructurePowerStateInput) {
+        self.input = ::std::option::Option::Some(provider_operation_input::Input::InfrastructurePowerState(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_infrastructure_power_state(&mut self) -> &mut InfrastructurePowerStateInput {
+        if let ::std::option::Option::Some(provider_operation_input::Input::InfrastructurePowerState(_)) = self.input {
+        } else {
+            self.input = ::std::option::Option::Some(provider_operation_input::Input::InfrastructurePowerState(InfrastructurePowerStateInput::new()));
+        }
+        match self.input {
+            ::std::option::Option::Some(provider_operation_input::Input::InfrastructurePowerState(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_infrastructure_power_state(&mut self) -> InfrastructurePowerStateInput {
+        if self.has_infrastructure_power_state() {
+            match self.input.take() {
+                ::std::option::Option::Some(provider_operation_input::Input::InfrastructurePowerState(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            InfrastructurePowerStateInput::new()
+        }
+    }
+
+    // .d2b.common.v2.TransportBindingInput transport_binding = 4;
+
+    pub fn transport_binding(&self) -> &TransportBindingInput {
+        match self.input {
+            ::std::option::Option::Some(provider_operation_input::Input::TransportBinding(ref v)) => v,
+            _ => <TransportBindingInput as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_transport_binding(&mut self) {
+        self.input = ::std::option::Option::None;
+    }
+
+    pub fn has_transport_binding(&self) -> bool {
+        match self.input {
+            ::std::option::Option::Some(provider_operation_input::Input::TransportBinding(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_transport_binding(&mut self, v: TransportBindingInput) {
+        self.input = ::std::option::Option::Some(provider_operation_input::Input::TransportBinding(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_transport_binding(&mut self) -> &mut TransportBindingInput {
+        if let ::std::option::Option::Some(provider_operation_input::Input::TransportBinding(_)) = self.input {
+        } else {
+            self.input = ::std::option::Option::Some(provider_operation_input::Input::TransportBinding(TransportBindingInput::new()));
+        }
+        match self.input {
+            ::std::option::Option::Some(provider_operation_input::Input::TransportBinding(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_transport_binding(&mut self) -> TransportBindingInput {
+        if self.has_transport_binding() {
+            match self.input.take() {
+                ::std::option::Option::Some(provider_operation_input::Input::TransportBinding(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            TransportBindingInput::new()
+        }
+    }
+
+    // .d2b.common.v2.StorageSnapshotInput storage_snapshot = 5;
+
+    pub fn storage_snapshot(&self) -> &StorageSnapshotInput {
+        match self.input {
+            ::std::option::Option::Some(provider_operation_input::Input::StorageSnapshot(ref v)) => v,
+            _ => <StorageSnapshotInput as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_storage_snapshot(&mut self) {
+        self.input = ::std::option::Option::None;
+    }
+
+    pub fn has_storage_snapshot(&self) -> bool {
+        match self.input {
+            ::std::option::Option::Some(provider_operation_input::Input::StorageSnapshot(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_storage_snapshot(&mut self, v: StorageSnapshotInput) {
+        self.input = ::std::option::Option::Some(provider_operation_input::Input::StorageSnapshot(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_storage_snapshot(&mut self) -> &mut StorageSnapshotInput {
+        if let ::std::option::Option::Some(provider_operation_input::Input::StorageSnapshot(_)) = self.input {
+        } else {
+            self.input = ::std::option::Option::Some(provider_operation_input::Input::StorageSnapshot(StorageSnapshotInput::new()));
+        }
+        match self.input {
+            ::std::option::Option::Some(provider_operation_input::Input::StorageSnapshot(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_storage_snapshot(&mut self) -> StorageSnapshotInput {
+        if self.has_storage_snapshot() {
+            match self.input.take() {
+                ::std::option::Option::Some(provider_operation_input::Input::StorageSnapshot(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            StorageSnapshotInput::new()
+        }
+    }
+
+    // .d2b.common.v2.DeviceSelectorInput device_selector = 6;
+
+    pub fn device_selector(&self) -> &DeviceSelectorInput {
+        match self.input {
+            ::std::option::Option::Some(provider_operation_input::Input::DeviceSelector(ref v)) => v,
+            _ => <DeviceSelectorInput as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_device_selector(&mut self) {
+        self.input = ::std::option::Option::None;
+    }
+
+    pub fn has_device_selector(&self) -> bool {
+        match self.input {
+            ::std::option::Option::Some(provider_operation_input::Input::DeviceSelector(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_device_selector(&mut self, v: DeviceSelectorInput) {
+        self.input = ::std::option::Option::Some(provider_operation_input::Input::DeviceSelector(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_device_selector(&mut self) -> &mut DeviceSelectorInput {
+        if let ::std::option::Option::Some(provider_operation_input::Input::DeviceSelector(_)) = self.input {
+        } else {
+            self.input = ::std::option::Option::Some(provider_operation_input::Input::DeviceSelector(DeviceSelectorInput::new()));
+        }
+        match self.input {
+            ::std::option::Option::Some(provider_operation_input::Input::DeviceSelector(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_device_selector(&mut self) -> DeviceSelectorInput {
+        if self.has_device_selector() {
+            match self.input.take() {
+                ::std::option::Option::Some(provider_operation_input::Input::DeviceSelector(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            DeviceSelectorInput::new()
+        }
+    }
+
+    // .d2b.common.v2.AudioStateInput audio_state = 7;
+
+    pub fn audio_state(&self) -> &AudioStateInput {
+        match self.input {
+            ::std::option::Option::Some(provider_operation_input::Input::AudioState(ref v)) => v,
+            _ => <AudioStateInput as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_audio_state(&mut self) {
+        self.input = ::std::option::Option::None;
+    }
+
+    pub fn has_audio_state(&self) -> bool {
+        match self.input {
+            ::std::option::Option::Some(provider_operation_input::Input::AudioState(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_audio_state(&mut self, v: AudioStateInput) {
+        self.input = ::std::option::Option::Some(provider_operation_input::Input::AudioState(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_audio_state(&mut self) -> &mut AudioStateInput {
+        if let ::std::option::Option::Some(provider_operation_input::Input::AudioState(_)) = self.input {
+        } else {
+            self.input = ::std::option::Option::Some(provider_operation_input::Input::AudioState(AudioStateInput::new()));
+        }
+        match self.input {
+            ::std::option::Option::Some(provider_operation_input::Input::AudioState(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_audio_state(&mut self) -> AudioStateInput {
+        if self.has_audio_state() {
+            match self.input.take() {
+                ::std::option::Option::Some(provider_operation_input::Input::AudioState(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            AudioStateInput::new()
+        }
+    }
+
+    // .d2b.common.v2.ObservabilityQueryInput observability_query = 8;
+
+    pub fn observability_query(&self) -> &ObservabilityQueryInput {
+        match self.input {
+            ::std::option::Option::Some(provider_operation_input::Input::ObservabilityQuery(ref v)) => v,
+            _ => <ObservabilityQueryInput as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_observability_query(&mut self) {
+        self.input = ::std::option::Option::None;
+    }
+
+    pub fn has_observability_query(&self) -> bool {
+        match self.input {
+            ::std::option::Option::Some(provider_operation_input::Input::ObservabilityQuery(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_observability_query(&mut self, v: ObservabilityQueryInput) {
+        self.input = ::std::option::Option::Some(provider_operation_input::Input::ObservabilityQuery(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_observability_query(&mut self) -> &mut ObservabilityQueryInput {
+        if let ::std::option::Option::Some(provider_operation_input::Input::ObservabilityQuery(_)) = self.input {
+        } else {
+            self.input = ::std::option::Option::Some(provider_operation_input::Input::ObservabilityQuery(ObservabilityQueryInput::new()));
+        }
+        match self.input {
+            ::std::option::Option::Some(provider_operation_input::Input::ObservabilityQuery(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_observability_query(&mut self) -> ObservabilityQueryInput {
+        if self.has_observability_query() {
+            match self.input.take() {
+                ::std::option::Option::Some(provider_operation_input::Input::ObservabilityQuery(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            ObservabilityQueryInput::new()
+        }
+    }
+
+    // .d2b.common.v2.ObservabilityExportInput observability_export = 9;
+
+    pub fn observability_export(&self) -> &ObservabilityExportInput {
+        match self.input {
+            ::std::option::Option::Some(provider_operation_input::Input::ObservabilityExport(ref v)) => v,
+            _ => <ObservabilityExportInput as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_observability_export(&mut self) {
+        self.input = ::std::option::Option::None;
+    }
+
+    pub fn has_observability_export(&self) -> bool {
+        match self.input {
+            ::std::option::Option::Some(provider_operation_input::Input::ObservabilityExport(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_observability_export(&mut self, v: ObservabilityExportInput) {
+        self.input = ::std::option::Option::Some(provider_operation_input::Input::ObservabilityExport(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_observability_export(&mut self) -> &mut ObservabilityExportInput {
+        if let ::std::option::Option::Some(provider_operation_input::Input::ObservabilityExport(_)) = self.input {
+        } else {
+            self.input = ::std::option::Option::Some(provider_operation_input::Input::ObservabilityExport(ObservabilityExportInput::new()));
+        }
+        match self.input {
+            ::std::option::Option::Some(provider_operation_input::Input::ObservabilityExport(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_observability_export(&mut self) -> ObservabilityExportInput {
+        if self.has_observability_export() {
+            match self.input.take() {
+                ::std::option::Option::Some(provider_operation_input::Input::ObservabilityExport(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            ObservabilityExportInput::new()
+        }
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(9);
+        let mut oneofs = ::std::vec::Vec::with_capacity(1);
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, NoProviderOperationInput>(
+            "no_input",
+            ProviderOperationInput::has_no_input,
+            ProviderOperationInput::no_input,
+            ProviderOperationInput::mut_no_input,
+            ProviderOperationInput::set_no_input,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, ConfiguredRuntimeExecutionInput>(
+            "configured_runtime_execution",
+            ProviderOperationInput::has_configured_runtime_execution,
+            ProviderOperationInput::configured_runtime_execution,
+            ProviderOperationInput::mut_configured_runtime_execution,
+            ProviderOperationInput::set_configured_runtime_execution,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, InfrastructurePowerStateInput>(
+            "infrastructure_power_state",
+            ProviderOperationInput::has_infrastructure_power_state,
+            ProviderOperationInput::infrastructure_power_state,
+            ProviderOperationInput::mut_infrastructure_power_state,
+            ProviderOperationInput::set_infrastructure_power_state,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, TransportBindingInput>(
+            "transport_binding",
+            ProviderOperationInput::has_transport_binding,
+            ProviderOperationInput::transport_binding,
+            ProviderOperationInput::mut_transport_binding,
+            ProviderOperationInput::set_transport_binding,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, StorageSnapshotInput>(
+            "storage_snapshot",
+            ProviderOperationInput::has_storage_snapshot,
+            ProviderOperationInput::storage_snapshot,
+            ProviderOperationInput::mut_storage_snapshot,
+            ProviderOperationInput::set_storage_snapshot,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, DeviceSelectorInput>(
+            "device_selector",
+            ProviderOperationInput::has_device_selector,
+            ProviderOperationInput::device_selector,
+            ProviderOperationInput::mut_device_selector,
+            ProviderOperationInput::set_device_selector,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, AudioStateInput>(
+            "audio_state",
+            ProviderOperationInput::has_audio_state,
+            ProviderOperationInput::audio_state,
+            ProviderOperationInput::mut_audio_state,
+            ProviderOperationInput::set_audio_state,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, ObservabilityQueryInput>(
+            "observability_query",
+            ProviderOperationInput::has_observability_query,
+            ProviderOperationInput::observability_query,
+            ProviderOperationInput::mut_observability_query,
+            ProviderOperationInput::set_observability_query,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, ObservabilityExportInput>(
+            "observability_export",
+            ProviderOperationInput::has_observability_export,
+            ProviderOperationInput::observability_export,
+            ProviderOperationInput::mut_observability_export,
+            ProviderOperationInput::set_observability_export,
+        ));
+        oneofs.push(provider_operation_input::Input::generated_oneof_descriptor_data());
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ProviderOperationInput>(
+            "ProviderOperationInput",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ProviderOperationInput {
+    const NAME: &'static str = "ProviderOperationInput";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.input = ::std::option::Option::Some(provider_operation_input::Input::NoInput(is.read_message()?));
+                },
+                18 => {
+                    self.input = ::std::option::Option::Some(provider_operation_input::Input::ConfiguredRuntimeExecution(is.read_message()?));
+                },
+                26 => {
+                    self.input = ::std::option::Option::Some(provider_operation_input::Input::InfrastructurePowerState(is.read_message()?));
+                },
+                34 => {
+                    self.input = ::std::option::Option::Some(provider_operation_input::Input::TransportBinding(is.read_message()?));
+                },
+                42 => {
+                    self.input = ::std::option::Option::Some(provider_operation_input::Input::StorageSnapshot(is.read_message()?));
+                },
+                50 => {
+                    self.input = ::std::option::Option::Some(provider_operation_input::Input::DeviceSelector(is.read_message()?));
+                },
+                58 => {
+                    self.input = ::std::option::Option::Some(provider_operation_input::Input::AudioState(is.read_message()?));
+                },
+                66 => {
+                    self.input = ::std::option::Option::Some(provider_operation_input::Input::ObservabilityQuery(is.read_message()?));
+                },
+                74 => {
+                    self.input = ::std::option::Option::Some(provider_operation_input::Input::ObservabilityExport(is.read_message()?));
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let ::std::option::Option::Some(ref v) = self.input {
+            match v {
+                &provider_operation_input::Input::NoInput(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+                &provider_operation_input::Input::ConfiguredRuntimeExecution(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+                &provider_operation_input::Input::InfrastructurePowerState(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+                &provider_operation_input::Input::TransportBinding(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+                &provider_operation_input::Input::StorageSnapshot(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+                &provider_operation_input::Input::DeviceSelector(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+                &provider_operation_input::Input::AudioState(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+                &provider_operation_input::Input::ObservabilityQuery(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+                &provider_operation_input::Input::ObservabilityExport(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+            };
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let ::std::option::Option::Some(ref v) = self.input {
+            match v {
+                &provider_operation_input::Input::NoInput(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+                },
+                &provider_operation_input::Input::ConfiguredRuntimeExecution(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(2, v, os)?;
+                },
+                &provider_operation_input::Input::InfrastructurePowerState(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(3, v, os)?;
+                },
+                &provider_operation_input::Input::TransportBinding(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(4, v, os)?;
+                },
+                &provider_operation_input::Input::StorageSnapshot(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(5, v, os)?;
+                },
+                &provider_operation_input::Input::DeviceSelector(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(6, v, os)?;
+                },
+                &provider_operation_input::Input::AudioState(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(7, v, os)?;
+                },
+                &provider_operation_input::Input::ObservabilityQuery(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(8, v, os)?;
+                },
+                &provider_operation_input::Input::ObservabilityExport(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(9, v, os)?;
+                },
+            };
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ProviderOperationInput {
+        ProviderOperationInput::new()
+    }
+
+    fn clear(&mut self) {
+        self.input = ::std::option::Option::None;
+        self.input = ::std::option::Option::None;
+        self.input = ::std::option::Option::None;
+        self.input = ::std::option::Option::None;
+        self.input = ::std::option::Option::None;
+        self.input = ::std::option::Option::None;
+        self.input = ::std::option::Option::None;
+        self.input = ::std::option::Option::None;
+        self.input = ::std::option::Option::None;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ProviderOperationInput {
+        static instance: ProviderOperationInput = ProviderOperationInput {
+            input: ::std::option::Option::None,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ProviderOperationInput {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ProviderOperationInput").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ProviderOperationInput {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ProviderOperationInput {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+/// Nested message and enums of message `ProviderOperationInput`
+pub mod provider_operation_input {
+
+    #[derive(Clone,PartialEq,Debug)]
+    #[non_exhaustive]
+    // @@protoc_insertion_point(oneof:d2b.common.v2.ProviderOperationInput.input)
+    pub enum Input {
+        // @@protoc_insertion_point(oneof_field:d2b.common.v2.ProviderOperationInput.no_input)
+        NoInput(super::NoProviderOperationInput),
+        // @@protoc_insertion_point(oneof_field:d2b.common.v2.ProviderOperationInput.configured_runtime_execution)
+        ConfiguredRuntimeExecution(super::ConfiguredRuntimeExecutionInput),
+        // @@protoc_insertion_point(oneof_field:d2b.common.v2.ProviderOperationInput.infrastructure_power_state)
+        InfrastructurePowerState(super::InfrastructurePowerStateInput),
+        // @@protoc_insertion_point(oneof_field:d2b.common.v2.ProviderOperationInput.transport_binding)
+        TransportBinding(super::TransportBindingInput),
+        // @@protoc_insertion_point(oneof_field:d2b.common.v2.ProviderOperationInput.storage_snapshot)
+        StorageSnapshot(super::StorageSnapshotInput),
+        // @@protoc_insertion_point(oneof_field:d2b.common.v2.ProviderOperationInput.device_selector)
+        DeviceSelector(super::DeviceSelectorInput),
+        // @@protoc_insertion_point(oneof_field:d2b.common.v2.ProviderOperationInput.audio_state)
+        AudioState(super::AudioStateInput),
+        // @@protoc_insertion_point(oneof_field:d2b.common.v2.ProviderOperationInput.observability_query)
+        ObservabilityQuery(super::ObservabilityQueryInput),
+        // @@protoc_insertion_point(oneof_field:d2b.common.v2.ProviderOperationInput.observability_export)
+        ObservabilityExport(super::ObservabilityExportInput),
+    }
+
+    impl ::protobuf::Oneof for Input {
+    }
+
+    impl ::protobuf::OneofFull for Input {
+        fn descriptor() -> ::protobuf::reflect::OneofDescriptor {
+            static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::OneofDescriptor> = ::protobuf::rt::Lazy::new();
+            descriptor.get(|| <super::ProviderOperationInput as ::protobuf::MessageFull>::descriptor().oneof_by_name("input").unwrap()).clone()
+        }
+    }
+
+    impl Input {
+        pub(in super) fn generated_oneof_descriptor_data() -> ::protobuf::reflect::GeneratedOneofDescriptorData {
+            ::protobuf::reflect::GeneratedOneofDescriptorData::new::<Input>("input")
+        }
+    }
 }
 
 // @@protoc_insertion_point(message:d2b.common.v2.CapabilityRequest)
@@ -1961,6 +4690,8 @@ pub struct ProviderResponse {
     pub stream_id: ::std::string::String,
     // @@protoc_insertion_point(field:d2b.common.v2.ProviderResponse.attachment_indexes)
     pub attachment_indexes: ::std::vec::Vec<u32>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ProviderResponse.observability_query_result)
+    pub observability_query_result: ::protobuf::MessageField<ObservabilityQueryResult>,
     // special fields
     // @@protoc_insertion_point(special_field:d2b.common.v2.ProviderResponse.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -1978,7 +4709,7 @@ impl ProviderResponse {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(8);
+        let mut fields = ::std::vec::Vec::with_capacity(9);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "outcome",
@@ -2019,6 +4750,11 @@ impl ProviderResponse {
             "attachment_indexes",
             |m: &ProviderResponse| { &m.attachment_indexes },
             |m: &mut ProviderResponse| { &mut m.attachment_indexes },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, ObservabilityQueryResult>(
+            "observability_query_result",
+            |m: &ProviderResponse| { &m.observability_query_result },
+            |m: &mut ProviderResponse| { &mut m.observability_query_result },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ProviderResponse>(
             "ProviderResponse",
@@ -2065,6 +4801,9 @@ impl ::protobuf::Message for ProviderResponse {
                 64 => {
                     self.attachment_indexes.push(is.read_uint32()?);
                 },
+                74 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.observability_query_result)?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -2101,6 +4840,10 @@ impl ::protobuf::Message for ProviderResponse {
             my_size += ::protobuf::rt::string_size(7, &self.stream_id);
         }
         my_size += ::protobuf::rt::vec_packed_uint32_size(8, &self.attachment_indexes);
+        if let Some(v) = self.observability_query_result.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -2129,6 +4872,9 @@ impl ::protobuf::Message for ProviderResponse {
             os.write_string(7, &self.stream_id)?;
         }
         os.write_repeated_packed_uint32(8, &self.attachment_indexes)?;
+        if let Some(v) = self.observability_query_result.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(9, v, os)?;
+        }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -2154,6 +4900,7 @@ impl ::protobuf::Message for ProviderResponse {
         self.error.clear();
         self.stream_id.clear();
         self.attachment_indexes.clear();
+        self.observability_query_result.clear();
         self.special_fields.clear();
     }
 
@@ -2167,6 +4914,7 @@ impl ::protobuf::Message for ProviderResponse {
             error: ::protobuf::MessageField::none(),
             stream_id: ::std::string::String::new(),
             attachment_indexes: ::std::vec::Vec::new(),
+            observability_query_result: ::protobuf::MessageField::none(),
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -3573,6 +6321,1286 @@ impl ProviderCapability {
 }
 
 #[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.common.v2.InfrastructurePowerState)
+pub enum InfrastructurePowerState {
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.InfrastructurePowerState.INFRASTRUCTURE_POWER_STATE_UNSPECIFIED)
+    INFRASTRUCTURE_POWER_STATE_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.InfrastructurePowerState.INFRASTRUCTURE_POWER_STATE_RUNNING)
+    INFRASTRUCTURE_POWER_STATE_RUNNING = 1,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.InfrastructurePowerState.INFRASTRUCTURE_POWER_STATE_STOPPED)
+    INFRASTRUCTURE_POWER_STATE_STOPPED = 2,
+}
+
+impl ::protobuf::Enum for InfrastructurePowerState {
+    const NAME: &'static str = "InfrastructurePowerState";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<InfrastructurePowerState> {
+        match value {
+            0 => ::std::option::Option::Some(InfrastructurePowerState::INFRASTRUCTURE_POWER_STATE_UNSPECIFIED),
+            1 => ::std::option::Option::Some(InfrastructurePowerState::INFRASTRUCTURE_POWER_STATE_RUNNING),
+            2 => ::std::option::Option::Some(InfrastructurePowerState::INFRASTRUCTURE_POWER_STATE_STOPPED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<InfrastructurePowerState> {
+        match str {
+            "INFRASTRUCTURE_POWER_STATE_UNSPECIFIED" => ::std::option::Option::Some(InfrastructurePowerState::INFRASTRUCTURE_POWER_STATE_UNSPECIFIED),
+            "INFRASTRUCTURE_POWER_STATE_RUNNING" => ::std::option::Option::Some(InfrastructurePowerState::INFRASTRUCTURE_POWER_STATE_RUNNING),
+            "INFRASTRUCTURE_POWER_STATE_STOPPED" => ::std::option::Option::Some(InfrastructurePowerState::INFRASTRUCTURE_POWER_STATE_STOPPED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [InfrastructurePowerState] = &[
+        InfrastructurePowerState::INFRASTRUCTURE_POWER_STATE_UNSPECIFIED,
+        InfrastructurePowerState::INFRASTRUCTURE_POWER_STATE_RUNNING,
+        InfrastructurePowerState::INFRASTRUCTURE_POWER_STATE_STOPPED,
+    ];
+}
+
+impl ::protobuf::EnumFull for InfrastructurePowerState {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("InfrastructurePowerState").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for InfrastructurePowerState {
+    fn default() -> Self {
+        InfrastructurePowerState::INFRASTRUCTURE_POWER_STATE_UNSPECIFIED
+    }
+}
+
+impl InfrastructurePowerState {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<InfrastructurePowerState>("InfrastructurePowerState")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.common.v2.AudioChannel)
+pub enum AudioChannel {
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.AudioChannel.AUDIO_CHANNEL_UNSPECIFIED)
+    AUDIO_CHANNEL_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.AudioChannel.AUDIO_CHANNEL_SPEAKER)
+    AUDIO_CHANNEL_SPEAKER = 1,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.AudioChannel.AUDIO_CHANNEL_MICROPHONE)
+    AUDIO_CHANNEL_MICROPHONE = 2,
+}
+
+impl ::protobuf::Enum for AudioChannel {
+    const NAME: &'static str = "AudioChannel";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<AudioChannel> {
+        match value {
+            0 => ::std::option::Option::Some(AudioChannel::AUDIO_CHANNEL_UNSPECIFIED),
+            1 => ::std::option::Option::Some(AudioChannel::AUDIO_CHANNEL_SPEAKER),
+            2 => ::std::option::Option::Some(AudioChannel::AUDIO_CHANNEL_MICROPHONE),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<AudioChannel> {
+        match str {
+            "AUDIO_CHANNEL_UNSPECIFIED" => ::std::option::Option::Some(AudioChannel::AUDIO_CHANNEL_UNSPECIFIED),
+            "AUDIO_CHANNEL_SPEAKER" => ::std::option::Option::Some(AudioChannel::AUDIO_CHANNEL_SPEAKER),
+            "AUDIO_CHANNEL_MICROPHONE" => ::std::option::Option::Some(AudioChannel::AUDIO_CHANNEL_MICROPHONE),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [AudioChannel] = &[
+        AudioChannel::AUDIO_CHANNEL_UNSPECIFIED,
+        AudioChannel::AUDIO_CHANNEL_SPEAKER,
+        AudioChannel::AUDIO_CHANNEL_MICROPHONE,
+    ];
+}
+
+impl ::protobuf::EnumFull for AudioChannel {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("AudioChannel").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for AudioChannel {
+    fn default() -> Self {
+        AudioChannel::AUDIO_CHANNEL_UNSPECIFIED
+    }
+}
+
+impl AudioChannel {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<AudioChannel>("AudioChannel")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.common.v2.AudioDirection)
+pub enum AudioDirection {
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.AudioDirection.AUDIO_DIRECTION_UNSPECIFIED)
+    AUDIO_DIRECTION_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.AudioDirection.AUDIO_DIRECTION_OUTPUT)
+    AUDIO_DIRECTION_OUTPUT = 1,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.AudioDirection.AUDIO_DIRECTION_INPUT)
+    AUDIO_DIRECTION_INPUT = 2,
+}
+
+impl ::protobuf::Enum for AudioDirection {
+    const NAME: &'static str = "AudioDirection";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<AudioDirection> {
+        match value {
+            0 => ::std::option::Option::Some(AudioDirection::AUDIO_DIRECTION_UNSPECIFIED),
+            1 => ::std::option::Option::Some(AudioDirection::AUDIO_DIRECTION_OUTPUT),
+            2 => ::std::option::Option::Some(AudioDirection::AUDIO_DIRECTION_INPUT),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<AudioDirection> {
+        match str {
+            "AUDIO_DIRECTION_UNSPECIFIED" => ::std::option::Option::Some(AudioDirection::AUDIO_DIRECTION_UNSPECIFIED),
+            "AUDIO_DIRECTION_OUTPUT" => ::std::option::Option::Some(AudioDirection::AUDIO_DIRECTION_OUTPUT),
+            "AUDIO_DIRECTION_INPUT" => ::std::option::Option::Some(AudioDirection::AUDIO_DIRECTION_INPUT),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [AudioDirection] = &[
+        AudioDirection::AUDIO_DIRECTION_UNSPECIFIED,
+        AudioDirection::AUDIO_DIRECTION_OUTPUT,
+        AudioDirection::AUDIO_DIRECTION_INPUT,
+    ];
+}
+
+impl ::protobuf::EnumFull for AudioDirection {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("AudioDirection").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for AudioDirection {
+    fn default() -> Self {
+        AudioDirection::AUDIO_DIRECTION_UNSPECIFIED
+    }
+}
+
+impl AudioDirection {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<AudioDirection>("AudioDirection")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.common.v2.ObservabilityView)
+pub enum ObservabilityView {
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityView.OBSERVABILITY_VIEW_UNSPECIFIED)
+    OBSERVABILITY_VIEW_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityView.OBSERVABILITY_VIEW_HEALTH)
+    OBSERVABILITY_VIEW_HEALTH = 1,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityView.OBSERVABILITY_VIEW_LIFECYCLE)
+    OBSERVABILITY_VIEW_LIFECYCLE = 2,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityView.OBSERVABILITY_VIEW_OPERATIONS)
+    OBSERVABILITY_VIEW_OPERATIONS = 3,
+}
+
+impl ::protobuf::Enum for ObservabilityView {
+    const NAME: &'static str = "ObservabilityView";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ObservabilityView> {
+        match value {
+            0 => ::std::option::Option::Some(ObservabilityView::OBSERVABILITY_VIEW_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ObservabilityView::OBSERVABILITY_VIEW_HEALTH),
+            2 => ::std::option::Option::Some(ObservabilityView::OBSERVABILITY_VIEW_LIFECYCLE),
+            3 => ::std::option::Option::Some(ObservabilityView::OBSERVABILITY_VIEW_OPERATIONS),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ObservabilityView> {
+        match str {
+            "OBSERVABILITY_VIEW_UNSPECIFIED" => ::std::option::Option::Some(ObservabilityView::OBSERVABILITY_VIEW_UNSPECIFIED),
+            "OBSERVABILITY_VIEW_HEALTH" => ::std::option::Option::Some(ObservabilityView::OBSERVABILITY_VIEW_HEALTH),
+            "OBSERVABILITY_VIEW_LIFECYCLE" => ::std::option::Option::Some(ObservabilityView::OBSERVABILITY_VIEW_LIFECYCLE),
+            "OBSERVABILITY_VIEW_OPERATIONS" => ::std::option::Option::Some(ObservabilityView::OBSERVABILITY_VIEW_OPERATIONS),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ObservabilityView] = &[
+        ObservabilityView::OBSERVABILITY_VIEW_UNSPECIFIED,
+        ObservabilityView::OBSERVABILITY_VIEW_HEALTH,
+        ObservabilityView::OBSERVABILITY_VIEW_LIFECYCLE,
+        ObservabilityView::OBSERVABILITY_VIEW_OPERATIONS,
+    ];
+}
+
+impl ::protobuf::EnumFull for ObservabilityView {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ObservabilityView").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ObservabilityView {
+    fn default() -> Self {
+        ObservabilityView::OBSERVABILITY_VIEW_UNSPECIFIED
+    }
+}
+
+impl ObservabilityView {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ObservabilityView>("ObservabilityView")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.common.v2.ObservabilityProjectionKind)
+pub enum ObservabilityProjectionKind {
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityProjectionKind.OBSERVABILITY_PROJECTION_KIND_UNSPECIFIED)
+    OBSERVABILITY_PROJECTION_KIND_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityProjectionKind.OBSERVABILITY_PROJECTION_KIND_METRICS)
+    OBSERVABILITY_PROJECTION_KIND_METRICS = 1,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityProjectionKind.OBSERVABILITY_PROJECTION_KIND_TRACE_SUMMARY)
+    OBSERVABILITY_PROJECTION_KIND_TRACE_SUMMARY = 2,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityProjectionKind.OBSERVABILITY_PROJECTION_KIND_AUDIT_SUMMARY)
+    OBSERVABILITY_PROJECTION_KIND_AUDIT_SUMMARY = 3,
+}
+
+impl ::protobuf::Enum for ObservabilityProjectionKind {
+    const NAME: &'static str = "ObservabilityProjectionKind";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ObservabilityProjectionKind> {
+        match value {
+            0 => ::std::option::Option::Some(ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_METRICS),
+            2 => ::std::option::Option::Some(ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_TRACE_SUMMARY),
+            3 => ::std::option::Option::Some(ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_AUDIT_SUMMARY),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ObservabilityProjectionKind> {
+        match str {
+            "OBSERVABILITY_PROJECTION_KIND_UNSPECIFIED" => ::std::option::Option::Some(ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_UNSPECIFIED),
+            "OBSERVABILITY_PROJECTION_KIND_METRICS" => ::std::option::Option::Some(ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_METRICS),
+            "OBSERVABILITY_PROJECTION_KIND_TRACE_SUMMARY" => ::std::option::Option::Some(ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_TRACE_SUMMARY),
+            "OBSERVABILITY_PROJECTION_KIND_AUDIT_SUMMARY" => ::std::option::Option::Some(ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_AUDIT_SUMMARY),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ObservabilityProjectionKind] = &[
+        ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_UNSPECIFIED,
+        ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_METRICS,
+        ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_TRACE_SUMMARY,
+        ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_AUDIT_SUMMARY,
+    ];
+}
+
+impl ::protobuf::EnumFull for ObservabilityProjectionKind {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ObservabilityProjectionKind").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ObservabilityProjectionKind {
+    fn default() -> Self {
+        ObservabilityProjectionKind::OBSERVABILITY_PROJECTION_KIND_UNSPECIFIED
+    }
+}
+
+impl ObservabilityProjectionKind {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ObservabilityProjectionKind>("ObservabilityProjectionKind")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.common.v2.ObservabilityMetricLabel)
+pub enum ObservabilityMetricLabel {
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityMetricLabel.OBSERVABILITY_METRIC_LABEL_UNSPECIFIED)
+    OBSERVABILITY_METRIC_LABEL_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityMetricLabel.OBSERVABILITY_METRIC_LABEL_PROVIDER_HEALTH)
+    OBSERVABILITY_METRIC_LABEL_PROVIDER_HEALTH = 1,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityMetricLabel.OBSERVABILITY_METRIC_LABEL_LIFECYCLE_TRANSITION)
+    OBSERVABILITY_METRIC_LABEL_LIFECYCLE_TRANSITION = 2,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityMetricLabel.OBSERVABILITY_METRIC_LABEL_OPERATION_TOTAL)
+    OBSERVABILITY_METRIC_LABEL_OPERATION_TOTAL = 3,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityMetricLabel.OBSERVABILITY_METRIC_LABEL_OPERATION_DURATION)
+    OBSERVABILITY_METRIC_LABEL_OPERATION_DURATION = 4,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityMetricLabel.OBSERVABILITY_METRIC_LABEL_QUEUE_DEPTH)
+    OBSERVABILITY_METRIC_LABEL_QUEUE_DEPTH = 5,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityMetricLabel.OBSERVABILITY_METRIC_LABEL_EXPORT_TRUNCATED)
+    OBSERVABILITY_METRIC_LABEL_EXPORT_TRUNCATED = 6,
+}
+
+impl ::protobuf::Enum for ObservabilityMetricLabel {
+    const NAME: &'static str = "ObservabilityMetricLabel";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ObservabilityMetricLabel> {
+        match value {
+            0 => ::std::option::Option::Some(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_PROVIDER_HEALTH),
+            2 => ::std::option::Option::Some(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_LIFECYCLE_TRANSITION),
+            3 => ::std::option::Option::Some(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_OPERATION_TOTAL),
+            4 => ::std::option::Option::Some(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_OPERATION_DURATION),
+            5 => ::std::option::Option::Some(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_QUEUE_DEPTH),
+            6 => ::std::option::Option::Some(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_EXPORT_TRUNCATED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ObservabilityMetricLabel> {
+        match str {
+            "OBSERVABILITY_METRIC_LABEL_UNSPECIFIED" => ::std::option::Option::Some(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_UNSPECIFIED),
+            "OBSERVABILITY_METRIC_LABEL_PROVIDER_HEALTH" => ::std::option::Option::Some(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_PROVIDER_HEALTH),
+            "OBSERVABILITY_METRIC_LABEL_LIFECYCLE_TRANSITION" => ::std::option::Option::Some(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_LIFECYCLE_TRANSITION),
+            "OBSERVABILITY_METRIC_LABEL_OPERATION_TOTAL" => ::std::option::Option::Some(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_OPERATION_TOTAL),
+            "OBSERVABILITY_METRIC_LABEL_OPERATION_DURATION" => ::std::option::Option::Some(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_OPERATION_DURATION),
+            "OBSERVABILITY_METRIC_LABEL_QUEUE_DEPTH" => ::std::option::Option::Some(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_QUEUE_DEPTH),
+            "OBSERVABILITY_METRIC_LABEL_EXPORT_TRUNCATED" => ::std::option::Option::Some(ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_EXPORT_TRUNCATED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ObservabilityMetricLabel] = &[
+        ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_UNSPECIFIED,
+        ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_PROVIDER_HEALTH,
+        ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_LIFECYCLE_TRANSITION,
+        ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_OPERATION_TOTAL,
+        ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_OPERATION_DURATION,
+        ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_QUEUE_DEPTH,
+        ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_EXPORT_TRUNCATED,
+    ];
+}
+
+impl ::protobuf::EnumFull for ObservabilityMetricLabel {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ObservabilityMetricLabel").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ObservabilityMetricLabel {
+    fn default() -> Self {
+        ObservabilityMetricLabel::OBSERVABILITY_METRIC_LABEL_UNSPECIFIED
+    }
+}
+
+impl ObservabilityMetricLabel {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ObservabilityMetricLabel>("ObservabilityMetricLabel")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.common.v2.ObservabilityOperationLabel)
+pub enum ObservabilityOperationLabel {
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOperationLabel.OBSERVABILITY_OPERATION_LABEL_UNSPECIFIED)
+    OBSERVABILITY_OPERATION_LABEL_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOperationLabel.OBSERVABILITY_OPERATION_LABEL_HEALTH)
+    OBSERVABILITY_OPERATION_LABEL_HEALTH = 1,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOperationLabel.OBSERVABILITY_OPERATION_LABEL_PLAN)
+    OBSERVABILITY_OPERATION_LABEL_PLAN = 2,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOperationLabel.OBSERVABILITY_OPERATION_LABEL_ENSURE)
+    OBSERVABILITY_OPERATION_LABEL_ENSURE = 3,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOperationLabel.OBSERVABILITY_OPERATION_LABEL_START)
+    OBSERVABILITY_OPERATION_LABEL_START = 4,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOperationLabel.OBSERVABILITY_OPERATION_LABEL_STOP)
+    OBSERVABILITY_OPERATION_LABEL_STOP = 5,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOperationLabel.OBSERVABILITY_OPERATION_LABEL_ATTACH)
+    OBSERVABILITY_OPERATION_LABEL_ATTACH = 6,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOperationLabel.OBSERVABILITY_OPERATION_LABEL_DETACH)
+    OBSERVABILITY_OPERATION_LABEL_DETACH = 7,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOperationLabel.OBSERVABILITY_OPERATION_LABEL_ADOPT)
+    OBSERVABILITY_OPERATION_LABEL_ADOPT = 8,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOperationLabel.OBSERVABILITY_OPERATION_LABEL_INSPECT)
+    OBSERVABILITY_OPERATION_LABEL_INSPECT = 9,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOperationLabel.OBSERVABILITY_OPERATION_LABEL_SET_STATE)
+    OBSERVABILITY_OPERATION_LABEL_SET_STATE = 10,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOperationLabel.OBSERVABILITY_OPERATION_LABEL_QUERY)
+    OBSERVABILITY_OPERATION_LABEL_QUERY = 11,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOperationLabel.OBSERVABILITY_OPERATION_LABEL_EXPORT)
+    OBSERVABILITY_OPERATION_LABEL_EXPORT = 12,
+}
+
+impl ::protobuf::Enum for ObservabilityOperationLabel {
+    const NAME: &'static str = "ObservabilityOperationLabel";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ObservabilityOperationLabel> {
+        match value {
+            0 => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_HEALTH),
+            2 => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_PLAN),
+            3 => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_ENSURE),
+            4 => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_START),
+            5 => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_STOP),
+            6 => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_ATTACH),
+            7 => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_DETACH),
+            8 => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_ADOPT),
+            9 => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_INSPECT),
+            10 => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_SET_STATE),
+            11 => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_QUERY),
+            12 => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_EXPORT),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ObservabilityOperationLabel> {
+        match str {
+            "OBSERVABILITY_OPERATION_LABEL_UNSPECIFIED" => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_UNSPECIFIED),
+            "OBSERVABILITY_OPERATION_LABEL_HEALTH" => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_HEALTH),
+            "OBSERVABILITY_OPERATION_LABEL_PLAN" => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_PLAN),
+            "OBSERVABILITY_OPERATION_LABEL_ENSURE" => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_ENSURE),
+            "OBSERVABILITY_OPERATION_LABEL_START" => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_START),
+            "OBSERVABILITY_OPERATION_LABEL_STOP" => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_STOP),
+            "OBSERVABILITY_OPERATION_LABEL_ATTACH" => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_ATTACH),
+            "OBSERVABILITY_OPERATION_LABEL_DETACH" => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_DETACH),
+            "OBSERVABILITY_OPERATION_LABEL_ADOPT" => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_ADOPT),
+            "OBSERVABILITY_OPERATION_LABEL_INSPECT" => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_INSPECT),
+            "OBSERVABILITY_OPERATION_LABEL_SET_STATE" => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_SET_STATE),
+            "OBSERVABILITY_OPERATION_LABEL_QUERY" => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_QUERY),
+            "OBSERVABILITY_OPERATION_LABEL_EXPORT" => ::std::option::Option::Some(ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_EXPORT),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ObservabilityOperationLabel] = &[
+        ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_UNSPECIFIED,
+        ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_HEALTH,
+        ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_PLAN,
+        ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_ENSURE,
+        ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_START,
+        ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_STOP,
+        ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_ATTACH,
+        ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_DETACH,
+        ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_ADOPT,
+        ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_INSPECT,
+        ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_SET_STATE,
+        ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_QUERY,
+        ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_EXPORT,
+    ];
+}
+
+impl ::protobuf::EnumFull for ObservabilityOperationLabel {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ObservabilityOperationLabel").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ObservabilityOperationLabel {
+    fn default() -> Self {
+        ObservabilityOperationLabel::OBSERVABILITY_OPERATION_LABEL_UNSPECIFIED
+    }
+}
+
+impl ObservabilityOperationLabel {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ObservabilityOperationLabel>("ObservabilityOperationLabel")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.common.v2.ObservabilityOutcomeLabel)
+pub enum ObservabilityOutcomeLabel {
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOutcomeLabel.OBSERVABILITY_OUTCOME_LABEL_UNSPECIFIED)
+    OBSERVABILITY_OUTCOME_LABEL_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOutcomeLabel.OBSERVABILITY_OUTCOME_LABEL_SUCCESS)
+    OBSERVABILITY_OUTCOME_LABEL_SUCCESS = 1,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOutcomeLabel.OBSERVABILITY_OUTCOME_LABEL_ALREADY_APPLIED)
+    OBSERVABILITY_OUTCOME_LABEL_ALREADY_APPLIED = 2,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOutcomeLabel.OBSERVABILITY_OUTCOME_LABEL_DENIED)
+    OBSERVABILITY_OUTCOME_LABEL_DENIED = 3,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOutcomeLabel.OBSERVABILITY_OUTCOME_LABEL_CANCELLED)
+    OBSERVABILITY_OUTCOME_LABEL_CANCELLED = 4,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOutcomeLabel.OBSERVABILITY_OUTCOME_LABEL_DEADLINE_EXPIRED)
+    OBSERVABILITY_OUTCOME_LABEL_DEADLINE_EXPIRED = 5,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOutcomeLabel.OBSERVABILITY_OUTCOME_LABEL_UNAVAILABLE)
+    OBSERVABILITY_OUTCOME_LABEL_UNAVAILABLE = 6,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityOutcomeLabel.OBSERVABILITY_OUTCOME_LABEL_TRUNCATED)
+    OBSERVABILITY_OUTCOME_LABEL_TRUNCATED = 7,
+}
+
+impl ::protobuf::Enum for ObservabilityOutcomeLabel {
+    const NAME: &'static str = "ObservabilityOutcomeLabel";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ObservabilityOutcomeLabel> {
+        match value {
+            0 => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_SUCCESS),
+            2 => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_ALREADY_APPLIED),
+            3 => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_DENIED),
+            4 => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_CANCELLED),
+            5 => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_DEADLINE_EXPIRED),
+            6 => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_UNAVAILABLE),
+            7 => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_TRUNCATED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ObservabilityOutcomeLabel> {
+        match str {
+            "OBSERVABILITY_OUTCOME_LABEL_UNSPECIFIED" => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_UNSPECIFIED),
+            "OBSERVABILITY_OUTCOME_LABEL_SUCCESS" => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_SUCCESS),
+            "OBSERVABILITY_OUTCOME_LABEL_ALREADY_APPLIED" => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_ALREADY_APPLIED),
+            "OBSERVABILITY_OUTCOME_LABEL_DENIED" => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_DENIED),
+            "OBSERVABILITY_OUTCOME_LABEL_CANCELLED" => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_CANCELLED),
+            "OBSERVABILITY_OUTCOME_LABEL_DEADLINE_EXPIRED" => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_DEADLINE_EXPIRED),
+            "OBSERVABILITY_OUTCOME_LABEL_UNAVAILABLE" => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_UNAVAILABLE),
+            "OBSERVABILITY_OUTCOME_LABEL_TRUNCATED" => ::std::option::Option::Some(ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_TRUNCATED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ObservabilityOutcomeLabel] = &[
+        ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_UNSPECIFIED,
+        ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_SUCCESS,
+        ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_ALREADY_APPLIED,
+        ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_DENIED,
+        ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_CANCELLED,
+        ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_DEADLINE_EXPIRED,
+        ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_UNAVAILABLE,
+        ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_TRUNCATED,
+    ];
+}
+
+impl ::protobuf::EnumFull for ObservabilityOutcomeLabel {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ObservabilityOutcomeLabel").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ObservabilityOutcomeLabel {
+    fn default() -> Self {
+        ObservabilityOutcomeLabel::OBSERVABILITY_OUTCOME_LABEL_UNSPECIFIED
+    }
+}
+
+impl ObservabilityOutcomeLabel {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ObservabilityOutcomeLabel>("ObservabilityOutcomeLabel")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.common.v2.ObservabilityHealthState)
+pub enum ObservabilityHealthState {
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthState.OBSERVABILITY_HEALTH_STATE_UNSPECIFIED)
+    OBSERVABILITY_HEALTH_STATE_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthState.OBSERVABILITY_HEALTH_STATE_HEALTHY)
+    OBSERVABILITY_HEALTH_STATE_HEALTHY = 1,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthState.OBSERVABILITY_HEALTH_STATE_DEGRADED)
+    OBSERVABILITY_HEALTH_STATE_DEGRADED = 2,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthState.OBSERVABILITY_HEALTH_STATE_UNAVAILABLE)
+    OBSERVABILITY_HEALTH_STATE_UNAVAILABLE = 3,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthState.OBSERVABILITY_HEALTH_STATE_FAILED)
+    OBSERVABILITY_HEALTH_STATE_FAILED = 4,
+}
+
+impl ::protobuf::Enum for ObservabilityHealthState {
+    const NAME: &'static str = "ObservabilityHealthState";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ObservabilityHealthState> {
+        match value {
+            0 => ::std::option::Option::Some(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_HEALTHY),
+            2 => ::std::option::Option::Some(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_DEGRADED),
+            3 => ::std::option::Option::Some(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_UNAVAILABLE),
+            4 => ::std::option::Option::Some(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_FAILED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ObservabilityHealthState> {
+        match str {
+            "OBSERVABILITY_HEALTH_STATE_UNSPECIFIED" => ::std::option::Option::Some(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_UNSPECIFIED),
+            "OBSERVABILITY_HEALTH_STATE_HEALTHY" => ::std::option::Option::Some(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_HEALTHY),
+            "OBSERVABILITY_HEALTH_STATE_DEGRADED" => ::std::option::Option::Some(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_DEGRADED),
+            "OBSERVABILITY_HEALTH_STATE_UNAVAILABLE" => ::std::option::Option::Some(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_UNAVAILABLE),
+            "OBSERVABILITY_HEALTH_STATE_FAILED" => ::std::option::Option::Some(ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_FAILED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ObservabilityHealthState] = &[
+        ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_UNSPECIFIED,
+        ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_HEALTHY,
+        ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_DEGRADED,
+        ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_UNAVAILABLE,
+        ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_FAILED,
+    ];
+}
+
+impl ::protobuf::EnumFull for ObservabilityHealthState {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ObservabilityHealthState").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ObservabilityHealthState {
+    fn default() -> Self {
+        ObservabilityHealthState::OBSERVABILITY_HEALTH_STATE_UNSPECIFIED
+    }
+}
+
+impl ObservabilityHealthState {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ObservabilityHealthState>("ObservabilityHealthState")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.common.v2.ObservabilityLifecycleState)
+pub enum ObservabilityLifecycleState {
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityLifecycleState.OBSERVABILITY_LIFECYCLE_STATE_UNSPECIFIED)
+    OBSERVABILITY_LIFECYCLE_STATE_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityLifecycleState.OBSERVABILITY_LIFECYCLE_STATE_PLANNED)
+    OBSERVABILITY_LIFECYCLE_STATE_PLANNED = 1,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityLifecycleState.OBSERVABILITY_LIFECYCLE_STATE_READY)
+    OBSERVABILITY_LIFECYCLE_STATE_READY = 2,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityLifecycleState.OBSERVABILITY_LIFECYCLE_STATE_RUNNING)
+    OBSERVABILITY_LIFECYCLE_STATE_RUNNING = 3,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityLifecycleState.OBSERVABILITY_LIFECYCLE_STATE_STOPPED)
+    OBSERVABILITY_LIFECYCLE_STATE_STOPPED = 4,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityLifecycleState.OBSERVABILITY_LIFECYCLE_STATE_RELEASED)
+    OBSERVABILITY_LIFECYCLE_STATE_RELEASED = 5,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityLifecycleState.OBSERVABILITY_LIFECYCLE_STATE_DESTROYED)
+    OBSERVABILITY_LIFECYCLE_STATE_DESTROYED = 6,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityLifecycleState.OBSERVABILITY_LIFECYCLE_STATE_UNKNOWN)
+    OBSERVABILITY_LIFECYCLE_STATE_UNKNOWN = 7,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityLifecycleState.OBSERVABILITY_LIFECYCLE_STATE_QUARANTINED)
+    OBSERVABILITY_LIFECYCLE_STATE_QUARANTINED = 8,
+}
+
+impl ::protobuf::Enum for ObservabilityLifecycleState {
+    const NAME: &'static str = "ObservabilityLifecycleState";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ObservabilityLifecycleState> {
+        match value {
+            0 => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_PLANNED),
+            2 => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_READY),
+            3 => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_RUNNING),
+            4 => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_STOPPED),
+            5 => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_RELEASED),
+            6 => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_DESTROYED),
+            7 => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_UNKNOWN),
+            8 => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_QUARANTINED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ObservabilityLifecycleState> {
+        match str {
+            "OBSERVABILITY_LIFECYCLE_STATE_UNSPECIFIED" => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_UNSPECIFIED),
+            "OBSERVABILITY_LIFECYCLE_STATE_PLANNED" => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_PLANNED),
+            "OBSERVABILITY_LIFECYCLE_STATE_READY" => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_READY),
+            "OBSERVABILITY_LIFECYCLE_STATE_RUNNING" => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_RUNNING),
+            "OBSERVABILITY_LIFECYCLE_STATE_STOPPED" => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_STOPPED),
+            "OBSERVABILITY_LIFECYCLE_STATE_RELEASED" => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_RELEASED),
+            "OBSERVABILITY_LIFECYCLE_STATE_DESTROYED" => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_DESTROYED),
+            "OBSERVABILITY_LIFECYCLE_STATE_UNKNOWN" => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_UNKNOWN),
+            "OBSERVABILITY_LIFECYCLE_STATE_QUARANTINED" => ::std::option::Option::Some(ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_QUARANTINED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ObservabilityLifecycleState] = &[
+        ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_UNSPECIFIED,
+        ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_PLANNED,
+        ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_READY,
+        ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_RUNNING,
+        ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_STOPPED,
+        ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_RELEASED,
+        ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_DESTROYED,
+        ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_UNKNOWN,
+        ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_QUARANTINED,
+    ];
+}
+
+impl ::protobuf::EnumFull for ObservabilityLifecycleState {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ObservabilityLifecycleState").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ObservabilityLifecycleState {
+    fn default() -> Self {
+        ObservabilityLifecycleState::OBSERVABILITY_LIFECYCLE_STATE_UNSPECIFIED
+    }
+}
+
+impl ObservabilityLifecycleState {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ObservabilityLifecycleState>("ObservabilityLifecycleState")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.common.v2.ObservabilityAdoptionState)
+pub enum ObservabilityAdoptionState {
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityAdoptionState.OBSERVABILITY_ADOPTION_STATE_UNSPECIFIED)
+    OBSERVABILITY_ADOPTION_STATE_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityAdoptionState.OBSERVABILITY_ADOPTION_STATE_NOT_ATTEMPTED)
+    OBSERVABILITY_ADOPTION_STATE_NOT_ATTEMPTED = 1,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityAdoptionState.OBSERVABILITY_ADOPTION_STATE_ADOPTED)
+    OBSERVABILITY_ADOPTION_STATE_ADOPTED = 2,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityAdoptionState.OBSERVABILITY_ADOPTION_STATE_REJECTED)
+    OBSERVABILITY_ADOPTION_STATE_REJECTED = 3,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityAdoptionState.OBSERVABILITY_ADOPTION_STATE_AMBIGUOUS)
+    OBSERVABILITY_ADOPTION_STATE_AMBIGUOUS = 4,
+}
+
+impl ::protobuf::Enum for ObservabilityAdoptionState {
+    const NAME: &'static str = "ObservabilityAdoptionState";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ObservabilityAdoptionState> {
+        match value {
+            0 => ::std::option::Option::Some(ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_NOT_ATTEMPTED),
+            2 => ::std::option::Option::Some(ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_ADOPTED),
+            3 => ::std::option::Option::Some(ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_REJECTED),
+            4 => ::std::option::Option::Some(ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_AMBIGUOUS),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ObservabilityAdoptionState> {
+        match str {
+            "OBSERVABILITY_ADOPTION_STATE_UNSPECIFIED" => ::std::option::Option::Some(ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_UNSPECIFIED),
+            "OBSERVABILITY_ADOPTION_STATE_NOT_ATTEMPTED" => ::std::option::Option::Some(ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_NOT_ATTEMPTED),
+            "OBSERVABILITY_ADOPTION_STATE_ADOPTED" => ::std::option::Option::Some(ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_ADOPTED),
+            "OBSERVABILITY_ADOPTION_STATE_REJECTED" => ::std::option::Option::Some(ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_REJECTED),
+            "OBSERVABILITY_ADOPTION_STATE_AMBIGUOUS" => ::std::option::Option::Some(ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_AMBIGUOUS),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ObservabilityAdoptionState] = &[
+        ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_UNSPECIFIED,
+        ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_NOT_ATTEMPTED,
+        ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_ADOPTED,
+        ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_REJECTED,
+        ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_AMBIGUOUS,
+    ];
+}
+
+impl ::protobuf::EnumFull for ObservabilityAdoptionState {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ObservabilityAdoptionState").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ObservabilityAdoptionState {
+    fn default() -> Self {
+        ObservabilityAdoptionState::OBSERVABILITY_ADOPTION_STATE_UNSPECIFIED
+    }
+}
+
+impl ObservabilityAdoptionState {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ObservabilityAdoptionState>("ObservabilityAdoptionState")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.common.v2.ObservabilityObservationReason)
+pub enum ObservabilityObservationReason {
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityObservationReason.OBSERVABILITY_OBSERVATION_REASON_UNSPECIFIED)
+    OBSERVABILITY_OBSERVATION_REASON_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityObservationReason.OBSERVABILITY_OBSERVATION_REASON_NONE)
+    OBSERVABILITY_OBSERVATION_REASON_NONE = 1,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityObservationReason.OBSERVABILITY_OBSERVATION_REASON_IDENTITY_MISMATCH)
+    OBSERVABILITY_OBSERVATION_REASON_IDENTITY_MISMATCH = 2,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityObservationReason.OBSERVABILITY_OBSERVATION_REASON_CONFIGURATION_MISMATCH)
+    OBSERVABILITY_OBSERVATION_REASON_CONFIGURATION_MISMATCH = 3,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityObservationReason.OBSERVABILITY_OBSERVATION_REASON_GENERATION_MISMATCH)
+    OBSERVABILITY_OBSERVATION_REASON_GENERATION_MISMATCH = 4,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityObservationReason.OBSERVABILITY_OBSERVATION_REASON_OWNER_MISMATCH)
+    OBSERVABILITY_OBSERVATION_REASON_OWNER_MISMATCH = 5,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityObservationReason.OBSERVABILITY_OBSERVATION_REASON_MULTIPLE_CANDIDATES)
+    OBSERVABILITY_OBSERVATION_REASON_MULTIPLE_CANDIDATES = 6,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityObservationReason.OBSERVABILITY_OBSERVATION_REASON_MISSING_EVIDENCE)
+    OBSERVABILITY_OBSERVATION_REASON_MISSING_EVIDENCE = 7,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityObservationReason.OBSERVABILITY_OBSERVATION_REASON_CANCELLED)
+    OBSERVABILITY_OBSERVATION_REASON_CANCELLED = 8,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityObservationReason.OBSERVABILITY_OBSERVATION_REASON_DEADLINE_EXPIRED)
+    OBSERVABILITY_OBSERVATION_REASON_DEADLINE_EXPIRED = 9,
+}
+
+impl ::protobuf::Enum for ObservabilityObservationReason {
+    const NAME: &'static str = "ObservabilityObservationReason";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ObservabilityObservationReason> {
+        match value {
+            0 => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_NONE),
+            2 => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_IDENTITY_MISMATCH),
+            3 => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_CONFIGURATION_MISMATCH),
+            4 => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_GENERATION_MISMATCH),
+            5 => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_OWNER_MISMATCH),
+            6 => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_MULTIPLE_CANDIDATES),
+            7 => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_MISSING_EVIDENCE),
+            8 => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_CANCELLED),
+            9 => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_DEADLINE_EXPIRED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ObservabilityObservationReason> {
+        match str {
+            "OBSERVABILITY_OBSERVATION_REASON_UNSPECIFIED" => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_UNSPECIFIED),
+            "OBSERVABILITY_OBSERVATION_REASON_NONE" => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_NONE),
+            "OBSERVABILITY_OBSERVATION_REASON_IDENTITY_MISMATCH" => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_IDENTITY_MISMATCH),
+            "OBSERVABILITY_OBSERVATION_REASON_CONFIGURATION_MISMATCH" => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_CONFIGURATION_MISMATCH),
+            "OBSERVABILITY_OBSERVATION_REASON_GENERATION_MISMATCH" => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_GENERATION_MISMATCH),
+            "OBSERVABILITY_OBSERVATION_REASON_OWNER_MISMATCH" => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_OWNER_MISMATCH),
+            "OBSERVABILITY_OBSERVATION_REASON_MULTIPLE_CANDIDATES" => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_MULTIPLE_CANDIDATES),
+            "OBSERVABILITY_OBSERVATION_REASON_MISSING_EVIDENCE" => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_MISSING_EVIDENCE),
+            "OBSERVABILITY_OBSERVATION_REASON_CANCELLED" => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_CANCELLED),
+            "OBSERVABILITY_OBSERVATION_REASON_DEADLINE_EXPIRED" => ::std::option::Option::Some(ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_DEADLINE_EXPIRED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ObservabilityObservationReason] = &[
+        ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_UNSPECIFIED,
+        ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_NONE,
+        ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_IDENTITY_MISMATCH,
+        ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_CONFIGURATION_MISMATCH,
+        ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_GENERATION_MISMATCH,
+        ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_OWNER_MISMATCH,
+        ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_MULTIPLE_CANDIDATES,
+        ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_MISSING_EVIDENCE,
+        ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_CANCELLED,
+        ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_DEADLINE_EXPIRED,
+    ];
+}
+
+impl ::protobuf::EnumFull for ObservabilityObservationReason {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ObservabilityObservationReason").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ObservabilityObservationReason {
+    fn default() -> Self {
+        ObservabilityObservationReason::OBSERVABILITY_OBSERVATION_REASON_UNSPECIFIED
+    }
+}
+
+impl ObservabilityObservationReason {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ObservabilityObservationReason>("ObservabilityObservationReason")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.common.v2.ObservabilityHealthReason)
+pub enum ObservabilityHealthReason {
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthReason.OBSERVABILITY_HEALTH_REASON_UNSPECIFIED)
+    OBSERVABILITY_HEALTH_REASON_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthReason.OBSERVABILITY_HEALTH_REASON_NONE)
+    OBSERVABILITY_HEALTH_REASON_NONE = 1,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthReason.OBSERVABILITY_HEALTH_REASON_PROVIDER_DEGRADED)
+    OBSERVABILITY_HEALTH_REASON_PROVIDER_DEGRADED = 2,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthReason.OBSERVABILITY_HEALTH_REASON_HEALTH_TIMEOUT)
+    OBSERVABILITY_HEALTH_REASON_HEALTH_TIMEOUT = 3,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthReason.OBSERVABILITY_HEALTH_REASON_HEALTH_STALE)
+    OBSERVABILITY_HEALTH_REASON_HEALTH_STALE = 4,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthReason.OBSERVABILITY_HEALTH_REASON_SESSION_DISCONNECTED)
+    OBSERVABILITY_HEALTH_REASON_SESSION_DISCONNECTED = 5,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthReason.OBSERVABILITY_HEALTH_REASON_QUEUE_PRESSURE)
+    OBSERVABILITY_HEALTH_REASON_QUEUE_PRESSURE = 6,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthReason.OBSERVABILITY_HEALTH_REASON_HANDSHAKE_TIMEOUT)
+    OBSERVABILITY_HEALTH_REASON_HANDSHAKE_TIMEOUT = 7,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthReason.OBSERVABILITY_HEALTH_REASON_AUTHENTICATION_FAILED)
+    OBSERVABILITY_HEALTH_REASON_AUTHENTICATION_FAILED = 8,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthReason.OBSERVABILITY_HEALTH_REASON_IDENTITY_MISMATCH)
+    OBSERVABILITY_HEALTH_REASON_IDENTITY_MISMATCH = 9,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthReason.OBSERVABILITY_HEALTH_REASON_CONFIGURATION_MISMATCH)
+    OBSERVABILITY_HEALTH_REASON_CONFIGURATION_MISMATCH = 10,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthReason.OBSERVABILITY_HEALTH_REASON_GENERATION_MISMATCH)
+    OBSERVABILITY_HEALTH_REASON_GENERATION_MISMATCH = 11,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthReason.OBSERVABILITY_HEALTH_REASON_CAPABILITY_MISMATCH)
+    OBSERVABILITY_HEALTH_REASON_CAPABILITY_MISMATCH = 12,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityHealthReason.OBSERVABILITY_HEALTH_REASON_ADOPTION_AMBIGUOUS)
+    OBSERVABILITY_HEALTH_REASON_ADOPTION_AMBIGUOUS = 13,
+}
+
+impl ::protobuf::Enum for ObservabilityHealthReason {
+    const NAME: &'static str = "ObservabilityHealthReason";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ObservabilityHealthReason> {
+        match value {
+            0 => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_NONE),
+            2 => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_PROVIDER_DEGRADED),
+            3 => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_HEALTH_TIMEOUT),
+            4 => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_HEALTH_STALE),
+            5 => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_SESSION_DISCONNECTED),
+            6 => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_QUEUE_PRESSURE),
+            7 => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_HANDSHAKE_TIMEOUT),
+            8 => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_AUTHENTICATION_FAILED),
+            9 => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_IDENTITY_MISMATCH),
+            10 => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_CONFIGURATION_MISMATCH),
+            11 => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_GENERATION_MISMATCH),
+            12 => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_CAPABILITY_MISMATCH),
+            13 => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_ADOPTION_AMBIGUOUS),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ObservabilityHealthReason> {
+        match str {
+            "OBSERVABILITY_HEALTH_REASON_UNSPECIFIED" => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_UNSPECIFIED),
+            "OBSERVABILITY_HEALTH_REASON_NONE" => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_NONE),
+            "OBSERVABILITY_HEALTH_REASON_PROVIDER_DEGRADED" => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_PROVIDER_DEGRADED),
+            "OBSERVABILITY_HEALTH_REASON_HEALTH_TIMEOUT" => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_HEALTH_TIMEOUT),
+            "OBSERVABILITY_HEALTH_REASON_HEALTH_STALE" => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_HEALTH_STALE),
+            "OBSERVABILITY_HEALTH_REASON_SESSION_DISCONNECTED" => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_SESSION_DISCONNECTED),
+            "OBSERVABILITY_HEALTH_REASON_QUEUE_PRESSURE" => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_QUEUE_PRESSURE),
+            "OBSERVABILITY_HEALTH_REASON_HANDSHAKE_TIMEOUT" => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_HANDSHAKE_TIMEOUT),
+            "OBSERVABILITY_HEALTH_REASON_AUTHENTICATION_FAILED" => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_AUTHENTICATION_FAILED),
+            "OBSERVABILITY_HEALTH_REASON_IDENTITY_MISMATCH" => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_IDENTITY_MISMATCH),
+            "OBSERVABILITY_HEALTH_REASON_CONFIGURATION_MISMATCH" => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_CONFIGURATION_MISMATCH),
+            "OBSERVABILITY_HEALTH_REASON_GENERATION_MISMATCH" => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_GENERATION_MISMATCH),
+            "OBSERVABILITY_HEALTH_REASON_CAPABILITY_MISMATCH" => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_CAPABILITY_MISMATCH),
+            "OBSERVABILITY_HEALTH_REASON_ADOPTION_AMBIGUOUS" => ::std::option::Option::Some(ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_ADOPTION_AMBIGUOUS),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ObservabilityHealthReason] = &[
+        ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_UNSPECIFIED,
+        ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_NONE,
+        ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_PROVIDER_DEGRADED,
+        ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_HEALTH_TIMEOUT,
+        ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_HEALTH_STALE,
+        ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_SESSION_DISCONNECTED,
+        ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_QUEUE_PRESSURE,
+        ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_HANDSHAKE_TIMEOUT,
+        ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_AUTHENTICATION_FAILED,
+        ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_IDENTITY_MISMATCH,
+        ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_CONFIGURATION_MISMATCH,
+        ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_GENERATION_MISMATCH,
+        ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_CAPABILITY_MISMATCH,
+        ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_ADOPTION_AMBIGUOUS,
+    ];
+}
+
+impl ::protobuf::EnumFull for ObservabilityHealthReason {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ObservabilityHealthReason").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ObservabilityHealthReason {
+    fn default() -> Self {
+        ObservabilityHealthReason::OBSERVABILITY_HEALTH_REASON_UNSPECIFIED
+    }
+}
+
+impl ObservabilityHealthReason {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ObservabilityHealthReason>("ObservabilityHealthReason")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.common.v2.ObservabilityRemediation)
+pub enum ObservabilityRemediation {
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityRemediation.OBSERVABILITY_REMEDIATION_UNSPECIFIED)
+    OBSERVABILITY_REMEDIATION_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityRemediation.OBSERVABILITY_REMEDIATION_NONE)
+    OBSERVABILITY_REMEDIATION_NONE = 1,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityRemediation.OBSERVABILITY_REMEDIATION_RETRY_BOUNDED)
+    OBSERVABILITY_REMEDIATION_RETRY_BOUNDED = 2,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityRemediation.OBSERVABILITY_REMEDIATION_INSPECT_PROVIDER)
+    OBSERVABILITY_REMEDIATION_INSPECT_PROVIDER = 3,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityRemediation.OBSERVABILITY_REMEDIATION_RESTART_AGENT)
+    OBSERVABILITY_REMEDIATION_RESTART_AGENT = 4,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityRemediation.OBSERVABILITY_REMEDIATION_RE_ENROLL_PEER)
+    OBSERVABILITY_REMEDIATION_RE_ENROLL_PEER = 5,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityRemediation.OBSERVABILITY_REMEDIATION_REPAIR_CONFIGURATION)
+    OBSERVABILITY_REMEDIATION_REPAIR_CONFIGURATION = 6,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityRemediation.OBSERVABILITY_REMEDIATION_REPLACE_GENERATION)
+    OBSERVABILITY_REMEDIATION_REPLACE_GENERATION = 7,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityRemediation.OBSERVABILITY_REMEDIATION_OPERATOR_INTERACTION)
+    OBSERVABILITY_REMEDIATION_OPERATOR_INTERACTION = 8,
+}
+
+impl ::protobuf::Enum for ObservabilityRemediation {
+    const NAME: &'static str = "ObservabilityRemediation";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ObservabilityRemediation> {
+        match value {
+            0 => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_NONE),
+            2 => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_RETRY_BOUNDED),
+            3 => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_INSPECT_PROVIDER),
+            4 => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_RESTART_AGENT),
+            5 => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_RE_ENROLL_PEER),
+            6 => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_REPAIR_CONFIGURATION),
+            7 => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_REPLACE_GENERATION),
+            8 => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_OPERATOR_INTERACTION),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ObservabilityRemediation> {
+        match str {
+            "OBSERVABILITY_REMEDIATION_UNSPECIFIED" => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_UNSPECIFIED),
+            "OBSERVABILITY_REMEDIATION_NONE" => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_NONE),
+            "OBSERVABILITY_REMEDIATION_RETRY_BOUNDED" => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_RETRY_BOUNDED),
+            "OBSERVABILITY_REMEDIATION_INSPECT_PROVIDER" => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_INSPECT_PROVIDER),
+            "OBSERVABILITY_REMEDIATION_RESTART_AGENT" => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_RESTART_AGENT),
+            "OBSERVABILITY_REMEDIATION_RE_ENROLL_PEER" => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_RE_ENROLL_PEER),
+            "OBSERVABILITY_REMEDIATION_REPAIR_CONFIGURATION" => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_REPAIR_CONFIGURATION),
+            "OBSERVABILITY_REMEDIATION_REPLACE_GENERATION" => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_REPLACE_GENERATION),
+            "OBSERVABILITY_REMEDIATION_OPERATOR_INTERACTION" => ::std::option::Option::Some(ObservabilityRemediation::OBSERVABILITY_REMEDIATION_OPERATOR_INTERACTION),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ObservabilityRemediation] = &[
+        ObservabilityRemediation::OBSERVABILITY_REMEDIATION_UNSPECIFIED,
+        ObservabilityRemediation::OBSERVABILITY_REMEDIATION_NONE,
+        ObservabilityRemediation::OBSERVABILITY_REMEDIATION_RETRY_BOUNDED,
+        ObservabilityRemediation::OBSERVABILITY_REMEDIATION_INSPECT_PROVIDER,
+        ObservabilityRemediation::OBSERVABILITY_REMEDIATION_RESTART_AGENT,
+        ObservabilityRemediation::OBSERVABILITY_REMEDIATION_RE_ENROLL_PEER,
+        ObservabilityRemediation::OBSERVABILITY_REMEDIATION_REPAIR_CONFIGURATION,
+        ObservabilityRemediation::OBSERVABILITY_REMEDIATION_REPLACE_GENERATION,
+        ObservabilityRemediation::OBSERVABILITY_REMEDIATION_OPERATOR_INTERACTION,
+    ];
+}
+
+impl ::protobuf::EnumFull for ObservabilityRemediation {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ObservabilityRemediation").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ObservabilityRemediation {
+    fn default() -> Self {
+        ObservabilityRemediation::OBSERVABILITY_REMEDIATION_UNSPECIFIED
+    }
+}
+
+impl ObservabilityRemediation {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ObservabilityRemediation>("ObservabilityRemediation")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.common.v2.ObservabilityExportFormat)
+pub enum ObservabilityExportFormat {
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityExportFormat.OBSERVABILITY_EXPORT_FORMAT_UNSPECIFIED)
+    OBSERVABILITY_EXPORT_FORMAT_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityExportFormat.OBSERVABILITY_EXPORT_FORMAT_JSON_LINES)
+    OBSERVABILITY_EXPORT_FORMAT_JSON_LINES = 1,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ObservabilityExportFormat.OBSERVABILITY_EXPORT_FORMAT_OTLP_PROTOBUF)
+    OBSERVABILITY_EXPORT_FORMAT_OTLP_PROTOBUF = 2,
+}
+
+impl ::protobuf::Enum for ObservabilityExportFormat {
+    const NAME: &'static str = "ObservabilityExportFormat";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ObservabilityExportFormat> {
+        match value {
+            0 => ::std::option::Option::Some(ObservabilityExportFormat::OBSERVABILITY_EXPORT_FORMAT_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ObservabilityExportFormat::OBSERVABILITY_EXPORT_FORMAT_JSON_LINES),
+            2 => ::std::option::Option::Some(ObservabilityExportFormat::OBSERVABILITY_EXPORT_FORMAT_OTLP_PROTOBUF),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ObservabilityExportFormat> {
+        match str {
+            "OBSERVABILITY_EXPORT_FORMAT_UNSPECIFIED" => ::std::option::Option::Some(ObservabilityExportFormat::OBSERVABILITY_EXPORT_FORMAT_UNSPECIFIED),
+            "OBSERVABILITY_EXPORT_FORMAT_JSON_LINES" => ::std::option::Option::Some(ObservabilityExportFormat::OBSERVABILITY_EXPORT_FORMAT_JSON_LINES),
+            "OBSERVABILITY_EXPORT_FORMAT_OTLP_PROTOBUF" => ::std::option::Option::Some(ObservabilityExportFormat::OBSERVABILITY_EXPORT_FORMAT_OTLP_PROTOBUF),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ObservabilityExportFormat] = &[
+        ObservabilityExportFormat::OBSERVABILITY_EXPORT_FORMAT_UNSPECIFIED,
+        ObservabilityExportFormat::OBSERVABILITY_EXPORT_FORMAT_JSON_LINES,
+        ObservabilityExportFormat::OBSERVABILITY_EXPORT_FORMAT_OTLP_PROTOBUF,
+    ];
+}
+
+impl ::protobuf::EnumFull for ObservabilityExportFormat {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ObservabilityExportFormat").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ObservabilityExportFormat {
+    fn default() -> Self {
+        ObservabilityExportFormat::OBSERVABILITY_EXPORT_FORMAT_UNSPECIFIED
+    }
+}
+
+impl ObservabilityExportFormat {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ObservabilityExportFormat>("ObservabilityExportFormat")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
 // @@protoc_insertion_point(enum:d2b.common.v2.CancelOutcome)
 pub enum CancelOutcome {
     // @@protoc_insertion_point(enum_value:d2b.common.v2.CancelOutcome.CANCEL_OUTCOME_UNSPECIFIED)
@@ -3685,40 +7713,105 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     R\x11attachmentIndexes\x12\x1b\n\tpage_size\x18\t\x20\x01(\rR\x08pageSiz\
     e\x12\x1f\n\x0bpage_cursor\x18\n\x20\x01(\tR\npageCursor\x12@\n\rdesired\
     _state\x18\x0b\x20\x01(\x0e2\x1b.d2b.common.v2.DesiredStateR\x0cdesiredS\
-    tateJ\x04\x08\x05\x10\x06\"\xc9\x02\n\x0fProviderRequest\x12A\n\x07conte\
+    tateJ\x04\x08\x05\x10\x06\"\xc0\x02\n\x0fProviderRequest\x12A\n\x07conte\
     xt\x18\x01\x20\x01(\x0b2'.d2b.common.v2.ProviderOperationContextR\x07con\
     text\x12\x1f\n\x0bresource_id\x18\x02\x20\x01(\tR\nresourceId\x12\x1f\n\
-    \x0bplan_digest\x18\x04\x20\x01(\x0cR\nplanDigest\x12\x1d\n\nbinding_id\
-    \x18\x05\x20\x01(\tR\tbindingId\x12-\n\x12attachment_indexes\x18\x06\x20\
-    \x03(\rR\x11attachmentIndexes\x12@\n\rdesired_state\x18\x07\x20\x01(\x0e\
-    2\x1b.d2b.common.v2.DesiredStateR\x0cdesiredState\x12\x1b\n\tstream_id\
-    \x18\x08\x20\x01(\tR\x08streamIdJ\x04\x08\x03\x10\x04\"V\n\x11Capability\
-    Request\x12A\n\x07context\x18\x01\x20\x01(\x0b2'.d2b.common.v2.ProviderO\
-    perationContextR\x07context\"\x95\x01\n\rErrorEnvelope\x12,\n\x04kind\
-    \x18\x01\x20\x01(\x0e2\x18.d2b.common.v2.ErrorKindR\x04kind\x12/\n\x05re\
-    try\x18\x02\x20\x01(\x0e2\x19.d2b.common.v2.RetryClassR\x05retry\x12%\n\
-    \x0ecorrelation_id\x18\x03\x20\x01(\tR\rcorrelationId\"\x9d\x01\n\x0bObs\
-    ervation\x12\x1f\n\x0bresource_id\x18\x01\x20\x01(\tR\nresourceId\x125\n\
-    \x05state\x18\x02\x20\x01(\x0e2\x1f.d2b.common.v2.ObservationStateR\x05s\
-    tate\x12\x1e\n\ngeneration\x18\x03\x20\x01(\x04R\ngeneration\x12\x16\n\
-    \x06digest\x18\x04\x20\x01(\x0cR\x06digest\"\x9e\x03\n\x0fServiceRespons\
-    e\x120\n\x07outcome\x18\x01\x20\x01(\x0e2\x16.d2b.common.v2.OutcomeR\x07\
-    outcome\x12!\n\x0coperation_id\x18\x02\x20\x01(\tR\x0boperationId\x12'\n\
-    \x0fresource_handle\x18\x03\x20\x01(\tR\x0eresourceHandle\x12\x1b\n\tstr\
-    eam_id\x18\x04\x20\x01(\tR\x08streamId\x12#\n\rresult_digest\x18\x05\x20\
-    \x01(\x0cR\x0cresultDigest\x12>\n\x0cobservations\x18\x06\x20\x03(\x0b2\
-    \x1a.d2b.common.v2.ObservationR\x0cobservations\x12(\n\x10next_page_curs\
-    or\x18\x07\x20\x01(\tR\x0enextPageCursor\x122\n\x05error\x18\x08\x20\x01\
-    (\x0b2\x1c.d2b.common.v2.ErrorEnvelopeR\x05error\x12-\n\x12attachment_in\
-    dexes\x18\t\x20\x03(\rR\x11attachmentIndexes\"\xf5\x02\n\x10ProviderResp\
-    onse\x120\n\x07outcome\x18\x01\x20\x01(\x0e2\x16.d2b.common.v2.OutcomeR\
-    \x07outcome\x12!\n\x0coperation_id\x18\x02\x20\x01(\tR\x0boperationId\
-    \x12'\n\x0fresource_handle\x18\x03\x20\x01(\tR\x0eresourceHandle\x12#\n\
-    \rresult_digest\x18\x04\x20\x01(\x0cR\x0cresultDigest\x12>\n\x0cobservat\
-    ions\x18\x05\x20\x03(\x0b2\x1a.d2b.common.v2.ObservationR\x0cobservation\
-    s\x122\n\x05error\x18\x06\x20\x01(\x0b2\x1c.d2b.common.v2.ErrorEnvelopeR\
-    \x05error\x12\x1b\n\tstream_id\x18\x07\x20\x01(\tR\x08streamId\x12-\n\
-    \x12attachment_indexes\x18\x08\x20\x03(\rR\x11attachmentIndexes\"\xed\
+    \x0bplan_digest\x18\x04\x20\x01(\x0cR\nplanDigest\x12-\n\x12attachment_i\
+    ndexes\x18\x06\x20\x03(\rR\x11attachmentIndexes\x12;\n\x05input\x18\t\
+    \x20\x01(\x0b2%.d2b.common.v2.ProviderOperationInputR\x05inputJ\x04\x08\
+    \x03\x10\x04J\x04\x08\x05\x10\x06J\x04\x08\x07\x10\x08J\x04\x08\x08\x10\
+    \tR\nbinding_idR\rdesired_stateR\tstream_id\"\x1a\n\x18NoProviderOperati\
+    onInput\"O\n\x1fConfiguredRuntimeExecutionInput\x12,\n\x12configured_ite\
+    m_id\x18\x01\x20\x01(\tR\x10configuredItemId\"^\n\x1dInfrastructurePower\
+    StateInput\x12=\n\x05state\x18\x01\x20\x01(\x0e2'.d2b.common.v2.Infrastr\
+    ucturePowerStateR\x05state\"I\n\x15TransportBindingInput\x120\n\x14trans\
+    port_binding_id\x18\x01\x20\x01(\tR\x12transportBindingId\"7\n\x14Storag\
+    eSnapshotInput\x12\x1f\n\x0bsnapshot_id\x18\x01\x20\x01(\tR\nsnapshotId\
+    \"C\n\x13DeviceSelectorInput\x12,\n\x12device_selector_id\x18\x01\x20\
+    \x01(\tR\x10deviceSelectorId\"\xcf\x01\n\x0fAudioStateInput\x125\n\x07ch\
+    annel\x18\x01\x20\x01(\x0e2\x1b.d2b.common.v2.AudioChannelR\x07channel\
+    \x12;\n\tdirection\x18\x02\x20\x01(\x0e2\x1d.d2b.common.v2.AudioDirectio\
+    nR\tdirection\x12\x17\n\x04mute\x18\x03\x20\x01(\x08H\0R\x04mute\x88\x01\
+    \x01\x12\x1b\n\x06volume\x18\x04\x20\x01(\rH\x01R\x06volume\x88\x01\x01B\
+    \x07\n\x05_muteB\t\n\x07_volume\"\x8d\x01\n\x17ObservabilityQueryInput\
+    \x124\n\x04view\x18\x01\x20\x01(\x0e2\x20.d2b.common.v2.ObservabilityVie\
+    wR\x04view\x12\x1b\n\x06cursor\x18\x02\x20\x01(\tH\0R\x06cursor\x88\x01\
+    \x01\x12\x14\n\x05limit\x18\x03\x20\x01(\rR\x05limitB\t\n\x07_cursor\"\
+    \x99\x04\n\x1dObservabilityBoundObservation\x12-\n\x13observed_at_unix_m\
+    s\x18\x01\x20\x01(\x04R\x10observedAtUnixMs\x12H\n\tlifecycle\x18\x02\
+    \x20\x01(\x0e2*.d2b.common.v2.ObservabilityLifecycleStateR\tlifecycle\
+    \x12E\n\x08adoption\x18\x03\x20\x01(\x0e2).d2b.common.v2.ObservabilityAd\
+    optionStateR\x08adoption\x12E\n\x06reason\x18\x04\x20\x01(\x0e2-.d2b.com\
+    mon.v2.ObservabilityObservationReasonR\x06reason\x12J\n\x0chealth_state\
+    \x18\x05\x20\x01(\x0e2'.d2b.common.v2.ObservabilityHealthStateR\x0bhealt\
+    hState\x12M\n\rhealth_reason\x18\x06\x20\x01(\x0e2(.d2b.common.v2.Observ\
+    abilityHealthReasonR\x0chealthReason\x12V\n\x12health_remediation\x18\
+    \x07\x20\x01(\x0e2'.d2b.common.v2.ObservabilityRemediationR\x11healthRem\
+    ediation\"\xf2\x02\n\x13ObservabilityLabels\x12@\n\rprovider_type\x18\
+    \x01\x20\x01(\x0e2\x1b.d2b.common.v2.ProviderTypeR\x0cproviderType\x12J\
+    \n\x0chealth_state\x18\x02\x20\x01(\x0e2'.d2b.common.v2.ObservabilityHea\
+    lthStateR\x0bhealthState\x12?\n\x06metric\x18\x03\x20\x01(\x0e2'.d2b.com\
+    mon.v2.ObservabilityMetricLabelR\x06metric\x12H\n\toperation\x18\x04\x20\
+    \x01(\x0e2*.d2b.common.v2.ObservabilityOperationLabelR\toperation\x12B\n\
+    \x07outcome\x18\x05\x20\x01(\x0e2(.d2b.common.v2.ObservabilityOutcomeLab\
+    elR\x07outcome\"\xe2\x01\n\x13ObservabilityRecord\x12-\n\x13observed_at_\
+    unix_ms\x18\x01\x20\x01(\x04R\x10observedAtUnixMs\x12J\n\nprojection\x18\
+    \x02\x20\x01(\x0e2*.d2b.common.v2.ObservabilityProjectionKindR\nprojecti\
+    on\x12:\n\x06labels\x18\x03\x20\x01(\x0b2\".d2b.common.v2.ObservabilityL\
+    abelsR\x06labels\x12\x14\n\x05value\x18\x04\x20\x01(\x04R\x05value\"\xb7\
+    \x02\n\x18ObservabilityQueryResult\x12N\n\x0bobservation\x18\x01\x20\x01\
+    (\x0b2,.d2b.common.v2.ObservabilityBoundObservationR\x0bobservation\x12<\
+    \n\x07records\x18\x02\x20\x03(\x0b2\".d2b.common.v2.ObservabilityRecordR\
+    \x07records\x12$\n\x0bnext_cursor\x18\x03\x20\x01(\tH\0R\nnextCursor\x88\
+    \x01\x01\x129\n\x19encoded_bytes_upper_bound\x18\x04\x20\x01(\rR\x16enco\
+    dedBytesUpperBound\x12\x1c\n\ttruncated\x18\x05\x20\x01(\x08R\ttruncated\
+    B\x0e\n\x0c_next_cursor\"\xaa\x01\n\x18ObservabilityExportInput\x12@\n\
+    \x06format\x18\x01\x20\x01(\x0e2(.d2b.common.v2.ObservabilityExportForma\
+    tR\x06format\x12'\n\x10start_at_unix_ms\x18\x02\x20\x01(\x04R\rstartAtUn\
+    ixMs\x12#\n\x0eend_at_unix_ms\x18\x03\x20\x01(\x04R\x0bendAtUnixMs\"\xbb\
+    \x06\n\x16ProviderOperationInput\x12D\n\x08no_input\x18\x01\x20\x01(\x0b\
+    2'.d2b.common.v2.NoProviderOperationInputH\0R\x07noInput\x12r\n\x1cconfi\
+    gured_runtime_execution\x18\x02\x20\x01(\x0b2..d2b.common.v2.ConfiguredR\
+    untimeExecutionInputH\0R\x1aconfiguredRuntimeExecution\x12l\n\x1ainfrast\
+    ructure_power_state\x18\x03\x20\x01(\x0b2,.d2b.common.v2.InfrastructureP\
+    owerStateInputH\0R\x18infrastructurePowerState\x12S\n\x11transport_bindi\
+    ng\x18\x04\x20\x01(\x0b2$.d2b.common.v2.TransportBindingInputH\0R\x10tra\
+    nsportBinding\x12P\n\x10storage_snapshot\x18\x05\x20\x01(\x0b2#.d2b.comm\
+    on.v2.StorageSnapshotInputH\0R\x0fstorageSnapshot\x12M\n\x0fdevice_selec\
+    tor\x18\x06\x20\x01(\x0b2\".d2b.common.v2.DeviceSelectorInputH\0R\x0edev\
+    iceSelector\x12A\n\x0baudio_state\x18\x07\x20\x01(\x0b2\x1e.d2b.common.v\
+    2.AudioStateInputH\0R\naudioState\x12Y\n\x13observability_query\x18\x08\
+    \x20\x01(\x0b2&.d2b.common.v2.ObservabilityQueryInputH\0R\x12observabili\
+    tyQuery\x12\\\n\x14observability_export\x18\t\x20\x01(\x0b2'.d2b.common.\
+    v2.ObservabilityExportInputH\0R\x13observabilityExportB\x07\n\x05input\"\
+    V\n\x11CapabilityRequest\x12A\n\x07context\x18\x01\x20\x01(\x0b2'.d2b.co\
+    mmon.v2.ProviderOperationContextR\x07context\"\x95\x01\n\rErrorEnvelope\
+    \x12,\n\x04kind\x18\x01\x20\x01(\x0e2\x18.d2b.common.v2.ErrorKindR\x04ki\
+    nd\x12/\n\x05retry\x18\x02\x20\x01(\x0e2\x19.d2b.common.v2.RetryClassR\
+    \x05retry\x12%\n\x0ecorrelation_id\x18\x03\x20\x01(\tR\rcorrelationId\"\
+    \x9d\x01\n\x0bObservation\x12\x1f\n\x0bresource_id\x18\x01\x20\x01(\tR\n\
+    resourceId\x125\n\x05state\x18\x02\x20\x01(\x0e2\x1f.d2b.common.v2.Obser\
+    vationStateR\x05state\x12\x1e\n\ngeneration\x18\x03\x20\x01(\x04R\ngener\
+    ation\x12\x16\n\x06digest\x18\x04\x20\x01(\x0cR\x06digest\"\x9e\x03\n\
+    \x0fServiceResponse\x120\n\x07outcome\x18\x01\x20\x01(\x0e2\x16.d2b.comm\
+    on.v2.OutcomeR\x07outcome\x12!\n\x0coperation_id\x18\x02\x20\x01(\tR\x0b\
+    operationId\x12'\n\x0fresource_handle\x18\x03\x20\x01(\tR\x0eresourceHan\
+    dle\x12\x1b\n\tstream_id\x18\x04\x20\x01(\tR\x08streamId\x12#\n\rresult_\
+    digest\x18\x05\x20\x01(\x0cR\x0cresultDigest\x12>\n\x0cobservations\x18\
+    \x06\x20\x03(\x0b2\x1a.d2b.common.v2.ObservationR\x0cobservations\x12(\n\
+    \x10next_page_cursor\x18\x07\x20\x01(\tR\x0enextPageCursor\x122\n\x05err\
+    or\x18\x08\x20\x01(\x0b2\x1c.d2b.common.v2.ErrorEnvelopeR\x05error\x12-\
+    \n\x12attachment_indexes\x18\t\x20\x03(\rR\x11attachmentIndexes\"\xdc\
+    \x03\n\x10ProviderResponse\x120\n\x07outcome\x18\x01\x20\x01(\x0e2\x16.d\
+    2b.common.v2.OutcomeR\x07outcome\x12!\n\x0coperation_id\x18\x02\x20\x01(\
+    \tR\x0boperationId\x12'\n\x0fresource_handle\x18\x03\x20\x01(\tR\x0ereso\
+    urceHandle\x12#\n\rresult_digest\x18\x04\x20\x01(\x0cR\x0cresultDigest\
+    \x12>\n\x0cobservations\x18\x05\x20\x03(\x0b2\x1a.d2b.common.v2.Observat\
+    ionR\x0cobservations\x122\n\x05error\x18\x06\x20\x01(\x0b2\x1c.d2b.commo\
+    n.v2.ErrorEnvelopeR\x05error\x12\x1b\n\tstream_id\x18\x07\x20\x01(\tR\
+    \x08streamId\x12-\n\x12attachment_indexes\x18\x08\x20\x03(\rR\x11attachm\
+    entIndexes\x12e\n\x1aobservability_query_result\x18\t\x20\x01(\x0b2'.d2b\
+    .common.v2.ObservabilityQueryResultR\x18observabilityQueryResult\"\xed\
     \x01\n\x12CapabilityResponse\x12E\n\x0ccapabilities\x18\x01\x20\x03(\x0e\
     2!.d2b.common.v2.ProviderCapabilityR\x0ccapabilities\x12/\n\x13provider_\
     generation\x18\x02\x20\x01(\x04R\x12providerGeneration\x12+\n\x11descrip\
@@ -3807,12 +7900,96 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \x1fPROVIDER_CAPABILITY_AUDIO_CLOSE\x104\x12,\n(PROVIDER_CAPABILITY_OBSE\
     RVABILITY_STATUS\x105\x12+\n'PROVIDER_CAPABILITY_OBSERVABILITY_QUERY\x10\
     6\x12/\n+PROVIDER_CAPABILITY_OBSERVABILITY_SUBSCRIBE\x107\x12,\n(PROVIDE\
-    R_CAPABILITY_OBSERVABILITY_EXPORT\x108*\xf9\x01\n\rCancelOutcome\x12\x1e\
-    \n\x1aCANCEL_OUTCOME_UNSPECIFIED\x10\0\x12,\n(CANCEL_OUTCOME_CANCELLED_B\
-    EFORE_DISPATCH\x10\x01\x12)\n%CANCEL_OUTCOME_CANCELLATION_SIGNALLED\x10\
-    \x02\x12#\n\x1fCANCEL_OUTCOME_ALREADY_TERMINAL\x10\x03\x12\"\n\x1eCANCEL\
-    _OUTCOME_UNKNOWN_REQUEST\x10\x04\x12&\n\"CANCEL_OUTCOME_GENERATION_MISMA\
-    TCH\x10\x05b\x06proto3\
+    R_CAPABILITY_OBSERVABILITY_EXPORT\x108*\x96\x01\n\x18InfrastructurePower\
+    State\x12*\n&INFRASTRUCTURE_POWER_STATE_UNSPECIFIED\x10\0\x12&\n\"INFRAS\
+    TRUCTURE_POWER_STATE_RUNNING\x10\x01\x12&\n\"INFRASTRUCTURE_POWER_STATE_\
+    STOPPED\x10\x02*f\n\x0cAudioChannel\x12\x1d\n\x19AUDIO_CHANNEL_UNSPECIFI\
+    ED\x10\0\x12\x19\n\x15AUDIO_CHANNEL_SPEAKER\x10\x01\x12\x1c\n\x18AUDIO_C\
+    HANNEL_MICROPHONE\x10\x02*h\n\x0eAudioDirection\x12\x1f\n\x1bAUDIO_DIREC\
+    TION_UNSPECIFIED\x10\0\x12\x1a\n\x16AUDIO_DIRECTION_OUTPUT\x10\x01\x12\
+    \x19\n\x15AUDIO_DIRECTION_INPUT\x10\x02*\x9b\x01\n\x11ObservabilityView\
+    \x12\"\n\x1eOBSERVABILITY_VIEW_UNSPECIFIED\x10\0\x12\x1d\n\x19OBSERVABIL\
+    ITY_VIEW_HEALTH\x10\x01\x12\x20\n\x1cOBSERVABILITY_VIEW_LIFECYCLE\x10\
+    \x02\x12!\n\x1dOBSERVABILITY_VIEW_OPERATIONS\x10\x03*\xd9\x01\n\x1bObser\
+    vabilityProjectionKind\x12-\n)OBSERVABILITY_PROJECTION_KIND_UNSPECIFIED\
+    \x10\0\x12)\n%OBSERVABILITY_PROJECTION_KIND_METRICS\x10\x01\x12/\n+OBSER\
+    VABILITY_PROJECTION_KIND_TRACE_SUMMARY\x10\x02\x12/\n+OBSERVABILITY_PROJ\
+    ECTION_KIND_AUDIT_SUMMARY\x10\x03*\xeb\x02\n\x18ObservabilityMetricLabel\
+    \x12*\n&OBSERVABILITY_METRIC_LABEL_UNSPECIFIED\x10\0\x12.\n*OBSERVABILIT\
+    Y_METRIC_LABEL_PROVIDER_HEALTH\x10\x01\x123\n/OBSERVABILITY_METRIC_LABEL\
+    _LIFECYCLE_TRANSITION\x10\x02\x12.\n*OBSERVABILITY_METRIC_LABEL_OPERATIO\
+    N_TOTAL\x10\x03\x121\n-OBSERVABILITY_METRIC_LABEL_OPERATION_DURATION\x10\
+    \x04\x12*\n&OBSERVABILITY_METRIC_LABEL_QUEUE_DEPTH\x10\x05\x12/\n+OBSERV\
+    ABILITY_METRIC_LABEL_EXPORT_TRUNCATED\x10\x06*\xc1\x04\n\x1bObservabilit\
+    yOperationLabel\x12-\n)OBSERVABILITY_OPERATION_LABEL_UNSPECIFIED\x10\0\
+    \x12(\n$OBSERVABILITY_OPERATION_LABEL_HEALTH\x10\x01\x12&\n\"OBSERVABILI\
+    TY_OPERATION_LABEL_PLAN\x10\x02\x12(\n$OBSERVABILITY_OPERATION_LABEL_ENS\
+    URE\x10\x03\x12'\n#OBSERVABILITY_OPERATION_LABEL_START\x10\x04\x12&\n\"O\
+    BSERVABILITY_OPERATION_LABEL_STOP\x10\x05\x12(\n$OBSERVABILITY_OPERATION\
+    _LABEL_ATTACH\x10\x06\x12(\n$OBSERVABILITY_OPERATION_LABEL_DETACH\x10\
+    \x07\x12'\n#OBSERVABILITY_OPERATION_LABEL_ADOPT\x10\x08\x12)\n%OBSERVABI\
+    LITY_OPERATION_LABEL_INSPECT\x10\t\x12+\n'OBSERVABILITY_OPERATION_LABEL_\
+    SET_STATE\x10\n\x12'\n#OBSERVABILITY_OPERATION_LABEL_QUERY\x10\x0b\x12(\
+    \n$OBSERVABILITY_OPERATION_LABEL_EXPORT\x10\x0c*\xff\x02\n\x19Observabil\
+    ityOutcomeLabel\x12+\n'OBSERVABILITY_OUTCOME_LABEL_UNSPECIFIED\x10\0\x12\
+    '\n#OBSERVABILITY_OUTCOME_LABEL_SUCCESS\x10\x01\x12/\n+OBSERVABILITY_OUT\
+    COME_LABEL_ALREADY_APPLIED\x10\x02\x12&\n\"OBSERVABILITY_OUTCOME_LABEL_D\
+    ENIED\x10\x03\x12)\n%OBSERVABILITY_OUTCOME_LABEL_CANCELLED\x10\x04\x120\
+    \n,OBSERVABILITY_OUTCOME_LABEL_DEADLINE_EXPIRED\x10\x05\x12+\n'OBSERVABI\
+    LITY_OUTCOME_LABEL_UNAVAILABLE\x10\x06\x12)\n%OBSERVABILITY_OUTCOME_LABE\
+    L_TRUNCATED\x10\x07*\xea\x01\n\x18ObservabilityHealthState\x12*\n&OBSERV\
+    ABILITY_HEALTH_STATE_UNSPECIFIED\x10\0\x12&\n\"OBSERVABILITY_HEALTH_STAT\
+    E_HEALTHY\x10\x01\x12'\n#OBSERVABILITY_HEALTH_STATE_DEGRADED\x10\x02\x12\
+    *\n&OBSERVABILITY_HEALTH_STATE_UNAVAILABLE\x10\x03\x12%\n!OBSERVABILITY_\
+    HEALTH_STATE_FAILED\x10\x04*\xa9\x03\n\x1bObservabilityLifecycleState\
+    \x12-\n)OBSERVABILITY_LIFECYCLE_STATE_UNSPECIFIED\x10\0\x12)\n%OBSERVABI\
+    LITY_LIFECYCLE_STATE_PLANNED\x10\x01\x12'\n#OBSERVABILITY_LIFECYCLE_STAT\
+    E_READY\x10\x02\x12)\n%OBSERVABILITY_LIFECYCLE_STATE_RUNNING\x10\x03\x12\
+    )\n%OBSERVABILITY_LIFECYCLE_STATE_STOPPED\x10\x04\x12*\n&OBSERVABILITY_L\
+    IFECYCLE_STATE_RELEASED\x10\x05\x12+\n'OBSERVABILITY_LIFECYCLE_STATE_DES\
+    TROYED\x10\x06\x12)\n%OBSERVABILITY_LIFECYCLE_STATE_UNKNOWN\x10\x07\x12-\
+    \n)OBSERVABILITY_LIFECYCLE_STATE_QUARANTINED\x10\x08*\xfb\x01\n\x1aObser\
+    vabilityAdoptionState\x12,\n(OBSERVABILITY_ADOPTION_STATE_UNSPECIFIED\
+    \x10\0\x12.\n*OBSERVABILITY_ADOPTION_STATE_NOT_ATTEMPTED\x10\x01\x12(\n$\
+    OBSERVABILITY_ADOPTION_STATE_ADOPTED\x10\x02\x12)\n%OBSERVABILITY_ADOPTI\
+    ON_STATE_REJECTED\x10\x03\x12*\n&OBSERVABILITY_ADOPTION_STATE_AMBIGUOUS\
+    \x10\x04*\xb9\x04\n\x1eObservabilityObservationReason\x120\n,OBSERVABILI\
+    TY_OBSERVATION_REASON_UNSPECIFIED\x10\0\x12)\n%OBSERVABILITY_OBSERVATION\
+    _REASON_NONE\x10\x01\x126\n2OBSERVABILITY_OBSERVATION_REASON_IDENTITY_MI\
+    SMATCH\x10\x02\x12;\n7OBSERVABILITY_OBSERVATION_REASON_CONFIGURATION_MIS\
+    MATCH\x10\x03\x128\n4OBSERVABILITY_OBSERVATION_REASON_GENERATION_MISMATC\
+    H\x10\x04\x123\n/OBSERVABILITY_OBSERVATION_REASON_OWNER_MISMATCH\x10\x05\
+    \x128\n4OBSERVABILITY_OBSERVATION_REASON_MULTIPLE_CANDIDATES\x10\x06\x12\
+    5\n1OBSERVABILITY_OBSERVATION_REASON_MISSING_EVIDENCE\x10\x07\x12.\n*OBS\
+    ERVABILITY_OBSERVATION_REASON_CANCELLED\x10\x08\x125\n1OBSERVABILITY_OBS\
+    ERVATION_REASON_DEADLINE_EXPIRED\x10\t*\xd8\x05\n\x19ObservabilityHealth\
+    Reason\x12+\n'OBSERVABILITY_HEALTH_REASON_UNSPECIFIED\x10\0\x12$\n\x20OB\
+    SERVABILITY_HEALTH_REASON_NONE\x10\x01\x121\n-OBSERVABILITY_HEALTH_REASO\
+    N_PROVIDER_DEGRADED\x10\x02\x12.\n*OBSERVABILITY_HEALTH_REASON_HEALTH_TI\
+    MEOUT\x10\x03\x12,\n(OBSERVABILITY_HEALTH_REASON_HEALTH_STALE\x10\x04\
+    \x124\n0OBSERVABILITY_HEALTH_REASON_SESSION_DISCONNECTED\x10\x05\x12.\n*\
+    OBSERVABILITY_HEALTH_REASON_QUEUE_PRESSURE\x10\x06\x121\n-OBSERVABILITY_\
+    HEALTH_REASON_HANDSHAKE_TIMEOUT\x10\x07\x125\n1OBSERVABILITY_HEALTH_REAS\
+    ON_AUTHENTICATION_FAILED\x10\x08\x121\n-OBSERVABILITY_HEALTH_REASON_IDEN\
+    TITY_MISMATCH\x10\t\x126\n2OBSERVABILITY_HEALTH_REASON_CONFIGURATION_MIS\
+    MATCH\x10\n\x123\n/OBSERVABILITY_HEALTH_REASON_GENERATION_MISMATCH\x10\
+    \x0b\x123\n/OBSERVABILITY_HEALTH_REASON_CAPABILITY_MISMATCH\x10\x0c\x122\
+    \n.OBSERVABILITY_HEALTH_REASON_ADOPTION_AMBIGUOUS\x10\r*\xbb\x03\n\x18Ob\
+    servabilityRemediation\x12)\n%OBSERVABILITY_REMEDIATION_UNSPECIFIED\x10\
+    \0\x12\"\n\x1eOBSERVABILITY_REMEDIATION_NONE\x10\x01\x12+\n'OBSERVABILIT\
+    Y_REMEDIATION_RETRY_BOUNDED\x10\x02\x12.\n*OBSERVABILITY_REMEDIATION_INS\
+    PECT_PROVIDER\x10\x03\x12+\n'OBSERVABILITY_REMEDIATION_RESTART_AGENT\x10\
+    \x04\x12,\n(OBSERVABILITY_REMEDIATION_RE_ENROLL_PEER\x10\x05\x122\n.OBSE\
+    RVABILITY_REMEDIATION_REPAIR_CONFIGURATION\x10\x06\x120\n,OBSERVABILITY_\
+    REMEDIATION_REPLACE_GENERATION\x10\x07\x122\n.OBSERVABILITY_REMEDIATION_\
+    OPERATOR_INTERACTION\x10\x08*\xa3\x01\n\x19ObservabilityExportFormat\x12\
+    +\n'OBSERVABILITY_EXPORT_FORMAT_UNSPECIFIED\x10\0\x12*\n&OBSERVABILITY_E\
+    XPORT_FORMAT_JSON_LINES\x10\x01\x12-\n)OBSERVABILITY_EXPORT_FORMAT_OTLP_\
+    PROTOBUF\x10\x02*\xf9\x01\n\rCancelOutcome\x12\x1e\n\x1aCANCEL_OUTCOME_U\
+    NSPECIFIED\x10\0\x12,\n(CANCEL_OUTCOME_CANCELLED_BEFORE_DISPATCH\x10\x01\
+    \x12)\n%CANCEL_OUTCOME_CANCELLATION_SIGNALLED\x10\x02\x12#\n\x1fCANCEL_O\
+    UTCOME_ALREADY_TERMINAL\x10\x03\x12\"\n\x1eCANCEL_OUTCOME_UNKNOWN_REQUES\
+    T\x10\x04\x12&\n\"CANCEL_OUTCOME_GENERATION_MISMATCH\x10\x05b\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file
@@ -3830,12 +8007,26 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
     file_descriptor.get(|| {
         let generated_file_descriptor = generated_file_descriptor_lazy.get(|| {
             let mut deps = ::std::vec::Vec::with_capacity(0);
-            let mut messages = ::std::vec::Vec::with_capacity(13);
+            let mut messages = ::std::vec::Vec::with_capacity(27);
             messages.push(RequestMetadata::generated_message_descriptor_data());
             messages.push(IdentityScope::generated_message_descriptor_data());
             messages.push(ProviderOperationContext::generated_message_descriptor_data());
             messages.push(ServiceRequest::generated_message_descriptor_data());
             messages.push(ProviderRequest::generated_message_descriptor_data());
+            messages.push(NoProviderOperationInput::generated_message_descriptor_data());
+            messages.push(ConfiguredRuntimeExecutionInput::generated_message_descriptor_data());
+            messages.push(InfrastructurePowerStateInput::generated_message_descriptor_data());
+            messages.push(TransportBindingInput::generated_message_descriptor_data());
+            messages.push(StorageSnapshotInput::generated_message_descriptor_data());
+            messages.push(DeviceSelectorInput::generated_message_descriptor_data());
+            messages.push(AudioStateInput::generated_message_descriptor_data());
+            messages.push(ObservabilityQueryInput::generated_message_descriptor_data());
+            messages.push(ObservabilityBoundObservation::generated_message_descriptor_data());
+            messages.push(ObservabilityLabels::generated_message_descriptor_data());
+            messages.push(ObservabilityRecord::generated_message_descriptor_data());
+            messages.push(ObservabilityQueryResult::generated_message_descriptor_data());
+            messages.push(ObservabilityExportInput::generated_message_descriptor_data());
+            messages.push(ProviderOperationInput::generated_message_descriptor_data());
             messages.push(CapabilityRequest::generated_message_descriptor_data());
             messages.push(ErrorEnvelope::generated_message_descriptor_data());
             messages.push(Observation::generated_message_descriptor_data());
@@ -3844,7 +8035,7 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
             messages.push(CapabilityResponse::generated_message_descriptor_data());
             messages.push(CancelRequest::generated_message_descriptor_data());
             messages.push(CancelResponse::generated_message_descriptor_data());
-            let mut enums = ::std::vec::Vec::with_capacity(8);
+            let mut enums = ::std::vec::Vec::with_capacity(23);
             enums.push(ProviderType::generated_enum_descriptor_data());
             enums.push(RetryClass::generated_enum_descriptor_data());
             enums.push(Outcome::generated_enum_descriptor_data());
@@ -3852,6 +8043,21 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
             enums.push(DesiredState::generated_enum_descriptor_data());
             enums.push(ObservationState::generated_enum_descriptor_data());
             enums.push(ProviderCapability::generated_enum_descriptor_data());
+            enums.push(InfrastructurePowerState::generated_enum_descriptor_data());
+            enums.push(AudioChannel::generated_enum_descriptor_data());
+            enums.push(AudioDirection::generated_enum_descriptor_data());
+            enums.push(ObservabilityView::generated_enum_descriptor_data());
+            enums.push(ObservabilityProjectionKind::generated_enum_descriptor_data());
+            enums.push(ObservabilityMetricLabel::generated_enum_descriptor_data());
+            enums.push(ObservabilityOperationLabel::generated_enum_descriptor_data());
+            enums.push(ObservabilityOutcomeLabel::generated_enum_descriptor_data());
+            enums.push(ObservabilityHealthState::generated_enum_descriptor_data());
+            enums.push(ObservabilityLifecycleState::generated_enum_descriptor_data());
+            enums.push(ObservabilityAdoptionState::generated_enum_descriptor_data());
+            enums.push(ObservabilityObservationReason::generated_enum_descriptor_data());
+            enums.push(ObservabilityHealthReason::generated_enum_descriptor_data());
+            enums.push(ObservabilityRemediation::generated_enum_descriptor_data());
+            enums.push(ObservabilityExportFormat::generated_enum_descriptor_data());
             enums.push(CancelOutcome::generated_enum_descriptor_data());
             ::protobuf::reflect::GeneratedFileDescriptor::new_generated(
                 file_descriptor_proto(),

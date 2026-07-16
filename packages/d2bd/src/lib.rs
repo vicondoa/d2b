@@ -10,7 +10,7 @@ use std::fs::{self, File, OpenOptions};
 use std::future::Future;
 use std::io::{self, IoSliceMut, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, IntoRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
@@ -26,6 +26,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwapOption;
 use async_trait::async_trait;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use d2b_contracts::{
     BROKER_SOCKET_PATH, KnownFeatureFlag,
     broker_wire::{
@@ -91,11 +92,9 @@ use d2b_provider_aca::{AcaConfig, AcaDiskImageSource, AcaSandboxDefaults, AcaWor
 use d2b_provider_relay::{LocalTarget, RelayEndpoint};
 use d2b_realm_core::{RealmIdentityConfigJson, RealmIdentityConfigSummary, TargetName};
 use d2b_realm_provider::provider::WorkloadProvider;
-use nix::cmsg_space;
 use nix::fcntl::{FcntlArg, FdFlag, Flock, FlockArg, fcntl};
 use nix::sys::socket::{
-    AddressFamily, ControlMessageOwned, MsgFlags, SockFlag, SockType, UnixAddr, connect, recv,
-    recvmsg, send, sendto, socket,
+    AddressFamily, MsgFlags, SockFlag, SockType, UnixAddr, connect, recv, send, sendto, socket,
 };
 use nix::unistd::{self, Gid, Group, Uid, User};
 use serde::{Deserialize, Serialize};
@@ -114,6 +113,9 @@ pub mod exec_session_real;
 pub mod guest_control_bridge;
 pub mod guest_control_health;
 pub mod guest_control_vsock;
+pub(crate) mod observability_export;
+pub mod provider_effects;
+pub mod provider_registry;
 pub mod realm_access_resolver;
 pub mod supervisor;
 pub mod terminal_session;
@@ -288,13 +290,20 @@ pub const DEFAULT_ACCEPTED_VERSION_RANGE: &str = ">=0.4.0, <0.5.0";
 pub const DEFAULT_DAEMON_STATE_DIR: &str = "/var/lib/d2b/daemon-state";
 const VM_RUNNER_ROLE_ID: &str = "ch-runner";
 const VM_STOP_TIMEOUT: Duration = Duration::from_secs(30);
+const VM_START_ROLLBACK_TERM_TIMEOUT: Duration = Duration::from_secs(10);
+const VM_START_ROLLBACK_KILL_TIMEOUT: Duration = Duration::from_secs(5);
+const LIFECYCLE_SNAPSHOT_MARGIN: Duration = Duration::from_secs(5);
 const DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS: u64 = 90;
 const PROVIDER_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const PUBLIC_STATUS_PROVIDER_PROBE_TIMEOUT: Duration = Duration::from_millis(100);
 const PUBLIC_STATUS_GUEST_USBIP_TIMEOUT: Duration = Duration::from_millis(250);
 const USBIP_SYSFS_PRESENCE_TIMEOUT: Duration = Duration::from_millis(250);
 const EMPTY_VMM_CLEANUP_GRACE: Duration = Duration::from_secs(5);
+const CGROUP_KILL_BROKER_TIMEOUT: Duration = Duration::from_secs(5);
 const CGROUP_EMPTY_POST_KILL_WAIT: Duration = Duration::from_secs(5);
+const USBIP_STOP_FIREWALL_WITHDRAWAL_BOUND: Duration = Duration::from_secs(15);
+const USBIP_STOP_HOST_UNBIND_BOUND: Duration = Duration::from_secs(15);
+const USBIP_STOP_PROXY_RECONCILE_BOUND: Duration = Duration::from_secs(15);
 const GATEWAY_DISPLAY_SESSION_TTL: Duration = Duration::from_secs(3600);
 
 /// Default cap on concurrent in-flight connection-handler threads.
@@ -575,6 +584,9 @@ struct ServerState {
     pidfd_table: Arc<PidfdTable>,
     broker_reap_log: Arc<BrokerReapLog>,
     metrics_registry: Arc<metrics::Registry>,
+    /// Canonical provider registry composed once after all daemon services
+    /// exist. Existing v1 request paths do not dispatch through it yet.
+    provider_registry: Arc<OnceLock<provider_registry::StartupProviderRegistry>>,
     /// Daemon-side audit log for supervisor events (e.g. api-ready
     /// timeout) that are not emitted by the broker.
     daemon_audit: Arc<daemon_audit::DaemonAuditLog>,
@@ -604,6 +616,67 @@ struct ServerState {
     security_key_sessions: Arc<parking_lot::Mutex<security_key::SkSessionTable>>,
     #[allow(dead_code)]
     unsafe_local_helpers: Arc<unsafe_local_helper::HelperRegistry>,
+}
+
+impl ServerState {
+    pub(crate) fn provider_registry(
+        &self,
+    ) -> Result<&provider_registry::StartupProviderRegistry, TypedError> {
+        self.provider_registry
+            .get()
+            .ok_or_else(|| TypedError::InternalConfig {
+                detail: "first-party provider registry is not initialized".to_owned(),
+            })
+    }
+}
+
+#[cfg(test)]
+fn initialized_provider_registry(
+    registry: provider_registry::StartupProviderRegistry,
+) -> Arc<OnceLock<provider_registry::StartupProviderRegistry>> {
+    let cell = Arc::new(OnceLock::new());
+    cell.set(registry)
+        .expect("new provider registry cell must initialize exactly once");
+    cell
+}
+
+async fn activate_provider_registry(
+    state: &Arc<ServerState>,
+    verification_policy: Option<&d2b_core::bundle_resolver::BundleVerifyPolicy>,
+) -> Result<(), TypedError> {
+    let artifact = match verification_policy {
+        Some(policy) => provider_registry::load_provider_registry_v2_with_policy(state, policy),
+        None => provider_registry::load_provider_registry_v2(state),
+    }
+    .map_err(|error| TypedError::InternalConfig {
+        detail: format!("load provider-registry-v2 failed: {error}"),
+    })?;
+    let registry = provider_registry::compose_startup_registry_with_policy(
+        state,
+        &artifact,
+        verification_policy,
+    )
+    .map_err(|error| TypedError::InternalConfig {
+        detail: format!("first-party provider registry composition failed: {error}"),
+    })?;
+    state
+        .provider_registry
+        .set(registry)
+        .map_err(|_| TypedError::InternalConfig {
+            detail: "first-party provider registry initialized more than once".to_owned(),
+        })?;
+    let startup_registry = state.provider_registry()?;
+    provider_registry::probe_startup_registry(startup_registry, &artifact)
+        .await
+        .map_err(|error| TypedError::InternalConfig {
+            detail: format!("first-party provider registry startup probe failed: {error}"),
+        })?;
+    tracing::info!(
+        provider_count = artifact.providers.len(),
+        registry_empty = startup_registry.is_empty(),
+        "first-party provider registry activated and inspected",
+    );
+    Ok(())
 }
 
 struct GatewayDisplayRuntime {
@@ -1473,7 +1546,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         runtime_identity.daemon_uid.as_raw(),
         unsafe_local_helper_uids,
     ));
-    let state = ServerState {
+    let state = Arc::new(ServerState {
         daemon_uid: runtime_identity.daemon_uid.as_raw(),
         config,
         daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::new(&daemon_state_dir)),
@@ -1481,6 +1554,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         pidfd_table,
         broker_reap_log,
         metrics_registry: Arc::new(crate::metrics::Registry::new()),
+        provider_registry: Arc::new(OnceLock::new()),
         exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
             crate::exec_session::ExecSessionCaps::default(),
         )),
@@ -1495,7 +1569,11 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             crate::security_key::SkSessionTable::default(),
         )),
         unsafe_local_helpers: Arc::clone(&unsafe_local_helpers),
-    };
+    });
+    let test_bundle_policy = options
+        .allow_unprivileged_runtime_dir
+        .then(d2b_core::bundle_resolver::BundleVerifyPolicy::for_tests);
+    activate_provider_registry(&state, test_bundle_policy.as_ref()).await?;
     if let Some(helper_listener) = unsafe_local_helper_listener {
         std::thread::Builder::new()
             .name("d2b-unsafe-local-listener".to_owned())
@@ -2096,7 +2174,13 @@ impl autostart::VmStarter for BrokerVmStarter {
             // `d2b vm start --apply` invocations.
             no_wait_api: true,
         };
-        match dispatch_broker_vm_start(&self.state, request) {
+        match dispatch_provider_or_broker_vm_start(
+            &self.state,
+            request,
+            BrokerCallerRole::AdminUid {
+                uid: self.state.daemon_uid,
+            },
+        ) {
             Ok(value) => {
                 // dispatch_broker_vm_start returns a JSON envelope
                 // even on logical failure (so the public verb can
@@ -3211,7 +3295,9 @@ fn dispatch_request(
     // stop/start helpers invoked by restart/rollback do NOT re-acquire it,
     // so there is no nested self-deadlock.
     let invalidates_status_model = request_invalidates_public_status_model(&request);
-    let _op_lock = state.op_locks.acquire(&request.lock_class());
+    let lock_class = request.lock_class();
+    let _op_lock = state.op_locks.acquire(&lock_class);
+    state.op_locks.wait_for_mapped_lifecycle(&lock_class);
     let result = dispatch_request_locked(state, peer, request);
     if invalidates_status_model {
         state.public_status_read_model.invalidate();
@@ -3225,6 +3311,7 @@ fn request_invalidates_public_status_model(request: &wire::Request) -> bool {
         wire::Request::List(_)
             | wire::Request::Status(_)
             | wire::Request::Audit(_)
+            | wire::Request::ObservabilityExportInspect(_)
             | wire::Request::HostCheck(_)
             | wire::Request::AuthStatus
             | wire::Request::KeysList
@@ -3251,6 +3338,9 @@ fn dispatch_request_locked(
         wire::Request::List(request) => dispatch_list(state, request),
         wire::Request::Status(request) => dispatch_status(state, request),
         wire::Request::Audit(request) => dispatch_audit(state, peer, request),
+        wire::Request::ObservabilityExportInspect(request) => {
+            dispatch_observability_export_inspect(state, peer, request)
+        }
         wire::Request::HostCheck(request) => dispatch_host_check(state, request),
         wire::Request::AuthStatus => Ok(dispatch_auth_status(state, peer)),
         wire::Request::KeysList => dispatch_keys_list(state),
@@ -3264,12 +3354,14 @@ fn dispatch_request_locked(
         // applies in d2bd; only `mutating_verb_preflight` remains
         // to emit the typed InvalidRequest / dry-run-planned envelope
         // before apply dispatch runs.
-        wire::Request::VmStart(req) => dispatch_broker_vm_start(state, req),
+        wire::Request::VmStart(req) => {
+            dispatch_provider_or_broker_vm_start(state, req, broker_caller_role_for_peer(peer))
+        }
         wire::Request::VmStop(req) => {
-            dispatch_broker_vm_stop_as(state, req, broker_caller_role_for_peer(peer))
+            dispatch_provider_or_broker_vm_stop_as(state, req, broker_caller_role_for_peer(peer))
         }
         wire::Request::VmRestart(req) => {
-            dispatch_broker_vm_restart_as(state, req, broker_caller_role_for_peer(peer))
+            dispatch_provider_or_broker_vm_restart_as(state, req, broker_caller_role_for_peer(peer))
         }
         wire::Request::Switch(req) => dispatch_broker_switch(state, req),
         wire::Request::Boot(req) => dispatch_broker_boot(state, req),
@@ -3979,6 +4071,9 @@ mod workload_observability_tests {
             broker_reap_log,
             metrics_registry: Arc::new(metrics::Registry::new()),
             daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::no_op()),
+            provider_registry: initialized_provider_registry(
+                crate::provider_registry::StartupProviderRegistry::Empty,
+            ),
             exec_sessions: Arc::new(exec_session::SessionTable::new(
                 exec_session::ExecSessionCaps::default(),
             )),
@@ -6162,8 +6257,9 @@ fn lifecycle_broker_ack(
     state: &ServerState,
     op_name: &str,
     request: BrokerRequest,
+    timeout: Duration,
 ) -> Result<(), usbip_reconcile_state::UsbipLifecycleStepError> {
-    match dispatch_broker_request(state, request) {
+    match dispatch_broker_request_with_timeout(state, request, timeout) {
         Ok(BrokerResponse::Ack(ack)) if ack.accepted && ack.operation == op_name => Ok(()),
         Ok(BrokerResponse::Error(error)) => {
             Err(usbip_reconcile_state::UsbipLifecycleStepError::new(
@@ -6206,6 +6302,7 @@ impl usbip_reconcile_state::UsbipVmStartReconcileExecutor
                 bundle_usbip_bind_intent_ref: BundleOpId::new(claim.claim_ref.clone()),
                 tracing_span_id: Some(tracing_span_id),
             }),
+            USBIP_STRICT_RECONCILE_TIMEOUT,
         )
     }
 
@@ -6240,6 +6337,7 @@ impl usbip_reconcile_state::UsbipVmStartReconcileExecutor
                 scope_id: ScopeId::new(format!("vm:{}", claim.vm)),
                 tracing_span_id: Some(tracing_span_id),
             }),
+            USBIP_STRICT_RECONCILE_TIMEOUT,
         )
         .map_err(|mut error| {
             error.kind = usbip_reconcile_state::UsbipLifecycleFailureKind::ProxyFailed;
@@ -6347,6 +6445,7 @@ impl usbip_reconcile_state::UsbipVmStopCarrierCleanup for DaemonUsbipStopCleanup
                 preserve_durable_claim: true,
                 tracing_span_id: Some(tracing_span_id),
             }),
+            USBIP_STOP_FIREWALL_WITHDRAWAL_BOUND.saturating_add(USBIP_STOP_HOST_UNBIND_BOUND),
         )
     }
 
@@ -6363,6 +6462,7 @@ impl usbip_reconcile_state::UsbipVmStopCarrierCleanup for DaemonUsbipStopCleanup
                 scope_id: ScopeId::new(format!("vm:{}", claim.vm)),
                 tracing_span_id: Some(tracing_span_id),
             }),
+            USBIP_STOP_PROXY_RECONCILE_BOUND,
         )
         .map_err(|mut error| {
             error.kind = usbip_reconcile_state::UsbipLifecycleFailureKind::ProxyFailed;
@@ -11567,13 +11667,33 @@ fn broker_remaining_before_op(
     deadline: Instant,
     socket_path: &Path,
 ) -> Result<Duration, TypedError> {
-    let remaining = deadline.saturating_duration_since(Instant::now());
+    broker_remaining_at(deadline, Instant::now(), socket_path)
+}
+
+fn broker_remaining_at(
+    deadline: Instant,
+    now: Instant,
+    socket_path: &Path,
+) -> Result<Duration, TypedError> {
+    let remaining = deadline.saturating_duration_since(now);
     if remaining.is_zero() {
         return Err(TypedError::InternalBrokerTimeout {
             path: socket_path.to_path_buf(),
         });
     }
     Ok(remaining)
+}
+
+fn checked_broker_deadline(
+    start: Instant,
+    timeout: Duration,
+    socket_path: &Path,
+) -> Result<Instant, TypedError> {
+    start
+        .checked_add(timeout)
+        .ok_or_else(|| TypedError::InternalBrokerTimeout {
+            path: socket_path.to_path_buf(),
+        })
 }
 
 /// Run connect + write + read so that each blocking op is bounded by the
@@ -11651,36 +11771,59 @@ fn dispatch_broker_request_with_fds_timeout(
     timeout: Duration,
 ) -> Result<(BrokerResponse, Vec<RawFd>), TypedError> {
     let socket_path = broker_socket_path(state);
-    let socket = Socket::from(connect_seqpacket_with_timeout(&socket_path, Some(timeout))?);
-    socket
-        .set_read_timeout(Some(timeout))
-        .map_err(|err| TypedError::InternalIo {
-            context: format!("set broker read timeout to {timeout:?}"),
-            detail: err.to_string(),
+    let deadline = checked_broker_deadline(Instant::now(), timeout, &socket_path)?;
+    let result = (|| {
+        let remaining = broker_remaining_before_op(deadline, &socket_path)?;
+        let socket = Socket::from(connect_seqpacket_with_timeout(
+            &socket_path,
+            Some(remaining),
+        )?);
+
+        let remaining = broker_remaining_before_op(deadline, &socket_path)?;
+        socket
+            .set_write_timeout(Some(remaining))
+            .map_err(|err| TypedError::InternalIo {
+                context: format!("set broker write timeout to {remaining:?}"),
+                detail: err.to_string(),
+            })?;
+        write_json_frame(
+            &socket,
+            &BrokerRequestEnvelope {
+                request,
+                caller_role: Default::default(),
+                test_peer_uid: None,
+            },
+        )?;
+
+        let remaining = broker_remaining_before_op(deadline, &socket_path)?;
+        socket
+            .set_read_timeout(Some(remaining))
+            .map_err(|err| TypedError::InternalIo {
+                context: format!("set broker read timeout to {remaining:?}"),
+                detail: err.to_string(),
+            })?;
+        let (response, received_fds) = read_frame_with_fds(&socket)?;
+        let decoded = serde_json::from_slice(&response).map_err(|err| {
+            close_received_fds(&received_fds);
+            TypedError::InternalBrokerUnavailable {
+                path: socket_path.clone(),
+                detail: err.to_string(),
+            }
         })?;
-    socket
-        .set_write_timeout(Some(timeout))
-        .map_err(|err| TypedError::InternalIo {
-            context: format!("set broker write timeout to {timeout:?}"),
-            detail: err.to_string(),
-        })?;
-    write_json_frame(
-        &socket,
-        &BrokerRequestEnvelope {
-            request,
-            caller_role: Default::default(),
-            test_peer_uid: None,
-        },
-    )?;
-    let (response, received_fds) = read_frame_with_fds(&socket)?;
-    let decoded = serde_json::from_slice(&response).map_err(|err| {
-        close_received_fds(&received_fds);
-        TypedError::InternalBrokerUnavailable {
-            path: socket_path,
-            detail: err.to_string(),
+        Ok((decoded, received_fds))
+    })();
+
+    match result {
+        Ok((response, received_fds)) if Instant::now() < deadline => Ok((response, received_fds)),
+        Ok((_, received_fds)) => {
+            close_received_fds(&received_fds);
+            Err(TypedError::InternalBrokerTimeout { path: socket_path })
         }
-    })?;
-    Ok((decoded, received_fds))
+        Err(_) if Instant::now() >= deadline => {
+            Err(TypedError::InternalBrokerTimeout { path: socket_path })
+        }
+        Err(err) => Err(err),
+    }
 }
 
 fn broker_response_kind(response: &BrokerResponse) -> String {
@@ -11826,6 +11969,19 @@ fn applied_response(verb: &str, summary: String) -> Value {
         remediation: None,
         api_ready: None,
     })
+}
+
+fn provider_lifecycle_ambiguous_response(verb: &str, vm: &str) -> Value {
+    broker_failure_response(
+        verb,
+        format!(
+            "{verb} {vm}: provider deadline elapsed while daemon cleanup continues to completion"
+        ),
+        format!(
+            "Inspect `d2b vm status {vm}` before retrying; a retry of the same provider operation joins the in-flight lifecycle task."
+        ),
+        None,
+    )
 }
 
 fn append_response_summary(response: &mut Value, suffix: &str) {
@@ -13583,8 +13739,8 @@ fn rollback_failed_vm_start(
             "vm start",
             vm,
             &entry.role,
-            Duration::from_secs(10),
-            Duration::from_secs(5),
+            VM_START_ROLLBACK_TERM_TIMEOUT,
+            VM_START_ROLLBACK_KILL_TIMEOUT,
         )?;
     }
     let _mguard = state.pidfd_table.mutation_guard();
@@ -14269,7 +14425,7 @@ fn request_cgroup_kill_if_populated(
         state,
         request,
         caller_role,
-        Duration::from_secs(5),
+        CGROUP_KILL_BROKER_TIMEOUT,
     ) {
         Ok(response) => {
             tracing::info!(vm = %vm, role = %role_id, response = ?response, "broker CgroupKill requested for populated runner leaf")
@@ -14509,6 +14665,237 @@ fn live_activation_timeout_for(state: &ServerState, vm: &str) -> Duration {
         .unwrap_or(state.config.live_activation_timeout_seconds)
         .clamp(1, 3600);
     Duration::from_secs(secs)
+}
+
+fn vm_start_api_and_readiness_timeouts() -> (Duration, Duration) {
+    let api_timeout = Duration::from_secs(
+        std::env::var("D2B_API_TIMEOUT_SECONDS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(supervisor::dag::DEFAULT_API_TIMEOUT_SECONDS),
+    );
+    let readiness_timeout = Duration::from_secs(
+        std::env::var("D2B_READINESS_TIMEOUT_SECONDS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(api_timeout.as_secs().max(300)),
+    );
+    (api_timeout, readiness_timeout)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MappedRuntimeLifecycleBudgets {
+    pub start: Duration,
+    pub stop: Duration,
+    pub restart: Duration,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MappedRuntimeUsbipLifecycleBudgets {
+    start: Duration,
+    stop: Duration,
+}
+
+fn lifecycle_budget_overflow() -> TypedError {
+    TypedError::InternalConfig {
+        detail: "mapped runtime lifecycle budget overflow".to_owned(),
+    }
+}
+
+fn checked_lifecycle_budget_add(left: Duration, right: Duration) -> Result<Duration, TypedError> {
+    left.checked_add(right)
+        .ok_or_else(lifecycle_budget_overflow)
+}
+
+fn checked_lifecycle_budget_mul(duration: Duration, count: usize) -> Result<Duration, TypedError> {
+    let count = u32::try_from(count).map_err(|_| lifecycle_budget_overflow())?;
+    duration
+        .checked_mul(count)
+        .ok_or_else(lifecycle_budget_overflow)
+}
+
+fn mapped_runtime_role_cleanup_budget(
+    term: Duration,
+    kill: Duration,
+) -> Result<Duration, TypedError> {
+    checked_lifecycle_budget_add(term, kill)
+        .and_then(|total| checked_lifecycle_budget_add(total, CGROUP_KILL_BROKER_TIMEOUT))
+        .and_then(|total| checked_lifecycle_budget_add(total, CGROUP_EMPTY_POST_KILL_WAIT))
+}
+
+fn mapped_runtime_graceful_shutdown_budget(configured: Duration) -> Result<Duration, TypedError> {
+    let request = ch_api::DEFAULT_TIMEOUT;
+    let trailing_poll = ch_api::DEFAULT_TIMEOUT;
+    checked_lifecycle_budget_add(configured, request)
+        .and_then(|total| checked_lifecycle_budget_add(total, trailing_poll))
+}
+
+fn mapped_runtime_start_budget_for_dag(
+    dag: &d2b_core::processes::VmProcessDag,
+    api_timeout: Duration,
+    readiness_timeout: Duration,
+) -> Result<Duration, TypedError> {
+    let node_budget = supervisor::dag::NodeBudget {
+        readiness: readiness_timeout,
+        ..supervisor::dag::NodeBudget::default()
+    };
+    let sequential_nodes = dag.nodes.iter().try_fold(Duration::ZERO, |total, node| {
+        let spawn = if matches!(
+            vm_start_node_mode(&node.role),
+            VmStartNodeMode::OneShot(_) | VmStartNodeMode::LongLived(_)
+        ) {
+            node_budget.spawn
+        } else {
+            Duration::ZERO
+        };
+        let readiness = if supervisor::dag::uses_split_readiness(&node.readiness) {
+            api_timeout
+        } else {
+            node_budget.readiness
+        };
+        let qemu_boot = if node.role == ProcessRole::QemuMediaRunner {
+            node_budget.readiness
+        } else {
+            Duration::ZERO
+        };
+        checked_lifecycle_budget_add(total, spawn)
+            .and_then(|total| checked_lifecycle_budget_add(total, readiness))
+            .and_then(|total| checked_lifecycle_budget_add(total, qemu_boot))
+    })?;
+    let rollback_roles = dag
+        .nodes
+        .iter()
+        .filter(|node| {
+            matches!(
+                vm_start_node_mode(&node.role),
+                VmStartNodeMode::LongLived(_)
+            )
+        })
+        .count()
+        .max(1);
+    let rollback = checked_lifecycle_budget_mul(
+        mapped_runtime_role_cleanup_budget(
+            VM_START_ROLLBACK_TERM_TIMEOUT,
+            VM_START_ROLLBACK_KILL_TIMEOUT,
+        )?,
+        rollback_roles,
+    )
+    .and_then(|rollback| checked_lifecycle_budget_add(rollback, LIFECYCLE_SNAPSHOT_MARGIN))?;
+    checked_lifecycle_budget_add(sequential_nodes, rollback)
+}
+
+fn mapped_runtime_stop_budget_for_roles(
+    graceful_budget: Duration,
+    stop_roles: usize,
+) -> Result<Duration, TypedError> {
+    let per_role = mapped_runtime_role_cleanup_budget(VM_STOP_TIMEOUT, VM_STOP_TIMEOUT)?;
+    checked_lifecycle_budget_mul(per_role, stop_roles.max(1))
+        .and_then(|roles| checked_lifecycle_budget_add(graceful_budget, roles))
+        .and_then(|total| checked_lifecycle_budget_add(total, LIFECYCLE_SNAPSHOT_MARGIN))
+}
+
+fn configured_usbip_claim_count(resolver: &BundleResolver, vm: &str) -> Result<usize, TypedError> {
+    resolver
+        .usbip_bind_intent_ids()
+        .try_fold(0usize, |count, intent_id| {
+            let intent = resolver.find_usbip_bind_intent(intent_id).ok_or_else(|| {
+                TypedError::InternalConfig {
+                    detail: "mapped runtime USBIP intent is missing".to_owned(),
+                }
+            })?;
+            if intent.vm_name == vm {
+                count.checked_add(1).ok_or_else(lifecycle_budget_overflow)
+            } else {
+                Ok(count)
+            }
+        })
+}
+
+fn mapped_runtime_usbip_lifecycle_budgets(
+    claim_count: usize,
+    strict_start: bool,
+) -> Result<MappedRuntimeUsbipLifecycleBudgets, TypedError> {
+    let start = if strict_start && claim_count > 0 {
+        USBIP_STRICT_RECONCILE_TIMEOUT
+    } else {
+        Duration::ZERO
+    };
+    let per_claim_stop = checked_lifecycle_budget_add(
+        guest_control_bridge::GUEST_CONTROL_USBIP_IMPORT_TIMEOUT,
+        USBIP_STOP_FIREWALL_WITHDRAWAL_BOUND,
+    )
+    .and_then(|total| checked_lifecycle_budget_add(total, USBIP_STOP_HOST_UNBIND_BOUND))
+    .and_then(|total| checked_lifecycle_budget_add(total, USBIP_STOP_PROXY_RECONCILE_BOUND))?;
+    let stop = checked_lifecycle_budget_mul(per_claim_stop, claim_count)?;
+    Ok(MappedRuntimeUsbipLifecycleBudgets { start, stop })
+}
+
+pub(crate) fn mapped_runtime_lifecycle_budgets(
+    state: &ServerState,
+    request: &public_wire::VmLifecycleRequest,
+) -> Result<MappedRuntimeLifecycleBudgets, TypedError> {
+    let resolver = load_bundle_resolver(state)?;
+    let dag = resolver
+        .processes
+        .vms
+        .iter()
+        .find(|dag| dag.vm == request.vm)
+        .ok_or_else(|| TypedError::InternalConfig {
+            detail: "mapped runtime lifecycle has no process DAG".to_owned(),
+        })?;
+    let manifest_entry =
+        manifest_entry_for_vm(state, &request.vm).ok_or_else(|| TypedError::InternalConfig {
+            detail: "mapped runtime lifecycle has no manifest entry".to_owned(),
+        })?;
+    let (api_timeout, readiness_timeout) = vm_start_api_and_readiness_timeouts();
+    let base_start = mapped_runtime_start_budget_for_dag(dag, api_timeout, readiness_timeout)?;
+    let graceful = if request.force || !graceful_shutdown_enabled(&manifest_entry) {
+        Duration::ZERO
+    } else {
+        mapped_runtime_graceful_shutdown_budget(graceful_shutdown_timeout_for(
+            state,
+            &manifest_entry,
+        ))?
+    };
+    let declared_roles = dag
+        .nodes
+        .iter()
+        .filter(|node| {
+            matches!(
+                vm_start_node_mode(&node.role),
+                VmStartNodeMode::LongLived(_)
+            )
+        })
+        .count();
+    let stop_roles = declared_roles.max(ordered_vm_stop_entries(state, &request.vm).len());
+    let base_stop = mapped_runtime_stop_budget_for_roles(graceful, stop_roles)?;
+    let usbip = mapped_runtime_usbip_lifecycle_budgets(
+        configured_usbip_claim_count(&resolver, &request.vm)?,
+        usbip_start_reconciles_synchronously(request),
+    )?;
+    let start = checked_lifecycle_budget_add(base_start, usbip.start)?;
+    let stop = checked_lifecycle_budget_add(base_stop, usbip.stop)?;
+    let restart = checked_lifecycle_budget_add(stop, start)?;
+    Ok(MappedRuntimeLifecycleBudgets {
+        start,
+        stop,
+        restart,
+    })
+}
+
+pub(crate) fn mapped_runtime_lifecycle_budget(
+    state: &ServerState,
+    request: &public_wire::VmLifecycleRequest,
+    method: d2b_contracts::v2_provider::ProviderMethod,
+) -> Result<Duration, TypedError> {
+    let budgets = mapped_runtime_lifecycle_budgets(state, request)?;
+    match method {
+        d2b_contracts::v2_provider::ProviderMethod::RuntimeStart => Ok(budgets.start),
+        d2b_contracts::v2_provider::ProviderMethod::RuntimeStop => Ok(budgets.stop),
+        _ => Err(TypedError::InternalConfig {
+            detail: "unsupported mapped runtime lifecycle budget".to_owned(),
+        }),
+    }
 }
 
 fn graceful_shutdown_enabled(manifest_entry: &Value) -> bool {
@@ -14792,7 +15179,7 @@ struct ProviderStopInputs<'a> {
     force_requested: bool,
 }
 
-fn stop_vmm_runner_with_provider(
+async fn stop_vmm_runner_with_provider_async(
     state: &ServerState,
     input: ProviderStopInputs<'_>,
 ) -> Option<Result<VmStopRoleReport, Value>> {
@@ -14895,7 +15282,7 @@ fn stop_vmm_runner_with_provider(
             timeout: ch_api::DEFAULT_TIMEOUT,
         }),
     };
-    let (outcome, report) = block_on_future(run_provider_graceful_shutdown(
+    let (outcome, report) = run_provider_graceful_shutdown(
         state,
         ProviderGracefulInputs {
             provider: provider.as_ref(),
@@ -14906,7 +15293,8 @@ fn stop_vmm_runner_with_provider(
             force_generation_baseline,
             caller_role: input.caller_role.clone(),
         },
-    ));
+    )
+    .await;
     if let Some(report) = report {
         record_vm_shutdown_metric(
             state,
@@ -15690,6 +16078,34 @@ fn dispatch_broker_vm_start(
     state: &ServerState,
     request: public_wire::VmLifecycleRequest,
 ) -> Result<Value, TypedError> {
+    block_on_future(dispatch_broker_vm_start_async(state, request))
+}
+
+// ProviderLifecycleTasks already enters mapped lifecycle on a dedicated OS
+// thread. Own the runtime on that thread too: synchronous broker/cgroup waits
+// cannot stall the provider executor, and no runtime handle can race its
+// owner's shutdown while a blocking-pool closure calls Handle::block_on.
+fn run_mapped_lifecycle_blocking<T>(future: impl Future<Output = T>) -> Result<T, TypedError> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|err| TypedError::InternalConfig {
+            detail: format!("build mapped provider lifecycle runtime: {err}"),
+        })?;
+    Ok(runtime.block_on(future))
+}
+
+pub(crate) fn dispatch_broker_vm_start_on_blocking_adapter(
+    state: Arc<ServerState>,
+    request: public_wire::VmLifecycleRequest,
+) -> Result<Value, TypedError> {
+    run_mapped_lifecycle_blocking(dispatch_broker_vm_start_async(&state, request))?
+}
+
+async fn dispatch_broker_vm_start_async(
+    state: &ServerState,
+    request: public_wire::VmLifecycleRequest,
+) -> Result<Value, TypedError> {
     const VERB: &str = "vm start";
 
     if let Some(response) = mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
@@ -16020,18 +16436,7 @@ fn dispatch_broker_vm_start(
         ));
     }
 
-    let api_timeout = Duration::from_secs(
-        std::env::var("D2B_API_TIMEOUT_SECONDS")
-            .ok()
-            .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or(supervisor::dag::DEFAULT_API_TIMEOUT_SECONDS),
-    );
-    let readiness_timeout = Duration::from_secs(
-        std::env::var("D2B_READINESS_TIMEOUT_SECONDS")
-            .ok()
-            .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or(api_timeout.as_secs().max(300)),
-    );
+    let (api_timeout, readiness_timeout) = vm_start_api_and_readiness_timeouts();
     let split_mode = if request.no_wait_api {
         supervisor::dag::SplitReadinessMode::NoWaitApi
     } else {
@@ -16042,13 +16447,10 @@ fn dispatch_broker_vm_start(
         ..supervisor::dag::NodeBudget::default()
     };
     let dag_start = Instant::now();
-    let report = match block_on_future(
-        supervisor::dag::DagExecutor::with_budget(runner, budget).run_split(
-            dag,
-            split_mode,
-            api_timeout,
-        ),
-    ) {
+    let report = match supervisor::dag::DagExecutor::with_budget(runner, budget)
+        .run_split(dag, split_mode, api_timeout)
+        .await
+    {
         Ok(report) => report,
         Err(error) => {
             tracing::warn!(vm = %request.vm, error = ?error, "vm start DAG validation failed");
@@ -16494,13 +16896,38 @@ fn dispatch_broker_vm_stop_as(
     request: public_wire::VmLifecycleRequest,
     caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
-    dispatch_broker_vm_stop_with_timeout_as(
+    block_on_future(dispatch_broker_vm_stop_as_async(
+        state,
+        request,
+        caller_role,
+    ))
+}
+
+async fn dispatch_broker_vm_stop_as_async(
+    state: &ServerState,
+    request: public_wire::VmLifecycleRequest,
+    caller_role: BrokerCallerRole,
+) -> Result<Value, TypedError> {
+    dispatch_broker_vm_stop_with_timeout_as_async(
         state,
         request,
         caller_role,
         VM_STOP_TIMEOUT,
         VM_STOP_TIMEOUT,
     )
+    .await
+}
+
+pub(crate) fn dispatch_broker_vm_stop_on_blocking_adapter(
+    state: Arc<ServerState>,
+    request: public_wire::VmLifecycleRequest,
+    caller_role: BrokerCallerRole,
+) -> Result<Value, TypedError> {
+    run_mapped_lifecycle_blocking(dispatch_broker_vm_stop_as_async(
+        &state,
+        request,
+        caller_role,
+    ))?
 }
 
 #[cfg(test)]
@@ -16510,16 +16937,16 @@ fn dispatch_broker_vm_stop_with_timeout(
     term_timeout: Duration,
     kill_timeout: Duration,
 ) -> Result<Value, TypedError> {
-    dispatch_broker_vm_stop_with_timeout_as(
+    block_on_future(dispatch_broker_vm_stop_with_timeout_as_async(
         state,
         request,
         BrokerCallerRole::LauncherUid { uid: 0 },
         term_timeout,
         kill_timeout,
-    )
+    ))
 }
 
-fn dispatch_broker_vm_stop_with_timeout_as(
+async fn dispatch_broker_vm_stop_with_timeout_as_async(
     state: &ServerState,
     request: public_wire::VmLifecycleRequest,
     caller_role: BrokerCallerRole,
@@ -16582,7 +17009,7 @@ fn dispatch_broker_vm_stop_with_timeout_as(
     let mut shutdown_outcomes = Vec::new();
     let force_requested = vm_lifecycle_force_requested(&request);
     for entry in &stop_entries {
-        let provider_report = stop_vmm_runner_with_provider(
+        let provider_report = stop_vmm_runner_with_provider_async(
             state,
             ProviderStopInputs {
                 caller_role: caller_role.clone(),
@@ -16594,7 +17021,8 @@ fn dispatch_broker_vm_stop_with_timeout_as(
                 kill_timeout,
                 force_requested,
             },
-        );
+        )
+        .await;
         let report = match provider_report.unwrap_or_else(|| {
             stop_vm_pidfd_role(
                 state,
@@ -16667,6 +17095,124 @@ fn dispatch_broker_vm_stop_with_timeout_as(
         .unwrap()
         .remove_session(&request.vm);
     Ok(applied_response(VERB, summary))
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_DIRECT_RUNTIME_FALLBACKS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn reset_test_direct_runtime_fallbacks() {
+    TEST_DIRECT_RUNTIME_FALLBACKS.set(0);
+}
+
+#[cfg(test)]
+fn test_direct_runtime_fallbacks() -> usize {
+    TEST_DIRECT_RUNTIME_FALLBACKS.get()
+}
+
+fn dispatch_provider_or_broker_vm_start(
+    state: &ServerState,
+    request: public_wire::VmLifecycleRequest,
+    caller_role: BrokerCallerRole,
+) -> Result<Value, TypedError> {
+    const VERB: &str = "vm start";
+    if let Some(response) = mutating_verb_preflight(VERB, &request.flags, Some(&request.vm)) {
+        return Ok(response);
+    }
+    match block_on_future(provider_registry::invoke_runtime_lifecycle(
+        state,
+        request.clone(),
+        caller_role,
+        d2b_contracts::v2_provider::ProviderMethod::RuntimeStart,
+    ))? {
+        provider_registry::RuntimeLifecycleInvocation::Unmapped => {
+            #[cfg(test)]
+            TEST_DIRECT_RUNTIME_FALLBACKS.set(TEST_DIRECT_RUNTIME_FALLBACKS.get() + 1);
+            dispatch_broker_vm_start(state, request)
+        }
+        provider_registry::RuntimeLifecycleInvocation::Direct(response) => Ok(response),
+        provider_registry::RuntimeLifecycleInvocation::Converged => Ok(applied_response(
+            VERB,
+            format!("vm start {}: provider already converged", request.vm),
+        )),
+        provider_registry::RuntimeLifecycleInvocation::Ambiguous => {
+            Ok(provider_lifecycle_ambiguous_response(VERB, &request.vm))
+        }
+    }
+}
+
+fn dispatch_provider_or_broker_vm_stop_as(
+    state: &ServerState,
+    request: public_wire::VmLifecycleRequest,
+    caller_role: BrokerCallerRole,
+) -> Result<Value, TypedError> {
+    const VERB: &str = "vm stop";
+    if let Some(response) = mutating_verb_preflight(VERB, &request.flags, Some(&request.vm)) {
+        return Ok(response);
+    }
+    match block_on_future(provider_registry::invoke_runtime_lifecycle(
+        state,
+        request.clone(),
+        caller_role.clone(),
+        d2b_contracts::v2_provider::ProviderMethod::RuntimeStop,
+    ))? {
+        provider_registry::RuntimeLifecycleInvocation::Unmapped => {
+            #[cfg(test)]
+            TEST_DIRECT_RUNTIME_FALLBACKS.set(TEST_DIRECT_RUNTIME_FALLBACKS.get() + 1);
+            dispatch_broker_vm_stop_as(state, request, caller_role)
+        }
+        provider_registry::RuntimeLifecycleInvocation::Direct(response) => Ok(response),
+        provider_registry::RuntimeLifecycleInvocation::Converged => Ok(applied_response(
+            VERB,
+            format!("vm stop {}: provider already converged", request.vm),
+        )),
+        provider_registry::RuntimeLifecycleInvocation::Ambiguous => {
+            Ok(provider_lifecycle_ambiguous_response(VERB, &request.vm))
+        }
+    }
+}
+
+fn dispatch_provider_or_broker_vm_restart_as(
+    state: &ServerState,
+    request: public_wire::VmLifecycleRequest,
+    caller_role: BrokerCallerRole,
+) -> Result<Value, TypedError> {
+    const VERB: &str = "vm restart";
+    if let Some(response) = mutating_verb_preflight(VERB, &request.flags, Some(&request.vm)) {
+        return Ok(response);
+    }
+    if state
+        .provider_registry()?
+        .runtime_route(&request.vm)
+        .is_none()
+    {
+        #[cfg(test)]
+        TEST_DIRECT_RUNTIME_FALLBACKS.set(TEST_DIRECT_RUNTIME_FALLBACKS.get() + 1);
+        return dispatch_broker_vm_restart_as(state, request, caller_role);
+    }
+    provider_registry::ensure_runtime_restart_budget(state, &request)?;
+
+    let stop_response =
+        dispatch_provider_or_broker_vm_stop_as(state, request.clone(), caller_role.clone())?;
+    if response_outcome(&stop_response) != Some("applied") {
+        return Ok(retarget_mutating_response(&stop_response, VERB));
+    }
+    let start_response = dispatch_provider_or_broker_vm_start(state, request.clone(), caller_role)?;
+    if response_outcome(&start_response) != Some("applied") {
+        return Ok(retarget_mutating_response(&start_response, VERB));
+    }
+    Ok(applied_response(
+        VERB,
+        format!(
+            "vm restart {}: {}; {}",
+            request.vm,
+            response_summary(&stop_response).unwrap_or("stop applied"),
+            response_summary(&start_response).unwrap_or("start applied"),
+        ),
+    ))
 }
 
 #[cfg(test)]
@@ -19601,6 +20147,9 @@ mod public_status_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(metrics::Registry::new()),
+            provider_registry: initialized_provider_registry(
+                crate::provider_registry::StartupProviderRegistry::Empty,
+            ),
             exec_sessions: Arc::new(exec_session::SessionTable::new(
                 exec_session::ExecSessionCaps::default(),
             )),
@@ -21662,6 +22211,68 @@ mod public_status_tests {
     }
 }
 
+fn dispatch_observability_export_inspect(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    request: public_wire::ObservabilityExportInspectRequest,
+) -> Result<Value, TypedError> {
+    use observability_export::{
+        ObservabilityExportLookup, ObservabilityExportStore, ObservabilityExportStoreError,
+    };
+
+    if peer.role != PeerRole::Admin {
+        return Err(TypedError::AuthzNotAdmin {
+            verb: "observabilityExportInspect".to_owned(),
+        });
+    }
+    if request.max_bytes == 0
+        || request.max_bytes > public_wire::OBSERVABILITY_EXPORT_INSPECT_MAX_BYTES
+    {
+        return Err(TypedError::WireInvalidFrame {
+            detail: "observability export inspection maxBytes is outside the bounded range"
+                .to_owned(),
+        });
+    }
+    let lookup = ObservabilityExportStore::new(&state.daemon_state_dir)
+        .lookup(&request.operation_id, request.offset, request.max_bytes)
+        .map_err(|error| match error {
+            ObservabilityExportStoreError::BoundsExceeded => TypedError::WireInvalidFrame {
+                detail: "observability export inspection bounds are invalid".to_owned(),
+            },
+            ObservabilityExportStoreError::StorageUnavailable
+            | ObservabilityExportStoreError::CompletionAmbiguous
+            | ObservabilityExportStoreError::NotFound
+            | ObservabilityExportStoreError::InvalidArtifact => TypedError::InternalIo {
+                context: "inspect observability export".to_owned(),
+                detail: "private export artifact is unavailable or invalid".to_owned(),
+            },
+        })?;
+    let response = match lookup {
+        ObservabilityExportLookup::Missing => {
+            public_wire::ObservabilityExportInspectResponse::Missing {
+                operation_id: request.operation_id,
+            }
+        }
+        ObservabilityExportLookup::Available(chunk) => {
+            let returned_bytes =
+                u32::try_from(chunk.bytes.len()).map_err(|_| TypedError::WireInvalidFrame {
+                    detail: "observability export inspection result exceeds its bound".to_owned(),
+                })?;
+            public_wire::ObservabilityExportInspectResponse::Available {
+                operation_id: request.operation_id,
+                format: chunk.inspection.format,
+                digest: chunk.inspection.digest,
+                encoded_bytes: chunk.inspection.encoded_bytes,
+                offset: chunk.offset,
+                returned_bytes,
+                bytes_base64: BASE64_STANDARD.encode(chunk.bytes),
+                complete: chunk.complete,
+            }
+        }
+    };
+    Ok(wire::observability_export_inspect_response(response))
+}
+
 fn dispatch_audit(
     state: &ServerState,
     peer: &PeerIdentity,
@@ -22066,17 +22677,12 @@ fn read_frame(socket: &impl AsRawFd) -> Result<Vec<u8>, TypedError> {
     Ok(buffer[4..read].to_vec())
 }
 
-fn mark_fd_cloexec(fd: RawFd, context: &str) -> Result<(), TypedError> {
+fn fd_is_cloexec(fd: RawFd, context: &str) -> Result<bool, TypedError> {
     let current = fcntl(fd, FcntlArg::F_GETFD).map_err(|err| TypedError::InternalIo {
         context: context.to_owned(),
         detail: err.to_string(),
     })?;
-    let flags = FdFlag::from_bits_truncate(current) | FdFlag::FD_CLOEXEC;
-    fcntl(fd, FcntlArg::F_SETFD(flags)).map_err(|err| TypedError::InternalIo {
-        context: context.to_owned(),
-        detail: err.to_string(),
-    })?;
-    Ok(())
+    Ok(FdFlag::from_bits_truncate(current).contains(FdFlag::FD_CLOEXEC))
 }
 
 fn duplicate_fd_cloexec(fd: RawFd, context: &str) -> Result<OwnedFd, TypedError> {
@@ -22091,28 +22697,46 @@ fn duplicate_fd_cloexec(fd: RawFd, context: &str) -> Result<OwnedFd, TypedError>
             context: context.to_owned(),
             detail: err.to_string(),
         })?;
+    // pidfd_getfd(2) reserves flags (they must be zero) and atomically sets
+    // FD_CLOEXEC on the returned descriptor.
     let duplicated =
         rustix::process::pidfd_getfd(&self_pidfd, fd, rustix::process::PidfdGetfdFlags::empty())
             .map_err(|err| TypedError::InternalIo {
                 context: context.to_owned(),
                 detail: err.to_string(),
             })?;
-    if let Err(error) = mark_fd_cloexec(duplicated.as_raw_fd(), context) {
-        drop(duplicated);
-        return Err(error);
-    }
     Ok(duplicated)
 }
 
-fn read_frame_with_fds(socket: &impl AsRawFd) -> Result<(Vec<u8>, Vec<RawFd>), TypedError> {
+const LINUX_SCM_MAX_FD: usize = 253;
+const MSG_CTRUNC_FLAG: u32 = nix::libc::MSG_CTRUNC as u32;
+
+fn read_frame_with_fds(socket: &impl AsFd) -> Result<(Vec<u8>, Vec<RawFd>), TypedError> {
+    read_frame_with_fds_capacity(socket, LINUX_SCM_MAX_FD)
+}
+
+fn read_frame_with_fds_capacity(
+    socket: &impl AsFd,
+    fd_capacity: usize,
+) -> Result<(Vec<u8>, Vec<RawFd>), TypedError> {
+    if fd_capacity > LINUX_SCM_MAX_FD {
+        return Err(TypedError::InternalIo {
+            context: "recv seqpacket frame with fds".to_owned(),
+            detail: "SCM_RIGHTS receive capacity exceeds the Linux limit".to_owned(),
+        });
+    }
     let mut buffer = vec![0u8; wire::MAX_FRAME_SIZE + 5];
     let mut iov = [IoSliceMut::new(&mut buffer)];
-    let mut control = cmsg_space!([RawFd; 8]);
-    let message = recvmsg::<UnixAddr>(
-        socket.as_raw_fd(),
+    let mut control_space =
+        vec![0_u8; rustix::cmsg_space!(ScmRights(fd_capacity), ScmCredentials(1))];
+    let mut control = rustix::net::RecvAncillaryBuffer::new(&mut control_space);
+    // MSG_CMSG_CLOEXEC makes SCM_RIGHTS installation close-on-exec in the
+    // kernel, eliminating the recvmsg-to-fcntl fork/exec leak window.
+    let message = rustix::net::recvmsg(
+        socket,
         &mut iov,
-        Some(&mut control),
-        MsgFlags::empty(),
+        &mut control,
+        rustix::net::RecvFlags::CMSG_CLOEXEC,
     )
     .map_err(|err| TypedError::InternalIo {
         context: "recv seqpacket frame with fds".to_owned(),
@@ -22120,45 +22744,85 @@ fn read_frame_with_fds(socket: &impl AsRawFd) -> Result<(Vec<u8>, Vec<RawFd>), T
     })?;
     let read = message.bytes;
     let mut received_fds = Vec::new();
-    for cmsg in message.cmsgs().map_err(|err| TypedError::InternalIo {
-        context: "recv seqpacket frame with fds".to_owned(),
-        detail: err.to_string(),
-    })? {
-        if let ControlMessageOwned::ScmRights(fds) = cmsg {
+    for cmsg in control.drain() {
+        if let rustix::net::RecvAncillaryMessage::ScmRights(fds) = cmsg {
             received_fds.extend(fds);
         }
     }
+    if message.flags.bits() & MSG_CTRUNC_FLAG != 0 {
+        return Err(TypedError::InternalIo {
+            context: "recv seqpacket frame with fds".to_owned(),
+            detail: "SCM_RIGHTS ancillary data was truncated".to_owned(),
+        });
+    }
+    #[cfg(test)]
+    run_received_fd_test_hook(
+        &received_fds
+            .iter()
+            .map(AsRawFd::as_raw_fd)
+            .collect::<Vec<_>>(),
+    );
     for fd in &received_fds {
-        if let Err(error) = mark_fd_cloexec(*fd, "mark received fd cloexec") {
-            close_received_fds(&received_fds);
-            return Err(error);
+        let cloexec = fd_is_cloexec(fd.as_raw_fd(), "verify received fd cloexec")?;
+        if !cloexec {
+            return Err(TypedError::InternalIo {
+                context: "verify received fd cloexec".to_owned(),
+                detail: "SCM_RIGHTS descriptor was not installed close-on-exec".to_owned(),
+            });
         }
     }
     if read == 0 {
-        close_received_fds(&received_fds);
         return Err(TypedError::InternalIo {
             context: "recv seqpacket frame with fds".to_owned(),
             detail: "peer closed the socket".to_owned(),
         });
     }
     if read < 4 {
-        close_received_fds(&received_fds);
         return Err(TypedError::WireInvalidFrame {
             detail: format!("frame too short: {read} bytes"),
         });
     }
     let declared = u32::from_le_bytes(buffer[..4].try_into().expect("prefix slice")) as usize;
     if declared > wire::MAX_FRAME_SIZE {
-        close_received_fds(&received_fds);
         return Err(TypedError::WireFrameTooLarge { declared });
     }
     if read - 4 != declared {
-        close_received_fds(&received_fds);
         return Err(TypedError::WireInvalidFrame {
             detail: format!("declared {declared} bytes but received {}", read - 4),
         });
     }
-    Ok((buffer[4..read].to_vec(), received_fds))
+    Ok((
+        buffer[4..read].to_vec(),
+        received_fds
+            .into_iter()
+            .map(IntoRawFd::into_raw_fd)
+            .collect(),
+    ))
+}
+
+#[cfg(test)]
+type ReceivedFdTestHook = Box<dyn FnOnce(&[RawFd])>;
+
+#[cfg(test)]
+thread_local! {
+    static TEST_RECEIVED_FD_HOOK: std::cell::RefCell<Option<ReceivedFdTestHook>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+fn set_received_fd_test_hook(hook: impl FnOnce(&[RawFd]) + 'static) {
+    TEST_RECEIVED_FD_HOOK.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
+
+#[cfg(test)]
+fn run_received_fd_test_hook(fds: &[RawFd]) {
+    TEST_RECEIVED_FD_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook(fds);
+        }
+    });
 }
 
 fn close_received_fds(fds: &[RawFd]) {
@@ -22512,6 +23176,9 @@ mod detached_exec_routing_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(metrics::Registry::new()),
+            provider_registry: initialized_provider_registry(
+                crate::provider_registry::StartupProviderRegistry::Empty,
+            ),
             exec_sessions: Arc::new(exec_session::SessionTable::new(caps)),
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
@@ -23227,6 +23894,9 @@ mod accept_loop_concurrency_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(metrics::Registry::new()),
+            provider_registry: initialized_provider_registry(
+                crate::provider_registry::StartupProviderRegistry::Empty,
+            ),
             exec_sessions: Arc::new(exec_session::SessionTable::new(
                 exec_session::ExecSessionCaps::default(),
             )),
@@ -23673,7 +24343,7 @@ mod accept_loop_concurrency_tests {
 
 #[cfg(test)]
 mod broker_dispatch_tests {
-    use std::collections::VecDeque;
+    use std::collections::{BTreeMap, VecDeque};
     use std::fs::File;
     use std::io::{self, IoSlice, Read, Write};
     use std::net::TcpListener;
@@ -23683,10 +24353,11 @@ mod broker_dispatch_tests {
     use std::path::{Path, PathBuf};
     use std::process::{Child, Command};
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+    use std::sync::{Arc, Mutex, MutexGuard, OnceLock, mpsc};
     use std::time::{Duration, Instant};
     use std::{fs, thread};
 
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use d2b_contracts::broker_wire::{
         ActivationMode as BrokerActivationMode, ActivationPhase as BrokerActivationPhase,
         BrokerCallerRole, BrokerErrorResponse, BrokerRequest, BrokerRequestEnvelope,
@@ -23695,21 +24366,44 @@ mod broker_dispatch_tests {
         SignalRunnerResponse, SpawnRunnerResponse,
     };
     use d2b_contracts::guest_proto as pb;
+    use d2b_contracts::provider_registry_v2::{
+        LocalObservabilityProviderBindingV2, LocalRuntimeProviderBindingV2,
+        PROVIDER_REGISTRY_V2_SCHEMA_VERSION, ProviderBindingV2, ProviderIntentId,
+        ProviderRegistryEntryV2, ProviderRegistryV2,
+        local_observability_configuration_schema_fingerprint,
+        local_observability_configured_scope_digest,
+        local_runtime_configuration_schema_fingerprint, local_runtime_configured_scope_digest,
+    };
     use d2b_contracts::public_wire::{
         ActivationRequest, GcRequest, HostDestroyRequest, HostInstallRequest, HostPrepareRequest,
-        KeysRotateRequest, MigrateRequest, MutationFlags, RotateKnownHostRequest, ShellCloseCause,
-        ShellName, ShellSessionState, StatusRequest, TrustRequest, VmLifecycleRequest,
+        KeysRotateRequest, MigrateRequest, MutationFlags, ObservabilityExportInspectRequest,
+        RotateKnownHostRequest, ShellCloseCause, ShellName, ShellSessionState, StatusRequest,
+        TrustRequest, VmLifecycleRequest,
     };
     use d2b_contracts::types::{RoleId, VmId};
+    use d2b_contracts::v2_component_session::EndpointRole;
+    use d2b_contracts::v2_identity::{
+        ProviderType, RealmId, RealmPath as ProviderRealmPath, WorkloadId, WorkloadName,
+    };
+    use d2b_contracts::v2_provider::{
+        Fingerprint, Generation, ImplementationId, ObservabilityExportFormat, OperationId,
+        PROVIDER_SCHEMA_VERSION, ProviderApiVersion, ProviderAuthority, ProviderDescriptor,
+        ProviderPlacement,
+    };
     use d2b_core::bundle_resolver::BundleResolver;
     use d2b_core::processes::ProcessRole;
+    use d2b_provider_observability_local::live_observability_capabilities;
+    use d2b_provider_runtime_local::{
+        CLOUD_HYPERVISOR_IMPLEMENTATION_ID, LocalRuntimeKind, live_runtime_capabilities,
+    };
     use nix::sys::socket::{
         AddressFamily, Backlog, ControlMessage, MsgFlags, SockFlag, SockType, UnixAddr, accept4,
-        bind, listen, recv, sendmsg, socket,
+        bind, listen, recv, sendmsg, setsockopt, socket, socketpair, sockopt,
     };
     use nix::unistd::close;
     use serde::Serialize;
     use serde_json::{Value, json};
+    use sha2::{Digest, Sha256};
 
     use super::provider_shutdown::GracefulVmShutdown;
     use super::supervisor::pidfd_table::{
@@ -23722,25 +24416,28 @@ mod broker_dispatch_tests {
     };
     use super::{
         ArtifactPaths, DaemonConfig, HostActivationMarkerState, PeerIdentity, PeerRole,
-        ProviderGracefulInputs, QemuBrokerShutdownProvider, ServerState,
+        ProviderGracefulInputs, QemuBrokerShutdownProvider, ServerState, TypedError,
         UsbipBackgroundReconcileGuard, VM_RUNNER_ROLE_ID, VmShutdownOutcome, VmStartNodeMode,
-        activation_marker_path, adopt_orphaned_runners_on_startup_with, block_on_future,
-        bounded_usbip_owner_label, daemon_audit, dispatch_broker_boot, dispatch_broker_gc,
-        dispatch_broker_host_destroy, dispatch_broker_host_prepare, dispatch_broker_keys_rotate,
-        dispatch_broker_rollback, dispatch_broker_rotate_known_host,
+        activate_provider_registry, activation_marker_path, adopt_orphaned_runners_on_startup_with,
+        block_on_future, bounded_usbip_owner_label, daemon_audit, dispatch_broker_boot,
+        dispatch_broker_gc, dispatch_broker_host_destroy, dispatch_broker_host_prepare,
+        dispatch_broker_keys_rotate, dispatch_broker_rollback, dispatch_broker_rotate_known_host,
         dispatch_broker_run_host_install, dispatch_broker_run_migrate, dispatch_broker_switch,
         dispatch_broker_test, dispatch_broker_trust, dispatch_broker_vm_restart,
         dispatch_broker_vm_start, dispatch_broker_vm_stop, dispatch_broker_vm_stop_with_timeout,
-        dispatch_request, dispatch_status, force_shutdown_generation, map_shell_attach_response,
-        map_shell_detach_response, map_shell_kill_response, map_shell_list_response,
-        note_force_shutdown_request, prove_role_cgroup_empty_or_escalate, provider_shutdown,
-        read_activation_marker, redact_broker_dispatch_failure_for_launcher,
-        redact_broker_error_for_launcher, resolve_store_view_intent_for_vm,
+        dispatch_provider_or_broker_vm_restart_as, dispatch_provider_or_broker_vm_start,
+        dispatch_provider_or_broker_vm_stop_as, dispatch_request, dispatch_status,
+        force_shutdown_generation, initialized_provider_registry, load_bundle_resolver,
+        map_shell_attach_response, map_shell_detach_response, map_shell_kill_response,
+        map_shell_list_response, note_force_shutdown_request, prove_role_cgroup_empty_or_escalate,
+        provider_effects, provider_registry, provider_shutdown, read_activation_marker,
+        redact_broker_dispatch_failure_for_launcher, redact_broker_error_for_launcher,
+        reset_test_direct_runtime_fallbacks, resolve_store_view_intent_for_vm,
         rollback_failed_vm_start, run_provider_graceful_shutdown,
         same_vm_declared_usbip_start_claims_with_reader,
         same_vm_persisted_usbip_stop_claims_with_reader,
-        stale_qemu_media_dependency_roles_from_entries, try_acquire_activation_lock,
-        usbip_start_reconciles_synchronously, vm_start_node_mode,
+        stale_qemu_media_dependency_roles_from_entries, test_direct_runtime_fallbacks,
+        try_acquire_activation_lock, usbip_start_reconciles_synchronously, vm_start_node_mode,
     };
 
     static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
@@ -23805,6 +24502,9 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
+            provider_registry: initialized_provider_registry(
+                crate::provider_registry::StartupProviderRegistry::Empty,
+            ),
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
@@ -23843,6 +24543,9 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
+            provider_registry: initialized_provider_registry(
+                crate::provider_registry::StartupProviderRegistry::Empty,
+            ),
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
@@ -23933,6 +24636,7 @@ mod broker_dispatch_tests {
         let processes_path = bundle_dir.join("processes.json");
         let bundle_path = bundle_dir.join("bundle.json");
         let privileges_path = bundle_dir.join("privileges.json");
+        let provider_registry_path = bundle_dir.join("provider-registry-v2.json");
         let api_socket = root.join("vm-a.api.sock");
 
         write_json_file(
@@ -24010,6 +24714,8 @@ mod broker_dispatch_tests {
                                 "id": "cloud-hypervisor",
                                 "role": "cloud-hypervisor-runner",
                                 "unit": null,
+                                "binaryPath": "/bin/true",
+                                "argv": ["cloud-hypervisor"],
                                 "profile": minimal_role_profile("vm-vm-a-cloud-hypervisor", "d2b.slice/vm-a/cloud-hypervisor"),
                                 "readiness": []
                             }
@@ -24030,6 +24736,16 @@ mod broker_dispatch_tests {
             &json!({ "schemaVersion": "v2", "operations": [] }),
         );
         write_json_file(
+            &provider_registry_path,
+            &json!({
+                "schemaVersion": "v2",
+                "registryGeneration": 1,
+                "configurationFingerprint": "0".repeat(64),
+                "publishedAtUnixMs": 0,
+                "providers": []
+            }),
+        );
+        write_json_file(
             &bundle_path,
             &json!({
                 "bundleVersion": 4,
@@ -24038,6 +24754,7 @@ mod broker_dispatch_tests {
                 "hostPath": host_fixture_path().display().to_string(),
                 "processesPath": processes_path.display().to_string(),
                 "privilegesPath": privileges_path.display().to_string(),
+                "providerRegistryV2Path": provider_registry_path.display().to_string(),
                 "closures": [],
                 "minijailProfiles": [],
                 "managedKeys": {
@@ -24057,6 +24774,7 @@ mod broker_dispatch_tests {
             &processes_path,
             &bundle_path,
             &privileges_path,
+            &provider_registry_path,
         ] {
             fs::set_permissions(path, fs::Permissions::from_mode(0o640))
                 .expect("chmod minimal bundle fixture");
@@ -24068,6 +24786,1695 @@ mod broker_dispatch_tests {
             host_path: host_fixture_path(),
             processes_path,
             ..ArtifactPaths::default()
+        }
+    }
+
+    fn local_runtime_provider_artifact(runner_intent_id: &str) -> ProviderRegistryV2 {
+        local_runtime_provider_artifact_for(LocalRuntimeKind::CloudHypervisor, runner_intent_id)
+    }
+
+    fn local_runtime_provider_artifact_for(
+        kind: LocalRuntimeKind,
+        runner_intent_id: &str,
+    ) -> ProviderRegistryV2 {
+        let realm_id = RealmId::derive(
+            &ProviderRealmPath::parse("work.local-root").expect("provider realm path"),
+        );
+        let workload_id = WorkloadId::derive(
+            &realm_id,
+            &WorkloadName::parse("vm-a").expect("workload name"),
+        );
+        let generation = Generation::new(1).expect("generation");
+        let provider_id = d2b_contracts::v2_identity::ProviderId::derive(
+            &realm_id,
+            ProviderType::Runtime,
+            &d2b_contracts::v2_identity::ConfiguredProviderId::parse(format!(
+                "runtime-{}",
+                workload_id.as_str()
+            ))
+            .expect("configured provider id"),
+        );
+        let role_id = match kind {
+            LocalRuntimeKind::CloudHypervisor => "cloud-hypervisor",
+            LocalRuntimeKind::QemuMedia => "qemu-media",
+            LocalRuntimeKind::SystemdUser => panic!("systemd-user is not a host runtime"),
+        };
+        let binding = LocalRuntimeProviderBindingV2 {
+            workload_id,
+            vm_start_intent_id: ProviderIntentId::parse(format!("vm-start:vm:vm-a:role:{role_id}"))
+                .expect("VM start intent"),
+            runner_intent_id: ProviderIntentId::parse(runner_intent_id).expect("runner intent"),
+        };
+        let descriptor = ProviderDescriptor {
+            schema_version: PROVIDER_SCHEMA_VERSION,
+            provider_id: provider_id.clone(),
+            authority: ProviderAuthority::Runtime {
+                posture: kind.authority_posture(),
+            },
+            implementation_id: ImplementationId::parse(kind.implementation_id())
+                .expect("implementation id"),
+            api_version: ProviderApiVersion::V2,
+            capabilities: live_runtime_capabilities().expect("live capabilities"),
+            configuration_schema_fingerprint: local_runtime_configuration_schema_fingerprint()
+                .expect("configuration fingerprint"),
+            configured_scope_digest: local_runtime_configured_scope_digest(
+                &provider_id,
+                &realm_id,
+                &binding,
+            )
+            .expect("scope digest"),
+            registry_generation: generation,
+            placement: ProviderPlacement::TrustedFirstPartyInProcess {
+                realm_id: realm_id.clone(),
+                controller_role: EndpointRole::RealmController,
+            },
+        };
+        let artifact = ProviderRegistryV2 {
+            schema_version: PROVIDER_REGISTRY_V2_SCHEMA_VERSION.to_owned(),
+            registry_generation: generation,
+            configuration_fingerprint: Fingerprint::parse("3".repeat(64))
+                .expect("registry fingerprint"),
+            published_at_unix_ms: 0,
+            providers: vec![ProviderRegistryEntryV2 {
+                descriptor,
+                binding: ProviderBindingV2::LocalRuntime(binding),
+            }],
+        };
+        artifact.validate().expect("valid provider artifact");
+        artifact
+    }
+
+    fn local_observability_provider_artifact() -> ProviderRegistryV2 {
+        let realm_id = RealmId::derive(
+            &ProviderRealmPath::parse("host.local-root").expect("provider realm path"),
+        );
+        let generation = Generation::new(1).expect("generation");
+        let provider_id = d2b_contracts::v2_identity::ProviderId::derive(
+            &realm_id,
+            ProviderType::Observability,
+            &d2b_contracts::v2_identity::ConfiguredProviderId::parse("observability-local")
+                .expect("configured provider id"),
+        );
+        let binding = LocalObservabilityProviderBindingV2 {
+            max_records: 64,
+            max_bytes: 32_768,
+            max_time_window_ms: 86_400_000,
+        };
+        let artifact = ProviderRegistryV2 {
+            schema_version: PROVIDER_REGISTRY_V2_SCHEMA_VERSION.to_owned(),
+            registry_generation: generation,
+            configuration_fingerprint: Fingerprint::parse("4".repeat(64))
+                .expect("registry fingerprint"),
+            published_at_unix_ms: 0,
+            providers: vec![ProviderRegistryEntryV2 {
+                descriptor: ProviderDescriptor {
+                    schema_version: PROVIDER_SCHEMA_VERSION,
+                    provider_id: provider_id.clone(),
+                    authority: ProviderAuthority::Observability,
+                    implementation_id: ImplementationId::parse("local").expect("implementation id"),
+                    api_version: ProviderApiVersion::V2,
+                    capabilities: live_observability_capabilities().expect("live capabilities"),
+                    configuration_schema_fingerprint:
+                        local_observability_configuration_schema_fingerprint()
+                            .expect("configuration fingerprint"),
+                    configured_scope_digest: local_observability_configured_scope_digest(
+                        &provider_id,
+                        &binding,
+                    )
+                    .expect("scope digest"),
+                    registry_generation: generation,
+                    placement: ProviderPlacement::TrustedFirstPartyInProcess {
+                        realm_id,
+                        controller_role: EndpointRole::LocalRootController,
+                    },
+                },
+                binding: ProviderBindingV2::LocalObservability(binding),
+            }],
+        };
+        artifact
+            .validate()
+            .expect("valid local observability artifact");
+        artifact
+    }
+
+    fn install_provider_registry_artifact(
+        artifacts: &ArtifactPaths,
+        artifact: &ProviderRegistryV2,
+    ) -> PathBuf {
+        let path = artifacts
+            .bundle_path
+            .parent()
+            .expect("bundle parent")
+            .join("provider-registry-v2.json");
+        write_json_file(
+            &path,
+            &serde_json::to_value(artifact).expect("serialize provider artifact"),
+        );
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640))
+            .expect("chmod provider artifact");
+
+        let host_path = path
+            .parent()
+            .expect("provider artifact parent")
+            .join("host.json");
+        fs::copy(host_fixture_path(), &host_path).expect("copy host fixture");
+        fs::set_permissions(&host_path, fs::Permissions::from_mode(0o640))
+            .expect("chmod host fixture");
+
+        if let Some(runtime) = artifact
+            .providers
+            .iter()
+            .find(|entry| matches!(&entry.binding, ProviderBindingV2::LocalRuntime(_)))
+        {
+            let mut processes: Value = serde_json::from_slice(
+                &fs::read(&artifacts.processes_path).expect("read processes"),
+            )
+            .expect("parse processes");
+            let implementation = runtime.descriptor.implementation_id.as_str();
+            let (runtime_kind, legacy_provider, role_id, process_role, binary, argv0) =
+                match implementation {
+                    CLOUD_HYPERVISOR_IMPLEMENTATION_ID => (
+                        "nixos",
+                        "local-cloud-hypervisor",
+                        "cloud-hypervisor",
+                        "cloud-hypervisor-runner",
+                        "/bin/true",
+                        "cloud-hypervisor",
+                    ),
+                    d2b_provider_runtime_local::QEMU_MEDIA_IMPLEMENTATION_ID => (
+                        "qemu-media",
+                        "local-qemu-media",
+                        "qemu-media",
+                        "qemu-media-runner",
+                        "/bin/true",
+                        "qemu-system-x86_64",
+                    ),
+                    other => panic!("unsupported test implementation {other}"),
+                };
+            processes["vms"][0]["workloadIdentity"] = json!({
+                "workloadId": "vm-a",
+                "realmId": "work",
+                "realmPath": ["work"],
+                "canonicalTarget": "vm-a.work.d2b",
+                "legacyVmName": "vm-a",
+                "runtimeKind": runtime_kind,
+                "providerId": legacy_provider
+            });
+            processes["vms"][0]["nodes"][0]["id"] = json!(role_id);
+            processes["vms"][0]["nodes"][0]["role"] = json!(process_role);
+            processes["vms"][0]["nodes"][0]["binaryPath"] = json!(binary);
+            processes["vms"][0]["nodes"][0]["argv"] = json!([argv0]);
+            write_json_file(&artifacts.processes_path, &processes);
+        }
+
+        let mut bundle: Value =
+            serde_json::from_slice(&fs::read(&artifacts.bundle_path).expect("read bundle"))
+                .expect("parse bundle");
+        bundle["bundleVersion"] = json!(12);
+        bundle["schemaVersion"] = json!("v2");
+        bundle["hostPath"] = json!(host_path.display().to_string());
+        bundle["providerRegistryV2Path"] = json!(path.display().to_string());
+        let mut artifact_hashes = BTreeMap::new();
+        for artifact_path in [&host_path, &artifacts.processes_path, &path] {
+            artifact_hashes.insert(
+                artifact_path.display().to_string(),
+                format!(
+                    "sha256:{:x}",
+                    Sha256::digest(fs::read(artifact_path).expect("read hashed artifact"))
+                ),
+            );
+        }
+        bundle["artifactHashes"] =
+            serde_json::to_value(&artifact_hashes).expect("serialize artifact hashes");
+        let mut unhashed = bundle.clone();
+        unhashed
+            .as_object_mut()
+            .expect("bundle object")
+            .remove("bundleHash");
+        unhashed["artifactHashes"] = Value::Null;
+        bundle["bundleHash"] = json!(format!(
+            "sha256:{:x}",
+            Sha256::digest(serde_json::to_vec(&unhashed).expect("serialize canonical bundle"))
+        ));
+        write_json_file(&artifacts.bundle_path, &bundle);
+        fs::set_permissions(&artifacts.bundle_path, fs::Permissions::from_mode(0o640))
+            .expect("chmod bundle");
+        path
+    }
+
+    fn seal_provider_test_bundle(artifacts: &ArtifactPaths, bundle: &mut Value) {
+        let bundle_root = artifacts.bundle_path.parent().expect("bundle parent");
+        let resolve = |value: &Value| {
+            let path = PathBuf::from(value.as_str().expect("bundle artifact path"));
+            if path.is_absolute() {
+                path
+            } else {
+                bundle_root.join(path)
+            }
+        };
+        let mut artifact_hashes = BTreeMap::new();
+        for field in ["hostPath", "processesPath", "providerRegistryV2Path"] {
+            let key = bundle[field]
+                .as_str()
+                .expect("bundle artifact path")
+                .to_owned();
+            let path = resolve(&bundle[field]);
+            artifact_hashes.insert(
+                key,
+                format!(
+                    "sha256:{:x}",
+                    Sha256::digest(fs::read(path).expect("read artifact for resealing"))
+                ),
+            );
+        }
+        bundle["artifactHashes"] =
+            serde_json::to_value(artifact_hashes).expect("serialize artifact hashes");
+        let mut unhashed = bundle.clone();
+        unhashed
+            .as_object_mut()
+            .expect("bundle object")
+            .remove("bundleHash");
+        unhashed["artifactHashes"] = Value::Null;
+        bundle["bundleHash"] = json!(format!(
+            "sha256:{:x}",
+            Sha256::digest(serde_json::to_vec(&unhashed).expect("serialize canonical bundle"))
+        ));
+    }
+
+    fn reseal_provider_test_bundle(artifacts: &ArtifactPaths) {
+        let mut bundle: Value =
+            serde_json::from_slice(&fs::read(&artifacts.bundle_path).expect("read bundle"))
+                .expect("parse bundle");
+        seal_provider_test_bundle(artifacts, &mut bundle);
+        write_json_file(&artifacts.bundle_path, &bundle);
+        fs::set_permissions(&artifacts.bundle_path, fs::Permissions::from_mode(0o640))
+            .expect("chmod resealed bundle");
+    }
+
+    fn configure_provider_test_usbip_claims(
+        state: &ServerState,
+        claim_count: usize,
+        graceful_timeout_seconds: u64,
+    ) {
+        let artifacts = &state.config.artifacts;
+        let bundle: Value =
+            serde_json::from_slice(&fs::read(&artifacts.bundle_path).expect("read bundle"))
+                .expect("parse bundle");
+        let configured_host_path = PathBuf::from(
+            bundle["hostPath"]
+                .as_str()
+                .expect("configured host artifact path"),
+        );
+        let host_path = if configured_host_path.is_absolute() {
+            configured_host_path
+        } else {
+            artifacts
+                .bundle_path
+                .parent()
+                .expect("bundle parent")
+                .join(configured_host_path)
+        };
+        let bus_ids = (1..=claim_count)
+            .map(|index| format!("1-{index}"))
+            .collect::<Vec<_>>();
+        let mut host: Value =
+            serde_json::from_slice(&fs::read(&host_path).expect("read host artifact"))
+                .expect("parse host artifact");
+        host["environments"][0]["env"] = json!("dev");
+        host["environments"][0]["usbipBackendPort"] = json!(3241);
+        host["environments"][0]["usbipBusidLocks"] = json!([
+            {
+                "lockOwner": "daemon",
+                "scope": "per-busid",
+                "vm": "vm-a",
+                "busIds": bus_ids
+            }
+        ]);
+        write_json_file(&host_path, &host);
+        fs::set_permissions(&host_path, fs::Permissions::from_mode(0o640))
+            .expect("chmod host artifact");
+
+        let mut manifest: Value = serde_json::from_slice(
+            &fs::read(&artifacts.public_manifest_path).expect("read public manifest"),
+        )
+        .expect("parse public manifest");
+        manifest["vm-a"]["lifecycle"] = json!({
+            "gracefulShutdown": {
+                "enable": true,
+                "timeoutSeconds": graceful_timeout_seconds
+            }
+        });
+        write_json_file(&artifacts.public_manifest_path, &manifest);
+        fs::set_permissions(
+            &artifacts.public_manifest_path,
+            fs::Permissions::from_mode(0o640),
+        )
+        .expect("chmod public manifest");
+        reseal_provider_test_bundle(artifacts);
+    }
+
+    fn uninitialized_provider_registry_state(label: &str) -> Arc<ServerState> {
+        let mut state = test_state_with_broker_socket(unreachable_broker_socket_path(label));
+        state.provider_registry = Arc::new(OnceLock::new());
+        state.config.locks_dir = state.daemon_state_dir.join("locks");
+        fs::create_dir_all(&state.config.locks_dir).expect("create provider test locks directory");
+        Arc::new(state)
+    }
+
+    fn mapped_cloud_hypervisor_state(label: &str) -> Arc<ServerState> {
+        let state = uninitialized_provider_registry_state(label);
+        let artifact = local_runtime_provider_artifact("runner:vm:vm-a:role:cloud-hypervisor");
+        install_provider_registry_artifact(&state.config.artifacts, &artifact);
+        let mut manifest: Value = serde_json::from_slice(
+            &fs::read(&state.config.artifacts.public_manifest_path).expect("read manifest fixture"),
+        )
+        .expect("parse manifest fixture");
+        manifest["vm-a"]["runtime"]["capabilities"]["storeSync"] = json!(false);
+        write_json_file(&state.config.artifacts.public_manifest_path, &manifest);
+        fs::set_permissions(
+            &state.config.artifacts.public_manifest_path,
+            fs::Permissions::from_mode(0o640),
+        )
+        .expect("chmod manifest fixture");
+        block_on_future(activate_provider_registry(&state, None)).expect("activate mapped runtime");
+        state
+    }
+
+    fn spawn_single_runner_broker(
+        socket_path: &Path,
+        expected_role_id: &'static str,
+        expected_role: RunnerRole,
+    ) -> thread::JoinHandle<ChildGuard> {
+        if let Some(parent) = socket_path.parent() {
+            fs::create_dir_all(parent).expect("create broker socket parent");
+        }
+        fs::remove_file(socket_path).ok();
+        let listener = socket(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            SockFlag::SOCK_CLOEXEC,
+            None,
+        )
+        .expect("create broker listener");
+        let address = UnixAddr::new(socket_path).expect("broker socket address");
+        bind(listener.as_raw_fd(), &address).expect("bind broker listener");
+        listen(&listener, Backlog::new(1).expect("listener backlog"))
+            .expect("listen on broker socket");
+        let socket_path = socket_path.to_path_buf();
+
+        thread::spawn(move || {
+            loop {
+                let accepted_fd = accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC)
+                    .expect("accept broker peer");
+                let frame = read_test_frame(accepted_fd).expect("read broker request frame");
+                let envelope: BrokerRequestEnvelope =
+                    serde_json::from_slice(&frame).expect("decode broker request frame");
+                match envelope.request {
+                    BrokerRequest::PollChildReaped => {
+                        write_test_json_frame(
+                            accepted_fd,
+                            &BrokerResponse::PollChildReaped(PollChildReapedResponse {
+                                notifications: Vec::new(),
+                            }),
+                        )
+                        .expect("write PollChildReaped response");
+                        close(accepted_fd).expect("close PollChildReaped broker peer");
+                    }
+                    BrokerRequest::DeregisterRunnerPidfd(request) => {
+                        write_test_json_frame(
+                            accepted_fd,
+                            &BrokerResponse::DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse {
+                                vm_id: request.vm_id,
+                                role_id: request.role_id,
+                                removed: true,
+                            }),
+                        )
+                        .expect("write DeregisterRunnerPidfd response");
+                        close(accepted_fd).expect("close DeregisterRunnerPidfd broker peer");
+                    }
+                    BrokerRequest::StoreSync(request) => {
+                        assert_eq!(request.vm_id.as_str(), "vm-a");
+                        write_test_json_frame(
+                            accepted_fd,
+                            &BrokerResponse::StoreSync(
+                                d2b_contracts::broker_wire::StoreSyncResponse {
+                                    vm: "vm-a".to_owned(),
+                                    generation_id: "test-generation".to_owned(),
+                                    generation_token: request.generation_token,
+                                    hardlink_farm_path: "/var/lib/d2b/vms/vm-a/store-view"
+                                        .to_owned(),
+                                    closure_count: 0,
+                                    retained_generations: Vec::new(),
+                                    swept_count: 0,
+                                    cleanup_deferred: false,
+                                },
+                            ),
+                        )
+                        .expect("write StoreSync response");
+                        close(accepted_fd).expect("close StoreSync broker peer");
+                    }
+                    BrokerRequest::SpawnRunner(request) => {
+                        assert_eq!(request.vm_id.as_str(), "vm-a");
+                        assert_eq!(request.role_id.as_str(), expected_role_id);
+                        assert_eq!(request.role, expected_role);
+
+                        let child = ChildGuard::new(
+                            Command::new("sleep")
+                                .arg("600")
+                                .spawn()
+                                .expect("spawn child for broker reply"),
+                        );
+                        let pidfd = open_child_pidfd(child.child());
+                        write_test_json_frame_with_fds(
+                            accepted_fd,
+                            &BrokerResponse::SpawnRunner(SpawnRunnerResponse {
+                                vm_id: VmId::new("vm-a"),
+                                role_id: RoleId::new(expected_role_id),
+                                role: expected_role,
+                                pid: child.child().id() as i32,
+                                start_time_ticks: read_child_start_time(child.child()),
+                                pidfd_index: 0,
+                                console_fd_index: None,
+                            }),
+                            &[pidfd.as_raw_fd()],
+                        )
+                        .expect("write spawn response with pidfd");
+                        close(accepted_fd).expect("close SpawnRunner broker peer");
+                        fs::remove_file(socket_path).ok();
+                        return child;
+                    }
+                    other => panic!("unexpected broker request: {other:?}"),
+                }
+            }
+        })
+    }
+
+    fn dispatch_lifecycle_on_connection_thread(
+        state: Arc<ServerState>,
+        request_type: &'static str,
+        request: &VmLifecycleRequest,
+    ) -> (Value, (usize, usize), usize) {
+        let (daemon, client) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("connection socketpair");
+        let daemon = super::Socket::from(daemon);
+        let client = super::Socket::from(client);
+        let handler = thread::Builder::new()
+            .name("d2bd-connection-test".to_owned())
+            .spawn(move || {
+                provider_effects::reset_test_runtime_lifecycle_calls();
+                reset_test_direct_runtime_fallbacks();
+                let result = super::handle_connection_authorized(
+                    daemon,
+                    &state,
+                    PeerIdentity {
+                        role: PeerRole::Admin,
+                        uid: 0,
+                    },
+                    None,
+                );
+                (
+                    result,
+                    provider_effects::test_runtime_lifecycle_calls(),
+                    test_direct_runtime_fallbacks(),
+                )
+            })
+            .expect("spawn connection handler");
+
+        super::write_frame(
+            &client,
+            &serde_json::to_vec(&json!({
+                "type": "hello",
+                "clientVersion": ">=0.4.0, <0.5.0"
+            }))
+            .expect("serialize hello"),
+        )
+        .expect("write hello");
+        let hello: Value = serde_json::from_slice(
+            &super::read_frame(&client).expect("read connection hello response"),
+        )
+        .expect("decode connection hello response");
+        assert_eq!(hello["type"], "helloOk");
+
+        let mut frame = serde_json::to_value(request).expect("serialize lifecycle request");
+        frame["type"] = json!(request_type);
+        super::write_frame(
+            &client,
+            &serde_json::to_vec(&frame).expect("serialize lifecycle frame"),
+        )
+        .expect("write lifecycle frame");
+        let response: Value =
+            serde_json::from_slice(&super::read_frame(&client).expect("read lifecycle response"))
+                .expect("decode lifecycle response");
+        drop(client);
+
+        let (handler_result, provider_calls, direct_fallbacks) = handler
+            .join()
+            .expect("connection handler must not panic in a nested Tokio runtime");
+        handler_result.expect("connection handler exits after client EOF");
+        (response, provider_calls, direct_fallbacks)
+    }
+
+    fn terminate_started_runner(state: &ServerState, role_id: &str, child: ChildGuard) {
+        state
+            .pidfd_table
+            .signal("vm-a", role_id, libc::SIGKILL)
+            .expect("signal started runner");
+        let _ = state
+            .pidfd_table
+            .wait_terminated("vm-a", role_id, Duration::from_secs(5))
+            .expect("wait for started runner");
+        let _ = state.pidfd_table.deregister("vm-a", role_id);
+        let _ = child.wait();
+    }
+
+    #[tokio::test]
+    async fn provider_registry_activation_is_live_retained_and_invokes_real_mapping() {
+        let state = uninitialized_provider_registry_state("provider-registry-live");
+        let artifact = local_runtime_provider_artifact("runner:vm:vm-a:role:cloud-hypervisor");
+        let artifact_path = install_provider_registry_artifact(&state.config.artifacts, &artifact);
+        load_bundle_resolver(&state).expect("provider fixture bundle resolves");
+
+        activate_provider_registry(&state, None)
+            .await
+            .expect("activate live registry");
+        let first = state.provider_registry().expect("startup-owned registry");
+        let second = state.provider_registry().expect("retained registry");
+        assert!(std::ptr::eq(first, second));
+        assert!(!first.is_empty());
+        let registry = first.registry().expect("live registry");
+        let instance = registry
+            .instance(&artifact.providers[0].descriptor.provider_id)
+            .expect("local runtime instance");
+        assert_eq!(instance.descriptor(), artifact.providers[0].descriptor);
+        assert_eq!(instance.descriptor().provider_type(), ProviderType::Runtime);
+        assert!(
+            !instance
+                .capabilities()
+                .contains_method(d2b_contracts::v2_provider::ProviderMethod::RuntimeExecute)
+        );
+        assert!(
+            activate_provider_registry(&state, None).await.is_err(),
+            "registry must initialize exactly once"
+        );
+
+        let stale = local_runtime_provider_artifact("runner:vm:vm-a:role:missing-runtime");
+        write_json_file(
+            &artifact_path,
+            &serde_json::to_value(stale).expect("serialize stale mapping"),
+        );
+        assert!(matches!(
+            provider_registry::probe_startup_registry(first, &artifact).await,
+            Err(provider_registry::ProviderCompositionError::StartupProbeFailed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn provider_registry_activation_probes_live_local_observability_status() {
+        let state = uninitialized_provider_registry_state("provider-registry-observability");
+        let artifact = local_observability_provider_artifact();
+        install_provider_registry_artifact(&state.config.artifacts, &artifact);
+        load_bundle_resolver(&state).expect("provider fixture bundle resolves");
+
+        activate_provider_registry(&state, None)
+            .await
+            .expect("activate local observability registry");
+        let startup = state.provider_registry().expect("startup-owned registry");
+        let registry = startup.registry().expect("live registry");
+        let instance = registry
+            .instance(&artifact.providers[0].descriptor.provider_id)
+            .expect("local observability instance");
+        assert_eq!(
+            instance.descriptor().provider_type(),
+            ProviderType::Observability
+        );
+        assert_eq!(
+            instance.capabilities(),
+            artifact.providers[0].descriptor.capabilities
+        );
+        provider_registry::probe_startup_registry(startup, &artifact)
+            .await
+            .expect("local observability health and status probe");
+    }
+
+    #[test]
+    fn observability_export_inspection_is_authorized_bounded_and_resolves_ambiguity() {
+        fn fail_directory_sync(_path: &Path) -> io::Result<()> {
+            Err(io::Error::other("injected directory sync failure"))
+        }
+
+        let state = test_state_with_broker_socket(unreachable_broker_socket_path(
+            "observability-export-inspect",
+        ));
+        let operation_id = OperationId::parse("inspect-ambiguous-export").expect("operation id");
+        let payload = b"bounded-observability-export";
+        let store = crate::observability_export::ObservabilityExportStore::with_directory_sync(
+            &state.daemon_state_dir,
+            fail_directory_sync,
+        );
+        assert_eq!(
+            store.persist(
+                &operation_id,
+                ObservabilityExportFormat::JsonLines,
+                payload,
+                1,
+                1,
+                1_024,
+            ),
+            Err(crate::observability_export::ObservabilityExportStoreError::CompletionAmbiguous)
+        );
+
+        let request = |operation_id: OperationId, offset, max_bytes| {
+            crate::wire::Request::ObservabilityExportInspect(ObservabilityExportInspectRequest {
+                operation_id,
+                offset,
+                max_bytes,
+            })
+        };
+        let launcher = PeerIdentity {
+            role: PeerRole::Launcher,
+            uid: 1000,
+        };
+        assert!(matches!(
+            dispatch_request(&state, &launcher, request(operation_id.clone(), 0, 7),),
+            Err(TypedError::AuthzNotAdmin { .. })
+        ));
+
+        let admin = PeerIdentity {
+            role: PeerRole::Admin,
+            uid: 0,
+        };
+        let first = dispatch_request(&state, &admin, request(operation_id.clone(), 0, 7))
+            .expect("inspect ambiguous completion");
+        assert_eq!(first["type"], "observabilityExportInspectResponse");
+        assert_eq!(first["state"], "available");
+        assert_eq!(first["format"], "json-lines");
+        assert_eq!(first["encodedBytes"], payload.len() as u64);
+        assert_eq!(first["offset"], 0);
+        assert_eq!(first["returnedBytes"], 7);
+        assert_eq!(first["complete"], false);
+        assert_eq!(
+            BASE64_STANDARD
+                .decode(first["bytesBase64"].as_str().expect("base64 chunk"))
+                .expect("decode chunk"),
+            b"bounded"
+        );
+        assert_eq!(first["digest"], format!("{:x}", Sha256::digest(payload)));
+        assert!(
+            !first
+                .to_string()
+                .contains(&state.daemon_state_dir.display().to_string())
+        );
+
+        let remainder =
+            dispatch_request(&state, &admin, request(operation_id.clone(), 7, 512 * 1024))
+                .expect("inspect remaining bytes");
+        assert_eq!(remainder["complete"], true);
+        assert_eq!(
+            BASE64_STANDARD
+                .decode(remainder["bytesBase64"].as_str().expect("base64 remainder"))
+                .expect("decode remainder"),
+            &payload[7..]
+        );
+
+        let missing = dispatch_request(
+            &state,
+            &admin,
+            request(
+                OperationId::parse("missing-observability-export").expect("operation id"),
+                0,
+                1,
+            ),
+        )
+        .expect("missing inspection is an observation");
+        assert_eq!(missing["state"], "missing");
+        assert!(missing.get("bytesBase64").is_none());
+
+        assert!(matches!(
+            dispatch_request(&state, &admin, request(operation_id.clone(), 0, 0),),
+            Err(TypedError::WireInvalidFrame { .. })
+        ));
+        assert!(matches!(
+            dispatch_request(
+                &state,
+                &admin,
+                request(
+                    operation_id,
+                    u32::try_from(payload.len() + 1).expect("offset"),
+                    1,
+                ),
+            ),
+            Err(TypedError::WireInvalidFrame { .. })
+        ));
+    }
+
+    #[test]
+    fn mapped_provider_deadlines_cover_readiness_grace_and_cleanup() {
+        let state = mapped_cloud_hypervisor_state("provider-lifecycle-deadlines");
+        let request = VmLifecycleRequest {
+            vm: "vm-a".to_owned(),
+            flags: MutationFlags {
+                apply: true,
+                dry_run: false,
+                json: true,
+            },
+            force: false,
+            no_wait_api: true,
+        };
+
+        let budgets =
+            crate::mapped_runtime_lifecycle_budgets(&state, &request).expect("lifecycle budgets");
+        let start_budget = budgets.start;
+        let start_deadline = provider_registry::provider_lifecycle_deadline(
+            &state,
+            &request,
+            d2b_contracts::v2_provider::ProviderMethod::RuntimeStart,
+        )
+        .expect("start provider deadline");
+        assert_eq!(
+            start_budget,
+            Duration::from_secs(300 + 10 + 10 + 5 + 5 + 5 + 5)
+        );
+        assert!(start_deadline.duration > Duration::from_secs(30));
+        assert_eq!(
+            u128::from(start_deadline.milliseconds),
+            start_deadline.duration.as_millis()
+        );
+
+        let stop_budget = budgets.stop;
+        let stop_deadline = provider_registry::provider_lifecycle_deadline(
+            &state,
+            &request,
+            d2b_contracts::v2_provider::ProviderMethod::RuntimeStop,
+        )
+        .expect("stop provider deadline");
+        assert_eq!(
+            stop_budget,
+            Duration::from_secs(90 + 5 + 5 + 30 + 30 + 5 + 5 + 5)
+        );
+        assert_eq!(budgets.restart, start_budget + stop_budget);
+        assert!(stop_deadline.duration > Duration::from_secs(30));
+        assert_eq!(
+            u128::from(stop_deadline.milliseconds),
+            stop_deadline.duration.as_millis()
+        );
+
+        let mut strict_without_usb = request;
+        strict_without_usb.no_wait_api = false;
+        assert_eq!(
+            crate::mapped_runtime_lifecycle_budgets(&state, &strict_without_usb)
+                .expect("strict USB-free lifecycle budgets"),
+            budgets,
+            "strict starts must not pay a phantom USBIP reconciliation cost"
+        );
+    }
+
+    #[test]
+    fn mapped_provider_usbip_budgets_are_claim_scoped_and_checked() {
+        let usb_free = crate::mapped_runtime_usbip_lifecycle_budgets(0, true)
+            .expect("USB-free lifecycle budget");
+        assert_eq!(usb_free.start, Duration::ZERO);
+        assert_eq!(usb_free.stop, Duration::ZERO);
+
+        let relaxed = crate::mapped_runtime_usbip_lifecycle_budgets(3, false)
+            .expect("relaxed USBIP lifecycle budget");
+        assert_eq!(relaxed.start, Duration::ZERO);
+        assert_eq!(relaxed.stop, Duration::from_secs(3 * 60));
+
+        let strict = crate::mapped_runtime_usbip_lifecycle_budgets(3, true)
+            .expect("strict USBIP lifecycle budget");
+        assert_eq!(strict.start, crate::USBIP_STRICT_RECONCILE_TIMEOUT);
+        assert_eq!(strict.stop, relaxed.stop);
+
+        if let Ok(too_many_claims) = usize::try_from(u64::from(u32::MAX) + 1) {
+            assert!(crate::mapped_runtime_usbip_lifecycle_budgets(too_many_claims, true).is_err());
+        }
+        assert!(crate::checked_lifecycle_budget_mul(Duration::MAX, 2).is_err());
+    }
+
+    #[test]
+    fn mapped_provider_usbip_claims_enforce_exact_contract_boundary() {
+        let state = uninitialized_provider_registry_state("provider-usbip-budget-boundary");
+        let artifact = local_runtime_provider_artifact("runner:vm:vm-a:role:cloud-hypervisor");
+        install_provider_registry_artifact(&state.config.artifacts, &artifact);
+        configure_provider_test_usbip_claims(&state, 6, 100);
+
+        let strict_request = VmLifecycleRequest {
+            vm: "vm-a".to_owned(),
+            flags: MutationFlags {
+                apply: true,
+                dry_run: false,
+                json: true,
+            },
+            force: false,
+            no_wait_api: false,
+        };
+        let resolver = load_bundle_resolver(&state).expect("load USBIP provider bundle");
+        assert_eq!(
+            crate::configured_usbip_claim_count(&resolver, "vm-a")
+                .expect("trusted configured USBIP claim count"),
+            6
+        );
+        assert_eq!(
+            crate::configured_usbip_claim_count(&resolver, "other-vm")
+                .expect("unmapped VM claim count"),
+            0
+        );
+
+        let exact = crate::mapped_runtime_lifecycle_budgets(&state, &strict_request)
+            .expect("exact-limit mapped lifecycle budget");
+        assert_eq!(exact.start, Duration::from_secs(355));
+        assert_eq!(exact.stop, Duration::from_secs(545));
+        assert_eq!(exact.restart, Duration::from_secs(900));
+        assert!(
+            provider_registry::compose_startup_registry_with_policy(&state, &artifact, None)
+                .is_ok(),
+            "an exact 900-second USBIP lifecycle budget must be accepted"
+        );
+
+        let mut relaxed_request = strict_request.clone();
+        relaxed_request.no_wait_api = true;
+        let relaxed = crate::mapped_runtime_lifecycle_budgets(&state, &relaxed_request)
+            .expect("relaxed mapped lifecycle budget");
+        assert_eq!(relaxed.start, Duration::from_secs(340));
+        assert_eq!(relaxed.stop, exact.stop);
+        assert_eq!(relaxed.restart, Duration::from_secs(885));
+
+        configure_provider_test_usbip_claims(&state, 6, 101);
+        let over = crate::mapped_runtime_lifecycle_budgets(&state, &strict_request)
+            .expect("over-limit mapped lifecycle budget");
+        assert_eq!(over.restart, Duration::from_secs(901));
+        assert!(matches!(
+            provider_registry::compose_startup_registry_with_policy(&state, &artifact, None),
+            Err(provider_registry::ProviderCompositionError::LifecycleBudgetExceeded)
+        ));
+    }
+
+    #[test]
+    fn mapped_provider_budget_sums_sequential_nodes_roles_and_restart() {
+        let state = mapped_cloud_hypervisor_state("provider-lifecycle-budget-sum");
+        let resolver = load_bundle_resolver(&state).expect("load provider bundle");
+        let mut dag = resolver.processes.vms[0].clone();
+        let mut second = dag.nodes[0].clone();
+        second.id = d2b_core::processes::NodeId("virtiofsd".to_owned());
+        second.role = ProcessRole::Virtiofsd;
+        dag.nodes.push(second);
+
+        let start = crate::mapped_runtime_start_budget_for_dag(
+            &dag,
+            Duration::from_secs(60),
+            Duration::from_secs(300),
+        )
+        .expect("start budget");
+        let stop =
+            crate::mapped_runtime_stop_budget_for_roles(Duration::from_secs(90), dag.nodes.len())
+                .expect("stop budget");
+        assert_eq!(
+            start,
+            Duration::from_secs((2 * (10 + 300)) + (2 * (10 + 5 + 5 + 5)) + 5)
+        );
+        assert_eq!(stop, Duration::from_secs(90 + (2 * (30 + 30 + 5 + 5)) + 5));
+        let restart = start + stop;
+        assert_eq!(restart, Duration::from_secs(910));
+        assert!(
+            restart.as_millis()
+                > u128::from(d2b_contracts::v2_provider::MAX_PROVIDER_REQUEST_LIFETIME_MS)
+        );
+
+        let exact_limit = start
+            + crate::mapped_runtime_stop_budget_for_roles(Duration::from_secs(80), dag.nodes.len())
+                .expect("exact-limit stop budget");
+        let over_limit = start
+            + crate::mapped_runtime_stop_budget_for_roles(Duration::from_secs(81), dag.nodes.len())
+                .expect("over-limit stop budget");
+        assert_eq!(exact_limit, Duration::from_secs(900));
+        assert_eq!(over_limit, Duration::from_secs(901));
+    }
+
+    #[test]
+    fn startup_rejects_mapped_runtime_whose_full_budget_exceeds_contract() {
+        fn add_budget_role(processes: &mut Value, template: &Value, id: &str, role: &str) {
+            let mut node = template.clone();
+            node["id"] = json!(id);
+            node["role"] = json!(role);
+            node["profile"]["profileId"] = json!(format!("vm-vm-a-{id}"));
+            node["profile"]["cgroupPlacement"]["subtree"] = json!(format!("d2b.slice/vm-a/{id}"));
+            processes["vms"][0]["nodes"]
+                .as_array_mut()
+                .expect("process nodes")
+                .push(node);
+        }
+
+        let state = uninitialized_provider_registry_state("provider-lifecycle-budget-reject");
+        let artifact = local_runtime_provider_artifact("runner:vm:vm-a:role:cloud-hypervisor");
+        install_provider_registry_artifact(&state.config.artifacts, &artifact);
+
+        let mut processes: Value = serde_json::from_slice(
+            &fs::read(&state.config.artifacts.processes_path).expect("read processes"),
+        )
+        .expect("parse processes");
+        let template = processes["vms"][0]["nodes"][0].clone();
+        assert!(
+            provider_registry::compose_startup_registry_with_policy(&state, &artifact, None)
+                .is_ok(),
+            "one mapped role must remain within the lifecycle contract"
+        );
+
+        add_budget_role(&mut processes, &template, "virtiofsd", "virtiofsd");
+        write_json_file(&state.config.artifacts.processes_path, &processes);
+        reseal_provider_test_bundle(&state.config.artifacts);
+
+        assert!(matches!(
+            provider_registry::compose_startup_registry_with_policy(&state, &artifact, None),
+            Err(provider_registry::ProviderCompositionError::LifecycleBudgetExceeded)
+        ));
+    }
+
+    #[test]
+    fn timed_out_mapped_cleanup_blocks_fresh_start_stop_and_usb_requests() {
+        let state = mapped_cloud_hypervisor_state("provider-lifecycle-serialization");
+        let lifecycle = state.op_locks.begin_mapped_lifecycle("vm-a");
+        let (started_tx, started_rx) = mpsc::channel();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let mut handles = Vec::new();
+        let lifecycle_flags = MutationFlags {
+            apply: true,
+            dry_run: false,
+            json: true,
+        };
+        let requests = [
+            (
+                "fresh-start",
+                super::wire::Request::VmStart(VmLifecycleRequest {
+                    vm: "vm-a".to_owned(),
+                    flags: lifecycle_flags.clone(),
+                    force: false,
+                    no_wait_api: false,
+                }),
+            ),
+            (
+                "fresh-stop",
+                super::wire::Request::VmStop(VmLifecycleRequest {
+                    vm: "vm-a".to_owned(),
+                    flags: lifecycle_flags.clone(),
+                    force: false,
+                    no_wait_api: false,
+                }),
+            ),
+            (
+                "usb-style",
+                super::wire::Request::UsbipBind(d2b_contracts::public_wire::UsbipBindCliRequest {
+                    vm: "vm-a".to_owned(),
+                    bus_id: "1-1".to_owned(),
+                    flags: lifecycle_flags,
+                }),
+            ),
+        ];
+        for (label, request) in requests {
+            let state = Arc::clone(&state);
+            let started_tx = started_tx.clone();
+            let entered_tx = entered_tx.clone();
+            handles.push(thread::spawn(move || {
+                started_tx.send(label).expect("record started request");
+                let response = dispatch_request(
+                    &state,
+                    &PeerIdentity {
+                        role: PeerRole::Admin,
+                        uid: 0,
+                    },
+                    request,
+                );
+                entered_tx
+                    .send((label, response))
+                    .expect("record admitted request");
+            }));
+        }
+        drop(started_tx);
+        drop(entered_tx);
+        for _ in 0..3 {
+            started_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("fresh request started");
+        }
+
+        assert!(
+            entered_rx.recv_timeout(Duration::from_millis(30)).is_err(),
+            "fresh operation identities must remain blocked while detached cleanup is active"
+        );
+        drop(lifecycle);
+        let admitted = (0..3)
+            .map(|_| {
+                entered_rx
+                    .recv_timeout(Duration::from_secs(1))
+                    .expect("request admitted after cleanup")
+                    .0
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            admitted,
+            std::collections::BTreeSet::from(["fresh-start", "fresh-stop", "usb-style"])
+        );
+        for handle in handles {
+            handle.join().expect("join per-VM request");
+        }
+    }
+
+    #[test]
+    fn mapped_start_on_connection_thread_uses_one_async_provider_dispatch() {
+        let state = mapped_cloud_hypervisor_state("provider-connection-start");
+        let broker = spawn_single_runner_broker(
+            &state.config.broker_socket_path,
+            VM_RUNNER_ROLE_ID,
+            RunnerRole::CloudHypervisor,
+        );
+        let request = VmLifecycleRequest {
+            vm: "vm-a".to_owned(),
+            flags: MutationFlags {
+                apply: true,
+                dry_run: false,
+                json: true,
+            },
+            force: false,
+            no_wait_api: true,
+        };
+
+        let (response, provider_calls, direct_fallbacks) =
+            dispatch_lifecycle_on_connection_thread(Arc::clone(&state), "vmStart", &request);
+        assert_eq!(
+            super::response_outcome(&response),
+            Some("applied"),
+            "unexpected mapped start response: {response}"
+        );
+        assert_eq!(provider_calls, (1, 0));
+        assert_eq!(direct_fallbacks, 0);
+
+        let child = broker.join().expect("join broker thread");
+        terminate_started_runner(&state, VM_RUNNER_ROLE_ID, child);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mapped_lifecycle_runtime_shutdown_preserves_concurrent_timer_progress() {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            super::run_mapped_lifecycle_blocking(async move {
+                entered_tx.send(()).expect("signal lifecycle entry");
+                release_rx.recv().expect("timer releases lifecycle");
+                42
+            })
+            .expect("dedicated lifecycle runtime completes")
+        });
+
+        let timer = tokio::spawn(async move {
+            entered_rx.await.expect("lifecycle runtime entered");
+            tokio::time::sleep(Duration::ZERO).await;
+            release_tx.send(()).expect("release lifecycle runtime");
+        });
+
+        timer.await.expect("concurrent timer task");
+        assert_eq!(
+            worker.join().expect("lifecycle worker shuts down cleanly"),
+            42
+        );
+    }
+
+    #[test]
+    fn pidfd_getfd_duplicate_is_atomically_close_on_exec() {
+        let (source, _peer) = socketpair(
+            AddressFamily::Unix,
+            SockType::Stream,
+            None,
+            SockFlag::empty(),
+        )
+        .expect("create source descriptor");
+        let duplicated =
+            super::duplicate_fd_cloexec(source.as_raw_fd(), "verify pidfd_getfd close-on-exec")
+                .expect("duplicate descriptor through pidfd_getfd");
+        let flags = nix::fcntl::fcntl(duplicated.as_raw_fd(), nix::fcntl::FcntlArg::F_GETFD)
+            .expect("read duplicated descriptor flags");
+        assert!(
+            nix::fcntl::FdFlag::from_bits_truncate(flags).contains(nix::fcntl::FdFlag::FD_CLOEXEC)
+        );
+    }
+
+    fn count_named_memfd_descriptors(marker: &str) -> usize {
+        fs::read_dir("/proc/self/fd")
+            .expect("read process descriptor table")
+            .filter_map(Result::ok)
+            .filter_map(|entry| fs::read_link(entry.path()).ok())
+            .filter(|target| target.to_string_lossy().contains(marker))
+            .count()
+    }
+
+    #[test]
+    fn scm_rights_receive_accepts_more_than_eight_and_linux_maximum() {
+        for (count, receive_credentials) in [(9, false), (super::LINUX_SCM_MAX_FD, true)] {
+            let (receiver, sender) = socketpair(
+                AddressFamily::Unix,
+                SockType::SeqPacket,
+                None,
+                SockFlag::SOCK_CLOEXEC,
+            )
+            .expect("create SCM_RIGHTS socketpair");
+            if receive_credentials {
+                setsockopt(&receiver, sockopt::PassCred, &true)
+                    .expect("enable credential ancillary message");
+            }
+            let marker = format!(
+                "d2b-scm-rights-capacity-{}-{}",
+                count,
+                NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed)
+            );
+            let source = rustix::fs::memfd_create(marker.as_str(), rustix::fs::MemfdFlags::CLOEXEC)
+                .expect("create descriptor source");
+            let sent_fds = vec![source.as_raw_fd(); count];
+            assert_eq!(count_named_memfd_descriptors(&marker), 1);
+
+            write_test_json_frame_with_fds(
+                sender.as_raw_fd(),
+                &json!({ "kind": "capacity-test" }),
+                &sent_fds,
+            )
+            .expect("send SCM_RIGHTS descriptors");
+            let (_, received_fds) =
+                super::read_frame_with_fds(&receiver).expect("receive SCM_RIGHTS descriptors");
+            assert_eq!(received_fds.len(), count);
+            assert_eq!(count_named_memfd_descriptors(&marker), count + 1);
+            for fd in &received_fds {
+                assert!(
+                    super::fd_is_cloexec(*fd, "verify capacity-test descriptor")
+                        .expect("read descriptor flags")
+                );
+            }
+            super::close_received_fds(&received_fds);
+            assert_eq!(
+                count_named_memfd_descriptors(&marker),
+                1,
+                "receiver must release every installed descriptor"
+            );
+        }
+    }
+
+    #[test]
+    fn scm_rights_truncation_fails_closed_without_descriptor_growth() {
+        let (receiver, sender) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("create SCM_RIGHTS socketpair");
+        setsockopt(&receiver, sockopt::PassCred, &true)
+            .expect("enable credential ancillary message");
+        let marker = format!(
+            "d2b-scm-rights-truncation-{}",
+            NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed)
+        );
+        let source = rustix::fs::memfd_create(marker.as_str(), rustix::fs::MemfdFlags::CLOEXEC)
+            .expect("create descriptor source");
+        let sent_fds = vec![source.as_raw_fd(); 32];
+        assert_eq!(count_named_memfd_descriptors(&marker), 1);
+
+        write_test_json_frame_with_fds(
+            sender.as_raw_fd(),
+            &json!({ "kind": "truncation-test" }),
+            &sent_fds,
+        )
+        .expect("send SCM_RIGHTS descriptors");
+        let error = super::read_frame_with_fds_capacity(&receiver, 8)
+            .expect_err("truncated ancillary data must fail closed");
+        assert!(matches!(
+            error,
+            super::TypedError::InternalIo { ref detail, .. }
+                if detail == "SCM_RIGHTS ancillary data was truncated"
+        ));
+        assert_eq!(
+            count_named_memfd_descriptors(&marker),
+            1,
+            "truncation must close every descriptor installed by recvmsg"
+        );
+    }
+
+    #[test]
+    fn scm_rights_receive_is_close_on_exec_during_concurrent_exec() {
+        let (receiver, sender) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("create SCM_RIGHTS socketpair");
+        let source = rustix::fs::memfd_create(
+            "d2b-scm-rights-cloexec-test",
+            rustix::fs::MemfdFlags::CLOEXEC,
+        )
+        .expect("create close-on-exec source descriptor");
+        let (fd_tx, fd_rx) = mpsc::sync_channel(1);
+        let (leak_tx, leak_rx) = mpsc::sync_channel(1);
+        let spawner = thread::spawn(move || {
+            let received_fd = fd_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("receive descriptor number");
+            let output = Command::new("readlink")
+                .arg(format!("/proc/self/fd/{received_fd}"))
+                .output()
+                .expect("exec descriptor probe");
+            leak_tx
+                .send(output.status.success())
+                .expect("publish descriptor leak result");
+        });
+        super::set_received_fd_test_hook(move |fds| {
+            assert_eq!(fds.len(), 1);
+            fd_tx.send(fds[0]).expect("publish received descriptor");
+            assert!(
+                !leak_rx
+                    .recv_timeout(Duration::from_secs(1))
+                    .expect("receive descriptor leak result"),
+                "received descriptor leaked across concurrent exec"
+            );
+        });
+
+        write_test_json_frame_with_fds(
+            sender.as_raw_fd(),
+            &json!({ "kind": "cloexec-test" }),
+            &[source.as_raw_fd()],
+        )
+        .expect("send SCM_RIGHTS descriptor");
+        let (_, received_fds) =
+            super::read_frame_with_fds(&receiver).expect("receive SCM_RIGHTS descriptor");
+        assert_eq!(received_fds.len(), 1);
+        assert!(
+            super::fd_is_cloexec(received_fds[0], "verify SCM_RIGHTS close-on-exec")
+                .expect("read received descriptor flags")
+        );
+        super::close_received_fds(&received_fds);
+        spawner.join().expect("join concurrent exec probe");
+    }
+
+    #[test]
+    fn mapped_stop_on_connection_thread_awaits_graceful_path_once() {
+        let state = mapped_cloud_hypervisor_state("provider-connection-stop");
+        let _child = register_sleep_runner_for_role(
+            &state,
+            "vm-a",
+            VM_RUNNER_ROLE_ID,
+            RunnerRole::CloudHypervisor,
+            false,
+        );
+        let request = VmLifecycleRequest {
+            vm: "vm-a".to_owned(),
+            flags: MutationFlags {
+                apply: true,
+                dry_run: false,
+                json: true,
+            },
+            force: false,
+            no_wait_api: true,
+        };
+
+        let (response, provider_calls, direct_fallbacks) =
+            dispatch_lifecycle_on_connection_thread(state, "vmStop", &request);
+        assert_eq!(super::response_outcome(&response), Some("applied"));
+        assert_eq!(provider_calls, (0, 1));
+        assert_eq!(direct_fallbacks, 0);
+    }
+
+    #[test]
+    fn mapped_restart_on_connection_thread_uses_each_provider_method_once() {
+        let state = mapped_cloud_hypervisor_state("provider-connection-restart");
+        let _stopped_child = register_sleep_runner_for_role(
+            &state,
+            "vm-a",
+            VM_RUNNER_ROLE_ID,
+            RunnerRole::CloudHypervisor,
+            false,
+        );
+        let broker = spawn_single_runner_broker(
+            &state.config.broker_socket_path,
+            VM_RUNNER_ROLE_ID,
+            RunnerRole::CloudHypervisor,
+        );
+        let request = VmLifecycleRequest {
+            vm: "vm-a".to_owned(),
+            flags: MutationFlags {
+                apply: true,
+                dry_run: false,
+                json: true,
+            },
+            force: false,
+            no_wait_api: true,
+        };
+
+        let (response, provider_calls, direct_fallbacks) =
+            dispatch_lifecycle_on_connection_thread(Arc::clone(&state), "vmRestart", &request);
+        assert_eq!(super::response_outcome(&response), Some("applied"));
+        assert_eq!(provider_calls, (1, 1));
+        assert_eq!(direct_fallbacks, 0);
+
+        let child = broker.join().expect("join broker thread");
+        terminate_started_runner(&state, VM_RUNNER_ROLE_ID, child);
+    }
+
+    #[test]
+    fn mapped_cloud_hypervisor_and_qemu_starts_use_provider_adapters_only() {
+        for (label, kind, role_id) in [
+            (
+                "provider-route-cloud-hypervisor",
+                LocalRuntimeKind::CloudHypervisor,
+                "cloud-hypervisor",
+            ),
+            (
+                "provider-route-qemu-media",
+                LocalRuntimeKind::QemuMedia,
+                "qemu-media",
+            ),
+        ] {
+            let state = uninitialized_provider_registry_state(label);
+            let artifact = local_runtime_provider_artifact_for(
+                kind,
+                &format!("runner:vm:vm-a:role:{role_id}"),
+            );
+            install_provider_registry_artifact(&state.config.artifacts, &artifact);
+            block_on_future(activate_provider_registry(&state, None))
+                .expect("activate mapped runtime");
+            provider_effects::reset_test_runtime_lifecycle_calls();
+            reset_test_direct_runtime_fallbacks();
+
+            let result = dispatch_provider_or_broker_vm_start(
+                &state,
+                VmLifecycleRequest {
+                    vm: "vm-a".to_owned(),
+                    flags: MutationFlags {
+                        apply: true,
+                        dry_run: false,
+                        json: true,
+                    },
+                    force: false,
+                    no_wait_api: true,
+                },
+                BrokerCallerRole::AdminUid { uid: 0 },
+            );
+            assert!(
+                match &result {
+                    Ok(response) => super::response_outcome(response) != Some("applied"),
+                    Err(_) => true,
+                },
+                "unreachable broker must fail closed"
+            );
+            assert_eq!(
+                provider_effects::test_runtime_lifecycle_calls(),
+                (1, 0),
+                "{kind:?} start must enter the retained runtime provider adapter"
+            );
+            assert_eq!(
+                test_direct_runtime_fallbacks(),
+                0,
+                "{kind:?} mapped start must not enter the unmapped fallback"
+            );
+        }
+    }
+
+    #[test]
+    fn mapped_cloud_hypervisor_and_qemu_stops_use_provider_adapters_only() {
+        for (label, kind, role_id, registration_role_id, runner_role) in [
+            (
+                "provider-stop-cloud-hypervisor",
+                LocalRuntimeKind::CloudHypervisor,
+                "cloud-hypervisor",
+                VM_RUNNER_ROLE_ID,
+                RunnerRole::CloudHypervisor,
+            ),
+            (
+                "provider-stop-qemu-media",
+                LocalRuntimeKind::QemuMedia,
+                "qemu-media",
+                "qemu-media",
+                RunnerRole::QemuMedia,
+            ),
+        ] {
+            let state = uninitialized_provider_registry_state(label);
+            let artifact = local_runtime_provider_artifact_for(
+                kind,
+                &format!("runner:vm:vm-a:role:{role_id}"),
+            );
+            install_provider_registry_artifact(&state.config.artifacts, &artifact);
+            block_on_future(activate_provider_registry(&state, None))
+                .expect("activate mapped runtime");
+            let _child = register_sleep_runner_for_role(
+                &state,
+                "vm-a",
+                registration_role_id,
+                runner_role,
+                false,
+            );
+            provider_effects::reset_test_runtime_lifecycle_calls();
+            reset_test_direct_runtime_fallbacks();
+
+            let _ = dispatch_provider_or_broker_vm_stop_as(
+                &state,
+                VmLifecycleRequest {
+                    vm: "vm-a".to_owned(),
+                    flags: MutationFlags {
+                        apply: true,
+                        dry_run: false,
+                        json: true,
+                    },
+                    force: true,
+                    no_wait_api: true,
+                },
+                BrokerCallerRole::AdminUid { uid: 0 },
+            );
+            assert_eq!(
+                provider_effects::test_runtime_lifecycle_calls(),
+                (0, 1),
+                "{kind:?} stop must enter the retained runtime provider adapter"
+            );
+            assert_eq!(
+                test_direct_runtime_fallbacks(),
+                0,
+                "{kind:?} mapped stop must not enter the unmapped fallback"
+            );
+        }
+    }
+
+    #[test]
+    fn mapped_host_shutdown_stop_and_restart_use_provider_adapters() {
+        let state = uninitialized_provider_registry_state("provider-route-host-shutdown");
+        let artifact = local_runtime_provider_artifact("runner:vm:vm-a:role:cloud-hypervisor");
+        install_provider_registry_artifact(&state.config.artifacts, &artifact);
+        block_on_future(activate_provider_registry(&state, None)).expect("activate mapped runtime");
+        provider_effects::reset_test_runtime_lifecycle_calls();
+        reset_test_direct_runtime_fallbacks();
+        let request = VmLifecycleRequest {
+            vm: "vm-a".to_owned(),
+            flags: MutationFlags {
+                apply: true,
+                dry_run: false,
+                json: true,
+            },
+            force: false,
+            no_wait_api: true,
+        };
+
+        let stopped = dispatch_request(
+            &state,
+            &host_shutdown_peer(),
+            super::wire::Request::VmStop(request.clone()),
+        )
+        .expect("host shutdown routes mapped stop");
+        assert_eq!(super::response_outcome(&stopped), Some("applied"));
+        assert_eq!(provider_effects::test_runtime_lifecycle_calls(), (0, 1));
+        assert_eq!(test_direct_runtime_fallbacks(), 0);
+
+        provider_effects::reset_test_runtime_lifecycle_calls();
+        let restarted = dispatch_provider_or_broker_vm_restart_as(
+            &state,
+            request,
+            BrokerCallerRole::AdminUid { uid: 0 },
+        );
+        assert!(
+            match &restarted {
+                Ok(response) => super::response_outcome(response) != Some("applied"),
+                Err(_) => true,
+            },
+            "start half must fail closed at the unreachable broker"
+        );
+        assert_eq!(provider_effects::test_runtime_lifecycle_calls(), (1, 1));
+        assert_eq!(test_direct_runtime_fallbacks(), 0);
+    }
+
+    #[test]
+    fn unmapped_runtime_start_preserves_direct_compatibility_path() {
+        let state = test_state_with_broker_socket(unreachable_broker_socket_path(
+            "provider-route-unmapped",
+        ));
+        provider_effects::reset_test_runtime_lifecycle_calls();
+        reset_test_direct_runtime_fallbacks();
+        let result = dispatch_provider_or_broker_vm_start(
+            &state,
+            VmLifecycleRequest {
+                vm: "vm-a".to_owned(),
+                flags: MutationFlags {
+                    apply: true,
+                    dry_run: false,
+                    json: true,
+                },
+                force: false,
+                no_wait_api: true,
+            },
+            BrokerCallerRole::AdminUid { uid: 0 },
+        );
+        assert!(result.is_err());
+        assert_eq!(provider_effects::test_runtime_lifecycle_calls(), (0, 0));
+        assert_eq!(test_direct_runtime_fallbacks(), 1);
+    }
+
+    #[tokio::test]
+    async fn provider_registry_activation_rejects_missing_and_unresolvable_artifacts() {
+        let missing = uninitialized_provider_registry_state("provider-registry-missing");
+        let mut bundle: Value = serde_json::from_slice(
+            &fs::read(&missing.config.artifacts.bundle_path).expect("read bundle"),
+        )
+        .expect("parse bundle");
+        bundle["schemaVersion"] = json!("v1");
+        bundle
+            .as_object_mut()
+            .expect("bundle object")
+            .remove("providerRegistryV2Path");
+        write_json_file(&missing.config.artifacts.bundle_path, &bundle);
+        assert!(activate_provider_registry(&missing, None).await.is_err());
+        assert!(missing.provider_registry().is_err());
+
+        let unresolved = uninitialized_provider_registry_state("provider-registry-unresolved");
+        let artifact = local_runtime_provider_artifact("runner:vm:vm-a:role:missing-runtime");
+        install_provider_registry_artifact(&unresolved.config.artifacts, &artifact);
+        assert!(activate_provider_registry(&unresolved, None).await.is_err());
+    }
+
+    #[test]
+    fn provider_activation_rejects_non_v12_or_hashless_bundle_contracts() {
+        for defect in [
+            "wrong-version",
+            "wrong-schema",
+            "missing-artifact-hashes",
+            "missing-provider-hash",
+            "missing-bundle-hash",
+        ] {
+            let state = uninitialized_provider_registry_state(&format!("provider-bundle-{defect}"));
+            let artifact = local_runtime_provider_artifact("runner:vm:vm-a:role:cloud-hypervisor");
+            install_provider_registry_artifact(&state.config.artifacts, &artifact);
+            let mut bundle: Value = serde_json::from_slice(
+                &fs::read(&state.config.artifacts.bundle_path).expect("read bundle"),
+            )
+            .expect("parse bundle");
+            match defect {
+                "wrong-version" => bundle["bundleVersion"] = json!(11),
+                "wrong-schema" => bundle["schemaVersion"] = json!("v1"),
+                "missing-artifact-hashes" => {
+                    bundle
+                        .as_object_mut()
+                        .expect("bundle object")
+                        .remove("artifactHashes");
+                }
+                "missing-provider-hash" => {
+                    let provider_path = bundle["providerRegistryV2Path"]
+                        .as_str()
+                        .expect("provider path")
+                        .to_owned();
+                    bundle["artifactHashes"]
+                        .as_object_mut()
+                        .expect("artifact hash object")
+                        .remove(&provider_path);
+                }
+                "missing-bundle-hash" => {
+                    bundle
+                        .as_object_mut()
+                        .expect("bundle object")
+                        .remove("bundleHash");
+                }
+                _ => unreachable!(),
+            }
+            if !matches!(
+                defect,
+                "missing-artifact-hashes" | "missing-provider-hash" | "missing-bundle-hash"
+            ) {
+                seal_provider_test_bundle(&state.config.artifacts, &mut bundle);
+            }
+            write_json_file(&state.config.artifacts.bundle_path, &bundle);
+            let error = block_on_future(activate_provider_registry(&state, None))
+                .expect_err("incompatible provider bundle must fail startup");
+            assert!(
+                matches!(error, super::TypedError::InternalConfig { .. }),
+                "{defect} must fail as startup configuration"
+            );
+            assert!(state.provider_registry().is_err());
+        }
+    }
+
+    #[test]
+    fn provider_activation_rejects_tampered_registry_artifact() {
+        let state = uninitialized_provider_registry_state("provider-registry-tampered");
+        let artifact = local_runtime_provider_artifact("runner:vm:vm-a:role:cloud-hypervisor");
+        let artifact_path = install_provider_registry_artifact(&state.config.artifacts, &artifact);
+        write_json_file(
+            &artifact_path,
+            &serde_json::to_value(local_runtime_provider_artifact(
+                "runner:vm:vm-a:role:wrong-runner",
+            ))
+            .expect("serialize tampered provider artifact"),
+        );
+
+        let error = block_on_future(activate_provider_registry(&state, None))
+            .expect_err("provider artifact hash mismatch must fail startup");
+        assert!(matches!(error, super::TypedError::InternalConfig { .. }));
+        assert!(state.provider_registry().is_err());
+    }
+
+    #[test]
+    fn provider_activation_authenticates_process_identity_and_explicit_runner_source() {
+        for defect in ["workload-identity", "legacy-runner"] {
+            let state =
+                uninitialized_provider_registry_state(&format!("provider-process-{defect}"));
+            let artifact = local_runtime_provider_artifact("runner:vm:vm-a:role:cloud-hypervisor");
+            install_provider_registry_artifact(&state.config.artifacts, &artifact);
+            let mut processes: Value = serde_json::from_slice(
+                &fs::read(&state.config.artifacts.processes_path).expect("read processes"),
+            )
+            .expect("parse processes");
+            match defect {
+                "workload-identity" => {
+                    processes["vms"][0]["workloadIdentity"]["workloadId"] = json!("other");
+                }
+                "legacy-runner" => {
+                    processes["vms"][0]["nodes"][0]
+                        .as_object_mut()
+                        .expect("process node")
+                        .remove("binaryPath");
+                    processes["vms"][0]["nodes"][0]
+                        .as_object_mut()
+                        .expect("process node")
+                        .remove("argv");
+                }
+                _ => unreachable!(),
+            }
+            write_json_file(&state.config.artifacts.processes_path, &processes);
+            reseal_provider_test_bundle(&state.config.artifacts);
+            let error = block_on_future(activate_provider_registry(&state, None))
+                .expect_err("stale process mapping must fail startup");
+            let detail = format!("{error:?}");
+            assert!(
+                detail.contains(if defect == "legacy-runner" {
+                    "legacy runner fallback"
+                } else {
+                    "explicit process workload identity"
+                }),
+                "typed activation error identifies {defect}: {detail}"
+            );
+            assert!(state.provider_registry().is_err());
         }
     }
 
@@ -24674,6 +27081,54 @@ mod broker_dispatch_tests {
         assert!(matches!(
             err,
             crate::typed_error::TypedError::InternalBrokerTimeout { .. }
+        ));
+    }
+
+    #[test]
+    fn broker_fd_dispatch_budget_uses_one_checked_deadline() {
+        let path = Path::new("/run/d2b/priv.sock");
+        let start = Instant::now();
+        let timeout = Duration::from_secs(30);
+        let deadline = super::checked_broker_deadline(start, timeout, path)
+            .expect("deadline is representable");
+
+        assert_eq!(
+            super::broker_remaining_at(deadline, start, path).expect("connect budget"),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            super::broker_remaining_at(
+                deadline,
+                start.checked_add(Duration::from_secs(7)).unwrap(),
+                path,
+            )
+            .expect("write budget"),
+            Duration::from_secs(23)
+        );
+        assert_eq!(
+            super::broker_remaining_at(
+                deadline,
+                start.checked_add(Duration::from_secs(29)).unwrap(),
+                path,
+            )
+            .expect("read budget"),
+            Duration::from_secs(1)
+        );
+    }
+
+    #[test]
+    fn broker_fd_dispatch_deadline_fails_closed_for_zero_and_overflow() {
+        let path = Path::new("/run/d2b/priv.sock");
+        let start = Instant::now();
+        let exhausted =
+            super::checked_broker_deadline(start, Duration::ZERO, path).expect("zero deadline");
+        assert!(matches!(
+            super::broker_remaining_at(exhausted, start, path),
+            Err(crate::typed_error::TypedError::InternalBrokerTimeout { .. })
+        ));
+        assert!(matches!(
+            super::checked_broker_deadline(start, Duration::MAX, path),
+            Err(crate::typed_error::TypedError::InternalBrokerTimeout { .. })
         ));
     }
 
@@ -25936,6 +28391,9 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
+            provider_registry: initialized_provider_registry(
+                crate::provider_registry::StartupProviderRegistry::Empty,
+            ),
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
@@ -26160,6 +28618,9 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
+            provider_registry: initialized_provider_registry(
+                crate::provider_registry::StartupProviderRegistry::Empty,
+            ),
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
@@ -26418,6 +28879,9 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
+            provider_registry: initialized_provider_registry(
+                crate::provider_registry::StartupProviderRegistry::Empty,
+            ),
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
@@ -28312,6 +30776,9 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
+            provider_registry: initialized_provider_registry(
+                crate::provider_registry::StartupProviderRegistry::Empty,
+            ),
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
@@ -29247,6 +31714,9 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
+            provider_registry: initialized_provider_registry(
+                crate::provider_registry::StartupProviderRegistry::Empty,
+            ),
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
@@ -29372,6 +31842,9 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
+            provider_registry: initialized_provider_registry(
+                crate::provider_registry::StartupProviderRegistry::Empty,
+            ),
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),

@@ -236,6 +236,13 @@ pub struct Registry {
     started_at: Instant,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LocalObservabilityMetrics {
+    pub lifecycle_transitions: u64,
+    pub operation_total: u64,
+    pub operation_duration_ms: u64,
+}
+
 impl Registry {
     pub fn new() -> Self {
         Self {
@@ -409,11 +416,49 @@ impl Registry {
         }
         out
     }
+
+    pub(crate) fn local_observability_projection(&self) -> LocalObservabilityMetrics {
+        let registry = self.inner.lock().expect("metrics registry poisoned");
+        let lifecycle_transitions = registry
+            .counters
+            .iter()
+            .filter(|((name, _), _)| {
+                matches!(
+                    *name,
+                    "d2b_daemon_vm_shutdown_total" | "d2b_daemon_workload_lifecycle_total"
+                )
+            })
+            .map(|(_, sample)| finite_nonnegative_u64(sample.value))
+            .fold(0_u64, u64::saturating_add);
+        let operation_total = registry
+            .counters
+            .values()
+            .map(|sample| finite_nonnegative_u64(sample.value))
+            .fold(0_u64, u64::saturating_add);
+        let operation_duration_ms = registry
+            .histograms
+            .values()
+            .map(|sample| finite_nonnegative_u64(sample.sum * 1_000.0))
+            .fold(0_u64, u64::saturating_add);
+        LocalObservabilityMetrics {
+            lifecycle_transitions,
+            operation_total,
+            operation_duration_ms,
+        }
+    }
 }
 
 impl Default for Registry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn finite_nonnegative_u64(value: f64) -> u64 {
+    if value.is_finite() && value > 0.0 {
+        value.min(u64::MAX as f64) as u64
+    } else {
+        0
     }
 }
 

@@ -1,5 +1,9 @@
 use crate::types::MediaRef;
-use crate::{FeatureFlag, Version, guest_wire::ExecState};
+use crate::{
+    FeatureFlag, Version,
+    guest_wire::ExecState,
+    v2_provider::{Fingerprint, ObservabilityExportFormat, OperationId as ProviderOperationId},
+};
 pub use d2b_core::audio_policy::LevelPercent;
 use d2b_core::{
     error::Error,
@@ -19,6 +23,16 @@ use schemars::{
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+pub const OBSERVABILITY_EXPORT_INSPECT_MAX_BYTES: u32 = 512 * 1024;
+const OBSERVABILITY_EXPORT_INSPECT_ENVELOPE_MARGIN: usize = 4 * 1024;
+const OBSERVABILITY_EXPORT_INSPECT_MAX_ENCODED_BYTES: usize =
+    (OBSERVABILITY_EXPORT_INSPECT_MAX_BYTES as usize).div_ceil(3) * 4;
+const _: () = assert!(
+    OBSERVABILITY_EXPORT_INSPECT_MAX_ENCODED_BYTES + OBSERVABILITY_EXPORT_INSPECT_ENVELOPE_MARGIN
+        < crate::MAX_FRAME_SIZE,
+    "observability export chunk plus envelope must fit the public socket frame"
+);
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", content = "payload")]
 pub enum PublicRequest {
@@ -32,6 +46,8 @@ pub enum PublicRequest {
     Status(StatusRequest),
     #[serde(rename = "audit")]
     Audit(AuditRequest),
+    #[serde(rename = "observability export inspect")]
+    ObservabilityExportInspect(ObservabilityExportInspectRequest),
     #[serde(rename = "host check")]
     HostCheck(HostCheckRequest),
     // Mutating-verb wire surface. Each variant carries the dry-run /
@@ -153,6 +169,8 @@ pub enum PublicResponse {
     Status(StatusResponse),
     #[serde(rename = "audit")]
     Audit(AuditResponse),
+    #[serde(rename = "observability export inspect")]
+    ObservabilityExportInspect(ObservabilityExportInspectResponse),
     #[serde(rename = "host check")]
     HostCheck(HostCheckResponse),
     #[serde(rename = "keys list")]
@@ -450,6 +468,17 @@ pub struct AuditRequest {
     #[serde(default)]
     pub format: AuditFormat,
     pub since: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ObservabilityExportInspectRequest {
+    pub operation_id: ProviderOperationId,
+    #[serde(default)]
+    #[schemars(range(max = 1048576))]
+    pub offset: u32,
+    #[schemars(range(min = 1, max = 524288))]
+    pub max_bytes: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -2187,6 +2216,37 @@ pub struct AuditResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(
+    tag = "state",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum ObservabilityExportInspectResponse {
+    Missing {
+        #[schemars(rename = "operationId")]
+        operation_id: ProviderOperationId,
+    },
+    Available {
+        #[schemars(rename = "operationId")]
+        operation_id: ProviderOperationId,
+        format: ObservabilityExportFormat,
+        digest: Fingerprint,
+        #[schemars(rename = "encodedBytes")]
+        #[schemars(range(max = 1048576))]
+        encoded_bytes: u32,
+        #[schemars(range(max = 1048576))]
+        offset: u32,
+        #[schemars(rename = "returnedBytes")]
+        #[schemars(range(max = 524288))]
+        returned_bytes: u32,
+        #[schemars(rename = "bytesBase64")]
+        bytes_base64: String,
+        complete: bool,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HostCheckResponse {
     pub exit_code: u8,
@@ -2709,8 +2769,12 @@ fn default_true() -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        LevelPercent, MutationFlags, PublicRequest, PublicResponse, RuntimeSummary,
-        VmLifecycleRequest, VmLifecycleState,
+        LevelPercent, MutationFlags, OBSERVABILITY_EXPORT_INSPECT_MAX_BYTES,
+        OBSERVABILITY_EXPORT_INSPECT_MAX_ENCODED_BYTES, ObservabilityExportInspectResponse,
+        PublicRequest, PublicResponse, RuntimeSummary, VmLifecycleRequest, VmLifecycleState,
+    };
+    use crate::v2_provider::{
+        Fingerprint, ObservabilityExportFormat, OperationId as ProviderOperationId,
     };
     use crate::{FeatureFlag, Version, decode_frame, encode_frame};
     use d2b_core::error::Error;
@@ -2723,6 +2787,55 @@ mod tests {
     fn vm_lifecycle_keeps_booted_variant() {
         let encoded = serde_json::to_string(&VmLifecycleState::Booted).expect("serializes");
         assert_eq!(encoded, "\"Booted\"");
+    }
+
+    #[test]
+    fn observability_export_inspection_is_closed_and_frame_bounded() {
+        let max_response = ObservabilityExportInspectResponse::Available {
+            operation_id: ProviderOperationId::parse("export-operation").expect("operation id"),
+            format: ObservabilityExportFormat::JsonLines,
+            digest: Fingerprint::parse("a".repeat(64)).expect("digest"),
+            encoded_bytes: OBSERVABILITY_EXPORT_INSPECT_MAX_BYTES,
+            offset: 0,
+            returned_bytes: OBSERVABILITY_EXPORT_INSPECT_MAX_BYTES,
+            bytes_base64: "A".repeat(OBSERVABILITY_EXPORT_INSPECT_MAX_ENCODED_BYTES),
+            complete: true,
+        };
+        assert!(
+            serde_json::to_vec(&max_response)
+                .expect("serialize maximum inspection response")
+                .len()
+                < crate::MAX_FRAME_SIZE
+        );
+        let response = ObservabilityExportInspectResponse::Available {
+            operation_id: ProviderOperationId::parse("export-operation").expect("operation id"),
+            format: ObservabilityExportFormat::JsonLines,
+            digest: Fingerprint::parse("a".repeat(64)).expect("digest"),
+            encoded_bytes: OBSERVABILITY_EXPORT_INSPECT_MAX_BYTES,
+            offset: 0,
+            returned_bytes: 7,
+            bytes_base64: "Ym91bmRlZA==".to_owned(),
+            complete: false,
+        };
+        let value = serde_json::to_value(&response).expect("serialize inspection");
+        assert_eq!(value["state"], "available");
+        assert_eq!(value["format"], "json-lines");
+        assert_eq!(
+            value["encodedBytes"],
+            OBSERVABILITY_EXPORT_INSPECT_MAX_BYTES
+        );
+        assert_eq!(value["bytesBase64"], "Ym91bmRlZA==");
+        assert!(value.get("path").is_none());
+        let decoded: ObservabilityExportInspectResponse =
+            serde_json::from_value(value).expect("closed inspection round trip");
+        assert_eq!(decoded, response);
+
+        let mut unknown = serde_json::to_value(&response).expect("serialize inspection");
+        unknown["path"] = serde_json::json!("/private");
+        assert!(
+            serde_json::from_value::<ObservabilityExportInspectResponse>(unknown).is_err(),
+            "filesystem paths are not part of the closed response"
+        );
     }
 
     #[test]

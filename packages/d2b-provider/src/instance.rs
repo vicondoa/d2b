@@ -5,11 +5,44 @@ use d2b_contracts::{
     v2_provider::{
         AudioProvider, CredentialProvider, DeviceProvider, DisplayProvider, InfrastructureProvider,
         NetworkProvider, ObservabilityProvider, Provider, ProviderCapabilitySet,
-        ProviderDescriptor, RuntimeProvider, StorageProvider, SubstrateProvider, TransportProvider,
+        ProviderDescriptor, ProviderMethod, RuntimeProvider, StorageProvider, SubstrateProvider,
+        TransportProvider,
     },
 };
 
 use crate::FactoryError;
+
+pub const fn provider_method_is_dispatchable(
+    method: d2b_contracts::v2_provider::ProviderMethod,
+) -> bool {
+    !matches!(
+        method,
+        d2b_contracts::v2_provider::ProviderMethod::RuntimeExecute
+    )
+}
+
+pub fn provider_capabilities_are_dispatchable(capabilities: &ProviderCapabilitySet) -> bool {
+    capabilities
+        .as_slice()
+        .iter()
+        .all(|capability| provider_method_is_dispatchable(capability.0))
+}
+
+pub const fn provider_inspection_method(provider_type: ProviderType) -> ProviderMethod {
+    match provider_type {
+        ProviderType::Runtime => ProviderMethod::RuntimeInspect,
+        ProviderType::Infrastructure => ProviderMethod::InfrastructureInspect,
+        ProviderType::Transport => ProviderMethod::TransportInspect,
+        ProviderType::Substrate => ProviderMethod::SubstrateCheck,
+        ProviderType::Credential => ProviderMethod::CredentialStatus,
+        ProviderType::Display => ProviderMethod::DisplayInspect,
+        ProviderType::Network => ProviderMethod::NetworkInspect,
+        ProviderType::Storage => ProviderMethod::StorageInspect,
+        ProviderType::Device => ProviderMethod::DeviceInspect,
+        ProviderType::Audio => ProviderMethod::AudioInspect,
+        ProviderType::Observability => ProviderMethod::ObservabilityStatus,
+    }
+}
 
 #[derive(Clone)]
 pub enum ProviderInstance {
@@ -82,12 +115,6 @@ impl ProviderInstance {
             Self::Audio(provider) => provider.capabilities(),
             Self::Observability(provider) => provider.capabilities(),
         }
-    }
-
-    pub fn validate_capability_dispatch(&self) -> bool {
-        !self
-            .capabilities()
-            .contains_method(d2b_contracts::v2_provider::ProviderMethod::RuntimeExecute)
     }
 
     pub fn provider(&self) -> &dyn Provider {

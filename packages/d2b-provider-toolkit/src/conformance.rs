@@ -1,10 +1,7 @@
 use std::{error::Error, fmt};
 
-use d2b_contracts::{
-    v2_identity::ProviderType,
-    v2_provider::{ProviderDescriptor, ProviderFailure, ProviderMethod},
-};
-use d2b_provider::ProviderInstance;
+use d2b_contracts::v2_provider::{ProviderDescriptor, ProviderFailure, ProviderMethod};
+use d2b_provider::{ProviderInstance, provider_inspection_method};
 
 use crate::Fixture;
 
@@ -15,6 +12,7 @@ pub enum ConformanceError {
     FixtureMismatch,
     Provider(Box<ProviderFailure>),
     Observation,
+    ObservabilityQueryResult,
 }
 
 impl fmt::Debug for ConformanceError {
@@ -25,6 +23,7 @@ impl fmt::Debug for ConformanceError {
             Self::FixtureMismatch => formatter.write_str("FixtureMismatch"),
             Self::Provider(error) => formatter.debug_tuple("Provider").field(error).finish(),
             Self::Observation => formatter.write_str("Observation"),
+            Self::ObservabilityQueryResult => formatter.write_str("ObservabilityQueryResult"),
         }
     }
 }
@@ -37,6 +36,7 @@ impl fmt::Display for ConformanceError {
             Self::FixtureMismatch => "provider conformance fixture mismatch",
             Self::Provider(_) => "provider conformance call failed",
             Self::Observation => "provider observation conformance failed",
+            Self::ObservabilityQueryResult => "provider query-result conformance failed",
         })
     }
 }
@@ -74,7 +74,7 @@ pub async fn check_provider_conformance(
     if descriptor != fixture.descriptor {
         return Err(ConformanceError::FixtureMismatch);
     }
-    let method = inspection_method(descriptor.provider_type());
+    let method = provider_inspection_method(descriptor.provider_type());
     let request = fixture
         .request(method)
         .map_err(|_| ConformanceError::FixtureMismatch)?;
@@ -111,21 +111,16 @@ pub async fn check_provider_conformance(
     {
         return Err(ConformanceError::Observation);
     }
-    Ok(())
-}
-
-const fn inspection_method(provider_type: ProviderType) -> ProviderMethod {
-    match provider_type {
-        ProviderType::Runtime => ProviderMethod::RuntimeInspect,
-        ProviderType::Infrastructure => ProviderMethod::InfrastructureInspect,
-        ProviderType::Transport => ProviderMethod::TransportInspect,
-        ProviderType::Substrate => ProviderMethod::SubstrateCheck,
-        ProviderType::Credential => ProviderMethod::CredentialStatus,
-        ProviderType::Display => ProviderMethod::DisplayInspect,
-        ProviderType::Network => ProviderMethod::NetworkInspect,
-        ProviderType::Storage => ProviderMethod::StorageInspect,
-        ProviderType::Device => ProviderMethod::DeviceInspect,
-        ProviderType::Audio => ProviderMethod::AudioInspect,
-        ProviderType::Observability => ProviderMethod::ObservabilityStatus,
+    if let ProviderInstance::Observability(provider) = instance {
+        let query = fixture
+            .request(ProviderMethod::ObservabilityQuery)
+            .map_err(|_| ConformanceError::FixtureMismatch)?;
+        let query_context = fixture.call_context(&query.context);
+        provider
+            .query(&query_context, &query)
+            .await?
+            .validate(&query)
+            .map_err(|_| ConformanceError::ObservabilityQueryResult)?;
     }
+    Ok(())
 }

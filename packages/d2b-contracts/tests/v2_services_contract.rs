@@ -2,11 +2,25 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use d2b_contracts::v2_provider::ProviderMethod;
+use d2b_contracts::v2_component_session::BoundedVec;
+use d2b_contracts::v2_identity::{ProviderId, ProviderType, RealmId, WorkloadId};
+use d2b_contracts::v2_provider::{
+    AdoptionState, AudioChannel, AudioDirection, AuthorizedProviderScope, CorrelationId,
+    Fingerprint, Generation, IdempotencyKey, InfrastructurePowerState,
+    OBSERVABILITY_RECORD_ENCODED_UPPER_BOUND_BYTES, ObservabilityExportFormat, ObservabilityLabels,
+    ObservabilityMetricLabel, ObservabilityOperationLabel, ObservabilityOutcomeLabel,
+    ObservabilityProjectionKind, ObservabilityQueryResult, ObservabilityRecord, ObservabilityView,
+    ObservationReason, ObservedLifecycleState, OperationId, PROVIDER_SCHEMA_VERSION, PrincipalRef,
+    ProviderCapability, ProviderHealth, ProviderHealthReason, ProviderHealthState, ProviderMethod,
+    ProviderObservation, ProviderOperationContext, ProviderOperationInput,
+    ProviderOperationRequest, ProviderRemediation, ProviderTarget,
+};
 use d2b_contracts::v2_services::{
     SERVICE_INVENTORY, SERVICE_PACKAGES, ServiceContractError, ServiceInventoryDocument,
-    StrictWireMessage, common, decode_strict, encode_strict, provider_method_for_capability,
-    service_inventory_document,
+    StrictWireMessage, common, decode_strict, encode_strict,
+    observability_query_response_from_wire, observability_query_result_to_wire,
+    provider_method_for_capability, provider_operation_input, service_inventory_document,
+    validate_provider_response_for_method,
 };
 use protobuf::{Enum, EnumOrUnknown, MessageField};
 
@@ -293,6 +307,108 @@ fn valid_request() -> common::ServiceRequest {
     request
 }
 
+fn valid_provider_request() -> common::ProviderRequest {
+    let request = valid_request();
+    let mut context = common::ProviderOperationContext::new();
+    context.metadata = request.metadata;
+    context.scope = request.scope;
+    context.operation_id = "operation-1".to_owned();
+    context.provider_id = "caaaaaaaaaaaaaaaaaaq".to_owned();
+    context.provider_type = common::ProviderType::PROVIDER_TYPE_RUNTIME.into();
+    context.provider_generation = 1;
+    context.policy_epoch = 1;
+    context.authorization_digest = vec![0x44; 32];
+    context.request_digest = vec![0x55; 32];
+    let mut input = common::ProviderOperationInput::new();
+    input.set_no_input(common::NoProviderOperationInput::new());
+    common::ProviderRequest {
+        context: MessageField::some(context),
+        input: MessageField::some(input),
+        ..Default::default()
+    }
+}
+
+fn canonical_observability_request() -> ProviderOperationRequest {
+    let realm_id = RealmId::parse("aaaaaaaaaaaaaaaaaaaa").unwrap();
+    let workload_id = WorkloadId::parse("bbbbbbbbbbbbbbbbbbba").unwrap();
+    ProviderOperationRequest {
+        context: ProviderOperationContext {
+            schema_version: PROVIDER_SCHEMA_VERSION,
+            operation_id: OperationId::parse("operation-query").unwrap(),
+            idempotency_key: IdempotencyKey::parse("idempotency-query").unwrap(),
+            request_digest: Fingerprint::parse("1".repeat(64)).unwrap(),
+            scope: AuthorizedProviderScope::Workload {
+                realm_id: realm_id.clone(),
+                workload_id: workload_id.clone(),
+            },
+            principal: PrincipalRef::parse("principal-query").unwrap(),
+            provider_id: ProviderId::parse("caaaaaaaaaaaaaaaaaaq").unwrap(),
+            provider_type: ProviderType::Observability,
+            provider_generation: Generation::new(7).unwrap(),
+            capability: ProviderCapability(ProviderMethod::ObservabilityQuery),
+            method: ProviderMethod::ObservabilityQuery,
+            policy_epoch: Generation::new(1).unwrap(),
+            authorization_decision_digest: Fingerprint::parse("2".repeat(64)).unwrap(),
+            issued_at_unix_ms: 1_000,
+            expires_at_unix_ms: 5_000,
+            correlation_id: CorrelationId::parse("correlation-query").unwrap(),
+            trace_id: Fingerprint::parse("3".repeat(64)).unwrap(),
+        },
+        target: ProviderTarget::Workload {
+            realm_id,
+            workload_id,
+        },
+        expected_configuration_fingerprint: Fingerprint::parse("4".repeat(64)).unwrap(),
+        input: ProviderOperationInput::ObservabilityQuery {
+            view: ObservabilityView::Health,
+            cursor: None,
+            limit: 2,
+        },
+    }
+}
+
+fn canonical_observability_result() -> ObservabilityQueryResult {
+    let request = canonical_observability_request();
+    ObservabilityQueryResult {
+        observation: ProviderObservation {
+            provider_id: request.context.provider_id.clone(),
+            provider_generation: request.context.provider_generation,
+            realm_id: request.target.realm_id().clone(),
+            workload_id: request.target.workload_id().cloned(),
+            handle_id: None,
+            resource_generation: None,
+            observed_at_unix_ms: 4_000,
+            lifecycle: ObservedLifecycleState::Ready,
+            adoption: AdoptionState::NotAttempted,
+            reason: ObservationReason::None,
+            health: ProviderHealth {
+                provider_id: request.context.provider_id,
+                registry_generation: request.context.provider_generation,
+                observed_at_unix_ms: 4_000,
+                state: ProviderHealthState::Healthy,
+                reason: ProviderHealthReason::None,
+                remediation: ProviderRemediation::None,
+            },
+        },
+        records: BoundedVec::new(vec![ObservabilityRecord {
+            observed_at_unix_ms: 3_000,
+            projection: ObservabilityProjectionKind::Metrics,
+            labels: ObservabilityLabels {
+                provider_type: ProviderType::Runtime,
+                health_state: ProviderHealthState::Healthy,
+                metric: ObservabilityMetricLabel::ProviderHealth,
+                operation: ObservabilityOperationLabel::Health,
+                outcome: ObservabilityOutcomeLabel::Success,
+            },
+            value: 1,
+        }])
+        .unwrap(),
+        next_cursor: None,
+        encoded_bytes_upper_bound: OBSERVABILITY_RECORD_ENCODED_UPPER_BOUND_BYTES,
+        truncated: false,
+    }
+}
+
 #[test]
 fn strict_wire_rejects_unknown_over_limit_and_missing_idempotency() {
     let request = valid_request();
@@ -334,6 +450,188 @@ fn strict_wire_rejects_unknown_over_limit_and_missing_idempotency() {
     assert_eq!(
         decode_strict::<common::ServiceRequest>(&oversized, true),
         Err(ServiceContractError::MessageTooLarge)
+    );
+}
+
+#[test]
+fn provider_operation_input_wire_is_exact_bounded_and_strict() {
+    let request = valid_provider_request();
+    request.validate_wire(true).unwrap();
+    assert_eq!(
+        provider_operation_input(request.input.as_ref().unwrap()).unwrap(),
+        ProviderOperationInput::NoInput
+    );
+
+    let mut missing = valid_provider_request();
+    missing.input = MessageField::none();
+    assert_eq!(
+        missing.validate_wire(true),
+        Err(ServiceContractError::MissingOperationInput)
+    );
+    missing.input = MessageField::some(common::ProviderOperationInput::new());
+    assert_eq!(
+        missing.validate_wire(true),
+        Err(ServiceContractError::MissingOperationInput)
+    );
+
+    let mut configured = valid_provider_request();
+    configured
+        .input
+        .as_mut()
+        .unwrap()
+        .set_configured_runtime_execution(common::ConfiguredRuntimeExecutionInput {
+            configured_item_id: "configured-item".to_owned(),
+            ..Default::default()
+        });
+    assert!(matches!(
+        provider_operation_input(configured.input.as_ref().unwrap()).unwrap(),
+        ProviderOperationInput::ConfiguredRuntimeExecution { .. }
+    ));
+    configured
+        .input
+        .as_mut()
+        .unwrap()
+        .mut_configured_runtime_execution()
+        .configured_item_id = "Configured/Command".to_owned();
+    assert_eq!(
+        configured.validate_wire(true),
+        Err(ServiceContractError::InvalidId)
+    );
+
+    for obsolete_field in [
+        &[0x2a, 0x01, b'x'][..],
+        &[0x38, 0x01][..],
+        &[0x42, 0x01, b'x'][..],
+    ] {
+        let mut encoded = encode_strict(&valid_provider_request(), true).unwrap();
+        encoded.extend_from_slice(obsolete_field);
+        assert_eq!(
+            decode_strict::<common::ProviderRequest>(&encoded, true),
+            Err(ServiceContractError::UnknownField)
+        );
+    }
+
+    let mut power = common::ProviderOperationInput::new();
+    power.set_infrastructure_power_state(common::InfrastructurePowerStateInput {
+        state: common::InfrastructurePowerState::INFRASTRUCTURE_POWER_STATE_STOPPED.into(),
+        ..Default::default()
+    });
+    assert_eq!(
+        provider_operation_input(&power).unwrap(),
+        ProviderOperationInput::InfrastructurePowerState {
+            state: InfrastructurePowerState::Stopped
+        }
+    );
+
+    let mut transport = common::ProviderOperationInput::new();
+    transport.set_transport_binding(common::TransportBindingInput {
+        transport_binding_id: "transport-binding".to_owned(),
+        ..Default::default()
+    });
+    assert!(matches!(
+        provider_operation_input(&transport).unwrap(),
+        ProviderOperationInput::TransportBinding { transport_binding_id }
+            if transport_binding_id.as_str() == "transport-binding"
+    ));
+
+    let mut storage = common::ProviderOperationInput::new();
+    storage.set_storage_snapshot(common::StorageSnapshotInput {
+        snapshot_id: "snapshot-id".to_owned(),
+        ..Default::default()
+    });
+    assert!(matches!(
+        provider_operation_input(&storage).unwrap(),
+        ProviderOperationInput::StorageSnapshot { snapshot_id }
+            if snapshot_id.as_str() == "snapshot-id"
+    ));
+
+    let mut device = common::ProviderOperationInput::new();
+    device.set_device_selector(common::DeviceSelectorInput {
+        device_selector_id: "selector-id".to_owned(),
+        ..Default::default()
+    });
+    assert!(matches!(
+        provider_operation_input(&device).unwrap(),
+        ProviderOperationInput::DeviceSelector { device_selector_id }
+            if device_selector_id.as_str() == "selector-id"
+    ));
+
+    let mut audio = valid_provider_request();
+    audio
+        .input
+        .as_mut()
+        .unwrap()
+        .set_audio_state(common::AudioStateInput {
+            channel: common::AudioChannel::AUDIO_CHANNEL_SPEAKER.into(),
+            direction: common::AudioDirection::AUDIO_DIRECTION_OUTPUT.into(),
+            mute: Some(false),
+            volume: Some(100),
+            ..Default::default()
+        });
+    assert_eq!(
+        provider_operation_input(audio.input.as_ref().unwrap()).unwrap(),
+        ProviderOperationInput::AudioState {
+            channel: AudioChannel::Speaker,
+            direction: AudioDirection::Output,
+            mute: Some(false),
+            volume: Some(100),
+        }
+    );
+    audio.input.as_mut().unwrap().mut_audio_state().volume = Some(101);
+    assert_eq!(
+        audio.validate_wire(true),
+        Err(ServiceContractError::BoundExceeded)
+    );
+    let audio_state = audio.input.as_mut().unwrap().mut_audio_state();
+    audio_state.volume = Some(50);
+    audio_state.channel = common::AudioChannel::AUDIO_CHANNEL_MICROPHONE.into();
+    assert_eq!(
+        audio.validate_wire(true),
+        Err(ServiceContractError::InvalidOperationInput)
+    );
+
+    let mut query = common::ProviderOperationInput::new();
+    query.set_observability_query(common::ObservabilityQueryInput {
+        view: common::ObservabilityView::OBSERVABILITY_VIEW_OPERATIONS.into(),
+        cursor: Some("cursor-one".to_owned()),
+        limit: 256,
+        ..Default::default()
+    });
+    assert_eq!(
+        provider_operation_input(&query).unwrap(),
+        ProviderOperationInput::ObservabilityQuery {
+            view: ObservabilityView::Operations,
+            cursor: Some(
+                d2b_contracts::v2_provider::ObservabilityCursor::parse("cursor-one").unwrap()
+            ),
+            limit: 256,
+        }
+    );
+    query.mut_observability_query().limit = 0;
+    assert_eq!(
+        provider_operation_input(&query),
+        Err(ServiceContractError::BoundExceeded)
+    );
+
+    let mut export = common::ProviderOperationInput::new();
+    export.set_observability_export(common::ObservabilityExportInput {
+        format: common::ObservabilityExportFormat::OBSERVABILITY_EXPORT_FORMAT_JSON_LINES.into(),
+        start_at_unix_ms: 100,
+        end_at_unix_ms: 200,
+        ..Default::default()
+    });
+    assert_eq!(
+        provider_operation_input(&export).unwrap(),
+        ProviderOperationInput::ObservabilityExport {
+            format: ObservabilityExportFormat::JsonLines,
+            start_at_unix_ms: 100,
+            end_at_unix_ms: 200,
+        }
+    );
+    export.mut_observability_export().end_at_unix_ms = 100;
+    assert_eq!(
+        provider_operation_input(&export),
+        Err(ServiceContractError::InvalidDeadline)
     );
 }
 
@@ -407,6 +705,163 @@ fn responses_bind_attachments_streams_and_error_outcomes() {
         provider.validate_wire(false),
         Err(ServiceContractError::BoundExceeded)
     );
+}
+
+#[test]
+fn observability_query_result_round_trips_exactly_with_actual_provider_type() {
+    let request = canonical_observability_request();
+    let result = canonical_observability_result();
+    let wire = observability_query_result_to_wire(&result, &request).unwrap();
+    let mut response = common::ProviderResponse::new();
+    response.outcome = common::Outcome::OUTCOME_SUCCEEDED.into();
+    response.operation_id = request.context.operation_id.as_str().to_owned();
+    response.observability_query_result = MessageField::some(wire);
+
+    validate_provider_response_for_method(&response, ProviderMethod::ObservabilityQuery).unwrap();
+    let decoded = observability_query_response_from_wire(&response, &request).unwrap();
+    assert_eq!(decoded, result);
+    assert_eq!(
+        decoded.records[0].labels.provider_type,
+        ProviderType::Runtime
+    );
+}
+
+#[test]
+fn observability_query_wire_rejects_invalid_enums_and_response_field_mixing() {
+    let request = canonical_observability_request();
+    let result = canonical_observability_result();
+    let mut response = common::ProviderResponse::new();
+    response.outcome = common::Outcome::OUTCOME_SUCCEEDED.into();
+    response.operation_id = request.context.operation_id.as_str().to_owned();
+    response.observability_query_result =
+        MessageField::some(observability_query_result_to_wire(&result, &request).unwrap());
+
+    let mut invalid_enum = response.clone();
+    invalid_enum
+        .observability_query_result
+        .as_mut()
+        .unwrap()
+        .records[0]
+        .labels
+        .as_mut()
+        .unwrap()
+        .metric = EnumOrUnknown::from_i32(999);
+    assert_eq!(
+        invalid_enum.validate_wire(false),
+        Err(ServiceContractError::InvalidEnum)
+    );
+
+    let mut too_many = response.clone();
+    let record = too_many
+        .observability_query_result
+        .as_ref()
+        .unwrap()
+        .records[0]
+        .clone();
+    too_many
+        .observability_query_result
+        .as_mut()
+        .unwrap()
+        .records = vec![record; 257];
+    assert_eq!(
+        too_many.validate_wire(false),
+        Err(ServiceContractError::BoundExceeded)
+    );
+
+    let mut cursor_too_long = response.clone();
+    let result = cursor_too_long.observability_query_result.as_mut().unwrap();
+    result.next_cursor = Some(format!("c{}", "1".repeat(64)));
+    result.truncated = true;
+    assert_eq!(
+        cursor_too_long.validate_wire(false),
+        Err(ServiceContractError::InvalidId)
+    );
+
+    let mut mixed = response.clone();
+    mixed.result_digest = vec![0x44; 32];
+    assert_eq!(
+        mixed.validate_wire(false),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+    assert_eq!(
+        validate_provider_response_for_method(&response, ProviderMethod::RuntimeInspect),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+
+    let mut failed = response;
+    failed.outcome = common::Outcome::OUTCOME_FAILED.into();
+    failed.error = MessageField::some(valid_error());
+    assert_eq!(
+        failed.validate_wire(false),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+}
+
+#[test]
+fn observability_query_result_rejects_operation_scope_and_generation_mismatch() {
+    let request = canonical_observability_request();
+    let result = canonical_observability_result();
+    let mut response = common::ProviderResponse::new();
+    response.outcome = common::Outcome::OUTCOME_SUCCEEDED.into();
+    response.operation_id = "operation-other".to_owned();
+    response.observability_query_result =
+        MessageField::some(observability_query_result_to_wire(&result, &request).unwrap());
+    assert_eq!(
+        observability_query_response_from_wire(&response, &request),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+
+    response.operation_id = request.context.operation_id.as_str().to_owned();
+    let mut mismatched_scope = request.clone();
+    mismatched_scope.target = ProviderTarget::Realm {
+        realm_id: request.target.realm_id().clone(),
+    };
+    assert_eq!(
+        observability_query_response_from_wire(&response, &mismatched_scope),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+
+    let mut mismatched_generation = result;
+    mismatched_generation.observation.provider_generation = Generation::new(8).unwrap();
+    assert_eq!(
+        observability_query_result_to_wire(&mismatched_generation, &request),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+}
+
+#[test]
+fn observability_record_wire_has_no_free_form_or_high_cardinality_labels() {
+    let source = include_str!("../proto/v2/common.proto");
+    let labels = source
+        .split("message ObservabilityLabels {")
+        .nth(1)
+        .unwrap()
+        .split('}')
+        .next()
+        .unwrap();
+    let record = source
+        .split("message ObservabilityRecord {")
+        .nth(1)
+        .unwrap()
+        .split('}')
+        .next()
+        .unwrap();
+    assert!(!labels.contains("string "));
+    assert!(!labels.contains("bytes "));
+    assert!(!record.contains("string "));
+    assert!(!record.contains("bytes "));
+    for forbidden in [
+        "workload",
+        "provider_instance",
+        "identifier",
+        "path",
+        "command",
+        "secret",
+        "json",
+    ] {
+        assert!(!labels.contains(forbidden));
+        assert!(!record.contains(forbidden));
+    }
 }
 
 #[test]

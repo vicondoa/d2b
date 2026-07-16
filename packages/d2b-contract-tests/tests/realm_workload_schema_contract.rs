@@ -16,6 +16,7 @@
 //!  * `realm-controllers.json` contains no sensitive credential fields.
 
 use d2b_contract_tests::read_repo_file;
+use d2b_contracts::provider_registry_v2::{ProviderBindingV2, ProviderRegistryV2};
 use d2b_core::{
     bundle::Bundle, realm_workloads_launcher::RealmWorkloadsLauncherV2Json,
     unsafe_local_workloads::UnsafeLocalWorkloadsJson,
@@ -396,6 +397,7 @@ fn provider_neutral_launcher_and_unsafe_local_artifacts_are_wired() {
     for module in [
         "./realm-workloads-launcher-v2-json.nix",
         "./unsafe-local-workloads-json.nix",
+        "./provider-registry-v2-json.nix",
     ] {
         assert!(
             default_nix.contains(module),
@@ -404,7 +406,11 @@ fn provider_neutral_launcher_and_unsafe_local_artifacts_are_wired() {
     }
 
     let bundle_artifacts = read_repo_file("nixos-modules/bundle-artifacts.nix");
-    for artifact in ["realmWorkloadsLauncherV2Json", "unsafeLocalWorkloadsJson"] {
+    for artifact in [
+        "realmWorkloadsLauncherV2Json",
+        "unsafeLocalWorkloadsJson",
+        "providerRegistryV2Json",
+    ] {
         assert!(
             bundle_artifacts.contains(artifact),
             "bundle-artifacts.nix must declare {artifact}"
@@ -439,6 +445,69 @@ fn generated_unsafe_local_schemas_are_closed_and_argv_is_private() {
     );
     assert!(helper_schema.contains("\"protocolVersion\""));
     assert!(helper_schema.contains("\"terminalProtocolVersion\""));
+}
+
+#[test]
+fn generated_provider_registry_schema_is_closed_and_authority_free() {
+    let schema_text = read_repo_file("docs/reference/schemas/v2/provider-registry-v2.json");
+    let schema: Value = serde_json::from_str(&schema_text).expect("provider registry schema");
+    assert_eq!(schema["additionalProperties"], serde_json::json!(false));
+    for forbidden in ["\"argv\"", "\"secret\""] {
+        assert!(
+            !schema_text.contains(forbidden),
+            "provider registry schema must not contain {forbidden}"
+        );
+    }
+    assert!(schema_text.contains("\"local-runtime\""));
+    assert!(schema_text.contains("\"local-observability\""));
+    assert!(schema_text.contains("\"vmStartIntentId\""));
+    assert!(schema_text.contains("\"runnerIntentId\""));
+    let variants = schema["definitions"]["ProviderBindingV2"]["oneOf"]
+        .as_array()
+        .expect("provider binding variants");
+    let find_variant = |axis: &str| {
+        variants
+            .iter()
+            .find(|variant| {
+                variant["properties"]["axis"]["enum"]
+                    .as_array()
+                    .is_some_and(|values| values.iter().any(|value| value == axis))
+            })
+            .unwrap_or_else(|| panic!("provider binding variant {axis}"))
+    };
+    let local_runtime = find_variant("local-runtime");
+    assert_eq!(
+        local_runtime["additionalProperties"],
+        serde_json::json!(false)
+    );
+    assert!(
+        local_runtime["properties"].get("realmId").is_none(),
+        "local runtime binding realm must come exclusively from descriptor placement"
+    );
+    assert!(local_runtime["properties"].get("workloadId").is_some());
+    let local_observability = find_variant("local-observability");
+    assert_eq!(
+        local_observability["additionalProperties"],
+        serde_json::json!(false)
+    );
+    assert_eq!(
+        local_observability["properties"]["maxRecords"]["maximum"],
+        serde_json::json!(256.0)
+    );
+    assert_eq!(
+        local_observability["properties"]["maxBytes"]["maximum"],
+        serde_json::json!(1_048_576.0)
+    );
+    assert_eq!(
+        local_observability["properties"]["maxTimeWindowMs"]["maximum"],
+        serde_json::json!(2_678_400_000_f64)
+    );
+    for forbidden in ["realmId", "workloadId", "providerId"] {
+        assert!(
+            local_observability["properties"].get(forbidden).is_none(),
+            "local observability binding must not carry {forbidden}"
+        );
+    }
 }
 
 #[test]
@@ -536,13 +605,39 @@ fn rendered_launcher_metadata_hides_argv_and_private_bundle_resolves_it() {
     let public: RealmWorkloadsLauncherV2Json =
         read_fixture_json(&dir, "realm-workloads-launcher-v2.json");
     let private: UnsafeLocalWorkloadsJson = read_fixture_json(&dir, "unsafe-local-workloads.json");
+    let provider_registry: ProviderRegistryV2 =
+        read_fixture_json(&dir, "provider-registry-v2.json");
     let bundle: Bundle = read_fixture_json(&dir, "bundle.json");
 
     private.validate().expect("private artifact validates");
+    provider_registry
+        .validate()
+        .expect("provider registry artifact validates");
     assert_eq!(public.schema_version, "v2");
-    assert_eq!(public.workloads.len(), 1);
+    assert_eq!(public.workloads.len(), 2);
     assert_eq!(private.workloads.len(), 1);
-    assert_eq!(public.workloads[0].realm_accent_color, "#cc3344");
+    assert_eq!(
+        provider_registry
+            .providers
+            .iter()
+            .filter(|entry| matches!(&entry.binding, ProviderBindingV2::LocalRuntime(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        provider_registry
+            .providers
+            .iter()
+            .filter(|entry| matches!(&entry.binding, ProviderBindingV2::LocalObservability(_)))
+            .count(),
+        2
+    );
+    assert!(
+        public
+            .workloads
+            .iter()
+            .any(|workload| workload.realm_accent_color == "#cc3344")
+    );
 
     let public_json = serde_json::to_string(&public).unwrap();
     assert!(!public_json.contains("rendered-private-argv-canary"));
@@ -572,6 +667,46 @@ fn rendered_launcher_metadata_hides_argv_and_private_bundle_resolves_it() {
         bundle.unsafe_local_workloads_path.as_deref(),
         Some("/etc/d2b/unsafe-local-workloads.json")
     );
+    assert_eq!(
+        bundle.provider_registry_v2_path.as_deref(),
+        Some("/etc/d2b/provider-registry-v2.json")
+    );
+    let provider_entry = provider_registry
+        .providers
+        .iter()
+        .find(|entry| matches!(&entry.binding, ProviderBindingV2::LocalRuntime(_)))
+        .expect("rendered local runtime provider");
+    assert_eq!(
+        provider_entry.descriptor.implementation_id.as_str(),
+        "cloud-hypervisor"
+    );
+    assert!(matches!(
+        &provider_entry.binding,
+        ProviderBindingV2::LocalRuntime(_)
+    ));
+    let binding_json = serde_json::to_value(&provider_entry.binding).unwrap();
+    assert!(binding_json.get("realmId").is_none());
+    for observability in provider_registry
+        .providers
+        .iter()
+        .filter(|entry| matches!(&entry.binding, ProviderBindingV2::LocalObservability(_)))
+    {
+        assert_eq!(observability.descriptor.implementation_id.as_str(), "local");
+        let binding_json = serde_json::to_value(&observability.binding).unwrap();
+        assert_eq!(binding_json["maxRecords"], 64);
+        assert_eq!(binding_json["maxBytes"], 32_768);
+        assert_eq!(binding_json["maxTimeWindowMs"], 86_400_000);
+        for forbidden in ["realmId", "workloadId", "providerId"] {
+            assert!(binding_json.get(forbidden).is_none());
+        }
+    }
+    let provider_json = serde_json::to_string(&provider_registry).unwrap();
+    for forbidden in ["\"argv\"", "\"secret\"", "\"azure-vm\"", "runtime.execute"] {
+        assert!(
+            !provider_json.contains(forbidden),
+            "rendered provider registry must not contain {forbidden}"
+        );
+    }
     let artifact_hashes = bundle
         .artifact_hashes
         .as_ref()
@@ -579,6 +714,7 @@ fn rendered_launcher_metadata_hides_argv_and_private_bundle_resolves_it() {
     for path in [
         "/etc/d2b/realm-workloads-launcher-v2.json",
         "/etc/d2b/unsafe-local-workloads.json",
+        "/etc/d2b/provider-registry-v2.json",
     ] {
         assert!(
             artifact_hashes.contains_key(path),

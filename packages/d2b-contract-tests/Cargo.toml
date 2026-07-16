@@ -20,3 +20,5 @@ d2b-contracts = { workspace = true, features = ["schema"] }
 d2b-host = { workspace = true }
 regex = "1"
 snow.workspace = true
+tree-sitter = "0.26.11"
+tree-sitter-bash = "0.25.1"

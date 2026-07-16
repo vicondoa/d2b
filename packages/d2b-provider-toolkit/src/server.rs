@@ -22,16 +22,18 @@ use d2b_contracts::{
         ProviderPlan, ProviderTarget, RetryClass,
     },
     v2_services::{
-        ServiceContractError, StrictWireMessage, common, provider_audio_ttrpc,
-        provider_credential_ttrpc, provider_device_ttrpc, provider_display_ttrpc,
-        provider_infrastructure_ttrpc, provider_network_ttrpc, provider_observability_ttrpc,
-        provider_runtime_ttrpc, provider_storage_ttrpc, provider_substrate_ttrpc,
-        provider_transport_ttrpc, provider_type,
+        ServiceContractError, StrictWireMessage, common, observability_query_result_to_wire,
+        provider_audio_ttrpc, provider_credential_ttrpc, provider_device_ttrpc,
+        provider_display_ttrpc, provider_infrastructure_ttrpc, provider_network_ttrpc,
+        provider_observability_ttrpc, provider_operation_input, provider_runtime_ttrpc,
+        provider_storage_ttrpc, provider_substrate_ttrpc, provider_transport_ttrpc, provider_type,
+        validate_provider_response_for_method,
     },
 };
 use d2b_provider::{
     ProviderClock, ProviderInstance, RpcCall, RpcOperation, RpcPayload, RpcResponse,
-    SessionIdentity,
+    SessionIdentity, provider_capabilities_are_dispatchable, provider_inspection_method,
+    provider_method_is_dispatchable,
 };
 use d2b_session::{
     Cancellation, ComponentSessionDriver, DeadlineBudget, OwnedAttachment, SessionDriverHandle,
@@ -92,6 +94,9 @@ impl GeneratedProviderServiceServer {
         let descriptor = instance.descriptor();
         if descriptor.placement.agent_binding().is_none() || driver.generation() == 0 {
             return Err(ToolkitError::DescriptorInvalid);
+        }
+        if !provider_capabilities_are_dispatchable(&instance.capabilities()) {
+            return Err(ToolkitError::CapabilityMismatch);
         }
         let identity = SessionIdentity {
             peer_role: d2b_contracts::v2_component_session::EndpointRole::ProviderAgent,
@@ -250,6 +255,9 @@ impl GeneratedProviderServiceServer {
             }
             RpcOperation::Capabilities => return Err(rpc_status(ttrpc::Code::INVALID_ARGUMENT)),
         };
+        if !provider_method_is_dispatchable(method) {
+            return Err(rpc_status(ttrpc::Code::FAILED_PRECONDITION));
+        }
         let requires_idempotency = matches!(operation, RpcOperation::Method(method) if method_requires_idempotency(method));
         request
             .validate_wire(requires_idempotency)
@@ -361,6 +369,13 @@ impl GeneratedProviderServiceServer {
                 .descriptor
                 .configuration_schema_fingerprint
                 .clone(),
+            input: provider_operation_input(
+                request
+                    .input
+                    .as_ref()
+                    .ok_or_else(|| rpc_status(ttrpc::Code::INVALID_ARGUMENT))?,
+            )
+            .map_err(invalid_request_contract)?,
         };
         canonical
             .validate(&self.descriptor, self.clock.now_unix_ms())
@@ -444,7 +459,6 @@ impl GeneratedProviderServiceServer {
                     .ok_or_else(|| rpc_status(ttrpc::Code::FAILED_PRECONDITION))?;
                 Ok(OwnedDispatchPayload::Lease(Box::new(lease)))
             }
-            ProviderMethod::RuntimeExecute => Err(rpc_status(ttrpc::Code::FAILED_PRECONDITION)),
             _ => Ok(OwnedDispatchPayload::Operation),
         }
     }
@@ -494,6 +508,13 @@ impl GeneratedProviderServiceServer {
                 wire.outcome = EnumOrUnknown::new(common::Outcome::OUTCOME_SUCCEEDED);
                 wire.observations.push(observation_to_wire(&observation)?);
             }
+            Ok(RpcResponse::ObservabilityQuery(result)) => {
+                wire.outcome = EnumOrUnknown::new(common::Outcome::OUTCOME_SUCCEEDED);
+                wire.observability_query_result = MessageField::some(
+                    observability_query_result_to_wire(&result, request)
+                        .map_err(invalid_response_contract)?,
+                );
+            }
             Ok(RpcResponse::Mutation(receipt)) => {
                 wire.outcome = EnumOrUnknown::new(match receipt.state {
                     MutationState::Applied | MutationState::AlreadyApplied => {
@@ -537,8 +558,11 @@ impl GeneratedProviderServiceServer {
                 return Ok(response);
             }
         }
-        wire.result_digest = decode_fingerprint(&self.descriptor.configuration_schema_fingerprint)?;
-        wire.validate_wire(false)
+        if wire.observability_query_result.is_none() {
+            wire.result_digest =
+                decode_fingerprint(&self.descriptor.configuration_schema_fingerprint)?;
+        }
+        validate_provider_response_for_method(&wire, request.context.method)
             .map_err(invalid_response_contract)?;
         Ok(wire)
     }
@@ -862,11 +886,7 @@ fn wire_context_method(
 ) -> ttrpc::Result<ProviderMethod> {
     let provider_type =
         provider_type(context).map_err(|_| rpc_status(ttrpc::Code::INVALID_ARGUMENT))?;
-    ProviderMethod::ALL
-        .iter()
-        .find(|method| method.provider_type() == provider_type && method.required())
-        .copied()
-        .ok_or_else(|| rpc_status(ttrpc::Code::INVALID_ARGUMENT))
+    Ok(provider_inspection_method(provider_type))
 }
 
 fn method_requires_idempotency(method: ProviderMethod) -> bool {

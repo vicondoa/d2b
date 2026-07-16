@@ -14,18 +14,27 @@ use d2b_contracts::{
         AttachmentPurpose, BoundedVec, CancelRequest, CancelResult, CloseReason, KernelObjectType,
         Remediation, RequestId, ServicePackage, SessionErrorCode,
     },
-    v2_identity::{ProviderId, ProviderType},
+    v2_identity::{ProviderId, ProviderType, RealmId, RoleId, WorkloadId},
     v2_provider::{
-        AdoptionRequest, AdoptionState, Fingerprint, Generation, ProviderFailureKind,
-        ProviderMethod, RuntimeProvider,
+        AdoptionRequest, AdoptionState, Fingerprint, Generation, HandleId, ImplementationId,
+        MutationState, ObservabilityProvider, ObservationReason, ObservedLifecycleState, PlanId,
+        PlannedResourceClass, ProviderCapability, ProviderCapabilitySet, ProviderFailureKind,
+        ProviderHealthReason, ProviderHealthState, ProviderMethod, ProviderOperationInput,
+        ProviderPlacement, ProviderRemediation, ProviderTarget, RetryClass, RuntimeProvider,
     },
-    v2_services::{StrictWireMessage, common, provider_credential_ttrpc, provider_runtime_ttrpc},
+    v2_services::{
+        StrictWireMessage, common, observability_query_response_from_wire,
+        provider_credential_ttrpc, provider_observability_ttrpc, provider_runtime_ttrpc,
+    },
 };
-use d2b_provider::{ProviderInstance, ProviderRegistryBuilder, RpcProviderProxy, SessionIdentity};
+use d2b_provider::{
+    AuthenticatedProviderRpc, ProviderInstance, ProviderRegistryBuilder, RpcCall, RpcProviderProxy,
+    RpcResponse, SessionIdentity,
+};
 use d2b_provider_toolkit::{
     DeterministicClock, FakeProvider, Fixture, GeneratedProviderServiceServer,
-    ProviderAgentAdapter, Redacted, Secret, check_provider_conformance, register_exact_instances,
-    sample_lease_request,
+    ProviderAgentAdapter, ProviderValues, Redacted, Secret, check_provider_conformance,
+    register_exact_instances, sample_lease_request,
 };
 use d2b_session::{
     AttachmentPayload, AttachmentValidationError, Cancellation, ComponentSessionDriver,
@@ -73,6 +82,147 @@ async fn every_axis_passes_identical_in_process_and_rpc_conformance() {
             .await
             .unwrap_or_else(|_| unreachable!());
     }
+}
+
+#[tokio::test]
+async fn conformance_uses_the_exact_real_descriptor_placement_and_target() {
+    let baseline = Fixture::new(ProviderType::Runtime, 0).unwrap_or_else(|_| unreachable!());
+    let realm_id = RealmId::parse("eeeeeeeeeeeeeeeeeeea").unwrap_or_else(|_| unreachable!());
+    let workload_id = WorkloadId::parse("fffffffffffffffffffa").unwrap_or_else(|_| unreachable!());
+    let mut descriptor = baseline.descriptor;
+    descriptor.provider_id =
+        ProviderId::parse("ggggggggggggggggggga").unwrap_or_else(|_| unreachable!());
+    descriptor.implementation_id =
+        ImplementationId::parse("runtime-real").unwrap_or_else(|_| unreachable!());
+    descriptor.registry_generation = Generation::new(7).unwrap_or_else(|_| unreachable!());
+    descriptor.placement = ProviderPlacement::ProviderAgent {
+        realm_id: realm_id.clone(),
+        workload_id: workload_id.clone(),
+        role_id: RoleId::parse("hhhhhhhhhhhhhhhhhhha").unwrap_or_else(|_| unreachable!()),
+        endpoint_role: d2b_contracts::v2_component_session::EndpointRole::ProviderAgent,
+        service: ServicePackage::ProviderV2,
+        agent_generation: Generation::new(7).unwrap_or_else(|_| unreachable!()),
+    };
+    let fixture = Fixture::from_descriptor(
+        descriptor.clone(),
+        ProviderTarget::Workload {
+            realm_id,
+            workload_id,
+        },
+        1_800_000_000_000,
+    )
+    .unwrap_or_else(|_| unreachable!());
+    assert_eq!(fixture.descriptor, descriptor);
+    check_provider_conformance(
+        &Arc::new(FakeProvider::new(fixture.clone())).instance(),
+        &fixture,
+    )
+    .await
+    .unwrap_or_else(|_| unreachable!());
+}
+
+#[test]
+fn provider_values_preserve_all_descriptor_and_operation_bindings() {
+    let fixture = Fixture::new(ProviderType::Runtime, 0).unwrap_or_else(|_| unreachable!());
+    let request = fixture
+        .request(ProviderMethod::RuntimePlan)
+        .unwrap_or_else(|_| unreachable!());
+    let values = ProviderValues::new(&fixture.descriptor, fixture.now_unix_ms)
+        .unwrap_or_else(|_| unreachable!());
+    let debug = format!("{values:?}");
+    assert!(!debug.contains(fixture.descriptor.provider_id.as_str()));
+
+    let health = values
+        .health(
+            ProviderHealthState::Healthy,
+            ProviderHealthReason::None,
+            ProviderRemediation::None,
+        )
+        .unwrap_or_else(|_| unreachable!());
+    assert_eq!(health.provider_id, fixture.descriptor.provider_id);
+    assert_eq!(
+        health.registry_generation,
+        fixture.descriptor.registry_generation
+    );
+    assert_eq!(health.observed_at_unix_ms, fixture.now_unix_ms);
+
+    let plan = values
+        .plan(
+            &request,
+            PlanId::parse("real-plan").unwrap_or_else(|_| unreachable!()),
+            fixture.now_unix_ms + 30_000,
+            BoundedVec::new(Vec::<PlannedResourceClass>::new()).unwrap_or_else(|_| unreachable!()),
+        )
+        .unwrap_or_else(|_| unreachable!());
+    assert_eq!(plan.binding, request.context.binding());
+    assert_eq!(
+        plan.configuration_fingerprint,
+        request.expected_configuration_fingerprint
+    );
+    assert_eq!(plan.created_at_unix_ms, fixture.now_unix_ms);
+
+    let owner = values.provider_owner(request.target.realm_id());
+    let handle = values
+        .handle_from_plan(
+            &plan,
+            HandleId::parse("real-handle").unwrap_or_else(|_| unreachable!()),
+            owner.clone(),
+            Generation::new(9).unwrap_or_else(|_| unreachable!()),
+            Some(fixture.now_unix_ms + 60_000),
+        )
+        .unwrap_or_else(|_| unreachable!());
+    assert_eq!(handle.created_by, plan.binding);
+    assert_eq!(handle.owner, owner);
+    assert_eq!(
+        handle.provider_generation,
+        fixture.descriptor.registry_generation
+    );
+    assert_eq!(handle.resource_generation.get(), 9);
+    assert_eq!(
+        handle.configuration_fingerprint,
+        plan.configuration_fingerprint
+    );
+    assert_eq!(handle.created_at_unix_ms, fixture.now_unix_ms);
+
+    let observation = values
+        .observation(
+            &request.context,
+            Some(&handle),
+            ObservedLifecycleState::Ready,
+            AdoptionState::NotAttempted,
+            ObservationReason::None,
+            ProviderHealthState::Healthy,
+            ProviderHealthReason::None,
+            ProviderRemediation::None,
+        )
+        .unwrap_or_else(|_| unreachable!());
+    assert_eq!(observation.provider_id, fixture.descriptor.provider_id);
+    assert_eq!(observation.handle_id, Some(handle.handle_id.clone()));
+    assert_eq!(
+        observation.resource_generation,
+        Some(handle.resource_generation)
+    );
+    assert_eq!(observation.observed_at_unix_ms, fixture.now_unix_ms);
+
+    let receipt = values
+        .receipt(&request.context, MutationState::Applied)
+        .unwrap_or_else(|_| unreachable!());
+    assert_eq!(receipt.binding, request.context.binding());
+    assert_eq!(receipt.observed_at_unix_ms, fixture.now_unix_ms);
+
+    let failure = values
+        .failure(
+            &request.context,
+            ProviderFailureKind::InvalidRequest,
+            RetryClass::Never,
+            ProviderHealthReason::None,
+            ProviderRemediation::None,
+        )
+        .unwrap_or_else(|_| unreachable!());
+    assert_eq!(failure.binding, request.context.binding());
+    assert_eq!(failure.correlation_id, request.context.correlation_id);
+    assert_eq!(failure.occurred_at_unix_ms, fixture.now_unix_ms);
+    assert!(!format!("{failure:?}").contains(request.context.operation_id.as_str()));
 }
 
 #[test]
@@ -206,6 +356,57 @@ async fn rpc_proxy_preserves_plan_handle_and_adoption_bindings() {
     let mut mismatch = adoption;
     mismatch.expected_resource_generation = Generation::new(2).unwrap_or_else(|_| unreachable!());
     assert!(proxy.adopt(&adoption_context, &mismatch).await.is_err());
+}
+
+struct MismatchedQueryRpc {
+    inner: Arc<ProviderAgentAdapter>,
+}
+
+#[async_trait]
+impl AuthenticatedProviderRpc for MismatchedQueryRpc {
+    fn session_identity(&self) -> SessionIdentity {
+        self.inner.session_identity()
+    }
+
+    async fn invoke(
+        &self,
+        call: RpcCall<'_>,
+    ) -> d2b_contracts::v2_provider::ProviderResult<RpcResponse> {
+        let mut response = self.inner.invoke(call).await?;
+        if let RpcResponse::ObservabilityQuery(result) = &mut response {
+            result.observation.provider_generation =
+                Generation::new(result.observation.provider_generation.get() + 1)
+                    .unwrap_or_else(|_| unreachable!());
+        }
+        Ok(response)
+    }
+}
+
+#[tokio::test]
+async fn rpc_proxy_rejects_mismatched_observability_query_results() {
+    let fixture = Fixture::new(ProviderType::Observability, 10).unwrap_or_else(|_| unreachable!());
+    let clock = Arc::new(DeterministicClock::new(fixture.now_unix_ms));
+    let instance = Arc::new(FakeProvider::new(fixture.clone())).instance();
+    let adapter = Arc::new(
+        ProviderAgentAdapter::new(instance, fixture.session_identity(), clock.clone())
+            .unwrap_or_else(|_| unreachable!()),
+    );
+    let proxy = RpcProviderProxy::new(
+        fixture.descriptor.clone(),
+        Arc::new(MismatchedQueryRpc { inner: adapter }),
+        clock,
+    )
+    .unwrap_or_else(|_| unreachable!());
+    let request = fixture
+        .request(ProviderMethod::ObservabilityQuery)
+        .unwrap_or_else(|_| unreachable!());
+    let context = fixture.call_context(&request.context);
+
+    let failure = proxy
+        .query(&context, &request)
+        .await
+        .expect_err("mismatched query result must fail closed");
+    assert_eq!(failure.kind, ProviderFailureKind::InvariantViolation);
 }
 
 #[test]
@@ -529,6 +730,124 @@ fn generated_request(fixture: &Fixture, method: ProviderMethod) -> common::Provi
     context.request_digest = vec![0xc8; 32];
     common::ProviderRequest {
         context: MessageField::some(context),
+        input: MessageField::some(input_to_wire(
+            &fixture
+                .request(method)
+                .unwrap_or_else(|_| unreachable!())
+                .input,
+        )),
+        ..Default::default()
+    }
+}
+
+fn input_to_wire(input: &ProviderOperationInput) -> common::ProviderOperationInput {
+    use common::provider_operation_input::Input;
+
+    let input = match input {
+        ProviderOperationInput::NoInput => Input::NoInput(common::NoProviderOperationInput::new()),
+        ProviderOperationInput::ConfiguredRuntimeExecution { configured_item_id } => {
+            Input::ConfiguredRuntimeExecution(common::ConfiguredRuntimeExecutionInput {
+                configured_item_id: configured_item_id.as_str().to_owned(),
+                ..Default::default()
+            })
+        }
+        ProviderOperationInput::InfrastructurePowerState { state } => {
+            Input::InfrastructurePowerState(common::InfrastructurePowerStateInput {
+                state: EnumOrUnknown::new(match state {
+                    d2b_contracts::v2_provider::InfrastructurePowerState::Running => {
+                        common::InfrastructurePowerState::INFRASTRUCTURE_POWER_STATE_RUNNING
+                    }
+                    d2b_contracts::v2_provider::InfrastructurePowerState::Stopped => {
+                        common::InfrastructurePowerState::INFRASTRUCTURE_POWER_STATE_STOPPED
+                    }
+                }),
+                ..Default::default()
+            })
+        }
+        ProviderOperationInput::TransportBinding {
+            transport_binding_id,
+        } => Input::TransportBinding(common::TransportBindingInput {
+            transport_binding_id: transport_binding_id.as_str().to_owned(),
+            ..Default::default()
+        }),
+        ProviderOperationInput::StorageSnapshot { snapshot_id } => {
+            Input::StorageSnapshot(common::StorageSnapshotInput {
+                snapshot_id: snapshot_id.as_str().to_owned(),
+                ..Default::default()
+            })
+        }
+        ProviderOperationInput::DeviceSelector { device_selector_id } => {
+            Input::DeviceSelector(common::DeviceSelectorInput {
+                device_selector_id: device_selector_id.as_str().to_owned(),
+                ..Default::default()
+            })
+        }
+        ProviderOperationInput::AudioState {
+            channel,
+            direction,
+            mute,
+            volume,
+        } => Input::AudioState(common::AudioStateInput {
+            channel: EnumOrUnknown::new(match channel {
+                d2b_contracts::v2_provider::AudioChannel::Speaker => {
+                    common::AudioChannel::AUDIO_CHANNEL_SPEAKER
+                }
+                d2b_contracts::v2_provider::AudioChannel::Microphone => {
+                    common::AudioChannel::AUDIO_CHANNEL_MICROPHONE
+                }
+            }),
+            direction: EnumOrUnknown::new(match direction {
+                d2b_contracts::v2_provider::AudioDirection::Output => {
+                    common::AudioDirection::AUDIO_DIRECTION_OUTPUT
+                }
+                d2b_contracts::v2_provider::AudioDirection::Input => {
+                    common::AudioDirection::AUDIO_DIRECTION_INPUT
+                }
+            }),
+            mute: *mute,
+            volume: volume.map(u32::from),
+            ..Default::default()
+        }),
+        ProviderOperationInput::ObservabilityQuery {
+            view,
+            cursor,
+            limit,
+        } => Input::ObservabilityQuery(common::ObservabilityQueryInput {
+            view: EnumOrUnknown::new(match view {
+                d2b_contracts::v2_provider::ObservabilityView::Health => {
+                    common::ObservabilityView::OBSERVABILITY_VIEW_HEALTH
+                }
+                d2b_contracts::v2_provider::ObservabilityView::Lifecycle => {
+                    common::ObservabilityView::OBSERVABILITY_VIEW_LIFECYCLE
+                }
+                d2b_contracts::v2_provider::ObservabilityView::Operations => {
+                    common::ObservabilityView::OBSERVABILITY_VIEW_OPERATIONS
+                }
+            }),
+            cursor: cursor.as_ref().map(|value| value.as_str().to_owned()),
+            limit: u32::from(*limit),
+            ..Default::default()
+        }),
+        ProviderOperationInput::ObservabilityExport {
+            format,
+            start_at_unix_ms,
+            end_at_unix_ms,
+        } => Input::ObservabilityExport(common::ObservabilityExportInput {
+            format: EnumOrUnknown::new(match format {
+                d2b_contracts::v2_provider::ObservabilityExportFormat::JsonLines => {
+                    common::ObservabilityExportFormat::OBSERVABILITY_EXPORT_FORMAT_JSON_LINES
+                }
+                d2b_contracts::v2_provider::ObservabilityExportFormat::OtlpProtobuf => {
+                    common::ObservabilityExportFormat::OBSERVABILITY_EXPORT_FORMAT_OTLP_PROTOBUF
+                }
+            }),
+            start_at_unix_ms: *start_at_unix_ms,
+            end_at_unix_ms: *end_at_unix_ms,
+            ..Default::default()
+        }),
+    };
+    common::ProviderOperationInput {
+        input: Some(input),
         ..Default::default()
     }
 }
@@ -599,6 +918,123 @@ async fn generated_server_dispatches_closed_methods_over_authenticated_session()
         .validate_wire(false)
         .unwrap_or_else(|_| unreachable!());
     assert!(!handle.resource_handle.is_empty());
+}
+
+#[tokio::test]
+async fn generated_server_preserves_the_exact_bounded_observability_result() {
+    let fixture = Fixture::new(ProviderType::Observability, 10).unwrap_or_else(|_| unreachable!());
+    let driver = Arc::new(FakeSessionDriver::new(&fixture));
+    let server = GeneratedProviderServiceServer::new(
+        Arc::new(FakeProvider::new(fixture.clone())).instance(),
+        driver,
+        Arc::new(DeterministicClock::new(fixture.now_unix_ms)),
+    )
+    .unwrap_or_else(|_| unreachable!());
+    let context = ttrpc::r#async::TtrpcContext {
+        mh: Default::default(),
+        metadata: Default::default(),
+        timeout_nano: 30_000_000_000,
+    };
+    let response = provider_observability_ttrpc::ObservabilityProviderService::query(
+        &server,
+        &context,
+        generated_request(&fixture, ProviderMethod::ObservabilityQuery),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("{error:?}"));
+    let request = fixture
+        .request(ProviderMethod::ObservabilityQuery)
+        .unwrap_or_else(|_| unreachable!());
+    let result = observability_query_response_from_wire(&response, &request)
+        .unwrap_or_else(|error| panic!("{error:?}"));
+
+    assert!(response.observations.is_empty());
+    assert!(response.result_digest.is_empty());
+    assert_eq!(result.records.len(), 1);
+    assert_eq!(
+        result.records[0].labels.provider_type,
+        ProviderType::Runtime
+    );
+}
+
+#[tokio::test]
+async fn generated_server_rejects_method_input_mismatch_before_provider_dispatch() {
+    let fixture = Fixture::new(ProviderType::Runtime, 0).unwrap_or_else(|_| unreachable!());
+    let driver = Arc::new(FakeSessionDriver::new(&fixture));
+    let server = GeneratedProviderServiceServer::new(
+        Arc::new(FakeProvider::new(fixture.clone())).instance(),
+        driver.clone(),
+        Arc::new(DeterministicClock::new(fixture.now_unix_ms)),
+    )
+    .unwrap_or_else(|_| unreachable!());
+    let context = ttrpc::r#async::TtrpcContext {
+        mh: Default::default(),
+        metadata: Default::default(),
+        timeout_nano: 30_000_000_000,
+    };
+    let mut request = generated_request(&fixture, ProviderMethod::RuntimePlan);
+    request
+        .input
+        .as_mut()
+        .unwrap_or_else(|| unreachable!())
+        .set_configured_runtime_execution(common::ConfiguredRuntimeExecutionInput {
+            configured_item_id: "configured-item".to_owned(),
+            ..Default::default()
+        });
+
+    assert!(
+        provider_runtime_ttrpc::RuntimeProviderService::plan(&server, &context, request)
+            .await
+            .is_err()
+    );
+    assert_eq!(driver.active_requests(), 0);
+}
+
+#[test]
+fn generated_server_reuses_the_canonical_dispatchability_policy() {
+    let baseline = Fixture::new(ProviderType::Runtime, 0).unwrap_or_else(|_| unreachable!());
+    let mut descriptor = baseline.descriptor;
+    descriptor.capabilities = ProviderCapabilitySet::new(
+        ProviderMethod::ALL
+            .iter()
+            .copied()
+            .filter(|method| method.provider_type() == ProviderType::Runtime)
+            .map(ProviderCapability)
+            .collect(),
+    )
+    .unwrap_or_else(|_| unreachable!());
+    let fixture = Fixture::from_descriptor(
+        descriptor,
+        ProviderTarget::Workload {
+            realm_id: RealmId::parse("aaaaaaaaaaaaaaaaaaaa").unwrap_or_else(|_| unreachable!()),
+            workload_id: WorkloadId::parse("ccccccccccccccccccca")
+                .unwrap_or_else(|_| unreachable!()),
+        },
+        baseline.now_unix_ms,
+    )
+    .unwrap_or_else(|_| unreachable!());
+    let driver = Arc::new(FakeSessionDriver::new(&fixture));
+    assert!(
+        GeneratedProviderServiceServer::new(
+            Arc::new(FakeProvider::new(fixture.clone())).instance(),
+            driver,
+            Arc::new(DeterministicClock::new(fixture.now_unix_ms)),
+        )
+        .is_err()
+    );
+
+    let mut builder = ProviderRegistryBuilder::new(
+        fixture.descriptor.registry_generation,
+        fixture.descriptor.configuration_schema_fingerprint.clone(),
+        fixture.now_unix_ms,
+    );
+    assert!(
+        register_exact_instances(
+            &mut builder,
+            vec![Arc::new(FakeProvider::new(fixture)).instance()]
+        )
+        .is_err()
+    );
 }
 
 #[tokio::test]

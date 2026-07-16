@@ -561,6 +561,10 @@ in
         "dbus.service"
         "d2b.slice"
       ];
+      restartTriggers = [
+        cfg._bundle.bundle.path
+        cfg._bundle.providerRegistryV2Json.path
+      ];
       serviceConfig = {
         # Type=notify makes systemd hold d2bd.service in "activating"
         # until the daemon has completed startup/adoption and is about to

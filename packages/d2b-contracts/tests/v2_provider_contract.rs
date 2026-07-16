@@ -1,6 +1,6 @@
 #![cfg(feature = "v2-provider")]
 
-use std::{fs, path::PathBuf};
+use std::{collections::BTreeSet, fs, path::PathBuf};
 
 use d2b_contracts::{
     v2_component_session::{BoundedVec, EndpointRole, ServicePackage},
@@ -55,6 +55,20 @@ fn agent_binding() -> AgentPlacementBinding {
     AgentPlacementBinding {
         realm_id: realm_id(),
         workload_id: workload_id(),
+        role_id: role_id(),
+        agent_generation: generation(3),
+    }
+}
+
+fn provider_agent_credential_binding() -> CredentialPlacementBinding {
+    CredentialPlacementBinding::ProviderAgent {
+        binding: agent_binding(),
+    }
+}
+
+fn user_agent_credential_binding() -> CredentialPlacementBinding {
+    CredentialPlacementBinding::UserAgent {
+        realm_id: realm_id(),
         role_id: role_id(),
         agent_generation: generation(3),
     }
@@ -204,6 +218,7 @@ fn operation_request() -> ProviderOperationRequest {
             workload_id: workload_id(),
         },
         expected_configuration_fingerprint: fingerprint(ONE),
+        input: ProviderOperationInput::NoInput,
     }
 }
 
@@ -281,12 +296,75 @@ fn observation() -> ProviderObservation {
     }
 }
 
+fn observability_query_request(limit: u16) -> ProviderOperationRequest {
+    let mut context = operation_context();
+    context.provider_type = ProviderType::Observability;
+    context.capability = ProviderCapability(ProviderMethod::ObservabilityQuery);
+    context.method = ProviderMethod::ObservabilityQuery;
+    ProviderOperationRequest {
+        context,
+        target: ProviderTarget::Workload {
+            realm_id: realm_id(),
+            workload_id: workload_id(),
+        },
+        expected_configuration_fingerprint: fingerprint(ONE),
+        input: ProviderOperationInput::ObservabilityQuery {
+            view: ObservabilityView::Health,
+            cursor: None,
+            limit,
+        },
+    }
+}
+
+fn observability_record(
+    observed_at_unix_ms: u64,
+    provider_type: ProviderType,
+    value: u64,
+) -> ObservabilityRecord {
+    ObservabilityRecord {
+        observed_at_unix_ms,
+        projection: ObservabilityProjectionKind::Metrics,
+        labels: ObservabilityLabels {
+            provider_type,
+            health_state: ProviderHealthState::Healthy,
+            metric: ObservabilityMetricLabel::ProviderHealth,
+            operation: ObservabilityOperationLabel::Health,
+            outcome: ObservabilityOutcomeLabel::Success,
+        },
+        value,
+    }
+}
+
+fn observability_query_result(records: Vec<ObservabilityRecord>) -> ObservabilityQueryResult {
+    let observation = ProviderObservation {
+        provider_id: provider_id("f7z3k5e3awgn43aljt2a"),
+        provider_generation: generation(7),
+        realm_id: realm_id(),
+        workload_id: Some(workload_id()),
+        handle_id: None,
+        resource_generation: None,
+        observed_at_unix_ms: 4_000,
+        lifecycle: ObservedLifecycleState::Ready,
+        adoption: AdoptionState::NotAttempted,
+        reason: ObservationReason::None,
+        health: healthy("f7z3k5e3awgn43aljt2a", 4_000),
+    };
+    ObservabilityQueryResult {
+        observation,
+        encoded_bytes_upper_bound: u32::try_from(records.len()).unwrap()
+            * OBSERVABILITY_RECORD_ENCODED_UPPER_BOUND_BYTES,
+        records: BoundedVec::new(records).unwrap(),
+        next_cursor: None,
+        truncated: false,
+    }
+}
+
 fn credential_lease() -> CredentialLease {
     CredentialLease {
         lease_id: LeaseId::parse("lease-1").unwrap(),
         credential_provider_id: provider_id("caaaaaaaaaaaaaaaaaaq"),
         consumer_provider_id: provider_id("eaaaaaaaaaaaaaaaaaaq"),
-        agent_binding: agent_binding(),
+        placement_binding: provider_agent_credential_binding(),
         allowed_operations: BoundedVec::new(vec![
             SdkOperationClass::Authenticate,
             SdkOperationClass::Create,
@@ -735,6 +813,93 @@ fn credential_leases_are_opaque_colocated_revocable_and_nontransferable() {
     );
 }
 
+#[test]
+fn user_agent_credential_leases_are_bound_to_the_exact_userd_instance() {
+    let placement = ProviderPlacement::UserAgent {
+        realm_id: realm_id(),
+        role_id: role_id(),
+        endpoint_role: EndpointRole::UserAgent,
+        service: ServicePackage::UserV2,
+        agent_generation: generation(3),
+    };
+    let mut credential = descriptor(
+        "caaaaaaaaaaaaaaaaaaq",
+        ProviderType::Credential,
+        "credential-secret-service",
+    );
+    credential.placement = placement.clone();
+    let mut consumer = descriptor(
+        "eaaaaaaaaaaaaaaaaaaq",
+        ProviderType::Runtime,
+        "runtime-user-agent-consumer",
+    );
+    consumer.placement = placement;
+
+    let mut lease = credential_lease();
+    lease.placement_binding = user_agent_credential_binding();
+    lease.validate(&credential, &consumer, 5_000).unwrap();
+
+    consumer.placement = ProviderPlacement::UserAgent {
+        realm_id: realm_id(),
+        role_id: role_id(),
+        endpoint_role: EndpointRole::UserAgent,
+        service: ServicePackage::UserV2,
+        agent_generation: generation(4),
+    };
+    assert_eq!(
+        lease.validate(&credential, &consumer, 5_000),
+        Err(ProviderContractError::LeaseNotColocated)
+    );
+
+    consumer.placement = agent_placement();
+    assert_eq!(
+        lease.validate(&credential, &consumer, 5_000),
+        Err(ProviderContractError::LeaseNotColocated)
+    );
+}
+
+#[test]
+fn user_agent_placement_requires_the_user_service_and_role() {
+    let valid = ProviderPlacement::UserAgent {
+        realm_id: realm_id(),
+        role_id: role_id(),
+        endpoint_role: EndpointRole::UserAgent,
+        service: ServicePackage::UserV2,
+        agent_generation: generation(1),
+    };
+    valid.validate().unwrap();
+
+    let invalid_service = ProviderPlacement::UserAgent {
+        realm_id: realm_id(),
+        role_id: role_id(),
+        endpoint_role: EndpointRole::UserAgent,
+        service: ServicePackage::ProviderV2,
+        agent_generation: generation(1),
+    };
+    assert_eq!(
+        invalid_service.validate(),
+        Err(ProviderContractError::PlacementMismatch)
+    );
+
+    let operation = operation_request().context;
+    let valid_call = ProviderCallContext {
+        operation: &operation,
+        peer_role: EndpointRole::UserAgent,
+        service: ServicePackage::UserV2,
+        monotonic_deadline_remaining_ms: 1,
+        cancelled: false,
+    };
+    valid_call.validate().unwrap();
+    let invalid_call = ProviderCallContext {
+        service: ServicePackage::ProviderV2,
+        ..valid_call
+    };
+    assert_eq!(
+        invalid_call.validate(),
+        Err(ProviderContractError::PlacementMismatch)
+    );
+}
+
 fn assert_no_forbidden_keys(value: &Value) {
     match value {
         Value::Object(map) => {
@@ -774,6 +939,205 @@ fn serialized_contract_has_no_secret_path_argv_or_unbounded_diagnostic_entrypoin
     ] {
         assert!(!encoded.contains(canary));
     }
+}
+
+#[test]
+fn operation_inputs_are_closed_bounded_and_method_exact() {
+    let configured = ProviderOperationInput::ConfiguredRuntimeExecution {
+        configured_item_id: ConfiguredItemId::parse("configured-canary").unwrap(),
+    };
+    let power = ProviderOperationInput::InfrastructurePowerState {
+        state: InfrastructurePowerState::Stopped,
+    };
+    let binding = ProviderOperationInput::TransportBinding {
+        transport_binding_id: TransportBindingId::parse("binding-canary").unwrap(),
+    };
+    let snapshot = ProviderOperationInput::StorageSnapshot {
+        snapshot_id: StorageSnapshotId::parse("snapshot-canary").unwrap(),
+    };
+    let selector = ProviderOperationInput::DeviceSelector {
+        device_selector_id: DeviceSelectorId::parse("selector-canary").unwrap(),
+    };
+    let audio = ProviderOperationInput::AudioState {
+        channel: AudioChannel::Speaker,
+        direction: AudioDirection::Output,
+        mute: Some(false),
+        volume: Some(100),
+    };
+    let query = ProviderOperationInput::ObservabilityQuery {
+        view: ObservabilityView::Operations,
+        cursor: Some(ObservabilityCursor::parse("cursor-canary").unwrap()),
+        limit: MAX_OBSERVABILITY_QUERY_LIMIT,
+    };
+    let export = ProviderOperationInput::ObservabilityExport {
+        format: ObservabilityExportFormat::OtlpProtobuf,
+        start_at_unix_ms: 10,
+        end_at_unix_ms: 10 + MAX_OBSERVABILITY_EXPORT_RANGE_MS,
+    };
+
+    for (input, method) in [
+        (&configured, ProviderMethod::RuntimeExecute),
+        (&power, ProviderMethod::InfrastructureSetPowerState),
+        (&binding, ProviderMethod::InfrastructureBootstrapBinding),
+        (&binding, ProviderMethod::TransportConnect),
+        (&binding, ProviderMethod::TransportRevokeBinding),
+        (&snapshot, ProviderMethod::StorageSnapshot),
+        (&selector, ProviderMethod::DevicePlanAttach),
+        (&audio, ProviderMethod::AudioSetState),
+        (&query, ProviderMethod::ObservabilityQuery),
+        (&export, ProviderMethod::ObservabilityExport),
+    ] {
+        input.validate_for(method).unwrap();
+        assert_eq!(
+            input.validate_for(ProviderMethod::RuntimeInspect),
+            Err(ProviderContractError::OperationInputMismatch)
+        );
+    }
+    ProviderOperationInput::NoInput
+        .validate_for(ProviderMethod::RuntimeInspect)
+        .unwrap();
+    assert_eq!(
+        ProviderOperationInput::NoInput.validate_for(ProviderMethod::AudioSetState),
+        Err(ProviderContractError::OperationInputMismatch)
+    );
+
+    assert_eq!(
+        ProviderOperationInput::AudioState {
+            channel: AudioChannel::Microphone,
+            direction: AudioDirection::Output,
+            mute: Some(true),
+            volume: None,
+        }
+        .validate(),
+        Err(ProviderContractError::OperationInputMismatch)
+    );
+    assert_eq!(
+        ProviderOperationInput::AudioState {
+            channel: AudioChannel::Speaker,
+            direction: AudioDirection::Output,
+            mute: None,
+            volume: None,
+        }
+        .validate(),
+        Err(ProviderContractError::OperationInputMismatch)
+    );
+    assert_eq!(
+        ProviderOperationInput::AudioState {
+            channel: AudioChannel::Speaker,
+            direction: AudioDirection::Output,
+            mute: None,
+            volume: Some(101),
+        }
+        .validate(),
+        Err(ProviderContractError::BoundExceeded)
+    );
+    assert_eq!(
+        ProviderOperationInput::ObservabilityQuery {
+            view: ObservabilityView::Health,
+            cursor: None,
+            limit: 0,
+        }
+        .validate(),
+        Err(ProviderContractError::BoundExceeded)
+    );
+    assert_eq!(
+        ProviderOperationInput::ObservabilityQuery {
+            view: ObservabilityView::Health,
+            cursor: None,
+            limit: MAX_OBSERVABILITY_QUERY_LIMIT + 1,
+        }
+        .validate(),
+        Err(ProviderContractError::BoundExceeded)
+    );
+    assert_eq!(
+        ProviderOperationInput::ObservabilityExport {
+            format: ObservabilityExportFormat::JsonLines,
+            start_at_unix_ms: 20,
+            end_at_unix_ms: 20,
+        }
+        .validate(),
+        Err(ProviderContractError::InvalidTimeRange)
+    );
+    assert_eq!(
+        ProviderOperationInput::ObservabilityExport {
+            format: ObservabilityExportFormat::JsonLines,
+            start_at_unix_ms: 20,
+            end_at_unix_ms: 21 + MAX_OBSERVABILITY_EXPORT_RANGE_MS,
+        }
+        .validate(),
+        Err(ProviderContractError::InvalidTimeRange)
+    );
+    assert_eq!(
+        ProviderOperationInput::ObservabilityExport {
+            format: ObservabilityExportFormat::JsonLines,
+            start_at_unix_ms: MAX_SAFE_JSON_INTEGER,
+            end_at_unix_ms: MAX_SAFE_JSON_INTEGER + 1,
+        }
+        .validate(),
+        Err(ProviderContractError::InvalidTimeRange)
+    );
+    assert!(ConfiguredItemId::parse("x".repeat(65)).is_err());
+    assert!(TransportBindingId::parse("x".repeat(65)).is_err());
+    assert!(StorageSnapshotId::parse("x".repeat(65)).is_err());
+    assert!(DeviceSelectorId::parse("x".repeat(65)).is_err());
+    assert!(ObservabilityCursor::parse("x".repeat(65)).is_err());
+    assert!(ObservabilityCursor::parse("cursor/escape").is_err());
+}
+
+#[test]
+fn operation_input_debug_redacts_every_identifier() {
+    for (input, canary) in [
+        (
+            ProviderOperationInput::ConfiguredRuntimeExecution {
+                configured_item_id: ConfiguredItemId::parse("configured-canary").unwrap(),
+            },
+            "configured-canary",
+        ),
+        (
+            ProviderOperationInput::TransportBinding {
+                transport_binding_id: TransportBindingId::parse("binding-canary").unwrap(),
+            },
+            "binding-canary",
+        ),
+        (
+            ProviderOperationInput::StorageSnapshot {
+                snapshot_id: StorageSnapshotId::parse("snapshot-canary").unwrap(),
+            },
+            "snapshot-canary",
+        ),
+        (
+            ProviderOperationInput::DeviceSelector {
+                device_selector_id: DeviceSelectorId::parse("selector-canary").unwrap(),
+            },
+            "selector-canary",
+        ),
+        (
+            ProviderOperationInput::ObservabilityQuery {
+                view: ObservabilityView::Health,
+                cursor: Some(ObservabilityCursor::parse("cursor-canary").unwrap()),
+                limit: 1,
+            },
+            "cursor-canary",
+        ),
+    ] {
+        assert!(!format!("{input:?}").contains(canary));
+    }
+}
+
+#[test]
+fn operation_request_rejects_method_input_mismatch() {
+    let descriptor = descriptor(
+        "f7z3k5e3awgn43aljt2a",
+        ProviderType::Runtime,
+        "azure-container-apps",
+    );
+    let mut request = operation_request();
+    request.context.method = ProviderMethod::RuntimeExecute;
+    request.context.capability = ProviderCapability(ProviderMethod::RuntimeExecute);
+    assert_eq!(
+        request.validate(&descriptor, 5_000),
+        Err(ProviderContractError::OperationInputMismatch)
+    );
 }
 
 #[test]
@@ -844,4 +1208,115 @@ fn every_provider_trait_is_object_safe_for_in_process_or_agent_proxies() {
     assert_device(None);
     assert_audio(None);
     assert_observability(None);
+}
+
+#[test]
+fn observability_query_result_accepts_closed_labels_with_actual_provider_type() {
+    let request = observability_query_request(2);
+    let result = observability_query_result(vec![
+        observability_record(3_000, ProviderType::Runtime, 1),
+        observability_record(3_001, ProviderType::Observability, 2),
+    ]);
+
+    result.validate(&request).unwrap();
+}
+
+#[test]
+fn observability_query_result_enforces_record_byte_and_cursor_bounds() {
+    let request = observability_query_request(MAX_OBSERVABILITY_QUERY_LIMIT);
+    let records = (0..MAX_OBSERVABILITY_QUERY_LIMIT)
+        .map(|index| {
+            observability_record(
+                3_000 + u64::from(index),
+                ProviderType::Runtime,
+                u64::from(index),
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut result = observability_query_result(records);
+    result.next_cursor = Some(ObservabilityCursor::parse(format!("c{}", "1".repeat(63))).unwrap());
+    result.truncated = true;
+    result.validate(&request).unwrap();
+
+    result.encoded_bytes_upper_bound = MAX_OBSERVABILITY_QUERY_BYTES;
+    result.validate(&request).unwrap();
+    result.encoded_bytes_upper_bound = MAX_OBSERVABILITY_QUERY_BYTES + 1;
+    assert!(result.validate(&request).is_err());
+    result.encoded_bytes_upper_bound = MAX_OBSERVABILITY_QUERY_BYTES;
+    result.truncated = false;
+    assert!(result.validate(&request).is_err());
+    result.truncated = true;
+    result.next_cursor = None;
+    assert!(result.validate(&request).is_err());
+}
+
+#[test]
+fn observability_query_result_rejects_binding_order_and_value_mismatches() {
+    let request = observability_query_request(2);
+    let mut result =
+        observability_query_result(vec![observability_record(3_000, ProviderType::Runtime, 1)]);
+
+    result.observation.provider_generation = generation(8);
+    assert!(result.validate(&request).is_err());
+    result.observation.provider_generation = generation(7);
+
+    result.observation.workload_id = None;
+    assert!(result.validate(&request).is_err());
+    result.observation.workload_id = Some(workload_id());
+
+    result.records = BoundedVec::new(vec![
+        observability_record(3_001, ProviderType::Runtime, 1),
+        observability_record(3_000, ProviderType::Runtime, 2),
+    ])
+    .unwrap();
+    result.encoded_bytes_upper_bound = 2 * OBSERVABILITY_RECORD_ENCODED_UPPER_BOUND_BYTES;
+    assert!(result.validate(&request).is_err());
+
+    result.records = BoundedVec::new(vec![ObservabilityRecord {
+        value: MAX_SAFE_JSON_INTEGER + 1,
+        ..observability_record(3_000, ProviderType::Runtime, 1)
+    }])
+    .unwrap();
+    result.encoded_bytes_upper_bound = OBSERVABILITY_RECORD_ENCODED_UPPER_BOUND_BYTES;
+    assert!(result.validate(&request).is_err());
+}
+
+#[test]
+fn observability_query_result_serialization_has_no_free_form_fields() {
+    let result =
+        observability_query_result(vec![observability_record(3_000, ProviderType::Runtime, 1)]);
+    let value = serde_json::to_value(result).unwrap();
+    let record = value["records"].as_array().unwrap()[0].as_object().unwrap();
+    let labels = record["labels"].as_object().unwrap();
+
+    assert_eq!(
+        record.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        ["labels", "observedAtUnixMs", "projection", "value"]
+            .into_iter()
+            .collect()
+    );
+    assert_eq!(
+        labels.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        [
+            "healthState",
+            "metric",
+            "operation",
+            "outcome",
+            "providerType"
+        ]
+        .into_iter()
+        .collect()
+    );
+    let encoded = serde_json::to_string(&value).unwrap();
+    for forbidden in [
+        "providerInstance",
+        "workloadLabel",
+        "identifier",
+        "command",
+        "path",
+        "secret",
+        "json",
+    ] {
+        assert!(!encoded.contains(forbidden));
+    }
 }

@@ -7,24 +7,34 @@ use d2b_contracts::{
     v2_component_session::{BoundedVec, EndpointRole, ServicePackage},
     v2_identity::{ProviderId, ProviderType, RealmId, RoleId, WorkloadId},
     v2_provider::{
-        AdoptionRequest, AdoptionState, AgentPlacementBinding, AudioProvider, CgroupAuthority,
-        CorrelationId, CredentialLease, CredentialLeaseRequest, CredentialLeaseState,
-        CredentialLeaseTransferPolicy, CredentialProvider, DeviceMediationPosture, DeviceProvider,
-        DisplayProvider, Fingerprint, Generation, HandleOwner, IdempotencyKey, ImplementationId,
-        InfrastructureProvider, LeaseId, MutationReceipt, MutationState, NetworkPosture,
-        NetworkProvider, ObservabilityProvider, ObservationReason, ObservedLifecycleState,
-        OperationId, OwnershipTransfer, PROVIDER_SCHEMA_VERSION, PersistentIdentityPosture, PlanId,
-        PlannedResourceClass, PrincipalRef, ProcessAuthority, Provider, ProviderApiVersion,
+        AdoptionRequest, AdoptionState, AgentPlacementBinding, AudioChannel, AudioDirection,
+        AudioProvider, CgroupAuthority, ConfiguredItemId, CorrelationId, CredentialLease,
+        CredentialLeaseRequest, CredentialLeaseState, CredentialLeaseTransferPolicy,
+        CredentialPlacementBinding, CredentialProvider, DeviceMediationPosture, DeviceProvider,
+        DeviceSelectorId, DisplayProvider, Fingerprint, Generation, IdempotencyKey,
+        ImplementationId, InfrastructurePowerState, InfrastructureProvider, LeaseId,
+        MutationReceipt, MutationState, NetworkPosture, NetworkProvider,
+        OBSERVABILITY_RECORD_ENCODED_UPPER_BOUND_BYTES, ObservabilityExportFormat,
+        ObservabilityLabels, ObservabilityMetricLabel, ObservabilityOperationLabel,
+        ObservabilityOutcomeLabel, ObservabilityProjectionKind, ObservabilityProvider,
+        ObservabilityQueryResult, ObservabilityRecord, ObservabilityView, ObservationReason,
+        ObservedLifecycleState, OperationId, PROVIDER_SCHEMA_VERSION, PersistentIdentityPosture,
+        PlanId, PlannedResourceClass, PrincipalRef, ProcessAuthority, Provider, ProviderApiVersion,
         ProviderAuthority, ProviderCallContext, ProviderCapability, ProviderCapabilitySet,
-        ProviderContractError, ProviderDescriptor, ProviderFuture, ProviderHandle,
-        ProviderHandleKind, ProviderHealth, ProviderHealthReason, ProviderHealthState,
-        ProviderMethod, ProviderObservation, ProviderOperationContext, ProviderOperationRequest,
+        ProviderContractError, ProviderDescriptor, ProviderFuture, ProviderHandle, ProviderHealth,
+        ProviderHealthReason, ProviderHealthState, ProviderMethod, ProviderObservation,
+        ProviderOperationContext, ProviderOperationInput, ProviderOperationRequest,
         ProviderPlacement, ProviderPlan, ProviderRemediation, ProviderTarget,
         RuntimeAuthorityPosture, RuntimeProvider, SdkOperationClass, SourceVersion,
-        StorageProvider, SubstrateProvider, TransportProvider, UserNamespacePosture,
+        StorageProvider, StorageSnapshotId, SubstrateProvider, TransportBindingId,
+        TransportProvider, UserNamespacePosture,
     },
 };
-use d2b_provider::{ProviderClock, ProviderInstance, SessionIdentity};
+use d2b_provider::{
+    ProviderClock, ProviderInstance, SessionIdentity, provider_method_is_dispatchable,
+};
+
+use crate::ProviderValues;
 
 #[derive(Debug)]
 pub struct DeterministicClock {
@@ -53,8 +63,7 @@ impl ProviderClock for DeterministicClock {
 pub struct Fixture {
     pub descriptor: ProviderDescriptor,
     pub now_unix_ms: u64,
-    realm_id: RealmId,
-    workload_id: WorkloadId,
+    target: ProviderTarget,
 }
 
 impl Fixture {
@@ -74,7 +83,7 @@ impl Fixture {
             ProviderMethod::ALL
                 .iter()
                 .filter(|method| method.provider_type() == provider_type)
-                .filter(|method| **method != ProviderMethod::RuntimeExecute)
+                .filter(|method| provider_method_is_dispatchable(**method))
                 .copied()
                 .map(ProviderCapability)
                 .collect(),
@@ -120,12 +129,32 @@ impl Fixture {
                 agent_generation: generation,
             },
         };
+        Self::from_descriptor(
+            descriptor,
+            ProviderTarget::Workload {
+                realm_id,
+                workload_id,
+            },
+            now_unix_ms,
+        )
+    }
+
+    pub fn from_descriptor(
+        descriptor: ProviderDescriptor,
+        target: ProviderTarget,
+        now_unix_ms: u64,
+    ) -> Result<Self, ProviderContractError> {
         descriptor.validate()?;
+        if target.realm_id() != descriptor.placement.realm_id() {
+            return Err(ProviderContractError::ScopeMismatch);
+        }
+        if now_unix_ms <= 1_000 || now_unix_ms > d2b_contracts::v2_provider::MAX_SAFE_JSON_INTEGER {
+            return Err(ProviderContractError::InvalidTimeRange);
+        }
         Ok(Self {
             descriptor,
             now_unix_ms,
-            realm_id,
-            workload_id,
+            target,
         })
     }
 
@@ -138,9 +167,27 @@ impl Fixture {
             operation_id: OperationId::parse("operation-fixture")?,
             idempotency_key: IdempotencyKey::parse("idempotency-fixture")?,
             request_digest: fingerprint(200)?,
-            scope: d2b_contracts::v2_provider::AuthorizedProviderScope::Workload {
-                realm_id: self.realm_id.clone(),
-                workload_id: self.workload_id.clone(),
+            scope: match &self.target {
+                ProviderTarget::Realm { realm_id }
+                | ProviderTarget::Handle {
+                    realm_id,
+                    workload_id: None,
+                    ..
+                } => d2b_contracts::v2_provider::AuthorizedProviderScope::Realm {
+                    realm_id: realm_id.clone(),
+                },
+                ProviderTarget::Workload {
+                    realm_id,
+                    workload_id,
+                }
+                | ProviderTarget::Handle {
+                    realm_id,
+                    workload_id: Some(workload_id),
+                    ..
+                } => d2b_contracts::v2_provider::AuthorizedProviderScope::Workload {
+                    realm_id: realm_id.clone(),
+                    workload_id: workload_id.clone(),
+                },
             },
             principal: PrincipalRef::parse("principal-fixture")?,
             provider_id: self.descriptor.provider_id.clone(),
@@ -161,16 +208,22 @@ impl Fixture {
         &self,
         method: ProviderMethod,
     ) -> Result<ProviderOperationRequest, ProviderContractError> {
+        self.request_with_input(method, sample_input(method)?)
+    }
+
+    pub fn request_with_input(
+        &self,
+        method: ProviderMethod,
+        input: ProviderOperationInput,
+    ) -> Result<ProviderOperationRequest, ProviderContractError> {
         Ok(ProviderOperationRequest {
             context: self.operation(method)?,
-            target: ProviderTarget::Workload {
-                realm_id: self.realm_id.clone(),
-                workload_id: self.workload_id.clone(),
-            },
+            target: self.target.clone(),
             expected_configuration_fingerprint: self
                 .descriptor
                 .configuration_schema_fingerprint
                 .clone(),
+            input,
         })
     }
 
@@ -178,10 +231,25 @@ impl Fixture {
         &self,
         operation: &'a ProviderOperationContext,
     ) -> ProviderCallContext<'a> {
+        let (peer_role, service) = match &self.descriptor.placement {
+            ProviderPlacement::TrustedFirstPartyInProcess {
+                controller_role, ..
+            } => (*controller_role, ServicePackage::ProviderV2),
+            ProviderPlacement::ProviderAgent {
+                endpoint_role,
+                service,
+                ..
+            }
+            | ProviderPlacement::UserAgent {
+                endpoint_role,
+                service,
+                ..
+            } => (*endpoint_role, *service),
+        };
         ProviderCallContext {
             operation,
-            peer_role: EndpointRole::ProviderAgent,
-            service: ServicePackage::ProviderV2,
+            peer_role,
+            service,
             monotonic_deadline_remaining_ms: 30_000,
             cancelled: false,
         }
@@ -196,6 +264,47 @@ impl Fixture {
             provider_generation: self.descriptor.registry_generation,
         }
     }
+}
+
+fn sample_input(method: ProviderMethod) -> Result<ProviderOperationInput, ProviderContractError> {
+    Ok(match method {
+        ProviderMethod::RuntimeExecute => ProviderOperationInput::ConfiguredRuntimeExecution {
+            configured_item_id: ConfiguredItemId::parse("configured-item")?,
+        },
+        ProviderMethod::InfrastructureSetPowerState => {
+            ProviderOperationInput::InfrastructurePowerState {
+                state: InfrastructurePowerState::Running,
+            }
+        }
+        ProviderMethod::InfrastructureBootstrapBinding
+        | ProviderMethod::TransportConnect
+        | ProviderMethod::TransportRevokeBinding => ProviderOperationInput::TransportBinding {
+            transport_binding_id: TransportBindingId::parse("transport-binding")?,
+        },
+        ProviderMethod::StorageSnapshot => ProviderOperationInput::StorageSnapshot {
+            snapshot_id: StorageSnapshotId::parse("snapshot-fixture")?,
+        },
+        ProviderMethod::DevicePlanAttach => ProviderOperationInput::DeviceSelector {
+            device_selector_id: DeviceSelectorId::parse("device-selector")?,
+        },
+        ProviderMethod::AudioSetState => ProviderOperationInput::AudioState {
+            channel: AudioChannel::Speaker,
+            direction: AudioDirection::Output,
+            mute: Some(false),
+            volume: Some(50),
+        },
+        ProviderMethod::ObservabilityQuery => ProviderOperationInput::ObservabilityQuery {
+            view: ObservabilityView::Lifecycle,
+            cursor: None,
+            limit: 32,
+        },
+        ProviderMethod::ObservabilityExport => ProviderOperationInput::ObservabilityExport {
+            format: ObservabilityExportFormat::JsonLines,
+            start_at_unix_ms: 1_699_999_940_000,
+            end_at_unix_ms: 1_700_000_000_000,
+        },
+        _ => ProviderOperationInput::NoInput,
+    })
 }
 
 fn fingerprint(value: usize) -> Result<Fingerprint, ProviderContractError> {
@@ -227,96 +336,59 @@ impl FakeProvider {
         }
     }
 
+    fn values(&self) -> ProviderValues {
+        ProviderValues::new(&self.fixture.descriptor, self.fixture.now_unix_ms)
+            .unwrap_or_else(|_| unreachable!())
+    }
+
     fn health_value(&self) -> ProviderHealth {
-        ProviderHealth {
-            provider_id: self.fixture.descriptor.provider_id.clone(),
-            registry_generation: self.fixture.descriptor.registry_generation,
-            observed_at_unix_ms: self.fixture.now_unix_ms,
-            state: ProviderHealthState::Healthy,
-            reason: ProviderHealthReason::None,
-            remediation: ProviderRemediation::None,
-        }
+        self.values()
+            .health(
+                ProviderHealthState::Healthy,
+                ProviderHealthReason::None,
+                ProviderRemediation::None,
+            )
+            .unwrap_or_else(|_| unreachable!())
     }
 
     fn plan_value(&self, request: &ProviderOperationRequest) -> ProviderPlan {
-        ProviderPlan {
-            schema_version: PROVIDER_SCHEMA_VERSION,
-            plan_id: PlanId::parse("plan-fixture").unwrap_or_else(|_| unreachable!()),
-            binding: request.context.binding(),
-            realm_id: request.target.realm_id().clone(),
-            workload_id: request.target.workload_id().cloned(),
-            method: request.context.method,
-            configuration_fingerprint: request.expected_configuration_fingerprint.clone(),
-            created_at_unix_ms: self.fixture.now_unix_ms,
-            expires_at_unix_ms: self.fixture.now_unix_ms + 30_000,
-            resources: BoundedVec::new(Vec::<PlannedResourceClass>::new())
-                .unwrap_or_else(|_| unreachable!()),
-        }
-    }
-
-    fn handle_kind(&self) -> ProviderHandleKind {
-        match self.fixture.descriptor.provider_type() {
-            ProviderType::Runtime => ProviderHandleKind::Runtime,
-            ProviderType::Infrastructure => ProviderHandleKind::Infrastructure,
-            ProviderType::Transport => ProviderHandleKind::Transport,
-            ProviderType::Display => ProviderHandleKind::Display,
-            ProviderType::Network => ProviderHandleKind::Network,
-            ProviderType::Storage => ProviderHandleKind::Storage,
-            ProviderType::Device => ProviderHandleKind::Device,
-            ProviderType::Audio => ProviderHandleKind::Audio,
-            ProviderType::Observability => ProviderHandleKind::Observation,
-            ProviderType::Substrate | ProviderType::Credential => ProviderHandleKind::Observation,
-        }
-    }
-
-    fn handle_from_binding(
-        &self,
-        binding: d2b_contracts::v2_provider::OperationBinding,
-        realm_id: RealmId,
-        workload_id: Option<WorkloadId>,
-    ) -> ProviderHandle {
-        ProviderHandle {
-            schema_version: PROVIDER_SCHEMA_VERSION,
-            handle_id: d2b_contracts::v2_provider::HandleId::parse("handle-fixture")
-                .unwrap_or_else(|_| unreachable!()),
-            kind: self.handle_kind(),
-            provider_id: self.fixture.descriptor.provider_id.clone(),
-            realm_id: realm_id.clone(),
-            workload_id,
-            owner: HandleOwner::Provider {
-                realm_id,
-                provider_id: self.fixture.descriptor.provider_id.clone(),
-            },
-            provider_generation: self.fixture.descriptor.registry_generation,
-            resource_generation: Generation::new(1).unwrap_or_else(|_| unreachable!()),
-            configuration_fingerprint: self
-                .fixture
-                .descriptor
-                .configuration_schema_fingerprint
-                .clone(),
-            created_by: binding,
-            created_at_unix_ms: self.fixture.now_unix_ms,
-            expires_at_unix_ms: None,
-            ownership_transfer: OwnershipTransfer::Stationary {
-                ownership_epoch: Generation::new(1).unwrap_or_else(|_| unreachable!()),
-            },
-        }
+        self.values()
+            .plan(
+                request,
+                PlanId::parse("plan-fixture").unwrap_or_else(|_| unreachable!()),
+                self.fixture.now_unix_ms + 30_000,
+                BoundedVec::new(Vec::<PlannedResourceClass>::new())
+                    .unwrap_or_else(|_| unreachable!()),
+            )
+            .unwrap_or_else(|_| unreachable!())
     }
 
     fn handle_from_request(&self, request: &ProviderOperationRequest) -> ProviderHandle {
-        self.handle_from_binding(
-            request.context.binding(),
-            request.target.realm_id().clone(),
-            request.target.workload_id().cloned(),
-        )
+        let values = self.values();
+        values
+            .handle_from_request(
+                request,
+                d2b_contracts::v2_provider::HandleId::parse("handle-fixture")
+                    .unwrap_or_else(|_| unreachable!()),
+                values.provider_owner(request.target.realm_id()),
+                Generation::new(1).unwrap_or_else(|_| unreachable!()),
+                None,
+            )
+            .unwrap_or_else(|_| unreachable!())
     }
 
     fn handle_from_plan(&self, plan: &ProviderPlan) -> ProviderHandle {
-        self.handle_from_binding(
-            plan.binding.clone(),
-            plan.realm_id.clone(),
-            plan.workload_id.clone(),
-        )
+        let values = self.values();
+        values
+            .handle_from_plan(
+                plan,
+                d2b_contracts::v2_provider::HandleId::parse("handle-fixture")
+                    .unwrap_or_else(|_| unreachable!()),
+                values.provider_owner(&plan.realm_id),
+                Generation::new(1).unwrap_or_else(|_| unreachable!()),
+                None,
+            )
+            .unwrap_or_else(|_| unreachable!())
     }
 
     fn observation(
@@ -325,28 +397,63 @@ impl FakeProvider {
         adoption: AdoptionState,
         handle: Option<&ProviderHandle>,
     ) -> ProviderObservation {
-        ProviderObservation {
-            provider_id: self.fixture.descriptor.provider_id.clone(),
-            provider_generation: self.fixture.descriptor.registry_generation,
-            realm_id: context.scope.realm_id().clone(),
-            workload_id: context.scope.workload_id().cloned(),
-            handle_id: handle.map(|value| value.handle_id.clone()),
-            resource_generation: handle.map(|value| value.resource_generation),
-            observed_at_unix_ms: self.fixture.now_unix_ms,
-            lifecycle: ObservedLifecycleState::Ready,
-            adoption,
-            reason: ObservationReason::None,
-            health: self.health_value(),
-        }
+        self.values()
+            .observation(
+                context,
+                handle,
+                ObservedLifecycleState::Ready,
+                adoption,
+                ObservationReason::None,
+                ProviderHealthState::Healthy,
+                ProviderHealthReason::None,
+                ProviderRemediation::None,
+            )
+            .unwrap_or_else(|_| unreachable!())
     }
 
     fn receipt(&self, context: &ProviderOperationContext) -> MutationReceipt {
-        MutationReceipt {
-            binding: context.binding(),
-            state: MutationState::Applied,
-            observed_at_unix_ms: self.fixture.now_unix_ms,
-            observation_required_before_retry: false,
-        }
+        self.values()
+            .receipt(context, MutationState::Applied)
+            .unwrap_or_else(|_| unreachable!())
+    }
+
+    fn query_result(&self, request: &ProviderOperationRequest) -> ObservabilityQueryResult {
+        let metric = match &request.input {
+            ProviderOperationInput::ObservabilityQuery {
+                view: ObservabilityView::Health,
+                ..
+            } => ObservabilityMetricLabel::ProviderHealth,
+            ProviderOperationInput::ObservabilityQuery {
+                view: ObservabilityView::Lifecycle,
+                ..
+            } => ObservabilityMetricLabel::LifecycleTransition,
+            ProviderOperationInput::ObservabilityQuery {
+                view: ObservabilityView::Operations,
+                ..
+            } => ObservabilityMetricLabel::OperationTotal,
+            _ => ObservabilityMetricLabel::ProviderHealth,
+        };
+        let result = ObservabilityQueryResult {
+            observation: self.observation(&request.context, AdoptionState::NotAttempted, None),
+            records: BoundedVec::new(vec![ObservabilityRecord {
+                observed_at_unix_ms: self.fixture.now_unix_ms,
+                projection: ObservabilityProjectionKind::Metrics,
+                labels: ObservabilityLabels {
+                    provider_type: ProviderType::Runtime,
+                    health_state: ProviderHealthState::Healthy,
+                    metric,
+                    operation: ObservabilityOperationLabel::Inspect,
+                    outcome: ObservabilityOutcomeLabel::Success,
+                },
+                value: 1,
+            }])
+            .unwrap_or_else(|_| unreachable!()),
+            next_cursor: None,
+            encoded_bytes_upper_bound: OBSERVABILITY_RECORD_ENCODED_UPPER_BOUND_BYTES,
+            truncated: false,
+        };
+        result.validate(request).unwrap_or_else(|_| unreachable!());
+        result
     }
 }
 
@@ -514,7 +621,7 @@ impl CredentialProvider for FakeProvider {
                 lease_id: LeaseId::parse("lease-fixture").unwrap_or_else(|_| unreachable!()),
                 credential_provider_id: self.fixture.descriptor.provider_id.clone(),
                 consumer_provider_id: request.consumer_provider_id.clone(),
-                agent_binding: request.agent_binding.clone(),
+                placement_binding: request.placement_binding.clone(),
                 allowed_operations: request.allowed_operations.clone(),
                 issued_at_unix_ms: self.fixture.now_unix_ms,
                 expires_at_unix_ms: request.requested_expiry_unix_ms,
@@ -595,7 +702,13 @@ impl AudioProvider for FakeProvider {
 impl ObservabilityProvider for FakeProvider {
     fake_capabilities!();
     fake_observation!(status);
-    fake_observation!(query);
+    fn query<'a>(
+        &'a self,
+        _context: &'a ProviderCallContext<'a>,
+        request: &'a ProviderOperationRequest,
+    ) -> ProviderFuture<'a, ObservabilityQueryResult> {
+        Box::pin(async move { Ok(self.query_result(request)) })
+    }
     fake_handle!(subscribe);
     fake_mutation!(export);
 }
@@ -617,11 +730,13 @@ pub fn sample_lease_request(
         context: fixture.operation(ProviderMethod::CredentialAcquireLease)?,
         consumer_provider_id: ProviderId::parse("eeeeeeeeeeeeeeeeeeea")
             .map_err(|_| ProviderContractError::InvalidIdentifier)?,
-        agent_binding: AgentPlacementBinding {
-            realm_id: realm_id.clone(),
-            workload_id: workload_id.clone(),
-            role_id: role_id.clone(),
-            agent_generation: *agent_generation,
+        placement_binding: CredentialPlacementBinding::ProviderAgent {
+            binding: AgentPlacementBinding {
+                realm_id: realm_id.clone(),
+                workload_id: workload_id.clone(),
+                role_id: role_id.clone(),
+                agent_generation: *agent_generation,
+            },
         },
         allowed_operations: BoundedVec::new(vec![SdkOperationClass::Read])
             .map_err(|_| ProviderContractError::BoundExceeded)?,

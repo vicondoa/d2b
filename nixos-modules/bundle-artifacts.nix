@@ -147,6 +147,7 @@ let
     "realmWorkloadsLauncherJson"
     "realmWorkloadsLauncherV2Json"
     "unsafeLocalWorkloadsJson"
+    "providerRegistryV2Json"
   ];
 
   shouldInstall = artifact:
@@ -262,6 +263,14 @@ in
       internal = true;
       visible = false;
       description = "Internal typed unsafe-local-workloads.json private configured-item artifact.";
+    };
+
+    providerRegistryV2Json = lib.mkOption {
+      type = artifactModule;
+      default = { };
+      internal = true;
+      visible = false;
+      description = "Internal typed provider-registry-v2.json private provider composition artifact.";
     };
 
     extraArtifacts = lib.mkOption {

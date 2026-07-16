@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write as _;
 use std::os::unix::fs::{FileTypeExt as _, PermissionsExt as _};
@@ -7,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
+use sha2::{Digest, Sha256};
 use tempfile::{Builder, TempDir};
 
 pub const HELLO_FRAME: &str =
@@ -138,7 +140,121 @@ pub fn primary_group_name() -> String {
 }
 
 pub fn write_daemon_config(fixture: &DaemonFixture, launcher_users: &[&str], admin_users: &[&str]) {
-    write_daemon_config_with_artifacts(fixture, launcher_users, admin_users, None);
+    let artifacts = write_empty_provider_registry_artifacts(fixture.root());
+    write_daemon_config_with_artifacts(fixture, launcher_users, admin_users, Some(artifacts));
+}
+
+fn write_empty_provider_registry_artifacts(root: &Path) -> serde_json::Value {
+    let artifacts_dir = root.join("artifacts");
+    let public_manifest_path = artifacts_dir.join("vms.json");
+    let bundle_path = artifacts_dir.join("bundle.json");
+    let host_path = artifacts_dir.join("host.json");
+    let processes_path = artifacts_dir.join("processes.json");
+    let provider_registry_path = artifacts_dir.join("provider-registry-v2.json");
+    let closures_dir = artifacts_dir.join("closures");
+    fs::create_dir_all(&closures_dir).expect("create default artifact fixture");
+
+    fs::write(
+        &public_manifest_path,
+        serde_json::to_vec(&serde_json::json!({
+            "_manifest": { "manifestVersion": 6 },
+            "_observability": {
+                "enabled": false,
+                "signozUrl": "http://127.0.0.1:8080",
+                "signozOtlpGrpcPort": 4317,
+                "signozOtlpHttpPort": 4318,
+                "obsVsockCid": 1000,
+                "obsVsockHostSocket": "/run/d2b/obs.sock",
+                "vmName": "sys-obs"
+            }
+        }))
+        .expect("serialize default manifest"),
+    )
+    .expect("write default manifest");
+    fs::copy(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/deny-unknown/host-valid.json"),
+        &host_path,
+    )
+    .expect("copy default host fixture");
+    fs::write(
+        &processes_path,
+        serde_json::to_vec(&serde_json::json!({ "schemaVersion": "v2", "vms": [] }))
+            .expect("serialize default processes"),
+    )
+    .expect("write default processes");
+    fs::write(
+        &provider_registry_path,
+        serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": "v2",
+            "registryGeneration": 1,
+            "configurationFingerprint": "0".repeat(64),
+            "publishedAtUnixMs": 0,
+            "providers": []
+        }))
+        .expect("serialize explicit empty provider registry"),
+    )
+    .expect("write explicit empty provider registry");
+    let mut artifact_hashes = BTreeMap::new();
+    for (key, path) in [
+        ("host.json", &host_path),
+        ("processes.json", &processes_path),
+        ("provider-registry-v2.json", &provider_registry_path),
+    ] {
+        artifact_hashes.insert(
+            key.to_owned(),
+            format!(
+                "sha256:{:x}",
+                Sha256::digest(fs::read(path).expect("read default artifact for hashing"))
+            ),
+        );
+    }
+    let mut bundle = serde_json::json!({
+        "bundleVersion": 12,
+        "schemaVersion": "v2",
+        "publicManifestPath": "vms.json",
+        "hostPath": "host.json",
+        "processesPath": "processes.json",
+        "privilegesPath": "privileges.json",
+        "providerRegistryV2Path": "provider-registry-v2.json",
+        "closures": [],
+        "minijailProfiles": [],
+        "managedKeys": {},
+        "generation": {
+            "generator": "d2bd-integration-test",
+            "sourceRevision": null,
+            "generatedAt": null
+        },
+        "artifactHashes": artifact_hashes
+    });
+    let mut unhashed = bundle.clone();
+    unhashed["artifactHashes"] = serde_json::Value::Null;
+    bundle["bundleHash"] = serde_json::Value::String(format!(
+        "sha256:{:x}",
+        Sha256::digest(serde_json::to_vec(&unhashed).expect("serialize unhashed bundle"))
+    ));
+    fs::write(
+        &bundle_path,
+        serde_json::to_vec(&bundle).expect("serialize default bundle"),
+    )
+    .expect("write default bundle");
+    for path in [
+        &public_manifest_path,
+        &bundle_path,
+        &host_path,
+        &processes_path,
+        &provider_registry_path,
+    ] {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o640))
+            .expect("chmod default artifact");
+    }
+    serde_json::json!({
+        "publicManifestPath": path_string(&public_manifest_path),
+        "bundlePath": path_string(&bundle_path),
+        "hostPath": path_string(&host_path),
+        "processesPath": path_string(&processes_path),
+        "closuresDir": path_string(&closures_dir)
+    })
 }
 
 pub fn write_daemon_config_with_artifacts(

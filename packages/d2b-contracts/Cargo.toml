@@ -32,6 +32,7 @@ public = [
     "broker",
     "guest",
     "dep:d2b-realm-core",
+    "v2-provider",
 ]
 cli-output = ["public"]
 unsafe-local = ["public"]

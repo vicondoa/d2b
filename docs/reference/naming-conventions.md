@@ -122,9 +122,8 @@ transition metadata only in the current implementation; bridge and TAP
 names below are still generated from `d2b.envs` and `d2b.vms.<vm>.env`.
 See [Realm option schema](./realm-options.md).
 
-Gateway-backed realms use a configured realm entrypoint. Consumers should read
-the generated access/entrypoint metadata rather than reconstructing gateway
-names from realm paths.
+Consumers should read canonical realm and provider identities from generated
+metadata rather than reconstructing process or endpoint names from realm paths.
 
 ## Network device names
 

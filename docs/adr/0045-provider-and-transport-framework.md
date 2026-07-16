@@ -2538,12 +2538,16 @@ W0 ADR 0045 decision closure, Proposed panel, and Accepted/index panel
   -> W1 delivery/test/panel/stack tooling
       -> W2 v2 workspace, IDs, contracts, schemas, service definitions
           -> W3 session/provider/state/client foundations
-              -> W4 first-party providers and Azure VM scaffolding
-              -> W5 core control-plane service migration
-              -> W6 user/desktop/device protocol migration
-          -> W7 realm-native Nix, process, allocator, storage and networking
-          -> W9 toolkit and sibling-client cutover
-W4 + W5 + W6 + W7
+              -> W4 first-party providers, provider registry, mapped local
+                    runtime routing, and Azure VM scaffolding
+                  -> W4-F frozen final-review candidate
+                      -> P post-W4 shared contracts/tooling root
+                          -> {W5 core control services,
+                              W6 user/desktop/device services,
+                              W7 remaining realm-native host boundaries}
+                              in parallel
+                      -> W9 toolkit/sibling cutover in parallel
+content-frozen W5 -> W6 -> W7 delivery linearization
   -> W8 integrated realm/provider behavior and current-feature parity
 W8 + W9
   -> W10 v1 purge and destructive reset tooling
@@ -2551,9 +2555,92 @@ W8 + W9
           -> W12 merge train, v2.0 release, toolkit releases, final host pin
 ```
 
-W4, W5, W6, W7, and W9 may overlap speculatively after their exact contract
-dependencies exist. A speculative branch that rebases onto a changed contract
-tree loses its prior seal.
+`W4-F` is the exact W4 head after focused preflight passes, the PR is updated,
+and immutable validation, CI, and the final panel start. The post-W4 shared root
+and W9 start from that head without waiting for W4 to merge or seal. A W4
+content correction invalidates W4's candidate and rebases all speculative
+branches. W4 and every content-changed descendant lose their snapshot,
+validation, CI, panel, and seal evidence.
+
+### Post-W4 parallel execution correction
+
+W4 closed provider-facade findings by pulling several prerequisite and
+integration surfaces forward. Later waves treat the resulting code as baseline:
+
+| W4 baseline | Later-wave correction |
+| --- | --- |
+| Private `provider-registry-v2` Rust/Nix/schema artifact and bundle v12 integrity | W7 extends the existing binding/emitter for remaining axes; it does not create another provider registry artifact. |
+| Startup-owned registry construction, exact effect bindings, and daemon restart on provider generations | W8 consumes the existing registry and never adds a parallel registry or reload authority. |
+| Cloud Hypervisor and qemu-media mapped lifecycle routing, adoption, cancellation-safe cleanup, serialization, and complete lifecycle budgets | W8 retains parity coverage and removes the temporary unmapped fallback; it does not reimplement local runtime routing. |
+| Bounded observability results, local observability mapping, and durable bounded export semantics | W7/W8 extend projection sources and routing without defining a second observability contract. |
+| User-agent provider placement and owner-correct credential leases | W6 implements userd/keyring behavior against the W4 contract without changing its ownership model. |
+
+The post-W4 execution rules are:
+
+1. Create `adr0045-post-w4-contracts` from `W4-F`. It exclusively owns
+   cross-wave DTO/protobuf/schema changes, anticipated workspace dependencies,
+   `Cargo.lock`, shared policy/tooling, and per-wave delivery-manifest support.
+   It freezes the allocator boundary: W5 owns allocator service/dispatch
+   implementation; W7 owns Nix/process/resource emission against that API.
+2. Create W5, W6, and W7 as Git Town children of the shared root and open draft
+   sibling PRs after wave-local prep commits. Wave-local prep owns only local
+   shared files and file-ownership maps. Any newly discovered cross-wave
+   contract returns to the root and rebases all three branches.
+3. Shared tooling adds separate checked-in manifests under
+   `delivery/manifests/w<N>.json`; sibling waves do not contend for one delivery
+   manifest. Slice agents never edit the workspace lock, cross-wave generated
+   contracts, shared policy, or another wave's files.
+4. W5/W6/W7 remain siblings during implementation. At content freeze, delivery
+   is deterministically linearized W5 -> W6 -> W7 through Git Town parent
+   changes **before W6/W7 create final snapshots or run final panels**. W6 and
+   W7 run fresh validation, CI, and panels against their larger integrated
+   trees; pre-linearization evidence is never reused. Later history-only
+   retargets may reuse only panel records after the existing byte-identical
+   content proof; new-history CI and manifest-declared validation rerun.
+5. W9 proceeds independently for W4/root-frozen contracts. A sibling feature
+   that consumes a W5/W6 service remains on a dependent child branch. W4/root
+   corrections propagate root-to-leaf and invalidate their own and every
+   content-changed descendant's candidate evidence.
+6. W8 integration prep starts when W5/W6/W7 publish content-frozen APIs. Create
+   `adr0045-w8-integration` as a Git Town child of the linearized W7 head; its PR
+   base is W7 and its manifest records the ordered W5/W6/W7/W8 chain. Recreate
+   or rebase it whenever a dependency changes.
+7. Every wave still receives a separate immutable candidate, required tests,
+   exact-head CI, and end-of-wave ten-role panel. A pending earlier panel never
+   idles later speculative implementation.
+8. Slice worktrees and real Cargo targets are removed immediately after
+   integration. Retain only the primary clone and currently active shared-root
+   or wave integration worktrees, including W8 after it starts.
+9. A Rust `xtask` per-development-UID semaphore owns two OFD-locked slots across
+   all worktrees. Its trusted directory is
+   `${XDG_RUNTIME_DIR}/d2b-heavy-gates` when available, otherwise
+   `${TMPDIR:-/tmp}/d2b-heavy-gates-$UID`. Creation uses mode 0700 and fails
+   closed unless `lstat`/`fstat` prove a non-symlink directory owned by the
+   invoking UID with no group/other access. The exact files `slot-0.lock` and
+   `slot-1.lock` are opened `O_RDWR|O_CREAT|O_CLOEXEC|O_NOFOLLOW` mode 0600 and
+   verified regular, same-owner, and single-link. The helper tries slot 0 then
+   slot 1 with nonblocking OFD write locks every 250 ms for at most 30 minutes;
+   unsupported OFD locking, unsafe metadata, or timeout fails closed with no
+   `flock` fallback. Its parent retains the original CLOEXEC slot FD. Before
+   `exec`, the gate child duplicates that same locked open-file description to a
+   designated `D2B_HEAVY_GATE_FD` and clears `FD_CLOEXEC` on the duplicate, so
+   the gate process hierarchy also retains the permit if the parent crashes.
+   The parent runs the gate in a child process group, forwards termination
+   signals, waits for process-group exit, and only then closes its FD. Inherited
+   gate FDs close on process exit; slot files persist and are never unlinked
+   during acquisition. It wraps
+   `make check`,
+   `make test-integration`, `make test-host-integration`, `make test-hardware`,
+   full-workspace final `cargo test`, and build-producing `nix flake check`.
+   Focused tests and CI do not consume local permits. The shared root implements
+   this wrapper before parallel final gates.
+10. Serial ownership stops at the smallest connected component of the actual
+    file-overlap graph. Once a shared prep commit lands, every dependency-ready
+    independent component and wave launches concurrently. One persistent agent
+    cannot accumulate unrelated axes or later review rounds merely to preserve
+    context. At each final-stage entry and review round, the integrator records
+    ready, launched, and concretely blocked components; conflict avoidance alone
+    is not a valid blocker.
 
 ### Exact wave tasks
 
@@ -2673,7 +2760,18 @@ Wrap real behavior, run common conformance, and advertise only live capability:
   create/power/adopt/bootstrap/delete and runtime workload-deploy/exec/inspect
   authority split compile-checked and production capability denied.
 
+W4 also owns the initial private provider registry artifact, bundle v12
+integrity, startup registry activation, generation-triggered daemon restart,
+local runtime and observability mappings, and mapped Cloud Hypervisor/qemu-media
+lifecycle routing. Those surfaces are frozen inputs to W5-W9.
+
 #### W5 - Core control-plane service migration
+
+W5 starts from the post-W4 shared root in parallel with W6, W7, and W9. The
+shared root freezes daemon/realm/guest/provider-agent/broker/allocator service
+DTOs and generated bindings. W5's local prep owns only its file map. W5 owns
+core service dispatch and CLI/client migration; it does not edit
+provider-registry Nix mappings.
 
 Parallel slices:
 
@@ -2692,6 +2790,11 @@ broker, allocator, and client service APIs plus operator how-to changes needed
 by those service migrations. No slice keeps an old handshake or fallback.
 
 #### W6 - User, desktop, device, and helper migration
+
+W6 starts from the post-W4 shared root in parallel with W5, W7, and W9. It
+consumes W4's user-agent placement, credential leases, provider contracts,
+transport contracts, and observability result contract unchanged. Its local
+prep owns only its file map and edge-local composition.
 
 Parallel slices:
 
@@ -2713,6 +2816,14 @@ in the same slice.
 
 #### W7 - Realm-native host configuration and resources
 
+W7 starts from the post-W4 shared root in parallel with W5, W6, and W9. Bundle
+v12, the private provider registry, local runtime mappings, local observability
+mappings, and the frozen allocator API are existing contracts. W7 owns
+Nix/process/resource emission against that allocator API and extends the
+provider registry with transport, substrate, display, network, storage, device,
+and audio mappings. It does not introduce another registry, generation model,
+runtime route, or allocator service protocol.
+
 Implement:
 
 - realm/workload/provider options only;
@@ -2720,8 +2831,10 @@ Implement:
   ordering records, with no child realm `.service` or `.socket` units;
 - per-realm users, internal cgroup groups, generated socket ownership rows,
   confined child brokers, identities, namespaces, state, and audits;
-- local-root allocator listener creation, typed child controller/broker spawn,
-  pidfd supervision/adoption, and leases;
+- generated local-root allocator listener/lease requests plus child
+  controller/broker process, cgroup, namespace, and ownership records; W5 alone
+  owns allocator service dispatch, runtime listener creation, typed spawn,
+  pidfd supervision/adoption, and lease execution;
 - process-free per-realm cgroup roots with `controller/`, `broker/`, and
   `workloads/` children, direct `CLONE_INTO_CGROUP` placement, and write
   delegation that ends at the realm root;
@@ -2739,9 +2852,16 @@ mandatory destructive-cutover acknowledgement and no old option path.
 
 #### W8 - Integrated behavior and current-feature parity
 
+At content freeze, Git Town linearizes W5 -> W6 -> W7. W8 is a child of that
+W7 head, uses W7 as its PR base, and records the ordered four-node chain in its
+delivery manifest. W4 already owns mapped Cloud Hypervisor/qemu-media lifecycle
+and local observability. W8 verifies their parity, removes the temporary
+unmapped direct-dispatch fallback during destructive integration, and
+concentrates new routing on the remaining providers and services.
+
 Wire providers and services through real lifecycle flows:
 
-- local VM and qemu-media lifecycle/adoption;
+- local VM and qemu-media parity, adoption, and final fallback removal;
 - systemd-user exec and persistent shell;
 - realm routing and policy;
 - ACA and Azure Relay behavior formerly in gateway crates;
@@ -2752,6 +2872,10 @@ Wire providers and services through real lifecycle flows:
 - bounded status, remediation, observability, and audit export.
 
 #### W9 - Toolkit and sibling cutover
+
+W9 starts when `W4-F` freezes the client/provider contracts and proceeds in
+parallel with W5-W7. It does not wait for those waves unless a specific sibling
+feature consumes one of their new service APIs.
 
 Across private sibling branches:
 

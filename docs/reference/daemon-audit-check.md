@@ -144,9 +144,9 @@ See also: `docs/reference/daemon-api.md` §"Audit",
 
 > **Local scope of this check.** The audit check described in this
 > document covers only the local broker audit log
-> (`/var/lib/d2b/audit/broker-<utc-date>.jsonl`). Any future
-> gateway or realm audit (realm access events, provider operation
-> records) is separate and resides inside the gateway guest VM.
+> (`/var/lib/d2b/audit/broker-<utc-date>.jsonl`). Realm-controller and
+> provider-agent audit (realm access events and provider operation records)
+> is separate and belongs to the component that owns those decisions.
 > Relay or realm identity never enters the local broker audit or
 > auth path: `peer_uid` and `authz_result` in the records above
 > reflect only the local `SO_PEERCRED`-derived classification.

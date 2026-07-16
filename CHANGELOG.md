@@ -12,6 +12,12 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added default-empty, non-publishable first-party provider implementation
+  crate reservations, an in-process Azure VM fake SDK boundary, and a
+  fail-closed workspace policy inventory for their naming and dependencies.
+- Added the private versioned `provider-registry-v2.json` bundle artifact with
+  canonical provider descriptors, closed local-runtime mappings to opaque
+  lifecycle intents, generated schema, and bundle-wide integrity coverage.
 - Added canonical d2b 2.0 implementations for Unix sessions, authenticated
   sessions, providers, provider tooling, state persistence, and clients.
 - Added Tokio-async client/session/provider APIs and explicit `spawn_blocking`
@@ -24,6 +30,10 @@ deprecations ship one minor release before removal.
   axes, bounded descriptors and registries, shared in-process/agent traits,
   explicit lifecycle and adoption bindings, and co-located opaque credential
   leases.
+- Added reusable provider-toolkit value builders and exact-descriptor
+  conformance fixtures that preserve operation, owner, generation,
+  fingerprint, correlation, and time bindings without exposing identifiers in
+  diagnostics.
 - Added the complete internal ComponentSession v2 protobuf/ttrpc service
   inventory, strict bounded wire validation, schema fingerprints, reference
   artifacts, and generated asynchronous client/server bindings.
@@ -43,6 +53,46 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Made dependency-ready wave launch and file-overlap-based component dispatch
+  mandatory after shared contract prep, preventing one persistent agent from
+  serializing unrelated implementation and review scopes, with shipped-package
+  dependency policy evaluated across every supported flake system.
+- Activated the startup-owned transactional provider registry after daemon
+  services initialize. Explicit local-VM and qemu-media realm workloads now
+  construct live local-runtime providers, revalidate their trusted mappings,
+  authenticate exact process-DAG identities and explicit runner provenance,
+  and route start, stop, restart, autostart, and host-shutdown lifecycle work
+  through concrete daemon adapters. Bundle-v12 activation now requires the v2
+  schema and complete bundle/provider-artifact hashes; unmapped VMs retain the
+  compatibility lifecycle path.
+- Activated closed local-observability mappings for enabled host-local root
+  realms. Startup now probes bounded status through the retained registry, and
+  concrete daemon adapters expose only aggregate metrics and audit-sink health
+  through provider-enforced query/export limits without repair authority or
+  source-cardinality labels.
+- Restart `d2bd` when the integrity-pinned bundle or generated provider
+  registry generation changes while retaining `KillMode=process`, so existing
+  VM runners survive and are re-adopted after the daemon continuation event.
+- Isolated mapped lifecycle's synchronous broker, cgroup, and readiness waits
+  behind a dedicated blocking adapter so provider deadlines and unrelated
+  executor timers continue progressing without weakening owned-task cleanup or
+  per-VM serialization.
+- Removed redundant post-duplication `fcntl` calls and rely on
+  `pidfd_getfd(2)` to atomically return close-on-exec descriptors with its
+  required zero flags.
+- Receive broker `SCM_RIGHTS` descriptors with `MSG_CMSG_CLOEXEC` and verify
+  the resulting flag, closing the fork/exec descriptor-leak window without a
+  post-receive mutation.
+- Changed observability provider queries to return a canonical bounded result
+  through the provider trait, proxy, protobuf/ttrpc service, and toolkit
+  adapter without dropping records or introducing free-form labels.
+- Added an exact user-agent placement binding for userd-owned Secret Service
+  leases while preserving provider-agent co-location for cloud credentials.
+- Bound transport connection requests to an exact opaque transport binding ID.
+- Strengthened provider dependency policy to inspect transitive Cargo package
+  identities, keep denied Azure VM scaffolds out of production graphs, and
+  prove their unavailable descriptors expose no live factory or instance
+  registration surface.
 - Split `d2b-contracts` into default-empty, least-privilege feature families,
   migrated every workspace consumer to explicit domains, and reserved
   independent empty d2b 2.0 identity, component-session, service, provider,
@@ -75,14 +125,95 @@ deprecations ship one minor release before removal.
   speculative Git Town PR stacks, exact-tree concurrent CI/validator/panel lanes,
   external `xtask` evidence and seals, full ten-role end-of-wave review, and the
   accepted local-root plus parent-spawned per-realm controller/broker model.
+- Made post-wave cleanup delete merged remote branches, finished worktrees and
+  their real Cargo targets, and local feature branches before running Nix GC.
 - Expanded and accepted ADR 0045 as the d2b 2.0 clean-break contract: destructive
   no-backup reset, universal authenticated ComponentSession IPC, eleven typed
   provider authorities, literal per-realm controller/broker boundaries,
   short-ID state ownership, scoped secret/key lifecycles, one Cargo workspace,
   coordinated toolkit cutover, and immutable-tree delivery seals.
+- Replaced generic provider request state, binding, and stream fields with an
+  exact closed operation-input union, method-specific compatibility checks,
+  strict protobuf conversion, and one shared provider dispatchability policy.
 
 ### Fixed
 
+- Parsed the evaluated delivery wrapper with the maintained Tree-sitter Bash
+  grammar, requiring an exact AST shape and rejecting quote, escape,
+  concatenation, substitution, array, inactive-command, and wrong-target decoys.
+- Required the evaluated delivery `postFixup` to contain exactly one
+  unconditional `wrapProgram` command for `$out/bin/xtask`, rejecting inactive
+  branches, function bodies, wrong targets, extra commands, and extra wrappers.
+- Evaluated each supported system's delivery derivation before checking its
+  wrapper PATH, with one canonical exported runtime-tool list grounding the
+  exact expected Nix store paths.
+- Rejected every executable shell input-redirection token in the delivery
+  package wrapper policy, including continuation-split, here-string, and
+  file-descriptor-prefixed forms.
+- Rejected shell heredocs in the delivery package wrapper policy so quoted,
+  unquoted, and tab-stripping heredoc bodies cannot masquerade as executable
+  runtime PATH configuration.
+- Bound delivery runtime-tool coverage to the active package wrapper's PATH
+  expression, so commented or unused package lists cannot satisfy the policy.
+- Made the delivery runtime-tool policy inspect the scoped Nix package list
+  structurally, preserving exact tool coverage across harmless formatting
+  changes while still failing closed when a required runtime tool is removed.
+- Replaced raw Rust source substring policy checks with an AST-aware,
+  alias-resolving scanner that rejects equivalent process, broker, and
+  non-opaque provider constructs across formatting variations.
+- Removed stale operator guidance for the retired gateway/ACA Nix surface and
+  aligned current realm, provider-agent, Azure Container Apps, and Azure Relay
+  documentation with the implemented contracts and availability boundary.
+- Decoupled successful Azure Container Apps operations from opaque credential
+  lease cleanup. A bounded provider-owned executor now revokes each lease
+  exactly once, drains accepted cleanup work before final provider shutdown,
+  and emits only closed, redacted outcomes across failure, timeout,
+  unavailability, and saturation.
+- Made Azure Relay close wait for its supervised listener task to terminate
+  before closing the socket, including concurrent, repeated, and failed close
+  attempts.
+- Aligned the v2 bundle and provider-registry schema references with every
+  canonical top-level field.
+- Persist bounded local-observability exports as atomically renamed private
+  artifacts keyed by opaque operation ID. JSON Lines and OTLP protobuf now honor
+  the requested format and exact streaming record/byte limits; storage failures
+  and post-dispatch timeouts fail or remain ambiguous before an operation can
+  report `Applied`.
+- Treat post-rename observability directory-sync failure as completion-ambiguous,
+  report persisted zero-record exports as `Applied`, and provide an admin-only,
+  path-free, operation-ID inspection route with bounded base64 chunks, exact
+  format, total bytes, and whole-artifact digest.
+- Generate Rust flake package definitions from the evaluated
+  `lib.shippedRustPackages` inventory and require exact agreement with Cargo
+  production roots and evaluated flake outputs, so aliases, variables, unknown
+  mappings, and missing mappings fail the unavailable-Azure policy closed.
+- Move mapped lifecycle permit admission off the provider executor, with
+  cancellation, deadline, and abandoned-waiter checks that prevent a cancelled
+  contender from starting work later.
+- Receive broker file-descriptor handoffs with atomic close-on-exec, capacity
+  for Linux's full descriptor limit plus credentials, and owning truncation
+  cleanup so malformed ancillary messages cannot leak installed descriptors.
+- Applied one checked absolute deadline across broker file-descriptor connect,
+  write, and read stages, closing descriptors received after budget exhaustion.
+- Split provider-registry identity failures into actionable provider-ID,
+  configuration-schema-fingerprint, and configured-scope-digest diagnostics.
+  Local-runtime bindings now derive realm identity exclusively from descriptor
+  placement while retaining workload identity for exact target selection.
+- Made mapped runtime-provider lifecycle deadlines cover readiness, graceful
+  shutdown, rollback, forced cleanup, and state snapshots. Timed-out mutation
+  waiters now return an observation-required ambiguous result while an owned
+  daemon task completes cleanup, and same-operation retries join that task
+  instead of dispatching twice. The owned task retains per-VM serialization
+  through completion, fresh operations wait behind it, sequential node and
+  per-role cleanup budgets are summed—including rollback cgroup cleanup and
+  graceful request/poll overhead, strict-start USBIP reconciliation, and every
+  configured USBIP claim's bounded stop cleanup—and over-limit or overflowing
+  mappings fail startup instead of truncating required cleanup.
+- Removed nested Tokio runtime bridging from mapped runtime-provider start,
+  graceful stop, and restart dispatch. Dedicated lifecycle worker threads now
+  own their current-thread runtimes so synchronous broker, cgroup, and readiness
+  waits cannot stall or outlive the provider executor; Cloud Hypervisor
+  observations use the daemon's canonical registered runner role.
 - Closed d2b 2.0 foundation integration gaps with a driven ComponentSession,
   authenticated two-phase descriptor binding, phase-aware peer credentials,
   canonical provider-agent serving, lock-bound state generations, and bounded

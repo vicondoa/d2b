@@ -392,19 +392,20 @@ else
   log "  SKIP: d2b-contract-tests (nix unavailable to build fixture-smoke)"
 fi
 
-# no-bash-exec AST layer (ADR 0017): the per-line `Command::new("bash")` scan
-# is covered by d2b-contract-tests/tests/policy_source.rs, but the
-# AST-level walk (which catches cross-line / obfuscated bash-exec sites the
-# per-line regex cannot) lives in the standalone tests/tools/no-bash-ast-walker
-# cargo tool. The retired tests/no-bash-exec-eval.sh ran it via `... all`; run
-# it here so the AST coverage stays gated. Fails closed on any bash-literal
-# Command::new site under packages/.
-log "--> no-bash-ast-walker (ADR 0017 AST-level bash-exec scan)"
+# The standalone syn walker catches cross-line, qualified, and aliased Rust
+# constructs that source-string policy checks cannot reliably identify. It
+# retains the shell-execution policy and owns exact provider source policies.
+log "--> no-bash-ast-walker tests (AST source-policy negative fixtures)"
 CARGO_TARGET_DIR="$workspace_target_dir" \
-  cargo run --release --quiet \
+  cargo test --locked --release --quiet \
+    --manifest-path "$ROOT/tests/tools/no-bash-ast-walker/Cargo.toml"
+ok "no-bash-ast-walker negative fixtures"
+log "--> no-bash-ast-walker (AST-level source-policy scan)"
+CARGO_TARGET_DIR="$workspace_target_dir" \
+  cargo run --locked --release --quiet \
     --manifest-path "$ROOT/tests/tools/no-bash-ast-walker/Cargo.toml" \
     -- "$ROOT/packages"
-ok "no-bash-ast-walker (zero Command::new bash-literal sites)"
+ok "no-bash-ast-walker (bash and exact source policies)"
 
 # Broker package: run the three feature passes (default, layer1-bootstrap,
 # fake-backends) — each on its own target dir — serially by default because

@@ -20,6 +20,8 @@ use d2b_contracts::{
 use d2b_provider::{
     AdmissionOptions, CancellationToken, FactoryError, ProviderFactory, ProviderInstance,
     ProviderRegistryBuilder, ProviderRuntimeError, RegistryBuildError, RegistryLimits,
+    provider_capabilities_are_dispatchable, provider_inspection_method,
+    provider_method_is_dispatchable,
 };
 
 const NOW: u64 = 1_700_000_000_000;
@@ -227,6 +229,16 @@ fn closed_error_context_is_actionable_without_identity_leaks() {
 }
 
 #[test]
+fn health_uses_no_input_inspection_methods_for_every_axis() {
+    for provider_type in ProviderType::ALL {
+        let method = provider_inspection_method(provider_type);
+        assert_eq!(method.provider_type(), provider_type);
+        assert!(method.required());
+        assert_ne!(method, ProviderMethod::DevicePlanAttach);
+    }
+}
+
+#[test]
 fn all_provider_traits_are_object_safe() {
     fn provider(_: Option<&dyn Provider>) {}
     fn runtime(_: Option<&dyn RuntimeProvider>) {}
@@ -252,6 +264,46 @@ fn all_provider_traits_are_object_safe() {
     device(None);
     audio(None);
     observability(None);
+}
+
+#[test]
+fn one_dispatchability_policy_blocks_unimplemented_runtime_execute() {
+    assert!(
+        ProviderMethod::ALL
+            .iter()
+            .copied()
+            .filter(|method| *method != ProviderMethod::RuntimeExecute)
+            .all(provider_method_is_dispatchable)
+    );
+    assert!(!provider_method_is_dispatchable(
+        ProviderMethod::RuntimeExecute
+    ));
+    assert!(provider_capabilities_are_dispatchable(
+        &runtime_capabilities()
+    ));
+
+    let mut advertised = descriptor('x', 1, 1);
+    advertised.capabilities = ProviderCapabilitySet::new(
+        ProviderMethod::ALL
+            .iter()
+            .copied()
+            .filter(|method| method.provider_type() == ProviderType::Runtime)
+            .map(ProviderCapability)
+            .collect(),
+    )
+    .unwrap_or_else(|_| unreachable!());
+    assert!(!provider_capabilities_are_dispatchable(
+        &advertised.capabilities
+    ));
+
+    let mut builder = registry_builder(1, 1);
+    builder
+        .register_factory(key(), Arc::new(StubFactory))
+        .unwrap_or_else(|_| unreachable!());
+    assert!(matches!(
+        builder.register_instance(advertised),
+        Err(RegistryBuildError::CapabilityMismatch)
+    ));
 }
 
 #[test]

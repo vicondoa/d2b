@@ -12,6 +12,10 @@ socket access ACLs. It does not allocate realm-owned network resources,
 migrate VMs, start provider adapters, or enable realm routing/identity/access
 policy beyond that inert host-local scaffolding.
 
+The removed `d2b.gateways` namespace is not an alternate realm declaration.
+Its old nested Relay and ACA fields are eval-time tombstones only and cannot
+provision a gateway guest or provider agent.
+
 Existing `d2b.envs` declarations remain the network substrate during the v2
 transition. Workload VMs still join that substrate with
 `d2b.vms.<vm>.env = "<env>"`, while `d2b.realms.<realm>.workloads` records the
@@ -71,7 +75,7 @@ access resolution, and identifier families.
 | Value | Intended placement |
 | --- | --- |
 | `host-local` | Realm controller as an isolated host-local service. |
-| `gateway-vm` | Realm controller inside a dedicated local gateway VM. |
+| `gateway-vm` | Reserved placement metadata for a realm controller in a dedicated VM; it does not provision that VM. |
 | `cloud-full-host` | Realm controller on a cloud VM running full d2b. |
 | `provider-controller` | Provider-supported controller environment named by `placementProvider`. |
 | `provider-agent` | Agent inside or adjacent to a managed provider sandbox named by `placementProvider`. |
@@ -82,6 +86,9 @@ access resolution, and identifier families.
 `host-local`, `gateway-vm`, and `cloud-full-host`. `providerSpecificPlacement`
 is meaningful only with `placement = "provider-specific"`. Both values are
 inert metadata in the current schema.
+
+In particular, `placement = "gateway-vm"` does not recreate the removed
+gateway guest configuration surface.
 
 ## Local access metadata
 

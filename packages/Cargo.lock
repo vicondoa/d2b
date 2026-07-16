@@ -981,6 +981,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-azure-vm-fake-sdk"
+version = "2.0.0"
+dependencies = [
+ "serde",
+ "tokio",
+]
+
+[[package]]
 name = "d2b-client"
 version = "2.0.0"
 dependencies = [
@@ -1027,6 +1035,8 @@ dependencies = [
  "serde",
  "serde_json",
  "snow",
+ "tree-sitter",
+ "tree-sitter-bash",
 ]
 
 [[package]]
@@ -1246,6 +1256,74 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-provider-audio-pipewire-vhost-user"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-host",
+ "d2b-provider",
+ "d2b-provider-toolkit",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-provider-credential-entra"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider",
+ "d2b-provider-toolkit",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-provider-credential-managed-identity"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider",
+ "d2b-provider-toolkit",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-provider-credential-secret-service"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider",
+ "d2b-provider-toolkit",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-provider-device-host-mediated"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-host",
+ "d2b-provider",
+ "d2b-provider-toolkit",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-provider-display-wayland"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider",
+ "d2b-provider-toolkit",
+ "tokio",
+]
+
+[[package]]
 name = "d2b-provider-host"
 version = "2.0.0"
 dependencies = [
@@ -1254,6 +1332,39 @@ dependencies = [
  "d2b-host",
  "d2b-realm-core",
  "d2b-realm-provider",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-provider-infrastructure-azure-vm"
+version = "2.0.0"
+dependencies = [
+ "d2b-azure-vm-fake-sdk",
+ "d2b-contracts",
+ "d2b-provider-toolkit",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-provider-network-local-realm"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider",
+ "d2b-provider-toolkit",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-provider-observability-local"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider",
+ "d2b-provider-toolkit",
  "serde_json",
  "tokio",
 ]
@@ -1282,6 +1393,61 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-provider-runtime-azure-container-apps"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider",
+ "d2b-provider-toolkit",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "d2b-provider-runtime-azure-vm"
+version = "2.0.0"
+dependencies = [
+ "d2b-azure-vm-fake-sdk",
+ "d2b-contracts",
+ "d2b-provider-toolkit",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-provider-runtime-local"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider",
+ "d2b-provider-toolkit",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-provider-storage-local"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider",
+ "d2b-provider-toolkit",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-provider-substrate-host"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider",
+ "d2b-provider-toolkit",
+ "tokio",
+]
+
+[[package]]
 name = "d2b-provider-toolkit"
 version = "2.0.0"
 dependencies = [
@@ -1293,6 +1459,39 @@ dependencies = [
  "serde_json",
  "tokio",
  "ttrpc",
+]
+
+[[package]]
+name = "d2b-provider-transport-azure-relay"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "base64",
+ "d2b-contracts",
+ "d2b-provider",
+ "d2b-provider-toolkit",
+ "futures-util",
+ "hmac",
+ "rustls",
+ "rustls-pki-types",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tokio-tungstenite",
+ "urlencoding",
+ "webpki-roots 0.26.11",
+ "zeroize",
+]
+
+[[package]]
+name = "d2b-provider-transport-local"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider",
+ "d2b-provider-toolkit",
+ "tokio",
 ]
 
 [[package]]
@@ -1468,14 +1667,28 @@ version = "2.0.0"
 dependencies = [
  "arc-swap",
  "async-trait",
+ "base64",
  "clap",
  "d2b-contracts",
  "d2b-core",
  "d2b-gateway",
  "d2b-gateway-runtime",
  "d2b-host",
+ "d2b-provider",
  "d2b-provider-aca",
+ "d2b-provider-audio-pipewire-vhost-user",
+ "d2b-provider-device-host-mediated",
+ "d2b-provider-display-wayland",
+ "d2b-provider-network-local-realm",
+ "d2b-provider-observability-local",
  "d2b-provider-relay",
+ "d2b-provider-runtime-azure-container-apps",
+ "d2b-provider-runtime-local",
+ "d2b-provider-storage-local",
+ "d2b-provider-substrate-host",
+ "d2b-provider-toolkit",
+ "d2b-provider-transport-azure-relay",
+ "d2b-provider-transport-local",
  "d2b-realm-core",
  "d2b-realm-provider",
  "d2b-realm-router",
@@ -3954,6 +4167,7 @@ version = "1.0.150"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e8014e44b4736ed0538adeecded0fce2a272f22dc9578a7eb6b2d9993c74cfb9"
 dependencies = [
+ "indexmap 2.14.0",
  "itoa",
  "memchr",
  "serde",
@@ -4211,6 +4425,12 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "streaming-iterator"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b2231b7c3057d5e4ad0156fb3dc807d900806020c5ffa3ee6ff2c8c76fb8520"
 
 [[package]]
 name = "string_cache"
@@ -4725,6 +4945,36 @@ dependencies = [
  "tracing-core",
  "tracing-log",
 ]
+
+[[package]]
+name = "tree-sitter"
+version = "0.26.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af1c71c1c4cc0920b20d6b0f6572e7682cd07a6a2faec71067a31fa394c586df"
+dependencies = [
+ "cc",
+ "regex",
+ "regex-syntax",
+ "serde_json",
+ "streaming-iterator",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-bash"
+version = "0.25.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e5ec769279cc91b561d3df0d8a5deb26b0ad40d183127f409494d6d8fc53062"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-language"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "009994f150cc0cd50ff54917d5bc8bffe8cad10ca10d81c34da2ec421ae61782"
 
 [[package]]
 name = "try-lock"

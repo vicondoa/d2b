@@ -158,9 +158,27 @@ let
   #
   # Cross-realm vsock CID collision: two workloads in DIFFERENT realms
   # referencing DIFFERENT local NixOS VMs whose derived vsock CIDs collide.
-  # (Same-VM references across realms share a CID by design and are not
-  # flagged here; the global vmVsockCidCollisions check covers per-VM uniqueness.)
+  # (Same-VM references do not create a CID collision, but are rejected by the
+  # unique legacy-VM ownership assertion below.)
   realmWorkloadRows = realmIndex.workloads.enabled;
+  duplicateLegacyVmWorkloadGroups =
+    lib.filterAttrs
+      (_: rows: lib.length rows > 1)
+      realmIndex.workloads.byVm;
+  uniqueLegacyVmWorkloadAssertions =
+    lib.mapAttrsToList
+      (vmName: rows: {
+        assertion = false;
+        message = ''
+          d2b.vms.${vmName} is referenced by multiple enabled explicit realm
+          workloads (${lib.concatStringsSep ", " (map
+            (row: "d2b.realms.${row.realmName}.workloads.${row.workloadName}")
+            rows)}). A legacy VM may have exactly one realm/workload owner so
+          processes.json and provider-registry-v2.json have one authoritative
+          workload identity.
+        '';
+      })
+      duplicateLegacyVmWorkloadGroups;
   hasConfiguredLocalVmLaunch = row:
     let
       declared = cfg.realms.${row.realmName}.workloads.${row.workloadName};
@@ -2250,6 +2268,7 @@ in
     ++ realmAssertions
     ++ realmPortForwardAssertions
     ++ realmWorkloadTargetAssertions
+    ++ uniqueLegacyVmWorkloadAssertions
     ++ realmLauncherItemAssertions
     ++ privateConfiguredWorkloadCountAssertions
     ++ securityKeyHostRequiredAssertions

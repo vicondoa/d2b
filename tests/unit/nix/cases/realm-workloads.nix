@@ -11,9 +11,7 @@
 #     vsockCid advisory, invariants block (noSensitiveCommandPayloads)
 #   • Bundle artifact registration: installFileName, classification,
 #     sensitivity, /etc install mode
-#   • Cross-realm vsock CID collision assertion: fires when two workloads in
-#     different realms reference different VMs with the same derived CID;
-#     same-VM cross-realm references do NOT trigger the assertion
+#   • Cross-realm vsock CID collision assertion and unique legacy-VM ownership
 #   • Cross-realm external-network attachment conflict: advisory (assertion
 #     stays true) but index.realms.externalNetworkConflicts is populated
 #   • controller config: explicit workload identity is nested under `identity`
@@ -342,7 +340,6 @@ let
     };
   };
 
-  sameVmCfg = (mkEval [ sameVmTwoRealmsFixture ]).config;
   sameVmMessages = failureMessages [ sameVmTwoRealmsFixture ];
 
   # ── external-network attachment conflict fixture ─────────────────────────────
@@ -1221,7 +1218,146 @@ in
     expected = true;
   };
 
-  "realm-workloads/unsafe-local-artifacts-and-bundle-v11" = {
+  "realm-workloads/generated-provider-registry-maps-only-explicit-live-runtime" = {
+    expr =
+      let
+        identity = import ../../../../nixos-modules/v2-identity.nix;
+        data = wlCfg.d2b._bundle.providerRegistryV2Json.data;
+        runtimeRows = lib.filter
+          (provider: provider.binding.axis == "local-runtime")
+          data.providers;
+        observabilityRows = lib.filter
+          (provider: provider.binding.axis == "local-observability")
+          data.providers;
+        entry = builtins.head runtimeRows;
+        descriptor = entry.descriptor;
+        binding = entry.binding;
+        realmId = identity.deriveRealmId "work.home.local-root";
+        workloadId = identity.deriveWorkloadId realmId "corp-laptop";
+        providerId = identity.deriveProviderId realmId "runtime"
+          "runtime-${workloadId}";
+        firstClassRows =
+          firstClassLocalVmCfg.d2b._bundle.providerRegistryV2Json.data.providers;
+        firstClassRuntimeRows = lib.filter
+          (provider: provider.binding.axis == "local-runtime")
+          firstClassRows;
+        observability = builtins.head observabilityRows;
+        observabilityRealmId = identity.deriveRealmId "home.local-root";
+        observabilityProviderId = identity.deriveProviderId
+          observabilityRealmId "observability" "observability-local";
+        processDag = lib.findFirst
+          (dag: dag.vm == "corpbox")
+          null
+          wlCfg.d2b._bundle.processesJson.data.vms;
+        processIdentity = processDag.workloadIdentity;
+        processRealmId = identity.deriveRealmId
+          "${lib.concatStringsSep "." processIdentity.realmPath}.local-root";
+        processWorkloadId = identity.deriveWorkloadId
+          processRealmId processIdentity.workloadId;
+        runnerNode = lib.findFirst
+          (node: node.id == "cloud-hypervisor")
+          null
+          processDag.nodes;
+        encoded = builtins.toJSON data;
+      in {
+        schemaVersion = data.schemaVersion;
+        providerCount = builtins.length data.providers;
+        runtimeProviderCount = builtins.length runtimeRows;
+        observabilityProviderCount = builtins.length observabilityRows;
+        canonicalRealm = descriptor.placement.realmId == realmId;
+        bindingRealmAbsent = !(binding ? realmId);
+        canonicalWorkload = binding.workloadId == workloadId;
+        canonicalProvider = descriptor.providerId == providerId;
+        processIdentityMatchesBinding =
+          descriptor.placement.realmId == processRealmId
+          && binding.workloadId == processWorkloadId
+          && processIdentity.legacyVmName == "corpbox"
+          && processIdentity.runtimeKind == "nixos"
+          && processIdentity.providerId == "local-cloud-hypervisor";
+        runnerIsExplicit =
+          runnerNode.binaryPath != null
+          && runnerNode.argv != [ ];
+        implementationId = descriptor.implementationId;
+        providerType = descriptor.authority.type;
+        placement = descriptor.placement.kind;
+        controllerRole = descriptor.placement.controllerRole;
+        axis = binding.axis;
+        vmStartIntentId = binding.vmStartIntentId;
+        runnerIntentId = binding.runnerIntentId;
+        capabilities = descriptor.capabilities;
+        firstClassWithoutIntentUnregistered =
+          builtins.length firstClassRuntimeRows == 1;
+        observabilityMapping = {
+          canonicalProvider =
+            observability.descriptor.providerId == observabilityProviderId;
+          canonicalRealm =
+            observability.descriptor.placement.realmId == observabilityRealmId;
+          providerType = observability.descriptor.authority.type;
+          implementationId = observability.descriptor.implementationId;
+          controllerRole = observability.descriptor.placement.controllerRole;
+          capabilities = observability.descriptor.capabilities;
+          binding = observability.binding;
+        };
+        runtimeExecuteAbsent =
+          !(builtins.elem "runtime.execute" descriptor.capabilities);
+        azureVmAbsent = !(lib.hasInfix "azure-vm" encoded);
+        argvAbsent = !(lib.hasInfix "\"argv\"" encoded);
+        secretAbsent = !(lib.hasInfix "secret" encoded);
+      };
+    expected = {
+      schemaVersion = "v2";
+      providerCount = 2;
+      runtimeProviderCount = 1;
+      observabilityProviderCount = 1;
+      canonicalRealm = true;
+      bindingRealmAbsent = true;
+      canonicalWorkload = true;
+      canonicalProvider = true;
+      processIdentityMatchesBinding = true;
+      runnerIsExplicit = true;
+      implementationId = "cloud-hypervisor";
+      providerType = "runtime";
+      placement = "trusted-first-party-in-process";
+      controllerRole = "realm-controller";
+      axis = "local-runtime";
+      vmStartIntentId = "vm-start:vm:corpbox:role:cloud-hypervisor";
+      runnerIntentId = "runner:vm:corpbox:role:cloud-hypervisor";
+      capabilities = [
+        "runtime.plan"
+        "runtime.ensure"
+        "runtime.start"
+        "runtime.stop"
+        "runtime.inspect"
+        "runtime.adopt"
+        "runtime.destroy"
+      ];
+      firstClassWithoutIntentUnregistered = true;
+      observabilityMapping = {
+        canonicalProvider = true;
+        canonicalRealm = true;
+        providerType = "observability";
+        implementationId = "local";
+        controllerRole = "local-root-controller";
+        capabilities = [
+          "observability.status"
+          "observability.query"
+          "observability.export"
+        ];
+        binding = {
+          axis = "local-observability";
+          maxRecords = 64;
+          maxBytes = 32768;
+          maxTimeWindowMs = 86400000;
+        };
+      };
+      runtimeExecuteAbsent = true;
+      azureVmAbsent = true;
+      argvAbsent = true;
+      secretAbsent = true;
+    };
+  };
+
+  "realm-workloads/unsafe-local-artifacts-and-bundle-v12" = {
     expr = {
       launcherV2File =
         unsafeCfg.d2b._bundle.realmWorkloadsLauncherV2Json.installFileName;
@@ -1239,10 +1375,20 @@ in
         unsafeCfg.environment.etc ? "d2b/unsafe-local-workloads.json";
       unsafeMode =
         unsafeCfg.environment.etc."d2b/unsafe-local-workloads.json".mode;
+      providerRegistryFile =
+        unsafeCfg.d2b._bundle.providerRegistryV2Json.installFileName;
+      providerRegistryClass =
+        unsafeCfg.d2b._bundle.providerRegistryV2Json.classification;
+      providerRegistryInstalled =
+        unsafeCfg.environment.etc ? "d2b/provider-registry-v2.json";
+      providerRegistryMode =
+        unsafeCfg.environment.etc."d2b/provider-registry-v2.json".mode;
       bundleVersion = unsafeCfg.d2b._bundle.bundle.data.bundleVersion;
       launcherV2BundlePath =
         unsafeCfg.d2b._bundle.bundle.data.realmWorkloadsLauncherV2Path;
       bundlePath = unsafeCfg.d2b._bundle.bundle.data.unsafeLocalWorkloadsPath;
+      providerRegistryBundlePath =
+        unsafeCfg.d2b._bundle.bundle.data.providerRegistryV2Path;
     };
     expected = {
       launcherV2File = "realm-workloads-launcher-v2.json";
@@ -1253,9 +1399,14 @@ in
       launcherV2Mode = "0640";
       unsafeInstalled = true;
       unsafeMode = "0640";
-      bundleVersion = 11;
+      providerRegistryFile = "provider-registry-v2.json";
+      providerRegistryClass = "contractPrivateNonSecret";
+      providerRegistryInstalled = true;
+      providerRegistryMode = "0640";
+      bundleVersion = 12;
       launcherV2BundlePath = "/etc/d2b/realm-workloads-launcher-v2.json";
       bundlePath = "/etc/d2b/unsafe-local-workloads.json";
+      providerRegistryBundlePath = "/etc/d2b/provider-registry-v2.json";
     };
   };
 
@@ -1424,10 +1575,8 @@ in
     expected = true;
   };
 
-  # ── cross-realm vsock CID: same VM in two realms — assertion does NOT fire ────
-  # When both workloads reference the SAME VM, the cross-realm assertion must
-  # not fire (same-VM CID sharing is intentional).
-  "realm-workloads/cross-realm-same-vm-no-cid-collision" = {
+  # ── same legacy VM in two realms: unique ownership assertion fires ────────────
+  "realm-workloads/cross-realm-same-vm-rejected-as-duplicate-owner" = {
     expr =
       let
         crossRealmMessages = lib.filter
@@ -1435,11 +1584,14 @@ in
           sameVmMessages;
       in {
         noCollisionFired = crossRealmMessages == [ ];
-        configEvalsClean = lib.all (a: a.assertion) sameVmCfg.assertions;
+        duplicateOwnerRejected = hasMessage [
+          "referenced by multiple enabled explicit realm"
+          "exactly one realm/workload owner"
+        ] sameVmMessages;
       };
     expected = {
       noCollisionFired = true;
-      configEvalsClean = true;
+      duplicateOwnerRejected = true;
     };
   };
 

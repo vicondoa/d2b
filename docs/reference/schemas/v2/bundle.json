@@ -23,7 +23,7 @@
       ]
     },
     "artifactHashes": {
-      "description": "Per-artifact SHA-256 hashes for tamper detection of every private bundle artifact loaded by the resolver.\n\nKeys match the path strings stored in the bundle path fields: absolute paths for `host_path`, `processes_path`, `privileges_path`, `storage_path`, `sync_path`, `allocator_path`, `realm_controllers_path`, `realm_identity_path`, `realm_workloads_launcher_v2_path`, and `unsafe_local_workloads_path`; bundle-relative paths for `closures[*].path` and `minijail_profiles[*].path`. Values are `\"sha256:<hex64>\"` strings.\n\nWhen `None`, per-artifact hash verification is skipped (backwards compatibility with bundles that pre-date this field).",
+      "description": "Per-artifact SHA-256 hashes for tamper detection of every private bundle artifact loaded by the resolver.\n\nKeys match the path strings stored in the bundle path fields: absolute paths for `host_path`, `processes_path`, `privileges_path`, `storage_path`, `sync_path`, `allocator_path`, `realm_controllers_path`, `realm_identity_path`, `realm_workloads_launcher_v2_path`, `unsafe_local_workloads_path`, and `provider_registry_v2_path`; bundle-relative paths for `closures[*].path` and `minijail_profiles[*].path`. Values are `\"sha256:<hex64>\"` strings.\n\nWhen `None`, per-artifact hash verification is skipped (backwards compatibility with bundles that pre-date this field).",
       "type": [
         "object",
         "null"
@@ -40,7 +40,7 @@
       ]
     },
     "bundleVersion": {
-      "description": "Version of the bundle format; bundleVersion 11 extends the private configured-item artifact to local VM workloads while artifact schemaVersion stays v2.",
+      "description": "Version of the bundle format; bundleVersion 12 adds the private provider-registry-v2 composition artifact while artifact schemaVersion stays v2.",
       "type": "integer",
       "format": "uint32",
       "minimum": 0.0
@@ -91,6 +91,13 @@
     "processesPath": {
       "description": "Private processes.json artifact path.",
       "type": "string"
+    },
+    "providerRegistryV2Path": {
+      "description": "Private canonical provider descriptors and opaque daemon intent mappings.",
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "publicManifestPath": {
       "description": "Public vms.json manifest path retained for v0.4.0 compatibility.",

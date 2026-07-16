@@ -15,11 +15,12 @@ use d2b_contracts::{
         CredentialLeaseState, CredentialLeaseTransferPolicy, CredentialProvider, DeviceProvider,
         DisplayProvider, InfrastructureProvider, MAX_CREDENTIAL_OPERATION_CLASSES,
         MAX_PROVIDER_LEASE_LIFETIME_MS, MutationReceipt, NetworkProvider, ObservabilityProvider,
-        PROVIDER_SCHEMA_VERSION, Provider, ProviderCallContext, ProviderCapabilitySet,
-        ProviderDescriptor, ProviderFailure, ProviderFailureKind, ProviderFuture, ProviderHandle,
-        ProviderHealth, ProviderHealthReason, ProviderMethod, ProviderObservation,
-        ProviderOperationRequest, ProviderPlan, ProviderRemediation, ProviderResult, RetryClass,
-        RuntimeProvider, StorageProvider, SubstrateProvider, TransportProvider,
+        ObservabilityQueryResult, PROVIDER_SCHEMA_VERSION, Provider, ProviderCallContext,
+        ProviderCapabilitySet, ProviderDescriptor, ProviderFailure, ProviderFailureKind,
+        ProviderFuture, ProviderHandle, ProviderHealth, ProviderHealthReason, ProviderMethod,
+        ProviderObservation, ProviderOperationRequest, ProviderPlan, ProviderRemediation,
+        ProviderResult, RetryClass, RuntimeProvider, StorageProvider, SubstrateProvider,
+        TransportProvider,
     },
 };
 
@@ -101,6 +102,7 @@ pub enum RpcResponse {
     Plan(Box<ProviderPlan>),
     Handle(Box<ProviderHandle>),
     Observation(Box<ProviderObservation>),
+    ObservabilityQuery(Box<ObservabilityQueryResult>),
     Mutation(Box<MutationReceipt>),
     Lease(Box<CredentialLease>),
 }
@@ -113,6 +115,7 @@ impl fmt::Debug for RpcResponse {
             Self::Plan(_) => "RpcResponse::Plan(<redacted>)",
             Self::Handle(_) => "RpcResponse::Handle(<redacted>)",
             Self::Observation(_) => "RpcResponse::Observation(<redacted>)",
+            Self::ObservabilityQuery(_) => "RpcResponse::ObservabilityQuery(<redacted>)",
             Self::Mutation(_) => "RpcResponse::Mutation(<redacted>)",
             Self::Lease(_) => "RpcResponse::Lease(<redacted>)",
         })
@@ -213,15 +216,8 @@ impl RpcProviderProxy {
             ));
         }
         let identity = self.rpc.session_identity();
-        let placement_matches = self
-            .descriptor
-            .placement
-            .agent_binding()
-            .is_some_and(|binding| {
-                binding.agent_generation == identity.provider_generation
-                    && identity.peer_role == EndpointRole::ProviderAgent
-                    && identity.service == ServicePackage::ProviderV2
-            });
+        let placement_matches =
+            session_identity_matches_placement(&self.descriptor.placement, &identity);
         if identity.provider_id != self.descriptor.provider_id
             || identity.provider_type != self.descriptor.provider_type()
             || identity.provider_generation != self.descriptor.registry_generation
@@ -234,6 +230,7 @@ impl RpcProviderProxy {
                 ProviderRemediation::ReEnrollPeer,
             ));
         }
+
         Ok(())
     }
 
@@ -340,9 +337,9 @@ impl RpcProviderProxy {
         request: &CredentialLeaseRequest,
     ) -> ProviderResult<()> {
         let now = self.clock.now_unix_ms();
-        let binding = self.descriptor.placement.agent_binding();
+        let binding = self.descriptor.placement.credential_binding();
         if request.context != *context.operation
-            || binding.as_ref() != Some(&request.agent_binding)
+            || binding.as_ref() != Some(&request.placement_binding)
             || request.consumer_provider_id == self.descriptor.provider_id
             || request.allowed_operations.is_empty()
             || request.allowed_operations.len() > MAX_CREDENTIAL_OPERATION_CLASSES
@@ -368,7 +365,7 @@ impl RpcProviderProxy {
         let now = self.clock.now_unix_ms();
         if lease.credential_provider_id != self.descriptor.provider_id
             || lease.consumer_provider_id != request.consumer_provider_id
-            || lease.agent_binding != request.agent_binding
+            || lease.placement_binding != request.placement_binding
             || lease.allowed_operations != request.allowed_operations
             || lease.credential_provider_generation != self.descriptor.registry_generation
             || lease.issued_at_unix_ms > now
@@ -489,6 +486,36 @@ impl RpcProviderProxy {
         }
     }
 
+    async fn call_observability_query(
+        &self,
+        context: &ProviderCallContext<'_>,
+        request: &ProviderOperationRequest,
+    ) -> ProviderResult<ObservabilityQueryResult> {
+        if request
+            .validate_method(
+                &self.descriptor,
+                self.clock.now_unix_ms(),
+                ProviderMethod::ObservabilityQuery,
+            )
+            .is_err()
+        {
+            return Err(self.response_mismatch(context));
+        }
+        match self
+            .call(
+                context,
+                ProviderMethod::ObservabilityQuery,
+                RpcPayload::Operation(request),
+            )
+            .await?
+        {
+            RpcResponse::ObservabilityQuery(result) if result.validate(request).is_ok() => {
+                Ok(*result)
+            }
+            _ => Err(self.response_mismatch(context)),
+        }
+    }
+
     async fn call_adoption(
         &self,
         context: &ProviderCallContext<'_>,
@@ -544,6 +571,29 @@ impl RpcProviderProxy {
             RpcResponse::Mutation(receipt) => self.validate_mutation(context, *receipt),
             _ => Err(self.response_mismatch(context)),
         }
+    }
+}
+
+fn session_identity_matches_placement(
+    placement: &d2b_contracts::v2_provider::ProviderPlacement,
+    identity: &SessionIdentity,
+) -> bool {
+    match placement {
+        d2b_contracts::v2_provider::ProviderPlacement::ProviderAgent {
+            agent_generation, ..
+        } => {
+            *agent_generation == identity.provider_generation
+                && identity.peer_role == EndpointRole::ProviderAgent
+                && identity.service == ServicePackage::ProviderV2
+        }
+        d2b_contracts::v2_provider::ProviderPlacement::UserAgent {
+            agent_generation, ..
+        } => {
+            *agent_generation == identity.provider_generation
+                && identity.peer_role == EndpointRole::UserAgent
+                && identity.service == ServicePackage::UserV2
+        }
+        d2b_contracts::v2_provider::ProviderPlacement::TrustedFirstPartyInProcess { .. } => false,
     }
 }
 
@@ -833,7 +883,78 @@ impl AudioProvider for RpcProviderProxy {
 impl ObservabilityProvider for RpcProviderProxy {
     capabilities!();
     operation_observation!(status, ObservabilityStatus);
-    operation_observation!(query, ObservabilityQuery);
+    fn query<'a>(
+        &'a self,
+        context: &'a ProviderCallContext<'a>,
+        request: &'a ProviderOperationRequest,
+    ) -> ProviderFuture<'a, ObservabilityQueryResult> {
+        Box::pin(self.call_observability_query(context, request))
+    }
     operation_handle!(subscribe, ObservabilitySubscribe);
     operation_mutation!(export, ObservabilityExport);
+}
+
+#[cfg(test)]
+mod tests {
+    use d2b_contracts::{
+        v2_component_session::{EndpointRole, ServicePackage},
+        v2_identity::{ProviderId, ProviderType, RealmId, RoleId, WorkloadId},
+        v2_provider::{Generation, ProviderPlacement},
+    };
+
+    use super::{SessionIdentity, session_identity_matches_placement};
+
+    fn generation(value: u64) -> Generation {
+        Generation::new(value).unwrap_or_else(|_| unreachable!())
+    }
+
+    fn identity(peer_role: EndpointRole, service: ServicePackage) -> SessionIdentity {
+        SessionIdentity {
+            peer_role,
+            service,
+            provider_id: ProviderId::parse("bbbbbbbbbbbbbbbbbbba")
+                .unwrap_or_else(|_| unreachable!()),
+            provider_type: ProviderType::Credential,
+            provider_generation: generation(1),
+        }
+    }
+
+    #[test]
+    fn provider_and_user_agent_session_identities_are_placement_exact() {
+        let realm_id = RealmId::parse("aaaaaaaaaaaaaaaaaaaa").unwrap_or_else(|_| unreachable!());
+        let role_id = RoleId::parse("ccccccccccccccccccca").unwrap_or_else(|_| unreachable!());
+        let provider_agent = ProviderPlacement::ProviderAgent {
+            realm_id: realm_id.clone(),
+            workload_id: WorkloadId::parse("ddddddddddddddddddda")
+                .unwrap_or_else(|_| unreachable!()),
+            role_id: role_id.clone(),
+            endpoint_role: EndpointRole::ProviderAgent,
+            service: ServicePackage::ProviderV2,
+            agent_generation: generation(1),
+        };
+        let user_agent = ProviderPlacement::UserAgent {
+            realm_id,
+            role_id,
+            endpoint_role: EndpointRole::UserAgent,
+            service: ServicePackage::UserV2,
+            agent_generation: generation(1),
+        };
+
+        assert!(session_identity_matches_placement(
+            &provider_agent,
+            &identity(EndpointRole::ProviderAgent, ServicePackage::ProviderV2)
+        ));
+        assert!(session_identity_matches_placement(
+            &user_agent,
+            &identity(EndpointRole::UserAgent, ServicePackage::UserV2)
+        ));
+        assert!(!session_identity_matches_placement(
+            &user_agent,
+            &identity(EndpointRole::ProviderAgent, ServicePackage::ProviderV2)
+        ));
+        assert!(!session_identity_matches_placement(
+            &provider_agent,
+            &identity(EndpointRole::UserAgent, ServicePackage::UserV2)
+        ));
+    }
 }

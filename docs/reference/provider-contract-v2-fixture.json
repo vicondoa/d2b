@@ -1,12 +1,6 @@
 {
-  "contractFingerprint": "025a883c7e6975a797bae9fe74483a5f96a16adfd27d1e2d31a63f5a0fcd2312",
+  "contractFingerprint": "91e665314ffbc0fbcc2d4f3bc788dd1d7f4d694382fa2795a47e877eb4ac9b57",
   "credentialLease": {
-    "agentBinding": {
-      "agentGeneration": 3,
-      "realmId": "yl2hpmks5td5dkeso6qq",
-      "roleId": "7xrbjonser3hpi7hqojq",
-      "workloadId": "q5h7jtqteem7kua4tfva"
-    },
     "allowedOperations": [
       "authenticate",
       "create"
@@ -18,6 +12,15 @@
     "expiresAtUnixMs": 8000,
     "issuedAtUnixMs": 2000,
     "leaseId": "lease-1",
+    "placementBinding": {
+      "binding": {
+        "agentGeneration": 3,
+        "realmId": "yl2hpmks5td5dkeso6qq",
+        "roleId": "7xrbjonser3hpi7hqojq",
+        "workloadId": "q5h7jtqteem7kua4tfva"
+      },
+      "kind": "provider-agent"
+    },
     "revokedAtUnixMs": null,
     "rotationGeneration": 1,
     "sourceVersion": "source-1",
@@ -114,6 +117,9 @@
       "traceId": "2222222222222222222222222222222222222222222222222222222222222222"
     },
     "expectedConfigurationFingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+    "input": {
+      "kind": "no-input"
+    },
     "target": {
       "kind": "workload",
       "realmId": "yl2hpmks5td5dkeso6qq",

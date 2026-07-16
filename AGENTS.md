@@ -210,6 +210,13 @@ Every wave must independently restack or rebase onto its landed dependencies,
 snapshot the resulting tree, complete all required validation, receive the full
 panel seal, and pass merge-eligibility checks before it merges.
 
+This is a positive launch requirement, not merely permission. When a wave enters
+its immutable final lanes, the integrator MUST query the dependency graph and
+launch every newly ready speculative wave in the same coordination cycle.
+Leaving a ready wave idle requires a concrete contract, file-ownership, disk, or
+tooling blocker recorded in the plan and task database; avoiding possible merge
+conflicts or keeping one agent's context warm is not a blocker.
+
 Use this shape:
 
 1. Open one private branch/worktree per independently reviewable slice and use
@@ -297,6 +304,47 @@ once that committed contract is stable enough to consume, but they remain
 speculative until it lands. Contract changes require dependent branches to
 restack and lose any prior validation or panel seal; never land a prep commit
 directly on local `main`.
+
+#### Anti-serialization invariant
+
+Serial ownership ends at the smallest coherent shared contract boundary. A
+shared DTO/schema/lockfile change may require one prep commit; it does **not**
+justify serializing every implementation or later wave that consumes it.
+
+Apply these rules to every plan and finding round:
+
+1. Build a file-overlap graph for all ready scopes. Each connected component may
+   be internally ordered, but distinct components MUST run concurrently in
+   separate worktrees. Partition by actual files/contracts, not by a desire to
+   avoid all future conflict.
+2. After a prep commit freezes a shared API, immediately dispatch all
+   dependency-ready components and waves. Use sibling stacked PRs over the
+   shared root. If overlapping follow-ups require order, create a short
+   micro-stack for only those files while unrelated components continue.
+3. A persistent agent owns one coherent component. Do not repeatedly expand one
+   long-lived agent into an umbrella owner for unrelated provider axes,
+   protocols, Nix modules, daemon routing, policy, documentation, and later
+   review rounds merely because it retains context. Reawaken it only for the
+   same component; start new agents/worktrees for independent components.
+4. The integrator owns shared prep, merge/conflict resolution, lockfile
+   reconciliation, generated artifacts, delivery authority, and cross-component
+   tests. The integrator is not the default implementation sink for work that
+   can be assigned to an independent component.
+5. At final-stage entry and after every review round, record the ready component
+   count, launched component count, and any blocked component with its exact
+   blocker. A launch count below the ready count without recorded blockers is a
+   process failure and must be corrected before more serial implementation.
+6. Resource limits constrain heavy validation, not implementation parallelism.
+   Use the plan's bounded heavy-gate semaphore for full builds/tests; do not keep
+   code work idle solely because another worktree is validating.
+7. Remove a slice worktree and its real Cargo target immediately after its
+   commits are integrated. Retain only active integration worktrees, so
+   parallelism does not become abandoned-worktree disk pressure.
+
+Exception: a security-sensitive cross-cutting invariant may stay serial only
+when the plan names the exact files, invariant, and unblock commit. Dispatch all
+downstream components as soon as that commit lands; the exception cannot expand
+silently into the rest of the wave.
 
 ### Edit → commit → validate
 
@@ -859,7 +907,15 @@ feature branches; `main` itself is maintained as a by-release history.
   under `packages/`. Focus broker feature passes with
   `-p d2b-priv-broker`; focus the persistent-shell helper's real bridge with
   `-p d2b-guest-shell-runner --features real-libshpool`.
-- The integrator MUST run `nix-collect-garbage` after each wave merge.
+- After each wave merge, the integrator MUST complete the whole post-wave
+  cleanup sequence:
+  1. Delete the merged remote feature branch.
+  2. If the finished worktree has a real `packages/target/`, clean that build
+     output; otherwise confirm the target is the shared-cache symlink or absent.
+  3. Remove the finished local worktree.
+  4. Delete the corresponding local feature branch.
+  5. Run `nix-collect-garbage` and verify `git worktree list` contains only
+     active work.
 - For the operator host running heavy iteration: prune OLD
   NixOS system generations periodically:
 
@@ -897,7 +953,7 @@ feature branches; `main` itself is maintained as a by-release history.
   the affected revision.
 - Before `git worktree remove`, confirm the worktree's
   `packages/target/` is the shared-cache symlink (or absent), not a
-  real per-worktree directory.
+  real per-worktree directory. Clean a real target before removal.
 - `tests/tools/preflight-disk-space.sh` fails the wave when free disk under
   `$ROOT` drops below 10 GiB. Runs after the orphan reapers but BEFORE
   the rust toolchain bootstrap so the fail-closed guard cannot be
@@ -926,7 +982,7 @@ Touch these only with a clear plan and a corresponding test run.
 | UI color contract / niri backend    | `nixos-modules/ui-colors.nix`, `nixos-modules/niri-vm-borders.nix`, `docs/reference/ui-colors.{md,json}`, `tests/unit/nix/cases/niri-vm-borders.nix`, and sibling consumers such as `vicondoa/d2b-wlcontrol` | The compositor-agnostic `d2b.site.ui` / `d2b.envs.<env>.ui` / `d2b.vms.<vm>.ui` color model is the source of truth for host/env/VM/state colors. Generated `/etc/d2b/ui-colors.json` and `/etc/d2b/ui-colors.css` are public presentation metadata, not authz or policy inputs. Niri-specific settings belong only under `d2b.site.ui.compositors.niri`; do not add compositor-specific color source options. Keep the JSON schema, reference docs, GTK CSS `@define-color` names, and nix-unit artifact-shape tests in sync. Downstream tools must fail visibly but remain usable when the artifact is missing or malformed, without reading root-owned d2b state directly. |
 | Unsafe-local provider, launcher, and persistent-shell helper | `nixos-modules/options-realms-workloads.nix`, `nixos-modules/unsafe-local-workloads-json.nix`, `packages/d2b-core/src/unsafe_local_workloads.rs`, `packages/d2b-contracts/src/unsafe_local_wire.rs`, `packages/d2b-unsafe-local-helper/src/{shell_runtime,shell_supervisor,shell_socket,output_ring,tty_exec}.rs`, and `docs/reference/unsafe-local-provider.md` | `unsafe-local` is explicit and default-denied. It runs only as the exact authenticated requesting uid and provides no isolation boundary. Public metadata never carries configured argv or shell policy; those come only from the integrity-pinned private bundle. A persistent-shell supervisor in a verified transient USER scope—not the reconnectable helper or d2bd—owns the login-shell PTY, bounded merged-output ring, attachment, and private same-UID listener. Ledger adoption preserves ambiguous sessions as degraded; teardown closes the PTY and signals only the exact re-verified scope. The helper-wide ring reservation is bounded, terminal responses transfer exactly one CLOEXEC stream fd, and shell names, supervisor ids, paths, environment, process/unit identity, and bytes stay out of Debug/errors/audit. Do not add cross-uid execution, a direct compositor fallback, VM state/network/device semantics, a root service, per-VM unit, broker op, free-form shell command, or broad same-UID cleanup. |
 | Manifest contract                   | `docs/reference/manifest-schema.{md,json}` + `nixos-modules/manifest.nix`               | Version-pinned via `manifestVersion`. Adding, removing, or renaming a per-VM field requires bumping the version, updating the schema, and noting it in the CHANGELOG. The `static.sh` md↔json drift gate catches partial updates. |
-| Manifest bundle — private artifacts | `docs/reference/manifest-bundle.md` + `docs/reference/schemas/v2/*.json` + `packages/d2b-core/src/{bundle,host,processes,privileges,closures,minijail_profile}.rs` + `nixos-modules/{bundle,bundle-artifacts,host-json,processes-json,privileges-json,closures-json,minijail-profiles}.nix` + `packages/xtask/src/main.rs` (`gen-schemas`) | Sensitive bundle artifacts install at `root:d2bd` 0640 and ground every broker/sandbox/runner behaviour. `d2b-core` DTOs are canonical; `d2b._bundle` is the typed internal artifact table that owns JSON data, install names, classifications, and `/etc/d2b` materialization for every bundle artifact. Add new bundle artifacts through `nixos-modules/bundle-artifacts.nix` instead of hand-writing parallel install logic in each emitter. Committed schemas under `docs/reference/schemas/v2/` ARE the contract and the `tests/unit/gates/drift-check.sh` gate enforces `xtask gen-schemas` + `git diff --exit-code` through `make test-drift`. Breaking the schema without an intentional `bundleVersion`/`schemaVersion` bump silently breaks every downstream consumer. |
+| Manifest bundle — private artifacts | `docs/reference/manifest-bundle.md` + `docs/reference/schemas/v2/*.json` + `packages/d2b-core/src/{bundle,host,processes,privileges,closures,minijail_profile}.rs` + `packages/d2b-contracts/src/provider_registry_v2.rs` + `nixos-modules/{bundle,bundle-artifacts,host-json,processes-json,privileges-json,closures-json,minijail-profiles,provider-registry-v2-json}.nix` + `packages/xtask/src/main.rs` (`gen-schemas`) | Sensitive bundle artifacts install at `root:d2bd` 0640 and ground every broker/sandbox/runner behaviour. `d2b-core` DTOs are canonical; the provider registry DTO is canonical in `d2b-contracts`; `d2b._bundle` is the typed internal artifact table that owns JSON data, install names, classifications, and `/etc/d2b` materialization for every bundle artifact. `provider-registry-v2.json` carries only canonical IDs and opaque existing bundle intent IDs: never add argv, host paths, or credentials. Add new bundle artifacts through `nixos-modules/bundle-artifacts.nix` instead of hand-writing parallel install logic in each emitter. Committed schemas under `docs/reference/schemas/v2/` ARE the contract and the `tests/unit/gates/drift-check.sh` gate enforces `xtask gen-schemas` + `git diff --exit-code` through `make test-drift`. Breaking the schema without an intentional `bundleVersion`/`schemaVersion` bump silently breaks every downstream consumer. |
 | Realm-local control plane | `packages/d2bd/**`, broker/provider/session crates, generated endpoint/process/storage contracts, and [ADR 0045](./docs/adr/0045-provider-and-transport-framework.md) | PID1 owns only the fixed local-root endpoint set. The local-root allocator pre-binds listeners and parent-spawns a distinct controller and broker for each child realm, returning separate pidfds for supervision. Child processes have separate identities, cgroup leaves, state/audit roots, and FD/lease authority; they are not PID1 units. Never collapse them into one realm-tagged broker or add per-workload units. |
 | Storage lifecycle / restart / synchronization | Planned generated contracts in `d2b-core::{storage,process_restart,sync}` + Nix emitters, broker storage/sync ops, daemon lifecycle DAG integration, and docs [ADR 0034](./docs/adr/0034-storage-lifecycle-restart-and-synchronization.md) / [`docs/explanation/storage-lifecycle.md`](./docs/explanation/storage-lifecycle.md) | Managed paths, restart adoption, locks, leases, cleanup, and degraded-state reporting are control-plane contracts. Normal daemon restarts are continuation events: do not broad-sweep `/run/d2b`; first re-discover adoptable runners from declared cgroup leaves, open fresh pidfds, verify identity, and quarantine/degrade ambiguity. Pidfds are not persisted. New advisory locks use OFD locks with `O_CLOEXEC`, explicit fd transfer only, and total acquisition order. The broker resolves storage/lock mutations from opaque bundle ids through anchored `openat2`/fd-relative path walking; daemon-owned ledgers are diagnostics, never repair authority. |
 | Eval-time assertions                | `nixos-modules/assertions.nix`                                                          | These are the framework's contract with consumers. Loosening one silently turns a previously-rejected misconfig into runtime breakage. New assertions need a matching case in `tests/assertions-eval.sh`. |

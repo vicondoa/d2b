@@ -61,15 +61,36 @@ mutation. Provider calls carry provider identity/type/generation, policy epoch,
 authorization digest, and request digest; credential operations return only
 opaque lease handles.
 
+`ProviderRequest` carries a mandatory `ProviderOperationInput` oneof. Its
+variants map exactly to the canonical provider input union: no input,
+configured item ID, infrastructure power state, transport binding ID, storage
+snapshot ID, device selector ID, audio state, observability query, or
+observability export. The removed generic `binding_id`, `desired_state`, and
+`stream_id` fields and their tags are reserved and rejected. Method-specific
+compatibility is validated before provider dispatch.
+
+An `observability-query` success uses the structured
+`ProviderResponse.observability_query_result` field. Its bound observation,
+closed record labels, records, cursor, byte upper bound, and truncation state
+round-trip the canonical Rust result directly; they are never encoded as JSON
+or opaque bytes. Query results cannot be mixed with generic observations,
+resource or stream handles, result digests, attachments, or errors. Error
+responses carry no query result, and every non-query provider method rejects
+that field. Provider-service schema fingerprints include this response shape.
+
 ## Bounds and strictness
 
 A protobuf message is at most 1 MiB. Strings and opaque IDs are at most 64
-bytes, digests are 32 bytes, a page has at most 256 observations, and a request
-references at most 64 unique ComponentSession attachments. Decode rejects
-unknown protobuf fields, unknown enum values, unspecified enum sentinels,
-invalid canonical IDs, duplicate attachment indexes, missing metadata,
-over-limit values, and mutation requests without idempotency. JSON inventory
-and schema fixtures deny unknown fields.
+bytes, digests are 32 bytes, a page has at most 256 observations or
+observability records, and a request references at most 64 unique
+ComponentSession attachments. An observability result declares at most 1 MiB
+of encoded records. Decode rejects unknown protobuf fields, unknown enum
+values, unspecified enum sentinels, invalid canonical IDs, duplicate
+attachment indexes, missing metadata, missing or mismatched provider input,
+over-limit values, inconsistent result fields, and mutation requests without
+idempotency. Strictness applies recursively to every nested operation input
+and observability result. JSON inventory and schema fixtures deny unknown
+fields.
 
 Generated bindings use only `ttrpc::r#async` client, handler, service, and
 server traits from the pinned runtime stack. They define wire dispatch only;

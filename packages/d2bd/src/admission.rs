@@ -143,6 +143,7 @@ pub(crate) fn verb_requires_admin(verb: &str) -> bool {
             | "hostInstall"
             | "hostReconcile"
             | "readGuestConfig"
+            | "observabilityExportInspect"
             | "exec"
             | "shell"
     )

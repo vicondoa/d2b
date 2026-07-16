@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "d2b",
+    "d2b-azure-vm-fake-sdk",
     "d2b-client",
     "d2b-clipd",
     "d2b-contract-tests",
@@ -20,9 +21,25 @@ members = [
     "d2b-priv-broker",
     "d2b-provider",
     "d2b-provider-aca",
+    "d2b-provider-audio-pipewire-vhost-user",
+    "d2b-provider-credential-entra",
+    "d2b-provider-credential-managed-identity",
+    "d2b-provider-credential-secret-service",
+    "d2b-provider-device-host-mediated",
+    "d2b-provider-display-wayland",
     "d2b-provider-host",
+    "d2b-provider-infrastructure-azure-vm",
+    "d2b-provider-network-local-realm",
+    "d2b-provider-observability-local",
     "d2b-provider-relay",
+    "d2b-provider-runtime-azure-container-apps",
+    "d2b-provider-runtime-azure-vm",
+    "d2b-provider-runtime-local",
+    "d2b-provider-storage-local",
+    "d2b-provider-substrate-host",
     "d2b-provider-toolkit",
+    "d2b-provider-transport-azure-relay",
+    "d2b-provider-transport-local",
     "d2b-realm-codec-protobuf",
     "d2b-realm-core",
     "d2b-realm-provider",
@@ -64,8 +81,9 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(test_root)"] }
 
 [workspace.dependencies]
 d2b = { path = "d2b", version = "2.0.0" }
-d2b-clipd = { path = "d2b-clipd", version = "2.0.0" }
+d2b-azure-vm-fake-sdk = { path = "d2b-azure-vm-fake-sdk", version = "2.0.0", default-features = false }
 d2b-client = { path = "d2b-client", version = "2.0.0", default-features = false }
+d2b-clipd = { path = "d2b-clipd", version = "2.0.0" }
 d2b-contracts = { path = "d2b-contracts", version = "2.0.0", default-features = false }
 d2b-core = { path = "d2b-core", version = "2.0.0" }
 d2b-daemon-access = { path = "d2b-daemon-access", version = "2.0.0" }
@@ -76,9 +94,25 @@ d2b-guestd = { path = "d2b-guestd", version = "2.0.0" }
 d2b-host = { path = "d2b-host", version = "2.0.0" }
 d2b-provider = { path = "d2b-provider", version = "2.0.0", default-features = false }
 d2b-provider-aca = { path = "d2b-provider-aca", version = "2.0.0" }
+d2b-provider-audio-pipewire-vhost-user = { path = "d2b-provider-audio-pipewire-vhost-user", version = "2.0.0", default-features = false }
+d2b-provider-credential-entra = { path = "d2b-provider-credential-entra", version = "2.0.0", default-features = false }
+d2b-provider-credential-managed-identity = { path = "d2b-provider-credential-managed-identity", version = "2.0.0", default-features = false }
+d2b-provider-credential-secret-service = { path = "d2b-provider-credential-secret-service", version = "2.0.0", default-features = false }
+d2b-provider-device-host-mediated = { path = "d2b-provider-device-host-mediated", version = "2.0.0", default-features = false }
+d2b-provider-display-wayland = { path = "d2b-provider-display-wayland", version = "2.0.0", default-features = false }
 d2b-provider-host = { path = "d2b-provider-host", version = "2.0.0" }
+d2b-provider-infrastructure-azure-vm = { path = "d2b-provider-infrastructure-azure-vm", version = "2.0.0", default-features = false }
+d2b-provider-network-local-realm = { path = "d2b-provider-network-local-realm", version = "2.0.0", default-features = false }
+d2b-provider-observability-local = { path = "d2b-provider-observability-local", version = "2.0.0", default-features = false }
 d2b-provider-relay = { path = "d2b-provider-relay", version = "2.0.0" }
+d2b-provider-runtime-azure-container-apps = { path = "d2b-provider-runtime-azure-container-apps", version = "2.0.0", default-features = false }
+d2b-provider-runtime-azure-vm = { path = "d2b-provider-runtime-azure-vm", version = "2.0.0", default-features = false }
+d2b-provider-runtime-local = { path = "d2b-provider-runtime-local", version = "2.0.0", default-features = false }
+d2b-provider-storage-local = { path = "d2b-provider-storage-local", version = "2.0.0", default-features = false }
+d2b-provider-substrate-host = { path = "d2b-provider-substrate-host", version = "2.0.0", default-features = false }
 d2b-provider-toolkit = { path = "d2b-provider-toolkit", version = "2.0.0", default-features = false }
+d2b-provider-transport-azure-relay = { path = "d2b-provider-transport-azure-relay", version = "2.0.0", default-features = false }
+d2b-provider-transport-local = { path = "d2b-provider-transport-local", version = "2.0.0", default-features = false }
 d2b-realm-codec-protobuf = { path = "d2b-realm-codec-protobuf", version = "2.0.0" }
 d2b-realm-core = { path = "d2b-realm-core", version = "2.0.0" }
 d2b-realm-provider = { path = "d2b-realm-provider", version = "2.0.0" }

@@ -8,7 +8,13 @@
 
 use d2b_contract_tests::{read_repo_file, repo_path_exists, repo_root};
 use regex::Regex;
-use std::path::{Path, PathBuf};
+use serde::Deserialize;
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    process::Command,
+};
+use tree_sitter::{Node, Parser};
 
 /// Assert `haystack` contains a line matching `pattern` (multi-line, `^`/`$`
 /// anchor lines), with a descriptive failure message.
@@ -30,6 +36,272 @@ fn collect_markdown_files(dir: &Path, files: &mut Vec<PathBuf>) {
             files.push(path);
         }
     }
+}
+
+fn node_text<'source>(node: Node<'_>, source: &'source str) -> Result<&'source str, String> {
+    node.utf8_text(source.as_bytes())
+        .map_err(|_| "bash AST node is not valid UTF-8".into())
+}
+
+fn named_children<'tree>(node: Node<'tree>) -> Vec<Node<'tree>> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor).collect()
+}
+
+fn contains_shell_redirection(node: Node<'_>) -> bool {
+    matches!(
+        node.kind(),
+        "file_redirect" | "heredoc_redirect" | "herestring_redirect" | "redirected_statement"
+    ) || named_children(node)
+        .into_iter()
+        .any(contains_shell_redirection)
+}
+
+fn exact_word(node: Node<'_>, expected: &str, source: &str) -> Result<(), String> {
+    if node.kind() != "word"
+        || node.named_child_count() != 0
+        || node_text(node, source)? != expected
+    {
+        return Err(format!(
+            "delivery wrapper expected word {expected:?}, found {} {:?}",
+            node.kind(),
+            node_text(node, source)?
+        ));
+    }
+    Ok(())
+}
+
+fn shell_gap_separates_words(gap: &str) -> bool {
+    let bytes = gap.as_bytes();
+    let mut index = 0;
+    let mut has_separator = false;
+    while index < bytes.len() {
+        if bytes[index] == b'\\' && bytes.get(index + 1) == Some(&b'\n') {
+            index += 2;
+            continue;
+        }
+        if matches!(bytes[index], b' ' | b'\t' | b'\n') {
+            has_separator = true;
+            index += 1;
+            continue;
+        }
+        return false;
+    }
+    has_separator
+}
+
+fn shell_outer_padding_is_safe(padding: &str) -> bool {
+    padding
+        .as_bytes()
+        .iter()
+        .all(|byte| matches!(byte, b' ' | b'\t' | b'\n'))
+}
+
+fn exact_xtask_target(node: Node<'_>, source: &str) -> Result<(), String> {
+    if node.kind() != "string" || node_text(node, source)? != "\"$out/bin/xtask\"" {
+        return Err(format!(
+            "delivery wrapper target must be exactly the double-quoted string \"$out/bin/xtask\", found {} {:?}",
+            node.kind(),
+            node_text(node, source)?
+        ));
+    }
+    let children = named_children(node);
+    if children.len() != 2
+        || children[0].kind() != "simple_expansion"
+        || children[1].kind() != "string_content"
+        || node_text(children[0], source)? != "$out"
+        || node_text(children[1], source)? != "/bin/xtask"
+    {
+        return Err(format!(
+            "delivery wrapper target must be a simple $out expansion followed by literal /bin/xtask, found {:?}",
+            node_text(node, source)?
+        ));
+    }
+    let expansion_children = named_children(children[0]);
+    if expansion_children.len() != 1
+        || expansion_children[0].kind() != "variable_name"
+        || node_text(expansion_children[0], source)? != "out"
+    {
+        return Err("delivery wrapper target expansion must name only $out".into());
+    }
+    Ok(())
+}
+
+fn exact_wrapper_command(post_fixup: &str, canonical_path: &str) -> Result<(), String> {
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_bash::LANGUAGE.into())
+        .map_err(|err| format!("initialize bash AST parser: {err}"))?;
+    let tree = parser
+        .parse(post_fixup, None)
+        .ok_or("bash AST parser returned no syntax tree")?;
+    let root = tree.root_node();
+    if root.has_error() {
+        return Err("delivery postFixup is not valid bash syntax".into());
+    }
+    let statements = named_children(root)
+        .into_iter()
+        .filter(|node| node.kind() != "comment")
+        .collect::<Vec<_>>();
+    if statements.iter().copied().any(contains_shell_redirection) {
+        return Err("delivery postFixup redirections and heredocs are forbidden".into());
+    }
+    if statements.len() != 1 {
+        return Err(format!(
+            "delivery postFixup must contain exactly one top-level command node; found {}",
+            statements.len()
+        ));
+    }
+    let command = statements[0];
+    let mut root_cursor = root.walk();
+    if root
+        .children(&mut root_cursor)
+        .any(|node| node.id() != command.id())
+    {
+        return Err("delivery postFixup contains an unexpected command terminator or node".into());
+    }
+    if command.kind() != "command" {
+        return Err(format!(
+            "delivery postFixup must contain one unconditional command, not {}",
+            command.kind()
+        ));
+    }
+
+    let name = command
+        .child_by_field_name("name")
+        .ok_or("delivery wrapper command is missing its name")?;
+    let name_children = named_children(name);
+    if name.kind() != "command_name"
+        || name_children.len() != 1
+        || exact_word(name_children[0], "wrapProgram", post_fixup).is_err()
+    {
+        return Err("delivery wrapper command name must be the plain word wrapProgram".into());
+    }
+    let mut cursor = command.walk();
+    let arguments = command
+        .children_by_field_name("argument", &mut cursor)
+        .collect::<Vec<_>>();
+    if arguments.len() != 5 || command.named_child_count() != 6 {
+        return Err(format!(
+            "delivery wrapper must have exactly five arguments and no redirects or assignments; found {} arguments",
+            arguments.len()
+        ));
+    }
+    let words = std::iter::once(name)
+        .chain(arguments.iter().copied())
+        .collect::<Vec<_>>();
+    for pair in words.windows(2) {
+        let gap = &post_fixup[pair[0].end_byte()..pair[1].start_byte()];
+        if !shell_gap_separates_words(gap) {
+            return Err(
+                "delivery wrapper arguments must be separated by unescaped shell whitespace".into(),
+            );
+        }
+    }
+    if !shell_outer_padding_is_safe(&post_fixup[..command.start_byte()])
+        || !shell_outer_padding_is_safe(
+            &post_fixup[arguments.last().expect("five arguments").end_byte()..],
+        )
+    {
+        return Err(
+            "delivery wrapper source boundaries contain unsafe shell bytes or continuations".into(),
+        );
+    }
+    exact_xtask_target(arguments[0], post_fixup)?;
+    exact_word(arguments[1], "--prefix", post_fixup)?;
+    exact_word(arguments[2], "PATH", post_fixup)?;
+    exact_word(arguments[3], ":", post_fixup)?;
+    exact_word(arguments[4], canonical_path, post_fixup)?;
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EvaluatedDeliveryRuntimeTool {
+    name: String,
+    bin_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EvaluatedDeliveryRuntime {
+    post_fixup: String,
+    delivery_runtime_tools: Vec<EvaluatedDeliveryRuntimeTool>,
+}
+
+const REQUIRED_DELIVERY_RUNTIME_TOOLS: [&str; 5] =
+    ["git", "openssl", "shellcheck", "gh", "git-town"];
+
+fn required_delivery_runtime_paths(
+    post_fixup: &str,
+    tools: &[EvaluatedDeliveryRuntimeTool],
+) -> Result<Vec<String>, String> {
+    let names = tools
+        .iter()
+        .map(|tool| tool.name.as_str())
+        .collect::<Vec<_>>();
+    if names != REQUIRED_DELIVERY_RUNTIME_TOOLS {
+        return Err(format!(
+            "evaluated delivery runtime tools differ from the required set: {names:?}"
+        ));
+    }
+    let expected_paths = tools
+        .iter()
+        .map(|tool| tool.bin_path.clone())
+        .collect::<Vec<_>>();
+    if expected_paths
+        .iter()
+        .any(|path| !path.starts_with("/nix/store/") || !path.ends_with("/bin"))
+    {
+        return Err(format!(
+            "evaluated delivery runtime tool paths must be Nix store bin paths: {expected_paths:?}"
+        ));
+    }
+    let expected_path = expected_paths.join(":");
+    exact_wrapper_command(post_fixup, &expected_path)?;
+    Ok(expected_paths)
+}
+
+fn evaluated_delivery_runtime_contracts() -> BTreeMap<String, EvaluatedDeliveryRuntime> {
+    let root = repo_root();
+    let flake_ref = format!("git+file://{}", root.display());
+    let flake_ref = serde_json::to_string(&flake_ref).expect("serialize flake reference");
+    let expression = format!(
+        r#"
+          let
+            flake = builtins.getFlake {flake_ref};
+          in
+          builtins.listToAttrs (map (system:
+            let package = flake.packages.${{system}}.d2b-delivery;
+            in {{
+              name = system;
+              value = {{
+                inherit (package) postFixup deliveryRuntimeTools;
+              }};
+            }}
+          ) flake.lib.supportedSystems)
+        "#
+    );
+    let output = Command::new("nix")
+        .args([
+            "eval",
+            "--impure",
+            "--quiet",
+            "--no-warn-dirty",
+            "--no-write-lock-file",
+            "--json",
+            "--expr",
+            &expression,
+        ])
+        .current_dir(root)
+        .output()
+        .expect("run nix eval for delivery runtime contracts");
+    assert!(
+        output.status.success(),
+        "all-system delivery runtime eval failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("parse all-system delivery runtime eval")
 }
 
 // Migrated from tests/daemon-experimental-warning-eval.sh.
@@ -262,10 +534,7 @@ fn delivery_tool_sources_and_toolchains_are_exactly_pinned() {
         flake.contains("gh --version | grep -F 'gh version 2.92.0'")
             && flake.contains("git-town --version | grep -Fx 'Git Town 23.0.1'")
             && flake.contains("gh = deliveryTools.gh;")
-            && flake.contains("git-town = deliveryTools.gitTown;")
-            && flake.contains(
-                "pkgs.git\n                pkgs.openssl\n                pkgs.shellcheck"
-            ),
+            && flake.contains("git-town = deliveryTools.gitTown;"),
         "delivery packages and checks must expose all runtime verification tools"
     );
 
@@ -299,10 +568,13 @@ fn delivery_tool_sources_and_toolchains_are_exactly_pinned() {
     assert!(
         flake.contains(
             "deliveryRustWorkspace =\n          rustWorkspaceWith deliveryTools.stableRustPlatform;"
-        ) && flake.contains("d2b-delivery = deliveryRustWorkspace {")
-            && flake.contains(
-                "passthru.rustToolchainVersion = deliveryTools.rustStableVersion;"
-            )
+        ) && flake.contains(r#"output = "d2b-delivery";"#)
+            && flake.contains(r#"buildKind = "deliveryWorkspace";"#)
+            && flake.contains("deliveryRustWorkspace (workspaceArgs // {")
+            && flake.contains("deliveryRuntimeToolSpecs = [")
+            && flake.contains("pkgs.lib.makeBinPath deliveryRuntimePackages")
+            && flake.contains("rustToolchainVersion = deliveryTools.rustStableVersion;")
+            && flake.contains("inherit deliveryRuntimeTools;")
             && flake.contains(
                 r#"outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";"#
             ),
@@ -383,6 +655,246 @@ fn delivery_tool_sources_and_toolchains_are_exactly_pinned() {
             "xtask must not implement a GitHub stack mutation with {mutation}"
         );
     }
+}
+
+fn delivery_runtime_policy_fixture() -> &'static str {
+    r#"
+      wrapProgram \
+        "$out/bin/xtask" \
+          --prefix   PATH : /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-git/bin:/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-openssl/bin:/nix/store/cccccccccccccccccccccccccccccccc-shellcheck/bin:/nix/store/dddddddddddddddddddddddddddddddd-gh/bin:/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-git-town/bin
+    "#
+}
+
+fn delivery_runtime_policy_tools() -> Vec<EvaluatedDeliveryRuntimeTool> {
+    [
+        ("git", "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-git/bin"),
+        (
+            "openssl",
+            "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-openssl/bin",
+        ),
+        (
+            "shellcheck",
+            "/nix/store/cccccccccccccccccccccccccccccccc-shellcheck/bin",
+        ),
+        ("gh", "/nix/store/dddddddddddddddddddddddddddddddd-gh/bin"),
+        (
+            "git-town",
+            "/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-git-town/bin",
+        ),
+    ]
+    .into_iter()
+    .map(|(name, bin_path)| EvaluatedDeliveryRuntimeTool {
+        name: name.to_owned(),
+        bin_path: bin_path.to_owned(),
+    })
+    .collect()
+}
+
+#[test]
+fn delivery_runtime_wrapper_eval_matches_canonical_tools_on_all_systems() {
+    let contracts = evaluated_delivery_runtime_contracts();
+    assert_eq!(
+        contracts.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["aarch64-linux", "x86_64-linux"],
+        "delivery runtime policy must evaluate every supported flake system"
+    );
+    for (system, contract) in contracts {
+        required_delivery_runtime_paths(&contract.post_fixup, &contract.delivery_runtime_tools)
+            .unwrap_or_else(|err| panic!("{system} delivery runtime policy failed: {err}"));
+    }
+}
+
+#[test]
+fn delivery_runtime_shell_ast_binds_active_wrap_program_path() {
+    let post_fixup = delivery_runtime_policy_fixture();
+    let tools = delivery_runtime_policy_tools();
+
+    assert_eq!(
+        required_delivery_runtime_paths(post_fixup, &tools)
+            .expect("evaluated formatting variant must parse"),
+        tools
+            .iter()
+            .map(|tool| tool.bin_path.clone())
+            .collect::<Vec<_>>()
+    );
+    let one_line = format!(
+        "wrapProgram \"$out/bin/xtask\" --prefix PATH : {}",
+        tools
+            .iter()
+            .map(|tool| tool.bin_path.as_str())
+            .collect::<Vec<_>>()
+            .join(":")
+    );
+    required_delivery_runtime_paths(&one_line, &tools)
+        .expect("one-line and quoted-target formatting must parse");
+    let fully_split = format!(
+        "wrapProgram \\\n\"$out/bin/xtask\" \\\n--prefix \\\nPATH \\\n: \\\n{}",
+        tools
+            .iter()
+            .map(|tool| tool.bin_path.as_str())
+            .collect::<Vec<_>>()
+            .join(":")
+    );
+    required_delivery_runtime_paths(&fully_split, &tools)
+        .expect("backslash-separated argument formatting must parse");
+
+    let missing_active_tool = post_fixup.replace(
+        ":/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-openssl/bin",
+        "",
+    );
+    let error = required_delivery_runtime_paths(&missing_active_tool, &tools)
+        .expect_err("commented shell decoys must not mask a missing runtime tool");
+    assert!(
+        error.contains("expected word"),
+        "missing active tool must fail specifically: {error}"
+    );
+
+    let inactive_wrapper =
+        post_fixup.replacen("      wrapProgram \\", "      echo wrapProgram \\", 1);
+    let error = required_delivery_runtime_paths(&inactive_wrapper, &tools)
+        .expect_err("commented, quoted, and unused decoys must not replace the active wrapper");
+    assert!(
+        error.contains("command name"),
+        "inactive wrapper must fail specifically: {error}"
+    );
+}
+
+#[test]
+fn delivery_runtime_shell_ast_rejects_inactive_or_wrong_wrappers() {
+    let post_fixup = delivery_runtime_policy_fixture();
+    let tools = delivery_runtime_policy_tools();
+    let canonical_path = tools
+        .iter()
+        .map(|tool| tool.bin_path.as_str())
+        .collect::<Vec<_>>()
+        .join(":");
+    let cases = [
+        (
+            "false branch",
+            format!("if false; then\n{post_fixup}\nfi\n"),
+        ),
+        (
+            "uncalled function",
+            format!("wrapper() {{\n{post_fixup}\n}}\n"),
+        ),
+        (
+            "wrong target",
+            post_fixup.replace("$out/bin/xtask", "$out/bin/not-xtask"),
+        ),
+        (
+            "continued target concatenation",
+            format!("wrapProgram \"$out/bin/xtask\"\\\n--prefix PATH : {canonical_path}"),
+        ),
+        (
+            "vertical-tab separator",
+            format!("wrapProgram\u{000b}\"$out/bin/xtask\" --prefix PATH : {canonical_path}"),
+        ),
+        (
+            "form-feed separator",
+            format!("wrapProgram\u{000c}\"$out/bin/xtask\" --prefix PATH : {canonical_path}"),
+        ),
+        (
+            "carriage-return separator",
+            format!("wrapProgram\r\"$out/bin/xtask\" --prefix PATH : {canonical_path}"),
+        ),
+        (
+            "crlf continuation",
+            format!("wrapProgram \\\r\n\"$out/bin/xtask\" --prefix PATH : {canonical_path}"),
+        ),
+        (
+            "literal target",
+            post_fixup.replace("\"$out/bin/xtask\"", "'$out/bin/xtask'"),
+        ),
+        (
+            "split quoted dollar",
+            post_fixup.replace("\"$out/bin/xtask\"", "\"$\"out/bin/xtask"),
+        ),
+        (
+            "concatenated target",
+            post_fixup.replace("\"$out/bin/xtask\"", "\"$out\"/bin/xtask"),
+        ),
+        (
+            "escaped target expansion",
+            post_fixup.replace("$out/bin/xtask", "\\$out/bin/xtask"),
+        ),
+        (
+            "backslash in double quote",
+            post_fixup.replace("/bin/xtask\"", "/bin/xta\\sk\""),
+        ),
+        (
+            "anonymous trailing dollar",
+            post_fixup.replace("/bin/xtask\"", "/bin/xtask$\""),
+        ),
+        (
+            "command substitution target",
+            post_fixup.replace("\"$out/bin/xtask\"", "\"$(printf '$out/bin/xtask')\""),
+        ),
+        (
+            "array",
+            format!("args=(wrapProgram \"$out/bin/xtask\" --prefix PATH : {canonical_path})\n"),
+        ),
+        ("extra wrapper", format!("{post_fixup}\n{post_fixup}")),
+        ("backgrounded wrapper", format!("{post_fixup} &")),
+        ("escaped trailing tab", format!("{post_fixup}\\\t")),
+    ];
+    for (name, script) in cases {
+        let error = required_delivery_runtime_paths(&script, &tools)
+            .expect_err("only one unconditional exact xtask wrapper may pass");
+        assert!(
+            error.contains("valid bash syntax")
+                || error.contains("top-level command")
+                || error.contains("unconditional command")
+                || error.contains("command name")
+                || error.contains("target")
+                || error.contains("unescaped shell whitespace")
+                || error.contains("source boundaries"),
+            "{name} must fail the whole-script grammar: {error}"
+        );
+    }
+}
+
+#[test]
+fn delivery_runtime_shell_ast_rejects_heredoc_decoys() {
+    for opener in ["cat <<EOF", "cat <<'EOF'", "cat <<\"EOF\"", "cat <<-EOF"] {
+        let heredoc_decoy = format!("{opener}\n{}\nEOF\n", delivery_runtime_policy_fixture());
+        let error =
+            required_delivery_runtime_paths(&heredoc_decoy, &delivery_runtime_policy_tools())
+                .expect_err("a wrapper-looking heredoc body must not satisfy runtime PATH policy");
+        assert!(
+            error.contains("heredocs are forbidden"),
+            "{opener} must fail closed before its body is parsed: {error}"
+        );
+    }
+}
+
+#[test]
+fn delivery_runtime_shell_ast_rejects_redirection_decoys() {
+    for redirection in [
+        "cat <input",
+        "cat < <EOF",
+        "cat <\\\n<EOF",
+        "cat <<<value",
+        "cat 3<input",
+        "cat >output",
+        "cat 2>output",
+    ] {
+        let redirection_decoy = format!("{redirection}\n{}", delivery_runtime_policy_fixture());
+        let error =
+            required_delivery_runtime_paths(&redirection_decoy, &delivery_runtime_policy_tools())
+                .expect_err("delivery postFixup redirection must fail closed");
+        assert!(
+            error.contains("redirection") || error.contains("valid bash syntax"),
+            "{redirection:?} must fail before wrapper matching: {error}"
+        );
+    }
+
+    let quoted_extra = format!("echo '<'\n{}", delivery_runtime_policy_fixture());
+    let error = required_delivery_runtime_paths(&quoted_extra, &delivery_runtime_policy_tools())
+        .expect_err("a quoted less-than is inert but still an extra command");
+    assert!(
+        error.contains("exactly one top-level") && !error.contains("redirection"),
+        "quoted less-than must remain inert while the extra command fails: {error}"
+    );
 }
 
 #[test]

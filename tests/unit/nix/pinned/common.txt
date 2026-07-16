@@ -622,11 +622,12 @@ realm-workloads/cross-realm-cid-collision-assertion-fires
 realm-workloads/cross-realm-cid-collision-names-affected-pairs
 realm-workloads/cross-realm-ext-network-conflict-advisory-only
 realm-workloads/cross-realm-ext-network-conflict-in-index
-realm-workloads/cross-realm-same-vm-no-cid-collision
+realm-workloads/cross-realm-same-vm-rejected-as-duplicate-owner
 realm-workloads/disabled-excluded-from-enabled
 realm-workloads/empty-local-vm-configured-launch-rejected
 realm-workloads/empty-local-vm-launcher-stays-compatibility-only
 realm-workloads/first-class-local-vm-private-launcher
+realm-workloads/generated-provider-registry-maps-only-explicit-live-runtime
 realm-workloads/index-accepted-provider-placeholder
 realm-workloads/index-accepted-with-legacyvmname
 realm-workloads/index-all-includes-disabled
@@ -652,7 +653,7 @@ realm-workloads/persistent-shell-compatibility-item
 realm-workloads/private-configured-workload-bounds
 realm-workloads/realm-row-workload-names
 realm-workloads/realm-with-no-workloads-empty-index
-realm-workloads/unsafe-local-artifacts-and-bundle-v11
+realm-workloads/unsafe-local-artifacts-and-bundle-v12
 realm-workloads/unsafe-local-helper-user-service-and-eligibility
 realm-workloads/unsafe-local-index-posture-and-items
 realm-workloads/unsafe-local-omitted-from-launcher-v1
@@ -673,6 +674,7 @@ requested-vm-config/purple-qemu-media-niri-border
 restart-policy/ch-exporter
 restart-policy/d2bd-killmode-process
 restart-policy/d2bd-present
+restart-policy/d2bd-provider-triggers-exact
 restart-policy/d2bd-restarts-on-update
 restart-policy/d2b-template
 restart-policy/gpu
@@ -682,6 +684,7 @@ restart-policy/microvm-virtiofsd-full-vm
 restart-policy/obs-otel-vsock-in-host
 restart-policy/otel-host-bridge
 restart-policy/otel-relay-template
+restart-policy/provider-generation-restarts-daemon-without-runner-kill
 restart-policy/snd
 restart-policy/swtpm
 restart-policy/video
@@ -759,6 +762,7 @@ usb-security-key/vm-enabled-host-disabled-fails
 v2-identity/canonical-cross-language-vectors
 v2-identity/duplicate-provider-ids-fail-closed
 v2-identity/global-short-id-collisions-fail-closed
+v2-identity/literal-nul-escape-is-not-a-nul-byte
 v2-identity/malformed-encodings-fail-recomputation
 v2-identity/malformed-short-ids-are-rejected
 v2-identity/partition-boundaries-are-distinct

@@ -135,18 +135,13 @@ d2b shell work kill --name build
 
 Use `list` first if you need to discover the configured default name.
 
-## Gateway-backed targets
+## Provider-managed targets
 
-`d2b shell list`, `detach`, and `kill` route gateway-backed realm targets
-through the selected gateway in current generations. Interactive gateway-backed
-`attach` still fails closed on the host facade until semantic gateway attach
-lands; for that case, enter the realm gateway first, then run the shell command
-from inside that gateway boundary:
-
-```bash
-d2b realm enter work
-work-gw$ d2b shell <target>
-```
+A provider-managed target supports persistent shells only when its runtime
+advertises the positive `persistent-shell` capability through its authenticated
+provider agent. The ACA runtime provider does not gain shell capability by
+implication. There is no gateway-guest fallback, provider-native shell
+fallback, or SSH fallback.
 
 ## Avoid co-locating untrusted same-UID services
 

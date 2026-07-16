@@ -8,9 +8,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Bundle {
-    /// Version of the bundle format; bundleVersion 11 extends the private
-    /// configured-item artifact to local VM workloads while artifact
-    /// schemaVersion stays v2.
+    /// Version of the bundle format; bundleVersion 12 adds the private
+    /// provider-registry-v2 composition artifact while artifact schemaVersion
+    /// stays v2.
     pub bundle_version: u32,
     /// Schema version directory used to validate all artifacts in this bundle.
     pub schema_version: String,
@@ -43,6 +43,9 @@ pub struct Bundle {
     /// Private configured unsafe-local workload metadata artifact path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unsafe_local_workloads_path: Option<String>,
+    /// Private canonical provider descriptors and opaque daemon intent mappings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_registry_v2_path: Option<String>,
     /// Per-VM closure artifact paths keyed by VM name.
     pub closures: Vec<BundleClosureRef>,
     /// Minijail profile metadata paths shipped with the bundle.
@@ -70,7 +73,8 @@ pub struct Bundle {
     /// paths for `host_path`, `processes_path`, `privileges_path`,
     /// `storage_path`, `sync_path`, `allocator_path`,
     /// `realm_controllers_path`, `realm_identity_path`,
-    /// `realm_workloads_launcher_v2_path`, and `unsafe_local_workloads_path`;
+    /// `realm_workloads_launcher_v2_path`, `unsafe_local_workloads_path`, and
+    /// `provider_registry_v2_path`;
     /// bundle-relative paths for `closures[*].path` and
     /// `minijail_profiles[*].path`. Values are
     /// `"sha256:<hex64>"` strings.

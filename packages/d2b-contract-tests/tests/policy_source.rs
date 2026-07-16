@@ -21,15 +21,12 @@
 //! so it is excluded from its own scan — the forbidden-pattern regex string it
 //! carries can never flag itself.
 //!
-//! syn-ast-walk note (no-bash-exec): the bash gate's third mode handed off to
-//! the standalone `tests/tools/no-bash-ast-walker/` cargo tool (a `syn`-based
-//! AST walker), falling back to `check` mode whenever that tool was absent.
-//! Porting the AST walker into this crate would require adding `syn` as a
-//! dev-dependency, which is out of scope for this migration; the standalone
-//! walker tool remains in place. The per-line regex `check` mode ported here is
-//! a strict superset of the walker's literal detection at the source-line level
-//! (it matches the same `Command::new("…bash"|"…sh")` literals and more), so the
-//! ADR 0017 regression invariant is preserved.
+//! syn-ast-walk note: the standalone `tests/tools/no-bash-ast-walker/` cargo
+//! tool owns syntax-aware Rust policy checks without adding parser dependencies
+//! to the shared workspace. In addition to shell execution, it parses exact
+//! provider call sites and resolves import and type aliases so formatting or
+//! qualified paths cannot evade those checks. The per-line regex here remains
+//! the broad source-level shell-execution backstop.
 
 use std::collections::BTreeSet;
 use std::process::Command;

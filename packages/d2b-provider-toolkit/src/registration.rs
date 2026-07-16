@@ -6,6 +6,7 @@ use d2b_contracts::{
 };
 use d2b_provider::{
     FactoryError, ProviderFactory, ProviderInstance, ProviderRegistryBuilder, RegistryBuildError,
+    provider_capabilities_are_dispatchable,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,7 +68,7 @@ pub fn register_exact_instances(
         if instance.capabilities() != descriptor.capabilities {
             return Err(ToolkitError::CapabilityMismatch);
         }
-        if !instance.validate_capability_dispatch() {
+        if !provider_capabilities_are_dispatchable(&instance.capabilities()) {
             return Err(ToolkitError::CapabilityMismatch);
         }
         let key = ProviderFactoryKey {

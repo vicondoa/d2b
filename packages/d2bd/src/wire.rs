@@ -24,6 +24,7 @@ pub enum Request {
     List(public_wire::ListRequest),
     Status(public_wire::StatusRequest),
     Audit(public_wire::AuditRequest),
+    ObservabilityExportInspect(public_wire::ObservabilityExportInspectRequest),
     HostCheck(HostCheckRequestExt),
     AuthStatus,
     KeysList,
@@ -68,6 +69,7 @@ impl Request {
             Self::List(_) => "list",
             Self::Status(_) => "status",
             Self::Audit(_) => "audit",
+            Self::ObservabilityExportInspect(_) => "observabilityExportInspect",
             Self::HostCheck(_) => "hostCheck",
             Self::AuthStatus => "authStatus",
             Self::KeysList => "keysList",
@@ -139,6 +141,7 @@ impl Request {
             Self::List(_)
             | Self::Status(_)
             | Self::Audit(_)
+            | Self::ObservabilityExportInspect(_)
             | Self::HostCheck(_)
             | Self::AuthStatus
             | Self::KeysList
@@ -252,6 +255,9 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, TypedError> {
             .map_err(map_parse_error),
         "audit" => serde_json::from_value(Value::Object(object.clone()))
             .map(Request::Audit)
+            .map_err(map_parse_error),
+        "observabilityExportInspect" => serde_json::from_value(Value::Object(object.clone()))
+            .map(Request::ObservabilityExportInspect)
             .map_err(map_parse_error),
         "hostCheck" => serde_json::from_value(Value::Object(object.clone()))
             .map(Request::HostCheck)
@@ -546,6 +552,19 @@ pub fn audit_response(lines: Vec<String>) -> AuditResponseFrame {
     }
 }
 
+pub fn observability_export_inspect_response(
+    payload: public_wire::ObservabilityExportInspectResponse,
+) -> Value {
+    let mut value = serde_json::to_value(payload).unwrap_or_else(|_| json!({}));
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "type".to_owned(),
+            Value::String("observabilityExportInspectResponse".to_owned()),
+        );
+    }
+    value
+}
+
 pub fn host_check_response(summary: Value, checks: Vec<Value>) -> Value {
     json!({ "type": "hostCheckResponse", "summary": summary, "checks": checks })
 }
@@ -745,6 +764,26 @@ mod tests {
             Request::Shell(ShellOp::List(args)) => assert_eq!(args.vm, "corp-vm"),
             other => panic!("unexpected request: {other:?}"),
         }
+    }
+
+    #[test]
+    fn observability_export_inspection_request_parses_exact_bounded_fields() {
+        let frame = br#"{"type":"observabilityExportInspect","operationId":"export-operation","offset":7,"maxBytes":1024}"#;
+        let request = parse_request(frame).expect("inspection request parses");
+        let Request::ObservabilityExportInspect(request) = request else {
+            panic!("unexpected request");
+        };
+        assert_eq!(request.operation_id.as_str(), "export-operation");
+        assert_eq!(request.offset, 7);
+        assert_eq!(request.max_bytes, 1_024);
+
+        let unknown = br#"{"type":"observabilityExportInspect","operationId":"export-operation","offset":0,"maxBytes":1,"path":"/private"}"#;
+        assert_eq!(
+            parse_request(unknown)
+                .expect_err("unknown retrieval field rejected")
+                .kind(),
+            "wire-unknown-field"
+        );
     }
 
     #[test]

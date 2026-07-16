@@ -9,7 +9,7 @@ use d2b_contracts::v2_provider::{
 };
 use d2b_provider::{
     AuthenticatedProviderRpc, ProviderClock, ProviderInstance, RpcCall, RpcOperation, RpcPayload,
-    RpcResponse, SessionIdentity,
+    RpcResponse, SessionIdentity, provider_capabilities_are_dispatchable,
 };
 
 use crate::ToolkitError;
@@ -42,6 +42,9 @@ impl ProviderAgentAdapter {
             .validate()
             .map_err(|_| ToolkitError::DescriptorInvalid)?;
         if instance.capabilities() != descriptor.capabilities {
+            return Err(ToolkitError::CapabilityMismatch);
+        }
+        if !provider_capabilities_are_dispatchable(&instance.capabilities()) {
             return Err(ToolkitError::CapabilityMismatch);
         }
         let binding = descriptor
@@ -520,7 +523,7 @@ impl AuthenticatedProviderRpc for ProviderAgentAdapter {
                         query,
                         call.context,
                         call.payload,
-                        Observation
+                        ObservabilityQuery
                     ),
                     (
                         ProviderInstance::Observability(provider),
