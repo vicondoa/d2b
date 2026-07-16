@@ -2110,6 +2110,94 @@ async fn cleanup_shutdown_drains_an_in_flight_revoke_before_stopping() {
 }
 
 #[tokio::test]
+async fn final_provider_owner_drains_pending_cleanup_and_joins_before_drop_returns() {
+    let observer = Arc::new(RecordingCleanupObserver::default());
+    let harness = Harness::container_image();
+    let (executor, control) =
+        controlled_lease_cleanup_executor_for_test(4, 1, Duration::from_millis(500))
+            .expect("controlled cleanup executor");
+    let provider = harness.provider_with_cleanup_services(observer.clone(), executor);
+    harness.credential.block_next_revoke();
+
+    let first = harness.request(ProviderMethod::RuntimeInspect, "drop-drain-first");
+    let first_context = harness.call_context(&first.context, 1_000, false);
+    provider.inspect(&first_context, &first).await.unwrap();
+    wait_for_within(Duration::from_millis(500), || {
+        harness.credential.revocation_count() == 1
+    })
+    .await;
+
+    let second = harness.request(ProviderMethod::RuntimeInspect, "drop-drain-second");
+    let second_context = harness.call_context(&second.context, 1_000, false);
+    provider.inspect(&second_context, &second).await.unwrap();
+    assert_eq!(harness.credential.revocation_count(), 1);
+
+    let dropper = std::thread::spawn(move || drop(provider));
+    wait_for_within(Duration::from_millis(500), || control.is_closed()).await;
+    assert!(!dropper.is_finished());
+
+    harness.credential.release_revoke();
+    dropper.join().unwrap();
+
+    assert!(control.is_stopped());
+    assert!(control.is_joined());
+    assert_eq!(harness.credential.revocation_count(), 2);
+    assert_eq!(harness.credential.completed_revocation_count(), 2);
+    assert_eq!(harness.credential.cancelled_revocation_count(), 0);
+    assert_eq!(lock(&harness.vault).active_lease_count(), 0);
+    assert_eq!(
+        observer
+            .events()
+            .iter()
+            .filter(|event| event.outcome().as_str() == "revoked")
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn provider_instance_clones_join_cleanup_only_when_the_final_owner_drops() {
+    let observer = Arc::new(RecordingCleanupObserver::default());
+    let harness = Harness::container_image();
+    let (executor, control) =
+        controlled_lease_cleanup_executor_for_test(4, 1, Duration::from_millis(100))
+            .expect("controlled cleanup executor");
+    let provider: Arc<dyn RuntimeProvider> =
+        Arc::new(harness.provider_with_cleanup_services(observer, executor));
+    let instance = ProviderInstance::Runtime(provider);
+    let clone = instance.clone();
+
+    drop(instance);
+    assert!(!control.is_stopped());
+    assert!(!control.is_joined());
+
+    drop(clone);
+    assert!(control.is_stopped());
+    assert!(control.is_joined());
+}
+
+#[test]
+fn cleanup_shutdown_join_is_idempotent() {
+    let observer = Arc::new(RecordingCleanupObserver::default());
+    let harness = Harness::container_image();
+    let (executor, control) =
+        controlled_lease_cleanup_executor_for_test(4, 1, Duration::from_millis(100))
+            .expect("controlled cleanup executor");
+    let provider = harness.provider_with_cleanup_services(observer, executor);
+
+    control.shutdown_and_join();
+    assert!(control.is_stopped());
+    assert!(control.is_joined());
+    control.shutdown_and_join();
+    assert!(control.is_stopped());
+    assert!(control.is_joined());
+
+    drop(provider);
+    assert!(control.is_stopped());
+    assert!(control.is_joined());
+}
+
+#[tokio::test]
 async fn cleanup_shutdown_timeout_reports_cancelled_once_without_a_second_revoke() {
     let observer = Arc::new(RecordingCleanupObserver::default());
     let harness = Harness::container_image();

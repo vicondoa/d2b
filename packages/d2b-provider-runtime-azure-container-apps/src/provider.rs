@@ -7,7 +7,7 @@ use std::{
     future::{Future, poll_fn},
     ops::Deref,
     sync::{
-        Arc, Mutex as StdMutex, OnceLock,
+        Arc, Mutex as StdMutex,
         atomic::{AtomicBool, Ordering},
         mpsc as std_mpsc,
     },
@@ -39,6 +39,9 @@ use tokio::{
     task::JoinSet,
     time::{Instant, timeout, timeout_at},
 };
+
+#[cfg(test)]
+use std::sync::Weak;
 
 use crate::{
     control::{
@@ -332,7 +335,9 @@ impl LeaseCleanupExecutor for UnavailableLeaseCleanupExecutor {
 struct ChannelLeaseCleanupExecutor {
     sender: mpsc::Sender<LeaseCleanupJob>,
     shutdown_sender: StdMutex<Option<oneshot::Sender<()>>>,
+    worker: StdMutex<Option<std::thread::JoinHandle<()>>>,
     stopped: Arc<AtomicBool>,
+    joined: Arc<AtomicBool>,
 }
 
 impl ChannelLeaseCleanupExecutor {
@@ -349,15 +354,17 @@ impl ChannelLeaseCleanupExecutor {
         let (ready_sender, ready_receiver) = std_mpsc::sync_channel(1);
         let stopped = Arc::new(AtomicBool::new(false));
         let worker_stopped = Arc::clone(&stopped);
-        std::thread::Builder::new()
+        let worker = std::thread::Builder::new()
             .name("d2b-aca-lease-cleanup".to_owned())
             .spawn(move || {
                 let runtime = Builder::new_current_thread().enable_time().build();
                 let Ok(runtime) = runtime else {
                     let _result = ready_sender.send(false);
+                    worker_stopped.store(true, Ordering::Release);
                     return;
                 };
                 if ready_sender.send(true).is_err() {
+                    worker_stopped.store(true, Ordering::Release);
                     return;
                 }
                 runtime.block_on(run_cleanup_worker(
@@ -370,12 +377,15 @@ impl ChannelLeaseCleanupExecutor {
             })
             .ok()?;
         if ready_receiver.recv().ok() != Some(true) {
+            let _result = worker.join();
             return None;
         }
         Some(Arc::new(Self {
             sender,
             shutdown_sender: StdMutex::new(Some(shutdown_sender)),
+            worker: StdMutex::new(Some(worker)),
             stopped,
+            joined: Arc::new(AtomicBool::new(false)),
         }))
     }
 
@@ -390,8 +400,21 @@ impl ChannelLeaseCleanupExecutor {
         }
     }
 
-    fn is_stopped(&self) -> bool {
-        self.stopped.load(Ordering::Acquire)
+    fn shutdown_and_join(&self) {
+        self.request_shutdown();
+        let mut worker = self
+            .worker
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(handle) = worker.take() else {
+            return;
+        };
+        if handle.thread().id() == std::thread::current().id() {
+            return;
+        }
+        let _result = handle.join();
+        self.stopped.store(true, Ordering::Release);
+        self.joined.store(true, Ordering::Release);
     }
 
     #[cfg(test)]
@@ -416,9 +439,7 @@ impl LeaseCleanupExecutor for ChannelLeaseCleanupExecutor {
 
 impl Drop for ChannelLeaseCleanupExecutor {
     fn drop(&mut self) {
-        if !self.is_stopped() {
-            self.request_shutdown();
-        }
+        self.shutdown_and_join();
     }
 }
 
@@ -466,20 +487,33 @@ async fn run_cleanup_worker(
 
     if shutdown_requested {
         receiver.close();
-        while let Ok(mut job) = receiver.try_recv() {
-            job.finish(LeaseCleanupOutcome::Cancelled);
+        let shutdown_deadline = Instant::now() + shutdown_timeout;
+        loop {
+            while tasks.len() < max_in_flight {
+                let Ok(mut job) = receiver.try_recv() else {
+                    break;
+                };
+                job.mark_running();
+                tasks.spawn(run_cleanup_job(job));
+            }
+            if tasks.is_empty() {
+                return;
+            }
+            if timeout_at(shutdown_deadline, tasks.join_next())
+                .await
+                .is_err()
+            {
+                while let Ok(mut job) = receiver.try_recv() {
+                    job.finish(LeaseCleanupOutcome::Cancelled);
+                }
+                tasks.abort_all();
+                while tasks.join_next().await.is_some() {}
+                return;
+            }
         }
     }
 
-    if timeout(shutdown_timeout, async {
-        while tasks.join_next().await.is_some() {}
-    })
-    .await
-    .is_err()
-    {
-        tasks.abort_all();
-        while tasks.join_next().await.is_some() {}
-    }
+    while tasks.join_next().await.is_some() {}
 }
 
 async fn run_cleanup_job(mut job: LeaseCleanupJob) {
@@ -505,19 +539,16 @@ const ACA_LEASE_CLEANUP_QUEUE_CAPACITY: usize = 128;
 const ACA_LEASE_CLEANUP_MAX_IN_FLIGHT: usize = 16;
 const ACA_LEASE_CLEANUP_SHUTDOWN_GRACE_MS: u64 = MAX_ACA_LEASE_CLEANUP_MS as u64 + 250;
 
-fn process_lease_cleanup_executor() -> Arc<dyn LeaseCleanupExecutor> {
-    static EXECUTOR: OnceLock<Arc<dyn LeaseCleanupExecutor>> = OnceLock::new();
-    Arc::clone(EXECUTOR.get_or_init(|| {
-        if let Some(executor) = ChannelLeaseCleanupExecutor::start(
-            ACA_LEASE_CLEANUP_QUEUE_CAPACITY,
-            ACA_LEASE_CLEANUP_MAX_IN_FLIGHT,
-            Duration::from_millis(ACA_LEASE_CLEANUP_SHUTDOWN_GRACE_MS),
-        ) {
-            executor
-        } else {
-            Arc::new(UnavailableLeaseCleanupExecutor)
-        }
-    }))
+fn lease_cleanup_executor() -> Arc<dyn LeaseCleanupExecutor> {
+    if let Some(executor) = ChannelLeaseCleanupExecutor::start(
+        ACA_LEASE_CLEANUP_QUEUE_CAPACITY,
+        ACA_LEASE_CLEANUP_MAX_IN_FLIGHT,
+        Duration::from_millis(ACA_LEASE_CLEANUP_SHUTDOWN_GRACE_MS),
+    ) {
+        executor
+    } else {
+        Arc::new(UnavailableLeaseCleanupExecutor)
+    }
 }
 
 impl ActiveCredentialLease {
@@ -602,22 +633,39 @@ pub(crate) fn lease_cleanup_executor_for_test(
 }
 
 #[cfg(test)]
+#[derive(Clone)]
 pub(crate) struct LeaseCleanupExecutorControl {
-    executor: Arc<ChannelLeaseCleanupExecutor>,
+    executor: Weak<ChannelLeaseCleanupExecutor>,
+    stopped: Arc<AtomicBool>,
+    joined: Arc<AtomicBool>,
 }
 
 #[cfg(test)]
 impl LeaseCleanupExecutorControl {
     pub(crate) fn request_shutdown(&self) {
-        self.executor.request_shutdown();
+        if let Some(executor) = self.executor.upgrade() {
+            executor.request_shutdown();
+        }
+    }
+
+    pub(crate) fn shutdown_and_join(&self) {
+        if let Some(executor) = self.executor.upgrade() {
+            executor.shutdown_and_join();
+        }
     }
 
     pub(crate) fn is_stopped(&self) -> bool {
-        self.executor.is_stopped()
+        self.stopped.load(Ordering::Acquire)
     }
 
     pub(crate) fn is_closed(&self) -> bool {
-        self.executor.is_closed()
+        self.executor
+            .upgrade()
+            .is_none_or(|executor| executor.is_closed())
+    }
+
+    pub(crate) fn is_joined(&self) -> bool {
+        self.joined.load(Ordering::Acquire)
     }
 }
 
@@ -630,7 +678,9 @@ pub(crate) fn controlled_lease_cleanup_executor_for_test(
     let executor =
         ChannelLeaseCleanupExecutor::start(queue_capacity, max_in_flight, shutdown_timeout)?;
     let control = LeaseCleanupExecutorControl {
-        executor: Arc::clone(&executor),
+        executor: Arc::downgrade(&executor),
+        stopped: Arc::clone(&executor.stopped),
+        joined: Arc::clone(&executor.joined),
     };
     Some((executor, control))
 }
@@ -752,7 +802,7 @@ impl AzureContainerAppsRuntimeProvider {
             control,
             clock,
             Arc::new(TracingLeaseCleanupObserver),
-            process_lease_cleanup_executor(),
+            lease_cleanup_executor(),
         )
     }
 
