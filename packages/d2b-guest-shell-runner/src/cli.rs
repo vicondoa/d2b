@@ -2,15 +2,15 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-#[derive(Debug, Parser)]
+#[derive(Parser)]
 #[command(name = "d2b-guest-shell-runner")]
-#[command(about = "Internal d2b persistent-shell helper")]
+#[command(about = "Internal libshpool data-plane helper for d2b guest service")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Subcommand)]
 pub enum Command {
     Daemon(DaemonArgs),
     Attach(AttachArgs),
@@ -19,7 +19,7 @@ pub enum Command {
     Kill(SessionManagementArgs),
 }
 
-#[derive(Debug, Parser)]
+#[derive(Parser)]
 pub struct DaemonArgs {
     #[arg(long)]
     pub socket: PathBuf,
@@ -27,7 +27,7 @@ pub struct DaemonArgs {
     pub home: PathBuf,
 }
 
-#[derive(Debug, Parser)]
+#[derive(Parser)]
 pub struct AttachArgs {
     #[arg(long)]
     pub socket: PathBuf,
@@ -37,20 +37,16 @@ pub struct AttachArgs {
     pub force: bool,
 }
 
-#[derive(Debug, Parser)]
+#[derive(Parser)]
 pub struct ManagementArgs {
     #[arg(long)]
     pub socket: PathBuf,
-    #[arg(long)]
-    pub json: bool,
 }
 
-#[derive(Debug, Parser)]
+#[derive(Parser)]
 pub struct SessionManagementArgs {
     #[arg(long)]
     pub socket: PathBuf,
     #[arg(long)]
     pub name: String,
-    #[arg(long)]
-    pub json: bool,
 }
