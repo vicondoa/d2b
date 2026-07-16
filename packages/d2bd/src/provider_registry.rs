@@ -918,7 +918,9 @@ fn validate_runtime_routes(
     let mut vm_start_intents = BTreeSet::new();
     let mut runner_intents = BTreeSet::new();
     for entry in &artifact.providers {
-        let ProviderBindingV2::LocalRuntime(binding) = &entry.binding;
+        let ProviderBindingV2::LocalRuntime(binding) = &entry.binding else {
+            continue;
+        };
         let realm_id = entry.descriptor.placement.realm_id();
         let vm_start = resolver
             .find_vm_start_intent(binding.vm_start_intent_id.as_str())
@@ -1011,7 +1013,9 @@ pub(crate) fn resolve_current_runtime_route(
         .validate()
         .map_err(map_provider_registry_validation_error)?;
     let routes = validate_runtime_routes(&resolver, &artifact)?;
-    let ProviderBindingV2::LocalRuntime(binding) = &expected.binding;
+    let ProviderBindingV2::LocalRuntime(binding) = &expected.binding else {
+        return Err(ProviderCompositionError::ProcessIdentityMismatch);
+    };
     let runner = resolver
         .find_runner_intent(binding.runner_intent_id.as_str())
         .ok_or(ProviderCompositionError::ProcessIdentityMismatch)?;
@@ -1109,6 +1113,18 @@ pub(crate) fn compose_startup_registry_with_policy(
                 Ok(HostProviderBinding::LocalRuntime {
                     descriptor: entry.descriptor.clone(),
                     configuration,
+                })
+            }
+            ProviderBindingV2::LocalObservability(binding) => {
+                let limits = ObservabilityLimits::new(
+                    binding.max_records,
+                    binding.max_bytes,
+                    binding.max_time_window_ms,
+                )
+                .map_err(|_| ProviderCompositionError::ConfigurationMismatch)?;
+                Ok(HostProviderBinding::LocalObservability {
+                    descriptor: entry.descriptor.clone(),
+                    limits,
                 })
             }
         })
@@ -1225,7 +1241,11 @@ pub(crate) async fn invoke_runtime_lifecycle(
     let Some(entry) = startup.runtime_route(&request.vm) else {
         return Ok(RuntimeLifecycleInvocation::Unmapped);
     };
-    let ProviderBindingV2::LocalRuntime(binding) = &entry.binding;
+    let ProviderBindingV2::LocalRuntime(binding) = &entry.binding else {
+        return Err(crate::TypedError::InternalConfig {
+            detail: "runtime route resolved to a non-runtime provider binding".to_owned(),
+        });
+    };
     let realm_id = entry.descriptor.placement.realm_id();
     let registry = startup
         .registry()
@@ -1414,9 +1434,36 @@ pub(crate) async fn probe_startup_registry(
         .try_into()
         .map_err(|_| ProviderCompositionError::StartupProbeFailed)?;
     for entry in &artifact.providers {
-        let ProviderBindingV2::LocalRuntime(binding) = &entry.binding;
         let realm_id = entry.descriptor.placement.realm_id();
-        let method = ProviderMethod::RuntimeInspect;
+        let (method, scope, target) = match &entry.binding {
+            ProviderBindingV2::LocalRuntime(binding) => (
+                ProviderMethod::RuntimeInspect,
+                AuthorizedProviderScope::Workload {
+                    realm_id: realm_id.clone(),
+                    workload_id: binding.workload_id.clone(),
+                },
+                ProviderTarget::Workload {
+                    realm_id: realm_id.clone(),
+                    workload_id: binding.workload_id.clone(),
+                },
+            ),
+            ProviderBindingV2::LocalObservability(_) => (
+                ProviderMethod::ObservabilityStatus,
+                AuthorizedProviderScope::Realm {
+                    realm_id: realm_id.clone(),
+                },
+                ProviderTarget::Realm {
+                    realm_id: realm_id.clone(),
+                },
+            ),
+        };
+        let ProviderPlacement::TrustedFirstPartyInProcess {
+            controller_role, ..
+        } = &entry.descriptor.placement
+        else {
+            return Err(ProviderCompositionError::StartupProbeFailed);
+        };
+        let controller_role = *controller_role;
         let operation = ProviderOperationContext {
             schema_version: PROVIDER_SCHEMA_VERSION,
             operation_id: OperationId::parse(format!(
@@ -1430,14 +1477,11 @@ pub(crate) async fn probe_startup_registry(
             ))
             .map_err(|_| ProviderCompositionError::StartupProbeFailed)?,
             request_digest: entry.descriptor.configured_scope_digest.clone(),
-            scope: AuthorizedProviderScope::Workload {
-                realm_id: realm_id.clone(),
-                workload_id: binding.workload_id.clone(),
-            },
+            scope,
             principal: PrincipalRef::parse("daemon-startup")
                 .map_err(|_| ProviderCompositionError::StartupProbeFailed)?,
             provider_id: entry.descriptor.provider_id.clone(),
-            provider_type: ProviderType::Runtime,
+            provider_type: entry.descriptor.provider_type(),
             provider_generation: entry.descriptor.registry_generation,
             capability: ProviderCapability(method),
             method,
@@ -1458,7 +1502,7 @@ pub(crate) async fn probe_startup_registry(
         };
         let call = ProviderCallContext {
             operation: &operation,
-            peer_role: EndpointRole::RealmController,
+            peer_role: controller_role,
             service: ServicePackage::ProviderV2,
             monotonic_deadline_remaining_ms: 30_000,
             cancelled: false,
@@ -1479,25 +1523,31 @@ pub(crate) async fn probe_startup_registry(
         }
         let request = ProviderOperationRequest {
             context: operation.clone(),
-            target: ProviderTarget::Workload {
-                realm_id: realm_id.clone(),
-                workload_id: binding.workload_id.clone(),
-            },
+            target,
             expected_configuration_fingerprint: entry
                 .descriptor
                 .configuration_schema_fingerprint
                 .clone(),
             input: ProviderOperationInput::NoInput,
         };
-        let ProviderInstance::Runtime(runtime) = instance else {
-            return Err(ProviderCompositionError::StartupProbeFailed);
-        };
-        runtime
-            .inspect(&call, &request)
-            .await
-            .map_err(|_| ProviderCompositionError::StartupProbeFailed)?
-            .validate()
-            .map_err(|_| ProviderCompositionError::StartupProbeFailed)?;
+        match (instance, &entry.binding) {
+            (ProviderInstance::Runtime(runtime), ProviderBindingV2::LocalRuntime(_)) => runtime
+                .inspect(&call, &request)
+                .await
+                .map_err(|_| ProviderCompositionError::StartupProbeFailed)?
+                .validate()
+                .map_err(|_| ProviderCompositionError::StartupProbeFailed)?,
+            (
+                ProviderInstance::Observability(observability),
+                ProviderBindingV2::LocalObservability(_),
+            ) => observability
+                .status(&call, &request)
+                .await
+                .map_err(|_| ProviderCompositionError::StartupProbeFailed)?
+                .validate()
+                .map_err(|_| ProviderCompositionError::StartupProbeFailed)?,
+            _ => return Err(ProviderCompositionError::StartupProbeFailed),
+        }
     }
     Ok(())
 }

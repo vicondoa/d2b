@@ -40,7 +40,8 @@ lifetime. After production services and `ServerState` exist, startup loads the
 integrity-pinned private `provider-registry-v2.json` artifact, validates the
 complete transaction, constructs instances with each implementation crate's
 public factory, and initializes a one-shot registry cell. It then calls provider
-health and inspect through that retained registry before serving requests.
+health and the axis-specific read-only inspection or status operation through
+that retained registry before serving requests.
 Duplicate or missing bindings, descriptor/factory mismatches, stale
 generations, scope or placement mismatches, unavailable intent mappings, and
 non-dispatchable capabilities abort startup. The registry is not reconstructed
@@ -60,11 +61,13 @@ path, a bundle hash, and an artifact-hash entry for that path. Older bundle
 versions remain readable by compatibility consumers but cannot activate this
 registry.
 
-The live host registry currently registers only local runtime providers:
+The live host registry currently registers local runtime and local
+observability providers:
 
 | Axis | Live implementations | Mapping and daemon authority |
 | --- | --- | --- |
 | Runtime | `cloud-hypervisor`, `qemu-media` | Explicit realm workloads map to matching VM-start and runner intent IDs. The daemon authenticates the mapping against the process DAG, observes its pidfd table, and calls the existing lifecycle start/stop authority through the provider adapter. |
+| Observability | `local` | Each enabled host-local root realm receives a closed binding containing only query/export limits. The daemon projects bounded aggregate metrics and audit-sink health into closed records, while the provider-owned bounded export sink enforces record, byte, and time-window limits. |
 
 Only explicit realm workload rows with a matching generated VM process DAG are
 eligible. Realm and workload IDs must derive exactly from the DAG's
@@ -108,6 +111,15 @@ Fresh operation identities and other mutations for that VM wait for the
 retained lifecycle authority; unrelated VMs remain independent. Read-only
 inspection does not need this retention and remains cancellable.
 
+The local observability binding carries no realm, workload, provider, label, or
+cardinality payload. Descriptor placement supplies realm authority, and the
+configuration schema fixes explicit maxima for record count, bytes, and time
+window. Queries use bounded opaque cursors. The metrics projection deliberately
+drops VM and source labels; audit projection exposes only closed sink-health
+states. Export writes only those bounded projections to the provider-owned sink
+and has no audit repair or unbounded-read authority. Startup probes
+`ObservabilityStatus` through the retained registry.
+
 Other first-party host implementation crates remain dependencies so their exact
 factory contracts are checked and available for the eventual composition
 cutover, but they are not registered by the production artifact yet:
@@ -120,14 +132,13 @@ cutover, but they are not registered by the production artifact yet:
   mappings;
 - local storage needs generated storage and synchronization row IDs;
 - host-mediated devices need typed device and broker-operation mappings;
-- PipeWire/vhost-user audio needs generated route and runner mappings; and
-- local observability needs bounded query/export mappings to current daemon
-  projections.
+- PipeWire/vhost-user audio needs generated route and runner mappings.
 
 These axes are intentionally absent rather than backed by no-op success. The
-provider registry currently mediates only mapped runtime lifecycle requests;
-the other v1 behavior stays on its existing paths until each axis gains a
-complete generated mapping and concrete adapter.
+provider registry currently mediates mapped runtime lifecycle requests and
+bounded local observability reads/exports; the other v1 behavior stays on its
+existing paths until each axis gains a complete generated mapping and concrete
+adapter.
 
 ## Process placement
 

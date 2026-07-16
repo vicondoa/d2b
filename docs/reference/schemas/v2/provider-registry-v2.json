@@ -320,6 +320,42 @@
             }
           },
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "axis",
+            "maxBytes",
+            "maxRecords",
+            "maxTimeWindowMs"
+          ],
+          "properties": {
+            "axis": {
+              "type": "string",
+              "enum": [
+                "local-observability"
+              ]
+            },
+            "maxBytes": {
+              "type": "integer",
+              "format": "uint32",
+              "maximum": 1048576.0,
+              "minimum": 512.0
+            },
+            "maxRecords": {
+              "type": "integer",
+              "format": "uint16",
+              "maximum": 256.0,
+              "minimum": 1.0
+            },
+            "maxTimeWindowMs": {
+              "type": "integer",
+              "format": "uint64",
+              "maximum": 2678400000.0,
+              "minimum": 1.0
+            }
+          },
+          "additionalProperties": false
         }
       ]
     },

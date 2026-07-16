@@ -522,7 +522,7 @@ running live guest activation.
 | `SignalTarget` | enum | [`SignalTarget`](../../packages/d2b-contracts/src/guest_wire.rs#L1473) | `ForegroundProcessGroup`; `ProcessTree` |
 | `ExecCancelReason` | enum | [`ExecCancelReason`](../../packages/d2b-contracts/src/guest_wire.rs#L1480) | `ClientDisconnect`; `UserRequested`; `SlowConsumer`; `ProtocolError` |
 | `KnownFeatureFlag` | enum | [`KnownFeatureFlag`](../../packages/d2b-contracts/src/lib.rs#L197) | `TypedErrors`; `ManifestV04`; `StatusCheckBridges`; `ExportBrokerAudit`; `ConfiguredLaunchV1`; `UnsafeLocalProviderV1`; `UnsafeLocalShellV1` |
-| `ProviderBindingV2` | enum | [`ProviderBindingV2`](../../packages/d2b-contracts/src/provider_registry_v2.rs#L117) | `LocalRuntime` — (LocalRuntimeProviderBindingV2) |
+| `ProviderBindingV2` | enum | [`ProviderBindingV2`](../../packages/d2b-contracts/src/provider_registry_v2.rs#L158) | `LocalRuntime` — (LocalRuntimeProviderBindingV2); `LocalObservability` — (LocalObservabilityProviderBindingV2) |
 | `WorkloadOp` | enum | [`WorkloadOp`](../../packages/d2b-contracts/src/public_wire.rs#L202) | `List` — (WorkloadListArgs); `Status` — (WorkloadStatusArgs); `LauncherExec` — (LauncherExecArgs) |
 | `WorkloadAvailability` | enum | [`WorkloadAvailability`](../../packages/d2b-contracts/src/public_wire.rs#L242) | `Ready`; `HelperUnavailable`; `HelperStale`; `UserManagerUnavailable`; `GraphicalSessionInactive`; `WaylandUnavailable`; `ProxyUnavailable`; `Degraded` |
 | `GraphicalLaunchPosture` | enum | [`GraphicalLaunchPosture`](../../packages/d2b-contracts/src/public_wire.rs#L256) | `Proxied`; `NotApplicable`; `GraphicalSessionInactive`; `WaylandUnavailable`; `ProxyUnavailable` |

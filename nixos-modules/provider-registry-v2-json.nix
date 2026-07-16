@@ -4,8 +4,15 @@ let
   cfg = config.d2b;
   identity = import ./v2-identity.nix;
   generation = 1;
-  configurationSchemaFingerprint =
+  runtimeConfigurationSchemaFingerprint =
     builtins.hashString "sha256" "d2b-provider-runtime-local-configuration-v1";
+  observabilityConfigurationSchemaFingerprint =
+    builtins.hashString "sha256" "d2b-provider-observability-local-configuration-v1";
+  observabilityLimits = {
+    maxRecords = 64;
+    maxBytes = 32768;
+    maxTimeWindowMs = 86400000;
+  };
   liveRuntimeCapabilities = [
     "runtime.plan"
     "runtime.ensure"
@@ -14,6 +21,11 @@ let
     "runtime.inspect"
     "runtime.adopt"
     "runtime.destroy"
+  ];
+  liveObservabilityCapabilities = [
+    "observability.status"
+    "observability.query"
+    "observability.export"
   ];
 
   mappedRuntimeRows = lib.filter
@@ -77,7 +89,7 @@ let
           minor = 0;
         };
         capabilities = liveRuntimeCapabilities;
-        inherit configurationSchemaFingerprint;
+        configurationSchemaFingerprint = runtimeConfigurationSchemaFingerprint;
         configuredScopeDigest = scopeDigest;
         registryGeneration = generation;
         placement = {
@@ -93,10 +105,53 @@ let
       };
     };
 
+  mappedObservabilityRealms = lib.filter
+    (realm:
+      realm.placement == "host-local"
+      && realm.parentPath == null)
+    cfg._index.realms.enabledList;
+
+  observabilityEntry = realm:
+    let
+      canonicalRealmId = identity.deriveRealmId "${realm.path}.local-root";
+      canonicalProviderId = identity.deriveProviderId
+        canonicalRealmId "observability" "observability-local";
+      scopeDigest = builtins.hashString "sha256" (builtins.toJSON ({
+        providerId = canonicalProviderId;
+      } // observabilityLimits));
+    in {
+      descriptor = {
+        schemaVersion = 2;
+        providerId = canonicalProviderId;
+        authority = {
+          type = "observability";
+        };
+        implementationId = "local";
+        apiVersion = {
+          major = 2;
+          minor = 0;
+        };
+        capabilities = liveObservabilityCapabilities;
+        configurationSchemaFingerprint =
+          observabilityConfigurationSchemaFingerprint;
+        configuredScopeDigest = scopeDigest;
+        registryGeneration = generation;
+        placement = {
+          kind = "trusted-first-party-in-process";
+          realmId = canonicalRealmId;
+          controllerRole = "local-root-controller";
+        };
+      };
+      binding = {
+        axis = "local-observability";
+      } // observabilityLimits;
+    };
+
   providers = lib.sort
     (left: right:
       lib.lessThan left.descriptor.providerId right.descriptor.providerId)
-    (map runtimeEntry mappedRuntimeRows);
+    ((map runtimeEntry mappedRuntimeRows)
+      ++ (map observabilityEntry mappedObservabilityRealms));
   configurationFingerprint = builtins.hashString "sha256" (builtins.toJSON {
     schemaVersion = "v2";
     registryGeneration = generation;

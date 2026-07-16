@@ -11,6 +11,7 @@ use std::{
     error::Error,
     fmt,
     sync::{Arc, Mutex, Weak},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
@@ -20,18 +21,25 @@ use d2b_contracts::{
         LocalRuntimeProviderBindingV2, ProviderBindingV2, ProviderRegistryEntryV2,
     },
     public_wire::{MutationFlags, VmLifecycleRequest},
-    v2_identity::{ProviderId, RealmId},
+    v2_identity::{ProviderId, ProviderType, RealmId},
     v2_provider::{
         AuthorizedProviderScope, HandleId, HandleOwner, IdempotencyKey, MutationState,
-        ObservationReason, ObservedLifecycleState, OperationId, PlanId, ProviderDescriptor,
-        ProviderMethod,
+        ObservabilityCursor, ObservabilityView, ObservationReason, ObservedLifecycleState,
+        OperationId, PlanId, ProviderDescriptor, ProviderHealthReason, ProviderHealthState,
+        ProviderMethod, ProviderRemediation,
     },
 };
 use d2b_provider_audio_pipewire_vhost_user::{AudioEffectPort, AudioQueryPort};
 use d2b_provider_device_host_mediated::{DeviceEffectPort, DeviceQueryPort};
 use d2b_provider_display_wayland::DisplayEffectPort;
 use d2b_provider_network_local_realm::NetworkEffectPort;
-use d2b_provider_observability_local::{ObservabilityExportPort, ObservabilityQueryPort};
+use d2b_provider_observability_local::{
+    BoundedExportSink, ClosedMetricLabels, ExportPortOutcome, ExportSinkStatus,
+    LocalObservabilityStatus, LocalObservationRecord, MetricLabel,
+    OBSERVATION_RECORD_ENCODED_UPPER_BOUND_BYTES, ObservabilityCall, ObservabilityExportIntent,
+    ObservabilityExportPort, ObservabilityPortError, ObservabilityQueryIntent,
+    ObservabilityQueryPort, OperationLabel, OutcomeLabel, ProjectionKind, ProjectionPage,
+};
 use d2b_provider_runtime_local::{
     LocalRuntimeKind, RuntimeAdoptionControl, RuntimeAdoptionMismatch, RuntimeAdoptionOutcome,
     RuntimeConfiguredItemControl, RuntimeControlContext, RuntimeControlError, RuntimeControlPort,
@@ -43,8 +51,9 @@ use d2b_provider_substrate_host::HostSubstratePort;
 use d2b_provider_transport_local::LocalEndpointPort;
 
 use crate::{
-    ServerState, TypedError, block_on_future, dispatch_broker_vm_start_async,
-    dispatch_broker_vm_stop_as_async, provider_registry::resolve_current_runtime_route,
+    ServerState, TypedError, block_on_future, daemon_audit::DaemonAuditSinkStatus,
+    dispatch_broker_vm_start_async, dispatch_broker_vm_stop_as_async,
+    provider_registry::resolve_current_runtime_route,
 };
 
 #[cfg(test)]
@@ -500,9 +509,262 @@ impl DaemonEffectAdapters {
                         });
                     builder.bind_runtime(entry.descriptor.clone(), adapter)?;
                 }
+                ProviderBindingV2::LocalObservability(_) => {
+                    let state = state
+                        .upgrade()
+                        .ok_or(DaemonEffectAdapterError::MappingUnavailable)?;
+                    let adapter = Arc::new(DaemonLocalObservability {
+                        realm_id: entry.descriptor.placement.realm_id().clone(),
+                        metrics: Arc::clone(&state.metrics_registry),
+                        audit: Arc::clone(&state.daemon_audit),
+                        connections: state.conn_semaphore.clone(),
+                    });
+                    builder.bind_observability(
+                        entry.descriptor.clone(),
+                        adapter.clone(),
+                        adapter,
+                    )?;
+                }
             }
         }
         builder.finish()
+    }
+}
+
+#[derive(Clone)]
+struct DaemonLocalObservability {
+    realm_id: RealmId,
+    metrics: Arc<crate::metrics::Registry>,
+    audit: Arc<crate::daemon_audit::DaemonAuditLog>,
+    connections: crate::concurrency::ConnSemaphore,
+}
+
+impl fmt::Debug for DaemonLocalObservability {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DaemonLocalObservability")
+            .finish_non_exhaustive()
+    }
+}
+
+impl DaemonLocalObservability {
+    fn validate_call(&self, context: &ObservabilityCall) -> Result<(), ObservabilityPortError> {
+        if context.scope().realm_id() == &self.realm_id {
+            Ok(())
+        } else {
+            Err(ObservabilityPortError::Denied)
+        }
+    }
+
+    fn status(&self) -> LocalObservabilityStatus {
+        match self.audit.sink_health_report().status {
+            DaemonAuditSinkStatus::Ok => LocalObservabilityStatus::healthy(),
+            DaemonAuditSinkStatus::Degraded | DaemonAuditSinkStatus::Unavailable => {
+                LocalObservabilityStatus {
+                    health_state: ProviderHealthState::Degraded,
+                    health_reason: ProviderHealthReason::ProviderDegraded,
+                    remediation: ProviderRemediation::InspectProvider,
+                }
+            }
+        }
+    }
+
+    fn now_unix_ms() -> Result<u64, ObservabilityPortError> {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| ObservabilityPortError::Unavailable)?
+            .as_millis()
+            .try_into()
+            .map_err(|_| ObservabilityPortError::Unavailable)
+    }
+
+    fn record(
+        observed_at_unix_ms: u64,
+        projection: ProjectionKind,
+        labels: ClosedMetricLabels,
+        value: u64,
+    ) -> Result<LocalObservationRecord, ObservabilityPortError> {
+        LocalObservationRecord::new(observed_at_unix_ms, projection, labels, value)
+            .map_err(|_| ObservabilityPortError::InvalidProjection)
+    }
+
+    fn records_for(
+        &self,
+        view: Option<ObservabilityView>,
+    ) -> Result<Vec<LocalObservationRecord>, ObservabilityPortError> {
+        let now = Self::now_unix_ms()?;
+        let status = self.status();
+        let health_outcome = if status.health_state == ProviderHealthState::Healthy {
+            OutcomeLabel::Success
+        } else {
+            OutcomeLabel::Unavailable
+        };
+        let metrics = self.metrics.local_observability_projection();
+        let mut records = Vec::new();
+        if view.is_none() || view == Some(ObservabilityView::Health) {
+            records.push(Self::record(
+                now,
+                ProjectionKind::AuditSummary,
+                ClosedMetricLabels::new(
+                    ProviderType::Observability,
+                    status.health_state,
+                    MetricLabel::ProviderHealth,
+                    OperationLabel::Health,
+                    health_outcome,
+                ),
+                1,
+            )?);
+            records.push(Self::record(
+                now,
+                ProjectionKind::Metrics,
+                ClosedMetricLabels::new(
+                    ProviderType::Observability,
+                    ProviderHealthState::Healthy,
+                    MetricLabel::QueueDepth,
+                    OperationLabel::Query,
+                    OutcomeLabel::Success,
+                ),
+                u64::try_from(self.connections.in_flight()).unwrap_or(u64::MAX),
+            )?);
+        }
+        if view.is_none() || view == Some(ObservabilityView::Lifecycle) {
+            records.push(Self::record(
+                now,
+                ProjectionKind::Metrics,
+                ClosedMetricLabels::new(
+                    ProviderType::Runtime,
+                    ProviderHealthState::Healthy,
+                    MetricLabel::LifecycleTransition,
+                    OperationLabel::Inspect,
+                    OutcomeLabel::Success,
+                ),
+                metrics.lifecycle_transitions,
+            )?);
+        }
+        if view.is_none() || view == Some(ObservabilityView::Operations) {
+            records.push(Self::record(
+                now,
+                ProjectionKind::Metrics,
+                ClosedMetricLabels::new(
+                    ProviderType::Observability,
+                    ProviderHealthState::Healthy,
+                    MetricLabel::OperationTotal,
+                    OperationLabel::Query,
+                    OutcomeLabel::Success,
+                ),
+                metrics.operation_total,
+            )?);
+            records.push(Self::record(
+                now,
+                ProjectionKind::TraceSummary,
+                ClosedMetricLabels::new(
+                    ProviderType::Observability,
+                    ProviderHealthState::Healthy,
+                    MetricLabel::OperationDuration,
+                    OperationLabel::Query,
+                    OutcomeLabel::Success,
+                ),
+                metrics.operation_duration_ms,
+            )?);
+        }
+        records.sort_unstable();
+        Ok(records)
+    }
+
+    fn page(
+        &self,
+        intent: &ObservabilityQueryIntent,
+    ) -> Result<ProjectionPage, ObservabilityPortError> {
+        let records = self.records_for(Some(intent.view))?;
+        let offset = match intent.cursor() {
+            None => 0,
+            Some(cursor) => cursor
+                .as_str()
+                .strip_prefix("offset-")
+                .and_then(|value| value.parse::<usize>().ok())
+                .filter(|offset| *offset <= records.len())
+                .ok_or(ObservabilityPortError::InvalidProjection)?,
+        };
+        let byte_capacity = intent.bounds.max_bytes / OBSERVATION_RECORD_ENCODED_UPPER_BOUND_BYTES;
+        let capacity = usize::from(
+            intent
+                .bounds
+                .max_records
+                .min(u16::try_from(byte_capacity).unwrap_or(u16::MAX)),
+        );
+        let end = offset.saturating_add(capacity).min(records.len());
+        let next_cursor = (end < records.len())
+            .then(|| ObservabilityCursor::parse(format!("offset-{end}")))
+            .transpose()
+            .map_err(|_| ObservabilityPortError::InvalidProjection)?;
+        ProjectionPage::new(
+            records[offset..end].to_vec(),
+            next_cursor,
+            end < records.len(),
+        )
+        .map_err(|_| ObservabilityPortError::InvalidProjection)
+    }
+}
+
+#[async_trait]
+impl ObservabilityQueryPort for DaemonLocalObservability {
+    async fn health(
+        &self,
+        context: ObservabilityCall,
+    ) -> Result<LocalObservabilityStatus, ObservabilityPortError> {
+        self.validate_call(&context)?;
+        Ok(self.status())
+    }
+
+    async fn status(
+        &self,
+        context: ObservabilityCall,
+    ) -> Result<LocalObservabilityStatus, ObservabilityPortError> {
+        self.validate_call(&context)?;
+        Ok(self.status())
+    }
+
+    async fn query(
+        &self,
+        context: ObservabilityCall,
+        intent: ObservabilityQueryIntent,
+    ) -> Result<ProjectionPage, ObservabilityPortError> {
+        self.validate_call(&context)?;
+        self.page(&intent)
+    }
+}
+
+#[async_trait]
+impl ObservabilityExportPort for DaemonLocalObservability {
+    async fn export(
+        &self,
+        context: ObservabilityCall,
+        intent: ObservabilityExportIntent,
+        sink: BoundedExportSink,
+    ) -> Result<ExportPortOutcome, ObservabilityPortError> {
+        self.validate_call(&context)?;
+        let mut emitted = false;
+        for record in self.records_for(None)?.into_iter().filter(|record| {
+            record.observed_at_unix_ms() >= intent.start_at_unix_ms
+                && record.observed_at_unix_ms() <= intent.end_at_unix_ms
+        }) {
+            match sink
+                .emit(record)
+                .map_err(|_| ObservabilityPortError::InvalidProjection)?
+            {
+                ExportSinkStatus::Emitted => emitted = true,
+                ExportSinkStatus::Truncated => {
+                    sink.mark_source_truncated()
+                        .map_err(|_| ObservabilityPortError::InvalidProjection)?;
+                    break;
+                }
+            }
+        }
+        Ok(ExportPortOutcome::new(if emitted {
+            MutationState::Applied
+        } else {
+            MutationState::NotApplicable
+        }))
     }
 }
 
@@ -1095,7 +1357,16 @@ mod tests {
         time::Duration,
     };
 
-    use d2b_contracts::v2_identity::ProviderType;
+    use d2b_contracts::{
+        v2_component_session::EndpointRole,
+        v2_identity::ProviderType,
+        v2_provider::{
+            ObservabilityExportFormat, ProviderOperationInput, ProviderPlacement, ProviderTarget,
+        },
+    };
+    use d2b_provider_observability_local::{
+        LocalObservabilityProvider, ObservabilityLimits, live_observability_capabilities,
+    };
     use d2b_provider_toolkit::Fixture;
 
     use super::*;
@@ -1122,6 +1393,117 @@ mod tests {
             resolve(&bindings, &mismatched),
             Err(DaemonEffectAdapterError::ConfigurationMismatch)
         ));
+    }
+
+    #[tokio::test]
+    async fn concrete_observability_adapter_bounds_and_redacts_query_and_export() {
+        let mut fixture = Fixture::new(ProviderType::Observability, 1).expect("fixture");
+        fixture.descriptor.implementation_id =
+            d2b_provider_observability_local::implementation_id();
+        fixture.descriptor.capabilities = live_observability_capabilities().expect("capabilities");
+        let realm_id = fixture.descriptor.placement.realm_id().clone();
+        fixture.descriptor.placement = ProviderPlacement::TrustedFirstPartyInProcess {
+            realm_id: realm_id.clone(),
+            controller_role: EndpointRole::LocalRootController,
+        };
+        let now = DaemonLocalObservability::now_unix_ms().expect("wall clock");
+        let fixture = Fixture::from_descriptor(
+            fixture.descriptor,
+            ProviderTarget::Realm {
+                realm_id: realm_id.clone(),
+            },
+            now,
+        )
+        .expect("observability fixture");
+
+        let metrics = Arc::new(crate::metrics::Registry::new());
+        metrics.counter_inc(
+            "d2b_daemon_workload_lifecycle_total",
+            &[
+                ("provider", "private-cardinality-canary"),
+                ("operation", "start"),
+                ("outcome", "success"),
+            ],
+        );
+        metrics.histogram_observe(
+            "d2b_daemon_vm_start_duration_seconds",
+            &[("vm", "private-vm-canary"), ("outcome", "success")],
+            1.25,
+        );
+        let connections = crate::concurrency::ConnSemaphore::new(2);
+        let _connection = connections.try_acquire().expect("connection permit");
+        let adapter = Arc::new(DaemonLocalObservability {
+            realm_id,
+            metrics,
+            audit: Arc::new(crate::daemon_audit::DaemonAuditLog::no_op()),
+            connections,
+        });
+        let provider = LocalObservabilityProvider::new(
+            fixture.descriptor.clone(),
+            ObservabilityLimits::new(2, 1_024, 60_000).expect("limits"),
+            adapter.clone(),
+            adapter,
+        )
+        .expect("provider");
+
+        let first_request = fixture
+            .request_with_input(
+                ProviderMethod::ObservabilityQuery,
+                ProviderOperationInput::ObservabilityQuery {
+                    view: ObservabilityView::Operations,
+                    cursor: None,
+                    limit: 1,
+                },
+            )
+            .expect("query request");
+        let first_call = fixture.call_context(&first_request.context);
+        let first = provider
+            .bounded_query(&first_call, &first_request)
+            .await
+            .expect("first query page");
+        assert_eq!(first.records().len(), 1);
+        assert!(first.truncated());
+        let cursor = first.next_cursor().cloned().expect("next cursor");
+
+        let second_request = fixture
+            .request_with_input(
+                ProviderMethod::ObservabilityQuery,
+                ProviderOperationInput::ObservabilityQuery {
+                    view: ObservabilityView::Operations,
+                    cursor: Some(cursor),
+                    limit: 1,
+                },
+            )
+            .expect("second query request");
+        let second_call = fixture.call_context(&second_request.context);
+        let second = provider
+            .bounded_query(&second_call, &second_request)
+            .await
+            .expect("second query page");
+        assert_eq!(second.records().len(), 1);
+        assert!(!second.truncated());
+
+        let export_request = fixture
+            .request_with_input(
+                ProviderMethod::ObservabilityExport,
+                ProviderOperationInput::ObservabilityExport {
+                    format: ObservabilityExportFormat::JsonLines,
+                    start_at_unix_ms: now.saturating_sub(1_000),
+                    end_at_unix_ms: now.saturating_add(1_000),
+                },
+            )
+            .expect("export request");
+        let export_call = fixture.call_context(&export_request.context);
+        let export = provider
+            .bounded_export(&export_call, &export_request)
+            .await
+            .expect("bounded export");
+        assert!(export.record_count() <= 2);
+        assert!(export.encoded_bytes() <= 1_024);
+        let debug = format!("{first:?}{second:?}{export:?}");
+        for forbidden in ["private-cardinality-canary", "private-vm-canary"] {
+            assert!(!debug.contains(forbidden));
+        }
     }
 
     #[tokio::test]

@@ -459,9 +459,23 @@ fn generated_provider_registry_schema_is_closed_and_authority_free() {
         );
     }
     assert!(schema_text.contains("\"local-runtime\""));
+    assert!(schema_text.contains("\"local-observability\""));
     assert!(schema_text.contains("\"vmStartIntentId\""));
     assert!(schema_text.contains("\"runnerIntentId\""));
-    let local_runtime = &schema["definitions"]["ProviderBindingV2"]["oneOf"][0];
+    let variants = schema["definitions"]["ProviderBindingV2"]["oneOf"]
+        .as_array()
+        .expect("provider binding variants");
+    let find_variant = |axis: &str| {
+        variants
+            .iter()
+            .find(|variant| {
+                variant["properties"]["axis"]["enum"]
+                    .as_array()
+                    .is_some_and(|values| values.iter().any(|value| value == axis))
+            })
+            .unwrap_or_else(|| panic!("provider binding variant {axis}"))
+    };
+    let local_runtime = find_variant("local-runtime");
     assert_eq!(
         local_runtime["additionalProperties"],
         serde_json::json!(false)
@@ -471,6 +485,29 @@ fn generated_provider_registry_schema_is_closed_and_authority_free() {
         "local runtime binding realm must come exclusively from descriptor placement"
     );
     assert!(local_runtime["properties"].get("workloadId").is_some());
+    let local_observability = find_variant("local-observability");
+    assert_eq!(
+        local_observability["additionalProperties"],
+        serde_json::json!(false)
+    );
+    assert_eq!(
+        local_observability["properties"]["maxRecords"]["maximum"],
+        serde_json::json!(256.0)
+    );
+    assert_eq!(
+        local_observability["properties"]["maxBytes"]["maximum"],
+        serde_json::json!(1_048_576.0)
+    );
+    assert_eq!(
+        local_observability["properties"]["maxTimeWindowMs"]["maximum"],
+        serde_json::json!(2_678_400_000_f64)
+    );
+    for forbidden in ["realmId", "workloadId", "providerId"] {
+        assert!(
+            local_observability["properties"].get(forbidden).is_none(),
+            "local observability binding must not carry {forbidden}"
+        );
+    }
 }
 
 #[test]
@@ -579,7 +616,22 @@ fn rendered_launcher_metadata_hides_argv_and_private_bundle_resolves_it() {
     assert_eq!(public.schema_version, "v2");
     assert_eq!(public.workloads.len(), 2);
     assert_eq!(private.workloads.len(), 1);
-    assert_eq!(provider_registry.providers.len(), 1);
+    assert_eq!(
+        provider_registry
+            .providers
+            .iter()
+            .filter(|entry| matches!(&entry.binding, ProviderBindingV2::LocalRuntime(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        provider_registry
+            .providers
+            .iter()
+            .filter(|entry| matches!(&entry.binding, ProviderBindingV2::LocalObservability(_)))
+            .count(),
+        2
+    );
     assert!(
         public
             .workloads
@@ -619,7 +671,11 @@ fn rendered_launcher_metadata_hides_argv_and_private_bundle_resolves_it() {
         bundle.provider_registry_v2_path.as_deref(),
         Some("/etc/d2b/provider-registry-v2.json")
     );
-    let provider_entry = &provider_registry.providers[0];
+    let provider_entry = provider_registry
+        .providers
+        .iter()
+        .find(|entry| matches!(&entry.binding, ProviderBindingV2::LocalRuntime(_)))
+        .expect("rendered local runtime provider");
     assert_eq!(
         provider_entry.descriptor.implementation_id.as_str(),
         "cloud-hypervisor"
@@ -630,6 +686,20 @@ fn rendered_launcher_metadata_hides_argv_and_private_bundle_resolves_it() {
     ));
     let binding_json = serde_json::to_value(&provider_entry.binding).unwrap();
     assert!(binding_json.get("realmId").is_none());
+    for observability in provider_registry
+        .providers
+        .iter()
+        .filter(|entry| matches!(&entry.binding, ProviderBindingV2::LocalObservability(_)))
+    {
+        assert_eq!(observability.descriptor.implementation_id.as_str(), "local");
+        let binding_json = serde_json::to_value(&observability.binding).unwrap();
+        assert_eq!(binding_json["maxRecords"], 64);
+        assert_eq!(binding_json["maxBytes"], 32_768);
+        assert_eq!(binding_json["maxTimeWindowMs"], 86_400_000);
+        for forbidden in ["realmId", "workloadId", "providerId"] {
+            assert!(binding_json.get(forbidden).is_none());
+        }
+    }
     let provider_json = serde_json::to_string(&provider_registry).unwrap();
     for forbidden in ["\"argv\"", "\"secret\"", "\"azure-vm\"", "runtime.execute"] {
         assert!(

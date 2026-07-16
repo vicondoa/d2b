@@ -13,8 +13,10 @@ use sha2::{Digest, Sha256};
 use crate::{
     v2_identity::{ConfiguredProviderId, ProviderId, ProviderType, RealmId, WorkloadId},
     v2_provider::{
-        Fingerprint, Generation, MAX_PROVIDER_REGISTRY_ENTRIES, MAX_SAFE_JSON_INTEGER,
-        ProviderContractError, ProviderDescriptor, ProviderPlacement,
+        Fingerprint, Generation, MAX_OBSERVABILITY_EXPORT_RANGE_MS, MAX_OBSERVABILITY_QUERY_BYTES,
+        MAX_OBSERVABILITY_QUERY_LIMIT, MAX_PROVIDER_REGISTRY_ENTRIES, MAX_SAFE_JSON_INTEGER,
+        OBSERVABILITY_RECORD_ENCODED_UPPER_BOUND_BYTES, ProviderContractError, ProviderDescriptor,
+        ProviderPlacement,
     },
 };
 
@@ -22,6 +24,8 @@ pub const PROVIDER_REGISTRY_V2_SCHEMA_VERSION: &str = "v2";
 pub const MAX_PROVIDER_INTENT_ID_BYTES: usize = 128;
 pub const LOCAL_RUNTIME_CONFIGURATION_SCHEMA_SEED: &str =
     "d2b-provider-runtime-local-configuration-v1";
+pub const LOCAL_OBSERVABILITY_CONFIGURATION_SCHEMA_SEED: &str =
+    "d2b-provider-observability-local-configuration-v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderRegistryV2Error {
@@ -123,16 +127,44 @@ pub struct LocalRuntimeProviderBindingV2 {
     pub runner_intent_id: ProviderIntentId,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalObservabilityProviderBindingV2 {
+    #[schemars(range(min = 1, max = 256))]
+    pub max_records: u16,
+    #[schemars(range(min = 512, max = 1048576))]
+    pub max_bytes: u32,
+    #[schemars(range(min = 1, max = 2678400000_u64))]
+    pub max_time_window_ms: u64,
+}
+
+impl LocalObservabilityProviderBindingV2 {
+    fn validate(self) -> Result<(), ProviderRegistryV2Error> {
+        if self.max_records == 0
+            || self.max_records > MAX_OBSERVABILITY_QUERY_LIMIT
+            || !(OBSERVABILITY_RECORD_ENCODED_UPPER_BOUND_BYTES..=MAX_OBSERVABILITY_QUERY_BYTES)
+                .contains(&self.max_bytes)
+            || self.max_time_window_ms == 0
+            || self.max_time_window_ms > MAX_OBSERVABILITY_EXPORT_RANGE_MS
+        {
+            return Err(ProviderRegistryV2Error::BoundExceeded);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "axis", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum ProviderBindingV2 {
     LocalRuntime(LocalRuntimeProviderBindingV2),
+    LocalObservability(LocalObservabilityProviderBindingV2),
 }
 
 impl ProviderBindingV2 {
     pub const fn provider_type(&self) -> ProviderType {
         match self {
             Self::LocalRuntime(_) => ProviderType::Runtime,
+            Self::LocalObservability(_) => ProviderType::Observability,
         }
     }
 }
@@ -183,6 +215,33 @@ impl ProviderRegistryEntryV2 {
                     != local_runtime_configured_scope_digest(
                         &self.descriptor.provider_id,
                         realm_id,
+                        binding,
+                    )?
+                {
+                    return Err(ProviderRegistryV2Error::ConfiguredScopeDigestMismatch);
+                }
+            }
+            ProviderBindingV2::LocalObservability(binding) => {
+                binding.validate()?;
+                let realm_id = self.descriptor.placement.realm_id();
+                let configured_provider_id = ConfiguredProviderId::parse("observability-local")
+                    .map_err(|_| ProviderRegistryV2Error::BindingMismatch)?;
+                let expected_provider_id = ProviderId::derive(
+                    realm_id,
+                    ProviderType::Observability,
+                    &configured_provider_id,
+                );
+                if self.descriptor.provider_id != expected_provider_id {
+                    return Err(ProviderRegistryV2Error::ProviderIdMismatch);
+                }
+                if self.descriptor.configuration_schema_fingerprint
+                    != local_observability_configuration_schema_fingerprint()?
+                {
+                    return Err(ProviderRegistryV2Error::ConfigurationSchemaFingerprintMismatch);
+                }
+                if self.descriptor.configured_scope_digest
+                    != local_observability_configured_scope_digest(
+                        &self.descriptor.provider_id,
                         binding,
                     )?
                 {
@@ -268,6 +327,28 @@ pub fn local_runtime_configured_scope_digest(
         binding.runner_intent_id.as_str(),
         binding.vm_start_intent_id.as_str(),
         binding.workload_id.as_str(),
+    );
+    sha256_fingerprint(canonical_scope.as_bytes())
+}
+
+pub fn local_observability_configuration_schema_fingerprint()
+-> Result<Fingerprint, ProviderRegistryV2Error> {
+    sha256_fingerprint(LOCAL_OBSERVABILITY_CONFIGURATION_SCHEMA_SEED.as_bytes())
+}
+
+pub fn local_observability_configured_scope_digest(
+    provider_id: &ProviderId,
+    binding: &LocalObservabilityProviderBindingV2,
+) -> Result<Fingerprint, ProviderRegistryV2Error> {
+    let canonical_scope = format!(
+        concat!(
+            r#"{{"maxBytes":{},"maxRecords":{},"maxTimeWindowMs":{},"#,
+            r#""providerId":"{}"}}"#
+        ),
+        binding.max_bytes,
+        binding.max_records,
+        binding.max_time_window_ms,
+        provider_id.as_str(),
     );
     sha256_fingerprint(canonical_scope.as_bytes())
 }
@@ -388,6 +469,72 @@ mod tests {
     }
 
     #[test]
+    fn validates_closed_local_observability_mapping() {
+        let realm_id = RealmId::derive(&RealmPath::parse("home.local-root").unwrap());
+        let provider_id = ProviderId::derive(
+            &realm_id,
+            ProviderType::Observability,
+            &ConfiguredProviderId::parse("observability-local").unwrap(),
+        );
+        let binding = LocalObservabilityProviderBindingV2 {
+            max_records: 64,
+            max_bytes: 32_768,
+            max_time_window_ms: 86_400_000,
+        };
+        let generation = Generation::new(1).unwrap();
+        let registry = ProviderRegistryV2 {
+            schema_version: PROVIDER_REGISTRY_V2_SCHEMA_VERSION.to_owned(),
+            registry_generation: generation,
+            configuration_fingerprint: Fingerprint::parse("1".repeat(64)).unwrap(),
+            published_at_unix_ms: 0,
+            providers: vec![ProviderRegistryEntryV2 {
+                descriptor: ProviderDescriptor {
+                    schema_version: PROVIDER_SCHEMA_VERSION,
+                    provider_id: provider_id.clone(),
+                    authority: ProviderAuthority::Observability,
+                    implementation_id: ImplementationId::parse("local").unwrap(),
+                    api_version: ProviderApiVersion::V2,
+                    capabilities: ProviderCapabilitySet::new(
+                        [
+                            ProviderMethod::ObservabilityStatus,
+                            ProviderMethod::ObservabilityQuery,
+                            ProviderMethod::ObservabilityExport,
+                        ]
+                        .into_iter()
+                        .map(ProviderCapability)
+                        .collect(),
+                    )
+                    .unwrap(),
+                    configuration_schema_fingerprint:
+                        local_observability_configuration_schema_fingerprint().unwrap(),
+                    configured_scope_digest: local_observability_configured_scope_digest(
+                        &provider_id,
+                        &binding,
+                    )
+                    .unwrap(),
+                    registry_generation: generation,
+                    placement: ProviderPlacement::TrustedFirstPartyInProcess {
+                        realm_id,
+                        controller_role: EndpointRole::LocalRootController,
+                    },
+                },
+                binding: ProviderBindingV2::LocalObservability(binding),
+            }],
+        };
+
+        registry.validate().unwrap();
+        let encoded = serde_json::to_value(&registry).unwrap();
+        let binding = &encoded["providers"][0]["binding"];
+        assert_eq!(binding["axis"], "local-observability");
+        assert_eq!(binding["maxRecords"], 64);
+        assert_eq!(binding["maxBytes"], 32_768);
+        assert_eq!(binding["maxTimeWindowMs"], 86_400_000);
+        assert!(binding.get("realmId").is_none());
+        assert!(binding.get("workloadId").is_none());
+        assert!(binding.get("providerId").is_none());
+    }
+
+    #[test]
     fn rejects_generation_and_exact_identity_mismatches() {
         let mut registry = fixture();
         registry.providers[0].descriptor.registry_generation = Generation::new(2).unwrap();
@@ -418,7 +565,9 @@ mod tests {
         );
 
         let mut registry = fixture();
-        let ProviderBindingV2::LocalRuntime(binding) = &mut registry.providers[0].binding;
+        let ProviderBindingV2::LocalRuntime(binding) = &mut registry.providers[0].binding else {
+            unreachable!("fixture is a local runtime binding");
+        };
         binding.runner_intent_id =
             ProviderIntentId::parse("runner:vm:other:role:cloud-hypervisor").unwrap();
         assert_eq!(

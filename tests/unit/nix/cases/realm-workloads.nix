@@ -1223,7 +1223,13 @@ in
       let
         identity = import ../../../../nixos-modules/v2-identity.nix;
         data = wlCfg.d2b._bundle.providerRegistryV2Json.data;
-        entry = builtins.head data.providers;
+        runtimeRows = lib.filter
+          (provider: provider.binding.axis == "local-runtime")
+          data.providers;
+        observabilityRows = lib.filter
+          (provider: provider.binding.axis == "local-observability")
+          data.providers;
+        entry = builtins.head runtimeRows;
         descriptor = entry.descriptor;
         binding = entry.binding;
         realmId = identity.deriveRealmId "work.home.local-root";
@@ -1232,6 +1238,13 @@ in
           "runtime-${workloadId}";
         firstClassRows =
           firstClassLocalVmCfg.d2b._bundle.providerRegistryV2Json.data.providers;
+        firstClassRuntimeRows = lib.filter
+          (provider: provider.binding.axis == "local-runtime")
+          firstClassRows;
+        observability = builtins.head observabilityRows;
+        observabilityRealmId = identity.deriveRealmId "home.local-root";
+        observabilityProviderId = identity.deriveProviderId
+          observabilityRealmId "observability" "observability-local";
         processDag = lib.findFirst
           (dag: dag.vm == "corpbox")
           null
@@ -1249,6 +1262,8 @@ in
       in {
         schemaVersion = data.schemaVersion;
         providerCount = builtins.length data.providers;
+        runtimeProviderCount = builtins.length runtimeRows;
+        observabilityProviderCount = builtins.length observabilityRows;
         canonicalRealm = descriptor.placement.realmId == realmId;
         bindingRealmAbsent = !(binding ? realmId);
         canonicalWorkload = binding.workloadId == workloadId;
@@ -1271,7 +1286,18 @@ in
         runnerIntentId = binding.runnerIntentId;
         capabilities = descriptor.capabilities;
         firstClassWithoutIntentUnregistered =
-          builtins.length firstClassRows == 1;
+          builtins.length firstClassRuntimeRows == 1;
+        observabilityMapping = {
+          canonicalProvider =
+            observability.descriptor.providerId == observabilityProviderId;
+          canonicalRealm =
+            observability.descriptor.placement.realmId == observabilityRealmId;
+          providerType = observability.descriptor.authority.type;
+          implementationId = observability.descriptor.implementationId;
+          controllerRole = observability.descriptor.placement.controllerRole;
+          capabilities = observability.descriptor.capabilities;
+          binding = observability.binding;
+        };
         runtimeExecuteAbsent =
           !(builtins.elem "runtime.execute" descriptor.capabilities);
         azureVmAbsent = !(lib.hasInfix "azure-vm" encoded);
@@ -1280,7 +1306,9 @@ in
       };
     expected = {
       schemaVersion = "v2";
-      providerCount = 1;
+      providerCount = 2;
+      runtimeProviderCount = 1;
+      observabilityProviderCount = 1;
       canonicalRealm = true;
       bindingRealmAbsent = true;
       canonicalWorkload = true;
@@ -1304,6 +1332,24 @@ in
         "runtime.destroy"
       ];
       firstClassWithoutIntentUnregistered = true;
+      observabilityMapping = {
+        canonicalProvider = true;
+        canonicalRealm = true;
+        providerType = "observability";
+        implementationId = "local";
+        controllerRole = "local-root-controller";
+        capabilities = [
+          "observability.status"
+          "observability.query"
+          "observability.export"
+        ];
+        binding = {
+          axis = "local-observability";
+          maxRecords = 64;
+          maxBytes = 32768;
+          maxTimeWindowMs = 86400000;
+        };
+      };
       runtimeExecuteAbsent = true;
       azureVmAbsent = true;
       argvAbsent = true;

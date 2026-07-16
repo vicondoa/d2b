@@ -23,8 +23,13 @@ carry argv, host paths, or credential material.
   contradictory realm JSON unrepresentable. `workloadId` remains in the
   binding because a realm-scoped trusted in-process descriptor does not identify
   the target workload.
-- The current closed binding variant is `local-runtime`. It maps explicit
-  local-VM and qemu-media workloads to matching VM-start and runner intents.
+- `local-runtime` bindings map explicit local-VM and qemu-media workloads to
+  matching VM-start and runner intents.
+- `local-observability` bindings carry only bounded `maxRecords`, `maxBytes`,
+  and `maxTimeWindowMs` limits. They carry no target or cardinality IDs;
+  descriptor placement is the realm authority. The host emits these rows only
+  for enabled host-local root realms and exposes closed aggregate
+  metrics/audit-health projections without repair authority.
 - An explicit zero-row artifact is valid. A missing artifact is not.
 - Azure VM implementations, credential providers, and `RuntimeExecute` are not
   live host registrations.

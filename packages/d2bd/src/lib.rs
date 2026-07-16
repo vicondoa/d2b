@@ -24171,8 +24171,11 @@ mod broker_dispatch_tests {
     };
     use d2b_contracts::guest_proto as pb;
     use d2b_contracts::provider_registry_v2::{
-        LocalRuntimeProviderBindingV2, PROVIDER_REGISTRY_V2_SCHEMA_VERSION, ProviderBindingV2,
-        ProviderIntentId, ProviderRegistryEntryV2, ProviderRegistryV2,
+        LocalObservabilityProviderBindingV2, LocalRuntimeProviderBindingV2,
+        PROVIDER_REGISTRY_V2_SCHEMA_VERSION, ProviderBindingV2, ProviderIntentId,
+        ProviderRegistryEntryV2, ProviderRegistryV2,
+        local_observability_configuration_schema_fingerprint,
+        local_observability_configured_scope_digest,
         local_runtime_configuration_schema_fingerprint, local_runtime_configured_scope_digest,
     };
     use d2b_contracts::public_wire::{
@@ -24191,6 +24194,7 @@ mod broker_dispatch_tests {
     };
     use d2b_core::bundle_resolver::BundleResolver;
     use d2b_core::processes::ProcessRole;
+    use d2b_provider_observability_local::live_observability_capabilities;
     use d2b_provider_runtime_local::{
         CLOUD_HYPERVISOR_IMPLEMENTATION_ID, LocalRuntimeKind, live_runtime_capabilities,
     };
@@ -24662,6 +24666,59 @@ mod broker_dispatch_tests {
         artifact
     }
 
+    fn local_observability_provider_artifact() -> ProviderRegistryV2 {
+        let realm_id = RealmId::derive(
+            &ProviderRealmPath::parse("host.local-root").expect("provider realm path"),
+        );
+        let generation = Generation::new(1).expect("generation");
+        let provider_id = d2b_contracts::v2_identity::ProviderId::derive(
+            &realm_id,
+            ProviderType::Observability,
+            &d2b_contracts::v2_identity::ConfiguredProviderId::parse("observability-local")
+                .expect("configured provider id"),
+        );
+        let binding = LocalObservabilityProviderBindingV2 {
+            max_records: 64,
+            max_bytes: 32_768,
+            max_time_window_ms: 86_400_000,
+        };
+        let artifact = ProviderRegistryV2 {
+            schema_version: PROVIDER_REGISTRY_V2_SCHEMA_VERSION.to_owned(),
+            registry_generation: generation,
+            configuration_fingerprint: Fingerprint::parse("4".repeat(64))
+                .expect("registry fingerprint"),
+            published_at_unix_ms: 0,
+            providers: vec![ProviderRegistryEntryV2 {
+                descriptor: ProviderDescriptor {
+                    schema_version: PROVIDER_SCHEMA_VERSION,
+                    provider_id: provider_id.clone(),
+                    authority: ProviderAuthority::Observability,
+                    implementation_id: ImplementationId::parse("local").expect("implementation id"),
+                    api_version: ProviderApiVersion::V2,
+                    capabilities: live_observability_capabilities().expect("live capabilities"),
+                    configuration_schema_fingerprint:
+                        local_observability_configuration_schema_fingerprint()
+                            .expect("configuration fingerprint"),
+                    configured_scope_digest: local_observability_configured_scope_digest(
+                        &provider_id,
+                        &binding,
+                    )
+                    .expect("scope digest"),
+                    registry_generation: generation,
+                    placement: ProviderPlacement::TrustedFirstPartyInProcess {
+                        realm_id,
+                        controller_role: EndpointRole::LocalRootController,
+                    },
+                },
+                binding: ProviderBindingV2::LocalObservability(binding),
+            }],
+        };
+        artifact
+            .validate()
+            .expect("valid local observability artifact");
+        artifact
+    }
+
     fn install_provider_registry_artifact(
         artifacts: &ArtifactPaths,
         artifact: &ProviderRegistryV2,
@@ -24686,44 +24743,51 @@ mod broker_dispatch_tests {
         fs::set_permissions(&host_path, fs::Permissions::from_mode(0o640))
             .expect("chmod host fixture");
 
-        let mut processes: Value =
-            serde_json::from_slice(&fs::read(&artifacts.processes_path).expect("read processes"))
-                .expect("parse processes");
-        let implementation = artifact.providers[0].descriptor.implementation_id.as_str();
-        let (runtime_kind, legacy_provider, role_id, process_role, binary, argv0) =
-            match implementation {
-                CLOUD_HYPERVISOR_IMPLEMENTATION_ID => (
-                    "nixos",
-                    "local-cloud-hypervisor",
-                    "cloud-hypervisor",
-                    "cloud-hypervisor-runner",
-                    "/bin/true",
-                    "cloud-hypervisor",
-                ),
-                d2b_provider_runtime_local::QEMU_MEDIA_IMPLEMENTATION_ID => (
-                    "qemu-media",
-                    "local-qemu-media",
-                    "qemu-media",
-                    "qemu-media-runner",
-                    "/bin/true",
-                    "qemu-system-x86_64",
-                ),
-                other => panic!("unsupported test implementation {other}"),
-            };
-        processes["vms"][0]["workloadIdentity"] = json!({
-            "workloadId": "vm-a",
-            "realmId": "work",
-            "realmPath": ["work"],
-            "canonicalTarget": "vm-a.work.d2b",
-            "legacyVmName": "vm-a",
-            "runtimeKind": runtime_kind,
-            "providerId": legacy_provider
-        });
-        processes["vms"][0]["nodes"][0]["id"] = json!(role_id);
-        processes["vms"][0]["nodes"][0]["role"] = json!(process_role);
-        processes["vms"][0]["nodes"][0]["binaryPath"] = json!(binary);
-        processes["vms"][0]["nodes"][0]["argv"] = json!([argv0]);
-        write_json_file(&artifacts.processes_path, &processes);
+        if let Some(runtime) = artifact
+            .providers
+            .iter()
+            .find(|entry| matches!(&entry.binding, ProviderBindingV2::LocalRuntime(_)))
+        {
+            let mut processes: Value = serde_json::from_slice(
+                &fs::read(&artifacts.processes_path).expect("read processes"),
+            )
+            .expect("parse processes");
+            let implementation = runtime.descriptor.implementation_id.as_str();
+            let (runtime_kind, legacy_provider, role_id, process_role, binary, argv0) =
+                match implementation {
+                    CLOUD_HYPERVISOR_IMPLEMENTATION_ID => (
+                        "nixos",
+                        "local-cloud-hypervisor",
+                        "cloud-hypervisor",
+                        "cloud-hypervisor-runner",
+                        "/bin/true",
+                        "cloud-hypervisor",
+                    ),
+                    d2b_provider_runtime_local::QEMU_MEDIA_IMPLEMENTATION_ID => (
+                        "qemu-media",
+                        "local-qemu-media",
+                        "qemu-media",
+                        "qemu-media-runner",
+                        "/bin/true",
+                        "qemu-system-x86_64",
+                    ),
+                    other => panic!("unsupported test implementation {other}"),
+                };
+            processes["vms"][0]["workloadIdentity"] = json!({
+                "workloadId": "vm-a",
+                "realmId": "work",
+                "realmPath": ["work"],
+                "canonicalTarget": "vm-a.work.d2b",
+                "legacyVmName": "vm-a",
+                "runtimeKind": runtime_kind,
+                "providerId": legacy_provider
+            });
+            processes["vms"][0]["nodes"][0]["id"] = json!(role_id);
+            processes["vms"][0]["nodes"][0]["role"] = json!(process_role);
+            processes["vms"][0]["nodes"][0]["binaryPath"] = json!(binary);
+            processes["vms"][0]["nodes"][0]["argv"] = json!([argv0]);
+            write_json_file(&artifacts.processes_path, &processes);
+        }
 
         let mut bundle: Value =
             serde_json::from_slice(&fs::read(&artifacts.bundle_path).expect("read bundle"))
@@ -25129,6 +25193,34 @@ mod broker_dispatch_tests {
             provider_registry::probe_startup_registry(first, &artifact).await,
             Err(provider_registry::ProviderCompositionError::StartupProbeFailed)
         ));
+    }
+
+    #[tokio::test]
+    async fn provider_registry_activation_probes_live_local_observability_status() {
+        let state = uninitialized_provider_registry_state("provider-registry-observability");
+        let artifact = local_observability_provider_artifact();
+        install_provider_registry_artifact(&state.config.artifacts, &artifact);
+        load_bundle_resolver(&state).expect("provider fixture bundle resolves");
+
+        activate_provider_registry(&state, None)
+            .await
+            .expect("activate local observability registry");
+        let startup = state.provider_registry().expect("startup-owned registry");
+        let registry = startup.registry().expect("live registry");
+        let instance = registry
+            .instance(&artifact.providers[0].descriptor.provider_id)
+            .expect("local observability instance");
+        assert_eq!(
+            instance.descriptor().provider_type(),
+            ProviderType::Observability
+        );
+        assert_eq!(
+            instance.capabilities(),
+            artifact.providers[0].descriptor.capabilities
+        );
+        provider_registry::probe_startup_registry(startup, &artifact)
+            .await
+            .expect("local observability health and status probe");
     }
 
     #[test]

@@ -61,6 +61,11 @@ deprecations ship one minor release before removal.
   through concrete daemon adapters. Bundle-v12 activation now requires the v2
   schema and complete bundle/provider-artifact hashes; unmapped VMs retain the
   compatibility lifecycle path.
+- Activated closed local-observability mappings for enabled host-local root
+  realms. Startup now probes bounded status through the retained registry, and
+  concrete daemon adapters expose only aggregate metrics and audit-sink health
+  through provider-enforced query/export limits without repair authority or
+  source-cardinality labels.
 - Changed observability provider queries to return a canonical bounded result
   through the provider trait, proxy, protobuf/ttrpc service, and toolkit
   adapter without dropping records or introducing free-form labels.
