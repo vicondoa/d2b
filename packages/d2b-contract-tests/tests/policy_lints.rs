@@ -74,7 +74,7 @@ fn skip_nix_trivia(source: &[u8], cursor: &mut usize) -> Result<(), String> {
     }
 }
 
-fn parse_nix_path_list(source: &str, list_open: usize) -> Result<Vec<String>, String> {
+fn parse_nix_path_list(source: &str, list_open: usize) -> Result<(Vec<String>, usize), String> {
     let source = source.as_bytes();
     if source.get(list_open) != Some(&b'[') {
         return Err("Nix package list does not start with `[`".into());
@@ -88,7 +88,7 @@ fn parse_nix_path_list(source: &str, list_open: usize) -> Result<Vec<String>, St
             return Err("unterminated Nix package list".into());
         };
         if byte == b']' {
-            return Ok(paths);
+            return Ok((paths, cursor));
         }
         if !is_nix_ident_start(byte) {
             return Err(format!(
@@ -134,6 +134,203 @@ fn parse_nix_path_list(source: &str, list_open: usize) -> Result<Vec<String>, St
     }
 }
 
+fn find_nix_indented_string_end(source: &str, content_start: usize) -> Result<usize, String> {
+    source[content_start..]
+        .find("''")
+        .map(|offset| content_start + offset)
+        .ok_or("unterminated Nix indented string".into())
+}
+
+fn skip_nix_quoted_string(source: &[u8], cursor: &mut usize) -> Result<(), String> {
+    *cursor += 1;
+    while let Some(&byte) = source.get(*cursor) {
+        match byte {
+            b'\\' => {
+                *cursor += 1;
+                if source.get(*cursor).is_none() {
+                    return Err("unterminated escape in Nix quoted string".into());
+                }
+                *cursor += 1;
+            }
+            b'"' => {
+                *cursor += 1;
+                return Ok(());
+            }
+            _ => *cursor += 1,
+        }
+    }
+    Err("unterminated Nix quoted string".into())
+}
+
+fn nix_indented_attribute<'a>(source: &'a str, name: &str) -> Result<&'a str, String> {
+    let bytes = source.as_bytes();
+    let mut cursor = 0;
+    let mut value = None;
+    while cursor < bytes.len() {
+        skip_nix_trivia(bytes, &mut cursor)?;
+        let Some(&byte) = bytes.get(cursor) else {
+            break;
+        };
+        if bytes.get(cursor..cursor + 2) == Some(b"''") {
+            let content_start = cursor + 2;
+            cursor = find_nix_indented_string_end(source, content_start)? + 2;
+            continue;
+        }
+        if byte == b'"' {
+            skip_nix_quoted_string(bytes, &mut cursor)?;
+            continue;
+        }
+        if !is_nix_ident_start(byte) {
+            cursor += 1;
+            continue;
+        }
+
+        let ident_start = cursor;
+        cursor += 1;
+        while bytes
+            .get(cursor)
+            .is_some_and(|byte| is_nix_ident_continue(*byte))
+        {
+            cursor += 1;
+        }
+        if &source[ident_start..cursor] != name {
+            continue;
+        }
+
+        skip_nix_trivia(bytes, &mut cursor)?;
+        if bytes.get(cursor) != Some(&b'=') {
+            continue;
+        }
+        cursor += 1;
+        skip_nix_trivia(bytes, &mut cursor)?;
+        if bytes.get(cursor..cursor + 2) != Some(b"''") {
+            return Err(format!("{name} must be a Nix indented string"));
+        }
+        let content_start = cursor + 2;
+        let content_end = find_nix_indented_string_end(source, content_start)?;
+        if value.replace(&source[content_start..content_end]).is_some() {
+            return Err(format!(
+                "multiple active {name} attributes in delivery package"
+            ));
+        }
+        cursor = content_end + 2;
+    }
+
+    value.ok_or_else(|| format!("delivery package is missing active {name}"))
+}
+
+fn shell_logical_commands(source: &str) -> Result<Vec<String>, String> {
+    let bytes = source.as_bytes();
+    let mut commands = Vec::new();
+    let mut command = String::new();
+    let mut cursor = 0;
+    let mut quote = None;
+    let mut nix_interpolation_depth = 0;
+
+    while let Some(&byte) = bytes.get(cursor) {
+        if bytes.get(cursor..cursor + 2) == Some(b"${") {
+            nix_interpolation_depth += 1;
+            command.push_str("${");
+            cursor += 2;
+            continue;
+        }
+        if nix_interpolation_depth > 0 {
+            command.push(char::from(byte));
+            cursor += 1;
+            match byte {
+                b'{' => nix_interpolation_depth += 1,
+                b'}' => nix_interpolation_depth -= 1,
+                _ => {}
+            }
+            continue;
+        }
+        if byte == b'\\' && bytes.get(cursor + 1) == Some(&b'\n') && quote != Some(b'\'') {
+            command.push(' ');
+            cursor += 2;
+            continue;
+        }
+        if let Some(delimiter) = quote {
+            command.push(char::from(byte));
+            cursor += 1;
+            if byte == b'\\' && delimiter == b'"' {
+                let Some(&escaped) = bytes.get(cursor) else {
+                    return Err("unterminated shell escape in postFixup".into());
+                };
+                command.push(char::from(escaped));
+                cursor += 1;
+            } else if byte == delimiter {
+                quote = None;
+            }
+            continue;
+        }
+
+        match byte {
+            b'\'' | b'"' => {
+                quote = Some(byte);
+                command.push(char::from(byte));
+                cursor += 1;
+            }
+            b'#' if command.is_empty()
+                || command
+                    .as_bytes()
+                    .last()
+                    .is_some_and(u8::is_ascii_whitespace) =>
+            {
+                while bytes.get(cursor).is_some_and(|byte| *byte != b'\n') {
+                    cursor += 1;
+                }
+            }
+            b'\n' | b';' => {
+                if !command.trim().is_empty() {
+                    commands.push(command.trim().to_owned());
+                }
+                command.clear();
+                cursor += 1;
+            }
+            _ => {
+                command.push(char::from(byte));
+                cursor += 1;
+            }
+        }
+    }
+    if quote.is_some() {
+        return Err("unterminated shell quote in postFixup".into());
+    }
+    if nix_interpolation_depth != 0 {
+        return Err("unterminated Nix interpolation in postFixup".into());
+    }
+    if !command.trim().is_empty() {
+        commands.push(command.trim().to_owned());
+    }
+    Ok(commands)
+}
+
+fn wrap_program_path_packages(post_fixup: &str) -> Result<Vec<String>, String> {
+    let prefix = Regex::new(
+        r#"^wrapProgram\s+(?:"(?:\\.|[^"\\])*"|'[^']*'|\S+)\s+--prefix\s+PATH\s+:\s+\$\{\s*pkgs\s*\.\s*lib\s*\.\s*makeBinPath\s*\["#,
+    )
+    .expect("valid wrapProgram PATH regex");
+    let mut matches = Vec::new();
+    for command in shell_logical_commands(post_fixup)? {
+        let Some(runtime_path) = prefix.find(&command) else {
+            continue;
+        };
+        let (packages, list_close) = parse_nix_path_list(&command, runtime_path.end() - 1)?;
+        let bytes = command.as_bytes();
+        let mut cursor = list_close + 1;
+        skip_nix_trivia(bytes, &mut cursor)?;
+        if bytes.get(cursor) != Some(&b'}') || !command[cursor + 1..].trim().is_empty() {
+            return Err("wrapProgram PATH must end with the makeBinPath interpolation".into());
+        }
+        matches.push(packages);
+    }
+    match matches.as_slice() {
+        [packages] => Ok(packages.clone()),
+        [] => Err("delivery postFixup is missing active wrapProgram PATH prefix".into()),
+        _ => Err("delivery postFixup has multiple wrapProgram PATH prefixes".into()),
+    }
+}
+
 fn delivery_runtime_packages(flake: &str) -> Result<Vec<String>, String> {
     let branch_start = Regex::new(r#"spec\s*\.\s*buildKind\s*==\s*"deliveryWorkspace"\s*then"#)
         .expect("valid delivery branch regex")
@@ -147,18 +344,32 @@ fn delivery_runtime_packages(flake: &str) -> Result<Vec<String>, String> {
     .find(branch_tail)
     .ok_or("deliveryWorkspace package branch is missing its pinned toolchain passthru")?;
     let branch = &branch_tail[..branch_end.start()];
+    wrap_program_path_packages(nix_indented_attribute(branch, "postFixup")?)
+}
 
-    let list_pattern = Regex::new(r#"pkgs\s*\.\s*lib\s*\.\s*makeBinPath\s*\["#)
-        .expect("valid delivery runtime list regex");
-    let mut lists = list_pattern.find_iter(branch);
-    let runtime_list = lists
-        .next()
-        .ok_or("deliveryWorkspace package branch is missing its runtime package list")?;
-    if lists.next().is_some() {
-        return Err("deliveryWorkspace package branch has multiple runtime package lists".into());
+const REQUIRED_DELIVERY_RUNTIME_PACKAGES: [&str; 5] = [
+    "pkgs.git",
+    "pkgs.openssl",
+    "pkgs.shellcheck",
+    "deliveryTools.gh",
+    "deliveryTools.gitTown",
+];
+
+fn required_delivery_runtime_packages(flake: &str) -> Result<Vec<String>, String> {
+    let packages = delivery_runtime_packages(flake)?;
+    for required in REQUIRED_DELIVERY_RUNTIME_PACKAGES {
+        if !packages.iter().any(|package| package == required) {
+            return Err(format!(
+                "delivery wrapProgram PATH is missing {required}; found {packages:?}"
+            ));
+        }
     }
-
-    parse_nix_path_list(branch, runtime_list.end() - 1)
+    if packages.len() != REQUIRED_DELIVERY_RUNTIME_PACKAGES.len() {
+        return Err(format!(
+            "delivery wrapProgram PATH must contain exactly the required tools; found {packages:?}"
+        ));
+    }
+    Ok(packages)
 }
 
 // Migrated from tests/daemon-experimental-warning-eval.sh.
@@ -387,32 +598,14 @@ fn delivery_tool_sources_and_toolchains_are_exactly_pinned() {
         "Git Town and GitHub CLI must be repository-owned source builds, not nixpkgs aliases"
     );
     let flake = read_repo_file("flake.nix");
-    let runtime_packages = delivery_runtime_packages(&flake)
+    required_delivery_runtime_packages(&flake)
         .unwrap_or_else(|err| panic!("invalid delivery runtime package list: {err}"));
-    let required_runtime_packages = [
-        "pkgs.git",
-        "pkgs.openssl",
-        "pkgs.shellcheck",
-        "deliveryTools.gh",
-        "deliveryTools.gitTown",
-    ];
-    for required in required_runtime_packages {
-        assert!(
-            runtime_packages.iter().any(|package| package == required),
-            "delivery runtime package list is missing {required}; found {runtime_packages:?}"
-        );
-    }
     assert!(
         flake.contains("gh --version | grep -F 'gh version 2.92.0'")
             && flake.contains("git-town --version | grep -Fx 'Git Town 23.0.1'")
             && flake.contains("gh = deliveryTools.gh;")
             && flake.contains("git-town = deliveryTools.gitTown;"),
         "delivery packages and checks must expose all runtime verification tools"
-    );
-    assert_eq!(
-        runtime_packages.len(),
-        required_runtime_packages.len(),
-        "delivery runtime package list must contain exactly the required tools"
     );
 
     let flake = read_repo_file("flake.nix");
@@ -534,7 +727,7 @@ fn delivery_tool_sources_and_toolchains_are_exactly_pinned() {
 }
 
 #[test]
-fn delivery_runtime_package_parser_ignores_layout_and_out_of_scope_lists() {
+fn delivery_runtime_package_parser_binds_active_wrap_program_path() {
     let flake = r#"
       decoy = pkgs.lib.makeBinPath [
         pkgs.git pkgs.openssl pkgs.shellcheck
@@ -542,15 +735,30 @@ fn delivery_runtime_package_parser_ignores_layout_and_out_of_scope_lists() {
       value =
         if spec . buildKind == "deliveryWorkspace"
         then deliveryRustWorkspace (workspaceArgs // {
+          # commentedRuntime = pkgs.lib.makeBinPath [
+          #   pkgs.git pkgs.openssl pkgs.shellcheck
+          #   deliveryTools.gh deliveryTools.gitTown
+          # ];
+          unusedRuntime = pkgs.lib.makeBinPath [
+            pkgs.git pkgs.openssl pkgs.shellcheck
+            deliveryTools.gh deliveryTools.gitTown
+          ];
+          stringDecoy = "postFixup pkgs.lib.makeBinPath [ pkgs.openssl ]";
           postFixup = ''
-            --prefix PATH : ${pkgs . lib . makeBinPath
-              [
-                pkgs . git
-                # Layout and comments are not package entries.
-                pkgs.openssl  pkgs . shellcheck
-                deliveryTools . gh
-                deliveryTools.gitTown
-              ]}
+            # wrapProgram "$out/bin/decoy" --prefix PATH : ${pkgs.lib.makeBinPath [
+            #   pkgs.git pkgs.openssl pkgs.shellcheck
+            #   deliveryTools.gh deliveryTools.gitTown
+            # ]}
+            wrapProgram \
+              "$out/bin/${spec.binary}" \
+                --prefix   PATH : ${pkgs . lib . makeBinPath
+                  [
+                    pkgs . git
+                    # Layout and comments are not package entries.
+                    pkgs.openssl  pkgs . shellcheck
+                    deliveryTools . gh
+                    deliveryTools.gitTown
+                  ]}
           '';
           passthru . rustToolchainVersion =
             deliveryTools . rustStableVersion ;
@@ -559,7 +767,7 @@ fn delivery_runtime_package_parser_ignores_layout_and_out_of_scope_lists() {
     "#;
 
     assert_eq!(
-        delivery_runtime_packages(flake).expect("formatting variant must parse"),
+        required_delivery_runtime_packages(flake).expect("formatting variant must parse"),
         [
             "pkgs.git",
             "pkgs.openssl",
@@ -567,6 +775,29 @@ fn delivery_runtime_package_parser_ignores_layout_and_out_of_scope_lists() {
             "deliveryTools.gh",
             "deliveryTools.gitTown",
         ]
+    );
+
+    let missing_active_tool = flake.replace(
+        "                    pkgs.openssl  pkgs . shellcheck",
+        "                    pkgs . shellcheck",
+    );
+    let error = required_delivery_runtime_packages(&missing_active_tool)
+        .expect_err("commented and unused in-branch decoys must not mask a missing runtime tool");
+    assert!(
+        error.contains("missing pkgs.openssl"),
+        "missing active tool must fail specifically: {error}"
+    );
+
+    let inactive_wrapper = flake.replacen(
+        "            wrapProgram \\",
+        "            echo wrapProgram \\",
+        1,
+    );
+    let error = required_delivery_runtime_packages(&inactive_wrapper)
+        .expect_err("commented, string, and unused decoys must not replace the active wrapper");
+    assert!(
+        error.contains("missing active wrapProgram PATH prefix"),
+        "inactive wrapper must fail specifically: {error}"
     );
 }
 

@@ -138,6 +138,8 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Bound delivery runtime-tool coverage to the active package wrapper's PATH
+  expression, so commented or unused package lists cannot satisfy the policy.
 - Made the delivery runtime-tool policy inspect the scoped Nix package list
   structurally, preserving exact tool coverage across harmless formatting
   changes while still failing closed when a required runtime tool is removed.
