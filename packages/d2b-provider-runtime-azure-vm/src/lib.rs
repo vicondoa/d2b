@@ -11,68 +11,86 @@ use std::{error::Error, fmt};
 
 use std::sync::Arc;
 
+use d2b_azure_vm_fake_sdk::{
+    ApplyDisposition, BindingMaterialError, DeploymentHandle, DeploymentState, FakeAzureVmSdk,
+    FakeSdkError, FakeSdkErrorKind, InfrastructureBindingFingerprint,
+    InfrastructureBindingMaterial, InfrastructureHandle, ResourceGeneration, ResourceId,
+    SdkCallContext,
+};
 use d2b_contracts::{
-    v2_identity::ProviderType,
+    v2_component_session::BoundedVec,
+    v2_identity::{ProviderId, ProviderType, RealmId},
     v2_provider::{
-        AdoptionRequest, MutationReceipt, Provider, ProviderCallContext, ProviderCapabilitySet,
-        ProviderDescriptor, ProviderFailure, ProviderFailureKind, ProviderFuture, ProviderHandle,
-        ProviderHealth, ProviderHealthReason, ProviderHealthState, ProviderMethod,
-        ProviderObservation, ProviderOperationRequest, ProviderPlan, ProviderRemediation,
-        RetryClass, RuntimeProvider,
+        AdoptionRequest, AdoptionState, Fingerprint, Generation, HandleId, HandleOwner,
+        MAX_PROVIDER_REQUEST_LIFETIME_MS, MAX_SAFE_JSON_INTEGER, MutationReceipt, MutationState,
+        ObservationReason, ObservedLifecycleState, OwnershipTransfer, PROVIDER_SCHEMA_VERSION,
+        PlanId, PlannedResourceClass, ProviderCallContext, ProviderFailure, ProviderFailureKind,
+        ProviderHandle, ProviderHandleKind, ProviderHealth, ProviderHealthReason,
+        ProviderHealthState, ProviderMethod, ProviderObservation, ProviderOperationInput,
+        ProviderOperationRequest, ProviderPlan, ProviderRemediation, RetryClass,
     },
 };
-use d2b_provider::ProviderInstance;
-use {
-    d2b_azure_vm_fake_sdk::{
-        ApplyDisposition, BindingMaterialError, DeploymentHandle, DeploymentState, FakeAzureVmSdk,
-        FakeSdkError, FakeSdkErrorKind, InfrastructureBindingFingerprint,
-        InfrastructureBindingMaterial, InfrastructureHandle, ResourceGeneration, ResourceId,
-        SdkCallContext,
-    },
-    d2b_contracts::{
-        v2_component_session::BoundedVec,
-        v2_provider::{
-            AdoptionState, Generation, HandleId, HandleOwner, MutationState, ObservationReason,
-            ObservedLifecycleState, PlannedResourceClass, ProviderCapability, ProviderHandleKind,
-            ProviderOperationInput,
-        },
-    },
-    d2b_provider_toolkit::ProviderValues,
-};
-
-const IMPLEMENTATION_ID: &str = "azure-vm";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScaffoldUnavailable {
-    CapabilityUnavailable,
+pub enum ScaffoldAvailability {
+    Unavailable,
 }
 
-impl fmt::Display for ScaffoldUnavailable {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("Azure VM runtime capability is unavailable")
+#[derive(Clone, PartialEq, Eq)]
+pub struct AzureVmRuntimeScaffoldDescriptor {
+    provider_id: ProviderId,
+    registry_generation: Generation,
+    configuration_fingerprint: Fingerprint,
+    realm_id: RealmId,
+}
+
+impl AzureVmRuntimeScaffoldDescriptor {
+    pub fn new(
+        provider_id: ProviderId,
+        registry_generation: Generation,
+        configuration_fingerprint: Fingerprint,
+        realm_id: RealmId,
+    ) -> Self {
+        Self {
+            provider_id,
+            registry_generation,
+            configuration_fingerprint,
+            realm_id,
+        }
+    }
+
+    pub const fn availability(&self) -> ScaffoldAvailability {
+        ScaffoldAvailability::Unavailable
+    }
+
+    pub const fn advertised_capabilities(&self) -> &'static [ProviderMethod] {
+        &[]
+    }
+
+    pub const fn is_registerable(&self) -> bool {
+        false
     }
 }
 
-impl Error for ScaffoldUnavailable {}
+impl fmt::Debug for AzureVmRuntimeScaffoldDescriptor {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AzureVmRuntimeScaffoldDescriptor")
+            .field("availability", &self.availability())
+            .field("provider_type", &ProviderType::Runtime)
+            .field("registry_generation", &self.registry_generation)
+            .finish_non_exhaustive()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScaffoldConstructionError {
-    InvalidDescriptor,
-    WrongAuthority,
-    WrongImplementation,
-    CapabilityInventoryMismatch,
     InvalidClock,
 }
 
 impl fmt::Display for ScaffoldConstructionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::InvalidDescriptor => "Azure VM runtime descriptor is invalid",
-            Self::WrongAuthority => "Azure VM runtime descriptor has the wrong authority",
-            Self::WrongImplementation => "Azure VM runtime descriptor has the wrong implementation",
-            Self::CapabilityInventoryMismatch => {
-                "Azure VM runtime descriptor has the wrong method inventory"
-            }
             Self::InvalidClock => "Azure VM runtime scaffold clock is invalid",
         })
     }
@@ -101,26 +119,25 @@ impl fmt::Display for InfrastructureBindingError {
 
 impl Error for InfrastructureBindingError {}
 
-pub struct AzureVmRuntimeProvider {
-    descriptor: ProviderDescriptor,
+pub struct AzureVmRuntimeScaffold {
+    descriptor: AzureVmRuntimeScaffoldDescriptor,
     now_unix_ms: u64,
     sdk: Arc<FakeAzureVmSdk>,
 }
 
-impl fmt::Debug for AzureVmRuntimeProvider {
+impl fmt::Debug for AzureVmRuntimeScaffold {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("AzureVmRuntimeProvider")
-            .field("production_available", &Self::PRODUCTION_AVAILABLE)
+            .debug_struct("AzureVmRuntimeScaffold")
+            .field("availability", &self.descriptor.availability())
             .field("provider_type", &ProviderType::Runtime)
             .finish_non_exhaustive()
     }
 }
 
-impl AzureVmRuntimeProvider {
-    pub const PRODUCTION_AVAILABLE: bool = false;
-    pub const LIVE_PRODUCTION_CAPABILITIES: &'static [ProviderMethod] = &[];
-    pub const CONTRACT_METHODS: &'static [ProviderMethod] = &[
+impl AzureVmRuntimeScaffold {
+    #[cfg(test)]
+    const DIRECT_METHODS: &'static [ProviderMethod] = &[
         ProviderMethod::RuntimePlan,
         ProviderMethod::RuntimeEnsure,
         ProviderMethod::RuntimeStart,
@@ -130,27 +147,11 @@ impl AzureVmRuntimeProvider {
         ProviderMethod::RuntimeDestroy,
     ];
 
-    pub fn production_registration() -> Result<ProviderInstance, ScaffoldUnavailable> {
-        Err(ScaffoldUnavailable::CapabilityUnavailable)
-    }
-
     pub fn new_for_conformance(
-        descriptor: ProviderDescriptor,
+        descriptor: AzureVmRuntimeScaffoldDescriptor,
         sdk: Arc<FakeAzureVmSdk>,
         now_unix_ms: u64,
     ) -> Result<Self, ScaffoldConstructionError> {
-        descriptor
-            .validate()
-            .map_err(|_| ScaffoldConstructionError::InvalidDescriptor)?;
-        if descriptor.provider_type() != ProviderType::Runtime {
-            return Err(ScaffoldConstructionError::WrongAuthority);
-        }
-        if descriptor.implementation_id.as_str() != IMPLEMENTATION_ID {
-            return Err(ScaffoldConstructionError::WrongImplementation);
-        }
-        if descriptor.capabilities != contract_capabilities() {
-            return Err(ScaffoldConstructionError::CapabilityInventoryMismatch);
-        }
         if !(1_001..=d2b_contracts::v2_provider::MAX_SAFE_JSON_INTEGER).contains(&now_unix_ms) {
             return Err(ScaffoldConstructionError::InvalidClock);
         }
@@ -161,11 +162,11 @@ impl AzureVmRuntimeProvider {
         })
     }
 
-    pub fn conformance_instance(self: Arc<Self>) -> ProviderInstance {
-        ProviderInstance::Runtime(self)
+    pub fn descriptor(&self) -> &AzureVmRuntimeScaffoldDescriptor {
+        &self.descriptor
     }
 
-    fn capability_unavailable(
+    pub fn deny_unavailable_dispatch(
         &self,
         context: &d2b_contracts::v2_provider::ProviderOperationContext,
     ) -> ProviderFailure {
@@ -198,19 +199,37 @@ impl AzureVmRuntimeProvider {
         }
     }
 
-    fn values(
+    fn invalid_request(
         &self,
         context: &d2b_contracts::v2_provider::ProviderOperationContext,
-    ) -> Result<ProviderValues, ProviderFailure> {
-        ProviderValues::new(&self.descriptor, self.now_unix_ms).map_err(|_| {
-            self.failure(
-                context,
-                ProviderFailureKind::InvariantViolation,
-                RetryClass::Never,
-                ProviderHealthReason::ConfigurationMismatch,
-                ProviderRemediation::RepairConfiguration,
-            )
-        })
+    ) -> ProviderFailure {
+        self.failure(
+            context,
+            ProviderFailureKind::InvalidRequest,
+            RetryClass::Never,
+            ProviderHealthReason::ConfigurationMismatch,
+            ProviderRemediation::RepairConfiguration,
+        )
+    }
+
+    fn operation_matches_scaffold(
+        &self,
+        operation: &d2b_contracts::v2_provider::ProviderOperationContext,
+        expected: ProviderMethod,
+    ) -> bool {
+        operation.schema_version == PROVIDER_SCHEMA_VERSION
+            && operation.provider_id == self.descriptor.provider_id
+            && operation.provider_type == ProviderType::Runtime
+            && operation.provider_generation == self.descriptor.registry_generation
+            && operation.method == expected
+            && operation.capability.0 == expected
+            && operation.scope.realm_id() == &self.descriptor.realm_id
+            && operation.issued_at_unix_ms <= MAX_SAFE_JSON_INTEGER
+            && operation.expires_at_unix_ms <= MAX_SAFE_JSON_INTEGER
+            && operation.expires_at_unix_ms > operation.issued_at_unix_ms
+            && operation.expires_at_unix_ms - operation.issued_at_unix_ms
+                <= MAX_PROVIDER_REQUEST_LIFETIME_MS
+            && self.now_unix_ms < operation.expires_at_unix_ms
     }
 
     fn validate_call(
@@ -222,7 +241,7 @@ impl AzureVmRuntimeProvider {
             || context.operation.method.provider_type() != ProviderType::Runtime
             || context.operation.method != expected
         {
-            return Err(self.capability_unavailable(context.operation));
+            return Err(self.deny_unavailable_dispatch(context.operation));
         }
         if context.cancelled {
             return Err(self.failure(
@@ -251,18 +270,11 @@ impl AzureVmRuntimeProvider {
                 ProviderRemediation::RepairConfiguration,
             )
         })?;
-        context
-            .operation
-            .validate(&self.descriptor, self.now_unix_ms)
-            .map_err(|_| {
-                self.failure(
-                    context.operation,
-                    ProviderFailureKind::InvalidRequest,
-                    RetryClass::Never,
-                    ProviderHealthReason::ConfigurationMismatch,
-                    ProviderRemediation::RepairConfiguration,
-                )
-            })
+        if self.operation_matches_scaffold(context.operation, expected) {
+            Ok(())
+        } else {
+            Err(self.invalid_request(context.operation))
+        }
     }
 
     fn validate_request(
@@ -273,19 +285,17 @@ impl AzureVmRuntimeProvider {
     ) -> Result<(), ProviderFailure> {
         self.validate_call(context, expected)?;
         if context.operation != &request.context || !runtime_input_matches(request, expected) {
-            return Err(self.capability_unavailable(context.operation));
+            return Err(self.deny_unavailable_dispatch(context.operation));
         }
-        request
-            .validate_method(&self.descriptor, self.now_unix_ms, expected)
-            .map_err(|_| {
-                self.failure(
-                    context.operation,
-                    ProviderFailureKind::InvalidRequest,
-                    RetryClass::Never,
-                    ProviderHealthReason::ConfigurationMismatch,
-                    ProviderRemediation::RepairConfiguration,
-                )
-            })
+        if request.target.realm_id() == request.context.scope.realm_id()
+            && request.target.workload_id() == request.context.scope.workload_id()
+            && request.expected_configuration_fingerprint
+                == self.descriptor.configuration_fingerprint
+        {
+            Ok(())
+        } else {
+            Err(self.invalid_request(context.operation))
+        }
     }
 
     fn validate_infrastructure_target(
@@ -330,7 +340,7 @@ impl AzureVmRuntimeProvider {
             && handle.provider.provider_id == self.descriptor.provider_id
             && handle.provider.provider_generation == self.descriptor.registry_generation
             && handle.provider.configuration_fingerprint
-                == self.descriptor.configuration_schema_fingerprint
+                == self.descriptor.configuration_fingerprint
             && handle.provider.workload_id.is_some()
             && handle.provider.resource_generation.get() == handle.sdk.generation().get()
             && handle.infrastructure.validate().is_ok()
@@ -473,7 +483,6 @@ impl AzureVmRuntimeProvider {
     ) -> Result<AzureVmRuntimePlan, ProviderFailure> {
         self.validate_request(context, request, ProviderMethod::RuntimePlan)?;
         self.validate_infrastructure_target(request, infrastructure)?;
-        let values = self.values(context.operation)?;
         let resources =
             BoundedVec::new(vec![PlannedResourceClass::WorkloadExecution]).map_err(|_| {
                 self.failure(
@@ -488,32 +497,28 @@ impl AzureVmRuntimeProvider {
             .now_unix_ms
             .saturating_add(30_000)
             .min(request.context.expires_at_unix_ms);
-        let plan = values
-            .plan(
-                request,
-                d2b_contracts::v2_provider::PlanId::parse("azure-vm-runtime-plan").map_err(
-                    |_| {
-                        self.failure(
-                            context.operation,
-                            ProviderFailureKind::InvariantViolation,
-                            RetryClass::Never,
-                            ProviderHealthReason::ConfigurationMismatch,
-                            ProviderRemediation::RepairConfiguration,
-                        )
-                    },
-                )?,
-                expires_at_unix_ms,
-                resources,
-            )
-            .map_err(|_| {
+        let plan = ProviderPlan {
+            schema_version: PROVIDER_SCHEMA_VERSION,
+            plan_id: PlanId::parse("azure-vm-runtime-plan").map_err(|_| {
                 self.failure(
                     context.operation,
-                    ProviderFailureKind::InvalidRequest,
+                    ProviderFailureKind::InvariantViolation,
                     RetryClass::Never,
                     ProviderHealthReason::ConfigurationMismatch,
                     ProviderRemediation::RepairConfiguration,
                 )
-            })?;
+            })?,
+            binding: request.context.binding(),
+            realm_id: request.target.realm_id().clone(),
+            workload_id: request.target.workload_id().cloned(),
+            method: request.context.method,
+            configuration_fingerprint: request.expected_configuration_fingerprint.clone(),
+            created_at_unix_ms: self.now_unix_ms,
+            expires_at_unix_ms,
+            resources,
+        };
+        plan.validate(request, self.now_unix_ms)
+            .map_err(|_| self.invalid_request(context.operation))?;
         let desired = DeploymentHandle::new(
             infrastructure.sdk,
             ResourceId::new(bounded_hash(request.context.request_digest.as_str()))
@@ -546,8 +551,7 @@ impl AzureVmRuntimeProvider {
             && plan.plan.workload_id.is_some()
             && plan.plan.method == ProviderMethod::RuntimePlan
             && plan.plan.resources.as_slice() == [PlannedResourceClass::WorkloadExecution]
-            && plan.plan.configuration_fingerprint
-                == self.descriptor.configuration_schema_fingerprint
+            && plan.plan.configuration_fingerprint == self.descriptor.configuration_fingerprint
             && plan.plan.created_at_unix_ms <= self.now_unix_ms
             && plan.plan.created_at_unix_ms < plan.plan.expires_at_unix_ms
             && plan.plan.expires_at_unix_ms > self.now_unix_ms
@@ -580,6 +584,38 @@ impl AzureVmRuntimeProvider {
         )
     }
 
+    fn handle_from_plan(
+        &self,
+        context: &d2b_contracts::v2_provider::ProviderOperationContext,
+        plan: &ProviderPlan,
+        handle_id: HandleId,
+        resource_generation: Generation,
+    ) -> Result<ProviderHandle, ProviderFailure> {
+        let handle = ProviderHandle {
+            schema_version: PROVIDER_SCHEMA_VERSION,
+            handle_id,
+            kind: ProviderHandleKind::Runtime,
+            provider_id: self.descriptor.provider_id.clone(),
+            realm_id: plan.realm_id.clone(),
+            workload_id: plan.workload_id.clone(),
+            owner: HandleOwner::Provider {
+                realm_id: plan.realm_id.clone(),
+                provider_id: self.descriptor.provider_id.clone(),
+            },
+            provider_generation: self.descriptor.registry_generation,
+            resource_generation,
+            configuration_fingerprint: self.descriptor.configuration_fingerprint.clone(),
+            created_by: plan.binding.clone(),
+            created_at_unix_ms: self.now_unix_ms,
+            expires_at_unix_ms: None,
+            ownership_transfer: OwnershipTransfer::Stationary {
+                ownership_epoch: Generation::new(1).map_err(|_| self.invalid_plan(context))?,
+            },
+        };
+        handle.validate().map_err(|_| self.invalid_plan(context))?;
+        Ok(handle)
+    }
+
     pub async fn deploy(
         &self,
         context: &ProviderCallContext<'_>,
@@ -594,33 +630,21 @@ impl AzureVmRuntimeProvider {
             .deploy_runtime(&sdk_context, plan.desired)
             .await
             .map_err(|error| self.sdk_failure(context.operation, error))?;
-        let values = self.values(context.operation)?;
-        let provider_handle = values
-            .handle_from_plan(
-                &plan.plan,
-                handle_id("azure-vm-runtime", mutation.handle().identity().get())
-                    .map_err(|kind| self.local_sdk_failure(context.operation, kind))?,
-                values.provider_owner(&plan.plan.realm_id),
-                Generation::new(mutation.handle().generation().get()).map_err(|_| {
-                    self.failure(
-                        context.operation,
-                        ProviderFailureKind::InvariantViolation,
-                        RetryClass::Never,
-                        ProviderHealthReason::GenerationMismatch,
-                        ProviderRemediation::ReplaceGeneration,
-                    )
-                })?,
-                None,
-            )
-            .map_err(|_| {
+        let provider_handle = self.handle_from_plan(
+            context.operation,
+            &plan.plan,
+            handle_id("azure-vm-runtime", mutation.handle().identity().get())
+                .map_err(|kind| self.local_sdk_failure(context.operation, kind))?,
+            Generation::new(mutation.handle().generation().get()).map_err(|_| {
                 self.failure(
                     context.operation,
                     ProviderFailureKind::InvariantViolation,
                     RetryClass::Never,
-                    ProviderHealthReason::ConfigurationMismatch,
-                    ProviderRemediation::RepairConfiguration,
+                    ProviderHealthReason::GenerationMismatch,
+                    ProviderRemediation::ReplaceGeneration,
                 )
-            })?;
+            })?,
+        )?;
         Ok(AzureVmRuntimeHandle {
             provider: provider_handle,
             infrastructure: plan.infrastructure.clone(),
@@ -707,9 +731,15 @@ impl AzureVmRuntimeProvider {
         self.validate_runtime_handle(context.operation, handle)?;
         if context.operation != &request.context
             || request.handle != handle.provider
-            || request
-                .validate(&self.descriptor, self.now_unix_ms)
-                .is_err()
+            || request.handle.validate().is_err()
+            || request.handle.provider_id != self.descriptor.provider_id
+            || request.handle.provider_generation != self.descriptor.registry_generation
+            || request.handle.realm_id != *context.operation.scope.realm_id()
+            || request.handle.workload_id.as_ref() != context.operation.scope.workload_id()
+            || request.handle.owner != request.expected_owner
+            || request.handle.configuration_fingerprint
+                != request.expected_configuration_fingerprint
+            || request.handle.resource_generation != request.expected_resource_generation
         {
             let reason =
                 if request.expected_resource_generation != handle.provider.resource_generation {
@@ -755,23 +785,25 @@ impl AzureVmRuntimeProvider {
             .remove_runtime_deployment(&sdk_context, handle.sdk)
             .await
             .map_err(|error| self.sdk_failure(context.operation, error))?;
-        self.values(context.operation)?
-            .receipt(
+        let receipt = MutationReceipt {
+            binding: context.operation.binding(),
+            state: match result.disposition() {
+                ApplyDisposition::Applied => MutationState::Applied,
+                ApplyDisposition::AlreadyApplied => MutationState::AlreadyApplied,
+            },
+            observed_at_unix_ms: self.now_unix_ms,
+            observation_required_before_retry: false,
+        };
+        receipt.validate().map_err(|_| {
+            self.failure(
                 context.operation,
-                match result.disposition() {
-                    ApplyDisposition::Applied => MutationState::Applied,
-                    ApplyDisposition::AlreadyApplied => MutationState::AlreadyApplied,
-                },
+                ProviderFailureKind::InvariantViolation,
+                RetryClass::Never,
+                ProviderHealthReason::ConfigurationMismatch,
+                ProviderRemediation::RepairConfiguration,
             )
-            .map_err(|_| {
-                self.failure(
-                    context.operation,
-                    ProviderFailureKind::InvariantViolation,
-                    RetryClass::Never,
-                    ProviderHealthReason::ConfigurationMismatch,
-                    ProviderRemediation::RepairConfiguration,
-                )
-            })
+        })?;
+        Ok(receipt)
     }
 
     fn observation(
@@ -781,74 +813,38 @@ impl AzureVmRuntimeProvider {
         lifecycle: ObservedLifecycleState,
         adoption: AdoptionState,
     ) -> Result<ProviderObservation, ProviderFailure> {
-        self.values(context)?
-            .observation(
+        let health = ProviderHealth {
+            provider_id: self.descriptor.provider_id.clone(),
+            registry_generation: self.descriptor.registry_generation,
+            observed_at_unix_ms: self.now_unix_ms,
+            state: ProviderHealthState::Healthy,
+            reason: ProviderHealthReason::None,
+            remediation: ProviderRemediation::None,
+        };
+        let observation = ProviderObservation {
+            provider_id: self.descriptor.provider_id.clone(),
+            provider_generation: self.descriptor.registry_generation,
+            realm_id: context.scope.realm_id().clone(),
+            workload_id: context.scope.workload_id().cloned(),
+            handle_id: Some(handle.provider.handle_id.clone()),
+            resource_generation: Some(handle.provider.resource_generation),
+            observed_at_unix_ms: self.now_unix_ms,
+            lifecycle,
+            adoption,
+            reason: ObservationReason::None,
+            health,
+        };
+        observation.validate().map_err(|_| {
+            self.failure(
                 context,
-                Some(&handle.provider),
-                lifecycle,
-                adoption,
-                ObservationReason::None,
-                ProviderHealthState::Healthy,
-                ProviderHealthReason::None,
-                ProviderRemediation::None,
+                ProviderFailureKind::InvariantViolation,
+                RetryClass::Never,
+                ProviderHealthReason::ConfigurationMismatch,
+                ProviderRemediation::RepairConfiguration,
             )
-            .map_err(|_| {
-                self.failure(
-                    context,
-                    ProviderFailureKind::InvariantViolation,
-                    RetryClass::Never,
-                    ProviderHealthReason::ConfigurationMismatch,
-                    ProviderRemediation::RepairConfiguration,
-                )
-            })
+        })?;
+        Ok(observation)
     }
-}
-
-impl Provider for AzureVmRuntimeProvider {
-    fn descriptor(&self) -> ProviderDescriptor {
-        self.descriptor.clone()
-    }
-
-    fn health<'a>(
-        &'a self,
-        context: &'a ProviderCallContext<'a>,
-    ) -> ProviderFuture<'a, ProviderHealth> {
-        Box::pin(async move {
-            self.values(context.operation)?
-                .health(
-                    ProviderHealthState::Unavailable,
-                    ProviderHealthReason::HealthStale,
-                    ProviderRemediation::InspectProvider,
-                )
-                .map_err(|_| self.capability_unavailable(context.operation))
-        })
-    }
-}
-
-macro_rules! denied_dispatch {
-    ($name:ident, $request:ty, $result:ty) => {
-        fn $name<'a>(
-            &'a self,
-            context: &'a ProviderCallContext<'a>,
-            _request: &'a $request,
-        ) -> ProviderFuture<'a, $result> {
-            Box::pin(async move { Err(self.capability_unavailable(context.operation)) })
-        }
-    };
-}
-
-impl RuntimeProvider for AzureVmRuntimeProvider {
-    fn capabilities(&self) -> ProviderCapabilitySet {
-        self.descriptor.capabilities.clone()
-    }
-
-    denied_dispatch!(plan, ProviderOperationRequest, ProviderPlan);
-    denied_dispatch!(ensure, ProviderPlan, ProviderHandle);
-    denied_dispatch!(start, ProviderOperationRequest, ProviderObservation);
-    denied_dispatch!(stop, ProviderOperationRequest, ProviderObservation);
-    denied_dispatch!(inspect, ProviderOperationRequest, ProviderObservation);
-    denied_dispatch!(adopt, AdoptionRequest, ProviderObservation);
-    denied_dispatch!(destroy, ProviderOperationRequest, MutationReceipt);
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -983,17 +979,6 @@ impl fmt::Debug for AzureVmRuntimeHandle {
             .field("sdk_handle", &"<opaque>")
             .finish()
     }
-}
-
-fn contract_capabilities() -> ProviderCapabilitySet {
-    ProviderCapabilitySet::new(
-        AzureVmRuntimeProvider::CONTRACT_METHODS
-            .iter()
-            .copied()
-            .map(ProviderCapability)
-            .collect(),
-    )
-    .unwrap_or_else(|_| unreachable!())
 }
 
 fn runtime_input_matches(request: &ProviderOperationRequest, method: ProviderMethod) -> bool {

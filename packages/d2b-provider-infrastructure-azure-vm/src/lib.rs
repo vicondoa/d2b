@@ -12,68 +12,87 @@ use std::{error::Error, fmt};
 use std::sync::Arc;
 
 use d2b_contracts::{
-    v2_identity::ProviderType,
+    v2_component_session::BoundedVec,
+    v2_identity::{ProviderId, ProviderType, RealmId},
     v2_provider::{
-        AdoptionRequest, InfrastructureProvider, MutationReceipt, Provider, ProviderCallContext,
-        ProviderCapabilitySet, ProviderDescriptor, ProviderFailure, ProviderFailureKind,
-        ProviderFuture, ProviderHandle, ProviderHealth, ProviderHealthReason, ProviderHealthState,
-        ProviderMethod, ProviderObservation, ProviderOperationRequest, ProviderPlan,
-        ProviderRemediation, RetryClass,
+        AdoptionRequest, Fingerprint, Generation, HandleId, HandleOwner,
+        MAX_PROVIDER_REQUEST_LIFETIME_MS, MAX_SAFE_JSON_INTEGER, MutationReceipt, MutationState,
+        ObservationReason, ObservedLifecycleState, OwnershipTransfer, PROVIDER_SCHEMA_VERSION,
+        PlanId, PlannedResourceClass, ProviderCallContext, ProviderFailure, ProviderFailureKind,
+        ProviderHandle, ProviderHandleKind, ProviderHealth, ProviderHealthReason,
+        ProviderHealthState, ProviderMethod, ProviderObservation, ProviderOperationInput,
+        ProviderOperationRequest, ProviderPlan, ProviderRemediation, RetryClass,
     },
 };
-use d2b_provider::ProviderInstance;
 use {
     d2b_azure_vm_fake_sdk::{
         ApplyDisposition, BindingMaterialError, BootstrapBinding, FakeAzureVmSdk, FakeSdkError,
         FakeSdkErrorKind, InfrastructureBindingFingerprint, InfrastructureBindingMaterial,
         InfrastructureHandle, PowerState, ResourceGeneration, ResourceId, SdkCallContext,
     },
-    d2b_contracts::{
-        v2_component_session::BoundedVec,
-        v2_provider::{
-            AdoptionState, Generation, HandleId, HandleOwner, InfrastructurePowerState,
-            MutationState, ObservationReason, ObservedLifecycleState, PlannedResourceClass,
-            ProviderCapability, ProviderHandleKind, ProviderOperationInput,
-        },
-    },
-    d2b_provider_toolkit::ProviderValues,
+    d2b_contracts::v2_provider::{AdoptionState, InfrastructurePowerState},
 };
 
-const IMPLEMENTATION_ID: &str = "azure-vm";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScaffoldUnavailable {
-    CapabilityUnavailable,
+pub enum ScaffoldAvailability {
+    Unavailable,
 }
 
-impl fmt::Display for ScaffoldUnavailable {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("Azure VM infrastructure capability is unavailable")
+#[derive(Clone, PartialEq, Eq)]
+pub struct AzureVmInfrastructureScaffoldDescriptor {
+    provider_id: ProviderId,
+    registry_generation: Generation,
+    configuration_fingerprint: Fingerprint,
+    realm_id: RealmId,
+}
+
+impl AzureVmInfrastructureScaffoldDescriptor {
+    pub fn new(
+        provider_id: ProviderId,
+        registry_generation: Generation,
+        configuration_fingerprint: Fingerprint,
+        realm_id: RealmId,
+    ) -> Self {
+        Self {
+            provider_id,
+            registry_generation,
+            configuration_fingerprint,
+            realm_id,
+        }
+    }
+
+    pub const fn availability(&self) -> ScaffoldAvailability {
+        ScaffoldAvailability::Unavailable
+    }
+
+    pub const fn advertised_capabilities(&self) -> &'static [ProviderMethod] {
+        &[]
+    }
+
+    pub const fn is_registerable(&self) -> bool {
+        false
     }
 }
 
-impl Error for ScaffoldUnavailable {}
+impl fmt::Debug for AzureVmInfrastructureScaffoldDescriptor {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AzureVmInfrastructureScaffoldDescriptor")
+            .field("availability", &self.availability())
+            .field("provider_type", &ProviderType::Infrastructure)
+            .field("registry_generation", &self.registry_generation)
+            .finish_non_exhaustive()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScaffoldConstructionError {
-    InvalidDescriptor,
-    WrongAuthority,
-    WrongImplementation,
-    CapabilityInventoryMismatch,
     InvalidClock,
 }
 
 impl fmt::Display for ScaffoldConstructionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::InvalidDescriptor => "Azure VM infrastructure descriptor is invalid",
-            Self::WrongAuthority => "Azure VM infrastructure descriptor has the wrong authority",
-            Self::WrongImplementation => {
-                "Azure VM infrastructure descriptor has the wrong implementation"
-            }
-            Self::CapabilityInventoryMismatch => {
-                "Azure VM infrastructure descriptor has the wrong method inventory"
-            }
             Self::InvalidClock => "Azure VM infrastructure scaffold clock is invalid",
         })
     }
@@ -81,26 +100,25 @@ impl fmt::Display for ScaffoldConstructionError {
 
 impl Error for ScaffoldConstructionError {}
 
-pub struct AzureVmInfrastructureProvider {
-    descriptor: ProviderDescriptor,
+pub struct AzureVmInfrastructureScaffold {
+    descriptor: AzureVmInfrastructureScaffoldDescriptor,
     now_unix_ms: u64,
     sdk: Arc<FakeAzureVmSdk>,
 }
 
-impl fmt::Debug for AzureVmInfrastructureProvider {
+impl fmt::Debug for AzureVmInfrastructureScaffold {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("AzureVmInfrastructureProvider")
-            .field("production_available", &Self::PRODUCTION_AVAILABLE)
+            .debug_struct("AzureVmInfrastructureScaffold")
+            .field("availability", &self.descriptor.availability())
             .field("provider_type", &ProviderType::Infrastructure)
             .finish_non_exhaustive()
     }
 }
 
-impl AzureVmInfrastructureProvider {
-    pub const PRODUCTION_AVAILABLE: bool = false;
-    pub const LIVE_PRODUCTION_CAPABILITIES: &'static [ProviderMethod] = &[];
-    pub const CONTRACT_METHODS: &'static [ProviderMethod] = &[
+impl AzureVmInfrastructureScaffold {
+    #[cfg(test)]
+    const DIRECT_METHODS: &'static [ProviderMethod] = &[
         ProviderMethod::InfrastructurePlan,
         ProviderMethod::InfrastructureApply,
         ProviderMethod::InfrastructureSetPowerState,
@@ -110,27 +128,11 @@ impl AzureVmInfrastructureProvider {
         ProviderMethod::InfrastructureDestroy,
     ];
 
-    pub fn production_registration() -> Result<ProviderInstance, ScaffoldUnavailable> {
-        Err(ScaffoldUnavailable::CapabilityUnavailable)
-    }
-
     pub fn new_for_conformance(
-        descriptor: ProviderDescriptor,
+        descriptor: AzureVmInfrastructureScaffoldDescriptor,
         sdk: Arc<FakeAzureVmSdk>,
         now_unix_ms: u64,
     ) -> Result<Self, ScaffoldConstructionError> {
-        descriptor
-            .validate()
-            .map_err(|_| ScaffoldConstructionError::InvalidDescriptor)?;
-        if descriptor.provider_type() != ProviderType::Infrastructure {
-            return Err(ScaffoldConstructionError::WrongAuthority);
-        }
-        if descriptor.implementation_id.as_str() != IMPLEMENTATION_ID {
-            return Err(ScaffoldConstructionError::WrongImplementation);
-        }
-        if descriptor.capabilities != contract_capabilities() {
-            return Err(ScaffoldConstructionError::CapabilityInventoryMismatch);
-        }
         if !(1_001..=d2b_contracts::v2_provider::MAX_SAFE_JSON_INTEGER).contains(&now_unix_ms) {
             return Err(ScaffoldConstructionError::InvalidClock);
         }
@@ -141,11 +143,11 @@ impl AzureVmInfrastructureProvider {
         })
     }
 
-    pub fn conformance_instance(self: Arc<Self>) -> ProviderInstance {
-        ProviderInstance::Infrastructure(self)
+    pub fn descriptor(&self) -> &AzureVmInfrastructureScaffoldDescriptor {
+        &self.descriptor
     }
 
-    fn capability_unavailable(
+    pub fn deny_unavailable_dispatch(
         &self,
         context: &d2b_contracts::v2_provider::ProviderOperationContext,
     ) -> ProviderFailure {
@@ -178,19 +180,37 @@ impl AzureVmInfrastructureProvider {
         }
     }
 
-    fn values(
+    fn invalid_request(
         &self,
         context: &d2b_contracts::v2_provider::ProviderOperationContext,
-    ) -> Result<ProviderValues, ProviderFailure> {
-        ProviderValues::new(&self.descriptor, self.now_unix_ms).map_err(|_| {
-            self.failure(
-                context,
-                ProviderFailureKind::InvariantViolation,
-                RetryClass::Never,
-                ProviderHealthReason::ConfigurationMismatch,
-                ProviderRemediation::RepairConfiguration,
-            )
-        })
+    ) -> ProviderFailure {
+        self.failure(
+            context,
+            ProviderFailureKind::InvalidRequest,
+            RetryClass::Never,
+            ProviderHealthReason::ConfigurationMismatch,
+            ProviderRemediation::RepairConfiguration,
+        )
+    }
+
+    fn operation_matches_scaffold(
+        &self,
+        operation: &d2b_contracts::v2_provider::ProviderOperationContext,
+        expected: ProviderMethod,
+    ) -> bool {
+        operation.schema_version == PROVIDER_SCHEMA_VERSION
+            && operation.provider_id == self.descriptor.provider_id
+            && operation.provider_type == ProviderType::Infrastructure
+            && operation.provider_generation == self.descriptor.registry_generation
+            && operation.method == expected
+            && operation.capability.0 == expected
+            && operation.scope.realm_id() == &self.descriptor.realm_id
+            && operation.issued_at_unix_ms <= MAX_SAFE_JSON_INTEGER
+            && operation.expires_at_unix_ms <= MAX_SAFE_JSON_INTEGER
+            && operation.expires_at_unix_ms > operation.issued_at_unix_ms
+            && operation.expires_at_unix_ms - operation.issued_at_unix_ms
+                <= MAX_PROVIDER_REQUEST_LIFETIME_MS
+            && self.now_unix_ms < operation.expires_at_unix_ms
     }
 
     fn validate_call(
@@ -202,7 +222,7 @@ impl AzureVmInfrastructureProvider {
             || context.operation.method.provider_type() != ProviderType::Infrastructure
             || context.operation.method != expected
         {
-            return Err(self.capability_unavailable(context.operation));
+            return Err(self.deny_unavailable_dispatch(context.operation));
         }
         if context.cancelled {
             return Err(self.failure(
@@ -231,18 +251,11 @@ impl AzureVmInfrastructureProvider {
                 ProviderRemediation::RepairConfiguration,
             )
         })?;
-        context
-            .operation
-            .validate(&self.descriptor, self.now_unix_ms)
-            .map_err(|_| {
-                self.failure(
-                    context.operation,
-                    ProviderFailureKind::InvalidRequest,
-                    RetryClass::Never,
-                    ProviderHealthReason::ConfigurationMismatch,
-                    ProviderRemediation::RepairConfiguration,
-                )
-            })
+        if self.operation_matches_scaffold(context.operation, expected) {
+            Ok(())
+        } else {
+            Err(self.invalid_request(context.operation))
+        }
     }
 
     fn validate_request(
@@ -254,19 +267,17 @@ impl AzureVmInfrastructureProvider {
         self.validate_call(context, expected)?;
         if context.operation != &request.context || !infrastructure_input_matches(request, expected)
         {
-            return Err(self.capability_unavailable(context.operation));
+            return Err(self.deny_unavailable_dispatch(context.operation));
         }
-        request
-            .validate_method(&self.descriptor, self.now_unix_ms, expected)
-            .map_err(|_| {
-                self.failure(
-                    context.operation,
-                    ProviderFailureKind::InvalidRequest,
-                    RetryClass::Never,
-                    ProviderHealthReason::ConfigurationMismatch,
-                    ProviderRemediation::RepairConfiguration,
-                )
-            })
+        if request.target.realm_id() == request.context.scope.realm_id()
+            && request.target.workload_id() == request.context.scope.workload_id()
+            && request.expected_configuration_fingerprint
+                == self.descriptor.configuration_fingerprint
+        {
+            Ok(())
+        } else {
+            Err(self.invalid_request(context.operation))
+        }
     }
 
     fn validate_handle_request(
@@ -312,7 +323,7 @@ impl AzureVmInfrastructureProvider {
             && handle.provider.provider_id == self.descriptor.provider_id
             && handle.provider.provider_generation == self.descriptor.registry_generation
             && handle.provider.configuration_fingerprint
-                == self.descriptor.configuration_schema_fingerprint
+                == self.descriptor.configuration_fingerprint
             && handle.provider.workload_id.is_none()
             && matches!(
                 &handle.provider.owner,
@@ -428,7 +439,6 @@ impl AzureVmInfrastructureProvider {
         request: &ProviderOperationRequest,
     ) -> Result<AzureVmInfrastructurePlan, ProviderFailure> {
         self.validate_request(context, request, ProviderMethod::InfrastructurePlan)?;
-        let values = self.values(context.operation)?;
         let resources =
             BoundedVec::new(vec![PlannedResourceClass::Infrastructure]).map_err(|_| {
                 self.failure(
@@ -443,32 +453,28 @@ impl AzureVmInfrastructureProvider {
             .now_unix_ms
             .saturating_add(30_000)
             .min(request.context.expires_at_unix_ms);
-        let plan = values
-            .plan(
-                request,
-                d2b_contracts::v2_provider::PlanId::parse("azure-vm-infrastructure-plan").map_err(
-                    |_| {
-                        self.failure(
-                            context.operation,
-                            ProviderFailureKind::InvariantViolation,
-                            RetryClass::Never,
-                            ProviderHealthReason::ConfigurationMismatch,
-                            ProviderRemediation::RepairConfiguration,
-                        )
-                    },
-                )?,
-                expires_at_unix_ms,
-                resources,
-            )
-            .map_err(|_| {
+        let plan = ProviderPlan {
+            schema_version: PROVIDER_SCHEMA_VERSION,
+            plan_id: PlanId::parse("azure-vm-infrastructure-plan").map_err(|_| {
                 self.failure(
                     context.operation,
-                    ProviderFailureKind::InvalidRequest,
+                    ProviderFailureKind::InvariantViolation,
                     RetryClass::Never,
                     ProviderHealthReason::ConfigurationMismatch,
                     ProviderRemediation::RepairConfiguration,
                 )
-            })?;
+            })?,
+            binding: request.context.binding(),
+            realm_id: request.target.realm_id().clone(),
+            workload_id: request.target.workload_id().cloned(),
+            method: request.context.method,
+            configuration_fingerprint: request.expected_configuration_fingerprint.clone(),
+            created_at_unix_ms: self.now_unix_ms,
+            expires_at_unix_ms,
+            resources,
+        };
+        plan.validate(request, self.now_unix_ms)
+            .map_err(|_| self.invalid_request(context.operation))?;
         let desired = InfrastructureHandle::new(
             resource_id(request.context.request_digest.as_str())
                 .map_err(|kind| self.local_sdk_failure(context.operation, kind))?,
@@ -502,8 +508,7 @@ impl AzureVmInfrastructureProvider {
             && context.operation.scope.workload_id().is_none()
             && plan.plan.method == ProviderMethod::InfrastructurePlan
             && plan.plan.resources.as_slice() == [PlannedResourceClass::Infrastructure]
-            && plan.plan.configuration_fingerprint
-                == self.descriptor.configuration_schema_fingerprint
+            && plan.plan.configuration_fingerprint == self.descriptor.configuration_fingerprint
             && plan.plan.created_at_unix_ms <= self.now_unix_ms
             && plan.plan.created_at_unix_ms < plan.plan.expires_at_unix_ms
             && plan.plan.expires_at_unix_ms > self.now_unix_ms
@@ -529,6 +534,38 @@ impl AzureVmInfrastructureProvider {
         )
     }
 
+    fn handle_from_plan(
+        &self,
+        context: &d2b_contracts::v2_provider::ProviderOperationContext,
+        plan: &ProviderPlan,
+        handle_id: HandleId,
+        resource_generation: Generation,
+    ) -> Result<ProviderHandle, ProviderFailure> {
+        let handle = ProviderHandle {
+            schema_version: PROVIDER_SCHEMA_VERSION,
+            handle_id,
+            kind: ProviderHandleKind::Infrastructure,
+            provider_id: self.descriptor.provider_id.clone(),
+            realm_id: plan.realm_id.clone(),
+            workload_id: None,
+            owner: HandleOwner::Provider {
+                realm_id: plan.realm_id.clone(),
+                provider_id: self.descriptor.provider_id.clone(),
+            },
+            provider_generation: self.descriptor.registry_generation,
+            resource_generation,
+            configuration_fingerprint: self.descriptor.configuration_fingerprint.clone(),
+            created_by: plan.binding.clone(),
+            created_at_unix_ms: self.now_unix_ms,
+            expires_at_unix_ms: None,
+            ownership_transfer: OwnershipTransfer::Stationary {
+                ownership_epoch: Generation::new(1).map_err(|_| self.invalid_plan(context))?,
+            },
+        };
+        handle.validate().map_err(|_| self.invalid_plan(context))?;
+        Ok(handle)
+    }
+
     pub async fn create(
         &self,
         context: &ProviderCallContext<'_>,
@@ -543,36 +580,24 @@ impl AzureVmInfrastructureProvider {
             .create_infrastructure(&sdk_context, plan.desired, PowerState::Stopped)
             .await
             .map_err(|error| self.sdk_failure(context.operation, error))?;
-        let values = self.values(context.operation)?;
-        let provider_handle = values
-            .handle_from_plan(
-                &plan.plan,
-                handle_id(
-                    "azure-vm-infrastructure",
-                    mutation.handle().identity().get(),
-                )
-                .map_err(|kind| self.local_sdk_failure(context.operation, kind))?,
-                values.provider_owner(&plan.plan.realm_id),
-                Generation::new(mutation.handle().generation().get()).map_err(|_| {
-                    self.failure(
-                        context.operation,
-                        ProviderFailureKind::InvariantViolation,
-                        RetryClass::Never,
-                        ProviderHealthReason::GenerationMismatch,
-                        ProviderRemediation::ReplaceGeneration,
-                    )
-                })?,
-                None,
+        let provider_handle = self.handle_from_plan(
+            context.operation,
+            &plan.plan,
+            handle_id(
+                "azure-vm-infrastructure",
+                mutation.handle().identity().get(),
             )
-            .map_err(|_| {
+            .map_err(|kind| self.local_sdk_failure(context.operation, kind))?,
+            Generation::new(mutation.handle().generation().get()).map_err(|_| {
                 self.failure(
                     context.operation,
                     ProviderFailureKind::InvariantViolation,
                     RetryClass::Never,
-                    ProviderHealthReason::ConfigurationMismatch,
-                    ProviderRemediation::RepairConfiguration,
+                    ProviderHealthReason::GenerationMismatch,
+                    ProviderRemediation::ReplaceGeneration,
                 )
-            })?;
+            })?,
+        )?;
         let sdk_handle = mutation.handle();
         let binding = InfrastructureBindingFingerprint::compute(
             &infrastructure_binding_material(&provider_handle).map_err(|_| {
@@ -606,7 +631,7 @@ impl AzureVmInfrastructureProvider {
         )?;
         self.validate_handle_request(request, handle)?;
         let ProviderOperationInput::InfrastructurePowerState { state } = &request.input else {
-            return Err(self.capability_unavailable(context.operation));
+            return Err(self.deny_unavailable_dispatch(context.operation));
         };
         let power = match state {
             InfrastructurePowerState::Running => PowerState::Running,
@@ -660,9 +685,15 @@ impl AzureVmInfrastructureProvider {
         self.validate_bound_handle(context.operation, handle)?;
         if context.operation != &request.context
             || request.handle != handle.provider
-            || request
-                .validate(&self.descriptor, self.now_unix_ms)
-                .is_err()
+            || request.handle.validate().is_err()
+            || request.handle.provider_id != self.descriptor.provider_id
+            || request.handle.provider_generation != self.descriptor.registry_generation
+            || request.handle.realm_id != *context.operation.scope.realm_id()
+            || context.operation.scope.workload_id().is_some()
+            || request.handle.owner != request.expected_owner
+            || request.handle.configuration_fingerprint
+                != request.expected_configuration_fingerprint
+            || request.handle.resource_generation != request.expected_resource_generation
         {
             let reason =
                 if request.expected_resource_generation != handle.provider.resource_generation {
@@ -733,23 +764,25 @@ impl AzureVmInfrastructureProvider {
             .delete_infrastructure(&sdk_context, handle.sdk)
             .await
             .map_err(|error| self.sdk_failure(context.operation, error))?;
-        self.values(context.operation)?
-            .receipt(
+        let receipt = MutationReceipt {
+            binding: context.operation.binding(),
+            state: match result.disposition() {
+                ApplyDisposition::Applied => MutationState::Applied,
+                ApplyDisposition::AlreadyApplied => MutationState::AlreadyApplied,
+            },
+            observed_at_unix_ms: self.now_unix_ms,
+            observation_required_before_retry: false,
+        };
+        receipt.validate().map_err(|_| {
+            self.failure(
                 context.operation,
-                match result.disposition() {
-                    ApplyDisposition::Applied => MutationState::Applied,
-                    ApplyDisposition::AlreadyApplied => MutationState::AlreadyApplied,
-                },
+                ProviderFailureKind::InvariantViolation,
+                RetryClass::Never,
+                ProviderHealthReason::ConfigurationMismatch,
+                ProviderRemediation::RepairConfiguration,
             )
-            .map_err(|_| {
-                self.failure(
-                    context.operation,
-                    ProviderFailureKind::InvariantViolation,
-                    RetryClass::Never,
-                    ProviderHealthReason::ConfigurationMismatch,
-                    ProviderRemediation::RepairConfiguration,
-                )
-            })
+        })?;
+        Ok(receipt)
     }
 
     fn observation(
@@ -759,26 +792,37 @@ impl AzureVmInfrastructureProvider {
         lifecycle: ObservedLifecycleState,
         adoption: AdoptionState,
     ) -> Result<ProviderObservation, ProviderFailure> {
-        self.values(context)?
-            .observation(
+        let health = ProviderHealth {
+            provider_id: self.descriptor.provider_id.clone(),
+            registry_generation: self.descriptor.registry_generation,
+            observed_at_unix_ms: self.now_unix_ms,
+            state: ProviderHealthState::Healthy,
+            reason: ProviderHealthReason::None,
+            remediation: ProviderRemediation::None,
+        };
+        let observation = ProviderObservation {
+            provider_id: self.descriptor.provider_id.clone(),
+            provider_generation: self.descriptor.registry_generation,
+            realm_id: context.scope.realm_id().clone(),
+            workload_id: None,
+            handle_id: Some(handle.provider.handle_id.clone()),
+            resource_generation: Some(handle.provider.resource_generation),
+            observed_at_unix_ms: self.now_unix_ms,
+            lifecycle,
+            adoption,
+            reason: ObservationReason::None,
+            health,
+        };
+        observation.validate().map_err(|_| {
+            self.failure(
                 context,
-                Some(&handle.provider),
-                lifecycle,
-                adoption,
-                ObservationReason::None,
-                ProviderHealthState::Healthy,
-                ProviderHealthReason::None,
-                ProviderRemediation::None,
+                ProviderFailureKind::InvariantViolation,
+                RetryClass::Never,
+                ProviderHealthReason::ConfigurationMismatch,
+                ProviderRemediation::RepairConfiguration,
             )
-            .map_err(|_| {
-                self.failure(
-                    context,
-                    ProviderFailureKind::InvariantViolation,
-                    RetryClass::Never,
-                    ProviderHealthReason::ConfigurationMismatch,
-                    ProviderRemediation::RepairConfiguration,
-                )
-            })
+        })?;
+        Ok(observation)
     }
 
     fn local_sdk_failure(
@@ -788,57 +832,6 @@ impl AzureVmInfrastructureProvider {
     ) -> ProviderFailure {
         self.sdk_failure_kind(context, kind)
     }
-}
-
-impl Provider for AzureVmInfrastructureProvider {
-    fn descriptor(&self) -> ProviderDescriptor {
-        self.descriptor.clone()
-    }
-
-    fn health<'a>(
-        &'a self,
-        context: &'a ProviderCallContext<'a>,
-    ) -> ProviderFuture<'a, ProviderHealth> {
-        Box::pin(async move {
-            self.values(context.operation)?
-                .health(
-                    ProviderHealthState::Unavailable,
-                    ProviderHealthReason::HealthStale,
-                    ProviderRemediation::InspectProvider,
-                )
-                .map_err(|_| self.capability_unavailable(context.operation))
-        })
-    }
-}
-
-macro_rules! denied_dispatch {
-    ($name:ident, $request:ty, $result:ty) => {
-        fn $name<'a>(
-            &'a self,
-            context: &'a ProviderCallContext<'a>,
-            _request: &'a $request,
-        ) -> ProviderFuture<'a, $result> {
-            Box::pin(async move { Err(self.capability_unavailable(context.operation)) })
-        }
-    };
-}
-
-impl InfrastructureProvider for AzureVmInfrastructureProvider {
-    fn capabilities(&self) -> ProviderCapabilitySet {
-        self.descriptor.capabilities.clone()
-    }
-
-    denied_dispatch!(plan, ProviderOperationRequest, ProviderPlan);
-    denied_dispatch!(apply, ProviderPlan, ProviderHandle);
-    denied_dispatch!(
-        set_power_state,
-        ProviderOperationRequest,
-        ProviderObservation
-    );
-    denied_dispatch!(inspect, ProviderOperationRequest, ProviderObservation);
-    denied_dispatch!(adopt, AdoptionRequest, ProviderObservation);
-    denied_dispatch!(bootstrap_binding, ProviderOperationRequest, ProviderHandle);
-    denied_dispatch!(destroy, ProviderOperationRequest, MutationReceipt);
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -918,17 +911,6 @@ impl fmt::Debug for AzureVmBootstrapBinding {
             .field("binding", &self.binding)
             .finish()
     }
-}
-
-fn contract_capabilities() -> ProviderCapabilitySet {
-    ProviderCapabilitySet::new(
-        AzureVmInfrastructureProvider::CONTRACT_METHODS
-            .iter()
-            .copied()
-            .map(ProviderCapability)
-            .collect(),
-    )
-    .unwrap_or_else(|_| unreachable!())
 }
 
 fn infrastructure_input_matches(

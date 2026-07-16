@@ -11,11 +11,10 @@ use d2b_contracts::{
         AdoptionRequest, AuthorizedProviderScope, Fingerprint, Generation, HandleId,
         IdempotencyKey, InfrastructurePowerState, MutationState, OperationId, PlanId,
         PlannedResourceClass, ProviderCallContext, ProviderCapability, ProviderFailureKind,
-        ProviderHandleKind, ProviderHealthState, ProviderMethod, ProviderOperationInput,
-        ProviderTarget, RuntimeProvider,
+        ProviderHandleKind, ProviderMethod, ProviderOperationInput, ProviderTarget,
     },
 };
-use d2b_provider_toolkit::{Fixture, ProviderValues, check_descriptor_conformance};
+use d2b_provider_toolkit::{Fixture, ProviderValues};
 
 use super::*;
 
@@ -73,12 +72,8 @@ fn runtime_fixture(infrastructure: &BoundInfrastructureHandle) -> Fixture {
         .workload_id()
         .cloned()
         .unwrap_or_else(|| unreachable!());
-    let mut descriptor = base.descriptor;
-    descriptor.implementation_id =
-        d2b_contracts::v2_provider::ImplementationId::parse(IMPLEMENTATION_ID)
-            .unwrap_or_else(|_| unreachable!());
     Fixture::from_descriptor(
-        descriptor,
+        base.descriptor,
         ProviderTarget::Handle {
             realm_id: infrastructure.provider.realm_id.clone(),
             workload_id: Some(workload_id),
@@ -90,8 +85,17 @@ fn runtime_fixture(infrastructure: &BoundInfrastructureHandle) -> Fixture {
     .unwrap_or_else(|_| unreachable!())
 }
 
+fn unavailable_descriptor(fixture: &Fixture) -> AzureVmRuntimeScaffoldDescriptor {
+    AzureVmRuntimeScaffoldDescriptor::new(
+        fixture.descriptor.provider_id.clone(),
+        fixture.descriptor.registry_generation,
+        fixture.descriptor.configuration_schema_fingerprint.clone(),
+        fixture.descriptor.placement.realm_id().clone(),
+    )
+}
+
 fn scaffold() -> (
-    Arc<AzureVmRuntimeProvider>,
+    Arc<AzureVmRuntimeScaffold>,
     Arc<FakeAzureVmSdk>,
     Fixture,
     BoundInfrastructureHandle,
@@ -101,8 +105,8 @@ fn scaffold() -> (
     let fixture = runtime_fixture(&infrastructure);
     let sdk = Arc::new(FakeAzureVmSdk::new());
     let provider = Arc::new(
-        AzureVmRuntimeProvider::new_for_conformance(
-            fixture.descriptor.clone(),
+        AzureVmRuntimeScaffold::new_for_conformance(
+            unavailable_descriptor(&fixture),
             sdk.clone(),
             fixture.now_unix_ms,
         )
@@ -112,7 +116,7 @@ fn scaffold() -> (
 }
 
 async fn deployment_plan(
-    provider: &AzureVmRuntimeProvider,
+    provider: &AzureVmRuntimeScaffold,
     fixture: &Fixture,
     infrastructure: &BoundInfrastructureHandle,
 ) -> AzureVmRuntimePlan {
@@ -130,7 +134,7 @@ async fn deployment_plan(
 }
 
 async fn runtime_handle(
-    provider: &AzureVmRuntimeProvider,
+    provider: &AzureVmRuntimeScaffold,
     fixture: &Fixture,
     infrastructure: &BoundInfrastructureHandle,
 ) -> AzureVmRuntimeHandle {
@@ -145,7 +149,7 @@ async fn runtime_handle(
 }
 
 async fn assert_deploy_rejected(
-    provider: &AzureVmRuntimeProvider,
+    provider: &AzureVmRuntimeScaffold,
     context: &ProviderCallContext<'_>,
     plan: &AzureVmRuntimePlan,
 ) {
@@ -157,12 +161,9 @@ async fn assert_deploy_rejected(
 }
 
 fn handle_fixture(handle: &AzureVmRuntimeHandle) -> Fixture {
-    let mut descriptor = Fixture::new(ProviderType::Runtime, 4)
+    let descriptor = Fixture::new(ProviderType::Runtime, 4)
         .unwrap_or_else(|_| unreachable!())
         .descriptor;
-    descriptor.implementation_id =
-        d2b_contracts::v2_provider::ImplementationId::parse(IMPLEMENTATION_ID)
-            .unwrap_or_else(|_| unreachable!());
     Fixture::from_descriptor(
         descriptor,
         ProviderTarget::Handle {
@@ -189,7 +190,7 @@ fn adoption(fixture: &Fixture, handle: &AzureVmRuntimeHandle) -> AdoptionRequest
 }
 
 fn synthetic_runtime_handle(
-    provider: &AzureVmRuntimeProvider,
+    _provider: &AzureVmRuntimeScaffold,
     fixture: &Fixture,
     plan: &AzureVmRuntimePlan,
 ) -> AzureVmRuntimeHandle {
@@ -198,7 +199,7 @@ fn synthetic_runtime_handle(
         ResourceId::new(601).unwrap_or_else(|_| unreachable!()),
         ResourceGeneration::new(1).unwrap_or_else(|_| unreachable!()),
     );
-    let values = ProviderValues::new(&provider.descriptor, fixture.now_unix_ms)
+    let values = ProviderValues::new(&fixture.descriptor, fixture.now_unix_ms)
         .unwrap_or_else(|_| unreachable!());
     let provider_handle = values
         .handle_from_plan(
@@ -217,101 +218,39 @@ fn synthetic_runtime_handle(
 }
 
 #[test]
-fn descriptor_inventory_is_runtime_only_and_production_unavailable() {
-    assert_eq!(
-        AzureVmRuntimeProvider::PRODUCTION_AVAILABLE,
-        AzureVmRuntimeProvider::production_registration().is_ok()
-    );
-    assert!(AzureVmRuntimeProvider::LIVE_PRODUCTION_CAPABILITIES.is_empty());
-    assert_eq!(AzureVmRuntimeProvider::CONTRACT_METHODS.len(), 7);
+fn unavailable_descriptor_advertises_nothing_and_cannot_register() {
+    let (scaffold, sdk, _, _) = scaffold();
+    let descriptor = scaffold.descriptor();
+    assert_eq!(descriptor.availability(), ScaffoldAvailability::Unavailable);
+    assert!(descriptor.advertised_capabilities().is_empty());
+    assert!(!descriptor.is_registerable());
+    assert_eq!(AzureVmRuntimeScaffold::DIRECT_METHODS.len(), 7);
     assert!(
-        AzureVmRuntimeProvider::CONTRACT_METHODS
+        AzureVmRuntimeScaffold::DIRECT_METHODS
             .iter()
             .all(|method| method.provider_type() == ProviderType::Runtime)
     );
-    assert!(!AzureVmRuntimeProvider::CONTRACT_METHODS.contains(&ProviderMethod::RuntimeExecute));
-    assert!(matches!(
-        AzureVmRuntimeProvider::production_registration(),
-        Err(ScaffoldUnavailable::CapabilityUnavailable)
-    ));
-
-    let (provider, _, _, _) = scaffold();
-    let instance = provider.conformance_instance();
-    let descriptor = check_descriptor_conformance(&instance).unwrap_or_else(|_| unreachable!());
-    assert_eq!(descriptor.provider_type(), ProviderType::Runtime);
+    assert!(!AzureVmRuntimeScaffold::DIRECT_METHODS.contains(&ProviderMethod::RuntimeExecute));
     assert_eq!(
-        descriptor.capabilities.as_slice().len(),
-        AzureVmRuntimeProvider::CONTRACT_METHODS.len()
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap_or_else(|_| unreachable!())
+            .block_on(sdk.snapshot())
+            .total_calls(),
+        0
     );
 }
 
 #[tokio::test]
 async fn normal_dispatch_denies_every_method_without_sdk_work() {
-    let (provider, sdk, fixture, infrastructure) = scaffold();
-    let plan = deployment_plan(&provider, &fixture, &infrastructure).await;
-    let handle = synthetic_runtime_handle(&provider, &fixture, &plan);
-    let handle_fixture = handle_fixture(&handle);
-
-    let plan_request = fixture
-        .request(ProviderMethod::RuntimePlan)
-        .unwrap_or_else(|_| unreachable!());
-    let plan_context = fixture.call_context(&plan_request.context);
-    let ensure_operation = fixture
-        .operation(ProviderMethod::RuntimeEnsure)
-        .unwrap_or_else(|_| unreachable!());
-    let ensure_context = fixture.call_context(&ensure_operation);
-    let start_request = handle_fixture
-        .request(ProviderMethod::RuntimeStart)
-        .unwrap_or_else(|_| unreachable!());
-    let start_context = handle_fixture.call_context(&start_request.context);
-    let stop_request = handle_fixture
-        .request(ProviderMethod::RuntimeStop)
-        .unwrap_or_else(|_| unreachable!());
-    let stop_context = handle_fixture.call_context(&stop_request.context);
-    let inspect_request = handle_fixture
-        .request(ProviderMethod::RuntimeInspect)
-        .unwrap_or_else(|_| unreachable!());
-    let inspect_context = handle_fixture.call_context(&inspect_request.context);
-    let adoption = adoption(&handle_fixture, &handle);
-    let adoption_context = handle_fixture.call_context(&adoption.context);
-    let destroy_request = handle_fixture
-        .request(ProviderMethod::RuntimeDestroy)
-        .unwrap_or_else(|_| unreachable!());
-    let destroy_context = handle_fixture.call_context(&destroy_request.context);
-
-    let failures = [
-        RuntimeProvider::plan(&*provider, &plan_context, &plan_request)
-            .await
-            .expect_err("plan dispatch must be unavailable"),
-        RuntimeProvider::ensure(&*provider, &ensure_context, &plan.plan)
-            .await
-            .expect_err("ensure dispatch must be unavailable"),
-        RuntimeProvider::start(&*provider, &start_context, &start_request)
-            .await
-            .expect_err("start dispatch must be unavailable"),
-        RuntimeProvider::stop(&*provider, &stop_context, &stop_request)
-            .await
-            .expect_err("stop dispatch must be unavailable"),
-        RuntimeProvider::inspect(&*provider, &inspect_context, &inspect_request)
-            .await
-            .expect_err("inspect dispatch must be unavailable"),
-        RuntimeProvider::adopt(&*provider, &adoption_context, &adoption)
-            .await
-            .expect_err("adopt dispatch must be unavailable"),
-        RuntimeProvider::destroy(&*provider, &destroy_context, &destroy_request)
-            .await
-            .expect_err("destroy dispatch must be unavailable"),
-    ];
-    assert!(
-        failures
-            .iter()
-            .all(|failure| failure.kind == ProviderFailureKind::CapabilityDenied)
-    );
-    let health = provider
-        .health(&inspect_context)
-        .await
-        .unwrap_or_else(|_| unreachable!());
-    assert_eq!(health.state, ProviderHealthState::Unavailable);
+    let (scaffold, sdk, fixture, _) = scaffold();
+    for method in AzureVmRuntimeScaffold::DIRECT_METHODS {
+        let operation = fixture
+            .operation(*method)
+            .unwrap_or_else(|_| unreachable!());
+        let failure = scaffold.deny_unavailable_dispatch(&operation);
+        assert_eq!(failure.kind, ProviderFailureKind::CapabilityDenied);
+    }
     assert_eq!(sdk.snapshot().await.total_calls(), 0);
 }
 
@@ -768,7 +707,7 @@ async fn cancellation_deadline_and_bad_infrastructure_binding_do_no_sdk_work() {
 
 #[tokio::test]
 async fn debug_and_errors_redact_operation_identity_and_path_canaries() {
-    let (provider, _, fixture, infrastructure) = scaffold();
+    let (provider, sdk, fixture, infrastructure) = scaffold();
     let mut request = fixture
         .request(ProviderMethod::RuntimePlan)
         .unwrap_or_else(|_| unreachable!());
@@ -782,21 +721,20 @@ async fn debug_and_errors_redact_operation_identity_and_path_canaries() {
         .plan_deployment(&context, &request, &infrastructure)
         .await
         .unwrap_or_else(|_| unreachable!());
-    let failure = RuntimeProvider::plan(&*provider, &context, &request)
-        .await
-        .expect_err("normal dispatch must fail closed");
+    let failure = provider.deny_unavailable_dispatch(&request.context);
 
     for rendered in [
         format!("{provider:?}"),
         format!("{infrastructure:?}"),
         format!("{plan:?}"),
         format!("{failure:?}"),
-        ScaffoldUnavailable::CapabilityUnavailable.to_string(),
+        format!("{:?}", provider.descriptor()),
     ] {
         assert!(!rendered.contains("secret-canary"));
         assert!(!rendered.contains("home-alice-private"));
         assert!(!rendered.contains("/home/alice/private"));
     }
+    assert_eq!(sdk.snapshot().await.total_calls(), 0);
 }
 
 #[test]
