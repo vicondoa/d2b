@@ -2,19 +2,18 @@
 
 **Diataxis category:** reference.
 
-Constellation inspection is explicit and bounded. The host may fan out current
-state requests through configured local and gateway entrypoints, but it does
-not become the owner of global telemetry history, remote registries, or realm
-relay/provider credentials.
+Constellation inspection is explicit and bounded. A realm controller may query
+configured providers, but the local root does not become the owner of global
+telemetry history, remote registries, or realm Relay/provider credentials.
 
 ## `d2b op inspect`
 
 `d2b op inspect` reports the current local operation/realm posture:
 
-- local VM and gateway counts;
-- configured host-resident and gateway-backed realms;
+- local workload and configured realm counts;
+- bounded provider health summaries;
 - optional bounded trace identifiers when supplied by the operator;
-- degraded partial results for unavailable gateways or sinks.
+- degraded partial results for unavailable providers or sinks.
 
 The command returns partial results instead of falling back to host
 credentials, SSH, generic tunnels, or host-owned relay sessions.
@@ -23,7 +22,7 @@ credentials, SSH, generic tunnels, or host-owned relay sessions.
 
 Constellation inspection uses the existing `TraceContext` model. Trace fields are bounded
 and optional; malformed trace context is rejected at the CLI boundary rather
-than propagated into daemon, gateway, provider, or telemetry surfaces.
+than propagated into daemon, controller, provider, or telemetry surfaces.
 
 ## Redaction and cardinality
 

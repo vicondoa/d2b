@@ -44,8 +44,9 @@ request or one response inside a frame.
 > `SO_PEERCRED`-based admin/launcher gate remains the sole authn
 > mechanism for the local Unix binding, and any non-local binding
 > requires explicit principal mapping against a daemon-access trust
-> anchor. Realm and provider workload credentials are held inside a
-> gateway guest VM and never transit the daemon API or broker paths.
+> anchor. Realm and provider workload credentials remain co-located with
+> their owning controller or provider agent and never transit the host daemon
+> API or broker paths.
 
 ## Handshake
 
@@ -844,14 +845,13 @@ broker `serve` CLI takes `--audit-dir <path>` instead of the prior
 `--audit-log-path` flag.
 
 > **Audit boundary.** The broker audit log above is the local
-> root-owned record for broker operations on this host. Any future
-> gateway or realm *aggregate* audit (realm access events, provider
-> operation records) is a separate record that lives inside the
-> per-realm gateway guest VM, not in `/var/lib/d2b/audit/`;
-> a remote full-host node keeps its own broker/audit records on that
-> node's local audit path (broker-mediated and node-owned), not in the
-> gateway guest. Relay or realm identity never enters this local broker
-> audit or auth path: the record's identity fields (e.g. `peer_uid`,
+> root-owned record for broker operations on this host. Realm-controller
+> and provider-agent audit (realm access events and provider operation
+> records) is separate and belongs to the component that owns those
+> decisions, not to `/var/lib/d2b/audit/`. A remote full-host node keeps
+> its own broker/audit records on that node's local audit path
+> (broker-mediated and node-owned). Relay or realm identity never enters
+> this local broker audit or auth path: the record's identity fields (e.g. `peer_uid`,
 > `authz_result`) carry only the local `SO_PEERCRED`-derived
 > classification, and `decision` is the local broker operation outcome.
 

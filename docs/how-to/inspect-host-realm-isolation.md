@@ -2,11 +2,10 @@
 
 **Diataxis category:** how-to.
 
-Use these checks on a deployed host when investigating a gateway-backed
-realm. They should show that the host is local-only and credentials live in
-the gateway guest.
+Use these checks on a deployed host to confirm that realm/provider credentials
+have not leaked into the local-root daemon or broker.
 
-1. Confirm the host has no gateway credential config:
+1. Confirm no obsolete gateway configuration was installed:
 
    ```bash
    test ! -e /etc/d2b/gateway.json
@@ -28,6 +27,7 @@ the gateway guest.
    done
    ```
 
-4. If any check fails, remove host-readable relay credentials from the host
-   config and enroll them inside the gateway guest with
-   `d2b-gateway-enroll`.
+4. If any check fails, remove host-readable Relay credentials and obsolete
+   gateway artifacts. Do not use the legacy gateway enrollment helper.
+   Credentials belong in the exact provider agent that owns their consumer;
+   only opaque leases may cross that boundary.

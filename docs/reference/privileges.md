@@ -81,11 +81,10 @@ are denied (`defaultForUnknown: deny`).
 > to `d2b-launcher` or `d2b-admin` and never enter the
 > `launcherUsers`/`adminUsers` uid lookup or the broker's authz
 > chain. Realm or provider workload credentials are distinct from
-> both: they are held inside a gateway guest VM and are never placed
-> on the host daemon or its config. A gateway guest has no direct
-> channel to the broker — the host daemon manages it as a local
-> workload VM — and its realm credentials, policy, and audit log
-> live entirely inside the guest.
+> both: they remain in the exact credential-owning provider agent and are
+> never placed on the host daemon or its config. Provider agents have no
+> direct host-broker channel; only opaque, co-located credential leases may
+> cross the provider contract.
 
 > **Host shutdown exception.** The guarded host-shutdown hook is the only
 > local lifecycle exception to the normal launcher/admin uid lookup. When

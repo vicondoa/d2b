@@ -138,6 +138,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Removed stale operator guidance for the retired gateway/ACA Nix surface and
+  aligned current realm, provider-agent, Azure Container Apps, and Azure Relay
+  documentation with the implemented contracts and availability boundary.
 - Decoupled successful Azure Container Apps operations from opaque credential
   lease cleanup. A bounded process-owned executor now revokes each lease exactly
   once and emits only closed, redacted cleanup outcomes across request-runtime

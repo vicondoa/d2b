@@ -362,35 +362,23 @@ unchanged once the host boots again. If the host cannot boot at
 all, that is a Lanzaboote / `sbctl` recovery procedure rather
 than a d2b one.
 
-### Constellation realm gateway (v2, ADR 0032)
+### Realm controllers and provider agents
 
-[ADR 0032](../adr/0032-d2b-v2-constellation-control-plane.md)
-adds a v2 constellation layer on top of the existing v1 substrate.
-The local fast path — the host daemon, the broker, and local VM
-lifecycle — is unchanged when constellation is disabled or when a
-relay or provider is unreachable. The following threat-model
-properties govern the constellation extension.
+[ADR 0045](../adr/0045-provider-and-transport-framework.md) supersedes the
+earlier gateway-entrypoint architecture. The local root owns the fixed local
+systemd endpoints and parent-spawns isolated controllers for child host-local
+realms. Provider-backed behavior is exposed through typed in-process providers
+or authenticated provider agents, not through an auto-declared gateway guest.
 
-**Entrypoint modes.** Each realm has one of two entrypoint modes:
+`d2b.realms.<realm>` is the public declaration namespace. The removed
+`d2b.gateways` namespace does not provision a guest, provider, Relay listener,
+or credential store.
 
-- *Host-resident*: the host `d2bd` is the realm entrypoint,
-  for local-only or trusted-host realms whose workloads all live
-  on this host and require no relay or provider credentials.
-- *Gateway-backed*: a dedicated local d2b guest VM (the
-  *realm gateway*) is the realm entrypoint. This is the default
-  for cross-host, work, and provider realms. The gateway guest
-  holds relay transport code, node registry, provider
-  configuration, credentials, policy, and the realm audit log.
-  The host daemon manages the gateway like any other local
-  workload; it does not hold the realm's credentials or policy.
-
-**Host holds no realm credentials.** The host daemon and broker
-hold no realm relay credentials, realm session keys, provider
-credentials, remote node registries, or realm audit log. All of
-those belong inside the per-realm gateway guest VM. They must not
-be loaded into any host process, host-readable storage, or
-host-side activation artifact. This invariant must hold
-regardless of which realm or provider is in use.
+**Credentials remain co-located.** The host daemon and broker do not hold
+realm Relay credentials, provider credentials, or remote realm state.
+Credential providers issue only opaque leases to an exact co-located consumer
+inside the owning provider agent (or user agent for Secret Service). Credential
+bytes do not cross the provider contract or enter host activation artifacts.
 
 **Relay is untrusted.** A relay (such as Azure Relay) is a
 ciphertext-only rendezvous transport. Relay credentials
@@ -406,13 +394,13 @@ relay-authenticated peer is never mapped to the local `Admin` role.
 `d2b` group remains the only local lifecycle authorisation
 surface, exactly as in v1. The broker remains the only
 privileged host-mutation path, with every op audited to
-`/var/lib/d2b/audit/broker-<date>.jsonl`. The gateway guest
-receives no broker channel and no generic host-control channel.
+`/var/lib/d2b/audit/broker-<date>.jsonl`. Provider agents receive no
+generic host-control or host-broker channel.
 
-**Per-realm L2 isolation.** A work gateway and a personal
-gateway must not share a host L2 bridge or broadcast domain.
-The existing per-env bridge model is the natural boundary: each
-realm's gateway and its local workloads occupy a distinct env,
+**Per-realm L2 isolation.** Work and personal realms must not share a host L2
+bridge or broadcast domain. During the network transition, the existing
+per-env bridge model is the active boundary: each realm's local workloads
+occupy a distinct env,
 with no cross-realm bridge membership, L3 forwarding, or
 transitive route unless an explicit named operation or named
 stream is authorised.
@@ -429,23 +417,23 @@ undermine the threat-model properties above.
   a generic L2 or L3 tunnel.
 - **Do not collapse work and personal networks or identities.**
   Work and personal realms must remain in distinct environments
-  with separate gateway guests and separate L2 bridges.
+  with separate L2 bridges.
 - **Do not map a relay-authenticated principal to local Admin.**
   Relay identity is a transport credential, not a constellation
   or host authorisation credential.
 - **Do not let a host process hold realm relay credentials.**
   Relay credentials, realm session keys, and provider credentials
-  belong inside the gateway guest, not in the host daemon, any
-  host-side activation artifact, or host-readable storage.
+  belong in their exact credential-owning provider agent, not in the host
+  daemon, any host-side activation artifact, or host-readable storage.
 - **Do not open realm relay sessions directly from the host
-  daemon.** Realm relay transport code runs inside the gateway guest or
-  inside remote nodes. Daemon-access relay (an opt-in path for
+  daemon.** Realm Relay transport code runs inside its configured provider
+  agent. Daemon-access relay (an opt-in path for
   remote node management) is a separate transport with its own
   audit path and must not carry realm or provider workload
   authority.
-- **Do not give the gateway a broker or generic host-control
-  channel.** The gateway guest manages its own realm; it does
-  not reach back through the broker to mutate the physical host.
+- **Do not give provider agents a broker or generic host-control
+  channel.** Host mutation remains behind the owning realm broker and
+  local-root allocator.
 - **Do not add a generic raw stream or port-forward escape
   hatch.** A raw bidirectional stream that carries arbitrary
   traffic becomes the real API and dissolves every other

@@ -65,9 +65,8 @@ The contracts. Stable interfaces a consumer can depend on.
   daemon/broker/CLI envelope alignment, including broker-error
   remediation rules.
 - [`reference/provider-managed-sandboxes.md`](./reference/provider-managed-sandboxes.md) —
-  capability matrix, absent capabilities, rate-limit/backoff/circuit
-  behavior, credential boundary, diagnostics redaction, and error shapes
-  for provider-managed sandbox nodes (ACA adapter).
+  canonical provider-agent placement, credential leases, capabilities,
+  availability, and failure posture for ACA and Azure Relay.
 - [`reference/display-io-capabilities.md`](./reference/display-io-capabilities.md) —
   display, clipboard, audio, USB/HID, GPU, video, and provider display
   lifecycle capability boundaries.
@@ -184,12 +183,8 @@ Task-oriented recipes. Prescriptive, copy-and-adapt.
 - [`how-to/write-a-d2b-addon.md`](./how-to/write-a-d2b-addon.md) —
   write a sibling flake that composes with `d2b` per VM, including
   the `nixpkgs` follow policy and eval-only test pattern.
-- [`how-to/configure-work-gateway.md`](./how-to/configure-work-gateway.md) —
-  declare a work/provider realm gateway and verify default-deny isolation.
 - [`how-to/configure-clipboard-picker.md`](./how-to/configure-clipboard-picker.md) —
   install the separate picker package and wire it into `d2b.site.clipboard`.
-- [`how-to/realm-gateway.md`](./how-to/realm-gateway.md) —
-  configure, enter, and recover realm gateway guests.
 - [`how-to/use-persistent-shells.md`](./how-to/use-persistent-shells.md) —
   enable, attach, detach, reattach, list, and kill persistent named guest shells.
 - [`how-to/configure-desktop-terminal-integration.md`](./how-to/configure-desktop-terminal-integration.md) —

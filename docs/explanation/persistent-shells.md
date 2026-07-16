@@ -11,9 +11,8 @@ d2b shell <target> [ACTION]
 
 where `ACTION` is `attach`, `list`, `detach`, or `kill`. Omitting `ACTION`
 attaches to the target's configured default session. Local VM names stay on the
-local daemon fast path. Gateway-backed management actions route through the
-configured realm gateway; interactive gateway attach remains fail-closed until
-semantic ADR 0039 attach support lands.
+local daemon fast path. Provider-managed targets require an authenticated
+provider agent that positively advertises persistent-shell capability.
 
 ## Persistence boundary
 
@@ -43,12 +42,10 @@ connection-owned and exits with the command's status.
 ## Local dispatch and network surface
 
 The host CLI connects to the local `d2bd` public socket for local targets.
-For gateway-backed `list`, `detach`, and `kill`, it enters the realm trust
-boundary by running the same `d2b shell <target> ...` command inside the
-gateway VM over the typed guest-control exec path. The host still does not load
-realm credentials or provider transports. Gateway-backed interactive attach
-fails closed on the host facade; operators can enter the realm gateway and run
-`d2b shell <target>` there until the semantic ADR 0039 attach stream lands.
+Provider-managed shell operations stay semantic provider operations and
+terminal streams. They are never translated into provider-native exec, raw
+guest-control, or a gateway-guest command. Missing provider-agent capability
+fails closed.
 
 Persistent shells do not add TCP or UDP listeners, network ports, or
 network-bound debug/metrics surfaces. The host-to-guest path reuses the existing

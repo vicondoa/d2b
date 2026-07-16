@@ -292,6 +292,13 @@ picker_not_configured
 
 **Synopsis:** `d2b realm enter <realm>`
 
+> **Compatibility surface.** The current CLI still implements the legacy
+> gateway-entrypoint commands and wire types documented in this section.
+> `d2b.gateways` no longer provisions their backing guest, however, and there is
+> no supported Nix deployment recipe for one. This reference records existing
+> parser and protocol behavior; it is not guidance to recreate gateway
+> configuration or artifacts manually.
+
 Enters the local gateway VM for a gateway-backed realm by opening an
 interactive `vm exec` session to the gateway workload. The host resolves
 the realm through the generated realm entrypoint table and verifies the
