@@ -8,13 +8,22 @@
 use std::{
     ffi::{OsStr, OsString},
     fs, io,
-    os::unix::fs::{FileTypeExt, PermissionsExt},
+    os::{
+        fd::{AsFd, OwnedFd as StdOwnedFd},
+        unix::fs::{FileTypeExt, PermissionsExt},
+    },
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
 };
 
+use nix::sys::socket::{getsockopt, sockopt::AcceptConn};
 use rustix::{
     fd::OwnedFd,
+    io::{FdFlags, fcntl_getfd},
+    net::{
+        AddressFamily, SocketType,
+        sockopt::{get_socket_domain, get_socket_type},
+    },
     process::{Pid, PidfdFlags, pidfd_open},
 };
 
@@ -22,6 +31,61 @@ const TERMINAL_RUNTIME_DIR: &str = "d2b-wayland-proxy";
 const SOCKET_MODE: u32 = 0o600;
 const DIR_MODE: u32 = 0o700;
 const MAX_UNIX_SOCKET_PATH_BYTES: usize = 107;
+
+pub struct SessionDisplayFds {
+    upstream: StdOwnedFd,
+    listener: StdOwnedFd,
+}
+
+impl std::fmt::Debug for SessionDisplayFds {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("SessionDisplayFds(<redacted>)")
+    }
+}
+
+impl SessionDisplayFds {
+    pub fn from_component_session(upstream: StdOwnedFd, listener: StdOwnedFd) -> io::Result<Self> {
+        validate_wayland_socket(&upstream, false)?;
+        validate_wayland_socket(&listener, true)?;
+        if same_socket_object(&upstream, &listener)? {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "ComponentSession supplied duplicate Wayland socket objects",
+            ));
+        }
+        Ok(Self { upstream, listener })
+    }
+
+    pub fn upstream(&self) -> &StdOwnedFd {
+        &self.upstream
+    }
+
+    pub fn listener(&self) -> &StdOwnedFd {
+        &self.listener
+    }
+}
+
+fn validate_wayland_socket(fd: &StdOwnedFd, expected_listener: bool) -> io::Result<()> {
+    if !fcntl_getfd(fd)
+        .map_err(io::Error::from)?
+        .contains(FdFlags::CLOEXEC)
+        || get_socket_domain(fd).map_err(io::Error::from)? != AddressFamily::UNIX
+        || get_socket_type(fd).map_err(io::Error::from)? != SocketType::STREAM
+        || getsockopt(fd, AcceptConn).map_err(io::Error::from)? != expected_listener
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid ComponentSession Wayland descriptor",
+        ));
+    }
+    Ok(())
+}
+
+fn same_socket_object(left: &StdOwnedFd, right: &StdOwnedFd) -> io::Result<bool> {
+    let left = rustix::fs::fstat(left.as_fd()).map_err(io::Error::from)?;
+    let right = rustix::fs::fstat(right.as_fd()).map_err(io::Error::from)?;
+    Ok(left.st_dev == right.st_dev && left.st_ino == right.st_ino)
+}
 
 #[derive(Debug)]
 pub struct TerminalRuntime {
@@ -290,6 +354,7 @@ fn random_token() -> io::Result<String> {
 mod tests {
     use super::*;
     use std::os::unix::net::UnixListener;
+    use std::os::unix::net::UnixStream;
 
     fn test_root(name: &str) -> PathBuf {
         let root = PathBuf::from("target")
@@ -426,6 +491,31 @@ mod tests {
             vec![OsStr::new("start"), OsStr::new("--always-new-process")]
         );
         drop(runtime);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn component_session_display_fds_require_distinct_cloexec_unix_streams() {
+        let (upstream, _upstream_peer) = UnixStream::pair().unwrap();
+        let root = test_root("component-session-display-fds");
+        let listener = UnixListener::bind(root.join("listener.sock")).unwrap();
+        let fds = SessionDisplayFds::from_component_session(upstream.into(), listener.into())
+            .expect("validated session descriptors");
+        assert!(
+            fcntl_getfd(fds.upstream())
+                .unwrap()
+                .contains(FdFlags::CLOEXEC)
+        );
+
+        let (duplicate, _peer) = UnixStream::pair().unwrap();
+        let duplicate_fd: StdOwnedFd = duplicate.into();
+        let duplicated = rustix::io::fcntl_dupfd_cloexec(&duplicate_fd, 0).unwrap();
+        assert_eq!(
+            SessionDisplayFds::from_component_session(duplicate_fd, duplicated)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
         let _ = fs::remove_dir_all(root);
     }
 }

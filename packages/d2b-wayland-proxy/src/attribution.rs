@@ -26,12 +26,25 @@ pub struct ClientAttributionBook {
     clients: HashMap<ProxyClientId, ClientAttribution>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum AttributionError {
+    #[error("Wayland client attribution requires ComponentSession identity")]
+    UnauthenticatedIdentity,
+}
+
 impl ClientAttributionBook {
     pub fn new(identity: ProxyIdentity) -> Self {
         Self {
             identity,
             clients: HashMap::new(),
         }
+    }
+
+    pub fn new_authenticated(identity: ProxyIdentity) -> Result<Self, AttributionError> {
+        identity
+            .require_component_session()
+            .map_err(|_| AttributionError::UnauthenticatedIdentity)?;
+        Ok(Self::new(identity))
     }
 
     pub fn ensure_client(&mut self, client_id: ProxyClientId) -> &mut ClientAttribution {
@@ -165,6 +178,14 @@ mod tests {
         assert_eq!(
             snapshot.title.as_deref().unwrap().chars().count(),
             MAX_CLIENT_METADATA_CHARS
+        );
+    }
+
+    #[test]
+    fn control_attribution_rejects_non_session_identity() {
+        assert_eq!(
+            ClientAttributionBook::new_authenticated(unsafe_local_identity()).unwrap_err(),
+            AttributionError::UnauthenticatedIdentity
         );
     }
 }
