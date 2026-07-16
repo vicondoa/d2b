@@ -71,6 +71,32 @@ fn exact_word(node: Node<'_>, expected: &str, source: &str) -> Result<(), String
     Ok(())
 }
 
+fn shell_gap_separates_words(gap: &str) -> bool {
+    let bytes = gap.as_bytes();
+    let mut index = 0;
+    let mut has_separator = false;
+    while index < bytes.len() {
+        if bytes[index] == b'\\' && bytes.get(index + 1) == Some(&b'\n') {
+            index += 2;
+            continue;
+        }
+        if bytes[index] == b'\\'
+            && bytes.get(index + 1) == Some(&b'\r')
+            && bytes.get(index + 2) == Some(&b'\n')
+        {
+            index += 3;
+            continue;
+        }
+        if bytes[index].is_ascii_whitespace() {
+            has_separator = true;
+            index += 1;
+            continue;
+        }
+        return false;
+    }
+    has_separator
+}
+
 fn exact_xtask_target(node: Node<'_>, source: &str) -> Result<(), String> {
     if node.kind() != "string" || node_text(node, source)? != "\"$out/bin/xtask\"" {
         return Err(format!(
@@ -160,6 +186,17 @@ fn exact_wrapper_command(post_fixup: &str, canonical_path: &str) -> Result<(), S
             "delivery wrapper must have exactly five arguments and no redirects or assignments; found {} arguments",
             arguments.len()
         ));
+    }
+    let words = std::iter::once(name)
+        .chain(arguments.iter().copied())
+        .collect::<Vec<_>>();
+    for pair in words.windows(2) {
+        let gap = &post_fixup[pair[0].end_byte()..pair[1].start_byte()];
+        if !shell_gap_separates_words(gap) {
+            return Err(
+                "delivery wrapper arguments must be separated by unescaped shell whitespace".into(),
+            );
+        }
     }
     exact_xtask_target(arguments[0], post_fixup)?;
     exact_word(arguments[1], "--prefix", post_fixup)?;
@@ -738,6 +775,10 @@ fn delivery_runtime_shell_ast_rejects_inactive_or_wrong_wrappers() {
             post_fixup.replace("$out/bin/xtask", "$out/bin/not-xtask"),
         ),
         (
+            "continued target concatenation",
+            format!("wrapProgram \"$out/bin/xtask\"\\\n--prefix PATH : {canonical_path}"),
+        ),
+        (
             "literal target",
             post_fixup.replace("\"$out/bin/xtask\"", "'$out/bin/xtask'"),
         ),
@@ -780,7 +821,8 @@ fn delivery_runtime_shell_ast_rejects_inactive_or_wrong_wrappers() {
                 || error.contains("top-level command")
                 || error.contains("unconditional command")
                 || error.contains("command name")
-                || error.contains("target"),
+                || error.contains("target")
+                || error.contains("unescaped shell whitespace"),
             "{name} must fail the whole-script grammar: {error}"
         );
     }
