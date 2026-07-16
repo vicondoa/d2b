@@ -30,7 +30,10 @@ use d2b_provider_toolkit::{DeterministicClock, Fixture, Secret};
 use tokio::sync::Notify;
 
 use super::*;
-use crate::provider::{LeaseCleanupEvent, LeaseCleanupObserver};
+use crate::provider::{
+    LeaseCleanupEvent, LeaseCleanupExecutor, LeaseCleanupObserver, lease_cleanup_executor_for_test,
+    unavailable_lease_cleanup_executor_for_test,
+};
 
 const NOW_UNIX_MS: u64 = 1_700_000_000_000;
 const SECRET_CANARY: &str = "aca-private-token-canary-do-not-emit";
@@ -780,13 +783,22 @@ impl Harness {
         &self,
         observer: Arc<dyn LeaseCleanupObserver>,
     ) -> AzureContainerAppsRuntimeProvider {
-        AzureContainerAppsRuntimeProvider::with_cleanup_observer_for_test(
+        self.provider_with_cleanup_services(observer, lease_cleanup_executor_for_test(32, 8))
+    }
+
+    fn provider_with_cleanup_services(
+        &self,
+        observer: Arc<dyn LeaseCleanupObserver>,
+        executor: Arc<dyn LeaseCleanupExecutor>,
+    ) -> AzureContainerAppsRuntimeProvider {
+        AzureContainerAppsRuntimeProvider::with_cleanup_services_for_test(
             self.fixture.descriptor.clone(),
             self.configuration.clone(),
             self.credential.clone(),
             self.control.clone(),
             Arc::new(DeterministicClock::new(NOW_UNIX_MS)),
             observer,
+            executor,
         )
         .unwrap()
     }
@@ -1882,10 +1894,11 @@ async fn lease_cleanup_telemetry_is_closed_and_redacted_for_every_outcome() {
         .await
         .unwrap();
     let unavailable_client: Arc<dyn AcaCredentialLeaseClient> = unavailable.credential.clone();
-    crate::provider::drop_lease_without_runtime_for_test(
+    crate::provider::drop_lease_after_request_runtime_shutdown_for_test(
         unavailable_lease,
         unavailable_client,
         observer.clone(),
+        unavailable_lease_cleanup_executor_for_test(),
     );
 
     let events = observer.events();
@@ -1918,6 +1931,125 @@ async fn lease_cleanup_telemetry_is_closed_and_redacted_for_every_outcome() {
     }
     assert_eq!(unavailable.credential.revocation_count(), 0);
     assert_eq!(lock(&unavailable.vault).active_lease_count(), 1);
+}
+
+#[tokio::test]
+async fn request_runtime_shutdown_before_drop_still_completes_cleanup_once() {
+    let observer = Arc::new(RecordingCleanupObserver::default());
+    let executor = lease_cleanup_executor_for_test(4, 1);
+    let harness = Harness::container_image();
+    let operation = harness.operation(ProviderMethod::RuntimeInspect, "request-runtime-shutdown");
+    let request = AcaCredentialLeaseRequest::new(
+        operation,
+        AcaCredentialPurpose::Inspect,
+        NOW_UNIX_MS + 1_000,
+    );
+    let lease = harness.credential.acquire(&request).await.unwrap();
+    let client: Arc<dyn AcaCredentialLeaseClient> = harness.credential.clone();
+
+    crate::provider::drop_lease_after_request_runtime_shutdown_for_test(
+        lease,
+        client,
+        observer.clone(),
+        executor,
+    );
+
+    wait_for_within(Duration::from_millis(500), || !observer.events().is_empty()).await;
+    let events = observer.events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].component(), "credential-lease");
+    assert_eq!(events[0].operation(), "revoke");
+    assert_eq!(events[0].outcome().as_str(), "revoked");
+    assert_eq!(harness.credential.revocation_count(), 1);
+    assert_eq!(harness.credential.completed_revocation_count(), 1);
+    assert_eq!(lock(&harness.vault).active_lease_count(), 0);
+}
+
+#[tokio::test]
+async fn unavailable_cleanup_executor_reports_once_without_delaying_success() {
+    let observer = Arc::new(RecordingCleanupObserver::default());
+    let harness = Harness::container_image();
+    let provider = harness.provider_with_cleanup_services(
+        observer.clone(),
+        unavailable_lease_cleanup_executor_for_test(),
+    );
+    let request = harness.request(ProviderMethod::RuntimeInspect, "executor-unavailable");
+    let context = harness.call_context(&request.context, 1_000, false);
+
+    let observation = tokio::time::timeout(
+        Duration::from_millis(100),
+        provider.inspect(&context, &request),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(observation.lifecycle, ObservedLifecycleState::Destroyed);
+    assert_eq!(observer.events().len(), 1);
+    assert_eq!(
+        observer.events()[0].outcome().as_str(),
+        "runtime-unavailable"
+    );
+    assert_eq!(harness.credential.acquisition_count(), 1);
+    assert_eq!(harness.credential.revocation_count(), 0);
+    assert_eq!(lock(&harness.vault).active_lease_count(), 1);
+}
+
+#[tokio::test]
+async fn saturated_cleanup_queue_reports_once_and_never_double_revokes() {
+    let observer = Arc::new(RecordingCleanupObserver::default());
+    let harness = Harness::container_image();
+    let provider = harness
+        .provider_with_cleanup_services(observer.clone(), lease_cleanup_executor_for_test(1, 1));
+    harness.credential.block_next_revoke();
+
+    let first = harness.request(ProviderMethod::RuntimeInspect, "queue-first");
+    let first_context = harness.call_context(&first.context, 1_000, false);
+    provider.inspect(&first_context, &first).await.unwrap();
+    wait_for_within(Duration::from_millis(500), || {
+        harness.credential.revocation_count() == 1
+    })
+    .await;
+
+    let second = harness.request(ProviderMethod::RuntimeInspect, "queue-second");
+    let second_context = harness.call_context(&second.context, 1_000, false);
+    provider.inspect(&second_context, &second).await.unwrap();
+    let third = harness.request(ProviderMethod::RuntimeInspect, "queue-third");
+    let third_context = harness.call_context(&third.context, 1_000, false);
+    provider.inspect(&third_context, &third).await.unwrap();
+
+    assert_eq!(observer.events().len(), 1);
+    assert_eq!(
+        observer.events()[0].outcome().as_str(),
+        "runtime-unavailable"
+    );
+    assert_eq!(harness.credential.revocation_count(), 1);
+
+    harness.credential.release_revoke();
+    wait_for_within(Duration::from_millis(500), || observer.events().len() == 3).await;
+    let outcomes = observer
+        .events()
+        .iter()
+        .map(|event| event.outcome().as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| **outcome == "runtime-unavailable")
+            .count(),
+        1
+    );
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| **outcome == "revoked")
+            .count(),
+        2
+    );
+    assert_eq!(harness.credential.acquisition_count(), 3);
+    assert_eq!(harness.credential.revocation_count(), 2);
+    assert_eq!(harness.credential.completed_revocation_count(), 2);
+    assert_eq!(lock(&harness.vault).active_lease_count(), 1);
 }
 
 #[tokio::test]
