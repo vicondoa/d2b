@@ -27,6 +27,7 @@ use d2b_provider::{
     FactoryError, ProviderClock, ProviderFactory, ProviderInstance, ProviderRegistryBuilder,
 };
 use d2b_provider_toolkit::{DeterministicClock, Fixture, Secret};
+use tokio::sync::Notify;
 
 use super::*;
 
@@ -66,6 +67,16 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+async fn wait_for_within(duration: Duration, condition: impl Fn() -> bool) {
+    tokio::time::timeout(duration, async {
+        while !condition() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
 }
 
 struct PrivateCredentialVault {
@@ -125,6 +136,8 @@ struct FakeCredentialClient {
     cancelled_revocations: AtomicUsize,
     stall_revoke_once: AtomicBool,
     timeout_revoke_once: AtomicBool,
+    block_revoke_once: AtomicBool,
+    revoke_release: Notify,
     purposes: Mutex<Vec<AcaCredentialPurpose>>,
     fail_once: Mutex<Option<AcaControlError>>,
     revoke_fail_once: Mutex<Option<AcaControlError>>,
@@ -145,6 +158,8 @@ impl FakeCredentialClient {
             cancelled_revocations: AtomicUsize::new(0),
             stall_revoke_once: AtomicBool::new(false),
             timeout_revoke_once: AtomicBool::new(false),
+            block_revoke_once: AtomicBool::new(false),
+            revoke_release: Notify::new(),
             purposes: Mutex::new(Vec::new()),
             fail_once: Mutex::new(None),
             revoke_fail_once: Mutex::new(None),
@@ -174,6 +189,14 @@ impl FakeCredentialClient {
 
     fn timeout_next_revoke(&self) {
         self.timeout_revoke_once.store(true, Ordering::Release);
+    }
+
+    fn block_next_revoke(&self) {
+        self.block_revoke_once.store(true, Ordering::Release);
+    }
+
+    fn release_revoke(&self) {
+        self.revoke_release.notify_one();
     }
 
     fn fail_next(&self, error: AcaControlError) {
@@ -270,6 +293,9 @@ impl AcaCredentialLeaseClient for FakeCredentialClient {
         self.revocations.fetch_add(1, Ordering::AcqRel);
         if let Some(error) = lock(&self.revoke_fail_once).take() {
             return Err(error);
+        }
+        if self.block_revoke_once.swap(false, Ordering::AcqRel) {
+            self.revoke_release.notified().await;
         }
         let revoke_delay_ms = if self.timeout_revoke_once.swap(false, Ordering::AcqRel) {
             Some(u64::from(MAX_ACA_LEASE_CLEANUP_MS) + 100)
@@ -807,6 +833,10 @@ async fn plan_and_ensure(
         .ensure(&ensure_context, &plan)
         .await
         .unwrap();
+    wait_for_within(Duration::from_millis(200), || {
+        harness.credential.completed_revocation_count() == harness.credential.acquisition_count()
+    })
+    .await;
     (plan, handle)
 }
 
@@ -1129,6 +1159,10 @@ async fn live_lifecycle_uses_opaque_leases_and_replays_completed_operations() {
         lock(&harness.vault).redemptions,
         harness.control.calls().len()
     );
+    wait_for_within(Duration::from_millis(200), || {
+        harness.credential.completed_revocation_count() == harness.credential.acquisition_count()
+    })
+    .await;
     assert_eq!(
         harness.credential.revocation_count(),
         harness.credential.acquisition_count()
@@ -1368,6 +1402,10 @@ async fn cancellation_and_deadline_fail_closed_and_same_operation_can_retry() {
         .await
         .unwrap();
     assert_eq!(observation.lifecycle, ObservedLifecycleState::Destroyed);
+    wait_for_within(Duration::from_millis(200), || {
+        harness.credential.revocation_count() == 2
+    })
+    .await;
     assert_eq!(harness.credential.revocation_count(), 2);
     assert_eq!(
         harness.control.calls(),
@@ -1548,17 +1586,89 @@ async fn first_mutation_timeout_after_dispatch_is_ambiguous() {
 }
 
 #[tokio::test]
-async fn successful_operation_revokes_its_opaque_lease_once() {
-    let harness = Harness::container_image();
-    let request = harness.request(ProviderMethod::RuntimeInspect, "success-revoke");
-    let context = harness.call_context(&request.context, 1_000, false);
+async fn successful_plan_inspect_handle_and_mutation_return_before_blocked_revoke() {
+    let harness = Harness::configured_disk();
+    let response_bound = Duration::from_millis(100);
+    let cleanup_bound = Duration::from_millis(200);
 
-    let observation = harness.provider.inspect(&context, &request).await.unwrap();
+    harness.credential.block_next_revoke();
+    let plan_request = harness.request(ProviderMethod::RuntimePlan, "background-plan");
+    let plan_context = harness.call_context(&plan_request.context, 1_000, false);
+    let plan = tokio::time::timeout(
+        response_bound,
+        harness.provider.plan(&plan_context, &plan_request),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(harness.credential.acquisition_count(), 0);
+    assert_eq!(harness.credential.revocation_count(), 0);
 
-    assert_eq!(observation.lifecycle, ObservedLifecycleState::Destroyed);
-    assert_eq!(harness.credential.acquisition_count(), 1);
-    assert_eq!(harness.credential.revocation_count(), 1);
+    let ensure_operation = harness.operation(ProviderMethod::RuntimeEnsure, "background-handle");
+    let ensure_context = harness.call_context(&ensure_operation, 1_000, false);
+    let handle = tokio::time::timeout(
+        response_bound,
+        harness.provider.ensure(&ensure_context, &plan),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    wait_for_within(cleanup_bound, || harness.credential.revocation_count() == 1).await;
+    assert_eq!(harness.credential.completed_revocation_count(), 0);
+    harness.credential.release_revoke();
+    wait_for_within(cleanup_bound, || {
+        harness.credential.completed_revocation_count() == 1
+    })
+    .await;
+
+    harness.credential.block_next_revoke();
+    let inspect_request = harness.handle_request(
+        ProviderMethod::RuntimeInspect,
+        "background-inspect",
+        &handle,
+    );
+    let inspect_context = harness.call_context(&inspect_request.context, 1_000, false);
+    let observation = tokio::time::timeout(
+        response_bound,
+        harness.provider.inspect(&inspect_context, &inspect_request),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(observation.lifecycle, ObservedLifecycleState::Stopped);
+    wait_for_within(cleanup_bound, || harness.credential.revocation_count() == 2).await;
     assert_eq!(harness.credential.completed_revocation_count(), 1);
+    harness.credential.release_revoke();
+    wait_for_within(cleanup_bound, || {
+        harness.credential.completed_revocation_count() == 2
+    })
+    .await;
+
+    harness.credential.block_next_revoke();
+    let destroy_request = harness.handle_request(
+        ProviderMethod::RuntimeDestroy,
+        "background-mutation",
+        &handle,
+    );
+    let destroy_context = harness.call_context(&destroy_request.context, 1_000, false);
+    let receipt = tokio::time::timeout(
+        response_bound,
+        harness.provider.destroy(&destroy_context, &destroy_request),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(receipt.state, MutationState::Applied);
+    wait_for_within(cleanup_bound, || harness.credential.revocation_count() == 3).await;
+    assert_eq!(harness.credential.completed_revocation_count(), 2);
+    harness.credential.release_revoke();
+    wait_for_within(cleanup_bound, || {
+        harness.credential.completed_revocation_count() == 3
+    })
+    .await;
+
+    assert_eq!(harness.credential.acquisition_count(), 3);
+    assert_eq!(harness.credential.revocation_count(), 3);
     assert_eq!(harness.credential.cancelled_revocation_count(), 0);
     assert_eq!(lock(&harness.vault).active_lease_count(), 0);
 }
@@ -1591,25 +1701,69 @@ async fn synchronous_revoke_success_preserves_the_operation_failure() {
 }
 
 #[tokio::test]
-async fn revoke_timeout_is_typed_ambiguity_without_a_second_attempt() {
+async fn background_revoke_timeout_never_changes_or_delays_success() {
     let harness = Harness::container_image();
     harness.credential.timeout_next_revoke();
     let request = harness.request(ProviderMethod::RuntimeInspect, "revoke-timeout");
     let context = harness.call_context(&request.context, 2_000, false);
 
-    let failure = harness
-        .provider
-        .inspect(&context, &request)
-        .await
-        .unwrap_err();
+    let observation = tokio::time::timeout(
+        Duration::from_millis(100),
+        harness.provider.inspect(&context, &request),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(observation.lifecycle, ObservedLifecycleState::Destroyed);
+    let calls = harness.control.calls();
+    wait_for_within(Duration::from_millis(200), || {
+        harness.credential.revocation_count() == 1
+    })
+    .await;
+    assert_eq!(harness.credential.revocation_count(), 1);
+    assert_eq!(harness.credential.completed_revocation_count(), 0);
+    wait_for_within(Duration::from_millis(1_200), || {
+        harness.credential.cancelled_revocation_count() == 1
+    })
+    .await;
+    assert_eq!(harness.credential.cancelled_revocation_count(), 1);
+
+    let replay = harness.provider.inspect(&context, &request).await.unwrap();
+    assert_eq!(replay.lifecycle, ObservedLifecycleState::Destroyed);
+    assert_eq!(harness.control.calls(), calls);
+    assert_eq!(harness.credential.acquisition_count(), 1);
+    assert_eq!(harness.credential.revocation_count(), 1);
+    assert_eq!(lock(&harness.vault).active_lease_count(), 1);
+}
+
+#[tokio::test]
+async fn error_branch_revoke_timeout_is_bounded_typed_ambiguity_once() {
+    let harness = Harness::container_image();
+    harness.control.fail_next(
+        ControlCall::FindSandboxes,
+        AcaControlError::closed(
+            AcaControlErrorKind::Unavailable,
+            AcaDiagnosticCode::ServiceUnavailable,
+        ),
+    );
+    harness.credential.timeout_next_revoke();
+    let request = harness.request(ProviderMethod::RuntimeInspect, "error-revoke-timeout");
+    let context = harness.call_context(&request.context, 2_000, false);
+
+    let failure = tokio::time::timeout(
+        Duration::from_millis(u64::from(MAX_ACA_LEASE_CLEANUP_MS) + 200),
+        harness.provider.inspect(&context, &request),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
 
     assert_eq!(failure.kind, ProviderFailureKind::AmbiguousMutation);
     assert_eq!(failure.retry, RetryClass::AfterObservation);
     assert_eq!(harness.credential.revocation_count(), 1);
     assert_eq!(harness.credential.completed_revocation_count(), 0);
     assert_eq!(harness.credential.cancelled_revocation_count(), 1);
-    tokio::task::yield_now().await;
-    assert_eq!(harness.credential.revocation_count(), 1);
     assert_eq!(lock(&harness.vault).active_lease_count(), 1);
 }
 
@@ -1633,14 +1787,10 @@ async fn dropping_an_in_flight_call_revokes_the_opaque_lease_once() {
     assert_eq!(harness.credential.revocation_count(), 0);
     drop(call);
 
-    tokio::time::timeout(Duration::from_millis(100), async {
-        while harness.credential.revocation_count() == 0 {
-            tokio::task::yield_now().await;
-        }
+    wait_for_within(Duration::from_millis(100), || {
+        harness.credential.completed_revocation_count() == 1
     })
-    .await
-    .unwrap();
-    tokio::task::yield_now().await;
+    .await;
     assert_eq!(harness.credential.revocation_count(), 1);
     assert_eq!(harness.credential.completed_revocation_count(), 1);
     assert_eq!(harness.credential.cancelled_revocation_count(), 0);
@@ -1808,6 +1958,10 @@ async fn rate_limit_and_credential_failure_use_closed_retry_classes_without_fall
     assert_eq!(harness.credential.revocation_count(), 1);
     let observation = harness.provider.inspect(&context, &request).await.unwrap();
     assert_eq!(observation.lifecycle, ObservedLifecycleState::Destroyed);
+    wait_for_within(Duration::from_millis(200), || {
+        harness.credential.revocation_count() == 2
+    })
+    .await;
     assert_eq!(harness.credential.revocation_count(), 2);
 
     let no_fallback = Harness::container_image();

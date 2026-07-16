@@ -629,10 +629,12 @@ impl AzureContainerAppsRuntimeProvider {
         lease: ActiveCredentialLease,
         result: ProviderResult<T>,
     ) -> ProviderResult<T> {
-        if lease.revoke().await.is_ok() {
-            result
-        } else {
-            Err(self.lease_cleanup_ambiguous_failure(operation))
+        match result {
+            Ok(value) => {
+                drop(lease);
+                Ok(value)
+            }
+            Err(failure) => Err(self.revoke_failed_lease(operation, lease, failure).await),
         }
     }
 
