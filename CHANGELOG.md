@@ -158,13 +158,22 @@ deprecations ship one minor release before removal.
 - Made the delivery runtime-tool policy inspect the scoped Nix package list
   structurally, preserving exact tool coverage across harmless formatting
   changes while still failing closed when a required runtime tool is removed.
+- Replaced raw Rust source substring policy checks with an AST-aware,
+  alias-resolving scanner that rejects equivalent process, broker, and
+  non-opaque provider constructs across formatting variations.
 - Removed stale operator guidance for the retired gateway/ACA Nix surface and
   aligned current realm, provider-agent, Azure Container Apps, and Azure Relay
   documentation with the implemented contracts and availability boundary.
 - Decoupled successful Azure Container Apps operations from opaque credential
-  lease cleanup. A bounded process-owned executor now revokes each lease exactly
-  once and emits only closed, redacted cleanup outcomes across request-runtime
-  shutdown, failure, timeout, unavailability, and saturation.
+  lease cleanup. A bounded provider-owned executor now revokes each lease
+  exactly once, drains accepted cleanup work before final provider shutdown,
+  and emits only closed, redacted outcomes across failure, timeout,
+  unavailability, and saturation.
+- Made Azure Relay close wait for its supervised listener task to terminate
+  before closing the socket, including concurrent, repeated, and failed close
+  attempts.
+- Aligned the v2 bundle and provider-registry schema references with every
+  canonical top-level field.
 - Persist bounded local-observability exports as atomically renamed private
   artifacts keyed by opaque operation ID. JSON Lines and OTLP protobuf now honor
   the requested format and exact streaming record/byte limits; storage failures
@@ -184,6 +193,8 @@ deprecations ship one minor release before removal.
 - Receive broker file-descriptor handoffs with atomic close-on-exec, capacity
   for Linux's full descriptor limit plus credentials, and owning truncation
   cleanup so malformed ancillary messages cannot leak installed descriptors.
+- Applied one checked absolute deadline across broker file-descriptor connect,
+  write, and read stages, closing descriptors received after budget exhaustion.
 - Split provider-registry identity failures into actionable provider-ID,
   configuration-schema-fingerprint, and configured-scope-digest diagnostics.
   Local-runtime bindings now derive realm identity exclusively from descriptor
@@ -199,9 +210,10 @@ deprecations ship one minor release before removal.
   configured USBIP claim's bounded stop cleanup—and over-limit or overflowing
   mappings fail startup instead of truncating required cleanup.
 - Removed nested Tokio runtime bridging from mapped runtime-provider start,
-  graceful stop, and restart dispatch. Provider adapters now await daemon
-  lifecycle effects directly, and Cloud Hypervisor observations use the
-  daemon's canonical registered runner role.
+  graceful stop, and restart dispatch. Dedicated lifecycle worker threads now
+  own their current-thread runtimes so synchronous broker, cgroup, and readiness
+  waits cannot stall or outlive the provider executor; Cloud Hypervisor
+  observations use the daemon's canonical registered runner role.
 - Closed d2b 2.0 foundation integration gaps with a driven ComponentSession,
   authenticated two-phase descriptor binding, phase-aware peer credentials,
   canonical provider-agent serving, lock-bound state generations, and bounded
