@@ -387,8 +387,14 @@ let
       value = position;
     })
     realmHostPlan.componentOrder);
+  componentBranches = map
+    (component: realmHostPlan.components.${component}.branch)
+    componentNames;
   allOwnedFiles = lib.concatMap
     (component: realmHostPlan.components.${component}.ownedFiles)
+    componentNames;
+  allReservedPaths = lib.concatMap
+    (component: realmHostPlan.components.${component}.reservedPaths)
     componentNames;
   ownershipCounts = builtins.foldl'
     (counts: path:
@@ -399,6 +405,15 @@ let
     allOwnedFiles;
   duplicateOwnedFiles = builtins.attrNames
     (lib.filterAttrs (_: count: count != 1) ownershipCounts);
+  unownedReservedPaths = lib.filter
+    (path: !(builtins.elem path allOwnedFiles))
+    allReservedPaths;
+  missingOwnedFiles = lib.filter
+    (path: !(builtins.pathExists (flakeRoot + "/${path}")))
+    allOwnedFiles;
+  unreservedMissingOwnedFiles = lib.filter
+    (path: !(builtins.elem path allReservedPaths))
+    missingOwnedFiles;
   dependencyErrors = lib.concatMap
     (component:
       let
@@ -413,6 +428,21 @@ let
             "${component}:${dependency}")
         dependencies)
     realmHostPlan.componentOrder;
+  externalDependencyErrors = lib.concatMap
+    (component:
+      map
+        (dependency: "${component}:${dependency}")
+        (lib.filter
+          (dependency:
+            !(builtins.hasAttr dependency realmHostPlan.externalDependencies))
+          realmHostPlan.components.${component}.externalDependsOn))
+    componentNames
+    ++ map
+      (row: "path:${row.dependency}")
+      (lib.filter
+        (row:
+          !(builtins.hasAttr row.dependency realmHostPlan.externalDependencies))
+        realmHostPlan.pathExternalDependencies);
   listNixFiles = prefix: directory:
     lib.concatMap
       (name:
@@ -440,6 +470,73 @@ let
       builtins.elem fragment.path
         realmHostPlan.components.${fragment.owner}.ownedFiles)
     providerExtensionFragments;
+  affectedInventoryRows =
+    lib.concatLists (builtins.attrValues realmHostPlan.affectedInventory);
+  affectedInventoryPaths =
+    lib.concatMap (row: row.paths) affectedInventoryRows;
+  affectedInventoryReservedPaths =
+    lib.concatMap (row: row.reservedPaths) affectedInventoryRows;
+  isAffectedInventoryPath = path:
+    path == "README.md"
+    || lib.hasPrefix "docs/explanation/" path
+    || lib.hasPrefix "docs/how-to/" path
+    || lib.hasPrefix "docs/reference/" path
+    || lib.hasPrefix "examples/" path
+    || lib.hasPrefix "templates/" path
+    || lib.hasPrefix "tests/fixtures/" path
+    || lib.hasPrefix "tests/golden/" path
+    || lib.hasPrefix "tests/unit/nix/" path
+    || lib.hasPrefix "tests/unit/smoke/" path;
+  ownedAffectedInventoryPaths =
+    lib.filter isAffectedInventoryPath allOwnedFiles;
+  reservedAffectedInventoryPaths =
+    lib.filter isAffectedInventoryPath allReservedPaths;
+  w5ReservedPaths =
+    realmHostPlan.crossWaveOwnership.w5RuntimeDocs
+    ++ realmHostPlan.crossWaveOwnership.w5ConsumerFiles
+    ++ realmHostPlan.crossWaveOwnership.foreignW5Fixtures;
+  crossWaveOverlaps = lib.intersectLists allOwnedFiles w5ReservedPaths;
+  allForeignAffectedPaths =
+    w5ReservedPaths
+    ++ realmHostPlan.crossWaveOwnership.deferredPurgeDocs.paths
+    ++ realmHostPlan.crossWaveOwnership.w6RuntimeDocs.paths
+    ++ realmHostPlan.crossWaveOwnership.frozenContractDocs.paths;
+  foreignAffectedOverlaps =
+    lib.intersectLists allOwnedFiles allForeignAffectedPaths;
+  deferredPurgeOverlaps = lib.intersectLists
+    allOwnedFiles
+    realmHostPlan.crossWaveOwnership.deferredPurgeDocs.paths;
+  expectedBundleDependencies =
+    lib.filter (component: component != "bundle-integration") componentNames;
+  componentPolicy = args:
+    import ../eval-cases/realm-host-component-policy.nix args;
+  allowedSchemaDiff = componentPolicy {
+    branch = "adr0045-w7-realm-schema";
+    pathsJson = builtins.toJSON [ "nixos-modules/options.nix" ];
+  };
+  deniedCrossComponentDiff = componentPolicy {
+    branch = "adr0045-w7-realm-schema";
+    pathsJson = builtins.toJSON [ "nixos-modules/index.nix" ];
+  };
+  blockedProviderRegistryDiff = componentPolicy {
+    branch = "adr0045-w7-provider-registry-composition";
+    pathsJson =
+      builtins.toJSON [ "nixos-modules/provider-registry-v2-json.nix" ];
+  };
+  blockedFixtureDiff = componentPolicy {
+    branch = "adr0045-w7-realm-devices";
+    pathsJson =
+      builtins.toJSON [ "tests/fixtures/runner-shape-swtpm.snap" ];
+  };
+  blockedAllocatorDocDiff = componentPolicy {
+    branch = "adr0045-w7-allocator-emission";
+    pathsJson =
+      builtins.toJSON [ "docs/reference/local-root-allocator.md" ];
+  };
+  blockedBundleIntegrationDiff = componentPolicy {
+    branch = "adr0045-w7-bundle-integration";
+    pathsJson = builtins.toJSON [ "flake.nix" ];
+  };
   forbiddenOwnedFiles = lib.filter
     (path:
       lib.any
@@ -1675,11 +1772,18 @@ in
       inherit duplicateOwnedFiles;
       currentNixInventoryComplete = plannedCurrentNixFiles == currentNixFiles;
       componentCount = builtins.length componentNames;
+      branchesUnique =
+        builtins.length componentBranches
+        == builtins.length (lib.unique componentBranches);
+      inherit unownedReservedPaths unreservedMissingOwnedFiles;
     };
     expected = {
       duplicateOwnedFiles = [ ];
       currentNixInventoryComplete = true;
       componentCount = 15;
+      branchesUnique = true;
+      unownedReservedPaths = [ ];
+      unreservedMissingOwnedFiles = [ ];
     };
   };
 
@@ -1688,16 +1792,23 @@ in
       orderCoversEveryComponent =
         lib.sort lib.lessThan realmHostPlan.componentOrder
         == lib.sort lib.lessThan componentNames;
-      inherit dependencyErrors;
+      inherit dependencyErrors externalDependencyErrors;
+      bundleDependenciesComplete =
+        lib.sort lib.lessThan
+          realmHostPlan.components.bundle-integration.dependsOn
+        == lib.sort lib.lessThan expectedBundleDependencies;
       promptsReady = lib.all
         (component:
-          realmHostPlan.components.${component}.prompt != ""
+          realmHostPlan.components.${component}.branch != ""
+          && realmHostPlan.components.${component}.prompt != ""
           && realmHostPlan.components.${component}.scope != [ ])
         componentNames;
     };
     expected = {
       orderCoversEveryComponent = true;
       dependencyErrors = [ ];
+      externalDependencyErrors = [ ];
+      bundleDependenciesComplete = true;
       promptsReady = true;
     };
   };
@@ -1713,6 +1824,20 @@ in
         realmHostPlan.frozenParentContracts.allocator.w7Owns;
       w5AllocatorRuntime =
         realmHostPlan.frozenParentContracts.allocator.w5Owns;
+      w7DeclarativeDocs =
+        realmHostPlan.crossWaveOwnership.w7DeclarativeDocs;
+      allocatorOwnsDeclarativeDocs = lib.all
+        (path:
+          builtins.elem path
+            realmHostPlan.components.allocator-emission.ownedFiles)
+        realmHostPlan.crossWaveOwnership.w7DeclarativeDocs;
+      inherit crossWaveOverlaps deferredPurgeOverlaps foreignAffectedOverlaps;
+      foreignOwners = {
+        w5 = realmHostPlan.crossWaveOwnership.w5Owner;
+        w6 = realmHostPlan.crossWaveOwnership.w6RuntimeDocs.owner;
+        purge = realmHostPlan.crossWaveOwnership.deferredPurgeDocs.owner;
+        frozen = realmHostPlan.crossWaveOwnership.frozenContractDocs.owner;
+      };
       inherit forbiddenOwnedFiles;
     };
     expected = {
@@ -1733,6 +1858,20 @@ in
         "pidfd supervision and adoption"
         "lease allocation, reconciliation, revocation, and execution"
       ];
+      w7DeclarativeDocs = [
+        "docs/reference/local-root-allocator.md"
+        "docs/reference/realm-identity-lifecycle.md"
+      ];
+      allocatorOwnsDeclarativeDocs = true;
+      crossWaveOverlaps = [ ];
+      deferredPurgeOverlaps = [ ];
+      foreignAffectedOverlaps = [ ];
+      foreignOwners = {
+        w5 = "w5";
+        w6 = "w6";
+        purge = "w10";
+        frozen = "shared-root";
+      };
       forbiddenOwnedFiles = [ ];
     };
   };
@@ -1747,6 +1886,18 @@ in
           builtins.elem path
             realmHostPlan.components.provider-registry-composition.ownedFiles)
         realmHostPlan.providerRegistryExtensionSeams.approvedProtectedFiles;
+      integrationOwner =
+        realmHostPlan.providerRegistryExtensionSeams.integrationOwner;
+      flakeOwnedByIntegration =
+        builtins.elem "flake.nix"
+          realmHostPlan.components.bundle-integration.ownedFiles
+        && !(builtins.elem "flake.nix"
+          realmHostPlan.components.provider-registry-composition.ownedFiles);
+      sharedRootConsumerDependency =
+        realmHostPlan.providerRegistryExtensionSeams.sharedRootConsumerDependency;
+      implementationBlocked =
+        realmHostPlan.externalDependencies.${realmHostPlan.providerRegistryExtensionSeams.sharedRootConsumerDependency}.status
+        == "blocked";
       inherit providerFragmentOwnershipValid;
       preservedAxes =
         realmHostPlan.frozenParentContracts.providerRegistry.preservedAxes;
@@ -1756,16 +1907,146 @@ in
       approvedProtectedFiles = [
         "docs/reference/schemas/v2/provider-registry-v2.json"
         "docs/reference/schemas/v2/provider-registry-v2.md"
-        "flake.nix"
         "nixos-modules/provider-registry-v2-json.nix"
         "packages/d2b-contracts/src/provider_registry_v2.rs"
       ];
       ownerHasEveryProtectedFile = true;
+      integrationOwner = "bundle-integration";
+      flakeOwnedByIntegration = true;
+      sharedRootConsumerDependency =
+        "shared-root-provider-registry-open-consumer-seam";
+      implementationBlocked = true;
       providerFragmentOwnershipValid = true;
       preservedAxes = [
         "local-observability"
         "local-runtime"
       ];
+    };
+  };
+
+  "realms/realm-host-prep-affected-inventory-has-exact-owners" = {
+    expr = {
+      affectedInventoryComplete =
+        lib.sort lib.lessThan affectedInventoryPaths
+        == lib.sort lib.lessThan ownedAffectedInventoryPaths;
+      affectedReservedInventoryComplete =
+        lib.sort lib.lessThan affectedInventoryReservedPaths
+        == lib.sort lib.lessThan reservedAffectedInventoryPaths;
+      inventoryPathsUnique =
+        builtins.length affectedInventoryPaths
+        == builtins.length (lib.unique affectedInventoryPaths);
+      fixturesInventoried =
+        lib.any
+          (row: row.paths != [ ])
+          realmHostPlan.affectedInventory.fixtures;
+      examplesInventoried =
+        lib.any
+          (row: row.paths != [ ])
+          realmHostPlan.affectedInventory.examples;
+      docsInventoried =
+        lib.any
+          (row: row.paths != [ ])
+          realmHostPlan.affectedInventory.docs;
+      testsInventoried =
+        lib.any
+          (row: row.paths != [ ])
+          realmHostPlan.affectedInventory.tests;
+    };
+    expected = {
+      affectedInventoryComplete = true;
+      affectedReservedInventoryComplete = true;
+      inventoryPathsUnique = true;
+      fixturesInventoried = true;
+      examplesInventoried = true;
+      docsInventoried = true;
+      testsInventoried = true;
+    };
+  };
+
+  "realms/realm-host-component-diff-policy-fails-closed" = {
+    expr = {
+      allowedSchema = {
+        inherit (allowedSchemaDiff) component valid violations;
+      };
+      deniedCrossComponent = {
+        inherit (deniedCrossComponentDiff) component valid violations;
+      };
+      blockedProviderRegistry = {
+        inherit (blockedProviderRegistryDiff)
+          blockedExternalDependencies
+          component
+          valid
+          violations
+          ;
+      };
+      blockedFixture = {
+        inherit (blockedFixtureDiff)
+          blockedExternalDependencies
+          component
+          valid
+          violations
+          ;
+      };
+      blockedAllocatorDoc = {
+        inherit (blockedAllocatorDocDiff)
+          blockedExternalDependencies
+          component
+          valid
+          violations
+          ;
+      };
+      blockedBundleIntegration = {
+        inherit (blockedBundleIntegrationDiff)
+          blockedExternalDependencies
+          component
+          valid
+          violations
+          ;
+      };
+    };
+    expected = {
+      allowedSchema = {
+        component = "realm-schema";
+        valid = true;
+        violations = [ ];
+      };
+      deniedCrossComponent = {
+        component = "realm-schema";
+        valid = false;
+        violations = [ "nixos-modules/index.nix" ];
+      };
+      blockedProviderRegistry = {
+        component = "provider-registry-composition";
+        valid = false;
+        violations = [ ];
+        blockedExternalDependencies = [
+          "shared-root-provider-registry-open-consumer-seam"
+        ];
+      };
+      blockedFixture = {
+        component = "realm-devices";
+        valid = false;
+        violations = [ ];
+        blockedExternalDependencies = [
+          "shared-root-w7-fixture-path-ownership"
+        ];
+      };
+      blockedAllocatorDoc = {
+        component = "allocator-emission";
+        valid = false;
+        violations = [ ];
+        blockedExternalDependencies = [
+          "w5-runtime-document-split"
+        ];
+      };
+      blockedBundleIntegration = {
+        component = "bundle-integration";
+        valid = false;
+        violations = [ ];
+        blockedExternalDependencies = [
+          "shared-root-provider-registry-open-consumer-seam"
+        ];
+      };
     };
   };
 }

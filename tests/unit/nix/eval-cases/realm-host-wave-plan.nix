@@ -1,8 +1,11 @@
 let
   components = {
     "realm-schema" = {
+      branch = "adr0045-w7-realm-schema";
       dependsOn = [ ];
+      externalDependsOn = [ ];
       ownedFiles = [
+        "docs/how-to/configure-realms.md"
         "docs/reference/realm-options.md"
         "nixos-modules/options-daemon.nix"
         "nixos-modules/options-envs.nix"
@@ -19,6 +22,11 @@ let
         "tests/unit/nix/cases/assertions.nix"
         "tests/unit/nix/cases/realms.nix"
         "tests/unit/nix/cases/requested-vm-config.nix"
+        "tests/unit/nix/eval-cases/assertions.nix"
+      ];
+      reservedPaths = [
+        "docs/how-to/configure-realms.md"
+        "nixos-modules/options-realms-providers.nix"
       ];
       deletes = [
         "nixos-modules/options-envs.nix"
@@ -40,8 +48,11 @@ let
     };
 
     "normalized-index" = {
+      branch = "adr0045-w7-normalized-index";
       dependsOn = [ "realm-schema" ];
+      externalDependsOn = [ ];
       ownedFiles = [
+        "docs/reference/naming-conventions.md"
         "nixos-modules/assertions.nix"
         "nixos-modules/index-realms.nix"
         "nixos-modules/index-resources.nix"
@@ -52,6 +63,11 @@ let
         "tests/unit/nix/cases/index.nix"
         "tests/unit/nix/cases/realm-workloads.nix"
         "tests/unit/nix/cases/v2-identity.nix"
+      ];
+      reservedPaths = [
+        "nixos-modules/index-realms.nix"
+        "nixos-modules/index-resources.nix"
+        "nixos-modules/index-workloads.nix"
       ];
       deletes = [ ];
       scope = [
@@ -69,13 +85,22 @@ let
     };
 
     "realm-principals" = {
+      branch = "adr0045-w7-realm-principals";
       dependsOn = [ "normalized-index" ];
+      externalDependsOn = [ ];
       ownedFiles = [
+        "docs/explanation/realm-controller-boundaries.md"
+        "docs/reference/realm-principals.md"
         "nixos-modules/host-polkit.nix"
         "nixos-modules/host-users.nix"
         "nixos-modules/realm-access.nix"
         "nixos-modules/realm-users.nix"
         "tests/unit/nix/cases/principal-uid-collision.nix"
+      ];
+      reservedPaths = [
+        "docs/reference/realm-principals.md"
+        "nixos-modules/realm-access.nix"
+        "nixos-modules/realm-users.nix"
       ];
       deletes = [
         "nixos-modules/host-polkit.nix"
@@ -95,10 +120,12 @@ let
     };
 
     "local-root-endpoints" = {
+      branch = "adr0045-w7-local-root-endpoints";
       dependsOn = [
         "normalized-index"
         "realm-principals"
       ];
+      externalDependsOn = [ ];
       ownedFiles = [
         "nixos-modules/host-broker.nix"
         "nixos-modules/host-daemon.nix"
@@ -114,6 +141,7 @@ let
         "tests/unit/nix/cases/daemon-default-compat.nix"
         "tests/unit/nix/cases/restart-policy.nix"
       ];
+      reservedPaths = [ ];
       deletes = [
         "nixos-modules/host-otel-relay-acl.nix"
         "nixos-modules/unsafe-local-helper.nix"
@@ -133,10 +161,12 @@ let
     };
 
     "allocator-emission" = {
+      branch = "adr0045-w7-allocator-emission";
       dependsOn = [
         "normalized-index"
         "realm-principals"
       ];
+      externalDependsOn = [ ];
       ownedFiles = [
         "docs/how-to/inspect-host-realm-isolation.md"
         "docs/reference/local-root-allocator.md"
@@ -152,6 +182,13 @@ let
         "tests/unit/nix/cases/autostart-wiring.nix"
         "tests/unit/nix/cases/realm-allocator-emission.nix"
       ];
+      reservedPaths = [
+        "nixos-modules/realm-allocator-rows.nix"
+        "nixos-modules/realm-endpoint-rows.nix"
+        "nixos-modules/realm-process-rows.nix"
+        "nixos-modules/realm-resource-rows.nix"
+        "tests/unit/nix/cases/realm-allocator-emission.nix"
+      ];
       deletes = [ ];
       scope = [
         "Emit generated child listener rows, lease requests, process launch records, ordering records, cgroup records, namespace records, and ownership rows."
@@ -163,17 +200,27 @@ let
         records in exactly the owned files. Emit home/dev/work public+broker
         listener rows, typed lease requests, separate controller/broker launch
         records, namespace/cgroup/ownership records, and deterministic ordering.
+        Own the declarative local-root allocator and realm identity lifecycle
+        references; W5 owns distinct runtime/service references.
         Never implement allocation, bind, spawn, pidfd, adoption, supervision,
         reconciliation, or lease execution; those are W5 runtime ownership.
       '';
     };
 
     "realm-network" = {
+      branch = "adr0045-w7-realm-network";
       dependsOn = [
         "normalized-index"
         "realm-schema"
       ];
+      externalDependsOn = [ ];
       ownedFiles = [
+        "docs/how-to/host-prepare.d/network.md"
+        "docs/how-to/route-conflicts.md"
+        "docs/reference/realm-network.md"
+        "examples/multi-env/README.md"
+        "examples/multi-env/configuration.nix"
+        "examples/multi-env/flake.nix"
         "nixos-modules/gateway-vm.nix"
         "nixos-modules/net-mdns.nix"
         "nixos-modules/net.nix"
@@ -185,6 +232,11 @@ let
         "tests/unit/nix/cases/ifname-nix-rust-parity.nix"
         "tests/unit/nix/cases/multi-env-daemon-backed.nix"
         "tests/unit/nix/cases/net-vm-network.nix"
+      ];
+      reservedPaths = [
+        "docs/reference/realm-network.md"
+        "nixos-modules/provider-registry-v2-extensions/network.nix"
+        "nixos-modules/realm-network-rows.nix"
       ];
       deletes = [
         "nixos-modules/gateway-vm.nix"
@@ -204,12 +256,20 @@ let
     };
 
     "realm-storage" = {
+      branch = "adr0045-w7-realm-storage";
       dependsOn = [
         "normalized-index"
         "realm-schema"
       ];
+      externalDependsOn = [ ];
       ownedFiles = [
+        "docs/reference/key-lifecycle.md"
+        "docs/reference/per-vm-state-ownership.md"
+        "docs/reference/ssh-host-key-preflight.md"
         "docs/reference/state-storage-sync-audit-v2.md"
+        "docs/reference/store-lifecycle.md"
+        "docs/reference/store-sync.md"
+        "docs/reference/store-virtiofs.md"
         "nixos-modules/components/audit.nix"
         "nixos-modules/host-activation.nix"
         "nixos-modules/host-keys.nix"
@@ -224,6 +284,10 @@ let
         "tests/unit/nix/cases/store-overlay-emit.nix"
         "tests/unit/nix/cases/umask-roundtrip.nix"
         "tests/unit/nix/cases/volume-mounts.nix"
+      ];
+      reservedPaths = [
+        "nixos-modules/provider-registry-v2-extensions/storage.nix"
+        "nixos-modules/realm-storage-rows.nix"
       ];
       deletes = [ ];
       scope = [
@@ -241,12 +305,23 @@ let
     };
 
     "realm-devices" = {
+      branch = "adr0045-w7-realm-devices";
       dependsOn = [
         "normalized-index"
         "realm-schema"
       ];
+      externalDependsOn = [ ];
       ownedFiles = [
+        "docs/how-to/migrate-usbip-yubikey-to-security-key.md"
+        "docs/how-to/troubleshoot-usbip.md"
+        "docs/how-to/use-usb-security-key.md"
+        "docs/reference/components-graphics.md"
+        "docs/reference/components-tpm.md"
+        "docs/reference/components-usb-security-key.md"
+        "docs/reference/components-usbip.md"
+        "docs/reference/components-video.md"
         "examples/graphics-workstation/configuration.nix"
+        "examples/graphics-workstation/README.md"
         "nixos-modules/components/graphics.nix"
         "nixos-modules/components/security-key-guest.nix"
         "nixos-modules/components/tpm.nix"
@@ -258,8 +333,18 @@ let
         "tests/unit/nix/cases/usb-security-key.nix"
         "tests/unit/nix/cases/usbip-gating.nix"
         "tests/unit/nix/cases/video-contract.nix"
+        "tests/fixtures/runner-shape-swtpm.snap"
+        "tests/golden/runner-shape/gpu-argv-minimal.txt"
+        "tests/golden/runner-shape/swtpm-argv-minimal.txt"
+        "tests/golden/runner-shape/usbip-argv-minimal.txt"
+        "tests/golden/runner-shape/video-argv-minimal.txt"
+        "tests/golden/runner-shape/virtgpu-ioctl-values.txt"
         "tests/unit/smoke/smoke-eval-graphics.nix"
         "tests/unit/smoke/smoke-eval-tpm.nix"
+      ];
+      reservedPaths = [
+        "nixos-modules/provider-registry-v2-extensions/device.nix"
+        "nixos-modules/realm-device-rows.nix"
       ];
       deletes = [ ];
       scope = [
@@ -277,13 +362,23 @@ let
     };
 
     "realm-audio" = {
+      branch = "adr0045-w7-realm-audio";
       dependsOn = [
         "normalized-index"
         "realm-schema"
       ];
+      externalDependsOn = [ ];
       ownedFiles = [
+        "docs/how-to/use-console-and-audio.md"
+        "docs/reference/components-audio.md"
         "nixos-modules/components/audio/guest.nix"
         "nixos-modules/components/audio/host.nix"
+        "nixos-modules/provider-registry-v2-extensions/audio.nix"
+        "nixos-modules/realm-audio-rows.nix"
+        "tests/golden/runner-shape/audio-argv-minimal.txt"
+        "tests/unit/nix/cases/realm-audio-resources.nix"
+      ];
+      reservedPaths = [
         "nixos-modules/provider-registry-v2-extensions/audio.nix"
         "nixos-modules/realm-audio-rows.nix"
         "tests/unit/nix/cases/realm-audio-resources.nix"
@@ -304,12 +399,17 @@ let
     };
 
     "realm-observability" = {
+      branch = "adr0045-w7-realm-observability";
       dependsOn = [
         "normalized-index"
         "realm-schema"
       ];
+      externalDependsOn = [ ];
       ownedFiles = [
+        "docs/how-to/enable-observability.md"
+        "docs/reference/components-observability.md"
         "examples/with-observability/configuration.nix"
+        "examples/with-observability/README.md"
         "nixos-modules/components/observability/default.nix"
         "nixos-modules/components/observability/guest.nix"
         "nixos-modules/components/observability/host.nix"
@@ -317,8 +417,13 @@ let
         "nixos-modules/observability-host-secrets.nix"
         "nixos-modules/observability-vm.nix"
         "nixos-modules/realm-observability-rows.nix"
+        "tests/golden/runner-shape/otel-host-bridge-argv-minimal.txt"
         "tests/unit/nix/cases/examples-with-observability.nix"
         "tests/unit/nix/cases/observability.nix"
+        "tests/unit/nix/eval-cases/observability.nix"
+      ];
+      reservedPaths = [
+        "nixos-modules/realm-observability-rows.nix"
       ];
       deletes = [
         "nixos-modules/observability-vm.nix"
@@ -338,8 +443,16 @@ let
     };
 
     "platform-provider-mappings" = {
+      branch = "adr0045-w7-platform-provider-mappings";
       dependsOn = [ "normalized-index" ];
+      externalDependsOn = [ ];
       ownedFiles = [
+        "nixos-modules/provider-registry-v2-extensions/display.nix"
+        "nixos-modules/provider-registry-v2-extensions/substrate.nix"
+        "nixos-modules/provider-registry-v2-extensions/transport.nix"
+        "tests/unit/nix/cases/platform-provider-mappings.nix"
+      ];
+      reservedPaths = [
         "nixos-modules/provider-registry-v2-extensions/display.nix"
         "nixos-modules/provider-registry-v2-extensions/substrate.nix"
         "nixos-modules/provider-registry-v2-extensions/transport.nix"
@@ -361,6 +474,7 @@ let
     };
 
     "workload-processes" = {
+      branch = "adr0045-w7-workload-processes";
       dependsOn = [
         "allocator-emission"
         "normalized-index"
@@ -370,7 +484,14 @@ let
         "realm-observability"
         "realm-storage"
       ];
+      externalDependsOn = [ ];
       ownedFiles = [
+        "docs/how-to/edit-vm-config-from-inside.md"
+        "docs/how-to/qemu-media.md"
+        "docs/reference/components-home-manager.md"
+        "docs/reference/qemu-media.md"
+        "docs/reference/runner-shape-audit.md"
+        "docs/explanation/vhost-user-video-status.md"
         "examples/qemu-media-dark-live.nix"
         "nixos-modules/base.nix"
         "nixos-modules/closures-json.nix"
@@ -397,9 +518,32 @@ let
         "tests/unit/nix/cases/guest-shell-policy.nix"
         "tests/unit/nix/cases/readiness-waves.nix"
         "tests/unit/nix/cases/vm-eval-overlays.nix"
+        "tests/unit/nix/eval-cases/guest-control-auth-eval.nix"
+        "tests/unit/nix/eval-cases/guest-control-vsock-eval.nix"
+        "tests/unit/nix/eval-cases/guest-exec-policy-eval.nix"
+        "tests/unit/nix/eval-cases/guest-fixtures/clean-guest.nix"
+        "tests/unit/nix/eval-cases/guest-fixtures/evil-microvm.nix"
+        "tests/unit/nix/eval-cases/guest-fixtures/imports-microvm.nix"
+        "tests/unit/nix/eval-cases/guest-fixtures/reads-standard-option.nix"
+        "tests/unit/nix/eval-cases/guest-fixtures/sets-d2b.nix"
+        "tests/unit/nix/eval-cases/guest-fixtures/sets-microvm.nix"
+        "tests/unit/nix/eval-cases/guest-fixtures/spoof-file.nix"
+        "tests/unit/nix/eval-cases/guest-fixtures/tofile-microvm.nix"
+        "tests/unit/nix/eval-cases/guest-shell-policy-eval.nix"
+        "tests/unit/nix/eval-cases/processes-dag-order.nix"
+        "tests/fixtures/runner-shape-cloud-hypervisor.snap"
+        "tests/fixtures/runner-shape-virtiofsd.snap"
+        "tests/golden/runner-shape/cloud-hypervisor-argv-minimal.txt"
+        "tests/golden/runner-shape/examples-minimal-declaredRunner.txt"
+        "tests/golden/runner-shape/virtiofsd-argv-minimal.txt"
+        "tests/golden/runner-shape/vsock-relay-argv-minimal.txt"
         "tests/unit/smoke/guest-static-consumption-eval.nix"
         "tests/unit/smoke/smoke-eval-extraspecialargs.nix"
         "tests/unit/smoke/smoke-eval-home-manager.nix"
+      ];
+      reservedPaths = [
+        "nixos-modules/role-process-rows.nix"
+        "nixos-modules/workload-process-rows.nix"
       ];
       deletes = [
         "nixos-modules/vm-options.nix"
@@ -420,12 +564,19 @@ let
     };
 
     "desktop-metadata" = {
+      branch = "adr0045-w7-desktop-metadata";
       dependsOn = [
         "normalized-index"
         "realm-schema"
       ];
+      externalDependsOn = [ ];
       ownedFiles = [
         "docs/how-to/configure-desktop-terminal-integration.md"
+        "docs/how-to/migrate-to-wayland-proxy.md"
+        "docs/how-to/niri-vm-borders.md"
+        "docs/reference/desktop-wrapper.md"
+        "docs/reference/ui-colors.md"
+        "docs/reference/wayland-proxy-warnings.md"
         "nixos-modules/clipboard.nix"
         "nixos-modules/desktop-metadata-json.nix"
         "nixos-modules/manifest.nix"
@@ -437,6 +588,9 @@ let
         "nixos-modules/unsafe-local-workloads-json.nix"
         "tests/unit/nix/cases/clipboard.nix"
         "tests/unit/nix/cases/niri-vm-borders.nix"
+      ];
+      reservedPaths = [
+        "nixos-modules/desktop-metadata-json.nix"
       ];
       deletes = [
         "nixos-modules/realm-workloads-launcher-json.nix"
@@ -456,6 +610,7 @@ let
     };
 
     "provider-registry-composition" = {
+      branch = "adr0045-w7-provider-registry-composition";
       dependsOn = [
         "normalized-index"
         "platform-provider-mappings"
@@ -464,12 +619,17 @@ let
         "realm-network"
         "realm-storage"
       ];
+      externalDependsOn = [
+        "shared-root-provider-registry-open-consumer-seam"
+      ];
       ownedFiles = [
         "docs/reference/schemas/v2/provider-registry-v2.json"
         "docs/reference/schemas/v2/provider-registry-v2.md"
-        "flake.nix"
         "nixos-modules/provider-registry-v2-json.nix"
         "packages/d2b-contracts/src/provider_registry_v2.rs"
+        "tests/unit/nix/cases/provider-registry-v2.nix"
+      ];
+      reservedPaths = [
         "tests/unit/nix/cases/provider-registry-v2.nix"
       ];
       deletes = [ ];
@@ -479,40 +639,86 @@ let
         "Use only the shared-root-approved protected emitter, binding, schema, reference, and flake seams."
       ];
       prompt = ''
-        Compose the existing provider-registry-v2 family in exactly the owned
-        files after all fragment owners land. Extend its closed binding enum and
-        generated schema/reference for transport, substrate, display, network,
-        storage, device, and audio. Preserve local-runtime and
-        local-observability mappings and registry generation semantics. Do not
-        create a second registry or edit other contracts, Cargo.lock, or tooling.
+        BLOCKED until the shared-root provider-registry open-consumer seam lands
+        and W7 rebases. After unblock, compose the existing provider-registry-v2
+        family in exactly the owned files after all fragment owners land.
+        Extend bindings for transport, substrate, display, network, storage,
+        device, and audio while preserving local-runtime/local-observability.
+        Never edit W5 d2bd consumers, create a second registry, or edit other
+        contracts, Cargo.lock, or tooling.
       '';
     };
 
     "bundle-integration" = {
+      branch = "adr0045-w7-bundle-integration";
       dependsOn = [
+        "allocator-emission"
         "desktop-metadata"
         "local-root-endpoints"
+        "normalized-index"
+        "platform-provider-mappings"
         "provider-registry-composition"
+        "realm-audio"
+        "realm-devices"
+        "realm-network"
+        "realm-observability"
         "realm-principals"
+        "realm-schema"
+        "realm-storage"
         "workload-processes"
       ];
+      externalDependsOn = [ ];
       ownedFiles = [
         "CHANGELOG.md"
+        "README.md"
         "delivery/manifests/w7.json"
+        "docs/explanation/design.md"
+        "docs/reference/filesystem-endpoint-layout.md"
+        "docs/reference/manifest-bundle.md"
+        "docs/reference/manifest-schema.json"
+        "docs/reference/manifest-schema.md"
+        "examples/README.md"
         "examples/minimal/configuration.nix"
-        "examples/multi-env/configuration.nix"
+        "examples/minimal/README.md"
         "examples/with-entra-id/configuration.nix"
+        "examples/with-entra-id/flake.nix"
+        "examples/with-entra-id/README.md"
         "examples/with-entra-id/work-entra.nix"
+        "flake.nix"
         "nixos-modules/bundle-artifacts.nix"
         "nixos-modules/bundle.nix"
         "nixos-modules/default.nix"
         "nixos-modules/host-json.nix"
         "nixos-modules/privileges-json.nix"
         "templates/default/configuration.nix"
+        "templates/default/flake.nix"
+        "templates/default/README.md"
+        "tests/fixtures/deny-unknown/bundle-invalid.json"
+        "tests/fixtures/deny-unknown/bundle-valid.json"
+        "tests/fixtures/deny-unknown/host-invalid.json"
+        "tests/fixtures/deny-unknown/host-valid.json"
+        "tests/golden/manifest_v04/baseline-vms.json"
+        "tests/golden/runner-shape/parity-drift.json"
+        "tests/golden/vms.json-91d69b0"
+        "tests/golden/vms.json-p2-v3"
+        "tests/golden/vms.json-signoz-v4"
+        "tests/golden/vms.json-signoz-v6"
+        "tests/golden/vms.json-signoz-v7"
         "tests/unit/nix/cases/bundle-artifacts.nix"
+        "tests/unit/nix/eval-cases/realm-host-component-policy.nix"
         "tests/unit/nix/eval-cases/realm-host-wave-plan.nix"
+        "tests/unit/nix/eval-cases/shared.nix"
+        "tests/unit/nix/pinned/aarch64-linux.txt"
+        "tests/unit/nix/pinned/common.txt"
+        "tests/unit/nix/pinned/x86_64-linux.txt"
+        "tests/unit/nix/tools/realm-host-component-diff.sh"
         "tests/unit/smoke/smoke-eval-aarch64.nix"
         "tests/unit/smoke/smoke-eval.nix"
+      ];
+      reservedPaths = [
+        "docs/reference/filesystem-endpoint-layout.md"
+        "tests/unit/nix/eval-cases/realm-host-component-policy.nix"
+        "tests/unit/nix/tools/realm-host-component-diff.sh"
       ];
       deletes = [ ];
       scope = [
@@ -548,6 +754,28 @@ let
     "provider-registry-composition"
     "bundle-integration"
   ];
+
+  hasPrefix = prefix: value:
+    builtins.stringLength value >= builtins.stringLength prefix
+    && builtins.substring 0 (builtins.stringLength prefix) value == prefix;
+  inventoryFor = exactPaths: prefixes:
+    builtins.filter
+      (row: row.paths != [ ] || row.reservedPaths != [ ])
+      (builtins.map
+        (owner: {
+          inherit owner;
+          paths = builtins.filter
+            (path:
+              builtins.elem path exactPaths
+              || builtins.any (prefix: hasPrefix prefix path) prefixes)
+            components.${owner}.ownedFiles;
+          reservedPaths = builtins.filter
+            (path:
+              builtins.elem path exactPaths
+              || builtins.any (prefix: hasPrefix prefix path) prefixes)
+            components.${owner}.reservedPaths;
+        })
+        componentOrder);
 in
 {
   schemaVersion = 1;
@@ -556,6 +784,181 @@ in
   branch = "adr0045-w7-realm-host";
   pullRequestBase = "adr0045-post-w4-contracts";
   inherit componentOrder components;
+
+  dispatch = {
+    trustedBranch = "adr0045-w7-realm-host";
+    gate =
+      "tests/unit/nix/tools/realm-host-component-diff.sh --candidate-root <component-worktree>";
+    commonPrompt = ''
+      Start from the current clean adr0045-w7-realm-host prep head, use the
+      component's exact branch and ownedFiles, and do not edit another
+      component's files. Commit before validation, then run the component diff
+      gate from the trusted prep worktree. A blocked external dependency is a
+      hard stop, not permission to edit shared-root or W5 files.
+    '';
+  };
+
+  affectedInventory = {
+    docs = inventoryFor [ "README.md" ] [
+      "docs/explanation/"
+      "docs/how-to/"
+      "docs/reference/"
+    ];
+    examples = inventoryFor [ ] [
+      "examples/"
+      "templates/"
+    ];
+    fixtures = inventoryFor [ ] [
+      "tests/fixtures/"
+      "tests/golden/"
+    ];
+    tests = inventoryFor [ ] [
+      "tests/unit/nix/"
+      "tests/unit/smoke/"
+    ];
+  };
+
+  externalDependencies = {
+    shared-root-provider-registry-open-consumer-seam = {
+      owner = "adr0045-post-w4-contracts";
+      status = "blocked";
+      requiredRebase = true;
+      contractFiles = [
+        "packages/d2b-contracts/src/provider_registry_v2.rs"
+      ];
+      foreignConsumerFiles = [
+        "packages/d2bd/src/lib.rs"
+        "packages/d2bd/src/provider_effects.rs"
+        "packages/d2bd/src/provider_registry.rs"
+      ];
+      acceptance = [
+        "ProviderBindingV2 exposes a non-exhaustive or equivalent forward-compatible consumer seam."
+        "W5 d2bd consumers use that seam or explicit unknown-axis handling without W7 edits."
+        "The W7 branch is rebased onto the accepted shared-root seam commit."
+      ];
+    };
+    shared-root-w7-fixture-path-ownership = {
+      owner = "adr0045-post-w4-contracts";
+      status = "blocked";
+      requiredRebase = true;
+      acceptance = [
+        "The trusted wave policy grants W7 exact fixture and golden ownership."
+        "W5 and frozen consumers retain code ownership; W7 changes only declared expected artifacts."
+      ];
+    };
+    w5-runtime-document-split = {
+      owner = "adr0045-w5-control";
+      status = "blocked";
+      requiredRebase = false;
+      acceptance = [
+        "W5 runtime/service docs use their distinct reserved paths."
+        "W7 retains declarative local-root allocator and realm identity lifecycle docs."
+      ];
+    };
+  };
+
+  pathExternalDependencies = [
+    {
+      dependency = "w5-runtime-document-split";
+      paths = [
+        "docs/reference/local-root-allocator.md"
+        "docs/reference/realm-identity-lifecycle.md"
+      ];
+    }
+    {
+      dependency = "shared-root-w7-fixture-path-ownership";
+      paths = builtins.concatLists (builtins.map
+        (row: row.paths)
+        (inventoryFor [ ] [ "tests/fixtures/" "tests/golden/" ]));
+    }
+  ];
+
+  crossWaveOwnership = {
+    source = "shared ownership inventory";
+    w5Owner = "w5";
+    w5FixturePath =
+      "packages/d2bd/tests/fixtures/control-service-slices.json";
+    w7DeclarativeDocs = [
+      "docs/reference/local-root-allocator.md"
+      "docs/reference/realm-identity-lifecycle.md"
+    ];
+    w5RuntimeDocs = [
+      "docs/how-to/configure-work-gateway.md"
+      "docs/reference/broker-w2-dispositions.md"
+      "docs/reference/cli-contract.md"
+      "docs/reference/daemon-api.md"
+      "docs/reference/daemon-audit-check.md"
+      "docs/reference/daemon-metrics.md"
+      "docs/reference/guest-control-exec-interactive-tty.md"
+      "docs/reference/guest-control-exec-io-chunked-stdio.md"
+      "docs/reference/guest-control-exec-io-credit-window.md"
+      "docs/reference/guest-control-persistent-shell.md"
+      "docs/reference/local-root-allocator-service.md"
+      "docs/reference/privileges.md"
+      "docs/reference/provider-contract-v2.md"
+      "docs/reference/provider-managed-sandboxes.md"
+      "docs/reference/realm-access-resolver.md"
+      "docs/reference/realm-controller-service.md"
+      "docs/reference/realm-core.md"
+      "docs/reference/realm-identity-service.md"
+      "docs/reference/realm-policy.md"
+      "docs/reference/realm-routing.md"
+      "docs/reference/remote-full-host-nodes.md"
+      "docs/reference/v2-provider-implementations.md"
+    ];
+    w5ConsumerFiles = [
+      "packages/d2bd/src/lib.rs"
+      "packages/d2bd/src/provider_effects.rs"
+      "packages/d2bd/src/provider_registry.rs"
+    ];
+    deferredPurgeDocs = {
+      owner = "w10";
+      paths = [
+        "docs/how-to/migrate-d2b-v0-to-v1.md"
+        "docs/how-to/migrate-d2b-v1-0-to-v1-1.md"
+        "docs/how-to/migrate-d2b-v1-2-to-v1-3.md"
+        "docs/how-to/migrate-d2b-v1-2-to-v2.md"
+        "docs/how-to/migrate-nixos-to-daemon.md"
+        "docs/how-to/migrating-from-microvm.md"
+      ];
+    };
+    w6RuntimeDocs = {
+      owner = "w6";
+      paths = [
+        "docs/how-to/configure-clipboard-picker.md"
+        "docs/how-to/configure-unsafe-local-launchers.md"
+        "docs/how-to/use-persistent-shells.md"
+        "docs/reference/components-shell.md"
+        "docs/reference/unsafe-local-provider.md"
+      ];
+    };
+    frozenContractDocs = {
+      owner = "shared-root";
+      paths = [
+        "docs/reference/schemas/v2/allocator.json"
+        "docs/reference/schemas/v2/allocator.md"
+        "docs/reference/schemas/v2/host.json"
+        "docs/reference/schemas/v2/processes.json"
+        "docs/reference/schemas/v2/realm-controllers.json"
+        "docs/reference/schemas/v2/realm-workloads-launcher-v2.json"
+        "docs/reference/schemas/v2/realm-workloads-launcher-v2.md"
+        "docs/reference/schemas/v2/unsafe-local-helper-wire.json"
+        "docs/reference/schemas/v2/unsafe-local-workloads.json"
+        "docs/reference/schemas/v2/unsafe-local-workloads.md"
+      ];
+    };
+    foreignW5Fixtures = [
+      "tests/fixtures/gen-w3-cli-goldens.py"
+      "tests/golden/cli-output/host-check-ifname-collision.json"
+      "tests/golden/cli-output/host-check-ifname-collision.txt"
+      "tests/golden/cli-output/host-check-ifname-too-long.json"
+      "tests/golden/cli-output/host-check-ifname-too-long.txt"
+      "tests/golden/cli-output/host-check-manifest-skew.json"
+      "tests/golden/cli-output/host-check-manifest-skew.txt"
+      "tests/golden/cli-output/host-check-runner-shape-drift.json"
+      "tests/golden/cli-output/host-check-runner-shape-drift.txt"
+    ];
+  };
 
   frozenParentContracts = {
     bundle = {
@@ -599,10 +1002,15 @@ in
     approvedProtectedFiles = [
       "docs/reference/schemas/v2/provider-registry-v2.json"
       "docs/reference/schemas/v2/provider-registry-v2.md"
-      "flake.nix"
       "nixos-modules/provider-registry-v2-json.nix"
       "packages/d2b-contracts/src/provider_registry_v2.rs"
     ];
+    integrationOwner = "bundle-integration";
+    integrationProtectedFiles = [
+      "flake.nix"
+    ];
+    sharedRootConsumerDependency =
+      "shared-root-provider-registry-open-consumer-seam";
     fragments = {
       audio = {
         owner = "realm-audio";
@@ -726,6 +1134,10 @@ in
     "packages/d2b-core/"
     "packages/d2b-realm-core/src/allocator.rs"
     "packages/d2b-realm-core/src/allocator_engine.rs"
+    "packages/d2bd/src/lib.rs"
+    "packages/d2bd/src/provider_effects.rs"
+    "packages/d2bd/src/provider_registry.rs"
+    "packages/d2bd/tests/fixtures/control-service-slices.json"
     "packages/xtask/"
   ];
 }
