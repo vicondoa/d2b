@@ -1,9 +1,11 @@
 use std::{
-    env, fs,
+    env,
+    ffi::{OsStr, OsString},
+    fs,
     os::{
         fd::{AsFd, AsRawFd, OwnedFd},
         unix::{
-            fs::{DirBuilderExt, MetadataExt},
+            ffi::OsStrExt,
             process::{CommandExt, ExitStatusExt},
         },
     },
@@ -19,7 +21,7 @@ use nix::{
     fcntl::{FcntlArg, fcntl},
     libc,
 };
-use rustix::fs::{FileType, Mode, OFlags};
+use rustix::fs::{AtFlags, FileType, Mode, OFlags};
 use signal_hook::{
     consts::{SIGHUP, SIGINT, SIGQUIT, SIGTERM},
     iterator::Signals,
@@ -57,11 +59,35 @@ impl From<std::io::Error> for HeavyGateError {
 }
 
 struct VerifiedGateDirectory {
+    parent: VerifiedParentDirectory,
     fd: OwnedFd,
+    name: OsString,
+    identity: FileIdentity,
+}
+
+struct VerifiedParentDirectory {
+    fd: OwnedFd,
+    path: PathBuf,
+    identity: FileIdentity,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FileIdentity {
+    device: libc::dev_t,
+    inode: libc::ino_t,
+}
+
+struct VerifiedSlot {
+    fd: OwnedFd,
+    name: &'static str,
+    identity: FileIdentity,
 }
 
 struct HeavyGatePermit {
+    directory: VerifiedGateDirectory,
     fd: OwnedFd,
+    name: &'static str,
+    identity: FileIdentity,
     slot: usize,
 }
 
@@ -69,6 +95,11 @@ impl HeavyGatePermit {
     fn duplicate_for_child(&self) -> Result<OwnedFd, HeavyGateError> {
         rustix::io::fcntl_dupfd_cloexec(&self.fd, 0)
             .map_err(|error| HeavyGateError::new(format!("cannot duplicate gate slot FD: {error}")))
+    }
+
+    fn verify_namespace(&self) -> Result<(), HeavyGateError> {
+        self.directory.verify_anchor()?;
+        verify_slot_anchor(&self.directory, self.name, &self.fd, self.identity)
     }
 }
 
@@ -128,16 +159,16 @@ fn run(args: &[String]) -> Result<ExitStatus, HeavyGateError> {
     {
         Ok(pidfd) => pidfd,
         Err(error) => {
-            terminate_group_and_reap(&mut child, leader_pid);
-            return Err(HeavyGateError::new(format!(
+            let failure = HeavyGateError::new(format!(
                 "cannot obtain race-free gate child authority: {error}"
-            )));
+            ));
+            return Err(terminate_after_failure(
+                &mut child, leader_pid, permit, failure,
+            ));
         }
     };
 
-    let result = wait_for_process_group(&mut child, leader_pid, &pidfd, &mut signals);
-    drop(permit);
-    result
+    wait_for_process_group(&mut child, leader_pid, &pidfd, &mut signals, permit)
 }
 
 fn gate_directory_from_environment() -> Result<PathBuf, HeavyGateError> {
@@ -190,9 +221,18 @@ fn acquire_permit(
         }
         attempted = true;
         for (slot, name) in SLOT_NAMES.iter().enumerate() {
-            let fd = open_verified_slot(&directory, name)?;
-            match try_ofd_lock(&fd)? {
-                LockAttempt::Acquired => return Ok(HeavyGatePermit { fd, slot }),
+            let verified_slot = open_verified_slot(&directory, name)?;
+            match try_ofd_lock(&verified_slot.fd)? {
+                LockAttempt::Acquired => {
+                    verified_slot.verify_anchor(&directory)?;
+                    return Ok(HeavyGatePermit {
+                        directory,
+                        fd: verified_slot.fd,
+                        name: verified_slot.name,
+                        identity: verified_slot.identity,
+                        slot,
+                    });
+                }
                 LockAttempt::Contended => {}
             }
         }
@@ -208,29 +248,27 @@ fn acquire_permit(
 }
 
 fn open_verified_gate_directory(path: &Path) -> Result<VerifiedGateDirectory, HeavyGateError> {
-    let created = match fs::DirBuilder::new().mode(GATE_DIRECTORY_MODE).create(path) {
-        Ok(()) => true,
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
-        Err(error) => {
-            return Err(HeavyGateError::new(format!(
-                "cannot create heavy gate directory {}: {error}",
-                path.display()
-            )));
-        }
-    };
-    let before = fs::symlink_metadata(path).map_err(|error| {
-        HeavyGateError::new(format!(
-            "cannot inspect heavy gate directory {}: {error}",
-            path.display()
-        ))
+    let parent_path = path.parent().ok_or_else(|| {
+        HeavyGateError::new("heavy gate path must have an absolute parent directory")
     })?;
-    if before.file_type().is_symlink() || !before.is_dir() {
-        return Err(HeavyGateError::new(
-            "heavy gate path is not a non-symlink directory",
-        ));
-    }
-    let fd = rustix::fs::open(
-        path,
+    let name = path.file_name().ok_or_else(|| {
+        HeavyGateError::new("heavy gate path must name a directory below its parent")
+    })?;
+    let parent = open_verified_parent_directory(parent_path)?;
+    let created =
+        match rustix::fs::mkdirat(&parent.fd, name, Mode::from_raw_mode(GATE_DIRECTORY_MODE)) {
+            Ok(()) => true,
+            Err(rustix::io::Errno::EXIST) => false,
+            Err(error) => {
+                return Err(HeavyGateError::new(format!(
+                    "cannot create heavy gate directory {}: {error}",
+                    path.display()
+                )));
+            }
+        };
+    let fd = rustix::fs::openat(
+        &parent.fd,
+        name,
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         Mode::empty(),
     )
@@ -249,26 +287,27 @@ fn open_verified_gate_directory(path: &Path) -> Result<VerifiedGateDirectory, He
         HeavyGateError::new(format!("cannot stat heavy gate directory: {error}"))
     })?;
     let uid = rustix::process::geteuid().as_raw();
-    if FileType::from_raw_mode(after.st_mode) != FileType::Directory
-        || before.dev() != after.st_dev
-        || before.ino() != after.st_ino
-        || before.uid() != uid
-        || after.st_uid != uid
-        || after.st_mode & 0o7777 != GATE_DIRECTORY_MODE
-        || before.mode() & 0o7777 != GATE_DIRECTORY_MODE
-    {
+    if !gate_directory_metadata_is_safe(&after, uid) {
         return Err(HeavyGateError::new(
-            "heavy gate directory has unsafe ownership, type, mode, or identity",
+            "heavy gate directory has unsafe ownership, type, or mode",
         ));
     }
     verify_cloexec(&fd, "heavy gate directory")?;
-    Ok(VerifiedGateDirectory { fd })
+    let directory = VerifiedGateDirectory {
+        parent,
+        fd,
+        name: name.to_os_string(),
+        identity: file_identity(&after),
+    };
+    directory.verify_anchor()?;
+    Ok(directory)
 }
 
 fn open_verified_slot(
     directory: &VerifiedGateDirectory,
-    name: &str,
-) -> Result<OwnedFd, HeavyGateError> {
+    name: &'static str,
+) -> Result<VerifiedSlot, HeavyGateError> {
+    directory.verify_anchor()?;
     let common = OFlags::RDWR | OFlags::CREATE | OFlags::CLOEXEC | OFlags::NOFOLLOW;
     let (fd, created) = match rustix::fs::openat(
         &directory.fd,
@@ -298,17 +337,186 @@ fn open_verified_slot(
     let stat = rustix::fs::fstat(&fd)
         .map_err(|error| HeavyGateError::new(format!("cannot stat gate slot {name}: {error}")))?;
     let uid = rustix::process::geteuid().as_raw();
-    if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile
-        || stat.st_uid != uid
-        || stat.st_nlink != 1
-        || stat.st_mode & 0o7777 != SLOT_MODE
-    {
+    if !slot_metadata_is_safe(&stat, uid) {
         return Err(HeavyGateError::new(format!(
             "heavy gate slot {name} has unsafe ownership, type, mode, or link count"
         )));
     }
     verify_cloexec(&fd, "heavy gate slot")?;
-    Ok(fd)
+    let slot = VerifiedSlot {
+        fd,
+        name,
+        identity: file_identity(&stat),
+    };
+    slot.verify_anchor(directory)?;
+    Ok(slot)
+}
+
+impl VerifiedParentDirectory {
+    fn verify_anchor(&self) -> Result<(), HeavyGateError> {
+        let pinned = rustix::fs::fstat(&self.fd).map_err(|error| {
+            HeavyGateError::new(format!("cannot restat heavy gate parent: {error}"))
+        })?;
+        let uid = rustix::process::geteuid().as_raw();
+        if !parent_directory_metadata_is_safe(&pinned, uid)
+            || file_identity(&pinned) != self.identity
+        {
+            return Err(HeavyGateError::new(
+                "heavy gate parent changed ownership, type, mode, or identity",
+            ));
+        }
+
+        let current = open_parent_directory_fd(&self.path)?;
+        let current_stat = rustix::fs::fstat(&current).map_err(|error| {
+            HeavyGateError::new(format!("cannot inspect heavy gate parent path: {error}"))
+        })?;
+        if !parent_directory_metadata_is_safe(&current_stat, uid)
+            || file_identity(&current_stat) != self.identity
+        {
+            return Err(HeavyGateError::new(
+                "heavy gate parent path was renamed or replaced",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl VerifiedGateDirectory {
+    fn verify_anchor(&self) -> Result<(), HeavyGateError> {
+        self.parent.verify_anchor()?;
+        let pinned = rustix::fs::fstat(&self.fd).map_err(|error| {
+            HeavyGateError::new(format!("cannot restat heavy gate directory: {error}"))
+        })?;
+        let uid = rustix::process::geteuid().as_raw();
+        if !gate_directory_metadata_is_safe(&pinned, uid) || file_identity(&pinned) != self.identity
+        {
+            return Err(HeavyGateError::new(
+                "heavy gate directory changed ownership, type, mode, or identity",
+            ));
+        }
+        let named = rustix::fs::statat(&self.parent.fd, &self.name, AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(|error| {
+                HeavyGateError::new(format!(
+                    "cannot verify pinned heavy gate directory name: {error}"
+                ))
+            })?;
+        if !gate_directory_metadata_is_safe(&named, uid) || file_identity(&named) != self.identity {
+            return Err(HeavyGateError::new(
+                "heavy gate directory name was renamed or replaced",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl VerifiedSlot {
+    fn verify_anchor(&self, directory: &VerifiedGateDirectory) -> Result<(), HeavyGateError> {
+        verify_slot_anchor(directory, self.name, &self.fd, self.identity)
+    }
+}
+
+fn open_verified_parent_directory(path: &Path) -> Result<VerifiedParentDirectory, HeavyGateError> {
+    if !path.is_absolute() {
+        return Err(HeavyGateError::new(
+            "heavy gate directory parent must be absolute",
+        ));
+    }
+    let fd = open_parent_directory_fd(path)?;
+    let stat = rustix::fs::fstat(&fd)
+        .map_err(|error| HeavyGateError::new(format!("cannot stat heavy gate parent: {error}")))?;
+    let uid = rustix::process::geteuid().as_raw();
+    if !parent_directory_metadata_is_safe(&stat, uid) {
+        return Err(HeavyGateError::new(
+            "heavy gate parent must be an invoking-UID-owned non-writable directory or a root-owned sticky world-writable directory",
+        ));
+    }
+    verify_cloexec(&fd, "heavy gate parent")?;
+    let parent = VerifiedParentDirectory {
+        fd,
+        path: path.to_path_buf(),
+        identity: file_identity(&stat),
+    };
+    parent.verify_anchor()?;
+    Ok(parent)
+}
+
+fn open_parent_directory_fd(path: &Path) -> Result<OwnedFd, HeavyGateError> {
+    rustix::fs::open(
+        path,
+        OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|error| {
+        HeavyGateError::new(format!(
+            "cannot open heavy gate parent {} without following symlinks: {error}",
+            path.display()
+        ))
+    })
+}
+
+fn parent_directory_metadata_is_safe(stat: &rustix::fs::Stat, uid: u32) -> bool {
+    parent_directory_values_are_safe(
+        FileType::from_raw_mode(stat.st_mode),
+        stat.st_uid,
+        stat.st_mode,
+        uid,
+    )
+}
+
+fn parent_directory_values_are_safe(file_type: FileType, owner: u32, mode: u32, uid: u32) -> bool {
+    if file_type != FileType::Directory {
+        return false;
+    }
+    let mode = mode & 0o7777;
+    let invoking_uid_owned = owner == uid && mode & 0o022 == 0;
+    let root_tmp_style = owner == 0 && mode & 0o1000 != 0 && mode & 0o002 != 0;
+    invoking_uid_owned || root_tmp_style
+}
+
+fn gate_directory_metadata_is_safe(stat: &rustix::fs::Stat, uid: u32) -> bool {
+    FileType::from_raw_mode(stat.st_mode) == FileType::Directory
+        && stat.st_uid == uid
+        && stat.st_mode & 0o7777 == GATE_DIRECTORY_MODE
+}
+
+fn slot_metadata_is_safe(stat: &rustix::fs::Stat, uid: u32) -> bool {
+    FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile
+        && stat.st_uid == uid
+        && stat.st_nlink == 1
+        && stat.st_mode & 0o7777 == SLOT_MODE
+}
+
+fn file_identity(stat: &rustix::fs::Stat) -> FileIdentity {
+    FileIdentity {
+        device: stat.st_dev,
+        inode: stat.st_ino,
+    }
+}
+
+fn verify_slot_anchor(
+    directory: &VerifiedGateDirectory,
+    name: &str,
+    fd: &OwnedFd,
+    identity: FileIdentity,
+) -> Result<(), HeavyGateError> {
+    directory.verify_anchor()?;
+    let uid = rustix::process::geteuid().as_raw();
+    let pinned = rustix::fs::fstat(fd)
+        .map_err(|error| HeavyGateError::new(format!("cannot restat gate slot {name}: {error}")))?;
+    let named =
+        rustix::fs::statat(&directory.fd, name, AtFlags::SYMLINK_NOFOLLOW).map_err(|error| {
+            HeavyGateError::new(format!("cannot verify pinned gate slot {name}: {error}"))
+        })?;
+    if !slot_metadata_is_safe(&pinned, uid)
+        || !slot_metadata_is_safe(&named, uid)
+        || file_identity(&pinned) != identity
+        || file_identity(&named) != identity
+    {
+        return Err(HeavyGateError::new(format!(
+            "heavy gate slot {name} was renamed, replaced, or made unsafe"
+        )));
+    }
+    Ok(())
 }
 
 fn verify_cloexec(fd: &OwnedFd, label: &str) -> Result<(), HeavyGateError> {
@@ -345,9 +553,47 @@ fn wait_for_process_group(
     leader_pid: rustix::process::Pid,
     pidfd: &OwnedFd,
     signals: &mut Signals,
+    permit: HeavyGatePermit,
+) -> Result<ExitStatus, HeavyGateError> {
+    wait_for_process_group_in(
+        child,
+        leader_pid,
+        pidfd,
+        signals,
+        Path::new("/proc"),
+        permit,
+    )
+}
+
+fn wait_for_process_group_in(
+    child: &mut Child,
+    leader_pid: rustix::process::Pid,
+    pidfd: &OwnedFd,
+    signals: &mut Signals,
+    proc_root: &Path,
+    permit: HeavyGatePermit,
+) -> Result<ExitStatus, HeavyGateError> {
+    let observed = observe_process_group(child, leader_pid, pidfd, signals, proc_root, &permit);
+    match observed {
+        Ok(status) => {
+            drop(permit);
+            Ok(status)
+        }
+        Err(failure) => Err(terminate_after_failure(child, leader_pid, permit, failure)),
+    }
+}
+
+fn observe_process_group(
+    child: &mut Child,
+    leader_pid: rustix::process::Pid,
+    pidfd: &OwnedFd,
+    signals: &mut Signals,
+    proc_root: &Path,
+    permit: &HeavyGatePermit,
 ) -> Result<ExitStatus, HeavyGateError> {
     loop {
-        forward_pending_signals(signals, leader_pid);
+        permit.verify_namespace()?;
+        forward_pending_signals(signals, leader_pid)?;
         let exited = rustix::process::waitid(
             rustix::process::WaitId::PidFd(pidfd.as_fd()),
             rustix::process::WaitidOptions::EXITED
@@ -362,21 +608,34 @@ fn wait_for_process_group(
         thread::sleep(CHILD_POLL_INTERVAL);
     }
 
-    while process_group_has_nonleader_members(leader_pid)? {
-        forward_pending_signals(signals, leader_pid);
+    while process_group_has_nonleader_members(leader_pid, proc_root)? {
+        permit.verify_namespace()?;
+        forward_pending_signals(signals, leader_pid)?;
         thread::sleep(CHILD_POLL_INTERVAL);
     }
+    permit.verify_namespace()?;
     child
         .wait()
         .map_err(|error| HeavyGateError::new(format!("cannot reap gate child: {error}")))
 }
 
-fn forward_pending_signals(signals: &mut Signals, process_group: rustix::process::Pid) {
+fn forward_pending_signals(
+    signals: &mut Signals,
+    process_group: rustix::process::Pid,
+) -> Result<(), HeavyGateError> {
     for signal in signals.pending() {
         if let Some(signal) = rustix_signal(signal) {
-            let _ = rustix::process::kill_process_group(process_group, signal);
+            match rustix::process::kill_process_group(process_group, signal) {
+                Ok(()) | Err(rustix::io::Errno::SRCH) => {}
+                Err(error) => {
+                    return Err(HeavyGateError::new(format!(
+                        "cannot forward signal to gate process group: {error}"
+                    )));
+                }
+            }
         }
     }
+    Ok(())
 }
 
 fn rustix_signal(signal: i32) -> Option<rustix::process::Signal> {
@@ -391,25 +650,23 @@ fn rustix_signal(signal: i32) -> Option<rustix::process::Signal> {
 
 fn process_group_has_nonleader_members(
     leader_pid: rustix::process::Pid,
+    proc_root: &Path,
 ) -> Result<bool, HeavyGateError> {
     let leader = leader_pid.as_raw_nonzero().get();
-    for entry in fs::read_dir("/proc").map_err(|error| {
+    for entry in fs::read_dir(proc_root).map_err(|error| {
         HeavyGateError::new(format!("cannot inspect child process group: {error}"))
     })? {
         let entry = entry.map_err(|error| {
             HeavyGateError::new(format!("cannot inspect child process group entry: {error}"))
         })?;
-        let Some(pid) = entry
-            .file_name()
-            .to_str()
-            .and_then(|name| name.parse::<i32>().ok())
-        else {
+        let file_name = entry.file_name();
+        let Some(pid) = parse_ascii_i32(file_name.as_os_str()) else {
             continue;
         };
         if pid == leader {
             continue;
         }
-        let stat = match fs::read_to_string(entry.path().join("stat")) {
+        let stat = match fs::read(entry.path().join("stat")) {
             Ok(stat) => stat,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => {
@@ -418,20 +675,37 @@ fn process_group_has_nonleader_members(
                 )));
             }
         };
-        if process_group_from_stat(&stat) == Some(leader) {
+        let process_group = process_group_from_stat(&stat)
+            .ok_or_else(|| HeavyGateError::new("cannot parse process-group member stat record"))?;
+        if process_group == leader {
             return Ok(true);
         }
     }
     Ok(false)
 }
 
-fn process_group_from_stat(stat: &str) -> Option<i32> {
-    let command_end = stat.rfind(')')?;
-    stat.get(command_end + 1..)?
-        .split_ascii_whitespace()
-        .nth(2)?
-        .parse()
-        .ok()
+fn process_group_from_stat(stat: &[u8]) -> Option<i32> {
+    let command_end = stat.iter().rposition(|byte| *byte == b')')?;
+    let process_group = stat
+        .get(command_end + 1..)?
+        .split(u8::is_ascii_whitespace)
+        .filter(|field| !field.is_empty())
+        .nth(2)?;
+    parse_ascii_i32_bytes(process_group)
+}
+
+fn parse_ascii_i32(value: &OsStr) -> Option<i32> {
+    parse_ascii_i32_bytes(value.as_bytes())
+}
+
+fn parse_ascii_i32_bytes(value: &[u8]) -> Option<i32> {
+    if value.is_empty() {
+        return None;
+    }
+    value.iter().try_fold(0_i32, |result, byte| {
+        let digit = byte.checked_sub(b'0').filter(|digit| *digit <= 9)?;
+        result.checked_mul(10)?.checked_add(i32::from(digit))
+    })
 }
 
 fn child_pid(child: &Child) -> Result<rustix::process::Pid, HeavyGateError> {
@@ -441,9 +715,75 @@ fn child_pid(child: &Child) -> Result<rustix::process::Pid, HeavyGateError> {
         .ok_or_else(|| HeavyGateError::new("gate child PID is invalid"))
 }
 
-fn terminate_group_and_reap(child: &mut Child, process_group: rustix::process::Pid) {
-    let _ = rustix::process::kill_process_group(process_group, rustix::process::Signal::Kill);
-    let _ = child.wait();
+fn terminate_after_failure(
+    child: &mut Child,
+    process_group: rustix::process::Pid,
+    permit: HeavyGatePermit,
+    failure: HeavyGateError,
+) -> HeavyGateError {
+    let cleanup = terminate_group_and_reap(child, process_group);
+    drop(permit);
+    match cleanup {
+        Ok(()) => failure,
+        Err(cleanup_error) => HeavyGateError::new(format!(
+            "{failure}; gate process-group cleanup also failed: {cleanup_error}"
+        )),
+    }
+}
+
+fn terminate_group_and_reap(
+    child: &mut Child,
+    process_group: rustix::process::Pid,
+) -> Result<(), HeavyGateError> {
+    let mut first_error = None;
+    match rustix::process::kill_process_group(process_group, rustix::process::Signal::Kill) {
+        Ok(()) | Err(rustix::io::Errno::SRCH) => {}
+        Err(error) => remember_cleanup_error(
+            &mut first_error,
+            format!("cannot terminate gate process group: {error}"),
+        ),
+    }
+    if let Err(error) = child.wait() {
+        remember_cleanup_error(
+            &mut first_error,
+            format!("cannot reap gate child after termination: {error}"),
+        );
+    }
+
+    loop {
+        match rustix::process::test_kill_process_group(process_group) {
+            Err(rustix::io::Errno::SRCH) => break,
+            Ok(()) | Err(rustix::io::Errno::PERM) => {
+                match rustix::process::kill_process_group(
+                    process_group,
+                    rustix::process::Signal::Kill,
+                ) {
+                    Ok(()) | Err(rustix::io::Errno::SRCH) => {}
+                    Err(error) => remember_cleanup_error(
+                        &mut first_error,
+                        format!("cannot finish terminating gate process group: {error}"),
+                    ),
+                }
+            }
+            Err(rustix::io::Errno::INTR) => {}
+            Err(error) => remember_cleanup_error(
+                &mut first_error,
+                format!("cannot observe terminated gate process group: {error}"),
+            ),
+        }
+        thread::sleep(CHILD_POLL_INTERVAL);
+    }
+
+    match first_error {
+        Some(error) => Err(HeavyGateError::new(error)),
+        None => Ok(()),
+    }
+}
+
+fn remember_cleanup_error(target: &mut Option<String>, error: String) {
+    if target.is_none() {
+        *target = Some(error);
+    }
 }
 
 fn exit_code(status: ExitStatus) -> ExitCode {
@@ -460,10 +800,13 @@ mod tests {
     use super::*;
     use std::{
         os::unix::fs::{PermissionsExt, symlink},
+        process::Stdio,
         sync::atomic::{AtomicU64, Ordering},
     };
 
     static NEXT_TEST: AtomicU64 = AtomicU64::new(1);
+    const GROUP_TEST_ROLE: &str = "D2B_HEAVY_GATE_UNIT_GROUP_ROLE";
+    const GROUP_TEST_DESCENDANT: &str = "D2B_HEAVY_GATE_UNIT_GROUP_DESCENDANT";
 
     struct Scratch(PathBuf);
 
@@ -480,6 +823,7 @@ mod tests {
                 NEXT_TEST.fetch_add(1, Ordering::Relaxed)
             ));
             fs::create_dir(&path).expect("scratch");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).expect("scratch mode");
             Self(path)
         }
     }
@@ -497,6 +841,42 @@ mod tests {
         assert_eq!(GATE_TIMEOUT, Duration::from_secs(30 * 60));
         assert_eq!(GATE_DIRECTORY_MODE, 0o700);
         assert_eq!(SLOT_MODE, 0o600);
+        assert!(parent_directory_values_are_safe(
+            FileType::Directory,
+            1000,
+            0o700,
+            1000
+        ));
+        assert!(parent_directory_values_are_safe(
+            FileType::Directory,
+            1000,
+            0o755,
+            1000
+        ));
+        assert!(parent_directory_values_are_safe(
+            FileType::Directory,
+            0,
+            0o1777,
+            1000
+        ));
+        assert!(!parent_directory_values_are_safe(
+            FileType::Directory,
+            1000,
+            0o770,
+            1000
+        ));
+        assert!(!parent_directory_values_are_safe(
+            FileType::Directory,
+            0,
+            0o0777,
+            1000
+        ));
+        assert!(!parent_directory_values_are_safe(
+            FileType::Directory,
+            0,
+            0o1770,
+            1000
+        ));
     }
 
     #[test]
@@ -600,14 +980,263 @@ mod tests {
     }
 
     #[test]
-    fn proc_stat_parser_handles_spaces_and_parentheses() {
+    fn unsafe_parent_modes_and_symlinks_fail_closed() {
+        let scratch = Scratch::new("unsafe-parent");
+        let unsafe_parent = scratch.0.join("unsafe");
+        fs::create_dir(&unsafe_parent).expect("unsafe parent");
+        fs::set_permissions(&unsafe_parent, fs::Permissions::from_mode(0o770))
+            .expect("unsafe parent mode");
+        assert!(
+            acquire_permit(
+                &unsafe_parent.join("gate"),
+                Duration::from_millis(20),
+                Duration::from_millis(5),
+                || None
+            )
+            .is_err()
+        );
+
+        let target = scratch.0.join("parent-target");
+        fs::create_dir(&target).expect("parent target");
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o700))
+            .expect("parent target mode");
+        let parent_link = scratch.0.join("parent-link");
+        symlink(&target, &parent_link).expect("parent symlink");
+        assert!(
+            acquire_permit(
+                &parent_link.join("gate"),
+                Duration::from_millis(20),
+                Duration::from_millis(5),
+                || None
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn pinned_parent_gate_and_slot_reject_namespace_replacement() {
+        let scratch = Scratch::new("namespace-replacement");
+
+        let parent = scratch.0.join("parent");
+        fs::create_dir(&parent).expect("parent");
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o700)).expect("parent mode");
+        let gate = parent.join("gate");
+        let pinned_parent = open_verified_gate_directory(&gate).expect("pinned parent");
+        let moved_parent = scratch.0.join("parent-moved");
+        fs::rename(&parent, &moved_parent).expect("rename parent");
+        fs::create_dir(&parent).expect("replacement parent");
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o700))
+            .expect("replacement parent mode");
+        assert!(
+            open_verified_slot(&pinned_parent, SLOT_NAMES[0]).is_err(),
+            "a renamed parent must not create a second lock namespace"
+        );
+
+        let gate_parent = scratch.0.join("gate-parent");
+        fs::create_dir(&gate_parent).expect("gate parent");
+        fs::set_permissions(&gate_parent, fs::Permissions::from_mode(0o700))
+            .expect("gate parent mode");
+        let gate = gate_parent.join("gate");
+        let pinned_gate = open_verified_gate_directory(&gate).expect("pinned gate");
+        fs::rename(&gate, gate_parent.join("gate-moved")).expect("rename gate");
+        fs::create_dir(&gate).expect("replacement gate");
+        fs::set_permissions(&gate, fs::Permissions::from_mode(0o700))
+            .expect("replacement gate mode");
+        assert!(
+            open_verified_slot(&pinned_gate, SLOT_NAMES[0]).is_err(),
+            "a renamed gate must not create a second lock namespace"
+        );
+
+        let slot_parent = scratch.0.join("slot-parent");
+        fs::create_dir(&slot_parent).expect("slot parent");
+        fs::set_permissions(&slot_parent, fs::Permissions::from_mode(0o700))
+            .expect("slot parent mode");
+        let slot_gate_path = slot_parent.join("gate");
+        let slot_gate =
+            open_verified_gate_directory(&slot_gate_path).expect("slot replacement gate");
+        let slot = open_verified_slot(&slot_gate, SLOT_NAMES[0]).expect("pinned slot");
+        let slot_path = slot_gate_path.join(SLOT_NAMES[0]);
+        fs::rename(&slot_path, slot_gate_path.join("slot-moved")).expect("rename slot");
+        fs::write(&slot_path, b"").expect("replacement slot");
+        fs::set_permissions(&slot_path, fs::Permissions::from_mode(SLOT_MODE))
+            .expect("replacement slot mode");
+        assert!(
+            slot.verify_anchor(&slot_gate).is_err(),
+            "a renamed slot must not create a second lock namespace"
+        );
+    }
+
+    #[test]
+    fn proc_stat_parser_handles_non_utf8_spaces_and_parentheses() {
         assert_eq!(
-            process_group_from_stat("123 (a command) S 1 77 77 0 -1"),
+            process_group_from_stat(b"123 (a command) S 1 77 77 0 -1"),
             Some(77)
         );
         assert_eq!(
-            process_group_from_stat("123 (a ) command) S 1 88 88 0 -1"),
+            process_group_from_stat(b"123 (a ) command) S 1 88 88 0 -1"),
             Some(88)
+        );
+        assert_eq!(
+            process_group_from_stat(b"123 (a \xff ) command) S 1 99 99 0 -1"),
+            Some(99)
+        );
+    }
+
+    #[test]
+    fn waitid_observation_error_terminates_and_reaps_group() {
+        let scratch = Scratch::new("waitid-error");
+        let (mut child, leader, _pidfd, descendant) =
+            spawn_supervision_group(&scratch, "leader-live");
+        let invalid_pidfd_path = scratch.0.join("not-a-pidfd");
+        fs::write(&invalid_pidfd_path, b"not a pidfd").expect("invalid pidfd fixture");
+        let invalid_pidfd = rustix::fs::open(
+            &invalid_pidfd_path,
+            OFlags::RDONLY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .expect("invalid pidfd fixture FD");
+        let permit = acquire_permit(
+            &scratch.0.join("gate"),
+            Duration::from_secs(1),
+            Duration::from_millis(5),
+            || None,
+        )
+        .expect("permit");
+        let mut signals = Signals::new([SIGHUP, SIGINT, SIGQUIT, SIGTERM]).expect("signals");
+
+        let error = wait_for_process_group_in(
+            &mut child,
+            leader,
+            &invalid_pidfd,
+            &mut signals,
+            Path::new("/proc"),
+            permit,
+        )
+        .expect_err("waitid failure must fail the gate");
+        assert!(error.to_string().contains("cannot observe gate child"));
+        assert_group_was_reaped(&mut child, descendant);
+    }
+
+    #[test]
+    fn proc_observation_error_terminates_and_reaps_group() {
+        let scratch = Scratch::new("proc-error");
+        let (mut child, leader, pidfd, descendant) =
+            spawn_supervision_group(&scratch, "leader-exit");
+        let invalid_proc = scratch.0.join("not-proc");
+        fs::write(&invalid_proc, b"not a directory").expect("invalid proc fixture");
+        let permit = acquire_permit(
+            &scratch.0.join("gate"),
+            Duration::from_secs(1),
+            Duration::from_millis(5),
+            || None,
+        )
+        .expect("permit");
+        let mut signals = Signals::new([SIGHUP, SIGINT, SIGQUIT, SIGTERM]).expect("signals");
+
+        let error = wait_for_process_group_in(
+            &mut child,
+            leader,
+            &pidfd,
+            &mut signals,
+            &invalid_proc,
+            permit,
+        )
+        .expect_err("proc failure must fail the gate");
+        assert!(
+            error
+                .to_string()
+                .contains("cannot inspect child process group")
+        );
+        assert_group_was_reaped(&mut child, descendant);
+    }
+
+    #[test]
+    fn process_group_test_child() {
+        let Some(role) = env::var_os(GROUP_TEST_ROLE) else {
+            return;
+        };
+        match role.to_str().expect("UTF-8 test role") {
+            "leader-live" | "leader-exit" => {
+                let descendant = Command::new(env::current_exe().expect("test executable"))
+                    .args([
+                        "heavy_gate::tests::process_group_test_child",
+                        "--exact",
+                        "--nocapture",
+                    ])
+                    .env(GROUP_TEST_ROLE, "descendant")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .expect("spawn group descendant");
+                fs::write(
+                    env::var_os(GROUP_TEST_DESCENDANT).expect("descendant marker"),
+                    descendant.id().to_string(),
+                )
+                .expect("write descendant marker");
+                drop(descendant);
+                if role == "leader-live" {
+                    thread::sleep(Duration::from_secs(30));
+                }
+            }
+            "descendant" => thread::sleep(Duration::from_secs(30)),
+            other => panic!("unknown process-group test role {other}"),
+        }
+    }
+
+    fn spawn_supervision_group(
+        scratch: &Scratch,
+        role: &str,
+    ) -> (Child, rustix::process::Pid, OwnedFd, rustix::process::Pid) {
+        let descendant_marker = scratch.0.join("descendant-pid");
+        let child = Command::new(env::current_exe().expect("test executable"))
+            .args([
+                "heavy_gate::tests::process_group_test_child",
+                "--exact",
+                "--nocapture",
+            ])
+            .env(GROUP_TEST_ROLE, role)
+            .env(GROUP_TEST_DESCENDANT, &descendant_marker)
+            .process_group(0)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn group leader");
+        let leader = child_pid(&child).expect("leader PID");
+        let pidfd = rustix::process::pidfd_open(leader, rustix::process::PidfdFlags::empty())
+            .expect("leader pidfd");
+        wait_for_test_path(&descendant_marker);
+        let descendant = fs::read_to_string(descendant_marker)
+            .expect("descendant PID")
+            .parse::<i32>()
+            .ok()
+            .and_then(rustix::process::Pid::from_raw)
+            .expect("valid descendant PID");
+        (child, leader, pidfd, descendant)
+    }
+
+    fn wait_for_test_path(path: &Path) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !path.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for {}",
+                path.display()
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    fn assert_group_was_reaped(child: &mut Child, descendant: rustix::process::Pid) {
+        assert!(
+            child.try_wait().expect("reaped leader status").is_some(),
+            "group leader was not reaped"
+        );
+        assert!(
+            matches!(
+                rustix::process::test_kill_process(descendant),
+                Err(rustix::io::Errno::SRCH)
+            ),
+            "group descendant survived observation failure"
         );
     }
 }

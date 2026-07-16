@@ -389,10 +389,15 @@ silently into the rest of the wave.
 semaphore. It owns two per-UID OFD-locked slots in
 `${XDG_RUNTIME_DIR}/d2b-heavy-gates`, or
 `${TMPDIR:-/tmp}/d2b-heavy-gates-$UID` when no runtime directory is available.
-The directory must be a non-symlink, invoking-UID-owned `0700` directory. The
-persistent `slot-0.lock` and `slot-1.lock` files must be regular, invoking-UID
-owned, single-link `0600` files opened with
-`O_RDWR|O_CREAT|O_CLOEXEC|O_NOFOLLOW`.
+The selected parent is pinned with a CLOEXEC directory FD and must be either an
+invoking-UID-owned non-symlink directory without group/other write or a
+root-owned sticky world-writable directory. The per-UID `0700` directory is
+created and opened relative to that FD with `mkdirat`/`openat` and
+`O_NOFOLLOW`. The persistent `slot-0.lock` and `slot-1.lock` files must be
+regular, invoking-UID-owned, single-link `0600` files opened relative to the
+pinned gate FD with `O_RDWR|O_CREAT|O_CLOEXEC|O_NOFOLLOW`. Parent, directory,
+and slot name-to-inode bindings are revalidated so rename or replacement cannot
+silently split the lock namespace.
 
 Acquisition tries slot 0 then slot 1 with nonblocking OFD write locks every
 250 ms for at most 30 minutes. Unsupported OFD locking, unsafe metadata, or
@@ -401,8 +406,11 @@ original CLOEXEC descriptor. The child receives a duplicate of the same locked
 open-file description at the numeric FD named by `D2B_HEAVY_GATE_FD`, with
 CLOEXEC cleared. The child runs in its own process group; the wrapper forwards
 termination signals, waits for the complete group, then closes its original FD.
-Thus a wrapper crash does not release a permit while its child hierarchy lives.
-Slot files are never unlinked during acquisition.
+`/proc/<pid>/stat` is parsed as bytes. Any pidfd wait, process-table, namespace,
+or process-group observation failure retains the parent permit while the
+wrapper kills the group, reaps its leader, and waits for the group to disappear
+before failing. Thus a wrapper crash does not release a permit while its child
+hierarchy lives. Slot files are never unlinked during acquisition.
 
 Use `make heavy-check`, `make heavy-test-integration`,
 `make heavy-test-host-integration`, `make heavy-test-hardware`,

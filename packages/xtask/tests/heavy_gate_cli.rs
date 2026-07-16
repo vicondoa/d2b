@@ -127,6 +127,7 @@ fn heavy_gate_test_child() {
             while !terminated.load(Ordering::Acquire) {
                 thread::sleep(Duration::from_millis(5));
             }
+            thread::sleep(duration);
             fs::write(
                 std::env::var_os("D2B_HEAVY_GATE_TEST_DONE").expect("signal marker"),
                 b"signaled",
@@ -160,6 +161,15 @@ fn heavy_gate_test_child() {
             )
             .expect("done marker");
         }
+        "close-inherited" => {
+            nix::unistd::close(raw_fd).expect("close inherited gate FD");
+            thread::sleep(duration);
+            fs::write(
+                std::env::var_os("D2B_HEAVY_GATE_TEST_DONE").expect("done marker"),
+                b"done",
+            )
+            .expect("done marker");
+        }
         other => panic!("unknown helper role {other}"),
     }
 }
@@ -168,10 +178,20 @@ fn heavy_gate_test_child() {
 fn inherited_duplicate_holds_slot_after_wrapper_crash() {
     let scratch = Scratch::new("crash");
     let first_ready = scratch.0.join("first-ready");
+    let first_done = scratch.0.join("first-done");
     let second_ready = scratch.0.join("second-ready");
     let third_ready = scratch.0.join("third-ready");
-    let mut first = launch_gate(&scratch.0, "sleep", &first_ready, 900, None);
-    wait_for(&first_ready, Duration::from_secs(2));
+    let mut first = launch_gate(
+        &scratch.0,
+        "group-leader",
+        &first_ready,
+        900,
+        Some(&first_done),
+    );
+    wait_for(
+        &first_ready.with_extension("descendant-ready"),
+        Duration::from_secs(2),
+    );
     send_signal(&first, rustix::process::Signal::Kill);
     assert!(!first.wait().expect("reap crashed wrapper").success());
 
@@ -183,6 +203,7 @@ fn inherited_duplicate_holds_slot_after_wrapper_crash() {
         !third_ready.exists(),
         "third gate entered while the crashed wrapper child retained a slot"
     );
+    wait_for(&first_done, Duration::from_secs(2));
     wait_for(&third_ready, Duration::from_secs(2));
     assert!(third.wait().expect("third wrapper").success());
     assert!(second.wait().expect("second wrapper").success());
@@ -193,11 +214,55 @@ fn wrapper_forwards_termination_to_child_process_group() {
     let scratch = Scratch::new("signal");
     let ready = scratch.0.join("ready");
     let signaled = scratch.0.join("signaled");
-    let mut wrapper = launch_gate(&scratch.0, "signal", &ready, 0, Some(&signaled));
+    let second_ready = scratch.0.join("second-ready");
+    let third_ready = scratch.0.join("third-ready");
+    let mut wrapper = launch_gate(&scratch.0, "signal", &ready, 350, Some(&signaled));
     wait_for(&ready, Duration::from_secs(2));
+    let mut second = launch_gate(&scratch.0, "sleep", &second_ready, 1_000, None);
+    wait_for(&second_ready, Duration::from_secs(2));
+    let mut third = launch_gate(&scratch.0, "quick", &third_ready, 0, None);
     send_signal(&wrapper, rustix::process::Signal::Term);
+    thread::sleep(Duration::from_millis(150));
+    assert!(
+        !third_ready.exists(),
+        "signal handling released the parent permit before group exit"
+    );
+    wait_for(&signaled, Duration::from_secs(2));
     assert!(wrapper.wait().expect("wrapper").success());
     assert_eq!(fs::read(signaled).expect("signal marker"), b"signaled");
+    wait_for(&third_ready, Duration::from_secs(2));
+    assert!(third.wait().expect("third wrapper").success());
+    assert!(second.wait().expect("second wrapper").success());
+}
+
+#[test]
+fn wrapper_parent_descriptor_holds_after_child_closes_duplicate() {
+    let scratch = Scratch::new("parent-descriptor");
+    let first_ready = scratch.0.join("first-ready");
+    let first_done = scratch.0.join("first-done");
+    let second_ready = scratch.0.join("second-ready");
+    let third_ready = scratch.0.join("third-ready");
+    let mut first = launch_gate(
+        &scratch.0,
+        "close-inherited",
+        &first_ready,
+        450,
+        Some(&first_done),
+    );
+    wait_for(&first_ready, Duration::from_secs(2));
+    let mut second = launch_gate(&scratch.0, "sleep", &second_ready, 1_000, None);
+    wait_for(&second_ready, Duration::from_secs(2));
+    let mut third = launch_gate(&scratch.0, "quick", &third_ready, 0, None);
+    thread::sleep(Duration::from_millis(150));
+    assert!(
+        !third_ready.exists(),
+        "child close released the wrapper parent's original OFD"
+    );
+    wait_for(&first_done, Duration::from_secs(2));
+    assert!(first.wait().expect("first wrapper").success());
+    wait_for(&third_ready, Duration::from_secs(2));
+    assert!(third.wait().expect("third wrapper").success());
+    assert!(second.wait().expect("second wrapper").success());
 }
 
 #[test]

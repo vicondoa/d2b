@@ -2634,21 +2634,28 @@ The post-W4 execution rules are:
 10. A Rust `xtask` per-development-UID semaphore owns two OFD-locked slots across
    all worktrees. Its trusted directory is
    `${XDG_RUNTIME_DIR}/d2b-heavy-gates` when available, otherwise
-   `${TMPDIR:-/tmp}/d2b-heavy-gates-$UID`. Creation uses mode 0700 and fails
-   closed unless `lstat`/`fstat` prove a non-symlink directory owned by the
-   invoking UID with no group/other access. The exact files `slot-0.lock` and
-   `slot-1.lock` are opened `O_RDWR|O_CREAT|O_CLOEXEC|O_NOFOLLOW` mode 0600 and
-   verified regular, same-owner, and single-link. The helper tries slot 0 then
-   slot 1 with nonblocking OFD write locks every 250 ms for at most 30 minutes;
-   unsupported OFD locking, unsafe metadata, or timeout fails closed with no
-   `flock` fallback. Its parent retains the original CLOEXEC slot FD. Before
-   `exec`, the gate child duplicates that same locked open-file description to a
-   designated `D2B_HEAVY_GATE_FD` and clears `FD_CLOEXEC` on the duplicate, so
-   the gate process hierarchy also retains the permit if the parent crashes.
-   The parent runs the gate in a child process group, forwards termination
-   signals, waits for process-group exit, and only then closes its FD. Inherited
-   gate FDs close on process exit; slot files persist and are never unlinked
-   during acquisition. It wraps
+   `${TMPDIR:-/tmp}/d2b-heavy-gates-$UID`. The selected parent is pinned by a
+   CLOEXEC directory FD and accepted only when it is an invoking-UID-owned
+   non-symlink directory without group/other write or a root-owned sticky
+   world-writable directory. The per-UID mode-0700 directory is created/opened
+   with `mkdirat`/`openat` plus `O_NOFOLLOW`; the exact files `slot-0.lock` and
+   `slot-1.lock` are opened relative to its pinned FD with
+   `O_RDWR|O_CREAT|O_CLOEXEC|O_NOFOLLOW` mode 0600 and verified regular,
+   same-owner, single-link, and still bound to their names. Parent, directory,
+   and slot identities are revalidated to reject rename-based split
+   namespaces. The helper tries slot 0 then slot 1 with nonblocking OFD write
+   locks every 250 ms for at most 30 minutes; unsupported OFD locking, unsafe
+   metadata, or timeout fails closed with no `flock` fallback. Its parent
+   retains the original CLOEXEC slot FD. Before `exec`, the gate child
+   duplicates that same locked open-file description to a designated
+   `D2B_HEAVY_GATE_FD` and clears `FD_CLOEXEC` on the duplicate, so the gate
+   process hierarchy also retains the permit if the parent crashes. The parent
+   runs the gate in a child process group, forwards termination signals, and
+   parses `/proc/<pid>/stat` as bytes. Any wait or process-group observation
+   failure keeps the permit while the wrapper kills the group, reaps its
+   leader, and waits for group disappearance before returning failure. Only
+   then does it close its FD. Inherited gate FDs close on process exit; slot
+   files persist and are never unlinked during acquisition. It wraps
    `make check`,
    `make test-integration`, `make test-host-integration`, `make test-hardware`,
    full-workspace final `cargo test`, and build-producing `nix flake check`.
