@@ -210,6 +210,13 @@ Every wave must independently restack or rebase onto its landed dependencies,
 snapshot the resulting tree, complete all required validation, receive the full
 panel seal, and pass merge-eligibility checks before it merges.
 
+This is a positive launch requirement, not merely permission. When a wave enters
+its immutable final lanes, the integrator MUST query the dependency graph and
+launch every newly ready speculative wave in the same coordination cycle.
+Leaving a ready wave idle requires a concrete contract, file-ownership, disk, or
+tooling blocker recorded in the plan and task database; avoiding possible merge
+conflicts or keeping one agent's context warm is not a blocker.
+
 Use this shape:
 
 1. Open one private branch/worktree per independently reviewable slice and use
@@ -297,6 +304,47 @@ once that committed contract is stable enough to consume, but they remain
 speculative until it lands. Contract changes require dependent branches to
 restack and lose any prior validation or panel seal; never land a prep commit
 directly on local `main`.
+
+#### Anti-serialization invariant
+
+Serial ownership ends at the smallest coherent shared contract boundary. A
+shared DTO/schema/lockfile change may require one prep commit; it does **not**
+justify serializing every implementation or later wave that consumes it.
+
+Apply these rules to every plan and finding round:
+
+1. Build a file-overlap graph for all ready scopes. Each connected component may
+   be internally ordered, but distinct components MUST run concurrently in
+   separate worktrees. Partition by actual files/contracts, not by a desire to
+   avoid all future conflict.
+2. After a prep commit freezes a shared API, immediately dispatch all
+   dependency-ready components and waves. Use sibling stacked PRs over the
+   shared root. If overlapping follow-ups require order, create a short
+   micro-stack for only those files while unrelated components continue.
+3. A persistent agent owns one coherent component. Do not repeatedly expand one
+   long-lived agent into an umbrella owner for unrelated provider axes,
+   protocols, Nix modules, daemon routing, policy, documentation, and later
+   review rounds merely because it retains context. Reawaken it only for the
+   same component; start new agents/worktrees for independent components.
+4. The integrator owns shared prep, merge/conflict resolution, lockfile
+   reconciliation, generated artifacts, delivery authority, and cross-component
+   tests. The integrator is not the default implementation sink for work that
+   can be assigned to an independent component.
+5. At final-stage entry and after every review round, record the ready component
+   count, launched component count, and any blocked component with its exact
+   blocker. A launch count below the ready count without recorded blockers is a
+   process failure and must be corrected before more serial implementation.
+6. Resource limits constrain heavy validation, not implementation parallelism.
+   Use the plan's bounded heavy-gate semaphore for full builds/tests; do not keep
+   code work idle solely because another worktree is validating.
+7. Remove a slice worktree and its real Cargo target immediately after its
+   commits are integrated. Retain only active integration worktrees, so
+   parallelism does not become abandoned-worktree disk pressure.
+
+Exception: a security-sensitive cross-cutting invariant may stay serial only
+when the plan names the exact files, invariant, and unblock commit. Dispatch all
+downstream components as soon as that commit lands; the exception cannot expand
+silently into the rest of the wave.
 
 ### Edit → commit → validate
 
