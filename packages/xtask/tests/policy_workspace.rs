@@ -339,14 +339,28 @@ fn evaluated_shipped_rust_packages() -> &'static [ShippedRustPackage] {
     })
 }
 
-fn evaluated_flake_package_outputs() -> &'static BTreeSet<String> {
-    static OUTPUTS: OnceLock<BTreeSet<String>> = OnceLock::new();
+fn evaluated_supported_systems() -> &'static [String] {
+    static SYSTEMS: OnceLock<Vec<String>> = OnceLock::new();
+    SYSTEMS.get_or_init(|| {
+        serde_json::from_slice(&evaluate_flake_json("lib.supportedSystems", None))
+            .expect("decode evaluated lib.supportedSystems JSON")
+    })
+}
+
+fn evaluated_flake_package_outputs() -> &'static BTreeMap<String, BTreeSet<String>> {
+    static OUTPUTS: OnceLock<BTreeMap<String, BTreeSet<String>>> = OnceLock::new();
     OUTPUTS.get_or_init(|| {
-        serde_json::from_slice(&evaluate_flake_json(
-            "packages.x86_64-linux",
-            Some("builtins.attrNames"),
-        ))
-        .expect("decode evaluated flake package outputs")
+        evaluated_supported_systems()
+            .iter()
+            .map(|system| {
+                let outputs = serde_json::from_slice(&evaluate_flake_json(
+                    &format!("packages.{system}"),
+                    Some("builtins.attrNames"),
+                ))
+                .unwrap_or_else(|_| panic!("decode evaluated {system} flake package outputs"));
+                (system.clone(), outputs)
+            })
+            .collect()
     })
 }
 
@@ -744,11 +758,20 @@ fn evaluated_shipped_rust_packages_match_cargo_production_roots() {
             .filter_map(|entry| entry.flake_package.as_ref())
             .map(|mapping| mapping.output.clone()),
     );
+    let outputs_by_system = evaluated_flake_package_outputs();
     assert_eq!(
-        evaluated_flake_package_outputs(),
-        &expected_outputs,
-        "every evaluated flake package output must have an exact shipped-Rust or non-Rust classification"
+        outputs_by_system.keys().collect::<BTreeSet<_>>(),
+        evaluated_supported_systems()
+            .iter()
+            .collect::<BTreeSet<_>>(),
+        "every supported flake system must be evaluated"
     );
+    for (system, outputs) in outputs_by_system {
+        assert_eq!(
+            outputs, &expected_outputs,
+            "every {system} flake package output must have an exact shipped-Rust or non-Rust classification"
+        );
+    }
 }
 
 #[test]

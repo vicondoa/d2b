@@ -55,7 +55,8 @@ deprecations ship one minor release before removal.
 
 - Made dependency-ready wave launch and file-overlap-based component dispatch
   mandatory after shared contract prep, preventing one persistent agent from
-  serializing unrelated implementation and review scopes.
+  serializing unrelated implementation and review scopes, with shipped-package
+  dependency policy evaluated across every supported flake system.
 - Activated the startup-owned transactional provider registry after daemon
   services initialize. Explicit local-VM and qemu-media realm workloads now
   construct live local-runtime providers, revalidate their trusted mappings,

@@ -1493,6 +1493,7 @@
 
       lib = nixpkgs.lib.makeExtensible (_: {
         inherit shippedRustPackages;
+        supportedSystems = systems;
       });
 
       overlays.default = _final: _prev: { };
