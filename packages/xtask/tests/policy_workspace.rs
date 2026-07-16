@@ -706,8 +706,8 @@ fn daemon_provider_composition_is_exact_startup_owned_and_credential_free() {
         );
     }
     for required in [
-        "dispatch_broker_vm_start_async",
-        "dispatch_broker_vm_stop_as_async",
+        "dispatch_broker_vm_start_on_blocking_adapter",
+        "dispatch_broker_vm_stop_on_blocking_adapter",
         "resolve_current_runtime_route",
         "still_alive_same_start_time",
         "ProviderLifecycleTasks",
