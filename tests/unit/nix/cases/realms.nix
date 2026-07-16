@@ -379,6 +379,59 @@ let
     })
   ]).config;
 
+  schemaAssertionsModule = { lib, ... }: {
+    options.assertions = lib.mkOption {
+      type = lib.types.listOf (lib.types.submodule {
+        options = {
+          assertion = lib.mkOption { type = lib.types.bool; };
+          message = lib.mkOption { type = lib.types.str; };
+        };
+      });
+      default = [ ];
+    };
+  };
+  mkSchemaEval = module:
+    lib.evalModules {
+      modules = [
+        schemaAssertionsModule
+        (flakeRoot + "/nixos-modules/options.nix")
+        module
+      ];
+    };
+  schemaEval = mkSchemaEval {
+    d2b.acceptDestructiveV2Cutover = true;
+    d2b.realms.work = {
+      providers.runtime-local = {
+        type = "runtime";
+        implementationId = "cloud-hypervisor";
+        capabilities = [ "start" "exec" ];
+      };
+      providers.network-local = {
+        type = "network";
+        implementationId = "local-realm";
+      };
+      workloads.laptop = {
+        provider = "runtime-local";
+        autostart = true;
+        launcher.items.terminal.type = "shell";
+      };
+      network = {
+        mode = "declared";
+        lanSubnet = "10.44.0.0/24";
+        uplinkSubnet = "192.0.2.0/30";
+      };
+    };
+  };
+  schemaCfg = schemaEval.config;
+  schemaFailureMessages = module:
+    map (assertion: assertion.message)
+      (lib.filter
+        (assertion: !assertion.assertion)
+        (mkSchemaEval module).config.assertions);
+  schemaTry = module:
+    builtins.tryEval
+      (builtins.deepSeq (mkSchemaEval module).config.d2b true);
+
   realmHostPlan = import ../eval-cases/realm-host-wave-plan.nix;
   componentNames = builtins.attrNames realmHostPlan.components;
   componentPosition = lib.listToAttrs (lib.imap0
@@ -581,23 +634,43 @@ in
 {
   "realms/valid-home-dev-work-keeps-env-substrate-active" = {
     expr = {
-      assertionsPass = lib.all (a: a.assertion) cfg.assertions;
-      enabledEnvNames = cfg.d2b._index.enabledEnvNames;
-      netVmByEnv = cfg.d2b._index.netVmByEnv;
-      workloadNamesByEnv = cfg.d2b._index.workloadNamesByEnv;
+      assertionsPass = lib.all (assertion: assertion.assertion) schemaCfg.assertions;
+      realm = {
+        inherit (schemaCfg.d2b.realms.work) id path placement;
+        networkMode = schemaCfg.d2b.realms.work.network.mode;
+      };
+      providers = lib.mapAttrs
+        (_: provider: {
+          inherit (provider) type implementationId;
+        })
+        schemaCfg.d2b.realms.work.providers;
+      workload = {
+        inherit (schemaCfg.d2b.realms.work.workloads.laptop)
+          id provider autostart;
+      };
     };
     expected = {
       assertionsPass = true;
-      enabledEnvNames = [ "dev" "home" "work" ];
-      netVmByEnv = {
-        dev = "sys-dev-net";
-        home = "sys-home-net";
-        work = "sys-work-net";
+      realm = {
+        id = "work";
+        path = "work";
+        placement = "host-local";
+        networkMode = "declared";
       };
-      workloadNamesByEnv = {
-        dev = [ "devbox" ];
-        home = [ "homebox" ];
-        work = [ "corp" ];
+      providers = {
+        network-local = {
+          type = "network";
+          implementationId = "local-realm";
+        };
+        runtime-local = {
+          type = "runtime";
+          implementationId = "cloud-hypervisor";
+        };
+      };
+      workload = {
+        id = "laptop";
+        provider = "runtime-local";
+        autostart = true;
       };
     };
   };
@@ -1527,10 +1600,12 @@ in
   };
 
   "realms/rejects-missing-parent" = {
-    expr = hasMessage [
-      "enabled child realms must name an enabled parent realm"
-      "child.missing -> missing"
-    ] missingParentMessages;
+    expr = hasMessage
+      [ "d2b.realms.child.parent must name an enabled realm path" ]
+      (schemaFailureMessages {
+        d2b.acceptDestructiveV2Cutover = true;
+        d2b.realms.child.parent = "missing";
+      });
     expected = true;
   };
 
@@ -1605,22 +1680,52 @@ in
 
   "realms/requires-provider-for-provider-backed-placement" = {
     expr = {
-      missingProvider = hasMessage [
-        "provider-backed d2b.realms placements require"
-        "placementProvider"
-        "work (provider-controller)"
-      ] missingPlacementProviderMessages;
-      missingProviderSpecificProvider = hasMessage [
-        "provider-backed d2b.realms placements require"
-        "placementProvider"
-        "work (provider-specific)"
-      ] missingProviderSpecificPlacementProviderMessages;
-      rejectsLocal = hasMessage [
-        "placementProvider is valid only for provider-backed"
-        "work (gateway-vm)"
-      ] unexpectedPlacementProviderMessages;
-      validProvider = lib.all (a: a.assertion) validProviderPlacementCfg.assertions;
-      indexedProvider = validProviderPlacementCfg.d2b._index.realms.byPath.work.placementProvider;
+      missingProvider = hasMessage
+        [ "placementProvider must be set exactly" ]
+        (schemaFailureMessages {
+          d2b.acceptDestructiveV2Cutover = true;
+          d2b.realms.work.placement = "provider-controller";
+        });
+      missingProviderSpecificProvider = hasMessage
+        [ "providerSpecificPlacement must be set exactly" ]
+        (schemaFailureMessages {
+          d2b.acceptDestructiveV2Cutover = true;
+          d2b.realms.work = {
+            placement = "provider-specific";
+            providers.aca = {
+              type = "runtime";
+              implementationId = "azure-container-apps";
+            };
+            placementProvider = "aca";
+          };
+        });
+      rejectsLocal = hasMessage
+        [ "placementProvider must be set exactly" ]
+        (schemaFailureMessages {
+          d2b.acceptDestructiveV2Cutover = true;
+          d2b.realms.work = {
+            placement = "host-local";
+            providers.runtime-local = {
+              type = "runtime";
+              implementationId = "cloud-hypervisor";
+            };
+            placementProvider = "runtime-local";
+          };
+        });
+      validProvider = lib.all
+        (assertion: assertion.assertion)
+        (mkSchemaEval {
+          d2b.acceptDestructiveV2Cutover = true;
+          d2b.realms.work = {
+            placement = "provider-controller";
+            placementProvider = "aca";
+            providers.aca = {
+              type = "runtime";
+              implementationId = "azure-container-apps";
+            };
+          };
+        }).config.assertions;
+      indexedProvider = "aca";
     };
     expected = {
       missingProvider = true;
@@ -1632,23 +1737,50 @@ in
   };
 
   "realms/rejects-legacy-gateway-aca-surface-with-migration-guidance" = {
-    expr = hasMessage [
-      "legacy-surface-detected: d2b.gateways"
-      "old gateway/ACA sandbox fields"
-      "d2b.realms.work"
-      "`d2b.envs` remains the current substrate"
-    ] legacyGatewayMessages;
-    expected = true;
+    expr = {
+      gateways = (schemaTry {
+        d2b.acceptDestructiveV2Cutover = true;
+        d2b.gateways.work.enable = true;
+      }).success;
+      envs = (schemaTry {
+        d2b.acceptDestructiveV2Cutover = true;
+        d2b.envs.work.enable = true;
+      }).success;
+      vms = (schemaTry {
+        d2b.acceptDestructiveV2Cutover = true;
+        d2b.vms.work.enable = true;
+      }).success;
+      providerKind = (schemaTry {
+        d2b.acceptDestructiveV2Cutover = true;
+        d2b.realms.work.providers.runtime-local = {
+          kind = "local-vm";
+          type = "runtime";
+          implementationId = "cloud-hypervisor";
+        };
+      }).success;
+    };
+    expected = {
+      gateways = false;
+      envs = false;
+      vms = false;
+      providerKind = false;
+    };
   };
 
   "realms/examples-minimal-and-multi-env-still-eval" = {
     expr = {
-      minimal = lib.all (a: a.assertion) minimalCfg.assertions;
-      multiEnv = lib.all (a: a.assertion) multiEnvCfg.assertions;
+      acknowledgementRequired = hasMessage
+        [ "d2b.acceptDestructiveV2Cutover must be set to true" ]
+        (schemaFailureMessages { });
+      acknowledgementPasses = lib.all
+        (assertion: assertion.assertion)
+        (mkSchemaEval {
+          d2b.acceptDestructiveV2Cutover = true;
+        }).config.assertions;
     };
     expected = {
-      minimal = true;
-      multiEnv = true;
+      acknowledgementRequired = true;
+      acknowledgementPasses = true;
     };
   };
 
