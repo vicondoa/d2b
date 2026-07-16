@@ -16038,33 +16038,25 @@ fn dispatch_broker_vm_start(
     block_on_future(dispatch_broker_vm_start_async(state, request))
 }
 
-// Mapped lifecycle is entered through a current-thread provider bridge, while
-// the retained lifecycle implementation still performs synchronous broker,
-// cgroup, and readiness waits. Poll that implementation on Tokio's blocking
-// pool through the existing runtime handle so its owning executor remains free
-// to drive deadlines, cancellation, and unrelated timers.
-async fn run_mapped_lifecycle_blocking<T>(
-    work: impl FnOnce(tokio::runtime::Handle) -> T + Send + 'static,
-) -> Result<T, TypedError>
-where
-    T: Send + 'static,
-{
-    let runtime = tokio::runtime::Handle::current();
-    tokio::task::spawn_blocking(move || work(runtime))
-        .await
-        .map_err(|_| TypedError::InternalConfig {
-            detail: "mapped provider lifecycle blocking adapter failed".to_owned(),
-        })
+// ProviderLifecycleTasks already enters mapped lifecycle on a dedicated OS
+// thread. Own the runtime on that thread too: synchronous broker/cgroup waits
+// cannot stall the provider executor, and no runtime handle can race its
+// owner's shutdown while a blocking-pool closure calls Handle::block_on.
+fn run_mapped_lifecycle_blocking<T>(future: impl Future<Output = T>) -> Result<T, TypedError> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|err| TypedError::InternalConfig {
+            detail: format!("build mapped provider lifecycle runtime: {err}"),
+        })?;
+    Ok(runtime.block_on(future))
 }
 
-pub(crate) async fn dispatch_broker_vm_start_on_blocking_adapter(
+pub(crate) fn dispatch_broker_vm_start_on_blocking_adapter(
     state: Arc<ServerState>,
     request: public_wire::VmLifecycleRequest,
 ) -> Result<Value, TypedError> {
-    run_mapped_lifecycle_blocking(move |runtime| {
-        runtime.block_on(dispatch_broker_vm_start_async(&state, request))
-    })
-    .await?
+    run_mapped_lifecycle_blocking(dispatch_broker_vm_start_async(&state, request))?
 }
 
 async fn dispatch_broker_vm_start_async(
@@ -16883,19 +16875,16 @@ async fn dispatch_broker_vm_stop_as_async(
     .await
 }
 
-pub(crate) async fn dispatch_broker_vm_stop_on_blocking_adapter(
+pub(crate) fn dispatch_broker_vm_stop_on_blocking_adapter(
     state: Arc<ServerState>,
     request: public_wire::VmLifecycleRequest,
     caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
-    run_mapped_lifecycle_blocking(move |runtime| {
-        runtime.block_on(dispatch_broker_vm_stop_as_async(
-            &state,
-            request,
-            caller_role,
-        ))
-    })
-    .await?
+    run_mapped_lifecycle_blocking(dispatch_broker_vm_stop_as_async(
+        &state,
+        request,
+        caller_role,
+    ))?
 }
 
 #[cfg(test)]
@@ -24320,7 +24309,7 @@ mod broker_dispatch_tests {
     use std::os::unix::net::UnixListener;
     use std::path::{Path, PathBuf};
     use std::process::{Child, Command};
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex, MutexGuard, OnceLock, mpsc};
     use std::time::{Duration, Instant};
     use std::{fs, thread};
@@ -25845,30 +25834,29 @@ mod broker_dispatch_tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn mapped_lifecycle_blocking_adapter_preserves_concurrent_timer_progress() {
-        let progressed = Arc::new(AtomicBool::new(false));
-        let observed = Arc::clone(&progressed);
+    async fn mapped_lifecycle_runtime_shutdown_preserves_concurrent_timer_progress() {
         let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
         let (release_tx, release_rx) = mpsc::sync_channel(1);
-        let timer = tokio::spawn(async move {
-            entered_rx.await.expect("blocking adapter entered");
-            tokio::time::sleep(Duration::from_millis(20)).await;
-            progressed.store(true, Ordering::SeqCst);
-            release_tx.send(()).expect("release blocking adapter");
+        let worker = std::thread::spawn(move || {
+            super::run_mapped_lifecycle_blocking(async move {
+                entered_tx.send(()).expect("signal lifecycle entry");
+                release_rx.recv().expect("timer releases lifecycle");
+                42
+            })
+            .expect("dedicated lifecycle runtime completes")
         });
 
-        let timer_progressed = super::run_mapped_lifecycle_blocking(move |_| {
-            entered_tx.send(()).expect("signal blocking adapter entry");
-            release_rx
-                .recv_timeout(Duration::from_secs(1))
-                .expect("concurrent timer releases blocking adapter");
-            observed.load(Ordering::SeqCst)
-        })
-        .await
-        .expect("blocking adapter joins");
+        let timer = tokio::spawn(async move {
+            entered_rx.await.expect("lifecycle runtime entered");
+            tokio::time::sleep(Duration::ZERO).await;
+            release_tx.send(()).expect("release lifecycle runtime");
+        });
 
         timer.await.expect("concurrent timer task");
-        assert!(timer_progressed);
+        assert_eq!(
+            worker.join().expect("lifecycle worker shuts down cleanly"),
+            42
+        );
     }
 
     #[test]

@@ -55,7 +55,7 @@ use d2b_provider_substrate_host::HostSubstratePort;
 use d2b_provider_transport_local::LocalEndpointPort;
 
 use crate::{
-    ServerState, TypedError, block_on_future, daemon_audit::DaemonAuditSinkStatus,
+    ServerState, TypedError, daemon_audit::DaemonAuditSinkStatus,
     dispatch_broker_vm_start_on_blocking_adapter, dispatch_broker_vm_stop_on_blocking_adapter,
     provider_registry::resolve_current_runtime_route,
 };
@@ -1088,9 +1088,7 @@ impl DaemonLocalRuntimeControl {
         let state = Arc::clone(&resolved.state);
         let task = self.lifecycle_tasks.spawn(key, move || {
             let _lifecycle_permit = lifecycle_permit;
-            let result = block_on_future(dispatch_broker_vm_start_on_blocking_adapter(
-                state, lifecycle,
-            ));
+            let result = dispatch_broker_vm_start_on_blocking_adapter(state, lifecycle);
             let _ = Self::publish_lifecycle_result(&result_slot, &result);
             result
         })?;
@@ -1132,11 +1130,7 @@ impl DaemonLocalRuntimeControl {
         let state = Arc::clone(&resolved.state);
         let task = self.lifecycle_tasks.spawn(key, move || {
             let _lifecycle_permit = lifecycle_permit;
-            let result = block_on_future(dispatch_broker_vm_stop_on_blocking_adapter(
-                state,
-                lifecycle,
-                caller_role,
-            ));
+            let result = dispatch_broker_vm_stop_on_blocking_adapter(state, lifecycle, caller_role);
             let _ = Self::publish_lifecycle_result(&result_slot, &result);
             result
         })?;
@@ -1334,11 +1328,7 @@ impl RuntimeControlPort for DaemonLocalRuntimeControl {
                 };
                 self.lifecycle_tasks.spawn(key, move || {
                     let _lifecycle_permit = lifecycle_permit;
-                    block_on_future(dispatch_broker_vm_stop_on_blocking_adapter(
-                        state,
-                        lifecycle,
-                        caller_role,
-                    ))
+                    dispatch_broker_vm_stop_on_blocking_adapter(state, lifecycle, caller_role)
                 })?
             }
         };
