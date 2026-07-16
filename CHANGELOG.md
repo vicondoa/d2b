@@ -86,7 +86,9 @@ deprecations ship one minor release before removal.
   leases while preserving provider-agent co-location for cloud credentials.
 - Bound transport connection requests to an exact opaque transport binding ID.
 - Strengthened provider dependency policy to inspect transitive Cargo package
-  identities and keep denied Azure VM scaffolds out of production graphs.
+  identities, keep denied Azure VM scaffolds out of production graphs, and
+  prove their unavailable descriptors expose no live factory or instance
+  registration surface.
 - Split `d2b-contracts` into default-empty, least-privilege feature families,
   migrated every workspace consumer to explicit domains, and reserved
   independent empty d2b 2.0 identity, component-session, service, provider,

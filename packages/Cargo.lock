@@ -1340,7 +1340,6 @@ version = "2.0.0"
 dependencies = [
  "d2b-azure-vm-fake-sdk",
  "d2b-contracts",
- "d2b-provider",
  "d2b-provider-toolkit",
  "tokio",
 ]
@@ -1407,7 +1406,6 @@ version = "2.0.0"
 dependencies = [
  "d2b-azure-vm-fake-sdk",
  "d2b-contracts",
- "d2b-provider",
  "d2b-provider-toolkit",
  "tokio",
 ]

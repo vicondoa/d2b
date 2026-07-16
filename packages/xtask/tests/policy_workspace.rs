@@ -40,6 +40,10 @@ const W4_PROVIDER_CRATES: &[&str] = &[
     "d2b-provider-transport-local",
 ];
 const W4_SUPPORT_CRATE: &str = "d2b-azure-vm-fake-sdk";
+const W4_UNAVAILABLE_PROVIDER_SCAFFOLDS: &[&str] = &[
+    "d2b-provider-infrastructure-azure-vm",
+    "d2b-provider-runtime-azure-vm",
+];
 const PROVIDER_INTEGRATION_FILES: &[&str] = &[
     "docs/reference/daemon-api.md",
     "docs/reference/manifest-bundle.md",
@@ -337,15 +341,19 @@ fn w4_provider_workspace_inventory_is_reserved_and_dependency_minimal() {
         );
     }
 
-    for package in W4_PROVIDER_CRATES {
+    for package in W4_PROVIDER_CRATES.iter().copied() {
         let manifest = read_repo_file(&format!("packages/{package}/Cargo.toml"));
-        for required in [
-            "d2b-contracts = { workspace = true, default-features = false, features = [\"v2-provider\"] }",
-            "d2b-provider = { workspace = true, default-features = false }",
-        ] {
+        let contracts_dependency = "d2b-contracts = { workspace = true, default-features = false, features = [\"v2-provider\"] }";
+        assert!(
+            manifest.contains(contracts_dependency),
+            "{package} must depend on the canonical provider contracts: {contracts_dependency}"
+        );
+        if !W4_UNAVAILABLE_PROVIDER_SCAFFOLDS.contains(&package) {
+            let provider_dependency =
+                "d2b-provider = { workspace = true, default-features = false }";
             assert!(
-                manifest.contains(required),
-                "{package} must depend on the canonical provider boundary: {required}"
+                manifest.contains(provider_dependency),
+                "{package} must depend on the canonical live-provider boundary: {provider_dependency}"
             );
         }
         let dependency_names = transitive_package_names(&metadata, package);
@@ -357,11 +365,9 @@ fn w4_provider_workspace_inventory_is_reserved_and_dependency_minimal() {
         }
     }
 
-    for package in [
-        W4_SUPPORT_CRATE,
-        "d2b-provider-infrastructure-azure-vm",
-        "d2b-provider-runtime-azure-vm",
-    ] {
+    for package in
+        std::iter::once(W4_SUPPORT_CRATE).chain(W4_UNAVAILABLE_PROVIDER_SCAFFOLDS.iter().copied())
+    {
         let package_features = declared_features(&metadata, package);
         assert_eq!(
             package_features
@@ -381,12 +387,9 @@ fn w4_provider_workspace_inventory_is_reserved_and_dependency_minimal() {
             ["async-trait", "serde", "tokio"].as_slice()
         } else {
             [
-                "async-trait",
                 "d2b-azure-vm-fake-sdk",
                 "d2b-contracts",
-                "d2b-provider",
                 "d2b-provider-toolkit",
-                "serde",
                 "tokio",
             ]
             .as_slice()
@@ -456,15 +459,57 @@ fn w4_provider_workspace_inventory_is_reserved_and_dependency_minimal() {
         "d2bd",
     ] {
         let dependencies = transitive_package_names(&metadata, production_package);
-        for forbidden in [
-            "d2b-provider-infrastructure-azure-vm",
-            "d2b-provider-runtime-azure-vm",
-        ] {
+        for forbidden in W4_UNAVAILABLE_PROVIDER_SCAFFOLDS.iter().copied() {
             assert!(
                 !dependencies.contains(forbidden),
                 "{production_package} must not include unavailable Azure VM provider {forbidden}"
             );
         }
+    }
+}
+
+#[test]
+fn unavailable_azure_vm_scaffold_descriptors_have_no_live_provider_surface() {
+    let metadata = workspace_metadata();
+    let tracked_files = git_tracked_files();
+
+    for package in W4_UNAVAILABLE_PROVIDER_SCAFFOLDS.iter().copied() {
+        let dependencies = declared_dependencies(&metadata, package);
+        assert!(
+            !dependencies
+                .iter()
+                .any(|dependency| dependency["name"].as_str() == Some("d2b-provider")),
+            "{package} must not depend on the live provider implementation boundary"
+        );
+
+        let source_prefix = format!("packages/{package}/src/");
+        let source_paths = tracked_files
+            .iter()
+            .filter(|path| path.starts_with(&source_prefix) && path.ends_with(".rs"))
+            .collect::<Vec<_>>();
+        assert!(
+            !source_paths.is_empty(),
+            "{package} must have tracked Rust sources"
+        );
+        for path in source_paths {
+            let source = read_repo_file(path);
+            for forbidden in ["ProviderFactory", "ProviderInstance"] {
+                assert!(
+                    !source.contains(forbidden),
+                    "{package} unavailable scaffold must not expose {forbidden} in {path}"
+                );
+            }
+        }
+
+        let source = read_repo_file(&format!("packages/{package}/src/lib.rs"));
+        assert!(
+            source.contains(
+                "pub const fn advertised_capabilities(&self) -> &'static [ProviderMethod] {\n        &[]\n    }"
+            ) && source.contains(
+                "pub const fn is_registerable(&self) -> bool {\n        false\n    }"
+            ),
+            "{package} descriptor must remain capability-empty and non-registerable"
+        );
     }
 }
 
