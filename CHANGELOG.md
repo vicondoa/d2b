@@ -24,6 +24,10 @@ deprecations ship one minor release before removal.
   child-realm controller/broker launches, with strict exact lookup, canonical
   content digests, opaque references, redacted diagnostics, and no ambient
   spawn fallback.
+- Added the W7 realm-host prep inventory and Nix policy skeleton: fifteen
+  file-disjoint declarative components, explicit allocator runtime exclusion,
+  provider-registry-v2 extension ownership, old-surface deletion inventory,
+  and dispatch-ready component prompts.
 - Added the post-W4 shared contract/tooling root: separate W5/W6/W7 delivery
   authorities, typed allocator and child-realm broker DTOs, frozen service and
   dependency inventories, parent-commit-trusted ownership checks with explicit

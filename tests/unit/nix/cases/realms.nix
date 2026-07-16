@@ -378,6 +378,76 @@ let
       };
     })
   ]).config;
+
+  realmHostPlan = import ../eval-cases/realm-host-wave-plan.nix;
+  componentNames = builtins.attrNames realmHostPlan.components;
+  componentPosition = lib.listToAttrs (lib.imap0
+    (position: component: {
+      name = component;
+      value = position;
+    })
+    realmHostPlan.componentOrder);
+  allOwnedFiles = lib.concatMap
+    (component: realmHostPlan.components.${component}.ownedFiles)
+    componentNames;
+  ownershipCounts = builtins.foldl'
+    (counts: path:
+      counts // {
+        ${path} = (counts.${path} or 0) + 1;
+      })
+    { }
+    allOwnedFiles;
+  duplicateOwnedFiles = builtins.attrNames
+    (lib.filterAttrs (_: count: count != 1) ownershipCounts);
+  dependencyErrors = lib.concatMap
+    (component:
+      let
+        position = componentPosition.${component};
+        dependencies = realmHostPlan.components.${component}.dependsOn;
+      in
+      lib.concatMap
+        (dependency:
+          lib.optional
+            (!(builtins.hasAttr dependency realmHostPlan.components)
+              || componentPosition.${dependency} >= position)
+            "${component}:${dependency}")
+        dependencies)
+    realmHostPlan.componentOrder;
+  listNixFiles = prefix: directory:
+    lib.concatMap
+      (name:
+        let
+          entryType = (builtins.readDir directory).${name};
+          relative = if prefix == "" then name else "${prefix}/${name}";
+          path = directory + "/${name}";
+        in
+        if entryType == "directory"
+        then listNixFiles relative path
+        else lib.optional (entryType == "regular" && lib.hasSuffix ".nix" name)
+          "nixos-modules/${relative}")
+      (builtins.attrNames (builtins.readDir directory));
+  currentNixFiles = lib.sort lib.lessThan
+    (listNixFiles "" (flakeRoot + "/nixos-modules"));
+  plannedCurrentNixFiles = lib.sort lib.lessThan (lib.filter
+    (path:
+      lib.hasPrefix "nixos-modules/" path
+      && builtins.pathExists (flakeRoot + "/${path}"))
+    allOwnedFiles);
+  providerExtensionFragments =
+    builtins.attrValues realmHostPlan.providerRegistryExtensionSeams.fragments;
+  providerFragmentOwnershipValid = lib.all
+    (fragment:
+      builtins.elem fragment.path
+        realmHostPlan.components.${fragment.owner}.ownedFiles)
+    providerExtensionFragments;
+  forbiddenOwnedFiles = lib.filter
+    (path:
+      lib.any
+        (forbidden:
+          path == forbidden
+          || (lib.hasSuffix "/" forbidden && lib.hasPrefix forbidden path))
+        realmHostPlan.forbiddenEdits)
+    allOwnedFiles;
 in
 {
   "realms/valid-home-dev-work-keeps-env-substrate-active" = {
@@ -1593,6 +1663,105 @@ in
     expected = {
       kind = "provider-placeholder";
       launcherEnable = false;
+    };
+  };
+
+  "realms/realm-host-prep-file-ownership-is-complete-and-disjoint" = {
+    expr = {
+      inherit duplicateOwnedFiles;
+      currentNixInventoryComplete = plannedCurrentNixFiles == currentNixFiles;
+      componentCount = builtins.length componentNames;
+    };
+    expected = {
+      duplicateOwnedFiles = [ ];
+      currentNixInventoryComplete = true;
+      componentCount = 15;
+    };
+  };
+
+  "realms/realm-host-prep-dependency-graph-is-ordered" = {
+    expr = {
+      orderCoversEveryComponent =
+        lib.sort lib.lessThan realmHostPlan.componentOrder
+        == lib.sort lib.lessThan componentNames;
+      inherit dependencyErrors;
+      promptsReady = lib.all
+        (component:
+          realmHostPlan.components.${component}.prompt != ""
+          && realmHostPlan.components.${component}.scope != [ ])
+        componentNames;
+    };
+    expected = {
+      orderCoversEveryComponent = true;
+      dependencyErrors = [ ];
+      promptsReady = true;
+    };
+  };
+
+  "realms/realm-host-prep-preserves-cross-wave-contract-boundaries" = {
+    expr = {
+      sharedRoot = realmHostPlan.sharedRoot;
+      bundleVersion = realmHostPlan.frozenParentContracts.bundle.version;
+      bundleSchemaVersion =
+        realmHostPlan.frozenParentContracts.bundle.schemaVersion;
+      allocatorOwner = realmHostPlan.frozenParentContracts.allocator.owner;
+      w7AllocatorOutputs =
+        realmHostPlan.frozenParentContracts.allocator.w7Owns;
+      w5AllocatorRuntime =
+        realmHostPlan.frozenParentContracts.allocator.w5Owns;
+      inherit forbiddenOwnedFiles;
+    };
+    expected = {
+      sharedRoot = "b2b50e67cfab4fb8601ebb1a63946e84eccba5c1";
+      bundleVersion = 12;
+      bundleSchemaVersion = "v2";
+      allocatorOwner = "w5";
+      w7AllocatorOutputs = [
+        "declarative child listener rows"
+        "declarative lease requests"
+        "declarative process and ordering records"
+        "declarative cgroup, namespace, resource, and ownership records"
+      ];
+      w5AllocatorRuntime = [
+        "allocator service dispatch"
+        "runtime listener creation and binding"
+        "typed child controller and broker spawn"
+        "pidfd supervision and adoption"
+        "lease allocation, reconciliation, revocation, and execution"
+      ];
+      forbiddenOwnedFiles = [ ];
+    };
+  };
+
+  "realms/realm-host-prep-provider-registry-extension-seams-are-exclusive" = {
+    expr = {
+      owner = realmHostPlan.providerRegistryExtensionSeams.owner;
+      approvedProtectedFiles =
+        realmHostPlan.providerRegistryExtensionSeams.approvedProtectedFiles;
+      ownerHasEveryProtectedFile = lib.all
+        (path:
+          builtins.elem path
+            realmHostPlan.components.provider-registry-composition.ownedFiles)
+        realmHostPlan.providerRegistryExtensionSeams.approvedProtectedFiles;
+      inherit providerFragmentOwnershipValid;
+      preservedAxes =
+        realmHostPlan.frozenParentContracts.providerRegistry.preservedAxes;
+    };
+    expected = {
+      owner = "provider-registry-composition";
+      approvedProtectedFiles = [
+        "docs/reference/schemas/v2/provider-registry-v2.json"
+        "docs/reference/schemas/v2/provider-registry-v2.md"
+        "flake.nix"
+        "nixos-modules/provider-registry-v2-json.nix"
+        "packages/d2b-contracts/src/provider_registry_v2.rs"
+      ];
+      ownerHasEveryProtectedFile = true;
+      providerFragmentOwnershipValid = true;
+      preservedAxes = [
+        "local-observability"
+        "local-runtime"
+      ];
     };
   };
 }
