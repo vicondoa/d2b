@@ -69,6 +69,10 @@ deprecations ship one minor release before removal.
 - Restart `d2bd` when the integrity-pinned bundle or generated provider
   registry generation changes while retaining `KillMode=process`, so existing
   VM runners survive and are re-adopted after the daemon continuation event.
+- Isolated mapped lifecycle's synchronous broker, cgroup, and readiness waits
+  behind a dedicated blocking adapter so provider deadlines and unrelated
+  executor timers continue progressing without weakening owned-task cleanup or
+  per-VM serialization.
 - Changed observability provider queries to return a canonical bounded result
   through the provider trait, proxy, protobuf/ttrpc service, and toolkit
   adapter without dropping records or introducing free-form labels.

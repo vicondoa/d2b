@@ -117,6 +117,12 @@ Fresh operation identities and other mutations for that VM wait for the
 retained lifecycle authority; unrelated VMs remain independent. Read-only
 inspection does not need this retention and remains cancellable.
 
+Mapped lifecycle polls the retained synchronous broker, cgroup, and readiness
+implementation through a dedicated Tokio blocking adapter. The provider's
+current-thread bridge remains free to drive deadlines, cancellation
+observation, and unrelated timers while cleanup continues under the owned
+lifecycle task and per-VM permit.
+
 The local observability binding carries no realm, workload, provider, label, or
 cardinality payload. Descriptor placement supplies realm authority, and the
 configuration schema fixes explicit maxima for record count, bytes, and time
