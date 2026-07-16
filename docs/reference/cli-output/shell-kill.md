@@ -4,6 +4,10 @@
 
 Schema: [`shell-kill.schema.json`](./shell-kill.schema.json).
 
+> Gateway-backed management forms remain historical parser compatibility
+> behavior. They are unsupported and do not define a routing or output
+> contract.
+
 ## Shape
 
 ```json
@@ -21,7 +25,7 @@ Schema: [`shell-kill.schema.json`](./shell-kill.schema.json).
 | Field | Meaning |
 | --- | --- |
 | `command` | Stable command discriminator, always `shell kill`. |
-| `vm` | Current schema field for the routed target. Local targets report the resolved VM name; gateway-backed management commands forward the target through the selected gateway, whose response keeps this field name until a future output-version bump can rename it to `target`. |
+| `vm` | Current schema field for the local target. Local VM targets report the resolved VM name; unsafe-local targets report their configured canonical target. |
 | `name` | Explicit shell session name supplied with `--name`. Kill never defaults to `default`. |
 | `result` | `killed` when the session was terminated; otherwise `already-absent`. |
 | `state` | Terminal shell state reported by the daemon, normally `killed` for this command. |

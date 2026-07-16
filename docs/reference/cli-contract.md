@@ -325,11 +325,12 @@ used by routed VM targets.
 
 **Synopsis:** `d2b op inspect [--trace-id <id> --span-id <id>] [--human | --json]`
 
-Inspects current local constellation operation state without making the host a
-global telemetry owner. The command reports bounded local VM/gateway counts,
-configured realm states, optional trace context, and degraded partial results
-for unavailable gateways or sinks. It never falls back to SSH, host-held realm
-credentials, or generic tunnels.
+Reads the local manifest and rendered realm-entrypoint table. The command
+reports bounded local VM/gateway counts, configured realm rows, and optional
+trace context. Its only implemented degraded cases are an unavailable
+manifest, an unavailable realm-entrypoint table, and a configured gateway that
+is not running. It does not inspect providers or sinks and never falls back to
+SSH, host-held realm credentials, or generic tunnels.
 
 ### `realm run`
 

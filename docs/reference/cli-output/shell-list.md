@@ -4,6 +4,10 @@
 
 Schema: [`shell-list.schema.json`](./shell-list.schema.json).
 
+> Gateway-backed management forms remain historical parser compatibility
+> behavior. They are unsupported and do not define a routing or output
+> contract.
+
 ## Shape
 
 ```json
@@ -27,7 +31,7 @@ Schema: [`shell-list.schema.json`](./shell-list.schema.json).
 | Field | Meaning |
 | --- | --- |
 | `command` | Stable command discriminator, always `shell list`. |
-| `vm` | Current schema field for the routed target. Local targets report the resolved VM name; gateway-backed management commands forward the target through the selected gateway, whose response keeps this field name until a future output-version bump can rename it to `target`. |
+| `vm` | Current schema field for the local target. Local VM targets report the resolved VM name; unsafe-local targets report their configured canonical target. |
 | `default_name` | Configured default shell session name for the target workload. Present even when `sessions` is empty. |
 | `sessions[]` | Bounded session rows reported by guestd. |
 | `sessions[].name` | Validated shell session name. |
