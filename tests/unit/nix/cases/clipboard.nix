@@ -74,8 +74,185 @@ let
   ];
   unsafeClipboardJson =
     builtins.fromJSON unsafeEnabled.config.environment.etc."d2b/clipboard.json".text;
+
+  desktopMetadataEval = lib.evalModules {
+    modules = [
+      ({ lib, ... }: {
+        options = {
+          assertions = lib.mkOption {
+            type = lib.types.listOf lib.types.anything;
+            default = [ ];
+          };
+          d2b._uiColors = lib.mkOption {
+            type = lib.types.anything;
+          };
+          d2b._bundle.extraArtifacts = lib.mkOption {
+            type = lib.types.attrsOf lib.types.anything;
+            default = { };
+          };
+          d2b.realms = lib.mkOption {
+            type = lib.types.attrsOf lib.types.anything;
+            default = { };
+          };
+        };
+        config.d2b = {
+          realms.work = {
+            name = "Work";
+            path = "work.local-root";
+            providers.systemd-user = {
+              id = "systemd-user";
+              type = "runtime";
+              implementationId = "systemd-user";
+              capabilities = [ "exec" ];
+            };
+            workloads.tools = {
+              id = "tools";
+              provider = "systemd-user";
+              launcher = {
+                enable = true;
+                label = "Tools";
+                icon = {
+                  id = "applications-utilities";
+                  name = null;
+                };
+                defaultItem = "browser";
+                capabilities = [ "configured-launch" ];
+                items.browser = {
+                  type = "exec";
+                  name = "Browser";
+                  graphical = true;
+                  icon = {
+                    id = "web-browser";
+                    name = null;
+                  };
+                  argv = [ "firefox" "https://example.test/" ];
+                };
+              };
+            };
+          };
+          _uiColors.realms.work.accent = "#ff6600";
+        };
+      })
+      ../../../../nixos-modules/index.nix
+      ../../../../nixos-modules/desktop-metadata-json.nix
+    ];
+  };
+  desktopArtifact =
+    desktopMetadataEval.config.d2b._bundle.extraArtifacts.desktopMetadataJson;
+  desktopMetadata = desktopArtifact.data;
+  desktopMetadataJson = builtins.toJSON desktopMetadata;
+  desktopIndex = desktopMetadataEval.config.d2b._index;
+  desktopRealmId = builtins.head desktopIndex.realms.ids;
+  desktopWorkloadId = builtins.head desktopIndex.workloads.ids;
+  desktopSystemdUserProviderId = builtins.head desktopIndex.providers.ids;
 in
 {
+  "desktop-metadata/artifact-contract" = {
+    expr = {
+      inherit (desktopArtifact) installFileName classification sensitivity;
+      inherit (desktopMetadata) schemaVersion runtimeState;
+    };
+    expected = {
+      installFileName = "desktop-metadata.json";
+      classification = "contractPublic";
+      sensitivity = "nonSecret";
+      schemaVersion = "v2";
+      runtimeState = "presentation-only";
+    };
+  };
+
+  "desktop-metadata/canonical-key-shape" = {
+    expr = {
+      realmKeys = builtins.attrNames desktopMetadata.realms;
+      workloadKeys = builtins.attrNames desktopMetadata.workloads;
+      workload = desktopMetadata.workloads."tools.work.local-root.d2b";
+    };
+    expected = {
+      realmKeys = [ desktopRealmId ];
+      workloadKeys = [ "tools.work.local-root.d2b" ];
+      workload = {
+        canonicalTarget = "tools.work.local-root.d2b";
+        realmId = desktopRealmId;
+        workloadId = desktopWorkloadId;
+        providerId = desktopSystemdUserProviderId;
+        executionPosture = {
+          isolation = "unsafe-local";
+          environment = "systemd-user-manager-ambient";
+          displayEnvironment = "wayland-proxy-only";
+          executionIdentity = "authenticated-requester-uid";
+          sessionPersistence = "user-manager-lifetime";
+        };
+        label = "Tools";
+        icon = {
+          id = "applications-utilities";
+        };
+        realmAccentColor = "#ff6600";
+        launcherEnabled = true;
+        defaultItemId = "browser";
+        capabilities = [ "configured-launch" ];
+        items = [
+          {
+            id = "browser";
+            type = "exec";
+            name = "Browser";
+            graphical = true;
+            icon = {
+              id = "web-browser";
+            };
+            capabilities = [ "configured-launch" "window-forwarding" ];
+          }
+        ];
+      };
+    };
+  };
+
+  "desktop-metadata/unsafe-local-uses-systemd-user-provider" = {
+    expr = desktopMetadata.providers.${desktopSystemdUserProviderId};
+    expected = {
+      providerId = desktopSystemdUserProviderId;
+      realmId = desktopRealmId;
+      canonicalTarget = "systemd-user.work.local-root.d2b";
+      implementation = "systemd-user";
+      label = "systemd-user";
+      capabilities = [ "exec" ];
+    };
+  };
+
+  "desktop-metadata/presentation-is-non-authoritative" = {
+    expr = desktopMetadata.invariants;
+    expected = {
+      argvPrivate = true;
+      canonicalIdsOnly = true;
+      canonicalTargetsOnly = true;
+      colorsArePresentationOnly = true;
+      metadataIsNotAuthorization = true;
+      nonAuthoritativeProjection = true;
+      noSecretsOrCredentials = true;
+    };
+  };
+
+  "desktop-metadata/no-legacy-aliases-or-argv" = {
+    expr = lib.all
+      (field: !(lib.hasInfix field desktopMetadataJson))
+      [
+        "\"appCommand\""
+        "\"argv\""
+        "\"legacyVmName\""
+        "\"providerKind\""
+        "\"runtimeKind\""
+        "\"targetAddress\""
+        "\"workloadName\""
+        "https://example.test/"
+      ];
+    expected = true;
+  };
+
+  "desktop-metadata/assertions-hold" = {
+    expr = lib.all (assertion: assertion.assertion)
+      desktopMetadataEval.config.assertions;
+    expected = true;
+  };
+
   "clipboard/disabled-no-user-service" = {
     expr = builtins.hasAttr "d2b-clipd" disabled.config.systemd.user.services;
     expected = false;
