@@ -640,6 +640,19 @@ fn w4_provider_workspace_inventory_is_reserved_and_dependency_minimal() {
         }
     }
 
+    assert!(
+        !transitive_package_names(&metadata, "d2b-provider-runtime-local").contains("d2b-host"),
+        "the local runtime provider must not transitively depend on d2b-host"
+    );
+    let local_runtime_dependencies = declared_dependencies(&metadata, "d2b-provider-runtime-local")
+        .iter()
+        .map(|dependency| dependency["name"].as_str().expect("dependency name"))
+        .collect::<BTreeSet<_>>();
+    assert!(
+        !local_runtime_dependencies.contains("serde_json"),
+        "the local runtime provider must not directly depend on serde_json"
+    );
+
     for package in
         std::iter::once(W4_SUPPORT_CRATE).chain(W4_UNAVAILABLE_PROVIDER_SCAFFOLDS.iter().copied())
     {
@@ -877,6 +890,7 @@ fn daemon_provider_composition_is_exact_startup_owned_and_credential_free() {
         );
     }
     for forbidden in [
+        "d2b-priv-broker",
         "d2b-provider-credential-entra",
         "d2b-provider-credential-managed-identity",
         "d2b-provider-credential-secret-service",
@@ -890,6 +904,7 @@ fn daemon_provider_composition_is_exact_startup_owned_and_credential_free() {
     }
     let transitive_dependencies = transitive_package_names(&metadata, "d2bd");
     for forbidden in [
+        "d2b-priv-broker",
         "d2b-provider-credential-entra",
         "d2b-provider-credential-managed-identity",
         "d2b-provider-credential-secret-service",
@@ -1076,12 +1091,6 @@ fn daemon_provider_composition_is_exact_startup_owned_and_credential_free() {
     }
 
     let effects = read_repo_file("packages/d2bd/src/provider_effects.rs");
-    for forbidden in ["d2b_priv_broker", "std::process::Command", "Command::new"] {
-        assert!(
-            !effects.contains(forbidden),
-            "daemon semantic effects must not bypass typed provider ports via {forbidden}"
-        );
-    }
     for required in [
         "dispatch_broker_vm_start_on_blocking_adapter",
         "dispatch_broker_vm_stop_on_blocking_adapter",

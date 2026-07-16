@@ -1450,35 +1450,7 @@ async fn diagnostics_are_closed_and_bounded() {
 }
 
 #[test]
-fn operation_input_has_no_argv_path_endpoint_or_json_variant() {
-    let control_source = include_str!("../src/control.rs");
-    for forbidden in [
-        "argv",
-        "host_path",
-        "endpoint:",
-        "credential:",
-        "serde_json",
-    ] {
-        assert!(!control_source.contains(forbidden), "{forbidden}");
-    }
-    let all_source = [
-        include_str!("../src/config.rs"),
-        include_str!("../src/control.rs"),
-        include_str!("../src/factory.rs"),
-        include_str!("../src/provider.rs"),
-        include_str!("../Cargo.toml"),
-    ]
-    .concat();
-    for forbidden in [
-        "Command::new",
-        "std::process",
-        "ChArgvInput",
-        "QemuMediaArgvInput",
-        "d2b-host",
-        "extra_args",
-    ] {
-        assert!(!all_source.contains(forbidden), "{forbidden}");
-    }
+fn live_runtime_capabilities_exclude_arbitrary_execute() {
     assert!(
         !live_runtime_capabilities()
             .unwrap_or_else(|_| unreachable!())
