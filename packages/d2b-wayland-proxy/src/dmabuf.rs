@@ -4,13 +4,17 @@ use std::{
     ffi::CString,
     fs::File,
     io::{self, Seek, SeekFrom, Write},
-    os::fd::OwnedFd,
+    os::fd::{AsFd, OwnedFd},
     rc::Rc,
     sync::Arc,
 };
 
 use nix::sys::memfd::{MemFdCreateFlag, memfd_create};
 use nix::sys::uio::pread;
+use rustix::{
+    fs::{FileType, fstat},
+    io::{FdFlags, fcntl_getfd},
+};
 use wl_proxy::protocols::{
     linux_dmabuf_v1::{
         zwp_linux_buffer_params_v1::{
@@ -299,6 +303,20 @@ impl DmabufPlane {
     }
 }
 
+fn validate_dmabuf_fd(fd: &OwnedFd) -> bool {
+    let Ok(flags) = fcntl_getfd(fd) else {
+        return false;
+    };
+    let Ok(stat) = fstat(fd.as_fd()) else {
+        return false;
+    };
+    flags.contains(FdFlags::CLOEXEC)
+        && matches!(
+            FileType::from_raw_mode(stat.st_mode),
+            FileType::RegularFile | FileType::CharacterDevice
+        )
+}
+
 struct DmabufBufferParamsHandler {
     filters: Arc<DmabufFilterList>,
     diag: Rc<RefCell<DiagRateLimiter>>,
@@ -530,6 +548,17 @@ impl ZwpLinuxBufferParamsV1Handler for DmabufBufferParamsHandler {
         modifier_hi: u32,
         modifier_lo: u32,
     ) {
+        if !validate_dmabuf_fd(fd) {
+            let _ = self
+                .diag
+                .borrow_mut()
+                .warn("dmabuf-descriptor-denied", "descriptor", || {
+                    "[d2b-wlproxy] event=dmabuf-descriptor-denied reason=descriptor-mismatch"
+                        .to_owned()
+                });
+            self.invalid_plane_count += 1;
+            return;
+        }
         if self.filters.is_empty() {
             slf.send_add(fd, plane_idx, offset, stride, modifier_hi, modifier_lo);
             return;
@@ -829,6 +858,7 @@ fn table_fd(table: &[u8]) -> io::Result<OwnedFd> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::net::UnixStream;
 
     #[derive(Debug, PartialEq, Eq)]
     enum CreateEvent {
@@ -1215,6 +1245,13 @@ mod tests {
                 modifier: None,
             }
         );
+    }
+
+    #[test]
+    fn descriptor_validation_rejects_non_dmabuf_socket() {
+        let (socket, _peer) = UnixStream::pair().unwrap();
+        let fd: OwnedFd = socket.into();
+        assert!(!validate_dmabuf_fd(&fd));
     }
 
     #[test]

@@ -16,6 +16,7 @@ use std::{
 };
 
 use nix::sys::memfd::{MemFdCreateFlag, memfd_create};
+use rustix::io::{FdFlags, fcntl_getfd};
 use wl_proxy::{
     fixed::Fixed,
     object::{ConcreteObject, ObjectCoreApi},
@@ -2277,9 +2278,24 @@ impl XdgToplevelHandler for WrapperToplevelHandler {
 }
 
 fn create_memfd_with_contents(contents: &[u8], size: u64) -> io::Result<OwnedFd> {
+    if u64::try_from(contents.len()).ok() != Some(size) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "decoration descriptor length mismatch",
+        ));
+    }
     let name = CString::new("d2b-wayland-border").expect("static memfd name has no nul");
     let fd = memfd_create(name.as_c_str(), MemFdCreateFlag::MFD_CLOEXEC)
         .map_err(|errno| io::Error::from_raw_os_error(errno as i32))?;
+    if !fcntl_getfd(&fd)
+        .map_err(io::Error::from)?
+        .contains(FdFlags::CLOEXEC)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "decoration descriptor is not close-on-exec",
+        ));
+    }
     let writer_fd = rustix::io::fcntl_dupfd_cloexec(&fd, 0).map_err(io::Error::from)?;
     let mut file = File::from(writer_fd);
     file.set_len(size)?;
@@ -2377,6 +2393,18 @@ impl wl_proxy::protocols::wayland::wl_shm_pool::WlShmPoolHandler for TrackingShm
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decoration_memfd_requires_exact_authenticated_length() {
+        assert_eq!(
+            create_memfd_with_contents(&[0_u8; 4], 3)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        let fd = create_memfd_with_contents(&[0_u8; 4], 4).unwrap();
+        assert!(fcntl_getfd(&fd).unwrap().contains(FdFlags::CLOEXEC));
+    }
 
     fn test_diag() -> Rc<RefCell<DiagRateLimiter>> {
         Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())))

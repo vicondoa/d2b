@@ -2,12 +2,25 @@ use d2b_core::workload_identity::WorkloadTarget;
 use d2b_realm_core::WorkloadProviderKind;
 use sha2::{Digest, Sha256};
 
+use crate::services::wayland::SessionIdentity;
+
 /// Authenticated provider-neutral identity for one proxy instance.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ProxyIdentity {
     target: WorkloadTarget,
     provider_kind: WorkloadProviderKind,
     legacy_vm_name: Option<String>,
+    session: Option<SessionIdentity>,
+}
+
+impl std::fmt::Debug for ProxyIdentity {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProxyIdentity")
+            .field("provider_kind", &self.provider_kind_label())
+            .field("component_session_authenticated", &self.session.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl ProxyIdentity {
@@ -16,6 +29,20 @@ impl ProxyIdentity {
             target,
             provider_kind,
             legacy_vm_name: None,
+            session: None,
+        }
+    }
+
+    pub fn from_component_session(
+        target: WorkloadTarget,
+        provider_kind: WorkloadProviderKind,
+        session: SessionIdentity,
+    ) -> Self {
+        Self {
+            target,
+            provider_kind,
+            legacy_vm_name: None,
+            session: Some(session),
         }
     }
 
@@ -33,6 +60,7 @@ impl ProxyIdentity {
             target,
             provider_kind,
             legacy_vm_name: Some(vm_name),
+            session: None,
         })
     }
 
@@ -55,6 +83,16 @@ impl ProxyIdentity {
 
     pub fn legacy_vm_name(&self) -> Option<&str> {
         self.legacy_vm_name.as_deref()
+    }
+
+    pub fn component_session_identity(&self) -> Option<&SessionIdentity> {
+        self.session.as_ref()
+    }
+
+    pub fn require_component_session(&self) -> Result<&SessionIdentity, ProxyIdentityError> {
+        self.session
+            .as_ref()
+            .ok_or(ProxyIdentityError::UnauthenticatedControl)
     }
 
     pub fn canonical_target(&self) -> String {
@@ -129,6 +167,8 @@ pub enum ProxyIdentityError {
     InvalidLegacyVmName,
     #[error("unsafe-local identity cannot carry a legacy VM name")]
     UnsafeLocalLegacyVm,
+    #[error("Wayland control identity was not authenticated by ComponentSession")]
+    UnauthenticatedControl,
 }
 
 fn validate_legacy_vm_name(value: &str) -> Result<(), ProxyIdentityError> {
@@ -194,6 +234,33 @@ mod tests {
                 WorkloadProviderKind::UnsafeLocal,
             ),
             Err(ProxyIdentityError::UnsafeLocalLegacyVm)
+        );
+    }
+
+    #[test]
+    fn component_session_identity_is_required_for_control_authority() {
+        use crate::services::wayland::{OpaqueId, SessionIdentity};
+
+        let session = SessionIdentity {
+            realm_id: OpaqueId::parse("realm").unwrap(),
+            workload_id: OpaqueId::parse("workload").unwrap(),
+            provider_id: OpaqueId::parse("provider").unwrap(),
+            role_id: OpaqueId::parse("role").unwrap(),
+        };
+        let identity = ProxyIdentity::from_component_session(
+            WorkloadTarget::parse("tools.host.d2b").unwrap(),
+            WorkloadProviderKind::UnsafeLocal,
+            session.clone(),
+        );
+        assert_eq!(identity.require_component_session(), Ok(&session));
+
+        let legacy = ProxyIdentity::canonical(
+            WorkloadTarget::parse("tools.host.d2b").unwrap(),
+            WorkloadProviderKind::UnsafeLocal,
+        );
+        assert_eq!(
+            legacy.require_component_session(),
+            Err(ProxyIdentityError::UnauthenticatedControl)
         );
     }
 }
