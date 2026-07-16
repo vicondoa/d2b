@@ -470,6 +470,24 @@ let
       builtins.elem fragment.path
         realmHostPlan.components.${fragment.owner}.ownedFiles)
     providerExtensionFragments;
+  deletionExtensionRows =
+    realmHostPlan.deletionContractTestExtensionSeam.owners;
+  deletionExtensionPaths =
+    lib.concatMap (row: row.extensionPaths) deletionExtensionRows;
+  deletionExtensionOwnershipValid = lib.all
+    (row:
+      lib.all
+        (path:
+          builtins.elem path realmHostPlan.components.${row.component}.ownedFiles)
+        row.extensionPaths
+      && lib.all
+        (path:
+          builtins.elem path realmHostPlan.components.${row.component}.deletes)
+        row.deletedFiles
+      && builtins.elem
+        realmHostPlan.deletionContractTestExtensionSeam.dependency
+        realmHostPlan.components.${row.component}.externalDependsOn)
+    deletionExtensionRows;
   affectedInventoryRows =
     lib.concatLists (builtins.attrValues realmHostPlan.affectedInventory);
   affectedInventoryPaths =
@@ -478,10 +496,16 @@ let
     lib.concatMap (row: row.reservedPaths) affectedInventoryRows;
   isAffectedInventoryPath = path:
     path == "README.md"
+    || path == "tests/migration-ledger.toml"
+    || path == "tests/migration-state.d/polkit-allowlist-eval.toml"
+    || path == "tests/migration-state.d/vm-submodule-cutover-eval.toml"
+    || path == "tests/migration-state.d/vm-submodule-eval.toml"
+    || path == "tests/static.sh"
     || lib.hasPrefix "docs/explanation/" path
     || lib.hasPrefix "docs/how-to/" path
     || lib.hasPrefix "docs/reference/" path
     || lib.hasPrefix "examples/" path
+    || lib.hasPrefix "packages/d2b-contract-tests/" path
     || lib.hasPrefix "templates/" path
     || lib.hasPrefix "tests/fixtures/" path
     || lib.hasPrefix "tests/golden/" path
@@ -510,6 +534,8 @@ let
     lib.filter (component: component != "bundle-integration") componentNames;
   componentPolicy = args:
     import ../eval-cases/realm-host-component-policy.nix args;
+  componentGateSource = builtins.readFile
+    (flakeRoot + "/tests/unit/nix/tools/realm-host-component-diff.sh");
   allowedSchemaDiff = componentPolicy {
     branch = "adr0045-w7-realm-schema";
     pathsJson = builtins.toJSON [ "nixos-modules/options.nix" ];
@@ -522,6 +548,12 @@ let
     branch = "adr0045-w7-provider-registry-composition";
     pathsJson =
       builtins.toJSON [ "nixos-modules/provider-registry-v2-json.nix" ];
+  };
+  blockedDeletionContractDiff = componentPolicy {
+    branch = "adr0045-w7-workload-processes";
+    pathsJson = builtins.toJSON [
+      "packages/d2b-contract-tests/tests/policy_misc.rs"
+    ];
   };
   blockedFixtureDiff = componentPolicy {
     branch = "adr0045-w7-realm-devices";
@@ -1837,7 +1869,7 @@ in
       inherit forbiddenOwnedFiles;
     };
     expected = {
-      sharedRoot = "b2b50e67cfab4fb8601ebb1a63946e84eccba5c1";
+      sharedRoot = "47a55e101b5b62e6a89e342512125de43bac4e68";
       bundleVersion = 12;
       bundleSchemaVersion = "v2";
       allocatorOwner = "w5";
@@ -1894,6 +1926,8 @@ in
       implementationBlocked =
         realmHostPlan.externalDependencies.${realmHostPlan.providerRegistryExtensionSeams.sharedRootConsumerDependency}.status
         == "blocked";
+      consumerSeamCommit =
+        realmHostPlan.externalDependencies.${realmHostPlan.providerRegistryExtensionSeams.sharedRootConsumerDependency}.landedCommit;
       inherit providerFragmentOwnershipValid;
       preservedAxes =
         realmHostPlan.frozenParentContracts.providerRegistry.preservedAxes;
@@ -1911,7 +1945,9 @@ in
       flakeOwnedByIntegration = true;
       sharedRootConsumerDependency =
         "shared-root-provider-registry-open-consumer-seam";
-      implementationBlocked = true;
+      implementationBlocked = false;
+      consumerSeamCommit =
+        "fa18c34741b8a898b4786a14e19e86e395d37325";
       providerFragmentOwnershipValid = true;
       preservedAxes = [
         "local-observability"
@@ -1947,6 +1983,16 @@ in
         lib.any
           (row: row.paths != [ ])
           realmHostPlan.affectedInventory.tests;
+      contractTestsInventoried =
+        lib.any
+          (row: row.paths != [ ])
+          realmHostPlan.affectedInventory.contractTests;
+      inherit deletionExtensionOwnershipValid;
+      deletionExtensionPathsUnique =
+        builtins.length deletionExtensionPaths
+        == builtins.length (lib.unique deletionExtensionPaths);
+      deletionExtensionPaths =
+        lib.sort lib.lessThan deletionExtensionPaths;
     };
     expected = {
       affectedInventoryComplete = true;
@@ -1956,6 +2002,22 @@ in
       examplesInventoried = true;
       docsInventoried = true;
       testsInventoried = true;
+      contractTestsInventoried = true;
+      deletionExtensionOwnershipValid = true;
+      deletionExtensionPathsUnique = true;
+      deletionExtensionPaths = [
+        "packages/d2b-contract-tests/tests/policy_host_realm_relay.rs"
+        "packages/d2b-contract-tests/tests/policy_misc.rs"
+        "packages/d2b-contract-tests/tests/policy_modules.rs"
+        "packages/d2b-contract-tests/tests/policy_source.rs"
+        "packages/d2b-contract-tests/tests/realm_workload_schema_contract.rs"
+        "packages/d2b-contract-tests/tests/storage_sync_contracts.rs"
+        "tests/migration-ledger.toml"
+        "tests/migration-state.d/polkit-allowlist-eval.toml"
+        "tests/migration-state.d/vm-submodule-cutover-eval.toml"
+        "tests/migration-state.d/vm-submodule-eval.toml"
+        "tests/static.sh"
+      ];
     };
   };
 
@@ -1969,6 +2031,14 @@ in
       };
       blockedProviderRegistry = {
         inherit (blockedProviderRegistryDiff)
+          blockedExternalDependencies
+          component
+          valid
+          violations
+          ;
+      };
+      blockedDeletionContract = {
+        inherit (blockedDeletionContractDiff)
           blockedExternalDependencies
           component
           valid
@@ -1999,6 +2069,27 @@ in
           violations
           ;
       };
+      gitEnvironmentHardening = {
+        sanitizedEnvironment = lib.hasInfix "env -i" componentGateSource;
+        replacementDisabled =
+          lib.hasInfix "export GIT_NO_REPLACE_OBJECTS=1" componentGateSource;
+        externalGraftDisabled =
+          lib.hasInfix "export GIT_GRAFT_FILE=/dev/null" componentGateSource
+          && lib.hasInfix "GIT_GRAFT_FILE=/dev/null \\" componentGateSource;
+        externalShallowDisabled =
+          lib.hasInfix "export GIT_SHALLOW_FILE=/dev/null" componentGateSource
+          && lib.hasInfix "GIT_SHALLOW_FILE=/dev/null \\" componentGateSource;
+        globalConfigDisabled =
+          lib.hasInfix "GIT_CONFIG_GLOBAL=/dev/null" componentGateSource
+          && lib.hasInfix "GIT_CONFIG_NOSYSTEM=1" componentGateSource;
+        repositoryMetadataRejected =
+          lib.hasInfix "info/grafts" componentGateSource
+          && lib.hasInfix "objects/info/alternates" componentGateSource
+          && lib.hasInfix "refs/replace" componentGateSource;
+        submodulesForced =
+          lib.hasInfix "--ignore-submodules=none" componentGateSource
+          && lib.hasInfix "diff.ignoreSubmodules=none" componentGateSource;
+      };
     };
     expected = {
       allowedSchema = {
@@ -2016,7 +2107,15 @@ in
         valid = false;
         violations = [ ];
         blockedExternalDependencies = [
-          "shared-root-provider-registry-open-consumer-seam"
+          "shared-root-deletion-contract-test-seam"
+        ];
+      };
+      blockedDeletionContract = {
+        component = "workload-processes";
+        valid = false;
+        violations = [ ];
+        blockedExternalDependencies = [
+          "shared-root-deletion-contract-test-seam"
         ];
       };
       blockedFixture = {
@@ -2032,6 +2131,7 @@ in
         valid = false;
         violations = [ ];
         blockedExternalDependencies = [
+          "shared-root-deletion-contract-test-seam"
           "w5-runtime-document-split"
         ];
       };
@@ -2040,8 +2140,17 @@ in
         valid = false;
         violations = [ ];
         blockedExternalDependencies = [
-          "shared-root-provider-registry-open-consumer-seam"
+          "shared-root-deletion-contract-test-seam"
         ];
+      };
+      gitEnvironmentHardening = {
+        sanitizedEnvironment = true;
+        replacementDisabled = true;
+        externalGraftDisabled = true;
+        externalShallowDisabled = true;
+        globalConfigDisabled = true;
+        repositoryMetadataRejected = true;
+        submodulesForced = true;
       };
     };
   };

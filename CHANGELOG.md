@@ -27,9 +27,11 @@ deprecations ship one minor release before removal.
 - Added the W7 realm-host prep inventory and Nix policy skeleton: fifteen
   file-disjoint declarative components, explicit allocator runtime exclusion,
   complete example/documentation/fixture/test ownership, a parent-trusted
-  component diff gate, cross-wave documentation reservations, blocked
-  provider-registry-v2 consumer-seam dependency, old-surface deletion
-  inventory, and dispatch-ready component prompts.
+  component diff gate with sanitized Git/rewrite metadata handling, cross-wave
+  documentation reservations, exact deletion-coupled contract-test and
+  retirement-ledger ownership behind a narrow shared-root seam, the landed
+  provider-registry-v2 consumer seam, old-surface deletion inventory, and
+  dispatch-ready component prompts.
 - Added the post-W4 shared contract/tooling root: separate W5/W6/W7 delivery
   authorities, typed allocator and child-realm broker DTOs, frozen service and
   dependency inventories, parent-commit-trusted ownership checks with explicit
