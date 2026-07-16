@@ -408,9 +408,11 @@ CLOEXEC cleared. The child runs in its own process group; the wrapper forwards
 termination signals, waits for the complete group, then closes its original FD.
 `/proc/<pid>/stat` is parsed as bytes. Any pidfd wait, process-table, namespace,
 or process-group observation failure retains the parent permit while the
-wrapper kills the group, reaps its leader, and waits for the group to disappear
-before failing. Thus a wrapper crash does not release a permit while its child
-hierarchy lives. Slot files are never unlinked during acquisition.
+wrapper kills the group and keeps its exited leader unreaped as the PID/PGID
+identity anchor while inspecting and terminating descendants. The leader is
+reaped only after the final group signal and membership check, so a reused PGID
+can never be targeted. Thus a wrapper crash does not release a permit while its
+child hierarchy lives. Slot files are never unlinked during acquisition.
 
 Use `make heavy-check`, `make heavy-test-integration`,
 `make heavy-test-host-integration`, `make heavy-test-hardware`,

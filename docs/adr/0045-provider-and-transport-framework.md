@@ -2652,10 +2652,13 @@ The post-W4 execution rules are:
    process hierarchy also retains the permit if the parent crashes. The parent
    runs the gate in a child process group, forwards termination signals, and
    parses `/proc/<pid>/stat` as bytes. Any wait or process-group observation
-   failure keeps the permit while the wrapper kills the group, reaps its
-   leader, and waits for group disappearance before returning failure. Only
-   then does it close its FD. Inherited gate FDs close on process exit; slot
-   files persist and are never unlinked during acquisition. It wraps
+   failure keeps the permit while the wrapper kills the group. The exited
+   leader remains unreaped as the PID/PGID identity anchor through every
+   descendant-membership check and any repeated group signal; only after the
+   last bare-PGID operation does the wrapper reap the leader and close its FD.
+   This ordering prevents a reused PGID from targeting an unrelated process
+   group. Inherited gate FDs close on process exit; slot files persist and are
+   never unlinked during acquisition. It wraps
    `make check`,
    `make test-integration`, `make test-host-integration`, `make test-hardware`,
    full-workspace final `cargo test`, and build-producing `nix flake check`.

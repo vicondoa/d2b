@@ -735,43 +735,109 @@ fn terminate_group_and_reap(
     child: &mut Child,
     process_group: rustix::process::Pid,
 ) -> Result<(), HeavyGateError> {
-    let mut first_error = None;
-    match rustix::process::kill_process_group(process_group, rustix::process::Signal::Kill) {
-        Ok(()) | Err(rustix::io::Errno::SRCH) => {}
-        Err(error) => remember_cleanup_error(
-            &mut first_error,
-            format!("cannot terminate gate process group: {error}"),
-        ),
+    let mut cleanup = OsProcessGroupCleanup {
+        child,
+        process_group,
+    };
+    terminate_group_with_anchor(&mut cleanup)
+}
+
+trait ProcessGroupCleanup {
+    fn signal_group(&mut self) -> Result<(), HeavyGateError>;
+    fn wait_for_leader_exit(&mut self) -> Result<(), HeavyGateError>;
+    fn has_nonleader_members(&mut self) -> Result<bool, HeavyGateError>;
+    fn reap_leader(&mut self) -> Result<(), HeavyGateError>;
+    fn pause(&mut self);
+}
+
+struct OsProcessGroupCleanup<'a> {
+    child: &'a mut Child,
+    process_group: rustix::process::Pid,
+}
+
+impl ProcessGroupCleanup for OsProcessGroupCleanup<'_> {
+    fn signal_group(&mut self) -> Result<(), HeavyGateError> {
+        match rustix::process::kill_process_group(self.process_group, rustix::process::Signal::Kill)
+        {
+            Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
+            Err(error) => Err(HeavyGateError::new(format!(
+                "cannot terminate gate process group: {error}"
+            ))),
+        }
     }
-    if let Err(error) = child.wait() {
-        remember_cleanup_error(
-            &mut first_error,
-            format!("cannot reap gate child after termination: {error}"),
-        );
+
+    fn wait_for_leader_exit(&mut self) -> Result<(), HeavyGateError> {
+        loop {
+            match rustix::process::waitid(
+                rustix::process::WaitId::Pid(self.process_group),
+                rustix::process::WaitidOptions::EXITED | rustix::process::WaitidOptions::NOWAIT,
+            ) {
+                Ok(Some(_)) => return Ok(()),
+                Ok(None) => {
+                    return Err(HeavyGateError::new(
+                        "gate process-group leader exit was not observable",
+                    ));
+                }
+                Err(rustix::io::Errno::INTR) => {}
+                Err(error) => {
+                    return Err(HeavyGateError::new(format!(
+                        "cannot preserve gate process-group leader identity: {error}"
+                    )));
+                }
+            }
+        }
+    }
+
+    fn has_nonleader_members(&mut self) -> Result<bool, HeavyGateError> {
+        process_group_has_nonleader_members(self.process_group, Path::new("/proc"))
+    }
+
+    fn reap_leader(&mut self) -> Result<(), HeavyGateError> {
+        self.child.wait().map(|_| ()).map_err(|error| {
+            HeavyGateError::new(format!("cannot reap gate child after termination: {error}"))
+        })
+    }
+
+    fn pause(&mut self) {
+        thread::sleep(CHILD_POLL_INTERVAL);
+    }
+}
+
+fn terminate_group_with_anchor(
+    cleanup: &mut impl ProcessGroupCleanup,
+) -> Result<(), HeavyGateError> {
+    let mut first_error = None;
+    if let Err(error) = cleanup.signal_group() {
+        remember_cleanup_error(&mut first_error, error.to_string());
+    }
+    if let Err(error) = cleanup.wait_for_leader_exit() {
+        remember_cleanup_error(&mut first_error, error.to_string());
+        if let Err(error) = cleanup.reap_leader() {
+            remember_cleanup_error(&mut first_error, error.to_string());
+        }
+        return Err(HeavyGateError::new(
+            first_error.expect("leader-anchor failure was recorded"),
+        ));
     }
 
     loop {
-        match rustix::process::test_kill_process_group(process_group) {
-            Err(rustix::io::Errno::SRCH) => break,
-            Ok(()) | Err(rustix::io::Errno::PERM) => {
-                match rustix::process::kill_process_group(
-                    process_group,
-                    rustix::process::Signal::Kill,
-                ) {
-                    Ok(()) | Err(rustix::io::Errno::SRCH) => {}
-                    Err(error) => remember_cleanup_error(
-                        &mut first_error,
-                        format!("cannot finish terminating gate process group: {error}"),
-                    ),
+        match cleanup.has_nonleader_members() {
+            Ok(false) => break,
+            Ok(true) => {
+                if let Err(error) = cleanup.signal_group() {
+                    remember_cleanup_error(&mut first_error, error.to_string());
                 }
             }
-            Err(rustix::io::Errno::INTR) => {}
-            Err(error) => remember_cleanup_error(
-                &mut first_error,
-                format!("cannot observe terminated gate process group: {error}"),
-            ),
+            Err(error) => {
+                remember_cleanup_error(&mut first_error, error.to_string());
+            }
         }
-        thread::sleep(CHILD_POLL_INTERVAL);
+        cleanup.pause();
+    }
+
+    // Reaping releases PID/PGID reuse protection. No group operation may follow.
+    if let Err(error) = cleanup.reap_leader() {
+        remember_cleanup_error(&mut first_error, error.to_string());
     }
 
     match first_error {
@@ -799,6 +865,7 @@ fn exit_code(status: ExitStatus) -> ExitCode {
 mod tests {
     use super::*;
     use std::{
+        collections::VecDeque,
         os::unix::fs::{PermissionsExt, symlink},
         process::Stdio,
         sync::atomic::{AtomicU64, Ordering},
@@ -807,6 +874,55 @@ mod tests {
     static NEXT_TEST: AtomicU64 = AtomicU64::new(1);
     const GROUP_TEST_ROLE: &str = "D2B_HEAVY_GATE_UNIT_GROUP_ROLE";
     const GROUP_TEST_DESCENDANT: &str = "D2B_HEAVY_GATE_UNIT_GROUP_DESCENDANT";
+
+    #[derive(Debug, Eq, PartialEq)]
+    enum CleanupEvent {
+        Signal,
+        WaitForLeaderExit,
+        InspectMembers,
+        ReapLeader,
+    }
+
+    struct ReuseAwareCleanup {
+        events: Vec<CleanupEvent>,
+        member_observations: VecDeque<bool>,
+        leader_reaped: bool,
+        touched_reused_group: bool,
+    }
+
+    impl ReuseAwareCleanup {
+        fn group_operation(&mut self, event: CleanupEvent) {
+            if self.leader_reaped {
+                self.touched_reused_group = true;
+            }
+            self.events.push(event);
+        }
+    }
+
+    impl ProcessGroupCleanup for ReuseAwareCleanup {
+        fn signal_group(&mut self) -> Result<(), HeavyGateError> {
+            self.group_operation(CleanupEvent::Signal);
+            Ok(())
+        }
+
+        fn wait_for_leader_exit(&mut self) -> Result<(), HeavyGateError> {
+            self.group_operation(CleanupEvent::WaitForLeaderExit);
+            Ok(())
+        }
+
+        fn has_nonleader_members(&mut self) -> Result<bool, HeavyGateError> {
+            self.group_operation(CleanupEvent::InspectMembers);
+            Ok(self.member_observations.pop_front().unwrap_or(false))
+        }
+
+        fn reap_leader(&mut self) -> Result<(), HeavyGateError> {
+            self.events.push(CleanupEvent::ReapLeader);
+            self.leader_reaped = true;
+            Ok(())
+        }
+
+        fn pause(&mut self) {}
+    }
 
     struct Scratch(PathBuf);
 
@@ -1083,6 +1199,51 @@ mod tests {
     }
 
     #[test]
+    fn cleanup_never_touches_reused_pgid_after_leader_reap() {
+        let mut cleanup = ReuseAwareCleanup {
+            events: Vec::new(),
+            member_observations: VecDeque::from([true, false]),
+            leader_reaped: false,
+            touched_reused_group: false,
+        };
+
+        terminate_group_with_anchor(&mut cleanup).expect("anchored cleanup");
+
+        assert_eq!(
+            cleanup.events,
+            [
+                CleanupEvent::Signal,
+                CleanupEvent::WaitForLeaderExit,
+                CleanupEvent::InspectMembers,
+                CleanupEvent::Signal,
+                CleanupEvent::InspectMembers,
+                CleanupEvent::ReapLeader,
+            ]
+        );
+        assert!(cleanup.leader_reaped);
+        assert!(
+            !cleanup.touched_reused_group,
+            "a bare PGID operation ran after the simulated immediate reuse"
+        );
+    }
+
+    #[test]
+    fn exited_leader_anchor_cleans_descendant_before_reap() {
+        let scratch = Scratch::new("exited-leader-cleanup");
+        let (mut child, leader, pidfd, descendant) =
+            spawn_supervision_group(&scratch, "leader-exit");
+        wait_for_test_leader_exit(&pidfd);
+        assert!(
+            rustix::process::test_kill_process(descendant).is_ok(),
+            "descendant must still be live before cleanup"
+        );
+
+        terminate_group_and_reap(&mut child, leader).expect("anchored group cleanup");
+
+        assert_group_was_reaped(&mut child, descendant);
+    }
+
+    #[test]
     fn waitid_observation_error_terminates_and_reaps_group() {
         let scratch = Scratch::new("waitid-error");
         let (mut child, leader, _pidfd, descendant) =
@@ -1118,7 +1279,7 @@ mod tests {
     }
 
     #[test]
-    fn proc_observation_error_terminates_and_reaps_group() {
+    fn proc_observation_error_with_exited_leader_reaps_descendant_group() {
         let scratch = Scratch::new("proc-error");
         let (mut child, leader, pidfd, descendant) =
             spawn_supervision_group(&scratch, "leader-exit");
@@ -1221,6 +1382,28 @@ mod tests {
                 Instant::now() < deadline,
                 "timed out waiting for {}",
                 path.display()
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    fn wait_for_test_leader_exit(pidfd: &OwnedFd) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let exited = rustix::process::waitid(
+                rustix::process::WaitId::PidFd(pidfd.as_fd()),
+                rustix::process::WaitidOptions::EXITED
+                    | rustix::process::WaitidOptions::NOHANG
+                    | rustix::process::WaitidOptions::NOWAIT,
+            )
+            .expect("observe test leader")
+            .is_some();
+            if exited {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for test leader exit"
             );
             thread::sleep(Duration::from_millis(5));
         }
