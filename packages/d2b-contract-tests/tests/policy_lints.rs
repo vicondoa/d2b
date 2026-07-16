@@ -32,6 +32,135 @@ fn collect_markdown_files(dir: &Path, files: &mut Vec<PathBuf>) {
     }
 }
 
+fn is_nix_ident_start(byte: u8) -> bool {
+    byte.is_ascii_alphabetic() || byte == b'_'
+}
+
+fn is_nix_ident_continue(byte: u8) -> bool {
+    is_nix_ident_start(byte) || byte.is_ascii_digit() || matches!(byte, b'-' | b'\'')
+}
+
+fn skip_nix_trivia(source: &[u8], cursor: &mut usize) -> Result<(), String> {
+    loop {
+        while source.get(*cursor).is_some_and(u8::is_ascii_whitespace) {
+            *cursor += 1;
+        }
+        if source.get(*cursor) == Some(&b'#') {
+            while source.get(*cursor).is_some_and(|byte| *byte != b'\n') {
+                *cursor += 1;
+            }
+            continue;
+        }
+        if source.get(*cursor..*cursor + 2) == Some(b"/*") {
+            *cursor += 2;
+            let mut depth = 1;
+            while depth > 0 {
+                match source.get(*cursor..*cursor + 2) {
+                    Some(b"/*") => {
+                        depth += 1;
+                        *cursor += 2;
+                    }
+                    Some(b"*/") => {
+                        depth -= 1;
+                        *cursor += 2;
+                    }
+                    Some(_) => *cursor += 1,
+                    None => return Err("unterminated block comment in Nix package list".into()),
+                }
+            }
+            continue;
+        }
+        return Ok(());
+    }
+}
+
+fn parse_nix_path_list(source: &str, list_open: usize) -> Result<Vec<String>, String> {
+    let source = source.as_bytes();
+    if source.get(list_open) != Some(&b'[') {
+        return Err("Nix package list does not start with `[`".into());
+    }
+
+    let mut cursor = list_open + 1;
+    let mut paths = Vec::new();
+    loop {
+        skip_nix_trivia(source, &mut cursor)?;
+        let Some(&byte) = source.get(cursor) else {
+            return Err("unterminated Nix package list".into());
+        };
+        if byte == b']' {
+            return Ok(paths);
+        }
+        if !is_nix_ident_start(byte) {
+            return Err(format!(
+                "delivery runtime package list contains unsupported token `{}`",
+                char::from(byte)
+            ));
+        }
+
+        let mut path = String::new();
+        loop {
+            let segment_start = cursor;
+            cursor += 1;
+            while source
+                .get(cursor)
+                .is_some_and(|byte| is_nix_ident_continue(*byte))
+            {
+                cursor += 1;
+            }
+            if !path.is_empty() {
+                path.push('.');
+            }
+            path.push_str(
+                std::str::from_utf8(&source[segment_start..cursor])
+                    .map_err(|_| "non-UTF-8 Nix identifier in delivery runtime package list")?,
+            );
+
+            skip_nix_trivia(source, &mut cursor)?;
+            if source.get(cursor) != Some(&b'.') {
+                break;
+            }
+            cursor += 1;
+            skip_nix_trivia(source, &mut cursor)?;
+            if !source
+                .get(cursor)
+                .is_some_and(|byte| is_nix_ident_start(*byte))
+            {
+                return Err(
+                    "incomplete Nix attribute path in delivery runtime package list".into(),
+                );
+            }
+        }
+        paths.push(path);
+    }
+}
+
+fn delivery_runtime_packages(flake: &str) -> Result<Vec<String>, String> {
+    let branch_start = Regex::new(r#"spec\s*\.\s*buildKind\s*==\s*"deliveryWorkspace"\s*then"#)
+        .expect("valid delivery branch regex")
+        .find(flake)
+        .ok_or("missing deliveryWorkspace package branch")?;
+    let branch_tail = &flake[branch_start.end()..];
+    let branch_end = Regex::new(
+        r#"passthru\s*\.\s*rustToolchainVersion\s*=\s*deliveryTools\s*\.\s*rustStableVersion\s*;"#,
+    )
+    .expect("valid delivery branch end regex")
+    .find(branch_tail)
+    .ok_or("deliveryWorkspace package branch is missing its pinned toolchain passthru")?;
+    let branch = &branch_tail[..branch_end.start()];
+
+    let list_pattern = Regex::new(r#"pkgs\s*\.\s*lib\s*\.\s*makeBinPath\s*\["#)
+        .expect("valid delivery runtime list regex");
+    let mut lists = list_pattern.find_iter(branch);
+    let runtime_list = lists
+        .next()
+        .ok_or("deliveryWorkspace package branch is missing its runtime package list")?;
+    if lists.next().is_some() {
+        return Err("deliveryWorkspace package branch has multiple runtime package lists".into());
+    }
+
+    parse_nix_path_list(branch, runtime_list.end() - 1)
+}
+
 // Migrated from tests/daemon-experimental-warning-eval.sh.
 #[test]
 fn daemon_experimental_option_documents_default_with_migration() {
@@ -258,15 +387,32 @@ fn delivery_tool_sources_and_toolchains_are_exactly_pinned() {
         "Git Town and GitHub CLI must be repository-owned source builds, not nixpkgs aliases"
     );
     let flake = read_repo_file("flake.nix");
+    let runtime_packages = delivery_runtime_packages(&flake)
+        .unwrap_or_else(|err| panic!("invalid delivery runtime package list: {err}"));
+    let required_runtime_packages = [
+        "pkgs.git",
+        "pkgs.openssl",
+        "pkgs.shellcheck",
+        "deliveryTools.gh",
+        "deliveryTools.gitTown",
+    ];
+    for required in required_runtime_packages {
+        assert!(
+            runtime_packages.iter().any(|package| package == required),
+            "delivery runtime package list is missing {required}; found {runtime_packages:?}"
+        );
+    }
     assert!(
         flake.contains("gh --version | grep -F 'gh version 2.92.0'")
             && flake.contains("git-town --version | grep -Fx 'Git Town 23.0.1'")
             && flake.contains("gh = deliveryTools.gh;")
-            && flake.contains("git-town = deliveryTools.gitTown;")
-            && flake.contains(
-                "pkgs.git\n                pkgs.openssl\n                pkgs.shellcheck"
-            ),
+            && flake.contains("git-town = deliveryTools.gitTown;"),
         "delivery packages and checks must expose all runtime verification tools"
+    );
+    assert_eq!(
+        runtime_packages.len(),
+        required_runtime_packages.len(),
+        "delivery runtime package list must contain exactly the required tools"
     );
 
     let flake = read_repo_file("flake.nix");
@@ -299,7 +445,9 @@ fn delivery_tool_sources_and_toolchains_are_exactly_pinned() {
     assert!(
         flake.contains(
             "deliveryRustWorkspace =\n          rustWorkspaceWith deliveryTools.stableRustPlatform;"
-        ) && flake.contains("d2b-delivery = deliveryRustWorkspace {")
+        ) && flake.contains(r#"output = "d2b-delivery";"#)
+            && flake.contains(r#"buildKind = "deliveryWorkspace";"#)
+            && flake.contains("deliveryRustWorkspace (workspaceArgs // {")
             && flake.contains(
                 "passthru.rustToolchainVersion = deliveryTools.rustStableVersion;"
             )
@@ -383,6 +531,43 @@ fn delivery_tool_sources_and_toolchains_are_exactly_pinned() {
             "xtask must not implement a GitHub stack mutation with {mutation}"
         );
     }
+}
+
+#[test]
+fn delivery_runtime_package_parser_ignores_layout_and_out_of_scope_lists() {
+    let flake = r#"
+      decoy = pkgs.lib.makeBinPath [
+        pkgs.git pkgs.openssl pkgs.shellcheck
+      ];
+      value =
+        if spec . buildKind == "deliveryWorkspace"
+        then deliveryRustWorkspace (workspaceArgs // {
+          postFixup = ''
+            --prefix PATH : ${pkgs . lib . makeBinPath
+              [
+                pkgs . git
+                # Layout and comments are not package entries.
+                pkgs.openssl  pkgs . shellcheck
+                deliveryTools . gh
+                deliveryTools.gitTown
+              ]}
+          '';
+          passthru . rustToolchainVersion =
+            deliveryTools . rustStableVersion ;
+        })
+        else null;
+    "#;
+
+    assert_eq!(
+        delivery_runtime_packages(flake).expect("formatting variant must parse"),
+        [
+            "pkgs.git",
+            "pkgs.openssl",
+            "pkgs.shellcheck",
+            "deliveryTools.gh",
+            "deliveryTools.gitTown",
+        ]
+    );
 }
 
 #[test]
