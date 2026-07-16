@@ -81,6 +81,7 @@ const PROVIDER_INTEGRATION_FILES: &[&str] = &[
     "packages/d2bd/tests/public_status_socket.rs",
     "packages/xtask/src/main.rs",
     "packages/xtask/tests/policy_workspace.rs",
+    "tests/golden/pinned/d2bd-startup-smoke.txt",
     "tests/unit/nix/cases/realm-workloads.nix",
     "tests/unit/nix/pinned/common.txt",
 ];

@@ -1319,6 +1319,11 @@
       "path": "packages/d2bd/src/supervisor/dag.rs"
     },
     {
+      "name": "w4-integration-d2bd-startup-smoke-test-pin",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "tests/golden/pinned/d2bd-startup-smoke.txt"
+    },
+    {
       "name": "w4-integration-d2bd-stop-dag-rs",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2bd/src/supervisor/stop_dag.rs"
