@@ -37,6 +37,10 @@ used by in-process adapters and authenticated RPC proxies. It does not load
 dynamic libraries, access ambient credentials, or publish a second provider
 contract.
 
+The exact source groups, feature selections, generated bindings, public
+artifacts, and distribution fingerprints are defined by the
+[toolkit source contract](./toolkit-source-contract.md).
+
 ## Session and descriptor invariants
 
 The portable session runtime implements the fixed preface and offer contract,

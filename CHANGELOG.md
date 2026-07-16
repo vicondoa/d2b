@@ -50,6 +50,9 @@ deprecations ship one minor release before removal.
 - Added a mandatory final streamline wave to ADR-scale delivery plans, seeded
   from observed W4-W7 stack, validation, test-discovery, evidence, and
   build-output friction and required to ship tested process/tooling improvements.
+- Added exact client and provider toolkit source fingerprints, feature and
+  generated-binding inventories, and disjoint sibling migration ownership with
+  policy coverage that rejects copied protocol DTOs.
 - Restored live guest system activation as the generated
   `d2b.activation.v2.ActivationService` on the authenticated direct GuestV2
   session, with integrity-bound configured intents, root-private restart-safe
