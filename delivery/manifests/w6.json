@@ -1874,6 +1874,11 @@
       "path": "packages/d2b-userd/tests/edge_composition_policy.rs"
     },
     {
+      "name": "w6-edge-segment-preflight",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-userd/tests/edge_segment_preflight.rs"
+    },
+    {
       "name": "w6-notify-actions-composition",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2b-notify/src/services/actions/mod.rs"
