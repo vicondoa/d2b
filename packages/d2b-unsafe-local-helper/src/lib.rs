@@ -2,6 +2,7 @@ pub mod environment;
 mod output_ring;
 pub mod protocol;
 pub mod runtime;
+pub mod services;
 pub mod shell_runtime;
 mod shell_socket;
 mod shell_supervisor;
