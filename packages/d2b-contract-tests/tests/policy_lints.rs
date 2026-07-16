@@ -263,8 +263,10 @@ fn shell_logical_commands(source: &str) -> Result<Vec<String>, String> {
             }
             continue;
         }
-        if bytes.get(cursor..cursor + 2) == Some(b"<<") {
-            return Err("shell heredocs are forbidden in delivery postFixup".into());
+        if byte == b'<' {
+            return Err(
+                "shell input redirection and heredocs are forbidden in delivery postFixup".into(),
+            );
         }
 
         match byte {
@@ -751,6 +753,8 @@ fn delivery_runtime_policy_fixture() -> &'static str {
             #   pkgs.git pkgs.openssl pkgs.shellcheck
             #   deliveryTools.gh deliveryTools.gitTown
             # ]}
+            # Benign quoted/comment input-redirection text must remain inert: < << <<<.
+            printf '%s\n' '<not-redirection'
             wrapProgram \
               "$out/bin/${spec.binary}" \
                 --prefix   PATH : ${pkgs . lib . makeBinPath
@@ -827,6 +831,29 @@ fn delivery_runtime_package_parser_rejects_heredoc_decoys() {
         assert!(
             error.contains("heredocs are forbidden"),
             "{opener} must fail closed before its body is parsed: {error}"
+        );
+    }
+}
+
+#[test]
+fn delivery_runtime_package_parser_rejects_input_redirection_decoys() {
+    for redirection in [
+        "cat <input",
+        "cat < <EOF",
+        "cat <\\\n<EOF",
+        "cat <<<value",
+        "cat 3<input",
+    ] {
+        let redirection_decoy = delivery_runtime_policy_fixture().replacen(
+            "            wrapProgram \\",
+            &format!("            {redirection}\n            wrapProgram \\"),
+            1,
+        );
+        let error = required_delivery_runtime_packages(&redirection_decoy)
+            .expect_err("delivery postFixup input redirection must fail closed");
+        assert!(
+            error.contains("input redirection"),
+            "{redirection:?} must fail before wrapper matching: {error}"
         );
     }
 }

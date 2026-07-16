@@ -138,6 +138,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Rejected every executable shell input-redirection token in the delivery
+  package wrapper policy, including continuation-split, here-string, and
+  file-descriptor-prefixed forms.
 - Rejected shell heredocs in the delivery package wrapper policy so quoted,
   unquoted, and tab-stripping heredoc bodies cannot masquerade as executable
   runtime PATH configuration.
