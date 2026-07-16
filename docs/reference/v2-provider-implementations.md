@@ -61,6 +61,14 @@ path, a bundle hash, and an artifact-hash entry for that path. Older bundle
 versions remain readable by compatibility consumers but cannot activate this
 registry.
 
+`ProviderBindingV2` is non-exhaustive only at the Rust consumer boundary.
+External consumers must retain an explicit fallback, and `d2bd` dispatches
+through `consumer_view()` before selecting an adapter. A newly declared binding
+therefore fails startup as unsupported until both the shared consumer view and
+the daemon adapter register it. This does not make the JSON union open:
+deserialization and the committed schema continue to reject every unknown
+`axis` value until that variant is explicitly added to the wire contract.
+
 The host `d2bd.service` restart trigger includes both the realised bundle and
 the realised provider-registry artifact. A changed generation therefore
 restarts the daemon before it can retain stale composition. This remains a

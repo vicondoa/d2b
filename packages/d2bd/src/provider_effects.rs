@@ -21,7 +21,7 @@ use async_trait::async_trait;
 use d2b_contracts::{
     broker_wire::BrokerCallerRole,
     provider_registry_v2::{
-        LocalRuntimeProviderBindingV2, ProviderBindingV2, ProviderRegistryEntryV2,
+        LocalRuntimeProviderBindingV2, ProviderBindingV2ConsumerView, ProviderRegistryEntryV2,
     },
     public_wire::{MutationFlags, VmLifecycleRequest},
     v2_identity::{ProviderId, ProviderType, RealmId},
@@ -316,6 +316,7 @@ impl ProviderLifecycleTasks {
 pub enum DaemonEffectAdapterError {
     DuplicateBinding,
     MappingUnavailable,
+    UnsupportedBinding,
     ConfigurationMismatch,
     TransactionAborted,
 }
@@ -325,6 +326,7 @@ impl fmt::Display for DaemonEffectAdapterError {
         formatter.write_str(match self {
             Self::DuplicateBinding => "duplicate daemon provider effect binding",
             Self::MappingUnavailable => "generated daemon provider mapping is unavailable",
+            Self::UnsupportedBinding => "provider binding has no registered daemon effect adapter",
             Self::ConfigurationMismatch => {
                 "daemon provider effect binding does not match the accepted descriptor"
             }
@@ -501,8 +503,12 @@ impl DaemonEffectAdapters {
     ) -> Result<Self, DaemonEffectAdapterError> {
         let mut builder = Self::builder();
         for entry in entries {
-            match &entry.binding {
-                ProviderBindingV2::LocalRuntime(binding) => {
+            let binding = entry
+                .binding
+                .consumer_view()
+                .map_err(|_| DaemonEffectAdapterError::UnsupportedBinding)?;
+            match binding {
+                ProviderBindingV2ConsumerView::LocalRuntime(binding) => {
                     let adapter: Arc<dyn RuntimeControlPort> =
                         Arc::new(DaemonLocalRuntimeControl {
                             state: state.clone(),
@@ -513,7 +519,7 @@ impl DaemonEffectAdapters {
                         });
                     builder.bind_runtime(entry.descriptor.clone(), adapter)?;
                 }
-                ProviderBindingV2::LocalObservability(_) => {
+                ProviderBindingV2ConsumerView::LocalObservability(_) => {
                     let state = state
                         .upgrade()
                         .ok_or(DaemonEffectAdapterError::MappingUnavailable)?;
@@ -534,6 +540,7 @@ impl DaemonEffectAdapters {
                         adapter,
                     )?;
                 }
+                _ => return Err(DaemonEffectAdapterError::UnsupportedBinding),
             }
         }
         builder.finish()
@@ -1499,6 +1506,10 @@ mod tests {
 
     #[test]
     fn missing_and_mismatched_mappings_fail_closed() {
+        assert_eq!(
+            DaemonEffectAdapterError::UnsupportedBinding.to_string(),
+            "provider binding has no registered daemon effect adapter"
+        );
         let descriptor = Fixture::new(ProviderType::Runtime, 1)
             .expect("fixture")
             .descriptor;

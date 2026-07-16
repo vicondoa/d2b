@@ -33,3 +33,9 @@ is rejected. Diffs and cleanliness checks also force
 configuration cannot conceal gitlink additions or type changes. A new shared
 DTO, dependency, generated contract, or policy requirement returns to
 `adr0045-post-w4-contracts`; it is not added on a wave branch.
+
+The provider-registry consumer seam is also shared-root-owned. Declarative work
+may add a schema-declared `ProviderBindingV2` variant through its narrow
+exception, but the non-exhaustive consumer view and protected daemon consumer
+files keep it unsupported until a shared-root adapter change lands. Unknown
+wire variants remain rejected.

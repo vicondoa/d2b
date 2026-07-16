@@ -319,6 +319,9 @@ symlink/gitlink, frozen, or foreign edits fail closed. Only the checked-in
 documentation paths/prefixes and the wave's own manifest are general
 exceptions. W7 extends the existing `provider-registry-v2` family through its
 narrow protected-path exceptions; no wave creates a second registry.
+`ProviderBindingV2` is non-exhaustive for Rust consumers but remains a strict
+closed serde union. New declared variants reach only the fail-closed consumer
+fallback until this shared root registers the matching daemon adapter.
 
 W5, W6, and W7 each edit only their authority at
 `delivery/manifests/w<N>.json`; `delivery/manifest.json` remains the unchanged W4

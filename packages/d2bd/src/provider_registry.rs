@@ -17,7 +17,8 @@ use std::{
 
 use d2b_contracts::{
     provider_registry_v2::{
-        ProviderBindingV2, ProviderRegistryEntryV2, ProviderRegistryV2, ProviderRegistryV2Error,
+        ProviderBindingV2ConsumerView, ProviderRegistryEntryV2, ProviderRegistryV2,
+        ProviderRegistryV2Error,
     },
     v2_component_session::{EndpointRole, ServicePackage},
     v2_identity::{
@@ -106,6 +107,7 @@ pub enum ProviderCompositionError {
     GenerationMismatch,
     WrongProcessPlacement,
     UnsupportedImplementation,
+    UnsupportedBinding,
     AzureVmForbidden,
     NondispatchableCapability,
     ConfigurationMismatch,
@@ -142,6 +144,9 @@ impl fmt::Display for ProviderCompositionError {
                 "provider implementation is not permitted in this process"
             }
             Self::UnsupportedImplementation => "provider implementation is not first-party live",
+            Self::UnsupportedBinding => {
+                "provider binding has no registered daemon consumer adapter"
+            }
             Self::AzureVmForbidden => "Azure VM providers are not production implementations",
             Self::NondispatchableCapability => {
                 "provider advertises a method without a live dispatcher"
@@ -918,8 +923,14 @@ fn validate_runtime_routes(
     let mut vm_start_intents = BTreeSet::new();
     let mut runner_intents = BTreeSet::new();
     for entry in &artifact.providers {
-        let ProviderBindingV2::LocalRuntime(binding) = &entry.binding else {
-            continue;
+        let binding = match entry
+            .binding
+            .consumer_view()
+            .map_err(|_| ProviderCompositionError::UnsupportedBinding)?
+        {
+            ProviderBindingV2ConsumerView::LocalRuntime(binding) => binding,
+            ProviderBindingV2ConsumerView::LocalObservability(_) => continue,
+            _ => return Err(ProviderCompositionError::UnsupportedBinding),
         };
         let realm_id = entry.descriptor.placement.realm_id();
         let vm_start = resolver
@@ -1013,8 +1024,16 @@ pub(crate) fn resolve_current_runtime_route(
         .validate()
         .map_err(map_provider_registry_validation_error)?;
     let routes = validate_runtime_routes(&resolver, &artifact)?;
-    let ProviderBindingV2::LocalRuntime(binding) = &expected.binding else {
-        return Err(ProviderCompositionError::ProcessIdentityMismatch);
+    let binding = match expected
+        .binding
+        .consumer_view()
+        .map_err(|_| ProviderCompositionError::UnsupportedBinding)?
+    {
+        ProviderBindingV2ConsumerView::LocalRuntime(binding) => binding,
+        ProviderBindingV2ConsumerView::LocalObservability(_) => {
+            return Err(ProviderCompositionError::ProcessIdentityMismatch);
+        }
+        _ => return Err(ProviderCompositionError::UnsupportedBinding),
     };
     let runner = resolver
         .find_runner_intent(binding.runner_intent_id.as_str())
@@ -1092,40 +1111,49 @@ pub(crate) fn compose_startup_registry_with_policy(
     let bindings = artifact
         .providers
         .iter()
-        .map(|entry| match &entry.binding {
-            ProviderBindingV2::LocalRuntime(binding) => {
-                let intent = RuntimeIntentBinding::new(
-                    RuntimeBundleIntentId::parse(binding.vm_start_intent_id.as_str())
-                        .map_err(|_| ProviderCompositionError::ConfigurationMismatch)?,
-                    RuntimeRunnerId::parse(binding.runner_intent_id.as_str())
-                        .map_err(|_| ProviderCompositionError::ConfigurationMismatch)?,
-                );
-                let configuration = match entry.descriptor.implementation_id.as_str() {
-                    CLOUD_HYPERVISOR_IMPLEMENTATION_ID => {
-                        LocalRuntimeConfiguration::CloudHypervisor(intent)
-                    }
-                    QEMU_MEDIA_IMPLEMENTATION_ID => LocalRuntimeConfiguration::QemuMedia(intent),
-                    AZURE_VM_IMPLEMENTATION_ID => {
-                        return Err(ProviderCompositionError::AzureVmForbidden);
-                    }
-                    _ => return Err(ProviderCompositionError::UnsupportedImplementation),
-                };
-                Ok(HostProviderBinding::LocalRuntime {
-                    descriptor: entry.descriptor.clone(),
-                    configuration,
-                })
-            }
-            ProviderBindingV2::LocalObservability(binding) => {
-                let limits = ObservabilityLimits::new(
-                    binding.max_records,
-                    binding.max_bytes,
-                    binding.max_time_window_ms,
-                )
-                .map_err(|_| ProviderCompositionError::ConfigurationMismatch)?;
-                Ok(HostProviderBinding::LocalObservability {
-                    descriptor: entry.descriptor.clone(),
-                    limits,
-                })
+        .map(|entry| {
+            let binding = entry
+                .binding
+                .consumer_view()
+                .map_err(|_| ProviderCompositionError::UnsupportedBinding)?;
+            match binding {
+                ProviderBindingV2ConsumerView::LocalRuntime(binding) => {
+                    let intent = RuntimeIntentBinding::new(
+                        RuntimeBundleIntentId::parse(binding.vm_start_intent_id.as_str())
+                            .map_err(|_| ProviderCompositionError::ConfigurationMismatch)?,
+                        RuntimeRunnerId::parse(binding.runner_intent_id.as_str())
+                            .map_err(|_| ProviderCompositionError::ConfigurationMismatch)?,
+                    );
+                    let configuration = match entry.descriptor.implementation_id.as_str() {
+                        CLOUD_HYPERVISOR_IMPLEMENTATION_ID => {
+                            LocalRuntimeConfiguration::CloudHypervisor(intent)
+                        }
+                        QEMU_MEDIA_IMPLEMENTATION_ID => {
+                            LocalRuntimeConfiguration::QemuMedia(intent)
+                        }
+                        AZURE_VM_IMPLEMENTATION_ID => {
+                            return Err(ProviderCompositionError::AzureVmForbidden);
+                        }
+                        _ => return Err(ProviderCompositionError::UnsupportedImplementation),
+                    };
+                    Ok(HostProviderBinding::LocalRuntime {
+                        descriptor: entry.descriptor.clone(),
+                        configuration,
+                    })
+                }
+                ProviderBindingV2ConsumerView::LocalObservability(binding) => {
+                    let limits = ObservabilityLimits::new(
+                        binding.max_records,
+                        binding.max_bytes,
+                        binding.max_time_window_ms,
+                    )
+                    .map_err(|_| ProviderCompositionError::ConfigurationMismatch)?;
+                    Ok(HostProviderBinding::LocalObservability {
+                        descriptor: entry.descriptor.clone(),
+                        limits,
+                    })
+                }
+                _ => Err(ProviderCompositionError::UnsupportedBinding),
             }
         })
         .collect::<Result<Vec<_>, ProviderCompositionError>>()?;
@@ -1241,10 +1269,18 @@ pub(crate) async fn invoke_runtime_lifecycle(
     let Some(entry) = startup.runtime_route(&request.vm) else {
         return Ok(RuntimeLifecycleInvocation::Unmapped);
     };
-    let ProviderBindingV2::LocalRuntime(binding) = &entry.binding else {
-        return Err(crate::TypedError::InternalConfig {
-            detail: "runtime route resolved to a non-runtime provider binding".to_owned(),
-        });
+    let binding = match entry.binding.consumer_view() {
+        Ok(ProviderBindingV2ConsumerView::LocalRuntime(binding)) => binding,
+        Ok(ProviderBindingV2ConsumerView::LocalObservability(_)) => {
+            return Err(crate::TypedError::InternalConfig {
+                detail: "runtime route resolved to a non-runtime provider binding".to_owned(),
+            });
+        }
+        Ok(_) | Err(_) => {
+            return Err(crate::TypedError::InternalConfig {
+                detail: "runtime route resolved to an unsupported provider binding".to_owned(),
+            });
+        }
     };
     let realm_id = entry.descriptor.placement.realm_id();
     let registry = startup
@@ -1435,8 +1471,12 @@ pub(crate) async fn probe_startup_registry(
         .map_err(|_| ProviderCompositionError::StartupProbeFailed)?;
     for entry in &artifact.providers {
         let realm_id = entry.descriptor.placement.realm_id();
-        let (method, scope, target) = match &entry.binding {
-            ProviderBindingV2::LocalRuntime(binding) => (
+        let binding = entry
+            .binding
+            .consumer_view()
+            .map_err(|_| ProviderCompositionError::UnsupportedBinding)?;
+        let (method, scope, target) = match binding {
+            ProviderBindingV2ConsumerView::LocalRuntime(binding) => (
                 ProviderMethod::RuntimeInspect,
                 AuthorizedProviderScope::Workload {
                     realm_id: realm_id.clone(),
@@ -1447,7 +1487,7 @@ pub(crate) async fn probe_startup_registry(
                     workload_id: binding.workload_id.clone(),
                 },
             ),
-            ProviderBindingV2::LocalObservability(_) => (
+            ProviderBindingV2ConsumerView::LocalObservability(_) => (
                 ProviderMethod::ObservabilityStatus,
                 AuthorizedProviderScope::Realm {
                     realm_id: realm_id.clone(),
@@ -1456,6 +1496,7 @@ pub(crate) async fn probe_startup_registry(
                     realm_id: realm_id.clone(),
                 },
             ),
+            _ => return Err(ProviderCompositionError::UnsupportedBinding),
         };
         let ProviderPlacement::TrustedFirstPartyInProcess {
             controller_role, ..
@@ -1530,8 +1571,11 @@ pub(crate) async fn probe_startup_registry(
                 .clone(),
             input: ProviderOperationInput::NoInput,
         };
-        match (instance, &entry.binding) {
-            (ProviderInstance::Runtime(runtime), ProviderBindingV2::LocalRuntime(_)) => runtime
+        match (instance, binding) {
+            (
+                ProviderInstance::Runtime(runtime),
+                ProviderBindingV2ConsumerView::LocalRuntime(_),
+            ) => runtime
                 .inspect(&call, &request)
                 .await
                 .map_err(|_| ProviderCompositionError::StartupProbeFailed)?
@@ -1539,14 +1583,19 @@ pub(crate) async fn probe_startup_registry(
                 .map_err(|_| ProviderCompositionError::StartupProbeFailed)?,
             (
                 ProviderInstance::Observability(observability),
-                ProviderBindingV2::LocalObservability(_),
+                ProviderBindingV2ConsumerView::LocalObservability(_),
             ) => observability
                 .status(&call, &request)
                 .await
                 .map_err(|_| ProviderCompositionError::StartupProbeFailed)?
                 .validate()
                 .map_err(|_| ProviderCompositionError::StartupProbeFailed)?,
-            _ => return Err(ProviderCompositionError::StartupProbeFailed),
+            (
+                _,
+                ProviderBindingV2ConsumerView::LocalRuntime(_)
+                | ProviderBindingV2ConsumerView::LocalObservability(_),
+            ) => return Err(ProviderCompositionError::StartupProbeFailed),
+            _ => return Err(ProviderCompositionError::UnsupportedBinding),
         }
     }
     Ok(())
@@ -1803,6 +1852,14 @@ mod tests {
             assert_eq!(mapped, composition);
             assert_eq!(mapped.to_string(), message);
         }
+    }
+
+    #[test]
+    fn unsupported_binding_error_is_explicit_and_redacted() {
+        assert_eq!(
+            ProviderCompositionError::UnsupportedBinding.to_string(),
+            "provider binding has no registered daemon consumer adapter"
+        );
     }
 
     #[test]

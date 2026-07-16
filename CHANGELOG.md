@@ -59,6 +59,10 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Made provider-registry bindings non-exhaustive for Rust consumers while
+  preserving strict wire variants, and added a registered consumer view whose
+  explicit daemon fallback rejects newly declared bindings until an adapter is
+  implemented.
 - Made dependency-ready wave launch and file-overlap-based component dispatch
   mandatory after shared contract prep, preventing one persistent agent from
   serializing unrelated implementation and review scopes, with shipped-package

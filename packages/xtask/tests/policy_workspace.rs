@@ -1755,6 +1755,121 @@ fn provider_registry_v2_has_one_canonical_artifact_family() {
 }
 
 #[test]
+fn provider_binding_consumers_require_and_preserve_fail_closed_fallbacks() {
+    let compact = |source: &str| {
+        source
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>()
+    };
+    let contract = read_repo_file("packages/d2b-contracts/src/provider_registry_v2.rs");
+    let compact_contract = compact(&contract);
+    let non_exhaustive = compact_contract
+        .find("#[non_exhaustive]")
+        .expect("non-exhaustive attribute");
+    let binding_enum = compact_contract
+        .find("pubenumProviderBindingV2")
+        .expect("provider binding enum");
+    assert!(
+        non_exhaustive < binding_enum,
+        "provider binding must remain non-exhaustive for external consumers"
+    );
+    assert!(
+        compact_contract.contains(
+            "#[serde(tag=\"axis\",rename_all=\"kebab-case\",deny_unknown_fields)]pubenumProviderBindingV2"
+        ),
+        "compile-time extensibility must not relax strict wire decoding"
+    );
+    let schema: serde_json::Value = serde_json::from_str(&read_repo_file(
+        "docs/reference/schemas/v2/provider-registry-v2.json",
+    ))
+    .expect("provider registry schema");
+    let wire_axes = schema["definitions"]["ProviderBindingV2"]["oneOf"]
+        .as_array()
+        .expect("provider binding union")
+        .iter()
+        .map(|variant| {
+            variant["properties"]["axis"]["enum"][0]
+                .as_str()
+                .expect("binding axis")
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        wire_axes,
+        BTreeSet::from(["local-observability", "local-runtime"]),
+        "provider binding wire schema must remain closed to declared axes"
+    );
+    assert!(
+        contract.contains("```compile_fail")
+            && compact_contract.contains("pubconstfnconsumer_view(")
+            && compact_contract.contains("_=>Err(UnsupportedProviderBindingV2)"),
+        "the contract must prove fallback-required matching and retain its registration seam"
+    );
+
+    let effects = read_repo_file("packages/d2bd/src/provider_effects.rs");
+    let registry = read_repo_file("packages/d2bd/src/provider_registry.rs");
+    for (name, source) in [("effects", &effects), ("registry", &registry)] {
+        assert!(
+            !source.contains("ProviderBindingV2::"),
+            "d2bd {name} must dispatch only through the registered consumer view"
+        );
+        assert!(
+            source.contains("ProviderBindingV2ConsumerView")
+                && source.contains("UnsupportedBinding"),
+            "d2bd {name} lacks an explicit unsupported extension path"
+        );
+    }
+    assert!(
+        compact(&effects).contains("_=>returnErr(DaemonEffectAdapterError::UnsupportedBinding)"),
+        "effect adapter dispatch must fail closed on a registered future view"
+    );
+    assert!(
+        compact(&registry).contains("_=>Err(ProviderCompositionError::UnsupportedBinding)")
+            && compact(&registry)
+                .contains("_=>returnErr(ProviderCompositionError::UnsupportedBinding)"),
+        "registry composition and probing must fail closed on registered future views"
+    );
+
+    let policy = xtask::wave_policy::read_policy(&repo_root()).expect("shared-contract policy");
+    for path in [
+        "docs/reference/v2-provider-implementations.md",
+        "packages/d2bd/src/provider_effects.rs",
+        "packages/d2bd/src/provider_registry.rs",
+    ] {
+        assert!(
+            policy
+                .protected_paths
+                .binary_search(&path.to_owned())
+                .is_ok(),
+            "shared ownership inventory does not protect {path}"
+        );
+    }
+
+    let seam_paths = BTreeSet::from([
+        "docs/reference/v2-provider-implementations.md",
+        "packages/d2b-contracts/src/provider_registry_v2.rs",
+        "packages/d2bd/src/provider_effects.rs",
+        "packages/d2bd/src/provider_registry.rs",
+        "packages/xtask/tests/policy_workspace.rs",
+    ]);
+    for wave in ["w5", "w6", "w7"] {
+        let manifest: serde_json::Value =
+            serde_json::from_str(&read_repo_file(&format!("delivery/manifests/{wave}.json")))
+                .expect("delivery manifest");
+        let fingerprinted = manifest["contract_fingerprints"]
+            .as_array()
+            .expect("contract fingerprints")
+            .iter()
+            .map(|row| row["path"].as_str().expect("fingerprint path"))
+            .collect::<BTreeSet<_>>();
+        assert!(
+            seam_paths.is_subset(&fingerprinted),
+            "{wave} delivery fingerprints do not cover the provider consumer seam"
+        );
+    }
+}
+
+#[test]
 fn v2_foundation_io_surfaces_are_async_first() {
     let client = read_repo_file("packages/d2b-client/src/client.rs");
     let connector = read_repo_file("packages/d2b-client/src/session.rs");

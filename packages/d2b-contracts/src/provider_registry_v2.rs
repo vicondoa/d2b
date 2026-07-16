@@ -153,6 +153,12 @@ impl LocalObservabilityProviderBindingV2 {
     }
 }
 
+/// Closed wire binding with an extension-safe consumer surface.
+///
+/// Wire decoding remains strict: serde accepts only variants declared by the
+/// current schema. Downstream consumers must nevertheless retain a fallback so
+/// adding a declared variant does not silently activate behavior.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "axis", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum ProviderBindingV2 {
@@ -160,11 +166,77 @@ pub enum ProviderBindingV2 {
     LocalObservability(LocalObservabilityProviderBindingV2),
 }
 
+/// Error returned for a binding without a registered consumer adapter.
+///
+/// An external exhaustive match does not compile:
+///
+/// ```compile_fail
+/// use d2b_contracts::provider_registry_v2::ProviderBindingV2;
+///
+/// fn consume(binding: &ProviderBindingV2) {
+///     match binding {
+///         ProviderBindingV2::LocalRuntime(_) => {}
+///         ProviderBindingV2::LocalObservability(_) => {}
+///     }
+/// }
+/// ```
+///
+/// Extension-safe consumers use the registered view and retain a fallback:
+///
+/// ```
+/// use d2b_contracts::provider_registry_v2::{
+///     ProviderBindingV2, ProviderBindingV2ConsumerView, UnsupportedProviderBindingV2,
+/// };
+///
+/// fn consume(binding: &ProviderBindingV2) -> Result<(), UnsupportedProviderBindingV2> {
+///     match binding.consumer_view()? {
+///         ProviderBindingV2ConsumerView::LocalRuntime(_) => Ok(()),
+///         ProviderBindingV2ConsumerView::LocalObservability(_) => Ok(()),
+///         _ => Err(UnsupportedProviderBindingV2),
+///     }
+/// }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnsupportedProviderBindingV2;
+
+impl fmt::Display for UnsupportedProviderBindingV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("provider binding has no registered consumer adapter")
+    }
+}
+
+impl Error for UnsupportedProviderBindingV2 {}
+
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderBindingV2ConsumerView<'a> {
+    LocalRuntime(&'a LocalRuntimeProviderBindingV2),
+    LocalObservability(&'a LocalObservabilityProviderBindingV2),
+}
+
 impl ProviderBindingV2 {
     pub const fn provider_type(&self) -> ProviderType {
         match self {
             Self::LocalRuntime(_) => ProviderType::Runtime,
             Self::LocalObservability(_) => ProviderType::Observability,
+        }
+    }
+
+    /// Returns only variants with an explicitly registered consumer contract.
+    ///
+    /// New wire variants remain unsupported here until the shared contract root
+    /// adds their consumer view. The wildcard is intentionally reachable only
+    /// after such a variant is added.
+    #[allow(unreachable_patterns)]
+    pub const fn consumer_view(
+        &self,
+    ) -> Result<ProviderBindingV2ConsumerView<'_>, UnsupportedProviderBindingV2> {
+        match self {
+            Self::LocalRuntime(binding) => Ok(ProviderBindingV2ConsumerView::LocalRuntime(binding)),
+            Self::LocalObservability(binding) => {
+                Ok(ProviderBindingV2ConsumerView::LocalObservability(binding))
+            }
+            _ => Err(UnsupportedProviderBindingV2),
         }
     }
 }
@@ -454,6 +526,10 @@ mod tests {
     fn validates_closed_local_runtime_mapping() {
         let registry = fixture();
         registry.validate().unwrap();
+        assert!(matches!(
+            registry.providers[0].binding.consumer_view(),
+            Ok(ProviderBindingV2ConsumerView::LocalRuntime(_))
+        ));
         let encoded = serde_json::to_string(&registry).unwrap();
         assert!(!encoded.contains("argv"));
         assert!(!encoded.contains("secret"));
@@ -523,6 +599,10 @@ mod tests {
         };
 
         registry.validate().unwrap();
+        assert!(matches!(
+            registry.providers[0].binding.consumer_view(),
+            Ok(ProviderBindingV2ConsumerView::LocalObservability(_))
+        ));
         let encoded = serde_json::to_value(&registry).unwrap();
         let binding = &encoded["providers"][0]["binding"];
         assert_eq!(binding["axis"], "local-observability");
@@ -582,6 +662,19 @@ mod tests {
         encoded["providers"][0]["binding"]["realmId"] =
             serde_json::Value::String("contradictory-realm".to_owned());
         assert!(serde_json::from_value::<ProviderRegistryV2>(encoded).is_err());
+    }
+
+    #[test]
+    fn unknown_binding_axis_remains_rejected_on_the_wire() {
+        let encoded = serde_json::json!({
+            "axis": "future-network",
+            "resourceId": "opaque"
+        });
+        assert!(serde_json::from_value::<ProviderBindingV2>(encoded).is_err());
+        assert_eq!(
+            UnsupportedProviderBindingV2.to_string(),
+            "provider binding has no registered consumer adapter"
+        );
     }
 
     #[test]
