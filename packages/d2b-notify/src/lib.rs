@@ -19,6 +19,7 @@
 pub mod events;
 pub mod nonce;
 pub mod notifications;
+pub mod services;
 pub mod state;
 pub mod waybar;
 pub mod wlcontrol;

@@ -8,5 +8,6 @@ pub mod notifications;
 pub mod picker;
 pub mod policy;
 pub mod protocol;
+pub mod services;
 pub mod virtual_keyboard;
 pub mod wayland;

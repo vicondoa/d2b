@@ -4,6 +4,8 @@ use d2b_contracts::guest_wire::{
     ExecId, GuestBootId, GuestControlErrorKind, OutputStream, TerminalSize,
 };
 
+pub mod services;
+
 pub const USERD_LISTENS_ON_VSOCK: bool = false;
 
 pub fn userd_listens_on_vsock() -> bool {

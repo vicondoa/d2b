@@ -13,6 +13,7 @@ pub mod filter;
 pub mod identity;
 pub mod policy;
 pub mod readiness;
+pub mod services;
 pub mod terminal;
 
 pub use policy::{FilterPolicy, GlobalAction, PolicyInput, PolicyWarning};

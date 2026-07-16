@@ -24,6 +24,10 @@ deprecations ship one minor release before removal.
   child-realm controller/broker launches, with strict exact lookup, canonical
   content digests, opaque references, redacted diagnostics, and no ambient
   spawn fallback.
+- Added behavior-free user, desktop, device, and retained-helper composition
+  seams plus a strict W6-local file/dependency and legacy-IPC inventory that
+  reserves file-disjoint implementation surfaces while keeping core endpoint
+  bootstrap and shared DTO authority in their frozen parents.
 - Added the post-W4 shared contract/tooling root: separate W5/W6/W7 delivery
   authorities, typed allocator and child-realm broker DTOs, frozen service and
   dependency inventories, parent-commit-trusted ownership checks with explicit
