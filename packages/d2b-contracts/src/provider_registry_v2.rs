@@ -11,7 +11,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    v2_identity::{ConfiguredProviderId, ProviderId, ProviderType, RealmId, WorkloadId},
+    v2_identity::{ConfiguredProviderId, ProviderId, ProviderType, RealmId, RoleId, WorkloadId},
     v2_provider::{
         Fingerprint, Generation, MAX_OBSERVABILITY_EXPORT_RANGE_MS, MAX_OBSERVABILITY_QUERY_BYTES,
         MAX_OBSERVABILITY_QUERY_LIMIT, MAX_PROVIDER_REGISTRY_ENTRIES, MAX_SAFE_JSON_INTEGER,
@@ -22,6 +22,7 @@ use crate::{
 
 pub const PROVIDER_REGISTRY_V2_SCHEMA_VERSION: &str = "v2";
 pub const MAX_PROVIDER_INTENT_ID_BYTES: usize = 128;
+pub const MAX_PROVIDER_MAPPING_IDS: usize = 64;
 pub const LOCAL_RUNTIME_CONFIGURATION_SCHEMA_SEED: &str =
     "d2b-provider-runtime-local-configuration-v1";
 pub const LOCAL_OBSERVABILITY_CONFIGURATION_SCHEMA_SEED: &str =
@@ -153,6 +154,119 @@ impl LocalObservabilityProviderBindingV2 {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalTransportProviderBindingV2 {
+    #[schemars(length(min = 1, max = 64))]
+    pub transport_binding_ids: Vec<ProviderIntentId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalSubstrateProviderBindingV2 {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalDisplayEndpointIdsV2 {
+    pub wayland: ProviderIntentId,
+    pub cross_domain: ProviderIntentId,
+    pub waypipe: ProviderIntentId,
+    pub proxy: ProviderIntentId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalDisplayProviderBindingV2 {
+    pub workload_id: WorkloadId,
+    pub owner_role_id: RoleId,
+    pub endpoint_ids: LocalDisplayEndpointIdsV2,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NetworkProviderBindingV2 {
+    pub network_id: ProviderIntentId,
+    pub allocator_lease_id: ProviderIntentId,
+    pub bridge_set_id: ProviderIntentId,
+    pub tap_set_id: ProviderIntentId,
+    pub net_vm_role_id: RoleId,
+    pub nat_policy_id: ProviderIntentId,
+    pub dhcp_policy_id: ProviderIntentId,
+    pub nft_policy_id: ProviderIntentId,
+    pub netlink_policy_id: ProviderIntentId,
+    pub external_attachment_id: Option<ProviderIntentId>,
+    pub resource_generation: Generation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StorageProviderBindingV2 {
+    pub realm_id: RealmId,
+    pub workload_id: WorkloadId,
+    pub local_state_id: ProviderIntentId,
+    pub disk_set_id: ProviderIntentId,
+    pub store_view_id: ProviderIntentId,
+    pub closure_sync_id: ProviderIntentId,
+    pub media_set_id: ProviderIntentId,
+    pub resource_generation: Generation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalDeviceProviderBindingV2 {
+    #[schemars(length(max = 64))]
+    pub device_resource_ids: Vec<ProviderIntentId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalAudioProviderBindingV2 {
+    pub workload_id: WorkloadId,
+    pub role_id: RoleId,
+    pub process_id: ProviderIntentId,
+    pub endpoint_id: ProviderIntentId,
+    pub state_storage_id: ProviderIntentId,
+    pub lock_storage_id: ProviderIntentId,
+    pub mediation_storage_id: ProviderIntentId,
+    pub lease_id: ProviderIntentId,
+}
+
+fn validate_mapping_ids<'a>(
+    ids: impl IntoIterator<Item = &'a ProviderIntentId>,
+) -> Result<(), ProviderRegistryV2Error> {
+    let ids = ids.into_iter().collect::<Vec<_>>();
+    if ids.is_empty()
+        || ids.len() > MAX_PROVIDER_MAPPING_IDS
+        || ids.iter().copied().collect::<BTreeSet<_>>().len() != ids.len()
+    {
+        return Err(ProviderRegistryV2Error::BindingMismatch);
+    }
+    Ok(())
+}
+
+fn validate_optional_mapping_ids<'a>(
+    ids: impl IntoIterator<Item = &'a ProviderIntentId>,
+) -> Result<(), ProviderRegistryV2Error> {
+    let ids = ids.into_iter().collect::<Vec<_>>();
+    if ids.len() > MAX_PROVIDER_MAPPING_IDS
+        || ids.iter().copied().collect::<BTreeSet<_>>().len() != ids.len()
+    {
+        return Err(ProviderRegistryV2Error::BindingMismatch);
+    }
+    Ok(())
+}
+
+fn validate_binding_realm(
+    placement: &ProviderPlacement,
+    binding_realm_id: &RealmId,
+) -> Result<(), ProviderRegistryV2Error> {
+    if placement.realm_id() == binding_realm_id {
+        Ok(())
+    } else {
+        Err(ProviderRegistryV2Error::BindingMismatch)
+    }
+}
+
 /// Closed wire binding with an extension-safe consumer surface.
 ///
 /// Wire decoding remains strict: serde accepts only variants declared by the
@@ -164,6 +278,13 @@ impl LocalObservabilityProviderBindingV2 {
 pub enum ProviderBindingV2 {
     LocalRuntime(LocalRuntimeProviderBindingV2),
     LocalObservability(LocalObservabilityProviderBindingV2),
+    LocalTransport(LocalTransportProviderBindingV2),
+    LocalSubstrate(LocalSubstrateProviderBindingV2),
+    LocalDisplay(LocalDisplayProviderBindingV2),
+    Network(NetworkProviderBindingV2),
+    LocalStorage(StorageProviderBindingV2),
+    LocalDevice(LocalDeviceProviderBindingV2),
+    LocalAudio(LocalAudioProviderBindingV2),
 }
 
 /// Error returned for a binding without a registered consumer adapter.
@@ -212,6 +333,13 @@ impl Error for UnsupportedProviderBindingV2 {}
 pub enum ProviderBindingV2ConsumerView<'a> {
     LocalRuntime(&'a LocalRuntimeProviderBindingV2),
     LocalObservability(&'a LocalObservabilityProviderBindingV2),
+    LocalTransport(&'a LocalTransportProviderBindingV2),
+    LocalSubstrate(&'a LocalSubstrateProviderBindingV2),
+    LocalDisplay(&'a LocalDisplayProviderBindingV2),
+    Network(&'a NetworkProviderBindingV2),
+    LocalStorage(&'a StorageProviderBindingV2),
+    LocalDevice(&'a LocalDeviceProviderBindingV2),
+    LocalAudio(&'a LocalAudioProviderBindingV2),
 }
 
 impl ProviderBindingV2 {
@@ -219,14 +347,21 @@ impl ProviderBindingV2 {
         match self {
             Self::LocalRuntime(_) => ProviderType::Runtime,
             Self::LocalObservability(_) => ProviderType::Observability,
+            Self::LocalTransport(_) => ProviderType::Transport,
+            Self::LocalSubstrate(_) => ProviderType::Substrate,
+            Self::LocalDisplay(_) => ProviderType::Display,
+            Self::Network(_) => ProviderType::Network,
+            Self::LocalStorage(_) => ProviderType::Storage,
+            Self::LocalDevice(_) => ProviderType::Device,
+            Self::LocalAudio(_) => ProviderType::Audio,
         }
     }
 
-    /// Returns only variants with an explicitly registered consumer contract.
+    /// Returns the declared closed variants through a forward-compatible view.
     ///
-    /// New wire variants remain unsupported here until the shared contract root
-    /// adds their consumer view. The wildcard is intentionally reachable only
-    /// after such a variant is added.
+    /// This does not register a daemon adapter. Downstream consumers still
+    /// reject every view they do not explicitly handle. The wildcard remains
+    /// reachable when a later wire variant precedes its consumer view.
     #[allow(unreachable_patterns)]
     pub const fn consumer_view(
         &self,
@@ -236,6 +371,17 @@ impl ProviderBindingV2 {
             Self::LocalObservability(binding) => {
                 Ok(ProviderBindingV2ConsumerView::LocalObservability(binding))
             }
+            Self::LocalTransport(binding) => {
+                Ok(ProviderBindingV2ConsumerView::LocalTransport(binding))
+            }
+            Self::LocalSubstrate(binding) => {
+                Ok(ProviderBindingV2ConsumerView::LocalSubstrate(binding))
+            }
+            Self::LocalDisplay(binding) => Ok(ProviderBindingV2ConsumerView::LocalDisplay(binding)),
+            Self::Network(binding) => Ok(ProviderBindingV2ConsumerView::Network(binding)),
+            Self::LocalStorage(binding) => Ok(ProviderBindingV2ConsumerView::LocalStorage(binding)),
+            Self::LocalDevice(binding) => Ok(ProviderBindingV2ConsumerView::LocalDevice(binding)),
+            Self::LocalAudio(binding) => Ok(ProviderBindingV2ConsumerView::LocalAudio(binding)),
             _ => Err(UnsupportedProviderBindingV2),
         }
     }
@@ -319,6 +465,57 @@ impl ProviderRegistryEntryV2 {
                 {
                     return Err(ProviderRegistryV2Error::ConfiguredScopeDigestMismatch);
                 }
+            }
+            ProviderBindingV2::LocalTransport(binding) => {
+                validate_mapping_ids(&binding.transport_binding_ids)?;
+            }
+            ProviderBindingV2::LocalSubstrate(_) => {}
+            ProviderBindingV2::LocalDisplay(binding) => {
+                validate_mapping_ids([
+                    &binding.endpoint_ids.wayland,
+                    &binding.endpoint_ids.cross_domain,
+                    &binding.endpoint_ids.waypipe,
+                    &binding.endpoint_ids.proxy,
+                ])?;
+            }
+            ProviderBindingV2::Network(binding) => {
+                validate_mapping_ids(
+                    [
+                        &binding.network_id,
+                        &binding.allocator_lease_id,
+                        &binding.bridge_set_id,
+                        &binding.tap_set_id,
+                        &binding.nat_policy_id,
+                        &binding.dhcp_policy_id,
+                        &binding.nft_policy_id,
+                        &binding.netlink_policy_id,
+                    ]
+                    .into_iter()
+                    .chain(binding.external_attachment_id.as_ref()),
+                )?;
+            }
+            ProviderBindingV2::LocalStorage(binding) => {
+                validate_binding_realm(&self.descriptor.placement, &binding.realm_id)?;
+                validate_mapping_ids([
+                    &binding.local_state_id,
+                    &binding.disk_set_id,
+                    &binding.store_view_id,
+                    &binding.closure_sync_id,
+                    &binding.media_set_id,
+                ])?;
+            }
+            ProviderBindingV2::LocalDevice(binding) => {
+                validate_optional_mapping_ids(&binding.device_resource_ids)?;
+            }
+            ProviderBindingV2::LocalAudio(binding) => {
+                validate_mapping_ids([
+                    &binding.process_id,
+                    &binding.endpoint_id,
+                    &binding.state_storage_id,
+                    &binding.lock_storage_id,
+                    &binding.mediation_storage_id,
+                    &binding.lease_id,
+                ])?;
             }
         }
         Ok(())
@@ -440,7 +637,7 @@ impl From<ProviderContractError> for ProviderRegistryV2Error {
 mod tests {
     use crate::{
         v2_component_session::EndpointRole,
-        v2_identity::{ConfiguredProviderId, ProviderType, RealmPath, WorkloadName},
+        v2_identity::{ConfiguredProviderId, ProviderType, RealmPath, RoleKind, WorkloadName},
         v2_provider::{
             CgroupAuthority, DeviceMediationPosture, ImplementationId, NetworkPosture,
             PROVIDER_SCHEMA_VERSION, PersistentIdentityPosture, ProcessAuthority,
@@ -612,6 +809,147 @@ mod tests {
         assert!(binding.get("realmId").is_none());
         assert!(binding.get("workloadId").is_none());
         assert!(binding.get("providerId").is_none());
+    }
+
+    #[test]
+    fn serializes_declared_mapping_axes_as_closed_variants() {
+        let realm_id = RealmId::derive(&RealmPath::parse("home.local-root").unwrap());
+        let workload_id = WorkloadId::derive(&realm_id, &WorkloadName::parse("desktop").unwrap());
+        let role_id = RoleId::derive(&realm_id, &workload_id, RoleKind::CloudHypervisor);
+        let intent = |value: &str| ProviderIntentId::parse(value).unwrap();
+        let generation = Generation::new(1).unwrap();
+        let bindings = vec![
+            ProviderBindingV2::LocalTransport(LocalTransportProviderBindingV2 {
+                transport_binding_ids: vec![intent("binding-public")],
+            }),
+            ProviderBindingV2::LocalSubstrate(LocalSubstrateProviderBindingV2 {}),
+            ProviderBindingV2::LocalDisplay(LocalDisplayProviderBindingV2 {
+                workload_id: workload_id.clone(),
+                owner_role_id: role_id.clone(),
+                endpoint_ids: LocalDisplayEndpointIdsV2 {
+                    wayland: intent("endpoint-wayland"),
+                    cross_domain: intent("endpoint-cross-domain"),
+                    waypipe: intent("endpoint-waypipe"),
+                    proxy: intent("endpoint-proxy"),
+                },
+            }),
+            ProviderBindingV2::Network(NetworkProviderBindingV2 {
+                network_id: intent("network-home"),
+                allocator_lease_id: intent("lease-network-home"),
+                bridge_set_id: intent("network-bridges"),
+                tap_set_id: intent("network-taps"),
+                net_vm_role_id: role_id.clone(),
+                nat_policy_id: intent("network-nat"),
+                dhcp_policy_id: intent("network-dhcp"),
+                nft_policy_id: intent("network-nft"),
+                netlink_policy_id: intent("network-netlink"),
+                external_attachment_id: None,
+                resource_generation: generation,
+            }),
+            ProviderBindingV2::LocalStorage(StorageProviderBindingV2 {
+                realm_id,
+                workload_id: workload_id.clone(),
+                local_state_id: intent("storage-state"),
+                disk_set_id: intent("storage-disks"),
+                store_view_id: intent("storage-store-view"),
+                closure_sync_id: intent("storage-closure-sync"),
+                media_set_id: intent("storage-media"),
+                resource_generation: generation,
+            }),
+            ProviderBindingV2::LocalDevice(LocalDeviceProviderBindingV2 {
+                device_resource_ids: vec![intent("device-tpm"), intent("device-gpu")],
+            }),
+            ProviderBindingV2::LocalAudio(LocalAudioProviderBindingV2 {
+                workload_id,
+                role_id,
+                process_id: intent("audio-process"),
+                endpoint_id: intent("audio-endpoint"),
+                state_storage_id: intent("audio-state"),
+                lock_storage_id: intent("audio-lock"),
+                mediation_storage_id: intent("audio-mediation"),
+                lease_id: intent("audio-lease"),
+            }),
+        ];
+
+        let expected_axes = [
+            "local-transport",
+            "local-substrate",
+            "local-display",
+            "network",
+            "local-storage",
+            "local-device",
+            "local-audio",
+        ];
+        let expected_types = [
+            ProviderType::Transport,
+            ProviderType::Substrate,
+            ProviderType::Display,
+            ProviderType::Network,
+            ProviderType::Storage,
+            ProviderType::Device,
+            ProviderType::Audio,
+        ];
+        for ((binding, expected_axis), expected_type) in
+            bindings.into_iter().zip(expected_axes).zip(expected_types)
+        {
+            assert_eq!(binding.provider_type(), expected_type);
+            assert!(binding.consumer_view().is_ok());
+            let encoded = serde_json::to_value(&binding).unwrap();
+            assert_eq!(encoded["axis"], expected_axis);
+            if expected_axis == "local-storage" {
+                assert!(encoded.get("realmId").is_some());
+            } else {
+                assert!(encoded.get("realmId").is_none());
+            }
+            assert!(encoded.get("argv").is_none());
+            assert!(encoded.get("path").is_none());
+            let decoded: ProviderBindingV2 = serde_json::from_value(encoded).unwrap();
+            assert_eq!(decoded, binding);
+        }
+    }
+
+    #[test]
+    fn rejects_duplicate_or_unbounded_mapping_ids() {
+        let duplicate = ProviderIntentId::parse("duplicate").unwrap();
+        assert_eq!(
+            validate_mapping_ids([&duplicate, &duplicate]),
+            Err(ProviderRegistryV2Error::BindingMismatch)
+        );
+        let too_many = (0..=MAX_PROVIDER_MAPPING_IDS)
+            .map(|index| ProviderIntentId::parse(format!("mapping-{index}")).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            validate_mapping_ids(&too_many),
+            Err(ProviderRegistryV2Error::BindingMismatch)
+        );
+        assert_eq!(validate_optional_mapping_ids([]), Ok(()));
+        assert_eq!(
+            validate_optional_mapping_ids([&duplicate, &duplicate]),
+            Err(ProviderRegistryV2Error::BindingMismatch)
+        );
+        assert_eq!(
+            validate_optional_mapping_ids(&too_many),
+            Err(ProviderRegistryV2Error::BindingMismatch)
+        );
+    }
+
+    #[test]
+    fn local_storage_binding_realm_must_match_descriptor_placement() {
+        let descriptor_realm = RealmId::derive(&RealmPath::parse("home.local-root").unwrap());
+        let binding_realm = RealmId::derive(&RealmPath::parse("work.local-root").unwrap());
+        let placement = ProviderPlacement::TrustedFirstPartyInProcess {
+            realm_id: descriptor_realm.clone(),
+            controller_role: EndpointRole::RealmController,
+        };
+
+        assert_eq!(
+            validate_binding_realm(&placement, &descriptor_realm),
+            Ok(())
+        );
+        assert_eq!(
+            validate_binding_realm(&placement, &binding_realm),
+            Err(ProviderRegistryV2Error::BindingMismatch)
+        );
     }
 
     #[test]
