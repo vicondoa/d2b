@@ -139,9 +139,10 @@ deprecations ship one minor release before removal.
   the requested format and exact streaming record/byte limits; storage failures
   and post-dispatch timeouts fail or remain ambiguous before an operation can
   report `Applied`.
-- Derive unavailable-Azure dependency exclusions from every production Cargo
-  binary target, the gateway library boundary, and the exact Rust package set
-  exported by the flake, with a drift-pinned output mapping.
+- Generate Rust flake package definitions from the evaluated
+  `lib.shippedRustPackages` inventory and require exact agreement with Cargo
+  production roots and evaluated flake outputs, so aliases, variables, unknown
+  mappings, and missing mappings fail the unavailable-Azure policy closed.
 - Move mapped lifecycle permit admission off the provider executor, with
   cancellation, deadline, and abandoned-waiter checks that prevent a cancelled
   contender from starting work later.

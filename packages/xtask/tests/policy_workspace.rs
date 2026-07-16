@@ -1,8 +1,10 @@
 #![forbid(unsafe_code)]
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 
 const CONTRACTS_CRATE: &str = "d2b-contracts";
 const FOCUSED_POLICY_PACKAGES: &[&str] = &["d2b-priv-broker", "d2b-guest-shell-runner"];
@@ -258,98 +260,233 @@ fn declared_features<'a>(
         .unwrap_or_else(|| panic!("workspace package {package_name} features not found"))
 }
 
-fn flake_package_blocks() -> BTreeMap<String, String> {
-    let flake = read_repo_file("flake.nix");
-    let body = flake
-        .split_once("      in {\n        manpages =")
-        .map(|(_, rest)| format!("        manpages ={rest}"))
-        .and_then(|body| {
-            body.split_once("\n      });\n\n      apps =")
-                .map(|(packages, _)| packages.to_owned())
-        })
-        .expect("flake packages body");
-    let mut starts = Vec::new();
-    let mut offset = 0;
-    for line in body.split_inclusive('\n') {
-        if let Some(candidate) = line.strip_prefix("        ")
-            && !candidate.starts_with(char::is_whitespace)
-            && let Some((name, _)) = candidate.split_once(" =")
-            && name
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-        {
-            starts.push((offset, name.to_owned()));
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum ShippedRustTargetKind {
+    Binary,
+    Library,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum ShippedRustBuildKind {
+    DeliveryWorkspace,
+    GuestShellStatic,
+    GuestStatic,
+    Workspace,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ShippedRustFlakePackage {
+    output: String,
+    build_kind: ShippedRustBuildKind,
+    binary: String,
+    main_program: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ShippedRustPackage {
+    cargo_package: String,
+    target_kind: ShippedRustTargetKind,
+    flake_package: Option<ShippedRustFlakePackage>,
+}
+
+fn git_file_flake_ref(root: &Path) -> String {
+    assert!(root.is_absolute(), "flake repository root must be absolute");
+    let mut encoded = String::from("git+file://");
+    for byte in root.as_os_str().as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(*byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
         }
-        offset += line.len();
     }
-    starts
+    encoded
+}
+
+fn evaluate_flake_json(attribute: &str, apply: Option<&str>) -> Vec<u8> {
+    let root = repo_root()
+        .canonicalize()
+        .expect("canonicalize flake repository root");
+    let target = format!("{}#{attribute}", git_file_flake_ref(&root));
+    let mut command = Command::new("nix");
+    command
+        .current_dir(&root)
+        .args(["eval", "--json", "--impure", "--no-warn-dirty"])
+        .arg(target);
+    if let Some(apply) = apply {
+        command.args(["--apply", apply]);
+    }
+    if std::env::var_os("NIX_CONFIG").is_none() {
+        command.env("NIX_CONFIG", "experimental-features = nix-command flakes");
+    }
+    let output = command.output().expect("evaluate flake JSON");
+    assert!(
+        output.status.success(),
+        "nix eval {attribute} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output.stdout
+}
+
+fn evaluated_shipped_rust_packages() -> &'static [ShippedRustPackage] {
+    static SHIPPED: OnceLock<Vec<ShippedRustPackage>> = OnceLock::new();
+    SHIPPED.get_or_init(|| {
+        serde_json::from_slice(&evaluate_flake_json("lib.shippedRustPackages", None))
+            .expect("decode evaluated lib.shippedRustPackages JSON")
+    })
+}
+
+fn evaluated_flake_package_outputs() -> &'static BTreeSet<String> {
+    static OUTPUTS: OnceLock<BTreeSet<String>> = OnceLock::new();
+    OUTPUTS.get_or_init(|| {
+        serde_json::from_slice(&evaluate_flake_json(
+            "packages.x86_64-linux",
+            Some("builtins.attrNames"),
+        ))
+        .expect("decode evaluated flake package outputs")
+    })
+}
+
+fn metadata_package<'a>(
+    metadata: &'a serde_json::Value,
+    package_name: &str,
+) -> &'a serde_json::Value {
+    let workspace_members = metadata["workspace_members"]
+        .as_array()
+        .expect("metadata workspace members")
         .iter()
-        .enumerate()
-        .map(|(index, (start, name))| {
-            let end = starts
-                .get(index + 1)
-                .map(|(start, _)| *start)
-                .unwrap_or(body.len());
-            (name.clone(), body[*start..end].to_owned())
+        .map(|member| member.as_str().expect("workspace member id"))
+        .collect::<BTreeSet<_>>();
+    metadata["packages"]
+        .as_array()
+        .expect("metadata packages")
+        .iter()
+        .find(|package| {
+            package["name"].as_str() == Some(package_name)
+                && package["id"]
+                    .as_str()
+                    .is_some_and(|id| workspace_members.contains(id))
         })
-        .collect()
+        .unwrap_or_else(|| {
+            panic!("shipped Rust package {package_name} is absent from Cargo metadata")
+        })
 }
 
-fn first_quoted_after<'a>(block: &'a str, marker: &str) -> Option<&'a str> {
-    let rest = block.split_once(marker)?.1;
-    let start = rest.find('"')? + 1;
-    let rest = &rest[start..];
-    let end = rest.find('"')?;
-    Some(&rest[..end])
+fn target_has_kind(target: &serde_json::Value, kind: &str) -> bool {
+    target["kind"]
+        .as_array()
+        .expect("target kind")
+        .iter()
+        .any(|value| value.as_str() == Some(kind))
 }
 
-fn flake_shipped_rust_packages() -> BTreeMap<String, String> {
-    flake_package_blocks()
-        .into_iter()
-        .filter_map(|(output, block)| {
-            let package = if block.contains("guestStaticPackage") {
-                first_quoted_after(&block, "guestStaticPackage").map(str::to_owned)
-            } else if block.contains("guestShellRunnerStatic") {
-                Some("d2b-guest-shell-runner".to_owned())
-            } else if block.contains("rustWorkspace {") || block.contains("deliveryRustWorkspace {")
-            {
-                first_quoted_after(&block, "\"--package\"").map(str::to_owned)
-            } else {
-                assert!(
-                    NON_RUST_FLAKE_PACKAGE_OUTPUTS.contains(&output.as_str()),
-                    "unclassified flake package output {output}"
-                );
-                None
-            };
-            package.map(|package| (output, package))
-        })
-        .collect()
+fn package_has_target_kind(package: &serde_json::Value, kind: &str) -> bool {
+    package["targets"]
+        .as_array()
+        .expect("package targets")
+        .iter()
+        .any(|target| target_has_kind(target, kind))
 }
 
 fn shipped_production_rust_packages(metadata: &serde_json::Value) -> BTreeSet<String> {
-    let mut packages = metadata["packages"]
+    let shipped = evaluated_shipped_rust_packages();
+    let mut declared = BTreeSet::new();
+    let mut flake_outputs = BTreeSet::new();
+    for entry in shipped {
+        assert!(
+            declared.insert(entry.cargo_package.clone()),
+            "duplicate shipped Rust Cargo package {}",
+            entry.cargo_package
+        );
+        let package = metadata_package(metadata, &entry.cargo_package);
+        let target_kind = match entry.target_kind {
+            ShippedRustTargetKind::Binary => "bin",
+            ShippedRustTargetKind::Library => "lib",
+        };
+        assert!(
+            package_has_target_kind(package, target_kind),
+            "shipped Rust package {} has no {target_kind} target",
+            entry.cargo_package
+        );
+        if let Some(flake_package) = &entry.flake_package {
+            assert_eq!(
+                entry.target_kind,
+                ShippedRustTargetKind::Binary,
+                "flake package {} must map to a binary Cargo package",
+                flake_package.output
+            );
+            assert!(
+                flake_outputs.insert(flake_package.output.clone()),
+                "duplicate shipped Rust flake output {}",
+                flake_package.output
+            );
+            assert!(
+                !flake_package.output.is_empty() && !flake_package.binary.is_empty(),
+                "shipped Rust flake mappings must use non-empty names"
+            );
+            assert!(
+                package["targets"]
+                    .as_array()
+                    .expect("package targets")
+                    .iter()
+                    .any(|target| {
+                        target["name"].as_str() == Some(&flake_package.binary)
+                            && target_has_kind(target, "bin")
+                    }),
+                "flake output {} maps to missing binary {} in Cargo package {}",
+                flake_package.output,
+                flake_package.binary,
+                entry.cargo_package
+            );
+            if let Some(main_program) = &flake_package.main_program {
+                assert_eq!(
+                    main_program, &flake_package.binary,
+                    "flake output {} main program must match its selected binary",
+                    flake_package.output
+                );
+            }
+            match flake_package.build_kind {
+                ShippedRustBuildKind::DeliveryWorkspace
+                | ShippedRustBuildKind::GuestShellStatic
+                | ShippedRustBuildKind::GuestStatic
+                | ShippedRustBuildKind::Workspace => {}
+            }
+        }
+    }
+
+    let workspace_members = metadata["workspace_members"]
+        .as_array()
+        .expect("metadata workspace members")
+        .iter()
+        .map(|member| member.as_str().expect("workspace member id"))
+        .collect::<BTreeSet<_>>();
+    let mut cargo_roots = metadata["packages"]
         .as_array()
         .expect("metadata packages")
         .iter()
         .filter(|package| {
-            package["targets"]
-                .as_array()
-                .expect("package targets")
-                .iter()
-                .any(|target| {
-                    target["kind"]
-                        .as_array()
-                        .expect("target kind")
-                        .iter()
-                        .any(|kind| kind.as_str() == Some("bin"))
-                })
+            package["id"]
+                .as_str()
+                .is_some_and(|id| workspace_members.contains(id))
         })
+        .filter(|package| package_has_target_kind(package, "bin"))
         .map(|package| package["name"].as_str().expect("package name").to_owned())
         .filter(|package| !NON_PRODUCTION_BINARY_PACKAGES.contains(&package.as_str()))
         .collect::<BTreeSet<_>>();
-    packages.insert("d2b-gateway".to_owned());
-    packages.extend(flake_shipped_rust_packages().into_values());
-    packages
+    cargo_roots.extend(
+        shipped
+            .iter()
+            .filter(|entry| entry.target_kind == ShippedRustTargetKind::Library)
+            .map(|entry| entry.cargo_package.clone()),
+    );
+    assert_eq!(
+        declared, cargo_roots,
+        "evaluated lib.shippedRustPackages must exactly match Cargo production roots"
+    );
+    declared
 }
 
 #[test]
@@ -587,38 +724,7 @@ fn w4_provider_workspace_inventory_is_reserved_and_dependency_minimal() {
 }
 
 #[test]
-fn shipped_rust_package_policy_tracks_the_flake_package_set() {
-    let flake_packages = flake_shipped_rust_packages();
-    assert_eq!(
-        flake_packages,
-        BTreeMap::from([
-            ("d2b-clipd".to_owned(), "d2b-clipd".to_owned()),
-            ("d2b-delivery".to_owned(), "xtask".to_owned(),),
-            (
-                "d2b-exec-runner-static".to_owned(),
-                "d2b-exec-runner".to_owned(),
-            ),
-            (
-                "d2b-guest-shell-runner-static".to_owned(),
-                "d2b-guest-shell-runner".to_owned(),
-            ),
-            ("d2b-guestd-static".to_owned(), "d2b-guestd".to_owned(),),
-            (
-                "d2b-sk-frontend-static".to_owned(),
-                "d2b-sk-frontend".to_owned(),
-            ),
-            (
-                "d2b-unsafe-local-helper".to_owned(),
-                "d2b-unsafe-local-helper".to_owned(),
-            ),
-            ("d2b-userd-static".to_owned(), "d2b-userd".to_owned(),),
-            (
-                "d2b-wayland-proxy".to_owned(),
-                "d2b-wayland-proxy".to_owned(),
-            ),
-        ])
-    );
-
+fn evaluated_shipped_rust_packages_match_cargo_production_roots() {
     let metadata = workspace_metadata();
     let shipped = shipped_production_rust_packages(&metadata);
     for required in REQUIRED_SHIPPED_PRODUCTION_PACKAGES {
@@ -627,6 +733,22 @@ fn shipped_rust_package_policy_tracks_the_flake_package_set() {
             "shipped production package inventory is missing {required}"
         );
     }
+
+    let mut expected_outputs = NON_RUST_FLAKE_PACKAGE_OUTPUTS
+        .iter()
+        .map(|output| (*output).to_owned())
+        .collect::<BTreeSet<_>>();
+    expected_outputs.extend(
+        evaluated_shipped_rust_packages()
+            .iter()
+            .filter_map(|entry| entry.flake_package.as_ref())
+            .map(|mapping| mapping.output.clone()),
+    );
+    assert_eq!(
+        evaluated_flake_package_outputs(),
+        &expected_outputs,
+        "every evaluated flake package output must have an exact shipped-Rust or non-Rust classification"
+    );
 }
 
 #[test]

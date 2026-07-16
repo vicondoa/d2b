@@ -30,6 +30,174 @@
         inherit system;
         overlays = [ rust-overlay.overlays.default ];
       });
+      rawShippedRustPackages = [
+        {
+          cargoPackage = "d2b";
+          targetKind = "binary";
+          flakePackage = null;
+        }
+        {
+          cargoPackage = "d2b-clipd";
+          targetKind = "binary";
+          flakePackage = {
+            output = "d2b-clipd";
+            buildKind = "workspace";
+            binary = "d2b-clipd";
+            mainProgram = null;
+          };
+        }
+        {
+          cargoPackage = "d2b-exec-runner";
+          targetKind = "binary";
+          flakePackage = {
+            output = "d2b-exec-runner-static";
+            buildKind = "guestStatic";
+            binary = "d2b-exec-runner";
+            mainProgram = null;
+          };
+        }
+        {
+          cargoPackage = "d2b-gateway";
+          targetKind = "library";
+          flakePackage = null;
+        }
+        {
+          cargoPackage = "d2b-gateway-runtime";
+          targetKind = "binary";
+          flakePackage = null;
+        }
+        {
+          cargoPackage = "d2b-guest-shell-runner";
+          targetKind = "binary";
+          flakePackage = {
+            output = "d2b-guest-shell-runner-static";
+            buildKind = "guestShellStatic";
+            binary = "d2b-guest-shell-runner";
+            mainProgram = null;
+          };
+        }
+        {
+          cargoPackage = "d2b-guestd";
+          targetKind = "binary";
+          flakePackage = {
+            output = "d2b-guestd-static";
+            buildKind = "guestStatic";
+            binary = "d2b-guestd";
+            mainProgram = null;
+          };
+        }
+        {
+          cargoPackage = "d2b-host";
+          targetKind = "binary";
+          flakePackage = null;
+        }
+        {
+          cargoPackage = "d2b-host-activation-helper";
+          targetKind = "binary";
+          flakePackage = null;
+        }
+        {
+          cargoPackage = "d2b-notify";
+          targetKind = "binary";
+          flakePackage = null;
+        }
+        {
+          cargoPackage = "d2b-priv-broker";
+          targetKind = "binary";
+          flakePackage = null;
+        }
+        {
+          cargoPackage = "d2b-provider-relay";
+          targetKind = "binary";
+          flakePackage = null;
+        }
+        {
+          cargoPackage = "d2b-sk-frontend";
+          targetKind = "binary";
+          flakePackage = {
+            output = "d2b-sk-frontend-static";
+            buildKind = "guestStatic";
+            binary = "d2b-sk-frontend";
+            mainProgram = null;
+          };
+        }
+        {
+          cargoPackage = "d2b-unsafe-local-helper";
+          targetKind = "binary";
+          flakePackage = {
+            output = "d2b-unsafe-local-helper";
+            buildKind = "workspace";
+            binary = "d2b-unsafe-local-helper";
+            mainProgram = "d2b-unsafe-local-helper";
+          };
+        }
+        {
+          cargoPackage = "d2b-userd";
+          targetKind = "binary";
+          flakePackage = {
+            output = "d2b-userd-static";
+            buildKind = "guestStatic";
+            binary = "d2b-userd";
+            mainProgram = null;
+          };
+        }
+        {
+          cargoPackage = "d2b-wayland-proxy";
+          targetKind = "binary";
+          flakePackage = {
+            output = "d2b-wayland-proxy";
+            buildKind = "workspace";
+            binary = "d2b-wayland-proxy";
+            mainProgram = "d2b-wayland-proxy";
+          };
+        }
+        {
+          cargoPackage = "d2bd";
+          targetKind = "binary";
+          flakePackage = null;
+        }
+        {
+          cargoPackage = "xtask";
+          targetKind = "binary";
+          flakePackage = {
+            output = "d2b-delivery";
+            buildKind = "deliveryWorkspace";
+            binary = "xtask";
+            mainProgram = "xtask";
+          };
+        }
+      ];
+      shippedRustPackages =
+        let
+          cargoPackages = map (entry: entry.cargoPackage) rawShippedRustPackages;
+          flakePackages =
+            map (entry: entry.flakePackage.output)
+              (builtins.filter (entry: entry.flakePackage != null) rawShippedRustPackages);
+          validEntry = entry:
+            builtins.isString entry.cargoPackage
+            && builtins.elem entry.targetKind [ "binary" "library" ]
+            && (
+              entry.flakePackage == null
+              || (
+                entry.targetKind == "binary"
+                && builtins.isString entry.flakePackage.output
+                && builtins.isString entry.flakePackage.binary
+                && builtins.elem entry.flakePackage.buildKind [
+                  "deliveryWorkspace"
+                  "guestShellStatic"
+                  "guestStatic"
+                  "workspace"
+                ]
+              )
+            );
+        in
+        assert builtins.all validEntry rawShippedRustPackages;
+        assert cargoPackages == builtins.sort builtins.lessThan cargoPackages;
+        assert builtins.length cargoPackages
+          == builtins.length (nixpkgs.lib.unique cargoPackages);
+        assert builtins.length flakePackages
+          == builtins.length (nixpkgs.lib.unique flakePackages);
+        rawShippedRustPackages;
     in
     {
       # The public surface area — populated incrementally by the
@@ -115,16 +283,18 @@
               fi
             '';
           };
-        guestShellRunnerStatic =
+        guestShellRunnerStatic = packageName: binName:
           pkgs.pkgsStatic.rustPlatform.buildRustPackage {
-            pname = "d2b-guest-shell-runner-static";
+            pname = "${binName}-static";
             version = workspaceVersion;
             src = rustPackagesSrc;
             sourceRoot = "d2b-rust-src/packages";
             cargoLock = workspaceCargoLock;
             cargoBuildFlags = [
               "--package"
-              "d2b-guest-shell-runner"
+              packageName
+              "--bin"
+              binName
               "--features"
               "real-libshpool"
             ];
@@ -137,28 +307,74 @@
             ];
             postInstall = ''
               readelf=${pkgs.pkgsStatic.binutils.bintools}/bin/readelf
-              bin="$out/bin/d2b-guest-shell-runner"
+              bin="$out/bin/${binName}"
               test -x "$bin"
               "$readelf" -h "$bin" >/dev/null
-              "$readelf" -l "$bin" > "$TMPDIR/d2b-guest-shell-runner.program-headers"
-              if grep -q 'Requesting program interpreter' "$TMPDIR/d2b-guest-shell-runner.program-headers"; then
-                echo "d2b-guest-shell-runner: unexpected ELF interpreter" >&2
-                cat "$TMPDIR/d2b-guest-shell-runner.program-headers" >&2
+              "$readelf" -l "$bin" > "$TMPDIR/${binName}.program-headers"
+              if grep -q 'Requesting program interpreter' "$TMPDIR/${binName}.program-headers"; then
+                echo "${binName}: unexpected ELF interpreter" >&2
+                cat "$TMPDIR/${binName}.program-headers" >&2
                 exit 1
               fi
-              if "$readelf" -d "$bin" > "$TMPDIR/d2b-guest-shell-runner.dynamic" 2> "$TMPDIR/d2b-guest-shell-runner.dynamic.err"; then
-                if grep -q '(NEEDED)' "$TMPDIR/d2b-guest-shell-runner.dynamic"; then
-                  echo "d2b-guest-shell-runner: unexpected dynamic dependency" >&2
-                  cat "$TMPDIR/d2b-guest-shell-runner.dynamic" >&2
+              if "$readelf" -d "$bin" > "$TMPDIR/${binName}.dynamic" 2> "$TMPDIR/${binName}.dynamic.err"; then
+                if grep -q '(NEEDED)' "$TMPDIR/${binName}.dynamic"; then
+                  echo "${binName}: unexpected dynamic dependency" >&2
+                  cat "$TMPDIR/${binName}.dynamic" >&2
                   exit 1
                 fi
-              elif ! grep -qi 'no dynamic section' "$TMPDIR/d2b-guest-shell-runner.dynamic.err"; then
-                echo "d2b-guest-shell-runner: readelf -d failed unexpectedly" >&2
-                cat "$TMPDIR/d2b-guest-shell-runner.dynamic.err" >&2
+              elif ! grep -qi 'no dynamic section' "$TMPDIR/${binName}.dynamic.err"; then
+                echo "${binName}: readelf -d failed unexpectedly" >&2
+                cat "$TMPDIR/${binName}.dynamic.err" >&2
                 exit 1
               fi
             '';
           };
+        shippedRustFlakePackages =
+          builtins.filter (entry: entry.flakePackage != null) shippedRustPackages;
+        mkShippedRustPackage = entry:
+          let
+            spec = entry.flakePackage;
+            workspaceArgs = {
+              pname = spec.output;
+              cargoBuildFlags = [
+                "--package"
+                entry.cargoPackage
+                "--bin"
+                spec.binary
+              ];
+              doCheck = false;
+            } // pkgs.lib.optionalAttrs (spec.mainProgram != null) {
+              meta.mainProgram = spec.mainProgram;
+            };
+          in {
+            name = spec.output;
+            value =
+              if spec.buildKind == "guestStatic" then
+                guestStaticPackage entry.cargoPackage spec.binary
+              else if spec.buildKind == "guestShellStatic" then
+                guestShellRunnerStatic entry.cargoPackage spec.binary
+              else if spec.buildKind == "workspace" then
+                rustWorkspace workspaceArgs
+              else if spec.buildKind == "deliveryWorkspace" then
+                deliveryRustWorkspace (workspaceArgs // {
+                  nativeBuildInputs = [ pkgs.makeWrapper pkgs.protobuf ];
+                  postFixup = ''
+                    wrapProgram "$out/bin/${spec.binary}" \
+                      --prefix PATH : ${pkgs.lib.makeBinPath [
+                        pkgs.git
+                        pkgs.openssl
+                        pkgs.shellcheck
+                        deliveryTools.gh
+                        deliveryTools.gitTown
+                      ]}
+                  '';
+                  passthru.rustToolchainVersion = deliveryTools.rustStableVersion;
+                })
+              else
+                throw "unsupported shipped Rust package build kind ${spec.buildKind}";
+          };
+        shippedRustPackageOutputs =
+          builtins.listToAttrs (map mkShippedRustPackage shippedRustFlakePackages);
       in {
         manpages = pkgs.runCommand "d2b-manpages" { } ''
           install -Dm644 ${./docs/manpages/d2b.1} "$out/share/man/man1/d2b.1"
@@ -170,53 +386,6 @@
           install -Dm644 ${./docs/completions/d2b.zsh}  "$out/share/zsh/site-functions/_d2b"
           install -Dm644 ${./docs/completions/d2b.fish} "$out/share/fish/vendor_completions.d/d2b.fish"
         '';
-        d2b-guestd-static = guestStaticPackage "d2b-guestd" "d2b-guestd";
-        d2b-userd-static = guestStaticPackage "d2b-userd" "d2b-userd";
-        d2b-exec-runner-static =
-          guestStaticPackage "d2b-exec-runner" "d2b-exec-runner";
-        d2b-sk-frontend-static =
-          guestStaticPackage "d2b-sk-frontend" "d2b-sk-frontend";
-        d2b-guest-shell-runner-static = guestShellRunnerStatic;
-        d2b-clipd = rustWorkspace {
-          pname = "d2b-clipd";
-          cargoBuildFlags = [ "--package" "d2b-clipd" "--bin" "d2b-clipd" ];
-          doCheck = false;
-        };
-        d2b-wayland-proxy = rustWorkspace {
-          pname = "d2b-wayland-proxy";
-          cargoBuildFlags = [ "--package" "d2b-wayland-proxy" "--bin" "d2b-wayland-proxy" ];
-          doCheck = false;
-          meta.mainProgram = "d2b-wayland-proxy";
-        };
-        d2b-unsafe-local-helper = rustWorkspace {
-          pname = "d2b-unsafe-local-helper";
-          cargoBuildFlags = [
-            "--package"
-            "d2b-unsafe-local-helper"
-            "--bin"
-            "d2b-unsafe-local-helper"
-          ];
-          doCheck = false;
-          meta.mainProgram = "d2b-unsafe-local-helper";
-        };
-        d2b-delivery = deliveryRustWorkspace {
-          pname = "d2b-delivery";
-          cargoBuildFlags = [ "--package" "xtask" "--bin" "xtask" ];
-          doCheck = false;
-          nativeBuildInputs = [ pkgs.makeWrapper pkgs.protobuf ];
-          postFixup = ''
-            wrapProgram "$out/bin/xtask" \
-              --prefix PATH : ${pkgs.lib.makeBinPath [
-                pkgs.git
-                pkgs.openssl
-                pkgs.shellcheck
-                deliveryTools.gh
-                deliveryTools.gitTown
-              ]}
-          '';
-          meta.mainProgram = "xtask";
-          passthru.rustToolchainVersion = deliveryTools.rustStableVersion;
-        };
         git-town = deliveryTools.gitTown;
         gh = deliveryTools.gh;
         cargo-udeps-nightly = deliveryTools.cargoUdepsNightly;
@@ -225,7 +394,7 @@
         signoz = import ./pkgs/signoz { inherit pkgs; };
         signozOtelCollector = import ./pkgs/signoz-otel-collector { inherit pkgs; };
         signozSchemaMigrator = import ./pkgs/signoz-schema-migrator { inherit pkgs; };
-      });
+      } // shippedRustPackageOutputs);
 
       apps = forAllSystems (system: {
         delivery = {
@@ -1322,7 +1491,9 @@
           (mkEval [ (import ./examples/graphics-workstation/configuration.nix) ]);
       });
 
-      lib = nixpkgs.lib.makeExtensible (_: { });
+      lib = nixpkgs.lib.makeExtensible (_: {
+        inherit shippedRustPackages;
+      });
 
       overlays.default = _final: _prev: { };
     };
