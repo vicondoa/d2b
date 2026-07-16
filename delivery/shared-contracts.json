@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "authority_repository": "github.com/vicondoa/d2b",
   "shared_root_branch": "adr0045-post-w4-contracts",
   "waves": [
@@ -19,7 +19,6 @@
         "packages/d2b-host/",
         "packages/d2b-priv-broker/",
         "packages/d2b-provider-agent/",
-        "packages/d2b-provider-toolkit/",
         "packages/d2b-realm-codec-protobuf/",
         "packages/d2b-realm-core/",
         "packages/d2b-realm-provider/",
@@ -48,7 +47,9 @@
         "packages/d2b-wayland-proxy/",
         "packages/d2b-wlcontrol/",
         "pkgs/",
-        "templates/"
+        "templates/",
+        "tests/unit/nix/",
+        "tests/unit/smoke/"
       ],
       "additional_protected_paths": [],
       "allowed_protected_paths": []
@@ -91,7 +92,6 @@
         "packages/d2b-host/",
         "packages/d2b-priv-broker/",
         "packages/d2b-provider-agent/",
-        "packages/d2b-provider-toolkit/",
         "packages/d2b-realm-codec-protobuf/",
         "packages/d2b-realm-core/",
         "packages/d2b-realm-provider/",
@@ -100,7 +100,9 @@
         "packages/d2b/",
         "packages/d2bd/",
         "pkgs/",
-        "templates/"
+        "templates/",
+        "tests/unit/nix/",
+        "tests/unit/smoke/"
       ],
       "additional_protected_paths": [],
       "allowed_protected_paths": []
@@ -117,7 +119,9 @@
         "examples/",
         "nixos-modules/",
         "pkgs/",
-        "templates/"
+        "templates/",
+        "tests/unit/nix/",
+        "tests/unit/smoke/"
       ],
       "foreign_prefixes": [
         "packages/d2b-activation-helper/",
@@ -135,7 +139,6 @@
         "packages/d2b-one-shot-helper/",
         "packages/d2b-priv-broker/",
         "packages/d2b-provider-agent/",
-        "packages/d2b-provider-toolkit/",
         "packages/d2b-realm-codec-protobuf/",
         "packages/d2b-realm-core/",
         "packages/d2b-realm-provider/",
@@ -198,6 +201,49 @@
     "packages/d2b-contracts/",
     "packages/xtask/src/delivery/",
     "packages/xtask/tests/delivery_"
+  ],
+  "frozen_prefixes": [
+    "packages/d2b-azure-vm-fake-sdk/",
+    "packages/d2b-contract-tests/",
+    "packages/d2b-contracts/",
+    "packages/d2b-core/",
+    "packages/d2b-provider-aca/",
+    "packages/d2b-provider-audio-pipewire-vhost-user/",
+    "packages/d2b-provider-credential-entra/",
+    "packages/d2b-provider-credential-managed-identity/",
+    "packages/d2b-provider-credential-secret-service/",
+    "packages/d2b-provider-device-host-mediated/",
+    "packages/d2b-provider-display-wayland/",
+    "packages/d2b-provider-host/",
+    "packages/d2b-provider-infrastructure-azure-vm/",
+    "packages/d2b-provider-network-local-realm/",
+    "packages/d2b-provider-observability-local/",
+    "packages/d2b-provider-relay/",
+    "packages/d2b-provider-runtime-azure-container-apps/",
+    "packages/d2b-provider-runtime-azure-vm/",
+    "packages/d2b-provider-runtime-local/",
+    "packages/d2b-provider-storage-local/",
+    "packages/d2b-provider-substrate-host/",
+    "packages/d2b-provider-toolkit/",
+    "packages/d2b-provider-transport-azure-relay/",
+    "packages/d2b-provider-transport-local/",
+    "packages/d2b-provider/",
+    "packages/d2b-session-unix/",
+    "packages/d2b-session/",
+    "packages/d2b-state/",
+    "packages/d2b-ttrpc-api-fit-spike/",
+    "packages/xtask/"
+  ],
+  "documentation_paths": [
+    "CHANGELOG.md",
+    "README.md"
+  ],
+  "documentation_prefixes": [
+    "docs/completions/",
+    "docs/explanation/",
+    "docs/how-to/",
+    "docs/manpages/",
+    "docs/reference/"
   ],
   "frozen_service_packages": [
     "d2b.activation.v2",

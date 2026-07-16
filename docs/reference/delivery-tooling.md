@@ -115,18 +115,28 @@ and computes a no-rename parent-to-head path diff. Candidate edits to the
 checker, delivery implementation, Make target, or policy are therefore judged
 by the parent policy and cannot exempt themselves.
 
+Every authority Git command disables replacement objects and bypasses graft and
+shallow traversal. Verification also fails if either worktree's common Git
+directory contains `refs/replace`, `info/grafts`, or `shallow` metadata, so
+replacement commits cannot substitute the trusted policy, selected manifest,
+or parent-to-head diff.
+
 The policy's implementation partition is fail-closed across waves:
 
 | Wave | Owned implementation |
 | --- | --- |
 | W5 | Core CLI/client/daemon, realm, guest, provider-agent, broker, host, and allocator crate prefixes |
 | W6 | Userd, systemd-user/shell, clipboard, notify/wlcontrol, Wayland, security-key, activation, TTY, and retained-helper crate prefixes |
-| W7 | `nixos-modules/`, `pkgs/`, `examples/`, and `templates/` |
+| W7 | `nixos-modules/`, `pkgs/`, `examples/`, `templates/`, and Nix eval-test emission |
 
-Each wave records the exact union of the other waves' prefixes as foreign.
-Shared-root contracts and tooling stay protected for every wave; W7 retains
-only the policy's narrow provider-registry and `flake.nix` exceptions. Before
-linearization all three waves use the shared root as parent. In the final
+Allowed prefixes are positive authority, not documentation: a changed
+implementation path must classify to the current wave. Each wave records the
+exact union of the other waves' prefixes as foreign, existing W4 implementation
+prefixes are frozen, unowned paths fail closed, and the prefix root itself
+cannot become a symlink, gitlink, or file. Shared-root contracts and tooling
+stay protected; only explicit documentation paths/prefixes, the current wave
+manifest, and W7's narrow provider-registry/`flake.nix` exceptions are allowed.
+Before linearization all three waves use the shared root as parent. In the final
 W5-to-W6-to-W7 chain, W6 uses W5 and W7 uses W6 as the exact trusted parent;
 partial linearization is rejected.
 

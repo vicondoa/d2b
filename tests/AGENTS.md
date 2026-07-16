@@ -180,8 +180,9 @@ CANDIDATE_ROOT=<wave-worktree>`. The checker and policy therefore come from the
 exact clean Git Town parent commit corroborated by the candidate's ordinary
 GitHub PR, not from the tree under review. It also walks and corroborates every
 wave ancestor back to the shared root. Tests for this surface must cover
-candidate checker/policy replacement, fake, partial, or self parent graphs, and
-cross-wave implementation paths.
+candidate checker/policy replacement, fake, partial, or self parent graphs,
+Git replacement/graft/shallow metadata, positive owner classification, prefix
+root symlink/gitlink changes, frozen implementation, and cross-wave paths.
 
 ### Unified Rust workspace
 

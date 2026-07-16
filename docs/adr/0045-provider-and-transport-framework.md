@@ -2591,15 +2591,20 @@ The post-W4 execution rules are:
 3. Shared tooling adds separate checked-in manifests under
    `delivery/manifests/w<N>.json`; sibling waves do not contend for one delivery
    manifest. Slice agents never edit the workspace lock, cross-wave generated
-   contracts, shared policy, or another wave's files. The policy partitions
-   implementation prefixes as follows:
+   contracts, shared policy, or another wave's files. The policy positively
+   partitions implementation prefixes as follows:
    - W5: core CLI/client/daemon, realm, guest, provider-agent, broker, host, and
      allocator crates;
    - W6: userd, systemd-user/shell, clipboard, notify/wlcontrol, Wayland,
      security-key, activation, TTY, and retained helper crates;
-   - W7: `nixos-modules/`, `pkgs/`, `examples/`, and `templates/`.
-   Each wave's foreign set is exactly the union of the other two sets. Root
-   shared contracts remain protected regardless of wave.
+   - W7: `nixos-modules/`, `pkgs/`, `examples/`, `templates/`, and Nix
+     eval-test emission.
+   Each wave's foreign set is exactly the union of the other two sets. Existing
+   W4 implementation prefixes are frozen. An implementation path not positively
+   classified to the current wave, including an exact prefix-root symlink or
+   gitlink change, fails closed. Root shared contracts remain protected, and
+   general exceptions are limited to explicit documentation paths/prefixes and
+   the current wave manifest.
 4. Before a wave branch is published, run ownership verification from a clean
    worktree at the exact immediate Git Town parent commit and pass the wave
    worktree only as the candidate. The parent-built checker derives the
@@ -2607,9 +2612,12 @@ The post-W4 execution rules are:
    corroborates Git Town parent/base and local head with the policy-pinned
    repository's unique open ordinary GitHub PR, loads policy from that exact
    parent commit, and diffs parent to head. Every wave ancestor is walked and
-   corroborated to the shared root. It accepts no caller-selected wave or base
-   and rejects a self/`HEAD` base. Before linearization the shared root is valid
-   for all three; after linearization only W5 -> W6 -> W7 is valid.
+   corroborated to the shared root. All Git object and graph operations disable
+   replace objects and bypass graft/shallow traversal; either worktree is
+   rejected if `refs/replace`, `info/grafts`, or `shallow` metadata exists. The
+   checker accepts no caller-selected wave or base and rejects a self/`HEAD`
+   base. Before linearization the shared root is valid for all three; after
+   linearization only W5 -> W6 -> W7 is valid.
 5. W5/W6/W7 remain siblings during implementation. At content freeze, delivery
    is deterministically linearized W5 -> W6 -> W7 through Git Town parent
    changes **before W6/W7 create final snapshots or run final panels**. W6 and

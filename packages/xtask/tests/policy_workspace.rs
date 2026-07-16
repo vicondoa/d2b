@@ -1451,7 +1451,7 @@ fn w4_provider_delivery_fingerprints_cover_every_reserved_file() {
 fn shared_contract_policy_freezes_services_dependencies_and_ownership() {
     let root = repo_root();
     let policy = xtask::wave_policy::read_policy(&root).expect("shared-contract policy");
-    assert_eq!(policy.schema_version, 2);
+    assert_eq!(policy.schema_version, 3);
     assert_eq!(policy.authority_repository, "github.com/vicondoa/d2b");
     let frozen = policy
         .frozen_service_packages
@@ -1510,7 +1510,7 @@ fn shared_contract_policy_freezes_services_dependencies_and_ownership() {
     for (wave, owned, foreign) in [
         ("w5", "packages/d2bd/", "packages/d2b-userd/"),
         ("w6", "packages/d2b-userd/", "nixos-modules/"),
-        ("w7", "nixos-modules/", "packages/d2bd/"),
+        ("w7", "tests/unit/nix/", "packages/d2bd/"),
     ] {
         let ownership = policy
             .waves
@@ -1532,6 +1532,52 @@ fn shared_contract_policy_freezes_services_dependencies_and_ownership() {
             "{wave} does not reject foreign prefix {foreign}"
         );
     }
+    let implementation_prefixes = policy
+        .waves
+        .iter()
+        .flat_map(|wave| wave.allowed_prefixes.iter())
+        .chain(policy.frozen_prefixes.iter())
+        .collect::<Vec<_>>();
+    for entry in std::fs::read_dir(root.join("packages")).expect("read package roots") {
+        let entry = entry.expect("package root entry");
+        if !entry.path().join("Cargo.toml").is_file() {
+            continue;
+        }
+        let prefix = format!("packages/{}/", entry.file_name().to_string_lossy());
+        let matches = implementation_prefixes
+            .iter()
+            .filter(|candidate| candidate.as_str() == prefix)
+            .count();
+        assert_eq!(
+            matches, 1,
+            "implementation package {prefix} must have exactly one canonical wave/frozen owner"
+        );
+    }
+    for frozen in [
+        "packages/d2b-provider-runtime-local/",
+        "packages/d2b-provider-toolkit/",
+        "packages/d2b-session/",
+    ] {
+        assert!(
+            policy
+                .frozen_prefixes
+                .binary_search(&frozen.to_owned())
+                .is_ok(),
+            "W4 implementation prefix {frozen} must stay frozen"
+        );
+    }
+    assert!(
+        policy
+            .documentation_paths
+            .binary_search(&"CHANGELOG.md".to_owned())
+            .is_ok()
+    );
+    assert!(
+        policy
+            .documentation_prefixes
+            .binary_search(&"docs/reference/".to_owned())
+            .is_ok()
+    );
 
     let generated =
         read_repo_file("packages/d2b-contracts/src/generated_v2_services/broker_ttrpc.rs");

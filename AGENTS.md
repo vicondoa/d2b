@@ -308,14 +308,17 @@ directly on local `main`.
 The post-W4 shared root is the exclusive owner of the frozen ComponentSession
 service DTOs/bindings, allocator and child-realm spawn wire, workspace dependency
 table and `Cargo.lock`, delivery tooling, and `delivery/shared-contracts.json`.
-Its policy defines disjoint implementation prefixes: W5 owns the core
+Its policy positively classifies implementation paths: W5 owns the core
 daemon/CLI/client, realm, guest, provider-agent, broker, host, and allocator
 crates; W6 owns userd, systemd-user/shell, clipboard, notify/wlcontrol, Wayland,
 security-key, activation, TTY, and one-shot helper crates; W7 owns
-`nixos-modules/`, `pkgs/`, `examples/`, and `templates/` emission. Every wave
-lists the other two sets as foreign and fails closed on those paths. W7 extends
-the existing `provider-registry-v2` family through its narrow protected-path
-exceptions; no wave creates a second registry.
+`nixos-modules/`, `pkgs/`, `examples/`, `templates/`, and its Nix eval-test
+emission. Existing W4 implementation crates are frozen. Every wave lists the
+other two sets as foreign, and unclassified implementation, prefix-root
+symlink/gitlink, frozen, or foreign edits fail closed. Only the checked-in
+documentation paths/prefixes and the wave's own manifest are general
+exceptions. W7 extends the existing `provider-registry-v2` family through its
+narrow protected-path exceptions; no wave creates a second registry.
 
 W5, W6, and W7 each edit only their authority at
 `delivery/manifests/w<N>.json`; `delivery/manifest.json` remains the unchanged W4
@@ -337,10 +340,14 @@ against that branch's unique ordinary PR. It accepts no caller-selected wave or
 base, rejects `HEAD` as its own base, and requires its own clean source worktree
 to be that exact immediate parent. Before linearization every wave may use the
 shared root; afterward only the complete W5 -> W6 -> W7 chain is valid. The
-check rejects another wave's implementation, another wave's
-manifest, the workspace lock/shared dependency table, frozen cross-wave
-contracts, or shared delivery/policy tooling. A newly required shared contract
-returns to the shared-root PR and all consumers restack.
+checker disables Git replacement, graft, and shallow traversal for every object
+read and diff, and rejects repositories containing `refs/replace`,
+`info/grafts`, or `shallow` metadata. The check rejects another wave's
+implementation, an unowned or frozen implementation, an implementation-prefix
+root, another wave's manifest, the workspace lock/shared dependency table,
+frozen cross-wave contracts, or shared delivery/policy tooling. A newly
+required shared contract returns to the shared-root PR and all consumers
+restack.
 
 #### Anti-serialization invariant
 

@@ -9,8 +9,8 @@ use serde::Deserialize;
 
 use crate::delivery::{
     command::{
-        CommandOutput, CommandOutputAdapter, GhStatusSource, GitProbe, ProcessCommandOutput,
-        PullRequestStatusSource, RepositoryProbe,
+        CommandLimits, CommandOutput, CommandOutputAdapter, GhStatusSource, GitProbe,
+        ProcessCommandOutput, PullRequestStatusSource, RepositoryProbe, authority_git_environment,
     },
     model::{
         DeliveryManifest, PullRequestState, expected_wave_manifest_path,
@@ -37,6 +37,14 @@ const REQUIRED_PROTECTED_PATHS: &[&str] = &[
 ];
 const REQUIRED_PROTECTED_PREFIXES: &[&str] =
     &["packages/d2b-contracts/", "packages/xtask/src/delivery/"];
+const REQUIRED_DOCUMENTATION_PATHS: &[&str] = &["CHANGELOG.md", "README.md"];
+const REQUIRED_DOCUMENTATION_PREFIXES: &[&str] = &[
+    "docs/completions/",
+    "docs/explanation/",
+    "docs/how-to/",
+    "docs/manpages/",
+    "docs/reference/",
+];
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -47,6 +55,9 @@ pub struct SharedContractPolicy {
     pub waves: Vec<WaveOwnership>,
     pub protected_paths: Vec<String>,
     pub protected_prefixes: Vec<String>,
+    pub frozen_prefixes: Vec<String>,
+    pub documentation_paths: Vec<String>,
+    pub documentation_prefixes: Vec<String>,
     pub frozen_service_packages: Vec<String>,
     pub broker_typed_methods: Vec<TypedBrokerMethod>,
     pub workspace_dependencies: Vec<WorkspaceDependency>,
@@ -85,7 +96,7 @@ pub struct WorkspaceDependency {
 
 impl SharedContractPolicy {
     pub fn validate(&self) -> Result<(), String> {
-        if self.schema_version != 2 {
+        if self.schema_version != 3 {
             return Err("unsupported shared-contract policy schema".to_owned());
         }
         if self.authority_repository != "github.com/vicondoa/d2b" {
@@ -151,8 +162,14 @@ impl SharedContractPolicy {
             if wave.responsibility.trim().is_empty() {
                 return Err(format!("{} responsibility is empty", wave.wave));
             }
-            validate_sorted_prefixes(&wave.allowed_prefixes)?;
-            validate_sorted_prefixes(&wave.foreign_prefixes)?;
+            validate_sorted_directory_prefixes(
+                &wave.allowed_prefixes,
+                "allowed implementation prefixes",
+            )?;
+            validate_sorted_directory_prefixes(
+                &wave.foreign_prefixes,
+                "foreign implementation prefixes",
+            )?;
             for prefix in &wave.allowed_prefixes {
                 if let Some(owner) = prefix_owners.insert(prefix.as_str(), wave.wave.as_str()) {
                     return Err(format!(
@@ -170,6 +187,12 @@ impl SharedContractPolicy {
         }
         validate_sorted_paths(&self.protected_paths)?;
         validate_sorted_prefixes(&self.protected_prefixes)?;
+        validate_sorted_directory_prefixes(
+            &self.frozen_prefixes,
+            "frozen implementation prefixes",
+        )?;
+        validate_sorted_relative_paths(&self.documentation_paths, "documentation paths")?;
+        validate_sorted_directory_prefixes(&self.documentation_prefixes, "documentation prefixes")?;
         validate_sorted_strings(&self.frozen_service_packages, "frozen service packages")?;
         validate_sorted_values(&self.broker_typed_methods, "typed broker methods")?;
         validate_sorted_values(&self.workspace_dependencies, "workspace dependencies")?;
@@ -192,6 +215,28 @@ impl SharedContractPolicy {
             {
                 return Err(format!(
                     "shared-contract policy does not protect required prefix {required}"
+                ));
+            }
+        }
+        for required in REQUIRED_DOCUMENTATION_PATHS {
+            if self
+                .documentation_paths
+                .binary_search_by(|path| path.as_str().cmp(required))
+                .is_err()
+            {
+                return Err(format!(
+                    "shared-contract policy does not allow required documentation path {required}"
+                ));
+            }
+        }
+        for required in REQUIRED_DOCUMENTATION_PREFIXES {
+            if self
+                .documentation_prefixes
+                .binary_search_by(|prefix| prefix.as_str().cmp(required))
+                .is_err()
+            {
+                return Err(format!(
+                    "shared-contract policy does not allow required documentation prefix {required}"
                 ));
             }
         }
@@ -232,13 +277,31 @@ impl SharedContractPolicy {
                 }
             }
         }
+        for frozen in &self.frozen_prefixes {
+            for (wave, owned) in &owned_prefixes {
+                if frozen.starts_with(owned) || owned.starts_with(frozen) {
+                    return Err(format!(
+                        "frozen implementation prefix {frozen} overlaps {owned} owned by {wave}"
+                    ));
+                }
+            }
+        }
+        for (index, left) in self.frozen_prefixes.iter().enumerate() {
+            for right in &self.frozen_prefixes[index + 1..] {
+                if left.starts_with(right) || right.starts_with(left) {
+                    return Err(format!(
+                        "frozen implementation prefixes {left} and {right} overlap"
+                    ));
+                }
+            }
+        }
         for wave in &self.waves {
             for path in &wave.allowed_protected_paths {
                 let globally_protected = self.protected_paths.binary_search(path).is_ok()
                     || self
                         .protected_prefixes
                         .iter()
-                        .any(|prefix| path.starts_with(prefix));
+                        .any(|prefix| path_matches_prefix(path, prefix));
                 if !globally_protected {
                     return Err(format!(
                         "{} exception {path} is not a protected shared-root path",
@@ -248,7 +311,7 @@ impl SharedContractPolicy {
                 if wave
                     .foreign_prefixes
                     .iter()
-                    .any(|prefix| path.starts_with(prefix))
+                    .any(|prefix| path_matches_prefix(path, prefix))
                 {
                     return Err(format!(
                         "{} exception {path} grants a foreign-wave implementation path",
@@ -258,6 +321,35 @@ impl SharedContractPolicy {
             }
         }
         Ok(())
+    }
+
+    fn implementation_path(&self, path: &str) -> Option<ImplementationPath<'_>> {
+        for wave in &self.waves {
+            for prefix in &wave.allowed_prefixes {
+                if path_matches_prefix(path, prefix) {
+                    return Some(ImplementationPath {
+                        owner: ImplementationOwner::Wave(&wave.wave),
+                        at_prefix_root: path == prefix.trim_end_matches('/'),
+                    });
+                }
+            }
+        }
+        self.frozen_prefixes.iter().find_map(|prefix| {
+            path_matches_prefix(path, prefix).then_some(ImplementationPath {
+                owner: ImplementationOwner::Frozen,
+                at_prefix_root: path == prefix.trim_end_matches('/'),
+            })
+        })
+    }
+
+    fn is_documentation_path(&self, path: &str) -> bool {
+        self.documentation_paths
+            .binary_search_by(|candidate| candidate.as_str().cmp(path))
+            .is_ok()
+            || self
+                .documentation_prefixes
+                .iter()
+                .any(|prefix| path.starts_with(prefix))
     }
 
     fn wave(&self, wave: &str) -> Result<&WaveOwnership, String> {
@@ -293,6 +385,18 @@ impl SharedContractPolicy {
                 .is_ok()
         })
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ImplementationOwner<'a> {
+    Wave(&'a str),
+    Frozen,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ImplementationPath<'a> {
+    owner: ImplementationOwner<'a>,
+    at_prefix_root: bool,
 }
 
 pub fn run_cli(args: &[String]) -> ExitCode {
@@ -356,6 +460,7 @@ struct OrdinaryPullRequest {
 
 trait OwnershipProbe {
     fn canonical_root(&self, root: &Path) -> Result<PathBuf, String>;
+    fn reject_history_rewrites(&self, root: &Path) -> Result<(), String>;
     fn repository_identity(&self, root: &Path) -> Result<String, String>;
     fn is_dirty(&self, root: &Path) -> Result<bool, String>;
     fn current_branch(&self, root: &Path) -> Result<String, String>;
@@ -406,13 +511,28 @@ impl ProcessOwnershipProbe {
         failure: &str,
     ) -> Result<CommandOutput, String> {
         let mut args = vec![
+            "--no-replace-objects".to_owned(),
             "-C".to_owned(),
             root.to_str()
                 .ok_or_else(|| "repository path is not UTF-8".to_owned())?
                 .to_owned(),
         ];
         args.extend_from_slice(arguments);
-        self.output("git", &args, None, failure)
+        let output = self
+            .command
+            .output_with_environment(
+                "git",
+                &args,
+                None,
+                &authority_git_environment(),
+                CommandLimits::default(),
+            )
+            .map_err(|error| error.to_string())?;
+        if output.success {
+            Ok(output)
+        } else {
+            Err(format!("{failure}: {}", output.safe_failure_summary()))
+        }
     }
 
     fn command_text(
@@ -441,6 +561,44 @@ impl OwnershipProbe for ProcessOwnershipProbe {
             .map_err(|error| error.to_string())
     }
 
+    fn reject_history_rewrites(&self, root: &Path) -> Result<(), String> {
+        let replace_refs = self.git_output(
+            root,
+            &[
+                "for-each-ref".to_owned(),
+                "--format=%(refname)".to_owned(),
+                "refs/replace".to_owned(),
+            ],
+            "cannot inspect Git replacement refs",
+        )?;
+        if !replace_refs.stdout.is_empty() {
+            return Err("repository contains forbidden refs/replace metadata".to_owned());
+        }
+
+        let common_dir = self
+            .git_probe()
+            .git_common_dir(root)
+            .map_err(|error| error.to_string())?;
+        for (relative, label) in [
+            (Path::new("info/grafts"), "graft"),
+            (Path::new("shallow"), "shallow"),
+        ] {
+            let path = common_dir.join(relative);
+            match fs::symlink_metadata(&path) {
+                Ok(_) => {
+                    return Err(format!(
+                        "repository contains forbidden Git {label} metadata"
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(format!("cannot inspect Git {label} metadata: {error}"));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn repository_identity(&self, root: &Path) -> Result<String, String> {
         self.git_probe()
             .repository_identity(root)
@@ -454,21 +612,26 @@ impl OwnershipProbe for ProcessOwnershipProbe {
     }
 
     fn current_branch(&self, root: &Path) -> Result<String, String> {
-        self.command_text(
-            "git",
+        let output = self.git_output(
+            root,
             &[
-                "-C".to_owned(),
-                root.to_str()
-                    .ok_or_else(|| "repository path is not UTF-8".to_owned())?
-                    .to_owned(),
                 "symbolic-ref".to_owned(),
                 "--quiet".to_owned(),
                 "--short".to_owned(),
                 "HEAD".to_owned(),
             ],
-            None,
             "cannot resolve candidate branch",
-        )
+        )?;
+        let value = String::from_utf8(output.stdout)
+            .map_err(|_| "cannot resolve candidate branch: output is not UTF-8".to_owned())?
+            .trim()
+            .to_owned();
+        if value.is_empty() || value.contains('\n') || value.contains('\0') {
+            return Err(
+                "cannot resolve candidate branch: output is missing or ambiguous".to_owned(),
+            );
+        }
+        Ok(value)
     }
 
     fn git_town_parent(&self, root: &Path, branch: &str) -> Result<String, String> {
@@ -602,6 +765,8 @@ fn verify_ownership<P: OwnershipProbe>(
 ) -> Result<VerifiedOwnership, String> {
     let authority_root = probe.canonical_root(authority_root)?;
     let candidate_root = probe.canonical_root(candidate_root)?;
+    probe.reject_history_rewrites(&authority_root)?;
+    probe.reject_history_rewrites(&candidate_root)?;
     if probe.is_dirty(&authority_root)? {
         return Err("trusted authority worktree must be clean".to_owned());
     }
@@ -842,29 +1007,51 @@ pub fn check_changed_paths(
             continue;
         }
         let candidate = Path::new(path);
-        if is_authoritative_manifest_path(candidate)
-            || policy.protected_paths.binary_search(path).is_ok()
+        if is_authoritative_manifest_path(candidate) {
+            violations.push(format!("{path} (foreign delivery authority)"));
+            continue;
+        }
+        if policy.protected_paths.binary_search(path).is_ok()
             || policy
                 .protected_prefixes
                 .iter()
-                .any(|prefix| path.starts_with(prefix))
+                .any(|prefix| path_matches_prefix(path, prefix))
             || ownership
                 .additional_protected_paths
                 .binary_search(path)
                 .is_ok()
-            || ownership
-                .foreign_prefixes
-                .iter()
-                .any(|prefix| path.starts_with(prefix))
         {
-            violations.push(path.clone());
+            violations.push(format!("{path} (shared-root authority)"));
+            continue;
         }
+        if let Some(implementation) = policy.implementation_path(path) {
+            if implementation.at_prefix_root {
+                violations.push(format!(
+                    "{path} (implementation prefix root cannot become a symlink, gitlink, or file)"
+                ));
+                continue;
+            }
+            match implementation.owner {
+                ImplementationOwner::Wave(owner) if owner == wave => continue,
+                ImplementationOwner::Wave(owner) => {
+                    violations.push(format!("{path} (owned by {owner})"));
+                }
+                ImplementationOwner::Frozen => {
+                    violations.push(format!("{path} (frozen pre-wave implementation)"));
+                }
+            }
+            continue;
+        }
+        if policy.is_documentation_path(path) {
+            continue;
+        }
+        violations.push(format!("{path} (unowned by any implementation wave)"));
     }
     if violations.is_empty() {
         Ok(())
     } else {
         Err(format!(
-            "{wave} changed shared-root or foreign-wave authority paths; return these changes to the owning branch (shared root {}):\n{}",
+            "{wave} changed paths outside its positive ownership partition; return these changes to the owning branch (shared root {}):\n{}",
             policy.shared_root_branch,
             violations.join("\n")
         ))
@@ -905,9 +1092,24 @@ fn branch_matches_stem(branch: &str, stem: &str) -> bool {
 }
 
 fn validate_sorted_paths(paths: &[String]) -> Result<(), String> {
-    validate_sorted_strings(paths, "protected paths")?;
+    validate_sorted_relative_paths(paths, "protected paths")
+}
+
+fn validate_sorted_relative_paths(paths: &[String], label: &str) -> Result<(), String> {
+    validate_sorted_strings(paths, label)?;
     for path in paths {
         validate_relative_path(Path::new(path))?;
+    }
+    Ok(())
+}
+
+fn validate_sorted_directory_prefixes(prefixes: &[String], label: &str) -> Result<(), String> {
+    validate_sorted_strings(prefixes, label)?;
+    for prefix in prefixes {
+        if !prefix.ends_with('/') {
+            return Err(format!("{label} entry {prefix} is not a directory prefix"));
+        }
+        validate_relative_path(Path::new(prefix.trim_end_matches('/')))?;
     }
     Ok(())
 }
@@ -921,6 +1123,13 @@ fn validate_sorted_prefixes(prefixes: &[String]) -> Result<(), String> {
         validate_relative_path(Path::new(prefix.trim_end_matches(['/', '_'])))?;
     }
     Ok(())
+}
+
+fn path_matches_prefix(path: &str, prefix: &str) -> bool {
+    path.starts_with(prefix)
+        || prefix
+            .strip_suffix('/')
+            .is_some_and(|prefix_root| path == prefix_root)
 }
 
 fn validate_sorted_strings(values: &[String], label: &str) -> Result<(), String> {
@@ -961,7 +1170,12 @@ fn validate_relative_path(path: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, collections::BTreeMap};
+    use std::{
+        cell::RefCell,
+        collections::BTreeMap,
+        process::Command,
+        sync::atomic::{AtomicU64, Ordering},
+    };
 
     use super::*;
 
@@ -972,6 +1186,68 @@ mod tests {
     const OTHER_OID: &str = "3333333333333333333333333333333333333333";
     const ROOT_OID: &str = "4444444444444444444444444444444444444444";
     const REPOSITORY: &str = "github.com/vicondoa/d2b";
+    static NEXT_TEST_REPOSITORY: AtomicU64 = AtomicU64::new(1);
+
+    struct TestRepository {
+        root: PathBuf,
+    }
+
+    impl TestRepository {
+        fn new(name: &str) -> Self {
+            let executable = std::env::current_exe().expect("current test executable");
+            let parent = executable.parent().expect("test executable directory");
+            let unique = NEXT_TEST_REPOSITORY.fetch_add(1, Ordering::Relaxed);
+            let root = parent.join(format!(
+                "wave-policy-{name}-{}-{unique}",
+                std::process::id()
+            ));
+            std::fs::create_dir(&root).expect("create test repository");
+            run_test_git(&root, &["init", "--quiet", "--initial-branch=main"]);
+            run_test_git(&root, &["config", "user.email", "test@example.invalid"]);
+            run_test_git(&root, &["config", "user.name", "Wave Policy Test"]);
+            Self { root }
+        }
+
+        fn write(&self, path: &str, bytes: &[u8]) {
+            let path = self.root.join(path);
+            std::fs::create_dir_all(path.parent().expect("test file parent"))
+                .expect("create test file parent");
+            std::fs::write(path, bytes).expect("write test file");
+        }
+
+        fn commit(&self, message: &str) -> String {
+            run_test_git(&self.root, &["add", "--all"]);
+            run_test_git(&self.root, &["commit", "--quiet", "-m", message]);
+            run_test_git(&self.root, &["rev-parse", "HEAD"])
+        }
+    }
+
+    impl Drop for TestRepository {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.root).expect("remove test repository");
+        }
+    }
+
+    fn run_test_git(root: &Path, arguments: &[&str]) -> String {
+        let output = Command::new("git")
+            .arg("--no-replace-objects")
+            .arg("-C")
+            .arg(root)
+            .args(arguments)
+            .env("GIT_NO_REPLACE_OBJECTS", "1")
+            .output()
+            .expect("run test Git command");
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            arguments.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout)
+            .expect("test Git output is UTF-8")
+            .trim()
+            .to_owned()
+    }
 
     fn policy() -> SharedContractPolicy {
         read_policy(
@@ -1014,6 +1290,7 @@ mod tests {
         ancestor_refs: BTreeMap<String, String>,
         ancestor_pull_requests: BTreeMap<String, OrdinaryPullRequest>,
         blob_reads: RefCell<Vec<(PathBuf, String, String)>>,
+        rewrite_metadata: BTreeMap<PathBuf, String>,
     }
 
     impl FakeProbe {
@@ -1036,6 +1313,7 @@ mod tests {
                 ancestor_refs: BTreeMap::new(),
                 ancestor_pull_requests: BTreeMap::new(),
                 blob_reads: RefCell::new(Vec::new()),
+                rewrite_metadata: BTreeMap::new(),
             }
         }
     }
@@ -1043,6 +1321,14 @@ mod tests {
     impl OwnershipProbe for FakeProbe {
         fn canonical_root(&self, root: &Path) -> Result<PathBuf, String> {
             Ok(root.to_path_buf())
+        }
+
+        fn reject_history_rewrites(&self, root: &Path) -> Result<(), String> {
+            if let Some(label) = self.rewrite_metadata.get(root) {
+                Err(format!("repository contains forbidden {label} metadata"))
+            } else {
+                Ok(())
+            }
         }
 
         fn repository_identity(&self, _root: &Path) -> Result<String, String> {
@@ -1176,11 +1462,46 @@ mod tests {
             &policy,
             "w5",
             &[
+                "CHANGELOG.md".to_owned(),
                 "delivery/manifests/w5.json".to_owned(),
+                "docs/reference/daemon-api.md".to_owned(),
                 "packages/d2bd/src/service_v2.rs".to_owned(),
             ],
         )
         .expect("wave-local paths");
+    }
+
+    #[test]
+    fn positive_partition_rejects_unowned_frozen_and_prefix_root_paths() {
+        let policy = policy();
+        for wave in ["w5", "w6", "w7"] {
+            let paths = [
+                "docs/adr/0099-wave-escape.md",
+                "packages/d2b-provider-runtime-local/src/lib.rs",
+                "packages/d2bd-escape/src/lib.rs",
+                "scripts/wave-escape.sh",
+            ]
+            .map(str::to_owned);
+            let error = check_changed_paths(&policy, wave, &paths)
+                .expect_err("unowned and frozen implementation paths");
+            for path in paths {
+                assert!(error.contains(&path), "{error}");
+            }
+        }
+
+        for (wave, roots) in [
+            ("w5", ["packages/d2bd", "packages/d2b-userd"]),
+            ("w6", ["packages/d2b-userd", "nixos-modules"]),
+            ("w7", ["nixos-modules", "packages/d2bd"]),
+        ] {
+            let roots = roots.map(str::to_owned);
+            let error = check_changed_paths(&policy, wave, &roots)
+                .expect_err("symlink or gitlink implementation root");
+            for root in roots {
+                assert!(error.contains(&root), "{error}");
+                assert!(error.contains("prefix root"), "{error}");
+            }
+        }
     }
 
     #[test]
@@ -1352,6 +1673,87 @@ mod tests {
         assert!(!reads.iter().any(|(root, commit, path)| {
             root == Path::new(CANDIDATE_ROOT) && commit == HEAD_OID && path == POLICY_PATH
         }));
+    }
+
+    #[test]
+    fn replace_metadata_fails_before_policy_manifest_or_diff_reads() {
+        for (root, label) in [
+            (AUTHORITY_ROOT, "refs/replace trusted policy"),
+            (CANDIDATE_ROOT, "refs/replace candidate manifest and diff"),
+        ] {
+            let mut probe = FakeProbe::valid();
+            probe
+                .rewrite_metadata
+                .insert(PathBuf::from(root), label.to_owned());
+            let error =
+                verify_ownership(&probe, Path::new(AUTHORITY_ROOT), Path::new(CANDIDATE_ROOT))
+                    .expect_err("replacement metadata");
+            assert!(error.contains(label), "{error}");
+            assert!(probe.blob_reads.borrow().is_empty());
+        }
+    }
+
+    #[test]
+    fn process_probe_ignores_substituted_objects_and_rejects_rewrite_metadata() {
+        let repository = TestRepository::new("replace");
+        repository.write(POLICY_PATH, b"trusted policy\n");
+        let base = repository.commit("trusted base");
+
+        repository.write("delivery/manifests/w5.json", b"trusted manifest\n");
+        repository.write("packages/d2bd/src/real.rs", b"real diff\n");
+        let head = repository.commit("real candidate");
+
+        run_test_git(
+            &repository.root,
+            &["checkout", "--quiet", "-b", "attacker", &base],
+        );
+        repository.write(POLICY_PATH, b"substituted policy\n");
+        repository.write("delivery/manifests/w5.json", b"substituted manifest\n");
+        let replacement = repository.commit("replacement objects");
+        run_test_git(&repository.root, &["replace", &base, &replacement]);
+        run_test_git(&repository.root, &["replace", &head, &replacement]);
+
+        let probe = ProcessOwnershipProbe::default();
+        assert_eq!(
+            probe
+                .tracked_blob(&repository.root, &base, POLICY_PATH)
+                .expect("read trusted policy"),
+            b"trusted policy\n"
+        );
+        assert_eq!(
+            probe
+                .tracked_blob(&repository.root, &head, "delivery/manifests/w5.json")
+                .expect("read trusted manifest"),
+            b"trusted manifest\n"
+        );
+        let changed = probe
+            .changed_paths(&repository.root, &base, &head)
+            .expect("read real diff");
+        assert!(
+            changed
+                .iter()
+                .any(|path| path == "packages/d2bd/src/real.rs")
+        );
+        let error = probe
+            .reject_history_rewrites(&repository.root)
+            .expect_err("replace refs");
+        assert!(error.contains("refs/replace"), "{error}");
+
+        run_test_git(&repository.root, &["replace", "-d", &base]);
+        run_test_git(&repository.root, &["replace", "-d", &head]);
+        let common_dir = repository.root.join(".git");
+        repository.write(".git/info/grafts", format!("{base}\n").as_bytes());
+        let error = probe
+            .reject_history_rewrites(&repository.root)
+            .expect_err("graft metadata");
+        assert!(error.contains("graft"), "{error}");
+        std::fs::remove_file(common_dir.join("info/grafts")).expect("remove graft metadata");
+
+        repository.write(".git/shallow", format!("{base}\n").as_bytes());
+        let error = probe
+            .reject_history_rewrites(&repository.root)
+            .expect_err("shallow metadata");
+        assert!(error.contains("shallow"), "{error}");
     }
 
     #[test]

@@ -49,6 +49,24 @@ const EXIT_TERMINATED: i32 = -6;
 pub const GIT_TOWN_LOCKED_VERSION: &str = "23.0.1";
 pub const GIT_TOWN_SUPPORTED_MAJOR: u64 = 23;
 
+pub(crate) fn authority_git_environment() -> BTreeMap<OsString, OsString> {
+    BTreeMap::from([
+        (OsString::from("GIT_ADVICE"), OsString::from("0")),
+        (
+            OsString::from("GIT_GRAFT_FILE"),
+            OsString::from("/dev/null"),
+        ),
+        (
+            OsString::from("GIT_NO_REPLACE_OBJECTS"),
+            OsString::from("1"),
+        ),
+        (
+            OsString::from("GIT_SHALLOW_FILE"),
+            OsString::from("/dev/null"),
+        ),
+    ])
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CommandLimits {
     pub stdout_bytes: usize,
@@ -1008,9 +1026,19 @@ impl<A: CommandOutputAdapter> GitProbe<A> {
         limits: CommandLimits,
     ) -> Result<CommandOutput> {
         let root_string = path_string(root)?;
-        let mut args = vec!["-C".to_owned(), root_string];
+        let mut args = vec![
+            "--no-replace-objects".to_owned(),
+            "-C".to_owned(),
+            root_string,
+        ];
         args.extend_from_slice(arguments);
-        self.command.output_with_limits("git", &args, None, limits)
+        self.command.output_with_environment(
+            "git",
+            &args,
+            None,
+            &authority_git_environment(),
+            limits,
+        )
     }
 
     fn git_stdout(&self, root: &Path, arguments: &[String]) -> Result<String> {
