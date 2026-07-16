@@ -31,7 +31,8 @@ use tokio::sync::Notify;
 
 use super::*;
 use crate::provider::{
-    LeaseCleanupEvent, LeaseCleanupExecutor, LeaseCleanupObserver, lease_cleanup_executor_for_test,
+    LeaseCleanupEvent, LeaseCleanupExecutor, LeaseCleanupObserver,
+    controlled_lease_cleanup_executor_for_test, lease_cleanup_executor_for_test,
     unavailable_lease_cleanup_executor_for_test,
 };
 
@@ -316,7 +317,12 @@ impl AcaCredentialLeaseClient for FakeCredentialClient {
             return Err(error);
         }
         if self.block_revoke_once.swap(false, Ordering::AcqRel) {
+            let mut in_flight = InFlightRevoke {
+                cancelled_revocations: &self.cancelled_revocations,
+                completed: false,
+            };
             self.revoke_release.notified().await;
+            in_flight.completed = true;
         }
         let revoke_delay_ms = if self.timeout_revoke_once.swap(false, Ordering::AcqRel) {
             Some(u64::from(MAX_ACA_LEASE_CLEANUP_MS) + 100)
@@ -1438,6 +1444,10 @@ async fn cancellation_and_deadline_fail_closed_and_same_operation_can_retry() {
     assert_eq!(failure.kind, ProviderFailureKind::DeadlineExpired);
     assert_eq!(failure.retry, RetryClass::SameOperation);
     assert_eq!(harness.control.cancelled_call_count(), 1);
+    wait_for_within(Duration::from_millis(200), || {
+        harness.credential.revocation_count() == 1
+    })
+    .await;
     assert_eq!(harness.credential.revocation_count(), 1);
 
     let retry_context = harness.call_context(&request.context, 1_000, false);
@@ -1563,6 +1573,10 @@ async fn forward_clock_jumps_fail_before_credential_and_control_effects() {
         .unwrap_err();
     assert_eq!(failure.kind, ProviderFailureKind::DeadlineExpired);
     assert_eq!(control_jump.credential.acquisition_count(), 1);
+    wait_for_within(Duration::from_millis(200), || {
+        control_jump.credential.revocation_count() == 1
+    })
+    .await;
     assert_eq!(control_jump.credential.revocation_count(), 1);
     assert!(control_jump.control.calls().is_empty());
 }
@@ -1595,6 +1609,10 @@ async fn first_mutation_expiry_before_dispatch_is_not_ambiguous() {
         &[ControlCall::FindSandboxes]
     );
     assert_eq!(harness.control.cancelled_call_count(), 0);
+    wait_for_within(Duration::from_millis(200), || {
+        harness.credential.revocation_count() == revocations_before + 1
+    })
+    .await;
     assert_eq!(
         harness.credential.revocation_count(),
         revocations_before + 1
@@ -1719,7 +1737,7 @@ async fn successful_plan_inspect_handle_and_mutation_return_before_blocked_revok
 }
 
 #[tokio::test]
-async fn synchronous_revoke_success_preserves_the_operation_failure() {
+async fn failed_operation_preserves_classification_and_revokes_once() {
     let harness = Harness::container_image();
     harness.control.fail_next(
         ControlCall::FindSandboxes,
@@ -1739,6 +1757,10 @@ async fn synchronous_revoke_success_preserves_the_operation_failure() {
 
     assert_eq!(failure.kind, ProviderFailureKind::Unavailable);
     assert_eq!(failure.retry, RetryClass::SameOperation);
+    wait_for_within(Duration::from_millis(200), || {
+        harness.credential.completed_revocation_count() == 1
+    })
+    .await;
     assert_eq!(harness.credential.revocation_count(), 1);
     assert_eq!(harness.credential.completed_revocation_count(), 1);
     assert_eq!(harness.credential.cancelled_revocation_count(), 0);
@@ -1783,7 +1805,7 @@ async fn background_revoke_timeout_never_changes_or_delays_success() {
 }
 
 #[tokio::test]
-async fn error_branch_revoke_timeout_is_bounded_typed_ambiguity_once() {
+async fn error_branch_revoke_timeout_never_replaces_the_original_failure() {
     let harness = Harness::container_image();
     harness.control.fail_next(
         ControlCall::FindSandboxes,
@@ -1797,15 +1819,19 @@ async fn error_branch_revoke_timeout_is_bounded_typed_ambiguity_once() {
     let context = harness.call_context(&request.context, 2_000, false);
 
     let failure = tokio::time::timeout(
-        Duration::from_millis(u64::from(MAX_ACA_LEASE_CLEANUP_MS) + 200),
+        Duration::from_millis(100),
         harness.provider.inspect(&context, &request),
     )
     .await
     .unwrap()
     .unwrap_err();
 
-    assert_eq!(failure.kind, ProviderFailureKind::AmbiguousMutation);
-    assert_eq!(failure.retry, RetryClass::AfterObservation);
+    assert_eq!(failure.kind, ProviderFailureKind::Unavailable);
+    assert_eq!(failure.retry, RetryClass::SameOperation);
+    wait_for_within(Duration::from_millis(1_200), || {
+        harness.credential.cancelled_revocation_count() == 1
+    })
+    .await;
     assert_eq!(harness.credential.revocation_count(), 1);
     assert_eq!(harness.credential.completed_revocation_count(), 0);
     assert_eq!(harness.credential.cancelled_revocation_count(), 1);
@@ -1951,7 +1977,7 @@ async fn request_runtime_shutdown_before_drop_still_completes_cleanup_once() {
         lease,
         client,
         observer.clone(),
-        executor,
+        executor.clone(),
     );
 
     wait_for_within(Duration::from_millis(500), || !observer.events().is_empty()).await;
@@ -1963,6 +1989,7 @@ async fn request_runtime_shutdown_before_drop_still_completes_cleanup_once() {
     assert_eq!(harness.credential.revocation_count(), 1);
     assert_eq!(harness.credential.completed_revocation_count(), 1);
     assert_eq!(lock(&harness.vault).active_lease_count(), 0);
+    drop(executor);
 }
 
 #[tokio::test]
@@ -2019,10 +2046,7 @@ async fn saturated_cleanup_queue_reports_once_and_never_double_revokes() {
     provider.inspect(&third_context, &third).await.unwrap();
 
     assert_eq!(observer.events().len(), 1);
-    assert_eq!(
-        observer.events()[0].outcome().as_str(),
-        "runtime-unavailable"
-    );
+    assert_eq!(observer.events()[0].outcome().as_str(), "saturated");
     assert_eq!(harness.credential.revocation_count(), 1);
 
     harness.credential.release_revoke();
@@ -2035,7 +2059,7 @@ async fn saturated_cleanup_queue_reports_once_and_never_double_revokes() {
     assert_eq!(
         outcomes
             .iter()
-            .filter(|outcome| **outcome == "runtime-unavailable")
+            .filter(|outcome| **outcome == "saturated")
             .count(),
         1
     );
@@ -2050,6 +2074,75 @@ async fn saturated_cleanup_queue_reports_once_and_never_double_revokes() {
     assert_eq!(harness.credential.revocation_count(), 2);
     assert_eq!(harness.credential.completed_revocation_count(), 2);
     assert_eq!(lock(&harness.vault).active_lease_count(), 1);
+}
+
+#[tokio::test]
+async fn cleanup_shutdown_drains_an_in_flight_revoke_before_stopping() {
+    let observer = Arc::new(RecordingCleanupObserver::default());
+    let harness = Harness::container_image();
+    let (executor, control) =
+        controlled_lease_cleanup_executor_for_test(4, 1, Duration::from_millis(500))
+            .expect("controlled cleanup executor");
+    let provider = harness.provider_with_cleanup_services(observer.clone(), executor);
+    harness.credential.block_next_revoke();
+
+    let request = harness.request(ProviderMethod::RuntimeInspect, "shutdown-drain");
+    let context = harness.call_context(&request.context, 1_000, false);
+    provider.inspect(&context, &request).await.unwrap();
+    wait_for_within(Duration::from_millis(500), || {
+        harness.credential.revocation_count() == 1
+    })
+    .await;
+
+    control.request_shutdown();
+    wait_for_within(Duration::from_millis(500), || control.is_closed()).await;
+    assert!(!control.is_stopped());
+    harness.credential.release_revoke();
+    wait_for_within(Duration::from_millis(500), || control.is_stopped()).await;
+
+    let events = observer.events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].outcome().as_str(), "revoked");
+    assert_eq!(harness.credential.revocation_count(), 1);
+    assert_eq!(harness.credential.completed_revocation_count(), 1);
+    assert_eq!(harness.credential.cancelled_revocation_count(), 0);
+    assert_eq!(lock(&harness.vault).active_lease_count(), 0);
+}
+
+#[tokio::test]
+async fn cleanup_shutdown_timeout_reports_cancelled_once_without_a_second_revoke() {
+    let observer = Arc::new(RecordingCleanupObserver::default());
+    let harness = Harness::container_image();
+    let (executor, control) =
+        controlled_lease_cleanup_executor_for_test(4, 1, Duration::from_millis(20))
+            .expect("controlled cleanup executor");
+    let provider = harness.provider_with_cleanup_services(observer.clone(), executor);
+    harness.credential.block_next_revoke();
+
+    let request = harness.request(ProviderMethod::RuntimeInspect, "shutdown-cancel");
+    let context = harness.call_context(&request.context, 1_000, false);
+    provider.inspect(&context, &request).await.unwrap();
+    wait_for_within(Duration::from_millis(500), || {
+        harness.credential.revocation_count() == 1
+    })
+    .await;
+
+    control.request_shutdown();
+    wait_for_within(Duration::from_millis(500), || control.is_closed()).await;
+    wait_for_within(Duration::from_millis(500), || control.is_stopped()).await;
+
+    let events = observer.events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].outcome().as_str(), "cancelled");
+    assert_eq!(harness.credential.revocation_count(), 1);
+    assert_eq!(harness.credential.completed_revocation_count(), 0);
+    assert_eq!(harness.credential.cancelled_revocation_count(), 1);
+
+    harness.credential.release_revoke();
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert_eq!(observer.events().len(), 1);
+    assert_eq!(harness.credential.revocation_count(), 1);
+    assert_eq!(harness.credential.completed_revocation_count(), 0);
 }
 
 #[tokio::test]
@@ -2083,7 +2176,7 @@ async fn dropping_an_in_flight_call_revokes_the_opaque_lease_once() {
 }
 
 #[tokio::test]
-async fn dropping_revoke_future_keeps_exactly_one_background_completion() {
+async fn failed_operation_returns_before_blocked_cleanup_and_completes_once() {
     let harness = Harness::container_image();
     harness.control.fail_next(
         ControlCall::FindSandboxes,
@@ -2092,19 +2185,15 @@ async fn dropping_revoke_future_keeps_exactly_one_background_completion() {
     harness.credential.stall_next_revoke();
     let request = harness.request(ProviderMethod::RuntimeInspect, "drop-mid-revoke");
     let context = harness.call_context(&request.context, 1_000, false);
-    let mut call = harness.provider.inspect(&context, &request);
-
-    tokio::select! {
-        result = &mut call => panic!("provider call completed before revoke drop: {result:?}"),
-        () = async {
-            while harness.credential.revocation_count() == 0 {
-                tokio::task::yield_now().await;
-            }
-        } => {}
-    }
-    assert_eq!(harness.credential.revocation_count(), 1);
-    assert_eq!(harness.credential.completed_revocation_count(), 0);
-    drop(call);
+    let failure = tokio::time::timeout(
+        Duration::from_millis(25),
+        harness.provider.inspect(&context, &request),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
+    assert_eq!(failure.kind, ProviderFailureKind::Unavailable);
+    assert_eq!(failure.retry, RetryClass::SameOperation);
 
     tokio::time::timeout(Duration::from_millis(100), async {
         while harness.credential.completed_revocation_count() == 0 {
@@ -2120,7 +2209,7 @@ async fn dropping_revoke_future_keeps_exactly_one_background_completion() {
 }
 
 #[tokio::test]
-async fn uncertain_lease_revoke_returns_typed_ambiguity_without_retrying_cleanup() {
+async fn uncertain_lease_revoke_never_replaces_the_operation_failure() {
     let harness = Harness::container_image();
     harness.control.fail_next(
         ControlCall::FindSandboxes,
@@ -2138,8 +2227,12 @@ async fn uncertain_lease_revoke_returns_typed_ambiguity_without_retrying_cleanup
         .await
         .unwrap_err();
 
-    assert_eq!(failure.kind, ProviderFailureKind::AmbiguousMutation);
-    assert_eq!(failure.retry, RetryClass::AfterObservation);
+    assert_eq!(failure.kind, ProviderFailureKind::Unavailable);
+    assert_eq!(failure.retry, RetryClass::SameOperation);
+    wait_for_within(Duration::from_millis(200), || {
+        harness.credential.revocation_count() == 1
+    })
+    .await;
     assert_eq!(harness.credential.revocation_count(), 1);
 }
 
@@ -2216,6 +2309,10 @@ async fn sdk_cancellation_after_mutation_dispatch_is_ambiguous() {
         .unwrap_err();
     assert_eq!(failure.kind, ProviderFailureKind::AmbiguousMutation);
     assert_eq!(failure.retry, RetryClass::AfterObservation);
+    wait_for_within(Duration::from_millis(200), || {
+        harness.credential.revocation_count() == 2
+    })
+    .await;
     assert_eq!(harness.credential.revocation_count(), 2);
 }
 
@@ -2240,6 +2337,10 @@ async fn rate_limit_and_credential_failure_use_closed_retry_classes_without_fall
         .unwrap_err();
     assert_eq!(failure.kind, ProviderFailureKind::Unavailable);
     assert_eq!(failure.retry, RetryClass::SameOperation);
+    wait_for_within(Duration::from_millis(200), || {
+        harness.credential.revocation_count() == 1
+    })
+    .await;
     assert_eq!(harness.credential.revocation_count(), 1);
     let observation = harness.provider.inspect(&context, &request).await.unwrap();
     assert_eq!(observation.lifecycle, ObservedLifecycleState::Destroyed);
