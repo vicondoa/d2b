@@ -87,6 +87,49 @@ exact-base-and-head compare-and-swap path or the GitHub merge queue.
 For the noninteractive setup, propose, update, and retarget procedure, see
 [Manage stacked wave pull requests with Git Town](../how-to/manage-stacked-wave-prs.md).
 
+## Wave ownership authority
+
+The post-W4 W5, W6, and W7 branches are checked by tooling built from their
+trusted immediate parent, not by the candidate's copy of `xtask`. Keep a clean
+worktree at the exact parent commit corroborated by Git Town and the candidate's
+ordinary GitHub PR, then run:
+
+```console
+make -C "$TRUSTED_PARENT_ROOT" wave-policy-check \
+  CANDIDATE_ROOT="$WAVE_WORKTREE"
+```
+
+Do not run this target from the wave worktree. The trusted command accepts no
+`--wave` or `--base`: it derives the wave from the candidate's canonical branch
+stem, reads the immediate parent with `git-town config get-parent`, discovers
+the unique open ordinary PR in the policy-pinned repository, and requires its
+local and GitHub base/head refs and OIDs to match. It walks every W5/W6 ancestor
+and corroborates each Git Town edge with that branch's ordinary PR through the
+shared root. Its own clean source worktree must be checked out at the
+candidate's exact immediate base commit. A base equal to its branch `HEAD`
+fails.
+
+The checker reads `delivery/shared-contracts.json` from the verified parent Git
+object, reads the selected per-wave manifest from the candidate `HEAD` object,
+and computes a no-rename parent-to-head path diff. Candidate edits to the
+checker, delivery implementation, Make target, or policy are therefore judged
+by the parent policy and cannot exempt themselves.
+
+The policy's implementation partition is fail-closed across waves:
+
+| Wave | Owned implementation |
+| --- | --- |
+| W5 | Core CLI/client/daemon, realm, guest, provider-agent, broker, host, and allocator crate prefixes |
+| W6 | Userd, systemd-user/shell, clipboard, notify/wlcontrol, Wayland, security-key, activation, TTY, and retained-helper crate prefixes |
+| W7 | `nixos-modules/`, `pkgs/`, `examples/`, and `templates/` |
+
+Each wave records the exact union of the other waves' prefixes as foreign.
+Shared-root contracts and tooling stay protected for every wave; W7 retains
+only the policy's narrow provider-registry and `flake.nix` exceptions. Before
+linearization all three waves use the shared root as parent. In the final
+W5-to-W6-to-W7 chain, W6 uses W5 and W7 uses W6 as the exact trusted parent;
+partial linearization is rejected.
+
 ## External evidence and check summaries
 
 The Make-independent delivery app exposes the implemented tree-bound commands

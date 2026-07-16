@@ -308,24 +308,39 @@ directly on local `main`.
 The post-W4 shared root is the exclusive owner of the frozen ComponentSession
 service DTOs/bindings, allocator and child-realm spawn wire, workspace dependency
 table and `Cargo.lock`, delivery tooling, and `delivery/shared-contracts.json`.
-W5 owns runtime service/dispatch implementation, W6 owns user/desktop/device
-service implementation, and W7 owns declarative Nix/process/resource emission
-against the frozen allocator API. W7 extends the existing
-`provider-registry-v2` family; no wave creates a second registry.
+Its policy defines disjoint implementation prefixes: W5 owns the core
+daemon/CLI/client, realm, guest, provider-agent, broker, host, and allocator
+crates; W6 owns userd, systemd-user/shell, clipboard, notify/wlcontrol, Wayland,
+security-key, activation, TTY, and one-shot helper crates; W7 owns
+`nixos-modules/`, `pkgs/`, `examples/`, and `templates/` emission. Every wave
+lists the other two sets as foreign and fails closed on those paths. W7 extends
+the existing `provider-registry-v2` family through its narrow protected-path
+exceptions; no wave creates a second registry.
 
 W5, W6, and W7 each edit only their authority at
 `delivery/manifests/w<N>.json`; `delivery/manifest.json` remains the unchanged W4
-authority. Before publishing a wave branch, run:
+authority. Ownership verification is itself parent-authoritative. Run the target
+from a clean trusted worktree checked out at the candidate's exact immediate
+Git Town parent commit, never from the candidate:
 
 ```bash
-make wave-policy-check WAVE=w5 BASE=adr0045-post-w4-contracts
+make -C "$TRUSTED_PARENT_ROOT" wave-policy-check \
+  CANDIDATE_ROOT="$WAVE_WORKTREE"
 ```
 
-Use the wave's actual immediate parent as `BASE` after delivery linearization.
-The check rejects edits to another wave's manifest, the workspace lock/shared
-dependency table, frozen cross-wave contracts, or shared delivery/policy
-tooling. A newly required shared contract returns to the shared-root PR and all
-consumers restack.
+The trusted checker derives the candidate branch and wave from the canonical
+`adr0045-w5`, `adr0045-w6`, or `adr0045-w7` branch stem. It obtains the immediate
+parent from Git Town, discovers the branch's unique open ordinary GitHub PR, and
+requires the policy-pinned repository and exact local/PR base and head OIDs. It
+walks every wave ancestor to the shared root and verifies each Git Town edge
+against that branch's unique ordinary PR. It accepts no caller-selected wave or
+base, rejects `HEAD` as its own base, and requires its own clean source worktree
+to be that exact immediate parent. Before linearization every wave may use the
+shared root; afterward only the complete W5 -> W6 -> W7 chain is valid. The
+check rejects another wave's implementation, another wave's
+manifest, the workspace lock/shared dependency table, frozen cross-wave
+contracts, or shared delivery/policy tooling. A newly required shared contract
+returns to the shared-root PR and all consumers restack.
 
 #### Anti-serialization invariant
 

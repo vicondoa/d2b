@@ -11,13 +11,20 @@ W5, W6, and W7 own only:
 
 `shared-contracts.json` is machine-enforced root authority. It protects the
 cross-wave protobuf/generated service contracts, allocator model, workspace
-dependency table and lock, delivery tooling, and foreign wave manifests. Run
-from the repository root:
+dependency table and lock, delivery tooling, foreign wave manifests, and the
+explicit W5/W6/W7 implementation-prefix partition. Run the parent copy of the
+tooling, not the candidate copy:
 
 ```console
-make wave-policy-check WAVE=w5 BASE=adr0045-post-w4-contracts
+make -C "$TRUSTED_PARENT_ROOT" wave-policy-check \
+  CANDIDATE_ROOT="$WAVE_WORKTREE"
 ```
 
-After delivery is linearized, use the wave's immediate parent as `BASE`. A new
-shared DTO, dependency, generated contract, or policy requirement returns to
+The trusted checker requires its clean source worktree to equal the exact Git
+Town parent commit corroborated by the candidate's unique open ordinary GitHub
+PR in the policy-pinned repository. Branch, wave, base, head, and every ancestor
+edge back to the shared root are derived and corroborated; caller-selected
+wave/base options do not exist, partial linearization is rejected, and a
+self/`HEAD` base fails. A new shared DTO, dependency, generated contract, or
+policy requirement returns to
 `adr0045-post-w4-contracts`; it is not added on a wave branch.

@@ -2580,6 +2580,8 @@ The post-W4 execution rules are:
 1. Create `adr0045-post-w4-contracts` from `W4-F`. It exclusively owns
    cross-wave DTO/protobuf/schema changes, anticipated workspace dependencies,
    `Cargo.lock`, shared policy/tooling, and per-wave delivery-manifest support.
+   Its ownership checker and policy are trust inputs: a wave candidate never
+   supplies the executable or policy that judges its own diff.
    It freezes the allocator boundary: W5 owns allocator service/dispatch
    implementation; W7 owns Nix/process/resource emission against that API.
 2. Create W5, W6, and W7 as Git Town children of the shared root and open draft
@@ -2589,29 +2591,47 @@ The post-W4 execution rules are:
 3. Shared tooling adds separate checked-in manifests under
    `delivery/manifests/w<N>.json`; sibling waves do not contend for one delivery
    manifest. Slice agents never edit the workspace lock, cross-wave generated
-   contracts, shared policy, or another wave's files.
-4. W5/W6/W7 remain siblings during implementation. At content freeze, delivery
+   contracts, shared policy, or another wave's files. The policy partitions
+   implementation prefixes as follows:
+   - W5: core CLI/client/daemon, realm, guest, provider-agent, broker, host, and
+     allocator crates;
+   - W6: userd, systemd-user/shell, clipboard, notify/wlcontrol, Wayland,
+     security-key, activation, TTY, and retained helper crates;
+   - W7: `nixos-modules/`, `pkgs/`, `examples/`, and `templates/`.
+   Each wave's foreign set is exactly the union of the other two sets. Root
+   shared contracts remain protected regardless of wave.
+4. Before a wave branch is published, run ownership verification from a clean
+   worktree at the exact immediate Git Town parent commit and pass the wave
+   worktree only as the candidate. The parent-built checker derives the
+   `adr0045-w5`, `adr0045-w6`, or `adr0045-w7` wave from the verified branch,
+   corroborates Git Town parent/base and local head with the policy-pinned
+   repository's unique open ordinary GitHub PR, loads policy from that exact
+   parent commit, and diffs parent to head. Every wave ancestor is walked and
+   corroborated to the shared root. It accepts no caller-selected wave or base
+   and rejects a self/`HEAD` base. Before linearization the shared root is valid
+   for all three; after linearization only W5 -> W6 -> W7 is valid.
+5. W5/W6/W7 remain siblings during implementation. At content freeze, delivery
    is deterministically linearized W5 -> W6 -> W7 through Git Town parent
    changes **before W6/W7 create final snapshots or run final panels**. W6 and
    W7 run fresh validation, CI, and panels against their larger integrated
    trees; pre-linearization evidence is never reused. Later history-only
    retargets may reuse only panel records after the existing byte-identical
    content proof; new-history CI and manifest-declared validation rerun.
-5. W9 proceeds independently for W4/root-frozen contracts. A sibling feature
+6. W9 proceeds independently for W4/root-frozen contracts. A sibling feature
    that consumes a W5/W6 service remains on a dependent child branch. W4/root
    corrections propagate root-to-leaf and invalidate their own and every
    content-changed descendant's candidate evidence.
-6. W8 integration prep starts when W5/W6/W7 publish content-frozen APIs. Create
+7. W8 integration prep starts when W5/W6/W7 publish content-frozen APIs. Create
    `adr0045-w8-integration` as a Git Town child of the linearized W7 head; its PR
    base is W7 and its manifest records the ordered W5/W6/W7/W8 chain. Recreate
    or rebase it whenever a dependency changes.
-7. Every wave still receives a separate immutable candidate, required tests,
+8. Every wave still receives a separate immutable candidate, required tests,
    exact-head CI, and end-of-wave ten-role panel. A pending earlier panel never
    idles later speculative implementation.
-8. Slice worktrees and real Cargo targets are removed immediately after
+9. Slice worktrees and real Cargo targets are removed immediately after
    integration. Retain only the primary clone and currently active shared-root
    or wave integration worktrees, including W8 after it starts.
-9. A Rust `xtask` per-development-UID semaphore owns two OFD-locked slots across
+10. A Rust `xtask` per-development-UID semaphore owns two OFD-locked slots across
    all worktrees. Its trusted directory is
    `${XDG_RUNTIME_DIR}/d2b-heavy-gates` when available, otherwise
    `${TMPDIR:-/tmp}/d2b-heavy-gates-$UID`. Creation uses mode 0700 and fails
@@ -2634,7 +2654,7 @@ The post-W4 execution rules are:
    full-workspace final `cargo test`, and build-producing `nix flake check`.
    Focused tests and CI do not consume local permits. The shared root implements
    this wrapper before parallel final gates.
-10. Serial ownership stops at the smallest connected component of the actual
+11. Serial ownership stops at the smallest connected component of the actual
     file-overlap graph. Once a shared prep commit lands, every dependency-ready
     independent component and wave launches concurrently. One persistent agent
     cannot accumulate unrelated axes or later review rounds merely to preserve

@@ -1451,6 +1451,8 @@ fn w4_provider_delivery_fingerprints_cover_every_reserved_file() {
 fn shared_contract_policy_freezes_services_dependencies_and_ownership() {
     let root = repo_root();
     let policy = xtask::wave_policy::read_policy(&root).expect("shared-contract policy");
+    assert_eq!(policy.schema_version, 2);
+    assert_eq!(policy.authority_repository, "github.com/vicondoa/d2b");
     let frozen = policy
         .frozen_service_packages
         .iter()
@@ -1466,14 +1468,70 @@ fn shared_contract_policy_freezes_services_dependencies_and_ownership() {
         policy
             .waves
             .iter()
-            .map(|wave| (wave.wave.as_str(), wave.responsibility.as_str()))
+            .map(|wave| (
+                wave.wave.as_str(),
+                (
+                    wave.branch_stem.as_str(),
+                    wave.allowed_parent_waves
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>(),
+                    wave.responsibility.as_str(),
+                ),
+            ))
             .collect::<BTreeMap<_, _>>(),
         BTreeMap::from([
-            ("w5", "runtime-service-and-dispatch-implementation"),
-            ("w6", "user-desktop-device-service-implementation"),
-            ("w7", "declarative-nix-process-and-resource-emission"),
+            (
+                "w5",
+                (
+                    "adr0045-w5",
+                    Vec::<&str>::new(),
+                    "runtime-service-and-dispatch-implementation",
+                ),
+            ),
+            (
+                "w6",
+                (
+                    "adr0045-w6",
+                    vec!["w5"],
+                    "user-desktop-device-service-implementation",
+                ),
+            ),
+            (
+                "w7",
+                (
+                    "adr0045-w7",
+                    vec!["w6"],
+                    "declarative-nix-process-and-resource-emission",
+                ),
+            ),
         ])
     );
+    for (wave, owned, foreign) in [
+        ("w5", "packages/d2bd/", "packages/d2b-userd/"),
+        ("w6", "packages/d2b-userd/", "nixos-modules/"),
+        ("w7", "nixos-modules/", "packages/d2bd/"),
+    ] {
+        let ownership = policy
+            .waves
+            .iter()
+            .find(|entry| entry.wave == wave)
+            .expect("wave ownership");
+        assert!(
+            ownership
+                .allowed_prefixes
+                .binary_search(&owned.to_owned())
+                .is_ok(),
+            "{wave} does not own {owned}"
+        );
+        assert!(
+            ownership
+                .foreign_prefixes
+                .binary_search(&foreign.to_owned())
+                .is_ok(),
+            "{wave} does not reject foreign prefix {foreign}"
+        );
+    }
 
     let generated =
         read_repo_file("packages/d2b-contracts/src/generated_v2_services/broker_ttrpc.rs");
@@ -1513,10 +1571,12 @@ fn shared_contract_policy_freezes_services_dependencies_and_ownership() {
     }
 
     for required in [
+        "delivery/shared-contracts.json",
         "packages/Cargo.lock",
         "packages/Cargo.toml",
         "packages/d2b-contracts/src/v2_services.rs",
         "packages/d2b-realm-core/src/allocator.rs",
+        "packages/xtask/src/wave_policy.rs",
     ] {
         assert!(
             policy

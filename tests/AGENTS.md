@@ -174,6 +174,15 @@ and fingerprint its declared wave. Delivery rejects a second checked-in
 authority for the same wave and still requires the exact ordered Git Town
 branch, PR, and parent graph.
 
+Wave ownership checks are parent-authoritative: validators invoke
+`make -C <trusted-parent-worktree> wave-policy-check
+CANDIDATE_ROOT=<wave-worktree>`. The checker and policy therefore come from the
+exact clean Git Town parent commit corroborated by the candidate's ordinary
+GitHub PR, not from the tree under review. It also walks and corroborates every
+wave ancestor back to the shared root. Tests for this surface must cover
+candidate checker/policy replacement, fake, partial, or self parent graphs, and
+cross-wave implementation paths.
+
 ### Unified Rust workspace
 
 Every maintained host and guest crate is a member of `packages/Cargo.toml` and

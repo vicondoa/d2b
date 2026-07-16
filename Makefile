@@ -158,8 +158,8 @@ heavy-flake-check:
 	cd packages && cargo xtask heavy-gate -- nix flake check ..
 
 wave-policy-check:
-	@test -n "$(WAVE)" -a -n "$(BASE)" || { echo "usage: make wave-policy-check WAVE=w5 BASE=<ref>" >&2; exit 2; }
-	cd packages && cargo xtask wave-policy check --wave "$(WAVE)" --base "$(BASE)"
+	@test -n "$(CANDIDATE_ROOT)" || { echo "usage: make -C <trusted-parent-worktree> wave-policy-check CANDIDATE_ROOT=<wave-worktree>" >&2; exit 2; }
+	cd packages && cargo xtask wave-policy check --candidate-root "$(abspath $(CANDIDATE_ROOT))"
 
 ## layer1-workflow — regenerate the Layer-1 PR workflow from tests/layer1-jobs.json.
 layer1-workflow:

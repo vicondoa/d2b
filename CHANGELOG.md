@@ -14,8 +14,9 @@ deprecations ship one minor release before removal.
 
 - Added the post-W4 shared contract/tooling root: separate W5/W6/W7 delivery
   authorities, typed allocator and child-realm broker DTOs, frozen service and
-  dependency inventories, enforceable cross-wave file ownership, and a
-  crash-safe two-slot OFD heavy-validation gate.
+  dependency inventories, parent-commit-trusted ownership checks with explicit
+  cross-wave implementation partitions, and a crash-safe two-slot OFD
+  heavy-validation gate.
 - Added default-empty, non-publishable first-party provider implementation
   crate reservations, an in-process Azure VM fake SDK boundary, and a
   fail-closed workspace policy inventory for their naming and dependencies.
