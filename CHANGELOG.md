@@ -76,6 +76,9 @@ deprecations ship one minor release before removal.
 - Removed redundant post-duplication `fcntl` calls and rely on
   `pidfd_getfd(2)` to atomically return close-on-exec descriptors with its
   required zero flags.
+- Receive broker `SCM_RIGHTS` descriptors with `MSG_CMSG_CLOEXEC` and verify
+  the resulting flag, closing the fork/exec descriptor-leak window without a
+  post-receive mutation.
 - Changed observability provider queries to return a canonical bounded result
   through the provider trait, proxy, protobuf/ttrpc service, and toolkit
   adapter without dropping records or introducing free-form labels.

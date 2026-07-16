@@ -22579,17 +22579,12 @@ fn read_frame(socket: &impl AsRawFd) -> Result<Vec<u8>, TypedError> {
     Ok(buffer[4..read].to_vec())
 }
 
-fn mark_fd_cloexec(fd: RawFd, context: &str) -> Result<(), TypedError> {
+fn fd_is_cloexec(fd: RawFd, context: &str) -> Result<bool, TypedError> {
     let current = fcntl(fd, FcntlArg::F_GETFD).map_err(|err| TypedError::InternalIo {
         context: context.to_owned(),
         detail: err.to_string(),
     })?;
-    let flags = FdFlag::from_bits_truncate(current) | FdFlag::FD_CLOEXEC;
-    fcntl(fd, FcntlArg::F_SETFD(flags)).map_err(|err| TypedError::InternalIo {
-        context: context.to_owned(),
-        detail: err.to_string(),
-    })?;
-    Ok(())
+    Ok(FdFlag::from_bits_truncate(current).contains(FdFlag::FD_CLOEXEC))
 }
 
 fn duplicate_fd_cloexec(fd: RawFd, context: &str) -> Result<OwnedFd, TypedError> {
@@ -22619,11 +22614,13 @@ fn read_frame_with_fds(socket: &impl AsRawFd) -> Result<(Vec<u8>, Vec<RawFd>), T
     let mut buffer = vec![0u8; wire::MAX_FRAME_SIZE + 5];
     let mut iov = [IoSliceMut::new(&mut buffer)];
     let mut control = cmsg_space!([RawFd; 8]);
+    // MSG_CMSG_CLOEXEC makes SCM_RIGHTS installation close-on-exec in the
+    // kernel, eliminating the recvmsg-to-fcntl fork/exec leak window.
     let message = recvmsg::<UnixAddr>(
         socket.as_raw_fd(),
         &mut iov,
         Some(&mut control),
-        MsgFlags::empty(),
+        MsgFlags::MSG_CMSG_CLOEXEC,
     )
     .map_err(|err| TypedError::InternalIo {
         context: "recv seqpacket frame with fds".to_owned(),
@@ -22639,10 +22636,22 @@ fn read_frame_with_fds(socket: &impl AsRawFd) -> Result<(Vec<u8>, Vec<RawFd>), T
             received_fds.extend(fds);
         }
     }
+    #[cfg(test)]
+    run_received_fd_test_hook(&received_fds);
     for fd in &received_fds {
-        if let Err(error) = mark_fd_cloexec(*fd, "mark received fd cloexec") {
+        let cloexec = match fd_is_cloexec(*fd, "verify received fd cloexec") {
+            Ok(cloexec) => cloexec,
+            Err(error) => {
+                close_received_fds(&received_fds);
+                return Err(error);
+            }
+        };
+        if !cloexec {
             close_received_fds(&received_fds);
-            return Err(error);
+            return Err(TypedError::InternalIo {
+                context: "verify received fd cloexec".to_owned(),
+                detail: "SCM_RIGHTS descriptor was not installed close-on-exec".to_owned(),
+            });
         }
     }
     if read == 0 {
@@ -22670,6 +22679,31 @@ fn read_frame_with_fds(socket: &impl AsRawFd) -> Result<(Vec<u8>, Vec<RawFd>), T
         });
     }
     Ok((buffer[4..read].to_vec(), received_fds))
+}
+
+#[cfg(test)]
+type ReceivedFdTestHook = Box<dyn FnOnce(&[RawFd])>;
+
+#[cfg(test)]
+thread_local! {
+    static TEST_RECEIVED_FD_HOOK: std::cell::RefCell<Option<ReceivedFdTestHook>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+fn set_received_fd_test_hook(hook: impl FnOnce(&[RawFd]) + 'static) {
+    TEST_RECEIVED_FD_HOOK.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
+
+#[cfg(test)]
+fn run_received_fd_test_hook(fds: &[RawFd]) {
+    TEST_RECEIVED_FD_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook(fds);
+        }
+    });
 }
 
 fn close_received_fds(fds: &[RawFd]) {
@@ -25653,6 +25687,62 @@ mod broker_dispatch_tests {
         assert!(
             nix::fcntl::FdFlag::from_bits_truncate(flags).contains(nix::fcntl::FdFlag::FD_CLOEXEC)
         );
+    }
+
+    #[test]
+    fn scm_rights_receive_is_close_on_exec_during_concurrent_exec() {
+        let (receiver, sender) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("create SCM_RIGHTS socketpair");
+        let source = rustix::fs::memfd_create(
+            "d2b-scm-rights-cloexec-test",
+            rustix::fs::MemfdFlags::CLOEXEC,
+        )
+        .expect("create close-on-exec source descriptor");
+        let (fd_tx, fd_rx) = mpsc::sync_channel(1);
+        let (leak_tx, leak_rx) = mpsc::sync_channel(1);
+        let spawner = thread::spawn(move || {
+            let received_fd = fd_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("receive descriptor number");
+            let output = Command::new("readlink")
+                .arg(format!("/proc/self/fd/{received_fd}"))
+                .output()
+                .expect("exec descriptor probe");
+            leak_tx
+                .send(output.status.success())
+                .expect("publish descriptor leak result");
+        });
+        super::set_received_fd_test_hook(move |fds| {
+            assert_eq!(fds.len(), 1);
+            fd_tx.send(fds[0]).expect("publish received descriptor");
+            assert!(
+                !leak_rx
+                    .recv_timeout(Duration::from_secs(1))
+                    .expect("receive descriptor leak result"),
+                "received descriptor leaked across concurrent exec"
+            );
+        });
+
+        write_test_json_frame_with_fds(
+            sender.as_raw_fd(),
+            &json!({ "kind": "cloexec-test" }),
+            &[source.as_raw_fd()],
+        )
+        .expect("send SCM_RIGHTS descriptor");
+        let (_, received_fds) =
+            super::read_frame_with_fds(&receiver).expect("receive SCM_RIGHTS descriptor");
+        assert_eq!(received_fds.len(), 1);
+        assert!(
+            super::fd_is_cloexec(received_fds[0], "verify SCM_RIGHTS close-on-exec")
+                .expect("read received descriptor flags")
+        );
+        super::close_received_fds(&received_fds);
+        spawner.join().expect("join concurrent exec probe");
     }
 
     #[test]
