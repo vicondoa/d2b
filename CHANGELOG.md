@@ -138,6 +138,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Required the evaluated delivery `postFixup` to contain exactly one
+  unconditional `wrapProgram` command for `$out/bin/xtask`, rejecting inactive
+  branches, function bodies, wrong targets, extra commands, and extra wrappers.
 - Evaluated each supported system's delivery derivation before checking its
   wrapper PATH, with one canonical exported runtime-tool list grounding the
   exact expected Nix store paths.

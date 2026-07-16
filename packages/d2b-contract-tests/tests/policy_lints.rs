@@ -37,30 +37,61 @@ fn collect_markdown_files(dir: &Path, files: &mut Vec<PathBuf>) {
     }
 }
 
-fn shell_logical_commands(source: &str) -> Result<Vec<String>, String> {
+#[derive(Debug, Default)]
+struct ShellWord {
+    value: String,
+    literal_dollar: bool,
+}
+
+fn finish_shell_word(word: &mut ShellWord, word_started: &mut bool, command: &mut Vec<ShellWord>) {
+    if *word_started {
+        command.push(std::mem::take(word));
+        *word_started = false;
+    }
+}
+
+fn finish_shell_command(
+    word: &mut ShellWord,
+    word_started: &mut bool,
+    command: &mut Vec<ShellWord>,
+    commands: &mut Vec<Vec<ShellWord>>,
+) {
+    finish_shell_word(word, word_started, command);
+    if !command.is_empty() {
+        commands.push(std::mem::take(command));
+    }
+}
+
+fn shell_argv_commands(source: &str) -> Result<Vec<Vec<ShellWord>>, String> {
     let bytes = source.as_bytes();
     let mut commands = Vec::new();
-    let mut command = String::new();
+    let mut command = Vec::new();
+    let mut word = ShellWord::default();
+    let mut word_started = false;
     let mut cursor = 0;
     let mut quote = None;
 
     while let Some(&byte) = bytes.get(cursor) {
         if byte == b'\\' && bytes.get(cursor + 1) == Some(&b'\n') && quote != Some(b'\'') {
-            command.push(' ');
             cursor += 2;
             continue;
         }
         if let Some(delimiter) = quote {
-            command.push(char::from(byte));
             cursor += 1;
             if byte == b'\\' && delimiter == b'"' {
                 let Some(&escaped) = bytes.get(cursor) else {
                     return Err("unterminated shell escape in postFixup".into());
                 };
-                command.push(char::from(escaped));
+                if escaped != b'\n' {
+                    word.value.push(char::from(escaped));
+                    word.literal_dollar |= escaped == b'$';
+                }
                 cursor += 1;
             } else if byte == delimiter {
                 quote = None;
+            } else {
+                word.value.push(char::from(byte));
+                word.literal_dollar |= delimiter == b'\'' && byte == b'$';
             }
             continue;
         }
@@ -69,32 +100,44 @@ fn shell_logical_commands(source: &str) -> Result<Vec<String>, String> {
                 "shell input redirection and heredocs are forbidden in delivery postFixup".into(),
             );
         }
+        if byte == b'>' {
+            return Err("shell redirections are forbidden in delivery postFixup".into());
+        }
 
         match byte {
             b'\'' | b'"' => {
                 quote = Some(byte);
-                command.push(char::from(byte));
+                word_started = true;
                 cursor += 1;
             }
-            b'#' if command.is_empty()
-                || command
-                    .as_bytes()
-                    .last()
-                    .is_some_and(u8::is_ascii_whitespace) =>
-            {
+            b'#' if !word_started => {
                 while bytes.get(cursor).is_some_and(|byte| *byte != b'\n') {
                     cursor += 1;
                 }
             }
             b'\n' | b';' => {
-                if !command.trim().is_empty() {
-                    commands.push(command.trim().to_owned());
-                }
-                command.clear();
+                finish_shell_command(&mut word, &mut word_started, &mut command, &mut commands);
                 cursor += 1;
             }
+            byte if byte.is_ascii_whitespace() => {
+                finish_shell_word(&mut word, &mut word_started, &mut command);
+                cursor += 1;
+            }
+            b'\\' => {
+                let Some(&escaped) = bytes.get(cursor + 1) else {
+                    return Err("unterminated shell escape in postFixup".into());
+                };
+                word_started = true;
+                word.value.push(char::from(escaped));
+                word.literal_dollar |= escaped == b'$';
+                cursor += 2;
+            }
+            b'|' | b'&' | b'(' | b')' | b'{' | b'}' => {
+                return Err("shell control flow is forbidden in delivery postFixup".into());
+            }
             _ => {
-                command.push(char::from(byte));
+                word_started = true;
+                word.value.push(char::from(byte));
                 cursor += 1;
             }
         }
@@ -102,36 +145,8 @@ fn shell_logical_commands(source: &str) -> Result<Vec<String>, String> {
     if quote.is_some() {
         return Err("unterminated shell quote in postFixup".into());
     }
-    if !command.trim().is_empty() {
-        commands.push(command.trim().to_owned());
-    }
+    finish_shell_command(&mut word, &mut word_started, &mut command, &mut commands);
     Ok(commands)
-}
-
-fn wrap_program_path_entries(post_fixup: &str) -> Result<Vec<String>, String> {
-    let wrapper = Regex::new(
-        r#"^wrapProgram\s+(?:"(?:\\.|[^"\\])*"|'[^']*'|\S+)\s+--prefix\s+PATH\s+:\s+(\S+)$"#,
-    )
-    .expect("valid evaluated wrapProgram PATH regex");
-    let mut matches = Vec::new();
-    for command in shell_logical_commands(post_fixup)? {
-        let Some(captures) = wrapper.captures(&command) else {
-            continue;
-        };
-        let entries = captures[1]
-            .split(':')
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        if entries.iter().any(String::is_empty) {
-            return Err("delivery wrapProgram PATH contains an empty entry".into());
-        }
-        matches.push(entries);
-    }
-    match matches.as_slice() {
-        [entries] => Ok(entries.clone()),
-        [] => Err("delivery postFixup is missing active wrapProgram PATH prefix".into()),
-        _ => Err("delivery postFixup has multiple wrapProgram PATH prefixes".into()),
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -176,13 +191,33 @@ fn required_delivery_runtime_paths(
             "evaluated delivery runtime tool paths must be Nix store bin paths: {expected_paths:?}"
         ));
     }
-    let actual_paths = wrap_program_path_entries(post_fixup)?;
-    if actual_paths != expected_paths {
+    let commands = shell_argv_commands(post_fixup)?;
+    if commands.len() != 1 {
         return Err(format!(
-            "evaluated delivery wrapProgram PATH {actual_paths:?} differs from canonical runtime tools {expected_paths:?}"
+            "delivery postFixup must contain exactly one unconditional top-level command; found {commands:?}"
         ));
     }
-    Ok(actual_paths)
+    let expected_path = expected_paths.join(":");
+    let expected_command = [
+        "wrapProgram",
+        "$out/bin/xtask",
+        "--prefix",
+        "PATH",
+        ":",
+        expected_path.as_str(),
+    ];
+    if commands[0]
+        .iter()
+        .map(|word| word.value.as_str())
+        .ne(expected_command)
+        || commands[0][1].literal_dollar
+    {
+        return Err(format!(
+            "delivery postFixup must be exactly the canonical xtask wrapper command; found {:?}",
+            commands[0]
+        ));
+    }
+    Ok(expected_paths)
 }
 
 fn evaluated_delivery_runtime_contracts() -> BTreeMap<String, EvaluatedDeliveryRuntime> {
@@ -583,9 +618,7 @@ fn delivery_tool_sources_and_toolchains_are_exactly_pinned() {
 fn delivery_runtime_policy_fixture() -> &'static str {
     r#"
       # wrapProgram "$out/bin/decoy" --prefix PATH : /nix/store/decoy/bin
-      unused_path='/nix/store/decoy-git/bin:/nix/store/decoy-openssl/bin'
-      # Benign quoted/comment input-redirection text must remain inert: < << <<<.
-      printf '%s\n' '<not-redirection'
+      # Benign comment input-redirection text must remain inert: < << <<<.
       wrapProgram \
         "$out/bin/xtask" \
           --prefix   PATH : /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-git/bin:/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-openssl/bin:/nix/store/cccccccccccccccccccccccccccccccc-shellcheck/bin:/nix/store/dddddddddddddddddddddddddddddddd-gh/bin:/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-git-town/bin
@@ -644,15 +677,25 @@ fn delivery_runtime_shell_parser_binds_active_wrap_program_path() {
             .map(|tool| tool.bin_path.clone())
             .collect::<Vec<_>>()
     );
+    let one_line = format!(
+        "wrapProgram \"$out/bin/xtask\" --prefix PATH : {}",
+        tools
+            .iter()
+            .map(|tool| tool.bin_path.as_str())
+            .collect::<Vec<_>>()
+            .join(":")
+    );
+    required_delivery_runtime_paths(&one_line, &tools)
+        .expect("one-line and quoted-target formatting must parse");
 
     let missing_active_tool = post_fixup.replace(
         ":/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-openssl/bin",
         "",
     );
     let error = required_delivery_runtime_paths(&missing_active_tool, &tools)
-        .expect_err("commented and unused shell decoys must not mask a missing runtime tool");
+        .expect_err("commented shell decoys must not mask a missing runtime tool");
     assert!(
-        error.contains("differs from canonical runtime tools"),
+        error.contains("canonical xtask wrapper command"),
         "missing active tool must fail specifically: {error}"
     );
 
@@ -661,9 +704,48 @@ fn delivery_runtime_shell_parser_binds_active_wrap_program_path() {
     let error = required_delivery_runtime_paths(&inactive_wrapper, &tools)
         .expect_err("commented, quoted, and unused decoys must not replace the active wrapper");
     assert!(
-        error.contains("missing active wrapProgram PATH prefix"),
+        error.contains("canonical xtask wrapper command"),
         "inactive wrapper must fail specifically: {error}"
     );
+}
+
+#[test]
+fn delivery_runtime_shell_parser_rejects_inactive_or_wrong_wrappers() {
+    let post_fixup = delivery_runtime_policy_fixture();
+    let tools = delivery_runtime_policy_tools();
+    let cases = [
+        (
+            "false branch",
+            format!("if false; then\n{post_fixup}\nfi\n"),
+        ),
+        (
+            "uncalled function",
+            format!("wrapper() {{\n{post_fixup}\n}}\n"),
+        ),
+        (
+            "wrong target",
+            post_fixup.replace("$out/bin/xtask", "$out/bin/not-xtask"),
+        ),
+        (
+            "literal target",
+            post_fixup.replace("\"$out/bin/xtask\"", "'$out/bin/xtask'"),
+        ),
+        (
+            "escaped target expansion",
+            post_fixup.replace("$out/bin/xtask", "\\$out/bin/xtask"),
+        ),
+        ("extra wrapper", format!("{post_fixup}\n{post_fixup}")),
+    ];
+    for (name, script) in cases {
+        let error = required_delivery_runtime_paths(&script, &tools)
+            .expect_err("only one unconditional exact xtask wrapper may pass");
+        assert!(
+            error.contains("exactly one unconditional")
+                || error.contains("control flow")
+                || error.contains("canonical xtask wrapper"),
+            "{name} must fail the whole-script grammar: {error}"
+        );
+    }
 }
 
 #[test]
@@ -681,23 +763,33 @@ fn delivery_runtime_shell_parser_rejects_heredoc_decoys() {
 }
 
 #[test]
-fn delivery_runtime_shell_parser_rejects_input_redirection_decoys() {
+fn delivery_runtime_shell_parser_rejects_redirection_decoys() {
     for redirection in [
         "cat <input",
         "cat < <EOF",
         "cat <\\\n<EOF",
         "cat <<<value",
         "cat 3<input",
+        "cat >output",
+        "cat 2>output",
     ] {
         let redirection_decoy = format!("{redirection}\n{}", delivery_runtime_policy_fixture());
         let error =
             required_delivery_runtime_paths(&redirection_decoy, &delivery_runtime_policy_tools())
-                .expect_err("delivery postFixup input redirection must fail closed");
+                .expect_err("delivery postFixup redirection must fail closed");
         assert!(
-            error.contains("input redirection"),
+            error.contains("redirection"),
             "{redirection:?} must fail before wrapper matching: {error}"
         );
     }
+
+    let quoted_extra = format!("echo '<'\n{}", delivery_runtime_policy_fixture());
+    let error = required_delivery_runtime_paths(&quoted_extra, &delivery_runtime_policy_tools())
+        .expect_err("a quoted less-than is inert but still an extra command");
+    assert!(
+        error.contains("exactly one unconditional") && !error.contains("redirection"),
+        "quoted less-than must remain inert while the extra command fails: {error}"
+    );
 }
 
 #[test]
