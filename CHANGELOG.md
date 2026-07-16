@@ -59,6 +59,9 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Reserved exact W7 ownership for the frozen contract assertions and migration
+  pins that must be rewritten or retired atomically with legacy declarative
+  source deletion, without opening the rest of the contract-test crate.
 - Predeclared the CLI-to-client, guestd-to-session, and provider-agent
   service/session dependency edges with least-privilege contract and Tokio
   features in the shared workspace lock.

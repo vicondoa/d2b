@@ -131,6 +131,12 @@ tests/
 Types 2–5 (unit/integration/contract/policy-lint) are Rust and live under
 `packages/`, not here.
 
+The destructive realm-host cutover may update frozen Rust policy tests only
+through the exact `w7_contract_test_migrations` rows in
+`delivery/shared-contracts.json`. Each selector and companion migration pin is
+owned by the declarative component deleting its legacy source; there is no
+general W7 exception for `packages/d2b-contract-tests/`.
+
 ## Layer-1 orchestration manifest
 
 `tests/layer1-jobs.json` is the declarative source of truth for the Layer-1

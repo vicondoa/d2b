@@ -46,3 +46,16 @@ slices diverge: the CLI consumes `d2b-client` with host-socket support,
 `d2b-gateway-runtime` consumes the v2-services-only `d2b-contracts` surface plus
 `d2b-session`. Every edge disables default features and records its exact Tokio
 feature set.
+
+W7 has no crate-wide exception for `d2b-contract-tests`. The shared inventory
+names only the exact legacy assertions tied to deletion of `host-polkit.nix`,
+`gateway-vm.nix`, `vm-submodule.nix`, and the legacy launcher emitter, plus
+their migration-ledger/state pins. Each row names the owning declarative
+component so the assertion is rewritten or retired in the same commit as its
+source deletion; every other contract-test and pin remains frozen.
+
+- `realm-principals`: the host-polkit assertion and retired-gate pin.
+- `realm-network`: the gateway source-filter, credential allowlist, and storage
+  mutation registration assertions.
+- `workload-processes`: the VM-submodule shape/cutover assertions and pins.
+- `desktop-metadata`: the six legacy launcher-emitter assertions.

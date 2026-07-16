@@ -574,6 +574,51 @@
       "path": "packages/d2b-userd/Cargo.toml"
     },
     {
+      "name": "shared-w7-migration-ledger",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "tests/migration-ledger.toml"
+    },
+    {
+      "name": "shared-w7-migration-polkit-pin",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "tests/migration-state.d/polkit-allowlist-eval.toml"
+    },
+    {
+      "name": "shared-w7-migration-vm-submodule-cutover-pin",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "tests/migration-state.d/vm-submodule-cutover-eval.toml"
+    },
+    {
+      "name": "shared-w7-migration-vm-submodule-pin",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "tests/migration-state.d/vm-submodule-eval.toml"
+    },
+    {
+      "name": "shared-w7-policy-host-realm-relay",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contract-tests/tests/policy_host_realm_relay.rs"
+    },
+    {
+      "name": "shared-w7-policy-misc",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contract-tests/tests/policy_misc.rs"
+    },
+    {
+      "name": "shared-w7-policy-modules",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contract-tests/tests/policy_modules.rs"
+    },
+    {
+      "name": "shared-w7-policy-source",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contract-tests/tests/policy_source.rs"
+    },
+    {
+      "name": "shared-w7-storage-sync-contracts",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contract-tests/tests/storage_sync_contracts.rs"
+    },
+    {
       "name": "shared-wave-policy",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/xtask/src/wave_policy.rs"

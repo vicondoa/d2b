@@ -1,5 +1,5 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "authority_repository": "github.com/vicondoa/d2b",
   "shared_root_branch": "adr0045-post-w4-contracts",
   "waves": [
@@ -163,7 +163,17 @@
         "docs/reference/schemas/v2/provider-registry-v2.md",
         "flake.nix",
         "nixos-modules/provider-registry-v2-json.nix",
-        "packages/d2b-contracts/src/provider_registry_v2.rs"
+        "packages/d2b-contract-tests/tests/policy_host_realm_relay.rs",
+        "packages/d2b-contract-tests/tests/policy_misc.rs",
+        "packages/d2b-contract-tests/tests/policy_modules.rs",
+        "packages/d2b-contract-tests/tests/policy_source.rs",
+        "packages/d2b-contract-tests/tests/realm_workload_schema_contract.rs",
+        "packages/d2b-contract-tests/tests/storage_sync_contracts.rs",
+        "packages/d2b-contracts/src/provider_registry_v2.rs",
+        "tests/migration-ledger.toml",
+        "tests/migration-state.d/polkit-allowlist-eval.toml",
+        "tests/migration-state.d/vm-submodule-cutover-eval.toml",
+        "tests/migration-state.d/vm-submodule-eval.toml"
       ]
     }
   ],
@@ -185,6 +195,12 @@
     "nixos-modules/provider-registry-v2-json.nix",
     "packages/Cargo.lock",
     "packages/Cargo.toml",
+    "packages/d2b-contract-tests/tests/policy_host_realm_relay.rs",
+    "packages/d2b-contract-tests/tests/policy_misc.rs",
+    "packages/d2b-contract-tests/tests/policy_modules.rs",
+    "packages/d2b-contract-tests/tests/policy_source.rs",
+    "packages/d2b-contract-tests/tests/realm_workload_schema_contract.rs",
+    "packages/d2b-contract-tests/tests/storage_sync_contracts.rs",
     "packages/d2b-contracts/src/v2_services.rs",
     "packages/d2b-contracts/tests/v2_services_contract.rs",
     "packages/d2b-realm-core/src/allocator.rs",
@@ -198,7 +214,11 @@
     "packages/xtask/src/wave_policy.rs",
     "packages/xtask/tests/heavy_gate_cli.rs",
     "packages/xtask/tests/policy_workspace.rs",
-    "tests/AGENTS.md"
+    "tests/AGENTS.md",
+    "tests/migration-ledger.toml",
+    "tests/migration-state.d/polkit-allowlist-eval.toml",
+    "tests/migration-state.d/vm-submodule-cutover-eval.toml",
+    "tests/migration-state.d/vm-submodule-eval.toml"
   ],
   "protected_prefixes": [
     "packages/d2b-contracts/",
@@ -340,6 +360,99 @@
         "signal",
         "sync",
         "time"
+      ]
+    }
+  ],
+  "w7_contract_test_migrations": [
+    {
+      "component": "desktop-metadata",
+      "test_file": "packages/d2b-contract-tests/tests/realm_workload_schema_contract.rs",
+      "test_names": [
+        "realm_workloads_launcher_artifact_wired_as_private_non_secret",
+        "realm_workloads_launcher_exposes_canonical_target_and_actions",
+        "realm_workloads_launcher_exposes_icon_grouping_fields",
+        "realm_workloads_launcher_exposes_workload_id_field",
+        "realm_workloads_launcher_icon_group_key_has_semantic_comment",
+        "realm_workloads_launcher_invariant_is_no_sensitive_command_payloads"
+      ],
+      "source_paths": [
+        "nixos-modules/realm-workloads-launcher-json.nix"
+      ],
+      "companion_paths": []
+    },
+    {
+      "component": "realm-network",
+      "test_file": "packages/d2b-contract-tests/tests/policy_host_realm_relay.rs",
+      "test_names": [
+        "host_daemon_broker_and_activation_do_not_store_realm_credentials"
+      ],
+      "source_paths": [
+        "nixos-modules/gateway-vm.nix"
+      ],
+      "companion_paths": []
+    },
+    {
+      "component": "realm-network",
+      "test_file": "packages/d2b-contract-tests/tests/policy_source.rs",
+      "test_names": [
+        "nix_package_source_filters_are_path_segment_based"
+      ],
+      "source_paths": [
+        "nixos-modules/gateway-vm.nix"
+      ],
+      "companion_paths": []
+    },
+    {
+      "component": "realm-network",
+      "test_file": "packages/d2b-contract-tests/tests/storage_sync_contracts.rs",
+      "test_names": [
+        "host_mutation_sources_are_registered_with_storage_or_sync_policy"
+      ],
+      "source_paths": [
+        "nixos-modules/gateway-vm.nix"
+      ],
+      "companion_paths": []
+    },
+    {
+      "component": "realm-principals",
+      "test_file": "packages/d2b-contract-tests/tests/policy_misc.rs",
+      "test_names": [
+        "polkit_allowlist_daemon_only_singletons"
+      ],
+      "source_paths": [
+        "nixos-modules/host-polkit.nix"
+      ],
+      "companion_paths": [
+        "tests/migration-ledger.toml",
+        "tests/migration-state.d/polkit-allowlist-eval.toml"
+      ]
+    },
+    {
+      "component": "workload-processes",
+      "test_file": "packages/d2b-contract-tests/tests/policy_misc.rs",
+      "test_names": [
+        "vm_submodule_compose_vm_shape"
+      ],
+      "source_paths": [
+        "nixos-modules/vm-submodule.nix"
+      ],
+      "companion_paths": [
+        "tests/migration-ledger.toml",
+        "tests/migration-state.d/vm-submodule-eval.toml"
+      ]
+    },
+    {
+      "component": "workload-processes",
+      "test_file": "packages/d2b-contract-tests/tests/policy_modules.rs",
+      "test_names": [
+        "vm_submodule_cutover"
+      ],
+      "source_paths": [
+        "nixos-modules/vm-submodule.nix"
+      ],
+      "companion_paths": [
+        "tests/migration-ledger.toml",
+        "tests/migration-state.d/vm-submodule-cutover-eval.toml"
       ]
     }
   ],

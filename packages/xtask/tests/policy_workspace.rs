@@ -1451,7 +1451,7 @@ fn w4_provider_delivery_fingerprints_cover_every_reserved_file() {
 fn shared_contract_policy_freezes_services_dependencies_and_ownership() {
     let root = repo_root();
     let policy = xtask::wave_policy::read_policy(&root).expect("shared-contract policy");
-    assert_eq!(policy.schema_version, 4);
+    assert_eq!(policy.schema_version, 5);
     assert_eq!(policy.authority_repository, "github.com/vicondoa/d2b");
     let frozen = policy
         .frozen_service_packages
@@ -1702,6 +1702,198 @@ fn w5_service_dependency_edges_are_locked_and_directional() {
                 "dependency direction inverted: {consumer} reaches {forbidden}"
             );
         }
+    }
+}
+
+#[test]
+fn w7_legacy_contract_migration_seam_is_exact() {
+    let policy =
+        xtask::wave_policy::read_policy(&repo_root()).expect("shared-contract migration policy");
+    assert_eq!(policy.w7_contract_test_migrations.len(), 7);
+
+    let expected_files = BTreeSet::from([
+        "packages/d2b-contract-tests/tests/policy_host_realm_relay.rs".to_owned(),
+        "packages/d2b-contract-tests/tests/policy_misc.rs".to_owned(),
+        "packages/d2b-contract-tests/tests/policy_modules.rs".to_owned(),
+        "packages/d2b-contract-tests/tests/policy_source.rs".to_owned(),
+        "packages/d2b-contract-tests/tests/realm_workload_schema_contract.rs".to_owned(),
+        "packages/d2b-contract-tests/tests/storage_sync_contracts.rs".to_owned(),
+    ]);
+    let actual_files = policy
+        .w7_contract_test_migrations
+        .iter()
+        .map(|migration| migration.test_file.clone())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(actual_files, expected_files);
+
+    let expected_assignments = BTreeMap::from([
+        (
+            (
+                "desktop-metadata",
+                "packages/d2b-contract-tests/tests/realm_workload_schema_contract.rs",
+            ),
+            BTreeSet::from([
+                "realm_workloads_launcher_artifact_wired_as_private_non_secret",
+                "realm_workloads_launcher_exposes_canonical_target_and_actions",
+                "realm_workloads_launcher_exposes_icon_grouping_fields",
+                "realm_workloads_launcher_exposes_workload_id_field",
+                "realm_workloads_launcher_icon_group_key_has_semantic_comment",
+                "realm_workloads_launcher_invariant_is_no_sensitive_command_payloads",
+            ]),
+        ),
+        (
+            (
+                "realm-network",
+                "packages/d2b-contract-tests/tests/policy_host_realm_relay.rs",
+            ),
+            BTreeSet::from(["host_daemon_broker_and_activation_do_not_store_realm_credentials"]),
+        ),
+        (
+            (
+                "realm-network",
+                "packages/d2b-contract-tests/tests/policy_source.rs",
+            ),
+            BTreeSet::from(["nix_package_source_filters_are_path_segment_based"]),
+        ),
+        (
+            (
+                "realm-network",
+                "packages/d2b-contract-tests/tests/storage_sync_contracts.rs",
+            ),
+            BTreeSet::from(["host_mutation_sources_are_registered_with_storage_or_sync_policy"]),
+        ),
+        (
+            (
+                "realm-principals",
+                "packages/d2b-contract-tests/tests/policy_misc.rs",
+            ),
+            BTreeSet::from(["polkit_allowlist_daemon_only_singletons"]),
+        ),
+        (
+            (
+                "workload-processes",
+                "packages/d2b-contract-tests/tests/policy_misc.rs",
+            ),
+            BTreeSet::from(["vm_submodule_compose_vm_shape"]),
+        ),
+        (
+            (
+                "workload-processes",
+                "packages/d2b-contract-tests/tests/policy_modules.rs",
+            ),
+            BTreeSet::from(["vm_submodule_cutover"]),
+        ),
+    ]);
+    let actual_assignments = policy
+        .w7_contract_test_migrations
+        .iter()
+        .map(|migration| {
+            (
+                (migration.component.as_str(), migration.test_file.as_str()),
+                migration
+                    .test_names
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(actual_assignments, expected_assignments);
+
+    for migration in &policy.w7_contract_test_migrations {
+        let source = read_repo_file(&migration.test_file);
+        for test in &migration.test_names {
+            assert!(
+                source.contains(&format!("fn {test}(")),
+                "{} does not contain assigned test {test}",
+                migration.test_file
+            );
+        }
+        for path in &migration.source_paths {
+            assert!(
+                source.contains(path),
+                "{} does not bind assigned source path {path}",
+                migration.test_file
+            );
+        }
+        for path in &migration.companion_paths {
+            assert!(
+                repo_root().join(path).is_file(),
+                "missing companion pin {path}"
+            );
+            let companion = read_repo_file(path);
+            assert!(
+                migration
+                    .test_names
+                    .iter()
+                    .any(|test| companion.contains(test)),
+                "companion pin {path} does not reference its assigned test selector"
+            );
+        }
+    }
+
+    let w7 = policy
+        .waves
+        .iter()
+        .find(|wave| wave.wave == "w7")
+        .expect("W7 ownership");
+    let allowed_contract_tests = w7
+        .allowed_protected_paths
+        .iter()
+        .filter(|path| path.starts_with("packages/d2b-contract-tests/tests/"))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    assert_eq!(allowed_contract_tests, expected_files);
+    let fingerprint_paths = policy
+        .w7_contract_test_migrations
+        .iter()
+        .flat_map(|migration| {
+            std::iter::once(migration.test_file.as_str())
+                .chain(migration.companion_paths.iter().map(String::as_str))
+        })
+        .collect::<BTreeSet<_>>();
+    for wave in ["w5", "w6", "w7"] {
+        let manifest: serde_json::Value =
+            serde_json::from_str(&read_repo_file(&format!("delivery/manifests/{wave}.json")))
+                .expect("delivery manifest");
+        let fingerprinted = manifest["contract_fingerprints"]
+            .as_array()
+            .expect("contract fingerprints")
+            .iter()
+            .map(|row| row["path"].as_str().expect("fingerprint path"))
+            .collect::<BTreeSet<_>>();
+        assert!(
+            fingerprint_paths.is_subset(&fingerprinted),
+            "{wave} fingerprints do not cover every W7 contract-test migration surface"
+        );
+    }
+    let allowed_paths = w7
+        .allowed_protected_paths
+        .iter()
+        .filter(|path| {
+            path.starts_with("packages/d2b-contract-tests/tests/")
+                || path == &"tests/migration-ledger.toml"
+                || path.starts_with("tests/migration-state.d/")
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    xtask::wave_policy::check_changed_paths(&policy, "w7", &allowed_paths)
+        .expect("exact W7 migration surfaces");
+    for wave in ["w5", "w6"] {
+        assert!(
+            xtask::wave_policy::check_changed_paths(&policy, wave, &allowed_paths).is_err(),
+            "{wave} must not own W7 migration surfaces"
+        );
+    }
+    for broader in [
+        "packages/d2b-contract-tests/tests/policy_network.rs",
+        "packages/d2b-contract-tests/tests/v2_services_contract.rs",
+        "tests/migration-state.d/no-bash-exec-eval.toml",
+    ] {
+        assert!(
+            xtask::wave_policy::check_changed_paths(&policy, "w7", &[broader.to_owned()]).is_err(),
+            "W7 must not gain broader contract-test or migration-pin ownership: {broader}"
+        );
     }
 }
 

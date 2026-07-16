@@ -322,6 +322,10 @@ narrow protected-path exceptions; no wave creates a second registry.
 `ProviderBindingV2` is non-exhaustive for Rust consumers but remains a strict
 closed serde union. New declared variants reach only the fail-closed consumer
 fallback until this shared root registers the matching daemon adapter.
+W7's frozen contract-test exception is likewise exact: only the test selectors
+and companion migration pins listed in `w7_contract_test_migrations` may move,
+owned by the declarative component deleting their legacy source. The rest of
+`d2b-contract-tests` remains frozen.
 
 W5, W6, and W7 each edit only their authority at
 `delivery/manifests/w<N>.json`; `delivery/manifest.json` remains the unchanged W4

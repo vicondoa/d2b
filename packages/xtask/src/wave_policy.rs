@@ -61,6 +61,7 @@ pub struct SharedContractPolicy {
     pub frozen_service_packages: Vec<String>,
     pub broker_typed_methods: Vec<TypedBrokerMethod>,
     pub service_dependency_edges: Vec<ServiceDependencyEdge>,
+    pub w7_contract_test_migrations: Vec<W7ContractTestMigration>,
     pub workspace_dependencies: Vec<WorkspaceDependency>,
 }
 
@@ -104,9 +105,19 @@ pub struct ServiceDependencyEdge {
     pub features: Vec<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[serde(deny_unknown_fields)]
+pub struct W7ContractTestMigration {
+    pub component: String,
+    pub test_file: String,
+    pub test_names: Vec<String>,
+    pub source_paths: Vec<String>,
+    pub companion_paths: Vec<String>,
+}
+
 impl SharedContractPolicy {
     pub fn validate(&self) -> Result<(), String> {
-        if self.schema_version != 4 {
+        if self.schema_version != 5 {
             return Err("unsupported shared-contract policy schema".to_owned());
         }
         if self.authority_repository != "github.com/vicondoa/d2b" {
@@ -218,6 +229,67 @@ impl SharedContractPolicy {
                     edge.consumer, edge.dependency
                 ));
             }
+        }
+        validate_sorted_values(
+            &self.w7_contract_test_migrations,
+            "W7 contract-test migrations",
+        )?;
+        let mut migration_test_files = BTreeSet::new();
+        let mut migration_companions = BTreeSet::new();
+        for migration in &self.w7_contract_test_migrations {
+            validate_identifier(&migration.component, "W7 migration component")
+                .map_err(|error| error.to_string())?;
+            validate_relative_path(Path::new(&migration.test_file))?;
+            if !migration
+                .test_file
+                .starts_with("packages/d2b-contract-tests/tests/")
+                || !migration.test_file.ends_with(".rs")
+            {
+                return Err(format!(
+                    "W7 migration test file is outside the frozen contract-test crate: {}",
+                    migration.test_file
+                ));
+            }
+            validate_sorted_strings(&migration.test_names, "W7 migration test names")?;
+            for name in &migration.test_names {
+                validate_identifier(name, "W7 migration test name")
+                    .map_err(|error| error.to_string())?;
+            }
+            validate_sorted_relative_paths(&migration.source_paths, "W7 migration source paths")?;
+            validate_sorted_relative_paths_allow_empty(
+                &migration.companion_paths,
+                "W7 migration companion paths",
+            )?;
+            migration_test_files.insert(migration.test_file.clone());
+            migration_companions.extend(migration.companion_paths.iter().cloned());
+        }
+        let w7 = self
+            .wave("w7")
+            .map_err(|_| "shared-contract policy has no W7 owner".to_owned())?;
+        let allowed_contract_tests = w7
+            .allowed_protected_paths
+            .iter()
+            .filter(|path| path.starts_with("packages/d2b-contract-tests/tests/"))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if allowed_contract_tests != migration_test_files {
+            return Err(
+                "W7 contract-test exceptions must exactly match the migration inventory".to_owned(),
+            );
+        }
+        let allowed_companions = w7
+            .allowed_protected_paths
+            .iter()
+            .filter(|path| {
+                path.as_str() == "tests/migration-ledger.toml"
+                    || path.starts_with("tests/migration-state.d/")
+            })
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if allowed_companions != migration_companions {
+            return Err(
+                "W7 migration pin exceptions must exactly match the migration inventory".to_owned(),
+            );
         }
         validate_sorted_values(&self.workspace_dependencies, "workspace dependencies")?;
         for required in REQUIRED_PROTECTED_PATHS {
@@ -1124,6 +1196,14 @@ fn validate_sorted_paths(paths: &[String]) -> Result<(), String> {
 
 fn validate_sorted_relative_paths(paths: &[String], label: &str) -> Result<(), String> {
     validate_sorted_strings(paths, label)?;
+    for path in paths {
+        validate_relative_path(Path::new(path))?;
+    }
+    Ok(())
+}
+
+fn validate_sorted_relative_paths_allow_empty(paths: &[String], label: &str) -> Result<(), String> {
+    validate_sorted_strings_allow_empty(paths, label)?;
     for path in paths {
         validate_relative_path(Path::new(path))?;
     }
