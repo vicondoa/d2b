@@ -61,6 +61,12 @@ path, a bundle hash, and an artifact-hash entry for that path. Older bundle
 versions remain readable by compatibility consumers but cannot activate this
 registry.
 
+The host `d2bd.service` restart trigger includes both the realised bundle and
+the realised provider-registry artifact. A changed generation therefore
+restarts the daemon before it can retain stale composition. This remains a
+continuation event: `KillMode=process` preserves broker-spawned runners, and
+the notify-ready replacement completes adoption before serving requests.
+
 The live host registry currently registers local runtime and local
 observability providers:
 

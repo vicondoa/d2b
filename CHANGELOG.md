@@ -66,6 +66,9 @@ deprecations ship one minor release before removal.
   concrete daemon adapters expose only aggregate metrics and audit-sink health
   through provider-enforced query/export limits without repair authority or
   source-cardinality labels.
+- Restart `d2bd` when the integrity-pinned bundle or generated provider
+  registry generation changes while retaining `KillMode=process`, so existing
+  VM runners survive and are re-adopted after the daemon continuation event.
 - Changed observability provider queries to return a canonical bounded result
   through the provider trait, proxy, protobuf/ttrpc service, and toolkit
   adapter without dropping records or introducing free-form labels.

@@ -1384,6 +1384,11 @@
       "path": "nixos-modules/default.nix"
     },
     {
+      "name": "w4-integration-nixos-modules-host-daemon-nix",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "nixos-modules/host-daemon.nix"
+    },
+    {
       "name": "w4-integration-nixos-modules-processes-json-nix",
       "repository": "github.com/vicondoa/d2b",
       "path": "nixos-modules/processes-json.nix"
@@ -1402,6 +1407,11 @@
       "name": "w4-integration-realm-workloads-nix-test-pin",
       "repository": "github.com/vicondoa/d2b",
       "path": "tests/unit/nix/pinned/common.txt"
+    },
+    {
+      "name": "w4-integration-restart-policy-nix-test",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "tests/unit/nix/cases/restart-policy.nix"
     },
     {
       "name": "w4-integration-xtask-main-rs",

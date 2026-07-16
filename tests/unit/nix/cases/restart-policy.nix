@@ -89,6 +89,39 @@ let
   # surviving runners.
   dCfg = (mkEval [ base ({ ... }: { d2b.daemonExperimental.enable = true; }) ]).config;
   dSvc = dCfg.systemd.services.d2bd or null;
+  mappedCfg = (mkEval [
+    base
+    ({ lib, ... }: {
+      d2b.daemonExperimental.enable = true;
+      d2b.vms.corp-vm = {
+        enable = true;
+        env = "work";
+        index = 10;
+        ssh.user = "alice";
+        config = {
+          networking.hostName = lib.mkDefault "corp-vm";
+          users.users.alice = { isNormalUser = true; uid = 1000; };
+        };
+      };
+      d2b.realms.work = {
+        name = "Work";
+        placement = "host-local";
+        env = "work";
+        network.envs = [ "work" ];
+        allowedUsers = [ "alice" ];
+        workloads.corp-vm = {
+          kind = "local-vm";
+          legacyVmName = "corp-vm";
+          launcher.label = "Corp VM";
+        };
+      };
+    })
+  ]).config;
+  mappedSvc = mappedCfg.systemd.services.d2bd;
+  triggerPaths = cfg: map toString [
+    cfg.d2b._bundle.bundle.path
+    cfg.d2b._bundle.providerRegistryV2Json.path
+  ];
 in
 {
   "restart-policy/d2b-template" = hostOk "d2b@";
@@ -115,5 +148,24 @@ in
   "restart-policy/d2bd-killmode-process" = {
     expr = if dSvc != null then (dSvc.serviceConfig.KillMode or null) else null;
     expected = "process";
+  };
+  "restart-policy/d2bd-provider-triggers-exact" = {
+    expr = if dSvc != null then map toString (dSvc.restartTriggers or [ ]) else [ ];
+    expected = triggerPaths dCfg;
+  };
+  "restart-policy/provider-generation-restarts-daemon-without-runner-kill" = {
+    expr = {
+      artifactChanged =
+        toString dCfg.d2b._bundle.providerRegistryV2Json.path
+        != toString mappedCfg.d2b._bundle.providerRegistryV2Json.path;
+      triggerChanged =
+        map toString dSvc.restartTriggers != map toString mappedSvc.restartTriggers;
+      killMode = mappedSvc.serviceConfig.KillMode;
+    };
+    expected = {
+      artifactChanged = true;
+      triggerChanged = true;
+      killMode = "process";
+    };
   };
 }

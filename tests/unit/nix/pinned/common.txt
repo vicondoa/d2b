@@ -674,6 +674,7 @@ requested-vm-config/purple-qemu-media-niri-border
 restart-policy/ch-exporter
 restart-policy/d2bd-killmode-process
 restart-policy/d2bd-present
+restart-policy/d2bd-provider-triggers-exact
 restart-policy/d2bd-restarts-on-update
 restart-policy/d2b-template
 restart-policy/gpu
@@ -683,6 +684,7 @@ restart-policy/microvm-virtiofsd-full-vm
 restart-policy/obs-otel-vsock-in-host
 restart-policy/otel-host-bridge
 restart-policy/otel-relay-template
+restart-policy/provider-generation-restarts-daemon-without-runner-kill
 restart-policy/snd
 restart-policy/swtpm
 restart-policy/video
