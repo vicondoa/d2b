@@ -43,37 +43,44 @@ See [ADR 0015](../adr/0015-daemon-only-clean-break.md) for the
 daemon-only authz/audit invariants that make these labels stable across
 host-side group renames.
 
-## Realm, workload, VM, and env identifiers
+## Realm, workload, provider, and role identifiers
 
-- VM name regex: `^[a-z][a-z0-9-]*$`
-- Reserved VM prefix: `sys-`
-- Reserved VM name: `launcher`
-- `sys-<env>-net` is framework-reserved for the auto-declared net VM.
-
-Realm and workload labels use the same lowercase label shape. The canonical
-public workload target form is:
+Realm labels, workload names, and configured provider instance ids use
+`^[a-z][a-z0-9-]*$` and are at most 63 ASCII bytes. Realm paths are
+most-specific first and end in `local-root`. The canonical public workload
+target form is:
 
 ```text
-<workload>.<realm>[.<ancestor>...].d2b
+<workload>.<realm>[.<ancestor>...].local-root.d2b
 ```
 
-During the v2 transition, `d2b.realms.<realm>.workloads.<workload>.legacyVmName`
-maps that public workload id to the existing local VM substrate. For example,
-`workloads.aad.legacyVmName = "work-aad"` makes `aad.work.d2b` resolve to the
-local `work-aad` VM for status and guest-control exec while preserving
-`/var/lib/d2b/vms/work-aad`.
+Runtime identities are 20-character lowercase unpadded RFC 4648 base32 values
+derived by the canonical domain-separated v2 identity grammar:
 
-These constraints let the CLI, manifest, and host-side units resolve resources
-mechanically without collisions. When docs and code differ, the passing code is
-canon; see [AGENTS.md](../../AGENTS.md#existing-code-is-canon).
+- realm id: canonical realm path;
+- workload id: realm id plus canonical workload name;
+- provider id: realm id, primary provider type, and configured provider id;
+- role id: realm id, workload id, and closed role kind.
 
-Launcher item ids also use `^[a-z][a-z0-9-]*$`. They are scoped to one workload
-and appear in `d2b launch <target> --item <id>`.
+Nix rejects collisions across the complete realm configuration. Human labels,
+canonical targets, configured provider ids, device ids, and bus ids remain
+metadata and never become runtime path components.
 
-Private configured unsafe-local and local-VM launcher data is installed as
-`/etc/d2b/unsafe-local-workloads.json`. Public provider-neutral launcher
-metadata uses `/etc/d2b/realm-workloads-launcher-v2.json`; the compatibility
-schema remains `/etc/d2b/realm-workloads-launcher.json`.
+The normalized index is the only Nix source for these identities and for
+generated storage/resource ids. Runtime paths use only fixed anchors and
+canonical short ids:
+
+```text
+/etc/d2b/r/<realm-id>/w/<workload-id>/
+/var/lib/d2b/r/<realm-id>/providers/<provider-id>/
+/var/lib/d2b/r/<realm-id>/w/<workload-id>/
+/var/cache/d2b/r/<realm-id>/
+/run/d2b/r/<realm-id>/p/<provider-id>/
+/run/d2b/r/<realm-id>/w/<workload-id>/roles/<role-id>/
+```
+
+Consumers look up normalized rows by canonical id or canonical target; they do
+not rescan realm/provider configuration or maintain a parallel VM/env index.
 
 ## Persistent shell session names
 
