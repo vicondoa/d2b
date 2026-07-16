@@ -3077,25 +3077,21 @@ same public `ShellOp` shape, but d2bd resolves bundle-owned policy and the exact
 requester-UID helper, then multiplexes the validated helper terminal fd behind
 an opaque public attachment handle. List/detach/kill use helper management
 operations. Disconnect and `closeAttach` detach only; kill tears down only the
-verified shell scope. Gateway-backed management forms
-(`list`, `detach`, `kill`) resolve the local realm entrypoint, verify the gateway
-VM is running, and run the same `d2b shell <target> ...` command inside the
-gateway VM over the typed `vm exec` guest-control path. The host does not load
-realm credentials, provider transports, raw guest-control frames, SSH, or
-provider-native shell APIs.
+verified shell scope.
 
 All shell actions remain admin-only. Launcher authorization for configured exec
 items does not extend to shell. Unsafe-local policy (`defaultName` and
 `maxSessions`) never appears in the public request and cannot be supplied by a
 client.
 
-Interactive gateway `attach` is fail-closed in this generation with an
-actionable `gateway-shell-attach-unavailable` error. Use
-`d2b realm enter <realm>` and run `d2b shell <target>` inside the
-gateway until semantic ADR 0039 shell attach is implemented. [ADR
-0039](../adr/0039-constellation-persistent-shell-routing.md) defines the final
-constellation route: gateway-backed targets forward through the selected gateway
-and require the remote node or provider agent to advertise `persistent-shell`.
+The current parser still recognizes legacy gateway-backed management forms.
+They are retained as historical parser behavior, not as a supported shell
+route, and interactive attach on such a route fails with
+`gateway-shell-attach-unavailable`. There is no supported gateway-guest shell
+fallback: do not enter a gateway guest and rerun the command. A
+provider-managed target may expose persistent shells only through an
+authenticated provider agent that positively advertises the
+`persistent-shell` capability.
 
 **Flags**
 
@@ -3170,10 +3166,9 @@ default detached  false     true
 
 The JSON field remains named `vm` for the current schema. For local VM targets
 it contains the resolved backing VM name; for unsafe-local it carries the
-configured canonical workload target. Gateway-backed management commands
-forward the requested target through the selected gateway; the in-gateway
-response keeps its own current schema until a future output-version bump can
-rename this field to `target`.
+configured canonical workload target. The retained legacy gateway parser path
+also keeps this field name for compatibility; it is not a supported deployment
+or shell fallback.
 
 **Exit codes**
 
@@ -3181,7 +3176,7 @@ rename this field to `target`.
 | --- | --- |
 | `0` | Success, including idempotent detach/kill no-op results. |
 | `1` | Unexpected daemon reply or local protocol/serialization failure. |
-| `2` | Usage error, invalid flag combination, missing required `--name` for kill, invalid shell name, non-TTY attach, or gateway-backed interactive attach before semantic shell attach support lands. |
+| `2` | Usage error, invalid flag combination, missing required `--name` for kill, invalid shell name, non-TTY attach, or interactive attach through the retained legacy gateway parser path. |
 | `42` | Internal scope/daemon failure. |
 | `69` | Daemon/helper/user-manager/terminal transport unavailable or timed out. |
 | `70` | Required shell capability or `unsafe-local-shell-v1` is unavailable. |

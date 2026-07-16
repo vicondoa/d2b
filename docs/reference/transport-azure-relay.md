@@ -2,7 +2,7 @@
 
 **Diataxis category:** reference.
 
-`d2b-provider-relay` exposes Azure Relay Hybrid Connections as a
+`d2b-provider-transport-azure-relay` exposes Azure Relay Hybrid Connections as a
 constellation byte transport. Relay provides reachability only: peer-session
 handshake, authentication binding, frame caps, capability negotiation, and
 named-stream authorization stay in the constellation router/mux layers.
