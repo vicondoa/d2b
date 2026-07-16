@@ -72,10 +72,11 @@ fn exact_word(node: Node<'_>, expected: &str, source: &str) -> Result<(), String
 }
 
 fn exact_xtask_target(node: Node<'_>, source: &str) -> Result<(), String> {
-    if node.kind() != "string" {
+    if node.kind() != "string" || node_text(node, source)? != "\"$out/bin/xtask\"" {
         return Err(format!(
-            "delivery wrapper target must be one double-quoted string node, found {}",
-            node.kind()
+            "delivery wrapper target must be exactly the double-quoted string \"$out/bin/xtask\", found {} {:?}",
+            node.kind(),
+            node_text(node, source)?
         ));
     }
     let children = named_children(node);
@@ -126,6 +127,13 @@ fn exact_wrapper_command(post_fixup: &str, canonical_path: &str) -> Result<(), S
         ));
     }
     let command = statements[0];
+    let mut root_cursor = root.walk();
+    if root
+        .children(&mut root_cursor)
+        .any(|node| node.id() != command.id() && node.kind() != "comment")
+    {
+        return Err("delivery postFixup contains a non-comment command terminator or node".into());
+    }
     if command.kind() != "command" {
         return Err(format!(
             "delivery postFixup must contain one unconditional command, not {}",
@@ -750,6 +758,10 @@ fn delivery_runtime_shell_ast_rejects_inactive_or_wrong_wrappers() {
             post_fixup.replace("/bin/xtask\"", "/bin/xta\\sk\""),
         ),
         (
+            "anonymous trailing dollar",
+            post_fixup.replace("/bin/xtask\"", "/bin/xtask$\""),
+        ),
+        (
             "command substitution target",
             post_fixup.replace("\"$out/bin/xtask\"", "\"$(printf '$out/bin/xtask')\""),
         ),
@@ -758,12 +770,14 @@ fn delivery_runtime_shell_ast_rejects_inactive_or_wrong_wrappers() {
             format!("args=(wrapProgram \"$out/bin/xtask\" --prefix PATH : {canonical_path})\n"),
         ),
         ("extra wrapper", format!("{post_fixup}\n{post_fixup}")),
+        ("backgrounded wrapper", format!("{post_fixup} &")),
     ];
     for (name, script) in cases {
         let error = required_delivery_runtime_paths(&script, &tools)
             .expect_err("only one unconditional exact xtask wrapper may pass");
         assert!(
-            error.contains("top-level command")
+            error.contains("valid bash syntax")
+                || error.contains("top-level command")
                 || error.contains("unconditional command")
                 || error.contains("command name")
                 || error.contains("target"),
