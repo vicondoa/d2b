@@ -1854,11 +1854,6 @@
       "path": "packages/d2b-provider-transport-local/src/lib.rs"
     },
     {
-      "name": "w6-activation-composition",
-      "repository": "github.com/vicondoa/d2b",
-      "path": "packages/d2b-host-activation-helper/src/services/activation/mod.rs"
-    },
-    {
       "name": "w6-clipboard-bridge-composition",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2b-clipd/src/services/bridge/mod.rs"

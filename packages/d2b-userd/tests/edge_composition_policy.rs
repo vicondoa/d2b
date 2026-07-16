@@ -2,19 +2,32 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
+    process::Command,
 };
 
 #[derive(Clone, Copy)]
 struct Component {
     id: &'static str,
     owned_files: &'static [&'static str],
+    reserved_files: &'static [&'static str],
     reserved_prefixes: &'static [&'static str],
-    dependencies: &'static [&'static str],
+    reserved_test_prefixes: &'static [&'static str],
+    implementation_dependencies: &'static [&'static str],
+    final_composition_dependencies: &'static [&'static str],
     frozen_inputs: &'static [&'static str],
+    service_module: Option<ServiceModule>,
     service_package: Option<&'static str>,
     endpoint_purpose: Option<&'static str>,
     endpoint_role: Option<&'static str>,
     frozen_parent_blockers: &'static [&'static str],
+}
+
+#[derive(Clone, Copy)]
+struct ServiceModule {
+    path: &'static str,
+    package_const: &'static str,
+    purpose_const: &'static str,
+    role_const: &'static str,
 }
 
 #[derive(Clone, Copy)]
@@ -59,13 +72,48 @@ const OWNED_PACKAGE_PREFIXES: &[&str] = &[
     "packages/d2b-wlcontrol/",
 ];
 
+const BASELINE_ROOT: &str = "b2b50e67cfab4fb8601ebb1a63946e84eccba5c1";
+const PREP_INTEGRATOR_FILES: &[&str] = &[
+    "CHANGELOG.md",
+    "delivery/manifests/w6.json",
+    "packages/d2b-userd/tests/edge_composition_policy.rs",
+];
+const PREP_INTEGRATOR_ID: &str = "prep-integrator";
+const PREP_INTEGRATOR_TEST_PREFIXES: &[&str] = &["packages/d2b-userd/tests/prep/"];
+const FOREIGN_IMPLEMENTATION_PREFIXES: &[&str] = &[
+    "examples/",
+    "nixos-modules/",
+    "pkgs/",
+    "templates/",
+    "tests/unit/nix/",
+    "tests/unit/smoke/",
+];
+const DOCUMENTED_COMPONENTS: &[&str] = &[
+    "activation-one-shot",
+    "clipboard-bridge",
+    "clipboard-control",
+    "clipboard-picker",
+    "desktop-actions",
+    "desktop-observer",
+    "retained-guest-shell",
+    "runtime-systemd-user",
+    "security-key-controller",
+    "security-key-frontend",
+    "shell-supervisor",
+    "tty-one-shot",
+    "user-secrets",
+    "wayland-control",
+];
+
 const BLOCKERS: &[FrozenParentBlocker] = &[
     FrozenParentBlocker {
         id: "activation-bootstrap",
         authority: "core-control-parent",
         paths: &[
-            "packages/d2b-host/src/bin/d2b-activation-helper.rs",
             "packages/d2b-priv-broker/src/live_handlers.rs",
+            "packages/d2b-priv-broker/src/ops/exec_reconcile.rs",
+            "packages/d2b-priv-broker/src/ops/store_view_farm.rs",
+            "packages/d2b-host/src/bin/d2b-activation-helper.rs",
         ],
     },
     FrozenParentBlocker {
@@ -188,22 +236,26 @@ const FROZEN_INPUTS: &[FrozenInput] = &[
 const COMPONENTS: &[Component] = &[
     Component {
         id: "activation-one-shot",
-        owned_files: &[
-            "packages/d2b-host-activation-helper/Cargo.toml",
-            "packages/d2b-host-activation-helper/src/lib.rs",
-            "packages/d2b-host-activation-helper/src/main.rs",
-            "packages/d2b-host-activation-helper/src/services/mod.rs",
+        owned_files: &[],
+        reserved_files: &[
+            "docs/how-to/use-activation-service.md",
+            "docs/reference/activation-service.md",
         ],
         reserved_prefixes: &[
             "packages/d2b-activation-helper/",
-            "packages/d2b-host-activation-helper/src/services/activation/",
             "packages/d2b-one-shot-helper/",
         ],
-        dependencies: &[],
+        reserved_test_prefixes: &[
+            "packages/d2b-activation-helper/tests/activation/",
+            "packages/d2b-one-shot-helper/tests/activation/",
+        ],
+        implementation_dependencies: &[],
+        final_composition_dependencies: &[],
         frozen_inputs: &["component-session", "service-contracts"],
-        service_package: Some("d2b.activation.v2"),
-        endpoint_purpose: Some("activation-helper"),
-        endpoint_role: Some("activation-helper"),
+        service_module: None,
+        service_package: None,
+        endpoint_purpose: None,
+        endpoint_role: None,
         frozen_parent_blockers: &["activation-bootstrap", "workspace-membership"],
     },
     Component {
@@ -213,14 +265,23 @@ const COMPONENTS: &[Component] = &[
             "packages/d2b-wayland-proxy/src/bridge.rs",
             "packages/d2b-wayland-proxy/src/clipboard.rs",
         ],
+        reserved_files: &["docs/reference/clipboard-bridge.md"],
         reserved_prefixes: &["packages/d2b-clipd/src/services/bridge/"],
-        dependencies: &["clipboard-control"],
+        reserved_test_prefixes: &["packages/d2b-clipd/tests/bridge/"],
+        implementation_dependencies: &["wayland-control"],
+        final_composition_dependencies: &["clipboard-control"],
         frozen_inputs: &[
             "component-session",
             "observability-result",
             "service-contracts",
             "transport-contract",
         ],
+        service_module: Some(ServiceModule {
+            path: "packages/d2b-clipd/src/services/bridge/mod.rs",
+            package_const: "SERVICE_PACKAGE",
+            purpose_const: "ENDPOINT_PURPOSE",
+            role_const: "ENDPOINT_ROLE",
+        }),
         service_package: Some("d2b.clipboard.v2"),
         endpoint_purpose: Some("clipboard-bridge"),
         endpoint_role: Some("clipboard-daemon"),
@@ -235,14 +296,22 @@ const COMPONENTS: &[Component] = &[
             "packages/d2b-clipd/src/services/mod.rs",
             "packages/d2b-clipd/tests/daemon_cli.rs",
         ],
+        reserved_files: &[],
         reserved_prefixes: &[],
-        dependencies: &["clipboard-bridge", "clipboard-control", "clipboard-picker"],
+        reserved_test_prefixes: &["packages/d2b-clipd/tests/composition/"],
+        implementation_dependencies: &[],
+        final_composition_dependencies: &[
+            "clipboard-bridge",
+            "clipboard-control",
+            "clipboard-picker",
+        ],
         frozen_inputs: &[
             "component-session",
             "observability-result",
             "service-contracts",
             "transport-contract",
         ],
+        service_module: None,
         service_package: None,
         endpoint_purpose: None,
         endpoint_role: None,
@@ -261,15 +330,26 @@ const COMPONENTS: &[Component] = &[
             "packages/d2b-clipd/src/virtual_keyboard.rs",
             "packages/d2b-clipd/src/wayland.rs",
             "packages/d2b-clipd/tests/test_pipe.rs",
+            "docs/explanation/clipboard-architecture.md",
+            "docs/reference/clipboard-policy.md",
         ],
+        reserved_files: &[],
         reserved_prefixes: &["packages/d2b-clipd/src/services/control/"],
-        dependencies: &[],
+        reserved_test_prefixes: &["packages/d2b-clipd/tests/control/"],
+        implementation_dependencies: &[],
+        final_composition_dependencies: &[],
         frozen_inputs: &[
             "component-session",
             "observability-result",
             "service-contracts",
             "transport-contract",
         ],
+        service_module: Some(ServiceModule {
+            path: "packages/d2b-clipd/src/services/control/mod.rs",
+            package_const: "SERVICE_PACKAGE",
+            purpose_const: "ENDPOINT_PURPOSE",
+            role_const: "ENDPOINT_ROLE",
+        }),
         service_package: Some("d2b.clipboard.v2"),
         endpoint_purpose: Some("clipboard-control"),
         endpoint_role: Some("clipboard-daemon"),
@@ -281,15 +361,26 @@ const COMPONENTS: &[Component] = &[
             "packages/d2b-clipd/src/framing.rs",
             "packages/d2b-clipd/src/picker.rs",
             "packages/d2b-clipd/src/protocol.rs",
+            "docs/how-to/configure-clipboard-picker.md",
+            "docs/reference/clipboard-picker-protocol.md",
         ],
+        reserved_files: &[],
         reserved_prefixes: &["packages/d2b-clipd/src/services/picker/"],
-        dependencies: &["clipboard-control"],
+        reserved_test_prefixes: &["packages/d2b-clipd/tests/picker/"],
+        implementation_dependencies: &["clipboard-control"],
+        final_composition_dependencies: &[],
         frozen_inputs: &[
             "component-session",
             "observability-result",
             "service-contracts",
             "transport-contract",
         ],
+        service_module: Some(ServiceModule {
+            path: "packages/d2b-clipd/src/services/picker/mod.rs",
+            package_const: "SERVICE_PACKAGE",
+            purpose_const: "ENDPOINT_PURPOSE",
+            role_const: "ENDPOINT_ROLE",
+        }),
         service_package: Some("d2b.clipboard.picker.v2"),
         endpoint_purpose: Some("clipboard-picker"),
         endpoint_role: Some("clipboard-picker"),
@@ -301,17 +392,32 @@ const COMPONENTS: &[Component] = &[
             "packages/d2b-notify/src/nonce.rs",
             "packages/d2b-notify/src/wlcontrol.rs",
         ],
+        reserved_files: &[
+            "docs/how-to/use-wlcontrol.md",
+            "docs/reference/desktop-actions.md",
+        ],
         reserved_prefixes: &[
             "packages/d2b-notify/src/services/actions/",
             "packages/d2b-wlcontrol/",
         ],
-        dependencies: &["desktop-observer"],
+        reserved_test_prefixes: &[
+            "packages/d2b-notify/tests/actions/",
+            "packages/d2b-wlcontrol/tests/actions/",
+        ],
+        implementation_dependencies: &["desktop-observer"],
+        final_composition_dependencies: &[],
         frozen_inputs: &[
             "component-session",
             "observability-result",
             "service-contracts",
             "transport-contract",
         ],
+        service_module: Some(ServiceModule {
+            path: "packages/d2b-notify/src/services/actions/mod.rs",
+            package_const: "SERVICE_PACKAGE",
+            purpose_const: "ENDPOINT_PURPOSE",
+            role_const: "ENDPOINT_ROLE",
+        }),
         service_package: Some("d2b.notify.v2"),
         endpoint_purpose: Some("desktop-observer"),
         endpoint_role: Some("desktop-observer"),
@@ -324,14 +430,18 @@ const COMPONENTS: &[Component] = &[
             "packages/d2b-notify/src/lib.rs",
             "packages/d2b-notify/src/services/mod.rs",
         ],
+        reserved_files: &[],
         reserved_prefixes: &[],
-        dependencies: &["desktop-actions", "desktop-observer"],
+        reserved_test_prefixes: &["packages/d2b-notify/tests/composition/"],
+        implementation_dependencies: &[],
+        final_composition_dependencies: &["desktop-actions", "desktop-observer"],
         frozen_inputs: &[
             "component-session",
             "observability-result",
             "service-contracts",
             "transport-contract",
         ],
+        service_module: None,
         service_package: None,
         endpoint_purpose: None,
         endpoint_role: None,
@@ -345,15 +455,25 @@ const COMPONENTS: &[Component] = &[
             "packages/d2b-notify/src/notifications.rs",
             "packages/d2b-notify/src/state.rs",
             "packages/d2b-notify/src/waybar.rs",
+            "docs/reference/usb-security-key-events.md",
         ],
+        reserved_files: &[],
         reserved_prefixes: &["packages/d2b-notify/src/services/observer/"],
-        dependencies: &[],
+        reserved_test_prefixes: &["packages/d2b-notify/tests/observer/"],
+        implementation_dependencies: &[],
+        final_composition_dependencies: &[],
         frozen_inputs: &[
             "component-session",
             "observability-result",
             "service-contracts",
             "transport-contract",
         ],
+        service_module: Some(ServiceModule {
+            path: "packages/d2b-notify/src/services/observer/mod.rs",
+            package_const: "SERVICE_PACKAGE",
+            purpose_const: "ENDPOINT_PURPOSE",
+            role_const: "ENDPOINT_ROLE",
+        }),
         service_package: Some("d2b.notify.v2"),
         endpoint_purpose: Some("desktop-observer"),
         endpoint_role: Some("desktop-observer"),
@@ -373,14 +493,42 @@ const COMPONENTS: &[Component] = &[
             "packages/d2b-guest-shell-runner/src/services/mod.rs",
             "packages/d2b-guest-shell-runner/src/socket.rs",
             "packages/d2b-guest-shell-runner/tests/cli.rs",
+            "docs/reference/components-shell.md",
         ],
+        reserved_files: &[],
         reserved_prefixes: &["packages/d2b-guest-shell-runner/src/services/retained_shell/"],
-        dependencies: &[],
+        reserved_test_prefixes: &["packages/d2b-guest-shell-runner/tests/retained_shell/"],
+        implementation_dependencies: &[],
+        final_composition_dependencies: &[],
         frozen_inputs: &["component-session", "service-contracts"],
+        service_module: Some(ServiceModule {
+            path: "packages/d2b-guest-shell-runner/src/services/retained_shell/mod.rs",
+            package_const: "PARENT_SERVICE_PACKAGE",
+            purpose_const: "PARENT_ENDPOINT_PURPOSE",
+            role_const: "PARENT_ENDPOINT_ROLE",
+        }),
         service_package: Some("d2b.guest.v2"),
         endpoint_purpose: Some("guest-control"),
         endpoint_role: Some("guest-agent"),
         frozen_parent_blockers: &["guest-shell-bootstrap"],
+    },
+    Component {
+        id: "retained-host-helper",
+        owned_files: &[
+            "packages/d2b-host-activation-helper/Cargo.toml",
+            "packages/d2b-host-activation-helper/src/main.rs",
+        ],
+        reserved_files: &[],
+        reserved_prefixes: &[],
+        reserved_test_prefixes: &["packages/d2b-host-activation-helper/tests/retained/"],
+        implementation_dependencies: &[],
+        final_composition_dependencies: &[],
+        frozen_inputs: &[],
+        service_module: None,
+        service_package: None,
+        endpoint_purpose: None,
+        endpoint_role: None,
+        frozen_parent_blockers: &[],
     },
     Component {
         id: "runtime-composition",
@@ -390,8 +538,11 @@ const COMPONENTS: &[Component] = &[
             "packages/d2b-unsafe-local-helper/src/main.rs",
             "packages/d2b-unsafe-local-helper/src/services/mod.rs",
         ],
+        reserved_files: &[],
         reserved_prefixes: &[],
-        dependencies: &[
+        reserved_test_prefixes: &["packages/d2b-unsafe-local-helper/tests/composition/"],
+        implementation_dependencies: &[],
+        final_composition_dependencies: &[
             "runtime-systemd-user",
             "shell-supervisor",
             "tty-one-shot",
@@ -404,6 +555,7 @@ const COMPONENTS: &[Component] = &[
             "service-contracts",
             "transport-contract",
         ],
+        service_module: None,
         service_package: None,
         endpoint_purpose: None,
         endpoint_role: None,
@@ -416,13 +568,23 @@ const COMPONENTS: &[Component] = &[
             "packages/d2b-unsafe-local-helper/src/protocol.rs",
             "packages/d2b-unsafe-local-helper/src/runtime.rs",
             "packages/d2b-unsafe-local-helper/src/systemd.rs",
+            "docs/explanation/unsafe-local-runtime.md",
+            "docs/how-to/configure-unsafe-local-launchers.md",
+            "docs/reference/unsafe-local-provider.md",
         ],
+        reserved_files: &[],
         reserved_prefixes: &[
             "packages/d2b-runtime-systemd-user/",
             "packages/d2b-systemd-user-agent/",
             "packages/d2b-unsafe-local-helper/src/services/runtime_systemd_user/",
         ],
-        dependencies: &[],
+        reserved_test_prefixes: &[
+            "packages/d2b-runtime-systemd-user/tests/runtime/",
+            "packages/d2b-systemd-user-agent/tests/runtime/",
+            "packages/d2b-unsafe-local-helper/tests/runtime_systemd_user/",
+        ],
+        implementation_dependencies: &["wayland-control"],
+        final_composition_dependencies: &[],
         frozen_inputs: &[
             "component-session",
             "observability-result",
@@ -430,6 +592,12 @@ const COMPONENTS: &[Component] = &[
             "service-contracts",
             "transport-contract",
         ],
+        service_module: Some(ServiceModule {
+            path: "packages/d2b-unsafe-local-helper/src/services/runtime_systemd_user/mod.rs",
+            package_const: "SERVICE_PACKAGE",
+            purpose_const: "ENDPOINT_PURPOSE",
+            role_const: "ENDPOINT_ROLE",
+        }),
         service_package: Some("d2b.runtime.systemd-user.v2"),
         endpoint_purpose: Some("runtime-systemd-user"),
         endpoint_role: Some("runtime-systemd-user-agent"),
@@ -437,9 +605,16 @@ const COMPONENTS: &[Component] = &[
     },
     Component {
         id: "security-key-controller",
-        owned_files: &[],
+        owned_files: &[
+            "docs/explanation/usb-security-key-architecture.md",
+            "docs/how-to/migrate-usbip-yubikey-to-security-key.md",
+            "docs/how-to/use-usb-security-key.md",
+        ],
+        reserved_files: &["docs/reference/security-key-service.md"],
         reserved_prefixes: &["packages/d2b-security-key-helper/"],
-        dependencies: &[],
+        reserved_test_prefixes: &["packages/d2b-security-key-helper/tests/controller/"],
+        implementation_dependencies: &[],
+        final_composition_dependencies: &[],
         frozen_inputs: &[
             "component-session",
             "device-provider",
@@ -448,9 +623,10 @@ const COMPONENTS: &[Component] = &[
             "service-contracts",
             "transport-contract",
         ],
-        service_package: Some("d2b.security-key.v2"),
-        endpoint_purpose: Some("security-key"),
-        endpoint_role: Some("security-key-controller"),
+        service_module: None,
+        service_package: None,
+        endpoint_purpose: None,
+        endpoint_role: None,
         frozen_parent_blockers: &["security-key-bootstrap", "workspace-membership"],
     },
     Component {
@@ -463,9 +639,13 @@ const COMPONENTS: &[Component] = &[
             "packages/d2b-sk-frontend/src/services/mod.rs",
             "packages/d2b-sk-frontend/src/uhid.rs",
             "packages/d2b-sk-frontend/src/vsock.rs",
+            "docs/reference/components-usb-security-key.md",
         ],
+        reserved_files: &[],
         reserved_prefixes: &["packages/d2b-sk-frontend/src/services/security_key/"],
-        dependencies: &[],
+        reserved_test_prefixes: &["packages/d2b-sk-frontend/tests/frontend/"],
+        implementation_dependencies: &[],
+        final_composition_dependencies: &["security-key-controller"],
         frozen_inputs: &[
             "component-session",
             "device-provider",
@@ -473,6 +653,12 @@ const COMPONENTS: &[Component] = &[
             "service-contracts",
             "transport-contract",
         ],
+        service_module: Some(ServiceModule {
+            path: "packages/d2b-sk-frontend/src/services/security_key/mod.rs",
+            package_const: "SERVICE_PACKAGE",
+            purpose_const: "ENDPOINT_PURPOSE",
+            role_const: "ENDPOINT_ROLE",
+        }),
         service_package: Some("d2b.security-key.v2"),
         endpoint_purpose: Some("security-key"),
         endpoint_role: Some("security-key-frontend"),
@@ -487,18 +673,32 @@ const COMPONENTS: &[Component] = &[
             "packages/d2b-unsafe-local-helper/src/shell_supervisor.rs",
             "packages/d2b-unsafe-local-helper/src/supervisor_protocol.rs",
             "packages/d2b-unsafe-local-helper/tests/shell_supervisor.rs",
+            "docs/explanation/persistent-shells.md",
+            "docs/how-to/use-persistent-shells.md",
         ],
+        reserved_files: &[],
         reserved_prefixes: &[
             "packages/d2b-shell-supervisor/",
             "packages/d2b-unsafe-local-helper/src/services/shell/",
         ],
-        dependencies: &["runtime-systemd-user"],
+        reserved_test_prefixes: &[
+            "packages/d2b-shell-supervisor/tests/shell/",
+            "packages/d2b-unsafe-local-helper/tests/shell/",
+        ],
+        implementation_dependencies: &["runtime-systemd-user"],
+        final_composition_dependencies: &[],
         frozen_inputs: &[
             "component-session",
             "observability-result",
             "service-contracts",
             "transport-contract",
         ],
+        service_module: Some(ServiceModule {
+            path: "packages/d2b-unsafe-local-helper/src/services/shell/mod.rs",
+            package_const: "SERVICE_PACKAGE",
+            purpose_const: "ENDPOINT_PURPOSE",
+            role_const: "ENDPOINT_ROLE",
+        }),
         service_package: Some("d2b.shell.v2"),
         endpoint_purpose: Some("shell-supervisor"),
         endpoint_role: Some("shell-supervisor"),
@@ -507,12 +707,27 @@ const COMPONENTS: &[Component] = &[
     Component {
         id: "tty-one-shot",
         owned_files: &["packages/d2b-unsafe-local-helper/src/tty_exec.rs"],
+        reserved_files: &[
+            "docs/how-to/use-tty-helper.md",
+            "docs/reference/tty-service.md",
+        ],
         reserved_prefixes: &[
             "packages/d2b-tty-helper/",
             "packages/d2b-unsafe-local-helper/src/services/tty/",
         ],
-        dependencies: &["runtime-systemd-user"],
+        reserved_test_prefixes: &[
+            "packages/d2b-tty-helper/tests/tty/",
+            "packages/d2b-unsafe-local-helper/tests/tty/",
+        ],
+        implementation_dependencies: &[],
+        final_composition_dependencies: &["runtime-systemd-user"],
         frozen_inputs: &["component-session", "service-contracts"],
+        service_module: Some(ServiceModule {
+            path: "packages/d2b-unsafe-local-helper/src/services/tty/mod.rs",
+            package_const: "SERVICE_PACKAGE",
+            purpose_const: "ENDPOINT_PURPOSE",
+            role_const: "ENDPOINT_ROLE",
+        }),
         service_package: Some("d2b.tty.v2"),
         endpoint_purpose: Some("tty-helper"),
         endpoint_role: Some("tty-helper"),
@@ -525,11 +740,16 @@ const COMPONENTS: &[Component] = &[
             "packages/d2b-userd/src/lib.rs",
             "packages/d2b-userd/src/main.rs",
             "packages/d2b-userd/src/services/mod.rs",
-            "packages/d2b-userd/tests/edge_composition_policy.rs",
             "packages/d2b-userd/tests/fail_closed.rs",
         ],
+        reserved_files: &[
+            "docs/how-to/manage-user-secrets.md",
+            "docs/reference/user-secrets-and-unattended-credentials.md",
+        ],
         reserved_prefixes: &["packages/d2b-userd/src/services/user/"],
-        dependencies: &[],
+        reserved_test_prefixes: &["packages/d2b-userd/tests/user/"],
+        implementation_dependencies: &[],
+        final_composition_dependencies: &[],
         frozen_inputs: &[
             "component-session",
             "credential-placement",
@@ -538,6 +758,12 @@ const COMPONENTS: &[Component] = &[
             "service-contracts",
             "transport-contract",
         ],
+        service_module: Some(ServiceModule {
+            path: "packages/d2b-userd/src/services/user/mod.rs",
+            package_const: "SERVICE_PACKAGE",
+            purpose_const: "ENDPOINT_PURPOSE",
+            role_const: "ENDPOINT_ROLE",
+        }),
         service_package: Some("d2b.user.v2"),
         endpoint_purpose: Some("user-agent"),
         endpoint_role: Some("user-agent"),
@@ -552,8 +778,11 @@ const COMPONENTS: &[Component] = &[
             "packages/d2b-wayland-proxy/src/main.rs",
             "packages/d2b-wayland-proxy/src/services/mod.rs",
         ],
+        reserved_files: &[],
         reserved_prefixes: &[],
-        dependencies: &["clipboard-bridge", "wayland-control"],
+        reserved_test_prefixes: &["packages/d2b-wayland-proxy/tests/composition/"],
+        implementation_dependencies: &[],
+        final_composition_dependencies: &["clipboard-bridge", "wayland-control"],
         frozen_inputs: &[
             "component-session",
             "display-provider",
@@ -562,6 +791,7 @@ const COMPONENTS: &[Component] = &[
             "service-contracts",
             "transport-contract",
         ],
+        service_module: None,
         service_package: None,
         endpoint_purpose: None,
         endpoint_role: None,
@@ -578,9 +808,14 @@ const COMPONENTS: &[Component] = &[
             "packages/d2b-wayland-proxy/src/policy.rs",
             "packages/d2b-wayland-proxy/src/readiness.rs",
             "packages/d2b-wayland-proxy/src/terminal.rs",
+            "docs/how-to/migrate-to-wayland-proxy.md",
+            "docs/reference/wayland-proxy-warnings.md",
         ],
+        reserved_files: &[],
         reserved_prefixes: &["packages/d2b-wayland-proxy/src/services/wayland/"],
-        dependencies: &["clipboard-bridge"],
+        reserved_test_prefixes: &["packages/d2b-wayland-proxy/tests/wayland/"],
+        implementation_dependencies: &[],
+        final_composition_dependencies: &[],
         frozen_inputs: &[
             "component-session",
             "display-provider",
@@ -589,6 +824,12 @@ const COMPONENTS: &[Component] = &[
             "service-contracts",
             "transport-contract",
         ],
+        service_module: Some(ServiceModule {
+            path: "packages/d2b-wayland-proxy/src/services/wayland/mod.rs",
+            package_const: "SERVICE_PACKAGE",
+            purpose_const: "ENDPOINT_PURPOSE",
+            role_const: "ENDPOINT_ROLE",
+        }),
         service_package: Some("d2b.wayland.v2"),
         endpoint_purpose: Some("wayland-proxy"),
         endpoint_role: Some("wayland-proxy"),
@@ -602,8 +843,9 @@ const LEGACY_BOUNDARIES: &[LegacyBoundary] = &[
         owner: "activation-one-shot",
         call_graph: &[
             "packages/d2b-priv-broker/src/live_handlers.rs",
+            "packages/d2b-priv-broker/src/ops/exec_reconcile.rs",
+            "packages/d2b-priv-broker/src/ops/store_view_farm.rs",
             "packages/d2b-host/src/bin/d2b-activation-helper.rs",
-            "packages/d2b-host-activation-helper/src/main.rs",
         ],
         legacy_handshake: "argv verbs plus untyped stdin JSON or process exit status",
         disposition: "fold-or-component-session",
@@ -779,21 +1021,38 @@ fn collect_files(root: &Path, relative: &Path, out: &mut BTreeSet<String>) {
 }
 
 fn owner_for(path: &str) -> Vec<&'static str> {
-    COMPONENTS
+    let mut owners = Vec::new();
+    if PREP_INTEGRATOR_FILES.contains(&path) {
+        owners.push(PREP_INTEGRATOR_ID);
+    }
+    if PREP_INTEGRATOR_TEST_PREFIXES
         .iter()
-        .filter(|component| {
-            component.owned_files.contains(&path)
-                || component
-                    .reserved_prefixes
-                    .iter()
-                    .any(|prefix| path.starts_with(prefix))
-        })
-        .map(|component| component.id)
-        .collect()
+        .any(|prefix| path.starts_with(prefix))
+    {
+        owners.push(PREP_INTEGRATOR_ID);
+    }
+    owners.extend(
+        COMPONENTS
+            .iter()
+            .filter(|component| {
+                component.owned_files.contains(&path)
+                    || component.reserved_files.contains(&path)
+                    || component
+                        .reserved_prefixes
+                        .iter()
+                        .any(|prefix| path.starts_with(prefix))
+                    || component
+                        .reserved_test_prefixes
+                        .iter()
+                        .any(|prefix| path.starts_with(prefix))
+            })
+            .map(|component| component.id),
+    );
+    owners
 }
 
 #[test]
-fn edge_files_have_exactly_one_local_owner() {
+fn edge_files_docs_and_test_reservations_have_exactly_one_owner() {
     let root = repository_root();
     let mut files = BTreeSet::new();
     for prefix in OWNED_PACKAGE_PREFIXES {
@@ -810,15 +1069,63 @@ fn edge_files_have_exactly_one_local_owner() {
     }
 
     for component in COMPONENTS {
+        assert!(
+            !component.reserved_test_prefixes.is_empty(),
+            "{} must reserve a disjoint future test path",
+            component.id
+        );
         for file in component.owned_files {
             assert!(root.join(file).is_file(), "{} is missing", file);
             assert_eq!(owner_for(file), vec![component.id]);
         }
+        for file in component.reserved_files {
+            assert_eq!(owner_for(file), vec![component.id]);
+        }
+        for prefix in component
+            .reserved_prefixes
+            .iter()
+            .chain(component.reserved_test_prefixes)
+        {
+            assert!(prefix.ends_with('/'), "reserved prefix must end in /");
+            let probe = format!("{prefix}__reserved__");
+            assert_eq!(owner_for(&probe), vec![component.id]);
+        }
+    }
+    let components = COMPONENTS
+        .iter()
+        .map(|component| (component.id, component))
+        .collect::<BTreeMap<_, _>>();
+    for id in DOCUMENTED_COMPONENTS {
+        let component = components[id];
+        assert!(
+            component
+                .owned_files
+                .iter()
+                .chain(component.reserved_files)
+                .any(|path| path.starts_with("docs/")),
+            "{id} must own or reserve its W6 documentation"
+        );
+    }
+    for file in PREP_INTEGRATOR_FILES {
+        assert!(root.join(file).is_file(), "{} is missing", file);
+        assert_eq!(owner_for(file), vec![PREP_INTEGRATOR_ID]);
+    }
+    for prefix in PREP_INTEGRATOR_TEST_PREFIXES {
+        assert_eq!(
+            owner_for(&format!("{prefix}__reserved__")),
+            vec![PREP_INTEGRATOR_ID]
+        );
+    }
+    for prefix in FOREIGN_IMPLEMENTATION_PREFIXES {
+        assert!(
+            owner_for(&format!("{prefix}reserved")).is_empty(),
+            "foreign path prefix {prefix} has a local owner"
+        );
     }
 }
 
 #[test]
-fn component_dependencies_are_known_and_acyclic() {
+fn implementation_and_final_composition_dependencies_are_known_and_acyclic() {
     let components = COMPONENTS
         .iter()
         .map(|component| (component.id, component))
@@ -828,6 +1135,7 @@ fn component_dependencies_are_known_and_acyclic() {
     fn visit(
         id: &'static str,
         components: &BTreeMap<&'static str, &Component>,
+        selector: fn(&Component) -> &'static [&'static str],
         active: &mut BTreeSet<&'static str>,
         complete: &mut BTreeSet<&'static str>,
     ) {
@@ -836,60 +1144,153 @@ fn component_dependencies_are_known_and_acyclic() {
         }
         assert!(active.insert(id), "component dependency cycle at {id}");
         let component = components.get(id).expect("known component");
-        for dependency in component.dependencies {
+        for dependency in selector(component) {
             assert!(
                 components.contains_key(dependency),
                 "{id} has unknown dependency {dependency}"
             );
-            visit(dependency, components, active, complete);
+            visit(dependency, components, selector, active, complete);
         }
         active.remove(id);
         complete.insert(id);
     }
 
-    let mut complete = BTreeSet::new();
-    for id in components.keys().copied() {
-        visit(id, &components, &mut BTreeSet::new(), &mut complete);
+    for selector in [
+        (|component: &Component| component.implementation_dependencies)
+            as fn(&Component) -> &'static [&'static str],
+        (|component: &Component| component.final_composition_dependencies)
+            as fn(&Component) -> &'static [&'static str],
+    ] {
+        let mut complete = BTreeSet::new();
+        for id in components.keys().copied() {
+            visit(
+                id,
+                &components,
+                selector,
+                &mut BTreeSet::new(),
+                &mut complete,
+            );
+        }
     }
+
+    assert_eq!(
+        components["clipboard-bridge"].implementation_dependencies,
+        ["wayland-control"]
+    );
+    assert_eq!(
+        components["runtime-systemd-user"].implementation_dependencies,
+        ["wayland-control"]
+    );
+    assert!(
+        components["tty-one-shot"]
+            .implementation_dependencies
+            .is_empty()
+    );
+    assert_eq!(
+        components["tty-one-shot"].final_composition_dependencies,
+        ["runtime-systemd-user"]
+    );
+}
+
+fn public_string_const(root: &Path, module: &ServiceModule, name: &str) -> String {
+    let source = fs::read_to_string(root.join(module.path)).expect("read service module");
+    let prefix = format!("pub const {name}: &str = ");
+    let declarations = source
+        .lines()
+        .map(str::trim)
+        .filter_map(|line| line.strip_prefix(&prefix))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        declarations.len(),
+        1,
+        "{} must define exactly one public {name}",
+        module.path
+    );
+    let literal = declarations[0]
+        .strip_suffix(';')
+        .expect("public string constant ends with semicolon")
+        .trim();
+    let value = literal
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .expect("public string constant is a literal");
+    assert!(
+        !value.contains('\\') && !value.contains('"'),
+        "service composition constant must be a plain literal"
+    );
+    value.to_owned()
 }
 
 #[test]
-fn service_composition_uses_only_frozen_contract_keys() {
+fn actual_service_modules_match_frozen_contract_keys() {
     let root = repository_root();
     let session_contract =
         fs::read_to_string(root.join("packages/d2b-contracts/src/v2_component_session.rs"))
             .expect("frozen ComponentSession contract");
     let service_inventory = fs::read_to_string(root.join("docs/reference/v2-services.json"))
         .expect("frozen service inventory");
+    let mut assigned_modules = BTreeSet::new();
 
     for component in COMPONENTS {
-        if let Some(package) = component.service_package {
+        let Some(module) = component.service_module else {
             assert!(
-                service_inventory.contains(&format!(r#""package": "{package}""#)),
-                "{} invents service package {package}",
+                component.service_package.is_none()
+                    && component.endpoint_purpose.is_none()
+                    && component.endpoint_role.is_none(),
+                "{} copies service keys without an actual module",
                 component.id
             );
+            continue;
+        };
+        assert!(
+            assigned_modules.insert(module.path),
+            "service module {} has multiple owners",
+            module.path
+        );
+        assert_eq!(owner_for(module.path), vec![component.id]);
+
+        let package = public_string_const(&root, &module, module.package_const);
+        let purpose = public_string_const(&root, &module, module.purpose_const);
+        let role = public_string_const(&root, &module, module.role_const);
+        assert_eq!(Some(package.as_str()), component.service_package);
+        assert_eq!(Some(purpose.as_str()), component.endpoint_purpose);
+        assert_eq!(Some(role.as_str()), component.endpoint_role);
+        assert!(
+            service_inventory.contains(&format!(r#""package": "{package}""#)),
+            "{} actual module invents service package {package}",
+            component.id
+        );
+        for (kind, value) in [("package", package), ("purpose", purpose), ("role", role)] {
             assert!(
-                session_contract.contains(&format!("\"{package}\"")),
-                "{} package is absent from ComponentSession",
-                component.id
-            );
-        }
-        if let Some(purpose) = component.endpoint_purpose {
-            assert!(
-                session_contract.contains(&format!("\"{purpose}\"")),
-                "{} invents endpoint purpose {purpose}",
-                component.id
-            );
-        }
-        if let Some(role) = component.endpoint_role {
-            assert!(
-                session_contract.contains(&format!("\"{role}\"")),
-                "{} invents endpoint role {role}",
+                session_contract.contains(&format!("\"{value}\"")),
+                "{} actual {kind} {value} is absent from ComponentSession",
                 component.id
             );
         }
     }
+
+    let mut files = BTreeSet::new();
+    for prefix in OWNED_PACKAGE_PREFIXES {
+        collect_files(&root, Path::new(prefix), &mut files);
+    }
+    let discovered_modules = files
+        .into_iter()
+        .filter(|path| path.contains("/src/services/") && path.ends_with("/mod.rs"))
+        .filter(|path| {
+            let source =
+                fs::read_to_string(root.join(path)).expect("read discovered service module");
+            source.contains("pub const SERVICE_PACKAGE: &str")
+                || source.contains("pub const PARENT_SERVICE_PACKAGE: &str")
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        discovered_modules,
+        assigned_modules
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>(),
+        "every public service composition module must be parsed and owned"
+    );
 }
 
 #[test]
@@ -900,6 +1301,15 @@ fn frozen_parent_blockers_are_external_to_local_ownership() {
         .map(|blocker| (blocker.id, blocker))
         .collect::<BTreeMap<_, _>>();
     assert_eq!(blockers.len(), BLOCKERS.len(), "duplicate blocker id");
+    assert_eq!(
+        blockers["activation-bootstrap"].paths,
+        [
+            "packages/d2b-priv-broker/src/live_handlers.rs",
+            "packages/d2b-priv-broker/src/ops/exec_reconcile.rs",
+            "packages/d2b-priv-broker/src/ops/store_view_farm.rs",
+            "packages/d2b-host/src/bin/d2b-activation-helper.rs",
+        ]
+    );
 
     for blocker in BLOCKERS {
         assert!(
@@ -957,6 +1367,66 @@ fn frozen_contract_dependencies_are_known_and_external() {
             );
         }
     }
+}
+
+fn git_output(root: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .current_dir(root)
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
+        .args(["-c", "diff.ignoreSubmodules=none"])
+        .args(args)
+        .output()
+        .expect("execute git");
+    assert!(
+        output.status.success(),
+        "git command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .expect("git output is UTF-8")
+        .trim()
+        .to_owned()
+}
+
+#[test]
+fn committed_diff_gate_covers_code_tests_docs_and_examples() {
+    let root = repository_root();
+    assert_eq!(
+        git_output(&root, &["merge-base", BASELINE_ROOT, "HEAD"]),
+        BASELINE_ROOT
+    );
+    let changed = git_output(
+        &root,
+        &[
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "--ignore-submodules=none",
+            &format!("{BASELINE_ROOT}..HEAD"),
+            "--",
+        ],
+    );
+    assert!(!changed.is_empty(), "edge preparation diff is empty");
+    for path in changed.lines() {
+        assert_eq!(
+            owner_for(path).len(),
+            1,
+            "changed path {path} must have one component or prep-integrator owner"
+        );
+    }
+
+    assert_eq!(
+        owner_for("packages/d2b-userd/tests/user/future_service.rs"),
+        vec!["user-secrets"]
+    );
+    assert_eq!(
+        owner_for("docs/reference/clipboard-policy.md"),
+        vec!["clipboard-control"]
+    );
+    assert!(
+        owner_for("examples/graphics-workstation/configuration.nix").is_empty(),
+        "examples remain foreign declarative-host ownership"
+    );
 }
 
 #[test]
@@ -1017,4 +1487,17 @@ fn legacy_ipc_inventory_has_no_specialized_exception() {
         "wayland-runtime-readiness",
     ]);
     assert_eq!(ids, required);
+    assert_eq!(
+        LEGACY_BOUNDARIES
+            .iter()
+            .find(|boundary| boundary.id == "activation-argv-and-stdin")
+            .expect("activation boundary")
+            .call_graph,
+        [
+            "packages/d2b-priv-broker/src/live_handlers.rs",
+            "packages/d2b-priv-broker/src/ops/exec_reconcile.rs",
+            "packages/d2b-priv-broker/src/ops/store_view_farm.rs",
+            "packages/d2b-host/src/bin/d2b-activation-helper.rs",
+        ]
+    );
 }
