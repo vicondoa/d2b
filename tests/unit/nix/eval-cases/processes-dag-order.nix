@@ -13,32 +13,13 @@ let
       flake.nixosModules.default
       shared.baseModule
       ({ lib, ... }: {
-        d2b.realms.local-root = {
-          path = "local-root";
-          placement = "host-local";
-        };
-        d2b.realms.work = {
-          parent = "local-root";
-          path = "work.local-root";
-          placement = "host-local";
-          allowedUsers = [ "alice" ];
-          network = {
-            mode = "declared";
-            lanSubnet = "10.20.0.0/24";
-            uplinkSubnet = "192.0.2.0/30";
-          };
-          providers.runtime = {
-            type = "runtime";
-            implementationId = "cloud-hypervisor";
-          };
-          workloads.dev = {
-            provider = "runtime";
-            config = {
-              networking.hostName = lib.mkDefault "dev";
-              users.users.alice = {
-                isNormalUser = true;
-                uid = 1000;
-              };
+        d2b.realms.work.workloads.dev = {
+          providerRefs.runtime = "runtime";
+          config = {
+            networking.hostName = lib.mkDefault "dev";
+            users.users.alice = {
+              isNormalUser = true;
+              uid = 1000;
             };
           };
         };

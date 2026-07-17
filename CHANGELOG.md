@@ -207,6 +207,8 @@ deprecations ship one minor release before removal.
   logs opened through a separate idempotent RPC.
 - Kept the allocator ledger generation helper available only with its
   test-support consumers so strict production builds remain warning-free.
+- Aligned guest, confinement, process-identity, and runner contract coverage
+  with canonical realm/workload/role rows and realm-controller supervision.
 - Parsed the evaluated delivery wrapper with the maintained Tree-sitter Bash
   grammar, requiring an exact AST shape and rejecting quote, escape,
   concatenation, substitution, array, inactive-command, and wrong-target decoys.
