@@ -112,6 +112,16 @@ inputs to the runtime owned by the local-root controller and broker; booleans in
 the records state that binding, spawning, supervision, adoption, and lease
 execution have not occurred.
 
+The private `allocator.json.processLaunch` projection pairs the controller and
+broker for each child realm under one canonical controller-generation key.
+Every child row binds its numeric principal, listener, cgroup, namespace,
+resource, and lease references with SHA-256 digests and fail-closed spawn
+flags. References are opaque and bounded; the executable reference is the only
+path-bearing launch field, and no argv or environment is reconstructed from
+ambient host state. Host-mediated device lease requests from the normalized
+device index are included in `resourceRequests` and referenced only by the
+owning realm broker's bounded resource and lease authority.
+
 ## Immutable host-file boundary
 
 `host-file-partition` is a typed resource kind, not permission for a
