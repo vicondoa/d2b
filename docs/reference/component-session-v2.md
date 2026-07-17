@@ -48,18 +48,32 @@ The base credential is exactly 156 bytes:
 | 124 | 32 | guest X25519 static public key |
 
 When bootstrap is present, a two-byte block length follows the base credential.
-The canonical current block is 90 bytes: a two-byte operation-ID length, the
-16-byte operation ID, 32-byte replay nonce, eight-byte expiry, and 32-byte PSK.
+The canonical current block is 98 bytes:
+
+| Offset | Size | Value |
+| ---: | ---: | --- |
+| 156 | 2 | bootstrap block length, `98` |
+| 158 | 2 | operation-ID length, `16` |
+| 160 | 16 | operation ID |
+| 176 | 32 | replay nonce |
+| 208 | 8 | nonzero issue time in Unix milliseconds |
+| 216 | 8 | expiry time in Unix milliseconds |
+| 224 | 32 | bootstrap PSK |
+
 The decoder applies the shared 64-byte operation-ID ceiling before constructing
-the stricter current `OperationId`. The canonical total is therefore 248 bytes;
-the absolute defensive maximum is 296 bytes.
+the stricter current `OperationId`. The canonical total is therefore 256 bytes;
+the absolute defensive maximum is 304 bytes. Expiry must be later than issue
+time and the checked lifetime is capped at five minutes. Admission before issue
+time or at/after expiry fails closed without timestamp arithmetic.
 
 Decode rejects truncation at every byte, trailing bytes, unknown schema or
 codec versions, unknown flags, nonzero reserved fields, inconsistent or
 over-limit lengths, generation zero, zero bindings/digests/public keys/nonces/
-expiry/PSK, and malformed operation IDs. No legacy magic or alternate layout is
-accepted. Secret Debug output is fully redacted, and the bootstrap PSK is
-zeroed on drop.
+issue time/expiry/PSK, invalid or overflowing lifetimes, and malformed operation
+IDs. No legacy magic or alternate layout is accepted. Secret Debug output is
+fully redacted. PSKs are held in `Zeroizing<[u8; 32]>`, decode temporaries wipe
+on success and error, and encoded credentials are returned as
+`Zeroizing<Vec<u8>>` so the broker's output buffer wipes on release.
 
 ## Handshake contract
 

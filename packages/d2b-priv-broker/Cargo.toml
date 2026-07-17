@@ -41,7 +41,7 @@ fake-backends = ["d2b-host/fake-backends"]
 
 
 [dependencies]
-d2b-contracts = { workspace = true, features = ["broker", "guest"] }
+d2b-contracts = { workspace = true, features = ["broker", "guest", "v2-component-session"] }
 d2b-core = { workspace = true }
 d2b-host = { workspace = true }
 d2b-realm-core = { workspace = true }

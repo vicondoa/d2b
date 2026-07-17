@@ -180,6 +180,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Bounded bootstrap credentials to an explicit issue/expiry window, rejected
+  future or effectively non-expiring PSKs, and moved PSK plus encoded credential
+  storage to zeroizing buffers on success and error paths.
 - Isolated CLI daemon integration tests from deployed host realm, provider, and
   bundle artifacts by binding every runtime input to test-owned paths.
 - Kept guest-service validators inside their versioned service rail and updated

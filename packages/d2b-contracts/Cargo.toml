@@ -37,7 +37,7 @@ public = [
 cli-output = ["public"]
 unsafe-local = ["public"]
 v2-identity = ["dep:schemars", "dep:serde", "dep:sha2"]
-v2-component-session = ["v2-identity", "dep:schemars", "dep:serde"]
+v2-component-session = ["v2-identity", "dep:schemars", "dep:serde", "dep:zeroize"]
 v2-provider = ["v2-component-session", "dep:schemars", "dep:serde"]
 v2-state = ["v2-identity", "dep:schemars", "dep:serde"]
 v2-services = [
@@ -72,6 +72,7 @@ schemars = { workspace = true, optional = true }
 protobuf = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 ttrpc = { workspace = true, features = ["async"], optional = true }
+zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json.workspace = true

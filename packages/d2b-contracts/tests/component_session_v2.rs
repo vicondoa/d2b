@@ -336,6 +336,7 @@ fn guest_session_credential(with_bootstrap: bool) -> GuestSessionCredentialV1 {
                 replay_nonce: [0x77; 32],
                 expires_at_unix_ms: 9_000,
             },
+            1_000,
             [0x88; 32],
         )
         .unwrap()
@@ -385,9 +386,10 @@ fn guest_session_credential_has_canonical_round_trips_and_fixed_vectors() {
     expected.extend_from_slice(&16_u16.to_be_bytes());
     expected.extend_from_slice(&[0x66; 16]);
     expected.extend_from_slice(&[0x77; 32]);
+    expected.extend_from_slice(&1_000_u64.to_be_bytes());
     expected.extend_from_slice(&9_000_u64.to_be_bytes());
     expected.extend_from_slice(&[0x88; 32]);
-    assert_eq!(encoded, expected);
+    assert_eq!(encoded.as_slice(), expected.as_slice());
     assert_eq!(
         encoded.len(),
         GUEST_SESSION_CREDENTIAL_V1_WITH_BOOTSTRAP_BYTES
@@ -397,6 +399,7 @@ fn guest_session_credential_has_canonical_round_trips_and_fixed_vectors() {
     let bootstrap = decoded.bootstrap().unwrap();
     assert_eq!(bootstrap.binding().operation_id.as_bytes(), &[0x66; 16]);
     assert_eq!(bootstrap.binding().replay_nonce, [0x77; 32]);
+    assert_eq!(bootstrap.issued_at_unix_ms(), 1_000);
     assert_eq!(bootstrap.binding().expires_at_unix_ms, 9_000);
     assert_eq!(bootstrap.expose_psk(), &[0x88; 32]);
 }
@@ -465,8 +468,9 @@ fn guest_session_credential_rejects_every_noncanonical_shape() {
         (92..124, GuestSessionCredentialError::InvalidBinding),
         (124..156, GuestSessionCredentialError::InvalidPublicKey),
         (176..208, GuestSessionCredentialError::InvalidBinding),
-        (208..216, GuestSessionCredentialError::InvalidDeadline),
-        (216..248, GuestSessionCredentialError::InvalidPsk),
+        (208..216, GuestSessionCredentialError::InvalidIssuedAt),
+        (216..224, GuestSessionCredentialError::InvalidDeadline),
+        (224..256, GuestSessionCredentialError::InvalidPsk),
     ] {
         let mut malformed = encoded.clone();
         malformed[range].fill(0);
@@ -475,6 +479,84 @@ fn guest_session_credential_rejects_every_noncanonical_shape() {
             expected
         );
     }
+
+    let mut excessive_lifetime = encoded.clone();
+    excessive_lifetime[208..216].copy_from_slice(&1_u64.to_be_bytes());
+    excessive_lifetime[216..224]
+        .copy_from_slice(&(MAX_GUEST_BOOTSTRAP_CREDENTIAL_LIFETIME_MS + 2).to_be_bytes());
+    assert_eq!(
+        GuestSessionCredentialV1::decode(&excessive_lifetime).unwrap_err(),
+        GuestSessionCredentialError::LifetimeExceeded
+    );
+
+    let mut reversed_lifetime = encoded;
+    reversed_lifetime[208..216].copy_from_slice(&u64::MAX.to_be_bytes());
+    reversed_lifetime[216..224].copy_from_slice(&1_u64.to_be_bytes());
+    assert_eq!(
+        GuestSessionCredentialV1::decode(&reversed_lifetime).unwrap_err(),
+        GuestSessionCredentialError::InvalidDeadline
+    );
+}
+
+fn bootstrap_credential_at(
+    issued_at_unix_ms: u64,
+    expires_at_unix_ms: u64,
+) -> Result<GuestBootstrapCredentialV1, GuestSessionCredentialError> {
+    GuestBootstrapCredentialV1::new(
+        BootstrapPskBinding {
+            operation_id: OperationId::new(vec![0x66; 16]).unwrap(),
+            replay_nonce: [0x77; 32],
+            expires_at_unix_ms,
+        },
+        issued_at_unix_ms,
+        [0x88; 32],
+    )
+}
+
+#[test]
+fn guest_bootstrap_credential_lifetime_and_admission_are_bounded() {
+    let issued = 1_000;
+    let expires = issued + MAX_GUEST_BOOTSTRAP_CREDENTIAL_LIFETIME_MS;
+    let maximum = bootstrap_credential_at(issued, expires).unwrap();
+    maximum.admit(issued).unwrap();
+    maximum.admit(expires - 1).unwrap();
+    assert_eq!(
+        maximum.admit(issued - 1),
+        Err(GuestSessionCredentialError::NotYetValid)
+    );
+    assert_eq!(
+        maximum.admit(expires),
+        Err(GuestSessionCredentialError::Expired)
+    );
+
+    assert!(matches!(
+        bootstrap_credential_at(0, 1),
+        Err(GuestSessionCredentialError::InvalidIssuedAt)
+    ));
+    assert!(matches!(
+        bootstrap_credential_at(issued, issued),
+        Err(GuestSessionCredentialError::InvalidDeadline)
+    ));
+    assert!(matches!(
+        bootstrap_credential_at(u64::MAX, 1),
+        Err(GuestSessionCredentialError::InvalidDeadline)
+    ));
+    assert!(matches!(
+        bootstrap_credential_at(
+            issued,
+            issued + MAX_GUEST_BOOTSTRAP_CREDENTIAL_LIFETIME_MS + 1
+        ),
+        Err(GuestSessionCredentialError::LifetimeExceeded)
+    ));
+
+    let near_max_issued = u64::MAX - MAX_GUEST_BOOTSTRAP_CREDENTIAL_LIFETIME_MS;
+    let near_max = bootstrap_credential_at(near_max_issued, u64::MAX).unwrap();
+    near_max.admit(near_max_issued).unwrap();
+    near_max.admit(u64::MAX - 1).unwrap();
+    assert_eq!(
+        near_max.admit(u64::MAX),
+        Err(GuestSessionCredentialError::Expired)
+    );
 }
 
 #[test]

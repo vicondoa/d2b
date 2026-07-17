@@ -439,6 +439,15 @@
     },
     {
       "consumer": "d2b-guestd",
+      "dependency": "d2b-contracts",
+      "default_features": false,
+      "features": [
+        "guest",
+        "v2-component-session"
+      ]
+    },
+    {
+      "consumer": "d2b-guestd",
       "dependency": "d2b-session",
       "default_features": false,
       "features": []
@@ -455,6 +464,16 @@
         "signal",
         "sync",
         "time"
+      ]
+    },
+    {
+      "consumer": "d2b-priv-broker",
+      "dependency": "d2b-contracts",
+      "default_features": false,
+      "features": [
+        "broker",
+        "guest",
+        "v2-component-session"
       ]
     }
   ],
