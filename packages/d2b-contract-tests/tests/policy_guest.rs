@@ -155,16 +155,26 @@ fn retired_guest_control_nongoals_are_now_shipped_goals() {
 // source.
 #[test]
 fn guest_control_auth_core_token_share_contract_present() {
-    // Host-side per-VM guest-control credential share: read-only `d2b-gctl`
-    // virtiofs share mounted at the host-control mount point.
-    let host = read_repo_file("nixos-modules/host.nix");
+    // Every normalized Cloud Hypervisor workload receives the read-only
+    // guest-control key share.
+    let workloads = read_repo_file("nixos-modules/workload-process-rows.nix");
     assert!(
-        host.contains(r#"tag = "d2b-gctl""#),
-        "host.nix must declare the d2b-gctl guest-control credential share"
+        workloads.contains(r#"tag = "d2b-gctl""#)
+            && workloads.contains(r#"mountPoint = "/run/d2b-guest-control-host""#)
+            && workloads.contains("readOnly = true;"),
+        "workload-process-rows.nix must declare the read-only d2b-gctl share"
     );
+
+    // Token creation and repair are realm-broker-owned and addressed through
+    // canonical workload/role/resource ids, never a caller-provided host path.
+    let host_token = read_repo_file("nixos-modules/guest-control-host.nix");
     assert!(
-        host.contains(r#"mountPoint = "/run/d2b-guest-control-host""#),
-        "host.nix must mount the guest-control share at /run/d2b-guest-control-host"
+        host_token.contains("options.d2b._workloadGuestControlRows")
+            && host_token.contains(r#"creator = "realm-broker""#)
+            && host_token.contains(r#"repairOwner = "realm-broker""#)
+            && host_token.contains("materializedByHostActivation = false;")
+            && host_token.contains(r#""d2b-gctlfs-${row.workloadId}""#),
+        "guest-control-host.nix must emit realm-broker-owned canonical token rows"
     );
 
     // guestd service LoadCredential delivering the token over the share.
@@ -178,21 +188,9 @@ fn guest_control_auth_core_token_share_contract_present() {
         "guest-control.nix must LoadCredential guest_control_token from the host share"
     );
 
-    // Operator-facing auth.tokenFile option + the absolute-path / outside
-    // /nix/store validation the eval's negative cases cover.
-    let host_token = read_repo_file("nixos-modules/guest-control-host.nix");
     assert!(
-        host_token.contains("vm.guest.control.auth.tokenFile"),
-        "guest-control-host.nix must wire vm.guest.control.auth.tokenFile"
-    );
-    assert!(
-        host_token.contains(r#"lib.hasPrefix "/nix/store/" vm.guest.control.auth.tokenFile"#),
-        "guest-control-host.nix must reject tokenFile paths inside /nix/store"
-    );
-    let options = read_repo_file("nixos-modules/options-vms.nix");
-    assert!(
-        options.contains("auth.tokenFile = lib.mkOption"),
-        "options-vms.nix must declare the auth.tokenFile option"
+        !host_token.contains("auth.tokenFile"),
+        "guest-control token rows must not accept a caller-controlled token path"
     );
 }
 
