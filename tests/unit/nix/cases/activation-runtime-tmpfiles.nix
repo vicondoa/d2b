@@ -10,6 +10,7 @@ let
     environment.etc."machine-id".text = "00000000000000000000000000000000";
     system.stateVersion = "25.11";
     users.users.alice = { isNormalUser = true; uid = 1000; };
+    d2b.acceptDestructiveV2Cutover = true;
     d2b.site = {
       waylandUser = "alice";
       launcherUsers = [ "alice" ];
@@ -17,9 +18,17 @@ let
     };
     d2b.realms.home = {
       allowedUsers = [ "alice" ];
+      providers.runtime = {
+        type = "runtime";
+        implementationId = "cloud-hypervisor";
+      };
       workloads.corp = {
-        kind = "local-vm";
+        provider = "runtime";
         launcher.enable = true;
+        config = {
+          networking.hostName = "corp";
+          users.users.alice = { isNormalUser = true; uid = 1000; };
+        };
       };
     };
   };
