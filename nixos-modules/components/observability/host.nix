@@ -14,24 +14,30 @@
 
 let
   cfg = config.d2b.observability;
+  rows = import ../../realm-observability-rows.nix {
+    inherit config lib;
+  };
   hostCfg = cfg.host;
   identityName = hostCfg.identityName;
   scrapeJournal = hostCfg.scrapeJournal;
   otlpIngest = hostCfg.otlpIngest.enable;
   clientGroup = hostCfg.otlpIngest.clientGroup;
 
-  otelRuntimeDir = "/run/d2b/otel";
-  hostEgressSocket = "${otelRuntimeDir}/host-egress.sock";
+  hostEgressSocket = rows.endpoints.hostEgress.path;
+  otelRuntimeDir = builtins.dirOf hostEgressSocket;
   # OTLP ingest lives in its own subdirectory so the collector's write
   # authority for bind(2) cannot reach host-egress.sock — unlink/rename
   # authority is parent-directory scoped (ADR 0033).
-  otelIngestDir = "${otelRuntimeDir}/ingest";
-  hostOtlpSocket = "${otelIngestDir}/host-otlp.sock";
+  hostOtlpSocket = rows.endpoints.hostIngest.path;
+  otelIngestDir = builtins.dirOf hostOtlpSocket;
 
   hostCollectorMetricsPort = 12345;
   journaldStorageDir = "/var/lib/d2b-host-otel-collector/journald";
 
-  storeSyncExportDir = "${config.d2b.site.stateDir}/observability/store-sync";
+  storeSyncExportDir =
+    (builtins.head (lib.filter
+      (row: row.kind == "bounded-projection")
+      rows.paths)).path;
   storeSyncExportGlob = "${storeSyncExportDir}/store-sync-*.jsonl";
 
   ingestGroup = if clientGroup == null then "d2b-host-otel-collector" else clientGroup;
@@ -74,14 +80,8 @@ let
       ${pkgs.acl}/bin/setfacl -m u:d2b-host-otel-collector:rw,m::rw ${hostEgressSocket}
     fi
 
-    state_dir=${lib.escapeShellArg config.d2b.site.stateDir}
-    obs_dir="$state_dir/observability"
     export_dir=${lib.escapeShellArg storeSyncExportDir}
-    if [ -d "$state_dir" ]; then
-      [ -d "$obs_dir" ] || ${pkgs.coreutils}/bin/install -d -m 0700 -o root -g root "$obs_dir"
-      [ -d "$export_dir" ] || ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g root "$export_dir"
-      ${pkgs.acl}/bin/setfacl -m "u:d2b-host-otel-collector:--x" "$state_dir" 2>/dev/null || true
-      ${pkgs.acl}/bin/setfacl -m "u:d2b-host-otel-collector:--x" "$obs_dir" 2>/dev/null || true
+    if [ -d "$export_dir" ]; then
       ${pkgs.acl}/bin/setfacl -m "u:d2b-host-otel-collector:r-x" "$export_dir" 2>/dev/null || true
       ${pkgs.acl}/bin/setfacl -d -m "u:d2b-host-otel-collector:r--" "$export_dir" 2>/dev/null || true
     fi
