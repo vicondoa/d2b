@@ -6,7 +6,7 @@ rust-version.workspace = true
 repository.workspace = true
 publish = false
 license.workspace = true
-description = "Host-session clipboard authority daemon for d2b"
+description = "Authenticated bounded clipboard services for d2b"
 
 [lints]
 workspace = true
