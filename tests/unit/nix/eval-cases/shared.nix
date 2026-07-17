@@ -219,7 +219,7 @@ let
           implementationId = "cloud-hypervisor";
         };
         workloads.corp-vm = {
-          provider = "runtime";
+          providerRefs.runtime = "runtime";
           config = {
             networking.hostName = lib.mkDefault "corp-vm";
             users.users.alice = {

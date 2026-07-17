@@ -1,692 +1,303 @@
-# Consolidated case table for the legacy
-# `tests/assertions-eval.sh` gate. ONE `nix-instantiate --eval --strict
-# --json` of this file returns the per-case `failingMessages` /
-# `evalSucceeded` map; the shell wrapper then asserts each case's
-# expected substring against either the failing-assertion message list
-# (Bucket A, the common path) or the captured throw signal
-# (Bucket B, eval-throws — fallback to a focused per-case re-eval).
-#
-# Replaces 31 separate per-case `nix-instantiate --eval --strict`
-# invocations in the legacy bash gate. See `shared.nix` for the
-# evaluator contract.
+# Realm-native eval-time assertion corpus.
 { flakeRoot ? null, nixpkgs ? null, d2bModule ? null }:
 
 let
   shared = import ./shared.nix { inherit flakeRoot nixpkgs d2bModule; };
+
+  desktopProviders = {
+    display = {
+      type = "display";
+      implementationId = "wayland";
+    };
+    devices = {
+      type = "device";
+      implementationId = "host-mediated";
+    };
+  };
+
+  desktopBindings = {
+    display = "display";
+    device = "devices";
+  };
 in
 shared.mkBatch {
   cases = {
-    # H10/1 — private-key marker in userAuthorizedKeys must be rejected.
-    "private-key-in-authorized-keys" = {
-      expectedSubstring = "does not look like a valid SSH public key";
-      override = (
-        { ... }:
-        {
-          d2b.site.userAuthorizedKeys = [
-            "-----BEGIN OPENSSH PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEILa...\n-----END OPENSSH PRIVATE KEY-----"
-          ];
-        }
-      );
+    "destructive-cutover-acknowledgement-required" = {
+      expectedSubstring = "d2b.acceptDestructiveV2Cutover must be set to true";
+      override = { lib, ... }: {
+        d2b.acceptDestructiveV2Cutover = lib.mkForce false;
+      };
     };
 
-    # H10/2 — graphics VM declared but waylandUser = null.
     "graphics-without-wayland-user" = {
-      expectedSubstring = "d2b.site.waylandUser";
-      override = (
-        { ... }:
-        {
-          d2b.site.waylandUser = null;
-          d2b.vms.corp-vm.graphics.enable = true;
-        }
-      );
+      expectedSubstring = "requires d2b.site.waylandUser";
+      override = { ... }: {
+        d2b.site.waylandUser = null;
+        d2b.realms.work.providers = desktopProviders;
+        d2b.realms.work.workloads.corp-vm = {
+          providerRefs = desktopBindings;
+          graphics.enable = true;
+        };
+      };
     };
 
-    # H10/3 — waylandUser names a user that does not exist.
     "wayland-user-missing" = {
-      expectedSubstring = "config.users.users.ghost is not declared";
-      override = (
-        { lib, ... }:
-        {
-          d2b.site.waylandUser = lib.mkForce "ghost";
-        }
-      );
+      expectedSubstring = "requires its d2b.site.waylandUser to name a declared host user";
+      override = { lib, ... }: {
+        d2b.site.waylandUser = lib.mkForce "ghost";
+        d2b.realms.work.providers = desktopProviders;
+        d2b.realms.work.workloads.corp-vm = {
+          providerRefs = desktopBindings;
+          graphics.enable = true;
+        };
+      };
     };
 
-    # Naming surface — VM names must start with a letter and only
-    # use lowercase alnum + '-'.
-    "vm-name-invalid" = {
-      expectedSubstring = "VM name must match the regex ^[a-z][a-z0-9-]*$";
-      override = (
-        { ... }:
-        {
-          d2b.vms = {
-            "42web" = {
-              enable = true;
-              env = "work";
-              index = 11;
-              ssh.user = "alice";
-              config = {
-                networking.hostName = "42web";
-                users.users.alice = {
-                  isNormalUser = true;
-                  uid = 1000;
-                };
-              };
-            };
-          };
-        }
-      );
+    "realm-name-invalid" = {
+      expectedSubstring = "Enabled d2b.realms attribute names must be canonical labels";
+      override = { ... }: {
+        d2b.realms."42work".enable = true;
+      };
     };
 
-    # Naming surface — 'launcher' is reserved.
-    "vm-name-reserved-launcher" = {
-      expectedSubstring = "'launcher' is reserved";
-      override = (
-        { ... }:
-        {
-          d2b.vms = {
-            launcher = {
-              enable = true;
-              env = "work";
-              index = 11;
-              ssh.user = "alice";
-              config = {
-                networking.hostName = "launcher";
-                users.users.alice = {
-                  isNormalUser = true;
-                  uid = 1000;
-                };
-              };
-            };
-          };
-        }
-      );
+    "realm-name-reserved" = {
+      expectedSubstring = "reserved target labels all or d2b";
+      override = { ... }: {
+        d2b.realms.all.enable = true;
+      };
     };
 
-    # Naming surface — user-declared VMs may not consume sys-* prefix.
-    "vm-name-reserved-sys-prefix" = {
-      expectedSubstring = "names starting with 'sys-' are reserved";
-      override = (
-        { ... }:
-        {
-          d2b.vms = {
-            "sys-shadow" = {
-              enable = true;
-              env = "work";
-              index = 11;
-              ssh.user = "alice";
-              config = {
-                networking.hostName = "sys-shadow";
-                users.users.alice = {
-                  isNormalUser = true;
-                  uid = 1000;
-                };
-              };
-            };
-          };
-        }
-      );
+    "workload-name-invalid" = {
+      expectedSubstring = "Workload attribute names in d2b.realms.work must be canonical labels";
+      override = { ... }: {
+        d2b.realms.work.workloads."42desktop".providerRefs.runtime = "runtime";
+      };
     };
 
-    # Naming surface — env names share the same leading-letter rule.
-    "env-name-invalid" = {
-      expectedSubstring = "env name must match the regex ^[a-z][a-z0-9-]*$";
-      override = (
-        { lib, ... }:
-        {
-          d2b.envs = {
-            "9corp" = {
-              lanSubnet = "10.99.0.0/24";
-              uplinkSubnet = "198.51.100.0/30";
-            };
-          };
-          d2b.vms.corp-vm.env = lib.mkForce "9corp";
-        }
-      );
+    "workload-runtime-binding-required" = {
+      expectedSubstring = "must bind providerRefs.runtime explicitly";
+      override = { lib, ... }: {
+        d2b.realms.work.workloads.corp-vm.providerRefs = lib.mkForce { };
+      };
     };
 
-    # Network option-schema — env names must fit the IFNAMSIZ budget.
-    "env-name-too-long" = {
-      expectedSubstring = "env name must be at most 8 characters";
-      override = (
-        { lib, ... }:
-        {
-          d2b.envs = {
-            corpwest1 = {
-              lanSubnet = "10.99.0.0/24";
-              uplinkSubnet = "198.51.100.0/30";
-            };
-          };
-          d2b.vms.corp-vm.env = lib.mkForce "corpwest1";
-        }
-      );
+    "workload-provider-binding-must-resolve" = {
+      expectedSubstring = "selects undeclared device provider missing";
+      override = { ... }: {
+        d2b.realms.work.workloads.corp-vm.providerRefs.device = "missing";
+      };
     };
 
-    # Network option-schema — workload env references must point at
-    # a declared env.
-    "vm-env-missing" = {
-      expectedSubstring = "but d2b.envs has no such ENABLED env";
-      override = (
-        { lib, ... }:
-        {
-          d2b.vms.corp-vm.env = lib.mkForce "ghost";
-        }
-      );
+    "graphics-requires-device-provider-binding" = {
+      expectedSubstring = "require an explicit device provider binding";
+      override = { ... }: {
+        d2b.realms.work.providers.display = {
+          type = "display";
+          implementationId = "wayland";
+        };
+        d2b.realms.work.workloads.corp-vm = {
+          providerRefs.display = "display";
+          graphics.enable = true;
+        };
+      };
     };
 
-    # Network option-schema — workload env references may not target
-    # a disabled env.
-    "vm-env-disabled" = {
-      expectedSubstring = "but d2b.envs has no such ENABLED env";
-      override = (
-        { lib, ... }:
-        {
-          d2b.envs.work.enable = lib.mkForce false;
-          d2b.vms.corp-vm.env = lib.mkForce "work";
-        }
-      );
+    "audio-requires-audio-provider-binding" = {
+      expectedSubstring = "audio requires an explicit audio provider binding";
+      override = { ... }: {
+        d2b.realms.work.workloads.corp-vm.audio.enable = true;
+      };
     };
 
-    # Network option-schema — workload indices must be unique within
-    # an env.
-    "vm-index-duplicate" = {
-      expectedSubstring = "Each workload VM in an env needs a unique `index`";
-      override = (
-        { ... }:
-        {
-          d2b.vms.other-vm = {
-            enable = true;
-            env = "work";
-            index = 10;
-            ssh.user = "alice";
-            config = {
-              networking.hostName = "other-vm";
-              users.users.alice = {
-                isNormalUser = true;
-                uid = 1000;
-              };
-            };
-          };
-        }
-      );
+    "wayland-requires-display-provider-binding" = {
+      expectedSubstring = "Wayland display requires an explicit display provider binding";
+      override = { ... }: {
+        d2b.realms.work.workloads.corp-vm.display.wayland = true;
+      };
     };
 
-    # Network option-schema — staticIp and env/index wiring are
-    # mutually exclusive.
-    "static-ip-and-env-mutually-exclusive" = {
-      expectedSubstring = "set EITHER `env`/`index` OR the deprecated `staticIp`, not both";
-      override = (
-        { lib, ... }:
-        {
-          d2b.vms.corp-vm.staticIp = lib.mkForce "10.20.0.50";
-        }
-      );
-    };
-
-    # H10/4 — lanSubnet must be /24.
     "lansubnet-wrong-mask" = {
-      expectedSubstring = "must be a /24";
-      override = (
-        { lib, ... }:
-        {
-          d2b.envs.work.lanSubnet = lib.mkForce "10.99.0.0/23";
-        }
-      );
+      expectedSubstring = "network.lanSubnet must be an IPv4 /24";
+      override = { lib, ... }: {
+        d2b.realms.work.network.lanSubnet = lib.mkForce "10.99.0.0/23";
+      };
     };
 
-    # H10/5 — uplinkSubnet must be /30.
     "uplinksubnet-wrong-mask" = {
-      expectedSubstring = "must be a /30";
-      override = (
-        { lib, ... }:
-        {
-          d2b.envs.work.uplinkSubnet = lib.mkForce "192.0.2.0/29";
-        }
-      );
+      expectedSubstring = "network.uplinkSubnet must be an IPv4 /30";
+      override = { lib, ... }: {
+        d2b.realms.work.network.uplinkSubnet = lib.mkForce "192.0.2.0/29";
+      };
     };
 
-    # H10/6 — lanSubnet network address must end in .0.
     "lansubnet-nonzero-host" = {
-      expectedSubstring = "ending in '.0'";
-      override = (
-        { lib, ... }:
-        {
-          d2b.envs.work.lanSubnet = lib.mkForce "10.99.0.5/24";
-        }
-      );
+      expectedSubstring = "network.lanSubnet must be an IPv4 /24 network ending in .0";
+      override = { lib, ... }: {
+        d2b.realms.work.network.lanSubnet = lib.mkForce "10.99.0.5/24";
+      };
     };
 
-    # H10/7 — two envs whose CIDRs OVERLAP.
-    "overlap-containment" = {
-      expectedSubstring = "CIDR overlap";
-      override = (
-        { ... }:
-        {
-          d2b.envs.other = {
-            lanSubnet = "10.20.0.0/16";
+    "realm-network-overlap" = {
+      expectedSubstring = "d2b realm networks must use disjoint CIDRs";
+      override = { ... }: {
+        d2b.realms.other = {
+          path = "other";
+          placement = "host-local";
+          broker = {
+            enable = true;
+            hostMutation = true;
+          };
+          network = {
+            mode = "declared";
+            lanSubnet = "10.20.0.0/24";
             uplinkSubnet = "198.51.100.0/30";
           };
-        }
-      );
+        };
+      };
     };
 
-    # H10/8 — env subnet overlaps with a hostLanCidrs entry.
-    "env-vs-host-overlap" = {
-      expectedSubstring = "overlaps with `d2b.hostLanCidrs`";
-      override = (
-        { ... }:
-        {
-          d2b.hostLanCidrs = [ "10.20.0.0/16" ];
-        }
-      );
-    };
-
-    # Wave 3 — stateDir is reserved but not fully threaded.
-    "state-dir-override-rejected" = {
-      expectedSubstring = "d2b.site.stateDir is reserved but not fully threaded yet";
-      override = (
-        { lib, ... }:
-        {
-          d2b.site.stateDir = lib.mkForce "/persist/d2b";
-        }
-      );
-    };
-
-    "store-state-dir-override-rejected" = {
-      expectedSubstring = "d2b.store.stateDir is reserved but not fully threaded yet";
-      override = (
-        { lib, ... }:
-        {
-          d2b.store.stateDir = lib.mkForce "/persist/d2b/vms";
-        }
-      );
+    "realm-network-host-overlap" = {
+      expectedSubstring = "must be valid and disjoint from realm network";
+      override = { ... }: {
+        d2b.hostLanCidrs = [ "10.20.0.0/16" ];
+      };
     };
 
     "allow-east-west-requires-site-ack" = {
-      expectedSubstring = "allowUnsafeEastWest = true";
-      override = (
-        { ... }:
-        {
-          d2b.envs.work.lan.allowEastWest = true;
-        }
-      );
+      expectedSubstring = "network.lan.allowEastWest requires d2b.site.allowUnsafeEastWest";
+      override = { ... }: {
+        d2b.realms.work.network.lan.allowEastWest = true;
+      };
     };
 
-    "home-lan-attachment-requires-host-interface" = {
-      expectedSubstring = "externalNetwork.attachment.enable requires";
-      override = (
-        { ... }:
-        {
-          d2b.envs.work.externalNetwork.attachment.enable = true;
-        }
-      );
+    "external-attachment-requires-interface" = {
+      expectedSubstring = "externalNetwork.attachment.enable requires attachment.interface";
+      override = { ... }: {
+        d2b.realms.work.network.externalNetwork.attachment.enable = true;
+      };
     };
 
-    "home-lan-attachment-interface-rust-safe-name" = {
-      expectedSubstring = "externalNetwork.attachment.interface must match";
-      override = (
-        { ... }:
-        {
-          d2b.envs.work.externalNetwork.attachment = {
+    "external-egress-requires-attachment" = {
+      expectedSubstring = "externalNetwork.egress.enable requires attachment.enable";
+      override = { ... }: {
+        d2b.realms.work.network.externalNetwork.egress.enable = true;
+      };
+    };
+
+    "port-forward-target-must-be-local" = {
+      expectedSubstring = "must select exactly one valid local workload or targetIp";
+      override = { ... }: {
+        d2b.realms.work.network.externalNetwork = {
+          attachment = {
             enable = true;
-            interface = "eno1.100";
+            interface = "eno1";
           };
-        }
-      );
-    };
-
-    "home-lan-egress-requires-attachment" = {
-      expectedSubstring = "externalNetwork.egress.enable requires";
-      override = (
-        { ... }:
-        {
-          d2b.envs.work.externalNetwork.egress.enable = true;
-        }
-      );
-    };
-
-    "home-lan-port-forward-requires-attachment" = {
-      expectedSubstring = "externalNetwork.portForwards requires";
-      override = (
-        { ... }:
-        {
-          d2b.envs.work.externalNetwork.portForwards = [{
-            protocol = "tcp";
+          portForwards = [{
             listenPort = 8443;
-            vm = "corp-vm";
+            workload = "missing";
             targetPort = 443;
           }];
-        }
-      );
+        };
+      };
     };
 
-    "home-lan-mdns-requires-attachment" = {
-      expectedSubstring = "externalNetwork.mdns.enable requires";
-      override = (
-        { ... }:
-        {
-          d2b.envs.work.externalNetwork.mdns.enable = true;
-        }
-      );
-    };
-
-    "home-lan-port-forward-required-fields" = {
-      expectedSubstring = "must specify either vm or targetIp";
-      override = (
-        { ... }:
-        {
-          d2b.envs.work.externalNetwork.attachment = {
-            enable = true;
-            interface = "eno1";
-          };
-          d2b.envs.work.externalNetwork.portForwards = [{
-            listenPort = 8443;
-          }];
-        }
-      );
-    };
-
-    "home-lan-port-forward-target-same-env" = {
-      expectedSubstring = "must name an enabled VM in the same env";
-      override = (
-        { ... }:
-        {
-          d2b.envs.other = {
-            lanSubnet = "10.30.0.0/24";
-            uplinkSubnet = "198.51.100.0/30";
-          };
-          d2b.vms.other-vm = {
-            enable = true;
-            env = "other";
-            index = 10;
-            ssh.user = "alice";
-          };
-          d2b.envs.work.externalNetwork.attachment = {
-            enable = true;
-            interface = "eno1";
-          };
-          d2b.envs.work.externalNetwork.portForwards = [{
-            protocol = "tcp";
-            listenPort = 8443;
-            vm = "other-vm";
-            targetPort = 443;
-          }];
-        }
-      );
-    };
-
-    "home-lan-egress-peer-cidr-rejected" = {
-      expectedSubstring = "externalNetwork.egress.allowedCidrs entry";
-      override = (
-        { ... }:
-        {
-          d2b.envs.other = {
-            lanSubnet = "10.30.0.0/24";
-            uplinkSubnet = "198.51.100.0/30";
-          };
-          d2b.envs.work.externalNetwork.attachment = {
-            enable = true;
-            interface = "eno1";
-          };
-          d2b.envs.work.externalNetwork.egress = {
-            enable = true;
-            allowedCidrs = [ "10.30.0.0/24" ];
-          };
-        }
-      );
-    };
-
-    "home-lan-port-forward-source-peer-cidr-rejected" = {
-      expectedSubstring = "externalNetwork.portForwards[0].sourceCidrs";
-      override = (
-        { ... }:
-        {
-          d2b.envs.other = {
-            lanSubnet = "10.30.0.0/24";
-            uplinkSubnet = "198.51.100.0/30";
-          };
-          d2b.envs.work.externalNetwork.attachment = {
-            enable = true;
-            interface = "eno1";
-          };
-          d2b.envs.work.externalNetwork.portForwards = [{
-            protocol = "tcp";
-            listenPort = 8443;
-            vm = "corp-vm";
-            targetPort = 443;
-            sourceCidrs = [ "10.30.0.0/24" ];
-          }];
-        }
-      );
-    };
-
-    # graphics.enable on aarch64-linux must trip the
-    # host.nix platform gate.
     "platform-gate-graphics-aarch64" = {
-      expectedSubstring = "graphics/audio components are";
+      expectedSubstring = "graphics/audio components are supported only on x86_64-linux";
       system = "aarch64-linux";
-      override = (
-        { ... }:
-        {
-          d2b.vms.corp-vm.graphics.enable = true;
-        }
-      );
+      override = { ... }: {
+        d2b.realms.work.providers = desktopProviders;
+        d2b.realms.work.workloads.corp-vm = {
+          providerRefs = desktopBindings;
+          graphics.enable = true;
+        };
+      };
     };
 
-    # audio.enable on aarch64-linux must also trip the gate.
     "platform-gate-audio-aarch64" = {
-      expectedSubstring = "graphics/audio components are";
+      expectedSubstring = "graphics/audio components are supported only on x86_64-linux";
       system = "aarch64-linux";
-      override = (
-        { ... }:
-        {
-          d2b.vms.corp-vm.audio.enable = true;
-        }
-      );
+      override = { ... }: {
+        d2b.realms.work.providers.sound = {
+          type = "audio";
+          implementationId = "pipewire-vhost-user";
+        };
+        d2b.realms.work.workloads.corp-vm = {
+          providerRefs.audio = "sound";
+          audio.enable = true;
+        };
+      };
     };
 
-    # v0.1.6 SWArch-M9 — graphics VMs cannot be autostart.
     "graphics-with-autostart" = {
-      expectedSubstring = "graphics.enable = true is incompatible";
-      override = (
-        { ... }:
-        {
-          d2b.vms.corp-vm.graphics.enable = true;
-          d2b.vms.corp-vm.autostart = true;
-        }
-      );
+      expectedSubstring = "graphics/audio mediation is incompatible with autostart";
+      override = { ... }: {
+        d2b.realms.work.providers = desktopProviders;
+        d2b.realms.work.workloads.corp-vm = {
+          providerRefs = desktopBindings;
+          graphics.enable = true;
+          autostart = true;
+        };
+      };
     };
 
-    # graphics.xwayland.enable = true fails closed during Wayland-only migration.
-    "graphics-xwayland-unsupported" = {
-      expectedSubstring = "supported in this release";
-      override = (
-        { ... }:
-        {
-          d2b.vms.corp-vm.graphics.enable = true;
-          d2b.vms.corp-vm.graphics.xwayland.enable = true;
-        }
-      );
+    "video-requires-graphics" = {
+      expectedSubstring = "video mediation requires graphics.enable";
+      override = { ... }: {
+        d2b.realms.work.providers.devices = {
+          type = "device";
+          implementationId = "host-mediated";
+        };
+        d2b.realms.work.workloads.corp-vm = {
+          providerRefs.device = "devices";
+          graphics.videoSidecar = true;
+        };
+      };
     };
 
-    # Issue #22 — guest audit forwarding requires per-VM observability.
-    "audit-without-observability" = {
-      expectedSubstring = "d2b.vms.corp-vm.audit.enable requires observability.enable on the same VM";
-      override = (
-        { ... }:
-        {
-          d2b.vms.corp-vm.audit.enable = true;
-        }
-      );
-    };
-
-    # W19 — `guest.exec.allowRoot` was removed (exec always runs as the
-    # workload user). A legacy assignment must land on the friendly
-    # migration assertion, not a cryptic "option does not exist".
-    "guest-exec-allowroot-removed" = {
-      expectedSubstring = "guest.exec.allowRoot was removed";
-      override = (
-        { ... }:
-        {
-          d2b.vms.corp-vm.guest.exec.allowRoot = true;
-        }
-      );
-    };
-
-    # W19 — `guest.exec.users` was removed (no per-VM exec user
-    # allowlist; exec targets the single workload user `ssh.user`).
-    "guest-exec-users-removed" = {
-      expectedSubstring = "guest.exec.users was removed";
-      override = (
-        { ... }:
-        {
-          d2b.vms.corp-vm.guest.exec.users = [ "alice" ];
-        }
-      );
-    };
-
-    # v1.1.2fu19 panel-test R2 must-fix: stablePrincipalId UID
-    # collision assertion (per the new check in
-    # nixos-modules/minijail-profiles.nix:538-575). vm2672 and
-    # vm8350 are a known-colliding pair whose
-    # `d2b-<name>-runner` SHA-256 prefixes both map to UID
-    # 2442195 = 50000 + 0x248083. Two enabled VMs with these
-    # names MUST trigger the assertion at eval time. The expected
-    # substring is from the assertion message template.
-    "principal-uid-collision" = {
-      expectedSubstring = "v1.1.2 stablePrincipalId collision: UID 2442195";
-      override = (
-        { lib, ... }:
-        {
-          d2b.vms.vm2672 = {
+    "nvidia-video-requires-sidecar" = {
+      expectedSubstring = "NVIDIA video decode requires videoSidecar";
+      override = { ... }: {
+        d2b.realms.work.providers = desktopProviders;
+        d2b.realms.work.workloads.corp-vm = {
+          providerRefs = desktopBindings;
+          graphics = {
             enable = true;
-            env = "work";
-            index = 30;
-            ssh.user = "alice";
+            videoNvidiaDecode = true;
           };
-          d2b.vms.vm8350 = {
-            enable = true;
-            env = "work";
-            index = 31;
-            ssh.user = "alice";
+        };
+      };
+    };
+
+    "usbip-fido-mutual-exclusion" = {
+      expectedSubstring = "cannot request USBIP and FIDO security-key mediation simultaneously";
+      override = { ... }: {
+        d2b.realms.work.providers.devices = {
+          type = "device";
+          implementationId = "host-mediated";
+        };
+        d2b.realms.work.workloads.corp-vm = {
+          providerRefs.device = "devices";
+          usbip.enable = true;
+          securityKey.enable = true;
+        };
+      };
+    };
+
+    "device-binding-required-when-ambiguous" = {
+      expectedSubstring = "multiple host-mediated providers require an explicit device provider binding";
+      override = { ... }: {
+        d2b.realms.work.providers = {
+          devices-a = {
+            type = "device";
+            implementationId = "host-mediated";
           };
-        }
-      );
-    };
-
-    # The former "observability-reserved-cid" negative case was removed:
-    # it is unsatisfiable under the current vsock CID formula. Workload
-    # CIDs are `100 + envIndex*1000 + slot` (nixos-modules/lib.nix
-    # `guestControlVsockCid`) with `index` typed `ints.between 10 250`,
-    # so every workload VM lands in [110+envIndex*1000, 350+envIndex*1000].
-    # The reserved observability CID (1000) sits in a permanent gap no
-    # type-valid workload VM can reach, so the `Vsock CID 1000 is reserved`
-    # assertion (nixos-modules/assertions.nix) is defense-in-depth that
-    # cannot be triggered by a valid config. Verified: the old case config
-    # produced corp-vm=1300 with sys-obs=1000 (the obs VM itself, which is
-    # excluded from the collision set).
-
-    # ---- USB security-key assertions -----
-
-    # A: per-VM securityKey requires host enable.
-    "usb-security-key-vm-requires-host-enable" = {
-      expectedSubstring = "d2b.vms.corp-vm.usb.securityKey.enable = true requires";
-      override = (
-        { lib, ... }:
-        {
-          # host NOT enabled
-          d2b.host.usb.securityKey.enable = lib.mkForce false;
-          d2b.vms.corp-vm.usb.securityKey.enable = true;
-        }
-      );
-    };
-
-    # B: per-VM securityKey and usbip.yubikey are mutually exclusive.
-    "usb-security-key-usbip-mutual-exclusion" = {
-      expectedSubstring = "usb.securityKey.enable and usbip.yubikey";
-      override = (
-        { lib, ... }:
-        {
-          d2b.host.usb.securityKey.enable = lib.mkForce true;
-          d2b.host.usb.securityKey.devices = [
-            {
-              label = "yubikey-primary";
-              vendorId = 4176; # 0x1050
-              productId = 1031; # 0x0407
-            }
-          ];
-          d2b.site.yubikey.enable = lib.mkForce true;
-          d2b.vms.corp-vm.usb.securityKey.enable = true;
-          d2b.vms.corp-vm.usbip.yubikey = true;
-          d2b.vms.corp-vm.guest.control.enable = true;
-        }
-      );
-    };
-
-    # C: vendorId outside FIDO-class allowlist is rejected.
-    "usb-security-key-non-fido-vendor-rejected" = {
-      expectedSubstring = "FIDO-class allowlist";
-      override = (
-        { lib, ... }:
-        {
-          d2b.host.usb.securityKey.enable = lib.mkForce true;
-          d2b.host.usb.securityKey.devices = [
-            {
-              label = "unknown-device";
-              vendorId = 4660; # 0x1234, not a known FIDO vendor
-              productId = 22136; # 0x5678
-            }
-          ];
-        }
-      );
-    };
-
-    # C: duplicate device labels are rejected.
-    "usb-security-key-duplicate-label-rejected" = {
-      expectedSubstring = "duplicate label";
-      override = (
-        { lib, ... }:
-        {
-          d2b.host.usb.securityKey.enable = lib.mkForce true;
-          d2b.host.usb.securityKey.devices = [
-            {
-              label = "same-label";
-              vendorId = 4176;
-              productId = 1031;
-            }
-            {
-              label = "same-label"; # duplicate
-              vendorId = 4176;
-              productId = 1032;
-            }
-          ];
-        }
-      );
-    };
-
-    # security-key + usbip.yubikey mutual exclusion (both claim FIDO2 endpoint).
-    "security-key-yubikey-conflict" = {
-      expectedSubstring = "usbip.yubikey = true and";
-      override = (
-        { ... }:
-        {
-          d2b.vms.corp-vm.usbip.yubikey = true;
-          d2b.vms.corp-vm.usb.securityKey.enable = true;
-          d2b.vms.corp-vm.guest.control.enable = true;
-        }
-      );
-    };
-
-    # security-key + qemu-media runtime conflict.
-    "security-key-qemu-media-conflict" = {
-      expectedSubstring = "runtime.kind = \"qemu-media\" is incompatible";
-      override = (
-        { ... }:
-        {
-          d2b.vms.corp-vm.runtime.kind = "qemu-media";
-          d2b.vms.corp-vm.usb.securityKey.enable = true;
-        }
-      );
+          devices-b = {
+            type = "device";
+            implementationId = "host-mediated";
+          };
+        };
+        d2b.realms.work.workloads.corp-vm.tpm.enable = true;
+      };
     };
   };
 }

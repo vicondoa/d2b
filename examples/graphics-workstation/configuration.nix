@@ -101,6 +101,10 @@
   d2b.realms.desktop = {
     path = "desktop.local-root";
     placement = "host-local";
+    broker = {
+      enable = true;
+      hostMutation = true;
+    };
 
     providers.runtime = {
       type = "runtime";
@@ -118,6 +122,26 @@
         "detach"
       ];
     };
+    providers.display = {
+      type = "display";
+      implementationId = "wayland";
+    };
+    providers.sound = {
+      type = "audio";
+      implementationId = "pipewire-vhost-user";
+    };
+    providers.network = {
+      type = "network";
+      implementationId = "local-realm";
+    };
+    providers.storage = {
+      type = "storage";
+      implementationId = "local";
+    };
+    providers.transport = {
+      type = "transport";
+      implementationId = "cloud-hypervisor-vsock";
+    };
 
     network = {
       mode = "declared";
@@ -126,8 +150,24 @@
     };
 
     workloads.corp-desktop = {
-      provider = "runtime";
+      providerRefs = {
+        runtime = "runtime";
+        device = "devices";
+        display = "display";
+        audio = "sound";
+        network = "network";
+        storage = "storage";
+        transport = "transport";
+      };
       autostart = false;
+      tpm.enable = true;
+      graphics = {
+        enable = true;
+        videoSidecar = true;
+      };
+      audio.enable = true;
+      usbip.enable = true;
+      display.wayland = true;
       launcher = {
         enable = true;
         label = "Corporate desktop";

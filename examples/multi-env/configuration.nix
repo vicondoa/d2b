@@ -43,7 +43,7 @@
       implementationId = "cloud-hypervisor";
     };
     workloads.work-app = {
-      provider = "vm";
+      providerRefs.runtime = "vm";
       config = {
         networking.hostName = lib.mkDefault "work-app";
         users.users.alice = {
@@ -72,7 +72,7 @@
       implementationId = "cloud-hypervisor";
     };
     workloads.personal-app = {
-      provider = "vm";
+      providerRefs.runtime = "vm";
       config = {
         networking.hostName = lib.mkDefault "personal-app";
         users.users.alice = {

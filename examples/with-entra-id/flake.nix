@@ -33,7 +33,13 @@
         # nothing about each other; this attrset is where they meet.
         {
           d2b.realms.work.workloads.work-entra = {
-            provider = "runtime";
+            providerRefs = {
+              runtime = "runtime";
+              device = "devices";
+              network = "network";
+              storage = "storage";
+            };
+            tpm.enable = true;
             config = {
               imports = [
                 entrablau.nixosModules.default

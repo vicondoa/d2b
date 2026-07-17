@@ -66,6 +66,18 @@
       type = "runtime";
       implementationId = "cloud-hypervisor";
     };
+    providers.devices = {
+      type = "device";
+      implementationId = "host-mediated";
+    };
+    providers.network = {
+      type = "network";
+      implementationId = "local-realm";
+    };
+    providers.storage = {
+      type = "storage";
+      implementationId = "local";
+    };
   };
 
   # Tell d2b about the host's own physical LAN so the

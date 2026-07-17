@@ -67,7 +67,7 @@
       implementationId = "cloud-hypervisor";
     };
     workloads.personal-dev = {
-      provider = "runtime";
+      providerRefs.runtime = "runtime";
       config = {
         networking.hostName = lib.mkDefault "personal-dev";
         users.users.alice = {
