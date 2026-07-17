@@ -95,6 +95,164 @@ fn primary_group_name() -> String {
         .unwrap_or_else(|| gid.to_string())
 }
 
+fn build_hermetic_bundle_tree(fixtures: &Path, destination: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::create_dir_all(destination.join("closures")).expect("mk fixture closures");
+    std::fs::set_permissions(destination, std::fs::Permissions::from_mode(0o750))
+        .expect("chmod fixture directory");
+    std::fs::set_permissions(
+        destination.join("closures"),
+        std::fs::Permissions::from_mode(0o750),
+    )
+    .expect("chmod fixture closures");
+    for entry in std::fs::read_dir(fixtures).expect("read fixture directory") {
+        let entry = entry.expect("fixture entry");
+        if entry.file_type().expect("fixture type").is_file() {
+            let bytes = std::fs::read(entry.path()).expect("read fixture");
+            let path = destination.join(entry.file_name());
+            std::fs::write(&path, bytes).expect("write fixture");
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o640))
+                .expect("chmod fixture");
+        }
+    }
+    for entry in std::fs::read_dir(fixtures.join("closures")).expect("read fixture closures") {
+        let entry = entry.expect("fixture closure");
+        let bytes = std::fs::read(entry.path()).expect("read fixture closure");
+        let path = destination.join("closures").join(entry.file_name());
+        std::fs::write(&path, bytes).expect("write fixture closure");
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o640))
+            .expect("chmod fixture closure");
+    }
+
+    let provider_registry_path = destination.join("provider-registry-v2.json");
+    let mut provider_registry: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&provider_registry_path).expect("read provider registry"),
+    )
+    .expect("decode provider registry");
+    let provider_registry_object = provider_registry
+        .as_object_mut()
+        .expect("provider registry object");
+    provider_registry_object.insert(
+        "configurationFingerprint".to_owned(),
+        serde_json::Value::String("0".repeat(64)),
+    );
+    provider_registry_object.insert("providers".to_owned(), serde_json::Value::Array(Vec::new()));
+    let provider_registry_bytes =
+        serde_json::to_vec(&provider_registry).expect("encode empty provider registry");
+    std::fs::write(&provider_registry_path, &provider_registry_bytes)
+        .expect("write empty provider registry");
+    std::fs::set_permissions(
+        &provider_registry_path,
+        std::fs::Permissions::from_mode(0o640),
+    )
+    .expect("chmod provider registry");
+    let provider_registry_digest = {
+        use sha2::Digest as _;
+        let bytes: [u8; 32] = sha2::Sha256::digest(&provider_registry_bytes).into();
+        format!(
+            "sha256:{}",
+            bytes
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        )
+    };
+
+    let bundle_path = destination.join("bundle.json");
+    let mut bundle: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&bundle_path).expect("read copied bundle"))
+            .expect("decode copied bundle");
+    let object = bundle.as_object_mut().expect("bundle object");
+    for field in [
+        "allocatorPath",
+        "hostPath",
+        "privilegesPath",
+        "processesPath",
+        "providerRegistryV2Path",
+        "publicManifestPath",
+        "realmControllersPath",
+        "realmIdentityPath",
+        "realmWorkloadsLauncherV2Path",
+        "storagePath",
+        "syncPath",
+        "unsafeLocalWorkloadsPath",
+    ] {
+        let name = if field == "publicManifestPath" {
+            "manifest.json".to_owned()
+        } else {
+            object
+                .get(field)
+                .and_then(serde_json::Value::as_str)
+                .and_then(|path| Path::new(path).file_name())
+                .expect("bundle artifact filename")
+                .to_string_lossy()
+                .into_owned()
+        };
+        object.insert(field.to_owned(), serde_json::Value::String(name));
+    }
+    let artifact_hashes = object
+        .get("artifactHashes")
+        .and_then(serde_json::Value::as_object)
+        .expect("bundle artifact hashes")
+        .iter()
+        .map(|(path, digest)| {
+            let key = if path.ends_with("/vms.json") {
+                "manifest.json".to_owned()
+            } else if Path::new(path).is_absolute() {
+                Path::new(path)
+                    .file_name()
+                    .expect("artifact filename")
+                    .to_string_lossy()
+                    .into_owned()
+            } else {
+                path.clone()
+            };
+            let digest = if key == "provider-registry-v2.json" {
+                serde_json::Value::String(provider_registry_digest.clone())
+            } else {
+                digest.clone()
+            };
+            (key, digest)
+        })
+        .collect();
+    object.insert(
+        "artifactHashes".to_owned(),
+        serde_json::Value::Object(artifact_hashes),
+    );
+    object.remove("bundleHash");
+    let mut canonical_bundle = bundle.clone();
+    canonical_bundle
+        .as_object_mut()
+        .expect("canonical bundle object")
+        .insert("artifactHashes".to_owned(), serde_json::Value::Null);
+    let canonical = serde_json::to_vec(&canonical_bundle).expect("encode canonical bundle");
+    let digest = {
+        use sha2::Digest as _;
+        let bytes: [u8; 32] = sha2::Sha256::digest(&canonical).into();
+        bytes
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    };
+    bundle.as_object_mut().expect("bundle object").insert(
+        "bundleHash".to_owned(),
+        serde_json::Value::String(format!("sha256:{digest}")),
+    );
+    std::fs::write(
+        &bundle_path,
+        serde_json::to_vec_pretty(&bundle).expect("encode hermetic bundle"),
+    )
+    .expect("write hermetic bundle");
+    std::fs::set_permissions(bundle_path, std::fs::Permissions::from_mode(0o640))
+        .expect("chmod hermetic bundle");
+    d2b_core::bundle_resolver::BundleResolver::load_with_policy(
+        &destination.join("bundle.json"),
+        &d2b_core::bundle_resolver::BundleVerifyPolicy::for_tests(),
+    )
+    .expect("validate hermetic bundle");
+}
+
 /// Spawn `d2bd serve --once --test-listen-on <socket>` with a synthetic
 /// config presenting `peer` as the connecting identity, and block until the
 /// public socket exists. Returns `None` when the daemon-spawn harness is
@@ -104,7 +262,8 @@ fn primary_group_name() -> String {
 /// the caller should run a single `d2b` invocation against
 /// `socket_path` and then call [`DaemonOnce::wait`].
 pub fn spawn_d2bd_once(peer: &TestPeer) -> Option<DaemonOnce> {
-    spawn_d2bd_inner(peer, None, None)
+    let artifacts_dir = std::env::var_os("D2B_FIXTURES").map(PathBuf::from)?;
+    spawn_d2bd_inner(peer, Some(&artifacts_dir), None)
 }
 
 /// Spawn `d2bd serve --once` wired to read its bundle/host/closure
@@ -149,6 +308,15 @@ fn spawn_d2bd_inner(
     let socket_path = run.join("public.sock");
     let state_lock = run.join("daemon.lock");
     let config_json = run.join("config.json");
+    let artifacts_dir = artifacts_dir.map(|dir| {
+        if fixture_path.is_none() {
+            let destination = run.join("artifacts");
+            build_hermetic_bundle_tree(dir, &destination);
+            destination
+        } else {
+            dir.to_path_buf()
+        }
+    });
 
     let group = primary_group_name();
     let mut config = serde_json::json!({
@@ -163,9 +331,18 @@ fn spawn_d2bd_inner(
         "adminUsers": ["admin-user"],
         "serverVersion": "0.4.0",
         "acceptedClientVersionRange": ">=0.4.0, <0.5.0",
-        "gatewayConfigPath": run.join("gateway.json")
+        "gatewayConfigPath": run.join("gateway.json"),
+        "realmControllersConfigPath": run.join("realm-controllers.json"),
+        "realmIdentityConfigPath": run.join("realm-identity.json"),
+        "artifacts": {
+            "publicManifestPath": run.join("manifest.json"),
+            "bundlePath": run.join("bundle.json"),
+            "hostPath": run.join("host.json"),
+            "processesPath": run.join("processes.json"),
+            "closuresDir": run.join("closures")
+        }
     });
-    if let Some(dir) = artifacts_dir {
+    if let Some(dir) = artifacts_dir.as_deref() {
         config.as_object_mut().unwrap().insert(
             "artifacts".to_owned(),
             serde_json::json!({

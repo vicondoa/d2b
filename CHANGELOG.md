@@ -175,6 +175,8 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Isolated CLI daemon integration tests from deployed host realm, provider, and
+  bundle artifacts by binding every runtime input to test-owned paths.
 - Kept guest-service validators inside their versioned service rail and updated
   the least-privilege feature matrix for the public provider types it consumes.
 - Preserved typed retained-log denial/cancellation/failure responses while
