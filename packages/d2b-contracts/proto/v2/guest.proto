@@ -1,15 +1,434 @@
 syntax = "proto3";
 package d2b.guest.v2;
+
 import "common.proto";
+import "terminal.proto";
+
 service GuestService {
-  rpc Bootstrap(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
-  rpc Reconnect(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
-  rpc Exec(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
-  rpc CancelExec(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
-  rpc InspectExec(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
-  rpc OpenShell(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
-  rpc FileTransfer(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
-  rpc SecurityKey(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
-  rpc Shutdown(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc Bootstrap(GuestBootstrapRequest) returns (GuestSessionResponse);
+  rpc Reconnect(GuestReconnectRequest) returns (GuestSessionResponse);
+  rpc Exec(d2b.terminal.v2.TerminalOpenRequest) returns (d2b.terminal.v2.TerminalOpenResponse);
+  rpc CancelExec(GuestCancelExecRequest) returns (GuestCancelExecResponse);
+  rpc InspectExec(GuestInspectExecRequest) returns (GuestInspectExecResponse);
+  rpc OpenShell(d2b.terminal.v2.TerminalOpenRequest) returns (d2b.terminal.v2.TerminalOpenResponse);
+  rpc FileTransfer(GuestFileTransferRequest) returns (d2b.terminal.v2.TerminalOpenResponse);
+  rpc SecurityKey(GuestSecurityKeyRequest) returns (d2b.terminal.v2.TerminalOpenResponse);
+  rpc Shutdown(GuestShutdownRequest) returns (GuestShutdownResponse);
   rpc Cancel(d2b.common.v2.CancelRequest) returns (d2b.common.v2.CancelResponse);
+}
+
+message GuestOperationContext {
+  d2b.common.v2.RequestMetadata metadata = 1;
+  d2b.common.v2.IdentityScope scope = 2;
+  string operation_id = 3;
+  bytes request_digest = 4;
+}
+
+enum GuestCapability {
+  GUEST_CAPABILITY_UNSPECIFIED = 0;
+  GUEST_CAPABILITY_EXEC_ATTACHED = 1;
+  GUEST_CAPABILITY_EXEC_DETACHED = 2;
+  GUEST_CAPABILITY_EXEC_TTY = 3;
+  GUEST_CAPABILITY_EXEC_RETAINED_LOGS = 4;
+  GUEST_CAPABILITY_TTY_RESIZE = 5;
+  GUEST_CAPABILITY_SIGNALS = 6;
+  GUEST_CAPABILITY_FILE_TRANSFER = 7;
+  GUEST_CAPABILITY_SHELL_ATTACHED = 8;
+  GUEST_CAPABILITY_SHELL_MANAGEMENT = 9;
+  GUEST_CAPABILITY_SECURITY_KEY = 10;
+  GUEST_CAPABILITY_SHUTDOWN = 11;
+}
+
+message GuestBootstrapRequest {
+  GuestOperationContext context = 1;
+  uint64 expected_generation = 2;
+  bytes expected_parent_static_public_key_digest = 3;
+  repeated GuestCapability requested_capabilities = 4;
+}
+
+message GuestReconnectRequest {
+  GuestOperationContext context = 1;
+  uint64 expected_generation = 2;
+  string guest_identity_handle = 3;
+  bytes expected_guest_static_public_key_digest = 4;
+  bytes expected_parent_static_public_key_digest = 5;
+  repeated GuestCapability required_capabilities = 6;
+}
+
+message GuestSessionResponse {
+  d2b.common.v2.Outcome outcome = 1;
+  string operation_id = 2;
+  uint64 session_generation = 3;
+  bytes request_id = 4;
+  string guest_identity_handle = 5;
+  bytes guest_static_public_key_digest = 6;
+  bytes parent_static_public_key_digest = 7;
+  repeated GuestCapability capabilities = 8;
+  d2b.common.v2.ErrorEnvelope error = 9;
+}
+
+enum GuestExecCancelReason {
+  GUEST_EXEC_CANCEL_REASON_UNSPECIFIED = 0;
+  GUEST_EXEC_CANCEL_REASON_USER_REQUESTED = 1;
+  GUEST_EXEC_CANCEL_REASON_CLIENT_DISCONNECT = 2;
+  GUEST_EXEC_CANCEL_REASON_SLOW_CONSUMER = 3;
+  GUEST_EXEC_CANCEL_REASON_PROTOCOL_ERROR = 4;
+}
+
+message GuestCancelExecRequest {
+  GuestOperationContext context = 1;
+  string resource_handle = 2;
+  uint64 control_sequence = 3;
+  GuestExecCancelReason reason = 4;
+}
+
+enum GuestExecCancellationOutcome {
+  GUEST_EXEC_CANCELLATION_OUTCOME_UNSPECIFIED = 0;
+  GUEST_EXEC_CANCELLATION_OUTCOME_SIGNALLED = 1;
+  GUEST_EXEC_CANCELLATION_OUTCOME_ALREADY_TERMINAL = 2;
+  GUEST_EXEC_CANCELLATION_OUTCOME_UNKNOWN_RESOURCE = 3;
+  GUEST_EXEC_CANCELLATION_OUTCOME_GENERATION_MISMATCH = 4;
+}
+
+message GuestCancelExecResponse {
+  d2b.common.v2.Outcome outcome = 1;
+  string operation_id = 2;
+  uint64 session_generation = 3;
+  bytes request_id = 4;
+  string resource_handle = 5;
+  GuestExecCancellationOutcome cancellation = 6;
+  d2b.common.v2.ErrorEnvelope error = 7;
+}
+
+message GuestExecStatusQuery {
+  string resource_handle = 1;
+}
+
+message GuestExecWaitQuery {
+  string resource_handle = 1;
+  uint64 known_state_generation = 2;
+  uint32 timeout_ms = 3;
+}
+
+message GuestExecListPageQuery {
+  uint32 page_size = 1;
+  string page_cursor = 2;
+}
+
+message GuestExecOpenRetainedLogQuery {
+  string resource_handle = 1;
+  d2b.terminal.v2.OutputStream output = 2;
+  uint64 offset = 3;
+  uint32 max_bytes = 4;
+}
+
+message GuestInspectExecQuery {
+  oneof query {
+    GuestExecStatusQuery status = 1;
+    GuestExecWaitQuery wait = 2;
+    GuestExecListPageQuery list_page = 3;
+    GuestExecOpenRetainedLogQuery open_retained_log = 4;
+  }
+}
+
+message GuestInspectExecRequest {
+  GuestOperationContext context = 1;
+  GuestInspectExecQuery query = 2;
+}
+
+enum GuestExecState {
+  GUEST_EXEC_STATE_UNSPECIFIED = 0;
+  GUEST_EXEC_STATE_CREATED = 1;
+  GUEST_EXEC_STATE_RUNNING = 2;
+  GUEST_EXEC_STATE_EXITED = 3;
+  GUEST_EXEC_STATE_SIGNALED = 4;
+  GUEST_EXEC_STATE_CANCELLED = 5;
+  GUEST_EXEC_STATE_PROTOCOL_ERROR = 6;
+  GUEST_EXEC_STATE_LOST = 7;
+  GUEST_EXEC_STATE_REAPED = 8;
+}
+
+enum GuestStdinState {
+  GUEST_STDIN_STATE_UNSPECIFIED = 0;
+  GUEST_STDIN_STATE_OPEN = 1;
+  GUEST_STDIN_STATE_CLOSING = 2;
+  GUEST_STDIN_STATE_CLOSED = 3;
+  GUEST_STDIN_STATE_CLOSED_BY_PROCESS = 4;
+  GUEST_STDIN_STATE_NOT_INTERACTIVE = 5;
+}
+
+message GuestExecStatus {
+  string resource_handle = 1;
+  GuestExecState state = 2;
+  GuestStdinState stdin_state = 3;
+  d2b.terminal.v2.TerminalOutcome terminal_outcome = 4;
+  uint64 stdout_start_offset = 5;
+  uint64 stdout_end_offset = 6;
+  uint64 stderr_start_offset = 7;
+  uint64 stderr_end_offset = 8;
+  uint64 stdout_dropped_bytes = 9;
+  uint64 stderr_dropped_bytes = 10;
+  bool stdout_truncated = 11;
+  bool stderr_truncated = 12;
+  uint64 state_generation = 13;
+  bool timed_out = 14;
+}
+
+message GuestExecListEntry {
+  string resource_handle = 1;
+  GuestExecState state = 2;
+  uint64 created_at_unix_ms = 3;
+  bytes argv_digest = 4;
+  uint64 stdout_bytes = 5;
+  uint64 stderr_bytes = 6;
+  uint64 dropped_bytes = 7;
+  bool stdout_truncated = 8;
+  bool stderr_truncated = 9;
+}
+
+message GuestExecListPage {
+  repeated GuestExecListEntry entries = 1;
+  bool truncated = 2;
+  string next_page_cursor = 3;
+}
+
+message GuestExecRetainedLogStream {
+  d2b.terminal.v2.TerminalOpenResponse stream = 1;
+  d2b.terminal.v2.OutputStream output = 2;
+  uint64 start_offset = 3;
+  uint64 end_offset = 4;
+}
+
+message GuestInspectExecResponse {
+  d2b.common.v2.Outcome outcome = 1;
+  string operation_id = 2;
+  uint64 session_generation = 3;
+  bytes request_id = 4;
+  oneof result {
+    GuestExecStatus status = 5;
+    GuestExecListPage list_page = 6;
+    GuestExecRetainedLogStream retained_log_stream = 7;
+  }
+  d2b.common.v2.ErrorEnvelope error = 8;
+}
+
+enum GuestArtifactId {
+  GUEST_ARTIFACT_ID_UNSPECIFIED = 0;
+  GUEST_ARTIFACT_ID_GUEST_CONFIG = 1;
+  GUEST_ARTIFACT_ID_ACTIVATION_PAYLOAD = 2;
+  GUEST_ARTIFACT_ID_DIAGNOSTIC_EXPORT = 3;
+}
+
+enum GuestFileTransferDirection {
+  GUEST_FILE_TRANSFER_DIRECTION_UNSPECIFIED = 0;
+  GUEST_FILE_TRANSFER_DIRECTION_HOST_TO_GUEST = 1;
+  GUEST_FILE_TRANSFER_DIRECTION_GUEST_TO_HOST = 2;
+}
+
+message GuestFileTransferRequest {
+  GuestOperationContext context = 1;
+  GuestArtifactId artifact = 2;
+  string configured_intent_id = 3;
+  GuestFileTransferDirection direction = 4;
+  uint64 offset = 5;
+  uint64 declared_size = 6;
+  bytes expected_digest = 7;
+}
+
+message GuestFileTransferStart {
+  GuestArtifactId artifact = 1;
+  string configured_intent_id = 2;
+  GuestFileTransferDirection direction = 3;
+  uint64 offset = 4;
+  uint64 declared_size = 5;
+  bytes expected_digest = 6;
+}
+
+message GuestFileTransferChunk {
+  uint64 offset = 1;
+  bytes data = 2;
+  bool eof = 3;
+  uint64 total_size = 4;
+  bytes final_digest = 5;
+}
+
+message GuestFileTransferCredit {
+  uint32 bytes = 1;
+  uint64 next_offset = 2;
+}
+
+message GuestFileTransferComplete {
+  uint64 total_size = 1;
+  bytes digest = 2;
+}
+
+message GuestFileTransferCancel {}
+
+enum GuestFileTransferErrorKind {
+  GUEST_FILE_TRANSFER_ERROR_KIND_UNSPECIFIED = 0;
+  GUEST_FILE_TRANSFER_ERROR_KIND_NOT_FOUND = 1;
+  GUEST_FILE_TRANSFER_ERROR_KIND_DENIED = 2;
+  GUEST_FILE_TRANSFER_ERROR_KIND_OFFSET_MISMATCH = 3;
+  GUEST_FILE_TRANSFER_ERROR_KIND_SIZE_MISMATCH = 4;
+  GUEST_FILE_TRANSFER_ERROR_KIND_DIGEST_MISMATCH = 5;
+  GUEST_FILE_TRANSFER_ERROR_KIND_RESOURCE_EXHAUSTED = 6;
+  GUEST_FILE_TRANSFER_ERROR_KIND_INTERNAL = 7;
+}
+
+message GuestFileTransferFailed {
+  GuestFileTransferErrorKind error = 1;
+  d2b.common.v2.RetryClass retry = 2;
+}
+
+message GuestFileTransferFrame {
+  uint64 session_generation = 1;
+  bytes request_id = 2;
+  uint64 sequence = 3;
+  string operation_id = 4;
+  string resource_handle = 5;
+  oneof frame {
+    GuestFileTransferStart start = 10;
+    GuestFileTransferChunk chunk = 11;
+    GuestFileTransferCredit credit = 12;
+    GuestFileTransferComplete complete = 13;
+    GuestFileTransferCancel cancel = 14;
+    GuestFileTransferFailed failed = 15;
+  }
+}
+
+enum GuestSecurityKeyAction {
+  GUEST_SECURITY_KEY_ACTION_UNSPECIFIED = 0;
+  GUEST_SECURITY_KEY_ACTION_START = 1;
+  GUEST_SECURITY_KEY_ACTION_RESUME = 2;
+}
+
+enum GuestSecurityKeyCeremonyKind {
+  GUEST_SECURITY_KEY_CEREMONY_KIND_UNSPECIFIED = 0;
+  GUEST_SECURITY_KEY_CEREMONY_KIND_MAKE_CREDENTIAL = 1;
+  GUEST_SECURITY_KEY_CEREMONY_KIND_GET_ASSERTION = 2;
+  GUEST_SECURITY_KEY_CEREMONY_KIND_U2F = 3;
+}
+
+message GuestSecurityKeyRequest {
+  GuestOperationContext context = 1;
+  GuestSecurityKeyAction action = 2;
+  string device_handle = 3;
+  string ceremony_handle = 4;
+  GuestSecurityKeyCeremonyKind ceremony = 5;
+  bool approval_required = 6;
+}
+
+message GuestSecurityKeyOpen {
+  GuestSecurityKeyAction action = 1;
+  string device_handle = 2;
+  string ceremony_handle = 3;
+  GuestSecurityKeyCeremonyKind ceremony = 4;
+}
+
+message GuestSecurityKeyReport {
+  bytes report = 1;
+}
+
+enum GuestSecurityKeyApprovalKind {
+  GUEST_SECURITY_KEY_APPROVAL_KIND_UNSPECIFIED = 0;
+  GUEST_SECURITY_KEY_APPROVAL_KIND_USER_PRESENCE = 1;
+  GUEST_SECURITY_KEY_APPROVAL_KIND_USER_VERIFICATION = 2;
+}
+
+message GuestSecurityKeyApprovalRequest {
+  GuestSecurityKeyApprovalKind approval = 1;
+}
+
+enum GuestSecurityKeyApprovalDecision {
+  GUEST_SECURITY_KEY_APPROVAL_DECISION_UNSPECIFIED = 0;
+  GUEST_SECURITY_KEY_APPROVAL_DECISION_APPROVED = 1;
+  GUEST_SECURITY_KEY_APPROVAL_DECISION_DENIED = 2;
+}
+
+message GuestSecurityKeyApproval {
+  GuestSecurityKeyApprovalDecision decision = 1;
+}
+
+message GuestSecurityKeyCancel {}
+
+enum GuestSecurityKeyOutcome {
+  GUEST_SECURITY_KEY_OUTCOME_UNSPECIFIED = 0;
+  GUEST_SECURITY_KEY_OUTCOME_SUCCEEDED = 1;
+  GUEST_SECURITY_KEY_OUTCOME_CTAP_ERROR = 2;
+  GUEST_SECURITY_KEY_OUTCOME_CANCELLED = 3;
+  GUEST_SECURITY_KEY_OUTCOME_TIMED_OUT = 4;
+}
+
+message GuestSecurityKeyComplete {
+  GuestSecurityKeyOutcome outcome = 1;
+}
+
+enum GuestSecurityKeyErrorKind {
+  GUEST_SECURITY_KEY_ERROR_KIND_UNSPECIFIED = 0;
+  GUEST_SECURITY_KEY_ERROR_KIND_DEVICE_UNAVAILABLE = 1;
+  GUEST_SECURITY_KEY_ERROR_KIND_CEREMONY_BUSY = 2;
+  GUEST_SECURITY_KEY_ERROR_KIND_INVALID_REPORT = 3;
+  GUEST_SECURITY_KEY_ERROR_KIND_APPROVAL_DENIED = 4;
+  GUEST_SECURITY_KEY_ERROR_KIND_PROTOCOL = 5;
+  GUEST_SECURITY_KEY_ERROR_KIND_INTERNAL = 6;
+}
+
+message GuestSecurityKeyFailed {
+  GuestSecurityKeyErrorKind error = 1;
+  d2b.common.v2.RetryClass retry = 2;
+}
+
+message GuestSecurityKeyFrame {
+  uint64 session_generation = 1;
+  bytes request_id = 2;
+  uint64 sequence = 3;
+  string operation_id = 4;
+  string resource_handle = 5;
+  oneof frame {
+    GuestSecurityKeyOpen open = 10;
+    GuestSecurityKeyReport guest_report = 11;
+    GuestSecurityKeyReport device_report = 12;
+    GuestSecurityKeyApprovalRequest approval_request = 13;
+    GuestSecurityKeyApproval approval = 14;
+    GuestSecurityKeyCancel cancel = 15;
+    GuestSecurityKeyComplete complete = 16;
+    GuestSecurityKeyFailed failed = 17;
+  }
+}
+
+enum GuestPowerAction {
+  GUEST_POWER_ACTION_UNSPECIFIED = 0;
+  GUEST_POWER_ACTION_POWER_OFF = 1;
+  GUEST_POWER_ACTION_REBOOT = 2;
+  GUEST_POWER_ACTION_HALT = 3;
+}
+
+message GuestShutdownRequest {
+  GuestOperationContext context = 1;
+  GuestPowerAction action = 2;
+  uint64 deadline_unix_ms = 3;
+}
+
+enum GuestShutdownPhase {
+  GUEST_SHUTDOWN_PHASE_UNSPECIFIED = 0;
+  GUEST_SHUTDOWN_PHASE_ACCEPTED = 1;
+  GUEST_SHUTDOWN_PHASE_FINAL = 2;
+}
+
+enum GuestShutdownFinalOutcome {
+  GUEST_SHUTDOWN_FINAL_OUTCOME_UNSPECIFIED = 0;
+  GUEST_SHUTDOWN_FINAL_OUTCOME_COMPLETED = 1;
+  GUEST_SHUTDOWN_FINAL_OUTCOME_ALREADY_APPLIED = 2;
+  GUEST_SHUTDOWN_FINAL_OUTCOME_CANCELLED = 3;
+  GUEST_SHUTDOWN_FINAL_OUTCOME_FAILED = 4;
+}
+
+message GuestShutdownResponse {
+  d2b.common.v2.Outcome outcome = 1;
+  string operation_id = 2;
+  uint64 session_generation = 3;
+  bytes request_id = 4;
+  GuestShutdownPhase phase = 5;
+  GuestShutdownFinalOutcome final_outcome = 6;
+  d2b.common.v2.ErrorEnvelope error = 7;
 }

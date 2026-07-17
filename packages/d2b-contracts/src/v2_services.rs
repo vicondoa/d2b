@@ -15,7 +15,8 @@ use sha2::{Digest as _, Sha256};
 use crate::{
     v2_component_session::{
         BoundedVec, CorrelationId, IdempotencyKey, MAX_LOGICAL_MESSAGE_BYTES,
-        MAX_REQUEST_ATTACHMENTS, MAX_REQUEST_LIFETIME_MS, RequestEnvelope, RequestId, TraceId,
+        MAX_NAMED_STREAM_QUEUE_BYTES, MAX_REQUEST_ATTACHMENTS, MAX_REQUEST_LIFETIME_MS,
+        RequestEnvelope, RequestId, TraceId,
     },
     v2_identity::{
         ProviderId, ProviderType as IdentityProviderType, RealmId, RealmLabel, RealmPath, RoleId,
@@ -63,6 +64,7 @@ pub mod common;
 pub mod daemon;
 #[path = "generated_v2_services/daemon_ttrpc.rs"]
 pub mod daemon_ttrpc;
+#[allow(clippy::match_single_binding, clippy::needless_borrowed_reference)]
 #[path = "generated_v2_services/guest.rs"]
 pub mod guest;
 #[path = "generated_v2_services/guest_ttrpc.rs"]
@@ -133,6 +135,9 @@ pub mod security_key_ttrpc;
 pub mod shell;
 #[path = "generated_v2_services/shell_ttrpc.rs"]
 pub mod shell_ttrpc;
+#[allow(clippy::match_single_binding, clippy::needless_borrowed_reference)]
+#[path = "generated_v2_services/terminal.rs"]
+pub mod terminal;
 #[path = "generated_v2_services/tty.rs"]
 pub mod tty;
 #[path = "generated_v2_services/tty_ttrpc.rs"]
@@ -145,6 +150,18 @@ pub mod user_ttrpc;
 pub mod wayland;
 #[path = "generated_v2_services/wayland_ttrpc.rs"]
 pub mod wayland_ttrpc;
+
+#[path = "v2_guest_services.rs"]
+mod guest_contract;
+pub use guest_contract::{
+    CTAPHID_REPORT_BYTES, FileTransferStreamValidator, GuestStreamDirection,
+    MAX_GUEST_CAPABILITIES, MAX_GUEST_EXEC_LIST_ENTRIES, MAX_GUEST_FILE_BYTES,
+    MAX_GUEST_FILE_CHUNK_BYTES, MAX_GUEST_WAIT_MS, SecurityKeyStreamValidator,
+    validate_guest_cancel_response_for_request, validate_guest_inspect_response_for_request,
+    validate_guest_session_response_for_bootstrap, validate_guest_session_response_for_reconnect,
+    validate_guest_shutdown_response_for_request,
+    validate_terminal_open_response_for_guest_context,
+};
 
 pub const MAX_PROTOBUF_MESSAGE_BYTES: usize = MAX_LOGICAL_MESSAGE_BYTES as usize;
 pub const MAX_SERVICE_STRING_BYTES: usize = 64;
@@ -474,7 +491,7 @@ pub struct MethodDocument {
 
 pub fn service_inventory_document() -> ServiceInventoryDocument {
     ServiceInventoryDocument {
-        schema_version: 3,
+        schema_version: 4,
         services: SERVICE_INVENTORY
             .iter()
             .map(|service| ServiceDocument {
@@ -511,8 +528,16 @@ pub fn service_schema_fingerprint(service: &ServiceSpec) -> [u8; 32] {
         digest.update(b"\0typed-allocator-and-realm-child-spawn-v3");
     }
     if service.package == "d2b.daemon.v2" {
-        digest.update(b"\0typed-results-and-terminal-stream-v1\0");
+        digest.update(b"\0typed-results-and-terminal-stream-v2\0");
         digest.update(include_bytes!("../proto/v2/daemon.proto"));
+        digest.update(b"\0");
+        digest.update(include_bytes!("../proto/v2/terminal.proto"));
+    }
+    if service.package == "d2b.guest.v2" {
+        digest.update(b"\0typed-guest-operations-v1\0");
+        digest.update(include_bytes!("../proto/v2/guest.proto"));
+        digest.update(b"\0");
+        digest.update(include_bytes!("../proto/v2/terminal.proto"));
     }
     for method in service.methods {
         digest.update(b"\0");
@@ -1433,7 +1458,7 @@ pub fn parse_server_stream_name(value: &str) -> Result<u16, ServiceContractError
     Ok(channel)
 }
 
-impl StrictWireMessage for daemon::TerminalOpenRequest {
+impl StrictWireMessage for terminal::TerminalOpenRequest {
     fn validate_wire(&self, _: bool) -> Result<(), ServiceContractError> {
         reject_unknown(self)?;
         validate_metadata(required_message(&self.metadata)?, true)?;
@@ -1448,7 +1473,7 @@ impl StrictWireMessage for daemon::TerminalOpenRequest {
     }
 }
 
-impl StrictWireMessage for daemon::TerminalOpenResponse {
+impl StrictWireMessage for terminal::TerminalOpenResponse {
     fn validate_wire(&self, _: bool) -> Result<(), ServiceContractError> {
         reject_unknown(self)?;
         if self.session_generation == 0
@@ -1463,7 +1488,9 @@ impl StrictWireMessage for daemon::TerminalOpenResponse {
             .map_err(|_| ServiceContractError::InvalidEnum)?;
         match outcome {
             common::Outcome::OUTCOME_ACCEPTED => {
-                if self.error.is_some() {
+                if self.error.is_some()
+                    || !bounded_opaque(&self.resource_handle, MAX_SERVICE_STRING_BYTES)
+                {
                     return Err(ServiceContractError::InconsistentResponse);
                 }
                 parse_server_stream_name(&self.stream_id)?;
@@ -1471,7 +1498,7 @@ impl StrictWireMessage for daemon::TerminalOpenResponse {
             common::Outcome::OUTCOME_DENIED
             | common::Outcome::OUTCOME_CANCELLED
             | common::Outcome::OUTCOME_FAILED => {
-                if !self.stream_id.is_empty() {
+                if !self.stream_id.is_empty() || !self.resource_handle.is_empty() {
                     return Err(ServiceContractError::InconsistentResponse);
                 }
                 validate_error(
@@ -1487,8 +1514,8 @@ impl StrictWireMessage for daemon::TerminalOpenResponse {
 }
 
 pub fn validate_terminal_open_response_for_request(
-    request: &daemon::TerminalOpenRequest,
-    response: &daemon::TerminalOpenResponse,
+    request: &terminal::TerminalOpenRequest,
+    response: &terminal::TerminalOpenResponse,
 ) -> Result<(), ServiceContractError> {
     request.validate_wire(true)?;
     response.validate_wire(false)?;
@@ -1505,7 +1532,7 @@ pub fn validate_terminal_open_response_for_request(
     Ok(())
 }
 
-fn validate_terminal_size(value: &daemon::TerminalSize) -> Result<(), ServiceContractError> {
+fn validate_terminal_size(value: &terminal::TerminalSize) -> Result<(), ServiceContractError> {
     reject_unknown(value)?;
     if value.rows == 0
         || value.columns == 0
@@ -1517,9 +1544,9 @@ fn validate_terminal_size(value: &daemon::TerminalSize) -> Result<(), ServiceCon
     Ok(())
 }
 
-fn validate_exec_selection(value: &daemon::ExecSelection) -> Result<(), ServiceContractError> {
+fn validate_exec_selection(value: &terminal::ExecSelection) -> Result<(), ServiceContractError> {
     reject_unknown(value)?;
-    use daemon::exec_selection::Selection;
+    use terminal::exec_selection::Selection;
     let authority = value
         .authority
         .enum_value()
@@ -1527,7 +1554,7 @@ fn validate_exec_selection(value: &daemon::ExecSelection) -> Result<(), ServiceC
     match (&value.selection, authority) {
         (
             Some(Selection::Arbitrary(arbitrary)),
-            daemon::ExecAuthority::EXEC_AUTHORITY_ADMIN_ARBITRARY,
+            terminal::ExecAuthority::EXEC_AUTHORITY_ADMIN_ARBITRARY,
         ) => {
             reject_unknown(arbitrary)?;
             if arbitrary.argv.is_empty() || arbitrary.argv.len() > MAX_TERMINAL_ARGV {
@@ -1552,7 +1579,7 @@ fn validate_exec_selection(value: &daemon::ExecSelection) -> Result<(), ServiceC
         }
         (
             Some(Selection::ConfiguredLaunch(configured)),
-            daemon::ExecAuthority::EXEC_AUTHORITY_CONFIGURED_LAUNCH,
+            terminal::ExecAuthority::EXEC_AUTHORITY_CONFIGURED_LAUNCH,
         ) => {
             reject_unknown(configured)?;
             if !bounded_opaque(&configured.configured_item_id, MAX_SERVICE_STRING_BYTES) {
@@ -1566,14 +1593,17 @@ fn validate_exec_selection(value: &daemon::ExecSelection) -> Result<(), ServiceC
         (false, None) => {}
         _ => return Err(ServiceContractError::InvalidOperationInput),
     }
+    if value.detached && value.tty {
+        return Err(ServiceContractError::InvalidOperationInput);
+    }
     Ok(())
 }
 
 fn validate_terminal_selection(
-    value: &daemon::TerminalSelection,
-) -> Result<daemon::TerminalKind, ServiceContractError> {
+    value: &terminal::TerminalSelection,
+) -> Result<terminal::TerminalKind, ServiceContractError> {
     reject_unknown(value)?;
-    use daemon::terminal_selection::Selection;
+    use terminal::terminal_selection::Selection;
     match value
         .selection
         .as_ref()
@@ -1581,23 +1611,43 @@ fn validate_terminal_selection(
     {
         Selection::Exec(exec) => {
             validate_exec_selection(exec)?;
-            Ok(daemon::TerminalKind::TERMINAL_KIND_EXEC)
+            Ok(terminal::TerminalKind::TERMINAL_KIND_EXEC)
         }
         Selection::Shell(shell) => {
             reject_unknown(shell)?;
-            if shell.use_default != shell.shell_name.is_empty()
-                || (!shell.shell_name.is_empty()
-                    && !bounded_opaque(&shell.shell_name, MAX_SERVICE_STRING_BYTES))
-            {
-                return Err(ServiceContractError::InvalidOperationInput);
+            let action = shell
+                .action
+                .enum_value()
+                .map_err(|_| ServiceContractError::InvalidEnum)?;
+            match action {
+                terminal::ShellAction::SHELL_ACTION_ATTACH_DEFAULT
+                    if shell.shell_handle.is_empty()
+                        && shell.configured_shell_id.is_empty()
+                        && shell.initial_size.is_some() =>
+                {
+                    validate_terminal_size(shell.initial_size.as_ref().expect("checked"))?;
+                }
+                terminal::ShellAction::SHELL_ACTION_ATTACH_CONFIGURED
+                    if shell.shell_handle.is_empty()
+                        && bounded_opaque(&shell.configured_shell_id, MAX_SERVICE_STRING_BYTES)
+                        && shell.initial_size.is_some() =>
+                {
+                    validate_terminal_size(shell.initial_size.as_ref().expect("checked"))?;
+                }
+                terminal::ShellAction::SHELL_ACTION_LIST
+                    if shell.shell_handle.is_empty()
+                        && shell.configured_shell_id.is_empty()
+                        && !shell.force
+                        && shell.initial_size.is_none() => {}
+                terminal::ShellAction::SHELL_ACTION_DETACH
+                | terminal::ShellAction::SHELL_ACTION_KILL
+                    if bounded_opaque(&shell.shell_handle, MAX_SERVICE_STRING_BYTES)
+                        && shell.configured_shell_id.is_empty()
+                        && !shell.force
+                        && shell.initial_size.is_none() => {}
+                _ => return Err(ServiceContractError::InvalidOperationInput),
             }
-            validate_terminal_size(
-                shell
-                    .initial_size
-                    .as_ref()
-                    .ok_or(ServiceContractError::MissingOperationInput)?,
-            )?;
-            Ok(daemon::TerminalKind::TERMINAL_KIND_SHELL)
+            Ok(terminal::TerminalKind::TERMINAL_KIND_SHELL)
         }
         Selection::Console(console) => {
             reject_unknown(console)?;
@@ -1607,33 +1657,47 @@ fn validate_terminal_selection(
                     .as_ref()
                     .ok_or(ServiceContractError::MissingOperationInput)?,
             )?;
-            Ok(daemon::TerminalKind::TERMINAL_KIND_CONSOLE)
+            Ok(terminal::TerminalKind::TERMINAL_KIND_CONSOLE)
+        }
+        Selection::RetainedLog(retained) => {
+            reject_unknown(retained)?;
+            if !bounded_opaque(&retained.exec_handle, MAX_SERVICE_STRING_BYTES)
+                || !valid_required_enum(
+                    &retained.output,
+                    terminal::OutputStream::OUTPUT_STREAM_UNSPECIFIED,
+                )
+            {
+                return Err(ServiceContractError::InvalidOperationInput);
+            }
+            Ok(terminal::TerminalKind::TERMINAL_KIND_RETAINED_LOG)
         }
     }
 }
 
-fn validate_terminal_started(value: &daemon::TerminalStarted) -> Result<(), ServiceContractError> {
+fn validate_terminal_started(
+    value: &terminal::TerminalStarted,
+) -> Result<(), ServiceContractError> {
     reject_unknown(value)?;
     let kind = value
         .kind
         .enum_value()
         .map_err(|_| ServiceContractError::InvalidEnum)?;
-    if kind == daemon::TerminalKind::TERMINAL_KIND_UNSPECIFIED {
+    if kind == terminal::TerminalKind::TERMINAL_KIND_UNSPECIFIED {
         return Err(ServiceContractError::InvalidEnum);
     }
     let provider = value
         .console_provider
         .enum_value()
         .map_err(|_| ServiceContractError::InvalidEnum)?;
-    if (kind == daemon::TerminalKind::TERMINAL_KIND_CONSOLE)
-        != (provider != daemon::ConsoleProviderKind::CONSOLE_PROVIDER_KIND_UNSPECIFIED)
+    if (kind == terminal::TerminalKind::TERMINAL_KIND_CONSOLE)
+        != (provider != terminal::ConsoleProviderKind::CONSOLE_PROVIDER_KIND_UNSPECIFIED)
     {
         return Err(ServiceContractError::InconsistentResponse);
     }
     Ok(())
 }
 
-fn validate_terminal_stdin(value: &daemon::TerminalStdin) -> Result<(), ServiceContractError> {
+fn validate_terminal_stdin(value: &terminal::TerminalStdin) -> Result<(), ServiceContractError> {
     reject_unknown(value)?;
     if value.data.len() > MAX_TERMINAL_CHUNK_BYTES || (value.data.is_empty() && !value.eof) {
         return Err(ServiceContractError::BoundExceeded);
@@ -1641,7 +1705,7 @@ fn validate_terminal_stdin(value: &daemon::TerminalStdin) -> Result<(), ServiceC
     Ok(())
 }
 
-fn validate_terminal_output(value: &daemon::TerminalOutput) -> Result<(), ServiceContractError> {
+fn validate_terminal_output(value: &terminal::TerminalOutput) -> Result<(), ServiceContractError> {
     reject_unknown(value)?;
     if value.data.len() > MAX_TERMINAL_CHUNK_BYTES || (value.data.is_empty() && !value.eof) {
         return Err(ServiceContractError::BoundExceeded);
@@ -1649,7 +1713,7 @@ fn validate_terminal_output(value: &daemon::TerminalOutput) -> Result<(), Servic
     Ok(())
 }
 
-fn validate_terminal_resize(value: &daemon::TerminalResize) -> Result<(), ServiceContractError> {
+fn validate_terminal_resize(value: &terminal::TerminalResize) -> Result<(), ServiceContractError> {
     reject_unknown(value)?;
     if value.operation_sequence == 0 {
         return Err(ServiceContractError::InvalidId);
@@ -1662,12 +1726,12 @@ fn validate_terminal_resize(value: &daemon::TerminalResize) -> Result<(), Servic
     )
 }
 
-fn validate_terminal_signal(value: &daemon::TerminalSignal) -> Result<(), ServiceContractError> {
+fn validate_terminal_signal(value: &terminal::TerminalSignal) -> Result<(), ServiceContractError> {
     reject_unknown(value)?;
     if value.operation_sequence == 0
         || !valid_required_enum(
             &value.signal,
-            daemon::TerminalSignalKind::TERMINAL_SIGNAL_KIND_UNSPECIFIED,
+            terminal::TerminalSignalKind::TERMINAL_SIGNAL_KIND_UNSPECIFIED,
         )
     {
         return Err(ServiceContractError::InvalidId);
@@ -1679,20 +1743,22 @@ fn validate_empty_terminal_message(value: &impl Message) -> Result<(), ServiceCo
     reject_unknown(value)
 }
 
-fn validate_terminal_status(value: &daemon::TerminalStatus) -> Result<(), ServiceContractError> {
+fn validate_terminal_status(value: &terminal::TerminalStatus) -> Result<(), ServiceContractError> {
     reject_unknown(value)?;
     if !valid_required_enum(
         &value.status,
-        daemon::TerminalStatusKind::TERMINAL_STATUS_KIND_UNSPECIFIED,
+        terminal::TerminalStatusKind::TERMINAL_STATUS_KIND_UNSPECIFIED,
     ) {
         return Err(ServiceContractError::InvalidEnum);
     }
     Ok(())
 }
 
-fn validate_terminal_outcome(value: &daemon::TerminalOutcome) -> Result<(), ServiceContractError> {
+fn validate_terminal_outcome(
+    value: &terminal::TerminalOutcome,
+) -> Result<(), ServiceContractError> {
     reject_unknown(value)?;
-    use daemon::terminal_outcome::Outcome;
+    use terminal::terminal_outcome::Outcome;
     match value
         .outcome
         .as_ref()
@@ -1717,7 +1783,7 @@ fn validate_terminal_outcome(value: &daemon::TerminalOutcome) -> Result<(), Serv
             reject_unknown(failed)?;
             if !valid_required_enum(
                 &failed.error,
-                daemon::TerminalErrorKind::TERMINAL_ERROR_KIND_UNSPECIFIED,
+                terminal::TerminalErrorKind::TERMINAL_ERROR_KIND_UNSPECIFIED,
             ) || !valid_required_enum(&failed.retry, common::RetryClass::RETRY_CLASS_UNSPECIFIED)
             {
                 return Err(ServiceContractError::InvalidEnum);
@@ -1727,16 +1793,67 @@ fn validate_terminal_outcome(value: &daemon::TerminalOutcome) -> Result<(), Serv
     Ok(())
 }
 
-impl StrictWireMessage for daemon::TerminalStreamFrame {
+fn validate_shell_management_result(
+    value: &terminal::ShellManagementResult,
+) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    let action = value
+        .action
+        .enum_value()
+        .map_err(|_| ServiceContractError::InvalidEnum)?;
+    if action == terminal::ShellAction::SHELL_ACTION_UNSPECIFIED
+        || value.sessions.len() > MAX_PAGE_SIZE as usize
+        || !optional_bounded_ascii(&value.affected_shell_handle, MAX_SERVICE_STRING_BYTES)
+        || (value.truncated && action != terminal::ShellAction::SHELL_ACTION_LIST)
+    {
+        return Err(ServiceContractError::InconsistentResponse);
+    }
+    let mut handles = BTreeSet::new();
+    for session in &value.sessions {
+        reject_unknown(session)?;
+        if !bounded_opaque(&session.shell_handle, MAX_SERVICE_STRING_BYTES)
+            || !valid_required_enum(
+                &session.state,
+                terminal::ShellSessionState::SHELL_SESSION_STATE_UNSPECIFIED,
+            )
+            || !handles.insert(session.shell_handle.as_str())
+        {
+            return Err(ServiceContractError::InvalidOperationInput);
+        }
+    }
+    match action {
+        terminal::ShellAction::SHELL_ACTION_LIST => {
+            if !value.affected_shell_handle.is_empty() || value.applied {
+                return Err(ServiceContractError::InconsistentResponse);
+            }
+        }
+        terminal::ShellAction::SHELL_ACTION_ATTACH_DEFAULT
+        | terminal::ShellAction::SHELL_ACTION_ATTACH_CONFIGURED
+        | terminal::ShellAction::SHELL_ACTION_DETACH
+        | terminal::ShellAction::SHELL_ACTION_KILL => {
+            if !bounded_opaque(&value.affected_shell_handle, MAX_SERVICE_STRING_BYTES)
+                || !value.applied
+            {
+                return Err(ServiceContractError::InconsistentResponse);
+            }
+        }
+        terminal::ShellAction::SHELL_ACTION_UNSPECIFIED => unreachable!("validated above"),
+    }
+    Ok(())
+}
+
+impl StrictWireMessage for terminal::TerminalStreamFrame {
     fn validate_wire(&self, _: bool) -> Result<(), ServiceContractError> {
         reject_unknown(self)?;
         if self.session_generation == 0
             || RequestId::new(self.request_id.clone()).is_err()
             || self.sequence > MAX_TERMINAL_FRAME_SEQUENCE
+            || !bounded_opaque(&self.operation_id, MAX_SERVICE_STRING_BYTES)
+            || !bounded_opaque(&self.resource_handle, MAX_SERVICE_STRING_BYTES)
         {
             return Err(ServiceContractError::InvalidId);
         }
-        use daemon::terminal_stream_frame::Frame;
+        use terminal::terminal_stream_frame::Frame;
         match self
             .frame
             .as_ref()
@@ -1756,6 +1873,7 @@ impl StrictWireMessage for daemon::TerminalStreamFrame {
             Frame::Cancel(cancel) => validate_empty_terminal_message(cancel)?,
             Frame::Status(status) => validate_terminal_status(status)?,
             Frame::Outcome(outcome) => validate_terminal_outcome(outcome)?,
+            Frame::ShellResult(result) => validate_shell_management_result(result)?,
         }
         Ok(())
     }
@@ -1777,13 +1895,17 @@ enum TerminalProtocolState {
 }
 
 pub struct TerminalStreamValidator {
-    kind: daemon::TerminalKind,
+    kind: terminal::TerminalKind,
     session_generation: u64,
     request_id: [u8; 16],
+    operation_id: String,
+    resource_handle: String,
     next_client_sequence: u64,
     next_server_sequence: u64,
     state: TerminalProtocolState,
     tty: bool,
+    detached_exec: bool,
+    shell_action: Option<terminal::ShellAction>,
 }
 
 impl fmt::Debug for TerminalStreamValidator {
@@ -1793,6 +1915,8 @@ impl fmt::Debug for TerminalStreamValidator {
             .field("kind", &self.kind)
             .field("session_generation", &"<redacted>")
             .field("request_id", &"<redacted>")
+            .field("operation_id", &"<redacted>")
+            .field("resource_handle", &"<redacted>")
             .field("state", &self.state)
             .field("tty", &self.tty)
             .finish()
@@ -1801,13 +1925,19 @@ impl fmt::Debug for TerminalStreamValidator {
 
 impl TerminalStreamValidator {
     pub fn new(
-        kind: daemon::TerminalKind,
+        kind: terminal::TerminalKind,
         session_generation: u64,
         request_id: [u8; 16],
+        operation_id: impl Into<String>,
+        resource_handle: impl Into<String>,
     ) -> Result<Self, ServiceContractError> {
-        if kind == daemon::TerminalKind::TERMINAL_KIND_UNSPECIFIED
+        let operation_id = operation_id.into();
+        let resource_handle = resource_handle.into();
+        if kind == terminal::TerminalKind::TERMINAL_KIND_UNSPECIFIED
             || session_generation == 0
             || request_id == [0; 16]
+            || !bounded_opaque(&operation_id, MAX_SERVICE_STRING_BYTES)
+            || !bounded_opaque(&resource_handle, MAX_SERVICE_STRING_BYTES)
         {
             return Err(ServiceContractError::InvalidId);
         }
@@ -1815,21 +1945,27 @@ impl TerminalStreamValidator {
             kind,
             session_generation,
             request_id,
+            operation_id,
+            resource_handle,
             next_client_sequence: 0,
             next_server_sequence: 0,
             state: TerminalProtocolState::AwaitSelection,
             tty: false,
+            detached_exec: false,
+            shell_action: None,
         })
     }
 
     pub fn accept(
         &mut self,
         direction: TerminalFrameDirection,
-        frame: &daemon::TerminalStreamFrame,
+        frame: &terminal::TerminalStreamFrame,
     ) -> Result<(), ServiceContractError> {
         frame.validate_wire(false)?;
         if frame.session_generation != self.session_generation
             || frame.request_id.as_slice() != self.request_id
+            || frame.operation_id != self.operation_id
+            || frame.resource_handle != self.resource_handle
         {
             return Err(ServiceContractError::InconsistentResponse);
         }
@@ -1854,10 +1990,10 @@ impl TerminalStreamValidator {
     fn accept_frame(
         &mut self,
         direction: TerminalFrameDirection,
-        frame: &daemon::TerminalStreamFrame,
+        frame: &terminal::TerminalStreamFrame,
     ) -> Result<(), ServiceContractError> {
-        use daemon::terminal_selection::Selection;
-        use daemon::terminal_stream_frame::Frame;
+        use terminal::terminal_selection::Selection;
+        use terminal::terminal_stream_frame::Frame;
         let payload = frame
             .frame
             .as_ref()
@@ -1872,9 +2008,32 @@ impl TerminalStreamValidator {
                 if selected != self.kind {
                     return Err(ServiceContractError::InvalidOperationInput);
                 }
+                if matches!(
+                    selection.selection.as_ref(),
+                    Some(Selection::RetainedLog(retained))
+                        if retained.exec_handle != self.resource_handle
+                ) {
+                    return Err(ServiceContractError::InconsistentResponse);
+                }
                 self.tty = match selection.selection.as_ref() {
-                    Some(Selection::Exec(exec)) => exec.tty,
-                    Some(Selection::Shell(_) | Selection::Console(_)) => true,
+                    Some(Selection::Exec(exec)) => {
+                        self.detached_exec = exec.detached;
+                        exec.tty
+                    }
+                    Some(Selection::Shell(shell)) => {
+                        let action = shell
+                            .action
+                            .enum_value()
+                            .map_err(|_| ServiceContractError::InvalidEnum)?;
+                        self.shell_action = Some(action);
+                        matches!(
+                            action,
+                            terminal::ShellAction::SHELL_ACTION_ATTACH_DEFAULT
+                                | terminal::ShellAction::SHELL_ACTION_ATTACH_CONFIGURED
+                        )
+                    }
+                    Some(Selection::Console(_)) => true,
+                    Some(Selection::RetainedLog(_)) => false,
                     None => return Err(ServiceContractError::MissingOperationInput),
                 };
                 self.state = TerminalProtocolState::AwaitStarted;
@@ -1886,6 +2045,24 @@ impl TerminalStreamValidator {
                 Frame::Started(started),
             ) if started.kind.enum_value().ok() == Some(self.kind) && started.tty == self.tty => {
                 self.state = TerminalProtocolState::Active;
+                Ok(())
+            }
+            (
+                TerminalProtocolState::AwaitStarted,
+                TerminalFrameDirection::ServerToClient,
+                Frame::ShellResult(result),
+            ) if self
+                .shell_action
+                .is_some_and(|action| action == result.action.enum_value_or_default())
+                && !matches!(
+                    self.shell_action,
+                    Some(
+                        terminal::ShellAction::SHELL_ACTION_ATTACH_DEFAULT
+                            | terminal::ShellAction::SHELL_ACTION_ATTACH_CONFIGURED
+                    )
+                ) =>
+            {
+                self.state = TerminalProtocolState::Closing;
                 Ok(())
             }
             (
@@ -1910,6 +2087,18 @@ impl TerminalStreamValidator {
                 TerminalFrameDirection::ServerToClient,
                 Frame::Outcome(_),
             ) => {
+                if self.detached_exec
+                    && !matches!(
+                        payload,
+                        Frame::Outcome(outcome)
+                            if matches!(
+                                outcome.outcome,
+                                Some(terminal::terminal_outcome::Outcome::Detached(_))
+                            )
+                    )
+                {
+                    return Err(ServiceContractError::InconsistentResponse);
+                }
                 self.state = TerminalProtocolState::Terminal;
                 Ok(())
             }
@@ -1917,12 +2106,16 @@ impl TerminalStreamValidator {
                 TerminalProtocolState::Active | TerminalProtocolState::Closing,
                 TerminalFrameDirection::ServerToClient,
                 Frame::Stdout(_) | Frame::Stderr(_) | Frame::Status(_),
-            ) => Ok(()),
+            ) if !self.detached_exec => Ok(()),
             (
                 TerminalProtocolState::Active,
                 TerminalFrameDirection::ClientToServer,
                 Frame::Stdin(_) | Frame::CloseStdin(_) | Frame::Signal(_),
-            ) => Ok(()),
+            ) if !self.detached_exec
+                && self.kind != terminal::TerminalKind::TERMINAL_KIND_RETAINED_LOG =>
+            {
+                Ok(())
+            }
             (
                 TerminalProtocolState::Active,
                 TerminalFrameDirection::ClientToServer,
@@ -1943,13 +2136,72 @@ impl TerminalStreamValidator {
     pub fn is_terminal(&self) -> bool {
         self.state == TerminalProtocolState::Terminal
     }
+
+    pub fn accept_transport_credit(&self, bytes: u32) -> Result<(), ServiceContractError> {
+        if bytes == 0
+            || bytes > MAX_NAMED_STREAM_QUEUE_BYTES
+            || self.state == TerminalProtocolState::Terminal
+        {
+            return Err(ServiceContractError::InconsistentResponse);
+        }
+        Ok(())
+    }
+
+    pub fn accept_transport_close(&self) -> Result<(), ServiceContractError> {
+        if self.state != TerminalProtocolState::Terminal {
+            return Err(ServiceContractError::InconsistentResponse);
+        }
+        Ok(())
+    }
+
+    pub fn accept_transport_reset(&self) -> Result<(), ServiceContractError> {
+        self.accept_transport_close()
+    }
 }
 
-pub struct RedactedTerminalFrame<'a>(pub &'a daemon::TerminalStreamFrame);
+pub struct ServerStreamLease {
+    stream_id: u16,
+    client_opened: bool,
+}
+
+impl ServerStreamLease {
+    pub fn reserve(stream_id: u16) -> Result<Self, ServiceContractError> {
+        server_stream_name(stream_id)?;
+        Ok(Self {
+            stream_id,
+            client_opened: false,
+        })
+    }
+
+    pub fn name(&self) -> String {
+        server_stream_name(self.stream_id).expect("validated reservation")
+    }
+
+    pub fn open_by_client(&mut self, name: &str) -> Result<u16, ServiceContractError> {
+        let stream_id = parse_server_stream_name(name)?;
+        if self.client_opened || stream_id != self.stream_id {
+            return Err(ServiceContractError::InconsistentResponse);
+        }
+        self.client_opened = true;
+        Ok(stream_id)
+    }
+}
+
+impl fmt::Debug for ServerStreamLease {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ServerStreamLease")
+            .field("stream_id", &"<redacted>")
+            .field("client_opened", &self.client_opened)
+            .finish()
+    }
+}
+
+pub struct RedactedTerminalFrame<'a>(pub &'a terminal::TerminalStreamFrame);
 
 impl fmt::Debug for RedactedTerminalFrame<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use daemon::terminal_stream_frame::Frame;
+        use terminal::terminal_stream_frame::Frame;
         let kind = self.0.frame.as_ref().map(|frame| match frame {
             Frame::Select(_) => "select",
             Frame::Started(_) => "started",
@@ -1964,11 +2216,14 @@ impl fmt::Debug for RedactedTerminalFrame<'_> {
             Frame::Cancel(_) => "cancel",
             Frame::Status(_) => "status",
             Frame::Outcome(_) => "outcome",
+            Frame::ShellResult(_) => "shell-result",
         });
         formatter
             .debug_struct("TerminalStreamFrame")
             .field("session_generation", &"<redacted>")
             .field("request_id", &"<redacted>")
+            .field("operation_id", &"<redacted>")
+            .field("resource_handle", &"<redacted>")
             .field("sequence", &self.0.sequence)
             .field("kind", &kind)
             .finish()

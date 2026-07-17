@@ -12,6 +12,10 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added transport-neutral terminal contracts and complete typed guest bootstrap,
+  reconnect, exec inspection/cancellation, persistent shell, file transfer,
+  security-key, and shutdown protocols with server-owned streams and bounded,
+  generation-bound frames.
 - Added bounded typed daemon realm/workload/inspect projections, server-allocated
   terminal named-stream framing, and authenticated local session-generation
   discovery without JSON payloads, caller-selected stream IDs, or generation

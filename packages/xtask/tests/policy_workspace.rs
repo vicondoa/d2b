@@ -1451,7 +1451,7 @@ fn w4_provider_delivery_fingerprints_cover_every_reserved_file() {
 fn shared_contract_policy_freezes_services_dependencies_and_ownership() {
     let root = repo_root();
     let policy = xtask::wave_policy::read_policy(&root).expect("shared-contract policy");
-    assert_eq!(policy.schema_version, 6);
+    assert_eq!(policy.schema_version, 7);
     assert_eq!(policy.authority_repository, "github.com/vicondoa/d2b");
     let frozen = policy
         .frozen_service_packages
@@ -1604,17 +1604,55 @@ fn shared_contract_policy_freezes_services_dependencies_and_ownership() {
             other => other,
         }
         .to_ascii_lowercase();
-        let request_module = if method.request == "ServiceRequest" {
-            "common"
+        let request_module = match method.request.as_str() {
+            "ServiceRequest" => "common",
+            "TerminalOpenRequest" => "terminal",
+            _ => "daemon",
+        };
+        let response_module = if method.response == "TerminalOpenResponse" {
+            "terminal"
         } else {
             "daemon"
         };
         assert!(
             generated.contains(&format!(
-                "pub async fn {method_name}(&self, ctx: ttrpc::context::Context, req: &super::{request_module}::{}) -> ::ttrpc::Result<super::daemon::{}>",
+                "pub async fn {method_name}(&self, ctx: ttrpc::context::Context, req: &super::{request_module}::{}) -> ::ttrpc::Result<super::{response_module}::{}>",
                 method.request, method.response
             )),
             "generated daemon binding does not freeze {} as {} -> {}",
+            method.method,
+            method.request,
+            method.response
+        );
+    }
+    let generated =
+        read_repo_file("packages/d2b-contracts/src/generated_v2_services/guest_ttrpc.rs");
+    for method in &policy.guest_typed_methods {
+        let method_name = match method.method.as_str() {
+            "CancelExec" => "cancel_exec",
+            "FileTransfer" => "file_transfer",
+            "InspectExec" => "inspect_exec",
+            "OpenShell" => "open_shell",
+            "SecurityKey" => "security_key",
+            other => other,
+        }
+        .to_ascii_lowercase();
+        let request_module = match method.request.as_str() {
+            "CancelRequest" => "common",
+            "TerminalOpenRequest" => "terminal",
+            _ => "guest",
+        };
+        let response_module = match method.response.as_str() {
+            "CancelResponse" => "common",
+            "TerminalOpenResponse" => "terminal",
+            _ => "guest",
+        };
+        assert!(
+            generated.contains(&format!(
+                "pub async fn {method_name}(&self, ctx: ttrpc::context::Context, req: &super::{request_module}::{}) -> ::ttrpc::Result<super::{response_module}::{}>",
+                method.request, method.response
+            )),
+            "generated guest binding does not freeze {} as {} -> {}",
             method.method,
             method.request,
             method.response

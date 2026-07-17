@@ -128,35 +128,46 @@ use closed enums. Responses contain at most 64 realms or 256 workloads.
 `PageInfo.returned_items` must equal the encoded row count; truncation requires
 a bounded next cursor, and a supplied total cannot be smaller than the returned
 count. Error outcomes cannot carry rows or pagination. The daemon service
-fingerprint hashes the canonical daemon protobuf source, so a projection or
-stream shape change changes the advertised schema identity.
+fingerprint hashes the canonical daemon and shared terminal protobuf sources,
+so a projection or stream shape change changes the advertised schema identity.
 
-### Daemon terminal streams
+### Shared terminal streams
 
-`Exec`, `Shell`, and `OpenConsole` accept `TerminalOpenRequest`, which has no
-stream-id field. After admission, the server reserves a ComponentSession named
-channel in the range `0x0100..=0xffff` and returns its canonical `stream-N`
-spelling. The client opens exactly that returned stream. A client cannot name,
-preselect, or cause the server to open a caller-selected channel.
+The transport-neutral `d2b.terminal.v2` package is shared by
+`DaemonService.Exec`/`Shell`/`OpenConsole` and
+`GuestService.Exec`/`OpenShell`. `TerminalOpenRequest` has no stream-id field.
+After admission, the server reserves a ComponentSession named channel in the
+range `0x0100..=0xffff` and returns its canonical `stream-N` spelling plus a
+bounded opaque resource handle. The client opens exactly that returned stream,
+once. A client cannot name, preselect, reuse, or cause the server to open a
+caller-selected channel.
 
 The first logical message is a client-to-server `TerminalSelection` matching
 the opening method. Exec selection is either bounded arbitrary argv with the
 closed `admin-arbitrary` authority or one opaque configured-item ID with the
 closed `configured-launch` authority. The latter is resolved from the
-integrity-checked bundle; it carries no argv. Shell selection carries only a
-bounded optional shell name and terminal shape. Console selection carries only
-terminal shape. No selection carries environment variables, a working
+integrity-checked bundle; it carries no argv. Shell selection uses closed
+attach-default, attach-configured, list, detach, and kill actions with opaque
+configured IDs or server-issued handles. Console selection carries only
+terminal shape. Retained-log selection carries an exec handle, closed output
+stream, and offset. No selection carries environment variables, a working
 directory, a host path, credentials, or provider-native data.
 
 Each frame binds the exact authenticated session generation and 16-byte opening
-request ID. Client and server frame sequences are independent, start at zero,
-increase by one, and are capped. Client frames are selection, bounded stdin,
-PTY resize, a closed signal, stdin close, detach, close, or cancellation.
-Server frames are start acknowledgement, bounded stdout/stderr, closed status,
-or one terminal outcome. Resize is valid only for a selected PTY. Once a
-client requests detach, close, or cancellation, only in-flight server
-output/status and the terminal outcome remain valid. No frame is valid after
-the first terminal outcome.
+request ID, operation ID, and resource handle. Client and server frame
+sequences are independent, start at zero, increase by one, and are capped.
+Client frames are selection, bounded stdin, PTY resize, a closed signal, stdin
+close, detach, close, or cancellation. Server frames are start acknowledgement,
+bounded stdout/stderr, closed status, shell-management result, or one terminal
+outcome. Resize is valid only for a selected PTY. Detached exec rejects PTY and
+streamed I/O and terminates the stream with the detached outcome while the
+guest-owned job continues. Once a client requests detach, close, or
+cancellation, only in-flight server output/status and the terminal outcome
+remain valid. No frame is valid after the first terminal outcome.
+
+ComponentSession credits, close, and reset remain transport controls rather
+than application frames. Credit is nonzero and bounded; close or reset is
+accepted by the application validator only after the typed terminal outcome.
 
 Arbitrary argv is limited to 256 UTF-8 arguments, 4 KiB per argument and
 64 KiB total. Terminal chunks are limited to 64 KiB. Generated Debug
@@ -165,6 +176,44 @@ errors are closed slugs. Runtime logging, audit, traces, and metrics must never
 format raw generated messages or record argv, terminal bytes, configured item
 IDs, shell names, request IDs, stream IDs, environment, working directories, or
 paths.
+
+### Guest operations
+
+`GuestService.Bootstrap` and `Reconnect` use typed requests and responses bound
+to the exact ComponentSession generation and request/operation IDs. They
+confirm the guest and parent static public-key digests, an opaque guest identity
+handle, and at most 32 closed capabilities. Bootstrap PSKs and static private
+keys remain handshake-only and are not representable in the service payload.
+
+`CancelExec` names the exact exec resource handle, generation, request, control
+sequence, and closed cancellation reason/outcome. `InspectExec` uses one closed
+query: status, bounded wait, detached-exec list page, or retained-log stream.
+Status and list results contain only closed lifecycle/stdin state, offsets,
+retention counters, opaque handles, and argv digests. A retained-log result
+uses a server-allocated stream and the shared retained-log terminal selection.
+
+`FileTransfer` names one closed artifact ID and one opaque configured-intent ID;
+paths are not representable. Its stream binds generation/request/operation/
+resource, direction, offset, declared size, optional expected digest, 64 KiB
+chunks, EOF/final digest, bounded credit, cancellation, and one completion or
+error outcome. Total transfer size is capped at 16 MiB.
+
+`SecurityKey` names only opaque device and ceremony handles and a closed
+ceremony kind. Its stream carries exactly 64-byte CTAPHID reports in explicit
+guest/device directions, closed approval request/decision, cancellation, and
+one completion or bounded error. It cannot carry credentials, relying-party
+secrets, device paths, or arbitrary diagnostics.
+
+`Shutdown` carries one closed power action and an absolute deadline within the
+request lifetime. Its response is either accepted with no final result or a
+strict final completed/already-applied/cancelled/failed outcome. Console remains
+host-owned; `GuestService` has no `OpenConsole` method.
+
+Every guest request, response, nested oneof, and stream frame rejects unknown
+fields, unknown or unspecified enums, over-limit data, generation/request/
+operation/resource mismatches, invalid direction or sequence, duplicate
+terminal outcomes, and mixed success/error fields. Generated Debug output is
+redacted for all guest and shared-terminal messages.
 
 ## Bounds and strictness
 

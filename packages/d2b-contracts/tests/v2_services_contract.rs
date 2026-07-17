@@ -18,11 +18,11 @@ use d2b_contracts::v2_provider::{
 use d2b_contracts::v2_services::{
     BROKER_PIDFD_ATTACHMENT_INDEX, CONTROLLER_PIDFD_ATTACHMENT_INDEX, MAX_REALM_CHILD_FDS,
     MAX_SERVICE_STRING_BYTES, MAX_TERMINAL_CHUNK_BYTES, RedactedTerminalFrame, SERVICE_INVENTORY,
-    SERVICE_PACKAGES, ServiceContractError, ServiceInventoryDocument, StrictWireMessage,
-    TerminalFrameDirection, TerminalStreamValidator, broker, common, daemon,
+    SERVICE_PACKAGES, ServerStreamLease, ServiceContractError, ServiceInventoryDocument,
+    StrictWireMessage, TerminalFrameDirection, TerminalStreamValidator, broker, common, daemon,
     decode_spawn_response_for_request, decode_strict, encode_strict,
     observability_query_response_from_wire, observability_query_result_to_wire,
-    provider_method_for_capability, provider_operation_input, service_inventory_document,
+    provider_method_for_capability, provider_operation_input, service_inventory_document, terminal,
     validate_provider_response_for_method, validate_spawn_response_for_request,
     validate_terminal_open_response_for_request,
 };
@@ -180,6 +180,7 @@ const PROTO_SOURCES: &[&str] = &[
     include_str!("../proto/v2/runtime_systemd_user.proto"),
     include_str!("../proto/v2/security_key.proto"),
     include_str!("../proto/v2/shell.proto"),
+    include_str!("../proto/v2/terminal.proto"),
     include_str!("../proto/v2/tty.proto"),
     include_str!("../proto/v2/user.proto"),
     include_str!("../proto/v2/wayland.proto"),
@@ -1445,7 +1446,9 @@ fn payload_surface_has_no_secret_path_or_execution_authority_fields() {
     let combined = PROTO_SOURCES
         .iter()
         .copied()
-        .filter(|source| !source.contains("package d2b.daemon.v2"))
+        .filter(|source| {
+            !source.contains("package d2b.daemon.v2") && !source.contains("package d2b.terminal.v2")
+        })
         .collect::<Vec<_>>()
         .join("\n");
     for forbidden in [
@@ -1453,7 +1456,6 @@ fn payload_surface_has_no_secret_path_or_execution_authority_fields() {
         "credential_bytes",
         "raw_path",
         "host_path",
-        "argv",
         "command",
         "environment",
         "principal_id",
@@ -1465,11 +1467,21 @@ fn payload_surface_has_no_secret_path_or_execution_authority_fields() {
             "forbidden protobuf field: {forbidden}"
         );
     }
+    assert!(!combined.contains("repeated bytes argv"));
     let daemon = include_str!("../proto/v2/daemon.proto");
-    assert_eq!(daemon.matches("repeated bytes argv").count(), 1);
-    assert!(!daemon.contains("string cwd"));
-    assert!(!daemon.contains("ExecEnv"));
-    assert!(!daemon.contains("stream_id = 6"));
+    let guest = include_str!("../proto/v2/guest.proto");
+    let terminal = include_str!("../proto/v2/terminal.proto");
+    assert_eq!(terminal.matches("repeated bytes argv").count(), 1);
+    assert!(!terminal.contains("string cwd"));
+    assert!(!terminal.contains("ExecEnv"));
+    assert!(!terminal.contains("stream_id = 6"));
+    assert!(!daemon.contains("message Terminal"));
+    assert!(!guest.contains("message Terminal"));
+    assert!(daemon.contains("d2b.terminal.v2.TerminalOpenRequest"));
+    assert!(guest.contains("d2b.terminal.v2.TerminalOpenRequest"));
+    assert!(!guest.contains("OpenConsole"));
+    assert!(!guest.contains(" path "));
+    assert!(!guest.contains("credentials"));
     assert!(!combined.contains(".v1"));
     for (_, _, generated) in TTRPC_SOURCES {
         assert!(!generated.contains(".v1"));
@@ -1635,9 +1647,9 @@ fn typed_daemon_results_enforce_bounds_and_pagination() {
     inconsistent.validate_wire(false).unwrap();
 }
 
-fn valid_terminal_open_request() -> daemon::TerminalOpenRequest {
+fn valid_terminal_open_request() -> terminal::TerminalOpenRequest {
     let request = valid_request();
-    daemon::TerminalOpenRequest {
+    terminal::TerminalOpenRequest {
         metadata: request.metadata,
         scope: request.scope,
         resource_id: "workload-1".to_owned(),
@@ -1647,34 +1659,36 @@ fn valid_terminal_open_request() -> daemon::TerminalOpenRequest {
     }
 }
 
-fn arbitrary_exec_selection() -> daemon::TerminalSelection {
-    let mut exec = daemon::ExecSelection {
-        authority: daemon::ExecAuthority::EXEC_AUTHORITY_ADMIN_ARBITRARY.into(),
+fn arbitrary_exec_selection() -> terminal::TerminalSelection {
+    let mut exec = terminal::ExecSelection {
+        authority: terminal::ExecAuthority::EXEC_AUTHORITY_ADMIN_ARBITRARY.into(),
         tty: true,
-        initial_size: MessageField::some(daemon::TerminalSize {
+        initial_size: MessageField::some(terminal::TerminalSize {
             rows: 24,
             columns: 80,
             ..Default::default()
         }),
         ..Default::default()
     };
-    exec.set_arbitrary(daemon::ArbitraryExecSelection {
+    exec.set_arbitrary(terminal::ArbitraryExecSelection {
         argv: vec![b"printf".to_vec(), b"private-argument".to_vec()],
         ..Default::default()
     });
-    let mut selection = daemon::TerminalSelection::new();
+    let mut selection = terminal::TerminalSelection::new();
     selection.set_exec(exec);
     selection
 }
 
 fn terminal_frame(
     sequence: u64,
-    frame: daemon::terminal_stream_frame::Frame,
-) -> daemon::TerminalStreamFrame {
-    daemon::TerminalStreamFrame {
+    frame: terminal::terminal_stream_frame::Frame,
+) -> terminal::TerminalStreamFrame {
+    terminal::TerminalStreamFrame {
         session_generation: 7,
         request_id: vec![0x11; 16],
         sequence,
+        operation_id: "operation-1".to_owned(),
+        resource_handle: "exec-1".to_owned(),
         frame: Some(frame),
         ..Default::default()
     }
@@ -1688,19 +1702,27 @@ fn terminal_opener_has_only_server_selected_stream_authority() {
     encoded.extend_from_slice(&[0x3a, 0x0a]);
     encoded.extend_from_slice(b"stream-256");
     assert_eq!(
-        decode_strict::<daemon::TerminalOpenRequest>(&encoded, true),
+        decode_strict::<terminal::TerminalOpenRequest>(&encoded, true),
         Err(ServiceContractError::UnknownField)
     );
 
-    let response = daemon::TerminalOpenResponse {
+    let response = terminal::TerminalOpenResponse {
         outcome: common::Outcome::OUTCOME_ACCEPTED.into(),
         operation_id: "operation-1".to_owned(),
         stream_id: "stream-256".to_owned(),
         session_generation: 1,
         request_id: vec![0x11; 16],
+        resource_handle: "exec-1".to_owned(),
         ..Default::default()
     };
     validate_terminal_open_response_for_request(&request, &response).unwrap();
+    let mut lease = ServerStreamLease::reserve(256).unwrap();
+    assert_eq!(lease.name(), "stream-256");
+    assert_eq!(lease.open_by_client(&response.stream_id).unwrap(), 256);
+    assert_eq!(
+        lease.open_by_client(&response.stream_id),
+        Err(ServiceContractError::InconsistentResponse)
+    );
 
     let mut mismatch = response;
     mismatch.session_generation = 2;
@@ -1708,73 +1730,88 @@ fn terminal_opener_has_only_server_selected_stream_authority() {
         validate_terminal_open_response_for_request(&request, &mismatch),
         Err(ServiceContractError::InconsistentResponse)
     );
+    mismatch.session_generation = 1;
+    mismatch.resource_handle.clear();
+    assert_eq!(
+        mismatch.validate_wire(false),
+        Err(ServiceContractError::InconsistentResponse)
+    );
 }
 
 #[test]
 fn every_terminal_frame_variant_is_strict_and_bounded() {
-    use daemon::terminal_stream_frame::Frame;
+    use terminal::terminal_stream_frame::Frame;
     let variants = vec![
         Frame::Select(arbitrary_exec_selection()),
-        Frame::Started(daemon::TerminalStarted {
-            kind: daemon::TerminalKind::TERMINAL_KIND_EXEC.into(),
+        Frame::Started(terminal::TerminalStarted {
+            kind: terminal::TerminalKind::TERMINAL_KIND_EXEC.into(),
             tty: true,
             ..Default::default()
         }),
-        Frame::Stdin(daemon::TerminalStdin {
+        Frame::Stdin(terminal::TerminalStdin {
             data: b"input".to_vec(),
             ..Default::default()
         }),
-        Frame::Stdout(daemon::TerminalOutput {
+        Frame::Stdout(terminal::TerminalOutput {
             data: b"output".to_vec(),
             ..Default::default()
         }),
-        Frame::Stderr(daemon::TerminalOutput {
+        Frame::Stderr(terminal::TerminalOutput {
             data: b"error".to_vec(),
             ..Default::default()
         }),
-        Frame::Resize(daemon::TerminalResize {
+        Frame::Resize(terminal::TerminalResize {
             operation_sequence: 1,
-            size: MessageField::some(daemon::TerminalSize {
+            size: MessageField::some(terminal::TerminalSize {
                 rows: 25,
                 columns: 81,
                 ..Default::default()
             }),
             ..Default::default()
         }),
-        Frame::Signal(daemon::TerminalSignal {
+        Frame::Signal(terminal::TerminalSignal {
             operation_sequence: 2,
-            signal: daemon::TerminalSignalKind::TERMINAL_SIGNAL_KIND_INTERRUPT.into(),
+            signal: terminal::TerminalSignalKind::TERMINAL_SIGNAL_KIND_INTERRUPT.into(),
             ..Default::default()
         }),
-        Frame::CloseStdin(daemon::TerminalCloseStdin::new()),
-        Frame::Detach(daemon::TerminalDetach::new()),
-        Frame::Close(daemon::TerminalClose::new()),
-        Frame::Cancel(daemon::TerminalCancel::new()),
-        Frame::Status(daemon::TerminalStatus {
-            status: daemon::TerminalStatusKind::TERMINAL_STATUS_KIND_RUNNING.into(),
+        Frame::CloseStdin(terminal::TerminalCloseStdin::new()),
+        Frame::Detach(terminal::TerminalDetach::new()),
+        Frame::Close(terminal::TerminalClose::new()),
+        Frame::Cancel(terminal::TerminalCancel::new()),
+        Frame::Status(terminal::TerminalStatus {
+            status: terminal::TerminalStatusKind::TERMINAL_STATUS_KIND_RUNNING.into(),
             ..Default::default()
         }),
         Frame::Outcome({
-            let mut outcome = daemon::TerminalOutcome::new();
-            outcome.set_exited(daemon::TerminalExited {
+            let mut outcome = terminal::TerminalOutcome::new();
+            outcome.set_exited(terminal::TerminalExited {
                 exit_code: 0,
                 ..Default::default()
             });
             outcome
+        }),
+        Frame::ShellResult(terminal::ShellManagementResult {
+            action: terminal::ShellAction::SHELL_ACTION_LIST.into(),
+            sessions: vec![terminal::ShellSession {
+                shell_handle: "shell-1".to_owned(),
+                state: terminal::ShellSessionState::SHELL_SESSION_STATE_DETACHED.into(),
+                ..Default::default()
+            }],
+            ..Default::default()
         }),
     ];
     for (sequence, variant) in variants.into_iter().enumerate() {
         let frame = terminal_frame(sequence as u64, variant);
         let encoded = encode_strict(&frame, false).expect("terminal frame encodes");
         assert_eq!(
-            decode_strict::<daemon::TerminalStreamFrame>(&encoded, false).unwrap(),
+            decode_strict::<terminal::TerminalStreamFrame>(&encoded, false).unwrap(),
             frame
         );
     }
 
     let mut oversized = terminal_frame(
         0,
-        Frame::Stdin(daemon::TerminalStdin {
+        Frame::Stdin(terminal::TerminalStdin {
             data: vec![0x55; MAX_TERMINAL_CHUNK_BYTES + 1],
             ..Default::default()
         }),
@@ -1792,10 +1829,16 @@ fn every_terminal_frame_variant_is_strict_and_bounded() {
 
 #[test]
 fn terminal_state_machine_binds_direction_generation_and_one_outcome() {
-    use daemon::terminal_stream_frame::Frame;
-    let mut validator =
-        TerminalStreamValidator::new(daemon::TerminalKind::TERMINAL_KIND_EXEC, 7, [0x11; 16])
-            .unwrap();
+    use terminal::terminal_stream_frame::Frame;
+    let mut validator = TerminalStreamValidator::new(
+        terminal::TerminalKind::TERMINAL_KIND_EXEC,
+        7,
+        [0x11; 16],
+        "operation-1",
+        "exec-1",
+    )
+    .unwrap();
+    validator.accept_transport_credit(1024).unwrap();
     validator
         .accept(
             TerminalFrameDirection::ClientToServer,
@@ -1807,8 +1850,8 @@ fn terminal_state_machine_binds_direction_generation_and_one_outcome() {
             TerminalFrameDirection::ServerToClient,
             &terminal_frame(
                 0,
-                Frame::Started(daemon::TerminalStarted {
-                    kind: daemon::TerminalKind::TERMINAL_KIND_EXEC.into(),
+                Frame::Started(terminal::TerminalStarted {
+                    kind: terminal::TerminalKind::TERMINAL_KIND_EXEC.into(),
                     tty: true,
                     ..Default::default()
                 }),
@@ -1820,7 +1863,7 @@ fn terminal_state_machine_binds_direction_generation_and_one_outcome() {
             TerminalFrameDirection::ClientToServer,
             &terminal_frame(
                 1,
-                Frame::Stdin(daemon::TerminalStdin {
+                Frame::Stdin(terminal::TerminalStdin {
                     data: b"private-input".to_vec(),
                     ..Default::default()
                 }),
@@ -1832,7 +1875,7 @@ fn terminal_state_machine_binds_direction_generation_and_one_outcome() {
             TerminalFrameDirection::ServerToClient,
             &terminal_frame(
                 1,
-                Frame::Stdout(daemon::TerminalOutput {
+                Frame::Stdout(terminal::TerminalOutput {
                     data: b"private-output".to_vec(),
                     ..Default::default()
                 }),
@@ -1842,11 +1885,11 @@ fn terminal_state_machine_binds_direction_generation_and_one_outcome() {
     validator
         .accept(
             TerminalFrameDirection::ClientToServer,
-            &terminal_frame(2, Frame::Cancel(daemon::TerminalCancel::new())),
+            &terminal_frame(2, Frame::Cancel(terminal::TerminalCancel::new())),
         )
         .unwrap();
-    let mut outcome = daemon::TerminalOutcome::new();
-    outcome.set_cancelled(daemon::TerminalCancelled::new());
+    let mut outcome = terminal::TerminalOutcome::new();
+    outcome.set_cancelled(terminal::TerminalCancelled::new());
     validator
         .accept(
             TerminalFrameDirection::ServerToClient,
@@ -1854,6 +1897,8 @@ fn terminal_state_machine_binds_direction_generation_and_one_outcome() {
         )
         .unwrap();
     assert!(validator.is_terminal());
+    validator.accept_transport_close().unwrap();
+    validator.accept_transport_reset().unwrap();
     assert_eq!(
         validator.accept(
             TerminalFrameDirection::ServerToClient,
@@ -1862,11 +1907,22 @@ fn terminal_state_machine_binds_direction_generation_and_one_outcome() {
         Err(ServiceContractError::InconsistentResponse)
     );
 
-    let mut mismatch =
-        TerminalStreamValidator::new(daemon::TerminalKind::TERMINAL_KIND_EXEC, 7, [0x11; 16])
-            .unwrap();
+    let mut mismatch = TerminalStreamValidator::new(
+        terminal::TerminalKind::TERMINAL_KIND_EXEC,
+        7,
+        [0x11; 16],
+        "operation-1",
+        "exec-1",
+    )
+    .unwrap();
     let mut frame = terminal_frame(0, Frame::Select(arbitrary_exec_selection()));
     frame.session_generation = 8;
+    assert_eq!(
+        mismatch.accept(TerminalFrameDirection::ClientToServer, &frame),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+    frame.session_generation = 7;
+    frame.operation_id = "operation-2".to_owned();
     assert_eq!(
         mismatch.accept(TerminalFrameDirection::ClientToServer, &frame),
         Err(ServiceContractError::InconsistentResponse)
@@ -1874,8 +1930,118 @@ fn terminal_state_machine_binds_direction_generation_and_one_outcome() {
 }
 
 #[test]
+fn detached_exec_and_shell_management_have_closed_stream_semantics() {
+    use terminal::terminal_stream_frame::Frame;
+    let mut detached_exec = terminal::ExecSelection {
+        authority: terminal::ExecAuthority::EXEC_AUTHORITY_ADMIN_ARBITRARY.into(),
+        detached: true,
+        ..Default::default()
+    };
+    detached_exec.set_arbitrary(terminal::ArbitraryExecSelection {
+        argv: vec![b"true".to_vec()],
+        ..Default::default()
+    });
+    let mut detached_selection = terminal::TerminalSelection::new();
+    detached_selection.set_exec(detached_exec);
+    let mut detached = TerminalStreamValidator::new(
+        terminal::TerminalKind::TERMINAL_KIND_EXEC,
+        7,
+        [0x11; 16],
+        "operation-1",
+        "exec-1",
+    )
+    .unwrap();
+    detached
+        .accept(
+            TerminalFrameDirection::ClientToServer,
+            &terminal_frame(0, Frame::Select(detached_selection)),
+        )
+        .unwrap();
+    detached
+        .accept(
+            TerminalFrameDirection::ServerToClient,
+            &terminal_frame(
+                0,
+                Frame::Started(terminal::TerminalStarted {
+                    kind: terminal::TerminalKind::TERMINAL_KIND_EXEC.into(),
+                    ..Default::default()
+                }),
+            ),
+        )
+        .unwrap();
+    assert_eq!(
+        detached.accept(
+            TerminalFrameDirection::ServerToClient,
+            &terminal_frame(
+                1,
+                Frame::Stdout(terminal::TerminalOutput {
+                    data: b"forbidden".to_vec(),
+                    ..Default::default()
+                })
+            )
+        ),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+    let mut detached_outcome = terminal::TerminalOutcome::new();
+    detached_outcome.set_detached(terminal::TerminalDetached::new());
+    detached
+        .accept(
+            TerminalFrameDirection::ServerToClient,
+            &terminal_frame(1, Frame::Outcome(detached_outcome)),
+        )
+        .unwrap();
+    assert!(detached.is_terminal());
+
+    let mut shell_selection = terminal::TerminalSelection::new();
+    shell_selection.set_shell(terminal::ShellSelection {
+        action: terminal::ShellAction::SHELL_ACTION_LIST.into(),
+        ..Default::default()
+    });
+    let mut shell = TerminalStreamValidator::new(
+        terminal::TerminalKind::TERMINAL_KIND_SHELL,
+        7,
+        [0x11; 16],
+        "operation-1",
+        "exec-1",
+    )
+    .unwrap();
+    shell
+        .accept(
+            TerminalFrameDirection::ClientToServer,
+            &terminal_frame(0, Frame::Select(shell_selection)),
+        )
+        .unwrap();
+    shell
+        .accept(
+            TerminalFrameDirection::ServerToClient,
+            &terminal_frame(
+                0,
+                Frame::ShellResult(terminal::ShellManagementResult {
+                    action: terminal::ShellAction::SHELL_ACTION_LIST.into(),
+                    sessions: vec![terminal::ShellSession {
+                        shell_handle: "shell-1".to_owned(),
+                        state: terminal::ShellSessionState::SHELL_SESSION_STATE_DETACHED.into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            ),
+        )
+        .unwrap();
+    let mut closed = terminal::TerminalOutcome::new();
+    closed.set_closed(terminal::TerminalClosed::new());
+    shell
+        .accept(
+            TerminalFrameDirection::ServerToClient,
+            &terminal_frame(1, Frame::Outcome(closed)),
+        )
+        .unwrap();
+    assert!(shell.is_terminal());
+}
+
+#[test]
 fn terminal_debug_and_errors_do_not_expose_argv_or_bytes() {
-    use daemon::terminal_stream_frame::Frame;
+    use terminal::terminal_stream_frame::Frame;
     let frame = terminal_frame(0, Frame::Select(arbitrary_exec_selection()));
     let rendered = format!("{:?}", RedactedTerminalFrame(&frame));
     assert!(!rendered.contains("private-argument"));
@@ -1887,7 +2053,7 @@ fn terminal_debug_and_errors_do_not_expose_argv_or_bytes() {
 
     let error = terminal_frame(
         0,
-        Frame::Stdin(daemon::TerminalStdin {
+        Frame::Stdin(terminal::TerminalStdin {
             data: vec![0x61; MAX_TERMINAL_CHUNK_BYTES + 1],
             ..Default::default()
         }),

@@ -516,6 +516,7 @@ fn gen_v2_services() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         "runtime_systemd_user",
         "security_key",
         "shell",
+        "terminal",
         "tty",
         "user",
         "wayland",
@@ -554,8 +555,29 @@ fn gen_v2_services() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
                 return Err("v2 service codegen emitted an unexpected output".into());
             }
             sanitize_generated_rust(&entry.path())?;
-            if entry.file_name() == "daemon.rs" {
-                redact_daemon_terminal_debug(&entry.path())?;
+            if entry.file_name() == "terminal.rs" {
+                redact_generated_message_debug(
+                    &entry.path(),
+                    "d2b.terminal.v2",
+                    &[
+                        ("exec_selection", "Selection"),
+                        ("terminal_selection", "Selection"),
+                        ("terminal_outcome", "Outcome"),
+                        ("terminal_stream_frame", "Frame"),
+                    ],
+                )?;
+            }
+            if entry.file_name() == "guest.rs" {
+                redact_generated_message_debug(
+                    &entry.path(),
+                    "d2b.guest.v2",
+                    &[
+                        ("guest_inspect_exec_query", "Query"),
+                        ("guest_inspect_exec_response", "Result"),
+                        ("guest_file_transfer_frame", "Frame"),
+                        ("guest_security_key_frame", "Frame"),
+                    ],
+                )?;
             }
             if entry.file_name() == "runtime_systemd_user_ttrpc.rs" {
                 let source = fs::read_to_string(entry.path())?;
@@ -577,11 +599,11 @@ fn gen_v2_services() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
             outputs.push(entry.path());
         }
         outputs.sort();
-        if outputs.len() != stems.len() * 2 - 1 {
+        if outputs.len() != stems.len() * 2 - 2 {
             return Err(format!(
                 "v2 service codegen emitted {} files, expected {}",
                 outputs.len(),
-                stems.len() * 2 - 1
+                stems.len() * 2 - 2
             )
             .into());
         }
@@ -657,33 +679,43 @@ fn gen_v2_services() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     generation
 }
 
-fn redact_daemon_terminal_debug(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn redact_generated_message_debug(
+    path: &Path,
+    package: &str,
+    oneofs: &[(&str, &str)],
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut source = fs::read_to_string(path)?;
-    let messages = [
-        "TerminalOpenRequest",
-        "TerminalOpenResponse",
-        "ArbitraryExecSelection",
-        "ConfiguredLaunchSelection",
-        "ExecSelection",
-        "ShellSelection",
-        "TerminalSelection",
-        "TerminalStdin",
-        "TerminalOutput",
-        "TerminalStreamFrame",
-    ];
-    for message in messages {
+    let prefix = format!("// @@protoc_insertion_point(message:{package}.");
+    let mut messages = Vec::new();
+    let mut remaining = source.as_str();
+    while let Some(start) = remaining.find(&prefix) {
+        let after = &remaining[start + prefix.len()..];
+        let end = after
+            .find(')')
+            .ok_or("generated message insertion point is malformed")?;
+        messages.push(after[..end].to_owned());
+        remaining = &after[end + 1..];
+    }
+    if messages.is_empty() {
+        return Err(format!("generated package {package} has no messages").into());
+    }
+    messages.sort();
+    messages.dedup();
+    for message in &messages {
         let marker = format!(
-            "// @@protoc_insertion_point(message:d2b.daemon.v2.{message})\n\
+            "// @@protoc_insertion_point(message:{package}.{message})\n\
              #[derive(PartialEq,Clone,Default,Debug)]\n\
              pub struct {message}"
         );
         let replacement = format!(
-            "// @@protoc_insertion_point(message:d2b.daemon.v2.{message})\n\
+            "// @@protoc_insertion_point(message:{package}.{message})\n\
              #[derive(PartialEq,Clone,Default)]\n\
              pub struct {message}"
         );
         if !source.contains(&marker) {
-            return Err(format!("generated daemon message {message} has an unknown shape").into());
+            return Err(
+                format!("generated {package} message {message} has an unknown shape").into(),
+            );
         }
         source = source.replacen(&marker, &replacement, 1);
         source.push_str(&format!(
@@ -694,18 +726,14 @@ fn redact_daemon_terminal_debug(path: &Path) -> Result<(), Box<dyn std::error::E
              }}\n"
         ));
     }
-    for (module, oneof) in [
-        ("exec_selection", "Selection"),
-        ("terminal_selection", "Selection"),
-        ("terminal_stream_frame", "Frame"),
-    ] {
+    for (module, oneof) in oneofs {
         let module_marker = format!("pub mod {module} {{");
         let module_start = source
             .find(&module_marker)
-            .ok_or_else(|| format!("generated daemon module {module} is absent"))?;
+            .ok_or_else(|| format!("generated {package} module {module} is absent"))?;
         let derive = "#[derive(Clone,PartialEq,Debug)]";
         let relative = source[module_start..].find(derive).ok_or_else(|| {
-            format!("generated daemon oneof {module}::{oneof} has an unknown shape")
+            format!("generated {package} oneof {module}::{oneof} has an unknown shape")
         })?;
         let start = module_start + relative;
         source.replace_range(start..start + derive.len(), "#[derive(Clone,PartialEq)]");

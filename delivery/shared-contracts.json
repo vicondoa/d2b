@@ -1,5 +1,5 @@
 {
-  "schema_version": 6,
+  "schema_version": 7,
   "authority_repository": "github.com/vicondoa/d2b",
   "shared_root_branch": "adr0045-post-w4-contracts",
   "waves": [
@@ -327,6 +327,58 @@
       "method": "Shell",
       "request": "TerminalOpenRequest",
       "response": "TerminalOpenResponse"
+    }
+  ],
+  "guest_typed_methods": [
+    {
+      "method": "Bootstrap",
+      "request": "GuestBootstrapRequest",
+      "response": "GuestSessionResponse"
+    },
+    {
+      "method": "Cancel",
+      "request": "CancelRequest",
+      "response": "CancelResponse"
+    },
+    {
+      "method": "CancelExec",
+      "request": "GuestCancelExecRequest",
+      "response": "GuestCancelExecResponse"
+    },
+    {
+      "method": "Exec",
+      "request": "TerminalOpenRequest",
+      "response": "TerminalOpenResponse"
+    },
+    {
+      "method": "FileTransfer",
+      "request": "GuestFileTransferRequest",
+      "response": "TerminalOpenResponse"
+    },
+    {
+      "method": "InspectExec",
+      "request": "GuestInspectExecRequest",
+      "response": "GuestInspectExecResponse"
+    },
+    {
+      "method": "OpenShell",
+      "request": "TerminalOpenRequest",
+      "response": "TerminalOpenResponse"
+    },
+    {
+      "method": "Reconnect",
+      "request": "GuestReconnectRequest",
+      "response": "GuestSessionResponse"
+    },
+    {
+      "method": "SecurityKey",
+      "request": "GuestSecurityKeyRequest",
+      "response": "TerminalOpenResponse"
+    },
+    {
+      "method": "Shutdown",
+      "request": "GuestShutdownRequest",
+      "response": "GuestShutdownResponse"
     }
   ],
   "service_dependency_edges": [
