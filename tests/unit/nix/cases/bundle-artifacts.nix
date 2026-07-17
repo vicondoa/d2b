@@ -89,6 +89,57 @@ in
     };
   };
 
+  "bundle-artifacts/realm-private-central-etc" = {
+    expr = lib.genAttrs [
+      "realm-controllers.json"
+      "realm-identity.json"
+    ] (name: {
+      mode = cfgDaemon.environment.etc."d2b/${name}".mode;
+      user = cfgDaemon.environment.etc."d2b/${name}".user;
+      group = cfgDaemon.environment.etc."d2b/${name}".group;
+    });
+    expected = lib.genAttrs [
+      "realm-controllers.json"
+      "realm-identity.json"
+    ] (_: {
+      mode = "0640";
+      user = "root";
+      group = "d2bd";
+    });
+  };
+
+  "bundle-artifacts/realm-private-classifications" = {
+    expr = {
+      bundleVersion = cfgDaemon.d2b._bundle.bundle.data.bundleVersion;
+      schemaVersion = cfgDaemon.d2b._bundle.bundle.data.schemaVersion;
+      bundle = {
+        inherit (cfgDaemon.d2b._bundle.bundle) classification sensitivity;
+      };
+      controllers = {
+        inherit (cfgDaemon.d2b._bundle.realmControllersJson) classification sensitivity;
+      };
+      identity = {
+        inherit (cfgDaemon.d2b._bundle.realmIdentityJson) classification sensitivity;
+      };
+    };
+    expected = {
+      bundleVersion = 12;
+      schemaVersion = "v2";
+      bundle = {
+        classification = "contractPrivateNonSecret";
+        sensitivity = "nonSecret";
+      };
+      controllers = {
+        classification = "contractPrivateNonSecret";
+        sensitivity = "nonSecret";
+      };
+      identity = {
+        classification = "contractPrivateNonSecret";
+        sensitivity = "nonSecret";
+      };
+    };
+  };
+
   "bundle-artifacts/default-json-text" = {
     expr = cfgDaemon.d2b._bundle.extraArtifacts.defaultedJson.jsonText;
     expected = builtins.toJSON cfgDaemon.d2b._bundle.extraArtifacts.defaultedJson.data;

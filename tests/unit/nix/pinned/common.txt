@@ -83,6 +83,8 @@ bundle-artifacts/extra-artifact-install-path-collision-conflicts
 bundle-artifacts/extra-artifact-reserved-name-collision-asserts
 bundle-artifacts/nested-table-field-name-collisions-are-not-rows
 bundle-artifacts/nested-tables-are-not-artifact-rows
+bundle-artifacts/realm-private-central-etc
+bundle-artifacts/realm-private-classifications
 bundle-artifacts/root-group-compat
 bundle-artifacts/storage-json-central-etc
 clipboard/bridge-root-allows-safe-child

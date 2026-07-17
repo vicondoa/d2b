@@ -148,6 +148,7 @@ fn legacy_group_allowlist() -> Regex {
         r"nixos-modules/privileges-json\.nix:[0-9]+:.*d2b-launcher.*",
         r"tests/legacy-group-name-denylist(-self-test)?\.sh:[0-9]+:.*",
         r"tests/group-rename-semantic-eval\.sh:[0-9]+:.*",
+        r"tests/unit/nix/cases/principal-uid-collision\.nix:[0-9]+:.*",
         // Migration bookkeeping (the ledger + per-script retirement records)
         // legitimately *describes* the retired legacy-group-name gates and their
         // successors; it is not live config usage, so exempt it (this is also

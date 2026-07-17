@@ -166,6 +166,24 @@ fn rendered_manifest_has_no_path_bearing_key_or_secret_fields() {
 }
 
 #[test]
+fn rendered_bundle_and_manifest_preserve_v12_v7_canonical_projection() {
+    let resolver = load_bundle_resolver_from_env();
+    assert_eq!(resolver.bundle.bundle_version, 12);
+    assert_eq!(resolver.bundle.schema_version, "v2");
+    assert_eq!(resolver.manifest.manifest.manifest_version, 7);
+    assert!(
+        !resolver.manifest.vms.is_empty(),
+        "fixture manifest must exercise at least one realm workload"
+    );
+    for (workload_id, workload) in &resolver.manifest.vms {
+        assert_eq!(
+            workload_id, &workload.name,
+            "manifest dynamic keys must remain canonical workload IDs"
+        );
+    }
+}
+
+#[test]
 fn rendered_profiles_with_broad_caps_carry_an_adr_carve_out() {
     let resolver = load_bundle_resolver_from_env();
     let mut violations = Vec::new();

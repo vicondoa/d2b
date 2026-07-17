@@ -13,8 +13,8 @@
 //! sandbox).
 //!
 //! Faithful port of the bash gate's `grep`s:
-//!   * store.nix keeps the canonical `chown d2bd:users` / `chmod 0755`
-//!     META_DIR fix-ups, and contains NO `chown root:kvm` / `chmod 2775`.
+//!   * store.nix routes store-view creation and repair through generated
+//!     realm storage rows and contains no activation-time ownership repair.
 //!   * no nixos-modules file enforces `store store-meta` at mode `2775`.
 //!   * ownership_preflight.rs declares NO `mode: 0o2775` on a `store*` path
 //!     (within the 6-line window after each `path: "store` line, mirroring the
@@ -55,26 +55,30 @@ fn nixos_module_files() -> Vec<std::path::PathBuf> {
 }
 
 // ---------------------------------------------------------------------------
-// store.nix keeps the canonical META_DIR ownership fix-up.
+// store.nix keeps creation and repair broker-owned.
 // ---------------------------------------------------------------------------
 #[test]
-fn store_sync_chowns_meta_dirs_to_d2bd_users() {
+fn store_sync_uses_realm_storage_rows() {
     let content = store_nix();
-    let needle = r#"find "$META_DIR" -type d -exec chown d2bd:users {} +"#;
-    assert!(
-        content.lines().any(|l| l.contains(needle)),
-        "{STORE_NIX} must keep the canonical META_DIR chown fix-up: `{needle}`",
-    );
+    for needle in [
+        "realmStorageRows = import ./realm-storage-rows.nix",
+        r#"lib.hasSuffix "/store-view-live" row.id"#,
+        r#"row.creator.kind == "broker""#,
+        r#"row.repairPolicy == "broker-reconcile""#,
+    ] {
+        assert!(content.contains(needle), "{STORE_NIX} missing `{needle}`");
+    }
 }
 
 #[test]
-fn store_sync_chmods_meta_dirs_0755() {
+fn store_sync_has_no_activation_time_tree_repair() {
     let content = store_nix();
-    let needle = r#"find "$META_DIR" -type d -exec chmod 0755 {} +"#;
-    assert!(
-        content.lines().any(|l| l.contains(needle)),
-        "{STORE_NIX} must keep the canonical META_DIR chmod 0755 fix-up: `{needle}`",
-    );
+    for forbidden in ["META_DIR", "find ", "chown ", "chmod ", "setfacl "] {
+        assert!(
+            !content.contains(forbidden),
+            "{STORE_NIX} must leave store-view tree repair to the broker: `{forbidden}`"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
