@@ -21,32 +21,35 @@ This is why the realm policy defaults to deny, status carries a closed
 `unsafe-local` posture, and desktop clients must display rather than soften the
 warning.
 
-## Outbound helper connection
+## Authenticated per-user runtime
 
-The daemon does not impersonate a user or guess a user D-Bus address. A
-per-user helper connects outward to a daemon-owned socket. `SO_PEERCRED`
-authenticates both the public requester and helper; the daemon routes an
-operation only when the uids match exactly.
+The user manager owns the fixed `d2b-runtime-systemd-user.socket`. Its service
+accepts only the frozen `runtime-systemd-user` ComponentSession purpose and
+`d2b.runtime.systemd-user.v2` service package. The authenticated Unix peer uid,
+service-process uid, and current uid must be the same non-root uid. No request
+field can select an execution identity, and no host process impersonates a user
+or guesses a user D-Bus address.
 
-The helper queries the current systemd user-manager environment for each
-operation and creates verified transient scopes. Graphical child setup removes
-`DISPLAY` and replaces `WAYLAND_DISPLAY` with the proxy endpoint while
-preserving `XDG_RUNTIME_DIR`. The environment posture is reported, but keys and
-values are not returned or logged.
+Each operation is bound to the negotiated session generation, authenticated
+realm/workload scope, absolute deadline, idempotency key, and private
+configuration digest. Configured argv is resolved behind the service boundary;
+it is never supplied by a public request. The old helper generation hello,
+heartbeat, JSON frames, and helper socket are not compatibility paths.
+
+The runtime queries the current systemd user-manager environment for each
+operation and creates verified transient scopes. Malformed or oversized manager
+environments fail closed. Child setup clears inherited environment and copies
+the complete manager environment. Environment keys and values are not returned,
+logged, or included in diagnostics.
 
 ## Graphical readiness and clipboard authority
 
-The Wayland proxy receives a validated canonical workload target and a closed
-provider kind. It reports typed upstream, listener, and first-client readiness
-events to the helper. The helper starts the graphical application only after the
-upstream and listener are ready, and considers launch successful only after the
-first client connects. An unsafe-local proxy requires an explicit compositor
-upstream; failure never retries the application against the compositor directly.
-The blocked scope supervisor owns both proxy and application in one verified
-user scope. It creates a randomized mode-`0700` directory below the validated
-`XDG_RUNTIME_DIR`, places the proxy display and private readiness socket there,
-and removes the directory after both children are reaped. Launch fails
-immediately if the application exits while first-client readiness is pending.
+Graphical launch requires an authenticated handle from the frozen Wayland
+control service. Child setup removes `DISPLAY` and installs only the
+service-issued `WAYLAND_DISPLAY`. If Wayland control cannot open a display, the
+runtime fails the operation; it never retries against the compositor or starts a
+host-shell wrapper. A failed process start closes the newly issued display
+handle.
 
 The clipboard bridge attributes an unsafe-local endpoint from that canonical
 target and provider identity. Window app ids and titles remain presentation
@@ -62,7 +65,7 @@ presentation metadata and selects persistent-shell semantics. This keeps
 provider routing common:
 
 - local VM exec items use authenticated guest control;
-- unsafe-local exec items use the same-uid helper;
+- unsafe-local exec items use the same-uid systemd user runtime;
 - provider-managed runtimes advertise or refuse configured launch;
 - shell items use the persistent-shell operation family.
 
@@ -71,10 +74,10 @@ argv is resolved from the integrity-pinned bundle.
 
 ## Restart and logout behavior
 
-Scope identity, including systemd `InvocationID`, is the adoption authority.
-Pids, process names, and broad cgroup sweeps are not. Ambiguous state is
-preserved and reported degraded rather than killed.
+Scope identity, including systemd `InvocationID` and the exact scope cgroup
+leaf, is the adoption authority. Pids, process names, and broad cgroup sweeps are
+not. Ambiguous state is preserved and reported degraded rather than killed.
 
-d2b does not enable user lingering. Helper and daemon restarts are continuation
-events while the user manager remains alive, but logout may end the scopes.
-Status names this `user-manager-lifetime`.
+d2b does not enable user lingering. Runtime-agent and controller reconnects are
+continuation events while the user manager remains alive, but logout may end
+the scopes. Status names this `user-manager-lifetime`.

@@ -4,10 +4,10 @@
 
 `unsafe-local` is an explicit realm workload provider for commands and
 persistent shells that run as the authenticated host user. It provides **no
-isolation boundary**. The helper connection and user-scope runtime are enabled
-for configured eligible users. Public configured launch and persistent-shell
-dispatch are feature-negotiated and run only through `d2bd` and the exact
-requester-UID helper.
+isolation boundary**. The per-user runtime and transient user scopes are enabled
+for configured eligible users. Dispatch runs only through the frozen
+`d2b.runtime.systemd-user.v2` ComponentSession boundary for the exact
+requester uid.
 
 ## Nix options
 
@@ -76,8 +76,8 @@ omits unsafe-local rows.
 `contractPublic` describes the artifact's safe data shape, not direct filesystem
 access. The bundle copy remains `0640 root:d2bd`; unprivileged CLI and desktop
 clients receive launcher metadata through the authorized public daemon API.
-They do not read `/etc/d2b/realm-workloads-launcher-v2.json`, and the helper
-receives only daemon-resolved private operations.
+They do not read `/etc/d2b/realm-workloads-launcher-v2.json`, and the runtime
+receives only controller-resolved private operations.
 
 The closed unsafe-local posture is:
 
@@ -90,21 +90,22 @@ The closed unsafe-local posture is:
 | `executionIdentity` | `authenticated-requester-uid` |
 | `sessionPersistence` | `user-manager-lifetime` |
 
-`configured-launch-v1`, `unsafe-local-provider-v1`, and
-`unsafe-local-shell-v1` are additive protocol-v3 feature flags. `d2bd`
-advertises the shell flag only with the complete helper-management and terminal
-path enabled. Clients must hide or refuse unsupported operations and recommend
-updating `d2b`, `d2bd`, and the helper together; they must never fall back to a
-host shell, SSH, or a different provider.
+The closed service methods are `EnsureScope`, `StartProcess`, `InspectProcess`,
+`AdoptProcess`, `StopProcess`, `OpenTerminal`, and `Cancel`. Mutating requests
+require a nonempty operation id, idempotency key, 32-byte private request
+digest, bounded lifetime, and the current ComponentSession generation. The
+request scope must exactly equal the authenticated realm and workload. There is
+no uid, argv, environment, cwd, unit name, compositor path, or shell command on
+the wire.
 
-Availability values are directly actionable: `helper-unavailable` and
-`helper-stale` require restarting the caller's user helper;
+Availability values are directly actionable: `runtime-unavailable` requires
+restarting the caller's systemd user runtime;
 `user-manager-unavailable` requires a PAM-backed graphical login;
 `graphical-session-inactive` and `wayland-unavailable` require an active Wayland
 session; and `proxy-unavailable` requires repairing the proxy prerequisite.
 There is no direct-compositor remediation path.
 
-## Private bundle and helper wire
+## Private bundle and runtime service
 
 Bundle version 10 added
 `unsafeLocalWorkloadsPath = /etc/d2b/unsafe-local-workloads.json`; bundle
@@ -117,45 +118,27 @@ For a local-VM workload, dispatch uses `legacyVmName` when present and otherwise
 uses the first-class workload id as the backing VM name.
 
 Configured exec launch accepts only local launcher/admin peers on the direct
-host-local Unix binding. The helper lookup is keyed by the requester's
-`SO_PEERCRED` UID, so requester and helper identity are exactly equal. Relay,
-remote, stale-helper, cross-UID, direct-compositor, root, SSH, and arbitrary
-command fallbacks are not available.
+host-local controller binding. The runtime session authenticates the Unix peer
+uid and admits it only when that uid equals the runtime process's non-root uid.
+Relay, remote, cross-uid, direct-compositor, root, SSH, arbitrary-command, old
+helper-protocol, and host-shell fallbacks are not available.
 
-The separate helper protocol is version 3 on the daemon-owned
-`/run/d2b/unsafe-local-helper.sock` `SOCK_SEQPACKET` endpoint. Peer credentials,
-not a uid field, establish identity. Earlier versions are rejected without a
-compatibility fallback because the daemon and helper are installed together.
-Frames contain no uid, environment, cwd, or public-supplied command. Both peers
-request at least 256 KiB for
-`SO_SNDBUF` and `SO_RCVBUF` before exchanging frames and verify that Linux
-reports effective buffers of at least 512 KiB. A smaller effective buffer makes
-the helper unavailable rather than allowing a valid 256 KiB frame to fail with
-`EMSGSIZE`. d2b does not write the host-wide `net.core.rmem_max` or
-`net.core.wmem_max` sysctls because a fixed value could lower a host's existing
-limits. Operators may raise restrictive host limits independently; helper
-registration remains fail-closed if the effective per-socket requirement is not
-met.
+The user manager owns `d2b-runtime-systemd-user.socket`; unit provenance is part
+of its generated endpoint row. ComponentSession owns the local handshake,
+generation, record protection, deadlines, cancellation, and packet-atomic
+attachments. The runtime does not self-bind a substitute endpoint and does not
+accept helper protocol 3 hello, heartbeat, snapshot, JSON, or generation frames.
 
-Shell requests additionally carry a closed trusted policy containing
-`defaultName` and `maxSessions`. The daemon populates those fields only from the
-bundle-hashed unsafe-local workload record after checking public/private shell
-item parity; no public shell request can choose or raise them.
-
-The globally installed `d2b-unsafe-local-helper.service` is a systemd user
-service. `ConditionGroup=d2b-unsafe-local` prevents users who are not allowed to
-access an enabled unsafe-local realm from registering or entering a restart
-loop. The helper connects outward; `d2bd` does not discover a user bus or
-impersonate a user. Both peers verify `SO_PEERCRED`, and a valid reconnect
-atomically supersedes the prior generation for that UID.
+Shell policy remains private bundle data and is handled by the separate shell
+service. No public request can choose or raise it.
 
 Supplementary groups are fixed when the login session starts. After enabling
 the first unsafe-local realm for a user, or adding that user to `allowedUsers`,
-the user must log out and back in before the helper can connect. The existing
-session remains fail-closed because neither its user manager nor helper
-processes have the new `d2b-unsafe-local` group.
+the user must log out and back in before the runtime agent can connect. The
+existing session remains fail-closed because neither its user manager nor
+runtime agent has the new `d2b-unsafe-local` group.
 
-For each operation the helper reads
+For each operation the runtime reads
 `org.freedesktop.systemd1.Manager.Environment` from the current user manager.
 It rejects malformed or oversized data rather than trimming it, clears the
 child's inherited environment, and copies the complete manager environment.
@@ -163,33 +146,27 @@ Graphical operations additionally remove `DISPLAY` and require a proxy-owned
 `WAYLAND_DISPLAY`; if no proxy endpoint is ready, launch fails without a direct
 display fallback.
 
-The user service supplies the helper an immutable
-`d2b-wayland-proxy` Nix-store path. A graphical launch carries the validated
-realm accent color over private helper protocol v3. Its existing blocked
-supervisor creates one randomized mode-`0700` directory beneath the validated
-`XDG_RUNTIME_DIR`; the proxy display and mode-`0600` readiness socket live
-inside it. The supervisor starts the proxy in the same verified user scope,
-requires matching upstream and listener events before starting the application,
-and requires the matching first-client event before acknowledging launch. App
-exit concurrently aborts that wait. It then owns proxy termination, child
-reaping, and private-directory cleanup. Proxy and application therefore remain
-under the one persisted scope identity used for restart adoption.
+Graphical launch obtains an authenticated display handle from
+`d2b.wayland.v2`. The runtime never constructs a compositor path or directly
+spawns a compositor client as a fallback. Failure to open the display prevents
+process start; failure after opening closes the new handle.
 
-Every launched process begins behind a blocked supervisor. The helper calls
+Every launched process begins behind a blocked supervisor. The runtime calls
 `StartTransientUnit`, verifies the returned scope's `InvocationID` and exact
 control-group identity, and only then releases the supervisor to start the
-child. Reconnect snapshots re-query that identity. An ambiguous scope is
+child. Adoption re-queries that identity. An ambiguous scope is
 preserved and reported degraded rather than killed by PID, name, or a broad
 cgroup sweep. These scopes last only for the systemd user-manager lifetime;
 d2b does not enable lingering.
 
 Persistent shells use a separate hidden `shell-supervisor` process in a
-`persistent-shell` transient user scope. The helper reserves the operation and
-name, reads the complete user-manager environment and passwd identity, starts
-the supervisor blocked, verifies the scope identity, releases it, waits for
-socket, PTY, and login-shell readiness, and only then atomically extends the
-existing scope ledger. The supervisor—not the reconnectable helper—owns the PTY
-master, login-shell child, output ring, attachment state, and private listener.
+`persistent-shell` transient user scope. The shell service reserves the
+operation and name, reads the complete user-manager environment and passwd
+identity, starts the supervisor blocked, verifies the scope identity, releases
+it, waits for socket, PTY, and login-shell readiness, and only then atomically
+extends the existing scope ledger. The supervisor—not the reconnectable shell
+service—owns the PTY master, login-shell child, output ring, attachment state,
+and private listener.
 The child executes the authenticated user's absolute passwd login shell in the
 passwd home with the complete manager environment; no shell string, PATH
 lookup, configurable command, or journal output is involved.
@@ -201,24 +178,13 @@ original owned socket inode. Ledger adoption re-verifies both the transient
 scope and supervisor status. A missing or ambiguous listener is preserved and
 reported degraded rather than swept or killed.
 
-Terminal data uses exactly one connected `AF_UNIX`
-`SOCK_STREAM` passed with `SCM_RIGHTS`; listeners, datagram sockets, zero fds,
-and multiple fds are rejected. The receiver requires
-`getsockopt(SO_TYPE) == SOCK_STREAM`, `getsockopt(SO_ACCEPTCONN) == 0`, and a
-successful `getpeername`, then verifies the authenticated helper generation,
-request correlation, and terminal protocol version before accepting the fd.
-Terminal protocol version 1 uses bounded JSON frames with a four-byte
-little-endian body-length prefix for stdin writes, output reads, resize, wait,
-stdin close, attachment close, and typed rejections. The connected socket binds
-one attachment, so these frames never accept a client-supplied session handle.
-Frames are limited to 128 KiB, decoded chunks to 64 KiB, per-stream output rings
-to the contract ceiling of 8 MiB, and waits to 1000 ms. The helper currently
-reserves 512 KiB per merged PTY output ring and caps all such reservations for
-one helper at 32 MiB. `stdout` is the authoritative merged PTY stream; `stderr`
-reads return an empty terminal result. Reads use absolute cursors and report
-dropped bytes after wrap. Writes and control sequences are strictly monotonic,
-and long read or wait polls do not block writes or resize. Terminal bytes do not
-share the helper control queue.
+`OpenTerminal` requires exactly attachment index `0`, bound by ComponentSession
+to the authenticated request id, session generation, and exact owner uid. The
+attachment must be one connected `AF_UNIX` `SOCK_STREAM` with `CLOEXEC`;
+listeners, datagram sockets, zero descriptors, extra descriptors, and
+cross-request reuse fail before dispatch. Terminal bytes use the negotiated
+named stream and do not share ttrpc control queues. There is no terminal
+protocol-v1 or helper-framing fallback.
 
 `d2bd` resolves canonical targets and unambiguous workload-id aliases before
 dispatch. Transition local-VM workloads keep `legacyVmName`; first-class local
@@ -228,13 +194,13 @@ fail closed. Attach returns an opaque daemon-generated public session handle.
 Every later terminal operation must present that exact handle. Disconnect and
 `closeAttach` detach only; they never kill the persistent shell.
 
-List, detach, and kill are helper protocol operations with daemon-generated
-operation ids. Helper idempotency and name reservations prevent duplicate named
-supervisors. A daemon timeout is ambiguous: d2bd does not replay it
-automatically, and operators should list before retrying a destructive action.
-Helper unavailability, stale generation, user-manager failure, invalid terminal
-fd/frame, output gap, stale offset, quota, name conflict, terminal close, and
-timeout all return typed errors without provider fallback.
+List, detach, and kill are shell-service operations with controller-generated
+operation ids. Idempotency and name reservations prevent duplicate named
+supervisors. A controller timeout is ambiguous and is not replayed
+automatically; operators should list before retrying a destructive action.
+Runtime unavailability, stale generation, user-manager failure, invalid
+terminal attachment, output gap, stale offset, quota, name conflict, terminal
+close, and timeout all return typed errors without provider fallback.
 
 Detach closes only the current attachment. Force attach atomically evicts the
 old attachment. Kill closes the owned PTY master, waits briefly, then signals
@@ -247,26 +213,28 @@ explicitly remapped for a child may survive `exec`.
 
 ## Runtime observability
 
-Helper registration, reconnect, supersede, and stale events use bounded event
-kinds and result classes. Provider-neutral `ShellLifecycle` is the sole runtime
-shell audit event for both providers. It covers create, attach, list, detach,
-kill, close, and failure boundaries with only the configured canonical target,
-peer uid, closed provider/action/result values, optional force-takeover intent,
-and optional fixed operation/session correlation digests. The
+Runtime session and method outcomes use bounded event kinds and result classes.
+The runtime retains at most 64 closed method/outcome diagnostic events; they
+contain no identity or payload fields. Provider-neutral `ShellLifecycle` is the
+sole runtime shell audit event for both providers. It covers create, attach,
+list, detach, kill, close, and failure boundaries with only the configured
+canonical target, peer uid, closed provider/action/result values, optional
+force-takeover intent, and optional fixed operation/session correlation
+digests. The
 `d2b_daemon_shell_lifecycle_total` metric uses only closed
 provider/component/operation/outcome/error labels. Neither surface includes
-argv, environment, cwd, paths, PIDs, unit names, helper diagnostics, shell
+argv, environment, cwd, paths, PIDs, unit names, runtime diagnostics, shell
 names, supervisor ids, transcripts, terminal bytes, or public session handles.
 
 Generated schemas:
 
 - [`realm-workloads-launcher-v2.json`](./schemas/v2/realm-workloads-launcher-v2.json)
 - [`unsafe-local-workloads.json`](./schemas/v2/unsafe-local-workloads.json)
-- [`unsafe-local-helper-wire.json`](./schemas/v2/unsafe-local-helper-wire.json)
+- [`component-session-v2-schema.json`](component-session-v2-schema.json)
 
 ## Security meaning
 
-The helper must execute only as the exact authenticated requesting uid. User
+The runtime must execute only as the exact authenticated requesting uid. User
 systemd scopes provide lifecycle ownership and restart adoption, not a security
 boundary from other processes running as that uid. The Wayland proxy provides
 identity rails and clipboard attribution, not same-uid compositor containment.
