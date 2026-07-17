@@ -6,6 +6,9 @@ let
   stackWorkloadId = identity.deriveWorkloadId realmId "sys-obs";
   workRealmId = identity.deriveRealmId "work.local-root";
   workWorkloadId = identity.deriveWorkloadId workRealmId "work-app";
+  personalRealmId = identity.deriveRealmId "personal.local-root";
+  personalWorkloadId =
+    identity.deriveWorkloadId personalRealmId "work-app";
 
   config = {
     d2b = {
@@ -41,6 +44,14 @@ let
           realmId = workRealmId;
           realmPath = "work.local-root";
         }
+        {
+          enabled = true;
+          workloadId = personalWorkloadId;
+          configuredName = "work-app";
+          canonicalTarget = "work-app.personal.local-root.d2b";
+          realmId = personalRealmId;
+          realmPath = "personal.local-root";
+        }
       ];
       _bundle.providerRegistryV2Json.data.providers = [
         {
@@ -60,7 +71,10 @@ let
   rows = import (flakeRoot + "/nixos-modules/realm-observability-rows.nix") {
     inherit config lib;
   };
-  source = builtins.head rows.projections.policy.sourceRows;
+  source = lib.findFirst
+    (row: row.canonicalTarget == "work-app.work.local-root.d2b")
+    (throw "missing work observability source")
+    rows.projections.policy.sourceRows;
   secretRoot =
     "/var/lib/d2b/r/${realmId}/w/${stackWorkloadId}/observability/secrets/";
 in
@@ -81,6 +95,9 @@ in
   "observability/canonical-resources" = {
     expr = {
       hostEgress = rows.endpoints.hostEgress.path;
+      hostEgressRole = rows.endpoints.hostEgress.roleId;
+      hostEgressOwner = rows.endpoints.hostEgress.owner;
+      hostEgressClients = rows.endpoints.hostEgress.clients;
       hostIngest = rows.endpoints.hostIngest.path;
       stackVsock = rows.endpoints.stackVsock.path;
       pathsAreCanonical = lib.all
@@ -93,13 +110,38 @@ in
     };
     expected = {
       hostEgress =
-        "/run/d2b/r/${realmId}/w/${stackWorkloadId}/sockets/host-egress.sock";
+        "/run/d2b/r/${realmId}/w/${stackWorkloadId}/roles/${
+          identity.deriveRoleId realmId stackWorkloadId "vsock-relay"
+        }/host-egress.sock";
+      hostEgressRole =
+        identity.deriveRoleId realmId stackWorkloadId "vsock-relay";
+      hostEgressOwner = "realm-broker";
+      hostEgressClients = [ "d2b-host-otel-collector" ];
       hostIngest =
         "/run/d2b/r/${realmId}/w/${stackWorkloadId}/sockets/ingest/host-otlp.sock";
       stackVsock =
         "/var/lib/d2b/r/${realmId}/w/${stackWorkloadId}/vsock.sock";
       pathsAreCanonical = true;
       brokerOwnsPaths = true;
+    };
+  };
+
+  "observability/same-name-sources-use-canonical-ids" = {
+    expr = {
+      sourceKeys = lib.sort lib.lessThan
+        (lib.remove "host" (lib.attrNames rows.ingressSources));
+      sourceTargets = map (row: row.canonicalTarget)
+        rows.projections.policy.sourceRows;
+    };
+    expected = {
+      sourceKeys = lib.sort lib.lessThan [
+        personalWorkloadId
+        workWorkloadId
+      ];
+      sourceTargets = [
+        "work-app.personal.local-root.d2b"
+        "work-app.work.local-root.d2b"
+      ];
     };
   };
 

@@ -12,6 +12,7 @@ let
 
   stateRoot = "/var/lib/d2b/r/${realmId}/w/${workloadId}";
   runRoot = "/run/d2b/r/${realmId}/w/${workloadId}";
+  bridgeRoleRoot = "${runRoot}/roles/${bridgeRoleId}";
   configRoot = "/etc/d2b/r/${realmId}/w/${workloadId}";
   auditRoot = "/var/lib/d2b/r/${realmId}/audit";
 
@@ -73,7 +74,7 @@ let
     ]
     ++ map
       (source: {
-        name = source.sourceName;
+        name = source.sourceId;
         value = {
           vmName = source.sourceName;
           envName = source.realmPath;
@@ -130,9 +131,12 @@ in
     hostEgress = {
       id = "endpoint:observability-host-egress:${workloadId}";
       kind = "unix-stream";
-      path = "${runRoot}/sockets/host-egress.sock";
-      inherit realmId workloadId bridgeRoleId;
+      path = "${bridgeRoleRoot}/host-egress.sock";
+      roleId = bridgeRoleId;
+      inherit realmId workloadId;
       mode = "0660";
+      owner = "realm-broker";
+      clients = [ "d2b-host-otel-collector" ];
     };
     hostIngest = {
       id = "endpoint:observability-host-ingest:${workloadId}";
@@ -174,11 +178,13 @@ in
       "runtime"
       "${runRoot}/sockets"
       "realm-scoped")
-    (pathRow
-      "path:observability-store-sync-projection:${workloadId}"
-      "bounded-projection"
-      "${auditRoot}/projections/store-sync"
-      "contract-private")
+    ((pathRow
+        "path:observability-store-sync-projection:${workloadId}"
+        "bounded-projection"
+        "${auditRoot}/projections/store-sync"
+        "contract-private") // {
+        readers = [ "d2b-host-otel-collector" ];
+      })
   ];
 
   secrets = [

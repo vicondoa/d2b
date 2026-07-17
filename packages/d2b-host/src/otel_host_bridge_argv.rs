@@ -1,8 +1,7 @@
 //! OTel host-bridge argv generator.
 //!
-//! Replaces the singleton `d2b-otel-host-bridge.service`
-//! (`nixos-modules/components/observability/host.nix`) with a
-//! broker-spawned runner under `RunnerRole::OtelHostBridge`.
+//! Renders the broker-spawned host bridge for a realm-owned observability
+//! relay role.
 //!
 //! Per-role closed-set intent contract:
 //!
@@ -31,12 +30,10 @@ pub struct OtelHostBridgeArgvInputs {
     /// package). MUST be an absolute path.
     pub socat_path: String,
     /// Path where the host OTel egress UDS will be listened on
-    /// (`/run/d2b/otel/host-egress.sock`). MUST be absolute +
-    /// non-empty.
+    /// under its canonical role runtime. MUST be absolute + non-empty.
     pub host_egress_socket: String,
     /// Path to the obs VM's base CH vsock UDS
-    /// (`/var/lib/d2b/vms/<obs-vm>/vsock.sock`). MUST be
-    /// absolute + non-empty.
+    /// under its canonical workload state root. MUST be absolute + non-empty.
     pub obs_vsock_host_socket: String,
     /// Vsock port the obs VM listens on for OTLP ingress (default
     /// 14317). MUST satisfy `1..=65535`.
@@ -105,9 +102,7 @@ fn require_abs_path(field: &'static str, value: &str) -> Result<(), OtelHostBrid
 /// Generate the OTel host-bridge argv. Byte-parity oracle:
 /// `tests/golden/runner-shape/otel-host-bridge-argv-minimal.txt`.
 ///
-/// The shape matches the singleton service's `ExecStart` line
-/// (`nixos-modules/components/observability/host.nix` lines 302-360)
-/// byte-for-byte modulo fd-inheritance differences: the broker
+/// The shape carries canonical realm-owned endpoints. The broker
 /// pre-opens the vsock fds and the per-role profile forbids
 /// `AF_VSOCK`/`AF_UNIX` socket creation, so the helper relies on
 /// inherited file descriptors only.
@@ -146,27 +141,26 @@ mod tests {
     fn happy_inputs() -> OtelHostBridgeArgvInputs {
         OtelHostBridgeArgvInputs {
             socat_path: "/run/current-system/sw/bin/socat".to_owned(),
-            host_egress_socket: "/run/d2b/otel/host-egress.sock".to_owned(),
-            obs_vsock_host_socket: "/var/lib/d2b/vms/sys-obs/vsock.sock".to_owned(),
+            host_egress_socket: "/run/d2b/r/cvudgfqzh442wwtozs7q/w/jagsccyorsii4fm3u6vq/roles/chgqvca2e5gtb6vypzza/host-egress.sock".to_owned(),
+            obs_vsock_host_socket:
+                "/var/lib/d2b/r/cvudgfqzh442wwtozs7q/w/jagsccyorsii4fm3u6vq/vsock.sock"
+                    .to_owned(),
             obs_otlp_port: 14317,
             ch_vsock_connect_path: "/run/current-system/sw/bin/d2b-ch-vsock-connect".to_owned(),
         }
     }
 
     #[test]
-    fn argv_shape_matches_singleton_service() {
+    fn argv_shape_matches_canonical_realm_endpoint() {
         let argv = generate_otel_host_bridge_argv(&happy_inputs()).expect("happy path");
-        // The argv shape must match the singleton service's ExecStart
-        // line byte-for-byte after fd-passing differences
-        // (i.e. fd inheritance handled by broker, not socat options).
         assert_eq!(
             argv,
             vec![
                 "/run/current-system/sw/bin/socat",
                 "-d",
                 "-d",
-                "UNIX-LISTEN:/run/d2b/otel/host-egress.sock,fork,reuseaddr,mode=0660",
-                "EXEC:\"/run/current-system/sw/bin/d2b-ch-vsock-connect /var/lib/d2b/vms/sys-obs/vsock.sock 14317\"",
+                "UNIX-LISTEN:/run/d2b/r/cvudgfqzh442wwtozs7q/w/jagsccyorsii4fm3u6vq/roles/chgqvca2e5gtb6vypzza/host-egress.sock,fork,reuseaddr,mode=0660",
+                "EXEC:\"/run/current-system/sw/bin/d2b-ch-vsock-connect /var/lib/d2b/r/cvudgfqzh442wwtozs7q/w/jagsccyorsii4fm3u6vq/vsock.sock 14317\"",
             ]
         );
     }

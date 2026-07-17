@@ -225,6 +225,9 @@ deprecations ship one minor release before removal.
 - Replaced split allocator lease-id, lease, and idempotency writes with one
   fallible generation-bound transaction, closed detail-free state errors, and
   fail-closed replay semantics for commit and acknowledgement failures.
+- Aligned observability relay profiles, endpoints, source keys, and contract
+  coverage with canonical realm/workload/role identities while retaining the
+  frozen bounded local-observability provider mapping.
 - Replaced the legacy environment and VM declaration graph with realm-owned
   providers and workloads, canonical-ID network/storage/process artifacts,
   fixed local-root endpoints, and parent-spawned child realm controllers and

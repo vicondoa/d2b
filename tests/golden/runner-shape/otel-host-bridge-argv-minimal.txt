@@ -1,5 +1,3 @@
-# P1 OtelHostBridge argv snapshot from d2b_host::otel_host_bridge_argv::generate_otel_host_bridge_argv (happy path)
-# Replaces the singleton d2b-otel-host-bridge.service ExecStart shape
-# (nixos-modules/components/observability/host.nix lines 302-360); fd
-# inheritance is broker-side (RunnerRole::OtelHostBridge), not encoded in argv.
-/run/current-system/sw/bin/socat -d -d UNIX-LISTEN:/run/d2b/otel/host-egress.sock,fork,reuseaddr,mode=0660 EXEC:"/run/current-system/sw/bin/d2b-ch-vsock-connect /var/lib/d2b/vms/sys-obs/vsock.sock 14317"
+# OtelHostBridge argv snapshot with canonical realm/workload/role endpoints.
+# Descriptor inheritance is broker-side and is not encoded in argv.
+/run/current-system/sw/bin/socat -d -d UNIX-LISTEN:/run/d2b/r/cvudgfqzh442wwtozs7q/w/jagsccyorsii4fm3u6vq/roles/chgqvca2e5gtb6vypzza/host-egress.sock,fork,reuseaddr,mode=0660 EXEC:"/run/current-system/sw/bin/d2b-ch-vsock-connect /var/lib/d2b/r/cvudgfqzh442wwtozs7q/w/jagsccyorsii4fm3u6vq/vsock.sock 14317"
