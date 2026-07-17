@@ -1632,6 +1632,7 @@ fn shared_contract_policy_freezes_services_dependencies_and_ownership() {
             "CancelExec" => "cancel_exec",
             "FileTransfer" => "file_transfer",
             "InspectExec" => "inspect_exec",
+            "OpenExecRetainedLog" => "open_exec_retained_log",
             "OpenShell" => "open_shell",
             "SecurityKey" => "security_key",
             other => other,

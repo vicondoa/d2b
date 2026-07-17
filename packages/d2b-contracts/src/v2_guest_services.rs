@@ -38,6 +38,63 @@ fn guest_context(
         .ok_or(ServiceContractError::MissingMetadata)
 }
 
+fn validate_guest_terminal_request(
+    request: &terminal::TerminalOpenRequest,
+) -> Result<(), ServiceContractError> {
+    request.validate_wire(true)?;
+    validate_guest_scope(required_message(&request.scope)?)
+}
+
+impl StrictWireMessage for guest::GuestExecRequest {
+    fn validate_wire(&self, _: bool) -> Result<(), ServiceContractError> {
+        reject_unknown(self)?;
+        validate_guest_terminal_request(
+            self.terminal
+                .as_ref()
+                .ok_or(ServiceContractError::MissingOperationInput)?,
+        )
+    }
+}
+
+impl StrictWireMessage for guest::GuestOpenShellRequest {
+    fn validate_wire(&self, _: bool) -> Result<(), ServiceContractError> {
+        reject_unknown(self)?;
+        validate_guest_terminal_request(
+            self.terminal
+                .as_ref()
+                .ok_or(ServiceContractError::MissingOperationInput)?,
+        )
+    }
+}
+
+pub fn validate_guest_exec_response_for_request(
+    request: &guest::GuestExecRequest,
+    response: &terminal::TerminalOpenResponse,
+) -> Result<(), ServiceContractError> {
+    request.validate_wire(true)?;
+    validate_terminal_open_response_for_request(
+        request
+            .terminal
+            .as_ref()
+            .ok_or(ServiceContractError::MissingOperationInput)?,
+        response,
+    )
+}
+
+pub fn validate_guest_open_shell_response_for_request(
+    request: &guest::GuestOpenShellRequest,
+    response: &terminal::TerminalOpenResponse,
+) -> Result<(), ServiceContractError> {
+    request.validate_wire(true)?;
+    validate_terminal_open_response_for_request(
+        request
+            .terminal
+            .as_ref()
+            .ok_or(ServiceContractError::MissingOperationInput)?,
+        response,
+    )
+}
+
 fn validate_capabilities(
     capabilities: &[EnumOrUnknown<guest::GuestCapability>],
 ) -> Result<(), ServiceContractError> {
@@ -248,21 +305,37 @@ impl StrictWireMessage for guest::GuestCancelExecResponse {
             .outcome
             .enum_value()
             .map_err(|_| ServiceContractError::InvalidEnum)?;
-        match outcome {
-            common::Outcome::OUTCOME_ACCEPTED
-            | common::Outcome::OUTCOME_SUCCEEDED
-            | common::Outcome::OUTCOME_NOT_APPLICABLE
-                if self.error.is_none() =>
-            {
-                Ok(())
+        let cancellation = self
+            .cancellation
+            .enum_value()
+            .map_err(|_| ServiceContractError::InvalidEnum)?;
+        match (outcome, cancellation, self.error.as_ref()) {
+            (
+                common::Outcome::OUTCOME_ACCEPTED,
+                guest::GuestExecCancellationOutcome::GUEST_EXEC_CANCELLATION_OUTCOME_SIGNALLED,
+                None,
+            )
+            | (
+                common::Outcome::OUTCOME_NOT_APPLICABLE,
+                guest::GuestExecCancellationOutcome::GUEST_EXEC_CANCELLATION_OUTCOME_ALREADY_TERMINAL,
+                None,
+            ) => Ok(()),
+            (
+                common::Outcome::OUTCOME_FAILED,
+                guest::GuestExecCancellationOutcome::GUEST_EXEC_CANCELLATION_OUTCOME_UNKNOWN_RESOURCE,
+                Some(error),
+            ) if error.kind.enum_value().ok() == Some(common::ErrorKind::ERROR_KIND_NOT_FOUND) => {
+                validate_error(error)
             }
-            common::Outcome::OUTCOME_DENIED
-            | common::Outcome::OUTCOME_CANCELLED
-            | common::Outcome::OUTCOME_FAILED => validate_error(
-                self.error
-                    .as_ref()
-                    .ok_or(ServiceContractError::InconsistentResponse)?,
-            ),
+            (
+                common::Outcome::OUTCOME_FAILED,
+                guest::GuestExecCancellationOutcome::GUEST_EXEC_CANCELLATION_OUTCOME_GENERATION_MISMATCH,
+                Some(error),
+            ) if error.kind.enum_value().ok()
+                == Some(common::ErrorKind::ERROR_KIND_GENERATION_MISMATCH) =>
+            {
+                validate_error(error)
+            }
             _ => Err(ServiceContractError::InconsistentResponse),
         }
     }
@@ -320,19 +393,6 @@ fn validate_exec_query(query: &guest::GuestInspectExecQuery) -> Result<(), Servi
                 return Err(ServiceContractError::BoundExceeded);
             }
         }
-        Query::OpenRetainedLog(log) => {
-            reject_unknown(log)?;
-            if !bounded_opaque(&log.resource_handle, MAX_SERVICE_STRING_BYTES)
-                || !valid_required_enum(
-                    &log.output,
-                    terminal::OutputStream::OUTPUT_STREAM_UNSPECIFIED,
-                )
-                || log.max_bytes == 0
-                || log.max_bytes as usize > MAX_TERMINAL_CHUNK_BYTES
-            {
-                return Err(ServiceContractError::BoundExceeded);
-            }
-        }
     }
     Ok(())
 }
@@ -361,27 +421,86 @@ fn terminal_state(state: guest::GuestExecState) -> bool {
     )
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TerminalOutcomeClass {
+    Exited,
+    Signaled,
+    Cancelled,
+    Failed,
+    Other,
+}
+
+fn terminal_outcome_class(value: &terminal::TerminalOutcome) -> TerminalOutcomeClass {
+    use terminal::terminal_outcome::Outcome;
+    match value.outcome.as_ref() {
+        Some(Outcome::Exited(_)) => TerminalOutcomeClass::Exited,
+        Some(Outcome::Signaled(_)) => TerminalOutcomeClass::Signaled,
+        Some(Outcome::Cancelled(_)) => TerminalOutcomeClass::Cancelled,
+        Some(Outcome::Failed(_)) => TerminalOutcomeClass::Failed,
+        Some(Outcome::Detached(_) | Outcome::Closed(_)) | None => TerminalOutcomeClass::Other,
+    }
+}
+
 fn validate_exec_status(value: &guest::GuestExecStatus) -> Result<(), ServiceContractError> {
     reject_unknown(value)?;
     let state = value
         .state
         .enum_value()
         .map_err(|_| ServiceContractError::InvalidEnum)?;
+    let stdin = value
+        .stdin_state
+        .enum_value()
+        .map_err(|_| ServiceContractError::InvalidEnum)?;
     if state == guest::GuestExecState::GUEST_EXEC_STATE_UNSPECIFIED
-        || !valid_required_enum(
-            &value.stdin_state,
-            guest::GuestStdinState::GUEST_STDIN_STATE_UNSPECIFIED,
-        )
+        || stdin == guest::GuestStdinState::GUEST_STDIN_STATE_UNSPECIFIED
         || !bounded_opaque(&value.resource_handle, MAX_SERVICE_STRING_BYTES)
         || value.state_generation == 0
         || value.stdout_start_offset > value.stdout_end_offset
         || value.stderr_start_offset > value.stderr_end_offset
-        || terminal_state(state) != value.terminal_outcome.is_some()
+        || (terminal_state(state)
+            && matches!(
+                stdin,
+                guest::GuestStdinState::GUEST_STDIN_STATE_OPEN
+                    | guest::GuestStdinState::GUEST_STDIN_STATE_CLOSING
+            ))
+        || (value.timed_out && terminal_state(state))
     {
         return Err(ServiceContractError::InconsistentResponse);
     }
-    if let Some(outcome) = value.terminal_outcome.as_ref() {
+    let outcome = value.terminal_outcome.as_ref();
+    if let Some(outcome) = outcome {
         validate_terminal_outcome(outcome)?;
+    }
+    let outcome_class = outcome.map(terminal_outcome_class);
+    let correlated = match state {
+        guest::GuestExecState::GUEST_EXEC_STATE_CREATED
+        | guest::GuestExecState::GUEST_EXEC_STATE_RUNNING => outcome_class.is_none(),
+        guest::GuestExecState::GUEST_EXEC_STATE_EXITED => {
+            outcome_class == Some(TerminalOutcomeClass::Exited)
+        }
+        guest::GuestExecState::GUEST_EXEC_STATE_SIGNALED => {
+            outcome_class == Some(TerminalOutcomeClass::Signaled)
+        }
+        guest::GuestExecState::GUEST_EXEC_STATE_CANCELLED => {
+            outcome_class == Some(TerminalOutcomeClass::Cancelled)
+        }
+        guest::GuestExecState::GUEST_EXEC_STATE_PROTOCOL_ERROR
+        | guest::GuestExecState::GUEST_EXEC_STATE_LOST => {
+            outcome_class == Some(TerminalOutcomeClass::Failed)
+        }
+        guest::GuestExecState::GUEST_EXEC_STATE_REAPED => matches!(
+            outcome_class,
+            Some(
+                TerminalOutcomeClass::Exited
+                    | TerminalOutcomeClass::Signaled
+                    | TerminalOutcomeClass::Cancelled
+                    | TerminalOutcomeClass::Failed
+            )
+        ),
+        guest::GuestExecState::GUEST_EXEC_STATE_UNSPECIFIED => false,
+    };
+    if !correlated {
+        return Err(ServiceContractError::InconsistentResponse);
     }
     Ok(())
 }
@@ -409,25 +528,6 @@ fn validate_exec_list(value: &guest::GuestExecListPage) -> Result<(), ServiceCon
         {
             return Err(ServiceContractError::InvalidOperationInput);
         }
-    }
-    Ok(())
-}
-
-fn validate_retained_log_stream(
-    value: &guest::GuestExecRetainedLogStream,
-) -> Result<(), ServiceContractError> {
-    reject_unknown(value)?;
-    value
-        .stream
-        .as_ref()
-        .ok_or(ServiceContractError::InconsistentResponse)?
-        .validate_wire(false)?;
-    if !valid_required_enum(
-        &value.output,
-        terminal::OutputStream::OUTPUT_STREAM_UNSPECIFIED,
-    ) || value.start_offset > value.end_offset
-    {
-        return Err(ServiceContractError::InconsistentResponse);
     }
     Ok(())
 }
@@ -460,20 +560,6 @@ impl StrictWireMessage for guest::GuestInspectExecResponse {
             {
                 Result::Status(status) => validate_exec_status(status),
                 Result::ListPage(page) => validate_exec_list(page),
-                Result::RetainedLogStream(stream) => {
-                    validate_retained_log_stream(stream)?;
-                    let open = stream
-                        .stream
-                        .as_ref()
-                        .ok_or(ServiceContractError::InconsistentResponse)?;
-                    if open.operation_id != self.operation_id
-                        || open.session_generation != self.session_generation
-                        || open.request_id != self.request_id
-                    {
-                        return Err(ServiceContractError::InconsistentResponse);
-                    }
-                    Ok(())
-                }
             }
         } else if matches!(
             outcome,
@@ -526,19 +612,101 @@ pub fn validate_guest_inspect_response_for_request(
         .ok_or(ServiceContractError::InconsistentResponse)?;
     match (query, result) {
         (Query::Status(query), Result::Status(status))
-            if status.resource_handle == query.resource_handle => {}
+            if status.resource_handle == query.resource_handle && !status.timed_out => {}
         (Query::Wait(query), Result::Status(status))
-            if status.resource_handle == query.resource_handle => {}
+            if status.resource_handle == query.resource_handle =>
+        {
+            if status.state_generation < query.known_state_generation
+                || (status.timed_out && status.state_generation != query.known_state_generation)
+                || (!status.timed_out
+                    && status.state_generation == query.known_state_generation
+                    && !terminal_state(status.state.enum_value_or_default()))
+            {
+                return Err(ServiceContractError::InconsistentResponse);
+            }
+        }
         (Query::ListPage(_), Result::ListPage(_)) => {}
-        (Query::OpenRetainedLog(query), Result::RetainedLogStream(stream))
-            if stream.output == query.output
-                && stream
-                    .stream
-                    .as_ref()
-                    .is_some_and(|open| open.resource_handle == query.resource_handle) => {}
         _ => return Err(ServiceContractError::InconsistentResponse),
     }
     Ok(())
+}
+
+impl StrictWireMessage for guest::GuestOpenExecRetainedLogRequest {
+    fn validate_wire(&self, _: bool) -> Result<(), ServiceContractError> {
+        reject_unknown(self)?;
+        validate_guest_context(guest_context(&self.context)?, true)?;
+        if !bounded_opaque(&self.resource_handle, MAX_SERVICE_STRING_BYTES)
+            || !valid_required_enum(
+                &self.output,
+                terminal::OutputStream::OUTPUT_STREAM_UNSPECIFIED,
+            )
+            || self.max_bytes == 0
+            || self.max_bytes as usize > MAX_TERMINAL_CHUNK_BYTES
+        {
+            return Err(ServiceContractError::BoundExceeded);
+        }
+        Ok(())
+    }
+}
+
+pub fn validate_guest_open_exec_retained_log_response_for_request(
+    request: &guest::GuestOpenExecRetainedLogRequest,
+    response: &terminal::TerminalOpenResponse,
+) -> Result<(), ServiceContractError> {
+    request.validate_wire(true)?;
+    validate_terminal_open_response_for_guest_context(guest_context(&request.context)?, response)?;
+    if response.outcome.enum_value().ok() != Some(common::Outcome::OUTCOME_ACCEPTED)
+        || response.resource_handle != request.resource_handle
+    {
+        return Err(ServiceContractError::InconsistentResponse);
+    }
+    let range = response
+        .retained_log
+        .as_ref()
+        .ok_or(ServiceContractError::InconsistentResponse)?;
+    let requested_end = request
+        .offset
+        .checked_add(u64::from(request.max_bytes))
+        .ok_or(ServiceContractError::BoundExceeded)?;
+    if range.output != request.output
+        || range.requested_offset != request.offset
+        || range.max_bytes != request.max_bytes
+        || range.start_offset < request.offset
+        || range.start_offset > range.end_offset
+        || range.end_offset > requested_end
+        || range.end_offset.saturating_sub(range.start_offset) > u64::from(request.max_bytes)
+    {
+        return Err(ServiceContractError::InconsistentResponse);
+    }
+    Ok(())
+}
+
+pub fn retained_log_stream_validator(
+    request: &guest::GuestOpenExecRetainedLogRequest,
+    response: &terminal::TerminalOpenResponse,
+) -> Result<TerminalStreamValidator, ServiceContractError> {
+    validate_guest_open_exec_retained_log_response_for_request(request, response)?;
+    let context = guest_context(&request.context)?;
+    let metadata = required_message(&context.metadata)?;
+    let request_id = metadata
+        .request_id
+        .as_slice()
+        .try_into()
+        .map_err(|_| ServiceContractError::InvalidId)?;
+    let mut validator = TerminalStreamValidator::new(
+        terminal::TerminalKind::TERMINAL_KIND_RETAINED_LOG,
+        metadata.session_generation,
+        request_id,
+        context.operation_id.clone(),
+        response.resource_handle.clone(),
+    )?;
+    validator.bind_retained_log_range(
+        response
+            .retained_log
+            .as_ref()
+            .ok_or(ServiceContractError::InconsistentResponse)?,
+    )?;
+    Ok(validator)
 }
 
 pub fn validate_terminal_open_response_for_guest_context(
@@ -687,9 +855,16 @@ pub struct FileTransferStreamValidator {
     declared_size: u64,
     expected_digest: Vec<u8>,
     next_offset: u64,
+    available_credit: u64,
+    accepted_eof: Option<AcceptedFileEof>,
     next_client_sequence: u64,
     next_server_sequence: u64,
     state: GuestStreamState,
+}
+
+struct AcceptedFileEof {
+    total_size: u64,
+    digest: Vec<u8>,
 }
 
 impl fmt::Debug for FileTransferStreamValidator {
@@ -716,7 +891,9 @@ impl FileTransferStreamValidator {
             guest_context(&request.context)?,
             response,
         )?;
-        if response.outcome.enum_value().ok() != Some(common::Outcome::OUTCOME_ACCEPTED) {
+        if response.outcome.enum_value().ok() != Some(common::Outcome::OUTCOME_ACCEPTED)
+            || response.retained_log.is_some()
+        {
             return Err(ServiceContractError::InconsistentResponse);
         }
         let context = guest_context(&request.context)?;
@@ -736,6 +913,8 @@ impl FileTransferStreamValidator {
             declared_size: request.declared_size,
             expected_digest: request.expected_digest.clone(),
             next_offset: request.offset,
+            available_credit: 0,
+            accepted_eof: None,
             next_client_sequence: 0,
             next_server_sequence: 0,
             state: GuestStreamState::AwaitStart,
@@ -789,6 +968,9 @@ impl FileTransferStreamValidator {
             {
                 let len = u64::try_from(chunk.data.len())
                     .map_err(|_| ServiceContractError::BoundExceeded)?;
+                if len > self.available_credit {
+                    return Err(ServiceContractError::BoundExceeded);
+                }
                 let next_offset = self
                     .next_offset
                     .checked_add(len)
@@ -803,20 +985,44 @@ impl FileTransferStreamValidator {
                     return Err(ServiceContractError::InconsistentResponse);
                 }
                 self.next_offset = next_offset;
+                self.available_credit -= len;
                 if chunk.eof {
+                    self.accepted_eof = Some(AcceptedFileEof {
+                        total_size: chunk.total_size,
+                        digest: chunk.final_digest.clone(),
+                    });
                     self.state = GuestStreamState::Closing;
                 }
             }
             (GuestStreamState::Active, actual, Some(Frame::Credit(credit)))
-                if actual != self.data_sender() && credit.next_offset == self.next_offset => {}
+                if actual != self.data_sender() && credit.next_offset == self.next_offset =>
+            {
+                let available_credit = self
+                    .available_credit
+                    .checked_add(u64::from(credit.bytes))
+                    .ok_or(ServiceContractError::BoundExceeded)?;
+                if available_credit > u64::from(MAX_NAMED_STREAM_QUEUE_BYTES) {
+                    return Err(ServiceContractError::BoundExceeded);
+                }
+                self.available_credit = available_credit;
+            }
             (
                 GuestStreamState::Closing,
                 GuestStreamDirection::ServerToClient,
                 Some(Frame::Complete(complete)),
-            ) if complete.total_size == self.declared_size
-                && self.next_offset == self.declared_size
-                && (self.expected_digest.is_empty() || complete.digest == self.expected_digest) =>
-            {
+            ) => {
+                let eof = self
+                    .accepted_eof
+                    .as_ref()
+                    .ok_or(ServiceContractError::InconsistentResponse)?;
+                if complete.total_size != self.declared_size
+                    || complete.total_size != eof.total_size
+                    || complete.digest != eof.digest
+                    || self.next_offset != self.declared_size
+                    || (!self.expected_digest.is_empty() && complete.digest != self.expected_digest)
+                {
+                    return Err(ServiceContractError::InconsistentResponse);
+                }
                 self.state = GuestStreamState::Terminal;
             }
             (
@@ -997,11 +1203,19 @@ pub struct SecurityKeyStreamValidator {
     device_handle: String,
     ceremony_handle: String,
     ceremony: guest::GuestSecurityKeyCeremonyKind,
-    approval_required: bool,
-    approval_requested: bool,
+    approval: SecurityKeyApprovalState,
     next_client_sequence: u64,
     next_server_sequence: u64,
     state: GuestStreamState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SecurityKeyApprovalState {
+    NotRequired,
+    Required,
+    Requested,
+    Granted,
+    Denied,
 }
 
 impl fmt::Debug for SecurityKeyStreamValidator {
@@ -1027,7 +1241,9 @@ impl SecurityKeyStreamValidator {
             guest_context(&request.context)?,
             response,
         )?;
-        if response.outcome.enum_value().ok() != Some(common::Outcome::OUTCOME_ACCEPTED) {
+        if response.outcome.enum_value().ok() != Some(common::Outcome::OUTCOME_ACCEPTED)
+            || response.retained_log.is_some()
+        {
             return Err(ServiceContractError::InconsistentResponse);
         }
         if request.action.enum_value().ok()
@@ -1055,8 +1271,11 @@ impl SecurityKeyStreamValidator {
                 request.ceremony_handle.clone()
             },
             ceremony: request.ceremony.enum_value_or_default(),
-            approval_required: request.approval_required,
-            approval_requested: false,
+            approval: if request.approval_required {
+                SecurityKeyApprovalState::Required
+            } else {
+                SecurityKeyApprovalState::NotRequired
+            },
             next_client_sequence: 0,
             next_server_sequence: 0,
             state: GuestStreamState::AwaitStart,
@@ -1112,19 +1331,33 @@ impl SecurityKeyStreamValidator {
                 GuestStreamState::Active,
                 GuestStreamDirection::ClientToServer,
                 Some(Frame::DeviceReport(_)),
-            ) => {}
+            ) if self.approval != SecurityKeyApprovalState::Denied => {}
             (
                 GuestStreamState::Active,
                 GuestStreamDirection::ServerToClient,
                 Some(Frame::ApprovalRequest(_)),
-            ) if self.approval_required && !self.approval_requested => {
-                self.approval_requested = true;
+            ) if self.approval == SecurityKeyApprovalState::Required => {
+                self.approval = SecurityKeyApprovalState::Requested;
             }
             (
                 GuestStreamState::Active,
                 GuestStreamDirection::ClientToServer,
-                Some(Frame::Approval(_)),
-            ) if self.approval_requested => self.approval_requested = false,
+                Some(Frame::Approval(approval)),
+            ) if self.approval == SecurityKeyApprovalState::Requested => {
+                self.approval = match approval.decision.enum_value().map_err(|_| {
+                    ServiceContractError::InvalidEnum
+                })? {
+                    guest::GuestSecurityKeyApprovalDecision::GUEST_SECURITY_KEY_APPROVAL_DECISION_APPROVED => {
+                        SecurityKeyApprovalState::Granted
+                    }
+                    guest::GuestSecurityKeyApprovalDecision::GUEST_SECURITY_KEY_APPROVAL_DECISION_DENIED => {
+                        SecurityKeyApprovalState::Denied
+                    }
+                    guest::GuestSecurityKeyApprovalDecision::GUEST_SECURITY_KEY_APPROVAL_DECISION_UNSPECIFIED => {
+                        return Err(ServiceContractError::InvalidEnum);
+                    }
+                };
+            }
             (
                 GuestStreamState::AwaitStart | GuestStreamState::Active,
                 GuestStreamDirection::ClientToServer,
@@ -1133,8 +1366,32 @@ impl SecurityKeyStreamValidator {
             (
                 GuestStreamState::Active | GuestStreamState::Closing,
                 GuestStreamDirection::ServerToClient,
-                Some(Frame::Complete(_)),
-            ) if !self.approval_requested => self.state = GuestStreamState::Terminal,
+                Some(Frame::Complete(complete)),
+            ) => {
+                let outcome = complete
+                    .outcome
+                    .enum_value()
+                    .map_err(|_| ServiceContractError::InvalidEnum)?;
+                let valid = match self.approval {
+                    SecurityKeyApprovalState::NotRequired | SecurityKeyApprovalState::Granted => {
+                        outcome
+                            != guest::GuestSecurityKeyOutcome::GUEST_SECURITY_KEY_OUTCOME_UNSPECIFIED
+                    }
+                    SecurityKeyApprovalState::Required | SecurityKeyApprovalState::Requested => {
+                        outcome
+                            != guest::GuestSecurityKeyOutcome::GUEST_SECURITY_KEY_OUTCOME_SUCCEEDED
+                    }
+                    SecurityKeyApprovalState::Denied => matches!(
+                        outcome,
+                        guest::GuestSecurityKeyOutcome::GUEST_SECURITY_KEY_OUTCOME_DENIED
+                            | guest::GuestSecurityKeyOutcome::GUEST_SECURITY_KEY_OUTCOME_CANCELLED
+                    ),
+                };
+                if !valid {
+                    return Err(ServiceContractError::InconsistentResponse);
+                }
+                self.state = GuestStreamState::Terminal;
+            }
             (
                 GuestStreamState::AwaitStart | GuestStreamState::Active | GuestStreamState::Closing,
                 GuestStreamDirection::ServerToClient,

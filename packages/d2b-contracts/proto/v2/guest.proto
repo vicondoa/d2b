@@ -7,10 +7,11 @@ import "terminal.proto";
 service GuestService {
   rpc Bootstrap(GuestBootstrapRequest) returns (GuestSessionResponse);
   rpc Reconnect(GuestReconnectRequest) returns (GuestSessionResponse);
-  rpc Exec(d2b.terminal.v2.TerminalOpenRequest) returns (d2b.terminal.v2.TerminalOpenResponse);
+  rpc Exec(GuestExecRequest) returns (d2b.terminal.v2.TerminalOpenResponse);
   rpc CancelExec(GuestCancelExecRequest) returns (GuestCancelExecResponse);
   rpc InspectExec(GuestInspectExecRequest) returns (GuestInspectExecResponse);
-  rpc OpenShell(d2b.terminal.v2.TerminalOpenRequest) returns (d2b.terminal.v2.TerminalOpenResponse);
+  rpc OpenExecRetainedLog(GuestOpenExecRetainedLogRequest) returns (d2b.terminal.v2.TerminalOpenResponse);
+  rpc OpenShell(GuestOpenShellRequest) returns (d2b.terminal.v2.TerminalOpenResponse);
   rpc FileTransfer(GuestFileTransferRequest) returns (d2b.terminal.v2.TerminalOpenResponse);
   rpc SecurityKey(GuestSecurityKeyRequest) returns (d2b.terminal.v2.TerminalOpenResponse);
   rpc Shutdown(GuestShutdownRequest) returns (GuestShutdownResponse);
@@ -22,6 +23,14 @@ message GuestOperationContext {
   d2b.common.v2.IdentityScope scope = 2;
   string operation_id = 3;
   bytes request_digest = 4;
+}
+
+message GuestExecRequest {
+  d2b.terminal.v2.TerminalOpenRequest terminal = 1;
+}
+
+message GuestOpenShellRequest {
+  d2b.terminal.v2.TerminalOpenRequest terminal = 1;
 }
 
 enum GuestCapability {
@@ -115,19 +124,21 @@ message GuestExecListPageQuery {
   string page_cursor = 2;
 }
 
-message GuestExecOpenRetainedLogQuery {
-  string resource_handle = 1;
-  d2b.terminal.v2.OutputStream output = 2;
-  uint64 offset = 3;
-  uint32 max_bytes = 4;
+message GuestOpenExecRetainedLogRequest {
+  GuestOperationContext context = 1;
+  string resource_handle = 2;
+  d2b.terminal.v2.OutputStream output = 3;
+  uint64 offset = 4;
+  uint32 max_bytes = 5;
 }
 
 message GuestInspectExecQuery {
+  reserved 4;
+  reserved "open_retained_log";
   oneof query {
     GuestExecStatusQuery status = 1;
     GuestExecWaitQuery wait = 2;
     GuestExecListPageQuery list_page = 3;
-    GuestExecOpenRetainedLogQuery open_retained_log = 4;
   }
 }
 
@@ -192,14 +203,9 @@ message GuestExecListPage {
   string next_page_cursor = 3;
 }
 
-message GuestExecRetainedLogStream {
-  d2b.terminal.v2.TerminalOpenResponse stream = 1;
-  d2b.terminal.v2.OutputStream output = 2;
-  uint64 start_offset = 3;
-  uint64 end_offset = 4;
-}
-
 message GuestInspectExecResponse {
+  reserved 7;
+  reserved "retained_log_stream";
   d2b.common.v2.Outcome outcome = 1;
   string operation_id = 2;
   uint64 session_generation = 3;
@@ -207,7 +213,6 @@ message GuestInspectExecResponse {
   oneof result {
     GuestExecStatus status = 5;
     GuestExecListPage list_page = 6;
-    GuestExecRetainedLogStream retained_log_stream = 7;
   }
   d2b.common.v2.ErrorEnvelope error = 8;
 }
@@ -357,6 +362,7 @@ enum GuestSecurityKeyOutcome {
   GUEST_SECURITY_KEY_OUTCOME_CTAP_ERROR = 2;
   GUEST_SECURITY_KEY_OUTCOME_CANCELLED = 3;
   GUEST_SECURITY_KEY_OUTCOME_TIMED_OUT = 4;
+  GUEST_SECURITY_KEY_OUTCOME_DENIED = 5;
 }
 
 message GuestSecurityKeyComplete {

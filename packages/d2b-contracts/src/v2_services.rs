@@ -157,9 +157,11 @@ pub use guest_contract::{
     CTAPHID_REPORT_BYTES, FileTransferStreamValidator, GuestStreamDirection,
     MAX_GUEST_CAPABILITIES, MAX_GUEST_EXEC_LIST_ENTRIES, MAX_GUEST_FILE_BYTES,
     MAX_GUEST_FILE_CHUNK_BYTES, MAX_GUEST_WAIT_MS, SecurityKeyStreamValidator,
-    validate_guest_cancel_response_for_request, validate_guest_inspect_response_for_request,
-    validate_guest_session_response_for_bootstrap, validate_guest_session_response_for_reconnect,
-    validate_guest_shutdown_response_for_request,
+    retained_log_stream_validator, validate_guest_cancel_response_for_request,
+    validate_guest_exec_response_for_request, validate_guest_inspect_response_for_request,
+    validate_guest_open_exec_retained_log_response_for_request,
+    validate_guest_open_shell_response_for_request, validate_guest_session_response_for_bootstrap,
+    validate_guest_session_response_for_reconnect, validate_guest_shutdown_response_for_request,
     validate_terminal_open_response_for_guest_context,
 };
 
@@ -275,7 +277,7 @@ pub const SERVICE_INVENTORY: &[ServiceSpec] = &[
         service: "GuestService",
         methods: methods![
             "Bootstrap" => true, "Reconnect" => true, "Exec" => true, "CancelExec" => true,
-            "InspectExec" => false, "OpenShell" => true, "FileTransfer" => true,
+            "InspectExec" => false, "OpenExecRetainedLog" => true, "OpenShell" => true, "FileTransfer" => true,
             "SecurityKey" => true, "Shutdown" => true, "Cancel" => false,
         ],
     },
@@ -491,7 +493,7 @@ pub struct MethodDocument {
 
 pub fn service_inventory_document() -> ServiceInventoryDocument {
     ServiceInventoryDocument {
-        schema_version: 4,
+        schema_version: 5,
         services: SERVICE_INVENTORY
             .iter()
             .map(|service| ServiceDocument {
@@ -534,7 +536,7 @@ pub fn service_schema_fingerprint(service: &ServiceSpec) -> [u8; 32] {
         digest.update(include_bytes!("../proto/v2/terminal.proto"));
     }
     if service.package == "d2b.guest.v2" {
-        digest.update(b"\0typed-guest-operations-v1\0");
+        digest.update(b"\0typed-guest-operations-v2\0");
         digest.update(include_bytes!("../proto/v2/guest.proto"));
         digest.update(b"\0");
         digest.update(include_bytes!("../proto/v2/terminal.proto"));
@@ -1494,11 +1496,17 @@ impl StrictWireMessage for terminal::TerminalOpenResponse {
                     return Err(ServiceContractError::InconsistentResponse);
                 }
                 parse_server_stream_name(&self.stream_id)?;
+                if let Some(range) = self.retained_log.as_ref() {
+                    validate_terminal_retained_log_range(range)?;
+                }
             }
             common::Outcome::OUTCOME_DENIED
             | common::Outcome::OUTCOME_CANCELLED
             | common::Outcome::OUTCOME_FAILED => {
-                if !self.stream_id.is_empty() || !self.resource_handle.is_empty() {
+                if !self.stream_id.is_empty()
+                    || !self.resource_handle.is_empty()
+                    || self.retained_log.is_some()
+                {
                     return Err(ServiceContractError::InconsistentResponse);
                 }
                 validate_error(
@@ -1526,6 +1534,30 @@ pub fn validate_terminal_open_response_for_request(
     if response.operation_id != request.operation_id
         || response.request_id != metadata.request_id
         || response.session_generation != metadata.session_generation
+        || response.retained_log.is_some()
+    {
+        return Err(ServiceContractError::InconsistentResponse);
+    }
+    Ok(())
+}
+
+fn validate_terminal_retained_log_range(
+    value: &terminal::TerminalRetainedLogRange,
+) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    let requested_end = value
+        .requested_offset
+        .checked_add(u64::from(value.max_bytes))
+        .ok_or(ServiceContractError::BoundExceeded)?;
+    if !valid_required_enum(
+        &value.output,
+        terminal::OutputStream::OUTPUT_STREAM_UNSPECIFIED,
+    ) || value.max_bytes == 0
+        || value.max_bytes as usize > MAX_TERMINAL_CHUNK_BYTES
+        || value.start_offset < value.requested_offset
+        || value.start_offset > value.end_offset
+        || value.end_offset > requested_end
+        || value.end_offset.saturating_sub(value.start_offset) > u64::from(value.max_bytes)
     {
         return Err(ServiceContractError::InconsistentResponse);
     }
@@ -1666,6 +1698,8 @@ fn validate_terminal_selection(
                     &retained.output,
                     terminal::OutputStream::OUTPUT_STREAM_UNSPECIFIED,
                 )
+                || retained.max_bytes == 0
+                || retained.max_bytes as usize > MAX_TERMINAL_CHUNK_BYTES
             {
                 return Err(ServiceContractError::InvalidOperationInput);
             }
@@ -1906,6 +1940,17 @@ pub struct TerminalStreamValidator {
     tty: bool,
     detached_exec: bool,
     shell_action: Option<terminal::ShellAction>,
+    retained_log: Option<RetainedLogStreamState>,
+}
+
+struct RetainedLogStreamState {
+    output: terminal::OutputStream,
+    requested_offset: u64,
+    next_offset: u64,
+    end_offset: u64,
+    max_bytes: u32,
+    eof: bool,
+    saw_eof: bool,
 }
 
 impl fmt::Debug for TerminalStreamValidator {
@@ -1953,7 +1998,31 @@ impl TerminalStreamValidator {
             tty: false,
             detached_exec: false,
             shell_action: None,
+            retained_log: None,
         })
+    }
+
+    pub fn bind_retained_log_range(
+        &mut self,
+        range: &terminal::TerminalRetainedLogRange,
+    ) -> Result<(), ServiceContractError> {
+        if self.kind != terminal::TerminalKind::TERMINAL_KIND_RETAINED_LOG
+            || self.state != TerminalProtocolState::AwaitSelection
+            || self.retained_log.is_some()
+        {
+            return Err(ServiceContractError::InconsistentResponse);
+        }
+        validate_terminal_retained_log_range(range)?;
+        self.retained_log = Some(RetainedLogStreamState {
+            output: range.output.enum_value_or_default(),
+            requested_offset: range.requested_offset,
+            next_offset: range.start_offset,
+            end_offset: range.end_offset,
+            max_bytes: range.max_bytes,
+            eof: range.eof,
+            saw_eof: false,
+        });
+        Ok(())
     }
 
     pub fn accept(
@@ -2012,7 +2081,17 @@ impl TerminalStreamValidator {
                     selection.selection.as_ref(),
                     Some(Selection::RetainedLog(retained))
                         if retained.exec_handle != self.resource_handle
+                            || self.retained_log.as_ref().is_none_or(|binding| {
+                                retained.output.enum_value().ok() != Some(binding.output)
+                                    || retained.offset != binding.requested_offset
+                                    || retained.max_bytes != binding.max_bytes
+                            })
                 ) {
+                    return Err(ServiceContractError::InconsistentResponse);
+                }
+                if self.kind == terminal::TerminalKind::TERMINAL_KIND_RETAINED_LOG
+                    && !matches!(selection.selection, Some(Selection::RetainedLog(_)))
+                {
                     return Err(ServiceContractError::InconsistentResponse);
                 }
                 self.tty = match selection.selection.as_ref() {
@@ -2044,6 +2123,22 @@ impl TerminalStreamValidator {
                 TerminalFrameDirection::ServerToClient,
                 Frame::Started(started),
             ) if started.kind.enum_value().ok() == Some(self.kind) && started.tty == self.tty => {
+                if let Some(binding) = self.retained_log.as_ref() {
+                    let (selected, other) = match binding.output {
+                        terminal::OutputStream::OUTPUT_STREAM_STDOUT => {
+                            (started.stdout_offset, started.stderr_offset)
+                        }
+                        terminal::OutputStream::OUTPUT_STREAM_STDERR => {
+                            (started.stderr_offset, started.stdout_offset)
+                        }
+                        terminal::OutputStream::OUTPUT_STREAM_UNSPECIFIED => {
+                            return Err(ServiceContractError::InvalidEnum);
+                        }
+                    };
+                    if selected != binding.next_offset || other != 0 {
+                        return Err(ServiceContractError::InconsistentResponse);
+                    }
+                }
                 self.state = TerminalProtocolState::Active;
                 Ok(())
             }
@@ -2099,14 +2194,39 @@ impl TerminalStreamValidator {
                 {
                     return Err(ServiceContractError::InconsistentResponse);
                 }
+                if self.retained_log.as_ref().is_some_and(|binding| {
+                    binding.next_offset != binding.end_offset || (binding.eof && !binding.saw_eof)
+                }) {
+                    return Err(ServiceContractError::InconsistentResponse);
+                }
                 self.state = TerminalProtocolState::Terminal;
                 Ok(())
+            }
+            (
+                TerminalProtocolState::Active,
+                TerminalFrameDirection::ServerToClient,
+                Frame::Stdout(output),
+            ) if self.retained_log.as_ref().is_some_and(|binding| {
+                binding.output == terminal::OutputStream::OUTPUT_STREAM_STDOUT
+            }) =>
+            {
+                self.accept_retained_log_output(output)
+            }
+            (
+                TerminalProtocolState::Active,
+                TerminalFrameDirection::ServerToClient,
+                Frame::Stderr(output),
+            ) if self.retained_log.as_ref().is_some_and(|binding| {
+                binding.output == terminal::OutputStream::OUTPUT_STREAM_STDERR
+            }) =>
+            {
+                self.accept_retained_log_output(output)
             }
             (
                 TerminalProtocolState::Active | TerminalProtocolState::Closing,
                 TerminalFrameDirection::ServerToClient,
                 Frame::Stdout(_) | Frame::Stderr(_) | Frame::Status(_),
-            ) if !self.detached_exec => Ok(()),
+            ) if !self.detached_exec && self.retained_log.is_none() => Ok(()),
             (
                 TerminalProtocolState::Active,
                 TerminalFrameDirection::ClientToServer,
@@ -2131,6 +2251,34 @@ impl TerminalStreamValidator {
             }
             _ => Err(ServiceContractError::InconsistentResponse),
         }
+    }
+
+    fn accept_retained_log_output(
+        &mut self,
+        output: &terminal::TerminalOutput,
+    ) -> Result<(), ServiceContractError> {
+        let binding = self
+            .retained_log
+            .as_mut()
+            .ok_or(ServiceContractError::InconsistentResponse)?;
+        if output.offset != binding.next_offset || binding.saw_eof {
+            return Err(ServiceContractError::InconsistentResponse);
+        }
+        let len =
+            u64::try_from(output.data.len()).map_err(|_| ServiceContractError::BoundExceeded)?;
+        let next_offset = binding
+            .next_offset
+            .checked_add(len)
+            .ok_or(ServiceContractError::BoundExceeded)?;
+        if next_offset > binding.end_offset
+            || next_offset.saturating_sub(binding.requested_offset) > u64::from(binding.max_bytes)
+            || (output.eof && (!binding.eof || next_offset != binding.end_offset))
+        {
+            return Err(ServiceContractError::InconsistentResponse);
+        }
+        binding.next_offset = next_offset;
+        binding.saw_eof = output.eof;
+        Ok(())
     }
 
     pub fn is_terminal(&self) -> bool {

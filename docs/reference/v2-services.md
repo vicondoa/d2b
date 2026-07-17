@@ -135,8 +135,10 @@ so a projection or stream shape change changes the advertised schema identity.
 
 The transport-neutral `d2b.terminal.v2` package is shared by
 `DaemonService.Exec`/`Shell`/`OpenConsole` and
-`GuestService.Exec`/`OpenShell`. `TerminalOpenRequest` has no stream-id field.
-After admission, the server reserves a ComponentSession named channel in the
+`GuestService.Exec`/`OpenShell`. Guest methods wrap `TerminalOpenRequest` in
+method-specific requests whose validation requires an exact workload scope:
+realm and workload IDs with no provider or role. `TerminalOpenRequest` has no
+stream-id field. After admission, the server reserves a ComponentSession named channel in the
 range `0x0100..=0xffff` and returns its canonical `stream-N` spelling plus a
 bounded opaque resource handle. The client opens exactly that returned stream,
 once. A client cannot name, preselect, reuse, or cause the server to open a
@@ -150,7 +152,7 @@ integrity-checked bundle; it carries no argv. Shell selection uses closed
 attach-default, attach-configured, list, detach, and kill actions with opaque
 configured IDs or server-issued handles. Console selection carries only
 terminal shape. Retained-log selection carries an exec handle, closed output
-stream, and offset. No selection carries environment variables, a working
+stream, requested offset, and maximum byte count. No selection carries environment variables, a working
 directory, a host path, credentials, or provider-native data.
 
 Each frame binds the exact authenticated session generation and 16-byte opening
@@ -186,22 +188,38 @@ handle, and at most 32 closed capabilities. Bootstrap PSKs and static private
 keys remain handshake-only and are not representable in the service payload.
 
 `CancelExec` names the exact exec resource handle, generation, request, control
-sequence, and closed cancellation reason/outcome. `InspectExec` uses one closed
-query: status, bounded wait, detached-exec list page, or retained-log stream.
+sequence, and closed cancellation reason/outcome. Signalled cancellation is
+`accepted`, already-terminal is `not-applicable`, and unknown-resource or
+generation-mismatch are typed failures; other combinations are rejected.
+`InspectExec` uses one closed read-only query: status, bounded wait, or
+detached-exec list page.
 Status and list results contain only closed lifecycle/stdin state, offsets,
-retention counters, opaque handles, and argv digests. A retained-log result
-uses a server-allocated stream and the shared retained-log terminal selection.
+retention counters, opaque handles, and argv digests. Exec state, terminal
+outcome, and stdin state must agree. Wait results cannot regress the caller's
+known state generation; timeout is valid only when no newer nonterminal state
+exists.
+
+`OpenExecRetainedLog` is a separate mutating operation requiring an idempotency
+key, so ambiguous retries cannot allocate multiple streams. Its terminal
+response binds output stream, requested offset, selected start/end range,
+maximum byte count, and EOF posture. The first retained-log selection repeats
+the exact resource/output/offset/limit, and output frames must remain contiguous
+within that range.
 
 `FileTransfer` names one closed artifact ID and one opaque configured-intent ID;
 paths are not representable. Its stream binds generation/request/operation/
 resource, direction, offset, declared size, optional expected digest, 64 KiB
 chunks, EOF/final digest, bounded credit, cancellation, and one completion or
-error outcome. Total transfer size is capped at 16 MiB.
+error outcome. Chunks require previously granted application credit, debit it
+exactly, and preserve the accepted EOF total/digest through completion.
+Total transfer size is capped at 16 MiB.
 
 `SecurityKey` names only opaque device and ceremony handles and a closed
 ceremony kind. Its stream carries exactly 64-byte CTAPHID reports in explicit
 guest/device directions, closed approval request/decision, cancellation, and
-one completion or bounded error. It cannot carry credentials, relying-party
+one completion or bounded error. A ceremony requiring approval cannot complete
+successfully before an explicit grant; denial permits only denied, cancelled,
+or failed closure. It cannot carry credentials, relying-party
 secrets, device paths, or arbitrary diagnostics.
 
 `Shutdown` carries one closed power action and an absolute deadline within the

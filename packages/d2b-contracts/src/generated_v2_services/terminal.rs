@@ -242,6 +242,8 @@ pub struct TerminalOpenResponse {
     pub error: ::protobuf::MessageField<super::common::ErrorEnvelope>,
     // @@protoc_insertion_point(field:d2b.terminal.v2.TerminalOpenResponse.resource_handle)
     pub resource_handle: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.terminal.v2.TerminalOpenResponse.retained_log)
+    pub retained_log: ::protobuf::MessageField<TerminalRetainedLogRange>,
     // special fields
     // @@protoc_insertion_point(special_field:d2b.terminal.v2.TerminalOpenResponse.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -259,7 +261,7 @@ impl TerminalOpenResponse {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(7);
+        let mut fields = ::std::vec::Vec::with_capacity(8);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "outcome",
@@ -295,6 +297,11 @@ impl TerminalOpenResponse {
             "resource_handle",
             |m: &TerminalOpenResponse| { &m.resource_handle },
             |m: &mut TerminalOpenResponse| { &mut m.resource_handle },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, TerminalRetainedLogRange>(
+            "retained_log",
+            |m: &TerminalOpenResponse| { &m.retained_log },
+            |m: &mut TerminalOpenResponse| { &mut m.retained_log },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TerminalOpenResponse>(
             "TerminalOpenResponse",
@@ -335,6 +342,9 @@ impl ::protobuf::Message for TerminalOpenResponse {
                 58 => {
                     self.resource_handle = is.read_string()?;
                 },
+                66 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.retained_log)?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -369,6 +379,10 @@ impl ::protobuf::Message for TerminalOpenResponse {
         if !self.resource_handle.is_empty() {
             my_size += ::protobuf::rt::string_size(7, &self.resource_handle);
         }
+        if let Some(v) = self.retained_log.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -396,6 +410,9 @@ impl ::protobuf::Message for TerminalOpenResponse {
         if !self.resource_handle.is_empty() {
             os.write_string(7, &self.resource_handle)?;
         }
+        if let Some(v) = self.retained_log.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(8, v, os)?;
+        }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -420,6 +437,7 @@ impl ::protobuf::Message for TerminalOpenResponse {
         self.request_id.clear();
         self.error.clear();
         self.resource_handle.clear();
+        self.retained_log.clear();
         self.special_fields.clear();
     }
 
@@ -432,6 +450,7 @@ impl ::protobuf::Message for TerminalOpenResponse {
             request_id: ::std::vec::Vec::new(),
             error: ::protobuf::MessageField::none(),
             resource_handle: ::std::string::String::new(),
+            retained_log: ::protobuf::MessageField::none(),
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -452,6 +471,218 @@ impl ::std::fmt::Display for TerminalOpenResponse {
 }
 
 impl ::protobuf::reflect::ProtobufValue for TerminalOpenResponse {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.terminal.v2.TerminalRetainedLogRange)
+#[derive(PartialEq,Clone,Default)]
+pub struct TerminalRetainedLogRange {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.terminal.v2.TerminalRetainedLogRange.output)
+    pub output: ::protobuf::EnumOrUnknown<OutputStream>,
+    // @@protoc_insertion_point(field:d2b.terminal.v2.TerminalRetainedLogRange.requested_offset)
+    pub requested_offset: u64,
+    // @@protoc_insertion_point(field:d2b.terminal.v2.TerminalRetainedLogRange.start_offset)
+    pub start_offset: u64,
+    // @@protoc_insertion_point(field:d2b.terminal.v2.TerminalRetainedLogRange.end_offset)
+    pub end_offset: u64,
+    // @@protoc_insertion_point(field:d2b.terminal.v2.TerminalRetainedLogRange.max_bytes)
+    pub max_bytes: u32,
+    // @@protoc_insertion_point(field:d2b.terminal.v2.TerminalRetainedLogRange.eof)
+    pub eof: bool,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.terminal.v2.TerminalRetainedLogRange.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TerminalRetainedLogRange {
+    fn default() -> &'a TerminalRetainedLogRange {
+        <TerminalRetainedLogRange as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TerminalRetainedLogRange {
+    pub fn new() -> TerminalRetainedLogRange {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(6);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "output",
+            |m: &TerminalRetainedLogRange| { &m.output },
+            |m: &mut TerminalRetainedLogRange| { &mut m.output },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "requested_offset",
+            |m: &TerminalRetainedLogRange| { &m.requested_offset },
+            |m: &mut TerminalRetainedLogRange| { &mut m.requested_offset },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "start_offset",
+            |m: &TerminalRetainedLogRange| { &m.start_offset },
+            |m: &mut TerminalRetainedLogRange| { &mut m.start_offset },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "end_offset",
+            |m: &TerminalRetainedLogRange| { &m.end_offset },
+            |m: &mut TerminalRetainedLogRange| { &mut m.end_offset },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "max_bytes",
+            |m: &TerminalRetainedLogRange| { &m.max_bytes },
+            |m: &mut TerminalRetainedLogRange| { &mut m.max_bytes },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "eof",
+            |m: &TerminalRetainedLogRange| { &m.eof },
+            |m: &mut TerminalRetainedLogRange| { &mut m.eof },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TerminalRetainedLogRange>(
+            "TerminalRetainedLogRange",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for TerminalRetainedLogRange {
+    const NAME: &'static str = "TerminalRetainedLogRange";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.output = is.read_enum_or_unknown()?;
+                },
+                16 => {
+                    self.requested_offset = is.read_uint64()?;
+                },
+                24 => {
+                    self.start_offset = is.read_uint64()?;
+                },
+                32 => {
+                    self.end_offset = is.read_uint64()?;
+                },
+                40 => {
+                    self.max_bytes = is.read_uint32()?;
+                },
+                48 => {
+                    self.eof = is.read_bool()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.output != ::protobuf::EnumOrUnknown::new(OutputStream::OUTPUT_STREAM_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(1, self.output.value());
+        }
+        if self.requested_offset != 0 {
+            my_size += ::protobuf::rt::uint64_size(2, self.requested_offset);
+        }
+        if self.start_offset != 0 {
+            my_size += ::protobuf::rt::uint64_size(3, self.start_offset);
+        }
+        if self.end_offset != 0 {
+            my_size += ::protobuf::rt::uint64_size(4, self.end_offset);
+        }
+        if self.max_bytes != 0 {
+            my_size += ::protobuf::rt::uint32_size(5, self.max_bytes);
+        }
+        if self.eof != false {
+            my_size += 1 + 1;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.output != ::protobuf::EnumOrUnknown::new(OutputStream::OUTPUT_STREAM_UNSPECIFIED) {
+            os.write_enum(1, ::protobuf::EnumOrUnknown::value(&self.output))?;
+        }
+        if self.requested_offset != 0 {
+            os.write_uint64(2, self.requested_offset)?;
+        }
+        if self.start_offset != 0 {
+            os.write_uint64(3, self.start_offset)?;
+        }
+        if self.end_offset != 0 {
+            os.write_uint64(4, self.end_offset)?;
+        }
+        if self.max_bytes != 0 {
+            os.write_uint32(5, self.max_bytes)?;
+        }
+        if self.eof != false {
+            os.write_bool(6, self.eof)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TerminalRetainedLogRange {
+        TerminalRetainedLogRange::new()
+    }
+
+    fn clear(&mut self) {
+        self.output = ::protobuf::EnumOrUnknown::new(OutputStream::OUTPUT_STREAM_UNSPECIFIED);
+        self.requested_offset = 0;
+        self.start_offset = 0;
+        self.end_offset = 0;
+        self.max_bytes = 0;
+        self.eof = false;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TerminalRetainedLogRange {
+        static instance: TerminalRetainedLogRange = TerminalRetainedLogRange {
+            output: ::protobuf::EnumOrUnknown::from_i32(0),
+            requested_offset: 0,
+            start_offset: 0,
+            end_offset: 0,
+            max_bytes: 0,
+            eof: false,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for TerminalRetainedLogRange {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("TerminalRetainedLogRange").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for TerminalRetainedLogRange {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TerminalRetainedLogRange {
     type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
 }
 
@@ -1520,6 +1751,8 @@ pub struct RetainedLogSelection {
     pub output: ::protobuf::EnumOrUnknown<OutputStream>,
     // @@protoc_insertion_point(field:d2b.terminal.v2.RetainedLogSelection.offset)
     pub offset: u64,
+    // @@protoc_insertion_point(field:d2b.terminal.v2.RetainedLogSelection.max_bytes)
+    pub max_bytes: u32,
     // special fields
     // @@protoc_insertion_point(special_field:d2b.terminal.v2.RetainedLogSelection.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -1537,7 +1770,7 @@ impl RetainedLogSelection {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(3);
+        let mut fields = ::std::vec::Vec::with_capacity(4);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "exec_handle",
@@ -1553,6 +1786,11 @@ impl RetainedLogSelection {
             "offset",
             |m: &RetainedLogSelection| { &m.offset },
             |m: &mut RetainedLogSelection| { &mut m.offset },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "max_bytes",
+            |m: &RetainedLogSelection| { &m.max_bytes },
+            |m: &mut RetainedLogSelection| { &mut m.max_bytes },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<RetainedLogSelection>(
             "RetainedLogSelection",
@@ -1581,6 +1819,9 @@ impl ::protobuf::Message for RetainedLogSelection {
                 24 => {
                     self.offset = is.read_uint64()?;
                 },
+                32 => {
+                    self.max_bytes = is.read_uint32()?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -1602,6 +1843,9 @@ impl ::protobuf::Message for RetainedLogSelection {
         if self.offset != 0 {
             my_size += ::protobuf::rt::uint64_size(3, self.offset);
         }
+        if self.max_bytes != 0 {
+            my_size += ::protobuf::rt::uint32_size(4, self.max_bytes);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -1616,6 +1860,9 @@ impl ::protobuf::Message for RetainedLogSelection {
         }
         if self.offset != 0 {
             os.write_uint64(3, self.offset)?;
+        }
+        if self.max_bytes != 0 {
+            os.write_uint32(4, self.max_bytes)?;
         }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
@@ -1637,6 +1884,7 @@ impl ::protobuf::Message for RetainedLogSelection {
         self.exec_handle.clear();
         self.output = ::protobuf::EnumOrUnknown::new(OutputStream::OUTPUT_STREAM_UNSPECIFIED);
         self.offset = 0;
+        self.max_bytes = 0;
         self.special_fields.clear();
     }
 
@@ -1645,6 +1893,7 @@ impl ::protobuf::Message for RetainedLogSelection {
             exec_handle: ::std::string::String::new(),
             output: ::protobuf::EnumOrUnknown::from_i32(0),
             offset: 0,
+            max_bytes: 0,
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -6974,48 +7223,56 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     source_id\x18\x03\x20\x01(\tR\nresourceId\x12!\n\x0coperation_id\x18\x04\
     \x20\x01(\tR\x0boperationId\x12%\n\x0erequest_digest\x18\x05\x20\x01(\
     \x0cR\rrequestDigestJ\x04\x08\x06\x10\x07J\x04\x08\x07\x10\x08R\tstream_\
-    id\"\xb3\x02\n\x14TerminalOpenResponse\x120\n\x07outcome\x18\x01\x20\x01\
+    id\"\x81\x03\n\x14TerminalOpenResponse\x120\n\x07outcome\x18\x01\x20\x01\
     (\x0e2\x16.d2b.common.v2.OutcomeR\x07outcome\x12!\n\x0coperation_id\x18\
     \x02\x20\x01(\tR\x0boperationId\x12\x1b\n\tstream_id\x18\x03\x20\x01(\tR\
     \x08streamId\x12-\n\x12session_generation\x18\x04\x20\x01(\x04R\x11sessi\
     onGeneration\x12\x1d\n\nrequest_id\x18\x05\x20\x01(\x0cR\trequestId\x122\
     \n\x05error\x18\x06\x20\x01(\x0b2\x1c.d2b.common.v2.ErrorEnvelopeR\x05er\
-    ror\x12'\n\x0fresource_handle\x18\x07\x20\x01(\tR\x0eresourceHandle\"<\n\
-    \x0cTerminalSize\x12\x12\n\x04rows\x18\x01\x20\x01(\rR\x04rows\x12\x18\n\
-    \x07columns\x18\x02\x20\x01(\rR\x07columns\",\n\x16ArbitraryExecSelectio\
-    n\x12\x12\n\x04argv\x18\x01\x20\x03(\x0cR\x04argv\"I\n\x19ConfiguredLaun\
-    chSelection\x12,\n\x12configured_item_id\x18\x01\x20\x01(\tR\x10configur\
-    edItemId\"\xee\x02\n\rExecSelection\x12<\n\tauthority\x18\x01\x20\x01(\
-    \x0e2\x1e.d2b.terminal.v2.ExecAuthorityR\tauthority\x12G\n\tarbitrary\
-    \x18\x02\x20\x01(\x0b2'.d2b.terminal.v2.ArbitraryExecSelectionH\0R\tarbi\
-    trary\x12Y\n\x11configured_launch\x18\x03\x20\x01(\x0b2*.d2b.terminal.v2\
-    .ConfiguredLaunchSelectionH\0R\x10configuredLaunch\x12\x10\n\x03tty\x18\
-    \x04\x20\x01(\x08R\x03tty\x12\x1a\n\x08detached\x18\x05\x20\x01(\x08R\
-    \x08detached\x12@\n\x0cinitial_size\x18\x06\x20\x01(\x0b2\x1d.d2b.termin\
-    al.v2.TerminalSizeR\x0binitialSizeB\x0b\n\tselection\"\xf1\x01\n\x0eShel\
-    lSelection\x124\n\x06action\x18\x01\x20\x01(\x0e2\x1c.d2b.terminal.v2.Sh\
-    ellActionR\x06action\x12!\n\x0cshell_handle\x18\x02\x20\x01(\tR\x0bshell\
-    Handle\x12.\n\x13configured_shell_id\x18\x03\x20\x01(\tR\x11configuredSh\
-    ellId\x12\x14\n\x05force\x18\x04\x20\x01(\x08R\x05force\x12@\n\x0cinitia\
-    l_size\x18\x05\x20\x01(\x0b2\x1d.d2b.terminal.v2.TerminalSizeR\x0binitia\
-    lSize\"T\n\x10ConsoleSelection\x12@\n\x0cinitial_size\x18\x01\x20\x01(\
-    \x0b2\x1d.d2b.terminal.v2.TerminalSizeR\x0binitialSize\"\x86\x01\n\x14Re\
-    tainedLogSelection\x12\x1f\n\x0bexec_handle\x18\x01\x20\x01(\tR\nexecHan\
-    dle\x125\n\x06output\x18\x02\x20\x01(\x0e2\x1d.d2b.terminal.v2.OutputStr\
-    eamR\x06output\x12\x16\n\x06offset\x18\x03\x20\x01(\x04R\x06offset\"\x9a\
-    \x02\n\x11TerminalSelection\x124\n\x04exec\x18\x01\x20\x01(\x0b2\x1e.d2b\
-    .terminal.v2.ExecSelectionH\0R\x04exec\x127\n\x05shell\x18\x02\x20\x01(\
-    \x0b2\x1f.d2b.terminal.v2.ShellSelectionH\0R\x05shell\x12=\n\x07console\
-    \x18\x03\x20\x01(\x0b2!.d2b.terminal.v2.ConsoleSelectionH\0R\x07console\
-    \x12J\n\x0cretained_log\x18\x04\x20\x01(\x0b2%.d2b.terminal.v2.RetainedL\
-    ogSelectionH\0R\x0bretainedLogB\x0b\n\tselection\"\xf1\x01\n\x0fTerminal\
-    Started\x121\n\x04kind\x18\x01\x20\x01(\x0e2\x1d.d2b.terminal.v2.Termina\
-    lKindR\x04kind\x12\x10\n\x03tty\x18\x02\x20\x01(\x08R\x03tty\x12#\n\rstd\
-    out_offset\x18\x03\x20\x01(\x04R\x0cstdoutOffset\x12#\n\rstderr_offset\
-    \x18\x04\x20\x01(\x04R\x0cstderrOffset\x12O\n\x10console_provider\x18\
-    \x05\x20\x01(\x0e2$.d2b.terminal.v2.ConsoleProviderKindR\x0fconsoleProvi\
-    der\"M\n\rTerminalStdin\x12\x16\n\x06offset\x18\x01\x20\x01(\x04R\x06off\
-    set\x12\x12\n\x04data\x18\x02\x20\x01(\x0cR\x04data\x12\x10\n\x03eof\x18\
+    ror\x12'\n\x0fresource_handle\x18\x07\x20\x01(\tR\x0eresourceHandle\x12L\
+    \n\x0cretained_log\x18\x08\x20\x01(\x0b2).d2b.terminal.v2.TerminalRetain\
+    edLogRangeR\x0bretainedLog\"\xed\x01\n\x18TerminalRetainedLogRange\x125\
+    \n\x06output\x18\x01\x20\x01(\x0e2\x1d.d2b.terminal.v2.OutputStreamR\x06\
+    output\x12)\n\x10requested_offset\x18\x02\x20\x01(\x04R\x0frequestedOffs\
+    et\x12!\n\x0cstart_offset\x18\x03\x20\x01(\x04R\x0bstartOffset\x12\x1d\n\
+    \nend_offset\x18\x04\x20\x01(\x04R\tendOffset\x12\x1b\n\tmax_bytes\x18\
+    \x05\x20\x01(\rR\x08maxBytes\x12\x10\n\x03eof\x18\x06\x20\x01(\x08R\x03e\
+    of\"<\n\x0cTerminalSize\x12\x12\n\x04rows\x18\x01\x20\x01(\rR\x04rows\
+    \x12\x18\n\x07columns\x18\x02\x20\x01(\rR\x07columns\",\n\x16ArbitraryEx\
+    ecSelection\x12\x12\n\x04argv\x18\x01\x20\x03(\x0cR\x04argv\"I\n\x19Conf\
+    iguredLaunchSelection\x12,\n\x12configured_item_id\x18\x01\x20\x01(\tR\
+    \x10configuredItemId\"\xee\x02\n\rExecSelection\x12<\n\tauthority\x18\
+    \x01\x20\x01(\x0e2\x1e.d2b.terminal.v2.ExecAuthorityR\tauthority\x12G\n\
+    \tarbitrary\x18\x02\x20\x01(\x0b2'.d2b.terminal.v2.ArbitraryExecSelectio\
+    nH\0R\tarbitrary\x12Y\n\x11configured_launch\x18\x03\x20\x01(\x0b2*.d2b.\
+    terminal.v2.ConfiguredLaunchSelectionH\0R\x10configuredLaunch\x12\x10\n\
+    \x03tty\x18\x04\x20\x01(\x08R\x03tty\x12\x1a\n\x08detached\x18\x05\x20\
+    \x01(\x08R\x08detached\x12@\n\x0cinitial_size\x18\x06\x20\x01(\x0b2\x1d.\
+    d2b.terminal.v2.TerminalSizeR\x0binitialSizeB\x0b\n\tselection\"\xf1\x01\
+    \n\x0eShellSelection\x124\n\x06action\x18\x01\x20\x01(\x0e2\x1c.d2b.term\
+    inal.v2.ShellActionR\x06action\x12!\n\x0cshell_handle\x18\x02\x20\x01(\t\
+    R\x0bshellHandle\x12.\n\x13configured_shell_id\x18\x03\x20\x01(\tR\x11co\
+    nfiguredShellId\x12\x14\n\x05force\x18\x04\x20\x01(\x08R\x05force\x12@\n\
+    \x0cinitial_size\x18\x05\x20\x01(\x0b2\x1d.d2b.terminal.v2.TerminalSizeR\
+    \x0binitialSize\"T\n\x10ConsoleSelection\x12@\n\x0cinitial_size\x18\x01\
+    \x20\x01(\x0b2\x1d.d2b.terminal.v2.TerminalSizeR\x0binitialSize\"\xa3\
+    \x01\n\x14RetainedLogSelection\x12\x1f\n\x0bexec_handle\x18\x01\x20\x01(\
+    \tR\nexecHandle\x125\n\x06output\x18\x02\x20\x01(\x0e2\x1d.d2b.terminal.\
+    v2.OutputStreamR\x06output\x12\x16\n\x06offset\x18\x03\x20\x01(\x04R\x06\
+    offset\x12\x1b\n\tmax_bytes\x18\x04\x20\x01(\rR\x08maxBytes\"\x9a\x02\n\
+    \x11TerminalSelection\x124\n\x04exec\x18\x01\x20\x01(\x0b2\x1e.d2b.termi\
+    nal.v2.ExecSelectionH\0R\x04exec\x127\n\x05shell\x18\x02\x20\x01(\x0b2\
+    \x1f.d2b.terminal.v2.ShellSelectionH\0R\x05shell\x12=\n\x07console\x18\
+    \x03\x20\x01(\x0b2!.d2b.terminal.v2.ConsoleSelectionH\0R\x07console\x12J\
+    \n\x0cretained_log\x18\x04\x20\x01(\x0b2%.d2b.terminal.v2.RetainedLogSel\
+    ectionH\0R\x0bretainedLogB\x0b\n\tselection\"\xf1\x01\n\x0fTerminalStart\
+    ed\x121\n\x04kind\x18\x01\x20\x01(\x0e2\x1d.d2b.terminal.v2.TerminalKind\
+    R\x04kind\x12\x10\n\x03tty\x18\x02\x20\x01(\x08R\x03tty\x12#\n\rstdout_o\
+    ffset\x18\x03\x20\x01(\x04R\x0cstdoutOffset\x12#\n\rstderr_offset\x18\
+    \x04\x20\x01(\x04R\x0cstderrOffset\x12O\n\x10console_provider\x18\x05\
+    \x20\x01(\x0e2$.d2b.terminal.v2.ConsoleProviderKindR\x0fconsoleProvider\
+    \"M\n\rTerminalStdin\x12\x16\n\x06offset\x18\x01\x20\x01(\x04R\x06offset\
+    \x12\x12\n\x04data\x18\x02\x20\x01(\x0cR\x04data\x12\x10\n\x03eof\x18\
     \x03\x20\x01(\x08R\x03eof\"\x91\x01\n\x0eTerminalOutput\x12\x16\n\x06off\
     set\x18\x01\x20\x01(\x04R\x06offset\x12\x12\n\x04data\x18\x02\x20\x01(\
     \x0cR\x04data\x12\x10\n\x03eof\x18\x03\x20\x01(\x08R\x03eof\x12#\n\rdrop\
@@ -7129,9 +7386,10 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
         let generated_file_descriptor = generated_file_descriptor_lazy.get(|| {
             let mut deps = ::std::vec::Vec::with_capacity(1);
             deps.push(super::common::file_descriptor().clone());
-            let mut messages = ::std::vec::Vec::with_capacity(30);
+            let mut messages = ::std::vec::Vec::with_capacity(31);
             messages.push(TerminalOpenRequest::generated_message_descriptor_data());
             messages.push(TerminalOpenResponse::generated_message_descriptor_data());
+            messages.push(TerminalRetainedLogRange::generated_message_descriptor_data());
             messages.push(TerminalSize::generated_message_descriptor_data());
             messages.push(ArbitraryExecSelection::generated_message_descriptor_data());
             messages.push(ConfiguredLaunchSelection::generated_message_descriptor_data());
@@ -7310,6 +7568,12 @@ impl ::std::fmt::Debug for TerminalOutput {
 impl ::std::fmt::Debug for TerminalResize {
     fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         formatter.write_str("TerminalResize(REDACTED)")
+    }
+}
+
+impl ::std::fmt::Debug for TerminalRetainedLogRange {
+    fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        formatter.write_str("TerminalRetainedLogRange(REDACTED)")
     }
 }
 

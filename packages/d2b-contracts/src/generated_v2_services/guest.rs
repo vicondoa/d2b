@@ -206,6 +206,252 @@ impl ::protobuf::reflect::ProtobufValue for GuestOperationContext {
     type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
 }
 
+// @@protoc_insertion_point(message:d2b.guest.v2.GuestExecRequest)
+#[derive(PartialEq,Clone,Default)]
+pub struct GuestExecRequest {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.guest.v2.GuestExecRequest.terminal)
+    pub terminal: ::protobuf::MessageField<super::terminal::TerminalOpenRequest>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.guest.v2.GuestExecRequest.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a GuestExecRequest {
+    fn default() -> &'a GuestExecRequest {
+        <GuestExecRequest as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl GuestExecRequest {
+    pub fn new() -> GuestExecRequest {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(1);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, super::terminal::TerminalOpenRequest>(
+            "terminal",
+            |m: &GuestExecRequest| { &m.terminal },
+            |m: &mut GuestExecRequest| { &mut m.terminal },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<GuestExecRequest>(
+            "GuestExecRequest",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for GuestExecRequest {
+    const NAME: &'static str = "GuestExecRequest";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.terminal)?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.terminal.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.terminal.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> GuestExecRequest {
+        GuestExecRequest::new()
+    }
+
+    fn clear(&mut self) {
+        self.terminal.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static GuestExecRequest {
+        static instance: GuestExecRequest = GuestExecRequest {
+            terminal: ::protobuf::MessageField::none(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for GuestExecRequest {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("GuestExecRequest").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for GuestExecRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for GuestExecRequest {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.guest.v2.GuestOpenShellRequest)
+#[derive(PartialEq,Clone,Default)]
+pub struct GuestOpenShellRequest {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.guest.v2.GuestOpenShellRequest.terminal)
+    pub terminal: ::protobuf::MessageField<super::terminal::TerminalOpenRequest>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.guest.v2.GuestOpenShellRequest.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a GuestOpenShellRequest {
+    fn default() -> &'a GuestOpenShellRequest {
+        <GuestOpenShellRequest as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl GuestOpenShellRequest {
+    pub fn new() -> GuestOpenShellRequest {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(1);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, super::terminal::TerminalOpenRequest>(
+            "terminal",
+            |m: &GuestOpenShellRequest| { &m.terminal },
+            |m: &mut GuestOpenShellRequest| { &mut m.terminal },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<GuestOpenShellRequest>(
+            "GuestOpenShellRequest",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for GuestOpenShellRequest {
+    const NAME: &'static str = "GuestOpenShellRequest";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.terminal)?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.terminal.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.terminal.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> GuestOpenShellRequest {
+        GuestOpenShellRequest::new()
+    }
+
+    fn clear(&mut self) {
+        self.terminal.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static GuestOpenShellRequest {
+        static instance: GuestOpenShellRequest = GuestOpenShellRequest {
+            terminal: ::protobuf::MessageField::none(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for GuestOpenShellRequest {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("GuestOpenShellRequest").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for GuestOpenShellRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for GuestOpenShellRequest {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
 // @@protoc_insertion_point(message:d2b.guest.v2.GuestBootstrapRequest)
 #[derive(PartialEq,Clone,Default)]
 pub struct GuestBootstrapRequest {
@@ -1688,67 +1934,74 @@ impl ::protobuf::reflect::ProtobufValue for GuestExecListPageQuery {
     type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
 }
 
-// @@protoc_insertion_point(message:d2b.guest.v2.GuestExecOpenRetainedLogQuery)
+// @@protoc_insertion_point(message:d2b.guest.v2.GuestOpenExecRetainedLogRequest)
 #[derive(PartialEq,Clone,Default)]
-pub struct GuestExecOpenRetainedLogQuery {
+pub struct GuestOpenExecRetainedLogRequest {
     // message fields
-    // @@protoc_insertion_point(field:d2b.guest.v2.GuestExecOpenRetainedLogQuery.resource_handle)
+    // @@protoc_insertion_point(field:d2b.guest.v2.GuestOpenExecRetainedLogRequest.context)
+    pub context: ::protobuf::MessageField<GuestOperationContext>,
+    // @@protoc_insertion_point(field:d2b.guest.v2.GuestOpenExecRetainedLogRequest.resource_handle)
     pub resource_handle: ::std::string::String,
-    // @@protoc_insertion_point(field:d2b.guest.v2.GuestExecOpenRetainedLogQuery.output)
+    // @@protoc_insertion_point(field:d2b.guest.v2.GuestOpenExecRetainedLogRequest.output)
     pub output: ::protobuf::EnumOrUnknown<super::terminal::OutputStream>,
-    // @@protoc_insertion_point(field:d2b.guest.v2.GuestExecOpenRetainedLogQuery.offset)
+    // @@protoc_insertion_point(field:d2b.guest.v2.GuestOpenExecRetainedLogRequest.offset)
     pub offset: u64,
-    // @@protoc_insertion_point(field:d2b.guest.v2.GuestExecOpenRetainedLogQuery.max_bytes)
+    // @@protoc_insertion_point(field:d2b.guest.v2.GuestOpenExecRetainedLogRequest.max_bytes)
     pub max_bytes: u32,
     // special fields
-    // @@protoc_insertion_point(special_field:d2b.guest.v2.GuestExecOpenRetainedLogQuery.special_fields)
+    // @@protoc_insertion_point(special_field:d2b.guest.v2.GuestOpenExecRetainedLogRequest.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
 }
 
-impl<'a> ::std::default::Default for &'a GuestExecOpenRetainedLogQuery {
-    fn default() -> &'a GuestExecOpenRetainedLogQuery {
-        <GuestExecOpenRetainedLogQuery as ::protobuf::Message>::default_instance()
+impl<'a> ::std::default::Default for &'a GuestOpenExecRetainedLogRequest {
+    fn default() -> &'a GuestOpenExecRetainedLogRequest {
+        <GuestOpenExecRetainedLogRequest as ::protobuf::Message>::default_instance()
     }
 }
 
-impl GuestExecOpenRetainedLogQuery {
-    pub fn new() -> GuestExecOpenRetainedLogQuery {
+impl GuestOpenExecRetainedLogRequest {
+    pub fn new() -> GuestOpenExecRetainedLogRequest {
         ::std::default::Default::default()
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(4);
+        let mut fields = ::std::vec::Vec::with_capacity(5);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, GuestOperationContext>(
+            "context",
+            |m: &GuestOpenExecRetainedLogRequest| { &m.context },
+            |m: &mut GuestOpenExecRetainedLogRequest| { &mut m.context },
+        ));
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "resource_handle",
-            |m: &GuestExecOpenRetainedLogQuery| { &m.resource_handle },
-            |m: &mut GuestExecOpenRetainedLogQuery| { &mut m.resource_handle },
+            |m: &GuestOpenExecRetainedLogRequest| { &m.resource_handle },
+            |m: &mut GuestOpenExecRetainedLogRequest| { &mut m.resource_handle },
         ));
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "output",
-            |m: &GuestExecOpenRetainedLogQuery| { &m.output },
-            |m: &mut GuestExecOpenRetainedLogQuery| { &mut m.output },
+            |m: &GuestOpenExecRetainedLogRequest| { &m.output },
+            |m: &mut GuestOpenExecRetainedLogRequest| { &mut m.output },
         ));
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "offset",
-            |m: &GuestExecOpenRetainedLogQuery| { &m.offset },
-            |m: &mut GuestExecOpenRetainedLogQuery| { &mut m.offset },
+            |m: &GuestOpenExecRetainedLogRequest| { &m.offset },
+            |m: &mut GuestOpenExecRetainedLogRequest| { &mut m.offset },
         ));
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "max_bytes",
-            |m: &GuestExecOpenRetainedLogQuery| { &m.max_bytes },
-            |m: &mut GuestExecOpenRetainedLogQuery| { &mut m.max_bytes },
+            |m: &GuestOpenExecRetainedLogRequest| { &m.max_bytes },
+            |m: &mut GuestOpenExecRetainedLogRequest| { &mut m.max_bytes },
         ));
-        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<GuestExecOpenRetainedLogQuery>(
-            "GuestExecOpenRetainedLogQuery",
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<GuestOpenExecRetainedLogRequest>(
+            "GuestOpenExecRetainedLogRequest",
             fields,
             oneofs,
         )
     }
 }
 
-impl ::protobuf::Message for GuestExecOpenRetainedLogQuery {
-    const NAME: &'static str = "GuestExecOpenRetainedLogQuery";
+impl ::protobuf::Message for GuestOpenExecRetainedLogRequest {
+    const NAME: &'static str = "GuestOpenExecRetainedLogRequest";
 
     fn is_initialized(&self) -> bool {
         true
@@ -1758,15 +2011,18 @@ impl ::protobuf::Message for GuestExecOpenRetainedLogQuery {
         while let Some(tag) = is.read_raw_tag_or_eof()? {
             match tag {
                 10 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.context)?;
+                },
+                18 => {
                     self.resource_handle = is.read_string()?;
                 },
-                16 => {
+                24 => {
                     self.output = is.read_enum_or_unknown()?;
                 },
-                24 => {
+                32 => {
                     self.offset = is.read_uint64()?;
                 },
-                32 => {
+                40 => {
                     self.max_bytes = is.read_uint32()?;
                 },
                 tag => {
@@ -1781,17 +2037,21 @@ impl ::protobuf::Message for GuestExecOpenRetainedLogQuery {
     #[allow(unused_variables)]
     fn compute_size(&self) -> u64 {
         let mut my_size = 0;
+        if let Some(v) = self.context.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
         if !self.resource_handle.is_empty() {
-            my_size += ::protobuf::rt::string_size(1, &self.resource_handle);
+            my_size += ::protobuf::rt::string_size(2, &self.resource_handle);
         }
         if self.output != ::protobuf::EnumOrUnknown::new(super::terminal::OutputStream::OUTPUT_STREAM_UNSPECIFIED) {
-            my_size += ::protobuf::rt::int32_size(2, self.output.value());
+            my_size += ::protobuf::rt::int32_size(3, self.output.value());
         }
         if self.offset != 0 {
-            my_size += ::protobuf::rt::uint64_size(3, self.offset);
+            my_size += ::protobuf::rt::uint64_size(4, self.offset);
         }
         if self.max_bytes != 0 {
-            my_size += ::protobuf::rt::uint32_size(4, self.max_bytes);
+            my_size += ::protobuf::rt::uint32_size(5, self.max_bytes);
         }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
@@ -1799,17 +2059,20 @@ impl ::protobuf::Message for GuestExecOpenRetainedLogQuery {
     }
 
     fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.context.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        }
         if !self.resource_handle.is_empty() {
-            os.write_string(1, &self.resource_handle)?;
+            os.write_string(2, &self.resource_handle)?;
         }
         if self.output != ::protobuf::EnumOrUnknown::new(super::terminal::OutputStream::OUTPUT_STREAM_UNSPECIFIED) {
-            os.write_enum(2, ::protobuf::EnumOrUnknown::value(&self.output))?;
+            os.write_enum(3, ::protobuf::EnumOrUnknown::value(&self.output))?;
         }
         if self.offset != 0 {
-            os.write_uint64(3, self.offset)?;
+            os.write_uint64(4, self.offset)?;
         }
         if self.max_bytes != 0 {
-            os.write_uint32(4, self.max_bytes)?;
+            os.write_uint32(5, self.max_bytes)?;
         }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
@@ -1823,11 +2086,12 @@ impl ::protobuf::Message for GuestExecOpenRetainedLogQuery {
         &mut self.special_fields
     }
 
-    fn new() -> GuestExecOpenRetainedLogQuery {
-        GuestExecOpenRetainedLogQuery::new()
+    fn new() -> GuestOpenExecRetainedLogRequest {
+        GuestOpenExecRetainedLogRequest::new()
     }
 
     fn clear(&mut self) {
+        self.context.clear();
         self.resource_handle.clear();
         self.output = ::protobuf::EnumOrUnknown::new(super::terminal::OutputStream::OUTPUT_STREAM_UNSPECIFIED);
         self.offset = 0;
@@ -1835,8 +2099,9 @@ impl ::protobuf::Message for GuestExecOpenRetainedLogQuery {
         self.special_fields.clear();
     }
 
-    fn default_instance() -> &'static GuestExecOpenRetainedLogQuery {
-        static instance: GuestExecOpenRetainedLogQuery = GuestExecOpenRetainedLogQuery {
+    fn default_instance() -> &'static GuestOpenExecRetainedLogRequest {
+        static instance: GuestOpenExecRetainedLogRequest = GuestOpenExecRetainedLogRequest {
+            context: ::protobuf::MessageField::none(),
             resource_handle: ::std::string::String::new(),
             output: ::protobuf::EnumOrUnknown::from_i32(0),
             offset: 0,
@@ -1847,20 +2112,20 @@ impl ::protobuf::Message for GuestExecOpenRetainedLogQuery {
     }
 }
 
-impl ::protobuf::MessageFull for GuestExecOpenRetainedLogQuery {
+impl ::protobuf::MessageFull for GuestOpenExecRetainedLogRequest {
     fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
         static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
-        descriptor.get(|| file_descriptor().message_by_package_relative_name("GuestExecOpenRetainedLogQuery").unwrap()).clone()
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("GuestOpenExecRetainedLogRequest").unwrap()).clone()
     }
 }
 
-impl ::std::fmt::Display for GuestExecOpenRetainedLogQuery {
+impl ::std::fmt::Display for GuestOpenExecRetainedLogRequest {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         ::protobuf::text_format::fmt(self, f)
     }
 }
 
-impl ::protobuf::reflect::ProtobufValue for GuestExecOpenRetainedLogQuery {
+impl ::protobuf::reflect::ProtobufValue for GuestOpenExecRetainedLogRequest {
     type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
 }
 
@@ -2032,57 +2297,8 @@ impl GuestInspectExecQuery {
         }
     }
 
-    // .d2b.guest.v2.GuestExecOpenRetainedLogQuery open_retained_log = 4;
-
-    pub fn open_retained_log(&self) -> &GuestExecOpenRetainedLogQuery {
-        match self.query {
-            ::std::option::Option::Some(guest_inspect_exec_query::Query::OpenRetainedLog(ref v)) => v,
-            _ => <GuestExecOpenRetainedLogQuery as ::protobuf::Message>::default_instance(),
-        }
-    }
-
-    pub fn clear_open_retained_log(&mut self) {
-        self.query = ::std::option::Option::None;
-    }
-
-    pub fn has_open_retained_log(&self) -> bool {
-        match self.query {
-            ::std::option::Option::Some(guest_inspect_exec_query::Query::OpenRetainedLog(..)) => true,
-            _ => false,
-        }
-    }
-
-    // Param is passed by value, moved
-    pub fn set_open_retained_log(&mut self, v: GuestExecOpenRetainedLogQuery) {
-        self.query = ::std::option::Option::Some(guest_inspect_exec_query::Query::OpenRetainedLog(v))
-    }
-
-    // Mutable pointer to the field.
-    pub fn mut_open_retained_log(&mut self) -> &mut GuestExecOpenRetainedLogQuery {
-        if let ::std::option::Option::Some(guest_inspect_exec_query::Query::OpenRetainedLog(_)) = self.query {
-        } else {
-            self.query = ::std::option::Option::Some(guest_inspect_exec_query::Query::OpenRetainedLog(GuestExecOpenRetainedLogQuery::new()));
-        }
-        match self.query {
-            ::std::option::Option::Some(guest_inspect_exec_query::Query::OpenRetainedLog(ref mut v)) => v,
-            _ => panic!(),
-        }
-    }
-
-    // Take field
-    pub fn take_open_retained_log(&mut self) -> GuestExecOpenRetainedLogQuery {
-        if self.has_open_retained_log() {
-            match self.query.take() {
-                ::std::option::Option::Some(guest_inspect_exec_query::Query::OpenRetainedLog(v)) => v,
-                _ => panic!(),
-            }
-        } else {
-            GuestExecOpenRetainedLogQuery::new()
-        }
-    }
-
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(4);
+        let mut fields = ::std::vec::Vec::with_capacity(3);
         let mut oneofs = ::std::vec::Vec::with_capacity(1);
         fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, GuestExecStatusQuery>(
             "status",
@@ -2104,13 +2320,6 @@ impl GuestInspectExecQuery {
             GuestInspectExecQuery::list_page,
             GuestInspectExecQuery::mut_list_page,
             GuestInspectExecQuery::set_list_page,
-        ));
-        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, GuestExecOpenRetainedLogQuery>(
-            "open_retained_log",
-            GuestInspectExecQuery::has_open_retained_log,
-            GuestInspectExecQuery::open_retained_log,
-            GuestInspectExecQuery::mut_open_retained_log,
-            GuestInspectExecQuery::set_open_retained_log,
         ));
         oneofs.push(guest_inspect_exec_query::Query::generated_oneof_descriptor_data());
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<GuestInspectExecQuery>(
@@ -2140,9 +2349,6 @@ impl ::protobuf::Message for GuestInspectExecQuery {
                 26 => {
                     self.query = ::std::option::Option::Some(guest_inspect_exec_query::Query::ListPage(is.read_message()?));
                 },
-                34 => {
-                    self.query = ::std::option::Option::Some(guest_inspect_exec_query::Query::OpenRetainedLog(is.read_message()?));
-                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -2169,10 +2375,6 @@ impl ::protobuf::Message for GuestInspectExecQuery {
                     let len = v.compute_size();
                     my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
                 },
-                &guest_inspect_exec_query::Query::OpenRetainedLog(ref v) => {
-                    let len = v.compute_size();
-                    my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
-                },
             };
         }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
@@ -2191,9 +2393,6 @@ impl ::protobuf::Message for GuestInspectExecQuery {
                 },
                 &guest_inspect_exec_query::Query::ListPage(ref v) => {
                     ::protobuf::rt::write_message_field_with_cached_size(3, v, os)?;
-                },
-                &guest_inspect_exec_query::Query::OpenRetainedLog(ref v) => {
-                    ::protobuf::rt::write_message_field_with_cached_size(4, v, os)?;
                 },
             };
         }
@@ -2214,7 +2413,6 @@ impl ::protobuf::Message for GuestInspectExecQuery {
     }
 
     fn clear(&mut self) {
-        self.query = ::std::option::Option::None;
         self.query = ::std::option::Option::None;
         self.query = ::std::option::Option::None;
         self.query = ::std::option::Option::None;
@@ -2260,8 +2458,6 @@ pub mod guest_inspect_exec_query {
         Wait(super::GuestExecWaitQuery),
         // @@protoc_insertion_point(oneof_field:d2b.guest.v2.GuestInspectExecQuery.list_page)
         ListPage(super::GuestExecListPageQuery),
-        // @@protoc_insertion_point(oneof_field:d2b.guest.v2.GuestInspectExecQuery.open_retained_log)
-        OpenRetainedLog(super::GuestExecOpenRetainedLogQuery),
     }
 
     impl ::protobuf::Oneof for Query {
@@ -3205,183 +3401,6 @@ impl ::protobuf::reflect::ProtobufValue for GuestExecListPage {
     type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
 }
 
-// @@protoc_insertion_point(message:d2b.guest.v2.GuestExecRetainedLogStream)
-#[derive(PartialEq,Clone,Default)]
-pub struct GuestExecRetainedLogStream {
-    // message fields
-    // @@protoc_insertion_point(field:d2b.guest.v2.GuestExecRetainedLogStream.stream)
-    pub stream: ::protobuf::MessageField<super::terminal::TerminalOpenResponse>,
-    // @@protoc_insertion_point(field:d2b.guest.v2.GuestExecRetainedLogStream.output)
-    pub output: ::protobuf::EnumOrUnknown<super::terminal::OutputStream>,
-    // @@protoc_insertion_point(field:d2b.guest.v2.GuestExecRetainedLogStream.start_offset)
-    pub start_offset: u64,
-    // @@protoc_insertion_point(field:d2b.guest.v2.GuestExecRetainedLogStream.end_offset)
-    pub end_offset: u64,
-    // special fields
-    // @@protoc_insertion_point(special_field:d2b.guest.v2.GuestExecRetainedLogStream.special_fields)
-    pub special_fields: ::protobuf::SpecialFields,
-}
-
-impl<'a> ::std::default::Default for &'a GuestExecRetainedLogStream {
-    fn default() -> &'a GuestExecRetainedLogStream {
-        <GuestExecRetainedLogStream as ::protobuf::Message>::default_instance()
-    }
-}
-
-impl GuestExecRetainedLogStream {
-    pub fn new() -> GuestExecRetainedLogStream {
-        ::std::default::Default::default()
-    }
-
-    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(4);
-        let mut oneofs = ::std::vec::Vec::with_capacity(0);
-        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, super::terminal::TerminalOpenResponse>(
-            "stream",
-            |m: &GuestExecRetainedLogStream| { &m.stream },
-            |m: &mut GuestExecRetainedLogStream| { &mut m.stream },
-        ));
-        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
-            "output",
-            |m: &GuestExecRetainedLogStream| { &m.output },
-            |m: &mut GuestExecRetainedLogStream| { &mut m.output },
-        ));
-        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
-            "start_offset",
-            |m: &GuestExecRetainedLogStream| { &m.start_offset },
-            |m: &mut GuestExecRetainedLogStream| { &mut m.start_offset },
-        ));
-        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
-            "end_offset",
-            |m: &GuestExecRetainedLogStream| { &m.end_offset },
-            |m: &mut GuestExecRetainedLogStream| { &mut m.end_offset },
-        ));
-        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<GuestExecRetainedLogStream>(
-            "GuestExecRetainedLogStream",
-            fields,
-            oneofs,
-        )
-    }
-}
-
-impl ::protobuf::Message for GuestExecRetainedLogStream {
-    const NAME: &'static str = "GuestExecRetainedLogStream";
-
-    fn is_initialized(&self) -> bool {
-        true
-    }
-
-    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
-        while let Some(tag) = is.read_raw_tag_or_eof()? {
-            match tag {
-                10 => {
-                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.stream)?;
-                },
-                16 => {
-                    self.output = is.read_enum_or_unknown()?;
-                },
-                24 => {
-                    self.start_offset = is.read_uint64()?;
-                },
-                32 => {
-                    self.end_offset = is.read_uint64()?;
-                },
-                tag => {
-                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
-                },
-            };
-        }
-        ::std::result::Result::Ok(())
-    }
-
-    // Compute sizes of nested messages
-    #[allow(unused_variables)]
-    fn compute_size(&self) -> u64 {
-        let mut my_size = 0;
-        if let Some(v) = self.stream.as_ref() {
-            let len = v.compute_size();
-            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
-        }
-        if self.output != ::protobuf::EnumOrUnknown::new(super::terminal::OutputStream::OUTPUT_STREAM_UNSPECIFIED) {
-            my_size += ::protobuf::rt::int32_size(2, self.output.value());
-        }
-        if self.start_offset != 0 {
-            my_size += ::protobuf::rt::uint64_size(3, self.start_offset);
-        }
-        if self.end_offset != 0 {
-            my_size += ::protobuf::rt::uint64_size(4, self.end_offset);
-        }
-        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
-        self.special_fields.cached_size().set(my_size as u32);
-        my_size
-    }
-
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
-        if let Some(v) = self.stream.as_ref() {
-            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
-        }
-        if self.output != ::protobuf::EnumOrUnknown::new(super::terminal::OutputStream::OUTPUT_STREAM_UNSPECIFIED) {
-            os.write_enum(2, ::protobuf::EnumOrUnknown::value(&self.output))?;
-        }
-        if self.start_offset != 0 {
-            os.write_uint64(3, self.start_offset)?;
-        }
-        if self.end_offset != 0 {
-            os.write_uint64(4, self.end_offset)?;
-        }
-        os.write_unknown_fields(self.special_fields.unknown_fields())?;
-        ::std::result::Result::Ok(())
-    }
-
-    fn special_fields(&self) -> &::protobuf::SpecialFields {
-        &self.special_fields
-    }
-
-    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
-        &mut self.special_fields
-    }
-
-    fn new() -> GuestExecRetainedLogStream {
-        GuestExecRetainedLogStream::new()
-    }
-
-    fn clear(&mut self) {
-        self.stream.clear();
-        self.output = ::protobuf::EnumOrUnknown::new(super::terminal::OutputStream::OUTPUT_STREAM_UNSPECIFIED);
-        self.start_offset = 0;
-        self.end_offset = 0;
-        self.special_fields.clear();
-    }
-
-    fn default_instance() -> &'static GuestExecRetainedLogStream {
-        static instance: GuestExecRetainedLogStream = GuestExecRetainedLogStream {
-            stream: ::protobuf::MessageField::none(),
-            output: ::protobuf::EnumOrUnknown::from_i32(0),
-            start_offset: 0,
-            end_offset: 0,
-            special_fields: ::protobuf::SpecialFields::new(),
-        };
-        &instance
-    }
-}
-
-impl ::protobuf::MessageFull for GuestExecRetainedLogStream {
-    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
-        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
-        descriptor.get(|| file_descriptor().message_by_package_relative_name("GuestExecRetainedLogStream").unwrap()).clone()
-    }
-}
-
-impl ::std::fmt::Display for GuestExecRetainedLogStream {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
-    }
-}
-
-impl ::protobuf::reflect::ProtobufValue for GuestExecRetainedLogStream {
-    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
-}
-
 // @@protoc_insertion_point(message:d2b.guest.v2.GuestInspectExecResponse)
 #[derive(PartialEq,Clone,Default)]
 pub struct GuestInspectExecResponse {
@@ -3512,57 +3531,8 @@ impl GuestInspectExecResponse {
         }
     }
 
-    // .d2b.guest.v2.GuestExecRetainedLogStream retained_log_stream = 7;
-
-    pub fn retained_log_stream(&self) -> &GuestExecRetainedLogStream {
-        match self.result {
-            ::std::option::Option::Some(guest_inspect_exec_response::Result::RetainedLogStream(ref v)) => v,
-            _ => <GuestExecRetainedLogStream as ::protobuf::Message>::default_instance(),
-        }
-    }
-
-    pub fn clear_retained_log_stream(&mut self) {
-        self.result = ::std::option::Option::None;
-    }
-
-    pub fn has_retained_log_stream(&self) -> bool {
-        match self.result {
-            ::std::option::Option::Some(guest_inspect_exec_response::Result::RetainedLogStream(..)) => true,
-            _ => false,
-        }
-    }
-
-    // Param is passed by value, moved
-    pub fn set_retained_log_stream(&mut self, v: GuestExecRetainedLogStream) {
-        self.result = ::std::option::Option::Some(guest_inspect_exec_response::Result::RetainedLogStream(v))
-    }
-
-    // Mutable pointer to the field.
-    pub fn mut_retained_log_stream(&mut self) -> &mut GuestExecRetainedLogStream {
-        if let ::std::option::Option::Some(guest_inspect_exec_response::Result::RetainedLogStream(_)) = self.result {
-        } else {
-            self.result = ::std::option::Option::Some(guest_inspect_exec_response::Result::RetainedLogStream(GuestExecRetainedLogStream::new()));
-        }
-        match self.result {
-            ::std::option::Option::Some(guest_inspect_exec_response::Result::RetainedLogStream(ref mut v)) => v,
-            _ => panic!(),
-        }
-    }
-
-    // Take field
-    pub fn take_retained_log_stream(&mut self) -> GuestExecRetainedLogStream {
-        if self.has_retained_log_stream() {
-            match self.result.take() {
-                ::std::option::Option::Some(guest_inspect_exec_response::Result::RetainedLogStream(v)) => v,
-                _ => panic!(),
-            }
-        } else {
-            GuestExecRetainedLogStream::new()
-        }
-    }
-
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(8);
+        let mut fields = ::std::vec::Vec::with_capacity(7);
         let mut oneofs = ::std::vec::Vec::with_capacity(1);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "outcome",
@@ -3597,13 +3567,6 @@ impl GuestInspectExecResponse {
             GuestInspectExecResponse::list_page,
             GuestInspectExecResponse::mut_list_page,
             GuestInspectExecResponse::set_list_page,
-        ));
-        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, GuestExecRetainedLogStream>(
-            "retained_log_stream",
-            GuestInspectExecResponse::has_retained_log_stream,
-            GuestInspectExecResponse::retained_log_stream,
-            GuestInspectExecResponse::mut_retained_log_stream,
-            GuestInspectExecResponse::set_retained_log_stream,
         ));
         fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, super::common::ErrorEnvelope>(
             "error",
@@ -3647,9 +3610,6 @@ impl ::protobuf::Message for GuestInspectExecResponse {
                 50 => {
                     self.result = ::std::option::Option::Some(guest_inspect_exec_response::Result::ListPage(is.read_message()?));
                 },
-                58 => {
-                    self.result = ::std::option::Option::Some(guest_inspect_exec_response::Result::RetainedLogStream(is.read_message()?));
-                },
                 66 => {
                     ::protobuf::rt::read_singular_message_into_field(is, &mut self.error)?;
                 },
@@ -3691,10 +3651,6 @@ impl ::protobuf::Message for GuestInspectExecResponse {
                     let len = v.compute_size();
                     my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
                 },
-                &guest_inspect_exec_response::Result::RetainedLogStream(ref v) => {
-                    let len = v.compute_size();
-                    my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
-                },
             };
         }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
@@ -3726,9 +3682,6 @@ impl ::protobuf::Message for GuestInspectExecResponse {
                 &guest_inspect_exec_response::Result::ListPage(ref v) => {
                     ::protobuf::rt::write_message_field_with_cached_size(6, v, os)?;
                 },
-                &guest_inspect_exec_response::Result::RetainedLogStream(ref v) => {
-                    ::protobuf::rt::write_message_field_with_cached_size(7, v, os)?;
-                },
             };
         }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
@@ -3752,7 +3705,6 @@ impl ::protobuf::Message for GuestInspectExecResponse {
         self.operation_id.clear();
         self.session_generation = 0;
         self.request_id.clear();
-        self.result = ::std::option::Option::None;
         self.result = ::std::option::Option::None;
         self.result = ::std::option::Option::None;
         self.error.clear();
@@ -3801,8 +3753,6 @@ pub mod guest_inspect_exec_response {
         Status(super::GuestExecStatus),
         // @@protoc_insertion_point(oneof_field:d2b.guest.v2.GuestInspectExecResponse.list_page)
         ListPage(super::GuestExecListPage),
-        // @@protoc_insertion_point(oneof_field:d2b.guest.v2.GuestInspectExecResponse.retained_log_stream)
-        RetainedLogStream(super::GuestExecRetainedLogStream),
     }
 
     impl ::protobuf::Oneof for Result {
@@ -8884,6 +8834,8 @@ pub enum GuestSecurityKeyOutcome {
     GUEST_SECURITY_KEY_OUTCOME_CANCELLED = 3,
     // @@protoc_insertion_point(enum_value:d2b.guest.v2.GuestSecurityKeyOutcome.GUEST_SECURITY_KEY_OUTCOME_TIMED_OUT)
     GUEST_SECURITY_KEY_OUTCOME_TIMED_OUT = 4,
+    // @@protoc_insertion_point(enum_value:d2b.guest.v2.GuestSecurityKeyOutcome.GUEST_SECURITY_KEY_OUTCOME_DENIED)
+    GUEST_SECURITY_KEY_OUTCOME_DENIED = 5,
 }
 
 impl ::protobuf::Enum for GuestSecurityKeyOutcome {
@@ -8900,6 +8852,7 @@ impl ::protobuf::Enum for GuestSecurityKeyOutcome {
             2 => ::std::option::Option::Some(GuestSecurityKeyOutcome::GUEST_SECURITY_KEY_OUTCOME_CTAP_ERROR),
             3 => ::std::option::Option::Some(GuestSecurityKeyOutcome::GUEST_SECURITY_KEY_OUTCOME_CANCELLED),
             4 => ::std::option::Option::Some(GuestSecurityKeyOutcome::GUEST_SECURITY_KEY_OUTCOME_TIMED_OUT),
+            5 => ::std::option::Option::Some(GuestSecurityKeyOutcome::GUEST_SECURITY_KEY_OUTCOME_DENIED),
             _ => ::std::option::Option::None
         }
     }
@@ -8911,6 +8864,7 @@ impl ::protobuf::Enum for GuestSecurityKeyOutcome {
             "GUEST_SECURITY_KEY_OUTCOME_CTAP_ERROR" => ::std::option::Option::Some(GuestSecurityKeyOutcome::GUEST_SECURITY_KEY_OUTCOME_CTAP_ERROR),
             "GUEST_SECURITY_KEY_OUTCOME_CANCELLED" => ::std::option::Option::Some(GuestSecurityKeyOutcome::GUEST_SECURITY_KEY_OUTCOME_CANCELLED),
             "GUEST_SECURITY_KEY_OUTCOME_TIMED_OUT" => ::std::option::Option::Some(GuestSecurityKeyOutcome::GUEST_SECURITY_KEY_OUTCOME_TIMED_OUT),
+            "GUEST_SECURITY_KEY_OUTCOME_DENIED" => ::std::option::Option::Some(GuestSecurityKeyOutcome::GUEST_SECURITY_KEY_OUTCOME_DENIED),
             _ => ::std::option::Option::None
         }
     }
@@ -8921,6 +8875,7 @@ impl ::protobuf::Enum for GuestSecurityKeyOutcome {
         GuestSecurityKeyOutcome::GUEST_SECURITY_KEY_OUTCOME_CTAP_ERROR,
         GuestSecurityKeyOutcome::GUEST_SECURITY_KEY_OUTCOME_CANCELLED,
         GuestSecurityKeyOutcome::GUEST_SECURITY_KEY_OUTCOME_TIMED_OUT,
+        GuestSecurityKeyOutcome::GUEST_SECURITY_KEY_OUTCOME_DENIED,
     ];
 }
 
@@ -9257,138 +9212,136 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \x20\x01(\x0b2\x1e.d2b.common.v2.RequestMetadataR\x08metadata\x122\n\x05\
     scope\x18\x02\x20\x01(\x0b2\x1c.d2b.common.v2.IdentityScopeR\x05scope\
     \x12!\n\x0coperation_id\x18\x03\x20\x01(\tR\x0boperationId\x12%\n\x0ereq\
-    uest_digest\x18\x04\x20\x01(\x0cR\rrequestDigest\"\xb4\x02\n\x15GuestBoo\
-    tstrapRequest\x12=\n\x07context\x18\x01\x20\x01(\x0b2#.d2b.guest.v2.Gues\
-    tOperationContextR\x07context\x12/\n\x13expected_generation\x18\x02\x20\
-    \x01(\x04R\x12expectedGeneration\x12U\n(expected_parent_static_public_ke\
-    y_digest\x18\x03\x20\x01(\x0cR#expectedParentStaticPublicKeyDigest\x12T\
-    \n\x16requested_capabilities\x18\x04\x20\x03(\x0e2\x1d.d2b.guest.v2.Gues\
-    tCapabilityR\x15requestedCapabilities\"\xbb\x03\n\x15GuestReconnectReque\
-    st\x12=\n\x07context\x18\x01\x20\x01(\x0b2#.d2b.guest.v2.GuestOperationC\
-    ontextR\x07context\x12/\n\x13expected_generation\x18\x02\x20\x01(\x04R\
-    \x12expectedGeneration\x122\n\x15guest_identity_handle\x18\x03\x20\x01(\
-    \tR\x13guestIdentityHandle\x12S\n'expected_guest_static_public_key_diges\
-    t\x18\x04\x20\x01(\x0cR\"expectedGuestStaticPublicKeyDigest\x12U\n(expec\
-    ted_parent_static_public_key_digest\x18\x05\x20\x01(\x0cR#expectedParent\
-    StaticPublicKeyDigest\x12R\n\x15required_capabilities\x18\x06\x20\x03(\
-    \x0e2\x1d.d2b.guest.v2.GuestCapabilityR\x14requiredCapabilities\"\xee\
-    \x03\n\x14GuestSessionResponse\x120\n\x07outcome\x18\x01\x20\x01(\x0e2\
-    \x16.d2b.common.v2.OutcomeR\x07outcome\x12!\n\x0coperation_id\x18\x02\
-    \x20\x01(\tR\x0boperationId\x12-\n\x12session_generation\x18\x03\x20\x01\
-    (\x04R\x11sessionGeneration\x12\x1d\n\nrequest_id\x18\x04\x20\x01(\x0cR\
-    \trequestId\x122\n\x15guest_identity_handle\x18\x05\x20\x01(\tR\x13guest\
-    IdentityHandle\x12B\n\x1eguest_static_public_key_digest\x18\x06\x20\x01(\
-    \x0cR\x1aguestStaticPublicKeyDigest\x12D\n\x1fparent_static_public_key_d\
-    igest\x18\x07\x20\x01(\x0cR\x1bparentStaticPublicKeyDigest\x12A\n\x0ccap\
-    abilities\x18\x08\x20\x03(\x0e2\x1d.d2b.guest.v2.GuestCapabilityR\x0ccap\
-    abilities\x122\n\x05error\x18\t\x20\x01(\x0b2\x1c.d2b.common.v2.ErrorEnv\
-    elopeR\x05error\"\xe8\x01\n\x16GuestCancelExecRequest\x12=\n\x07context\
-    \x18\x01\x20\x01(\x0b2#.d2b.guest.v2.GuestOperationContextR\x07context\
-    \x12'\n\x0fresource_handle\x18\x02\x20\x01(\tR\x0eresourceHandle\x12)\n\
-    \x10control_sequence\x18\x03\x20\x01(\x04R\x0fcontrolSequence\x12;\n\x06\
-    reason\x18\x04\x20\x01(\x0e2#.d2b.guest.v2.GuestExecCancelReasonR\x06rea\
-    son\"\xe9\x02\n\x17GuestCancelExecResponse\x120\n\x07outcome\x18\x01\x20\
-    \x01(\x0e2\x16.d2b.common.v2.OutcomeR\x07outcome\x12!\n\x0coperation_id\
-    \x18\x02\x20\x01(\tR\x0boperationId\x12-\n\x12session_generation\x18\x03\
-    \x20\x01(\x04R\x11sessionGeneration\x12\x1d\n\nrequest_id\x18\x04\x20\
-    \x01(\x0cR\trequestId\x12'\n\x0fresource_handle\x18\x05\x20\x01(\tR\x0er\
-    esourceHandle\x12N\n\x0ccancellation\x18\x06\x20\x01(\x0e2*.d2b.guest.v2\
-    .GuestExecCancellationOutcomeR\x0ccancellation\x122\n\x05error\x18\x07\
-    \x20\x01(\x0b2\x1c.d2b.common.v2.ErrorEnvelopeR\x05error\"?\n\x14GuestEx\
-    ecStatusQuery\x12'\n\x0fresource_handle\x18\x01\x20\x01(\tR\x0eresourceH\
-    andle\"\x92\x01\n\x12GuestExecWaitQuery\x12'\n\x0fresource_handle\x18\
-    \x01\x20\x01(\tR\x0eresourceHandle\x124\n\x16known_state_generation\x18\
-    \x02\x20\x01(\x04R\x14knownStateGeneration\x12\x1d\n\ntimeout_ms\x18\x03\
-    \x20\x01(\rR\ttimeoutMs\"V\n\x16GuestExecListPageQuery\x12\x1b\n\tpage_s\
-    ize\x18\x01\x20\x01(\rR\x08pageSize\x12\x1f\n\x0bpage_cursor\x18\x02\x20\
-    \x01(\tR\npageCursor\"\xb4\x01\n\x1dGuestExecOpenRetainedLogQuery\x12'\n\
-    \x0fresource_handle\x18\x01\x20\x01(\tR\x0eresourceHandle\x125\n\x06outp\
-    ut\x18\x02\x20\x01(\x0e2\x1d.d2b.terminal.v2.OutputStreamR\x06output\x12\
-    \x16\n\x06offset\x18\x03\x20\x01(\x04R\x06offset\x12\x1b\n\tmax_bytes\
-    \x18\x04\x20\x01(\rR\x08maxBytes\"\xb6\x02\n\x15GuestInspectExecQuery\
-    \x12<\n\x06status\x18\x01\x20\x01(\x0b2\".d2b.guest.v2.GuestExecStatusQu\
-    eryH\0R\x06status\x126\n\x04wait\x18\x02\x20\x01(\x0b2\x20.d2b.guest.v2.\
-    GuestExecWaitQueryH\0R\x04wait\x12C\n\tlist_page\x18\x03\x20\x01(\x0b2$.\
-    d2b.guest.v2.GuestExecListPageQueryH\0R\x08listPage\x12Y\n\x11open_retai\
-    ned_log\x18\x04\x20\x01(\x0b2+.d2b.guest.v2.GuestExecOpenRetainedLogQuer\
-    yH\0R\x0fopenRetainedLogB\x07\n\x05query\"\x93\x01\n\x17GuestInspectExec\
+    uest_digest\x18\x04\x20\x01(\x0cR\rrequestDigest\"T\n\x10GuestExecReques\
+    t\x12@\n\x08terminal\x18\x01\x20\x01(\x0b2$.d2b.terminal.v2.TerminalOpen\
+    RequestR\x08terminal\"Y\n\x15GuestOpenShellRequest\x12@\n\x08terminal\
+    \x18\x01\x20\x01(\x0b2$.d2b.terminal.v2.TerminalOpenRequestR\x08terminal\
+    \"\xb4\x02\n\x15GuestBootstrapRequest\x12=\n\x07context\x18\x01\x20\x01(\
+    \x0b2#.d2b.guest.v2.GuestOperationContextR\x07context\x12/\n\x13expected\
+    _generation\x18\x02\x20\x01(\x04R\x12expectedGeneration\x12U\n(expected_\
+    parent_static_public_key_digest\x18\x03\x20\x01(\x0cR#expectedParentStat\
+    icPublicKeyDigest\x12T\n\x16requested_capabilities\x18\x04\x20\x03(\x0e2\
+    \x1d.d2b.guest.v2.GuestCapabilityR\x15requestedCapabilities\"\xbb\x03\n\
+    \x15GuestReconnectRequest\x12=\n\x07context\x18\x01\x20\x01(\x0b2#.d2b.g\
+    uest.v2.GuestOperationContextR\x07context\x12/\n\x13expected_generation\
+    \x18\x02\x20\x01(\x04R\x12expectedGeneration\x122\n\x15guest_identity_ha\
+    ndle\x18\x03\x20\x01(\tR\x13guestIdentityHandle\x12S\n'expected_guest_st\
+    atic_public_key_digest\x18\x04\x20\x01(\x0cR\"expectedGuestStaticPublicK\
+    eyDigest\x12U\n(expected_parent_static_public_key_digest\x18\x05\x20\x01\
+    (\x0cR#expectedParentStaticPublicKeyDigest\x12R\n\x15required_capabiliti\
+    es\x18\x06\x20\x03(\x0e2\x1d.d2b.guest.v2.GuestCapabilityR\x14requiredCa\
+    pabilities\"\xee\x03\n\x14GuestSessionResponse\x120\n\x07outcome\x18\x01\
+    \x20\x01(\x0e2\x16.d2b.common.v2.OutcomeR\x07outcome\x12!\n\x0coperation\
+    _id\x18\x02\x20\x01(\tR\x0boperationId\x12-\n\x12session_generation\x18\
+    \x03\x20\x01(\x04R\x11sessionGeneration\x12\x1d\n\nrequest_id\x18\x04\
+    \x20\x01(\x0cR\trequestId\x122\n\x15guest_identity_handle\x18\x05\x20\
+    \x01(\tR\x13guestIdentityHandle\x12B\n\x1eguest_static_public_key_digest\
+    \x18\x06\x20\x01(\x0cR\x1aguestStaticPublicKeyDigest\x12D\n\x1fparent_st\
+    atic_public_key_digest\x18\x07\x20\x01(\x0cR\x1bparentStaticPublicKeyDig\
+    est\x12A\n\x0ccapabilities\x18\x08\x20\x03(\x0e2\x1d.d2b.guest.v2.GuestC\
+    apabilityR\x0ccapabilities\x122\n\x05error\x18\t\x20\x01(\x0b2\x1c.d2b.c\
+    ommon.v2.ErrorEnvelopeR\x05error\"\xe8\x01\n\x16GuestCancelExecRequest\
+    \x12=\n\x07context\x18\x01\x20\x01(\x0b2#.d2b.guest.v2.GuestOperationCon\
+    textR\x07context\x12'\n\x0fresource_handle\x18\x02\x20\x01(\tR\x0eresour\
+    ceHandle\x12)\n\x10control_sequence\x18\x03\x20\x01(\x04R\x0fcontrolSequ\
+    ence\x12;\n\x06reason\x18\x04\x20\x01(\x0e2#.d2b.guest.v2.GuestExecCance\
+    lReasonR\x06reason\"\xe9\x02\n\x17GuestCancelExecResponse\x120\n\x07outc\
+    ome\x18\x01\x20\x01(\x0e2\x16.d2b.common.v2.OutcomeR\x07outcome\x12!\n\
+    \x0coperation_id\x18\x02\x20\x01(\tR\x0boperationId\x12-\n\x12session_ge\
+    neration\x18\x03\x20\x01(\x04R\x11sessionGeneration\x12\x1d\n\nrequest_i\
+    d\x18\x04\x20\x01(\x0cR\trequestId\x12'\n\x0fresource_handle\x18\x05\x20\
+    \x01(\tR\x0eresourceHandle\x12N\n\x0ccancellation\x18\x06\x20\x01(\x0e2*\
+    .d2b.guest.v2.GuestExecCancellationOutcomeR\x0ccancellation\x122\n\x05er\
+    ror\x18\x07\x20\x01(\x0b2\x1c.d2b.common.v2.ErrorEnvelopeR\x05error\"?\n\
+    \x14GuestExecStatusQuery\x12'\n\x0fresource_handle\x18\x01\x20\x01(\tR\
+    \x0eresourceHandle\"\x92\x01\n\x12GuestExecWaitQuery\x12'\n\x0fresource_\
+    handle\x18\x01\x20\x01(\tR\x0eresourceHandle\x124\n\x16known_state_gener\
+    ation\x18\x02\x20\x01(\x04R\x14knownStateGeneration\x12\x1d\n\ntimeout_m\
+    s\x18\x03\x20\x01(\rR\ttimeoutMs\"V\n\x16GuestExecListPageQuery\x12\x1b\
+    \n\tpage_size\x18\x01\x20\x01(\rR\x08pageSize\x12\x1f\n\x0bpage_cursor\
+    \x18\x02\x20\x01(\tR\npageCursor\"\xf5\x01\n\x1fGuestOpenExecRetainedLog\
     Request\x12=\n\x07context\x18\x01\x20\x01(\x0b2#.d2b.guest.v2.GuestOpera\
-    tionContextR\x07context\x129\n\x05query\x18\x02\x20\x01(\x0b2#.d2b.guest\
-    .v2.GuestInspectExecQueryR\x05query\"\xb5\x05\n\x0fGuestExecStatus\x12'\
-    \n\x0fresource_handle\x18\x01\x20\x01(\tR\x0eresourceHandle\x122\n\x05st\
-    ate\x18\x02\x20\x01(\x0e2\x1c.d2b.guest.v2.GuestExecStateR\x05state\x12>\
-    \n\x0bstdin_state\x18\x03\x20\x01(\x0e2\x1d.d2b.guest.v2.GuestStdinState\
-    R\nstdinState\x12K\n\x10terminal_outcome\x18\x04\x20\x01(\x0b2\x20.d2b.t\
-    erminal.v2.TerminalOutcomeR\x0fterminalOutcome\x12.\n\x13stdout_start_of\
-    fset\x18\x05\x20\x01(\x04R\x11stdoutStartOffset\x12*\n\x11stdout_end_off\
-    set\x18\x06\x20\x01(\x04R\x0fstdoutEndOffset\x12.\n\x13stderr_start_offs\
-    et\x18\x07\x20\x01(\x04R\x11stderrStartOffset\x12*\n\x11stderr_end_offse\
-    t\x18\x08\x20\x01(\x04R\x0fstderrEndOffset\x120\n\x14stdout_dropped_byte\
-    s\x18\t\x20\x01(\x04R\x12stdoutDroppedBytes\x120\n\x14stderr_dropped_byt\
-    es\x18\n\x20\x01(\x04R\x12stderrDroppedBytes\x12)\n\x10stdout_truncated\
-    \x18\x0b\x20\x01(\x08R\x0fstdoutTruncated\x12)\n\x10stderr_truncated\x18\
-    \x0c\x20\x01(\x08R\x0fstderrTruncated\x12)\n\x10state_generation\x18\r\
-    \x20\x01(\x04R\x0fstateGeneration\x12\x1b\n\ttimed_out\x18\x0e\x20\x01(\
-    \x08R\x08timedOut\"\x80\x03\n\x12GuestExecListEntry\x12'\n\x0fresource_h\
-    andle\x18\x01\x20\x01(\tR\x0eresourceHandle\x122\n\x05state\x18\x02\x20\
-    \x01(\x0e2\x1c.d2b.guest.v2.GuestExecStateR\x05state\x12+\n\x12created_a\
-    t_unix_ms\x18\x03\x20\x01(\x04R\x0fcreatedAtUnixMs\x12\x1f\n\x0bargv_dig\
-    est\x18\x04\x20\x01(\x0cR\nargvDigest\x12!\n\x0cstdout_bytes\x18\x05\x20\
-    \x01(\x04R\x0bstdoutBytes\x12!\n\x0cstderr_bytes\x18\x06\x20\x01(\x04R\
-    \x0bstderrBytes\x12#\n\rdropped_bytes\x18\x07\x20\x01(\x04R\x0cdroppedBy\
-    tes\x12)\n\x10stdout_truncated\x18\x08\x20\x01(\x08R\x0fstdoutTruncated\
-    \x12)\n\x10stderr_truncated\x18\t\x20\x01(\x08R\x0fstderrTruncated\"\x97\
-    \x01\n\x11GuestExecListPage\x12:\n\x07entries\x18\x01\x20\x03(\x0b2\x20.\
-    d2b.guest.v2.GuestExecListEntryR\x07entries\x12\x1c\n\ttruncated\x18\x02\
-    \x20\x01(\x08R\ttruncated\x12(\n\x10next_page_cursor\x18\x03\x20\x01(\tR\
-    \x0enextPageCursor\"\xd4\x01\n\x1aGuestExecRetainedLogStream\x12=\n\x06s\
-    tream\x18\x01\x20\x01(\x0b2%.d2b.terminal.v2.TerminalOpenResponseR\x06st\
-    ream\x125\n\x06output\x18\x02\x20\x01(\x0e2\x1d.d2b.terminal.v2.OutputSt\
-    reamR\x06output\x12!\n\x0cstart_offset\x18\x03\x20\x01(\x04R\x0bstartOff\
-    set\x12\x1d\n\nend_offset\x18\x04\x20\x01(\x04R\tendOffset\"\xd0\x03\n\
+    tionContextR\x07context\x12'\n\x0fresource_handle\x18\x02\x20\x01(\tR\
+    \x0eresourceHandle\x125\n\x06output\x18\x03\x20\x01(\x0e2\x1d.d2b.termin\
+    al.v2.OutputStreamR\x06output\x12\x16\n\x06offset\x18\x04\x20\x01(\x04R\
+    \x06offset\x12\x1b\n\tmax_bytes\x18\x05\x20\x01(\rR\x08maxBytes\"\xf4\
+    \x01\n\x15GuestInspectExecQuery\x12<\n\x06status\x18\x01\x20\x01(\x0b2\"\
+    .d2b.guest.v2.GuestExecStatusQueryH\0R\x06status\x126\n\x04wait\x18\x02\
+    \x20\x01(\x0b2\x20.d2b.guest.v2.GuestExecWaitQueryH\0R\x04wait\x12C\n\tl\
+    ist_page\x18\x03\x20\x01(\x0b2$.d2b.guest.v2.GuestExecListPageQueryH\0R\
+    \x08listPageB\x07\n\x05queryJ\x04\x08\x04\x10\x05R\x11open_retained_log\
+    \"\x93\x01\n\x17GuestInspectExecRequest\x12=\n\x07context\x18\x01\x20\
+    \x01(\x0b2#.d2b.guest.v2.GuestOperationContextR\x07context\x129\n\x05que\
+    ry\x18\x02\x20\x01(\x0b2#.d2b.guest.v2.GuestInspectExecQueryR\x05query\"\
+    \xb5\x05\n\x0fGuestExecStatus\x12'\n\x0fresource_handle\x18\x01\x20\x01(\
+    \tR\x0eresourceHandle\x122\n\x05state\x18\x02\x20\x01(\x0e2\x1c.d2b.gues\
+    t.v2.GuestExecStateR\x05state\x12>\n\x0bstdin_state\x18\x03\x20\x01(\x0e\
+    2\x1d.d2b.guest.v2.GuestStdinStateR\nstdinState\x12K\n\x10terminal_outco\
+    me\x18\x04\x20\x01(\x0b2\x20.d2b.terminal.v2.TerminalOutcomeR\x0ftermina\
+    lOutcome\x12.\n\x13stdout_start_offset\x18\x05\x20\x01(\x04R\x11stdoutSt\
+    artOffset\x12*\n\x11stdout_end_offset\x18\x06\x20\x01(\x04R\x0fstdoutEnd\
+    Offset\x12.\n\x13stderr_start_offset\x18\x07\x20\x01(\x04R\x11stderrStar\
+    tOffset\x12*\n\x11stderr_end_offset\x18\x08\x20\x01(\x04R\x0fstderrEndOf\
+    fset\x120\n\x14stdout_dropped_bytes\x18\t\x20\x01(\x04R\x12stdoutDropped\
+    Bytes\x120\n\x14stderr_dropped_bytes\x18\n\x20\x01(\x04R\x12stderrDroppe\
+    dBytes\x12)\n\x10stdout_truncated\x18\x0b\x20\x01(\x08R\x0fstdoutTruncat\
+    ed\x12)\n\x10stderr_truncated\x18\x0c\x20\x01(\x08R\x0fstderrTruncated\
+    \x12)\n\x10state_generation\x18\r\x20\x01(\x04R\x0fstateGeneration\x12\
+    \x1b\n\ttimed_out\x18\x0e\x20\x01(\x08R\x08timedOut\"\x80\x03\n\x12Guest\
+    ExecListEntry\x12'\n\x0fresource_handle\x18\x01\x20\x01(\tR\x0eresourceH\
+    andle\x122\n\x05state\x18\x02\x20\x01(\x0e2\x1c.d2b.guest.v2.GuestExecSt\
+    ateR\x05state\x12+\n\x12created_at_unix_ms\x18\x03\x20\x01(\x04R\x0fcrea\
+    tedAtUnixMs\x12\x1f\n\x0bargv_digest\x18\x04\x20\x01(\x0cR\nargvDigest\
+    \x12!\n\x0cstdout_bytes\x18\x05\x20\x01(\x04R\x0bstdoutBytes\x12!\n\x0cs\
+    tderr_bytes\x18\x06\x20\x01(\x04R\x0bstderrBytes\x12#\n\rdropped_bytes\
+    \x18\x07\x20\x01(\x04R\x0cdroppedBytes\x12)\n\x10stdout_truncated\x18\
+    \x08\x20\x01(\x08R\x0fstdoutTruncated\x12)\n\x10stderr_truncated\x18\t\
+    \x20\x01(\x08R\x0fstderrTruncated\"\x97\x01\n\x11GuestExecListPage\x12:\
+    \n\x07entries\x18\x01\x20\x03(\x0b2\x20.d2b.guest.v2.GuestExecListEntryR\
+    \x07entries\x12\x1c\n\ttruncated\x18\x02\x20\x01(\x08R\ttruncated\x12(\n\
+    \x10next_page_cursor\x18\x03\x20\x01(\tR\x0enextPageCursor\"\x8f\x03\n\
     \x18GuestInspectExecResponse\x120\n\x07outcome\x18\x01\x20\x01(\x0e2\x16\
     .d2b.common.v2.OutcomeR\x07outcome\x12!\n\x0coperation_id\x18\x02\x20\
     \x01(\tR\x0boperationId\x12-\n\x12session_generation\x18\x03\x20\x01(\
     \x04R\x11sessionGeneration\x12\x1d\n\nrequest_id\x18\x04\x20\x01(\x0cR\t\
     requestId\x127\n\x06status\x18\x05\x20\x01(\x0b2\x1d.d2b.guest.v2.GuestE\
     xecStatusH\0R\x06status\x12>\n\tlist_page\x18\x06\x20\x01(\x0b2\x1f.d2b.\
-    guest.v2.GuestExecListPageH\0R\x08listPage\x12Z\n\x13retained_log_stream\
-    \x18\x07\x20\x01(\x0b2(.d2b.guest.v2.GuestExecRetainedLogStreamH\0R\x11r\
-    etainedLogStream\x122\n\x05error\x18\x08\x20\x01(\x0b2\x1c.d2b.common.v2\
-    .ErrorEnvelopeR\x05errorB\x08\n\x06result\"\xf4\x02\n\x18GuestFileTransf\
-    erRequest\x12=\n\x07context\x18\x01\x20\x01(\x0b2#.d2b.guest.v2.GuestOpe\
-    rationContextR\x07context\x129\n\x08artifact\x18\x02\x20\x01(\x0e2\x1d.d\
-    2b.guest.v2.GuestArtifactIdR\x08artifact\x120\n\x14configured_intent_id\
-    \x18\x03\x20\x01(\tR\x12configuredIntentId\x12F\n\tdirection\x18\x04\x20\
-    \x01(\x0e2(.d2b.guest.v2.GuestFileTransferDirectionR\tdirection\x12\x16\
-    \n\x06offset\x18\x05\x20\x01(\x04R\x06offset\x12#\n\rdeclared_size\x18\
-    \x06\x20\x01(\x04R\x0cdeclaredSize\x12'\n\x0fexpected_digest\x18\x07\x20\
-    \x01(\x0cR\x0eexpectedDigest\"\xb3\x02\n\x16GuestFileTransferStart\x129\
-    \n\x08artifact\x18\x01\x20\x01(\x0e2\x1d.d2b.guest.v2.GuestArtifactIdR\
-    \x08artifact\x120\n\x14configured_intent_id\x18\x02\x20\x01(\tR\x12confi\
-    guredIntentId\x12F\n\tdirection\x18\x03\x20\x01(\x0e2(.d2b.guest.v2.Gues\
-    tFileTransferDirectionR\tdirection\x12\x16\n\x06offset\x18\x04\x20\x01(\
-    \x04R\x06offset\x12#\n\rdeclared_size\x18\x05\x20\x01(\x04R\x0cdeclaredS\
-    ize\x12'\n\x0fexpected_digest\x18\x06\x20\x01(\x0cR\x0eexpectedDigest\"\
-    \x98\x01\n\x16GuestFileTransferChunk\x12\x16\n\x06offset\x18\x01\x20\x01\
-    (\x04R\x06offset\x12\x12\n\x04data\x18\x02\x20\x01(\x0cR\x04data\x12\x10\
-    \n\x03eof\x18\x03\x20\x01(\x08R\x03eof\x12\x1d\n\ntotal_size\x18\x04\x20\
-    \x01(\x04R\ttotalSize\x12!\n\x0cfinal_digest\x18\x05\x20\x01(\x0cR\x0bfi\
-    nalDigest\"P\n\x17GuestFileTransferCredit\x12\x14\n\x05bytes\x18\x01\x20\
-    \x01(\rR\x05bytes\x12\x1f\n\x0bnext_offset\x18\x02\x20\x01(\x04R\nnextOf\
-    fset\"R\n\x19GuestFileTransferComplete\x12\x1d\n\ntotal_size\x18\x01\x20\
-    \x01(\x04R\ttotalSize\x12\x16\n\x06digest\x18\x02\x20\x01(\x0cR\x06diges\
-    t\"\x19\n\x17GuestFileTransferCancel\"\x8a\x01\n\x17GuestFileTransferFai\
-    led\x12>\n\x05error\x18\x01\x20\x01(\x0e2(.d2b.guest.v2.GuestFileTransfe\
-    rErrorKindR\x05error\x12/\n\x05retry\x18\x02\x20\x01(\x0e2\x19.d2b.commo\
-    n.v2.RetryClassR\x05retry\"\xdd\x04\n\x16GuestFileTransferFrame\x12-\n\
-    \x12session_generation\x18\x01\x20\x01(\x04R\x11sessionGeneration\x12\
-    \x1d\n\nrequest_id\x18\x02\x20\x01(\x0cR\trequestId\x12\x1a\n\x08sequenc\
-    e\x18\x03\x20\x01(\x04R\x08sequence\x12!\n\x0coperation_id\x18\x04\x20\
-    \x01(\tR\x0boperationId\x12'\n\x0fresource_handle\x18\x05\x20\x01(\tR\
-    \x0eresourceHandle\x12<\n\x05start\x18\n\x20\x01(\x0b2$.d2b.guest.v2.Gue\
-    stFileTransferStartH\0R\x05start\x12<\n\x05chunk\x18\x0b\x20\x01(\x0b2$.\
-    d2b.guest.v2.GuestFileTransferChunkH\0R\x05chunk\x12?\n\x06credit\x18\
+    guest.v2.GuestExecListPageH\0R\x08listPage\x122\n\x05error\x18\x08\x20\
+    \x01(\x0b2\x1c.d2b.common.v2.ErrorEnvelopeR\x05errorB\x08\n\x06resultJ\
+    \x04\x08\x07\x10\x08R\x13retained_log_stream\"\xf4\x02\n\x18GuestFileTra\
+    nsferRequest\x12=\n\x07context\x18\x01\x20\x01(\x0b2#.d2b.guest.v2.Guest\
+    OperationContextR\x07context\x129\n\x08artifact\x18\x02\x20\x01(\x0e2\
+    \x1d.d2b.guest.v2.GuestArtifactIdR\x08artifact\x120\n\x14configured_inte\
+    nt_id\x18\x03\x20\x01(\tR\x12configuredIntentId\x12F\n\tdirection\x18\
+    \x04\x20\x01(\x0e2(.d2b.guest.v2.GuestFileTransferDirectionR\tdirection\
+    \x12\x16\n\x06offset\x18\x05\x20\x01(\x04R\x06offset\x12#\n\rdeclared_si\
+    ze\x18\x06\x20\x01(\x04R\x0cdeclaredSize\x12'\n\x0fexpected_digest\x18\
+    \x07\x20\x01(\x0cR\x0eexpectedDigest\"\xb3\x02\n\x16GuestFileTransferSta\
+    rt\x129\n\x08artifact\x18\x01\x20\x01(\x0e2\x1d.d2b.guest.v2.GuestArtifa\
+    ctIdR\x08artifact\x120\n\x14configured_intent_id\x18\x02\x20\x01(\tR\x12\
+    configuredIntentId\x12F\n\tdirection\x18\x03\x20\x01(\x0e2(.d2b.guest.v2\
+    .GuestFileTransferDirectionR\tdirection\x12\x16\n\x06offset\x18\x04\x20\
+    \x01(\x04R\x06offset\x12#\n\rdeclared_size\x18\x05\x20\x01(\x04R\x0cdecl\
+    aredSize\x12'\n\x0fexpected_digest\x18\x06\x20\x01(\x0cR\x0eexpectedDige\
+    st\"\x98\x01\n\x16GuestFileTransferChunk\x12\x16\n\x06offset\x18\x01\x20\
+    \x01(\x04R\x06offset\x12\x12\n\x04data\x18\x02\x20\x01(\x0cR\x04data\x12\
+    \x10\n\x03eof\x18\x03\x20\x01(\x08R\x03eof\x12\x1d\n\ntotal_size\x18\x04\
+    \x20\x01(\x04R\ttotalSize\x12!\n\x0cfinal_digest\x18\x05\x20\x01(\x0cR\
+    \x0bfinalDigest\"P\n\x17GuestFileTransferCredit\x12\x14\n\x05bytes\x18\
+    \x01\x20\x01(\rR\x05bytes\x12\x1f\n\x0bnext_offset\x18\x02\x20\x01(\x04R\
+    \nnextOffset\"R\n\x19GuestFileTransferComplete\x12\x1d\n\ntotal_size\x18\
+    \x01\x20\x01(\x04R\ttotalSize\x12\x16\n\x06digest\x18\x02\x20\x01(\x0cR\
+    \x06digest\"\x19\n\x17GuestFileTransferCancel\"\x8a\x01\n\x17GuestFileTr\
+    ansferFailed\x12>\n\x05error\x18\x01\x20\x01(\x0e2(.d2b.guest.v2.GuestFi\
+    leTransferErrorKindR\x05error\x12/\n\x05retry\x18\x02\x20\x01(\x0e2\x19.\
+    d2b.common.v2.RetryClassR\x05retry\"\xdd\x04\n\x16GuestFileTransferFrame\
+    \x12-\n\x12session_generation\x18\x01\x20\x01(\x04R\x11sessionGeneration\
+    \x12\x1d\n\nrequest_id\x18\x02\x20\x01(\x0cR\trequestId\x12\x1a\n\x08seq\
+    uence\x18\x03\x20\x01(\x04R\x08sequence\x12!\n\x0coperation_id\x18\x04\
+    \x20\x01(\tR\x0boperationId\x12'\n\x0fresource_handle\x18\x05\x20\x01(\t\
+    R\x0eresourceHandle\x12<\n\x05start\x18\n\x20\x01(\x0b2$.d2b.guest.v2.Gu\
+    estFileTransferStartH\0R\x05start\x12<\n\x05chunk\x18\x0b\x20\x01(\x0b2$\
+    .d2b.guest.v2.GuestFileTransferChunkH\0R\x05chunk\x12?\n\x06credit\x18\
     \x0c\x20\x01(\x0b2%.d2b.guest.v2.GuestFileTransferCreditH\0R\x06credit\
     \x12E\n\x08complete\x18\r\x20\x01(\x0b2'.d2b.guest.v2.GuestFileTransferC\
     ompleteH\0R\x08complete\x12?\n\x06cancel\x18\x0e\x20\x01(\x0b2%.d2b.gues\
@@ -9498,41 +9451,44 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \x02*\xbc\x01\n\x20GuestSecurityKeyApprovalDecision\x124\n0GUEST_SECURIT\
     Y_KEY_APPROVAL_DECISION_UNSPECIFIED\x10\0\x121\n-GUEST_SECURITY_KEY_APPR\
     OVAL_DECISION_APPROVED\x10\x01\x12/\n+GUEST_SECURITY_KEY_APPROVAL_DECISI\
-    ON_DENIED\x10\x02*\xee\x01\n\x17GuestSecurityKeyOutcome\x12*\n&GUEST_SEC\
+    ON_DENIED\x10\x02*\x95\x02\n\x17GuestSecurityKeyOutcome\x12*\n&GUEST_SEC\
     URITY_KEY_OUTCOME_UNSPECIFIED\x10\0\x12(\n$GUEST_SECURITY_KEY_OUTCOME_SU\
     CCEEDED\x10\x01\x12)\n%GUEST_SECURITY_KEY_OUTCOME_CTAP_ERROR\x10\x02\x12\
     (\n$GUEST_SECURITY_KEY_OUTCOME_CANCELLED\x10\x03\x12(\n$GUEST_SECURITY_K\
-    EY_OUTCOME_TIMED_OUT\x10\x04*\xee\x02\n\x19GuestSecurityKeyErrorKind\x12\
-    -\n)GUEST_SECURITY_KEY_ERROR_KIND_UNSPECIFIED\x10\0\x124\n0GUEST_SECURIT\
-    Y_KEY_ERROR_KIND_DEVICE_UNAVAILABLE\x10\x01\x12/\n+GUEST_SECURITY_KEY_ER\
-    ROR_KIND_CEREMONY_BUSY\x10\x02\x120\n,GUEST_SECURITY_KEY_ERROR_KIND_INVA\
-    LID_REPORT\x10\x03\x121\n-GUEST_SECURITY_KEY_ERROR_KIND_APPROVAL_DENIED\
-    \x10\x04\x12*\n&GUEST_SECURITY_KEY_ERROR_KIND_PROTOCOL\x10\x05\x12*\n&GU\
-    EST_SECURITY_KEY_ERROR_KIND_INTERNAL\x10\x06*\x94\x01\n\x10GuestPowerAct\
-    ion\x12\"\n\x1eGUEST_POWER_ACTION_UNSPECIFIED\x10\0\x12\x20\n\x1cGUEST_P\
-    OWER_ACTION_POWER_OFF\x10\x01\x12\x1d\n\x19GUEST_POWER_ACTION_REBOOT\x10\
-    \x02\x12\x1b\n\x17GUEST_POWER_ACTION_HALT\x10\x03*}\n\x12GuestShutdownPh\
-    ase\x12$\n\x20GUEST_SHUTDOWN_PHASE_UNSPECIFIED\x10\0\x12!\n\x1dGUEST_SHU\
-    TDOWN_PHASE_ACCEPTED\x10\x01\x12\x1e\n\x1aGUEST_SHUTDOWN_PHASE_FINAL\x10\
-    \x02*\xfc\x01\n\x19GuestShutdownFinalOutcome\x12,\n(GUEST_SHUTDOWN_FINAL\
-    _OUTCOME_UNSPECIFIED\x10\0\x12*\n&GUEST_SHUTDOWN_FINAL_OUTCOME_COMPLETED\
-    \x10\x01\x120\n,GUEST_SHUTDOWN_FINAL_OUTCOME_ALREADY_APPLIED\x10\x02\x12\
-    *\n&GUEST_SHUTDOWN_FINAL_OUTCOME_CANCELLED\x10\x03\x12'\n#GUEST_SHUTDOWN\
-    _FINAL_OUTCOME_FAILED\x10\x042\xfa\x06\n\x0cGuestService\x12T\n\tBootstr\
-    ap\x12#.d2b.guest.v2.GuestBootstrapRequest\x1a\".d2b.guest.v2.GuestSessi\
-    onResponse\x12T\n\tReconnect\x12#.d2b.guest.v2.GuestReconnectRequest\x1a\
-    \".d2b.guest.v2.GuestSessionResponse\x12S\n\x04Exec\x12$.d2b.terminal.v2\
-    .TerminalOpenRequest\x1a%.d2b.terminal.v2.TerminalOpenResponse\x12Y\n\nC\
-    ancelExec\x12$.d2b.guest.v2.GuestCancelExecRequest\x1a%.d2b.guest.v2.Gue\
-    stCancelExecResponse\x12\\\n\x0bInspectExec\x12%.d2b.guest.v2.GuestInspe\
-    ctExecRequest\x1a&.d2b.guest.v2.GuestInspectExecResponse\x12X\n\tOpenShe\
-    ll\x12$.d2b.terminal.v2.TerminalOpenRequest\x1a%.d2b.terminal.v2.Termina\
-    lOpenResponse\x12]\n\x0cFileTransfer\x12&.d2b.guest.v2.GuestFileTransfer\
-    Request\x1a%.d2b.terminal.v2.TerminalOpenResponse\x12[\n\x0bSecurityKey\
-    \x12%.d2b.guest.v2.GuestSecurityKeyRequest\x1a%.d2b.terminal.v2.Terminal\
-    OpenResponse\x12S\n\x08Shutdown\x12\".d2b.guest.v2.GuestShutdownRequest\
-    \x1a#.d2b.guest.v2.GuestShutdownResponse\x12E\n\x06Cancel\x12\x1c.d2b.co\
-    mmon.v2.CancelRequest\x1a\x1d.d2b.common.v2.CancelResponseb\x06proto3\
+    EY_OUTCOME_TIMED_OUT\x10\x04\x12%\n!GUEST_SECURITY_KEY_OUTCOME_DENIED\
+    \x10\x05*\xee\x02\n\x19GuestSecurityKeyErrorKind\x12-\n)GUEST_SECURITY_K\
+    EY_ERROR_KIND_UNSPECIFIED\x10\0\x124\n0GUEST_SECURITY_KEY_ERROR_KIND_DEV\
+    ICE_UNAVAILABLE\x10\x01\x12/\n+GUEST_SECURITY_KEY_ERROR_KIND_CEREMONY_BU\
+    SY\x10\x02\x120\n,GUEST_SECURITY_KEY_ERROR_KIND_INVALID_REPORT\x10\x03\
+    \x121\n-GUEST_SECURITY_KEY_ERROR_KIND_APPROVAL_DENIED\x10\x04\x12*\n&GUE\
+    ST_SECURITY_KEY_ERROR_KIND_PROTOCOL\x10\x05\x12*\n&GUEST_SECURITY_KEY_ER\
+    ROR_KIND_INTERNAL\x10\x06*\x94\x01\n\x10GuestPowerAction\x12\"\n\x1eGUES\
+    T_POWER_ACTION_UNSPECIFIED\x10\0\x12\x20\n\x1cGUEST_POWER_ACTION_POWER_O\
+    FF\x10\x01\x12\x1d\n\x19GUEST_POWER_ACTION_REBOOT\x10\x02\x12\x1b\n\x17G\
+    UEST_POWER_ACTION_HALT\x10\x03*}\n\x12GuestShutdownPhase\x12$\n\x20GUEST\
+    _SHUTDOWN_PHASE_UNSPECIFIED\x10\0\x12!\n\x1dGUEST_SHUTDOWN_PHASE_ACCEPTE\
+    D\x10\x01\x12\x1e\n\x1aGUEST_SHUTDOWN_PHASE_FINAL\x10\x02*\xfc\x01\n\x19\
+    GuestShutdownFinalOutcome\x12,\n(GUEST_SHUTDOWN_FINAL_OUTCOME_UNSPECIFIE\
+    D\x10\0\x12*\n&GUEST_SHUTDOWN_FINAL_OUTCOME_COMPLETED\x10\x01\x120\n,GUE\
+    ST_SHUTDOWN_FINAL_OUTCOME_ALREADY_APPLIED\x10\x02\x12*\n&GUEST_SHUTDOWN_\
+    FINAL_OUTCOME_CANCELLED\x10\x03\x12'\n#GUEST_SHUTDOWN_FINAL_OUTCOME_FAIL\
+    ED\x10\x042\xe0\x07\n\x0cGuestService\x12T\n\tBootstrap\x12#.d2b.guest.v\
+    2.GuestBootstrapRequest\x1a\".d2b.guest.v2.GuestSessionResponse\x12T\n\t\
+    Reconnect\x12#.d2b.guest.v2.GuestReconnectRequest\x1a\".d2b.guest.v2.Gue\
+    stSessionResponse\x12M\n\x04Exec\x12\x1e.d2b.guest.v2.GuestExecRequest\
+    \x1a%.d2b.terminal.v2.TerminalOpenResponse\x12Y\n\nCancelExec\x12$.d2b.g\
+    uest.v2.GuestCancelExecRequest\x1a%.d2b.guest.v2.GuestCancelExecResponse\
+    \x12\\\n\x0bInspectExec\x12%.d2b.guest.v2.GuestInspectExecRequest\x1a&.d\
+    2b.guest.v2.GuestInspectExecResponse\x12k\n\x13OpenExecRetainedLog\x12-.\
+    d2b.guest.v2.GuestOpenExecRetainedLogRequest\x1a%.d2b.terminal.v2.Termin\
+    alOpenResponse\x12W\n\tOpenShell\x12#.d2b.guest.v2.GuestOpenShellRequest\
+    \x1a%.d2b.terminal.v2.TerminalOpenResponse\x12]\n\x0cFileTransfer\x12&.d\
+    2b.guest.v2.GuestFileTransferRequest\x1a%.d2b.terminal.v2.TerminalOpenRe\
+    sponse\x12[\n\x0bSecurityKey\x12%.d2b.guest.v2.GuestSecurityKeyRequest\
+    \x1a%.d2b.terminal.v2.TerminalOpenResponse\x12S\n\x08Shutdown\x12\".d2b.\
+    guest.v2.GuestShutdownRequest\x1a#.d2b.guest.v2.GuestShutdownResponse\
+    \x12E\n\x06Cancel\x12\x1c.d2b.common.v2.CancelRequest\x1a\x1d.d2b.common\
+    .v2.CancelResponseb\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file
@@ -9552,8 +9508,10 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
             let mut deps = ::std::vec::Vec::with_capacity(2);
             deps.push(super::common::file_descriptor().clone());
             deps.push(super::terminal::file_descriptor().clone());
-            let mut messages = ::std::vec::Vec::with_capacity(36);
+            let mut messages = ::std::vec::Vec::with_capacity(37);
             messages.push(GuestOperationContext::generated_message_descriptor_data());
+            messages.push(GuestExecRequest::generated_message_descriptor_data());
+            messages.push(GuestOpenShellRequest::generated_message_descriptor_data());
             messages.push(GuestBootstrapRequest::generated_message_descriptor_data());
             messages.push(GuestReconnectRequest::generated_message_descriptor_data());
             messages.push(GuestSessionResponse::generated_message_descriptor_data());
@@ -9562,13 +9520,12 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
             messages.push(GuestExecStatusQuery::generated_message_descriptor_data());
             messages.push(GuestExecWaitQuery::generated_message_descriptor_data());
             messages.push(GuestExecListPageQuery::generated_message_descriptor_data());
-            messages.push(GuestExecOpenRetainedLogQuery::generated_message_descriptor_data());
+            messages.push(GuestOpenExecRetainedLogRequest::generated_message_descriptor_data());
             messages.push(GuestInspectExecQuery::generated_message_descriptor_data());
             messages.push(GuestInspectExecRequest::generated_message_descriptor_data());
             messages.push(GuestExecStatus::generated_message_descriptor_data());
             messages.push(GuestExecListEntry::generated_message_descriptor_data());
             messages.push(GuestExecListPage::generated_message_descriptor_data());
-            messages.push(GuestExecRetainedLogStream::generated_message_descriptor_data());
             messages.push(GuestInspectExecResponse::generated_message_descriptor_data());
             messages.push(GuestFileTransferRequest::generated_message_descriptor_data());
             messages.push(GuestFileTransferStart::generated_message_descriptor_data());
@@ -9654,15 +9611,9 @@ impl ::std::fmt::Debug for GuestExecListPageQuery {
     }
 }
 
-impl ::std::fmt::Debug for GuestExecOpenRetainedLogQuery {
+impl ::std::fmt::Debug for GuestExecRequest {
     fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        formatter.write_str("GuestExecOpenRetainedLogQuery(REDACTED)")
-    }
-}
-
-impl ::std::fmt::Debug for GuestExecRetainedLogStream {
-    fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        formatter.write_str("GuestExecRetainedLogStream(REDACTED)")
+        formatter.write_str("GuestExecRequest(REDACTED)")
     }
 }
 
@@ -9747,6 +9698,18 @@ impl ::std::fmt::Debug for GuestInspectExecRequest {
 impl ::std::fmt::Debug for GuestInspectExecResponse {
     fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         formatter.write_str("GuestInspectExecResponse(REDACTED)")
+    }
+}
+
+impl ::std::fmt::Debug for GuestOpenExecRetainedLogRequest {
+    fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        formatter.write_str("GuestOpenExecRetainedLogRequest(REDACTED)")
+    }
+}
+
+impl ::std::fmt::Debug for GuestOpenShellRequest {
+    fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        formatter.write_str("GuestOpenShellRequest(REDACTED)")
     }
 }
 

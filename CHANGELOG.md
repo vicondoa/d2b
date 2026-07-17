@@ -172,6 +172,10 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Tightened guest protocol validation for workload-only terminal scope,
+  credit/digest-continuous file transfer, mandatory security-key approval,
+  correlated exec cancellation/status/wait results, and range-bound retained
+  logs opened through a separate idempotent RPC.
 - Kept the allocator ledger generation helper available only with its
   test-support consumers so strict production builds remain warning-free.
 - Parsed the evaluated delivery wrapper with the maintained Tree-sitter Bash

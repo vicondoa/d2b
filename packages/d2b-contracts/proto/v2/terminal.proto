@@ -24,6 +24,16 @@ message TerminalOpenResponse {
   bytes request_id = 5;
   d2b.common.v2.ErrorEnvelope error = 6;
   string resource_handle = 7;
+  TerminalRetainedLogRange retained_log = 8;
+}
+
+message TerminalRetainedLogRange {
+  OutputStream output = 1;
+  uint64 requested_offset = 2;
+  uint64 start_offset = 3;
+  uint64 end_offset = 4;
+  uint32 max_bytes = 5;
+  bool eof = 6;
 }
 
 enum TerminalKind {
@@ -95,6 +105,7 @@ message RetainedLogSelection {
   string exec_handle = 1;
   OutputStream output = 2;
   uint64 offset = 3;
+  uint32 max_bytes = 4;
 }
 
 message TerminalSelection {

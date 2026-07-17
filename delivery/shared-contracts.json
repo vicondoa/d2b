@@ -347,7 +347,7 @@
     },
     {
       "method": "Exec",
-      "request": "TerminalOpenRequest",
+      "request": "GuestExecRequest",
       "response": "TerminalOpenResponse"
     },
     {
@@ -361,8 +361,13 @@
       "response": "GuestInspectExecResponse"
     },
     {
+      "method": "OpenExecRetainedLog",
+      "request": "GuestOpenExecRetainedLogRequest",
+      "response": "TerminalOpenResponse"
+    },
+    {
       "method": "OpenShell",
-      "request": "TerminalOpenRequest",
+      "request": "GuestOpenShellRequest",
       "response": "TerminalOpenResponse"
     },
     {

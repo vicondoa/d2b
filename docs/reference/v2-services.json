@@ -1,10 +1,10 @@
 {
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "services": [
     {
       "package": "d2b.daemon.v2",
       "service": "DaemonService",
-      "schemaFingerprint": "373e49ebb8e60d96edbbb82ad8ce75e346bb32d96fe067567f45bf93df980df5",
+      "schemaFingerprint": "48090336e653742f356d1b98ab225f7ecd5115db882c86935ddf3e74b659402e",
       "methods": [
         {
           "name": "Resolve",
@@ -186,7 +186,7 @@
     {
       "package": "d2b.guest.v2",
       "service": "GuestService",
-      "schemaFingerprint": "3ff677599c1e16c40bdeee91faef4f911ecb819f178d8b0092d02f075d9dd38b",
+      "schemaFingerprint": "d31fabea037f1fea0d262ea68fe559bd0902bbbca642582faab227e212b1cc7a",
       "methods": [
         {
           "name": "Bootstrap",
@@ -225,6 +225,14 @@
           "methodId": 2415393647,
           "mutating": false,
           "requiresIdempotency": false,
+          "maxRequestBytes": 1048576,
+          "maxLifetimeMs": 900000
+        },
+        {
+          "name": "OpenExecRetainedLog",
+          "methodId": 1917754755,
+          "mutating": true,
+          "requiresIdempotency": true,
           "maxRequestBytes": 1048576,
           "maxLifetimeMs": 900000
         },

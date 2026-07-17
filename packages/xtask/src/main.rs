@@ -579,6 +579,9 @@ fn gen_v2_services() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
                     ],
                 )?;
             }
+            if entry.file_name() == "guest_ttrpc.rs" {
+                harden_guest_terminal_adapters(&entry.path())?;
+            }
             if entry.file_name() == "runtime_systemd_user_ttrpc.rs" {
                 let source = fs::read_to_string(entry.path())?;
                 let rewritten =
@@ -696,6 +699,7 @@ fn redact_generated_message_debug(
         messages.push(after[..end].to_owned());
         remaining = &after[end + 1..];
     }
+
     if messages.is_empty() {
         return Err(format!("generated package {package} has no messages").into());
     }
@@ -744,6 +748,37 @@ fn redact_generated_message_debug(
              \x20   }}\n\
              }}\n"
         ));
+    }
+    fs::write(path, source)?;
+    Ok(())
+}
+
+fn harden_guest_terminal_adapters(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let mut source = fs::read_to_string(path)?;
+    for (message, method) in [
+        ("GuestExecRequest", "exec"),
+        ("GuestOpenShellRequest", "open_shell"),
+    ] {
+        let dispatch =
+            format!("::ttrpc::async_request_handler!(self, ctx, req, guest, {message}, {method});");
+        let hardened = format!(
+            "let decoded = <super::guest::{message} as ::protobuf::Message>::parse_from_bytes(&req.payload)\n\
+             \x20   .map_err(|_| ::ttrpc::Error::RpcStatus(::ttrpc::get_status(\n\
+             \x20       ::ttrpc::Code::INVALID_ARGUMENT,\n\
+             \x20       \"v2-service-decode-failed\".to_owned(),\n\
+             \x20   )))?;\n\
+             super::StrictWireMessage::validate_wire(&decoded, true).map_err(|error| {{\n\
+             \x20   ::ttrpc::Error::RpcStatus(::ttrpc::get_status(\n\
+             \x20       ::ttrpc::Code::INVALID_ARGUMENT,\n\
+             \x20       error.to_string(),\n\
+             \x20   ))\n\
+             }})?;\n\
+             {dispatch}"
+        );
+        if !source.contains(&dispatch) {
+            return Err(format!("generated guest adapter {method} has an unknown shape").into());
+        }
+        source = source.replacen(&dispatch, &hardened, 1);
     }
     fs::write(path, source)?;
     Ok(())
