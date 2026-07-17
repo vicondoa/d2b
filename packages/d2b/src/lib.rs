@@ -603,8 +603,6 @@ struct ClipboardArmArgs {
     human: bool,
 }
 
-const CLIPBOARD_ARM_CONTROL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-
 #[derive(Debug, Subcommand)]
 enum OpCommand {
     /// Inspect current operation/trace state with bounded partial results.
@@ -2609,69 +2607,10 @@ fn dispatch(
 // ============================================================
 
 fn cmd_clipboard_arm(_context: &Context, args: &ClipboardArmArgs) -> Result<i32, CliFailure> {
-    use std::io::{Read, Write};
-    use std::os::unix::net::UnixStream;
-
-    let runtime = std::env::var_os("XDG_RUNTIME_DIR").ok_or_else(|| {
-        clipboard_arm_failure(
-            args,
-            "XDG_RUNTIME_DIR is not set; cannot locate d2b-clipd control socket",
-        )
-    })?;
-    let socket_path = PathBuf::from(runtime).join("d2b-clipd/clipd.sock");
-    let mut stream = UnixStream::connect(&socket_path).map_err(|error| {
-        clipboard_arm_failure(
-            args,
-            format!(
-                "failed to connect to d2b-clipd control socket {}: {error}",
-                socket_path.display()
-            ),
-        )
-    })?;
-    set_clipboard_arm_timeouts(&stream).map_err(|error| {
-        clipboard_arm_failure(
-            args,
-            format!("failed to set clipboard arm socket timeout: {error}"),
-        )
-    })?;
-    stream.write_all(b"{\"type\":\"arm\"}\n").map_err(|error| {
-        clipboard_arm_failure(args, format!("failed to request clipboard arm: {error}"))
-    })?;
-    let mut line = Vec::new();
-    stream.take(4096).read_to_end(&mut line).map_err(|error| {
-        clipboard_arm_failure(
-            args,
-            format!("failed to read clipboard arm response: {error}"),
-        )
-    })?;
-    let value: serde_json::Value = serde_json::from_slice(&line).map_err(|error| {
-        clipboard_arm_failure(args, format!("invalid d2b-clipd response: {error}"))
-    })?;
-    if value.get("ok").and_then(|ok| ok.as_bool()) == Some(true) {
-        if args.json {
-            print_stdout(&format!("{value}\n"));
-        } else {
-            let message = value
-                .get("message")
-                .and_then(|message| message.as_str())
-                .unwrap_or("picker opened");
-            print_stdout(&format!("{message}\n"));
-        }
-        Ok(0)
-    } else {
-        let error = value
-            .get("error")
-            .and_then(|error| error.as_str())
-            .unwrap_or("d2b-clipd rejected clipboard arm request");
-        Err(clipboard_arm_failure(args, error))
-    }
-}
-
-fn set_clipboard_arm_timeouts(stream: &std::os::unix::net::UnixStream) -> std::io::Result<()> {
-    let timeout = Some(CLIPBOARD_ARM_CONTROL_TIMEOUT);
-    stream.set_read_timeout(timeout)?;
-    stream.set_write_timeout(timeout)?;
-    Ok(())
+    Err(clipboard_arm_failure(
+        args,
+        "authenticated clipboard picker control is unavailable",
+    ))
 }
 
 fn clipboard_arm_failure(args: &ClipboardArmArgs, message: impl Into<String>) -> CliFailure {
@@ -2697,7 +2636,6 @@ fn clipboard_arm_failure(args: &ClipboardArmArgs, message: impl Into<String>) ->
 #[cfg(test)]
 mod clipboard_arm_tests {
     use super::*;
-    use std::os::unix::net::UnixStream;
 
     #[test]
     fn json_failure_emits_structured_stdout_and_suppresses_stderr() {
@@ -2712,20 +2650,6 @@ mod clipboard_arm_tests {
         let value: Value = serde_json::from_slice(&stdout).expect("json failure stdout");
         assert_eq!(value["ok"], false);
         assert_eq!(value["error"], "daemon unavailable");
-    }
-
-    #[test]
-    fn clipboard_arm_sets_read_and_write_timeouts() {
-        let (left, _right) = UnixStream::pair().expect("socketpair");
-        set_clipboard_arm_timeouts(&left).expect("set timeouts");
-        assert_eq!(
-            left.read_timeout().expect("read timeout"),
-            Some(CLIPBOARD_ARM_CONTROL_TIMEOUT)
-        );
-        assert_eq!(
-            left.write_timeout().expect("write timeout"),
-            Some(CLIPBOARD_ARM_CONTROL_TIMEOUT)
-        );
     }
 }
 

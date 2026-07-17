@@ -27,8 +27,12 @@ tokio = { workspace = true, optional = true, features = ["net"] }
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "deny"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(test_root)"] }
+
+[lints.clippy]
+all = "warn"
 
 [[test]]
 name = "unix_session"

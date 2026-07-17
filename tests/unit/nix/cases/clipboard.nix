@@ -93,9 +93,14 @@ in
       after = service.after;
     };
     expected = {
-      wantedBy = [ "graphical-session.target" ];
+      wantedBy = [ ];
       partOf = [ "graphical-session.target" ];
-      after = [ "graphical-session.target" ];
+      after = [
+        "graphical-session.target"
+        "d2b-clipd-control.socket"
+        "d2b-clipd-picker.socket"
+        "d2b-clipd-bridge.socket"
+      ];
     };
   };
 
@@ -137,8 +142,8 @@ in
   "clipboard/execstart-uses-package-and-config" = {
     expr =
       lib.hasInfix "/bin/d2b-clipd" serviceConfig.ExecStart
-      && lib.hasInfix "--config /etc/d2b/clipboard.json" serviceConfig.ExecStart
-      && lib.hasInfix "--bridge-root /run/d2b/clipd" serviceConfig.ExecStart;
+      && !(lib.hasInfix "--config" serviceConfig.ExecStart)
+      && !(lib.hasInfix "--bridge-root" serviceConfig.ExecStart);
     expected = true;
   };
 
@@ -157,7 +162,7 @@ in
         ];
         execStart = weirdExec.config.systemd.user.services.d2b-clipd.serviceConfig.ExecStart;
       in
-      lib.hasInfix "d2b-clipd%%" execStart && lib.hasInfix "d2b-clip-picker$$" execStart;
+      lib.hasInfix "d2b-clipd%%" execStart && !(lib.hasInfix "d2b-clip-picker$$" execStart);
     expected = true;
   };
 

@@ -1350,11 +1350,27 @@ fn v2_foundation_crates_are_default_empty_and_not_publishable() {
             "rust-version.workspace = true",
             "publish = false",
             "[features]\ndefault = []",
-            "[lints]\nworkspace = true",
         ] {
             assert!(
                 manifest.contains(required),
                 "{package} manifest is missing {required:?}"
+            );
+        }
+        if package == &"d2b-session-unix" {
+            for required in [
+                "[lints.rust]\nunsafe_code = \"deny\"",
+                "unexpected_cfgs = { level = \"warn\", check-cfg = [\"cfg(test_root)\"] }",
+                "[lints.clippy]\nall = \"warn\"",
+            ] {
+                assert!(
+                    manifest.contains(required),
+                    "{package} manifest is missing scoped activation lint {required:?}"
+                );
+            }
+        } else {
+            assert!(
+                manifest.contains("[lints]\nworkspace = true"),
+                "{package} manifest must inherit workspace lints"
             );
         }
 

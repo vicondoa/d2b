@@ -18,6 +18,7 @@ mod lifecycle;
 mod metrics;
 mod record;
 mod scheduler;
+mod server;
 mod streams;
 mod transport;
 
@@ -39,6 +40,7 @@ pub use lifecycle::{KeepaliveAction, SessionLifecycle, SessionPhase};
 pub use metrics::{MetricEvent, MetricsSink, NoopMetrics};
 pub use record::{ProtectedRecord, RecordProtector};
 pub use scheduler::{FairScheduler, OutboundFrame, QueueClass};
+pub use server::{SessionServerError, serve_ttrpc_services};
 pub use streams::{NamedStreamMux, StreamEvent, StreamId, StreamPhase};
 pub use transport::{OwnedTransport, TransportDescriptor, TransportError, TransportPacket};
 

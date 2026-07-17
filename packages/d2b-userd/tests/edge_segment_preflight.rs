@@ -6,6 +6,7 @@ use std::{
 
 const AUTHORITY_REPOSITORY: &str = "vicondoa/d2b";
 const WAVE_BRANCH: &str = "adr0045-w6-edge";
+const WAVE_PARENT_BRANCH: &str = "adr0045-w5-control";
 
 fn repository_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -137,6 +138,10 @@ fn verify_historical_edge_segment_authority() {
     let root = repository_root();
     reject_graph_metadata(&root);
     let (manifest_parent, manifest_pr) = manifest_segment(&root);
+    assert_eq!(
+        manifest_parent, WAVE_PARENT_BRANCH,
+        "W6 authority must be linearized directly onto W5"
+    );
 
     let parent_key = format!("git-town-branch.{WAVE_BRANCH}.parent");
     if let Some(configured_parent) = optional_git_output(&root, &["config", "--get", &parent_key]) {

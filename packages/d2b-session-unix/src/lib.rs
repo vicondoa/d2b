@@ -1,4 +1,4 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 //! Audited Unix transport substrate for ComponentSession.
 //!
 //! The default feature set intentionally exports no host socket implementation.
@@ -18,6 +18,8 @@ mod error;
 mod pidfd;
 #[cfg(feature = "host-socket")]
 mod socket;
+#[cfg(feature = "host-socket")]
+mod systemd;
 
 #[cfg(feature = "host-socket")]
 pub use adapter::{
@@ -46,4 +48,8 @@ pub use pidfd::{
 pub use socket::{
     AncillaryCapacity, OutboundPacket, PacketBurst, SendBurst, SentPacket, SeqpacketSocket,
     StreamRead, StreamSocket, prearmed_seqpacket_pair,
+};
+#[cfg(feature = "host-socket")]
+pub use systemd::{
+    ActivatedSeqpacketListener, ActivatedSeqpacketListeners, SystemdActivationError,
 };

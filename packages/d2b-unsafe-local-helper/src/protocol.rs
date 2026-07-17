@@ -1,12 +1,10 @@
-//! Legacy endpoint shim retained only until the separately owned runtime
-//! composition switches its socket activation to ComponentSession. New runtime
-//! operations are admitted exclusively by
+//! Compatibility message handling for the retained helper data plane. New
+//! runtime operations are admitted exclusively by
 //! [`crate::services::runtime_systemd_user::RuntimeSystemdUserService`]; this
-//! module is not a fallback for that service.
+//! module does not select or create an endpoint.
 
 use crate::runtime::{RuntimeError, ScopeRuntime};
 use crate::systemd::UserScopeManager;
-use d2b_contracts::UNSAFE_LOCAL_HELPER_SOCKET_PATH;
 use d2b_contracts::unsafe_local_wire::{
     DaemonToUnsafeLocalHelper, HELPER_SOCKET_BUFFER_REQUEST_BYTES, HelperFailureCode,
     HelperHeartbeat, HelperHello, HelperOperationRejected, MAX_HELPER_FRAME_SIZE,
@@ -316,10 +314,6 @@ fn drain_response_wakeup(response_wakeup: &UnixStream) -> Result<(), ProtocolErr
             Err(_) => return Err(ProtocolError::QueueClosed),
         }
     }
-}
-
-pub fn default_helper_socket_path() -> &'static Path {
-    Path::new(UNSAFE_LOCAL_HELPER_SOCKET_PATH)
 }
 
 fn connect_control_socket(path: &Path, expected_daemon_uid: u32) -> Result<Socket, ProtocolError> {

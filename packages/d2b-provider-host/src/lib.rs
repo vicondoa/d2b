@@ -453,8 +453,8 @@ async fn render_qemu_media_argv(input: QemuMediaArgvInput) -> ProviderResult<Vec
 fn wayland_proxy_argv_error(err: WaylandProxyArgvError) -> ProviderError {
     let message = match err {
         WaylandProxyArgvError::EmptyVmName => "invalid Wayland proxy argv input: empty VM name",
-        WaylandProxyArgvError::RelativeSocketPath { .. } => {
-            "invalid Wayland proxy argv input: relative socket path"
+        WaylandProxyArgvError::InvalidSessionIdentity => {
+            "invalid Wayland proxy argv input: invalid session identity"
         }
     };
     ProviderError::new(ErrorKind::ProviderAllocationFailed, message)
@@ -675,20 +675,20 @@ mod tests {
     fn expected_wayland_argv() -> Vec<String> {
         [
             "d2b-corp-vm-wlproxy",
-            "--listen",
-            "/run/d2b-wlproxy/corp-vm/wayland-0",
-            "--connect",
-            "/run/d2b-wlproxy/corp-vm/upstream",
-            "--vm-name",
-            "corp-vm",
-            "--app-id-prefix",
-            "d2b.corp-vm.",
+            "--session-generation",
+            "1",
             "--target",
             "corp-vm.local.d2b",
             "--provider-kind",
             "local-vm",
-            "--realm-target",
-            "corp-vm.local.d2b",
+            "--realm-id",
+            "local",
+            "--workload-id",
+            "corp-vm",
+            "--provider-id",
+            "display-wayland",
+            "--app-id-prefix",
+            "d2b.corp-vm.",
             "--title-prefix",
             "[corp-vm] ",
         ]

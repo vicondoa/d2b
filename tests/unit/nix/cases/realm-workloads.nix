@@ -1084,7 +1084,8 @@ in
   "realm-workloads/unsafe-local-helper-user-service-and-eligibility" = {
     expr =
       let
-        service = unsafeCfg.systemd.user.services.d2b-unsafe-local-helper;
+        service = unsafeCfg.systemd.user.services.d2b-runtime-systemd-user;
+        socket = unsafeCfg.systemd.user.sockets.d2b-runtime-systemd-user;
         daemonConfig =
           builtins.fromJSON unsafeCfg.environment.etc."d2b/daemon-config.json".text;
         rootUnits =
@@ -1110,16 +1111,17 @@ in
         restart = service.serviceConfig.Restart;
         execStartHasHelper =
           lib.hasInfix "/bin/d2b-unsafe-local-helper" service.serviceConfig.ExecStart;
-        execStartHasImmutableProxy =
-          lib.hasInfix
-            (builtins.unsafeDiscardStringContext
-              "--wayland-proxy ${unsafeCfg.d2b._hostToolPackages.d2bWaylandProxy}/bin/d2b-wayland-proxy")
+        execStartHasLegacyProxyArg =
+          lib.hasInfix "--wayland-proxy"
             (builtins.unsafeDiscardStringContext service.serviceConfig.ExecStart);
         proxyPackageConfigured =
           unsafeCfg.d2b._hostToolPackages.d2bWaylandProxy != null;
-        daemonSocketPath = daemonConfig.unsafeLocalHelperSocketPath;
-        daemonSocketGroup = daemonConfig.unsafeLocalHelperSocketGroup;
+        daemonSocketPathAbsent = !(daemonConfig ? unsafeLocalHelperSocketPath);
+        daemonSocketGroupAbsent = !(daemonConfig ? unsafeLocalHelperSocketGroup);
         daemonAllowedUsers = daemonConfig.unsafeLocalHelperUsers;
+        userSocketPath = socket.socketConfig.ListenSequentialPacket;
+        userSocketFdName = socket.socketConfig.FileDescriptorName;
+        userSocketMode = socket.socketConfig.SocketMode;
         helperRootUnitAbsent =
           !(builtins.elem "d2b-unsafe-local-helper" rootUnits);
         noHelperBrokerSocketUnit =
@@ -1137,11 +1139,14 @@ in
       conditionGroup = "d2b-unsafe-local";
       restart = "on-failure";
       execStartHasHelper = true;
-      execStartHasImmutableProxy = true;
+      execStartHasLegacyProxyArg = false;
       proxyPackageConfigured = true;
-      daemonSocketPath = "/run/d2b/unsafe-local-helper.sock";
-      daemonSocketGroup = "d2b-unsafe-local";
+      daemonSocketPathAbsent = true;
+      daemonSocketGroupAbsent = true;
       daemonAllowedUsers = [ "alice" ];
+      userSocketPath = "/run/d2b/u/%U/runtime-agent.sock";
+      userSocketFdName = "runtime-systemd-user";
+      userSocketMode = "0600";
       helperRootUnitAbsent = true;
       noHelperBrokerSocketUnit = true;
       unsafeLocalShellRootUnits = [ ];

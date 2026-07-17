@@ -16,6 +16,7 @@
 #![allow(dead_code)]
 
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::time::{Duration, Instant};
@@ -327,7 +328,6 @@ fn spawn_d2bd_inner(
     // The state-lock parent (`run`) must be uid/gid-owned by the invoking user
     // and mode 0755/0750 for `--allow-unprivileged-runtime-dir` lock-parent
     // validation; pin it explicitly rather than relying on the process umask.
-    use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&run, std::fs::Permissions::from_mode(0o755)).expect("chmod run dir");
 
     let socket_path = run.join("public.sock");

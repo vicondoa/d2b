@@ -254,22 +254,20 @@ typed failure instead of silently writing clipboard data.
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | The picker opened, or picker launch/handshake failed and `d2b-clipd` successfully armed the native paste fallback. | — |
-| `2` | The control socket was unavailable, malformed, timed out, or returned a daemon error. | [`usage`](./error-codes.md#usage) |
+| `0` | Reserved for a completed authenticated picker request. | — |
+| `2` | Authenticated picker control is unavailable. | [`usage`](./error-codes.md#usage) |
 
-The CLI connects to `$XDG_RUNTIME_DIR/d2b-clipd/clipd.sock`, sends one bounded
-arm request, and applies five-second read and write deadlines to the
-control socket so a wedged `d2b-clipd` cannot hang the terminal. The
-daemon owns all clipboard state and transfer FDs; this command only asks
-the daemon to open the picker for d2b-owned paste replay.
+The legacy newline-JSON control socket is retired. Clipboard operations use the
+fixed per-user ComponentSession endpoints under
+`/run/d2b/u/<uid>/clipd/`. Until the authenticated picker request is available
+through the CLI client, `clipboard arm` fails closed without contacting a
+legacy endpoint.
 
 **Human examples**
 
 ```text
 $ d2b clipboard arm
-picker opened
-$ d2b clipboard arm
-picker_not_configured
+authenticated clipboard picker control is unavailable
 ```
 
 **`--json` examples**

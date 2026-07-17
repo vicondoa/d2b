@@ -629,15 +629,11 @@ EOF
     };
 
   # wayland-proxy runner: d2b-wayland-proxy host-side proxy.
-  # Runs as d2b-<vm>-wlproxy, listens on the per-VM proxy socket,
-  # and connects upstream to the real host compositor socket. The broker
-  # grants the wlproxy principal an ACL on exactly that socket.
+  # Runs as d2b-<vm>-wlproxy with controller-provided listener and upstream
+  # descriptors. It never resolves or self-binds either pathname.
   waylandProxyRunner = providerKind: name: vm:
     let
       vmName = name;
-      filterSock = "/run/d2b-wlproxy/${vmName}/wayland-0";
-      upstreamSock = waylandHostSock;
-      bridgeSock = "${config.d2b.site.clipboard.runtime.bridgeRoot}/${waylandUid}/bridge/${vmName}/${config.d2b.site.clipboard.runtime.bridgeSocketName}";
       appIdPrefix = "d2b.${vmName}.";
       # Realm identity: present when one enabled realm workload row references
       # this VM. Multiple rows are rejected by assertions; no rows use the
@@ -650,6 +646,8 @@ EOF
         if unambiguousRow != null
         then unambiguousRow.canonicalTarget
         else "${vmName}.local.d2b";
+      realmId = if unambiguousRow != null then unambiguousRow.realmId else "local";
+      workloadId = if unambiguousRow != null then unambiguousRow.workloadId else vmName;
       titlePrefix = "[${vmName}] ";
       border = vm.graphics.waylandProxy.border;
       borderColors = cfg._uiColors.vms.${vmName}.border;
@@ -700,17 +698,15 @@ EOF
       ];
       argv = [
         "d2b-${vmName}-wlproxy"
-        "--listen" filterSock
-        "--connect" upstreamSock
+        "--session-generation" "1"
         "--target" realmTarget
         "--provider-kind" providerKind
-        "--vm-name" vmName
+        "--realm-id" realmId
+        "--workload-id" workloadId
+        "--provider-id" "display-wayland"
         "--app-id-prefix" appIdPrefix
-        "--realm-target" realmTarget
         "--title-prefix" titlePrefix
-      ] ++ borderArgs ++ lib.optionals config.d2b.site.clipboard.enable [
-        "--clipd-bridge-socket" bridgeSock
-      ] ++ denyArgs ++ allowArgs ++ maxVersionArgs ++ dmabufAllowArgs ++ dmabufDenyArgs;
+      ] ++ borderArgs ++ denyArgs ++ allowArgs ++ maxVersionArgs ++ dmabufAllowArgs ++ dmabufDenyArgs;
     };
 
   videoBinaryPath = _name:
