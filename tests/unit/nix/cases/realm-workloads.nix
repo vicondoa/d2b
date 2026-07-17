@@ -160,7 +160,11 @@ in
             };
             workloads.app = {
               name = "Application";
-              provider = "runtime";
+              providerRefs = {
+                runtime = "runtime";
+                display = "display";
+              };
+              display.wayland = true;
               shell.enable = true;
               launcher = {
                 enable = true;
@@ -189,7 +193,10 @@ in
       realmId = "cvudgfqzh442wwtozs7q";
       canonicalTarget = "app.local-root.d2b";
       workloadCapabilities = [ "persistent-shell" "pty" ];
-      providerRefs.runtime = "runtime";
+      providerRefs = {
+        runtime = "runtime";
+        display = "display";
+      };
       workloadId = "n2brfnqxyvjb5iyl4vba";
       workloadLabel = "Application";
       providerCapabilities = [ "exec" "shell" ];

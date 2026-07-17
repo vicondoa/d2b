@@ -68,9 +68,20 @@ let
         description = "Human-readable workload name.";
       };
 
-      provider = lib.mkOption {
-        type = labelType;
-        description = "Enabled runtime provider instance in the owning realm.";
+      providerRefs = lib.mkOption {
+        type = lib.types.attrsOf labelType;
+        default = { };
+        example = {
+          runtime = "vm";
+          device = "devices";
+          display = "wayland";
+        };
+        description = ''
+          Explicit bindings from a closed provider authority name to an enabled
+          provider instance in this realm. Runtime-backed workloads must bind
+          `runtime`; feature options bind their matching device, display,
+          audio, network, storage, or transport authority.
+        '';
       };
 
       config = lib.mkOption {
@@ -83,6 +94,55 @@ let
         type = lib.types.bool;
         default = false;
         description = "Whether the owning realm controller starts this workload automatically.";
+      };
+
+      tpm.enable = lib.mkEnableOption "a stateful TPM 2.0 device for this workload";
+
+      graphics = {
+        enable = lib.mkEnableOption "mediated GPU graphics for this workload";
+
+        videoSidecar = lib.mkEnableOption "the mediated H.264 video decode sidecar";
+
+        videoNvidiaDecode = lib.mkEnableOption "NVIDIA device mediation for the video sidecar";
+
+        renderNodeOnly = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = "Expose only the mediated render-node role.";
+        };
+      };
+
+      audio = {
+        enable = lib.mkEnableOption "vhost-user audio mediation for this workload";
+
+        allowMicByDefault = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = "Initial microphone policy; runtime grants remain provider-mediated.";
+        };
+
+        allowSpeakerByDefault = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = "Initial speaker policy; runtime grants remain provider-mediated.";
+        };
+      };
+
+      usbip.enable = lib.mkEnableOption "exclusive USBIP device mediation for this workload";
+
+      securityKey.enable =
+        lib.mkEnableOption "mediated FIDO security-key ceremonies for this workload";
+
+      display.wayland = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Attach the workload to its explicitly bound Wayland display provider.";
+      };
+
+      guestControl.vsockRelay = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Render the authenticated guest-control vsock relay role.";
       };
 
       shell = {
@@ -150,9 +210,9 @@ in
     type = lib.types.attrsOf workloadType;
     default = { };
     description = ''
-      Realm-owned workloads. A workload selects an enabled runtime provider by
-      instance id; legacy VM kinds, provider-placeholder kinds, and legacy VM
-      state mappings are not part of this schema.
+      Realm-owned workloads with closed feature configuration and explicit
+      typed provider bindings. Legacy VM kinds, aliases, state mappings, and
+      provider placeholders are not part of this schema.
     '';
   };
 }

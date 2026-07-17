@@ -98,10 +98,8 @@ fn legacy_group_name_denylist() {
     );
 }
 
-/// Negative coverage migrated from the retired
-/// `tests/legacy-group-name-denylist-self-test.sh`: a forbidden
-/// `d2b-launcher` reference in a non-allowlisted source path must be
-/// flagged, while an allowlisted (migration-tombstone) reference must not.
+/// A forbidden legacy group reference must be flagged, while an active
+/// privilege-contract reference remains explicitly classified.
 #[test]
 fn legacy_group_name_denylist_rejects_forbidden_line() {
     let search = legacy_group_search();
@@ -117,10 +115,11 @@ fn legacy_group_name_denylist_rejects_forbidden_line() {
         "a forbidden d2b-launcher reference in a non-allowlisted path must be flagged"
     );
 
-    let allowed = "nixos-modules/host-users.nix:42:    d2b-launcher = { };";
+    let allowed =
+        "nixos-modules/privileges-json.nix:42:      \"d2b-launcher\",";
     assert!(
         allowlist.is_match(allowed),
-        "the host-users.nix migration-tombstone line must stay allowlisted"
+        "the active privilege-contract role must stay classified"
     );
 }
 
@@ -134,14 +133,7 @@ fn legacy_group_search() -> Regex {
 /// gate's `allowlist=(...)` array.
 fn legacy_group_allowlist() -> Regex {
     let allowlist_patterns = [
-        r"nixos-modules/host-activation\.nix:[0-9]+:[[:space:]]*(legacyLauncherGid|legacyLaunchersGid|getent group|for legacy_name in d2b-launcher d2b-launchers; do).*",
         r"packages/d2b-host-activation-helper/.*",
-        r"nixos-modules/host-users\.nix:[0-9]+:[[:space:]]*# DEPRECATED v1\.2: kept as migration tombstone for the[[:space:]]*",
-        r"nixos-modules/host-users\.nix:[0-9]+:[[:space:]]*# d2b-launcher\{,s\} → d2b rename\. No module references the[[:space:]]*",
-        r"nixos-modules/host-users\.nix:[0-9]+:[[:space:]]*d2b-launcher = \{ \};[[:space:]]*",
-        r"nixos-modules/host-daemon\.nix:[0-9]+:[[:space:]]*# DEPRECATED v1\.2: kept as migration tombstone for the[[:space:]]*",
-        r"nixos-modules/host-daemon\.nix:[0-9]+:[[:space:]]*# d2b-launcher\{,s\} → d2b rename\. No module references the[[:space:]]*",
-        r"nixos-modules/host-daemon\.nix:[0-9]+:[[:space:]]*users\.groups\.d2b-launchers = \{ \};[[:space:]]*",
         r"packages/d2b-core/src/privileges\.rs:[0-9]+:.*d2b-launcher.*",
         r"packages/d2b-contracts/src/broker_wire\.rs:[0-9]+:.*d2b-launcher.*",
         r"packages/d2b-priv-broker/src/bootstrap\.rs:[0-9]+:.*d2b-launcher.*",
@@ -155,6 +147,7 @@ fn legacy_group_allowlist() -> Regex {
         // future-proof against other legacy-name gate retirements).
         r"tests/migration-ledger\.toml:[0-9]+:.*",
         r"tests/migration-state\.d/.*:[0-9]+:.*",
+        r"tests/unit/nix/cases/principal-uid-collision\.nix:[0-9]+:.*",
         // This Rust port carries the denylist patterns (which literally contain
         // the legacy group names) and replaces the bash gate; self-allowlist it
         // exactly as the bash gate self-allowlisted `legacy-group-name-denylist.sh`.
@@ -166,40 +159,41 @@ fn legacy_group_allowlist() -> Regex {
 // ---------------------------------------------------------------------------
 // Migrated from tests/vm-submodule-cutover-eval.sh.
 //
-// Asserts no production consumer in `nixos-modules/` reads
-// `config.microvm.vms.${name}.config.config.*` directly — every consumer routes
-// through the canonical workload evaluator. `lib.nix` and `host.nix` retain
-// transitional compatibility helpers and are exempt.
+// The destructive cutover deletes the VM submodule rather than retaining a
+// compatibility reader or removed-option tombstone. The closed realm workload
+// schema is the sole declarative workload entry point.
 // ---------------------------------------------------------------------------
 #[test]
-fn workload_composition_cutover() {
-    let pattern = Regex::new(r"config\.microvm\.vms\.\$\{[^}]*\}\.config\.config")
-        .expect("valid cutover regex");
-    let exempt: BTreeSet<&str> = ["nixos-modules/lib.nix", "nixos-modules/host.nix"]
-        .into_iter()
-        .collect();
-
-    let mut violations: Vec<String> = Vec::new();
-    for rel in git_listed_files(&["nixos-modules"]) {
-        if exempt.contains(rel.as_str()) {
-            continue;
-        }
-        let Some(content) = read_repo_file_opt(&rel) else {
-            continue;
-        };
-        for (idx, line) in content.lines().enumerate() {
-            if pattern.is_match(line) {
-                violations.push(format!("{rel}:{}:{line}", idx + 1));
-            }
-        }
-    }
-
+fn vm_submodule_cutover() {
     assert!(
-        violations.is_empty(),
-        "workload-composition-cutover: production consumers must route through \
-         canonical workload composition, found direct \
-         config.microvm.vms.${{...}}.config.config reads:\n{}",
-        violations.join("\n")
+        read_repo_file_opt("nixos-modules/options-vms.nix").is_none(),
+        "destructive realm cutover must delete options-vms.nix"
+    );
+    assert!(
+        read_repo_file_opt("nixos-modules/vm-submodule.nix").is_none(),
+        "destructive realm cutover must delete vm-submodule.nix"
+    );
+
+    let schema = read_repo_file_opt("nixos-modules/options-realms-workloads.nix")
+        .expect("read canonical realm workload schema");
+    assert!(
+        schema.contains("options.workloads = lib.mkOption"),
+        "realm workload schema must own the workload option"
+    );
+    assert!(
+        schema.contains("providerRefs = lib.mkOption"),
+        "realm workload schema must expose explicit typed provider bindings"
+    );
+    for forbidden in ["legacyVmName", "provider-placeholder", "mkRemovedOptionModule"] {
+        assert!(
+            !schema.contains(forbidden),
+            "realm workload schema must not retain compatibility surface {forbidden}"
+        );
+    }
+    assert!(
+        schema.contains("Legacy VM kinds, aliases, state mappings, and")
+            && schema.contains("provider placeholders are not part of this schema"),
+        "destructive schema must document the closed no-compatibility boundary"
     );
 }
 

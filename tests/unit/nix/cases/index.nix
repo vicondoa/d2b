@@ -61,6 +61,16 @@ let
           primaryAuthority = "transport";
           implementation = "unix-stream";
         };
+        devices = {
+          id = "devices";
+          primaryAuthority = "device";
+          implementation = "host-mediated";
+        };
+        sound = {
+          id = "sound";
+          primaryAuthority = "audio";
+          implementation = "pipewire";
+        };
         wayland = {
           id = "wayland";
           primaryAuthority = "display";
@@ -73,6 +83,12 @@ let
         runtime = {
           provider = "primary";
           implementation = "cloud-hypervisor";
+        };
+        providerRefs = {
+          runtime = "primary";
+          device = "devices";
+          audio = "sound";
+          display = "wayland";
         };
         capabilityRefs = [ "guest-control" ];
         shell.enable = true;
@@ -138,11 +154,33 @@ in
           "pty"
           "window-forwarding"
         ];
-        providerRefs.runtime = "primary";
-        providerBindings.runtime = {
-          implementationId = "cloud-hypervisor";
-          providerId = "f7z3k5e3awgn43aljt2a";
-          providerType = "runtime";
+        providerRefs = {
+          audio = "sound";
+          device = "devices";
+          display = "wayland";
+          runtime = "primary";
+        };
+        providerBindings = {
+          audio = {
+            implementationId = "pipewire";
+            providerId = "3laykn2hk5ojcazs4r4a";
+            providerType = "audio";
+          };
+          device = {
+            implementationId = "host-mediated";
+            providerId = "btzjn55n4j2qrxovy3nq";
+            providerType = "device";
+          };
+          display = {
+            implementationId = "wayland";
+            providerId = "4bm4k2vr7eqbzubhskjq";
+            providerType = "display";
+          };
+          runtime = {
+            implementationId = "cloud-hypervisor";
+            providerId = "f7z3k5e3awgn43aljt2a";
+            providerType = "runtime";
+          };
         };
       };
       provider = {

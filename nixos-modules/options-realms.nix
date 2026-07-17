@@ -21,6 +21,19 @@ let
     "provider-agent"
     "provider-specific"
   ];
+  providerAuthorities = [
+    "runtime"
+    "infrastructure"
+    "transport"
+    "substrate"
+    "credential"
+    "display"
+    "network"
+    "storage"
+    "device"
+    "audio"
+    "observability"
+  ];
 
   enabledRealms = lib.filterAttrs (_: realm: realm.enable) config.d2b.realms;
   enabledRealmList = builtins.attrValues enabledRealms;
@@ -351,6 +364,29 @@ in
           }
           {
             assertion =
+              lib.all
+                (workload:
+                  lib.all
+                    (providerType: builtins.elem providerType providerAuthorities)
+                    (builtins.attrNames workload.providerRefs))
+                (builtins.attrValues realm.workloads);
+            message =
+              "Workload providerRefs in d2b.realms.${realmName} must use a "
+              + "closed provider authority name.";
+          }
+          {
+            assertion =
+              lib.all
+                (workload:
+                  !workload.enable
+                  || builtins.hasAttr "runtime" workload.providerRefs)
+                (builtins.attrValues realm.workloads);
+            message =
+              "Every enabled workload in d2b.realms.${realmName} must bind "
+              + "providerRefs.runtime explicitly.";
+          }
+          {
+            assertion =
               realm.parent == null || builtins.elem realm.parent enabledRealmPaths;
             message =
               "d2b.realms.${realmName}.parent must name an enabled realm path.";
@@ -396,7 +432,11 @@ in
         ++ lib.mapAttrsToList
           (workloadName: workload:
             let
-              provider = realm.providers.${workload.provider} or null;
+              runtimeRef = workload.providerRefs.runtime or null;
+              provider =
+                if runtimeRef == null
+                then null
+                else realm.providers.${runtimeRef} or null;
             in
             {
               assertion =
@@ -405,7 +445,7 @@ in
                   && provider.enable
                   && provider.type == "runtime");
               message =
-                "d2b.realms.${realmName}.workloads.${workloadName}.provider "
+                "d2b.realms.${realmName}.workloads.${workloadName}.providerRefs.runtime "
                 + "must name an enabled runtime provider in the same realm.";
             })
           realm.workloads)

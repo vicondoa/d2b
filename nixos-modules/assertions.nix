@@ -4,6 +4,15 @@ let
   cfg = config.d2b;
   index = cfg._index;
   identity = import ./v2-identity.nix;
+  modulePkgs =
+    config._module.args.pkgs
+      or (config._module.specialArgs.pkgs or null);
+  platformSystem =
+    if modulePkgs == null
+    then null
+    else modulePkgs.stdenv.hostPlatform.system;
+  waylandUser = lib.attrByPath [ "d2b" "site" "waylandUser" ] null config;
+  declaredUsers = lib.attrByPath [ "users" "users" ] { } config;
 
   parentAssertions = map
     (realm: {
@@ -51,6 +60,93 @@ let
     })
     index.providers.enabledList;
 
+  workloadFeatureAssertions = lib.concatMap
+    (workload:
+      let
+        spec = workload.spec;
+        graphics = lib.attrByPath [ "graphics" "enable" ] false spec;
+        video = lib.attrByPath [ "graphics" "videoSidecar" ] false spec;
+        nvidiaVideo =
+          lib.attrByPath [ "graphics" "videoNvidiaDecode" ] false spec;
+        audio = lib.attrByPath [ "audio" "enable" ] false spec;
+        wayland = lib.attrByPath [ "display" "wayland" ] false spec;
+        device =
+          lib.attrByPath [ "tpm" "enable" ] false spec
+          || graphics
+          || lib.attrByPath [ "usbip" "enable" ] false spec
+          || lib.attrByPath [ "securityKey" "enable" ] false spec;
+        needsDesktop = graphics || audio || wayland;
+        hasBinding = authority:
+          (workload.providerBindings.${authority} or null) != null;
+      in
+      [
+        {
+          assertion =
+            !(graphics || audio)
+            || platformSystem == null
+            || platformSystem == "x86_64-linux";
+          message =
+            "Workload ${workload.canonicalTarget}: graphics/audio components "
+            + "are supported only on x86_64-linux.";
+        }
+        {
+          assertion =
+            !needsDesktop
+            || !(config.d2b ? site)
+            || waylandUser != null;
+          message =
+            "Workload ${workload.canonicalTarget} requires "
+            + "d2b.site.waylandUser for graphics, audio, or Wayland display.";
+        }
+        {
+          assertion =
+            !needsDesktop
+            || !(config.d2b ? site)
+            || (waylandUser != null
+              && builtins.hasAttr waylandUser declaredUsers);
+          message =
+            "Workload ${workload.canonicalTarget} requires its "
+            + "d2b.site.waylandUser to name a declared host user.";
+        }
+        {
+          assertion =
+            !(graphics || audio)
+            || !(workload.spec.autostart or false);
+          message =
+            "Workload ${workload.canonicalTarget}: graphics/audio mediation "
+            + "is incompatible with autostart.";
+        }
+        {
+          assertion = !video || graphics;
+          message =
+            "Workload ${workload.canonicalTarget}: video mediation requires graphics.enable.";
+        }
+        {
+          assertion = !nvidiaVideo || video;
+          message =
+            "Workload ${workload.canonicalTarget}: NVIDIA video decode requires videoSidecar.";
+        }
+        {
+          assertion = !device || hasBinding "device";
+          message =
+            "Workload ${workload.canonicalTarget}: TPM, graphics, USBIP, and "
+            + "security-key features require an explicit device provider binding.";
+        }
+        {
+          assertion = !audio || hasBinding "audio";
+          message =
+            "Workload ${workload.canonicalTarget}: audio requires an explicit "
+            + "audio provider binding.";
+        }
+        {
+          assertion = !wayland || hasBinding "display";
+          message =
+            "Workload ${workload.canonicalTarget}: Wayland display requires an "
+            + "explicit display provider binding.";
+        }
+      ])
+    index.workloads.enabledList;
+
   rawRuntimeComponents =
     (map (realm: realm.metadata.configuredId) index.realms.list)
     ++ (map (workload: workload.configuredName) index.workloads.list)
@@ -92,5 +188,6 @@ in
     ++ parentCycleAssertions
     ++ providerBindingAssertions
     ++ providerImplementationAssertions
+    ++ workloadFeatureAssertions
     ++ pathAssertions;
 }
