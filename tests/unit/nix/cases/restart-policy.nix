@@ -21,6 +21,23 @@ let
       bundle.path = "/nix/store/d2b-bundle";
       providerRegistryV2Json.path = "/nix/store/d2b-provider-registry";
     };
+    _realmPrincipals.localRoot = {
+      controller = "d2bd";
+      broker = "root";
+      publicGroup = "d2b";
+      socketPrincipals = {
+        public = {
+          owner = "d2bd";
+          group = "d2b";
+          mode = "0660";
+        };
+        broker = {
+          owner = "root";
+          group = "d2bd";
+          mode = "0660";
+        };
+      };
+    };
   };
   args = {
     config = { inherit d2b; };

@@ -4,6 +4,10 @@
 
 let
   cfg = config.d2b;
+  localRoot = cfg._realmPrincipals.localRoot;
+  controllerPrincipal = localRoot.controller;
+  brokerPrincipal = localRoot.broker;
+  brokerSocketPrincipal = localRoot.socketPrincipals.broker;
   d2bLib = import ./lib.nix { inherit lib; };
   prebuilt =
     if cfg.site.usePrebuiltHostTools
@@ -50,8 +54,8 @@ in
     environment.systemPackages = [ brokerPackage ];
 
     systemd.tmpfiles.rules = [
-      "d /run/d2b/broker 0750 root d2bd -"
-      "d /var/lib/d2b/audit 0750 root d2bd -"
+      "d /run/d2b/broker 0750 ${brokerPrincipal} ${controllerPrincipal} -"
+      "d /var/lib/d2b/audit 0750 ${brokerPrincipal} ${controllerPrincipal} -"
       "d /var/lib/d2b/current-bundle 0755 root root -"
     ];
 
@@ -67,9 +71,9 @@ in
       after = [ "systemd-tmpfiles-setup.service" ];
       socketConfig = {
         ListenSequentialPacket = "/run/d2b/broker.sock";
-        SocketUser = "root";
-        SocketGroup = "d2bd";
-        SocketMode = "0660";
+        SocketUser = brokerSocketPrincipal.owner;
+        SocketGroup = brokerSocketPrincipal.group;
+        SocketMode = brokerSocketPrincipal.mode;
         Accept = false;
         FileDescriptorName = "priv.sock";
         Service = "d2b-priv-broker.service";
@@ -108,8 +112,8 @@ in
       serviceConfig = {
         Type = "notify";
         NotifyAccess = "main";
-        User = "root";
-        Group = "d2bd";
+        User = brokerPrincipal;
+        Group = brokerPrincipal;
         CapabilityBoundingSet = [
           "CAP_NET_ADMIN"
           "CAP_NET_RAW"
@@ -152,14 +156,15 @@ in
           set -euo pipefail
           env_file=/run/d2b/broker/priv-broker.env
           env_tmp=/run/d2b/broker/priv-broker.env.new
-          uid=$(${pkgs.coreutils}/bin/id -u d2bd)
-          gid=$(${pkgs.coreutils}/bin/id -g d2bd)
+          uid=$(${pkgs.coreutils}/bin/id -u ${controllerPrincipal})
+          gid=$(${pkgs.coreutils}/bin/id -g ${controllerPrincipal})
           umask 0077
           {
             printf 'D2BD_UID=%s\n' "$uid"
             printf 'D2BD_GID=%s\n' "$gid"
           } > "$env_tmp"
-          ${pkgs.coreutils}/bin/chown root:d2bd "$env_tmp"
+          ${pkgs.coreutils}/bin/chown \
+            ${brokerPrincipal}:${controllerPrincipal} "$env_tmp"
           ${pkgs.coreutils}/bin/chmod 0640 "$env_tmp"
           ${pkgs.coreutils}/bin/mv -f "$env_tmp" "$env_file"
         ''}";

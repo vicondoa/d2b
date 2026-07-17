@@ -2,6 +2,9 @@
 
 let
   cfg = config.d2b;
+  localRoot = cfg._realmPrincipals.localRoot;
+  controllerPrincipal = localRoot.controller;
+  publicSocketPrincipal = localRoot.socketPrincipals.public;
   d2bLib = import ./lib.nix { inherit lib; };
   prebuilt =
     if cfg.site.usePrebuiltHostTools
@@ -105,9 +108,9 @@ let
     brokerSocketPath = "/run/d2b/broker.sock";
     stateLockPath = "/run/d2b/daemon.lock";
     locksDir = "/run/d2b/locks";
-    daemonUser = "d2bd";
-    daemonGroup = "d2bd";
-    publicSocketGroup = "d2b";
+    daemonUser = controllerPrincipal;
+    daemonGroup = controllerPrincipal;
+    publicSocketGroup = localRoot.publicGroup;
     unsafeLocalHelperSocketPath = null;
     unsafeLocalHelperSocketGroup = null;
     unsafeLocalHelperUsers = [ ];
@@ -156,11 +159,11 @@ let
 in
 {
   config = {
-    users.groups.d2bd = { };
-    users.users.d2bd = {
+    users.groups.${controllerPrincipal} = { };
+    users.users.${controllerPrincipal} = {
       isSystemUser = true;
-      group = "d2bd";
-      extraGroups = [ "d2b" ];
+      group = controllerPrincipal;
+      extraGroups = [ localRoot.publicGroup ];
       description = "d2b local-root controller";
     };
 
@@ -179,22 +182,22 @@ in
       text = daemonConfigJson;
       mode = "0640";
       user = "root";
-      group = "d2bd";
+      group = controllerPrincipal;
     };
 
     systemd.tmpfiles.rules = [
-      "d /run/d2b 1770 root d2b -"
-      "z /run/d2b 1770 root d2b -"
+      "d /run/d2b 1770 root ${localRoot.publicGroup} -"
+      "z /run/d2b 1770 root ${localRoot.publicGroup} -"
       "a+ /run/d2b - - - - g::r-x"
-      "a+ /run/d2b - - - - u:d2bd:rwx"
+      "a+ /run/d2b - - - - u:${controllerPrincipal}:rwx"
       "a+ /run/d2b - - - - m::rwx"
-      "f /run/d2b/daemon.lock 0640 d2bd d2bd -"
-      "d /run/d2b/locks 0700 d2bd d2bd -"
-      "d /run/d2b/state 0700 d2bd d2bd -"
-      "d /var/lib/d2b 0750 root d2bd -"
-      "d /var/lib/d2b/daemon-state 0700 d2bd d2bd -"
-      "d /var/cache/d2b 0750 root d2bd -"
-      "d /etc/d2b 0750 root d2bd -"
+      "f /run/d2b/daemon.lock 0640 ${controllerPrincipal} ${controllerPrincipal} -"
+      "d /run/d2b/locks 0700 ${controllerPrincipal} ${controllerPrincipal} -"
+      "d /run/d2b/state 0700 ${controllerPrincipal} ${controllerPrincipal} -"
+      "d /var/lib/d2b 0750 root ${controllerPrincipal} -"
+      "d /var/lib/d2b/daemon-state 0700 ${controllerPrincipal} ${controllerPrincipal} -"
+      "d /var/cache/d2b 0750 root ${controllerPrincipal} -"
+      "d /etc/d2b 0750 root ${controllerPrincipal} -"
     ];
 
     systemd.sockets.d2bd = {
@@ -204,9 +207,9 @@ in
       after = [ "systemd-tmpfiles-setup.service" ];
       socketConfig = {
         ListenSequentialPacket = "/run/d2b/root.sock";
-        SocketUser = "root";
-        SocketGroup = "d2b";
-        SocketMode = "0660";
+        SocketUser = publicSocketPrincipal.owner;
+        SocketGroup = publicSocketPrincipal.group;
+        SocketMode = publicSocketPrincipal.mode;
         Accept = false;
         FileDescriptorName = "public.sock";
         Service = "d2bd.service";
@@ -241,8 +244,8 @@ in
         NotifyAccess = "main";
         TimeoutStartSec = "5min";
         KillMode = "process";
-        User = "d2bd";
-        Group = "d2bd";
+        User = controllerPrincipal;
+        Group = controllerPrincipal;
         ExecStart =
           "${d2bdPackage}/bin/d2bd serve --config /etc/d2b/daemon-config.json";
         ExecStop = "+${shutdownHook}";
@@ -256,7 +259,7 @@ in
         ProtectHome = true;
         RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" "AF_INET6" ];
         UMask = "0027";
-        SupplementaryGroups = [ "d2b" ];
+        SupplementaryGroups = [ localRoot.publicGroup ];
         Slice = "d2b.slice";
       };
     };

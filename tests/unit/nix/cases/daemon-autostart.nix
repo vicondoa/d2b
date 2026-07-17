@@ -20,6 +20,16 @@ let
         bundle.path = "/nix/store/d2b-bundle";
         providerRegistryV2Json.path = "/nix/store/d2b-provider-registry";
       };
+      _realmPrincipals.localRoot = {
+        controller = "d2bd";
+        broker = "root";
+        publicGroup = "d2b";
+        socketPrincipals.public = {
+          owner = "d2bd";
+          group = "d2b";
+          mode = "0660";
+        };
+      };
     };
     inherit lib pkgs;
   };
@@ -39,7 +49,7 @@ in
     };
     expected = {
       path = "/run/d2b/root.sock";
-      owner = "root";
+      owner = "d2bd";
       group = "d2b";
       mode = "0660";
       fdName = "public.sock";
