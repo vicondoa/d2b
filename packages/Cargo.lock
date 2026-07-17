@@ -1191,10 +1191,10 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "clap",
+ "d2b-contracts",
  "libshpool",
  "predicates",
- "serde",
- "serde_json",
+ "protobuf",
  "thiserror 2.0.18",
 ]
 
@@ -1648,6 +1648,12 @@ dependencies = [
 name = "d2b-sk-frontend"
 version = "2.0.0"
 dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider-device-host-mediated",
+ "d2b-provider-observability-local",
+ "d2b-provider-transport-local",
+ "d2b-session",
  "libc",
  "tokio",
  "tokio-vsock",
@@ -1700,8 +1706,14 @@ dependencies = [
 name = "d2b-userd"
 version = "2.0.0"
 dependencies = [
+ "async-trait",
  "d2b-contracts",
+ "d2b-provider-credential-secret-service",
+ "d2b-session-unix",
  "oo7",
+ "sha2",
+ "tokio",
+ "zeroize",
 ]
 
 [[package]]
