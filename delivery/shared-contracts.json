@@ -389,11 +389,9 @@
   "service_dependency_edges": [
     {
       "consumer": "d2b",
-      "dependency": "d2b-client",
+      "dependency": "d2b-daemon-access",
       "default_features": false,
-      "features": [
-        "host-socket"
-      ]
+      "features": []
     },
     {
       "consumer": "d2b",
@@ -403,6 +401,14 @@
         "macros",
         "rt",
         "time"
+      ]
+    },
+    {
+      "consumer": "d2b-daemon-access",
+      "dependency": "d2b-client",
+      "default_features": false,
+      "features": [
+        "host-socket"
       ]
     },
     {

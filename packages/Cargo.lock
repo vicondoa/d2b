@@ -1000,9 +1000,9 @@ name = "d2b"
 version = "2.0.0"
 dependencies = [
  "clap",
- "d2b-client",
  "d2b-contracts",
  "d2b-core",
+ "d2b-daemon-access",
  "d2b-realm-core",
  "d2b-realm-router",
  "nix 0.29.0",
@@ -1119,6 +1119,7 @@ name = "d2b-daemon-access"
 version = "2.0.0"
 dependencies = [
  "async-trait",
+ "d2b-client",
  "d2b-contracts",
  "d2b-core",
  "d2b-realm-core",

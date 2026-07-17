@@ -20,6 +20,7 @@ workspace = true
 [dependencies]
 d2b-realm-core = { workspace = true }
 d2b-realm-provider = { workspace = true }
+d2b-client = { workspace = true, default-features = false, features = ["host-socket"] }
 d2b-contracts = { workspace = true, features = ["public"] }
 d2b-core = { workspace = true }
 async-trait.workspace = true

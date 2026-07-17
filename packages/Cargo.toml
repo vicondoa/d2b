@@ -86,7 +86,7 @@ d2b-client = { path = "d2b-client", version = "2.0.0", default-features = false 
 d2b-clipd = { path = "d2b-clipd", version = "2.0.0" }
 d2b-contracts = { path = "d2b-contracts", version = "2.0.0", default-features = false }
 d2b-core = { path = "d2b-core", version = "2.0.0" }
-d2b-daemon-access = { path = "d2b-daemon-access", version = "2.0.0" }
+d2b-daemon-access = { path = "d2b-daemon-access", version = "2.0.0", default-features = false }
 d2b-exec-runner = { path = "d2b-exec-runner", version = "2.0.0" }
 d2b-gateway = { path = "d2b-gateway", version = "2.0.0" }
 d2b-gateway-runtime = { path = "d2b-gateway-runtime", version = "2.0.0" }

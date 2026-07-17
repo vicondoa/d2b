@@ -71,6 +71,9 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Routed the CLI dependency authority through `d2b-daemon-access`, the sole
+  owner of the exact no-default-features `d2b-client/host-socket` edge, instead
+  of permitting duplicate endpoint and channel-binding policy.
 - Made the pure local-root allocator engine generic over narrow, thread-safe
   ledger, observed-state, and controller-liveness adapters while restricting
   in-memory fake adapters to explicit test support.

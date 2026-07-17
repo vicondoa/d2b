@@ -1755,6 +1755,69 @@ fn w5_service_dependency_edges_are_locked_and_directional() {
         );
     }
 
+    let direct_dependencies = |consumer: &str| {
+        packages
+            .iter()
+            .find(|package| package["name"] == consumer)
+            .unwrap_or_else(|| panic!("missing consumer package {consumer}"))["dependencies"]
+            .as_array()
+            .expect("package dependencies")
+            .iter()
+            .filter(|dependency| dependency["kind"].is_null())
+            .filter_map(|dependency| dependency["name"].as_str().map(str::to_owned))
+            .collect::<BTreeSet<_>>()
+    };
+    let cli_dependencies = direct_dependencies("d2b");
+    assert!(cli_dependencies.contains("d2b-daemon-access"));
+    assert!(
+        !cli_dependencies.contains("d2b-client"),
+        "CLI must not duplicate daemon-access endpoint policy"
+    );
+    assert!(
+        direct_dependencies("d2b-daemon-access").contains("d2b-client"),
+        "daemon-access must own the typed host-socket client"
+    );
+
+    let mut host_socket_owners = Vec::new();
+    for package in packages {
+        let consumer = package["name"].as_str().expect("package name");
+        for dependency in package["dependencies"]
+            .as_array()
+            .expect("package dependencies")
+            .iter()
+            .filter(|dependency| dependency["kind"].is_null() && dependency["name"] == "d2b-client")
+        {
+            let features = dependency["features"]
+                .as_array()
+                .expect("dependency features")
+                .iter()
+                .map(|feature| feature.as_str().expect("feature").to_owned())
+                .collect::<BTreeSet<_>>();
+            if features.contains("host-socket") {
+                assert_eq!(
+                    consumer, "d2b-daemon-access",
+                    "{consumer} must not enable d2b-client/host-socket"
+                );
+                assert_eq!(
+                    dependency["uses_default_features"],
+                    serde_json::Value::Bool(false),
+                    "daemon-access host-socket edge must disable default features"
+                );
+                assert_eq!(
+                    features,
+                    BTreeSet::from(["host-socket".to_owned()]),
+                    "daemon-access host-socket edge must not amplify features"
+                );
+                host_socket_owners.push(consumer);
+            }
+        }
+    }
+    assert_eq!(host_socket_owners, ["d2b-daemon-access"]);
+    assert!(
+        !transitive_package_names(&metadata, "d2b-daemon-access").contains("d2b"),
+        "daemon-access dependency graph must remain acyclic"
+    );
+
     for (consumer, forbidden) in [
         ("d2b-client", ["d2b", "d2b-guestd"]),
         ("d2b-session", ["d2b-guestd", "d2b-gateway-runtime"]),
