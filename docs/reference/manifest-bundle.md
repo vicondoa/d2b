@@ -12,10 +12,10 @@ world-readable system profile.
 
 | Artifact | Visibility | Mode | Purpose |
 | --- | --- | --- | --- |
-| `vms.json` | public compatibility surface | world-readable, existing installation path | VM list and public capability metadata; see `docs/reference/manifest-schema.md` for the current `manifestVersion`. |
+| `vms.json` | public compatibility surface | world-readable, existing installation path | Canonical workload compatibility entries and public capability metadata. |
 | `bundle.json` | private bundle index | root:`d2bd` `0640` | Bundle version, artifact paths, hashes, and compatibility policy. |
 | `host.json` | private host intent | root:`d2bd` `0640` | Host requirements, network intent, runtime/provider catalog, kernel/device/fd requirements, and support tier. |
-| `processes.json` | private supervisor intent | root:`d2bd` `0640` | Per-VM process DAG, readiness predicates, cgroup placement, and minijail profile IDs. |
+| `processes.json` | private supervisor intent | root:`d2bd` `0640` | Realm-owned workload DAGs, readiness predicates, cgroup placement, and minijail profile IDs. |
 | `storage.json` | private storage lifecycle contract | root:`d2bd` `0640` | Managed path inventory, restart/adoption policy, degraded-state taxonomy, cleanup/repair policy, and remediation IDs. |
 | `sync.json` | private synchronization contract | root:`d2bd` `0640` | Lock inventory, OFD/fd-transfer policy, acquisition order, stale-owner policy, and lock degraded-state handling. |
 | `allocator.json` | private allocator metadata and launch authority | root:`d2bd` `0640` | Integrity-bound local-root allocator plan rooted in `d2b.realms`: enabled realms, resource requests, path/socket partitions, provider placement, env bridges, and bounded paired controller/broker process-launch records. |
@@ -25,7 +25,7 @@ world-readable system profile.
 | `unsafe-local-workloads.json` | private configured launcher intent | root:`d2bd` `0640` | Normalized configured argv and default items for unsafe-local and local-VM workloads, plus unsafe-local persistent-shell policy, resolved only by `d2bd`. |
 | `provider-registry-v2.json` | private provider composition contract | root:`d2bd` `0640` | Canonical provider descriptors and closed per-axis bindings to opaque bundle intent IDs; contains no argv or credentials. |
 | `privileges.json` | private authorization policy | root:`d2bd` `0640` | Public API/CLI authorization matrix and private broker operation matrix. |
-| `closures/<vm>.json` | private closure metadata | root:`d2bd` `0640` | Per-VM toplevel, closure paths, declared-runner parity data, and generation metadata. |
+| `closures/<workload-id>.json` | private closure metadata | root:`d2bd` `0640` | Per-workload toplevel, closure paths, declared-runner parity data, and generation metadata. |
 | `minijail-profile.json` | private sandbox profile catalog | root:`d2bd` `0640` | Typed minijail profile fields, mount policy, and bounded start-as-root exceptions. |
 
 `vms.json` is the only world-readable artifact. All other artifacts are
@@ -73,9 +73,8 @@ same wave integration.
 
 The public boundary is intentionally narrow:
 
-- `vms.json` may contain VM names, public capability bits, public socket
-  locations already required by the bash CLI, and non-secret topology
-  metadata.
+- `vms.json` may contain canonical workload IDs, public capability bits, and
+  the non-secret compatibility fields required by the frozen Rust parser.
 - `realm-workloads-launcher-v2.json` contains public-safe, argv-free metadata
   but remains daemon-owned `0640`; unprivileged consumers receive it through
   the authorized public daemon API.
@@ -111,7 +110,7 @@ references below.
 | `unsafe-local-workloads.json` | [`schemas/v2/unsafe-local-workloads.md`](./schemas/v2/unsafe-local-workloads.md) | `schemas/v2/unsafe-local-workloads.json` |
 | `provider-registry-v2.json` | [`schemas/v2/provider-registry-v2.md`](./schemas/v2/provider-registry-v2.md) | `schemas/v2/provider-registry-v2.json` |
 | `privileges.json` | [`schemas/v2/privileges.md`](./schemas/v2/privileges.md) | `schemas/v2/privileges.json` |
-| `closures/<vm>.json` | [`schemas/v2/closures.md`](./schemas/v2/closures.md) | `schemas/v2/closures.json` |
+| `closures/<workload-id>.json` | [`schemas/v2/closures.md`](./schemas/v2/closures.md) | `schemas/v2/closures.json` |
 | `minijail-profile.json` | [`schemas/v2/minijail-profile.md`](./schemas/v2/minijail-profile.md) | `schemas/v2/minijail-profile.json` |
 | `manifest_v04.json` | [`schemas/v2/manifest_v04.md`](./schemas/v2/manifest_v04.md) | `schemas/v2/manifest_v04.json` |
 | `wire-protocol.json` | [`schemas/v2/wire-protocol.md`](./schemas/v2/wire-protocol.md) | `schemas/v2/wire-protocol.json` |

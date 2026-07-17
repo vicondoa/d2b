@@ -5,8 +5,8 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     # `microvm` flake input DROPPED per ADR 0018.
-    # The d2b NixOS substrate owns its per-VM evaluator via
-    # `nixos-modules/vm-evaluator.nix` + `nixos-modules/vm-options.nix`.
+    # The d2b NixOS substrate owns its realm workload evaluator via
+    # `nixos-modules/vm-evaluator.nix`.
     # Runner argv generation lives in the Rust crate
     # `packages/d2b-host/src/*_argv.rs` (broker-side).
 
@@ -602,31 +602,24 @@
             yubikey.enable = false;
           };
 
-          d2b.envs.work = {
-            lanSubnet = "10.20.0.0/24";
-            uplinkSubnet = "192.0.2.0/30";
-          };
-
-          d2b.vms.corp-vm = {
-            enable = true;
-            env = "work";
-            index = 10;
-            ssh.user = "alice";
-            config = {
-              networking.hostName = lib.mkDefault "corp-vm";
-              users.users.alice = {
-                isNormalUser = true;
-                uid = 1000;
-              };
-            };
-          };
+          d2b.acceptDestructiveV2Cutover = true;
 
           d2b.realms.host = {
+            path = "host";
+            placement = "host-local";
             allowedUsers = [ "alice" ];
             policy.allowUnsafeLocal = true;
+            providers.runtime = {
+              type = "runtime";
+              implementationId = "systemd-user";
+            };
+            providers.display = {
+              type = "display";
+              implementationId = "wayland";
+            };
             network.ui.accentColor = "#cc3344";
             workloads.tools = {
-              kind = "unsafe-local";
+              provider = "runtime";
               shell = {
                 enable = true;
                 defaultName = "host";
@@ -655,13 +648,32 @@
             };
           };
           d2b.realms.work = {
-            env = "work";
-            network.envs = [ "work" ];
+            path = "work";
+            placement = "host-local";
+            broker = {
+              enable = true;
+              hostMutation = true;
+            };
+            network = {
+              mode = "declared";
+              lanSubnet = "10.20.0.0/24";
+              uplinkSubnet = "192.0.2.0/30";
+            };
             allowedUsers = [ "alice" ];
+            providers.runtime = {
+              type = "runtime";
+              implementationId = "cloud-hypervisor";
+            };
             workloads.corp-runtime = {
-              kind = "local-vm";
-              legacyVmName = "corp-vm";
+              provider = "runtime";
               launcher.enable = false;
+              config = {
+                networking.hostName = lib.mkDefault "corp-runtime";
+                users.users.alice = {
+                  isNormalUser = true;
+                  uid = 1000;
+                };
+              };
             };
           };
         };
@@ -688,7 +700,6 @@
           cp ${bundle.allocatorJson.path} $out/allocator.json
           cp ${bundle.realmControllersJson.path} $out/realm-controllers.json
           cp ${bundle.realmIdentityJson.path} $out/realm-identity.json
-          cp ${bundle.realmWorkloadsLauncherJson.path} $out/realm-workloads-launcher.json
           cp ${bundle.realmWorkloadsLauncherV2Json.path} $out/realm-workloads-launcher-v2.json
           cp ${bundle.unsafeLocalWorkloadsJson.path} $out/unsafe-local-workloads.json
           cp ${bundle.providerRegistryV2Json.path} $out/provider-registry-v2.json
@@ -730,30 +741,32 @@
           };
 
           d2b.observability.enable = true;
+          d2b.acceptDestructiveV2Cutover = true;
 
-          d2b.envs.work = {
-            lanSubnet = "10.20.0.0/24";
-            uplinkSubnet = "192.0.2.0/30";
-          };
-
-          d2b.vms.corp-full = {
-            enable = true;
-            env = "work";
-            index = 10;
-            ssh.user = "alice";
-            graphics.enable = true;
-            graphics.crossDomainTrusted = true;
-            graphics.videoSidecar = true;
-            audio.enable = true;
-            usbip.yubikey = true;
-            guest.control.enable = true;
-            tpm.enable = true;
-            observability.enable = true;
-            config = {
-              networking.hostName = lib.mkDefault "corp-full";
-              users.users.alice = {
-                isNormalUser = true;
-                uid = 1000;
+          d2b.realms.work = {
+            path = "work";
+            placement = "host-local";
+            broker = {
+              enable = true;
+              hostMutation = true;
+            };
+            network = {
+              mode = "declared";
+              lanSubnet = "10.20.0.0/24";
+              uplinkSubnet = "192.0.2.0/30";
+            };
+            providers.runtime = {
+              type = "runtime";
+              implementationId = "cloud-hypervisor";
+            };
+            workloads.corp-full = {
+              provider = "runtime";
+              config = {
+                networking.hostName = lib.mkDefault "corp-full";
+                users.users.alice = {
+                  isNormalUser = true;
+                  uid = 1000;
+                };
               };
             };
           };
@@ -891,8 +904,9 @@
             "bundle-artifacts.nix"
             "daemon-autostart.nix"
             "daemon-default-compat.nix"
-            "gateway-vm.nix"
             "d2bd-startup-smoke.nix"
+            "provider-registry-v2.nix"
+            "realm-allocator-emission.nix"
           ];
           nix-unit-guest = [
             "guest-config-containment.nix"
@@ -915,9 +929,11 @@
           ];
           nix-unit-network = [
             "bridge-ipv6-boot-sysctl.nix"
+            "gateway-vm.nix"
             "index.nix"
             "multi-env-daemon-backed.nix"
             "net-vm-network.nix"
+            "platform-provider-mappings.nix"
             "realm-workloads.nix"
             "realms.nix"
             "usbip-gating.nix"
@@ -926,6 +942,7 @@
             "clipboard.nix"
             "external-vm-kind.nix"
             "niri-vm-borders.nix"
+            "realm-audio-resources.nix"
             "requested-vm-config.nix"
             "security-key-gating.nix"
             "video-contract.nix"
@@ -1142,9 +1159,9 @@
             ({ lib, ... }: {
               d2b.site.allowUnsafeEastWest = true;
               d2b.daemonExperimental.enable = true;
-              d2b.envs.work.mtu = lib.mkForce 1400;
-              d2b.envs.work.mssClamp = lib.mkForce true;
-              d2b.envs.work.lan.allowEastWest = lib.mkForce true;
+              d2b.realms.work.network.mtu = lib.mkForce 1400;
+              d2b.realms.work.network.mssClamp = lib.mkForce true;
+              d2b.realms.work.network.lan.allowEastWest = lib.mkForce true;
             })
           ]);
 
@@ -1155,9 +1172,10 @@
               assertionsGreen = pkgs.lib.all (a: a.assertion) cfg.config.assertions;
               observabilityEnabled =
                 (builtins.fromJSON cfg.config.d2b._manifestPkg.text)._observability.enabled;
-              stackVmDeclared = builtins.hasAttr "sys-obs" cfg.config.d2b.vms;
+              stackVmDeclared =
+                builtins.hasAttr "sys-obs" cfg.config.d2b.realms.local-root.workloads;
               workloadAgentDeclared =
-                cfg.config.d2b.vms.work-app.observability.enable;
+                builtins.hasAttr "work-app" cfg.config.d2b.realms.work.workloads;
             };
           in
           mkEvalOnlyCheck "eval-with-observability" (
@@ -1513,7 +1531,15 @@
         # the check on `system == "x86_64-linux"` so aarch64-linux
         # `nix flake check` stays green.
         eval-graphics = mkCheck "eval-graphics"
-          (mkEval [ (import ./examples/graphics-workstation/configuration.nix) ]);
+          (mkEval [
+            (import ./examples/graphics-workstation/configuration.nix)
+            {
+              d2b.realms.desktop.broker = {
+                enable = true;
+                hostMutation = true;
+              };
+            }
+          ]);
       });
 
       lib = nixpkgs.lib.makeExtensible (_: {

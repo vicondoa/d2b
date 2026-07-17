@@ -1,7 +1,7 @@
 # Host-side NixOS configuration for the d2b + entrablau
 # composition example. This file owns everything *outside* the
 # Entra VM: the human user on the host, the d2b site-level
-# knobs, and the env that the VM lives in. The VM's own NixOS
+# knobs, and the realm that owns the workload. The workload's NixOS
 # config (and its `entrablau.*` settings) live in `work-entra.nix`.
 { lib, ... }:
 
@@ -48,13 +48,24 @@
     # Flip false if you don't have a Yubikey.
     yubikey.enable = true;
   };
+  d2b.acceptDestructiveV2Cutover = true;
 
-  # One env for work-side VMs. /30 for the host↔net-VM uplink,
-  # /24 for the LAN that workload VMs share. Pick non-overlapping
-  # CIDRs; the framework's eval-time check rejects collisions.
-  d2b.envs.work = {
-    lanSubnet = "10.20.0.0/24";
-    uplinkSubnet = "192.0.2.0/30";
+  d2b.realms.work = {
+    path = "work";
+    placement = "host-local";
+    broker = {
+      enable = true;
+      hostMutation = true;
+    };
+    network = {
+      mode = "declared";
+      lanSubnet = "10.20.0.0/24";
+      uplinkSubnet = "192.0.2.0/30";
+    };
+    providers.runtime = {
+      type = "runtime";
+      implementationId = "cloud-hypervisor";
+    };
   };
 
   # Tell d2b about the host's own physical LAN so the

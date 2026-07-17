@@ -88,6 +88,11 @@ deprecations ship one minor release before removal.
 - Replaced split allocator lease-id, lease, and idempotency writes with one
   fallible generation-bound transaction, closed detail-free state errors, and
   fail-closed replay semantics for commit and acknowledgement failures.
+- Replaced the legacy environment and VM declaration graph with realm-owned
+  providers and workloads, canonical-ID network/storage/process artifacts,
+  fixed local-root endpoints, and parent-spawned child realm controllers and
+  brokers while preserving bundle version 12 and the public manifest version 7
+  compatibility contract.
 - Reserved exact W7 ownership for the frozen contract assertions and migration
   pins that must be rewritten or retired atomically with legacy declarative
   source deletion, without opening the rest of the contract-test crate.
