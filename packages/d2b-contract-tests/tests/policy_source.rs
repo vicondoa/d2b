@@ -136,6 +136,36 @@ fn rust_workspace_is_single_and_versioned() {
     }
 }
 
+#[test]
+fn guest_session_credential_codec_has_one_shared_authority() {
+    const AUTHORITY: &str = "packages/d2b-contracts/src/v2_component_session.rs";
+    let authority = read_repo_file(AUTHORITY);
+    assert!(authority.contains("GuestSessionCredentialV1"));
+    assert!(authority.contains("GUEST_SESSION_CREDENTIAL_MAGIC"));
+    assert!(authority.contains(concat!("D2B", "GSV2")));
+
+    let forbidden = [
+        concat!("D2B", "GSV2"),
+        concat!("SESSION_", "MATERIAL_MAGIC"),
+        concat!("fn decode_", "session_material"),
+        concat!("fn decode_", "guest_session_credential"),
+    ];
+    for path in git_listed_files(&["packages"]) {
+        if path == AUTHORITY || !path.ends_with(".rs") {
+            continue;
+        }
+        let Some(source) = read_repo_file_opt(&path) else {
+            continue;
+        };
+        for pattern in forbidden {
+            assert!(
+                !source.contains(pattern),
+                "independent guest session credential codec marker {pattern:?} in {path}"
+            );
+        }
+    }
+}
+
 /// Whether `rel` lives under an excluded directory component, mirroring the
 /// bash gate's `rg -g '!**/target/**' -g '!**/tests/**' -g '!**/.git/**'`
 /// globs. A `**/X/**` glob excludes paths where `X` is a *directory* component

@@ -58,9 +58,22 @@ pub const MAX_KEEPALIVE_TIMEOUT_MS: u32 = 30_000;
 pub const MAX_ID_BYTES: usize = 64;
 pub const RECORD_HEADER_LEN: usize = 24;
 pub const FRAGMENT_HEADER_LEN: usize = 24;
+pub const GUEST_SESSION_CREDENTIAL_MAGIC: [u8; 8] = *b"D2BGSV2\0";
+pub const GUEST_SESSION_CREDENTIAL_SCHEMA_VERSION: u16 = 1;
+pub const GUEST_SESSION_CREDENTIAL_CODEC_VERSION: u16 = 1;
+pub const GUEST_SESSION_CREDENTIAL_HEADER_BYTES: usize = 20;
+pub const GUEST_SESSION_CREDENTIAL_V1_BASE_BYTES: usize = 156;
+pub const GUEST_BOOTSTRAP_CREDENTIAL_OVERHEAD_BYTES: usize = 74;
+pub const GUEST_BOOTSTRAP_CREDENTIAL_V1_BYTES: usize = 90;
+pub const GUEST_SESSION_CREDENTIAL_V1_WITH_BOOTSTRAP_BYTES: usize = 248;
+pub const GUEST_SESSION_CREDENTIAL_MAX_BYTES: usize = GUEST_SESSION_CREDENTIAL_V1_BASE_BYTES
+    + 2
+    + GUEST_BOOTSTRAP_CREDENTIAL_OVERHEAD_BYTES
+    + MAX_ID_BYTES;
 
 const HANDSHAKE_BINARY_VERSION: u8 = 1;
 const NAMED_STREAM_CHANNEL_MIN: u16 = 0x0100;
+const GUEST_SESSION_CREDENTIAL_FLAG_BOOTSTRAP: u16 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
@@ -1786,6 +1799,430 @@ impl BootstrapPskBinding {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum GuestSessionCredentialError {
+    Truncated,
+    TrailingBytes,
+    InvalidMagic,
+    UnsupportedSchema,
+    UnsupportedVersion,
+    InvalidFlags,
+    InvalidReserved,
+    LengthExceeded,
+    InvalidGeneration,
+    InvalidBinding,
+    InvalidPublicKey,
+    InvalidPsk,
+    InvalidOperationId,
+    InvalidDeadline,
+}
+
+impl fmt::Debug for GuestSessionCredentialError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("GuestSessionCredentialError")
+            .field(&self.as_str())
+            .finish()
+    }
+}
+
+impl GuestSessionCredentialError {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Truncated => "guest-session-credential-truncated",
+            Self::TrailingBytes => "guest-session-credential-trailing-bytes",
+            Self::InvalidMagic => "guest-session-credential-invalid-magic",
+            Self::UnsupportedSchema => "guest-session-credential-unsupported-schema",
+            Self::UnsupportedVersion => "guest-session-credential-unsupported-version",
+            Self::InvalidFlags => "guest-session-credential-invalid-flags",
+            Self::InvalidReserved => "guest-session-credential-invalid-reserved",
+            Self::LengthExceeded => "guest-session-credential-length-exceeded",
+            Self::InvalidGeneration => "guest-session-credential-invalid-generation",
+            Self::InvalidBinding => "guest-session-credential-invalid-binding",
+            Self::InvalidPublicKey => "guest-session-credential-invalid-public-key",
+            Self::InvalidPsk => "guest-session-credential-invalid-psk",
+            Self::InvalidOperationId => "guest-session-credential-invalid-operation-id",
+            Self::InvalidDeadline => "guest-session-credential-invalid-deadline",
+        }
+    }
+}
+
+impl fmt::Display for GuestSessionCredentialError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl Error for GuestSessionCredentialError {}
+
+pub struct GuestBootstrapCredentialV1 {
+    binding: BootstrapPskBinding,
+    psk: [u8; 32],
+    #[cfg(test)]
+    drop_observer: Option<std::sync::Arc<std::sync::Mutex<[u8; 32]>>>,
+}
+
+impl GuestBootstrapCredentialV1 {
+    pub fn new(
+        binding: BootstrapPskBinding,
+        psk: [u8; 32],
+    ) -> Result<Self, GuestSessionCredentialError> {
+        validate_guest_bootstrap_binding(&binding)?;
+        if psk == [0; 32] {
+            return Err(GuestSessionCredentialError::InvalidPsk);
+        }
+        Ok(Self {
+            binding,
+            psk,
+            #[cfg(test)]
+            drop_observer: None,
+        })
+    }
+
+    pub fn binding(&self) -> &BootstrapPskBinding {
+        &self.binding
+    }
+
+    pub fn expose_psk(&self) -> &[u8; 32] {
+        &self.psk
+    }
+
+    #[cfg(test)]
+    fn with_drop_observer(
+        binding: BootstrapPskBinding,
+        psk: [u8; 32],
+        observer: std::sync::Arc<std::sync::Mutex<[u8; 32]>>,
+    ) -> Result<Self, GuestSessionCredentialError> {
+        let mut value = Self::new(binding, psk)?;
+        value.drop_observer = Some(observer);
+        Ok(value)
+    }
+}
+
+impl fmt::Debug for GuestBootstrapCredentialV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("GuestBootstrapCredentialV1(REDACTED)")
+    }
+}
+
+impl Drop for GuestBootstrapCredentialV1 {
+    fn drop(&mut self) {
+        self.psk.fill(0);
+        #[cfg(test)]
+        if let Some(observer) = self.drop_observer.as_ref()
+            && let Ok(mut observed) = observer.lock()
+        {
+            *observed = self.psk;
+        }
+    }
+}
+
+pub struct GuestSessionCredentialV1 {
+    schema_version: u16,
+    codec_version: u16,
+    session_generation: u64,
+    parent_static_public_key: [u8; 32],
+    channel_binding: [u8; 32],
+    guest_identity_digest: [u8; 32],
+    guest_static_public_key: [u8; 32],
+    bootstrap: Option<GuestBootstrapCredentialV1>,
+}
+
+impl GuestSessionCredentialV1 {
+    pub fn new(
+        session_generation: u64,
+        parent_static_public_key: [u8; 32],
+        channel_binding: [u8; 32],
+        guest_identity_digest: [u8; 32],
+        guest_static_public_key: [u8; 32],
+        bootstrap: Option<GuestBootstrapCredentialV1>,
+    ) -> Result<Self, GuestSessionCredentialError> {
+        let value = Self {
+            schema_version: GUEST_SESSION_CREDENTIAL_SCHEMA_VERSION,
+            codec_version: GUEST_SESSION_CREDENTIAL_CODEC_VERSION,
+            session_generation,
+            parent_static_public_key,
+            channel_binding,
+            guest_identity_digest,
+            guest_static_public_key,
+            bootstrap,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    pub const fn schema_version(&self) -> u16 {
+        self.schema_version
+    }
+
+    pub const fn codec_version(&self) -> u16 {
+        self.codec_version
+    }
+
+    pub const fn session_generation(&self) -> u64 {
+        self.session_generation
+    }
+
+    pub const fn parent_static_public_key(&self) -> &[u8; 32] {
+        &self.parent_static_public_key
+    }
+
+    pub const fn channel_binding(&self) -> &[u8; 32] {
+        &self.channel_binding
+    }
+
+    pub const fn guest_identity_digest(&self) -> &[u8; 32] {
+        &self.guest_identity_digest
+    }
+
+    pub const fn guest_static_public_key(&self) -> &[u8; 32] {
+        &self.guest_static_public_key
+    }
+
+    pub fn bootstrap(&self) -> Option<&GuestBootstrapCredentialV1> {
+        self.bootstrap.as_ref()
+    }
+
+    pub fn encode(&self) -> Result<Vec<u8>, GuestSessionCredentialError> {
+        self.validate()?;
+        let bootstrap_bytes = self
+            .bootstrap
+            .as_ref()
+            .map(|bootstrap| {
+                GUEST_BOOTSTRAP_CREDENTIAL_OVERHEAD_BYTES
+                    .checked_add(bootstrap.binding.operation_id.as_bytes().len())
+                    .ok_or(GuestSessionCredentialError::LengthExceeded)
+            })
+            .transpose()?
+            .unwrap_or(0);
+        let total_bytes = GUEST_SESSION_CREDENTIAL_V1_BASE_BYTES
+            .checked_add(if self.bootstrap.is_some() {
+                2_usize
+                    .checked_add(bootstrap_bytes)
+                    .ok_or(GuestSessionCredentialError::LengthExceeded)?
+            } else {
+                0
+            })
+            .ok_or(GuestSessionCredentialError::LengthExceeded)?;
+        if total_bytes > GUEST_SESSION_CREDENTIAL_MAX_BYTES {
+            return Err(GuestSessionCredentialError::LengthExceeded);
+        }
+        let mut writer = BinaryWriter::with_capacity(total_bytes);
+        writer.bytes(&GUEST_SESSION_CREDENTIAL_MAGIC);
+        writer.u16(self.schema_version);
+        writer.u16(self.codec_version);
+        writer.u16(if self.bootstrap.is_some() {
+            GUEST_SESSION_CREDENTIAL_FLAG_BOOTSTRAP
+        } else {
+            0
+        });
+        writer.u16(0);
+        writer.u32(
+            u32::try_from(total_bytes).map_err(|_| GuestSessionCredentialError::LengthExceeded)?,
+        );
+        writer.u64(self.session_generation);
+        writer.bytes(&self.parent_static_public_key);
+        writer.bytes(&self.channel_binding);
+        writer.bytes(&self.guest_identity_digest);
+        writer.bytes(&self.guest_static_public_key);
+        if let Some(bootstrap) = self.bootstrap.as_ref() {
+            writer.u16(
+                u16::try_from(bootstrap_bytes)
+                    .map_err(|_| GuestSessionCredentialError::LengthExceeded)?,
+            );
+            let operation_id = bootstrap.binding.operation_id.as_bytes();
+            writer.u16(
+                u16::try_from(operation_id.len())
+                    .map_err(|_| GuestSessionCredentialError::LengthExceeded)?,
+            );
+            writer.bytes(operation_id);
+            writer.bytes(&bootstrap.binding.replay_nonce);
+            writer.u64(bootstrap.binding.expires_at_unix_ms);
+            writer.bytes(&bootstrap.psk);
+        }
+        if writer.len() != total_bytes {
+            return Err(GuestSessionCredentialError::LengthExceeded);
+        }
+        Ok(writer.finish())
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, GuestSessionCredentialError> {
+        if bytes.len() > GUEST_SESSION_CREDENTIAL_MAX_BYTES {
+            return Err(GuestSessionCredentialError::LengthExceeded);
+        }
+        let mut reader = BinaryReader::new(bytes);
+        let magic = reader
+            .array::<8>()
+            .map_err(map_guest_credential_binary_error)?;
+        if magic != GUEST_SESSION_CREDENTIAL_MAGIC {
+            return Err(GuestSessionCredentialError::InvalidMagic);
+        }
+        let schema_version = reader.u16().map_err(map_guest_credential_binary_error)?;
+        if schema_version != GUEST_SESSION_CREDENTIAL_SCHEMA_VERSION {
+            return Err(GuestSessionCredentialError::UnsupportedSchema);
+        }
+        let codec_version = reader.u16().map_err(map_guest_credential_binary_error)?;
+        if codec_version != GUEST_SESSION_CREDENTIAL_CODEC_VERSION {
+            return Err(GuestSessionCredentialError::UnsupportedVersion);
+        }
+        let flags = reader.u16().map_err(map_guest_credential_binary_error)?;
+        if flags & !GUEST_SESSION_CREDENTIAL_FLAG_BOOTSTRAP != 0 {
+            return Err(GuestSessionCredentialError::InvalidFlags);
+        }
+        if reader.u16().map_err(map_guest_credential_binary_error)? != 0 {
+            return Err(GuestSessionCredentialError::InvalidReserved);
+        }
+        let declared_bytes =
+            usize::try_from(reader.u32().map_err(map_guest_credential_binary_error)?)
+                .map_err(|_| GuestSessionCredentialError::LengthExceeded)?;
+        if declared_bytes > GUEST_SESSION_CREDENTIAL_MAX_BYTES {
+            return Err(GuestSessionCredentialError::LengthExceeded);
+        }
+        if declared_bytes > bytes.len() {
+            return Err(GuestSessionCredentialError::Truncated);
+        }
+        if declared_bytes < bytes.len() {
+            return Err(GuestSessionCredentialError::TrailingBytes);
+        }
+        let session_generation = reader.u64().map_err(map_guest_credential_binary_error)?;
+        let parent_static_public_key = reader
+            .array::<32>()
+            .map_err(map_guest_credential_binary_error)?;
+        let channel_binding = reader
+            .array::<32>()
+            .map_err(map_guest_credential_binary_error)?;
+        let guest_identity_digest = reader
+            .array::<32>()
+            .map_err(map_guest_credential_binary_error)?;
+        let guest_static_public_key = reader
+            .array::<32>()
+            .map_err(map_guest_credential_binary_error)?;
+        let bootstrap = if flags == GUEST_SESSION_CREDENTIAL_FLAG_BOOTSTRAP {
+            let bootstrap_bytes =
+                usize::from(reader.u16().map_err(map_guest_credential_binary_error)?);
+            if bootstrap_bytes > GUEST_BOOTSTRAP_CREDENTIAL_OVERHEAD_BYTES + MAX_ID_BYTES {
+                return Err(GuestSessionCredentialError::LengthExceeded);
+            }
+            let encoded = reader
+                .take(bootstrap_bytes)
+                .map_err(map_guest_credential_binary_error)?;
+            let mut bootstrap_reader = BinaryReader::new(encoded);
+            let operation_id_bytes = usize::from(
+                bootstrap_reader
+                    .u16()
+                    .map_err(map_guest_credential_binary_error)?,
+            );
+            if operation_id_bytes > MAX_ID_BYTES {
+                return Err(GuestSessionCredentialError::LengthExceeded);
+            }
+            let operation_id = OperationId::new(
+                bootstrap_reader
+                    .take(operation_id_bytes)
+                    .map_err(map_guest_credential_binary_error)?
+                    .to_vec(),
+            )
+            .map_err(|_| GuestSessionCredentialError::InvalidOperationId)?;
+            let replay_nonce = bootstrap_reader
+                .array::<32>()
+                .map_err(map_guest_credential_binary_error)?;
+            let expires_at_unix_ms = bootstrap_reader
+                .u64()
+                .map_err(map_guest_credential_binary_error)?;
+            let mut psk = bootstrap_reader
+                .array::<32>()
+                .map_err(map_guest_credential_binary_error)?;
+            bootstrap_reader
+                .finish()
+                .map_err(map_guest_credential_binary_error)?;
+            let decoded = GuestBootstrapCredentialV1::new(
+                BootstrapPskBinding {
+                    operation_id,
+                    replay_nonce,
+                    expires_at_unix_ms,
+                },
+                psk,
+            );
+            psk.fill(0);
+            Some(decoded?)
+        } else {
+            None
+        };
+        reader.finish().map_err(map_guest_credential_binary_error)?;
+        let value = Self {
+            schema_version,
+            codec_version,
+            session_generation,
+            parent_static_public_key,
+            channel_binding,
+            guest_identity_digest,
+            guest_static_public_key,
+            bootstrap,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    fn validate(&self) -> Result<(), GuestSessionCredentialError> {
+        if self.schema_version != GUEST_SESSION_CREDENTIAL_SCHEMA_VERSION {
+            return Err(GuestSessionCredentialError::UnsupportedSchema);
+        }
+        if self.codec_version != GUEST_SESSION_CREDENTIAL_CODEC_VERSION {
+            return Err(GuestSessionCredentialError::UnsupportedVersion);
+        }
+        if self.session_generation == 0 {
+            return Err(GuestSessionCredentialError::InvalidGeneration);
+        }
+        if self.parent_static_public_key == [0; 32] || self.guest_static_public_key == [0; 32] {
+            return Err(GuestSessionCredentialError::InvalidPublicKey);
+        }
+        if self.channel_binding == [0; 32] || self.guest_identity_digest == [0; 32] {
+            return Err(GuestSessionCredentialError::InvalidBinding);
+        }
+        if let Some(bootstrap) = self.bootstrap.as_ref() {
+            validate_guest_bootstrap_binding(&bootstrap.binding)?;
+            if bootstrap.psk == [0; 32] {
+                return Err(GuestSessionCredentialError::InvalidPsk);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for GuestSessionCredentialV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("GuestSessionCredentialV1(REDACTED)")
+    }
+}
+
+fn validate_guest_bootstrap_binding(
+    binding: &BootstrapPskBinding,
+) -> Result<(), GuestSessionCredentialError> {
+    if binding.operation_id.as_bytes().is_empty()
+        || binding.operation_id.as_bytes().len() > MAX_ID_BYTES
+    {
+        return Err(GuestSessionCredentialError::InvalidOperationId);
+    }
+    if binding.replay_nonce == [0; 32] {
+        return Err(GuestSessionCredentialError::InvalidBinding);
+    }
+    if binding.expires_at_unix_ms == 0 {
+        return Err(GuestSessionCredentialError::InvalidDeadline);
+    }
+    Ok(())
+}
+
+fn map_guest_credential_binary_error(error: BinaryError) -> GuestSessionCredentialError {
+    match error {
+        BinaryError::Truncated => GuestSessionCredentialError::Truncated,
+        BinaryError::TrailingBytes => GuestSessionCredentialError::TrailingBytes,
+        BinaryError::LengthExceeded => GuestSessionCredentialError::LengthExceeded,
+        BinaryError::UnknownEnumTag
+        | BinaryError::UnsupportedVersion
+        | BinaryError::NonCanonical
+        | BinaryError::InvalidContract(_) => GuestSessionCredentialError::InvalidBinding,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BootstrapPskState {
     binding: BootstrapPskBinding,
@@ -2562,5 +2999,39 @@ impl<'a> BinaryReader<'a> {
         } else {
             Err(BinaryError::TrailingBytes)
         }
+    }
+}
+
+#[cfg(test)]
+mod guest_session_credential_tests {
+    use super::*;
+
+    #[test]
+    fn dropping_guest_session_credential_zeroes_bootstrap_psk() {
+        let observed = std::sync::Arc::new(std::sync::Mutex::new([0xff; 32]));
+        {
+            let bootstrap = GuestBootstrapCredentialV1::with_drop_observer(
+                BootstrapPskBinding {
+                    operation_id: OperationId::new(vec![0x66; 16]).unwrap(),
+                    replay_nonce: [0x77; 32],
+                    expires_at_unix_ms: 9_000,
+                },
+                [0x88; 32],
+                std::sync::Arc::clone(&observed),
+            )
+            .unwrap();
+            let credential = GuestSessionCredentialV1::new(
+                7,
+                [0x11; 32],
+                [0x22; 32],
+                [0x33; 32],
+                [0x44; 32],
+                Some(bootstrap),
+            )
+            .unwrap();
+            assert_eq!(credential.bootstrap().unwrap().expose_psk(), &[0x88; 32]);
+            assert_eq!(*observed.lock().unwrap(), [0xff; 32]);
+        }
+        assert_eq!(*observed.lock().unwrap(), [0; 32]);
     }
 }

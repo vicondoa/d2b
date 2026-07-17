@@ -12,6 +12,9 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added one canonical, redacted, zeroizing binary guest-session credential
+  codec for broker encoding and guestd decoding, including optional
+  replay-bound bootstrap PSK material.
 - Added a distinct transport-neutral terminal quit signal so SIGQUIT remains
   separate from interrupt, terminate, suspend, and hangup.
 - Added transport-neutral terminal contracts and complete typed guest bootstrap,

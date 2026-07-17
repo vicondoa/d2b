@@ -328,6 +328,179 @@ fn closed_inventory_and_noise_identity_requirements_are_complete() {
     }
 }
 
+fn guest_session_credential(with_bootstrap: bool) -> GuestSessionCredentialV1 {
+    let bootstrap = with_bootstrap.then(|| {
+        GuestBootstrapCredentialV1::new(
+            BootstrapPskBinding {
+                operation_id: OperationId::new(vec![0x66; 16]).unwrap(),
+                replay_nonce: [0x77; 32],
+                expires_at_unix_ms: 9_000,
+            },
+            [0x88; 32],
+        )
+        .unwrap()
+    });
+    GuestSessionCredentialV1::new(7, [0x11; 32], [0x22; 32], [0x33; 32], [0x44; 32], bootstrap)
+        .unwrap()
+}
+
+#[test]
+fn guest_session_credential_has_canonical_round_trips_and_fixed_vectors() {
+    let base = guest_session_credential(false);
+    let base_encoded = base.encode().unwrap();
+    assert_eq!(base_encoded.len(), GUEST_SESSION_CREDENTIAL_V1_BASE_BYTES);
+    let base_decoded = GuestSessionCredentialV1::decode(&base_encoded).unwrap();
+    assert_eq!(base_decoded.schema_version(), 1);
+    assert_eq!(base_decoded.codec_version(), 1);
+    assert_eq!(base_decoded.session_generation(), 7);
+    assert_eq!(base_decoded.parent_static_public_key(), &[0x11; 32]);
+    assert_eq!(base_decoded.channel_binding(), &[0x22; 32]);
+    assert_eq!(base_decoded.guest_identity_digest(), &[0x33; 32]);
+    assert_eq!(base_decoded.guest_static_public_key(), &[0x44; 32]);
+    assert!(base_decoded.bootstrap().is_none());
+
+    let credential = guest_session_credential(true);
+    let encoded = credential.encode().unwrap();
+    let mut expected = Vec::new();
+    expected.extend_from_slice(&GUEST_SESSION_CREDENTIAL_MAGIC);
+    expected.extend_from_slice(&1_u16.to_be_bytes());
+    expected.extend_from_slice(&1_u16.to_be_bytes());
+    expected.extend_from_slice(&1_u16.to_be_bytes());
+    expected.extend_from_slice(&0_u16.to_be_bytes());
+    expected.extend_from_slice(
+        &u32::try_from(GUEST_SESSION_CREDENTIAL_V1_WITH_BOOTSTRAP_BYTES)
+            .unwrap()
+            .to_be_bytes(),
+    );
+    expected.extend_from_slice(&7_u64.to_be_bytes());
+    expected.extend_from_slice(&[0x11; 32]);
+    expected.extend_from_slice(&[0x22; 32]);
+    expected.extend_from_slice(&[0x33; 32]);
+    expected.extend_from_slice(&[0x44; 32]);
+    expected.extend_from_slice(
+        &u16::try_from(GUEST_BOOTSTRAP_CREDENTIAL_V1_BYTES)
+            .unwrap()
+            .to_be_bytes(),
+    );
+    expected.extend_from_slice(&16_u16.to_be_bytes());
+    expected.extend_from_slice(&[0x66; 16]);
+    expected.extend_from_slice(&[0x77; 32]);
+    expected.extend_from_slice(&9_000_u64.to_be_bytes());
+    expected.extend_from_slice(&[0x88; 32]);
+    assert_eq!(encoded, expected);
+    assert_eq!(
+        encoded.len(),
+        GUEST_SESSION_CREDENTIAL_V1_WITH_BOOTSTRAP_BYTES
+    );
+
+    let decoded = GuestSessionCredentialV1::decode(&encoded).unwrap();
+    let bootstrap = decoded.bootstrap().unwrap();
+    assert_eq!(bootstrap.binding().operation_id.as_bytes(), &[0x66; 16]);
+    assert_eq!(bootstrap.binding().replay_nonce, [0x77; 32]);
+    assert_eq!(bootstrap.binding().expires_at_unix_ms, 9_000);
+    assert_eq!(bootstrap.expose_psk(), &[0x88; 32]);
+}
+
+#[test]
+fn guest_session_credential_rejects_every_noncanonical_shape() {
+    let encoded = guest_session_credential(true).encode().unwrap();
+    for length in 0..encoded.len() {
+        assert!(
+            GuestSessionCredentialV1::decode(&encoded[..length]).is_err(),
+            "truncation at {length} unexpectedly decoded"
+        );
+    }
+
+    let mut trailing = encoded.clone();
+    trailing.push(0);
+    assert_eq!(
+        GuestSessionCredentialV1::decode(&trailing).unwrap_err(),
+        GuestSessionCredentialError::TrailingBytes
+    );
+
+    for (offset, value, expected) in [
+        (0, b'X', GuestSessionCredentialError::InvalidMagic),
+        (9, 2, GuestSessionCredentialError::UnsupportedSchema),
+        (11, 2, GuestSessionCredentialError::UnsupportedVersion),
+        (13, 2, GuestSessionCredentialError::InvalidFlags),
+        (15, 1, GuestSessionCredentialError::InvalidReserved),
+    ] {
+        let mut malformed = encoded.clone();
+        malformed[offset] = value;
+        assert_eq!(
+            GuestSessionCredentialV1::decode(&malformed).unwrap_err(),
+            expected
+        );
+    }
+
+    let mut legacy = encoded.clone();
+    legacy[..8].copy_from_slice(b"D2BGSV1\0");
+    assert_eq!(
+        GuestSessionCredentialV1::decode(&legacy).unwrap_err(),
+        GuestSessionCredentialError::InvalidMagic
+    );
+
+    let mut oversized_operation = encoded.clone();
+    oversized_operation[158..160].copy_from_slice(&65_u16.to_be_bytes());
+    assert_eq!(
+        GuestSessionCredentialV1::decode(&oversized_operation).unwrap_err(),
+        GuestSessionCredentialError::LengthExceeded
+    );
+
+    let mut oversized_total = encoded.clone();
+    oversized_total[16..20].copy_from_slice(
+        &u32::try_from(GUEST_SESSION_CREDENTIAL_MAX_BYTES + 1)
+            .unwrap()
+            .to_be_bytes(),
+    );
+    assert_eq!(
+        GuestSessionCredentialV1::decode(&oversized_total).unwrap_err(),
+        GuestSessionCredentialError::LengthExceeded
+    );
+
+    for (range, expected) in [
+        (20..28, GuestSessionCredentialError::InvalidGeneration),
+        (28..60, GuestSessionCredentialError::InvalidPublicKey),
+        (60..92, GuestSessionCredentialError::InvalidBinding),
+        (92..124, GuestSessionCredentialError::InvalidBinding),
+        (124..156, GuestSessionCredentialError::InvalidPublicKey),
+        (176..208, GuestSessionCredentialError::InvalidBinding),
+        (208..216, GuestSessionCredentialError::InvalidDeadline),
+        (216..248, GuestSessionCredentialError::InvalidPsk),
+    ] {
+        let mut malformed = encoded.clone();
+        malformed[range].fill(0);
+        assert_eq!(
+            GuestSessionCredentialV1::decode(&malformed).unwrap_err(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn guest_session_credential_debug_and_errors_are_redacted_and_schema_excludes_secrets() {
+    let credential = guest_session_credential(true);
+    let rendered = format!("{credential:?}");
+    assert_eq!(rendered, "GuestSessionCredentialV1(REDACTED)");
+    assert!(!rendered.contains("136"));
+    assert_eq!(
+        format!("{:?}", credential.bootstrap().unwrap()),
+        "GuestBootstrapCredentialV1(REDACTED)"
+    );
+    let error = GuestSessionCredentialV1::decode(b"private-material").unwrap_err();
+    let rendered = format!("{error:?}");
+    assert!(rendered.contains("guest-session-credential-invalid-magic"));
+    assert!(!rendered.contains("private-material"));
+
+    let schema = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/reference/component-session-v2-schema.json"),
+    )
+    .unwrap();
+    assert!(!schema.contains("GuestSessionCredentialV1"));
+    assert!(!schema.contains("GuestBootstrapCredentialV1"));
+}
+
 #[test]
 fn every_closed_wire_enum_uses_its_canonical_spelling_in_serde_and_schema() {
     macro_rules! check {

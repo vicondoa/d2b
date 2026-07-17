@@ -25,6 +25,42 @@ Short input, long input, bad magic, unsupported major, unsupported minor,
 empty offer, and over-limit offer are distinct errors. No version range,
 preference list, feature intersection, legacy preface, or fallback exists.
 
+## Guest session credential
+
+`GuestSessionCredentialV1` is the single broker-to-guestd credential codec. It
+is a secret-bearing canonical binary contract and is intentionally excluded
+from JSON Schema and serde. All integers and length fields are big-endian.
+
+The base credential is exactly 156 bytes:
+
+| Offset | Size | Value |
+| ---: | ---: | --- |
+| 0 | 8 | `D2BGSV2\0` magic |
+| 8 | 2 | schema version `1` |
+| 10 | 2 | codec version `1` |
+| 12 | 2 | flags; bit 0 means bootstrap is present |
+| 14 | 2 | reserved, zero |
+| 16 | 4 | total credential byte length |
+| 20 | 8 | nonzero ComponentSession generation |
+| 28 | 32 | parent X25519 static public key |
+| 60 | 32 | channel binding |
+| 92 | 32 | guest identity digest |
+| 124 | 32 | guest X25519 static public key |
+
+When bootstrap is present, a two-byte block length follows the base credential.
+The canonical current block is 90 bytes: a two-byte operation-ID length, the
+16-byte operation ID, 32-byte replay nonce, eight-byte expiry, and 32-byte PSK.
+The decoder applies the shared 64-byte operation-ID ceiling before constructing
+the stricter current `OperationId`. The canonical total is therefore 248 bytes;
+the absolute defensive maximum is 296 bytes.
+
+Decode rejects truncation at every byte, trailing bytes, unknown schema or
+codec versions, unknown flags, nonzero reserved fields, inconsistent or
+over-limit lengths, generation zero, zero bindings/digests/public keys/nonces/
+expiry/PSK, and malformed operation IDs. No legacy magic or alternate layout is
+accepted. Secret Debug output is fully redacted, and the bootstrap PSK is
+zeroed on drop.
+
 ## Handshake contract
 
 The offer's canonical binary encoding starts with encoding version `1`, then
