@@ -9,7 +9,7 @@
 //!
 //! Migrated gates:
 //!   * tests/legacy-group-name-denylist.sh    -> legacy_group_name_denylist
-//!   * tests/vm-submodule-cutover-eval.sh      -> vm_submodule_cutover
+//!   * tests/vm-submodule-cutover-eval.sh      -> workload_composition_cutover
 //!   * tests/static-rust-dependency-direction.sh -> static_rust_dependency_direction
 
 use std::collections::BTreeSet;
@@ -167,21 +167,16 @@ fn legacy_group_allowlist() -> Regex {
 //
 // Asserts no production consumer in `nixos-modules/` reads
 // `config.microvm.vms.${name}.config.config.*` directly — every consumer routes
-// through the d2b-owned helpers `d2bLib.vmRunner` / `d2bLib.vmToplevel` /
-// `d2bLib.vmDeclaredRunner` in `nixos-modules/lib.nix`. `lib.nix`, `host.nix`, and
-// `vm-submodule.nix` are the substrate-side authors and are EXEMPT.
+// through the canonical workload evaluator. `lib.nix` and `host.nix` retain
+// transitional compatibility helpers and are exempt.
 // ---------------------------------------------------------------------------
 #[test]
-fn vm_submodule_cutover() {
+fn workload_composition_cutover() {
     let pattern = Regex::new(r"config\.microvm\.vms\.\$\{[^}]*\}\.config\.config")
         .expect("valid cutover regex");
-    let exempt: BTreeSet<&str> = [
-        "nixos-modules/lib.nix",
-        "nixos-modules/host.nix",
-        "nixos-modules/vm-submodule.nix",
-    ]
-    .into_iter()
-    .collect();
+    let exempt: BTreeSet<&str> = ["nixos-modules/lib.nix", "nixos-modules/host.nix"]
+        .into_iter()
+        .collect();
 
     let mut violations: Vec<String> = Vec::new();
     for rel in git_listed_files(&["nixos-modules"]) {
@@ -200,8 +195,8 @@ fn vm_submodule_cutover() {
 
     assert!(
         violations.is_empty(),
-        "vm-submodule-cutover: production consumers must route through \
-         d2bLib.vmRunner/vmToplevel/vmDeclaredRunner, found direct \
+        "workload-composition-cutover: production consumers must route through \
+         canonical workload composition, found direct \
          config.microvm.vms.${{...}}.config.config reads:\n{}",
         violations.join("\n")
     );

@@ -1,172 +1,224 @@
 { config, lib, pkgs, ... }:
 
 let
-  clean = builtins.unsafeDiscardStringContext;
-
   cfg = config.d2b;
-  prebuilt =
-    if cfg.site.usePrebuiltHostTools
-    then import ./prebuilt-packages.nix { inherit pkgs lib; }
-    else { };
-  # d2b-owned access helpers (see lib.nix).
-  d2bLib = import ./lib.nix { inherit lib pkgs; };
-  normalNixosVms = d2bLib.normalNixosVms cfg.vms;
-  qemuMediaVms = d2bLib.qemuMediaVms cfg.vms;
-  obsOtlpPort = cfg._index.observability.sourceBasePort;
-  obsSourcePort = name: cfg._index.observability.sourcePorts.${name} or obsOtlpPort;
-  waylandUid =
-    if cfg.site.waylandUser != null
-    then toString (config.users.users.${cfg.site.waylandUser}.uid or 0)
-    else "0";
-  waylandDisplay = cfg.site.waylandDisplay;
-  # Real host compositor socket. Used only by the wayland-proxy role;
-  # GPU runners no longer reference this path directly.
-  waylandHostSock = "/run/user/${waylandUid}/${waylandDisplay}";
-  chVsockConnect = import ./d2b-ch-vsock-connect.nix { inherit pkgs; };
-  vhostDeviceSound = import ../pkgs/vhost-device-sound { inherit pkgs; };
-  spectrumCH = import ../pkgs/spectrum-ch { inherit pkgs; };
-
-  # d2b-wayland-proxy: host-side Wayland proxy.
-  # Built from the workspace so the binary path is available for the
-  # wayland-proxy DAG node's binaryPath field.
-  packagesSrc = d2bLib.cleanRustPackagesSource ../packages;
-  d2bWaylandProxySourcePackage = pkgs.rustPlatform.buildRustPackage {
-    pname = "d2b-wayland-proxy";
-    version = "2.0.0";
-    src = packagesSrc;
-    cargoLock = {
-      lockFile = ../packages/Cargo.lock;
-      outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
-    };
-    cargoBuildFlags = [ "--package" "d2b-wayland-proxy" ];
-    doCheck = false;
-    postPatch = ''
-      mkdir -p .cargo
-      cat > .cargo/config.toml <<EOF
-[build]
-rustc-wrapper = ""
-EOF
-      rm -f .cargo/rustc-wrapper.sh
-    '';
-    installPhase = ''
-      runHook preInstall
-      install -Dm755 target/x86_64-unknown-linux-gnu/release/d2b-wayland-proxy $out/bin/d2b-wayland-proxy 2>/dev/null \
-        || install -Dm755 target/release/d2b-wayland-proxy $out/bin/d2b-wayland-proxy
-      runHook postInstall
-    '';
+  d2bLib = import ./lib.nix { inherit lib; };
+  workloads = import ./workload-process-rows.nix {
+    inherit config lib pkgs;
   };
-  # The filter is tied to the checked-out policy implementation and is cheap
-  # enough to build in the eval smoke fixtures. Keep it source-built even when
-  # other host tools use release prebuilts so missing release assets cannot
-  # break local validation.
-  d2bWaylandProxyPackage = d2bWaylandProxySourcePackage;
-  d2bWaylandProxyBinary = "${d2bWaylandProxyPackage}/bin/d2b-wayland-proxy";
+  roles = import ./role-process-rows.nix {
+    inherit config lib pkgs;
+  };
+  audioRows = import ./realm-audio-rows.nix {
+    inherit config lib pkgs;
+  };
 
-  backendPort = envName: cfg._index.usbip.backendPorts.${envName};
+  clean = value: lib.strings.sanitizeDerivationName value;
+  resource = workloadId: kind:
+    lib.findFirst
+      (row: row.kind == kind)
+      (throw "workload ${workloadId} is missing normalized ${kind}")
+      (cfg._index.resources.byWorkloadId.${workloadId} or [ ]);
+  roleFor = workloadId: kind:
+    lib.findFirst
+      (row: row.workloadId == workloadId && row.roleKind == kind)
+      null
+      roles;
+  roleRuntime = role:
+    (lib.findFirst
+      (row: row.kind == "role-runtime")
+      (throw "role ${role.roleId} is missing normalized role-runtime")
+      (cfg._index.resources.byRoleId.${role.roleId} or [ ])).path;
+  profile = nodeId:
+    cfg._bundle.minijailProfiles."role-${nodeId}".roleProfile;
+  audioFor = workloadId:
+    lib.findFirst
+      (row: row.workloadId == workloadId)
+      null
+      audioRows.processes;
+  audioEndpointFor = workloadId:
+    lib.findFirst
+      (row: row.workloadId == workloadId)
+      null
+      audioRows.endpoints;
 
-  profileIdFor = name: nodeId: "vm-${name}-${nodeId}";
-  profileFor = name: nodeId:
-    if nodeId == "otel-host-bridge"
-    then cfg._bundle.minijailProfiles."host-otel-host-bridge".roleProfile
-    else cfg._bundle.minijailProfiles.${profileIdFor name nodeId}.roleProfile;
-  vsockSocketForPort = socketPath: port: "${socketPath}_${toString port}";
-  shareNodeId = share: "virtiofsd-${clean share.tag}";
-  shareSocketPath = name: share:
-    if share.tag == "d2b-gctl"
-    then "/run/d2b/vms/${name}/guest-control/${clean share.tag}.sock"
-    else "/run/d2b/vms/${name}/${clean share.tag}.sock";
-  volumeHostPath = name: volume: d2bLib.volumeHostPath cfg.store.stateDir name volume;
+  readiness = kind: value: { inherit kind value; };
+  socketExists = path: readiness "unix-socket-exists" path;
+  socketListening = path: readiness "unix-socket-listening" path;
+  componentReady = value: readiness "component-specific" value;
+  commandReady = value: readiness "command" value;
 
-  mkReadiness = kind: value: { inherit kind value; };
-  componentReady = mkReadiness "component-specific";
-  apiSocketInfo = mkReadiness "api-socket-info";
-  unixSocketExists = mkReadiness "unix-socket-exists";
-  unixSocketListening = mkReadiness "unix-socket-listening";
-  tcpPort = host: port: mkReadiness "tcp-port" { inherit host port; };
-  commandReady = mkReadiness "command";
-  # Authenticated guest-control Health readiness. Unlike a raw TCP-22
-  # probe this predicate fails CLOSED: the daemon completes a full
-  # Hello + token challenge-response + Health over the guest-control vsock
-  # before the node is ready. The daemon resolves the per-VM vsock socket,
-  # peer credentials, and broker-backed signer from its own trusted state.
-  guestControlHealthReady = vmName: { kind = "guest-control-health"; value = { vm = vmName; }; };
+  mkNode =
+    {
+      id,
+      role,
+      ready ? [ ],
+      binaryPath ? null,
+      argv ? [ ],
+      env ? [ ],
+      planOps ? [ ],
+      networkInterfaces ? [ ],
+    }:
+    assert (binaryPath == null) == (argv == [ ]);
+    {
+      inherit id role;
+      readiness = ready;
+      profile = profile id;
+    }
+    // lib.optionalAttrs (binaryPath != null) {
+      inherit binaryPath argv;
+    }
+    // lib.optionalAttrs (env != [ ]) { inherit env; }
+    // lib.optionalAttrs (planOps != [ ]) { inherit planOps; }
+    // lib.optionalAttrs (networkInterfaces != [ ]) {
+      inherit networkInterfaces;
+    };
 
-  extractOptValues = optFlag: extraArgs:
-    let
-      flags = if builtins.isList optFlag then optFlag else [ optFlag ];
-      processArgs = args: values: acc:
-        if args == [ ] then
-          { inherit values; args = acc; }
-        else if (builtins.elem (builtins.head args) flags) && (builtins.length args) > 1 then
-          processArgs (builtins.tail (builtins.tail args)) (values ++ [ (builtins.elemAt args 1) ]) acc
-        else
-          processArgs (builtins.tail args) values (acc ++ [ (builtins.head args) ]);
+  edge = from: to: reason: { inherit from to reason; };
+
+  threadPoolSize = microvm:
+    let raw = microvm.virtiofsd.threadPoolSize;
     in
-    processArgs extraArgs [ ] [ ];
+    if builtins.isInt raw then toString raw
+    else if builtins.isString raw && builtins.match "^[0-9]+$" raw != null
+    then raw
+    else toString (lib.max 1 microvm.vcpu);
 
-  extractParamValue = param: opts:
-    if opts == "" || opts == null then null
-    else
-      let
-        m = builtins.match ".*${param}=([^,]+).*" opts;
-      in
-      if m == null then null else builtins.head m;
+  variadic = flag: values:
+    lib.optionals (values != [ ]) ([ flag ] ++ values);
 
-  opsMapped = ops:
-    lib.concatStringsSep "," (
-      lib.mapAttrsToList (k: v: "${k}=${toString v}") ops
-    );
+  volumePath = workload: volume:
+    if lib.hasPrefix "/" volume.image
+    then volume.image
+    else "${workload.stateRoot}/volumes/${volume.image}";
 
-  # CH 52 changed `--fs`/`--net`/`--disk`/`--device` from
-  # accepting repeated `--flag value` pairs to a single `--flag` followed
-  # by multiple positional values (clap variadic). The microvm.nix-derived
-  # net-VM argv path used the OLD repeated-flag style which CH 52 rejects
-  # with "the argument '--fs <fs>...' cannot be used multiple times".
-  #
-  # Fix: emit single-flag variadic for the `--fs`/`--net`/`--disk`/
-  # `--device` cases. Other CH variadic flags (`--vsock`, `--gpu`) only
-  # ever have one value and are not affected.
-  variadicFlagArgs = flag: params:
-    if params == [ ]
-    then [ ]
-    else [ flag ] ++ params;
-
-  resolvedInterfaces = microvm:
-    builtins.map (iface: ({
-      type = iface.type;
-      id = iface.id or null;
-      mac = iface.mac or null;
-    } // (lib.optionalAttrs (iface.type == "macvtap") {
-      macvtap = {
-        link = iface.macvtap.link;
-        mode = iface.macvtap.mode;
-      };
-    }))) microvm.interfaces;
-
-  resolvedVirtiofsdThreadPoolSize = microvm:
+  cloudHypervisorArgv = workload: microvm:
     let
-      raw = microvm.virtiofsd.threadPoolSize;
+      cloud = roleFor workload.workloadId "cloud-hypervisor";
+      apiSocket = "${roleRuntime cloud}/api.sock";
+      kernelParams = lib.concatStringsSep " " (
+        [
+          (if pkgs.stdenv.hostPlatform.system == "x86_64-linux"
+           then "earlyprintk=ttyS0 console=ttyS0"
+           else "console=ttyAMA0")
+          "reboot=t"
+          "panic=-1"
+        ]
+        ++ microvm.kernelParams
+      );
+      diskParams = map
+        (volume:
+          let
+            base = "path=${volumePath workload volume}";
+            readonly = if volume.readOnly or false then ",readonly=on" else "";
+          in
+          "${base}${readonly}")
+        microvm.volumes;
+      fsParams = map
+        (share:
+          let
+            virtiofs = roleFor workload.workloadId "virtiofsd";
+            socket = "${roleRuntime virtiofs}/${clean share.tag}.sock";
+          in
+          "tag=${share.tag},socket=${socket}")
+        workload.shares;
+      netParams = lib.optionals (workload.networkInterface != null) [
+        "tap=${workload.networkInterface.id},mac=${workload.networkInterface.mac}"
+      ];
+      tpm = roleFor workload.workloadId "swtpm";
+      gpu = roleFor workload.workloadId "gpu";
+      gpuRender = roleFor workload.workloadId "gpu-render-node";
+      activeGpu =
+        if microvm.graphics.renderNodeOnly or false then gpuRender else gpu;
+      video = roleFor workload.workloadId "video";
+      audio = roleFor workload.workloadId "audio";
     in
-    if builtins.isInt raw then
-      toString raw
-    else if builtins.typeOf raw == "string" && builtins.match "^[0-9]+$" raw != null then
-      raw
-    else
-      toString (if microvm.vcpu > 0 then microvm.vcpu else 1);
+    [
+      "microvm@${workload.workloadId}"
+      "--cpus" "boot=${toString microvm.vcpu}"
+      "--watchdog"
+      "--kernel"
+      (if pkgs.stdenv.hostPlatform.system == "x86_64-linux"
+       then "${microvm.kernel.dev}/vmlinux"
+       else "${microvm.kernel.out}/${pkgs.stdenv.hostPlatform.linux-kernel.target}")
+      "--initramfs" (toString microvm.initrdPath)
+      "--cmdline" kernelParams
+      "--seccomp" "true"
+      "--memory" "size=${toString microvm.mem}M,shared=on"
+      "--platform"
+      "oem_strings=[io.systemd.credential:vmm.notify_socket=vsock-stream:2:8888]"
+      "--console" "null"
+      "--serial" "tty"
+      "--vsock" "cid=${toString microvm.vsock.cid},socket=${microvm.vsock.socket}"
+    ]
+    ++ variadic "--disk" diskParams
+    ++ variadic "--fs" fsParams
+    ++ [ "--api-socket" apiSocket ]
+    ++ variadic "--net" netParams
+    ++ lib.optionals (tpm != null) [
+      "--tpm" "socket=${roleRuntime tpm}/tpm.sock"
+    ]
+    ++ lib.optionals (activeGpu != null) [
+      "--gpu" "socket=${roleRuntime activeGpu}/gpu.sock"
+    ]
+    ++ lib.optionals (video != null) [
+      "--vhost-user-media" "socket=${roleRuntime video}/video.sock"
+    ]
+    ++ lib.optionals (audio != null) [
+      "--generic-vhost-user"
+      "socket=${(audioEndpointFor workload.workloadId).path},virtio_id=25,queue_sizes=[64,64,64,64]"
+    ]
+    ++ microvm.cloud-hypervisor.extraArgs;
 
-  swtpmFlushScript = name:
-    pkgs.writeShellScript "d2b-${name}-swtpm-flush" ''
+  virtiofsNodes = workload: microvm:
+    let role = roleFor workload.workloadId "virtiofsd";
+    in
+    if role == null then [ ] else map
+      (share:
+        let
+          id = "${role.roleId}-${share.tag}";
+          source = share.servedSource or share.source;
+          readOnly =
+            share.tag == "ro-store"
+            || share.tag == "d2b-meta"
+            || (share.readOnly or false);
+          socket = "${roleRuntime role}/${clean share.tag}.sock";
+        in
+        mkNode {
+          inherit id;
+          role = "virtiofsd";
+          ready = [ (socketListening socket) ];
+          binaryPath = "${microvm.virtiofsd.package}/bin/virtiofsd";
+          argv = [
+            "microvm-virtiofsd@${workload.workloadId}-${clean share.tag}"
+            "--socket-path=${socket}"
+            "--shared-dir=${source}"
+            "--thread-pool-size" (threadPoolSize microvm)
+            "--sandbox=chroot"
+            "--inode-file-handles=never"
+            "--cache=${share.cache or "auto"}"
+          ]
+          ++ lib.optionals (microvm.virtiofsd.group != null) [
+            "--socket-group=${microvm.virtiofsd.group}"
+          ]
+          ++ lib.optional readOnly "--readonly"
+          ++ microvm.virtiofsd.extraArgs;
+        })
+      workload.shares;
+
+  swtpmFlushScript = workload: role:
+    pkgs.writeShellScript "d2b-swtpm-flush-${workload.workloadId}" ''
       set -eu
-      state_dir=/var/lib/d2b/vms/${name}/swtpm
+      state_dir=${lib.escapeShellArg "${workload.stateRoot}/tpm"}
       permall_file="$state_dir/swtpm_perm.state"
-      flush_sock=/run/d2b/vms/${name}/tpm-flush.sock
+      flush_sock=${lib.escapeShellArg "${roleRuntime role}/tpm-flush.sock"}
 
       if [ ! -f "$permall_file" ]; then
         exit 0
       fi
 
       cleanup() {
-        rm -f "$flush_sock"
+        ${pkgs.coreutils}/bin/rm -f -- "$flush_sock"
         if [ -n "''${swtpm_pid:-}" ] && kill -0 "$swtpm_pid" 2>/dev/null; then
           kill "$swtpm_pid" 2>/dev/null || true
           wait "$swtpm_pid" 2>/dev/null || true
@@ -181,7 +233,7 @@ EOF
         --flags startup-clear &
       swtpm_pid=$!
 
-      for i in $(${pkgs.coreutils}/bin/seq 1 50); do
+      for _ in $(${pkgs.coreutils}/bin/seq 1 50); do
         if [ -S "$flush_sock" ]; then
           break
         fi
@@ -189,577 +241,65 @@ EOF
       done
 
       [ -S "$flush_sock" ]
-
       ${pkgs.swtpm}/bin/swtpm_ioctl --unix "$flush_sock" -i
       ${pkgs.swtpm}/bin/swtpm_ioctl --unix "$flush_sock" -s
       wait "$swtpm_pid"
     '';
 
-  cloudHypervisorBinaryPath = microvm: "${microvm.cloud-hypervisor.package}/bin/cloud-hypervisor";
-  qemuMediaQmpSocket = name: "/run/d2b/vms/${name}/qmp.sock";
-  qemuMediaBinaryPath =
-    if pkgs.stdenv.hostPlatform.system == "x86_64-linux" then
-      "${pkgs.qemu_kvm}/bin/qemu-system-x86_64"
-    else if pkgs.stdenv.hostPlatform.system == "aarch64-linux" then
-      "${pkgs.qemu_kvm}/bin/qemu-system-aarch64"
-    else
-      throw "Unsupported system ${pkgs.stdenv.hostPlatform.system} for qemu-media argv emission";
-
-  qemuMediaMac = name:
-    let vm = cfg.vms.${name};
-    in d2bLib.mkMac vm.env "lan" vm.index;
-  qemuMediaArgv = name:
-    let
-      vm = cfg.vms.${name};
-      resources = vm.qemuMedia.resources;
-      security = vm.qemuMedia.security;
-      memoryBackendFlags = [
-        "memory-backend-ram"
-        "id=nlram"
-        "size=${toString resources.memoryMiB}M"
-        "dump=${if security.excludeMemoryFromCoreDump then "off" else "on"}"
-        "merge=${if security.disableMemoryMerge then "off" else "on"}"
-      ] ++ lib.optional security.lockMemory "prealloc=on";
-    in [
-      "d2b-qemu-media@${name}"
-      "-nodefaults"
-      "-no-user-config"
-      "-S"
-      "-object"
-      (lib.concatStringsSep "," memoryBackendFlags)
-      "-machine"
-      "q35,accel=kvm,usb=off,memory-backend=nlram"
-      "-m"
-      "${toString resources.memoryMiB}M"
-      "-smp"
-      (toString resources.vcpu)
-    ] ++ lib.optionals security.lockMemory [
-      "-overcommit"
-      "mem-lock=on"
-    ] ++ [
-      "-device"
-      "usb-ehci,id=ehci"
-      "-device"
-      "virtio-vga"
-      "-display"
-      "gtk,gl=off,show-cursor=on"
-      "-device"
-      "usb-kbd,bus=ehci.0"
-      "-device"
-      "usb-tablet,bus=ehci.0"
-      "-netdev"
-      "tap,id=nl0,fd=10,vhost=off"
-      "-device"
-      "virtio-net-pci,netdev=nl0,mac=${qemuMediaMac name}"
-      "-qmp"
-      "unix:${qemuMediaQmpSocket name},server=on,wait=off"
-      "-monitor"
-      "none"
-      "-chardev"
-      "socket,id=con0,fd=11"
-      "-serial"
-      "chardev:con0"
-      "-parallel"
-      "none"
-      "-name"
-      "d2b-${name}-qemu-media"
-    ];
-  qemuMediaEnv = name:
-    lib.optionals (cfg.site.waylandUser != null) [
-      "GDK_BACKEND=wayland"
-      "WAYLAND_DISPLAY=wayland-0"
-      "XDG_RUNTIME_DIR=/run/d2b-wlproxy/${name}"
-    ];
-
-  cloudHypervisorArgv = name: vm: manifest:
-    let
-      microvm = d2bLib.vmRunner config name;
-      extraArgs = microvm.cloud-hypervisor.extraArgs;
-      hasUserVsockExtraArg = lib.any
-        (arg: arg == "--vsock" || lib.hasPrefix "--vsock=" arg)
-        extraArgs;
-      processedExtraArgs = builtins.foldl'
-        (args: opt: (extractOptValues opt args).args)
-        extraArgs
-        [ "--platform" ];
-      hasUserConsole = (extractOptValues "--console" extraArgs).values != [ ];
-      userSerialValues = (extractOptValues "--serial" extraArgs).values;
-      hasUserSerial = userSerialValues != [ ];
-      userSerial = if hasUserSerial then builtins.head userSerialValues else null;
-      kernelPath =
-        if pkgs.stdenv.hostPlatform.system == "x86_64-linux" then
-          "${microvm.kernel.dev}/vmlinux"
-        else if pkgs.stdenv.hostPlatform.system == "aarch64-linux" then
-          "${microvm.kernel.out}/${pkgs.stdenv.hostPlatform.linux-kernel.target}"
-        else
-          throw "Unsupported system ${pkgs.stdenv.hostPlatform.system} for cloud-hypervisor argv emission";
-      kernelConsoleDefault =
-        if pkgs.stdenv.hostPlatform.system == "x86_64-linux" then
-          "earlyprintk=ttyS0 console=ttyS0"
-        else if pkgs.stdenv.hostPlatform.system == "aarch64-linux" then
-          "console=ttyAMA0"
-        else
-          "";
-      kernelConsole = if (!hasUserSerial) || userSerial == "tty" then kernelConsoleDefault else "";
-      kernelCmdLine = lib.concatStringsSep " " (
-        lib.filter (value: value != "") ([ kernelConsole "reboot=t" "panic=-1" ] ++ microvm.kernelParams)
-      );
-      vsockCID = microvm.vsock.cid;
-      vsockPath = microvm.vsock.socket;
-      supportsNotifySocket = true;
-      vsockOpts =
-        if hasUserVsockExtraArg then
-          throw "d2b.vms.${name}.config.microvm.cloud-hypervisor.extraArgs must not set --vsock; d2b owns the Cloud Hypervisor vsock device for guest control and observability"
-        else
-          "cid=${toString vsockCID},socket=${vsockPath}";
-      virtiofsShares = lib.filter (share: (share.proto or "virtiofs") == "virtiofs") microvm.shares;
-      useVirtiofs = virtiofsShares != [ ];
-      useHotPlugMemory = microvm.hotplugMem > 0;
-      memOps = opsMapped ({
-        size = "${toString microvm.mem}M";
-        shared = if useVirtiofs || vm.graphics.enable then "on" else "off";
-      }
-      // lib.optionalAttrs (!useVirtiofs && !vm.graphics.enable) {
-        mergeable = "on";
-      }
-      // lib.optionalAttrs useHotPlugMemory {
-        size = "${toString microvm.hotplugMem}M";
-        hotplug_method = "virtio-mem";
-        hotplug_size = "${toString microvm.hotplugMem}M";
-        hotplugged_size = "${toString microvm.hotpluggedMem}M";
-      }
-      // lib.optionalAttrs microvm.hugepageMem {
-        hugepages = "on";
-      });
-      balloonOps = opsMapped ({
-        size = "${toString microvm.initialBalloonMem}M";
-        free_page_reporting = "on";
-      }
-      // lib.optionalAttrs microvm.deflateOnOOM {
-        deflate_on_oom = "on";
-      });
-      tapMultiQueue = microvm.vcpu > 1;
-      diskMqOps = lib.optionalAttrs tapMultiQueue {
-        num_queues = toString microvm.vcpu;
-      };
-      netMqOps = lib.optionalAttrs tapMultiQueue {
-        num_queues = toString (2 * microvm.vcpu);
-      };
-      oemStringValues = microvm.cloud-hypervisor.platformOEMStrings ++ lib.optional supportsNotifySocket "io.systemd.credential:vmm.notify_socket=vsock-stream:2:8888";
-      oemStringOptions = lib.optional (oemStringValues != [ ]) "oem_strings=[${lib.concatStringsSep "," oemStringValues}]";
-      platformExtracted = extractOptValues "--platform" extraArgs;
-      userPlatformOpts = platformExtracted.values;
-      userPlatformStr = if userPlatformOpts != [ ] then builtins.head userPlatformOpts else "";
-      userHasOemStrings = (extractParamValue "oem_strings" userPlatformStr) != null;
-      platformOps =
-        if userHasOemStrings then
-          throw "Use microvm.cloud-hypervisor.platformOEMStrings instead of passing oem_strings via --platform"
-        else
-          lib.concatStringsSep "," (oemStringOptions ++ userPlatformOpts);
-      fsParams = builtins.map (share:
-        opsMapped {
-          tag = share.tag;
-          socket = shareSocketPath name share;
-        }
-      ) virtiofsShares;
-      diskParams =
-        lib.optional microvm.storeOnDisk (opsMapped ({
-          path = toString microvm.storeDisk;
-          readonly = "on";
-        } // diskMqOps))
-        ++ builtins.map (volume:
-          opsMapped ({
-            # prefix relative volume.image with the
-            # per-VM state dir so CH (which has no cwd under broker
-            # spawn) can find the disk. Absolute paths pass through
-            # unchanged.
-            path = volumeHostPath name volume;
-            # Defensive defaults for volume fields the consumer may
-            # omit. The d2b-owned vm-options.nix
-            # types `microvm.volumes` as `listOf attrs` (untyped)
-            # for forward compat; processes-json.nix supplies the
-            # CH defaults when the consumer doesn't.
-            direct = if (volume.direct or false) then "on" else "off";
-            readonly = if (volume.readOnly or false) then "on" else "off";
-            image_type = toString (volume.imageType or "raw");
-            serial = d2bLib.volumeSerial volume;
-          }
-          // diskMqOps)
-        ) microvm.volumes
-        ++ lib.optionals (microvm.writableStoreOverlay != null) [
-          (opsMapped ({
-            # writableStoreOverlay is a guest-side overlayfs upper
-            # layer. The backing image is provisioned by the broker's
-            # `DiskInit` plan-op at host start; the broker also runs
-            # mkfs.ext4 on the new image so the guest kernel can
-            # mount it.  CRITICAL: this disk MUST include the same
-            # CH disk argv defaults (`direct`, `image_type`,
-            # `num_queues`) the regular volume path emits — without
-            # them CH 52 falls back to an auto-detected mode that
-            # leaves the guest unable to bring up the
-            # /nix/store-overlayfs upper, hanging early in
-            # initramfs before earlyprintk produces output.
-            path = "${toString cfg.store.stateDir}/${name}/store-overlay.img";
-            serial = "rootfs";
-            direct = "off";
-            readonly = "off";
-            image_type = "raw";
-          } // diskMqOps))
-        ];
-      interfaces = resolvedInterfaces microvm;
-      macvtapInterfaces = builtins.filter (iface: iface.type == "macvtap") interfaces;
-      macvtapFdFor = iface:
-        let
-          matches = builtins.filter (entry: entry.idx != null) (lib.imap0
-            (idx: candidate: {
-              idx = if candidate.id == iface.id then idx else null;
-            })
-            macvtapInterfaces);
-        in
-        if matches == [ ]
-        then throw "internal error: macvtap interface ${iface.id} missing from macvtap index"
-        else 10 + (builtins.head matches).idx;
-      netParams = builtins.map (iface:
-        if iface.type == "tap" then
-          opsMapped ({
-            tap = iface.id;
-            mac = iface.mac;
-          } // netMqOps)
-        else if iface.type == "macvtap" then
-          opsMapped ({
-            fd = toString (macvtapFdFor iface);
-            mac = iface.mac;
-          } // netMqOps)
-        else
-          throw "Unsupported interface type ${iface.type} for cloud-hypervisor argv emission"
-      ) interfaces;
-      deviceParams = builtins.map (device:
-        # Defensive default for device.bus when the consumer doesn't
-        # specify (defaults to "pci" for the
-        # contract preserved here).
-        let bus = device.bus or "pci"; in
-        if bus == "pci" then
-          "path=/sys/bus/pci/devices/${device.path}"
-        else
-          throw "Unsupported device bus ${bus} for cloud-hypervisor argv emission"
-      ) microvm.devices;
-      audioExtraArgs = lib.optionals vm.audio.enable [
-        "--generic-vhost-user"
-        "socket=/run/d2b/vms/${name}/snd.sock,virtio_id=25,queue_sizes=[64,64,64,64]"
-      ];
-    in
-    [
-      "microvm@${name}"
-      "--cpus"
-      "boot=${toString microvm.vcpu}"
-      "--watchdog"
-      "--kernel"
-      kernelPath
-      "--initramfs"
-      (toString microvm.initrdPath)
-      "--cmdline"
-      kernelCmdLine
-      "--seccomp"
-      "true"
-      "--memory"
-      memOps
-      "--platform"
-      platformOps
-    ]
-    ++ lib.optionals (!hasUserConsole) [ "--console" "null" ]
-    ++ lib.optionals (!hasUserSerial) [ "--serial" "tty" ]
-    ++ [ "--vsock" vsockOpts ]
-    ++ lib.optionals vm.graphics.enable [ "--gpu" "socket=${microvm.graphics.socket}" ]
-    ++ lib.optionals microvm.balloon [ "--balloon" balloonOps ]
-    ++ variadicFlagArgs "--disk" diskParams
-    ++ variadicFlagArgs "--fs" fsParams
-    ++ [ "--api-socket" manifest.apiSocket ]
-    ++ variadicFlagArgs "--net" netParams
-    ++ variadicFlagArgs "--device" deviceParams
-    ++ processedExtraArgs
-    ++ audioExtraArgs;
-
-  mediaArgValues = name: vm: manifest:
-    (extractOptValues "--vhost-user-media" (cloudHypervisorArgv name vm manifest)).values;
-  mediaFlagTokens = name: vm: manifest:
-    builtins.filter
-      (arg: builtins.isString arg && lib.hasPrefix "--vhost-user-media" arg)
-      (cloudHypervisorArgv name vm manifest);
-
-  virtiofsdRunner = name: share:
-    let
-      microvm = d2bLib.vmRunner config name;
-      # (ADR 0021): under broker-pre-NS, virtiofsd is
-      # fake-root inside its own user namespace. Use --sandbox=chroot
-      # (now works because we have CAP_SYS_ADMIN inside the NS) and
-      # disable file handles (we don't need open_by_handle_at(2)
-      # for read-only or per-VM share serving). --posix-acl + --xattr
-      # are dropped: /nix/store has no ACLs, and the per-VM shares
-      # are d2b-managed (no foreign xattrs to preserve).
-      isRoStore = share.source == "/nix/store";
-      isStoreMeta = share.tag == "d2b-meta";
-      # SECURITY (per-VM store isolation): the ro-store share's guest
-      # `/nix/store` must expose ONLY this VM's closure, never the host's
-      # full `/nix/store`. `share.source` stays `/nix/store` as the
-      # eval-time sentinel that the guest-mount + overlay + readiness
-      # logic keys off, but virtiofsd is pointed at the per-VM hardlink
-      # live pool `<stateDir>/<vm>/store-view/live` — the canonical
-      # closure-only per-VM store. virtiofsd still execs from the real host
-      # `/nix/store` (kept mounted in its runner namespace) and only
-      # *serves* the farm, so the guest sees a closure-only store. This
-      # replaces the previous `--shared-dir=/nix/store`, which leaked the
-      # host's entire store into every guest. Mirrors the legacy
-      # `BindReadOnlyPaths /nix/store -> per-VM farm` behaviour.
-      roStoreSharedDir = "${toString cfg.store.stateDir}/${name}/store-view/live";
-      sharedDir = if isRoStore then roStoreSharedDir else toString share.source;
-    in {
-      binaryPath = "${microvm.virtiofsd.package}/bin/virtiofsd";
-      argv = [
-        "microvm-virtiofsd@${name}-${clean share.tag}"
-        "--socket-path=${shareSocketPath name share}"
-      ]
-      ++ lib.optionals (microvm.virtiofsd.group != null) [ "--socket-group=${microvm.virtiofsd.group}" ]
-      ++ [
-        "--shared-dir=${sharedDir}"
-        "--thread-pool-size"
-        (resolvedVirtiofsdThreadPoolSize microvm)
-        "--sandbox=chroot"
-        "--inode-file-handles=never"
-        "--cache=${share.cache or "auto"}"
-      ]
-      ++ lib.optionals (microvm.hypervisor == "crosvm") [ "--tag=${share.tag}" ]
-      ++ lib.optionals (isRoStore || isStoreMeta || (share.readOnly or false)) [ "--readonly" ]
-      ++ microvm.virtiofsd.extraArgs;
+  d2bWaylandProxy = pkgs.rustPlatform.buildRustPackage {
+    pname = "d2b-wayland-proxy";
+    version = "2.0.0";
+    src = d2bLib.cleanRustPackagesSource ../packages;
+    cargoLock = {
+      lockFile = ../packages/Cargo.lock;
+      outputHashes."wl-proxy-0.1.2" =
+        "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
     };
-
-  swtpmFlushRunner = name:
-    let
-      script = swtpmFlushScript name;
-    in {
-      binaryPath = "${script}";
-      argv = [ "d2b-swtpm-flush@${name}" ];
-    };
-
-  swtpmRunner = name: {
-    binaryPath = "${pkgs.swtpm}/bin/swtpm";
-    argv = [
-      "microvm-swtpm@${name}"
-      "socket"
-      "--tpmstate"
-      "dir=/var/lib/d2b/vms/${name}/swtpm"
-      "--ctrl"
-      # mode=0660 (was 0600) so that combined with
-      # umask 0o007 from the swtpm role profile and the per-VM
-      # /run/d2b/vms/<vm>/ default ACL granting CH's UID rw,
-      # cloud-hypervisor can connect to the TPM control socket
-      # without operator setfacl intervention.
-      "type=unixio,path=/run/d2b/vms/${name}/tpm.sock,mode=0660"
-      "--tpm2"
-      "--flags"
-      "startup-clear"
-    ];
+    cargoBuildFlags = [ "--package" "d2b-wayland-proxy" ];
+    doCheck = false;
+    postPatch = ''
+      mkdir -p .cargo
+      cat > .cargo/config.toml <<EOF
+[build]
+rustc-wrapper = ""
+EOF
+      rm -f .cargo/rustc-wrapper.sh
+    '';
+    installPhase = ''
+      runHook preInstall
+      install -Dm755 target/x86_64-unknown-linux-gnu/release/d2b-wayland-proxy \
+        $out/bin/d2b-wayland-proxy 2>/dev/null \
+        || install -Dm755 target/release/d2b-wayland-proxy \
+          $out/bin/d2b-wayland-proxy
+      runHook postInstall
+    '';
   };
 
-  gpuRunner = name: vm:
-    let
-      microvm = d2bLib.vmRunner config name;
-      gpuParams = "{\"context-types\":\"virgl:virgl2:cross-domain\",\"displays\":[{\"hidden\":true}],\"egl\":true,\"vulkan\":true}";
-      filterSock = "/run/d2b-wlproxy/${name}/wayland-0";
-      emitWaylandProxy = vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandProxy.enable;
-      # When the Wayland proxy is emitted, crosvm connects to the proxy
-      # socket. Otherwise preserve the legacy display backend by connecting
-      # directly to the real host compositor socket.
-      waylandSock = if emitWaylandProxy then filterSock else waylandHostSock;
-    in {
-      binaryPath = "${microvm.graphics.crosvmPackage}/bin/crosvm";
-      argv = [
-        "d2b-${name}-gpu"
-        "device"
-        "gpu"
-        "--socket"
-        microvm.graphics.socket
-        "--wayland-sock"
-        waylandSock
-        "--params"
-        gpuParams
-      ];
-      env = [
-        "LD_LIBRARY_PATH=${pkgs.vulkan-loader}/lib"
-      ];
-    };
-
-  # (ADR 0021) render-node-only broker-pre-NS GPU sidecar.
-  #
-  # This runner is identical to gpuRunner except
-  #   --gpu-device-node /proc/self/fd/10 : references the pre-opened render
-  #     node fd that the broker dup2'd to RENDER_NODE_INHERITED_FD (10) in
-  #     the user-NS child before execve.
-  #
-  # The broker parent opens /dev/dri/renderD128, dup2's it to fd 10 in the
-  # child, and the crosvm process accesses it via /proc/self/fd/10 without
-  # ever needing host-side DAC access to /dev/dri/.
-  gpuRenderNodeRunner = name: vm:
-    let
-      microvm = d2bLib.vmRunner config name;
-      gpuParams = "{\"context-types\":\"virgl:virgl2:cross-domain\",\"displays\":[{\"hidden\":true}],\"egl\":true,\"vulkan\":true}";
-      filterSock = "/run/d2b-wlproxy/${name}/wayland-0";
-      emitWaylandProxy = vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandProxy.enable;
-      waylandSock = if emitWaylandProxy then filterSock else waylandHostSock;
-    in {
-      binaryPath = "${microvm.graphics.crosvmPackage}/bin/crosvm";
-      argv = [
-        "d2b-${name}-gpu-render-node"
-        "device"
-        "gpu"
-        "--socket"
-        microvm.graphics.socket
-        "--wayland-sock"
-        waylandSock
-        # reference the pre-opened render node fd.
-        # The broker dup2'd /dev/dri/renderD128 to fd 10
-        # (RENDER_NODE_INHERITED_FD) in the user-NS child before execve.
-        "--gpu-device-node"
-        "/proc/self/fd/10"
-        "--params"
-        gpuParams
-      ];
-      env = [
-        "LD_LIBRARY_PATH=${pkgs.vulkan-loader}/lib"
-      ];
-    };
-
-  # wayland-proxy runner: d2b-wayland-proxy host-side proxy.
-  # Runs as d2b-<vm>-wlproxy, listens on the per-VM proxy socket,
-  # and connects upstream to the real host compositor socket. The broker
-  # grants the wlproxy principal an ACL on exactly that socket.
-  waylandProxyRunner = providerKind: name: vm:
-    let
-      vmName = name;
-      filterSock = "/run/d2b-wlproxy/${vmName}/wayland-0";
-      upstreamSock = waylandHostSock;
-      bridgeSock = "${config.d2b.site.clipboard.runtime.bridgeRoot}/${waylandUid}/bridge/${vmName}/${config.d2b.site.clipboard.runtime.bridgeSocketName}";
-      appIdPrefix = "d2b.${vmName}.";
-      # Realm identity: present when one enabled realm workload row references
-      # this VM. Multiple rows are rejected by assertions; no rows use the
-      # host-local transitional defaults.
-      vmRealmRows = cfg._index.realms.workloads.byVm.${vmName} or [];
-      unambiguousRow = if lib.length vmRealmRows == 1 then builtins.head vmRealmRows else null;
-      # Default realm target: <workload>.<realmPath>.d2b when unambiguous,
-      # else <vmName>.local.d2b for the transitional host-local realm.
-      realmTarget =
-        if unambiguousRow != null
-        then unambiguousRow.canonicalTarget
-        else "${vmName}.local.d2b";
-      titlePrefix = "[${vmName}] ";
-      border = vm.graphics.waylandProxy.border;
-      borderColors = cfg._uiColors.vms.${vmName}.border;
-      # Active rail color: realm accent when the VM maps unambiguously to a
-      # realm and that realm has a resolved accent entry; falls back to the
-      # VM border active color.
-      realmActiveColor =
-        if unambiguousRow != null
-          && builtins.hasAttr unambiguousRow.realmName cfg._uiColors.realms
-        then cfg._uiColors.realms.${unambiguousRow.realmName}.accent
-        else borderColors.active;
-      # Default rail label: <workload>.<realmPath> when unambiguous, else VM
-      # name.  Explicit operator border.label.text always takes precedence.
-      defaultBorderLabel =
-        if unambiguousRow != null
-        then "${unambiguousRow.workloadName}.${unambiguousRow.realmPath}"
-        else vmName;
-      borderLabelText = if border.label.text != null then border.label.text else defaultBorderLabel;
-      borderLabelArgs = lib.optionals (border.label.enable && borderLabelText != "") [
-        "--border-label" borderLabelText
-      ];
-      borderArgs = lib.optionals border.enable ([
-        "--border-enable"
-        "--border-color-active" realmActiveColor
-        "--border-color-inactive" borderColors.inactive
-        "--border-color-urgent" borderColors.urgent
-      ] ++ borderLabelArgs);
-      denyArgs = lib.concatMap (g: [ "--deny-global" g ]) vm.graphics.waylandProxy.denyGlobals;
-      allowArgs = lib.concatMap (g: [ "--allow-global" g ]) vm.graphics.waylandProxy.allowGlobals;
-      maxVersionArgs = lib.concatMap
-        (nameVersion:
-          let parts = lib.splitString "=" nameVersion;
-          in [ "--max-version" nameVersion ])
-        (lib.mapAttrsToList (iface: ver: "${iface}=${toString ver}") vm.graphics.waylandProxy.maxVersions);
-      dmabufAllowArgs = lib.concatMap (filter: [ "--dmabuf-allow" filter ]) vm.graphics.waylandProxy.dmabufAllow;
-      dmabufDenyArgs = lib.concatMap (filter: [ "--dmabuf-deny" filter ]) vm.graphics.waylandProxy.dmabufDeny;
-    in {
-      binaryPath = d2bWaylandProxyBinary;
-      env = [
-        "XDG_RUNTIME_DIR=/run/user/${waylandUid}"
-        "WAYLAND_DISPLAY=${waylandDisplay}"
-      ] ++ lib.optionals vm.graphics.waylandProxy.debugLogging [
-        "WL_PROXY_DEBUG=1"
-        "WL_PROXY_PREFIX=d2b-${vmName}-wlproxy"
-      ] ++ lib.optionals vm.graphics.waylandProxy.byteLogging [
-        "WL_PROXY_HEXDUMP=1"
-        "WL_PROXY_HEXDUMP_LIMIT=256"
-      ];
-      argv = [
-        "d2b-${vmName}-wlproxy"
-        "--listen" filterSock
-        "--connect" upstreamSock
-        "--target" realmTarget
-        "--provider-kind" providerKind
-        "--vm-name" vmName
-        "--app-id-prefix" appIdPrefix
-        "--realm-target" realmTarget
-        "--title-prefix" titlePrefix
-      ] ++ borderArgs ++ lib.optionals config.d2b.site.clipboard.enable [
-        "--clipd-bridge-socket" bridgeSock
-      ] ++ denyArgs ++ allowArgs ++ maxVersionArgs ++ dmabufAllowArgs ++ dmabufDenyArgs;
-    };
-
-  videoBinaryPath = _name:
-    # the per-VM
-    # `d2b-${name}-video.service` was deleted. The video
-    # sidecar is now broker-spawned via SpawnRunner{role: Video},
-    # and the broker takes the binary path from the bundle's
-    # helperPaths map (populated by this file's emitter below).
-    # We construct the crosvmVideo binary path inline using the
-    # same overlay the deleted systemd template used.
-    "${crosvmVideo}/bin/crosvm";
-
-  # crosvmVideo derivation
-  # relocated here from the deleted
-  # nixos-modules/components/video/host.nix. The overlay adds the
-  # video-decoder + vaapi + media features to crosvm and patches
-  # in the vhost-user video backend from
-  # pkgs/vhost-user-video/. The binary path is consumed by the
-  # broker via the bundle's helperPaths map.
-  crosvmVideo = (pkgs.crosvm.overrideAttrs (old: {
-    buildInputs = (old.buildInputs or []) ++ [ pkgs.libva ];
-    cargoBuildFeatures = (old.cargoBuildFeatures or old.buildFeatures or []) ++ [
-      "video-decoder" "vaapi" "media"
-    ];
-    cargoCheckFeatures = (old .cargoCheckFeatures or old.cargoBuildFeatures or old.buildFeatures or []) ++ [
-      "video-decoder" "vaapi" "media"
-    ];
+  crosvmVideo = pkgs.crosvm.overrideAttrs (old: {
+    buildInputs = (old.buildInputs or [ ]) ++ [ pkgs.libva ];
+    cargoBuildFeatures =
+      (old.cargoBuildFeatures or old.buildFeatures or [ ])
+      ++ [ "video-decoder" "vaapi" "media" ];
+    cargoCheckFeatures =
+      (old.cargoCheckFeatures or old.cargoBuildFeatures
+        or old.buildFeatures or [ ])
+      ++ [ "video-decoder" "vaapi" "media" ];
     postPatch = (old.postPatch or "") + ''
       mkdir -p devices/src/virtio/vhost_user_backend/video/sys
       cp ${../pkgs/vhost-user-video/mod.rs} devices/src/virtio/vhost_user_backend/video/mod.rs
       cp ${../pkgs/vhost-user-video/sys_mod.rs} devices/src/virtio/vhost_user_backend/video/sys/mod.rs
       cp ${../pkgs/vhost-user-video/sys_linux.rs} devices/src/virtio/vhost_user_backend/video/sys/linux.rs
-
       substituteInPlace devices/src/virtio/vhost_user_backend/mod.rs \
-        --replace-fail \
-          '#[cfg(feature = "audio")]
-pub mod snd;' \
-          '#[cfg(feature = "audio")]
+        --replace-fail '#[cfg(feature = "audio")]
+pub mod snd;' '#[cfg(feature = "audio")]
 pub mod snd;
 #[cfg(feature = "video-decoder")]
 pub mod video;'
-
       substituteInPlace devices/src/virtio/vhost_user_backend/mod.rs \
-        --replace-fail \
-          '#[cfg(feature = "audio")]
+        --replace-fail '#[cfg(feature = "audio")]
 pub use snd::run_snd_device;
 #[cfg(feature = "audio")]
-pub use snd::Options as SndOptions;' \
-          '#[cfg(feature = "audio")]
+pub use snd::Options as SndOptions;' '#[cfg(feature = "audio")]
 pub use snd::run_snd_device;
 #[cfg(feature = "audio")]
 pub use snd::Options as SndOptions;
@@ -767,34 +307,24 @@ pub use snd::Options as SndOptions;
 pub use video::run_video_device;
 #[cfg(feature = "video-decoder")]
 pub use video::Options as VideoOptions;'
-
       substituteInPlace src/crosvm/cmdline.rs \
-        --replace-fail \
-          '#[cfg(feature = "audio")]
-    Snd(vhost_user_backend::SndOptions),' \
-          '#[cfg(feature = "audio")]
+        --replace-fail '#[cfg(feature = "audio")]
+    Snd(vhost_user_backend::SndOptions),' '#[cfg(feature = "audio")]
     Snd(vhost_user_backend::SndOptions),
     #[cfg(feature = "video-decoder")]
     Video(vhost_user_backend::VideoOptions),'
-
       substituteInPlace src/main.rs \
-        --replace-fail \
-          '#[cfg(feature = "audio")]
-use devices::virtio::vhost_user_backend::run_snd_device;' \
-          '#[cfg(feature = "audio")]
+        --replace-fail '#[cfg(feature = "audio")]
+use devices::virtio::vhost_user_backend::run_snd_device;' '#[cfg(feature = "audio")]
 use devices::virtio::vhost_user_backend::run_snd_device;
 #[cfg(feature = "video-decoder")]
 use devices::virtio::vhost_user_backend::run_video_device;'
-
       substituteInPlace src/main.rs \
-        --replace-fail \
-          '#[cfg(feature = "audio")]
-            CrossPlatformDevicesCommands::Snd(cfg) => run_snd_device(cfg),' \
-          '#[cfg(feature = "audio")]
+        --replace-fail '#[cfg(feature = "audio")]
+            CrossPlatformDevicesCommands::Snd(cfg) => run_snd_device(cfg),' '#[cfg(feature = "audio")]
             CrossPlatformDevicesCommands::Snd(cfg) => run_snd_device(cfg),
             #[cfg(feature = "video-decoder")]
             CrossPlatformDevicesCommands::Video(cfg) => run_video_device(cfg),'
-
       substituteInPlace devices/src/virtio/media.rs \
         --replace-fail 'struct EventQueue(Queue);' 'pub struct EventQueue(pub Queue);' \
         --replace-fail 'struct HostMemoryMapper<M: SharedMemoryMapper> {' 'pub struct HostMemoryMapper<M: SharedMemoryMapper> {' \
@@ -803,472 +333,299 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         --replace-fail 'enum Token {' 'pub enum Token {' \
         --replace-fail 'struct WaitContextPoller(Rc<WaitContext<Token>>);' 'pub struct WaitContextPoller(pub Rc<WaitContext<Token>>);'
     '';
-  }));
+  });
 
-  videoRunner = name: {
-    binaryPath = videoBinaryPath name;
+  gpuRenderNodeRunner = role: microvm: waylandSocket: gpuParams: {
+    binaryPath = "${microvm.graphics.crosvmPackage}/bin/crosvm";
     argv = [
-      "d2b-${name}-video"
-      "device"
-      "video-decoder"
-      "--socket-path"
-      "/run/d2b-video/${name}/video.sock"
-      "--backend"
-      "vaapi"
+      "d2b-role-${role.roleId}"
+      "device" "gpu"
+      "--socket" "${roleRuntime role}/gpu.sock"
+      "--wayland-sock" waylandSocket
+      "--gpu-device-node" "/proc/self/fd/10"
+      "--params" gpuParams
     ];
-    # (Option B): video sidecar uses vaapi which
-    # talks to /dev/dri/renderD128 directly, but needs
-    # XDG_RUNTIME_DIR for libdrm + intel-media-driver state.
-    env = [
-      "XDG_RUNTIME_DIR=/run/user/${waylandUid}"
-    ];
+    env = [ "LD_LIBRARY_PATH=${pkgs.vulkan-loader}/lib" ];
   };
 
-  audioRunner = name: {
-    binaryPath = "${vhostDeviceSound}/bin/vhost-device-sound";
-    argv = [
-      "d2b-${name}-snd"
-      "--socket"
-      "/run/d2b/vms/${name}/snd.sock"
-      "--backend"
-      "pipewire"
-    ];
-    # (Option B): point libpipewire at the Wayland
-    # user's PipeWire socket. Without these env vars,
-    # vhost-device-sound (running as the ephemeral role UID)
-    # looks at /run/user/$EUID/pipewire-0 which doesn't exist
-    # for the ephemeral UID. The PipeWire socket itself is
-    # grant'd to the ephemeral UID by host-activation.nix's
-    # d2bRoleUidAcls script.
-    env = [
-      "PIPEWIRE_RUNTIME_DIR=/run/user/${waylandUid}"
-      "XDG_RUNTIME_DIR=/run/user/${waylandUid}"
-      ''PIPEWIRE_PROPS={ application.name = "d2b-${name}" node.name = "d2b-${name}" node.description = "d2b ${name}" d2b.vm = "${name}" }''
-      "WPCTL_PATH=${pkgs.wireplumber}/bin/wpctl"
-      "PW_DUMP_PATH=${pkgs.pipewire}/bin/pw-dump"
-    ] ++ lib.optional (cfg.site.audio.inputTargetNode != null)
-      "D2B_AUDIO_INPUT_TARGET_NODE=${cfg.site.audio.inputTargetNode}";
-  };
-
-  vsockRelayRunner = name: manifest: {
-    binaryPath = "${cfg.observability.transport.relayPackage}/bin/socat";
-    argv = [
-      "d2b-otel-relay@${name}"
-      "-d"
-      "-d"
-      "UNIX-LISTEN:${vsockSocketForPort manifest.observability.vsockHostSocket obsOtlpPort},fork,max-children=16,reuseaddr,mode=0660"
-      "EXEC:${chVsockConnect}/bin/d2b-ch-vsock-connect ${cfg.store.stateDir}/${cfg.observability.vmName}/vsock.sock ${toString (obsSourcePort name)}"
-    ];
-  };
-
-  otelHostBridgeRunner = manifest: {
-    binaryPath = "${cfg.observability.transport.relayPackage}/bin/socat";
-    argv = [
-      "d2b-otel-host-bridge"
-      "-d"
-      "-d"
-      "UNIX-LISTEN:/run/d2b/otel/host-egress.sock,fork,reuseaddr,mode=0660"
-      ''EXEC:"${chVsockConnect}/bin/d2b-ch-vsock-connect ${manifest.observability.vsockHostSocket} ${toString obsOtlpPort}"''
-    ];
-  };
-
-  usbipBackendRunner = envName: {
-    binaryPath = "${pkgs.linuxPackages.usbip}/bin/usbipd";
-    argv = [
-      "d2b-sys-${envName}-usbipd-backend"
-      "-4"
-      "--tcp-port"
-      (toString (backendPort envName))
-    ];
-  };
-
-  usbipProxyRunner = envName: m: {
-    binaryPath = "${pkgs.socat}/bin/socat";
-    # Generic per-env L4 forwarder. It does not inspect USBIP frames or busids,
-    # so single-busid revocation must not bounce this sidecar while other
-    # same-env streams may be active; use host unbind plus targeted
-    # conntrack/socket cleanup, or fail closed if the stream cannot be isolated.
-    argv = [
-      "d2b-sys-${envName}-usbipd-proxy"
-      "TCP-LISTEN:3240,bind=${m.hostUplinkIp},fork,max-children=4,reuseaddr"
-      "TCP:127.0.0.1:${toString (backendPort envName)}"
-    ];
-  };
-
-  mkDiskInitPlanOp = { targetPath, sizeBytes, mode, ownerProfile, ifAbsent ? true }: {
-    kind = "diskInit";
-    inherit targetPath sizeBytes mode ifAbsent;
-    ownerUid = ownerProfile.uid;
-    ownerGid = ownerProfile.gid;
-  };
-
-  mkProcessNode = name: { id, role, readiness, unit ? null, binaryPath ? null, argv ? [ ], env ? [ ], planOps ? [ ], networkInterfaces ? [ ] }:
+  roleNode = workload: microvm: role:
     let
-      # `vm.supervisor` was removed per ADR 0015; every
-      # enabled VM is daemon-supervised. `emitUnit` is permanently
-      # false so processes.json never reports a systemd unit
-      # reference for a daemon-owned VM (preserves the single-
-      # writer invariant). The retained `_` binding for the local
-      # `vm` keeps the rest of the closure shape intact for
-      # diff hygiene.
-      _vm = cfg.vms.${name};
-      emitUnit = false;
-      emitRunner = binaryPath != null;
+      runtime = roleRuntime role;
+      spec = cfg._index.workloads.byId.${workload.workloadId}.spec;
+      waylandUid =
+        if cfg.site.waylandUser == null
+        then 0
+        else config.users.users.${cfg.site.waylandUser}.uid;
+      wayland = roleFor workload.workloadId "wayland-proxy";
+      waylandSocket =
+        if wayland == null then null else "${roleRuntime wayland}/wayland-0";
+      gpuParams =
+        ''{"context-types":"virgl:virgl2:cross-domain","displays":[{"hidden":true}],"egl":true,"vulkan":true}'';
+      qemuMemoryMiB =
+        lib.attrByPath [ "qemuMedia" "resources" "memoryMiB" ] 2048 spec;
+      qemuVcpu =
+        lib.attrByPath [ "qemuMedia" "resources" "vcpu" ] 2 spec;
     in
-    assert (binaryPath == null) == (argv == [ ]);
-    {
-      inherit id role readiness;
-      profile = profileFor name id;
-    }
-    // lib.optionalAttrs emitUnit { inherit unit; }
-    // lib.optionalAttrs emitRunner {
-      inherit binaryPath argv;
-    }
-    // lib.optionalAttrs (env != [ ]) {
-      inherit env;
-    }
-    // lib.optionalAttrs (planOps != [ ]) {
-      inherit planOps;
-    }
-    // lib.optionalAttrs (networkInterfaces != [ ]) {
-      inherit networkInterfaces;
-    };
-
-  mkRunnerNode = name: args: runner:
-    mkProcessNode name (args // runner);
-
-  runnerNode = name: { id, role, readiness, runner, unit ? null, planOps ? [ ] }:
-    mkRunnerNode name {
-      inherit id role readiness unit planOps;
-    } runner;
-
-  node = mkProcessNode;
-
-  hypervisorRunnerNode = name: service: args:
-    runnerNode name ({
-      id = service.nodeId;
-      role = service.runnerRole;
-    } // args);
-
-  mkEdge = from: to: reason: { inherit from to reason; };
-  edge = mkEdge;
-  edgesFromNodes = fromNodes: to: reason:
-    builtins.map (from: edge from to reason) fromNodes;
-  edgesToNodes = from: toNodes: reason:
-    builtins.map (to: edge from to reason) toNodes;
-
-  vmDag = name: vm:
-    let
-      manifest = cfg.manifest.${name};
-      microvm = d2bLib.vmRunner config name;
-      hypervisorService = d2bLib.runtimeHypervisorService "nixos";
-      # The guest-control authenticated Health probe is the framework
-      # readiness gate on guest-control-capable VMs. Per-VM sshd/host-keys are
-      # retained for the SSH-compat window but are no longer the framework
-      # readiness signal, so a TCP-22 readiness node is no longer emitted.
-      guestControlEnabled = vm.guest.control.enable;
-      virtiofsShares = lib.filter
-        (share: (share.proto or "virtiofs") == "virtiofs")
-        microvm.shares;
-      shareNodes = lib.forEach virtiofsShares (share:
-        mkRunnerNode name {
-          id = shareNodeId share;
-          role = "virtiofsd";
-          readiness = [ (unixSocketExists (shareSocketPath name share)) ];
-        } (virtiofsdRunner name share));
-      shareNodeIds = builtins.map shareNodeId virtiofsShares;
-      postStoreNodeIds = if shareNodeIds != [ ] then shareNodeIds else [ "store-virtiofs-preflight" ];
-      preOptionalNodeIds = if vm.tpm.enable then [ "swtpm" ] else postStoreNodeIds;
-      optionalSidecarBaseNodeIds = if vm.observability.enable then [ "vsock-relay" ] else preOptionalNodeIds;
-      graphicsReadiness = [
-        (unixSocketExists (d2bLib.vmRunner config name).graphics.socket)
-      ] ++ lib.optional vm.graphics.virglVideo
-        (componentReady "graphics.virglVideo=true");
-      # Whether the host-jailed Wayland proxy is emitted for this VM.
-      # Requires graphics.enable, crossDomainTrusted, and waylandProxy.enable.
-      emitWaylandProxy = vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandProxy.enable;
-      # Resolved GPU node id: gpu-render-node when renderNodeOnly is true.
-      graphicsNodeId = if vm.graphics.renderNodeOnly then "gpu-render-node" else "gpu";
-      preVmmNodeIds =
-        lib.unique (
-          (lib.optionals (vm.graphics.enable && vm.graphics.videoSidecar) [ "video" ])
-          # When the wayland-proxy filter is active, GPU depends on
-          # wayland-proxy (not directly on the gpu/render-node node — gpu
-          # is behind wayland-proxy in the readiness chain). Cloud Hypervisor
-          # waits on gpu/video directly, so preVmmNodeIds still names the
-          # gpu/video node; the wayland-proxy edge is declared separately below.
-          ++ (lib.optionals (vm.graphics.enable && !vm.graphics.videoSidecar) [ graphicsNodeId ])
-          ++ (lib.optionals vm.audio.enable [ "audio" ])
-          ++ lib.optionals (!vm.graphics.enable && !vm.audio.enable) optionalSidecarBaseNodeIds
-        );
-      # Realm workload identity: present for VMs declared as realm workloads.
-      # The assertion layer guarantees at most one enabled owning row; absence
-      # means a classical d2b.vms.<vm> entry.
-      realmWorkloadRows = cfg._index.realms.workloads.byVm.${name} or [ ];
-      vmWorkloadRow =
-        if lib.length realmWorkloadRows == 1 then builtins.head realmWorkloadRows else null;
-      vmWorkloadIdentity =
-        if vmWorkloadRow != null then {
-          workloadId = vmWorkloadRow.workloadName;
-          realmId = vmWorkloadRow.realmId;
-          realmPath = lib.splitString "." vmWorkloadRow.realmPath;
-          canonicalTarget = vmWorkloadRow.canonicalTarget;
-        } // lib.optionalAttrs (vmWorkloadRow.legacyVmName != null) {
-          legacyVmName = vmWorkloadRow.legacyVmName;
-        } // lib.optionalAttrs (vmWorkloadRow.runtimeKind != null) {
-          runtimeKind = vmWorkloadRow.runtimeKind;
-        } // lib.optionalAttrs (vmWorkloadRow.runtimeProviderId != null) {
-          providerId = vmWorkloadRow.runtimeProviderId;
-        }
-        else null;
-    in {
-      vm = name;
-    } // lib.optionalAttrs (vmWorkloadIdentity != null) {
-      workloadIdentity = vmWorkloadIdentity;
-    } // {
-      nodes = [
-        (node name {
-          id = "host-reconcile";
-          role = "host-reconcile";
-          readiness = [ (componentReady "host state, runtime directories, and bridges are reconciled") ];
-        })
-        (node name {
-          id = "store-virtiofs-preflight";
-          role = "store-virtiofs-preflight";
-          unit = "d2b-${name}-store-sync.service";
-          readiness = [
-            (commandReady [ "test" "-e" "${toString cfg.store.stateDir}/${name}/store-view/live/.d2b-marker-${name}" ])
-          ];
-        })
-      ]
-      ++ lib.optional vm.tpm.enable (mkRunnerNode name {
-        id = "swtpm-flush";
-        role = "swtpm-pre-start-flush";
-        readiness = [ ];
-      } (swtpmFlushRunner name))
-      ++ lib.optional vm.tpm.enable (mkRunnerNode name {
-        id = "swtpm";
-        role = "swtpm";
-        readiness = [ (unixSocketListening manifest.tpmSocket) ];
-      } (swtpmRunner name))
-      ++ shareNodes
-      ++ lib.optional (vm.graphics.enable && !vm.graphics.renderNodeOnly) (mkRunnerNode name {
-        id = "gpu";
-        role = "gpu";
-      # (Option B): readiness uses microvm.graphics.socket
-      # (the same path the argv tells crosvm to create), not the
-      # stale /var/lib/d2b/vms/<vm>/<vm>-gpu.sock from manifest.
-      # The two paths diverged when the v1.1.1 substrate moved the
-      # gpu sidecar from /var/lib/d2b to /run/d2b without
-      # updating the readiness predicate. Without this fix the DAG
-      # times out waiting on a socket that crosvm never creates.
-      readiness = graphicsReadiness;
-      } (gpuRunner name vm))
-      # (ADR 0021) render-node-only broker-pre-NS GPU sidecar.
-      # Emitted when graphics.renderNodeOnly = true. Uses gpuRenderNodeRunner
-      # (argv carries --gpu-device-node /proc/self/fd/10) and the
-      # gpu-render-node minijail profile (userNamespace, empty deviceBinds).
-      ++ lib.optional (vm.graphics.enable && vm.graphics.renderNodeOnly) (mkRunnerNode name {
-        id = "gpu-render-node";
-        role = "gpu-render-node";
-        readiness = graphicsReadiness;
-      } (gpuRenderNodeRunner name vm))
-      ++ lib.optional (vm.graphics.enable && vm.graphics.videoSidecar) (mkRunnerNode name {
-        id = "video";
-        role = "video";
-        readiness = [ (unixSocketListening "/run/d2b-video/${name}/video.sock") ];
-      } (videoRunner name))
-      ++ lib.optional emitWaylandProxy (mkRunnerNode name {
-        id = "wayland-proxy";
-        role = "wayland-proxy";
-        readiness = [
-          (unixSocketListening "/run/d2b-wlproxy/${name}/wayland-0")
-        ];
-      } (waylandProxyRunner "local-vm" name vm))
-      ++ lib.optional vm.audio.enable (mkRunnerNode name {
-        id = "audio";
-        role = "audio";
-        readiness = [ (unixSocketExists "/run/d2b/vms/${name}/snd.sock") ];
-      } (audioRunner name))
-      ++ [
-        (hypervisorRunnerNode name hypervisorService {
-          runner = {
-            binaryPath = cloudHypervisorBinaryPath microvm;
-            argv = cloudHypervisorArgv name vm manifest;
-            networkInterfaces = resolvedInterfaces microvm;
-            # the cloud-hypervisor binary is a bash
-            # wrapper that calls `dirname` to compute paths; under
-            # the broker spawn (empty PATH) it exits 127 on the
-            # very first line. Provide PATH with coreutils so the
-            # wrapper can find dirname + sed.
-            env = [
-              "PATH=${pkgs.coreutils}/bin:${pkgs.gnused}/bin"
-            ];
-          };
-          readiness = [ (apiSocketInfo manifest.apiSocket) ];
-          # emit DiskInit plan-ops before SpawnRunner.
-          # D2b-owned relative raw/ext4 microvm.volumes are declared by
-          # the consumer and mounted inside the guest by vm-guest-base.nix,
-          # so missing images must be created and mkfs'd before CH starts.
-          # Existing images are validated non-destructively (`ifAbsent = true`):
-          # the broker skips ext4 images, safely repairs stale declared
-          # owner/mode posture after fd-bound identity checks, safely formats a
-          # proven-empty image, and fails closed for ambiguous data.
-          #
-          # mode 0o660 = 432 decimal for regular VM volumes (CH runner
-          # opens them via kvm group); store-overlay keeps 0o600.
-          planOps = (builtins.map (volume: mkDiskInitPlanOp {
-            targetPath = volumeHostPath name volume;
-            sizeBytes = d2bLib.volumeSizeBytes volume;
-            mode = 432;
-            ownerProfile = profileFor name "cloud-hypervisor";
-          }) (builtins.filter d2bLib.volumeDiskInitEligible microvm.volumes))
-          ++ lib.optionals (microvm.writableStoreOverlay != null) [
-            (mkDiskInitPlanOp {
-              targetPath = "${toString cfg.store.stateDir}/${name}/store-overlay.img";
-              sizeBytes = vm.writableStoreOverlaySize;
-              mode = 384;
-              ownerProfile = profileFor name "cloud-hypervisor";
-            })
-          ];
-        })
-      ]
-      ++ lib.optional vm.observability.enable (runnerNode name {
-        id = "vsock-relay";
-        role = "vsock-relay";
-        unit = "d2b-otel-relay@${name}.service";
-        readiness = [ (unixSocketExists (vsockSocketForPort manifest.observability.vsockHostSocket obsOtlpPort)) ];
-        runner = vsockRelayRunner name manifest;
-      })
-      ++ lib.optional (cfg.observability.enable && name == cfg.observability.vmName) (runnerNode name {
-        id = "otel-host-bridge";
-        role = "otel-host-bridge";
-        unit = "d2b-otel-host-bridge.service";
-        readiness = [ (unixSocketExists "/run/d2b/otel/host-egress.sock") ];
-        runner = otelHostBridgeRunner manifest;
-      })
-      ++ lib.optional guestControlEnabled (node name {
-        id = "guest-control-health";
-        role = "guest-control-health";
-        readiness = [ (guestControlHealthReady name) ];
-      })
-      ++ lib.optional vm.usb.securityKey.enable (node name {
-        # The sk-frontend DAG node tracks the readiness of the host-side
-        # vsock socket endpoint that the guest frontend connects to. The
-        # socket is created by the host broker (security-key broker workstream)
-        # at the path <vsock_base>_14320. The node has no runner: the actual
-        # frontend process runs inside the guest VM supervised by the guest's
-        # systemd. The host daemon uses the readiness predicate to determine
-        # when the broker endpoint is available for guest connections.
-        id = "sk-frontend";
-        role = "security-key-frontend";
-        readiness = [
-          (unixSocketExists (vsockSocketForPort "${manifest.stateDir}/vsock.sock" d2bLib.securityKeyVsockPort))
-        ];
-      });
-      edges = [
-        (edge "host-reconcile" "store-virtiofs-preflight" "Host reconciliation must complete before store and virtiofs preflight runs.")
-      ]
-      ++ edgesToNodes "store-virtiofs-preflight" shareNodeIds "Each virtiofs share depends on the per-VM store view and marker preflight."
-      ++ lib.optionals vm.tpm.enable (
-        (edgesFromNodes postStoreNodeIds "swtpm-flush" "The swtpm pre-start flush runs only after every virtiofs share is ready.")
-        ++ [ (edge "swtpm-flush" "swtpm" "The long-lived swtpm sidecar starts only after the one-shot flush completes.") ]
-      )
-      ++ lib.optionals vm.observability.enable (
-        edgesFromNodes preOptionalNodeIds "vsock-relay" "The vsock relay starts only after runtime/state dirs, taps, cgroup setup, and earlier sidecars are ready."
-      )
-      ++ lib.optionals (cfg.observability.enable && name == cfg.observability.vmName) (
-        [
-          (edge "cloud-hypervisor" "otel-host-bridge" "The host OTel bridge starts only after the obs VM Cloud Hypervisor runner creates the base vsock socket.")
-        ]
-      )
-      ++ lib.optionals vm.graphics.enable (
-        (edgesFromNodes optionalSidecarBaseNodeIds graphicsNodeId "The GPU sidecar starts only after every prerequisite sidecar is ready.")
-        ++ lib.optional emitWaylandProxy
-          (edge "host-reconcile" "wayland-proxy" "The Wayland proxy starts only after host reconciliation prepares runtime directories and socket ACLs.")
-        ++ lib.optional vm.graphics.videoSidecar
-          (edge graphicsNodeId "video" "The optional video decoder sidecar depends on the GPU sidecar.")
-        # GPU connects to the proxy socket, so wayland-proxy must be
-        # listening before the GPU starts. Emit only when the proxy is
-        # present.
-        ++ lib.optional emitWaylandProxy
-          (edge "wayland-proxy" graphicsNodeId "The GPU sidecar starts only after the Wayland proxy is listening on its socket.")
-      )
-      ++ lib.optionals vm.audio.enable (
-        edgesFromNodes optionalSidecarBaseNodeIds "audio" "The audio sidecar starts only after every prerequisite sidecar is ready."
-      )
-      ++ edgesFromNodes preVmmNodeIds "cloud-hypervisor" "Cloud Hypervisor starts only after every prerequisite sidecar is ready."
-      ++ lib.optional guestControlEnabled
-        (edge "cloud-hypervisor" "guest-control-health" "Authenticated guest-control Health readiness is probed only after Cloud Hypervisor is running.")
-      ++ lib.optional vm.usb.securityKey.enable
-        (edge "cloud-hypervisor" "sk-frontend" "The sk-frontend vsock endpoint tracking starts only after Cloud Hypervisor creates the base vsock socket.");
-      invariants = {
-        perVmAuditPipeline = true;
-        swtpmPreStartFlush = true;
-        tpmOwnershipMigrationWithoutRunningVmMutation = true;
-        usbipGating = true;
+    if role.roleKind == "qemu-media" then mkNode {
+      id = role.roleId;
+      role = role.processRole;
+      ready = [ (socketListening "${runtime}/qmp.sock") ];
+      binaryPath =
+        if pkgs.stdenv.hostPlatform.system == "x86_64-linux"
+        then "${pkgs.qemu_kvm}/bin/qemu-system-x86_64"
+        else "${pkgs.qemu_kvm}/bin/qemu-system-aarch64";
+      argv = [
+        "d2b-qemu-media@${workload.workloadId}"
+        "-nodefaults"
+        "-no-user-config"
+        "-S"
+        "-object"
+        "memory-backend-ram,id=nlram,size=${toString qemuMemoryMiB}M,dump=off,merge=off"
+        "-machine" "q35,accel=kvm,usb=off,memory-backend=nlram"
+        "-m" "${toString qemuMemoryMiB}M"
+        "-smp" (toString qemuVcpu)
+        "-device" "usb-ehci,id=ehci"
+        "-device" "virtio-vga"
+        "-display" "gtk,gl=off,show-cursor=on"
+        "-device" "usb-kbd,bus=ehci.0"
+        "-device" "usb-tablet,bus=ehci.0"
+        "-netdev" "tap,id=nl0,fd=10,vhost=off"
+        "-device"
+        "virtio-net-pci,netdev=nl0,mac=${
+          if workload.networkInterface == null
+          then throw "qemu-media workload ${workload.workloadId} has no allocator-declared network interface"
+          else workload.networkInterface.mac
+        }"
+        "-qmp" "unix:${runtime}/qmp.sock,server=on,wait=off"
+        "-monitor" "none"
+        "-chardev" "socket,id=con0,fd=11"
+        "-serial" "chardev:con0"
+        "-parallel" "none"
+        "-name" "workload-${workload.workloadId}"
+      ];
+      env = lib.optionals (wayland != null) [
+        "GDK_BACKEND=wayland"
+        "WAYLAND_DISPLAY=wayland-0"
+        "XDG_RUNTIME_DIR=${roleRuntime wayland}"
+      ];
+      networkInterfaces = lib.optional (workload.networkInterface != null) {
+        inherit (workload.networkInterface) type id mac;
       };
-    };
+    }
+    else if role.roleKind == "store-virtiofs-preflight" then mkNode {
+      id = role.roleId;
+      role = role.processRole;
+      ready = [
+        (commandReady [
+          "test" "-e"
+          "${workload.storeViewLive}/.d2b-marker-${workload.workloadId}"
+        ])
+      ];
+    }
+    else if role.roleKind == "swtpm-pre-start-flush" then mkNode {
+      id = role.roleId;
+      role = role.processRole;
+      binaryPath = toString (swtpmFlushScript workload role);
+      argv = [ "d2b-role-${role.roleId}" ];
+    }
+    else if role.roleKind == "swtpm" then mkNode {
+      id = role.roleId;
+      role = role.processRole;
+      ready = [ (socketListening "${runtime}/tpm.sock") ];
+      binaryPath = "${pkgs.swtpm}/bin/swtpm";
+      argv = [
+        "microvm-swtpm@${workload.workloadId}"
+        "socket"
+        "--tpmstate" "dir=${workload.stateRoot}/tpm"
+        "--ctrl" "type=unixio,path=${runtime}/tpm.sock,mode=0660"
+        "--tpm2"
+        "--flags" "startup-clear"
+      ];
+    }
+    else if role.roleKind == "gpu"
+      && !(microvm.graphics.renderNodeOnly or false) then mkNode {
+      id = role.roleId;
+      role = role.processRole;
+      ready = [ (socketListening "${runtime}/gpu.sock") ];
+      binaryPath = "${microvm.graphics.crosvmPackage}/bin/crosvm";
+      argv = [
+        "d2b-role-${role.roleId}"
+        "device" "gpu"
+        "--socket" "${runtime}/gpu.sock"
+        "--wayland-sock" waylandSocket
+        "--params" gpuParams
+      ];
+      env = [ "LD_LIBRARY_PATH=${pkgs.vulkan-loader}/lib" ];
+    }
+    else if role.roleKind == "gpu-render-node"
+      && (microvm.graphics.renderNodeOnly or false) then
+      mkNode ({
+        id = role.roleId;
+        role = role.processRole;
+        ready = [ (socketListening "${runtime}/gpu.sock") ];
+      } // gpuRenderNodeRunner role microvm waylandSocket gpuParams)
+    else if role.roleKind == "video" then mkNode {
+      id = role.roleId;
+      role = role.processRole;
+      ready = [ (socketListening "${runtime}/video.sock") ];
+      binaryPath = "${crosvmVideo}/bin/crosvm";
+      argv = [
+        "d2b-role-${role.roleId}"
+        "device" "video-decoder"
+        "--socket-path" "${runtime}/video.sock"
+        "--backend" "vaapi"
+      ];
+      env = [ "XDG_RUNTIME_DIR=/run/user/${toString waylandUid}" ];
+    }
+    else if role.roleKind == "audio" then mkNode {
+      id = role.roleId;
+      role = role.processRole;
+      ready = [
+        (socketListening
+          (builtins.elemAt (audioFor workload.workloadId).process.argv 2))
+      ];
+      binaryPath =
+        (audioFor workload.workloadId).process.executable.runtimePath;
+      argv = (audioFor workload.workloadId).process.argv;
+      env = (audioFor workload.workloadId).process.environment;
+    }
+    else if role.roleKind == "wayland-proxy" then mkNode {
+      id = role.roleId;
+      role = role.processRole;
+      ready = [ (socketListening "${runtime}/wayland-0") ];
+      binaryPath = "${d2bWaylandProxy}/bin/d2b-wayland-proxy";
+      argv = [
+        "d2b-role-${role.roleId}"
+        "--listen" "${runtime}/wayland-0"
+        "--connect" "/run/user/${toString waylandUid}/${cfg.site.waylandSocket}"
+        "--target" workload.canonicalTarget
+        "--provider-kind"
+        (if workload.runtimeImplementation == "cloud-hypervisor"
+         then "local-vm"
+         else workload.runtimeImplementation)
+        "--realm-target" workload.canonicalTarget
+        "--app-id-prefix" "d2b.${workload.workloadId}."
+        "--title-prefix" "[${workload.canonicalTarget}] "
+      ];
+    }
+    else if role.roleKind == "vsock-relay" then mkNode {
+      id = role.roleId;
+      role = role.processRole;
+      ready = [ (componentReady "realm-controller guest transport relay") ];
+    }
+    else if role.roleKind == "guest-control-health" then mkNode {
+      id = role.roleId;
+      role = role.processRole;
+      ready = [
+        (readiness "guest-control-health" {
+          vm = workload.workloadId;
+        })
+      ];
+    }
+    else if role.roleKind == "security-key-frontend" then mkNode {
+      id = role.roleId;
+      role = role.processRole;
+      ready = [ (componentReady "allocator-owned security-key endpoint") ];
+    }
+    else if role.roleKind == "usbip" then mkNode {
+      id = role.roleId;
+      role = role.processRole;
+      ready = [ (componentReady "allocator-owned USBIP attachment") ];
+    }
+    else if role.roleKind == "cloud-hypervisor" then mkNode {
+      id = role.roleId;
+      role = role.processRole;
+      ready = [ (readiness "api-socket-info" "${runtime}/api.sock") ];
+      binaryPath = "${microvm.cloud-hypervisor.package}/bin/cloud-hypervisor";
+      argv = cloudHypervisorArgv workload microvm;
+      env = [ "PATH=${pkgs.coreutils}/bin:${pkgs.gnused}/bin" ];
+      networkInterfaces = lib.optional (workload.networkInterface != null) {
+        inherit (workload.networkInterface) type id mac;
+      };
+    }
+    else null;
 
-  qemuMediaDag = name: vm:
+  workloadDag = workload:
     let
-      emitWaylandProxy = cfg.site.waylandUser != null;
-      hypervisorService = d2bLib.runtimeHypervisorService "qemu-media";
-      # Realm workload identity: present for VMs declared as realm workloads;
-      # the assertion layer guarantees at most one enabled owning row.
-      realmWorkloadRows = cfg._index.realms.workloads.byVm.${name} or [ ];
-      vmWorkloadRow =
-        if lib.length realmWorkloadRows == 1 then builtins.head realmWorkloadRows else null;
-      vmWorkloadIdentity =
-        if vmWorkloadRow != null then {
-          workloadId = vmWorkloadRow.workloadName;
-          realmId = vmWorkloadRow.realmId;
-          realmPath = lib.splitString "." vmWorkloadRow.realmPath;
-          canonicalTarget = vmWorkloadRow.canonicalTarget;
-        } // lib.optionalAttrs (vmWorkloadRow.legacyVmName != null) {
-          legacyVmName = vmWorkloadRow.legacyVmName;
-        } // lib.optionalAttrs (vmWorkloadRow.runtimeKind != null) {
-          runtimeKind = vmWorkloadRow.runtimeKind;
-        } // lib.optionalAttrs (vmWorkloadRow.runtimeProviderId != null) {
-          providerId = vmWorkloadRow.runtimeProviderId;
-        }
-        else null;
+      isCloud = workload.runtimeImplementation == "cloud-hypervisor";
+      computed = cfg._computedWorkloads.${workload.workloadId} or null;
+      microvm = if computed == null then null else computed.config.microvm;
+      workloadRoles = lib.filter
+        (row: row.workloadId == workload.workloadId)
+        roles;
+      selectedRoles = lib.filter
+        (role:
+          role.roleKind != "virtiofsd"
+          && !(isCloud && role.roleKind == "gpu"
+            && (microvm.graphics.renderNodeOnly or false))
+          && !(isCloud && role.roleKind == "gpu-render-node"
+            && !(microvm.graphics.renderNodeOnly or false)))
+        workloadRoles;
+      normalNodes =
+        if isCloud && microvm == null
+        then [ ]
+        else lib.filter (node: node != null)
+          (map (roleNode workload microvm) selectedRoles);
+      shareNodes =
+        if !isCloud || microvm == null
+        then [ ]
+        else virtiofsNodes workload microvm;
+      nodes = normalNodes ++ shareNodes;
+      preflight = roleFor workload.workloadId "store-virtiofs-preflight";
+      hypervisor = roleFor workload.workloadId "cloud-hypervisor";
+      qemu = roleFor workload.workloadId "qemu-media";
+      wayland = roleFor workload.workloadId "wayland-proxy";
+      dependencyNodes = map (node: node.id)
+        (lib.filter (node:
+          node.role != "cloud-hypervisor-runner"
+          && node.role != "guest-control-health")
+          nodes);
+      dagEdges =
+        lib.optionals (preflight != null)
+          (map
+            (node:
+              edge preflight.roleId node.id
+                "The store/resource preflight precedes role startup.")
+            (lib.filter
+              (node:
+                node.id != preflight.roleId
+                && node.role != "cloud-hypervisor-runner"
+                && node.role != "guest-control-health")
+              nodes))
+        ++ lib.optionals (hypervisor != null)
+          (map
+            (id:
+              edge id hypervisor.roleId
+                "Every sidecar is ready before the workload runner starts.")
+            (lib.filter (id: id != preflight.roleId) dependencyNodes))
+        ++ lib.optionals (hypervisor != null)
+          (map
+            (node:
+              edge hypervisor.roleId node.id
+                "Guest protocol readiness follows workload runner startup.")
+            (lib.filter
+              (node: node.role == "guest-control-health")
+              nodes))
+        ++ lib.optionals (qemu != null && wayland != null) [
+          (edge wayland.roleId qemu.roleId
+            "The mediated display endpoint is ready before QEMU starts.")
+        ];
     in
     {
-      vm = name;
-    } // lib.optionalAttrs (vmWorkloadIdentity != null) {
-      workloadIdentity = vmWorkloadIdentity;
-    } // {
-      nodes = [
-        (node name {
-          id = "host-reconcile";
-          role = "host-reconcile";
-          readiness = [ (componentReady "host state, runtime directories, and bridges are reconciled") ];
-        })
-      ] ++ lib.optional emitWaylandProxy (node name ({
-        id = "wayland-proxy";
-        role = "wayland-proxy";
-        readiness = [
-          (unixSocketListening "/run/d2b-wlproxy/${name}/wayland-0")
-        ];
-      } // waylandProxyRunner "qemu-media" name vm))
-      ++ [
-        (hypervisorRunnerNode name hypervisorService {
-          runner = {
-            binaryPath = qemuMediaBinaryPath;
-            argv = qemuMediaArgv name;
-            env = qemuMediaEnv name;
-          };
-          readiness = [ (unixSocketListening (qemuMediaQmpSocket name)) ];
-        })
-      ];
-      edges =
-        if emitWaylandProxy then [
-          (edge "host-reconcile" "wayland-proxy" "The Wayland proxy starts only after host reconciliation prepares runtime directories and socket ACLs.")
-          (edge "wayland-proxy" "qemu-media" "QEMU media connects to the per-VM Wayland proxy instead of the host compositor socket.")
-        ] else [
-          (edge "host-reconcile" "qemu-media" "QEMU media starts only after host reconciliation prepares runtime directories and network state.")
-        ];
+      vm = workload.workloadId;
+      workloadIdentity = {
+        inherit (workload)
+          workloadId
+          workloadName
+          realmId
+          canonicalTarget
+          ;
+        realmPath = lib.splitString "." workload.realmPath;
+        runtimeKind = workload.runtimeImplementation;
+        providerId = workload.runtimeBinding.providerId;
+      };
+      inherit nodes;
+      edges = dagEdges;
       invariants = {
         perVmAuditPipeline = true;
         swtpmPreStartFlush = true;
@@ -1277,80 +634,21 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       };
     };
 
-  usbipdDag = envName: m:
-    let
-      vmId = "sys-${envName}-usbipd";
-    in {
-      vm = vmId;
-      nodes = [
-        (runnerNode vmId {
-          id = "backend";
-          role = "usbip";
-          readiness = [ (tcpPort "127.0.0.1" (backendPort envName)) ];
-          runner = usbipBackendRunner envName;
-        })
-        (runnerNode vmId {
-          id = "proxy";
-          role = "usbip";
-          readiness = [ (tcpPort m.hostUplinkIp 3240) ];
-          runner = usbipProxyRunner envName m;
-        })
-      ];
-      edges = [
-        (edge "backend" "proxy" "The per-env USBIP proxy starts only after the backend usbipd listener is ready.")
-      ];
-      invariants = {
-        perVmAuditPipeline = true;
-        swtpmPreStartFlush = true;
-        tpmOwnershipMigrationWithoutRunningVmMutation = true;
-        usbipGating = true;
-      };
-    };
-
-  data = {
+  dags = map workloadDag workloads;
+  processesData = {
     schemaVersion = "v2";
-    vms =
-      (lib.mapAttrsToList vmDag normalNixosVms)
-      ++ (lib.mapAttrsToList qemuMediaDag qemuMediaVms)
-      ++ (lib.mapAttrsToList usbipdDag cfg._index.usbip.envMeta);
+    vms = dags;
   };
-
-  jsonText = builtins.toJSON data;
-  jsonFile = pkgs.writeText "d2b-processes.json" jsonText;
-  videoAssertions = lib.flatten (lib.mapAttrsToList (name: vm:
-    let
-      manifest = cfg.manifest.${name};
-      microvm = d2bLib.vmRunner config name;
-      expectedMediaArg = "socket=/run/d2b-video/${name}/video.sock";
-      values = mediaArgValues name vm manifest;
-      flags = mediaFlagTokens name vm manifest;
-    in
-    lib.optionals (vm.enable && vm.graphics.videoSidecar) [
-      {
-        assertion = toString microvm.cloud-hypervisor.package == toString spectrumCH;
-        message = ''
-          d2b.vms.${name}.graphics.videoSidecar requires the vendored patched
-          Cloud Hypervisor package from pkgs/spectrum-ch. Remove the
-          microvm.cloud-hypervisor.package override or disable graphics.videoSidecar.
-        '';
-      }
-      {
-        assertion = flags == [ "--vhost-user-media" ] && values == [ expectedMediaArg ];
-        message = ''
-          d2b.vms.${name}.graphics.videoSidecar requires exactly one
-          --vhost-user-media argument equal to ${expectedMediaArg}. Do not add
-          or override media endpoints via microvm.cloud-hypervisor.extraArgs.
-        '';
-      }
-    ]) normalNixosVms);
+  processesFile = pkgs.writeText "d2b-processes-v2.json"
+    (builtins.toJSON processesData);
 in
 {
-  config = {
-    assertions = videoAssertions;
-    d2b._hostToolPackages.d2bWaylandProxy = d2bWaylandProxyPackage;
-    d2b._bundle.processesJson = {
-      inherit data jsonText;
-      path = "${jsonFile}";
+  config.d2b = {
+    _hostToolPackages.d2bWaylandProxy = d2bWaylandProxy;
+    _bundle.processesJson = {
+      data = processesData;
+      jsonText = builtins.toJSON processesData;
+      path = processesFile;
       installFileName = "processes.json";
       classification = "contractPrivateNonSecret";
       sensitivity = "nonSecret";

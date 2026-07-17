@@ -7,7 +7,7 @@
 //! access is sound here.
 //!
 //! Migrated gates:
-//!   * tests/vm-submodule-eval.sh -> vm_submodule_compose_vm_shape
+//!   * tests/vm-submodule-eval.sh -> workload_composition_shape
 //!   * tests/minijail-version-check.sh -> minijail_version_comparison_canary,
 //!     minijail_version_parser_canary
 
@@ -25,24 +25,24 @@ fn any_line_matches(content: &str, pattern: &str) -> bool {
 // ---------------------------------------------------------------------------
 // Migrated from tests/vm-submodule-eval.sh.
 //
-// Asserts `nixos-modules/vm-submodule.nix` exists with the expected `composeVm`
-// ownership shape. The full toplevel-hash parity test (vm-submodule.nix vs the
-// upstream microvm.vms evaluation) is covered separately.
-//
-// Spec correction: the bash gate's assertion text speaks of a `composeVm`
-// binding, but the current repo renamed it to `_composeVm` (it re-exports
-// `evaluator._composeVm`). The gate's unanchored `composeVm\s*=` grep still
-// matches the `_composeVm =` substring, so the gate passes against the current
-// repo; this port keeps the same unanchored pattern (existing code is canon).
+// Asserts the legacy evaluator split is gone and the workload evaluator owns
+// the canonical composition entry point.
 // ---------------------------------------------------------------------------
 #[test]
-fn vm_submodule_compose_vm_shape() {
-    let rel = "nixos-modules/vm-submodule.nix";
-    assert!(repo_path_exists(rel), "vm-submodule-eval: {rel} missing");
-    let submodule = read_repo_file(rel);
+fn workload_composition_shape() {
     assert!(
-        any_line_matches(&submodule, r"composeVm\s*="),
-        "vm-submodule-eval: composeVm function not found in {rel}"
+        !repo_path_exists("nixos-modules/vm-submodule.nix"),
+        "workload composition must not restore vm-submodule.nix"
+    );
+    assert!(
+        !repo_path_exists("nixos-modules/vm-options.nix"),
+        "workload composition must not restore vm-options.nix"
+    );
+    let rel = "nixos-modules/vm-evaluator.nix";
+    let evaluator = read_repo_file(rel);
+    assert!(
+        any_line_matches(&evaluator, r"_composeWorkload\s*="),
+        "workload composition entry point not found in {rel}"
     );
 }
 
