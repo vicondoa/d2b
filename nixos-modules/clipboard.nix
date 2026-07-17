@@ -30,48 +30,52 @@ let
     || (cfg.policy.crossRealm.enable && (cfg.modes.hostCrossRealmPicker || cfg.modes.vmCrossRealmPicker));
 
   niriProgramEnabled = config.programs.niri.enable or false;
-  bridgeVmSet =
-    (lib.filterAttrs (_name: vm:
-      vm.enable && vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandProxy.enable
-    ) (d2bLib.normalNixosVms config.d2b.vms))
-    // (d2bLib.qemuMediaVms config.d2b.vms);
-  bridgeVms = lib.attrNames bridgeVmSet;
-  indexedWorkloads = config.d2b._index.realms.workloads.enabled;
-  indexedWorkloadForVm = vm:
-    lib.findFirst (workload: workload.legacyVmName == vm) null indexedWorkloads;
-  bridgeVmEndpoint = vm:
-    let workload = indexedWorkloadForVm vm;
-    in {
-      canonicalTarget =
-        if workload == null then "${vm}.local.d2b" else workload.canonicalTarget;
-      providerKind =
-        if workload == null then "local-vm" else workload.providerKind;
-      legacyVmName = vm;
-      socketComponent = vm;
-      expectedUid = d2bLib.stablePrincipalId "d2b-${vm}-wlproxy";
+  indexedWorkloads = config.d2b._index.workloads.enabledList;
+  displayBindings = config.d2b._index.providerRegistryV2Mappings.display;
+  displayBindingFor = workload:
+    lib.findFirst
+      (binding: binding.workloadId == workload.workloadId)
+      null
+      displayBindings;
+  bridgeEndpointFor = workload:
+    let
+      runtime = workload.providerBindings.runtime or null;
+      display = displayBindingFor workload;
+      sameUid = runtime != null && runtime.implementationId == "systemd-user";
+      supportedRuntime =
+        runtime != null
+        && builtins.elem runtime.implementationId
+          [ "cloud-hypervisor" "qemu-media" "systemd-user" ];
+      waylandUserAllowed =
+        !sameUid
+        || (site.waylandUser != null
+          && lib.elem site.waylandUser
+            config.d2b.realms.${workload.realmName}.allowedUsers);
+      ownerPrincipal =
+        if sameUid
+        then site.waylandUser
+        else "d2b-role-${display.ownerRoleId}";
+    in
+    if display == null || !supportedRuntime || !waylandUserAllowed
+    then null
+    else {
+      inherit (workload) canonicalTarget realmId workloadId;
+      runtimeProviderId = runtime.providerId;
+      displayProviderId = display.providerId;
+      socketComponent = display.endpointIds.proxy;
+      inherit ownerPrincipal sameUid;
+      expectedUid =
+        if sameUid
+        then config.users.users.${site.waylandUser}.uid
+        else d2bLib.stablePrincipalId ownerPrincipal;
     };
-  unsafeLocalWorkloads = lib.filter
-    (workload:
-      workload.kind == "unsafe-local"
-      && site.waylandUser != null
-      && lib.elem site.waylandUser
-        config.d2b.realms.${workload.realmName}.allowedUsers)
-    indexedWorkloads;
-  unsafeLocalEndpoint = workload: {
-    canonicalTarget = workload.canonicalTarget;
-    providerKind = "unsafe-local";
-    legacyVmName = null;
-    socketComponent =
-      "endpoint-${builtins.substring 0 24 (builtins.hashString "sha256" workload.canonicalTarget)}";
-    expectedUid = config.users.users.${site.waylandUser}.uid;
-  };
-  bridgeEndpoints =
-    map bridgeVmEndpoint bridgeVms
-    ++ map unsafeLocalEndpoint unsafeLocalWorkloads;
-  bridgePeers = map (vm: {
-    vmName = vm;
-    expectedUid = d2bLib.stablePrincipalId "d2b-${vm}-wlproxy";
-  }) bridgeVms;
+  bridgeEndpoints = lib.filter (endpoint: endpoint != null)
+    (map bridgeEndpointFor indexedWorkloads);
+  bridgeWorkloads = map (endpoint: endpoint.canonicalTarget) bridgeEndpoints;
+  bridgePeers = map (endpoint: {
+    inherit (endpoint)
+      canonicalTarget realmId workloadId runtimeProviderId displayProviderId expectedUid;
+  }) bridgeEndpoints;
   waylandUid = toString config.users.users.${site.waylandUser}.uid;
   waylandGroup = config.users.users.${site.waylandUser}.group;
   clipdBridgeRootTmpfiles =
@@ -88,18 +92,22 @@ let
         "z ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge 0710 root root -"
         "a+ ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge - - - - u:${site.waylandUser}:--x"
       ]
-      ++ lib.concatMap (vm: [
-        "d ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge/${vm} 0770 ${site.waylandUser} d2b-${vm}-wlproxy -"
-        "z ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge/${vm} 0770 ${site.waylandUser} d2b-${vm}-wlproxy -"
-        "a+ /run/d2b - - - - u:d2b-${vm}-wlproxy:--x"
-        "a+ ${cfg.runtime.bridgeRoot} - - - - u:d2b-${vm}-wlproxy:--x"
-        "a+ ${cfg.runtime.bridgeRoot}/${waylandUid} - - - - u:d2b-${vm}-wlproxy:--x"
-        "a+ ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge - - - - u:d2b-${vm}-wlproxy:--x"
-      ]) bridgeVms
-      ++ lib.concatMap (workload: [
-        "d ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge/${(unsafeLocalEndpoint workload).socketComponent} 0700 ${site.waylandUser} ${waylandGroup} -"
-        "z ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge/${(unsafeLocalEndpoint workload).socketComponent} 0700 ${site.waylandUser} ${waylandGroup} -"
-      ]) unsafeLocalWorkloads
+      ++ lib.concatMap
+        (endpoint:
+          if endpoint.sameUid
+          then [
+            "d ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge/${endpoint.socketComponent} 0700 ${site.waylandUser} ${waylandGroup} -"
+            "z ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge/${endpoint.socketComponent} 0700 ${site.waylandUser} ${waylandGroup} -"
+          ]
+          else [
+            "d ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge/${endpoint.socketComponent} 0770 ${site.waylandUser} ${endpoint.ownerPrincipal} -"
+            "z ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge/${endpoint.socketComponent} 0770 ${site.waylandUser} ${endpoint.ownerPrincipal} -"
+            "a+ /run/d2b - - - - u:${endpoint.ownerPrincipal}:--x"
+            "a+ ${cfg.runtime.bridgeRoot} - - - - u:${endpoint.ownerPrincipal}:--x"
+            "a+ ${cfg.runtime.bridgeRoot}/${waylandUid} - - - - u:${endpoint.ownerPrincipal}:--x"
+            "a+ ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge - - - - u:${endpoint.ownerPrincipal}:--x"
+          ])
+        bridgeEndpoints
     );
 
   configJson = builtins.toJSON {
@@ -121,7 +129,7 @@ let
     runtime = {
       bridgeRoot = cfg.runtime.bridgeRoot;
       bridgeSocketTemplate = "${cfg.runtime.bridgeRoot}/<uid>/bridge/<endpoint>/${cfg.runtime.bridgeSocketName}";
-      inherit bridgeVms;
+      inherit bridgeWorkloads;
       inherit bridgePeers;
       inherit bridgeEndpoints;
       parentProvisioning = "d2bd-broker-lifecycle";
@@ -231,17 +239,17 @@ in
         onVmLock = lib.mkOption {
           type = lib.types.enum [ "keep" "quarantine" "drop" ];
           default = "quarantine";
-          description = "Retention action for entries attributed to a VM when it locks.";
+          description = "Retention action for entries attributed to a workload when it locks.";
         };
         onVmPause = lib.mkOption {
           type = lib.types.enum [ "keep" "quarantine" "drop" ];
           default = "quarantine";
-          description = "Retention action for entries attributed to a VM when it pauses.";
+          description = "Retention action for entries attributed to a workload when it pauses.";
         };
         onVmStop = lib.mkOption {
           type = lib.types.enum [ "keep" "quarantine" "drop" ];
           default = "drop";
-          description = "Retention action for entries attributed to a VM when it stops.";
+          description = "Retention action for entries attributed to a workload when it stops.";
         };
         onVmDestroy = lib.mkOption {
           type = lib.types.enum [ "drop" ];
@@ -412,7 +420,7 @@ in
       captureVmClipboard = lib.mkOption {
         type = lib.types.bool;
         default = true;
-        description = "Capture allowed VM clipboard selections through the Wayland bridge.";
+        description = "Capture allowed workload clipboard selections through the Wayland bridge.";
       };
       hostCrossRealmPicker = lib.mkOption {
         type = lib.types.bool;
@@ -422,7 +430,7 @@ in
       vmCrossRealmPicker = lib.mkOption {
         type = lib.types.bool;
         default = true;
-        description = "Allow VM-destination cross-realm picker prompts when trusted intent exists.";
+        description = "Allow workload-destination cross-realm picker prompts when trusted intent exists.";
       };
       primarySelection = lib.mkOption {
         type = lib.types.enum [ "deny" ];
@@ -443,8 +451,9 @@ in
         description = ''
           Broker-provisioned root for per-user/per-workload clipboard bridge
           sockets. The effective template is
-          `<bridgeRoot>/<uid>/bridge/<endpoint>/<bridgeSocketName>`, where
-          canonical non-VM targets use a stable hash-shortened endpoint component.
+          `<bridgeRoot>/<uid>/bridge/<endpoint>/<bridgeSocketName>`, where the
+          endpoint is the opaque proxy endpoint id from the canonical display
+          provider binding.
           The user service must not create `/run/d2b` parents; d2bd and the
           broker own parent creation, traversal ACLs, endpoint ACLs, and teardown.
         '';
@@ -453,7 +462,7 @@ in
         type = lib.types.strMatching "^[A-Za-z0-9_.-]+\\.sock$";
         default = "clip.sock";
         readOnly = true;
-        description = "Basename for each per-VM internal clipboard bridge socket.";
+        description = "Basename for each per-workload internal clipboard bridge socket.";
       };
     };
   };
