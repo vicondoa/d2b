@@ -174,8 +174,8 @@ mod tests {
     fn audit_input() -> VideoArgvInput {
         VideoArgvInput {
             crosvm_binary_path: "/nix/store/CROSVMVIDEOCROSVMVIDEO-crosvm/bin/crosvm".to_owned(),
-            vm_name: "corp-desktop".to_owned(),
-            socket_path: "/run/d2b-video/corp-desktop/video.sock".to_owned(),
+            vm_name: "ucvmyzodoxhnswumcjsa".to_owned(),
+            socket_path: "/run/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/roles/nulwtvcxjg3av2c63baq/video.sock".to_owned(),
             backend: VideoBackend::Vaapi,
         }
     }
@@ -187,13 +187,18 @@ mod tests {
         assert_eq!(argv[1], "device");
         assert_eq!(argv[2], "video-decoder");
         let joined = argv.join(" ");
-        assert!(joined.contains("--socket-path /run/d2b-video/corp-desktop/video.sock"));
+        assert!(joined.contains(
+            "--socket-path /run/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/roles/nulwtvcxjg3av2c63baq/video.sock"
+        ));
         assert!(joined.contains("--backend vaapi"));
     }
 
     #[test]
     fn exec_arg0_matches_systemd_unit_name() {
-        assert_eq!(exec_arg0(&audit_input()).unwrap(), "d2b-corp-desktop-video");
+        assert_eq!(
+            exec_arg0(&audit_input()).unwrap(),
+            "d2b-ucvmyzodoxhnswumcjsa-video"
+        );
     }
 
     #[test]

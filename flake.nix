@@ -759,10 +759,68 @@
               type = "runtime";
               implementationId = "cloud-hypervisor";
             };
+            providers.devices = {
+              type = "device";
+              implementationId = "host-mediated";
+            };
+            providers.audio = {
+              type = "audio";
+              implementationId = "pipewire-vhost-user";
+            };
+            providers.display = {
+              type = "display";
+              implementationId = "wayland";
+            };
             workloads.corp-full = {
-              provider = "runtime";
+              providerRefs = {
+                runtime = "runtime";
+                device = "devices";
+                audio = "audio";
+                display = "display";
+              };
+              tpm.enable = true;
+              graphics = {
+                enable = true;
+                videoSidecar = true;
+              };
+              audio.enable = true;
+              usbip.enable = true;
+              display.wayland = true;
               config = {
                 networking.hostName = lib.mkDefault "corp-full";
+                users.users.alice = {
+                  isNormalUser = true;
+                  uid = 1000;
+                };
+              };
+            };
+            workloads.corp-render = {
+              providerRefs = {
+                runtime = "runtime";
+                device = "devices";
+                display = "display";
+              };
+              graphics = {
+                enable = true;
+                renderNodeOnly = true;
+              };
+              display.wayland = true;
+              config = {
+                networking.hostName = lib.mkDefault "corp-render";
+                users.users.alice = {
+                  isNormalUser = true;
+                  uid = 1000;
+                };
+              };
+            };
+            workloads.corp-fido = {
+              providerRefs = {
+                runtime = "runtime";
+                device = "devices";
+              };
+              securityKey.enable = true;
+              config = {
+                networking.hostName = lib.mkDefault "corp-fido";
                 users.users.alice = {
                   isNormalUser = true;
                   uid = 1000;
@@ -792,6 +850,7 @@
           cp ${bundle.allocatorJson.path} $out/allocator.json
           cp ${bundle.realmControllersJson.path} $out/realm-controllers.json
           cp ${bundle.realmIdentityJson.path} $out/realm-identity.json
+          cp ${bundle.providerRegistryV2Json.path} $out/provider-registry-v2.json
           cp ${bundle.bundle.path} $out/bundle.json
           cp ${manifestPkg}/share/d2b/vms.json $out/manifest.json
           ${nixpkgs.lib.concatStringsSep "\n" (nixpkgs.lib.mapAttrsToList

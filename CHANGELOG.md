@@ -91,6 +91,8 @@ deprecations ship one minor release before removal.
 - Aligned observability relay profiles, endpoints, source keys, and contract
   coverage with canonical realm/workload/role identities while retaining the
   frozen bounded local-observability provider mapping.
+- Aligned rendered device runner contracts and golden fixtures with canonical
+  realm/workload/role paths, allocator leases, and FD-only device mediation.
 - Replaced the legacy environment and VM declaration graph with realm-owned
   providers and workloads, canonical-ID network/storage/process artifacts,
   fixed local-root endpoints, and parent-spawned child realm controllers and

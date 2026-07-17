@@ -32,8 +32,11 @@ let
             implementationId = "host-mediated";
           };
           workloads.desktop = {
-            provider = "runtime";
-            launcher.capabilities = [ "tpm" ];
+            providerRefs = {
+              runtime = "runtime";
+              device = "devices";
+            };
+            tpm.enable = true;
           };
         };
       })
