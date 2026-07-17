@@ -145,12 +145,13 @@ fn wayland_proxy_rendered_profile_is_role_scoped() {
                 identity.workload_id.as_str(),
                 node.id.0
             );
-            assert!(node
-                .profile
-                .mount_policy
-                .writable_paths
-                .iter()
-                .any(|path| path.path == runtime));
+            assert!(
+                node.profile
+                    .mount_policy
+                    .writable_paths
+                    .iter()
+                    .any(|path| path.path == runtime)
+            );
         }
     }
     assert_eq!(
