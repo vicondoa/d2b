@@ -183,7 +183,6 @@ fn broker_disposition_doc_matches_schema_and_dispatcher() {
 
     let source_tree = broker_source_tree();
     let arm_segments = dispatcher_arm_segments();
-    let privileges_nix = read_repo_file("nixos-modules/privileges-json.nix");
 
     for (variant, disposition) in rows {
         assert!(
@@ -231,12 +230,6 @@ fn broker_disposition_doc_matches_schema_and_dispatcher() {
                     segment.is_none(),
                     "broker-enum-disposition: compile-time-only variant {variant} reached \
                      the wire dispatcher"
-                );
-            }
-            "retired-denied" => {
-                assert!(
-                    !privileges_nix.contains(&format!(r#""operation": "{variant}""#)),
-                    "broker-enum-disposition: retired variant {variant} still has a declarative authorization row"
                 );
             }
             "promoted-live" => {

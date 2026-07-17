@@ -1,5 +1,9 @@
-{ ... }:
+{ config, ... }:
 
+let
+  guestSessionRows =
+    config.d2b._workloadGuestSessionCredentialRows or [ ];
+in
 {
   # PID1 owns only the fixed filesystem anchors. Every realm, workload,
   # provider, role, lock, key, audit, and store-view path below these anchors
@@ -10,5 +14,8 @@
     "d /var/cache/d2b 0750 root d2bd -"
     "z /var/cache/d2b 0750 root d2bd -"
     "a+ /run/d2b - - - - m::rwx"
-  ];
+  ] ++ map
+    (row:
+      "a+ /run/d2b - - - - g:${row.readerPrincipal}:--x")
+    guestSessionRows;
 }

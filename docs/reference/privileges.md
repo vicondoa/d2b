@@ -215,8 +215,10 @@ Guest ComponentSession credential generation is realm-controller authority, not
 a privileged signing operation. The owning realm broker may materialize the
 controller-supplied bytes into its declared private runtime path, but it neither
 holds the parent private key nor derives a guest signature.
-An older wire variant may remain decodable during the clean break, but its
-absence from `brokerOperations` makes authorization deny it by default.
+The declarative omission of `GuestControlSign` is dependency-blocked until the
+live daemon/broker dispatch is removed. A tree that still has that live Rust
+operation must fail full privilege parity rather than filter the operation from
+the expected matrix.
 
 The wire goldens under `tests/golden/broker-wire/` cover one canonical
 encoding per reserved variant so handlers can be added without

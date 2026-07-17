@@ -202,7 +202,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2b-contract-tests/tests/policy_guest.rs::guest_session_credential_contract_present", "packages/d2b-contract-tests/tests/policy_guest.rs::guest_session_credential_has_exact_public_bindings_and_private_delivery", "packages/d2b-contract-tests/tests/policy_guest.rs::legacy_guest_token_materializer_and_signing_authority_are_absent"]
+successor_ids = ["packages/d2b-contract-tests/tests/policy_guest.rs::guest_session_credential_contract_present", "packages/d2b-contract-tests/tests/policy_guest.rs::guest_session_credential_has_exact_public_bindings_and_private_delivery", "packages/d2b-contract-tests/tests/policy_guest.rs::legacy_guest_token_materializer_and_signing_authority_are_absent", "packages/d2b-contract-tests/tests/policy_guest.rs::privileges_parity_does_not_hide_live_guest_control_sign"]
 exercised_today = "yes"
 
 [[script]]

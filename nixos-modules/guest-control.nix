@@ -26,6 +26,19 @@ in
       description = "Whether d2b's guest-control credential surface is wired in this guest.";
     };
 
+    workloadId = lib.mkOption {
+      type = lib.types.strMatching "^([a-z2-7]{20}|[a-z][a-z0-9-]*)$";
+      default = name;
+      internal = true;
+      readOnly = true;
+      description = ''
+        Canonical workload identity passed to the authenticated guest session
+        runtime. Direct module consumers default to their module name; the
+        realm workload composer always forces the canonical workload ID.
+        Runtime use is blocked on the shared guest session codec and encoder.
+      '';
+    };
+
     guestConfigPath = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       internal = true;
@@ -45,6 +58,7 @@ in
     sessionCredential = {
       name = lib.mkOption {
         type = lib.types.enum [ "d2b-guest-session-v2" ];
+        default = "d2b-guest-session-v2";
         internal = true;
         readOnly = true;
         description = "Fixed systemd credential name consumed by the authenticated guest session runtime.";
@@ -52,6 +66,7 @@ in
 
       sourcePath = lib.mkOption {
         type = lib.types.strMatching "^/run/d2b-guest-control-host/[a-z0-9-]+$";
+        default = "/run/d2b-guest-control-host/d2b-guest-session-v2";
         internal = true;
         readOnly = true;
         description = "Read-only guest path to the runtime-provisioned ComponentSession credential.";
@@ -309,7 +324,7 @@ in
                       " --shell-systemctl-path ${pkgs.systemd}/bin/systemctl"
                 );
             in
-            "${guestPackages.d2b-guestd-static}/bin/d2b-guestd --serve --vm-id ${lib.escapeShellArg name} --workload-id ${lib.escapeShellArg name}${execFlags}${execRuntimeFlags}${configFlags}${usbipFlags}${audioFlags}${activationFlags}${shellFlags}";
+            "${guestPackages.d2b-guestd-static}/bin/d2b-guestd --serve --vm-id ${lib.escapeShellArg name} --workload-id ${lib.escapeShellArg cfg.workloadId}${execFlags}${execRuntimeFlags}${configFlags}${usbipFlags}${audioFlags}${activationFlags}${shellFlags}";
           LoadCredential = [
             "${cfg.sessionCredential.name}:${cfg.sessionCredential.sourcePath}"
           ];

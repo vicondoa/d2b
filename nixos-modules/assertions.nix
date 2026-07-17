@@ -252,6 +252,13 @@ let
           && !row.observability.logsCredential
           && !row.observability.auditsCredential
           && !row.observability.metricsCredential
+          && row.runtimeDependency.status == "blocked"
+          && row.runtimeDependency.codec == "GuestSessionCredentialV1"
+          && row.runtimeDependency.liveOperationRemoval
+            == "GuestControlSign"
+          && row.runtimeDependency.requiredTogether
+            == [ "load-credential" "workload-id" ]
+          && !row.runtimeDependency.standalone
           && !row.materializedByHostActivation)
         guestSessionRows;
       message = "Guest session credentials must remain private runtime material with no store, bundle, activation, or ambient delivery path.";

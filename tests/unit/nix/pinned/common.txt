@@ -174,11 +174,14 @@ guest-config-containment/store-source-sentinel
 guest-config-containment/vm-start-intent-canonical
 guest-config-containment/workload-config-evaluated
 guest-config-containment/workload-id-not-name
+guest-control-auth/direct-consumer-safe-defaults
 guest-control-auth/exact-payload-bindings
 guest-control-auth/no-bundle-or-signing-surface
 guest-control-auth/private-credential-delivery
 guest-control-auth/realm-runtime-authority
 guest-control-auth/rotation-adoption-fail-closed
+guest-control-auth/runtime-ancestor-traversal
+guest-control-auth/runtime-wiring-is-paired
 guest-control-vsock/base-positive
 guest-exec-policy/control-is-host-forced
 guest-exec-policy/control-no-exec-positive

@@ -281,12 +281,14 @@ fn legacy_guest_token_materializer_and_signing_authority_are_absent() {
     ] {
         let source = read_repo_file(path);
         assert!(
-            !source.contains("guest_control_token")
-                && !source.contains("guest-control-token")
-                && !source.contains("GuestControlSign"),
-            "{path} retains a legacy token/signing surface"
+            !source.contains("guest_control_token") && !source.contains("guest-control-token"),
+            "{path} retains a legacy token surface"
         );
     }
+    assert!(
+        !read_repo_file("nixos-modules/privileges-json.nix").contains("GuestControlSign"),
+        "the emitted privileges matrix must omit GuestControlSign"
+    );
 
     let legacy_storage = read_repo_file("nixos-modules/storage-json.nix");
     assert!(
@@ -308,6 +310,17 @@ fn legacy_guest_token_materializer_and_signing_authority_are_absent() {
             "the public manifest emitter must not contain {forbidden}"
         );
     }
+}
+
+#[test]
+fn privileges_parity_does_not_hide_live_guest_control_sign() {
+    let parity = read_repo_file("packages/d2b-contract-tests/tests/privileges_parity.rs");
+    assert!(
+        !parity.contains("GuestControlSign")
+            && !parity.contains(".retain(|row|")
+            && !parity.contains(".filter(|row|"),
+        "privileges parity must compare the complete live Rust matrix without filtering"
+    );
 }
 
 #[test]

@@ -86,6 +86,30 @@ let
   realmControllersJson =
     builtins.toJSON cfg.d2b._bundle.realmControllersJson.data;
   bundleJson = builtins.toJSON cfg.d2b._bundle.bundle.data;
+  directGuestControlOptions =
+    (import ../../../../nixos-modules/guest-control.nix {
+      config = { };
+      d2bInputs = null;
+      inherit lib pkgs;
+      name = "direct-consumer";
+    }).options.d2b.guestControl;
+  execStart = service.serviceConfig.ExecStart;
+  pathAt = path:
+    lib.findFirst (row: row.pathTemplate == path) null storageRows;
+  grantFor = row:
+    lib.findFirst
+      (grant:
+        grant.principal.kind == "group"
+        && grant.principal.value == credentialRow.readerPrincipal)
+      null
+      row.accessAcl;
+  realmRuntimeRoot = pathAt "/run/d2b/r";
+  realmRuntime = pathAt "/run/d2b/r/${credentialRow.realmId}";
+  realmWorkloads = pathAt "/run/d2b/r/${credentialRow.realmId}/w";
+  workloadRuntime = pathAt workloadRow.runtimeRoot;
+  runtimeRootRule = "d /run/d2b 1770 root d2b -";
+  runtimeRootGrant =
+    "a+ /run/d2b - - - - g:${credentialRow.readerPrincipal}:--x";
 in
 assert credentialShare != null;
 assert credentialShare.source == "${workloadRow.runtimeRoot}/guest-session";
@@ -105,8 +129,10 @@ assert credentialRow.materializedByHostActivation == false;
 assert credentialStorage != null;
 assert credentialDirectoryStorage != null;
 assert credentialStorage.owner.value == "root";
-assert credentialStorage.group.kind == "gid";
-assert credentialStorage.group.value == toString credentialRow.readerGid;
+assert credentialStorage.group.kind == "group";
+assert credentialStorage.group.value == credentialRow.readerPrincipal;
+assert cfg.users.groups.${credentialRow.readerPrincipal}.gid
+  == credentialRow.readerGid;
 assert credentialStorage.mode == "0440";
 assert credentialStorage.lifecycle == "process-scoped";
 assert credentialStorage.persistence == "process-scoped";
@@ -116,6 +142,16 @@ assert credentialStorage.repairPolicy == "broker-fail-closed";
 assert credentialStorage.sensitivity == "secret-adjacent";
 assert credentialDirectoryStorage.owner.value == "root";
 assert credentialDirectoryStorage.mode == "0750";
+assert builtins.elem runtimeRootRule cfg.systemd.tmpfiles.rules;
+assert builtins.elem runtimeRootGrant cfg.systemd.tmpfiles.rules;
+assert realmRuntimeRoot != null;
+assert realmRuntime != null;
+assert realmWorkloads != null;
+assert workloadRuntime != null;
+assert (grantFor realmRuntimeRoot).permissions == "x";
+assert (grantFor realmRuntime).permissions == "x";
+assert (grantFor realmWorkloads).permissions == "x";
+assert (grantFor workloadRuntime).permissions == "x";
 assert credentialProfile != null;
 assert builtins.elem credentialShare.source
   credentialProfile.data.mountPolicy.readOnlyPaths;
@@ -125,6 +161,10 @@ assert service.serviceConfig.LoadCredential
   == [
     "d2b-guest-session-v2:/run/d2b-guest-control-host/d2b-guest-session-v2"
   ];
+assert lib.hasInfix
+  "--workload-id ${workload.workloadId}"
+  execStart;
+assert !(lib.hasInfix "guest_control_token" execStart);
 assert builtins.elem "/run/d2b-guest-control-host"
   service.unitConfig.RequiresMountsFor;
 assert !(lib.hasInfix "GuestControlSign" privilegesJson);
@@ -147,15 +187,16 @@ assert !(lib.hasInfix "d2b-guest-session-v2" bundleJson);
     payloadContract
     repairOwner
     resourceRef
+    runtimeDependency
     schemaVersion
     ;
   inherit (credentialShare) mountPoint readOnly;
   hostStorage = {
     directoryMode = credentialDirectoryStorage.mode;
     groupIsWorkloadPrincipal =
-      credentialStorage.group.kind == "gid"
+      credentialStorage.group.kind == "group"
         && credentialStorage.group.value
-          == toString credentialRow.readerGid;
+          == credentialRow.readerPrincipal;
     mode = credentialStorage.mode;
     owner = credentialStorage.owner.value;
   };
@@ -176,5 +217,82 @@ assert !(lib.hasInfix "d2b-guest-session-v2" bundleJson);
     && credentialRow.creator == credentialRow.authority.materialization
     && credentialRow.repairOwner
       == credentialRow.authority.materialization;
+  directDefaults = {
+    credentialName =
+      directGuestControlOptions.sessionCredential.name.default;
+    credentialSourcePath =
+      directGuestControlOptions.sessionCredential.sourcePath.default;
+    workloadId = directGuestControlOptions.workloadId.default;
+  };
+  pairedRuntimeWiring = {
+    hasCredential =
+      service.serviceConfig.LoadCredential
+        == [
+          "d2b-guest-session-v2:/run/d2b-guest-control-host/d2b-guest-session-v2"
+        ];
+    hasCanonicalWorkloadId =
+      lib.hasInfix "--workload-id ${workload.workloadId}" execStart;
+    legacyTokenAbsent = !(lib.hasInfix "guest_control_token"
+      (builtins.toJSON service.serviceConfig.LoadCredential + execStart));
+    dependencyBlocked =
+      credentialRow.runtimeDependency.status == "blocked"
+      && credentialRow.runtimeDependency.requiredTogether
+        == [ "load-credential" "workload-id" ]
+      && !credentialRow.runtimeDependency.standalone;
+  };
+  readerPrincipal = credentialRow.readerPrincipal;
+  traversal = [
+    {
+      path = "/run/d2b";
+      owner = "root";
+      group = "d2b";
+      mode = "1770";
+      grant = if builtins.elem runtimeRootGrant cfg.systemd.tmpfiles.rules
+        then "x"
+        else null;
+    }
+    {
+      path = realmRuntimeRoot.pathTemplate;
+      owner = realmRuntimeRoot.owner.value;
+      group = realmRuntimeRoot.group.value;
+      mode = realmRuntimeRoot.mode;
+      grant = (grantFor realmRuntimeRoot).permissions;
+    }
+    {
+      path = realmRuntime.pathTemplate;
+      owner = realmRuntime.owner.value;
+      group = realmRuntime.group.value;
+      mode = realmRuntime.mode;
+      grant = (grantFor realmRuntime).permissions;
+    }
+    {
+      path = realmWorkloads.pathTemplate;
+      owner = realmWorkloads.owner.value;
+      group = realmWorkloads.group.value;
+      mode = realmWorkloads.mode;
+      grant = (grantFor realmWorkloads).permissions;
+    }
+    {
+      path = workloadRuntime.pathTemplate;
+      owner = workloadRuntime.owner.value;
+      group = workloadRuntime.group.value;
+      mode = workloadRuntime.mode;
+      grant = (grantFor workloadRuntime).permissions;
+    }
+    {
+      path = credentialDirectoryStorage.pathTemplate;
+      owner = credentialDirectoryStorage.owner.value;
+      group = credentialDirectoryStorage.group.value;
+      mode = credentialDirectoryStorage.mode;
+      grant = "group-rx";
+    }
+    {
+      path = credentialStorage.pathTemplate;
+      owner = credentialStorage.owner.value;
+      group = credentialStorage.group.value;
+      mode = credentialStorage.mode;
+      grant = "group-read";
+    }
+  ];
   workloadId = workload.workloadId;
 }

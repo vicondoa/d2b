@@ -9,6 +9,15 @@ The credential schema version is exactly `1`; `d2b-guest-session-v2` is the
 fixed runtime encoding and systemd credential name, not a second schema
 version.
 
+## Integration status
+
+This declarative contract is not a standalone cutover. Its `LoadCredential`
+and canonical `--workload-id` wiring must land together with the shared runtime
+codec, realm-controller encoder, guest decoder, and removal of the live
+privileged guest-token signing dispatch. Until then the unit remains
+dependency-blocked and privilege parity is expected to report the live signing
+row missing from the emitted declarative matrix.
+
 ## Payload
 
 Every credential contains exactly these required bindings:
@@ -42,6 +51,23 @@ The directory is `root:d2b-gctlfs-<workload-id>` mode `0750`; the credential is
 mode `0440` with the same owner/group. It is process-scoped, broker-created,
 and quarantined rather than adopted when owner, generation, identity, channel,
 or runtime evidence is ambiguous.
+
+The gctlfs numeric principal receives execute-only traversal, never directory
+listing, on each ancestor that its group mode does not already cover:
+
+| Path | Owner/group | Mode | gctlfs access |
+| --- | --- | --- | --- |
+| `/run/d2b` | `root:d2b` | `1770` | exact named `x` ACL |
+| `/run/d2b/r` | `root:d2bd` | `0710` | exact named `x` ACL |
+| `/run/d2b/r/<realm-id>` | `root:d2bcg-r-<realm-id>` | `0750` | exact named `x` ACL |
+| `.../w` | realm controller/internal group | `0750` | exact named `x` ACL |
+| `.../w/<workload-id>` | realm controller/internal group | `0750` | exact named `x` ACL |
+| `.../guest-session` | `root:<gctlfs-gid>` | `0750` | group `r-x` |
+| `.../d2b-guest-session-v2` | `root:<gctlfs-gid>` | `0440` | group read |
+
+The grants name only that workload's stable gctlfs GID. The fixed-root grant is
+an exact tmpfiles declaration and descendant grants are storage rows; neither
+uses recursive chmod nor a catch-all ACL repair.
 
 The controller transfers the encoded credential to its realm broker only as an
 exact-storage-reference-bound, sealed, close-on-exec memory-file descriptor over

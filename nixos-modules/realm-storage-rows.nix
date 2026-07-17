@@ -2,7 +2,6 @@
 
 let
   cfg = config.d2b;
-  d2bLib = import ./lib.nix { inherit lib; };
   identity = import ./v2-identity.nix;
 
   actor = kind: value: { inherit kind value; };
@@ -39,6 +38,9 @@ let
       owner ? controllerUser realmId,
       group ? internalGroup realmId,
       mode ? "0750",
+      accessAcl ? [ ],
+      defaultAcl ? [ ],
+      creator ? brokerActor realmId,
       writers ? [ (brokerActor realmId) ],
       readers ? [ (controllerActor realmId) (brokerActor realmId) ],
       cleanupPolicy ? "never",
@@ -60,6 +62,9 @@ let
         owner
         group
         mode
+        accessAcl
+        defaultAcl
+        creator
         writers
         readers
         cleanupPolicy
@@ -72,9 +77,6 @@ let
         invariants
         ;
       pathTemplate = path;
-      creator = brokerActor realmId;
-      accessAcl = [ ];
-      defaultAcl = [ ];
       recursive = false;
     };
 
@@ -183,8 +185,16 @@ let
       tpmRole = roleActor "swtpm";
       audioRole = roleActor "audio";
       guestSessionReader =
-        principal "gid" (toString
-          (d2bLib.stablePrincipalId "d2b-gctlfs-${workloadId}"));
+        principal "group" "d2b-gctlfs-${workloadId}";
+      guestSessionAcl = lib.optional
+        (lib.attrByPath
+          [ "providerBindings" "runtime" "implementationId" ]
+          null
+          workload == "cloud-hypervisor")
+        {
+          principal = guestSessionReader;
+          permissions = "x";
+        };
       standard = [
         (mkConfigPath {
           id = configResource.resourceId;
@@ -371,6 +381,7 @@ let
           persistence = "boot-scoped";
           cleanupPolicy = "process-exit-with-proof";
           leaseClass = "process-pidfd";
+          accessAcl = guestSessionAcl;
         })
         (mkPath {
           id = "path:workload-guest-session:${workloadId}";
@@ -477,7 +488,7 @@ let
     in
     {
       paths = standard;
-      inherit locks workloadId ids;
+      inherit locks workloadId ids guestSessionAcl;
     };
 
   realmRows = realm:
@@ -498,6 +509,8 @@ let
         (lib.filter
           (workload: (workload.spec.kind or null) != "unsafe-local")
           (cfg._index.workloads.enabledByRealmId.${realmId} or [ ]));
+      guestSessionAcl =
+        lib.concatMap (workload: workload.guestSessionAcl) workloads;
       storageProviderIdFor = workload:
         identity.deriveProviderId realmId "storage" "storage-${workload.workloadId}";
       storageProviderPathRows = lib.concatMap
@@ -623,6 +636,11 @@ let
           path = runRoot;
           lifecycle = "boot-scoped-readoptable";
           persistence = "boot-scoped";
+          owner = principal "user" "root";
+          group = internalGroup realmId;
+          accessAcl = guestSessionAcl;
+          creator = actor "broker" "d2b-priv-broker";
+          writers = [ (actor "broker" "d2b-priv-broker") ];
           cleanupPolicy = "process-exit-with-proof";
           leaseClass = "process-pidfd";
         })
@@ -643,6 +661,7 @@ let
           path = "${runRoot}/${leaf}";
           lifecycle = "boot-scoped-readoptable";
           persistence = "boot-scoped";
+          accessAcl = if leaf == "w" then guestSessionAcl else [ ];
           cleanupPolicy = "process-exit-with-proof";
           leaseClass = "process-pidfd";
         })
@@ -718,16 +737,52 @@ let
         workloads;
     in
     {
-      inherit realmId paths locks providers;
+      inherit realmId paths locks providers guestSessionAcl;
     };
 
   enabledHostLocalRealms = lib.filter
     (realm: realm.placement == "host-local")
     cfg._index.realms.enabledList;
   rows = map realmRows enabledHostLocalRealms;
+  allGuestSessionAcl =
+    lib.concatMap (row: row.guestSessionAcl) rows;
+  realmRuntimeRoot = {
+    id = "path:realm-runtime-root";
+    scope = "host";
+    pathTemplate = "/run/d2b/r";
+    kind = "directory";
+    lifecycle = "boot-scoped-readoptable";
+    persistence = "boot-scoped";
+    owner = principal "user" "root";
+    group = principal "group" "d2bd";
+    mode = "0710";
+    accessAcl = allGuestSessionAcl;
+    defaultAcl = [ ];
+    creator = actor "broker" "d2b-priv-broker";
+    writers = [ (actor "broker" "d2b-priv-broker") ];
+    readers = [
+      (actor "daemon" "d2bd")
+      (actor "broker" "d2b-priv-broker")
+    ];
+    cleanupPolicy = "boot";
+    repairPolicy = "broker-reconcile";
+    restartPolicy = "preserve-across-daemon-restart";
+    adoptionPolicy = "adopt-with-live-owner-proof";
+    leaseClass = "none";
+    sensitivity = "realm-scoped";
+    noFollow = true;
+    recursive = false;
+    invariants = [
+      "no-symlink"
+      "no-magic-link"
+      "broker-opaque-id-only"
+      "scope-authorization-required"
+    ];
+  };
 in
 {
-  paths = sortRows "id" (lib.flatten (map (row: row.paths) rows));
+  paths = sortRows "id"
+    ([ realmRuntimeRoot ] ++ lib.flatten (map (row: row.paths) rows));
   locks = sortRows "id" (lib.flatten (map (row: row.locks) rows));
   providers = lib.sort
     (left: right:

@@ -40,9 +40,11 @@ let
         readerGid = d2bLib.stablePrincipalId
           readerPrincipal;
         directoryOwner = "root";
+        directoryGroup = readerPrincipal;
         directoryGid = d2bLib.stablePrincipalId readerPrincipal;
         directoryMode = "0750";
         owner = "root";
+        group = readerPrincipal;
         gid = d2bLib.stablePrincipalId readerPrincipal;
         mode = "0440";
         guestDelivery = {
@@ -127,6 +129,18 @@ let
           metricsCredential = false;
           diagnostics = "closed-redacted";
         };
+        runtimeDependency = {
+          status = "blocked";
+          codec = "GuestSessionCredentialV1";
+          encoder = "realm-controller";
+          decoder = "d2b-guestd";
+          liveOperationRemoval = "GuestControlSign";
+          requiredTogether = [
+            "load-credential"
+            "workload-id"
+          ];
+          standalone = false;
+        };
         creator = row.broker;
         repairOwner = row.broker;
         materializedByHostActivation = false;
@@ -146,4 +160,9 @@ in
   };
 
   config.d2b._workloadGuestSessionCredentialRows = rows;
+  config.users.groups = lib.listToAttrs (map
+    (row: lib.nameValuePair row.readerPrincipal {
+      gid = row.readerGid;
+    })
+    rows);
 }
