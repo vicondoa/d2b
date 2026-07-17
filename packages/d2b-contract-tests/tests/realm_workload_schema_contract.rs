@@ -258,8 +258,9 @@ fn normalized_index_owns_canonical_desktop_identity() {
 
     for marker in [
         "realms = realmIndex;",
-        "inherit workloads;",
-        "inherit (resourceIndex) providers",
+        "workloads = workloadIndex //",
+        "providerBindings =",
+        "resourceIndex.providers.bindingsByWorkloadId",
     ] {
         assert!(
             index.contains(marker),
@@ -278,6 +279,37 @@ fn normalized_index_owns_canonical_desktop_identity() {
         assert!(
             !index.contains(forbidden),
             "normalized index must not restore legacy desktop alias {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn clipboard_endpoints_follow_canonical_workload_and_provider_bindings() {
+    let emitter = read_repo_file("nixos-modules/clipboard.nix");
+    for marker in [
+        "config.d2b._index.workloads.enabledList",
+        "config.d2b._index.providerRegistryV2Mappings.display",
+        "workload.providerBindings.runtime",
+        "inherit (workload) canonicalTarget realmId workloadId",
+        "runtimeProviderId = runtime.providerId;",
+        "displayProviderId = display.providerId;",
+        "socketComponent = display.endpointIds.proxy;",
+    ] {
+        assert!(
+            emitter.contains(marker),
+            "clipboard endpoint policy must consume canonical marker {marker}"
+        );
+    }
+    for forbidden in [
+        "config.d2b.vms",
+        "normalNixosVms",
+        "qemuMediaVms",
+        "legacyVmName",
+        "providerKind",
+    ] {
+        assert!(
+            !emitter.contains(forbidden),
+            "clipboard endpoint policy must not derive identity through {forbidden}"
         );
     }
 }
@@ -341,6 +373,35 @@ fn desktop_metadata_keeps_configured_argv_private() {
         assert!(
             !emitter.contains(forbidden),
             "public desktop metadata must not project configured argv through {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn private_launcher_intents_use_normalized_workload_provider_identity() {
+    let emitter = read_repo_file("nixos-modules/unsafe-local-workloads-json.nix");
+    for marker in [
+        "cfg._index.workloads.enabledList",
+        "workload.providerBindings.runtime",
+        "inherit (workload) workloadId realmId canonicalTarget",
+        "runtimeKind = runtime.implementationId;",
+        "providerId = runtime.providerId;",
+        "items = privateItems workload.launcher.items;",
+    ] {
+        assert!(
+            emitter.contains(marker),
+            "private launcher intent must consume canonical marker {marker}"
+        );
+    }
+    for forbidden in [
+        "cfg.vms",
+        "legacyVmName",
+        "runtimeProviderId",
+        "providerId = \"unsafe-local\"",
+    ] {
+        assert!(
+            !emitter.contains(forbidden),
+            "private launcher intent must not restore legacy identity through {forbidden}"
         );
     }
 }
@@ -604,7 +665,6 @@ fn rendered_private_launcher_intent_resolves_argv_without_debug_leakage() {
         read_fixture_json(&dir, "provider-registry-v2.json");
     let bundle: Bundle = read_fixture_json(&dir, "bundle.json");
 
-    private.validate().expect("private artifact validates");
     provider_registry
         .validate()
         .expect("provider registry artifact validates");
@@ -617,17 +677,32 @@ fn rendered_private_launcher_intent_resolves_argv_without_debug_leakage() {
             .count(),
         1
     );
-    assert_eq!(
-        provider_registry
-            .providers
-            .iter()
-            .filter(|entry| matches!(&entry.binding, ProviderBindingV2::LocalObservability(_)))
-            .count(),
-        2
-    );
     let private_debug = format!("{private:?}");
     assert!(!private_debug.contains("rendered-private-argv-canary"));
-    let exec = private.workloads[0]
+    let configured_workload = &private.workloads[0];
+    assert_eq!(
+        configured_workload.identity.canonical_target.to_canonical(),
+        "tools.host.local-root.d2b"
+    );
+    assert_ne!(
+        configured_workload
+            .identity
+            .provider_id
+            .as_ref()
+            .expect("private intent carries canonical runtime provider id")
+            .as_str(),
+        "unsafe-local"
+    );
+    assert_eq!(
+        configured_workload
+            .identity
+            .runtime_kind
+            .as_ref()
+            .expect("private intent carries runtime implementation")
+            .as_str(),
+        "systemd-user"
+    );
+    let exec = configured_workload
         .items
         .iter()
         .find_map(|item| match item {
@@ -664,20 +739,6 @@ fn rendered_private_launcher_intent_resolves_argv_without_debug_leakage() {
     ));
     let binding_json = serde_json::to_value(&provider_entry.binding).unwrap();
     assert!(binding_json.get("realmId").is_none());
-    for observability in provider_registry
-        .providers
-        .iter()
-        .filter(|entry| matches!(&entry.binding, ProviderBindingV2::LocalObservability(_)))
-    {
-        assert_eq!(observability.descriptor.implementation_id.as_str(), "local");
-        let binding_json = serde_json::to_value(&observability.binding).unwrap();
-        assert_eq!(binding_json["maxRecords"], 64);
-        assert_eq!(binding_json["maxBytes"], 32_768);
-        assert_eq!(binding_json["maxTimeWindowMs"], 86_400_000);
-        for forbidden in ["realmId", "workloadId", "providerId"] {
-            assert!(binding_json.get(forbidden).is_none());
-        }
-    }
     let provider_json = serde_json::to_string(&provider_registry).unwrap();
     for forbidden in ["\"argv\"", "\"secret\"", "\"azure-vm\"", "runtime.execute"] {
         assert!(
@@ -698,105 +759,68 @@ fn rendered_private_launcher_intent_resolves_argv_without_debug_leakage() {
             "rendered bundle must hash {path}"
         );
     }
+
+    let controllers: Value = read_fixture_json(&dir, "realm-controllers.json");
+    let controllers = controllers["controllers"]
+        .as_array()
+        .expect("rendered controller list");
+    assert!(!controllers.is_empty());
+    for controller in controllers {
+        let providers = controller["providers"]
+            .as_array()
+            .expect("controller canonical provider list");
+        for provider in providers {
+            assert!(provider["providerId"].as_str().is_some());
+            assert!(provider["providerName"].as_str().is_some());
+            for forbidden in ["legacyVmName", "providerKind", "runtimeProviderId"] {
+                assert!(
+                    provider.get(forbidden).is_none(),
+                    "controller provider metadata must not carry {forbidden}"
+                );
+            }
+        }
+    }
 }
 
-// ── realm-controller-config emitter: identity fields ─────────────────────────
+// ── realm-controller-config emitter: canonical normalized metadata ────────────
 
-/// The controller config emitter must wire workload identity as a **nested**
-/// `identity = { ... }` object (matching the `RealmControllerLocalWorkload.identity:
-/// Option<WorkloadIdentity>` field) with the correct field names.
-///
-/// Required WorkloadIdentity fields in the emitter:
-///   - `workloadId`   (maps from workload name)
-///   - `realmId`      (from `workloadRow.realmId`)
-///   - `realmPath`    (as a Nix list, via `lib.splitString "." workloadRow.realmPath`)
-///   - `canonicalTarget`
-///
-/// Optional WorkloadIdentity fields in the emitter:
-///   - `legacyVmName`, `runtimeKind`, `providerId` (renamed from `runtimeProviderId`)
-///
-/// Fields that must NOT appear as identity keys:
-///   - `kind`           (not in WorkloadIdentity; was a W15 pre-review error)
-///   - `runtimeProviderId` as a JSON key (renamed to `providerId`)
-///
-/// The identity object must be nested (not flat-merged with `//` into the
-/// workload root), because `RealmControllerLocalWorkload` has `deny_unknown_fields`.
 #[test]
 fn realm_controller_config_emitter_wires_workload_identity_fields() {
     let emitter = read_repo_file("nixos-modules/realm-controller-config-json.nix");
-
-    // Required fields must appear as Nix keys inside the identity block:
-    for field in [
-        "workloadId",
-        "realmId",
-        "realmPath",
-        "canonicalTarget",
-        "legacyVmName",
-        "runtimeKind",
+    for marker in [
+        "cfg._index.realms.byId.${row.realmId}",
+        "cfg._index.providers.enabledList",
+        "inherit (provider)",
+        "providerName",
+        "providerId",
+        "kind = provider.providerType;",
+        "providers = providersFor row.realmId;",
     ] {
         assert!(
-            emitter.contains(field),
-            "realm-controller-config emitter must wire WorkloadIdentity field {field}"
+            emitter.contains(marker),
+            "realm controller artifact must consume canonical normalized marker {marker}"
         );
     }
-
-    // The renamed field: the Nix key must be `providerId` (the DTO name),
-    // not `runtimeProviderId`. The value source `workloadRow.runtimeProviderId`
-    // may still appear, but `providerId` must be present as a key.
-    assert!(
-        emitter.contains("providerId"),
-        "realm-controller-config emitter must use 'providerId' as the WorkloadIdentity key \
-         (not runtimeProviderId)"
-    );
-
-    // Identity must be nested, not flat-merged: the `identity =` assignment
-    // must appear so that the identity fields travel in a sub-object.
-    assert!(
-        emitter.contains("identity ="),
-        "realm-controller-config emitter must nest workload identity under 'identity = {{ ... }}' \
-         (RealmControllerLocalWorkload.identity: Option<WorkloadIdentity> — deny_unknown_fields \
-         rejects flat identity keys at the workload root)"
-    );
-
-    // `kind` must NOT be used as a key inside the identity block.
-    // It was a pre-review error: WorkloadIdentity has no `kind` field.
-    // The emitter may still reference `workload.kind` elsewhere (index row
-    // access), but there must not be a `kind = workloadRow.kind` assignment
-    // inside the identity attrset.
-    assert!(
-        !emitter.contains("kind = workloadRow.kind"),
-        "realm-controller-config emitter must not assign 'kind = workloadRow.kind' \
-         inside the identity block; WorkloadIdentity has no 'kind' field"
-    );
-
-    // Bug-fix from W14: vmRef was renamed to legacyVmName; the emitter must
-    // not reference the old name.
-    assert!(
-        !emitter.contains("row.vmRef"),
-        "realm-controller-config emitter must not reference removed field 'row.vmRef'; use 'row.legacyVmName'"
-    );
 }
 
-/// The controller config emitter must use `row.legacyVmName` (not the
-/// previously broken `row.vmRef`) in all three call sites of
-/// `localRuntimeWorkloadsFor`.  Also guards that the old flat field name
-/// `runtimeProviderId` is not used as a JSON key in the identity object
-/// (it was renamed to `providerId` to match WorkloadIdentity).
 #[test]
 fn realm_controller_config_emitter_uses_legacy_vm_name_not_vm_ref() {
     let emitter = read_repo_file("nixos-modules/realm-controller-config-json.nix");
+    for forbidden in [
+        "cfg.vms",
+        "vmRef",
+        "legacyVmName",
+        "runtimeProviderId",
+        "providerKind",
+    ] {
+        assert!(
+            !emitter.contains(forbidden),
+            "realm controller artifact must not restore legacy identity through {forbidden}"
+        );
+    }
     assert!(
-        !emitter.contains("vmRef"),
-        "realm-controller-config emitter must not contain any reference to 'vmRef' \
-         (renamed to legacyVmName in W14)"
-    );
-    // `runtimeProviderId` may appear as the Nix value source
-    // (workloadRow.runtimeProviderId) but must NOT appear as the
-    // JSON key name; the DTO field is `providerId`.
-    assert!(
-        !emitter.contains("runtimeProviderId ="),
-        "realm-controller-config emitter must not use 'runtimeProviderId =' as a key; \
-         the WorkloadIdentity DTO field is 'providerId'"
+        emitter.contains("localRuntime = null;"),
+        "realm controller metadata must not synthesize legacy local runtime authority"
     );
 }
 

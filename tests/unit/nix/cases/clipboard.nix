@@ -21,7 +21,8 @@ let
     d2b.site.waylandUser = "alice";
   };
 
-  evalWith = overrides: mkEval ([ base ] ++ overrides);
+  evalWith = overrides:
+    mkEval ([ ../../../../nixos-modules/clipboard.nix base ] ++ overrides);
   failingMessages = nixos:
     map
       (assertion: assertion.message or "")
@@ -60,8 +61,16 @@ let
       d2b.realms.host = {
         allowedUsers = [ "alice" ];
         policy.allowUnsafeLocal = true;
+        providers.runtime = {
+          type = "runtime";
+          implementationId = "systemd-user";
+        };
+        providers.display = {
+          type = "display";
+          implementationId = "wayland";
+        };
         workloads.tools = {
-          kind = "unsafe-local";
+          provider = "runtime";
           launcher.items.browser = {
             type = "exec";
             name = "Browser";
@@ -90,6 +99,9 @@ let
             type = lib.types.attrsOf lib.types.anything;
             default = { };
           };
+          d2b._bundle.unsafeLocalWorkloadsJson = lib.mkOption {
+            type = lib.types.anything;
+          };
           d2b.realms = lib.mkOption {
             type = lib.types.attrsOf lib.types.anything;
             default = { };
@@ -104,6 +116,12 @@ let
               type = "runtime";
               implementationId = "systemd-user";
               capabilities = [ "exec" ];
+            };
+            providers.wayland = {
+              id = "wayland";
+              type = "display";
+              implementationId = "wayland";
+              capabilities = [ "display.open" ];
             };
             workloads.tools = {
               id = "tools";
@@ -135,22 +153,33 @@ let
       })
       ../../../../nixos-modules/index.nix
       ../../../../nixos-modules/desktop-metadata-json.nix
+      ../../../../nixos-modules/unsafe-local-workloads-json.nix
     ];
   };
   desktopArtifact =
     desktopMetadataEval.config.d2b._bundle.extraArtifacts.desktopMetadataJson;
   desktopMetadata = desktopArtifact.data;
   desktopMetadataJson = builtins.toJSON desktopMetadata;
+  privateLauncher =
+    builtins.head desktopMetadataEval.config.d2b._bundle.unsafeLocalWorkloadsJson.data.workloads;
   desktopIndex = desktopMetadataEval.config.d2b._index;
   desktopRealmId = builtins.head desktopIndex.realms.ids;
   desktopWorkloadId = builtins.head desktopIndex.workloads.ids;
-  desktopSystemdUserProviderId = builtins.head desktopIndex.providers.ids;
+  desktopSystemdUserProviderId =
+    (builtins.head desktopIndex.workloads.enabledList).providerBindings.runtime.providerId;
+  unsafeWorkload = builtins.head unsafeEnabled.config.d2b._index.workloads.enabledList;
+  unsafeRuntimeProvider = unsafeWorkload.providerBindings.runtime;
+  unsafeDisplayBinding =
+    builtins.head unsafeEnabled.config.d2b._index.providerRegistryV2Mappings.display;
 in
 {
   "desktop-metadata/artifact-contract" = {
     expr = {
       inherit (desktopArtifact) installFileName classification sensitivity;
       inherit (desktopMetadata) schemaVersion runtimeState;
+      privateIdentity = privateLauncher.identity;
+      privateArgv = (builtins.head privateLauncher.items).argv;
+      publicContainsArgv = lib.hasInfix "\"argv\"" desktopMetadataJson;
     };
     expected = {
       installFileName = "desktop-metadata.json";
@@ -158,6 +187,16 @@ in
       sensitivity = "nonSecret";
       schemaVersion = "v2";
       runtimeState = "presentation-only";
+      privateIdentity = {
+        canonicalTarget = "tools.work.local-root.d2b";
+        providerId = desktopSystemdUserProviderId;
+        realmId = desktopRealmId;
+        realmPath = [ "work" "local-root" ];
+        runtimeKind = "systemd-user";
+        workloadId = desktopWorkloadId;
+      };
+      privateArgv = [ "firefox" "https://example.test/" ];
+      publicContainsArgv = false;
     };
   };
 
@@ -417,21 +456,26 @@ in
       let endpoint = builtins.head unsafeClipboardJson.runtime.bridgeEndpoints;
       in {
         inherit (endpoint)
-          canonicalTarget providerKind legacyVmName socketComponent expectedUid;
+          canonicalTarget realmId workloadId runtimeProviderId displayProviderId
+          socketComponent expectedUid sameUid;
       };
     expected = {
-      canonicalTarget = "tools.host.d2b";
-      providerKind = "unsafe-local";
-      legacyVmName = null;
-      socketComponent = "endpoint-fc002cd9909aab17c2232e85";
+      canonicalTarget = unsafeWorkload.canonicalTarget;
+      inherit (unsafeWorkload) realmId workloadId;
+      runtimeProviderId = unsafeRuntimeProvider.providerId;
+      displayProviderId = unsafeDisplayBinding.providerId;
+      socketComponent = unsafeDisplayBinding.endpointIds.proxy;
       expectedUid = 1000;
+      sameUid = true;
     };
   };
 
   "clipboard/unsafe-local-bridge-dir-is-user-owned" = {
     expr = lib.any
       (rule:
-        lib.hasInfix "/bridge/endpoint-fc002cd9909aab17c2232e85 0700 alice desktop" rule)
+        lib.hasInfix
+          "/bridge/${unsafeDisplayBinding.endpointIds.proxy} 0700 alice desktop"
+          rule)
       unsafeEnabled.config.systemd.tmpfiles.rules;
     expected = true;
   };
@@ -539,6 +583,7 @@ in
   "clipboard/missing-wayland-user-fails" = {
     expr = hasFailure
       (mkEval [
+        ../../../../nixos-modules/clipboard.nix
         ({ ... }: {
           boot.loader.grub.enable = false;
           boot.loader.systemd-boot.enable = false;
