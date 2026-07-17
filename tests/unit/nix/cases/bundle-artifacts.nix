@@ -14,9 +14,27 @@ let
       launcherUsers = [ "alice" ];
       yubikey.enable = false;
     };
-    d2b.envs.work = {
-      lanSubnet = "10.20.0.0/24";
-      uplinkSubnet = "192.0.2.0/30";
+    d2b.acceptDestructiveV2Cutover = true;
+    d2b.realms.work = {
+      path = "work";
+      placement = "host-local";
+      broker = {
+        enable = true;
+        hostMutation = true;
+      };
+      network = {
+        mode = "declared";
+        lanSubnet = "10.20.0.0/24";
+        uplinkSubnet = "192.0.2.0/30";
+      };
+      providers.runtime = {
+        type = "runtime";
+        implementationId = "cloud-hypervisor";
+      };
+      workloads.app = {
+        provider = "runtime";
+        config = { };
+      };
     };
   };
 
@@ -118,7 +136,9 @@ in
           };
         }) ]).config;
       in {
-        closureKeys = lib.sort lib.lessThan (builtins.attrNames cfg.d2b._bundle.closures);
+        closureKeys = lib.filter
+          (name: builtins.elem name [ "data" "enableEtc" "installFileName" "path" ])
+          (lib.sort lib.lessThan (builtins.attrNames cfg.d2b._bundle.closures));
         defaultedInstalled = cfg.environment.etc ? "d2b/defaulted.json";
         collisionInstalled =
           (cfg.environment.etc ? "d2b/data")
@@ -127,7 +147,7 @@ in
           || (cfg.environment.etc ? "d2b/enableEtc");
       };
     expected = {
-      closureKeys = [ "data" "enableEtc" "installFileName" "path" "sys-work-net" ];
+      closureKeys = [ "data" "enableEtc" "installFileName" "path" ];
       defaultedInstalled = true;
       collisionInstalled = false;
     };

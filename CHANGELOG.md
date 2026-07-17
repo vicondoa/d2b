@@ -225,6 +225,11 @@ deprecations ship one minor release before removal.
 - Replaced split allocator lease-id, lease, and idempotency writes with one
   fallible generation-bound transaction, closed detail-free state errors, and
   fail-closed replay semantics for commit and acknowledgement failures.
+- Replaced the legacy environment and VM declaration graph with realm-owned
+  providers and workloads, canonical-ID network/storage/process artifacts,
+  fixed local-root endpoints, and parent-spawned child realm controllers and
+  brokers while preserving bundle version 12 and the public manifest version 7
+  compatibility contract.
 - Composed fixed user-manager endpoints for user, runtime, and clipboard
   services over authenticated component sessions; migrated Wayland bootstrap
   to pre-bound descriptors and retired the daemon-owned unsafe-local helper and

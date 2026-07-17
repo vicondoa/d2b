@@ -9,7 +9,7 @@
       "id": "github.com/vicondoa/d2b",
       "object_format": "sha1",
       "trunk_ref": "main",
-      "integration_ref": "adr0045-w7-realm-host"
+      "integration_ref": "adr0045-w7-bundle-integration"
     }
   ],
   "stack_nodes": [
@@ -30,7 +30,7 @@
     {
       "id": "d2b-w7",
       "repository": "github.com/vicondoa/d2b",
-      "branch": "adr0045-w7-realm-host",
+      "branch": "adr0045-w7-bundle-integration",
       "pr_number": 316,
       "external_dependencies": []
     }

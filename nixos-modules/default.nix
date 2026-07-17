@@ -8,18 +8,9 @@
 # infinite-recurses on host.nix's import-list resolution; the
 # deep-eval regression test in the smoke flake covers this wiring.
 #
-# Sub-modules consuming `inputs`
-#   * `host.nix` — `imports = [ inputs.microvm.nixosModules.host ]`
-#     (the original case the partial-application wiring was built
-#     for).
-#   * `components/home-manager.nix` — `imports =
-#     [ inputs.home-manager.nixosModules.home-manager ]`. Imported
-#     conditionally by host.nix per-VM when `homeManager.enable =
-#     true`; the partial application flows through there.
-#
-# Components live in sibling files (components/graphics.nix,
-# components/audit.nix, etc.) and are conditionally imported per-VM
-# by host.nix.
+# Workload guest modules receive `inputs` through host.nix's
+# closure-passed evaluator. This avoids `_module.args.inputs`
+# recursion while keeping the host module graph realm-native.
 { inputs }:
 
 { ... }:
@@ -27,70 +18,48 @@
 {
   imports = [
     ./options.nix
-    ./bundle-artifacts.nix
     ./options-observability.nix
     ./options-ownership-matrix.nix
+    ./bundle-artifacts.nix
     ./index.nix
     ./assertions.nix
+    ./realm-users.nix
+    ./realm-access.nix
     ./network.nix
-    ./gateway-vm.nix
-    (import ./host.nix { inherit inputs; })
+    ./realm-device-rows.nix
+    ./store.nix
     ./unsafe-local-helper.nix
     ./user-services.nix
-    # host-otel-relay-acl.nix retired per ADR 0018.
-    # The OTel host-bridge + per-VM relay ACL contract moved into the
-    # broker pre-spawn pipeline (`SpawnRunner{role: OtelHostBridge}`
-    # in `packages/d2b-priv-broker/src/runtime.rs`). The retired
-    # module file is kept as a stub for one release for diff
-    # readability; consumers should not import it directly. A future
-    # commit deletes the stub file outright.
-    # ./host-otel-relay-acl.nix
-    # ./vms.nix is INTENTIONALLY OMITTED from the public flake — VM
-    # registrations are consumer-specific. Downstream users declare
-    # their VMs via `d2b.vms.<name> = ...` in their own NixOS
-    # module, which is merged into d2b.vms here via option-system
-    # semantics. There is no public file with example VMs (yet —
-    # examples/ will demonstrate the pattern).
-    ./observability-vm.nix
-    ./clipboard.nix
-    ./notifications.nix
-    ./store.nix
-    ./manifest.nix
-    ./bundle.nix
+    ./ui-colors.nix
+    ./niri-vm-borders.nix
+    ./desktop-metadata-json.nix
+    # Keep the workload evaluator portable to Nix releases without builtins.mod.
+    ((builtins.scopedImport {
+      builtins = builtins // {
+        mod = dividend: divisor:
+          dividend - divisor * builtins.div dividend divisor;
+      };
+    } ./host.nix) { inherit inputs; })
     ./guest-control-host.nix
-    ./host-json.nix
-    ./processes-json.nix
-    ./storage-json.nix
-    ./sync-json.nix
+    ./components/audio/host.nix
+    ./components/observability/default.nix
     ./allocator-json.nix
     ./realm-controller-config-json.nix
     ./realm-identity-config-json.nix
-    ./realm-workloads-launcher-json.nix
-    ./realm-workloads-launcher-v2-json.nix
+    ./host-json.nix
+    ./processes-json.nix
     ./provider-registry-v2-json.nix
-    ./unsafe-local-workloads-json.nix
     ./privileges-json.nix
     ./closures-json.nix
     ./minijail-profiles.nix
-    ./ui-colors.nix
-    # Both cli.nix (bash CLI package) and host-ch-exporter.nix (host
-    # singleton scraper folded into daemon /metrics) are now retired.
-    # See tests/cli-nix-consumers-eval.sh + tests/legacy-unit-denylist-eval.sh
-    # for the static gates.
+    ./bundle.nix
     (import ./host-broker.nix { inherit inputs; })
-    ./components/audio/host.nix
-    ./components/observability/default.nix
-    ./niri-vm-borders.nix
   ];
 
-  # Entra ID / Himmelblau is NOT auto-imported here — it lives in
-  # the sibling `vicondoa/entrablau.nix` flake. Consumers bring
-  # it in per-VM
+  # Entra ID / Himmelblau is not auto-imported here. Consumers compose
+  # it into a realm workload:
   #
-  #   d2b.vms.<vm>.config.imports = [
+  #   d2b.realms.<realm>.workloads.<workload>.config.imports = [
   #     inputs.entrablau.nixosModules.default
   #   ];
-  #
-  # That keeps the himmelblau NixOS module out of d2b's eval
-  # graph entirely.
 }

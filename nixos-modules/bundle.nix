@@ -11,18 +11,6 @@ let
     path = profile.relativePath;
   }) (config.d2b._bundle.minijailProfiles or { }));
 
-  d2bLib = import ./lib.nix { inherit lib; };
-  normalNixosVms = d2bLib.normalNixosVms config.d2b.vms;
-  managedKeyOverrides = lib.sortOn (entry: entry.vm) (lib.filter (entry: entry != null)
-    (lib.mapAttrsToList (name: vm:
-      if vm.ssh.keyPath == null
-      then null
-      else {
-        vm = name;
-        keyPath = toString vm.ssh.keyPath;
-      }
-    ) normalNixosVms));
-
   # Per-artifact SHA-256 hashes are computed in the bundle derivation
   # below, not with builtins.hashFile at eval time. The closure artifacts
   # are pkgs.closureInfo-backed build outputs, so hashing them during
@@ -112,7 +100,7 @@ let
     managedKeys = {
       keysDir = toString config.d2b.site.keysDir;
       knownHostsPath = "${config.d2b.site.stateDir}/known_hosts.d2b";
-      overrides = managedKeyOverrides;
+      overrides = [ ];
     };
     generation = {
       generator = "nixos-modules/bundle.nix";
