@@ -2,32 +2,51 @@
 
 **Diataxis category:** how-to.
 
-Use these checks on a deployed host to confirm that realm/provider credentials
-have not leaked into the local-root daemon or broker.
+Use the installed private bundle artifacts to inspect the declarative
+child-realm allocation plan. These checks do not prove that runtime allocation
+or spawning has occurred.
 
-1. Confirm no obsolete gateway configuration was installed:
-
-   ```bash
-   test ! -e /etc/d2b/gateway.json
-   ```
-
-2. Inspect the static host policy:
+1. List child realm identities and endpoint paths:
 
    ```bash
-   jq . /etc/d2b/host-realm-relay-egress-policy.json
+   sudo jq '.controllers[] |
+     {realmId, controller: .daemon.user, broker: .broker.user,
+      public: .sockets.publicSocketPath, brokerSocket: .sockets.brokerSocketPath}' \
+     /etc/d2b/realm-controllers.json
    ```
 
-3. Check host daemon and broker process environment/cmdline for accidental
-   relay credential variables:
+2. Confirm no child row claims PID1 materialization:
 
    ```bash
-   for pid in $(pgrep -x d2bd; systemctl show -p MainPID --value d2b-priv-broker.service); do
-     tr '\0' '\n' < /proc/$pid/environ | grep -F D2B_RELAY_ && exit 1
-     tr '\0' ' ' < /proc/$pid/cmdline | grep -F D2B_RELAY_ && exit 1
-   done
+   sudo jq -e '
+     .invariants.noSystemdUnitsMaterialized and
+     all(.controllers[];
+       (.daemon.materializedService | not) and
+       (.broker.materializedSocket | not) and
+       (.broker.materializedService | not))
+   ' /etc/d2b/realm-controllers.json
    ```
 
-4. If any check fails, remove host-readable Relay credentials and obsolete
-   gateway artifacts. Do not use the legacy gateway enrollment helper.
-   Credentials belong in the exact provider agent that owns their consumer;
-   only opaque leases may cross that boundary.
+3. Inspect the ordered typed allocator requests:
+
+   ```bash
+   sudo jq '.resourceRequests |
+     sort_by(.realmPath, .acquisitionOrder.phase, .acquisitionOrder.ordinal,
+             .kind, .resourceId) |
+     map({realmPath, resourceId, kind, share, acquisitionOrder})' \
+     /etc/d2b/allocator.json
+   ```
+
+4. Confirm identity configuration contains references and fingerprints only:
+
+   ```bash
+   sudo jq -e '
+     all(.. | objects;
+       (has("privateKey") or has("credentialMaterial") or has("providerToken"))
+       | not)
+   ' /etc/d2b/realm-identity.json
+   ```
+
+If a child row reports a materialized unit, shares controller and broker
+principals, or contains secret material, stop before runtime validation and
+repair the declarative configuration.
