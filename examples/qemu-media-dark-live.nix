@@ -1,10 +1,7 @@
 { ... }:
 
 {
-  # Safe, eval-only qemu-media example for the requested `dark` env and
-  # `dark-live` VM. Physical USB devices are referenced only by opaque
-  # media refs; discover live hardware at runtime with `d2b usb probe`,
-  # keeping the transient probe selector on the CLI and never in this file.
+  # Safe, eval-only realm-owned qemu-media workload.
   boot.loader.grub.enable = false;
   boot.loader.systemd-boot.enable = false;
   boot.initrd.includeDefaultModules = false;
@@ -31,36 +28,35 @@
     "192.168.1.0/24"
   ];
 
-  d2b.envs.dark = {
-    lanSubnet = "10.60.0.0/24";
-    uplinkSubnet = "203.0.113.0/30";
-  };
-
-  d2b.vms.dark-live = {
-    enable = true;
-    runtime.kind = "qemu-media";
-    env = "dark";
-    index = 10;
-    autostart = false;
-
-    qemuMedia = {
-      source = {
-        kind = "physical-usb";
-        ref = "boot";
-        format = "raw";
-        readOnly = true;
-        usbSelector.byIdName = "usb-Example_Dark_Live_0001-0:0";
-      };
-
-      removableSlots.backup.source = {
-        kind = "physical-usb";
-        ref = "backup";
-        format = "raw";
-        readOnly = true;
-      };
-
+  d2b.realms = {
+    local-root = {
+    path = "local-root";
+    placement = "host-local";
     };
-
-    ui.border.activeColor = "#301934";
+    dark = {
+    parent = "local-root";
+    path = "dark.local-root";
+    placement = "host-local";
+    allowedUsers = [ "alice" ];
+    network = {
+      mode = "declared";
+      lanSubnet = "10.60.0.0/24";
+      uplinkSubnet = "203.0.113.0/30";
+    };
+    providers.media = {
+      type = "runtime";
+      implementationId = "qemu-media";
+      configRef = "dark-live-media";
+      capabilities = [ "qmp-media-attach" ];
+    };
+    workloads.dark-live = {
+      provider = "media";
+      autostart = false;
+      launcher = {
+        enable = true;
+        label = "Dark live media";
+      };
+    };
+    };
   };
 }

@@ -6,7 +6,10 @@ The crosvm vhost-user-media backend is wired as a supported opt-in path for
 graphics VMs that set:
 
 ```nix
-d2b.vms.<vm>.graphics.videoSidecar = true;
+d2b.realms.<realm>.workloads.<workload> = {
+  provider = "runtime";
+  launcher.capabilities = [ "video" ];
+};
 ```
 
 The implementation is still intentionally narrow: H264 decode only and

@@ -2,47 +2,36 @@
 
 let
   cfg = config.d2b;
-  # d2b-owned access helpers (see lib.nix).
-  d2bLib = import ./lib.nix { inherit lib pkgs; };
-  normalNixosVms = d2bLib.normalNixosVms cfg.vms;
+  workloads = import ./workload-process-rows.nix {
+    inherit config lib pkgs;
+  };
+  nixosWorkloads = lib.filter
+    (row: row.runtimeImplementation == "cloud-hypervisor")
+    workloads;
 
   privateEtc = source: {
     inherit source;
     mode = "0640";
     user = "root";
-    group = if cfg.daemonExperimental.enable then "d2bd" else "root";
+    group = "d2bd";
   };
 
-  vmTopOf = name: d2bLib.vmToplevel config name;
+  workloadTopLevel = workloadId:
+    cfg._computedWorkloads.${workloadId}.config.system.build.toplevel;
 
-  vmRunnerOf = name: d2bLib.vmDeclaredRunner config name;
-
-  vmClosureInfo = name:
-    let
-      runner = vmRunnerOf name;
-    in
+  workloadClosureInfo = workloadId:
     pkgs.closureInfo {
-      rootPaths = [ (vmTopOf name) ]
-        ++ lib.optional (runner != null) runner;
+      rootPaths = [ (workloadTopLevel workloadId) ];
     };
 
-  closureArtifact = name:
+  closureArtifact = workload:
     let
-      top = "${vmTopOf name}";
-      # per-VM declared runner is null (broker generates
-      # argv in Rust via packages/d2b-host/src/*_argv.rs); the
-      # bundle's `declaredRunner` / `runnerParityPath` are kept in
-      # the schema for tooling that still reads them but rendered
-      # as the empty string when no derivation exists. The runner-
-      # parity invariant is enforced in the broker by comparing the
-      # bundle's prebuilt argv to the Rust regenerator's output
-      # (see packages/d2b-priv-broker/src/runtime.rs SpawnRunner
-      # dispatch arm).
-      runnerDrv = vmRunnerOf name;
-      runner = if runnerDrv == null then "" else "${runnerDrv}";
-      closure = vmClosureInfo name;
-      relativePath = "closures/${name}.json";
-      file = pkgs.runCommand "d2b-${name}-closure.json" { nativeBuildInputs = [ pkgs.python3 ]; } ''
+      workloadId = workload.workloadId;
+      top = "${workloadTopLevel workloadId}";
+      closure = workloadClosureInfo workloadId;
+      relativePath = "closures/${workloadId}.json";
+      file = pkgs.runCommand "d2b-${workloadId}-closure.json"
+        { nativeBuildInputs = [ pkgs.python3 ]; } ''
         python - "$out" "${closure}/store-paths" "${closure}/registration" <<'PY'
         import hashlib
         import json
@@ -71,12 +60,12 @@ let
 
         data = {
             "schemaVersion": "v2",
-            "vm": "${name}",
+            "vm": "${workloadId}",
             "toplevel": "${top}",
             "closurePaths": paths,
             "dbDumpPath": db_dump,
-            "declaredRunner": "${runner}",
-            "runnerParityPath": "${runner}",
+            "declaredRunner": "",
+            "runnerParityPath": "",
             "runnerParityOk": True,
             "generation": {
                 "hostGeneration": host_generation,
@@ -90,14 +79,19 @@ let
         PY
       '';
     in {
-      vm = name;
+      vm = workloadId;
       path = file;
       classification = "contractPrivateNonSecret";
       sensitivity = "nonSecret";
       inherit relativePath;
     };
 
-  closures = lib.mapAttrs (name: _: closureArtifact name) normalNixosVms;
+  closures = lib.listToAttrs (map
+    (workload: {
+      name = workload.workloadId;
+      value = closureArtifact workload;
+    })
+    nixosWorkloads);
 in
 {
   config = {
