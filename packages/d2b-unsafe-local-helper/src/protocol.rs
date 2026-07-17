@@ -1,3 +1,9 @@
+//! Legacy endpoint shim retained only until the separately owned runtime
+//! composition switches its socket activation to ComponentSession. New runtime
+//! operations are admitted exclusively by
+//! [`crate::services::runtime_systemd_user::RuntimeSystemdUserService`]; this
+//! module is not a fallback for that service.
+
 use crate::runtime::{RuntimeError, ScopeRuntime};
 use crate::systemd::UserScopeManager;
 use d2b_contracts::UNSAFE_LOCAL_HELPER_SOCKET_PATH;
