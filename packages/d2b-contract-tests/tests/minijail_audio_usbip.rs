@@ -119,10 +119,11 @@ fn audio_rendered_profile_is_realm_role_scoped() {
                     "pipewire".to_owned(),
                 ]
             );
-            assert!(node
-                .env
-                .iter()
-                .any(|entry| entry == &format!("PIPEWIRE_RUNTIME_DIR={role_root}/pipewire")));
+            assert!(
+                node.env
+                    .iter()
+                    .any(|entry| entry == &format!("PIPEWIRE_RUNTIME_DIR={role_root}/pipewire"))
+            );
             assert!(!node.env.iter().any(|entry| entry.contains("/run/user/")));
         }
     }

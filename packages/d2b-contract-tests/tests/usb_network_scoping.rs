@@ -61,9 +61,10 @@ fn rendered_allocator_deduplicates_canonical_device_leases() {
         .collect();
     assert!(rows.contains(&("device-render-node-global", "shared-partition")));
     assert!(rows.contains(&("device-security-key-global", "exclusive")));
-    assert!(rows
-        .iter()
-        .any(|(resource, share)| resource.starts_with("device-tpm-") && *share == "exclusive"));
+    assert!(
+        rows.iter()
+            .any(|(resource, share)| resource.starts_with("device-tpm-") && *share == "exclusive")
+    );
     assert!(device_requests.iter().all(|request| {
         request["kind"] == "host-file-partition"
             && request["source"]["kind"] == "realm-broker"

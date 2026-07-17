@@ -115,8 +115,7 @@ fn legacy_group_name_denylist_rejects_forbidden_line() {
         "a forbidden d2b-launcher reference in a non-allowlisted path must be flagged"
     );
 
-    let allowed =
-        "nixos-modules/privileges-json.nix:42:      \"d2b-launcher\",";
+    let allowed = "nixos-modules/privileges-json.nix:42:      \"d2b-launcher\",";
     assert!(
         allowlist.is_match(allowed),
         "the active privilege-contract role must stay classified"
@@ -184,7 +183,11 @@ fn vm_submodule_cutover() {
         schema.contains("providerRefs = lib.mkOption"),
         "realm workload schema must expose explicit typed provider bindings"
     );
-    for forbidden in ["legacyVmName", "provider-placeholder", "mkRemovedOptionModule"] {
+    for forbidden in [
+        "legacyVmName",
+        "provider-placeholder",
+        "mkRemovedOptionModule",
+    ] {
         assert!(
             !schema.contains(forbidden),
             "realm workload schema must not retain compatibility surface {forbidden}"

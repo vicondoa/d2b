@@ -101,12 +101,13 @@ fn swtpm_rendered_profiles_preserve_state_and_role_isolation() {
                         identity.realm_id.as_str(),
                         identity.workload_id.as_str()
                     );
-                    assert!(node
-                        .profile
-                        .mount_policy
-                        .writable_paths
-                        .iter()
-                        .any(|path| path.path == state));
+                    assert!(
+                        node.profile
+                            .mount_policy
+                            .writable_paths
+                            .iter()
+                            .any(|path| path.path == state)
+                    );
                     assert!(node.profile.user_namespace.is_none());
                     assert!(node.profile.mount_policy.device_binds.is_empty());
                     assert!(node.profile.mount_policy.hide_device_nodes_by_default);
