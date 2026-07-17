@@ -35,6 +35,8 @@ runtime allocator exists.
 | Reconciliation | Comparing persisted lease state with observed kernel/host state and producing explicit decisions. |
 | Quarantine | A fail-closed state that prevents automatic reuse until a later repair path resolves ambiguity. |
 | Reclaim | A terminal cleanup decision for resources that can be safely retired from the ledger. |
+| Ledger generation | An opaque compare-and-swap token binding a decision to the consistent durable snapshot from which it was computed. |
+| Atomic grant commit | One durable ledger transaction that reserves the lease id, inserts the lease, stores the idempotency result, and advances the ledger generation together. |
 
 ## Resource kinds
 
@@ -126,9 +128,14 @@ nftables, create cgroups, or repair host files.
 `LocalRootAllocatorEngine<L, O, V>` is statically composed from three narrow
 adapters:
 
-- `AllocatorLedger` exposes the current lease snapshot, engine-owned
-  idempotency records, deterministic lease-id reservation, and insertion of
-  granted leases;
+- `AllocatorLedger::load` returns a fallible, generation-bound
+  `AllocatorLedgerSnapshot` containing the current leases and opaque,
+  engine-owned idempotency records;
+- `AllocatorLedger::commit_allocation` accepts one engine-created transaction.
+  For a grant, the adapter reserves the next lease id while holding its
+  exclusive lock, materializes the engine-owned lease and idempotency result,
+  and durably publishes the sequence, lease, idempotency record, and generation
+  change atomically. Denial idempotency is committed through the same method;
 - `ObservedAllocatorState` exposes an already-collected resource observation
   snapshot;
 - `AllocatorLiveness` answers whether the exact realm/controller generation in
@@ -136,10 +143,21 @@ adapters:
 
 All three traits require `Send + Sync`. The engine uses generic static dispatch;
 it has no trait-object, dynamic downcast, ambient-I/O, or fallback path. Host
-observation and durable state loading happen outside the engine, and adapters
-present that state to a decision pass. The idempotency record is constructed and
-compared by the engine, so a ledger adapter stores an opaque value rather than
-reimplementing request fingerprint validation.
+observation happens before the decision pass. Durable reads and commits remain
+explicitly fallible so an OFD-locked adapter can report lock, I/O, stale
+generation, or integrity failures. `AllocatorEngineError` is a closed,
+detail-free error enum; `allocate` and `reconcile` return `Result` and propagate
+these failures without producing an allocation response.
+
+The engine computes and validates a decision against one snapshot, then commits
+before returning `Granted`. A commit must expose either the complete old state
+or the complete new state after any failure; it must never expose a reserved id,
+lease, or idempotency record independently. A stale generation fails closed.
+The caller may retry with the same idempotency key: an uncommitted failure is
+recomputed from a fresh snapshot, while a durable commit whose acknowledgement
+was lost replays the exact stored result. The idempotency record is constructed,
+serialized, and compared by the engine, so a ledger adapter stores an opaque
+value rather than reimplementing request fingerprint validation.
 
 The in-memory `FakeAllocatorLedger`, `FakeObservedAllocatorState`, and
 `FakeAllocatorLiveness` adapters are available only to crate tests or consumers

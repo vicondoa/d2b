@@ -3,9 +3,10 @@
 //! semantic operation, stream, capability, idempotency, relay-as-reachability,
 //! and bounded-audit invariants. The crate defines identifiers, realm targets,
 //! realm-controller data models, provider/workload placement summaries, routing and
-//! enrollment metadata, the local-root allocator decision engine and its narrow
-//! state-adapter traits, the persistent-shell contract, the audit envelope, the
-//! semantic `ConstellationFrame`, a bounded `TraceContext`, and the typed error surface.
+//! enrollment metadata, the local-root allocator decision engine and its fallible
+//! transactional state-adapter traits, the persistent-shell contract, the audit
+//! envelope, the semantic `ConstellationFrame`, a bounded `TraceContext`, and the
+//! typed error surface.
 //!
 //! Invariants:
 //!
@@ -66,9 +67,11 @@ pub use allocator::{
 };
 pub use allocator_engine::{
     AllocatorAllocationDecision, AllocatorEngineAllocation, AllocatorEngineDecision,
-    AllocatorEngineOutcome, AllocatorEngineReconciliation, AllocatorIdempotencyRecord,
-    AllocatorLedger, AllocatorLiveness, AllocatorMetricEvent, AllocatorMetricLabels,
-    AllocatorReconciliationAction, LocalRootAllocatorEngine, ObservedAllocatorState,
+    AllocatorEngineError, AllocatorEngineOutcome, AllocatorEngineReconciliation,
+    AllocatorIdempotencyRecord, AllocatorLedger, AllocatorLedgerCommit, AllocatorLedgerCommitKind,
+    AllocatorLedgerCommitResult, AllocatorLedgerGeneration, AllocatorLedgerSnapshot,
+    AllocatorLiveness, AllocatorMetricEvent, AllocatorMetricLabels, AllocatorReconciliationAction,
+    LocalRootAllocatorEngine, ObservedAllocatorState,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use allocator_engine::{

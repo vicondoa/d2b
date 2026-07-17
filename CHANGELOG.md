@@ -66,6 +66,9 @@ deprecations ship one minor release before removal.
 - Made the pure local-root allocator engine generic over narrow, thread-safe
   ledger, observed-state, and controller-liveness adapters while restricting
   in-memory fake adapters to explicit test support.
+- Replaced split allocator lease-id, lease, and idempotency writes with one
+  fallible generation-bound transaction, closed detail-free state errors, and
+  fail-closed replay semantics for commit and acknowledgement failures.
 - Reserved exact W7 ownership for the frozen contract assertions and migration
   pins that must be rewritten or retired atomically with legacy declarative
   source deletion, without opening the rest of the contract-test crate.
