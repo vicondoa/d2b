@@ -25,8 +25,14 @@ let
             implementationId = "host-mediated";
           };
           workloads.desktop = {
-            provider = "runtime";
-            launcher.capabilities = [ "gpu" "video" ];
+            providerRefs = {
+              runtime = "runtime";
+              device = "devices";
+            };
+            graphics = {
+              enable = true;
+              videoSidecar = true;
+            };
           };
         };
       })
