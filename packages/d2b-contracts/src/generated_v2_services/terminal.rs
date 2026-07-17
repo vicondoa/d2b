@@ -6890,6 +6890,8 @@ pub enum TerminalSignalKind {
     TERMINAL_SIGNAL_KIND_SUSPEND = 3,
     // @@protoc_insertion_point(enum_value:d2b.terminal.v2.TerminalSignalKind.TERMINAL_SIGNAL_KIND_HANGUP)
     TERMINAL_SIGNAL_KIND_HANGUP = 4,
+    // @@protoc_insertion_point(enum_value:d2b.terminal.v2.TerminalSignalKind.TERMINAL_SIGNAL_KIND_QUIT)
+    TERMINAL_SIGNAL_KIND_QUIT = 5,
 }
 
 impl ::protobuf::Enum for TerminalSignalKind {
@@ -6906,6 +6908,7 @@ impl ::protobuf::Enum for TerminalSignalKind {
             2 => ::std::option::Option::Some(TerminalSignalKind::TERMINAL_SIGNAL_KIND_TERMINATE),
             3 => ::std::option::Option::Some(TerminalSignalKind::TERMINAL_SIGNAL_KIND_SUSPEND),
             4 => ::std::option::Option::Some(TerminalSignalKind::TERMINAL_SIGNAL_KIND_HANGUP),
+            5 => ::std::option::Option::Some(TerminalSignalKind::TERMINAL_SIGNAL_KIND_QUIT),
             _ => ::std::option::Option::None
         }
     }
@@ -6917,6 +6920,7 @@ impl ::protobuf::Enum for TerminalSignalKind {
             "TERMINAL_SIGNAL_KIND_TERMINATE" => ::std::option::Option::Some(TerminalSignalKind::TERMINAL_SIGNAL_KIND_TERMINATE),
             "TERMINAL_SIGNAL_KIND_SUSPEND" => ::std::option::Option::Some(TerminalSignalKind::TERMINAL_SIGNAL_KIND_SUSPEND),
             "TERMINAL_SIGNAL_KIND_HANGUP" => ::std::option::Option::Some(TerminalSignalKind::TERMINAL_SIGNAL_KIND_HANGUP),
+            "TERMINAL_SIGNAL_KIND_QUIT" => ::std::option::Option::Some(TerminalSignalKind::TERMINAL_SIGNAL_KIND_QUIT),
             _ => ::std::option::Option::None
         }
     }
@@ -6927,6 +6931,7 @@ impl ::protobuf::Enum for TerminalSignalKind {
         TerminalSignalKind::TERMINAL_SIGNAL_KIND_TERMINATE,
         TerminalSignalKind::TERMINAL_SIGNAL_KIND_SUSPEND,
         TerminalSignalKind::TERMINAL_SIGNAL_KIND_HANGUP,
+        TerminalSignalKind::TERMINAL_SIGNAL_KIND_QUIT,
     ];
 }
 
@@ -7346,28 +7351,28 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \x12\x15\n\x11SHELL_ACTION_KILL\x10\x05*\xb5\x01\n\x13ConsoleProviderKin\
     d\x12%\n!CONSOLE_PROVIDER_KIND_UNSPECIFIED\x10\0\x12*\n&CONSOLE_PROVIDER\
     _KIND_LOCAL_HYPERVISOR\x10\x01\x12$\n\x20CONSOLE_PROVIDER_KIND_QEMU_MEDI\
-    A\x10\x02\x12%\n!CONSOLE_PROVIDER_KIND_ACA_SANDBOX\x10\x03*\xc5\x01\n\
+    A\x10\x02\x12%\n!CONSOLE_PROVIDER_KIND_ACA_SANDBOX\x10\x03*\xe4\x01\n\
     \x12TerminalSignalKind\x12$\n\x20TERMINAL_SIGNAL_KIND_UNSPECIFIED\x10\0\
     \x12\"\n\x1eTERMINAL_SIGNAL_KIND_INTERRUPT\x10\x01\x12\"\n\x1eTERMINAL_S\
     IGNAL_KIND_TERMINATE\x10\x02\x12\x20\n\x1cTERMINAL_SIGNAL_KIND_SUSPEND\
-    \x10\x03\x12\x1f\n\x1bTERMINAL_SIGNAL_KIND_HANGUP\x10\x04*\x84\x02\n\x12\
-    TerminalStatusKind\x12$\n\x20TERMINAL_STATUS_KIND_UNSPECIFIED\x10\0\x12\
-    \x20\n\x1cTERMINAL_STATUS_KIND_RUNNING\x10\x01\x12'\n#TERMINAL_STATUS_KI\
-    ND_STDIN_ACCEPTED\x10\x02\x12,\n(TERMINAL_STATUS_KIND_STDIN_BACKPRESSURE\
-    D\x10\x03\x12%\n!TERMINAL_STATUS_KIND_STDIN_CLOSED\x10\x04\x12(\n$TERMIN\
-    AL_STATUS_KIND_CONTROL_APPLIED\x10\x05*\xc1\x01\n\x11ShellSessionState\
-    \x12#\n\x1fSHELL_SESSION_STATE_UNSPECIFIED\x10\0\x12\x20\n\x1cSHELL_SESS\
-    ION_STATE_ATTACHED\x10\x01\x12\x20\n\x1cSHELL_SESSION_STATE_DETACHED\x10\
-    \x02\x12\x1e\n\x1aSHELL_SESSION_STATE_KILLED\x10\x03\x12#\n\x1fSHELL_SES\
-    SION_STATE_UNAVAILABLE\x10\x04*\x90\x03\n\x11TerminalErrorKind\x12#\n\
-    \x1fTERMINAL_ERROR_KIND_UNSPECIFIED\x10\0\x12)\n%TERMINAL_ERROR_KIND_INV\
-    ALID_SELECTION\x10\x01\x12$\n\x20TERMINAL_ERROR_KIND_UNAUTHORIZED\x10\
-    \x02\x12!\n\x1dTERMINAL_ERROR_KIND_NOT_FOUND\x10\x03\x12\x20\n\x1cTERMIN\
-    AL_ERROR_KIND_CONFLICT\x10\x04\x12#\n\x1fTERMINAL_ERROR_KIND_UNAVAILABLE\
-    \x10\x05\x12*\n&TERMINAL_ERROR_KIND_RESOURCE_EXHAUSTED\x10\x06\x12+\n'TE\
-    RMINAL_ERROR_KIND_GENERATION_MISMATCH\x10\x07\x12\x20\n\x1cTERMINAL_ERRO\
-    R_KIND_PROTOCOL\x10\x08\x12\x20\n\x1cTERMINAL_ERROR_KIND_INTERNAL\x10\tb\
-    \x06proto3\
+    \x10\x03\x12\x1f\n\x1bTERMINAL_SIGNAL_KIND_HANGUP\x10\x04\x12\x1d\n\x19T\
+    ERMINAL_SIGNAL_KIND_QUIT\x10\x05*\x84\x02\n\x12TerminalStatusKind\x12$\n\
+    \x20TERMINAL_STATUS_KIND_UNSPECIFIED\x10\0\x12\x20\n\x1cTERMINAL_STATUS_\
+    KIND_RUNNING\x10\x01\x12'\n#TERMINAL_STATUS_KIND_STDIN_ACCEPTED\x10\x02\
+    \x12,\n(TERMINAL_STATUS_KIND_STDIN_BACKPRESSURED\x10\x03\x12%\n!TERMINAL\
+    _STATUS_KIND_STDIN_CLOSED\x10\x04\x12(\n$TERMINAL_STATUS_KIND_CONTROL_AP\
+    PLIED\x10\x05*\xc1\x01\n\x11ShellSessionState\x12#\n\x1fSHELL_SESSION_ST\
+    ATE_UNSPECIFIED\x10\0\x12\x20\n\x1cSHELL_SESSION_STATE_ATTACHED\x10\x01\
+    \x12\x20\n\x1cSHELL_SESSION_STATE_DETACHED\x10\x02\x12\x1e\n\x1aSHELL_SE\
+    SSION_STATE_KILLED\x10\x03\x12#\n\x1fSHELL_SESSION_STATE_UNAVAILABLE\x10\
+    \x04*\x90\x03\n\x11TerminalErrorKind\x12#\n\x1fTERMINAL_ERROR_KIND_UNSPE\
+    CIFIED\x10\0\x12)\n%TERMINAL_ERROR_KIND_INVALID_SELECTION\x10\x01\x12$\n\
+    \x20TERMINAL_ERROR_KIND_UNAUTHORIZED\x10\x02\x12!\n\x1dTERMINAL_ERROR_KI\
+    ND_NOT_FOUND\x10\x03\x12\x20\n\x1cTERMINAL_ERROR_KIND_CONFLICT\x10\x04\
+    \x12#\n\x1fTERMINAL_ERROR_KIND_UNAVAILABLE\x10\x05\x12*\n&TERMINAL_ERROR\
+    _KIND_RESOURCE_EXHAUSTED\x10\x06\x12+\n'TERMINAL_ERROR_KIND_GENERATION_M\
+    ISMATCH\x10\x07\x12\x20\n\x1cTERMINAL_ERROR_KIND_PROTOCOL\x10\x08\x12\
+    \x20\n\x1cTERMINAL_ERROR_KIND_INTERNAL\x10\tb\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file

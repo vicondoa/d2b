@@ -1,10 +1,10 @@
 {
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "services": [
     {
       "package": "d2b.daemon.v2",
       "service": "DaemonService",
-      "schemaFingerprint": "48090336e653742f356d1b98ab225f7ecd5115db882c86935ddf3e74b659402e",
+      "schemaFingerprint": "d99ef3f122a6575478f80437c47253d3428eaeb5a5037ccf86b78283f3a645a7",
       "methods": [
         {
           "name": "Resolve",
@@ -186,7 +186,7 @@
     {
       "package": "d2b.guest.v2",
       "service": "GuestService",
-      "schemaFingerprint": "d31fabea037f1fea0d262ea68fe559bd0902bbbca642582faab227e212b1cc7a",
+      "schemaFingerprint": "af42630b97ccf809c107bef26680afecb9be31ac26248ad517a7e3ea42be4514",
       "methods": [
         {
           "name": "Bootstrap",

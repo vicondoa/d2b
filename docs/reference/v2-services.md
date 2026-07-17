@@ -158,7 +158,8 @@ directory, a host path, credentials, or provider-native data.
 Each frame binds the exact authenticated session generation and 16-byte opening
 request ID, operation ID, and resource handle. Client and server frame
 sequences are independent, start at zero, increase by one, and are capped.
-Client frames are selection, bounded stdin, PTY resize, a closed signal, stdin
+Client frames are selection, bounded stdin, PTY resize, a closed interrupt,
+quit, terminate, suspend, or hangup signal, stdin
 close, detach, close, or cancellation. Server frames are start acknowledgement,
 bounded stdout/stderr, closed status, shell-management result, or one terminal
 outcome. Resize is valid only for a selected PTY. Detached exec rejects PTY and

@@ -1828,6 +1828,36 @@ fn every_terminal_frame_variant_is_strict_and_bounded() {
 }
 
 #[test]
+fn terminal_quit_signal_is_distinct_strict_and_redacted() {
+    assert_eq!(
+        terminal::TerminalSignalKind::TERMINAL_SIGNAL_KIND_QUIT.value(),
+        5
+    );
+    let signal = terminal::TerminalSignal {
+        operation_sequence: 1,
+        signal: terminal::TerminalSignalKind::TERMINAL_SIGNAL_KIND_QUIT.into(),
+        ..Default::default()
+    };
+    assert_eq!(format!("{signal:?}"), "TerminalSignal(REDACTED)");
+    terminal_frame(0, terminal::terminal_stream_frame::Frame::Signal(signal))
+        .validate_wire(false)
+        .unwrap();
+
+    let unknown = terminal_frame(
+        0,
+        terminal::terminal_stream_frame::Frame::Signal(terminal::TerminalSignal {
+            operation_sequence: 1,
+            signal: EnumOrUnknown::from_i32(999),
+            ..Default::default()
+        }),
+    );
+    assert_eq!(
+        unknown.validate_wire(false),
+        Err(ServiceContractError::InvalidEnum)
+    );
+}
+
+#[test]
 fn terminal_state_machine_binds_direction_generation_and_one_outcome() {
     use terminal::terminal_stream_frame::Frame;
     let mut validator = TerminalStreamValidator::new(
@@ -1885,7 +1915,20 @@ fn terminal_state_machine_binds_direction_generation_and_one_outcome() {
     validator
         .accept(
             TerminalFrameDirection::ClientToServer,
-            &terminal_frame(2, Frame::Cancel(terminal::TerminalCancel::new())),
+            &terminal_frame(
+                2,
+                Frame::Signal(terminal::TerminalSignal {
+                    operation_sequence: 1,
+                    signal: terminal::TerminalSignalKind::TERMINAL_SIGNAL_KIND_QUIT.into(),
+                    ..Default::default()
+                }),
+            ),
+        )
+        .unwrap();
+    validator
+        .accept(
+            TerminalFrameDirection::ClientToServer,
+            &terminal_frame(3, Frame::Cancel(terminal::TerminalCancel::new())),
         )
         .unwrap();
     let mut outcome = terminal::TerminalOutcome::new();

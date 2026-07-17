@@ -482,7 +482,7 @@ pub struct MethodDocument {
 
 pub fn service_inventory_document() -> ServiceInventoryDocument {
     ServiceInventoryDocument {
-        schema_version: 5,
+        schema_version: 6,
         services: SERVICE_INVENTORY
             .iter()
             .map(|service| ServiceDocument {
@@ -1751,13 +1751,14 @@ fn validate_terminal_resize(value: &terminal::TerminalResize) -> Result<(), Serv
 
 fn validate_terminal_signal(value: &terminal::TerminalSignal) -> Result<(), ServiceContractError> {
     reject_unknown(value)?;
-    if value.operation_sequence == 0
-        || !valid_required_enum(
-            &value.signal,
-            terminal::TerminalSignalKind::TERMINAL_SIGNAL_KIND_UNSPECIFIED,
-        )
-    {
+    if value.operation_sequence == 0 {
         return Err(ServiceContractError::InvalidId);
+    }
+    if !valid_required_enum(
+        &value.signal,
+        terminal::TerminalSignalKind::TERMINAL_SIGNAL_KIND_UNSPECIFIED,
+    ) {
+        return Err(ServiceContractError::InvalidEnum);
     }
     Ok(())
 }
