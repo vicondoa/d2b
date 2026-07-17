@@ -121,6 +121,31 @@ The crate defines these reports and bounds them to keep audit and metric
 metadata small. It does not observe the live kernel, mutate
 nftables, create cgroups, or repair host files.
 
+## Allocator engine adapters
+
+`LocalRootAllocatorEngine<L, O, V>` is statically composed from three narrow
+adapters:
+
+- `AllocatorLedger` exposes the current lease snapshot, engine-owned
+  idempotency records, deterministic lease-id reservation, and insertion of
+  granted leases;
+- `ObservedAllocatorState` exposes an already-collected resource observation
+  snapshot;
+- `AllocatorLiveness` answers whether the exact realm/controller generation in
+  a `LeaseOwner` is live.
+
+All three traits require `Send + Sync`. The engine uses generic static dispatch;
+it has no trait-object, dynamic downcast, ambient-I/O, or fallback path. Host
+observation and durable state loading happen outside the engine, and adapters
+present that state to a decision pass. The idempotency record is constructed and
+compared by the engine, so a ledger adapter stores an opaque value rather than
+reimplementing request fingerprint validation.
+
+The in-memory `FakeAllocatorLedger`, `FakeObservedAllocatorState`, and
+`FakeAllocatorLiveness` adapters are available only to crate tests or consumers
+that explicitly enable the `test-support` feature. They are not default generic
+parameters and are absent from the normal production API.
+
 `/etc/d2b/realm-controllers.json` may reference allocator resource ids for a
 realm, but those references remain metadata until a runtime allocator exists.
 They do not grant host mutation authority by themselves.
@@ -161,9 +186,10 @@ state.
 
 ## Current implementation status
 
-The committed foundation consists of Rust DTOs, validation helpers, tests,
-and generated schema coverage in `d2b-realm-core`. It does not install a
-local-root allocator daemon, expose a public or broker socket operation,
-or change the live behavior of existing `d2b.envs` networking, cgroup,
-nftables, host-file, or namespace management. Runtime allocation, live
+The committed foundation consists of Rust DTOs, validation helpers, a pure
+allocator decision engine with injectable state adapters, tests, and generated
+schema coverage in `d2b-realm-core`. It does not install a local-root allocator
+daemon, implement a durable production adapter, expose a public or broker socket
+operation, or change the live behavior of existing `d2b.envs` networking,
+cgroup, nftables, host-file, or namespace management. Runtime allocation, live
 mutation, and migration from local host-resource paths are contract boundaries.

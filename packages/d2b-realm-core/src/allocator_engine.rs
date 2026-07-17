@@ -1,9 +1,10 @@
-//! Hermetic local-root allocator engine over fake host observations.
+//! Hermetic local-root allocator decision engine.
 //!
 //! The engine is deliberately pure: it reconciles typed allocator data models against
-//! in-memory fake ledger/liveness/observation backends and emits decisions,
-//! audit metadata, and low-cardinality metric samples. It performs no netlink,
-//! nftables, filesystem, systemd, broker, or other live host mutation.
+//! caller-supplied ledger, liveness, and observation adapters and emits decisions,
+//! audit metadata, and low-cardinality metric samples. Adapters expose already-loaded
+//! state only; the engine performs no netlink, nftables, filesystem, systemd, broker,
+//! or other live host mutation.
 
 use crate::allocator::{
     AllocatorConflict, AllocatorEventKind, AllocatorEventMetadata, AllocatorLease,
@@ -175,7 +176,7 @@ pub struct AllocatorReconciliationAction {
     pub decision: AllocatorEngineDecision,
 }
 
-/// Result of reconciling fake observed host state against fake persisted leases.
+/// Result of reconciling observed host state against persisted leases.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AllocatorEngineReconciliation {
     pub report: ReconciliationReport,
@@ -183,35 +184,111 @@ pub struct AllocatorEngineReconciliation {
     pub metrics: Vec<AllocatorMetricEvent>,
 }
 
-/// In-memory fake observed host state.
+/// Persisted allocator state required by [`LocalRootAllocatorEngine`].
+///
+/// Implementations own persistence and restart recovery outside the engine. They
+/// store opaque idempotency records while fingerprint construction and comparison
+/// remain engine-owned.
+pub trait AllocatorLedger: Send + Sync {
+    /// Current lease snapshot in stable ledger order.
+    fn leases(&self) -> &[AllocatorLease];
+
+    /// Return the opaque record for an idempotency key, if one exists.
+    fn idempotency_record(&self, key: &IdempotencyKey) -> Option<AllocatorIdempotencyRecord>;
+
+    /// Reserve the next lease id according to the ledger's persisted sequence.
+    fn next_lease_id(&mut self) -> AllocatorLeaseId;
+
+    /// Persist a newly granted lease.
+    fn insert_lease(&mut self, lease: AllocatorLease);
+
+    /// Persist an engine-created idempotency record.
+    fn remember_idempotency(&mut self, record: AllocatorIdempotencyRecord);
+}
+
+/// Already-observed host resource state required by the allocator engine.
+///
+/// Observation and host I/O happen before this adapter is passed to the engine.
+pub trait ObservedAllocatorState: Send + Sync {
+    fn resources(&self) -> &[ObservedHostResource];
+}
+
+/// Controller-generation liveness snapshot required by the allocator engine.
+pub trait AllocatorLiveness: Send + Sync {
+    fn is_live(&self, owner: &LeaseOwner) -> bool;
+}
+
+/// Opaque engine-owned idempotency record stored by an [`AllocatorLedger`].
+///
+/// Adapters may retain and return this value, but request fingerprint construction
+/// and comparison remain engine-owned.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AllocatorIdempotencyRecord {
+    key: IdempotencyKey,
+    signature: AllocationRequestSignature,
+    result: LeaseAllocationResult,
+}
+
+impl AllocatorIdempotencyRecord {
+    /// Construct the canonical record for a completed request.
+    pub fn from_request(request: &LeaseAllocationRequest, result: LeaseAllocationResult) -> Self {
+        Self {
+            key: request.idempotency_key.clone(),
+            signature: AllocationRequestSignature::from_request(request),
+            result,
+        }
+    }
+
+    /// Key used by ledger adapters to index this record.
+    pub fn key(&self) -> &IdempotencyKey {
+        &self.key
+    }
+}
+
+/// In-memory observed-state adapter for tests and support tooling.
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FakeObservedAllocatorState {
     pub resources: Vec<ObservedHostResource>,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl FakeObservedAllocatorState {
     pub fn new(resources: Vec<ObservedHostResource>) -> Self {
         Self { resources }
     }
 }
 
-/// In-memory fake owner-liveness backend.
+#[cfg(any(test, feature = "test-support"))]
+impl ObservedAllocatorState for FakeObservedAllocatorState {
+    fn resources(&self) -> &[ObservedHostResource] {
+        &self.resources
+    }
+}
+
+/// In-memory liveness adapter for tests and support tooling.
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FakeAllocatorLiveness {
     pub live_owners: Vec<LeaseOwner>,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl FakeAllocatorLiveness {
     pub fn new(live_owners: Vec<LeaseOwner>) -> Self {
         Self { live_owners }
     }
+}
 
+#[cfg(any(test, feature = "test-support"))]
+impl AllocatorLiveness for FakeAllocatorLiveness {
     fn is_live(&self, owner: &LeaseOwner) -> bool {
         self.live_owners.iter().any(|candidate| candidate == owner)
     }
 }
 
-/// In-memory fake allocator ledger, including idempotency replay records.
+/// In-memory ledger adapter for tests and support tooling.
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FakeAllocatorLedger {
     pub leases: Vec<AllocatorLease>,
@@ -219,6 +296,7 @@ pub struct FakeAllocatorLedger {
     next_lease_sequence: u64,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl Default for FakeAllocatorLedger {
     fn default() -> Self {
         Self {
@@ -229,6 +307,7 @@ impl Default for FakeAllocatorLedger {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl FakeAllocatorLedger {
     pub fn new(leases: Vec<AllocatorLease>) -> Self {
         Self {
@@ -236,22 +315,19 @@ impl FakeAllocatorLedger {
             ..Self::default()
         }
     }
+}
 
-    fn remember_idempotency(
-        &mut self,
-        key: IdempotencyKey,
-        signature: AllocationRequestSignature,
-        result: LeaseAllocationResult,
-    ) {
-        self.idempotency.push(AllocatorIdempotencyRecord {
-            key,
-            signature,
-            result,
-        });
+#[cfg(any(test, feature = "test-support"))]
+impl AllocatorLedger for FakeAllocatorLedger {
+    fn leases(&self) -> &[AllocatorLease] {
+        &self.leases
     }
 
-    fn idempotency_record(&self, key: &IdempotencyKey) -> Option<&AllocatorIdempotencyRecord> {
-        self.idempotency.iter().find(|record| &record.key == key)
+    fn idempotency_record(&self, key: &IdempotencyKey) -> Option<AllocatorIdempotencyRecord> {
+        self.idempotency
+            .iter()
+            .find(|record| record.key() == key)
+            .cloned()
     }
 
     fn next_lease_id(&mut self) -> AllocatorLeaseId {
@@ -269,13 +345,14 @@ impl FakeAllocatorLedger {
             return AllocatorLeaseId::parse(candidate).expect("generated lease id is valid");
         }
     }
-}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct AllocatorIdempotencyRecord {
-    key: IdempotencyKey,
-    signature: AllocationRequestSignature,
-    result: LeaseAllocationResult,
+    fn insert_lease(&mut self, lease: AllocatorLease) {
+        self.leases.push(lease);
+    }
+
+    fn remember_idempotency(&mut self, record: AllocatorIdempotencyRecord) {
+        self.idempotency.push(record);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -326,23 +403,29 @@ impl Ord for RequestedResourceSignature {
     }
 }
 
-/// Pure allocator engine using fake ledger, observed-state, and liveness
-/// backends.
+/// Pure allocator engine over explicitly injected state adapters.
+///
+/// No fake adapter defaults exist on the production surface.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LocalRootAllocatorEngine {
+pub struct LocalRootAllocatorEngine<L, O, V>
+where
+    L: AllocatorLedger,
+    O: ObservedAllocatorState,
+    V: AllocatorLiveness,
+{
     allocator_owner: LeaseOwner,
-    pub ledger: FakeAllocatorLedger,
-    pub observed: FakeObservedAllocatorState,
-    pub liveness: FakeAllocatorLiveness,
+    ledger: L,
+    observed: O,
+    liveness: V,
 }
 
-impl LocalRootAllocatorEngine {
-    pub fn new(
-        allocator_owner: LeaseOwner,
-        ledger: FakeAllocatorLedger,
-        observed: FakeObservedAllocatorState,
-        liveness: FakeAllocatorLiveness,
-    ) -> Self {
+impl<L, O, V> LocalRootAllocatorEngine<L, O, V>
+where
+    L: AllocatorLedger,
+    O: ObservedAllocatorState,
+    V: AllocatorLiveness,
+{
+    pub fn new(allocator_owner: LeaseOwner, ledger: L, observed: O, liveness: V) -> Self {
         Self {
             allocator_owner,
             ledger,
@@ -351,13 +434,29 @@ impl LocalRootAllocatorEngine {
         }
     }
 
+    pub fn ledger(&self) -> &L {
+        &self.ledger
+    }
+
+    pub fn observed(&self) -> &O {
+        &self.observed
+    }
+
+    pub fn liveness(&self) -> &V {
+        &self.liveness
+    }
+
+    pub fn into_adapters(self) -> (L, O, V) {
+        (self.ledger, self.observed, self.liveness)
+    }
+
     /// Allocate a typed lease request without touching the live host.
     pub fn allocate(&mut self, request: LeaseAllocationRequest) -> AllocatorEngineAllocation {
         let acquired = request.acquisition_order();
         let signature = AllocationRequestSignature::from_request(&request);
 
         if let Some(record) = self.ledger.idempotency_record(&request.idempotency_key) {
-            if record.signature == signature {
+            if record.key == request.idempotency_key && record.signature == signature {
                 let metric = metric_from_replay_result(&record.result);
                 let response = LeaseAllocationResponse {
                     operation_id: request.operation_id.clone(),
@@ -425,14 +524,14 @@ impl LocalRootAllocatorEngine {
             state: AllocatorLeaseState::Granted,
             resources: grant_resources_in_order(&request),
         };
-        self.ledger.leases.push(lease.clone());
+        self.ledger.insert_lease(lease.clone());
 
         let result = LeaseAllocationResult::Granted { lease };
-        self.ledger.remember_idempotency(
-            request.idempotency_key.clone(),
-            signature,
-            result.clone(),
-        );
+        self.ledger
+            .remember_idempotency(AllocatorIdempotencyRecord::from_request(
+                &request,
+                result.clone(),
+            ));
 
         let decisions = request
             .resources
@@ -473,7 +572,7 @@ impl LocalRootAllocatorEngine {
         }
     }
 
-    /// Reconcile fake observed host state against fake persisted leases.
+    /// Reconcile observed host state against persisted leases.
     pub fn reconcile(
         &self,
         operation_id: OperationId,
@@ -481,7 +580,7 @@ impl LocalRootAllocatorEngine {
     ) -> AllocatorEngineReconciliation {
         let mut resources = BTreeMap::<ResourceKey, ResourcePair>::new();
 
-        for lease in &self.ledger.leases {
+        for lease in self.ledger.leases() {
             for resource in &lease.resources {
                 let key = ResourceKey::new(resource.kind, resource.resource_id.clone());
                 resources
@@ -496,7 +595,7 @@ impl LocalRootAllocatorEngine {
             }
         }
 
-        for observed in &self.observed.resources {
+        for observed in self.observed.resources() {
             let key = ResourceKey::new(observed.kind, observed.resource_id.clone());
             resources.entry(key).or_default().observed = Some(observed.clone());
         }
@@ -588,7 +687,7 @@ impl LocalRootAllocatorEngine {
         resource: &ResourceAcquisitionKey,
     ) -> Option<AllocatorConflict> {
         self.ledger
-            .leases
+            .leases()
             .iter()
             .filter(|lease| !lease.state.is_terminal())
             .find_map(|lease| {
@@ -613,7 +712,7 @@ impl LocalRootAllocatorEngine {
 
     fn observed_conflict(&self, resource: &ResourceAcquisitionKey) -> Option<AllocatorConflict> {
         self.observed
-            .resources
+            .resources()
             .iter()
             .find(|observed| {
                 observed.kind == resource.kind && observed.resource_id == resource.resource_id
@@ -754,11 +853,11 @@ impl LocalRootAllocatorEngine {
             .idempotency_record(&request.idempotency_key)
             .is_none()
         {
-            self.ledger.remember_idempotency(
-                request.idempotency_key.clone(),
-                AllocationRequestSignature::from_request(request),
-                result.clone(),
-            );
+            self.ledger
+                .remember_idempotency(AllocatorIdempotencyRecord::from_request(
+                    request,
+                    result.clone(),
+                ));
         }
         let response = LeaseAllocationResponse {
             operation_id: request.operation_id.clone(),
@@ -1045,18 +1144,207 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Default)]
+    struct CustomLedger {
+        leases: Vec<AllocatorLease>,
+        idempotency: Vec<AllocatorIdempotencyRecord>,
+        next_sequence: u64,
+    }
+
+    impl CustomLedger {
+        fn with_next_sequence(next_sequence: u64) -> Self {
+            Self {
+                next_sequence,
+                ..Self::default()
+            }
+        }
+    }
+
+    impl AllocatorLedger for CustomLedger {
+        fn leases(&self) -> &[AllocatorLease] {
+            &self.leases
+        }
+
+        fn idempotency_record(&self, key: &IdempotencyKey) -> Option<AllocatorIdempotencyRecord> {
+            self.idempotency
+                .iter()
+                .find(|record| record.key() == key)
+                .cloned()
+        }
+
+        fn next_lease_id(&mut self) -> AllocatorLeaseId {
+            let id = AllocatorLeaseId::parse(format!("lease-custom-{}", self.next_sequence))
+                .expect("custom test lease id");
+            self.next_sequence += 1;
+            id
+        }
+
+        fn insert_lease(&mut self, lease: AllocatorLease) {
+            self.leases.push(lease);
+        }
+
+        fn remember_idempotency(&mut self, record: AllocatorIdempotencyRecord) {
+            self.idempotency.push(record);
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct CustomObserved {
+        resources: Vec<ObservedHostResource>,
+    }
+
+    impl ObservedAllocatorState for CustomObserved {
+        fn resources(&self) -> &[ObservedHostResource] {
+            &self.resources
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct CustomLiveness {
+        live: Vec<LeaseOwner>,
+    }
+
+    impl AllocatorLiveness for CustomLiveness {
+        fn is_live(&self, owner: &LeaseOwner) -> bool {
+            self.live.iter().any(|candidate| candidate == owner)
+        }
+    }
+
+    type FakeEngine = LocalRootAllocatorEngine<
+        FakeAllocatorLedger,
+        FakeObservedAllocatorState,
+        FakeAllocatorLiveness,
+    >;
+
     fn engine(
         owner: LeaseOwner,
         leases: Vec<AllocatorLease>,
         observations: Vec<ObservedHostResource>,
         live_owners: Vec<LeaseOwner>,
-    ) -> LocalRootAllocatorEngine {
+    ) -> FakeEngine {
         LocalRootAllocatorEngine::new(
             owner,
             FakeAllocatorLedger::new(leases),
             FakeObservedAllocatorState::new(observations),
             FakeAllocatorLiveness::new(live_owners),
         )
+    }
+
+    #[test]
+    fn fake_support_adapters_conform_and_engine_is_send_sync() {
+        fn assert_ledger<T: AllocatorLedger>() {}
+        fn assert_observed<T: ObservedAllocatorState>() {}
+        fn assert_liveness<T: AllocatorLiveness>() {}
+        fn assert_send_sync<T: Send + Sync>() {}
+
+        assert_ledger::<FakeAllocatorLedger>();
+        assert_observed::<FakeObservedAllocatorState>();
+        assert_liveness::<FakeAllocatorLiveness>();
+        assert_send_sync::<FakeEngine>();
+        assert_send_sync::<LocalRootAllocatorEngine<CustomLedger, CustomObserved, CustomLiveness>>(
+        );
+    }
+
+    #[test]
+    fn custom_adapters_preserve_replay_generation_and_restart_semantics() {
+        let allocator_owner = owner("root");
+        let lease_owner = owner("work");
+        let initial = request(
+            "op-1",
+            "corr-1",
+            "idem-1",
+            lease_owner.clone(),
+            vec![request_resource("bridge-1", HostResourceKind::Bridge, 1, 0)],
+        );
+        let mut engine = LocalRootAllocatorEngine::new(
+            allocator_owner.clone(),
+            CustomLedger::with_next_sequence(41),
+            CustomObserved::default(),
+            CustomLiveness {
+                live: vec![lease_owner.clone()],
+            },
+        );
+
+        let first = engine.allocate(initial.clone());
+        let LeaseAllocationResult::Granted { lease } = &first.response.result else {
+            panic!("expected custom adapter grant");
+        };
+        assert_eq!(lease.lease_id, lease_id("lease-custom-41"));
+
+        let (ledger, _, _) = engine.into_adapters();
+        let mut restarted = LocalRootAllocatorEngine::new(
+            allocator_owner,
+            ledger,
+            CustomObserved {
+                resources: vec![observed(
+                    "bridge-1",
+                    HostResourceKind::Bridge,
+                    ObservedResourceState::Present,
+                )],
+            },
+            CustomLiveness {
+                live: vec![lease_owner.clone()],
+            },
+        );
+        let mut replay_request = initial.clone();
+        replay_request.operation_id = op("op-2");
+        replay_request.correlation_id = corr("corr-2");
+        let replay = restarted.allocate(replay_request);
+        assert_eq!(replay.response.result, first.response.result);
+        assert_eq!(
+            replay.metrics[0].outcome,
+            AllocatorEngineOutcome::IdempotentReplay
+        );
+        let next = restarted.allocate(request(
+            "op-next",
+            "corr-next",
+            "idem-next",
+            lease_owner.clone(),
+            vec![request_resource("bridge-2", HostResourceKind::Bridge, 1, 0)],
+        ));
+        let LeaseAllocationResult::Granted { lease } = next.response.result else {
+            panic!("expected post-restart grant");
+        };
+        assert_eq!(lease.lease_id, lease_id("lease-custom-42"));
+
+        let reconciliation = restarted.reconcile(op("op-3"), corr("corr-3"));
+        assert_eq!(
+            reconciliation.actions[0].decision,
+            AllocatorEngineDecision::Reconcile
+        );
+        let changed = restarted.allocate(request(
+            "op-changed",
+            "corr-changed",
+            "idem-1",
+            lease_owner.clone(),
+            vec![request_resource("bridge-2", HostResourceKind::Bridge, 1, 0)],
+        ));
+        assert!(matches!(
+            changed.response.result,
+            LeaseAllocationResult::Denied {
+                reason: AllocatorReasonCode::InvalidRequest,
+                ..
+            }
+        ));
+
+        let (ledger, observed, _) = restarted.into_adapters();
+        let mut generation_changed = lease_owner;
+        generation_changed.controller_generation = ControllerGenerationId::parse("gen-2").unwrap();
+        let restarted_without_owner = LocalRootAllocatorEngine::new(
+            owner("root"),
+            ledger,
+            observed,
+            CustomLiveness {
+                live: vec![generation_changed],
+            },
+        );
+        let reconciliation = restarted_without_owner.reconcile(op("op-4"), corr("corr-4"));
+        assert_eq!(
+            reconciliation.actions[0].decision,
+            AllocatorEngineDecision::Reclaim {
+                reason: AllocatorReasonCode::OwnerNotLive
+            }
+        );
     }
 
     #[test]
@@ -1202,7 +1490,7 @@ mod tests {
         };
         assert_eq!(reason, AllocatorReasonCode::InvalidRequest);
         assert!(conflicts.is_empty());
-        assert!(engine.ledger.leases.is_empty());
+        assert!(engine.ledger().leases.is_empty());
     }
 
     #[test]
@@ -1268,7 +1556,7 @@ mod tests {
             second.metrics[0].outcome,
             AllocatorEngineOutcome::IdempotentReplay
         );
-        assert_eq!(engine.ledger.leases.len(), 1);
+        assert_eq!(engine.ledger().leases.len(), 1);
     }
 
     #[test]

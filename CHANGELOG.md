@@ -59,6 +59,9 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Made the pure local-root allocator engine generic over narrow, thread-safe
+  ledger, observed-state, and controller-liveness adapters while restricting
+  in-memory fake adapters to explicit test support.
 - Reserved exact W7 ownership for the frozen contract assertions and migration
   pins that must be rewritten or retired atomically with legacy declarative
   source deletion, without opening the rest of the contract-test crate.

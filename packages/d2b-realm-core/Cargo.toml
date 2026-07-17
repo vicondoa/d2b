@@ -13,6 +13,9 @@ doctest = false
 [lints]
 workspace = true
 
+[features]
+test-support = []
+
 # Pure, codec-neutral constellation model (ADR 0032). This crate is the
 # shared contract every later v2 crate depends on. It MUST NOT depend on
 # `prost`, generated protobuf, any codec crate, any transport crate, or
