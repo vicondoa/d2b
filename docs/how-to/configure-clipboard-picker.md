@@ -53,9 +53,9 @@ d2b.site.clipboard = {
 
 Bind `d2b.site.clipboard.niri.fallback.command` (default:
 `d2b clipboard arm`) in niri. The command opens the picker for the currently
-focused target. After selection, `d2b-clipd` publishes
-the chosen payload as a d2b-owned host selection and triggers the paste replay;
-the picker itself still never writes to the clipboard.
+focused target. After selection, `d2b-clipd` publishes the chosen payload as a
+d2b-owned host selection and triggers the paste replay; the picker itself still
+never writes to the clipboard.
 
 ## Probe the session clipboard
 
@@ -76,7 +76,12 @@ data-control globals, and do not bypass `d2b-clipd` for VM boundary transfers.
 - no Wayland transfer FDs;
 - no data-control or primary-selection authority;
 - no virtual-keyboard or input-synthesis permission;
-- no persistence or policy authority.
+- no persistence or policy authority;
+- no clipboard transfer descriptors; and
+- no socket-path or newline-frame compatibility channel.
 
-The picker talks only over its inherited socketpair and sends `Select` or
-`Cancel` for the current request.
+The picker receives a connected local transport descriptor and establishes the
+authenticated `d2b.clipboard.picker.v2` ComponentSession. It lists bounded offer
+metadata, then calls `SelectOffer`, `CancelSelection`, or common `Cancel`.
+Selections use opaque bounded ids and the exact canonical destination supplied
+by `d2b-clipd`; display labels are never routing inputs.
