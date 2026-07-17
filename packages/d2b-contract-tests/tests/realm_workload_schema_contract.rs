@@ -7,9 +7,9 @@
 //!  * Wire-protocol schema separation: workload identity travels in the daemon-wire
 //!    schema (`wire-protocol.json`), NOT in CLI output schemas (`list.schema.json`,
 //!    `status.schema.json`).
-//!  * `realm-workloads-launcher.json` emitter carries the `noSensitiveCommandPayloads`
-//!    invariant, `canonicalTarget`, `appCommand`, and `actions` fields, and is
-//!    registered as `contractPrivateNonSecret` / `nonSecret`.
+//!  * `desktop-metadata.json` is a bounded, argv-free, non-authoritative
+//!    presentation projection keyed by canonical realm/provider ids and workload
+//!    targets from the normalized index.
 //!  * Source-lint: `WorkloadIdentity` and sibling structs carry `deny_unknown_fields`;
 //!    the module-level doc policy comment names both `bundleVersion` and `schemaVersion`
 //!    as the required bumps for breaking changes.
@@ -17,10 +17,7 @@
 
 use d2b_contract_tests::read_repo_file;
 use d2b_contracts::provider_registry_v2::{ProviderBindingV2, ProviderRegistryV2};
-use d2b_core::{
-    bundle::Bundle, realm_workloads_launcher::RealmWorkloadsLauncherV2Json,
-    unsafe_local_workloads::UnsafeLocalWorkloadsJson,
-};
+use d2b_core::{bundle::Bundle, unsafe_local_workloads::UnsafeLocalWorkloadsJson};
 use serde_json::Value;
 use std::{env, fs, path::Path};
 
@@ -250,57 +247,184 @@ fn realm_controllers_schema_contains_no_sensitive_credential_fields() {
     }
 }
 
-/// The index emitter (`index.nix`) must also derive `workloadId`, `iconId`,
-/// `iconName`, and `iconGroupKey` on the workload row so that any consumer of
-/// the index (not just the launcher emitter) has access to these fields.
+/// Desktop identity comes from the normalized index. Presentation details stay
+/// nested under metadata/launcher rather than becoming identity aliases.
 #[test]
-fn realm_workloads_index_derives_grouping_fields() {
+fn normalized_index_owns_canonical_desktop_identity() {
     let index = read_repo_file("nixos-modules/index.nix");
-    for field in ["workloadId", "iconId", "iconName", "iconGroupKey"] {
+    let realms = read_repo_file("nixos-modules/index-realms.nix");
+    let workloads = read_repo_file("nixos-modules/index-workloads.nix");
+    let resources = read_repo_file("nixos-modules/index-resources.nix");
+
+    for marker in [
+        "realms = realmIndex;",
+        "inherit workloads;",
+        "inherit (resourceIndex) providers",
+    ] {
         assert!(
-            index.contains(field),
-            "nixos-modules/index.nix must derive {field} on the workload row"
+            index.contains(marker),
+            "normalized index must expose canonical desktop source: {marker}"
+        );
+    }
+    assert!(realms.contains("canonicalTargetSuffix = \"${realmPath}.d2b\";"));
+    assert!(
+        workloads.contains("canonicalTarget = \"${canonicalName}.${realmRow.realmPath}.d2b\";")
+    );
+    assert!(workloads.contains("metadata = {"));
+    assert!(workloads.contains("launcher = {"));
+    assert!(resources.contains("providerId ="));
+    assert!(resources.contains("bindingsByWorkloadId"));
+    for forbidden in ["iconGroupKey", "legacyVmName", "targetAddress"] {
+        assert!(
+            !index.contains(forbidden),
+            "normalized index must not restore legacy desktop alias {forbidden}"
         );
     }
 }
 
 #[test]
-fn provider_neutral_launcher_and_unsafe_local_artifacts_are_wired() {
-    let default_nix = read_repo_file("nixos-modules/default.nix");
-    for module in [
-        "./realm-workloads-launcher-v2-json.nix",
-        "./unsafe-local-workloads-json.nix",
-        "./provider-registry-v2-json.nix",
+fn desktop_metadata_artifact_is_public_non_secret() {
+    let emitter = read_repo_file("nixos-modules/desktop-metadata-json.nix");
+    for marker in [
+        "desktopMetadataJson",
+        "installFileName = \"desktop-metadata.json\";",
+        "classification = \"contractPublic\";",
+        "sensitivity = \"nonSecret\";",
     ] {
         assert!(
-            default_nix.contains(module),
-            "default.nix must import {module}"
-        );
-    }
-
-    let bundle_artifacts = read_repo_file("nixos-modules/bundle-artifacts.nix");
-    for artifact in [
-        "realmWorkloadsLauncherV2Json",
-        "unsafeLocalWorkloadsJson",
-        "providerRegistryV2Json",
-    ] {
-        assert!(
-            bundle_artifacts.contains(artifact),
-            "bundle-artifacts.nix must declare {artifact}"
+            emitter.contains(marker),
+            "desktop metadata emitter must contain {marker}"
         );
     }
 }
 
 #[test]
-fn generated_unsafe_local_schemas_are_closed_and_argv_is_private() {
-    let public_schema =
-        read_repo_file("docs/reference/schemas/v2/realm-workloads-launcher-v2.json");
+fn desktop_metadata_consumes_normalized_rows_without_rederiving_ids() {
+    let emitter = read_repo_file("nixos-modules/desktop-metadata-json.nix");
+    for marker in [
+        "cfg._index.realms.enabledList",
+        "cfg._index.workloads.enabledList",
+        "cfg._index.providers.enabledList",
+        "inherit (realm) realmId",
+        "inherit (workload) canonicalTarget realmId workloadId",
+        "inherit (provider) providerId realmId",
+    ] {
+        assert!(
+            emitter.contains(marker),
+            "desktop metadata must consume normalized marker {marker}"
+        );
+    }
+    for forbidden in [
+        "deriveRealmId",
+        "deriveWorkloadId",
+        "deriveProviderId",
+        "v2-identity.nix",
+    ] {
+        assert!(
+            !emitter.contains(forbidden),
+            "desktop metadata must not rederive normalized identity via {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn desktop_metadata_keeps_configured_argv_private() {
+    let emitter = read_repo_file("nixos-modules/desktop-metadata-json.nix");
+    assert!(emitter.contains("argvPrivate = true;"));
+    assert!(emitter.contains("items = lib.mapAttrsToList publicItem workload.launcher.items;"));
+    for forbidden in [
+        "item.argv",
+        "argv = item",
+        "inherit (item) argv",
+        "appCommand",
+    ] {
+        assert!(
+            !emitter.contains(forbidden),
+            "public desktop metadata must not project configured argv through {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn desktop_metadata_preserves_presentation_without_legacy_group_aliases() {
+    let emitter = read_repo_file("nixos-modules/desktop-metadata-json.nix");
+    for marker in [
+        "icon = publicIcon workload.metadata.icon;",
+        "label = workload.metadata.label;",
+        "realmAccentColor",
+        "accentColor",
+    ] {
+        assert!(
+            emitter.contains(marker),
+            "desktop metadata must preserve presentation marker {marker}"
+        );
+    }
+    for forbidden in ["iconGroupKey", "iconId =", "iconName ="] {
+        assert!(
+            !emitter.contains(forbidden),
+            "desktop metadata must not restore presentation alias {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn desktop_metadata_is_bounded_and_non_authoritative() {
+    let emitter = read_repo_file("nixos-modules/desktop-metadata-json.nix");
+    for marker in [
+        "maxRealms = 64;",
+        "maxWorkloads = 256;",
+        "maxProviders = 256;",
+        "maxItemsPerWorkload = 64;",
+        "maxCapabilitiesPerEntry = 64;",
+        "colorsArePresentationOnly = true;",
+        "metadataIsNotAuthorization = true;",
+        "nonAuthoritativeProjection = true;",
+    ] {
+        assert!(
+            emitter.contains(marker),
+            "desktop metadata contract must contain {marker}"
+        );
+    }
+}
+
+#[test]
+fn desktop_metadata_maps_systemd_user_to_unsafe_local_posture() {
+    let emitter = read_repo_file("nixos-modules/desktop-metadata-json.nix");
+    for marker in [
+        "implementationId == \"systemd-user\"",
+        "isolation = \"unsafe-local\";",
+        "environment = \"systemd-user-manager-ambient\";",
+        "displayEnvironment = \"wayland-proxy-only\";",
+        "executionIdentity = \"authenticated-requester-uid\";",
+        "sessionPersistence = \"user-manager-lifetime\";",
+    ] {
+        assert!(
+            emitter.contains(marker),
+            "systemd-user desktop posture must contain {marker}"
+        );
+    }
+}
+
+#[test]
+fn legacy_launcher_emitters_do_not_emit_compatibility_artifacts() {
+    assert!(
+        !Path::new(&env!("CARGO_MANIFEST_DIR"))
+            .join("../../nixos-modules/realm-workloads-launcher-json.nix")
+            .exists(),
+        "legacy realm-workloads-launcher emitter must remain deleted"
+    );
+    assert_eq!(
+        read_repo_file("nixos-modules/realm-workloads-launcher-v2-json.nix").trim(),
+        "{ }",
+        "legacy v2 launcher emitter must not alias or emit desktop metadata"
+    );
+}
+
+#[test]
+fn private_launcher_schema_remains_closed_and_argv_bearing() {
     let private_schema = read_repo_file("docs/reference/schemas/v2/unsafe-local-workloads.json");
     let helper_schema = read_repo_file("docs/reference/schemas/v2/unsafe-local-helper-wire.json");
 
-    assert!(!public_schema.contains("\"argv\""));
-    assert!(public_schema.contains("\"providerKind\""));
-    assert!(public_schema.contains("\"executionPosture\""));
     assert!(private_schema.contains("\"argv\""));
     assert!(private_schema.contains("\"additionalProperties\": false"));
     let private_schema: serde_json::Value = serde_json::from_str(&private_schema).unwrap();
@@ -469,14 +593,12 @@ fn helper_shell_schema_is_correlated_bounded_and_authority_free() {
 }
 
 #[test]
-fn rendered_launcher_metadata_hides_argv_and_private_bundle_resolves_it() {
+fn rendered_private_launcher_intent_resolves_argv_without_debug_leakage() {
     let Some(dir) = env::var_os("D2B_FIXTURES").map(std::path::PathBuf::from) else {
         eprintln!("  (skipping rendered unsafe-local contracts; D2B_FIXTURES unset)");
         return;
     };
 
-    let public: RealmWorkloadsLauncherV2Json =
-        read_fixture_json(&dir, "realm-workloads-launcher-v2.json");
     let private: UnsafeLocalWorkloadsJson = read_fixture_json(&dir, "unsafe-local-workloads.json");
     let provider_registry: ProviderRegistryV2 =
         read_fixture_json(&dir, "provider-registry-v2.json");
@@ -486,8 +608,6 @@ fn rendered_launcher_metadata_hides_argv_and_private_bundle_resolves_it() {
     provider_registry
         .validate()
         .expect("provider registry artifact validates");
-    assert_eq!(public.schema_version, "v2");
-    assert_eq!(public.workloads.len(), 2);
     assert_eq!(private.workloads.len(), 1);
     assert_eq!(
         provider_registry
@@ -505,17 +625,6 @@ fn rendered_launcher_metadata_hides_argv_and_private_bundle_resolves_it() {
             .count(),
         2
     );
-    assert!(
-        public
-            .workloads
-            .iter()
-            .any(|workload| workload.realm_accent_color == "#cc3344")
-    );
-
-    let public_json = serde_json::to_string(&public).unwrap();
-    assert!(!public_json.contains("rendered-private-argv-canary"));
-    assert!(!public_json.contains("\"argv\""));
-
     let private_debug = format!("{private:?}");
     assert!(!private_debug.contains("rendered-private-argv-canary"));
     let exec = private.workloads[0]
@@ -531,10 +640,6 @@ fn rendered_launcher_metadata_hides_argv_and_private_bundle_resolves_it() {
             .as_slice()
             .iter()
             .any(|arg| arg == "rendered-private-argv-canary")
-    );
-    assert_eq!(
-        bundle.realm_workloads_launcher_v2_path.as_deref(),
-        Some("/etc/d2b/realm-workloads-launcher-v2.json")
     );
     assert_eq!(
         bundle.unsafe_local_workloads_path.as_deref(),
@@ -585,7 +690,6 @@ fn rendered_launcher_metadata_hides_argv_and_private_bundle_resolves_it() {
         .as_ref()
         .expect("rendered bundle carries artifact hashes");
     for path in [
-        "/etc/d2b/realm-workloads-launcher-v2.json",
         "/etc/d2b/unsafe-local-workloads.json",
         "/etc/d2b/provider-registry-v2.json",
     ] {
