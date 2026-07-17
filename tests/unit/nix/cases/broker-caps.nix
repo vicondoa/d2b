@@ -4,11 +4,22 @@ let
   module =
     (import (flakeRoot + "/nixos-modules/host-broker.nix") { inputs = { }; })
       {
-        config.d2b.site = {
-          usePrebuiltHostTools = false;
-          stateDir = "/var/lib/d2b";
-          audit.retentionDays = 14;
-          bundle.currentManifest = "/etc/d2b/bundle.json";
+        config.d2b = {
+          site = {
+            usePrebuiltHostTools = false;
+            stateDir = "/var/lib/d2b";
+            audit.retentionDays = 14;
+            bundle.currentManifest = "/etc/d2b/bundle.json";
+          };
+          _realmPrincipals.localRoot = {
+            controller = "d2bd";
+            broker = "root";
+            socketPrincipals.broker = {
+              owner = "root";
+              group = "d2bd";
+              mode = "0660";
+            };
+          };
         };
         inherit lib pkgs;
       };
