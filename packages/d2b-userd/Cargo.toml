@@ -15,5 +15,11 @@ default = []
 secret-service = ["dep:oo7"]
 
 [dependencies]
-d2b-contracts = { workspace = true, features = ["guest"] }
+async-trait.workspace = true
+d2b-contracts = { workspace = true, features = ["guest", "v2-services"] }
+d2b-provider-credential-secret-service.workspace = true
+d2b-session-unix = { workspace = true, features = ["host-socket"] }
 oo7 = { workspace = true, optional = true }
+sha2.workspace = true
+tokio = { workspace = true, features = ["io-util", "process", "sync", "time"] }
+zeroize.workspace = true

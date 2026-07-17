@@ -1,10 +1,16 @@
-#![doc = "Guest user-session agent primitives for d2b exec."]
+#![doc = "Per-user interaction and credential agent primitives."]
+#![forbid(unsafe_code)]
 
 use d2b_contracts::guest_wire::{
     ExecId, GuestBootId, GuestControlErrorKind, OutputStream, TerminalSize,
 };
 
 pub mod services;
+
+pub use services::user::{
+    AuthenticatedUser, ClosedOutcome, NoopSecretMetrics, OwnerBinding, SecretMetricEvent,
+    SecretMetricSink, UserSecretError,
+};
 
 pub const USERD_LISTENS_ON_VSOCK: bool = false;
 
