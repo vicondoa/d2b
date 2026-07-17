@@ -1623,6 +1623,7 @@ version = "2.0.0"
 dependencies = [
  "async-trait",
  "d2b-contracts",
+ "futures-util",
  "protobuf",
  "serde_json",
  "sha2",

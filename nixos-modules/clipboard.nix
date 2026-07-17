@@ -10,11 +10,38 @@ let
   nonNegativeInt = lib.types.ints.unsigned;
   systemdExecArg = arg: builtins.replaceStrings [ "%" "$" ] [ "%%" "$$" ] (lib.escapeShellArg arg);
   systemdExecArgs = args: lib.concatMapStringsSep " " systemdExecArg args;
+  packagesSrc = d2bLib.cleanRustPackagesSource ../packages;
+  clipdSourcePackage = pkgs.rustPlatform.buildRustPackage {
+    pname = "d2b-clipd";
+    version = "2.0.0";
+    src = packagesSrc;
+    cargoLock = {
+      lockFile = ../packages/Cargo.lock;
+      outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
+    };
+    cargoBuildFlags = [ "--package" "d2b-clipd" ];
+    doCheck = false;
+    postPatch = ''
+      mkdir -p .cargo
+      cat > .cargo/config.toml <<EOF
+[build]
+rustc-wrapper = ""
+EOF
+      rm -f .cargo/rustc-wrapper.sh
+    '';
+    installPhase = ''
+      runHook preInstall
+      install -Dm755 target/x86_64-unknown-linux-gnu/release/d2b-clipd \
+        $out/bin/d2b-clipd 2>/dev/null \
+        || install -Dm755 target/release/d2b-clipd $out/bin/d2b-clipd
+      runHook postInstall
+    '';
+  };
 
   clipdExec =
     if cfg.clipd.executablePath != null then cfg.clipd.executablePath
     else if cfg.clipd.package != null then "${cfg.clipd.package}/bin/d2b-clipd"
-    else "${pkgs.coreutils}/bin/false";
+    else "${clipdSourcePackage}/bin/d2b-clipd";
 
   pickerExec =
     if cfg.picker.executablePath != null then cfg.picker.executablePath
@@ -74,6 +101,14 @@ let
   }) bridgeVms;
   waylandUid = toString config.users.users.${site.waylandUser}.uid;
   waylandGroup = config.users.users.${site.waylandUser}.group;
+  userEndpointTmpfiles = [
+    "d /run/d2b/u 0711 root root -"
+    "z /run/d2b/u 0711 root root -"
+    "d /run/d2b/u/${waylandUid} 0700 ${site.waylandUser} ${waylandGroup} -"
+    "z /run/d2b/u/${waylandUid} 0700 ${site.waylandUser} ${waylandGroup} -"
+    "d /run/d2b/u/${waylandUid}/clipd 0700 ${site.waylandUser} ${waylandGroup} -"
+    "z /run/d2b/u/${waylandUid}/clipd 0700 ${site.waylandUser} ${waylandGroup} -"
+  ];
   clipdBridgeRootTmpfiles =
     lib.optionals (cfg.enable && bridgeEndpoints != [ ]) (
       [
@@ -129,10 +164,6 @@ let
     };
   } + "\n";
 
-  serviceArgs =
-    [ "--config" "/etc/d2b/clipboard.json" ]
-    ++ lib.optionals (pickerExec != null) [ "--picker" pickerExec ]
-    ++ [ "--bridge-root" cfg.runtime.bridgeRoot ];
 in
 {
   options.d2b.site.clipboard = {
@@ -147,10 +178,8 @@ in
         default = null;
         example = lib.literalExpression "pkgs.d2b-clipd";
         description = ''
-          Package providing `bin/d2b-clipd`. The crate/package may be
-          supplied by a later integration lane; this module intentionally
-          accepts an external package reference and does not build the daemon
-          itself.
+          Package providing `bin/d2b-clipd`. When unset, d2b builds the
+          authenticated clipboard service from this framework revision.
         '';
       };
 
@@ -553,21 +582,49 @@ in
       text = configJson;
       mode = "0644";
     };
-    systemd.tmpfiles.rules = clipdBridgeRootTmpfiles;
+    systemd.tmpfiles.rules = clipdBridgeRootTmpfiles ++ userEndpointTmpfiles;
+
+    systemd.user.sockets = lib.genAttrs [
+      "d2b-clipd-control"
+      "d2b-clipd-picker"
+      "d2b-clipd-bridge"
+    ] (unitName:
+      let purpose = lib.removePrefix "d2b-clipd-" unitName;
+      in {
+        description = "d2b authenticated clipboard ${purpose} endpoint";
+        wantedBy = [ "sockets.target" ];
+        socketConfig = {
+          ListenSequentialPacket = "/run/d2b/u/%U/clipd/${purpose}.sock";
+          FileDescriptorName = "clipboard-${purpose}";
+          SocketMode = "0600";
+          DirectoryMode = "0700";
+          RemoveOnStop = true;
+          Service = "d2b-clipd.service";
+        };
+      });
 
     systemd.user.services.d2b-clipd = {
       description = "d2b clipboard authority daemon";
       documentation = [
         "file:/etc/d2b/clipboard.json"
       ];
-      wantedBy = [ "graphical-session.target" ];
       partOf = [ "graphical-session.target" ];
-      after = [ "graphical-session.target" ];
+      requires = [
+        "d2b-clipd-control.socket"
+        "d2b-clipd-picker.socket"
+        "d2b-clipd-bridge.socket"
+      ];
+      after = [
+        "graphical-session.target"
+        "d2b-clipd-control.socket"
+        "d2b-clipd-picker.socket"
+        "d2b-clipd-bridge.socket"
+      ];
       unitConfig.AssertEnvironment = [ "WAYLAND_DISPLAY" ]
         ++ lib.optional cfg.niri.enable "NIRI_SOCKET";
       serviceConfig = {
         Type = "simple";
-        ExecStart = systemdExecArgs ([ clipdExec ] ++ serviceArgs);
+        ExecStart = systemdExecArgs [ clipdExec ];
         Restart = "on-failure";
         RestartSec = "2s";
         UMask = "0077";

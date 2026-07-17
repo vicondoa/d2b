@@ -1,4 +1,4 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 //! Audited Unix transport substrate for ComponentSession.
 //!
 //! The default feature set intentionally exports no host socket implementation.
@@ -22,6 +22,8 @@ mod pidfd;
 mod socket;
 #[cfg(feature = "native-vsock")]
 mod vsock;
+#[cfg(feature = "host-socket")]
+mod systemd;
 
 #[cfg(feature = "host-socket")]
 pub use adapter::{
@@ -53,3 +55,7 @@ pub use socket::{
 };
 #[cfg(feature = "native-vsock")]
 pub use vsock::{FramedVsockTransport, NativeVsockListener, NativeVsockTransport};
+#[cfg(feature = "host-socket")]
+pub use systemd::{
+    ActivatedSeqpacketListener, ActivatedSeqpacketListeners, SystemdActivationError,
+};

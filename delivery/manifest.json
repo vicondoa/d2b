@@ -864,6 +864,11 @@
       "path": "packages/d2b-session/src/scheduler.rs"
     },
     {
+      "name": "w3-session-server",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session/src/server.rs"
+    },
+    {
       "name": "w3-session-streams",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2b-session/src/streams.rs"
@@ -917,6 +922,11 @@
       "name": "w3-session-unix-socket",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2b-session-unix/src/socket.rs"
+    },
+    {
+      "name": "w3-session-unix-systemd",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session-unix/src/systemd.rs"
     },
     {
       "name": "w3-session-unix-tests",

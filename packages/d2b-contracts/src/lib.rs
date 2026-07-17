@@ -60,9 +60,6 @@ pub const MAX_FRAME_SIZE: usize = 1024 * 1024;
 pub const PUBLIC_SOCKET_PATH: &str = "/run/d2b/public.sock";
 #[cfg(feature = "common")]
 pub const BROKER_SOCKET_PATH: &str = "/run/d2b/priv.sock";
-#[cfg(feature = "common")]
-pub const UNSAFE_LOCAL_HELPER_SOCKET_PATH: &str = "/run/d2b/unsafe-local-helper.sock";
-
 /// Wire-protocol version. Earlier builds negotiated via [`SemverRange`];
 /// the current broker handshake layers an explicit `PROTOCOL_VERSION`
 /// constant on top so the `d2b-priv-broker`/`d2bd` skew gate can

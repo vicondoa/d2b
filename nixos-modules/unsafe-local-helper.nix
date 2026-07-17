@@ -47,6 +47,14 @@ EOF
     cfg._index.realms.enabledList;
   eligibleUsers = lib.sort lib.lessThan
     (lib.unique (lib.concatMap (realm: realm.allowedUsers) unsafeLocalRealms));
+  userEndpointTmpfiles = lib.concatMap (user:
+    let
+      uid = toString config.users.users.${user}.uid;
+      group = config.users.users.${user}.group;
+    in [
+      "d /run/d2b/u/${uid} 0700 ${user} ${group} -"
+      "z /run/d2b/u/${uid} 0700 ${user} ${group} -"
+    ]) eligibleUsers;
 in
 {
   config = lib.mkIf cfg.daemonExperimental.enable {
@@ -57,17 +65,42 @@ in
 
     d2b._hostToolPackages.d2bUnsafeLocalHelper = helperPackage;
     environment.systemPackages = [ helperPackage ];
+    systemd.tmpfiles.rules = [
+      "d /run/d2b/u 0711 root root -"
+      "z /run/d2b/u 0711 root root -"
+    ] ++ userEndpointTmpfiles;
 
-    systemd.user.services.d2b-unsafe-local-helper = {
-      description = "d2b same-uid unsafe-local runtime helper";
-      wantedBy = [ "default.target" ];
+    systemd.user.sockets.d2b-runtime-systemd-user = {
+      description = "d2b authenticated systemd user runtime endpoint";
+      wantedBy = [ "sockets.target" ];
+      unitConfig.ConditionGroup = "d2b-unsafe-local";
+      socketConfig = {
+        ListenSequentialPacket = "/run/d2b/u/%U/runtime-agent.sock";
+        FileDescriptorName = "runtime-systemd-user";
+        SocketMode = "0600";
+        DirectoryMode = "0700";
+        RemoveOnStop = true;
+        Service = "d2b-runtime-systemd-user.service";
+      };
+    };
+
+    systemd.user.services.d2b-runtime-systemd-user = {
+      description = "d2b authenticated same-uid systemd user runtime";
+      requires = [ "d2b-runtime-systemd-user.socket" ];
+      after = [ "d2b-runtime-systemd-user.socket" ];
       unitConfig.ConditionGroup = "d2b-unsafe-local";
       serviceConfig = {
         Type = "simple";
-        ExecStart = "${helperPackage}/bin/d2b-unsafe-local-helper --wayland-proxy ${cfg._hostToolPackages.d2bWaylandProxy}/bin/d2b-wayland-proxy";
+        ExecStart = "${helperPackage}/bin/d2b-unsafe-local-helper";
         Restart = "on-failure";
         RestartSec = "5s";
         Slice = "app.slice";
+        UMask = "0077";
+        NoNewPrivileges = true;
+        LockPersonality = true;
+        MemoryDenyWriteExecute = true;
+        RestrictRealtime = true;
+        RestrictSUIDSGID = true;
       };
     };
   };

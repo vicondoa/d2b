@@ -16,11 +16,12 @@
 //!
 //! ```text
 //! d2b-wayland-proxy \
-//!   --listen /run/d2b-wlproxy/<vm>/wayland-0 \
-//!   --connect /run/d2b-wlproxy/<vm>/upstream \
+//!   --session-generation <generation> \
 //!   --target <workload>.<realm>.d2b \
 //!   --provider-kind local-vm \
-//!   --vm-name <vm>
+//!   --realm-id <realm> \
+//!   --workload-id <workload> \
+//!   --provider-id display-wayland
 //! ```
 //!
 //! Crate invariant `#![forbid(unsafe_code)]` is honoured.
@@ -39,14 +40,16 @@ use serde::{Deserialize, Serialize};
 pub struct WaylandProxyArgvInput {
     /// VM name (used to derive socket paths and the app-id prefix).
     pub vm_name: String,
-    /// In-jail path for the filter listen socket (where crosvm connects).
-    ///
-    /// Default: `/run/d2b-wlproxy/<vm>/wayland-0`
-    pub listen_socket: String,
-    /// In-jail path for the upstream host compositor socket bind-mount.
-    ///
-    /// Default: `/run/d2b-wlproxy/<vm>/upstream`
-    pub upstream_socket: String,
+    /// ComponentSession generation supplied by the owning controller.
+    pub session_generation: u64,
+    /// Canonical provider kind supplied by the provider binding.
+    pub provider_kind: String,
+    /// Authenticated realm identity.
+    pub realm_id: String,
+    /// Authenticated workload identity.
+    pub workload_id: String,
+    /// Authenticated display-provider identity.
+    pub provider_id: String,
     /// App-id prefix injected by the proxy for all guest toplevels.
     ///
     /// Default: `d2b.<vm>.`
@@ -129,15 +132,16 @@ impl WaylandProxyArgvInput {
     /// Construct a default-shaped input for `vm_name`.
     pub fn for_vm(vm_name: impl Into<String>) -> Self {
         let vm_name = vm_name.into();
-        let listen_socket = format!("/run/d2b-wlproxy/{vm_name}/wayland-0");
-        let upstream_socket = format!("/run/d2b-wlproxy/{vm_name}/upstream");
         let app_id_prefix = format!("d2b.{vm_name}.");
         let realm_target = Some(format!("{vm_name}.local.d2b"));
         let title_prefix = format!("[{vm_name}] ");
         Self {
-            vm_name,
-            listen_socket,
-            upstream_socket,
+            vm_name: vm_name.clone(),
+            session_generation: 1,
+            provider_kind: "local-vm".to_owned(),
+            realm_id: "local".to_owned(),
+            workload_id: vm_name.clone(),
+            provider_id: "display-wayland".to_owned(),
             app_id_prefix,
             realm_target,
             title_prefix,
@@ -152,8 +156,8 @@ impl WaylandProxyArgvInput {
 pub enum WaylandProxyArgvError {
     /// The VM name is empty.
     EmptyVmName,
-    /// A required socket path is not an absolute path.
-    RelativeSocketPath { path: String },
+    /// The ComponentSession generation or typed identities are invalid.
+    InvalidSessionIdentity,
 }
 
 /// Generate the argv for the wayland-proxy sidecar.
@@ -167,36 +171,37 @@ pub fn generate_wayland_proxy_argv(
     if input.vm_name.is_empty() {
         return Err(WaylandProxyArgvError::EmptyVmName);
     }
-    for path in [&input.listen_socket, &input.upstream_socket] {
-        if !path.starts_with('/') {
-            return Err(WaylandProxyArgvError::RelativeSocketPath { path: path.clone() });
-        }
+    if input.session_generation == 0
+        || input.provider_kind.is_empty()
+        || input.realm_id.is_empty()
+        || input.workload_id.is_empty()
+        || input.provider_id.is_empty()
+    {
+        return Err(WaylandProxyArgvError::InvalidSessionIdentity);
     }
 
     let mut argv = vec![
         format!("d2b-{}-wlproxy", input.vm_name),
-        "--listen".to_owned(),
-        input.listen_socket.clone(),
-        "--connect".to_owned(),
-        input.upstream_socket.clone(),
-        "--vm-name".to_owned(),
-        input.vm_name.clone(),
+        "--session-generation".to_owned(),
+        input.session_generation.to_string(),
+        "--target".to_owned(),
+        input
+            .realm_target
+            .clone()
+            .ok_or(WaylandProxyArgvError::InvalidSessionIdentity)?,
+        "--provider-kind".to_owned(),
+        input.provider_kind.clone(),
+        "--realm-id".to_owned(),
+        input.realm_id.clone(),
+        "--workload-id".to_owned(),
+        input.workload_id.clone(),
+        "--provider-id".to_owned(),
+        input.provider_id.clone(),
     ];
 
     if !input.app_id_prefix.is_empty() {
         argv.push("--app-id-prefix".to_owned());
         argv.push(input.app_id_prefix.clone());
-    }
-    if let Some(realm_target) = &input.realm_target
-        && !realm_target.is_empty()
-    {
-        argv.push("--target".to_owned());
-        argv.push(realm_target.clone());
-        argv.push("--provider-kind".to_owned());
-        argv.push("local-vm".to_owned());
-        // Keep the old spelling during the compatibility window.
-        argv.push("--realm-target".to_owned());
-        argv.push(realm_target.clone());
     }
     if !input.title_prefix.is_empty() {
         argv.push("--title-prefix".to_owned());
@@ -257,16 +262,14 @@ mod tests {
         let input = WaylandProxyArgvInput::for_vm("work");
         let argv = generate_wayland_proxy_argv(&input).expect("valid input");
         assert_eq!(argv[0], "d2b-work-wlproxy", "argv[0] is process title");
-        assert!(argv.contains(&"--listen".to_owned()));
-        assert!(argv.contains(&"--connect".to_owned()));
-        assert!(argv.contains(&"--vm-name".to_owned()));
-        let listen_idx = argv.iter().position(|a| a == "--listen").unwrap();
-        assert_eq!(argv[listen_idx + 1], "/run/d2b-wlproxy/work/wayland-0");
-        let connect_idx = argv.iter().position(|a| a == "--connect").unwrap();
-        assert_eq!(argv[connect_idx + 1], "/run/d2b-wlproxy/work/upstream");
-        assert_eq!(flag_value(&argv, "--realm-target"), Some("work.local.d2b"));
+        assert!(!argv.contains(&"--listen".to_owned()));
+        assert!(!argv.contains(&"--connect".to_owned()));
+        assert_eq!(flag_value(&argv, "--session-generation"), Some("1"));
         assert_eq!(flag_value(&argv, "--target"), Some("work.local.d2b"));
         assert_eq!(flag_value(&argv, "--provider-kind"), Some("local-vm"));
+        assert_eq!(flag_value(&argv, "--realm-id"), Some("local"));
+        assert_eq!(flag_value(&argv, "--workload-id"), Some("work"));
+        assert_eq!(flag_value(&argv, "--provider-id"), Some("display-wayland"));
     }
 
     #[test]
@@ -290,14 +293,11 @@ mod tests {
     }
 
     #[test]
-    fn relative_socket_path_errors() {
+    fn invalid_session_identity_errors() {
         let mut input = WaylandProxyArgvInput::for_vm("work");
-        input.listen_socket = "relative/path".to_owned();
+        input.session_generation = 0;
         let err = generate_wayland_proxy_argv(&input).unwrap_err();
-        assert!(matches!(
-            err,
-            WaylandProxyArgvError::RelativeSocketPath { .. }
-        ));
+        assert_eq!(err, WaylandProxyArgvError::InvalidSessionIdentity);
     }
 
     #[test]
@@ -312,7 +312,6 @@ mod tests {
     fn realm_target_in_argv() {
         let input = WaylandProxyArgvInput::for_vm("dev");
         let argv = generate_wayland_proxy_argv(&input).expect("valid");
-        assert_eq!(flag_value(&argv, "--realm-target"), Some("dev.local.d2b"));
         assert_eq!(flag_value(&argv, "--target"), Some("dev.local.d2b"));
         assert_eq!(flag_value(&argv, "--provider-kind"), Some("local-vm"));
     }

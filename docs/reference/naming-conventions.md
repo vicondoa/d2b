@@ -20,7 +20,9 @@ Canonical reference for host-visible d2b naming. AGENTS.md and the design doc ke
 | Legacy per-VM system users | `d2b-<vm>-{gpu,video,snd,swtpm,store-sync}` | Legacy framework-managed per-VM service users; in v1.0 (per [ADR 0015](../adr/0015-daemon-only-clean-break.md)) the same user identities are preserved as the broker-spawned runner uids under `d2b.slice/<vm>/<role>`. Notable exceptions: `d2b-<vm>-store-sync` runs as root (no dedicated user) and `d2b-<vm>-gpu` is shared by the GPU and video runners. |
 | Launcher group | `d2b` | v1.2 Unix group allowed to talk to `d2bd` over `/run/d2b/public.sock` (mode 0660, group `d2b`). Authorisation is enforced via SO_PEERCRED at accept time. The pre-v1.2 `d2b-launcher` / `d2b-launchers` groups are empty migration tombstones only. |
 | Unsafe-local helper group | `d2b-unsafe-local` | Narrow helper-socket access group populated only from users allowed to use an enabled unsafe-local realm. |
-| Unsafe-local helper socket | `/run/d2b/unsafe-local-helper.sock` | Daemon-owned private `SOCK_SEQPACKET` listener; not a systemd socket unit and not a fourth root service. |
+| User agent socket | `/run/d2b/u/<uid>/userd.sock` | User-manager-owned authenticated `SOCK_SEQPACKET` endpoint. |
+| User runtime agent socket | `/run/d2b/u/<uid>/runtime-agent.sock` | User-manager-owned authenticated `SOCK_SEQPACKET` endpoint for unsafe-local runtime operations. |
+| Clipboard sockets | `/run/d2b/u/<uid>/clipd/{control,picker,bridge}.sock` | User-manager-owned authenticated clipboard control, picker, and bridge endpoints. |
 
 ## Broker caller-role audit labels
 

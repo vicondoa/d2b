@@ -1367,6 +1367,59 @@ fn frozen_parent_blockers_are_external_to_local_ownership() {
 }
 
 #[test]
+fn final_parent_composition_uses_authenticated_fixed_endpoints() {
+    let root = repository_root();
+    let read = |path: &str| fs::read_to_string(root.join(path)).expect("read composition seam");
+
+    let session_server = read("packages/d2b-session/src/server.rs");
+    assert!(session_server.contains("serve_ttrpc_services"));
+    let activation = read("packages/d2b-session-unix/src/systemd.rs");
+    assert!(activation.contains("ActivatedSeqpacketListener"));
+    assert!(activation.contains("ActivatedSeqpacketListeners"));
+
+    let user_services = read("nixos-modules/user-services.nix");
+    assert!(user_services.contains("/run/d2b/u/%U/userd.sock"));
+    assert!(user_services.contains("ListenSequentialPacket"));
+    let runtime = read("nixos-modules/unsafe-local-helper.nix");
+    assert!(runtime.contains("/run/d2b/u/%U/runtime-agent.sock"));
+    assert!(!runtime.contains("/run/d2b/unsafe-local-helper.sock"));
+    let clipboard = read("nixos-modules/clipboard.nix");
+    for endpoint in ["control.sock", "picker.sock", "bridge.sock"] {
+        assert!(
+            clipboard.contains(endpoint),
+            "missing clipboard endpoint {endpoint}"
+        );
+    }
+    assert!(!clipboard.contains("clipd.sock"));
+
+    let host_daemon = read("nixos-modules/host-daemon.nix");
+    assert!(!host_daemon.contains("unsafeLocalHelperSocketPath"));
+    assert!(!host_daemon.contains("unsafeLocalHelperSocketGroup"));
+    let cli = read("packages/d2b/src/lib.rs");
+    assert!(!cli.contains("d2b-clipd/clipd.sock"));
+    assert!(!cli.contains(r#"{\"type\":\"arm\"}"#));
+
+    let wayland_argv = read("packages/d2b-host/src/wayland_proxy_argv.rs");
+    assert!(wayland_argv.contains("--session-generation"));
+    assert!(!wayland_argv.contains("--listen-socket"));
+    assert!(!wayland_argv.contains("--upstream-socket"));
+    let client = read("packages/d2b-client/src/host_socket.rs");
+    for service in [
+        "ServiceKind::User",
+        "ServiceKind::RuntimeSystemdUser",
+        "ServiceKind::Clipboard",
+        "ServiceKind::Notify",
+        "ServiceKind::SecurityKey",
+        "ServiceKind::Wayland",
+    ] {
+        assert!(
+            client.contains(service),
+            "missing authenticated client seam {service}"
+        );
+    }
+}
+
+#[test]
 fn frozen_contract_dependencies_are_known_and_external() {
     let root = repository_root();
     let inputs = FROZEN_INPUTS

@@ -2263,6 +2263,9 @@ pub mod pidfd_sys {
         /// See `RENDER_NODE_INHERITED_FD` for the well-known protocol
         /// constant used by the first (and currently only) entry.
         pub pre_opened_device_fds: Vec<OwnedFd>,
+        /// Optional controller-provided data-plane descriptors installed as
+        /// stdin and stdout before the runner executes.
+        pub inherited_stdio: Option<(OwnedFd, OwnedFd)>,
         /// Optional bounded RLIMIT_MEMLOCK installed in the child before
         /// dropping credentials. Used only for qemu-media runners whose
         /// trusted argv requests QEMU `mem-lock=on`.
@@ -3244,6 +3247,10 @@ pub mod pidfd_sys {
             .iter()
             .map(|fd| fd.as_raw_fd())
             .collect();
+        let inherited_stdio_raw = isolation
+            .inherited_stdio
+            .as_ref()
+            .map(|(stdin, stdout)| (stdin.as_raw_fd(), stdout.as_raw_fd()));
         let inherited_fd_range_start = RENDER_NODE_INHERITED_FD;
         let inherited_fd_range_end =
             inherited_fd_range_start.saturating_add(pre_opened_raw_fds.len() as libc::c_int);
@@ -3262,6 +3269,7 @@ pub mod pidfd_sys {
             }
         }
         let _pre_opened_device_fds_owner = isolation.pre_opened_device_fds;
+        let _inherited_stdio_owner = isolation.inherited_stdio;
         let _overlap_safe_pre_opened_fds_owner = overlap_safe_pre_opened_fds;
         let _device_bind_fds_owner = device_bind_fds;
 
@@ -3544,6 +3552,16 @@ pub mod pidfd_sys {
                         libc::_exit(CHILD_EXIT_INVALID_UMASK);
                     }
                     libc::umask(mask as libc::mode_t);
+                }
+                if let Some((stdin_fd, stdout_fd)) = inherited_stdio_raw {
+                    for (src_fd, dst_fd) in [(stdin_fd, 0), (stdout_fd, 1)] {
+                        if src_fd != dst_fd && libc::dup2(src_fd, dst_fd) < 0 {
+                            let m = b"DEBUG: dup2 inherited stdio fd failed\n";
+                            libc::write(2, m.as_ptr() as *const _, m.len());
+                            libc::_exit(CHILD_EXIT_PREOPEN_DUP2);
+                        }
+                        libc::fcntl(dst_fd, libc::F_SETFD, 0);
+                    }
                 }
                 // Install pre-opened device fds at their well-known numbers
                 // before seccomp is loaded (ADR 0021).
@@ -3951,6 +3969,7 @@ mod tests {
             user_namespace: spec,
             umask: None,
             pre_opened_device_fds: Vec::new(),
+            inherited_stdio: None,
             memlock_limit_bytes: None,
         }
     }
@@ -4286,6 +4305,7 @@ mod tests {
             }),
             umask: None,
             pre_opened_device_fds: Vec::new(),
+            inherited_stdio: None,
             memlock_limit_bytes: None,
         };
 
