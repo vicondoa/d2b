@@ -21,14 +21,12 @@ pub struct AuditEvent {
 }
 
 pub fn bounded_mime(mime_type: &str) -> String {
-    let normalized = crate::policy::normalize_mime(mime_type);
-    if crate::policy::is_mime_allowed(&normalized) {
-        return normalized;
+    if crate::policy::is_mime_allowed(mime_type) {
+        return crate::policy::normalize_mime(mime_type);
     }
     let mut out = String::new();
     for ch in mime_type.chars() {
         if out.len() + ch.len_utf8() > MAX_AUDIT_MIME_BYTES {
-            out.push('…');
             break;
         }
         if ch.is_ascii_graphic() || ch == ' ' {
