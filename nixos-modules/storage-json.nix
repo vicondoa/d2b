@@ -9,6 +9,7 @@ let
   tpmVms = lib.filterAttrs (_: vm: vm.tpm.enable) normalNixosVms;
   audioVms = lib.filterAttrs (_: vm: vm.audio.enable) normalNixosVms;
   processDags = cfg._bundle.processesJson.data.vms or [ ];
+  realmStorageRows = import ./realm-storage-rows.nix { inherit config lib; };
 
   actor = kind: value: { inherit kind value; };
   principal = kind: value: { inherit kind value; };
@@ -1051,7 +1052,8 @@ let
       ++ perAudioVmStoragePaths
       ++ nodeWritablePaths
       ++ readinessSocketPaths
-      ++ diskInitPaths;
+      ++ diskInitPaths
+      ++ realmStorageRows.paths;
     restartPolicies = lib.flatten (map (dag: map (node: restartPolicyFor dag node) (dag.nodes or [ ])) processDags);
     degradedStates = degradedStates;
     remediations = [
