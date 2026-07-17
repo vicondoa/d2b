@@ -655,7 +655,19 @@ pub fn validate_guest_open_exec_retained_log_response_for_request(
 ) -> Result<(), ServiceContractError> {
     request.validate_wire(true)?;
     validate_terminal_open_response_for_guest_context(guest_context(&request.context)?, response)?;
-    if response.outcome.enum_value().ok() != Some(common::Outcome::OUTCOME_ACCEPTED)
+    let outcome = response
+        .outcome
+        .enum_value()
+        .map_err(|_| ServiceContractError::InvalidEnum)?;
+    if matches!(
+        outcome,
+        common::Outcome::OUTCOME_DENIED
+            | common::Outcome::OUTCOME_CANCELLED
+            | common::Outcome::OUTCOME_FAILED
+    ) {
+        return Ok(());
+    }
+    if outcome != common::Outcome::OUTCOME_ACCEPTED
         || response.resource_handle != request.resource_handle
     {
         return Err(ServiceContractError::InconsistentResponse);
@@ -686,6 +698,9 @@ pub fn retained_log_stream_validator(
     response: &terminal::TerminalOpenResponse,
 ) -> Result<TerminalStreamValidator, ServiceContractError> {
     validate_guest_open_exec_retained_log_response_for_request(request, response)?;
+    if response.outcome.enum_value().ok() != Some(common::Outcome::OUTCOME_ACCEPTED) {
+        return Err(ServiceContractError::InconsistentResponse);
+    }
     let context = guest_context(&request.context)?;
     let metadata = required_message(&context.metadata)?;
     let request_id = metadata
@@ -1326,7 +1341,7 @@ impl SecurityKeyStreamValidator {
                 GuestStreamState::Active,
                 GuestStreamDirection::ServerToClient,
                 Some(Frame::GuestReport(_)),
-            ) => {}
+            ) if self.approval != SecurityKeyApprovalState::Denied => {}
             (
                 GuestStreamState::Active,
                 GuestStreamDirection::ClientToServer,
@@ -1376,10 +1391,16 @@ impl SecurityKeyStreamValidator {
                     SecurityKeyApprovalState::NotRequired | SecurityKeyApprovalState::Granted => {
                         outcome
                             != guest::GuestSecurityKeyOutcome::GUEST_SECURITY_KEY_OUTCOME_UNSPECIFIED
+                            && outcome
+                                != guest::GuestSecurityKeyOutcome::GUEST_SECURITY_KEY_OUTCOME_DENIED
                     }
                     SecurityKeyApprovalState::Required | SecurityKeyApprovalState::Requested => {
-                        outcome
-                            != guest::GuestSecurityKeyOutcome::GUEST_SECURITY_KEY_OUTCOME_SUCCEEDED
+                        matches!(
+                            outcome,
+                            guest::GuestSecurityKeyOutcome::GUEST_SECURITY_KEY_OUTCOME_CTAP_ERROR
+                                | guest::GuestSecurityKeyOutcome::GUEST_SECURITY_KEY_OUTCOME_CANCELLED
+                                | guest::GuestSecurityKeyOutcome::GUEST_SECURITY_KEY_OUTCOME_TIMED_OUT
+                        )
                     }
                     SecurityKeyApprovalState::Denied => matches!(
                         outcome,

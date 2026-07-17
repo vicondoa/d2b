@@ -204,7 +204,9 @@ key, so ambiguous retries cannot allocate multiple streams. Its terminal
 response binds output stream, requested offset, selected start/end range,
 maximum byte count, and EOF posture. The first retained-log selection repeats
 the exact resource/output/offset/limit, and output frames must remain contiguous
-within that range.
+within that range. Denied, cancelled, and failed open responses remain valid
+closed results and carry no stream, resource handle, or range; only an accepted
+response can construct a live stream validator.
 
 `FileTransfer` names one closed artifact ID and one opaque configured-intent ID;
 paths are not representable. Its stream binds generation/request/operation/
@@ -219,7 +221,9 @@ ceremony kind. Its stream carries exactly 64-byte CTAPHID reports in explicit
 guest/device directions, closed approval request/decision, cancellation, and
 one completion or bounded error. A ceremony requiring approval cannot complete
 successfully before an explicit grant; denial permits only denied, cancelled,
-or failed closure. It cannot carry credentials, relying-party
+or failed closure and rejects all subsequent report or approval traffic.
+Conversely, denied completion is invalid unless approval was explicitly denied.
+It cannot carry credentials, relying-party
 secrets, device paths, or arbitrary diagnostics.
 
 `Shutdown` carries one closed power action and an absolute deadline within the

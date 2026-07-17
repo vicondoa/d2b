@@ -172,6 +172,10 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Preserved typed retained-log denial/cancellation/failure responses while
+  restricting live stream construction to accepted ranges, and made explicit
+  security-key denial reject further ceremony traffic and contradictory
+  outcomes.
 - Tightened guest protocol validation for workload-only terminal scope,
   credit/digest-continuous file transfer, mandatory security-key approval,
   correlated exec cancellation/status/wait results, and range-bound retained

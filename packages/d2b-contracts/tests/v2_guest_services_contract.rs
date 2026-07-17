@@ -471,6 +471,37 @@ fn retained_log_stream_is_server_allocated_and_query_bound() {
         ..Default::default()
     });
     validate_guest_open_exec_retained_log_response_for_request(&request, &response).unwrap();
+
+    for (outcome, kind) in [
+        (
+            common::Outcome::OUTCOME_DENIED,
+            common::ErrorKind::ERROR_KIND_UNAUTHORIZED,
+        ),
+        (
+            common::Outcome::OUTCOME_CANCELLED,
+            common::ErrorKind::ERROR_KIND_CANCELLED,
+        ),
+        (
+            common::Outcome::OUTCOME_FAILED,
+            common::ErrorKind::ERROR_KIND_INTERNAL,
+        ),
+    ] {
+        let closed = terminal::TerminalOpenResponse {
+            outcome: outcome.into(),
+            operation_id: "operation-1".to_owned(),
+            session_generation: GENERATION,
+            request_id: REQUEST_ID.to_vec(),
+            error: MessageField::some(common::ErrorEnvelope {
+                kind: kind.into(),
+                retry: common::RetryClass::RETRY_CLASS_NEVER.into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        validate_guest_open_exec_retained_log_response_for_request(&request, &closed).unwrap();
+        assert!(retained_log_stream_validator(&request, &closed).is_err());
+    }
+
     let mut validator = retained_log_stream_validator(&request, &response).unwrap();
     let frame = |sequence, frame| terminal::TerminalStreamFrame {
         session_generation: GENERATION,
@@ -888,11 +919,12 @@ fn security_frame(
     }
 }
 
-fn opened_security_validator() -> SecurityKeyStreamValidator {
+fn opened_security_validator(
+    request: &guest::GuestSecurityKeyRequest,
+) -> SecurityKeyStreamValidator {
     use guest::guest_security_key_frame::Frame;
-    let request = security_request();
     let mut validator =
-        SecurityKeyStreamValidator::new(&request, &terminal_response("ceremony-1")).unwrap();
+        SecurityKeyStreamValidator::new(request, &terminal_response("ceremony-1")).unwrap();
     validator
         .accept(
             GuestStreamDirection::ClientToServer,
@@ -900,7 +932,7 @@ fn opened_security_validator() -> SecurityKeyStreamValidator {
                 0,
                 Frame::Open(guest::GuestSecurityKeyOpen {
                     action: request.action,
-                    device_handle: request.device_handle,
+                    device_handle: request.device_handle.clone(),
                     ceremony_handle: "ceremony-1".to_owned(),
                     ceremony: request.ceremony,
                     ..Default::default()
@@ -920,7 +952,8 @@ fn security_key_required_approval_cannot_be_bypassed() {
             ..Default::default()
         })
     };
-    let mut immediate = opened_security_validator();
+    let request = security_request();
+    let mut immediate = opened_security_validator(&request);
     assert_eq!(
         immediate.accept(
             GuestStreamDirection::ServerToClient,
@@ -929,7 +962,7 @@ fn security_key_required_approval_cannot_be_bypassed() {
         Err(ServiceContractError::InconsistentResponse)
     );
 
-    let mut denied = opened_security_validator();
+    let mut denied = opened_security_validator(&request);
     denied
         .accept(
             GuestStreamDirection::ServerToClient,
@@ -954,6 +987,53 @@ fn security_key_required_approval_cannot_be_bypassed() {
             ),
         )
         .unwrap();
+    for (direction, frame) in [
+        (
+            GuestStreamDirection::ServerToClient,
+            security_frame(
+                1,
+                Frame::GuestReport(guest::GuestSecurityKeyReport {
+                    report: vec![0x55; CTAPHID_REPORT_BYTES],
+                    ..Default::default()
+                }),
+            ),
+        ),
+        (
+            GuestStreamDirection::ClientToServer,
+            security_frame(
+                2,
+                Frame::DeviceReport(guest::GuestSecurityKeyReport {
+                    report: vec![0x66; CTAPHID_REPORT_BYTES],
+                    ..Default::default()
+                }),
+            ),
+        ),
+        (
+            GuestStreamDirection::ServerToClient,
+            security_frame(
+                1,
+                Frame::ApprovalRequest(guest::GuestSecurityKeyApprovalRequest {
+                    approval: guest::GuestSecurityKeyApprovalKind::GUEST_SECURITY_KEY_APPROVAL_KIND_USER_PRESENCE.into(),
+                    ..Default::default()
+                }),
+            ),
+        ),
+        (
+            GuestStreamDirection::ClientToServer,
+            security_frame(
+                2,
+                Frame::Approval(guest::GuestSecurityKeyApproval {
+                    decision: guest::GuestSecurityKeyApprovalDecision::GUEST_SECURITY_KEY_APPROVAL_DECISION_APPROVED.into(),
+                    ..Default::default()
+                }),
+            ),
+        ),
+    ] {
+        assert_eq!(
+            denied.accept(direction, &frame),
+            Err(ServiceContractError::InconsistentResponse)
+        );
+    }
     assert_eq!(
         denied.accept(
             GuestStreamDirection::ServerToClient,
@@ -975,6 +1055,64 @@ fn security_key_required_approval_cannot_be_bypassed() {
         )
         .unwrap();
     assert!(denied.is_terminal());
+
+    let mut granted = opened_security_validator(&request);
+    granted
+        .accept(
+            GuestStreamDirection::ServerToClient,
+            &security_frame(
+                0,
+                Frame::ApprovalRequest(guest::GuestSecurityKeyApprovalRequest {
+                    approval: guest::GuestSecurityKeyApprovalKind::GUEST_SECURITY_KEY_APPROVAL_KIND_USER_PRESENCE.into(),
+                    ..Default::default()
+                }),
+            ),
+        )
+        .unwrap();
+    granted
+        .accept(
+            GuestStreamDirection::ClientToServer,
+            &security_frame(
+                1,
+                Frame::Approval(guest::GuestSecurityKeyApproval {
+                    decision: guest::GuestSecurityKeyApprovalDecision::GUEST_SECURITY_KEY_APPROVAL_DECISION_APPROVED.into(),
+                    ..Default::default()
+                }),
+            ),
+        )
+        .unwrap();
+    assert_eq!(
+        granted.accept(
+            GuestStreamDirection::ServerToClient,
+            &security_frame(
+                1,
+                Frame::Complete(guest::GuestSecurityKeyComplete {
+                    outcome: guest::GuestSecurityKeyOutcome::GUEST_SECURITY_KEY_OUTCOME_DENIED
+                        .into(),
+                    ..Default::default()
+                })
+            )
+        ),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+
+    let mut no_approval_request = security_request();
+    no_approval_request.approval_required = false;
+    let mut not_required = opened_security_validator(&no_approval_request);
+    assert_eq!(
+        not_required.accept(
+            GuestStreamDirection::ServerToClient,
+            &security_frame(
+                0,
+                Frame::Complete(guest::GuestSecurityKeyComplete {
+                    outcome: guest::GuestSecurityKeyOutcome::GUEST_SECURITY_KEY_OUTCOME_DENIED
+                        .into(),
+                    ..Default::default()
+                })
+            )
+        ),
+        Err(ServiceContractError::InconsistentResponse)
+    );
 }
 
 #[test]
