@@ -152,18 +152,7 @@ pub mod wayland;
 pub mod wayland_ttrpc;
 
 #[path = "v2_guest_services.rs"]
-mod guest_contract;
-pub use guest_contract::{
-    CTAPHID_REPORT_BYTES, FileTransferStreamValidator, GuestStreamDirection,
-    MAX_GUEST_CAPABILITIES, MAX_GUEST_EXEC_LIST_ENTRIES, MAX_GUEST_FILE_BYTES,
-    MAX_GUEST_FILE_CHUNK_BYTES, MAX_GUEST_WAIT_MS, SecurityKeyStreamValidator,
-    retained_log_stream_validator, validate_guest_cancel_response_for_request,
-    validate_guest_exec_response_for_request, validate_guest_inspect_response_for_request,
-    validate_guest_open_exec_retained_log_response_for_request,
-    validate_guest_open_shell_response_for_request, validate_guest_session_response_for_bootstrap,
-    validate_guest_session_response_for_reconnect, validate_guest_shutdown_response_for_request,
-    validate_terminal_open_response_for_guest_context,
-};
+pub mod guest_contract;
 
 pub const MAX_PROTOBUF_MESSAGE_BYTES: usize = MAX_LOGICAL_MESSAGE_BYTES as usize;
 pub const MAX_SERVICE_STRING_BYTES: usize = 64;

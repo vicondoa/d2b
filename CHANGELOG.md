@@ -175,6 +175,8 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Kept guest-service validators inside their versioned service rail and updated
+  the least-privilege feature matrix for the public provider types it consumes.
 - Preserved typed retained-log denial/cancellation/failure responses while
   restricting live stream construction to accepted ranges, and made explicit
   security-key denial reject further ceremony traffic and contradictory

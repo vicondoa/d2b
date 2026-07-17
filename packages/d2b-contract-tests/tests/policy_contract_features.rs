@@ -77,7 +77,7 @@ fn contracts_default_is_empty_and_feature_graph_is_acyclic() {
             "broker",
             BTreeSet::from(["common", "guest-auth", "security-key", "usbip"]),
         ),
-        ("public", BTreeSet::from(["broker", "guest"])),
+        ("public", BTreeSet::from(["broker", "guest", "v2-provider"])),
         ("cli-output", BTreeSet::from(["public"])),
         ("unsafe-local", BTreeSet::from(["public"])),
         (

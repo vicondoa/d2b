@@ -1,15 +1,18 @@
 #![cfg(feature = "v2-services")]
 
-use d2b_contracts::v2_services::{
+use d2b_contracts::v2_services::guest_contract::{
     CTAPHID_REPORT_BYTES, FileTransferStreamValidator, GuestStreamDirection,
-    SecurityKeyStreamValidator, ServiceContractError, StrictWireMessage, common, decode_strict,
-    encode_strict, guest, method_spec, retained_log_stream_validator, terminal,
+    SecurityKeyStreamValidator, retained_log_stream_validator,
     validate_guest_cancel_response_for_request, validate_guest_exec_response_for_request,
     validate_guest_inspect_response_for_request,
     validate_guest_open_exec_retained_log_response_for_request,
     validate_guest_open_shell_response_for_request, validate_guest_session_response_for_bootstrap,
     validate_guest_session_response_for_reconnect, validate_guest_shutdown_response_for_request,
     validate_terminal_open_response_for_guest_context,
+};
+use d2b_contracts::v2_services::{
+    ServiceContractError, StrictWireMessage, common, decode_strict, encode_strict, guest,
+    method_spec, terminal,
 };
 use protobuf::{Message, MessageField};
 
