@@ -1,5 +1,5 @@
 {
-  description = "d2b example: two isolated envs (work + personal) demonstrating per-env network separation";
+  description = "d2b example: two isolated realm networks";
 
   # Consume d2b as a path input so this example works without
   # pinning a tag. In a real consumer flake you'd write:
@@ -9,7 +9,7 @@
   inputs.d2b.url = "path:../..";
 
   outputs = { self, d2b }: {
-    # Base variant: two isolated envs with daemon-supervised VMs.
+    # Base variant: two isolated realms with controller-supervised workloads.
     nixosConfigurations.demo = d2b.inputs.nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
       modules = [
@@ -18,7 +18,7 @@
       ];
     };
 
-    # Network-knob variant: exercises per-env `mtu`, `mssClamp`, and
+    # Network-knob variant: exercises per-realm `mtu`, `mssClamp`, and
     # `lan.allowEastWest` knobs together with the site-level
     # `allowUnsafeEastWest` acknowledgement. VM supervision is still
     # daemon-only; see ./README.md for the operator UX.
@@ -30,18 +30,18 @@
           ./configuration.nix
           ({ lib, ... }: {
             # Site-level acknowledgement that this host accepts
-            # the relaxed east-west isolation for envs that
+            # the relaxed east-west isolation for realms that
             # opt in below.
             d2b.site.allowUnsafeEastWest = true;
 
-            # Per-env network knobs on the `work` env:
+            # Network knobs on the `work` realm:
             #   * MTU clamp to 1400 (tunneled uplink reference).
             #   * MSS clamp on the net VM's nft forward chain.
             #   * East-west between workload LAN ports — double
             #     opt-in with site.allowUnsafeEastWest above.
-            d2b.envs.work.mtu = lib.mkForce 1400;
-            d2b.envs.work.mssClamp = lib.mkForce true;
-            d2b.envs.work.lan.allowEastWest = lib.mkForce true;
+            d2b.realms.work.network.mtu = lib.mkForce 1400;
+            d2b.realms.work.network.mssClamp = lib.mkForce true;
+            d2b.realms.work.network.lan.allowEastWest = lib.mkForce true;
 
             # Every enabled VM is daemon-supervised by default.
           })

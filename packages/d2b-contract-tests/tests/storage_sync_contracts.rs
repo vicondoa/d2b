@@ -691,10 +691,6 @@ fn registered_host_mutation_sources() -> BTreeMap<&'static str, &'static str> {
             "storage root:path:run-root",
         ),
         (
-            "nixos-modules/gateway-vm.nix",
-            "storage root:path:state-root",
-        ),
-        (
             "nixos-modules/guest-control.nix",
             "storage paths:nodeWritablePaths/readinessSocketPaths",
         ),

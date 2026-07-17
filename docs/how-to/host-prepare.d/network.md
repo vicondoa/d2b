@@ -9,8 +9,7 @@
 
 This fragment covers the network reconcile deliverables:
 
-- bridge + TAP lifecycle (`CreateTapFd`, `CreatePersistentTap`,
-  `SetBridgePortFlags`);
+- allocator-owned bridge, veth, TAP, namespace, and nftables leases;
 - the 5-step **IPv6-off** ordering with NetworkManager / systemd-networkd
   (per-link sysctls plus `bridge-nf-call-*` when `br_netfilter` is
   loaded);
@@ -25,7 +24,7 @@ This fragment covers the network reconcile deliverables:
 ## Dry-run / apply / destroy walkthrough
 
 ```bash
-# Read-only inventory: lists derived ifnames, declared bridges,
+# Read-only inventory: lists realm-derived ifnames, declared resources,
 # detected NM version + state, host LAN CIDRs, route preflight result.
 d2b host check --json
 
@@ -40,8 +39,8 @@ sudo d2b host prepare --dry-run
 sudo d2b host prepare --apply
 
 # Same pending disposition for destroy (`daemon-down`, exit 1, today).
-# Once wired it will reverse the host-prepare mutations only (bridges,
-# TAPs, NM drop-in, /etc/hosts managed block, IPv6 sysctls). Foreign
+# Once wired it will reverse only allocator-owned realm resources (bridges,
+# veths, TAPs, NM marked block, IPv6 sysctls). Foreign
 # state untouched.
 sudo d2b host destroy --apply
 ```
@@ -126,12 +125,10 @@ between the step-3 write and the step-5 readback is the
 
 ### NixOS (Tier 0)
 
-- `host prepare --apply` is refused on the legacy path. Tier-0
-  consumers use the NixOS module: every d2b-owned bridge, TAP,
-  sysctl, NM unmanaged entry, and `/etc/hosts` block is materialised
-  declaratively via `nixos-modules/`. The `host doctor --read-only`
-  command still runs and reports drift between the module-emitted
-  state and the live host.
+- The NixOS module emits realm resource and allocator rows; it does not create
+  dynamic realm links directly. The local-root allocator owns global creation,
+  collision checks, and lease delegation. `host doctor --read-only` reports
+  drift between those generated rows and the live host.
 
 ## Cloud Hypervisor net handoff mode
 
@@ -164,14 +161,14 @@ derivation rule:
 - collect remaining IPv4 `RT_TABLE_MAIN scope LINK` destinations;
 - flag VPN-like routes (point-to-point, no broadcast) as ambiguous —
   do not include automatically. Operator overrides via
-  `d2b.site.hostLanCidrs`.
+  `d2b.hostLanCidrs`.
 
 ## Failure modes operators will see
 
 | Audit `error_kind`                  | Meaning                                                  |
 | ----------------------------------- | -------------------------------------------------------- |
 | `ifname-too-long`                   | Derived ifname exceeded IFNAMSIZ-1 (15 bytes).           |
-| `ifname-collision`                  | Two `(env, vm, role)` keys derived the same ifname.      |
+| `ifname-collision`                  | Two `(realm, workload, role)` keys derived the same ifname. |
 | `ipv6-sysctl-drift`                 | Per-link IPv6 sysctl readback diverged from step-3 write.|
 | `bridge-port-flag-drift`            | Post-`SetBridgePortFlags` readback diverged.             |
 | `nm-managed-foreign-conflict`       | NM still claims a d2b-declared ifname.               |

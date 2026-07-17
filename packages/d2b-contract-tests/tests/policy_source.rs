@@ -283,11 +283,9 @@ fn nix_package_source_filters_are_path_segment_based() {
         "nixos-modules/lib.nix: cleanRustPackagesSource must exclude only a directory segment named `target`"
     );
 
-    let gateway_vm = read_repo_file("nixos-modules/gateway-vm.nix");
     assert!(
-        !gateway_vm.contains("cleanSourceWith") && !gateway_vm.contains("filterSource"),
-        "nixos-modules/gateway-vm.nix: gateway VMs must consume _hostToolPackages, \
-         not define an ad-hoc Rust source filter"
+        !repo_path_exists("nixos-modules/gateway-vm.nix"),
+        "the legacy gateway VM synthesizer must remain deleted"
     );
 }
 
