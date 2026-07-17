@@ -1,24 +1,24 @@
-# Guest-side baseline for d2b per-env net VMs.
+# Guest-side baseline for d2b realm net VMs.
 #
-# Auto-instantiated by network.nix for each `d2b.envs.<env>`.
-# The env's metadata + extraNetConfig come through specialArgs
-# as `envMeta` and `envExtraConfig`.
+# A realm workload/process row instantiates this module with the generated
+# `realmNetwork.guest` record.
 #
 # What this file owns
 #   - Hostname + minimal-system config.
 #   - Two systemd-networkd interfaces (eth0 = uplink, eth1 = lan).
 #   - sysctl ip_forward.
 #   - nftables: stateful firewall + MASQUERADE on eth0 + the carve-
-#     outs that make the per-env isolation policy real.
+#     outs that make the per-realm isolation policy real.
 #   - dnsmasq on eth1 with DHCP host-reservations for every workload
-#     VM declared in this env, plus public-resolver forwarding.
-#   - microvm.* hypervisor block (cloud-hypervisor, two tap interfaces named
-#     `<env>-u2` (uplink-side) / `<env>-l1` (LAN-side), small VM,
-#     no graphics).
-{ envMeta, config, pkgs, lib, ... }:
+#     VM declared in this realm, plus public-resolver forwarding.
+#   - microvm.* hypervisor block (cloud-hypervisor, two allocator-named tap
+#     interfaces, small VM, no graphics).
+{ realmNetwork ? null, config, pkgs, lib, ... }:
 
 let
-  m = envMeta;
+  m =
+    if realmNetwork != null then realmNetwork
+    else throw "d2b net VM requires realmNetwork guest metadata";
   homeAttachment = m.externalNetwork.attachment;
   externalNetworkEnabled = homeAttachment.enable;
   homeIf = homeAttachment.guestIfName;
@@ -50,6 +50,8 @@ let
   # with a MAC that can never match.
 in
 {
+  _module.args.realmNetwork = lib.mkDefault m;
+
   imports = [
     ./net-mdns.nix
   ];
@@ -228,7 +230,7 @@ in
 
           # Opt-in same-env east-west traffic. This complements the
           # host bridge's `Isolated = false` path when
-          # `d2b.envs.<env>.lan.allowEastWest = true`.
+          # `d2b.realms.<realm>.network.lan.allowEastWest = true`.
           ${lib.optionalString m.allowEastWest ''
           iifname "eth1" oifname "eth1" ct state new accept
           ''}
@@ -297,8 +299,7 @@ in
 
   # dnsmasq: DHCP server on the LAN with per-VM host-reservations
   # plus DNS forwarding to public resolvers. The reservation list is
-  # computed from envMeta.workloads (which network.nix builds from
-  # every workload VM that named this env).
+  # computed from realmNetwork.workloads.
   services.dnsmasq = {
     enable = true;
     settings = {
@@ -329,7 +330,7 @@ in
         "option:dns-server,${m.netLanIp}"
       ];
 
-      # Static reservations: one per workload VM declared in this env.
+      # Static reservations: one per workload VM declared in this realm.
       dhcp-host = lib.mapAttrsToList
         (vmName: w: "${w.mac},${w.ip},${vmName},12h")
         m.workloads;
@@ -496,12 +497,12 @@ in
     interfaces = [
       {
         type = "tap";
-        id = "${m.name}-u2";
+        id = m.interfaces.netVmUplink;
         mac = m.netUplinkMac;
       }
       {
         type = "tap";
-        id = "${m.name}-l1";
+        id = m.interfaces.netVmLan;
         mac = m.netLanMac;
       }
     ] ++ lib.optional externalNetworkEnabled {

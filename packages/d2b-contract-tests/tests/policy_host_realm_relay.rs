@@ -105,7 +105,6 @@ fn host_daemon_broker_and_activation_do_not_store_realm_credentials() {
         "packages/d2bd/src/realm_stubs.rs",
         "packages/d2bd/src/lib.rs",
         "nixos-modules/assertions.nix",
-        "nixos-modules/gateway-vm.nix",
         "nixos-modules/options-gateway.nix",
     ]);
     let forbidden = [
