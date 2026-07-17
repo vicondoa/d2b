@@ -1,6 +1,4 @@
-# P1 audio argv snapshot from d2b_host::audio_argv::generate_audio_argv(audit_input())
-# Per-VM copy at /run/d2b/vms/<vm>/d2b-<vm> so libpipewire's init_prgname()
-# derives application.name = "d2b-<vm>" from /proc/self/exe (W5-H6 panel finding #2
-# + W5 GPT-5.5 panel notable #1); --socket pins the per-VM PipeWire-backed vhost-user
-# socket; --backend pipewire is today's only supported backend.
+# Canonical realm-role argv consumed by declarative and contract coverage.
+# canonical-argv: /run/d2b/r/tft6a4n527flrfmxjwna/w/3ktvlfsdkkqlcugirbcq/roles/dfjudgner53qnwyowkja/d2b-audio-3ktvlfsdkkqlcugirbcq --socket /run/d2b/r/tft6a4n527flrfmxjwna/w/3ktvlfsdkkqlcugirbcq/sockets/audio.sock --backend pipewire
+# Legacy d2b-host argv-generator compatibility payload. Rust ignores comments.
 /run/d2b/vms/corp-desktop/d2b-corp-desktop --socket /run/d2b/vms/corp-desktop/snd.sock --backend pipewire
