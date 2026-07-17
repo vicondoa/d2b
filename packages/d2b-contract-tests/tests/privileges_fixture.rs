@@ -15,4 +15,11 @@ fn privileges_fixture_contains_broker_operation_matrix() {
             .any(|row| row.operation == "DelegateCgroupV2"),
         "privileges.json must include the DelegateCgroupV2 broker operation"
     );
+    assert!(
+        privileges
+            .broker_operations
+            .iter()
+            .all(|row| row.operation != "GuestControlSign"),
+        "privileges.json must not retain guest token signing authority"
+    );
 }

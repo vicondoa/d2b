@@ -420,25 +420,6 @@ let
         invariants = [ "no-symlink" "scope-authorization-required" ];
       })
       (mkPath {
-        id = "path:vm-run-guest-control:${name}";
-        scope = "vm:${name}";
-        path = "/run/d2b/vms/${name}/guest-control";
-        lifecycle = "boot-scoped-readoptable";
-        persistence = "boot-scoped";
-        owner = principal "user" "d2bd";
-        group = principal "group" "d2b";
-        mode = "0770";
-        creator = actor "nix-module" "tmpfiles";
-        writers = [
-          (actor "daemon" "d2bd")
-          (actor "broker" "d2b-priv-broker")
-        ];
-        cleanupPolicy = "boot";
-        repairPolicy = "nix-activation";
-        leaseClass = "process-pidfd";
-        invariants = [ "no-symlink" "scope-authorization-required" ];
-      })
-      (mkPath {
         id = "path:daemon-state-vm:${name}";
         scope = "vm:${name}";
         path = "${toString cfg.site.stateDir}/daemon-state/${name}";

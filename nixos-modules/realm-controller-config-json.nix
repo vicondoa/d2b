@@ -2,6 +2,7 @@
 
 let
   cfg = config.d2b;
+  guestSessionRows = cfg._workloadGuestSessionCredentialRows or [ ];
   allocatorRows = cfg._realmAllocatorRows;
   childRealms = lib.sortOn (row: row.realmPath) (cfg._realmAccess.children or [ ]);
   allocatorData = cfg._bundle.allocatorJson.data;
@@ -139,6 +140,7 @@ let
       preservesDirectUnixSocketSemantics = true;
     };
   };
+  dataJson = builtins.toJSON data;
 in
 {
   config = {
@@ -150,6 +152,25 @@ in
           && builtins.substring 0 9 controller.daemon.locksDir == "/run/d2b/"
         ) data.controllers;
         message = "realm controller lock metadata must remain under /run/d2b";
+      }
+      {
+        assertion = lib.all
+          (credential:
+            credential.authority.generation
+              == "d2bd-r-${credential.realmId}"
+            && credential.authority.materialization
+              == "d2bbr-r-${credential.realmId}")
+          guestSessionRows;
+        message = "realm guest session credential authority must remain child-realm confined";
+      }
+      {
+        assertion =
+          !(lib.hasInfix "GuestSessionCredentialV1" dataJson)
+          && !(lib.hasInfix "d2b-guest-session-v2" dataJson)
+          && !(lib.hasInfix "parentPrivateKey" dataJson)
+          && !(lib.hasInfix "guestPrivateKey" dataJson)
+          && !(lib.hasInfix "operationPsk" dataJson);
+        message = "runtime guest session credentials must not enter realm-controllers.json";
       }
     ];
 

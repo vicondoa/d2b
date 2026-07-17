@@ -68,6 +68,11 @@ let
       d2b.guestControl = {
         enable = lib.mkForce true;
         guestConfigPath = lib.mkForce null;
+        sessionCredential = {
+          name = lib.mkForce "d2b-guest-session-v2";
+          sourcePath = lib.mkForce
+            "/run/d2b-guest-control-host/d2b-guest-session-v2";
+        };
         exec = {
           enable = lib.mkForce execEnabled;
           execUser = lib.mkForce config.d2b.sshUser;

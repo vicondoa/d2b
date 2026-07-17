@@ -202,6 +202,11 @@ deprecations ship one minor release before removal.
   identity digest is not SHA-256 of the pinned static public key.
 - Passed the canonical workload identity to guestd and removed the retired
   `GuestControlSign` operation from the declarative privilege inventory.
+- Replaced the long-lived guest-control token and privileged signing row with a
+  realm-confined runtime `GuestSessionCredentialV1` handoff that binds the exact
+  generation, parent and guest public identities, channel, and optional
+  operation PSK; credentials are root-owned, delivered without an ambient
+  fallback, rotated before publication, and excluded from bundle artifacts.
 - Routed the CLI dependency authority through `d2b-daemon-access`, the sole
   owner of the exact no-default-features `d2b-client/host-socket` edge, instead
   of permitting duplicate endpoint and channel-binding policy.

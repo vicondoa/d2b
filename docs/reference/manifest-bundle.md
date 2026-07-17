@@ -28,6 +28,10 @@ world-readable system profile.
 | `closures/<workload-id>.json` | private closure metadata | root:`d2bd` `0640` | Per-workload toplevel, closure paths, declared-runner parity data, and generation metadata. |
 | `minijail-profile.json` | private sandbox profile catalog | root:`d2bd` `0640` | Typed minijail profile fields, mount policy, and bounded start-as-root exceptions. |
 
+`GuestSessionCredentialV1` is deliberately absent from this inventory. Only
+its non-secret runtime storage policy may appear in `storage.json`; credential
+bytes and private/PSK material are never bundle or public-manifest data.
+
 `vms.json` is the only world-readable artifact. All other artifacts are
 daemon-owned bundle inputs, including public-safe launcher metadata that
 `d2bd` exposes through its authorized API. The privileged boundary is described by

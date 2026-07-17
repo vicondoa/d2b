@@ -194,7 +194,7 @@ let
           readOnly = true;
         }
         {
-          source = "${keys.path}/guest-control";
+          source = "${(normalized "workload-runtime").path}/guest-session";
           mountPoint = "/run/d2b-guest-control-host";
           tag = "d2b-gctl";
           proto = "virtiofs";

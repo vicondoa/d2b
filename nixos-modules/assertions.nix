@@ -13,6 +13,26 @@ let
     else modulePkgs.stdenv.hostPlatform.system;
   waylandUser = lib.attrByPath [ "d2b" "site" "waylandUser" ] null config;
   declaredUsers = lib.attrByPath [ "users" "users" ] { } config;
+  guestSessionRows = cfg._workloadGuestSessionCredentialRows or [ ];
+  guestSessionRequiredFields = [
+    "sessionGeneration"
+    "parentPublicKey"
+    "channelBinding"
+    "guestIdentity"
+    "guestPublicKey"
+  ];
+  guestSessionOperationPskBindingFields = [
+    "operationId"
+    "realmId"
+    "workloadId"
+    "controllerGeneration"
+    "workloadGeneration"
+    "runtimeInstanceHandleDigest"
+    "transportEndpointDigest"
+    "purpose"
+    "expiresAtUnixMs"
+    "replayNonce"
+  ];
 
   parentAssertions = map
     (realm: {
@@ -180,6 +200,76 @@ let
     assertion = builtins.deepSeq index.identities true;
     message = "Normalized realm identity inventory is invalid.";
   };
+
+  guestSessionAssertions = [
+    {
+      assertion = lib.all
+        (row:
+          row.format == "GuestSessionCredentialV1"
+          && row.schemaVersion == 1
+          && row.encoding == "d2b-guest-session-v2"
+          && row.payloadContract.requiredFields == guestSessionRequiredFields
+          && row.payloadContract.forbiddenFields
+            == [ "parentPrivateKey" "guestPrivateKey" ]
+          && row.payloadContract.optionalOperationPskFields
+            == [ "binding" "secret" ]
+          && row.payloadContract.operationPskBindingFields
+            == guestSessionOperationPskBindingFields
+          && row.payloadContract.operationPskAllOrNone
+          && row.payloadContract.operationPskSingleUse)
+        guestSessionRows;
+      message = "Guest session credentials must bind the exact generation, channel, parent, and guest public identities without private keys.";
+    }
+    {
+      assertion = lib.all
+        (row:
+          lib.hasPrefix
+            "/run/d2b/r/${row.realmId}/w/${row.workloadId}/guest-session/"
+            row.target
+          && !(lib.hasPrefix "/nix/store" row.target)
+          && row.owner == "root"
+          && row.mode == "0440"
+          && row.guestDelivery.owner == "root"
+          && row.guestDelivery.mode == "0400"
+          && !row.guestDelivery.ambientFallback
+          && row.hostMaterialization.mechanism
+            == "authenticated-component-session-fd"
+          && row.hostMaterialization.service == "d2b.broker.v2"
+          && row.hostMaterialization.method == "Apply"
+          && row.hostMaterialization.methodId == 2253834528
+          && row.hostMaterialization.attachmentCount == 1
+          && row.hostMaterialization.attachmentKind == "file-descriptor"
+          && row.hostMaterialization.descriptor == "memfd"
+          && row.hostMaterialization.access == "read-only"
+          && row.hostMaterialization.purpose == "request-input"
+          && row.hostMaterialization.sealedRequired
+          && row.hostMaterialization.cloexecRequired
+          && row.hostMaterialization.exactStorageRefRequired
+          && !row.hostMaterialization.pathPayloadAllowed
+          && !row.hostMaterialization.ambientFallback
+          && !row.bundleArtifact
+          && !row.derivationMaterial
+          && !row.observability.logsCredential
+          && !row.observability.auditsCredential
+          && !row.observability.metricsCredential
+          && !row.materializedByHostActivation)
+        guestSessionRows;
+      message = "Guest session credentials must remain private runtime material with no store, bundle, activation, or ambient delivery path.";
+    }
+    {
+      assertion = lib.all
+        (row:
+          row.authority.generation == "d2bd-r-${row.realmId}"
+          && row.authority.materialization == "d2bbr-r-${row.realmId}"
+          && row.authority.workloadId == row.workloadId
+          && row.lifecycle.restart == "rotate-before-publish"
+          && row.lifecycle.adoption == "exact-binding-or-quarantine"
+          && row.lifecycle.stale == "fail-closed"
+          && row.lifecycle.ambiguous == "fail-closed")
+        guestSessionRows;
+      message = "Guest session credential rotation and adoption must remain confined to the owning child realm and fail closed.";
+    }
+  ];
 in
 {
   assertions =
@@ -189,5 +279,6 @@ in
     ++ providerBindingAssertions
     ++ providerImplementationAssertions
     ++ workloadFeatureAssertions
-    ++ pathAssertions;
+    ++ pathAssertions
+    ++ guestSessionAssertions;
 }

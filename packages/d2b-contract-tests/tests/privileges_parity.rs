@@ -31,14 +31,22 @@ fn operation_groups(label: &str, ops: &[OperationAuthz]) -> BTreeMap<String, Vec
 
 #[test]
 fn rendered_privileges_matches_rust_matrix() {
-    let mut rendered = load_privileges_fixture_from_env();
-    let retired = rendered
-        .broker_operations
-        .iter()
-        .position(|operation| operation.operation == "GuestControlSign")
-        .expect("Nix privilege emitter must retain GuestControlSign until declarative retirement");
-    rendered.broker_operations.remove(retired);
+    let rendered = load_privileges_fixture_from_env();
     let rust = PrivilegesJson::w1(rendered.schema_version.clone());
+
+    assert!(
+        rendered
+            .broker_operations
+            .iter()
+            .all(|row| row.operation != "GuestControlSign"),
+        "rendered privileges.json must retire the superseded guest token signing authority"
+    );
+    assert!(
+        rust.broker_operations
+            .iter()
+            .all(|row| row.operation != "GuestControlSign"),
+        "Rust privileges must retire the superseded guest token signing authority"
+    );
 
     // Operation set + allowedGroups parity, public and broker, in one
     // BTreeMap equality each (the map diff localizes any drift to the

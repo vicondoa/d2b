@@ -202,7 +202,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2b-host/tests/guest_control_token_materializer.rs::guest_control_token_materializer_rejects_missing_source_without_path_leak", "packages/d2b-host/tests/guest_control_token_materializer.rs::guest_control_token_materializer_rejects_relative_source_without_path_leak", "packages/d2b-host/tests/guest_control_token_materializer.rs::guest_control_token_materializer_rejects_store_child_source_without_path_leak", "packages/d2b-host/tests/guest_control_token_materializer.rs::guest_control_token_materializer_rejects_store_root_source_without_path_leak"]
+successor_ids = ["packages/d2b-contract-tests/tests/policy_guest.rs::guest_session_credential_contract_present", "packages/d2b-contract-tests/tests/policy_guest.rs::guest_session_credential_has_exact_public_bindings_and_private_delivery", "packages/d2b-contract-tests/tests/policy_guest.rs::legacy_guest_token_materializer_and_signing_authority_are_absent"]
 exercised_today = "yes"
 
 [[script]]
@@ -1021,7 +1021,7 @@ group = "H"
 make_target = "test-policy"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2b-contract-tests/tests/policy_guest.rs::retired_guest_control_nongoals_are_now_shipped_goals (the W15 guest-control-health readiness non-goal and the W16 `d2b exec` CLI non-goal are now shipped goals: ProcessRole::GuestControlHealth + the readiness predicate in d2b-core/src/processes.rs, and the admin-only `vm exec` / `vm konsole` verbs in d2b/src/lib.rs); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh", "packages/d2b-contract-tests/tests/policy_guest.rs::guest_control_auth_core_token_share_contract_present (the auth-core token-share / LoadCredential contract the retired nix-eval smoke exercised — d2b-gctl share + /run/d2b-guest-control-host mount + guest_control_token LoadCredential + auth.tokenFile absolute/outside-/nix/store validation — is present in the module source; the nix eval itself remains covered by tests/unit/nix/cases/guest-control-auth.nix); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]
+successor_ids = ["packages/d2b-contract-tests/tests/policy_guest.rs::retired_guest_control_nongoals_are_now_shipped_goals (the guest-control-health readiness and admin-only guest execution surfaces are shipped goals); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh", "packages/d2b-contract-tests/tests/policy_guest.rs::guest_session_credential_contract_present (the runtime-only authenticated ComponentSession credential replaces the long-lived token share and caller-selected token path); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]
 exercised_today = "yes"
 
 [[script]]
@@ -1345,7 +1345,7 @@ group = "D"
 make_target = "test-nix-unit"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["flake.checks.<system>.nix-unit (tests/unit/nix/cases/guest-control-auth.nix — 5 auth-token-delivery cases: default parameterization asserts the exact d2b-gctl token share + LoadCredential JSON; /nix/store, /nix/store/<child>, and relative auth.tokenFile each reject at eval time, as does a tokenFile set without guest.control.enable; imports tests/unit/nix/eval-cases/guest-control-auth-eval.nix via a mkEval flake shim)"]
+successor_ids = ["flake.checks.<system>.nix-unit (tests/unit/nix/cases/guest-control-auth.nix — authenticated runtime credential cases cover exact public-key/generation/channel bindings, optional operation PSK binding, private owner/modes, read-only delivery, fail-closed rotation/adoption, child-realm confinement, and absence from bundle artifacts)"]
 exercised_today = "yes"
 
 [[script]]

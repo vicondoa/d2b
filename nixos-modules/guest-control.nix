@@ -42,6 +42,22 @@ in
       '';
     };
 
+    sessionCredential = {
+      name = lib.mkOption {
+        type = lib.types.enum [ "d2b-guest-session-v2" ];
+        internal = true;
+        readOnly = true;
+        description = "Fixed systemd credential name consumed by the authenticated guest session runtime.";
+      };
+
+      sourcePath = lib.mkOption {
+        type = lib.types.strMatching "^/run/d2b-guest-control-host/[a-z0-9-]+$";
+        internal = true;
+        readOnly = true;
+        description = "Read-only guest path to the runtime-provisioned ComponentSession credential.";
+      };
+    };
+
     usbipPath = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       internal = true;
@@ -295,7 +311,7 @@ in
             in
             "${guestPackages.d2b-guestd-static}/bin/d2b-guestd --serve --vm-id ${lib.escapeShellArg name} --workload-id ${lib.escapeShellArg name}${execFlags}${execRuntimeFlags}${configFlags}${usbipFlags}${audioFlags}${activationFlags}${shellFlags}";
           LoadCredential = [
-            "guest_control_token:/run/d2b-guest-control-host/token"
+            "${cfg.sessionCredential.name}:${cfg.sessionCredential.sourcePath}"
           ];
         };
         restartIfChanged = false;

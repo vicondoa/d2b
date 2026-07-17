@@ -247,6 +247,9 @@ let
   singletonProfiles = map profileForRole
     (lib.filter (row: row.roleKind != "virtiofsd") roleRows);
   shareProfiles = lib.concatMap shareProfilesFor workloadRows;
+  guestSessionProfiles = lib.filter
+    (profile: lib.hasPrefix "d2b-gctlfs-" profile.principal)
+    shareProfiles;
   profiles = singletonProfiles ++ shareProfiles;
   profileTable = lib.listToAttrs (map
     (profile: {
@@ -289,7 +292,7 @@ in
           (privateEtc profile.path))
       renderedProfiles;
 
-    assertions = lib.mapAttrsToList
+    assertions = (lib.mapAttrsToList
       (uid: pairs: {
         assertion = false;
         message =
@@ -297,6 +300,21 @@ in
             lib.concatStringsSep ", " (map (pair: pair.principal) pairs)
           }";
       })
-      collisions;
+      collisions)
+      ++ map
+        (profile: {
+          assertion =
+            profile.capabilities == [ ]
+            && lib.any
+              (path:
+                lib.hasPrefix "/run/d2b/r/" path
+                && lib.hasSuffix "/guest-session" path)
+              profile.mountPolicy.readOnlyPaths
+            && lib.all
+              (entry: !(lib.hasSuffix "/guest-session" entry.path))
+              profile.mountPolicy.writablePaths;
+          message = "guest session virtiofs profiles must expose only the declared read-only runtime credential directory";
+        })
+        guestSessionProfiles;
   };
 }

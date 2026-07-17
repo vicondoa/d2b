@@ -2,6 +2,7 @@
 
 let
   cfg = config.d2b;
+  d2bLib = import ./lib.nix { inherit lib; };
   identity = import ./v2-identity.nix;
 
   actor = kind: value: { inherit kind value; };
@@ -181,6 +182,9 @@ let
       storeRole = roleActor "virtiofsd";
       tpmRole = roleActor "swtpm";
       audioRole = roleActor "audio";
+      guestSessionReader =
+        principal "gid" (toString
+          (d2bLib.stablePrincipalId "d2b-gctlfs-${workloadId}"));
       standard = [
         (mkConfigPath {
           id = configResource.resourceId;
@@ -367,6 +371,41 @@ let
           persistence = "boot-scoped";
           cleanupPolicy = "process-exit-with-proof";
           leaseClass = "process-pidfd";
+        })
+        (mkPath {
+          id = "path:workload-guest-session:${workloadId}";
+          inherit scope realmId;
+          path = "${runRoot}/guest-session";
+          lifecycle = "process-scoped";
+          persistence = "process-scoped";
+          owner = principal "user" "root";
+          group = guestSessionReader;
+          mode = "0750";
+          readers = [ (brokerActor realmId) ] ++ storeRole;
+          cleanupPolicy = "process-exit-with-proof";
+          repairPolicy = "broker-fail-closed";
+          restartPolicy = "recreate-after-owner-death";
+          adoptionPolicy = "quarantine-on-ambiguity";
+          leaseClass = "process-pidfd";
+          sensitivity = "secret-adjacent";
+        })
+        (mkPath {
+          id = "path:workload-guest-session-credential:${workloadId}";
+          inherit scope realmId;
+          path = "${runRoot}/guest-session/d2b-guest-session-v2";
+          kind = "regular-file";
+          lifecycle = "process-scoped";
+          persistence = "process-scoped";
+          owner = principal "user" "root";
+          group = guestSessionReader;
+          mode = "0440";
+          readers = [ (brokerActor realmId) ] ++ storeRole;
+          cleanupPolicy = "process-exit-with-proof";
+          repairPolicy = "broker-fail-closed";
+          restartPolicy = "recreate-after-owner-death";
+          adoptionPolicy = "quarantine-on-ambiguity";
+          leaseClass = "process-pidfd";
+          sensitivity = "secret-adjacent";
         })
       ] ++ map
         (leaf:

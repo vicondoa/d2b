@@ -194,6 +194,11 @@ Every closed enum uses the spelling listed by this contract identically in JSON
 and generated JSON Schema; variant-name case conversion is not part of the
 wire contract.
 
+Guest endpoints receive their generation, public identity bindings, channel
+binding, and optional one-shot bootstrap PSK through the private runtime
+[`GuestSessionCredentialV1`](guest-session-credential.md) handoff. It is not a
+bundle artifact or a replacement long-lived token.
+
 ## Limits
 
 All additions and subtractions use checked arithmetic before allocation.
