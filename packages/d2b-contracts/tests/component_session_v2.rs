@@ -198,6 +198,38 @@ fn offer_accept_and_reject_have_canonical_binary_round_trips() {
 }
 
 #[test]
+fn endpoint_identity_discovers_only_a_nonzero_local_generation() {
+    let offer = offer();
+    let policy = policy(&offer);
+    let identity = EndpointPolicyIdentity::from(&policy);
+    identity.validate_local_generation_discovery().unwrap();
+    let encoded = identity.encode_canonical().unwrap();
+    assert_eq!(encoded.len(), ENDPOINT_POLICY_IDENTITY_CANONICAL_LEN);
+    assert_eq!(
+        EndpointPolicyIdentity::decode_canonical(&encoded).unwrap(),
+        identity
+    );
+    assert_eq!(identity.validate_exact(&policy), Ok(()));
+    assert_eq!(
+        identity.with_generation(0),
+        Err(ContractError::InvalidGeneration)
+    );
+    assert_eq!(identity.with_generation(9).unwrap().reconnect_generation, 9);
+
+    let mut remote = identity;
+    remote.purpose_class = PurposeClass::Enrolled;
+    remote.noise_profile = NoiseProfile::Kk25519ChaChaPolySha256;
+    remote.transport_binding.transport = TransportClass::ProviderStream;
+    remote.transport_binding.locality = Locality::Remote;
+    remote.transport_binding.identity_evidence = IdentityEvidenceRequirement::EnrolledStaticKeys;
+    remote.attachment_policy = AttachmentPolicy::disabled();
+    assert_eq!(
+        remote.validate_local_generation_discovery(),
+        Err(ContractError::IdentityEvidenceMismatch)
+    );
+}
+
+#[test]
 fn exact_offer_validation_rejects_every_downgrade_dimension() {
     let base = offer();
     let expected = policy(&base);
@@ -847,6 +879,7 @@ fn schema_fixture() -> serde_json::Value {
                 "handshakeAccept": schema_for!(HandshakeAccept),
                 "handshakeOffer": schema_for!(HandshakeOffer),
                 "handshakeReject": schema_for!(HandshakeReject),
+                "endpointPolicyIdentity": schema_for!(EndpointPolicyIdentity),
                 "keepaliveRecord": schema_for!(KeepaliveRecord),
                 "metricLabels": schema_for!(MetricLabels),
                 "recordHeader": schema_for!(RecordHeader),

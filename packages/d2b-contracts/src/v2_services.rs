@@ -5,7 +5,7 @@
 //! identity and method capability are intentionally absent: authenticated
 //! session state and [`SERVICE_INVENTORY`] are their sole authority.
 
-use std::{collections::BTreeSet, error::Error, fmt};
+use std::{collections::BTreeSet, error::Error, fmt, net::IpAddr};
 
 use protobuf::{Enum, EnumOrUnknown, Message, MessageField};
 use schemars::JsonSchema;
@@ -17,7 +17,10 @@ use crate::{
         BoundedVec, CorrelationId, IdempotencyKey, MAX_LOGICAL_MESSAGE_BYTES,
         MAX_REQUEST_ATTACHMENTS, MAX_REQUEST_LIFETIME_MS, RequestEnvelope, RequestId, TraceId,
     },
-    v2_identity::{ProviderId, ProviderType as IdentityProviderType, RealmId, RoleId, WorkloadId},
+    v2_identity::{
+        ProviderId, ProviderType as IdentityProviderType, RealmId, RealmLabel, RealmPath, RoleId,
+        WorkloadId, WorkloadName,
+    },
     v2_provider::{
         AdoptionState, AudioChannel as CanonicalAudioChannel,
         AudioDirection as CanonicalAudioDirection, ConfiguredItemId, DeviceSelectorId,
@@ -55,6 +58,7 @@ pub mod clipboard_ttrpc;
 #[allow(clippy::match_single_binding, clippy::needless_borrowed_reference)]
 #[path = "generated_v2_services/common.rs"]
 pub mod common;
+#[allow(clippy::match_single_binding, clippy::needless_borrowed_reference)]
 #[path = "generated_v2_services/daemon.rs"]
 pub mod daemon;
 #[path = "generated_v2_services/daemon_ttrpc.rs"]
@@ -153,6 +157,23 @@ pub const MAX_ALLOCATOR_CONFLICTS: usize = 16;
 pub const MAX_REALM_CHILD_FDS: usize = 64;
 pub const CONTROLLER_PIDFD_ATTACHMENT_INDEX: u32 = 0;
 pub const BROKER_PIDFD_ATTACHMENT_INDEX: u32 = 1;
+pub const MAX_DAEMON_REALMS: usize = 64;
+pub const MAX_DAEMON_WORKLOADS: usize = 256;
+pub const MAX_DAEMON_DETAIL_BYTES: usize = 256;
+pub const MAX_DAEMON_REFERENCE_BYTES: usize = 512;
+pub const MAX_DAEMON_DEGRADED_REASONS: usize = 16;
+pub const MAX_DAEMON_SERVICES: usize = 64;
+pub const MAX_DAEMON_CAPABILITIES: usize = 32;
+pub const MAX_DAEMON_MEDIA: usize = 32;
+pub const MAX_DAEMON_USB_DEVICES: usize = 32;
+pub const MAX_DAEMON_BRIDGES: usize = 32;
+pub const MAX_DAEMON_READINESS: usize = 128;
+pub const MAX_TERMINAL_ARGV: usize = 256;
+pub const MAX_TERMINAL_ARG_BYTES: usize = 4096;
+pub const MAX_TERMINAL_ARGV_BYTES: usize = 64 * 1024;
+pub const MAX_TERMINAL_CHUNK_BYTES: usize = 64 * 1024;
+pub const MAX_TERMINAL_FRAME_SEQUENCE: u64 = u32::MAX as u64;
+pub const MIN_NAMED_STREAM_ID: u16 = 0x0100;
 
 pub const SERVICE_PACKAGES: [&str; 15] = [
     "d2b.daemon.v2",
@@ -453,7 +474,7 @@ pub struct MethodDocument {
 
 pub fn service_inventory_document() -> ServiceInventoryDocument {
     ServiceInventoryDocument {
-        schema_version: 2,
+        schema_version: 3,
         services: SERVICE_INVENTORY
             .iter()
             .map(|service| ServiceDocument {
@@ -488,6 +509,10 @@ pub fn service_schema_fingerprint(service: &ServiceSpec) -> [u8; 32] {
     }
     if service.package == "d2b.broker.v2" {
         digest.update(b"\0typed-allocator-and-realm-child-spawn-v3");
+    }
+    if service.package == "d2b.daemon.v2" {
+        digest.update(b"\0typed-results-and-terminal-stream-v1\0");
+        digest.update(include_bytes!("../proto/v2/daemon.proto"));
     }
     for method in service.methods {
         digest.update(b"\0");
@@ -804,6 +829,1149 @@ impl StrictWireMessage for common::ServiceRequest {
             return Err(ServiceContractError::InvalidEnum);
         }
         validate_attachments(&self.attachment_indexes)
+    }
+}
+
+fn bounded_ascii(value: &str, max: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= max
+        && value.is_ascii()
+        && value
+            .bytes()
+            .all(|byte| !byte.is_ascii_control() && byte != b'\\')
+}
+
+fn optional_bounded_ascii(value: &str, max: usize) -> bool {
+    value.is_empty() || bounded_ascii(value, max)
+}
+
+fn valid_required_enum<E>(value: &EnumOrUnknown<E>, unspecified: E) -> bool
+where
+    E: Enum + Eq,
+{
+    value
+        .enum_value()
+        .ok()
+        .is_some_and(|actual| actual != unspecified)
+}
+
+fn valid_optional_enum<E>(value: &EnumOrUnknown<E>) -> bool
+where
+    E: Enum,
+{
+    value.enum_value().is_ok()
+}
+
+fn validate_page(
+    value: &daemon::PageInfo,
+    returned: usize,
+    maximum: usize,
+) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    if returned > maximum
+        || value.returned_items as usize != returned
+        || value.truncated == value.next_page_cursor.is_empty()
+        || (!value.next_page_cursor.is_empty()
+            && !bounded_ascii(&value.next_page_cursor, MAX_PAGE_CURSOR_BYTES))
+        || (!value.total_items_known && value.total_items != 0)
+        || (value.total_items_known && value.total_items < value.returned_items)
+    {
+        return Err(ServiceContractError::BoundExceeded);
+    }
+    Ok(())
+}
+
+fn validate_daemon_response_shape(
+    outcome: &EnumOrUnknown<common::Outcome>,
+    error: &MessageField<common::ErrorEnvelope>,
+    page: &MessageField<daemon::PageInfo>,
+    returned: usize,
+    maximum: usize,
+) -> Result<(), ServiceContractError> {
+    let outcome = outcome
+        .enum_value()
+        .map_err(|_| ServiceContractError::InvalidEnum)?;
+    match outcome {
+        common::Outcome::OUTCOME_SUCCEEDED | common::Outcome::OUTCOME_DEGRADED => {
+            if error.is_some() {
+                return Err(ServiceContractError::InconsistentResponse);
+            }
+            validate_page(
+                page.as_ref()
+                    .ok_or(ServiceContractError::InconsistentResponse)?,
+                returned,
+                maximum,
+            )
+        }
+        common::Outcome::OUTCOME_DENIED
+        | common::Outcome::OUTCOME_CANCELLED
+        | common::Outcome::OUTCOME_FAILED => {
+            if returned != 0 || page.is_some() {
+                return Err(ServiceContractError::InconsistentResponse);
+            }
+            validate_error(
+                error
+                    .as_ref()
+                    .ok_or(ServiceContractError::InconsistentResponse)?,
+            )
+        }
+        _ => Err(ServiceContractError::InconsistentResponse),
+    }
+}
+
+fn validate_realm_projection(value: &daemon::RealmProjection) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    RealmId::parse(value.realm_id.clone()).map_err(|_| ServiceContractError::InvalidIdentity)?;
+    RealmPath::parse(value.realm_path.clone())
+        .map_err(|_| ServiceContractError::InvalidIdentity)?;
+    if value.realm_label != "local-root" {
+        RealmLabel::parse(value.realm_label.clone())
+            .map_err(|_| ServiceContractError::InvalidIdentity)?;
+    }
+    if !valid_required_enum(&value.mode, daemon::RealmMode::REALM_MODE_UNSPECIFIED)
+        || !valid_required_enum(&value.state, daemon::RealmState::REALM_STATE_UNSPECIFIED)
+        || !valid_required_enum(
+            &value.cross_realm_policy,
+            daemon::CrossRealmPolicy::CROSS_REALM_POLICY_UNSPECIFIED,
+        )
+        || !valid_required_enum(
+            &value.credential_boundary,
+            daemon::CredentialBoundary::CREDENTIAL_BOUNDARY_UNSPECIFIED,
+        )
+        || value.generation == 0
+    {
+        return Err(ServiceContractError::InvalidEnum);
+    }
+    if !value.gateway_workload_id.is_empty() {
+        WorkloadId::parse(value.gateway_workload_id.clone())
+            .map_err(|_| ServiceContractError::InvalidIdentity)?;
+    }
+    if !value.gateway_target.is_empty() && !valid_canonical_target(&value.gateway_target) {
+        return Err(ServiceContractError::InvalidIdentity);
+    }
+    let gateway_backed =
+        value.mode.enum_value().ok() == Some(daemon::RealmMode::REALM_MODE_GATEWAY_BACKED);
+    if gateway_backed != (!value.gateway_workload_id.is_empty() && !value.gateway_target.is_empty())
+    {
+        return Err(ServiceContractError::InconsistentResponse);
+    }
+    Ok(())
+}
+
+impl StrictWireMessage for daemon::ListRealmsResponse {
+    fn validate_wire(&self, _: bool) -> Result<(), ServiceContractError> {
+        reject_unknown(self)?;
+        validate_daemon_response_shape(
+            &self.outcome,
+            &self.error,
+            &self.page,
+            self.realms.len(),
+            MAX_DAEMON_REALMS,
+        )?;
+        let mut identities = BTreeSet::new();
+        for realm in &self.realms {
+            validate_realm_projection(realm)?;
+            if !identities.insert(realm.realm_id.as_str()) {
+                return Err(ServiceContractError::InconsistentResponse);
+            }
+        }
+        Ok(())
+    }
+}
+
+fn valid_canonical_target(value: &str) -> bool {
+    value.len() <= MAX_DAEMON_DETAIL_BYTES
+        && value.ends_with(".d2b")
+        && value.split('.').count() >= 3
+        && value.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label.is_ascii()
+                && label.as_bytes()[0].is_ascii_lowercase()
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        })
+}
+
+fn validate_workload_identity(
+    value: &daemon::WorkloadIdentityProjection,
+) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    RealmId::parse(value.realm_id.clone()).map_err(|_| ServiceContractError::InvalidIdentity)?;
+    WorkloadId::parse(value.workload_id.clone())
+        .map_err(|_| ServiceContractError::InvalidIdentity)?;
+    RealmPath::parse(value.realm_path.clone())
+        .map_err(|_| ServiceContractError::InvalidIdentity)?;
+    WorkloadName::parse(value.workload_name.clone())
+        .map_err(|_| ServiceContractError::InvalidIdentity)?;
+    if !valid_canonical_target(&value.canonical_target) {
+        return Err(ServiceContractError::InvalidIdentity);
+    }
+    Ok(())
+}
+
+fn validate_degraded_reason(value: &daemon::DegradedReason) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    if !bounded_ascii(&value.reason, MAX_DAEMON_DETAIL_BYTES)
+        || !bounded_ascii(&value.remediation, MAX_DAEMON_DETAIL_BYTES)
+    {
+        return Err(ServiceContractError::BoundExceeded);
+    }
+    Ok(())
+}
+
+fn validate_lifecycle(
+    value: &daemon::WorkloadLifecycleProjection,
+) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    if !valid_required_enum(
+        &value.state,
+        daemon::WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_UNSPECIFIED,
+    ) || value.generation == 0
+        || value.degraded_reasons.len() > MAX_DAEMON_DEGRADED_REASONS
+        || value.degraded == value.degraded_reasons.is_empty()
+    {
+        return Err(ServiceContractError::InconsistentResponse);
+    }
+    for reason in &value.degraded_reasons {
+        validate_degraded_reason(reason)?;
+    }
+    Ok(())
+}
+
+fn validate_runtime(value: &daemon::RuntimeProjection) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    if !valid_required_enum(&value.kind, daemon::RuntimeKind::RUNTIME_KIND_UNSPECIFIED)
+        || !bounded_ascii(&value.detail, MAX_DAEMON_DETAIL_BYTES)
+        || value.supported_capabilities.len() > MAX_DAEMON_CAPABILITIES
+        || value.unsupported_capabilities.len() > MAX_DAEMON_CAPABILITIES
+    {
+        return Err(ServiceContractError::BoundExceeded);
+    }
+    let mut capabilities = BTreeSet::new();
+    for capability in value
+        .supported_capabilities
+        .iter()
+        .chain(&value.unsupported_capabilities)
+    {
+        if !valid_required_enum(
+            capability,
+            daemon::RuntimeCapability::RUNTIME_CAPABILITY_UNSPECIFIED,
+        ) || !capabilities.insert(capability.value())
+        {
+            return Err(ServiceContractError::InvalidEnum);
+        }
+    }
+    Ok(())
+}
+
+fn validate_service(value: &daemon::ServiceProjection) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    if !valid_required_enum(&value.kind, daemon::ServiceKind::SERVICE_KIND_UNSPECIFIED)
+        || !valid_required_enum(
+            &value.state,
+            daemon::ServiceState::SERVICE_STATE_UNSPECIFIED,
+        )
+        || !bounded_opaque(&value.role_id, MAX_SERVICE_STRING_BYTES)
+    {
+        return Err(ServiceContractError::InvalidEnum);
+    }
+    Ok(())
+}
+
+fn validate_autostart(value: &daemon::AutostartProjection) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    if !valid_required_enum(
+        &value.mode,
+        daemon::AutostartMode::AUTOSTART_MODE_UNSPECIFIED,
+    ) || !bounded_ascii(&value.reason, MAX_DAEMON_DETAIL_BYTES)
+    {
+        return Err(ServiceContractError::BoundExceeded);
+    }
+    Ok(())
+}
+
+fn validate_deployment(value: &daemon::DeploymentProjection) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    if [
+        &value.declared_guest_closure,
+        &value.current_generation,
+        &value.booted_generation,
+    ]
+    .iter()
+    .any(|entry| !optional_bounded_ascii(entry, MAX_DAEMON_REFERENCE_BYTES))
+        || (value.declared_guest_closure.is_empty()
+            && value.current_generation.is_empty()
+            && value.booted_generation.is_empty())
+    {
+        return Err(ServiceContractError::BoundExceeded);
+    }
+    Ok(())
+}
+
+fn validate_runner_parity(
+    value: &daemon::RunnerParityProjection,
+) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    if !bounded_opaque(&value.declared_runner, MAX_SERVICE_STRING_BYTES)
+        || !bounded_ascii(&value.parity_reference, MAX_DAEMON_REFERENCE_BYTES)
+    {
+        return Err(ServiceContractError::BoundExceeded);
+    }
+    Ok(())
+}
+
+fn validate_live_pool(
+    value: &daemon::LivePoolIntegrityProjection,
+) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    if !valid_required_enum(
+        &value.state,
+        daemon::ServiceState::SERVICE_STATE_UNSPECIFIED,
+    ) || !optional_bounded_ascii(&value.reason, MAX_DAEMON_DETAIL_BYTES)
+        || !optional_bounded_ascii(&value.audit_reference, MAX_DAEMON_REFERENCE_BYTES)
+        || !optional_bounded_ascii(&value.remediation, MAX_DAEMON_DETAIL_BYTES)
+    {
+        return Err(ServiceContractError::BoundExceeded);
+    }
+    Ok(())
+}
+
+fn validate_qemu_registry(
+    value: &daemon::QemuMediaRegistryProjection,
+) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    if !valid_required_enum(
+        &value.state,
+        daemon::ServiceState::SERVICE_STATE_UNSPECIFIED,
+    ) || !optional_bounded_ascii(&value.remediation, MAX_DAEMON_DETAIL_BYTES)
+    {
+        return Err(ServiceContractError::BoundExceeded);
+    }
+    Ok(())
+}
+
+fn validate_qemu_media(value: &daemon::QemuMediaProjection) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    if !valid_required_enum(
+        &value.firmware_mode,
+        daemon::QemuMediaFirmwareMode::QEMU_MEDIA_FIRMWARE_MODE_UNSPECIFIED,
+    ) || !valid_required_enum(
+        &value.runner_state,
+        daemon::ServiceState::SERVICE_STATE_UNSPECIFIED,
+    ) || !valid_required_enum(
+        &value.qmp_readiness,
+        daemon::QemuMediaReadiness::QEMU_MEDIA_READINESS_UNSPECIFIED,
+    ) || !valid_required_enum(
+        &value.pre_cont_progress,
+        daemon::QemuMediaProgress::QEMU_MEDIA_PROGRESS_UNSPECIFIED,
+    ) || value.media.len() > MAX_DAEMON_MEDIA
+    {
+        return Err(ServiceContractError::InvalidEnum);
+    }
+    let mut media_refs = BTreeSet::new();
+    for media in &value.media {
+        reject_unknown(media)?;
+        if !bounded_opaque(&media.media_ref, MAX_SERVICE_STRING_BYTES)
+            || !bounded_opaque(&media.slot, MAX_SERVICE_STRING_BYTES)
+            || !valid_required_enum(
+                &media.source_kind,
+                daemon::QemuMediaSourceKind::QEMU_MEDIA_SOURCE_KIND_UNSPECIFIED,
+            )
+            || !valid_required_enum(
+                &media.format,
+                daemon::QemuMediaFormat::QEMU_MEDIA_FORMAT_UNSPECIFIED,
+            )
+            || !media_refs.insert(media.media_ref.as_str())
+        {
+            return Err(ServiceContractError::BoundExceeded);
+        }
+        validate_qemu_registry(
+            media
+                .registry
+                .as_ref()
+                .ok_or(ServiceContractError::InconsistentResponse)?,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_usb(value: &daemon::UsbProjection) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    if value.devices.len() > MAX_DAEMON_USB_DEVICES {
+        return Err(ServiceContractError::BoundExceeded);
+    }
+    let mut devices = BTreeSet::new();
+    for device in &value.devices {
+        reject_unknown(device)?;
+        if !bounded_opaque(&device.device_id, MAX_SERVICE_STRING_BYTES)
+            || !valid_required_enum(
+                &device.state,
+                daemon::UsbDeviceState::USB_DEVICE_STATE_UNSPECIFIED,
+            )
+            || !optional_bounded_ascii(&device.owner_workload_id, MAX_SERVICE_STRING_BYTES)
+            || !optional_bounded_ascii(&device.slot, MAX_SERVICE_STRING_BYTES)
+            || !optional_bounded_ascii(&device.media_ref, MAX_SERVICE_STRING_BYTES)
+            || device.candidate_device_ids.len() > MAX_DAEMON_USB_DEVICES
+            || device.degraded_reasons.len() > MAX_DAEMON_DEGRADED_REASONS
+            || !devices.insert(device.device_id.as_str())
+        {
+            return Err(ServiceContractError::BoundExceeded);
+        }
+        if !device.owner_workload_id.is_empty() {
+            WorkloadId::parse(device.owner_workload_id.clone())
+                .map_err(|_| ServiceContractError::InvalidIdentity)?;
+        }
+        let mut candidates = BTreeSet::new();
+        for candidate in &device.candidate_device_ids {
+            if !bounded_opaque(candidate, MAX_SERVICE_STRING_BYTES)
+                || !candidates.insert(candidate.as_str())
+            {
+                return Err(ServiceContractError::BoundExceeded);
+            }
+        }
+        for reason in &device.degraded_reasons {
+            validate_degraded_reason(reason)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_bridge(value: &daemon::BridgeProjection) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    let valid_ifname = |name: &str| {
+        !name.is_empty()
+            && name.len() <= 15
+            && name.is_ascii()
+            && name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    };
+    if !valid_ifname(&value.bridge) || (!value.tap.is_empty() && !valid_ifname(&value.tap)) {
+        return Err(ServiceContractError::BoundExceeded);
+    }
+    Ok(())
+}
+
+fn validate_readiness(value: &daemon::ReadinessProjection) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    if !bounded_opaque(&value.role_id, MAX_SERVICE_STRING_BYTES)
+        || !bounded_ascii(&value.predicate_id, MAX_DAEMON_DETAIL_BYTES)
+        || !valid_required_enum(
+            &value.state,
+            daemon::ServiceState::SERVICE_STATE_UNSPECIFIED,
+        )
+    {
+        return Err(ServiceContractError::BoundExceeded);
+    }
+    Ok(())
+}
+
+fn validate_workload(value: &daemon::WorkloadProjection) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    validate_workload_identity(
+        value
+            .identity
+            .as_ref()
+            .ok_or(ServiceContractError::InvalidIdentity)?,
+    )?;
+    WorkloadName::parse(value.name.clone()).map_err(|_| ServiceContractError::InvalidIdentity)?;
+    if !value.environment.is_empty() {
+        WorkloadName::parse(value.environment.clone())
+            .map_err(|_| ServiceContractError::InvalidIdentity)?;
+    }
+    if !value.static_ip.is_empty() && !matches!(value.static_ip.len(), 4 | 16) {
+        return Err(ServiceContractError::BoundExceeded);
+    }
+    if value.static_ip.len() == 4 {
+        let bytes: [u8; 4] = value
+            .static_ip
+            .as_slice()
+            .try_into()
+            .expect("length checked");
+        let _ = IpAddr::from(bytes);
+    } else if value.static_ip.len() == 16 {
+        let bytes: [u8; 16] = value
+            .static_ip
+            .as_slice()
+            .try_into()
+            .expect("length checked");
+        let _ = IpAddr::from(bytes);
+    }
+    validate_lifecycle(
+        value
+            .lifecycle
+            .as_ref()
+            .ok_or(ServiceContractError::InconsistentResponse)?,
+    )?;
+    validate_runtime(
+        value
+            .runtime
+            .as_ref()
+            .ok_or(ServiceContractError::InconsistentResponse)?,
+    )?;
+    if value.services.is_empty()
+        || value.services.len() > MAX_DAEMON_SERVICES
+        || value.bridge_checks.len() > MAX_DAEMON_BRIDGES
+        || value.declared_roles.len() > MAX_DAEMON_SERVICES
+        || value.readiness.len() > MAX_DAEMON_READINESS
+    {
+        return Err(ServiceContractError::BoundExceeded);
+    }
+    let mut services = BTreeSet::new();
+    for service in &value.services {
+        validate_service(service)?;
+        if !services.insert((service.kind.value(), service.role_id.as_str())) {
+            return Err(ServiceContractError::InconsistentResponse);
+        }
+    }
+    if let Some(autostart) = value.autostart.as_ref() {
+        validate_autostart(autostart)?;
+    }
+    if let Some(deployment) = value.deployment.as_ref() {
+        validate_deployment(deployment)?;
+    }
+    if let Some(parity) = value.runner_parity.as_ref() {
+        validate_runner_parity(parity)?;
+    }
+    if !valid_optional_enum(&value.api_ready) {
+        return Err(ServiceContractError::InvalidEnum);
+    }
+    if let Some(integrity) = value.live_pool_integrity.as_ref() {
+        validate_live_pool(integrity)?;
+    }
+    if let Some(qemu) = value.qemu_media.as_ref() {
+        validate_qemu_media(qemu)?;
+    }
+    if let Some(usb) = value.usb.as_ref() {
+        validate_usb(usb)?;
+    }
+    for bridge in &value.bridge_checks {
+        validate_bridge(bridge)?;
+    }
+    let mut roles = BTreeSet::new();
+    for role in &value.declared_roles {
+        if !bounded_opaque(role, MAX_SERVICE_STRING_BYTES) || !roles.insert(role.as_str()) {
+            return Err(ServiceContractError::BoundExceeded);
+        }
+    }
+    for readiness in &value.readiness {
+        validate_readiness(readiness)?;
+    }
+    Ok(())
+}
+
+fn validate_workload_response(
+    message: &impl Message,
+    outcome: &EnumOrUnknown<common::Outcome>,
+    workloads: &[daemon::WorkloadProjection],
+    page: &MessageField<daemon::PageInfo>,
+    error: &MessageField<common::ErrorEnvelope>,
+) -> Result<(), ServiceContractError> {
+    reject_unknown(message)?;
+    validate_daemon_response_shape(outcome, error, page, workloads.len(), MAX_DAEMON_WORKLOADS)?;
+    let mut identities = BTreeSet::new();
+    for workload in workloads {
+        validate_workload(workload)?;
+        let id = &workload
+            .identity
+            .as_ref()
+            .ok_or(ServiceContractError::InvalidIdentity)?
+            .workload_id;
+        if !identities.insert(id.as_str()) {
+            return Err(ServiceContractError::InconsistentResponse);
+        }
+    }
+    Ok(())
+}
+
+impl StrictWireMessage for daemon::ListWorkloadsResponse {
+    fn validate_wire(&self, _: bool) -> Result<(), ServiceContractError> {
+        validate_workload_response(
+            self,
+            &self.outcome,
+            &self.workloads,
+            &self.page,
+            &self.error,
+        )
+    }
+}
+
+impl StrictWireMessage for daemon::InspectResponse {
+    fn validate_wire(&self, _: bool) -> Result<(), ServiceContractError> {
+        validate_workload_response(
+            self,
+            &self.outcome,
+            &self.workloads,
+            &self.page,
+            &self.error,
+        )?;
+        if !optional_bounded_ascii(&self.read_model, MAX_DAEMON_DETAIL_BYTES) {
+            return Err(ServiceContractError::BoundExceeded);
+        }
+        Ok(())
+    }
+}
+
+pub fn server_stream_name(stream_id: u16) -> Result<String, ServiceContractError> {
+    if stream_id < MIN_NAMED_STREAM_ID {
+        return Err(ServiceContractError::InvalidId);
+    }
+    Ok(format!("stream-{stream_id}"))
+}
+
+pub fn parse_server_stream_name(value: &str) -> Result<u16, ServiceContractError> {
+    let channel = value
+        .strip_prefix("stream-")
+        .ok_or(ServiceContractError::InvalidId)?
+        .parse::<u16>()
+        .map_err(|_| ServiceContractError::InvalidId)?;
+    if channel < MIN_NAMED_STREAM_ID || server_stream_name(channel)?.as_str() != value {
+        return Err(ServiceContractError::InvalidId);
+    }
+    Ok(channel)
+}
+
+impl StrictWireMessage for daemon::TerminalOpenRequest {
+    fn validate_wire(&self, _: bool) -> Result<(), ServiceContractError> {
+        reject_unknown(self)?;
+        validate_metadata(required_message(&self.metadata)?, true)?;
+        validate_scope(required_message(&self.scope)?)?;
+        if !bounded_opaque(&self.resource_id, MAX_SERVICE_STRING_BYTES)
+            || !bounded_opaque(&self.operation_id, MAX_SERVICE_STRING_BYTES)
+            || !required_digest(&self.request_digest)
+        {
+            return Err(ServiceContractError::InvalidOperationInput);
+        }
+        Ok(())
+    }
+}
+
+impl StrictWireMessage for daemon::TerminalOpenResponse {
+    fn validate_wire(&self, _: bool) -> Result<(), ServiceContractError> {
+        reject_unknown(self)?;
+        if self.session_generation == 0
+            || RequestId::new(self.request_id.clone()).is_err()
+            || !bounded_opaque(&self.operation_id, MAX_SERVICE_STRING_BYTES)
+        {
+            return Err(ServiceContractError::InvalidId);
+        }
+        let outcome = self
+            .outcome
+            .enum_value()
+            .map_err(|_| ServiceContractError::InvalidEnum)?;
+        match outcome {
+            common::Outcome::OUTCOME_ACCEPTED => {
+                if self.error.is_some() {
+                    return Err(ServiceContractError::InconsistentResponse);
+                }
+                parse_server_stream_name(&self.stream_id)?;
+            }
+            common::Outcome::OUTCOME_DENIED
+            | common::Outcome::OUTCOME_CANCELLED
+            | common::Outcome::OUTCOME_FAILED => {
+                if !self.stream_id.is_empty() {
+                    return Err(ServiceContractError::InconsistentResponse);
+                }
+                validate_error(
+                    self.error
+                        .as_ref()
+                        .ok_or(ServiceContractError::InconsistentResponse)?,
+                )?;
+            }
+            _ => return Err(ServiceContractError::InconsistentResponse),
+        }
+        Ok(())
+    }
+}
+
+pub fn validate_terminal_open_response_for_request(
+    request: &daemon::TerminalOpenRequest,
+    response: &daemon::TerminalOpenResponse,
+) -> Result<(), ServiceContractError> {
+    request.validate_wire(true)?;
+    response.validate_wire(false)?;
+    let metadata = request
+        .metadata
+        .as_ref()
+        .ok_or(ServiceContractError::MissingMetadata)?;
+    if response.operation_id != request.operation_id
+        || response.request_id != metadata.request_id
+        || response.session_generation != metadata.session_generation
+    {
+        return Err(ServiceContractError::InconsistentResponse);
+    }
+    Ok(())
+}
+
+fn validate_terminal_size(value: &daemon::TerminalSize) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    if value.rows == 0
+        || value.columns == 0
+        || value.rows > u16::MAX.into()
+        || value.columns > u16::MAX.into()
+    {
+        return Err(ServiceContractError::BoundExceeded);
+    }
+    Ok(())
+}
+
+fn validate_exec_selection(value: &daemon::ExecSelection) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    use daemon::exec_selection::Selection;
+    let authority = value
+        .authority
+        .enum_value()
+        .map_err(|_| ServiceContractError::InvalidEnum)?;
+    match (&value.selection, authority) {
+        (
+            Some(Selection::Arbitrary(arbitrary)),
+            daemon::ExecAuthority::EXEC_AUTHORITY_ADMIN_ARBITRARY,
+        ) => {
+            reject_unknown(arbitrary)?;
+            if arbitrary.argv.is_empty() || arbitrary.argv.len() > MAX_TERMINAL_ARGV {
+                return Err(ServiceContractError::BoundExceeded);
+            }
+            let mut total = 0_usize;
+            for argument in &arbitrary.argv {
+                total = total
+                    .checked_add(argument.len())
+                    .ok_or(ServiceContractError::BoundExceeded)?;
+                if argument.is_empty()
+                    || argument.len() > MAX_TERMINAL_ARG_BYTES
+                    || argument.contains(&0)
+                    || std::str::from_utf8(argument).is_err()
+                {
+                    return Err(ServiceContractError::BoundExceeded);
+                }
+            }
+            if total > MAX_TERMINAL_ARGV_BYTES {
+                return Err(ServiceContractError::BoundExceeded);
+            }
+        }
+        (
+            Some(Selection::ConfiguredLaunch(configured)),
+            daemon::ExecAuthority::EXEC_AUTHORITY_CONFIGURED_LAUNCH,
+        ) => {
+            reject_unknown(configured)?;
+            if !bounded_opaque(&configured.configured_item_id, MAX_SERVICE_STRING_BYTES) {
+                return Err(ServiceContractError::BoundExceeded);
+            }
+        }
+        _ => return Err(ServiceContractError::InvalidOperationInput),
+    }
+    match (value.tty, value.initial_size.as_ref()) {
+        (true, Some(size)) => validate_terminal_size(size)?,
+        (false, None) => {}
+        _ => return Err(ServiceContractError::InvalidOperationInput),
+    }
+    Ok(())
+}
+
+fn validate_terminal_selection(
+    value: &daemon::TerminalSelection,
+) -> Result<daemon::TerminalKind, ServiceContractError> {
+    reject_unknown(value)?;
+    use daemon::terminal_selection::Selection;
+    match value
+        .selection
+        .as_ref()
+        .ok_or(ServiceContractError::MissingOperationInput)?
+    {
+        Selection::Exec(exec) => {
+            validate_exec_selection(exec)?;
+            Ok(daemon::TerminalKind::TERMINAL_KIND_EXEC)
+        }
+        Selection::Shell(shell) => {
+            reject_unknown(shell)?;
+            if shell.use_default != shell.shell_name.is_empty()
+                || (!shell.shell_name.is_empty()
+                    && !bounded_opaque(&shell.shell_name, MAX_SERVICE_STRING_BYTES))
+            {
+                return Err(ServiceContractError::InvalidOperationInput);
+            }
+            validate_terminal_size(
+                shell
+                    .initial_size
+                    .as_ref()
+                    .ok_or(ServiceContractError::MissingOperationInput)?,
+            )?;
+            Ok(daemon::TerminalKind::TERMINAL_KIND_SHELL)
+        }
+        Selection::Console(console) => {
+            reject_unknown(console)?;
+            validate_terminal_size(
+                console
+                    .initial_size
+                    .as_ref()
+                    .ok_or(ServiceContractError::MissingOperationInput)?,
+            )?;
+            Ok(daemon::TerminalKind::TERMINAL_KIND_CONSOLE)
+        }
+    }
+}
+
+fn validate_terminal_started(value: &daemon::TerminalStarted) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    let kind = value
+        .kind
+        .enum_value()
+        .map_err(|_| ServiceContractError::InvalidEnum)?;
+    if kind == daemon::TerminalKind::TERMINAL_KIND_UNSPECIFIED {
+        return Err(ServiceContractError::InvalidEnum);
+    }
+    let provider = value
+        .console_provider
+        .enum_value()
+        .map_err(|_| ServiceContractError::InvalidEnum)?;
+    if (kind == daemon::TerminalKind::TERMINAL_KIND_CONSOLE)
+        != (provider != daemon::ConsoleProviderKind::CONSOLE_PROVIDER_KIND_UNSPECIFIED)
+    {
+        return Err(ServiceContractError::InconsistentResponse);
+    }
+    Ok(())
+}
+
+fn validate_terminal_stdin(value: &daemon::TerminalStdin) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    if value.data.len() > MAX_TERMINAL_CHUNK_BYTES || (value.data.is_empty() && !value.eof) {
+        return Err(ServiceContractError::BoundExceeded);
+    }
+    Ok(())
+}
+
+fn validate_terminal_output(value: &daemon::TerminalOutput) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    if value.data.len() > MAX_TERMINAL_CHUNK_BYTES || (value.data.is_empty() && !value.eof) {
+        return Err(ServiceContractError::BoundExceeded);
+    }
+    Ok(())
+}
+
+fn validate_terminal_resize(value: &daemon::TerminalResize) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    if value.operation_sequence == 0 {
+        return Err(ServiceContractError::InvalidId);
+    }
+    validate_terminal_size(
+        value
+            .size
+            .as_ref()
+            .ok_or(ServiceContractError::MissingOperationInput)?,
+    )
+}
+
+fn validate_terminal_signal(value: &daemon::TerminalSignal) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    if value.operation_sequence == 0
+        || !valid_required_enum(
+            &value.signal,
+            daemon::TerminalSignalKind::TERMINAL_SIGNAL_KIND_UNSPECIFIED,
+        )
+    {
+        return Err(ServiceContractError::InvalidId);
+    }
+    Ok(())
+}
+
+fn validate_empty_terminal_message(value: &impl Message) -> Result<(), ServiceContractError> {
+    reject_unknown(value)
+}
+
+fn validate_terminal_status(value: &daemon::TerminalStatus) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    if !valid_required_enum(
+        &value.status,
+        daemon::TerminalStatusKind::TERMINAL_STATUS_KIND_UNSPECIFIED,
+    ) {
+        return Err(ServiceContractError::InvalidEnum);
+    }
+    Ok(())
+}
+
+fn validate_terminal_outcome(value: &daemon::TerminalOutcome) -> Result<(), ServiceContractError> {
+    reject_unknown(value)?;
+    use daemon::terminal_outcome::Outcome;
+    match value
+        .outcome
+        .as_ref()
+        .ok_or(ServiceContractError::MissingOperationInput)?
+    {
+        Outcome::Exited(exited) => {
+            reject_unknown(exited)?;
+            if !(0..=255).contains(&exited.exit_code) {
+                return Err(ServiceContractError::BoundExceeded);
+            }
+        }
+        Outcome::Signaled(signaled) => {
+            reject_unknown(signaled)?;
+            if !(1..=64).contains(&signaled.signal) {
+                return Err(ServiceContractError::BoundExceeded);
+            }
+        }
+        Outcome::Cancelled(cancelled) => validate_empty_terminal_message(cancelled)?,
+        Outcome::Detached(detached) => validate_empty_terminal_message(detached)?,
+        Outcome::Closed(closed) => validate_empty_terminal_message(closed)?,
+        Outcome::Failed(failed) => {
+            reject_unknown(failed)?;
+            if !valid_required_enum(
+                &failed.error,
+                daemon::TerminalErrorKind::TERMINAL_ERROR_KIND_UNSPECIFIED,
+            ) || !valid_required_enum(&failed.retry, common::RetryClass::RETRY_CLASS_UNSPECIFIED)
+            {
+                return Err(ServiceContractError::InvalidEnum);
+            }
+        }
+    }
+    Ok(())
+}
+
+impl StrictWireMessage for daemon::TerminalStreamFrame {
+    fn validate_wire(&self, _: bool) -> Result<(), ServiceContractError> {
+        reject_unknown(self)?;
+        if self.session_generation == 0
+            || RequestId::new(self.request_id.clone()).is_err()
+            || self.sequence > MAX_TERMINAL_FRAME_SEQUENCE
+        {
+            return Err(ServiceContractError::InvalidId);
+        }
+        use daemon::terminal_stream_frame::Frame;
+        match self
+            .frame
+            .as_ref()
+            .ok_or(ServiceContractError::MissingOperationInput)?
+        {
+            Frame::Select(selection) => {
+                validate_terminal_selection(selection)?;
+            }
+            Frame::Started(started) => validate_terminal_started(started)?,
+            Frame::Stdin(stdin) => validate_terminal_stdin(stdin)?,
+            Frame::Stdout(stdout) | Frame::Stderr(stdout) => validate_terminal_output(stdout)?,
+            Frame::Resize(resize) => validate_terminal_resize(resize)?,
+            Frame::Signal(signal) => validate_terminal_signal(signal)?,
+            Frame::CloseStdin(close) => validate_empty_terminal_message(close)?,
+            Frame::Detach(detach) => validate_empty_terminal_message(detach)?,
+            Frame::Close(close) => validate_empty_terminal_message(close)?,
+            Frame::Cancel(cancel) => validate_empty_terminal_message(cancel)?,
+            Frame::Status(status) => validate_terminal_status(status)?,
+            Frame::Outcome(outcome) => validate_terminal_outcome(outcome)?,
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalFrameDirection {
+    ClientToServer,
+    ServerToClient,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TerminalProtocolState {
+    AwaitSelection,
+    AwaitStarted,
+    Active,
+    Closing,
+    Terminal,
+}
+
+pub struct TerminalStreamValidator {
+    kind: daemon::TerminalKind,
+    session_generation: u64,
+    request_id: [u8; 16],
+    next_client_sequence: u64,
+    next_server_sequence: u64,
+    state: TerminalProtocolState,
+    tty: bool,
+}
+
+impl fmt::Debug for TerminalStreamValidator {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TerminalStreamValidator")
+            .field("kind", &self.kind)
+            .field("session_generation", &"<redacted>")
+            .field("request_id", &"<redacted>")
+            .field("state", &self.state)
+            .field("tty", &self.tty)
+            .finish()
+    }
+}
+
+impl TerminalStreamValidator {
+    pub fn new(
+        kind: daemon::TerminalKind,
+        session_generation: u64,
+        request_id: [u8; 16],
+    ) -> Result<Self, ServiceContractError> {
+        if kind == daemon::TerminalKind::TERMINAL_KIND_UNSPECIFIED
+            || session_generation == 0
+            || request_id == [0; 16]
+        {
+            return Err(ServiceContractError::InvalidId);
+        }
+        Ok(Self {
+            kind,
+            session_generation,
+            request_id,
+            next_client_sequence: 0,
+            next_server_sequence: 0,
+            state: TerminalProtocolState::AwaitSelection,
+            tty: false,
+        })
+    }
+
+    pub fn accept(
+        &mut self,
+        direction: TerminalFrameDirection,
+        frame: &daemon::TerminalStreamFrame,
+    ) -> Result<(), ServiceContractError> {
+        frame.validate_wire(false)?;
+        if frame.session_generation != self.session_generation
+            || frame.request_id.as_slice() != self.request_id
+        {
+            return Err(ServiceContractError::InconsistentResponse);
+        }
+        let expected_sequence = match direction {
+            TerminalFrameDirection::ClientToServer => self.next_client_sequence,
+            TerminalFrameDirection::ServerToClient => self.next_server_sequence,
+        };
+        if frame.sequence != expected_sequence {
+            return Err(ServiceContractError::InconsistentResponse);
+        }
+        self.accept_frame(direction, frame)?;
+        let next = expected_sequence
+            .checked_add(1)
+            .ok_or(ServiceContractError::BoundExceeded)?;
+        match direction {
+            TerminalFrameDirection::ClientToServer => self.next_client_sequence = next,
+            TerminalFrameDirection::ServerToClient => self.next_server_sequence = next,
+        }
+        Ok(())
+    }
+
+    fn accept_frame(
+        &mut self,
+        direction: TerminalFrameDirection,
+        frame: &daemon::TerminalStreamFrame,
+    ) -> Result<(), ServiceContractError> {
+        use daemon::terminal_selection::Selection;
+        use daemon::terminal_stream_frame::Frame;
+        let payload = frame
+            .frame
+            .as_ref()
+            .ok_or(ServiceContractError::MissingOperationInput)?;
+        match (self.state, direction, payload) {
+            (
+                TerminalProtocolState::AwaitSelection,
+                TerminalFrameDirection::ClientToServer,
+                Frame::Select(selection),
+            ) => {
+                let selected = validate_terminal_selection(selection)?;
+                if selected != self.kind {
+                    return Err(ServiceContractError::InvalidOperationInput);
+                }
+                self.tty = match selection.selection.as_ref() {
+                    Some(Selection::Exec(exec)) => exec.tty,
+                    Some(Selection::Shell(_) | Selection::Console(_)) => true,
+                    None => return Err(ServiceContractError::MissingOperationInput),
+                };
+                self.state = TerminalProtocolState::AwaitStarted;
+                Ok(())
+            }
+            (
+                TerminalProtocolState::AwaitStarted,
+                TerminalFrameDirection::ServerToClient,
+                Frame::Started(started),
+            ) if started.kind.enum_value().ok() == Some(self.kind) && started.tty == self.tty => {
+                self.state = TerminalProtocolState::Active;
+                Ok(())
+            }
+            (
+                TerminalProtocolState::AwaitStarted,
+                TerminalFrameDirection::ClientToServer,
+                Frame::Detach(_) | Frame::Close(_) | Frame::Cancel(_),
+            ) => {
+                self.state = TerminalProtocolState::Closing;
+                Ok(())
+            }
+            (
+                TerminalProtocolState::Closing,
+                TerminalFrameDirection::ServerToClient,
+                Frame::Started(started),
+            ) if started.kind.enum_value().ok() == Some(self.kind) && started.tty == self.tty => {
+                Ok(())
+            }
+            (
+                TerminalProtocolState::AwaitStarted
+                | TerminalProtocolState::Active
+                | TerminalProtocolState::Closing,
+                TerminalFrameDirection::ServerToClient,
+                Frame::Outcome(_),
+            ) => {
+                self.state = TerminalProtocolState::Terminal;
+                Ok(())
+            }
+            (
+                TerminalProtocolState::Active | TerminalProtocolState::Closing,
+                TerminalFrameDirection::ServerToClient,
+                Frame::Stdout(_) | Frame::Stderr(_) | Frame::Status(_),
+            ) => Ok(()),
+            (
+                TerminalProtocolState::Active,
+                TerminalFrameDirection::ClientToServer,
+                Frame::Stdin(_) | Frame::CloseStdin(_) | Frame::Signal(_),
+            ) => Ok(()),
+            (
+                TerminalProtocolState::Active,
+                TerminalFrameDirection::ClientToServer,
+                Frame::Resize(_),
+            ) if self.tty => Ok(()),
+            (
+                TerminalProtocolState::Active,
+                TerminalFrameDirection::ClientToServer,
+                Frame::Detach(_) | Frame::Close(_) | Frame::Cancel(_),
+            ) => {
+                self.state = TerminalProtocolState::Closing;
+                Ok(())
+            }
+            _ => Err(ServiceContractError::InconsistentResponse),
+        }
+    }
+
+    pub fn is_terminal(&self) -> bool {
+        self.state == TerminalProtocolState::Terminal
+    }
+}
+
+pub struct RedactedTerminalFrame<'a>(pub &'a daemon::TerminalStreamFrame);
+
+impl fmt::Debug for RedactedTerminalFrame<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use daemon::terminal_stream_frame::Frame;
+        let kind = self.0.frame.as_ref().map(|frame| match frame {
+            Frame::Select(_) => "select",
+            Frame::Started(_) => "started",
+            Frame::Stdin(_) => "stdin",
+            Frame::Stdout(_) => "stdout",
+            Frame::Stderr(_) => "stderr",
+            Frame::Resize(_) => "resize",
+            Frame::Signal(_) => "signal",
+            Frame::CloseStdin(_) => "close-stdin",
+            Frame::Detach(_) => "detach",
+            Frame::Close(_) => "close",
+            Frame::Cancel(_) => "cancel",
+            Frame::Status(_) => "status",
+            Frame::Outcome(_) => "outcome",
+        });
+        formatter
+            .debug_struct("TerminalStreamFrame")
+            .field("session_generation", &"<redacted>")
+            .field("request_id", &"<redacted>")
+            .field("sequence", &self.0.sequence)
+            .field("kind", &kind)
+            .finish()
     }
 }
 

@@ -28,26 +28,11958 @@
 /// of protobuf runtime.
 const _PROTOBUF_VERSION_CHECK: () = ::protobuf::VERSION_3_7_2;
 
+// @@protoc_insertion_point(message:d2b.daemon.v2.PageInfo)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct PageInfo {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.PageInfo.truncated)
+    pub truncated: bool,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.PageInfo.next_page_cursor)
+    pub next_page_cursor: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.PageInfo.returned_items)
+    pub returned_items: u32,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.PageInfo.total_items_known)
+    pub total_items_known: bool,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.PageInfo.total_items)
+    pub total_items: u32,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.PageInfo.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a PageInfo {
+    fn default() -> &'a PageInfo {
+        <PageInfo as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl PageInfo {
+    pub fn new() -> PageInfo {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(5);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "truncated",
+            |m: &PageInfo| { &m.truncated },
+            |m: &mut PageInfo| { &mut m.truncated },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "next_page_cursor",
+            |m: &PageInfo| { &m.next_page_cursor },
+            |m: &mut PageInfo| { &mut m.next_page_cursor },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "returned_items",
+            |m: &PageInfo| { &m.returned_items },
+            |m: &mut PageInfo| { &mut m.returned_items },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "total_items_known",
+            |m: &PageInfo| { &m.total_items_known },
+            |m: &mut PageInfo| { &mut m.total_items_known },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "total_items",
+            |m: &PageInfo| { &m.total_items },
+            |m: &mut PageInfo| { &mut m.total_items },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<PageInfo>(
+            "PageInfo",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for PageInfo {
+    const NAME: &'static str = "PageInfo";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.truncated = is.read_bool()?;
+                },
+                18 => {
+                    self.next_page_cursor = is.read_string()?;
+                },
+                24 => {
+                    self.returned_items = is.read_uint32()?;
+                },
+                32 => {
+                    self.total_items_known = is.read_bool()?;
+                },
+                40 => {
+                    self.total_items = is.read_uint32()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.truncated != false {
+            my_size += 1 + 1;
+        }
+        if !self.next_page_cursor.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.next_page_cursor);
+        }
+        if self.returned_items != 0 {
+            my_size += ::protobuf::rt::uint32_size(3, self.returned_items);
+        }
+        if self.total_items_known != false {
+            my_size += 1 + 1;
+        }
+        if self.total_items != 0 {
+            my_size += ::protobuf::rt::uint32_size(5, self.total_items);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.truncated != false {
+            os.write_bool(1, self.truncated)?;
+        }
+        if !self.next_page_cursor.is_empty() {
+            os.write_string(2, &self.next_page_cursor)?;
+        }
+        if self.returned_items != 0 {
+            os.write_uint32(3, self.returned_items)?;
+        }
+        if self.total_items_known != false {
+            os.write_bool(4, self.total_items_known)?;
+        }
+        if self.total_items != 0 {
+            os.write_uint32(5, self.total_items)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> PageInfo {
+        PageInfo::new()
+    }
+
+    fn clear(&mut self) {
+        self.truncated = false;
+        self.next_page_cursor.clear();
+        self.returned_items = 0;
+        self.total_items_known = false;
+        self.total_items = 0;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static PageInfo {
+        static instance: PageInfo = PageInfo {
+            truncated: false,
+            next_page_cursor: ::std::string::String::new(),
+            returned_items: 0,
+            total_items_known: false,
+            total_items: 0,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for PageInfo {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("PageInfo").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for PageInfo {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for PageInfo {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.RealmProjection)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct RealmProjection {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.RealmProjection.realm_id)
+    pub realm_id: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.RealmProjection.realm_path)
+    pub realm_path: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.RealmProjection.realm_label)
+    pub realm_label: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.RealmProjection.mode)
+    pub mode: ::protobuf::EnumOrUnknown<RealmMode>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.RealmProjection.state)
+    pub state: ::protobuf::EnumOrUnknown<RealmState>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.RealmProjection.cross_realm_policy)
+    pub cross_realm_policy: ::protobuf::EnumOrUnknown<CrossRealmPolicy>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.RealmProjection.credential_boundary)
+    pub credential_boundary: ::protobuf::EnumOrUnknown<CredentialBoundary>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.RealmProjection.gateway_workload_id)
+    pub gateway_workload_id: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.RealmProjection.gateway_target)
+    pub gateway_target: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.RealmProjection.generation)
+    pub generation: u64,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.RealmProjection.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a RealmProjection {
+    fn default() -> &'a RealmProjection {
+        <RealmProjection as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl RealmProjection {
+    pub fn new() -> RealmProjection {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(10);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "realm_id",
+            |m: &RealmProjection| { &m.realm_id },
+            |m: &mut RealmProjection| { &mut m.realm_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "realm_path",
+            |m: &RealmProjection| { &m.realm_path },
+            |m: &mut RealmProjection| { &mut m.realm_path },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "realm_label",
+            |m: &RealmProjection| { &m.realm_label },
+            |m: &mut RealmProjection| { &mut m.realm_label },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "mode",
+            |m: &RealmProjection| { &m.mode },
+            |m: &mut RealmProjection| { &mut m.mode },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "state",
+            |m: &RealmProjection| { &m.state },
+            |m: &mut RealmProjection| { &mut m.state },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "cross_realm_policy",
+            |m: &RealmProjection| { &m.cross_realm_policy },
+            |m: &mut RealmProjection| { &mut m.cross_realm_policy },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "credential_boundary",
+            |m: &RealmProjection| { &m.credential_boundary },
+            |m: &mut RealmProjection| { &mut m.credential_boundary },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "gateway_workload_id",
+            |m: &RealmProjection| { &m.gateway_workload_id },
+            |m: &mut RealmProjection| { &mut m.gateway_workload_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "gateway_target",
+            |m: &RealmProjection| { &m.gateway_target },
+            |m: &mut RealmProjection| { &mut m.gateway_target },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "generation",
+            |m: &RealmProjection| { &m.generation },
+            |m: &mut RealmProjection| { &mut m.generation },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<RealmProjection>(
+            "RealmProjection",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for RealmProjection {
+    const NAME: &'static str = "RealmProjection";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.realm_id = is.read_string()?;
+                },
+                18 => {
+                    self.realm_path = is.read_string()?;
+                },
+                26 => {
+                    self.realm_label = is.read_string()?;
+                },
+                32 => {
+                    self.mode = is.read_enum_or_unknown()?;
+                },
+                40 => {
+                    self.state = is.read_enum_or_unknown()?;
+                },
+                48 => {
+                    self.cross_realm_policy = is.read_enum_or_unknown()?;
+                },
+                56 => {
+                    self.credential_boundary = is.read_enum_or_unknown()?;
+                },
+                66 => {
+                    self.gateway_workload_id = is.read_string()?;
+                },
+                74 => {
+                    self.gateway_target = is.read_string()?;
+                },
+                80 => {
+                    self.generation = is.read_uint64()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if !self.realm_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(1, &self.realm_id);
+        }
+        if !self.realm_path.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.realm_path);
+        }
+        if !self.realm_label.is_empty() {
+            my_size += ::protobuf::rt::string_size(3, &self.realm_label);
+        }
+        if self.mode != ::protobuf::EnumOrUnknown::new(RealmMode::REALM_MODE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(4, self.mode.value());
+        }
+        if self.state != ::protobuf::EnumOrUnknown::new(RealmState::REALM_STATE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(5, self.state.value());
+        }
+        if self.cross_realm_policy != ::protobuf::EnumOrUnknown::new(CrossRealmPolicy::CROSS_REALM_POLICY_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(6, self.cross_realm_policy.value());
+        }
+        if self.credential_boundary != ::protobuf::EnumOrUnknown::new(CredentialBoundary::CREDENTIAL_BOUNDARY_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(7, self.credential_boundary.value());
+        }
+        if !self.gateway_workload_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(8, &self.gateway_workload_id);
+        }
+        if !self.gateway_target.is_empty() {
+            my_size += ::protobuf::rt::string_size(9, &self.gateway_target);
+        }
+        if self.generation != 0 {
+            my_size += ::protobuf::rt::uint64_size(10, self.generation);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if !self.realm_id.is_empty() {
+            os.write_string(1, &self.realm_id)?;
+        }
+        if !self.realm_path.is_empty() {
+            os.write_string(2, &self.realm_path)?;
+        }
+        if !self.realm_label.is_empty() {
+            os.write_string(3, &self.realm_label)?;
+        }
+        if self.mode != ::protobuf::EnumOrUnknown::new(RealmMode::REALM_MODE_UNSPECIFIED) {
+            os.write_enum(4, ::protobuf::EnumOrUnknown::value(&self.mode))?;
+        }
+        if self.state != ::protobuf::EnumOrUnknown::new(RealmState::REALM_STATE_UNSPECIFIED) {
+            os.write_enum(5, ::protobuf::EnumOrUnknown::value(&self.state))?;
+        }
+        if self.cross_realm_policy != ::protobuf::EnumOrUnknown::new(CrossRealmPolicy::CROSS_REALM_POLICY_UNSPECIFIED) {
+            os.write_enum(6, ::protobuf::EnumOrUnknown::value(&self.cross_realm_policy))?;
+        }
+        if self.credential_boundary != ::protobuf::EnumOrUnknown::new(CredentialBoundary::CREDENTIAL_BOUNDARY_UNSPECIFIED) {
+            os.write_enum(7, ::protobuf::EnumOrUnknown::value(&self.credential_boundary))?;
+        }
+        if !self.gateway_workload_id.is_empty() {
+            os.write_string(8, &self.gateway_workload_id)?;
+        }
+        if !self.gateway_target.is_empty() {
+            os.write_string(9, &self.gateway_target)?;
+        }
+        if self.generation != 0 {
+            os.write_uint64(10, self.generation)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> RealmProjection {
+        RealmProjection::new()
+    }
+
+    fn clear(&mut self) {
+        self.realm_id.clear();
+        self.realm_path.clear();
+        self.realm_label.clear();
+        self.mode = ::protobuf::EnumOrUnknown::new(RealmMode::REALM_MODE_UNSPECIFIED);
+        self.state = ::protobuf::EnumOrUnknown::new(RealmState::REALM_STATE_UNSPECIFIED);
+        self.cross_realm_policy = ::protobuf::EnumOrUnknown::new(CrossRealmPolicy::CROSS_REALM_POLICY_UNSPECIFIED);
+        self.credential_boundary = ::protobuf::EnumOrUnknown::new(CredentialBoundary::CREDENTIAL_BOUNDARY_UNSPECIFIED);
+        self.gateway_workload_id.clear();
+        self.gateway_target.clear();
+        self.generation = 0;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static RealmProjection {
+        static instance: RealmProjection = RealmProjection {
+            realm_id: ::std::string::String::new(),
+            realm_path: ::std::string::String::new(),
+            realm_label: ::std::string::String::new(),
+            mode: ::protobuf::EnumOrUnknown::from_i32(0),
+            state: ::protobuf::EnumOrUnknown::from_i32(0),
+            cross_realm_policy: ::protobuf::EnumOrUnknown::from_i32(0),
+            credential_boundary: ::protobuf::EnumOrUnknown::from_i32(0),
+            gateway_workload_id: ::std::string::String::new(),
+            gateway_target: ::std::string::String::new(),
+            generation: 0,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for RealmProjection {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("RealmProjection").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for RealmProjection {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for RealmProjection {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.ListRealmsResponse)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ListRealmsResponse {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.ListRealmsResponse.outcome)
+    pub outcome: ::protobuf::EnumOrUnknown<super::common::Outcome>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.ListRealmsResponse.realms)
+    pub realms: ::std::vec::Vec<RealmProjection>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.ListRealmsResponse.page)
+    pub page: ::protobuf::MessageField<PageInfo>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.ListRealmsResponse.error)
+    pub error: ::protobuf::MessageField<super::common::ErrorEnvelope>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.ListRealmsResponse.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ListRealmsResponse {
+    fn default() -> &'a ListRealmsResponse {
+        <ListRealmsResponse as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ListRealmsResponse {
+    pub fn new() -> ListRealmsResponse {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(4);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "outcome",
+            |m: &ListRealmsResponse| { &m.outcome },
+            |m: &mut ListRealmsResponse| { &mut m.outcome },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "realms",
+            |m: &ListRealmsResponse| { &m.realms },
+            |m: &mut ListRealmsResponse| { &mut m.realms },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, PageInfo>(
+            "page",
+            |m: &ListRealmsResponse| { &m.page },
+            |m: &mut ListRealmsResponse| { &mut m.page },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, super::common::ErrorEnvelope>(
+            "error",
+            |m: &ListRealmsResponse| { &m.error },
+            |m: &mut ListRealmsResponse| { &mut m.error },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ListRealmsResponse>(
+            "ListRealmsResponse",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ListRealmsResponse {
+    const NAME: &'static str = "ListRealmsResponse";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.outcome = is.read_enum_or_unknown()?;
+                },
+                18 => {
+                    self.realms.push(is.read_message()?);
+                },
+                26 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.page)?;
+                },
+                34 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.error)?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.outcome != ::protobuf::EnumOrUnknown::new(super::common::Outcome::OUTCOME_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(1, self.outcome.value());
+        }
+        for value in &self.realms {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
+        if let Some(v) = self.page.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if let Some(v) = self.error.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.outcome != ::protobuf::EnumOrUnknown::new(super::common::Outcome::OUTCOME_UNSPECIFIED) {
+            os.write_enum(1, ::protobuf::EnumOrUnknown::value(&self.outcome))?;
+        }
+        for v in &self.realms {
+            ::protobuf::rt::write_message_field_with_cached_size(2, v, os)?;
+        };
+        if let Some(v) = self.page.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(3, v, os)?;
+        }
+        if let Some(v) = self.error.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(4, v, os)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ListRealmsResponse {
+        ListRealmsResponse::new()
+    }
+
+    fn clear(&mut self) {
+        self.outcome = ::protobuf::EnumOrUnknown::new(super::common::Outcome::OUTCOME_UNSPECIFIED);
+        self.realms.clear();
+        self.page.clear();
+        self.error.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ListRealmsResponse {
+        static instance: ListRealmsResponse = ListRealmsResponse {
+            outcome: ::protobuf::EnumOrUnknown::from_i32(0),
+            realms: ::std::vec::Vec::new(),
+            page: ::protobuf::MessageField::none(),
+            error: ::protobuf::MessageField::none(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ListRealmsResponse {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ListRealmsResponse").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ListRealmsResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ListRealmsResponse {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.WorkloadLifecycleProjection)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct WorkloadLifecycleProjection {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadLifecycleProjection.state)
+    pub state: ::protobuf::EnumOrUnknown<WorkloadLifecycleState>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadLifecycleProjection.degraded)
+    pub degraded: bool,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadLifecycleProjection.pending_restart)
+    pub pending_restart: bool,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadLifecycleProjection.degraded_reasons)
+    pub degraded_reasons: ::std::vec::Vec<DegradedReason>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadLifecycleProjection.generation)
+    pub generation: u64,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.WorkloadLifecycleProjection.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a WorkloadLifecycleProjection {
+    fn default() -> &'a WorkloadLifecycleProjection {
+        <WorkloadLifecycleProjection as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl WorkloadLifecycleProjection {
+    pub fn new() -> WorkloadLifecycleProjection {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(5);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "state",
+            |m: &WorkloadLifecycleProjection| { &m.state },
+            |m: &mut WorkloadLifecycleProjection| { &mut m.state },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "degraded",
+            |m: &WorkloadLifecycleProjection| { &m.degraded },
+            |m: &mut WorkloadLifecycleProjection| { &mut m.degraded },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "pending_restart",
+            |m: &WorkloadLifecycleProjection| { &m.pending_restart },
+            |m: &mut WorkloadLifecycleProjection| { &mut m.pending_restart },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "degraded_reasons",
+            |m: &WorkloadLifecycleProjection| { &m.degraded_reasons },
+            |m: &mut WorkloadLifecycleProjection| { &mut m.degraded_reasons },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "generation",
+            |m: &WorkloadLifecycleProjection| { &m.generation },
+            |m: &mut WorkloadLifecycleProjection| { &mut m.generation },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<WorkloadLifecycleProjection>(
+            "WorkloadLifecycleProjection",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for WorkloadLifecycleProjection {
+    const NAME: &'static str = "WorkloadLifecycleProjection";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.state = is.read_enum_or_unknown()?;
+                },
+                16 => {
+                    self.degraded = is.read_bool()?;
+                },
+                24 => {
+                    self.pending_restart = is.read_bool()?;
+                },
+                34 => {
+                    self.degraded_reasons.push(is.read_message()?);
+                },
+                40 => {
+                    self.generation = is.read_uint64()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.state != ::protobuf::EnumOrUnknown::new(WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(1, self.state.value());
+        }
+        if self.degraded != false {
+            my_size += 1 + 1;
+        }
+        if self.pending_restart != false {
+            my_size += 1 + 1;
+        }
+        for value in &self.degraded_reasons {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
+        if self.generation != 0 {
+            my_size += ::protobuf::rt::uint64_size(5, self.generation);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.state != ::protobuf::EnumOrUnknown::new(WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_UNSPECIFIED) {
+            os.write_enum(1, ::protobuf::EnumOrUnknown::value(&self.state))?;
+        }
+        if self.degraded != false {
+            os.write_bool(2, self.degraded)?;
+        }
+        if self.pending_restart != false {
+            os.write_bool(3, self.pending_restart)?;
+        }
+        for v in &self.degraded_reasons {
+            ::protobuf::rt::write_message_field_with_cached_size(4, v, os)?;
+        };
+        if self.generation != 0 {
+            os.write_uint64(5, self.generation)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> WorkloadLifecycleProjection {
+        WorkloadLifecycleProjection::new()
+    }
+
+    fn clear(&mut self) {
+        self.state = ::protobuf::EnumOrUnknown::new(WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_UNSPECIFIED);
+        self.degraded = false;
+        self.pending_restart = false;
+        self.degraded_reasons.clear();
+        self.generation = 0;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static WorkloadLifecycleProjection {
+        static instance: WorkloadLifecycleProjection = WorkloadLifecycleProjection {
+            state: ::protobuf::EnumOrUnknown::from_i32(0),
+            degraded: false,
+            pending_restart: false,
+            degraded_reasons: ::std::vec::Vec::new(),
+            generation: 0,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for WorkloadLifecycleProjection {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("WorkloadLifecycleProjection").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for WorkloadLifecycleProjection {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for WorkloadLifecycleProjection {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.DegradedReason)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct DegradedReason {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.DegradedReason.reason)
+    pub reason: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.DegradedReason.remediation)
+    pub remediation: ::std::string::String,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.DegradedReason.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a DegradedReason {
+    fn default() -> &'a DegradedReason {
+        <DegradedReason as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl DegradedReason {
+    pub fn new() -> DegradedReason {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(2);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "reason",
+            |m: &DegradedReason| { &m.reason },
+            |m: &mut DegradedReason| { &mut m.reason },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "remediation",
+            |m: &DegradedReason| { &m.remediation },
+            |m: &mut DegradedReason| { &mut m.remediation },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<DegradedReason>(
+            "DegradedReason",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for DegradedReason {
+    const NAME: &'static str = "DegradedReason";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.reason = is.read_string()?;
+                },
+                18 => {
+                    self.remediation = is.read_string()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if !self.reason.is_empty() {
+            my_size += ::protobuf::rt::string_size(1, &self.reason);
+        }
+        if !self.remediation.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.remediation);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if !self.reason.is_empty() {
+            os.write_string(1, &self.reason)?;
+        }
+        if !self.remediation.is_empty() {
+            os.write_string(2, &self.remediation)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> DegradedReason {
+        DegradedReason::new()
+    }
+
+    fn clear(&mut self) {
+        self.reason.clear();
+        self.remediation.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static DegradedReason {
+        static instance: DegradedReason = DegradedReason {
+            reason: ::std::string::String::new(),
+            remediation: ::std::string::String::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for DegradedReason {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("DegradedReason").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for DegradedReason {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for DegradedReason {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.RuntimeProjection)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct RuntimeProjection {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.RuntimeProjection.kind)
+    pub kind: ::protobuf::EnumOrUnknown<RuntimeKind>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.RuntimeProjection.detail)
+    pub detail: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.RuntimeProjection.supported_capabilities)
+    pub supported_capabilities: ::std::vec::Vec<::protobuf::EnumOrUnknown<RuntimeCapability>>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.RuntimeProjection.unsupported_capabilities)
+    pub unsupported_capabilities: ::std::vec::Vec<::protobuf::EnumOrUnknown<RuntimeCapability>>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.RuntimeProjection.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a RuntimeProjection {
+    fn default() -> &'a RuntimeProjection {
+        <RuntimeProjection as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl RuntimeProjection {
+    pub fn new() -> RuntimeProjection {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(4);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "kind",
+            |m: &RuntimeProjection| { &m.kind },
+            |m: &mut RuntimeProjection| { &mut m.kind },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "detail",
+            |m: &RuntimeProjection| { &m.detail },
+            |m: &mut RuntimeProjection| { &mut m.detail },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "supported_capabilities",
+            |m: &RuntimeProjection| { &m.supported_capabilities },
+            |m: &mut RuntimeProjection| { &mut m.supported_capabilities },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "unsupported_capabilities",
+            |m: &RuntimeProjection| { &m.unsupported_capabilities },
+            |m: &mut RuntimeProjection| { &mut m.unsupported_capabilities },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<RuntimeProjection>(
+            "RuntimeProjection",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for RuntimeProjection {
+    const NAME: &'static str = "RuntimeProjection";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.kind = is.read_enum_or_unknown()?;
+                },
+                18 => {
+                    self.detail = is.read_string()?;
+                },
+                24 => {
+                    self.supported_capabilities.push(is.read_enum_or_unknown()?);
+                },
+                26 => {
+                    ::protobuf::rt::read_repeated_packed_enum_or_unknown_into(is, &mut self.supported_capabilities)?
+                },
+                32 => {
+                    self.unsupported_capabilities.push(is.read_enum_or_unknown()?);
+                },
+                34 => {
+                    ::protobuf::rt::read_repeated_packed_enum_or_unknown_into(is, &mut self.unsupported_capabilities)?
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.kind != ::protobuf::EnumOrUnknown::new(RuntimeKind::RUNTIME_KIND_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(1, self.kind.value());
+        }
+        if !self.detail.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.detail);
+        }
+        my_size += ::protobuf::rt::vec_packed_enum_or_unknown_size(3, &self.supported_capabilities);
+        my_size += ::protobuf::rt::vec_packed_enum_or_unknown_size(4, &self.unsupported_capabilities);
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.kind != ::protobuf::EnumOrUnknown::new(RuntimeKind::RUNTIME_KIND_UNSPECIFIED) {
+            os.write_enum(1, ::protobuf::EnumOrUnknown::value(&self.kind))?;
+        }
+        if !self.detail.is_empty() {
+            os.write_string(2, &self.detail)?;
+        }
+        os.write_repeated_packed_enum_or_unknown(3, &self.supported_capabilities)?;
+        os.write_repeated_packed_enum_or_unknown(4, &self.unsupported_capabilities)?;
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> RuntimeProjection {
+        RuntimeProjection::new()
+    }
+
+    fn clear(&mut self) {
+        self.kind = ::protobuf::EnumOrUnknown::new(RuntimeKind::RUNTIME_KIND_UNSPECIFIED);
+        self.detail.clear();
+        self.supported_capabilities.clear();
+        self.unsupported_capabilities.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static RuntimeProjection {
+        static instance: RuntimeProjection = RuntimeProjection {
+            kind: ::protobuf::EnumOrUnknown::from_i32(0),
+            detail: ::std::string::String::new(),
+            supported_capabilities: ::std::vec::Vec::new(),
+            unsupported_capabilities: ::std::vec::Vec::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for RuntimeProjection {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("RuntimeProjection").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for RuntimeProjection {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for RuntimeProjection {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.ServiceProjection)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ServiceProjection {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.ServiceProjection.kind)
+    pub kind: ::protobuf::EnumOrUnknown<ServiceKind>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.ServiceProjection.role_id)
+    pub role_id: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.ServiceProjection.state)
+    pub state: ::protobuf::EnumOrUnknown<ServiceState>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.ServiceProjection.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ServiceProjection {
+    fn default() -> &'a ServiceProjection {
+        <ServiceProjection as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ServiceProjection {
+    pub fn new() -> ServiceProjection {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(3);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "kind",
+            |m: &ServiceProjection| { &m.kind },
+            |m: &mut ServiceProjection| { &mut m.kind },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "role_id",
+            |m: &ServiceProjection| { &m.role_id },
+            |m: &mut ServiceProjection| { &mut m.role_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "state",
+            |m: &ServiceProjection| { &m.state },
+            |m: &mut ServiceProjection| { &mut m.state },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ServiceProjection>(
+            "ServiceProjection",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ServiceProjection {
+    const NAME: &'static str = "ServiceProjection";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.kind = is.read_enum_or_unknown()?;
+                },
+                18 => {
+                    self.role_id = is.read_string()?;
+                },
+                24 => {
+                    self.state = is.read_enum_or_unknown()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.kind != ::protobuf::EnumOrUnknown::new(ServiceKind::SERVICE_KIND_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(1, self.kind.value());
+        }
+        if !self.role_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.role_id);
+        }
+        if self.state != ::protobuf::EnumOrUnknown::new(ServiceState::SERVICE_STATE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(3, self.state.value());
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.kind != ::protobuf::EnumOrUnknown::new(ServiceKind::SERVICE_KIND_UNSPECIFIED) {
+            os.write_enum(1, ::protobuf::EnumOrUnknown::value(&self.kind))?;
+        }
+        if !self.role_id.is_empty() {
+            os.write_string(2, &self.role_id)?;
+        }
+        if self.state != ::protobuf::EnumOrUnknown::new(ServiceState::SERVICE_STATE_UNSPECIFIED) {
+            os.write_enum(3, ::protobuf::EnumOrUnknown::value(&self.state))?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ServiceProjection {
+        ServiceProjection::new()
+    }
+
+    fn clear(&mut self) {
+        self.kind = ::protobuf::EnumOrUnknown::new(ServiceKind::SERVICE_KIND_UNSPECIFIED);
+        self.role_id.clear();
+        self.state = ::protobuf::EnumOrUnknown::new(ServiceState::SERVICE_STATE_UNSPECIFIED);
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ServiceProjection {
+        static instance: ServiceProjection = ServiceProjection {
+            kind: ::protobuf::EnumOrUnknown::from_i32(0),
+            role_id: ::std::string::String::new(),
+            state: ::protobuf::EnumOrUnknown::from_i32(0),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ServiceProjection {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ServiceProjection").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ServiceProjection {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ServiceProjection {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.AutostartProjection)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct AutostartProjection {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.AutostartProjection.mode)
+    pub mode: ::protobuf::EnumOrUnknown<AutostartMode>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.AutostartProjection.reason)
+    pub reason: ::std::string::String,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.AutostartProjection.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a AutostartProjection {
+    fn default() -> &'a AutostartProjection {
+        <AutostartProjection as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl AutostartProjection {
+    pub fn new() -> AutostartProjection {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(2);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "mode",
+            |m: &AutostartProjection| { &m.mode },
+            |m: &mut AutostartProjection| { &mut m.mode },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "reason",
+            |m: &AutostartProjection| { &m.reason },
+            |m: &mut AutostartProjection| { &mut m.reason },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<AutostartProjection>(
+            "AutostartProjection",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for AutostartProjection {
+    const NAME: &'static str = "AutostartProjection";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.mode = is.read_enum_or_unknown()?;
+                },
+                18 => {
+                    self.reason = is.read_string()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.mode != ::protobuf::EnumOrUnknown::new(AutostartMode::AUTOSTART_MODE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(1, self.mode.value());
+        }
+        if !self.reason.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.reason);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.mode != ::protobuf::EnumOrUnknown::new(AutostartMode::AUTOSTART_MODE_UNSPECIFIED) {
+            os.write_enum(1, ::protobuf::EnumOrUnknown::value(&self.mode))?;
+        }
+        if !self.reason.is_empty() {
+            os.write_string(2, &self.reason)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> AutostartProjection {
+        AutostartProjection::new()
+    }
+
+    fn clear(&mut self) {
+        self.mode = ::protobuf::EnumOrUnknown::new(AutostartMode::AUTOSTART_MODE_UNSPECIFIED);
+        self.reason.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static AutostartProjection {
+        static instance: AutostartProjection = AutostartProjection {
+            mode: ::protobuf::EnumOrUnknown::from_i32(0),
+            reason: ::std::string::String::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for AutostartProjection {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("AutostartProjection").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for AutostartProjection {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for AutostartProjection {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.WorkloadIdentityProjection)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct WorkloadIdentityProjection {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadIdentityProjection.realm_id)
+    pub realm_id: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadIdentityProjection.workload_id)
+    pub workload_id: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadIdentityProjection.realm_path)
+    pub realm_path: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadIdentityProjection.workload_name)
+    pub workload_name: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadIdentityProjection.canonical_target)
+    pub canonical_target: ::std::string::String,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.WorkloadIdentityProjection.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a WorkloadIdentityProjection {
+    fn default() -> &'a WorkloadIdentityProjection {
+        <WorkloadIdentityProjection as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl WorkloadIdentityProjection {
+    pub fn new() -> WorkloadIdentityProjection {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(5);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "realm_id",
+            |m: &WorkloadIdentityProjection| { &m.realm_id },
+            |m: &mut WorkloadIdentityProjection| { &mut m.realm_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "workload_id",
+            |m: &WorkloadIdentityProjection| { &m.workload_id },
+            |m: &mut WorkloadIdentityProjection| { &mut m.workload_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "realm_path",
+            |m: &WorkloadIdentityProjection| { &m.realm_path },
+            |m: &mut WorkloadIdentityProjection| { &mut m.realm_path },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "workload_name",
+            |m: &WorkloadIdentityProjection| { &m.workload_name },
+            |m: &mut WorkloadIdentityProjection| { &mut m.workload_name },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "canonical_target",
+            |m: &WorkloadIdentityProjection| { &m.canonical_target },
+            |m: &mut WorkloadIdentityProjection| { &mut m.canonical_target },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<WorkloadIdentityProjection>(
+            "WorkloadIdentityProjection",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for WorkloadIdentityProjection {
+    const NAME: &'static str = "WorkloadIdentityProjection";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.realm_id = is.read_string()?;
+                },
+                18 => {
+                    self.workload_id = is.read_string()?;
+                },
+                26 => {
+                    self.realm_path = is.read_string()?;
+                },
+                34 => {
+                    self.workload_name = is.read_string()?;
+                },
+                42 => {
+                    self.canonical_target = is.read_string()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if !self.realm_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(1, &self.realm_id);
+        }
+        if !self.workload_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.workload_id);
+        }
+        if !self.realm_path.is_empty() {
+            my_size += ::protobuf::rt::string_size(3, &self.realm_path);
+        }
+        if !self.workload_name.is_empty() {
+            my_size += ::protobuf::rt::string_size(4, &self.workload_name);
+        }
+        if !self.canonical_target.is_empty() {
+            my_size += ::protobuf::rt::string_size(5, &self.canonical_target);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if !self.realm_id.is_empty() {
+            os.write_string(1, &self.realm_id)?;
+        }
+        if !self.workload_id.is_empty() {
+            os.write_string(2, &self.workload_id)?;
+        }
+        if !self.realm_path.is_empty() {
+            os.write_string(3, &self.realm_path)?;
+        }
+        if !self.workload_name.is_empty() {
+            os.write_string(4, &self.workload_name)?;
+        }
+        if !self.canonical_target.is_empty() {
+            os.write_string(5, &self.canonical_target)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> WorkloadIdentityProjection {
+        WorkloadIdentityProjection::new()
+    }
+
+    fn clear(&mut self) {
+        self.realm_id.clear();
+        self.workload_id.clear();
+        self.realm_path.clear();
+        self.workload_name.clear();
+        self.canonical_target.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static WorkloadIdentityProjection {
+        static instance: WorkloadIdentityProjection = WorkloadIdentityProjection {
+            realm_id: ::std::string::String::new(),
+            workload_id: ::std::string::String::new(),
+            realm_path: ::std::string::String::new(),
+            workload_name: ::std::string::String::new(),
+            canonical_target: ::std::string::String::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for WorkloadIdentityProjection {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("WorkloadIdentityProjection").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for WorkloadIdentityProjection {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for WorkloadIdentityProjection {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.DeploymentProjection)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct DeploymentProjection {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.DeploymentProjection.declared_guest_closure)
+    pub declared_guest_closure: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.DeploymentProjection.current_generation)
+    pub current_generation: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.DeploymentProjection.booted_generation)
+    pub booted_generation: ::std::string::String,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.DeploymentProjection.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a DeploymentProjection {
+    fn default() -> &'a DeploymentProjection {
+        <DeploymentProjection as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl DeploymentProjection {
+    pub fn new() -> DeploymentProjection {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(3);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "declared_guest_closure",
+            |m: &DeploymentProjection| { &m.declared_guest_closure },
+            |m: &mut DeploymentProjection| { &mut m.declared_guest_closure },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "current_generation",
+            |m: &DeploymentProjection| { &m.current_generation },
+            |m: &mut DeploymentProjection| { &mut m.current_generation },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "booted_generation",
+            |m: &DeploymentProjection| { &m.booted_generation },
+            |m: &mut DeploymentProjection| { &mut m.booted_generation },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<DeploymentProjection>(
+            "DeploymentProjection",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for DeploymentProjection {
+    const NAME: &'static str = "DeploymentProjection";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.declared_guest_closure = is.read_string()?;
+                },
+                18 => {
+                    self.current_generation = is.read_string()?;
+                },
+                26 => {
+                    self.booted_generation = is.read_string()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if !self.declared_guest_closure.is_empty() {
+            my_size += ::protobuf::rt::string_size(1, &self.declared_guest_closure);
+        }
+        if !self.current_generation.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.current_generation);
+        }
+        if !self.booted_generation.is_empty() {
+            my_size += ::protobuf::rt::string_size(3, &self.booted_generation);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if !self.declared_guest_closure.is_empty() {
+            os.write_string(1, &self.declared_guest_closure)?;
+        }
+        if !self.current_generation.is_empty() {
+            os.write_string(2, &self.current_generation)?;
+        }
+        if !self.booted_generation.is_empty() {
+            os.write_string(3, &self.booted_generation)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> DeploymentProjection {
+        DeploymentProjection::new()
+    }
+
+    fn clear(&mut self) {
+        self.declared_guest_closure.clear();
+        self.current_generation.clear();
+        self.booted_generation.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static DeploymentProjection {
+        static instance: DeploymentProjection = DeploymentProjection {
+            declared_guest_closure: ::std::string::String::new(),
+            current_generation: ::std::string::String::new(),
+            booted_generation: ::std::string::String::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for DeploymentProjection {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("DeploymentProjection").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for DeploymentProjection {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for DeploymentProjection {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.RunnerParityProjection)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct RunnerParityProjection {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.RunnerParityProjection.declared_runner)
+    pub declared_runner: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.RunnerParityProjection.parity_reference)
+    pub parity_reference: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.RunnerParityProjection.parity_ok)
+    pub parity_ok: bool,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.RunnerParityProjection.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a RunnerParityProjection {
+    fn default() -> &'a RunnerParityProjection {
+        <RunnerParityProjection as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl RunnerParityProjection {
+    pub fn new() -> RunnerParityProjection {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(3);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "declared_runner",
+            |m: &RunnerParityProjection| { &m.declared_runner },
+            |m: &mut RunnerParityProjection| { &mut m.declared_runner },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "parity_reference",
+            |m: &RunnerParityProjection| { &m.parity_reference },
+            |m: &mut RunnerParityProjection| { &mut m.parity_reference },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "parity_ok",
+            |m: &RunnerParityProjection| { &m.parity_ok },
+            |m: &mut RunnerParityProjection| { &mut m.parity_ok },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<RunnerParityProjection>(
+            "RunnerParityProjection",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for RunnerParityProjection {
+    const NAME: &'static str = "RunnerParityProjection";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.declared_runner = is.read_string()?;
+                },
+                18 => {
+                    self.parity_reference = is.read_string()?;
+                },
+                24 => {
+                    self.parity_ok = is.read_bool()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if !self.declared_runner.is_empty() {
+            my_size += ::protobuf::rt::string_size(1, &self.declared_runner);
+        }
+        if !self.parity_reference.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.parity_reference);
+        }
+        if self.parity_ok != false {
+            my_size += 1 + 1;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if !self.declared_runner.is_empty() {
+            os.write_string(1, &self.declared_runner)?;
+        }
+        if !self.parity_reference.is_empty() {
+            os.write_string(2, &self.parity_reference)?;
+        }
+        if self.parity_ok != false {
+            os.write_bool(3, self.parity_ok)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> RunnerParityProjection {
+        RunnerParityProjection::new()
+    }
+
+    fn clear(&mut self) {
+        self.declared_runner.clear();
+        self.parity_reference.clear();
+        self.parity_ok = false;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static RunnerParityProjection {
+        static instance: RunnerParityProjection = RunnerParityProjection {
+            declared_runner: ::std::string::String::new(),
+            parity_reference: ::std::string::String::new(),
+            parity_ok: false,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for RunnerParityProjection {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("RunnerParityProjection").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for RunnerParityProjection {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for RunnerParityProjection {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.LivePoolIntegrityProjection)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct LivePoolIntegrityProjection {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.LivePoolIntegrityProjection.state)
+    pub state: ::protobuf::EnumOrUnknown<ServiceState>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.LivePoolIntegrityProjection.reason)
+    pub reason: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.LivePoolIntegrityProjection.audit_reference)
+    pub audit_reference: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.LivePoolIntegrityProjection.repair_attempted)
+    pub repair_attempted: bool,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.LivePoolIntegrityProjection.remediation)
+    pub remediation: ::std::string::String,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.LivePoolIntegrityProjection.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a LivePoolIntegrityProjection {
+    fn default() -> &'a LivePoolIntegrityProjection {
+        <LivePoolIntegrityProjection as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl LivePoolIntegrityProjection {
+    pub fn new() -> LivePoolIntegrityProjection {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(5);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "state",
+            |m: &LivePoolIntegrityProjection| { &m.state },
+            |m: &mut LivePoolIntegrityProjection| { &mut m.state },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "reason",
+            |m: &LivePoolIntegrityProjection| { &m.reason },
+            |m: &mut LivePoolIntegrityProjection| { &mut m.reason },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "audit_reference",
+            |m: &LivePoolIntegrityProjection| { &m.audit_reference },
+            |m: &mut LivePoolIntegrityProjection| { &mut m.audit_reference },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "repair_attempted",
+            |m: &LivePoolIntegrityProjection| { &m.repair_attempted },
+            |m: &mut LivePoolIntegrityProjection| { &mut m.repair_attempted },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "remediation",
+            |m: &LivePoolIntegrityProjection| { &m.remediation },
+            |m: &mut LivePoolIntegrityProjection| { &mut m.remediation },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<LivePoolIntegrityProjection>(
+            "LivePoolIntegrityProjection",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for LivePoolIntegrityProjection {
+    const NAME: &'static str = "LivePoolIntegrityProjection";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.state = is.read_enum_or_unknown()?;
+                },
+                18 => {
+                    self.reason = is.read_string()?;
+                },
+                26 => {
+                    self.audit_reference = is.read_string()?;
+                },
+                32 => {
+                    self.repair_attempted = is.read_bool()?;
+                },
+                42 => {
+                    self.remediation = is.read_string()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.state != ::protobuf::EnumOrUnknown::new(ServiceState::SERVICE_STATE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(1, self.state.value());
+        }
+        if !self.reason.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.reason);
+        }
+        if !self.audit_reference.is_empty() {
+            my_size += ::protobuf::rt::string_size(3, &self.audit_reference);
+        }
+        if self.repair_attempted != false {
+            my_size += 1 + 1;
+        }
+        if !self.remediation.is_empty() {
+            my_size += ::protobuf::rt::string_size(5, &self.remediation);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.state != ::protobuf::EnumOrUnknown::new(ServiceState::SERVICE_STATE_UNSPECIFIED) {
+            os.write_enum(1, ::protobuf::EnumOrUnknown::value(&self.state))?;
+        }
+        if !self.reason.is_empty() {
+            os.write_string(2, &self.reason)?;
+        }
+        if !self.audit_reference.is_empty() {
+            os.write_string(3, &self.audit_reference)?;
+        }
+        if self.repair_attempted != false {
+            os.write_bool(4, self.repair_attempted)?;
+        }
+        if !self.remediation.is_empty() {
+            os.write_string(5, &self.remediation)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> LivePoolIntegrityProjection {
+        LivePoolIntegrityProjection::new()
+    }
+
+    fn clear(&mut self) {
+        self.state = ::protobuf::EnumOrUnknown::new(ServiceState::SERVICE_STATE_UNSPECIFIED);
+        self.reason.clear();
+        self.audit_reference.clear();
+        self.repair_attempted = false;
+        self.remediation.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static LivePoolIntegrityProjection {
+        static instance: LivePoolIntegrityProjection = LivePoolIntegrityProjection {
+            state: ::protobuf::EnumOrUnknown::from_i32(0),
+            reason: ::std::string::String::new(),
+            audit_reference: ::std::string::String::new(),
+            repair_attempted: false,
+            remediation: ::std::string::String::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for LivePoolIntegrityProjection {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("LivePoolIntegrityProjection").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for LivePoolIntegrityProjection {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for LivePoolIntegrityProjection {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.QemuMediaRegistryProjection)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct QemuMediaRegistryProjection {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.QemuMediaRegistryProjection.state)
+    pub state: ::protobuf::EnumOrUnknown<ServiceState>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.QemuMediaRegistryProjection.remediation)
+    pub remediation: ::std::string::String,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.QemuMediaRegistryProjection.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a QemuMediaRegistryProjection {
+    fn default() -> &'a QemuMediaRegistryProjection {
+        <QemuMediaRegistryProjection as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl QemuMediaRegistryProjection {
+    pub fn new() -> QemuMediaRegistryProjection {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(2);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "state",
+            |m: &QemuMediaRegistryProjection| { &m.state },
+            |m: &mut QemuMediaRegistryProjection| { &mut m.state },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "remediation",
+            |m: &QemuMediaRegistryProjection| { &m.remediation },
+            |m: &mut QemuMediaRegistryProjection| { &mut m.remediation },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<QemuMediaRegistryProjection>(
+            "QemuMediaRegistryProjection",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for QemuMediaRegistryProjection {
+    const NAME: &'static str = "QemuMediaRegistryProjection";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.state = is.read_enum_or_unknown()?;
+                },
+                18 => {
+                    self.remediation = is.read_string()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.state != ::protobuf::EnumOrUnknown::new(ServiceState::SERVICE_STATE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(1, self.state.value());
+        }
+        if !self.remediation.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.remediation);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.state != ::protobuf::EnumOrUnknown::new(ServiceState::SERVICE_STATE_UNSPECIFIED) {
+            os.write_enum(1, ::protobuf::EnumOrUnknown::value(&self.state))?;
+        }
+        if !self.remediation.is_empty() {
+            os.write_string(2, &self.remediation)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> QemuMediaRegistryProjection {
+        QemuMediaRegistryProjection::new()
+    }
+
+    fn clear(&mut self) {
+        self.state = ::protobuf::EnumOrUnknown::new(ServiceState::SERVICE_STATE_UNSPECIFIED);
+        self.remediation.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static QemuMediaRegistryProjection {
+        static instance: QemuMediaRegistryProjection = QemuMediaRegistryProjection {
+            state: ::protobuf::EnumOrUnknown::from_i32(0),
+            remediation: ::std::string::String::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for QemuMediaRegistryProjection {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("QemuMediaRegistryProjection").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for QemuMediaRegistryProjection {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for QemuMediaRegistryProjection {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.QemuMediaSourceProjection)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct QemuMediaSourceProjection {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.QemuMediaSourceProjection.media_ref)
+    pub media_ref: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.QemuMediaSourceProjection.slot)
+    pub slot: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.QemuMediaSourceProjection.source_kind)
+    pub source_kind: ::protobuf::EnumOrUnknown<QemuMediaSourceKind>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.QemuMediaSourceProjection.format)
+    pub format: ::protobuf::EnumOrUnknown<QemuMediaFormat>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.QemuMediaSourceProjection.read_only)
+    pub read_only: bool,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.QemuMediaSourceProjection.registry)
+    pub registry: ::protobuf::MessageField<QemuMediaRegistryProjection>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.QemuMediaSourceProjection.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a QemuMediaSourceProjection {
+    fn default() -> &'a QemuMediaSourceProjection {
+        <QemuMediaSourceProjection as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl QemuMediaSourceProjection {
+    pub fn new() -> QemuMediaSourceProjection {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(6);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "media_ref",
+            |m: &QemuMediaSourceProjection| { &m.media_ref },
+            |m: &mut QemuMediaSourceProjection| { &mut m.media_ref },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "slot",
+            |m: &QemuMediaSourceProjection| { &m.slot },
+            |m: &mut QemuMediaSourceProjection| { &mut m.slot },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "source_kind",
+            |m: &QemuMediaSourceProjection| { &m.source_kind },
+            |m: &mut QemuMediaSourceProjection| { &mut m.source_kind },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "format",
+            |m: &QemuMediaSourceProjection| { &m.format },
+            |m: &mut QemuMediaSourceProjection| { &mut m.format },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "read_only",
+            |m: &QemuMediaSourceProjection| { &m.read_only },
+            |m: &mut QemuMediaSourceProjection| { &mut m.read_only },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, QemuMediaRegistryProjection>(
+            "registry",
+            |m: &QemuMediaSourceProjection| { &m.registry },
+            |m: &mut QemuMediaSourceProjection| { &mut m.registry },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<QemuMediaSourceProjection>(
+            "QemuMediaSourceProjection",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for QemuMediaSourceProjection {
+    const NAME: &'static str = "QemuMediaSourceProjection";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.media_ref = is.read_string()?;
+                },
+                18 => {
+                    self.slot = is.read_string()?;
+                },
+                24 => {
+                    self.source_kind = is.read_enum_or_unknown()?;
+                },
+                32 => {
+                    self.format = is.read_enum_or_unknown()?;
+                },
+                40 => {
+                    self.read_only = is.read_bool()?;
+                },
+                50 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.registry)?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if !self.media_ref.is_empty() {
+            my_size += ::protobuf::rt::string_size(1, &self.media_ref);
+        }
+        if !self.slot.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.slot);
+        }
+        if self.source_kind != ::protobuf::EnumOrUnknown::new(QemuMediaSourceKind::QEMU_MEDIA_SOURCE_KIND_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(3, self.source_kind.value());
+        }
+        if self.format != ::protobuf::EnumOrUnknown::new(QemuMediaFormat::QEMU_MEDIA_FORMAT_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(4, self.format.value());
+        }
+        if self.read_only != false {
+            my_size += 1 + 1;
+        }
+        if let Some(v) = self.registry.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if !self.media_ref.is_empty() {
+            os.write_string(1, &self.media_ref)?;
+        }
+        if !self.slot.is_empty() {
+            os.write_string(2, &self.slot)?;
+        }
+        if self.source_kind != ::protobuf::EnumOrUnknown::new(QemuMediaSourceKind::QEMU_MEDIA_SOURCE_KIND_UNSPECIFIED) {
+            os.write_enum(3, ::protobuf::EnumOrUnknown::value(&self.source_kind))?;
+        }
+        if self.format != ::protobuf::EnumOrUnknown::new(QemuMediaFormat::QEMU_MEDIA_FORMAT_UNSPECIFIED) {
+            os.write_enum(4, ::protobuf::EnumOrUnknown::value(&self.format))?;
+        }
+        if self.read_only != false {
+            os.write_bool(5, self.read_only)?;
+        }
+        if let Some(v) = self.registry.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(6, v, os)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> QemuMediaSourceProjection {
+        QemuMediaSourceProjection::new()
+    }
+
+    fn clear(&mut self) {
+        self.media_ref.clear();
+        self.slot.clear();
+        self.source_kind = ::protobuf::EnumOrUnknown::new(QemuMediaSourceKind::QEMU_MEDIA_SOURCE_KIND_UNSPECIFIED);
+        self.format = ::protobuf::EnumOrUnknown::new(QemuMediaFormat::QEMU_MEDIA_FORMAT_UNSPECIFIED);
+        self.read_only = false;
+        self.registry.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static QemuMediaSourceProjection {
+        static instance: QemuMediaSourceProjection = QemuMediaSourceProjection {
+            media_ref: ::std::string::String::new(),
+            slot: ::std::string::String::new(),
+            source_kind: ::protobuf::EnumOrUnknown::from_i32(0),
+            format: ::protobuf::EnumOrUnknown::from_i32(0),
+            read_only: false,
+            registry: ::protobuf::MessageField::none(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for QemuMediaSourceProjection {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("QemuMediaSourceProjection").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for QemuMediaSourceProjection {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for QemuMediaSourceProjection {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.QemuMediaProjection)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct QemuMediaProjection {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.QemuMediaProjection.firmware_mode)
+    pub firmware_mode: ::protobuf::EnumOrUnknown<QemuMediaFirmwareMode>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.QemuMediaProjection.runner_state)
+    pub runner_state: ::protobuf::EnumOrUnknown<ServiceState>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.QemuMediaProjection.qmp_readiness)
+    pub qmp_readiness: ::protobuf::EnumOrUnknown<QemuMediaReadiness>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.QemuMediaProjection.pre_cont_progress)
+    pub pre_cont_progress: ::protobuf::EnumOrUnknown<QemuMediaProgress>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.QemuMediaProjection.media)
+    pub media: ::std::vec::Vec<QemuMediaSourceProjection>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.QemuMediaProjection.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a QemuMediaProjection {
+    fn default() -> &'a QemuMediaProjection {
+        <QemuMediaProjection as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl QemuMediaProjection {
+    pub fn new() -> QemuMediaProjection {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(5);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "firmware_mode",
+            |m: &QemuMediaProjection| { &m.firmware_mode },
+            |m: &mut QemuMediaProjection| { &mut m.firmware_mode },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "runner_state",
+            |m: &QemuMediaProjection| { &m.runner_state },
+            |m: &mut QemuMediaProjection| { &mut m.runner_state },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "qmp_readiness",
+            |m: &QemuMediaProjection| { &m.qmp_readiness },
+            |m: &mut QemuMediaProjection| { &mut m.qmp_readiness },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "pre_cont_progress",
+            |m: &QemuMediaProjection| { &m.pre_cont_progress },
+            |m: &mut QemuMediaProjection| { &mut m.pre_cont_progress },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "media",
+            |m: &QemuMediaProjection| { &m.media },
+            |m: &mut QemuMediaProjection| { &mut m.media },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<QemuMediaProjection>(
+            "QemuMediaProjection",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for QemuMediaProjection {
+    const NAME: &'static str = "QemuMediaProjection";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.firmware_mode = is.read_enum_or_unknown()?;
+                },
+                16 => {
+                    self.runner_state = is.read_enum_or_unknown()?;
+                },
+                24 => {
+                    self.qmp_readiness = is.read_enum_or_unknown()?;
+                },
+                32 => {
+                    self.pre_cont_progress = is.read_enum_or_unknown()?;
+                },
+                42 => {
+                    self.media.push(is.read_message()?);
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.firmware_mode != ::protobuf::EnumOrUnknown::new(QemuMediaFirmwareMode::QEMU_MEDIA_FIRMWARE_MODE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(1, self.firmware_mode.value());
+        }
+        if self.runner_state != ::protobuf::EnumOrUnknown::new(ServiceState::SERVICE_STATE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(2, self.runner_state.value());
+        }
+        if self.qmp_readiness != ::protobuf::EnumOrUnknown::new(QemuMediaReadiness::QEMU_MEDIA_READINESS_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(3, self.qmp_readiness.value());
+        }
+        if self.pre_cont_progress != ::protobuf::EnumOrUnknown::new(QemuMediaProgress::QEMU_MEDIA_PROGRESS_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(4, self.pre_cont_progress.value());
+        }
+        for value in &self.media {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.firmware_mode != ::protobuf::EnumOrUnknown::new(QemuMediaFirmwareMode::QEMU_MEDIA_FIRMWARE_MODE_UNSPECIFIED) {
+            os.write_enum(1, ::protobuf::EnumOrUnknown::value(&self.firmware_mode))?;
+        }
+        if self.runner_state != ::protobuf::EnumOrUnknown::new(ServiceState::SERVICE_STATE_UNSPECIFIED) {
+            os.write_enum(2, ::protobuf::EnumOrUnknown::value(&self.runner_state))?;
+        }
+        if self.qmp_readiness != ::protobuf::EnumOrUnknown::new(QemuMediaReadiness::QEMU_MEDIA_READINESS_UNSPECIFIED) {
+            os.write_enum(3, ::protobuf::EnumOrUnknown::value(&self.qmp_readiness))?;
+        }
+        if self.pre_cont_progress != ::protobuf::EnumOrUnknown::new(QemuMediaProgress::QEMU_MEDIA_PROGRESS_UNSPECIFIED) {
+            os.write_enum(4, ::protobuf::EnumOrUnknown::value(&self.pre_cont_progress))?;
+        }
+        for v in &self.media {
+            ::protobuf::rt::write_message_field_with_cached_size(5, v, os)?;
+        };
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> QemuMediaProjection {
+        QemuMediaProjection::new()
+    }
+
+    fn clear(&mut self) {
+        self.firmware_mode = ::protobuf::EnumOrUnknown::new(QemuMediaFirmwareMode::QEMU_MEDIA_FIRMWARE_MODE_UNSPECIFIED);
+        self.runner_state = ::protobuf::EnumOrUnknown::new(ServiceState::SERVICE_STATE_UNSPECIFIED);
+        self.qmp_readiness = ::protobuf::EnumOrUnknown::new(QemuMediaReadiness::QEMU_MEDIA_READINESS_UNSPECIFIED);
+        self.pre_cont_progress = ::protobuf::EnumOrUnknown::new(QemuMediaProgress::QEMU_MEDIA_PROGRESS_UNSPECIFIED);
+        self.media.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static QemuMediaProjection {
+        static instance: QemuMediaProjection = QemuMediaProjection {
+            firmware_mode: ::protobuf::EnumOrUnknown::from_i32(0),
+            runner_state: ::protobuf::EnumOrUnknown::from_i32(0),
+            qmp_readiness: ::protobuf::EnumOrUnknown::from_i32(0),
+            pre_cont_progress: ::protobuf::EnumOrUnknown::from_i32(0),
+            media: ::std::vec::Vec::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for QemuMediaProjection {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("QemuMediaProjection").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for QemuMediaProjection {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for QemuMediaProjection {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.UsbDeviceProjection)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct UsbDeviceProjection {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.UsbDeviceProjection.device_id)
+    pub device_id: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.UsbDeviceProjection.state)
+    pub state: ::protobuf::EnumOrUnknown<UsbDeviceState>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.UsbDeviceProjection.owner_workload_id)
+    pub owner_workload_id: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.UsbDeviceProjection.slot)
+    pub slot: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.UsbDeviceProjection.media_ref)
+    pub media_ref: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.UsbDeviceProjection.candidate_device_ids)
+    pub candidate_device_ids: ::std::vec::Vec<::std::string::String>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.UsbDeviceProjection.degraded_reasons)
+    pub degraded_reasons: ::std::vec::Vec<DegradedReason>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.UsbDeviceProjection.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a UsbDeviceProjection {
+    fn default() -> &'a UsbDeviceProjection {
+        <UsbDeviceProjection as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl UsbDeviceProjection {
+    pub fn new() -> UsbDeviceProjection {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(7);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "device_id",
+            |m: &UsbDeviceProjection| { &m.device_id },
+            |m: &mut UsbDeviceProjection| { &mut m.device_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "state",
+            |m: &UsbDeviceProjection| { &m.state },
+            |m: &mut UsbDeviceProjection| { &mut m.state },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "owner_workload_id",
+            |m: &UsbDeviceProjection| { &m.owner_workload_id },
+            |m: &mut UsbDeviceProjection| { &mut m.owner_workload_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "slot",
+            |m: &UsbDeviceProjection| { &m.slot },
+            |m: &mut UsbDeviceProjection| { &mut m.slot },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "media_ref",
+            |m: &UsbDeviceProjection| { &m.media_ref },
+            |m: &mut UsbDeviceProjection| { &mut m.media_ref },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "candidate_device_ids",
+            |m: &UsbDeviceProjection| { &m.candidate_device_ids },
+            |m: &mut UsbDeviceProjection| { &mut m.candidate_device_ids },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "degraded_reasons",
+            |m: &UsbDeviceProjection| { &m.degraded_reasons },
+            |m: &mut UsbDeviceProjection| { &mut m.degraded_reasons },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<UsbDeviceProjection>(
+            "UsbDeviceProjection",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for UsbDeviceProjection {
+    const NAME: &'static str = "UsbDeviceProjection";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.device_id = is.read_string()?;
+                },
+                16 => {
+                    self.state = is.read_enum_or_unknown()?;
+                },
+                26 => {
+                    self.owner_workload_id = is.read_string()?;
+                },
+                34 => {
+                    self.slot = is.read_string()?;
+                },
+                42 => {
+                    self.media_ref = is.read_string()?;
+                },
+                50 => {
+                    self.candidate_device_ids.push(is.read_string()?);
+                },
+                58 => {
+                    self.degraded_reasons.push(is.read_message()?);
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if !self.device_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(1, &self.device_id);
+        }
+        if self.state != ::protobuf::EnumOrUnknown::new(UsbDeviceState::USB_DEVICE_STATE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(2, self.state.value());
+        }
+        if !self.owner_workload_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(3, &self.owner_workload_id);
+        }
+        if !self.slot.is_empty() {
+            my_size += ::protobuf::rt::string_size(4, &self.slot);
+        }
+        if !self.media_ref.is_empty() {
+            my_size += ::protobuf::rt::string_size(5, &self.media_ref);
+        }
+        for value in &self.candidate_device_ids {
+            my_size += ::protobuf::rt::string_size(6, &value);
+        };
+        for value in &self.degraded_reasons {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if !self.device_id.is_empty() {
+            os.write_string(1, &self.device_id)?;
+        }
+        if self.state != ::protobuf::EnumOrUnknown::new(UsbDeviceState::USB_DEVICE_STATE_UNSPECIFIED) {
+            os.write_enum(2, ::protobuf::EnumOrUnknown::value(&self.state))?;
+        }
+        if !self.owner_workload_id.is_empty() {
+            os.write_string(3, &self.owner_workload_id)?;
+        }
+        if !self.slot.is_empty() {
+            os.write_string(4, &self.slot)?;
+        }
+        if !self.media_ref.is_empty() {
+            os.write_string(5, &self.media_ref)?;
+        }
+        for v in &self.candidate_device_ids {
+            os.write_string(6, &v)?;
+        };
+        for v in &self.degraded_reasons {
+            ::protobuf::rt::write_message_field_with_cached_size(7, v, os)?;
+        };
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> UsbDeviceProjection {
+        UsbDeviceProjection::new()
+    }
+
+    fn clear(&mut self) {
+        self.device_id.clear();
+        self.state = ::protobuf::EnumOrUnknown::new(UsbDeviceState::USB_DEVICE_STATE_UNSPECIFIED);
+        self.owner_workload_id.clear();
+        self.slot.clear();
+        self.media_ref.clear();
+        self.candidate_device_ids.clear();
+        self.degraded_reasons.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static UsbDeviceProjection {
+        static instance: UsbDeviceProjection = UsbDeviceProjection {
+            device_id: ::std::string::String::new(),
+            state: ::protobuf::EnumOrUnknown::from_i32(0),
+            owner_workload_id: ::std::string::String::new(),
+            slot: ::std::string::String::new(),
+            media_ref: ::std::string::String::new(),
+            candidate_device_ids: ::std::vec::Vec::new(),
+            degraded_reasons: ::std::vec::Vec::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for UsbDeviceProjection {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("UsbDeviceProjection").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for UsbDeviceProjection {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for UsbDeviceProjection {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.UsbProjection)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct UsbProjection {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.UsbProjection.degraded)
+    pub degraded: bool,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.UsbProjection.devices)
+    pub devices: ::std::vec::Vec<UsbDeviceProjection>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.UsbProjection.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a UsbProjection {
+    fn default() -> &'a UsbProjection {
+        <UsbProjection as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl UsbProjection {
+    pub fn new() -> UsbProjection {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(2);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "degraded",
+            |m: &UsbProjection| { &m.degraded },
+            |m: &mut UsbProjection| { &mut m.degraded },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "devices",
+            |m: &UsbProjection| { &m.devices },
+            |m: &mut UsbProjection| { &mut m.devices },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<UsbProjection>(
+            "UsbProjection",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for UsbProjection {
+    const NAME: &'static str = "UsbProjection";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.degraded = is.read_bool()?;
+                },
+                18 => {
+                    self.devices.push(is.read_message()?);
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.degraded != false {
+            my_size += 1 + 1;
+        }
+        for value in &self.devices {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.degraded != false {
+            os.write_bool(1, self.degraded)?;
+        }
+        for v in &self.devices {
+            ::protobuf::rt::write_message_field_with_cached_size(2, v, os)?;
+        };
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> UsbProjection {
+        UsbProjection::new()
+    }
+
+    fn clear(&mut self) {
+        self.degraded = false;
+        self.devices.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static UsbProjection {
+        static instance: UsbProjection = UsbProjection {
+            degraded: false,
+            devices: ::std::vec::Vec::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for UsbProjection {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("UsbProjection").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for UsbProjection {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for UsbProjection {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.BridgeProjection)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct BridgeProjection {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.BridgeProjection.bridge)
+    pub bridge: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.BridgeProjection.present)
+    pub present: bool,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.BridgeProjection.tap)
+    pub tap: ::std::string::String,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.BridgeProjection.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a BridgeProjection {
+    fn default() -> &'a BridgeProjection {
+        <BridgeProjection as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl BridgeProjection {
+    pub fn new() -> BridgeProjection {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(3);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "bridge",
+            |m: &BridgeProjection| { &m.bridge },
+            |m: &mut BridgeProjection| { &mut m.bridge },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "present",
+            |m: &BridgeProjection| { &m.present },
+            |m: &mut BridgeProjection| { &mut m.present },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "tap",
+            |m: &BridgeProjection| { &m.tap },
+            |m: &mut BridgeProjection| { &mut m.tap },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<BridgeProjection>(
+            "BridgeProjection",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for BridgeProjection {
+    const NAME: &'static str = "BridgeProjection";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.bridge = is.read_string()?;
+                },
+                16 => {
+                    self.present = is.read_bool()?;
+                },
+                26 => {
+                    self.tap = is.read_string()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if !self.bridge.is_empty() {
+            my_size += ::protobuf::rt::string_size(1, &self.bridge);
+        }
+        if self.present != false {
+            my_size += 1 + 1;
+        }
+        if !self.tap.is_empty() {
+            my_size += ::protobuf::rt::string_size(3, &self.tap);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if !self.bridge.is_empty() {
+            os.write_string(1, &self.bridge)?;
+        }
+        if self.present != false {
+            os.write_bool(2, self.present)?;
+        }
+        if !self.tap.is_empty() {
+            os.write_string(3, &self.tap)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> BridgeProjection {
+        BridgeProjection::new()
+    }
+
+    fn clear(&mut self) {
+        self.bridge.clear();
+        self.present = false;
+        self.tap.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static BridgeProjection {
+        static instance: BridgeProjection = BridgeProjection {
+            bridge: ::std::string::String::new(),
+            present: false,
+            tap: ::std::string::String::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for BridgeProjection {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("BridgeProjection").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for BridgeProjection {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for BridgeProjection {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.ReadinessProjection)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ReadinessProjection {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.ReadinessProjection.role_id)
+    pub role_id: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.ReadinessProjection.predicate_id)
+    pub predicate_id: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.ReadinessProjection.state)
+    pub state: ::protobuf::EnumOrUnknown<ServiceState>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.ReadinessProjection.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ReadinessProjection {
+    fn default() -> &'a ReadinessProjection {
+        <ReadinessProjection as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ReadinessProjection {
+    pub fn new() -> ReadinessProjection {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(3);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "role_id",
+            |m: &ReadinessProjection| { &m.role_id },
+            |m: &mut ReadinessProjection| { &mut m.role_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "predicate_id",
+            |m: &ReadinessProjection| { &m.predicate_id },
+            |m: &mut ReadinessProjection| { &mut m.predicate_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "state",
+            |m: &ReadinessProjection| { &m.state },
+            |m: &mut ReadinessProjection| { &mut m.state },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ReadinessProjection>(
+            "ReadinessProjection",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ReadinessProjection {
+    const NAME: &'static str = "ReadinessProjection";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.role_id = is.read_string()?;
+                },
+                18 => {
+                    self.predicate_id = is.read_string()?;
+                },
+                24 => {
+                    self.state = is.read_enum_or_unknown()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if !self.role_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(1, &self.role_id);
+        }
+        if !self.predicate_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.predicate_id);
+        }
+        if self.state != ::protobuf::EnumOrUnknown::new(ServiceState::SERVICE_STATE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(3, self.state.value());
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if !self.role_id.is_empty() {
+            os.write_string(1, &self.role_id)?;
+        }
+        if !self.predicate_id.is_empty() {
+            os.write_string(2, &self.predicate_id)?;
+        }
+        if self.state != ::protobuf::EnumOrUnknown::new(ServiceState::SERVICE_STATE_UNSPECIFIED) {
+            os.write_enum(3, ::protobuf::EnumOrUnknown::value(&self.state))?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ReadinessProjection {
+        ReadinessProjection::new()
+    }
+
+    fn clear(&mut self) {
+        self.role_id.clear();
+        self.predicate_id.clear();
+        self.state = ::protobuf::EnumOrUnknown::new(ServiceState::SERVICE_STATE_UNSPECIFIED);
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ReadinessProjection {
+        static instance: ReadinessProjection = ReadinessProjection {
+            role_id: ::std::string::String::new(),
+            predicate_id: ::std::string::String::new(),
+            state: ::protobuf::EnumOrUnknown::from_i32(0),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ReadinessProjection {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ReadinessProjection").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ReadinessProjection {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ReadinessProjection {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.WorkloadProjection)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct WorkloadProjection {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadProjection.identity)
+    pub identity: ::protobuf::MessageField<WorkloadIdentityProjection>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadProjection.name)
+    pub name: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadProjection.environment)
+    pub environment: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadProjection.graphics)
+    pub graphics: bool,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadProjection.tpm)
+    pub tpm: bool,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadProjection.usbip)
+    pub usbip: bool,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadProjection.static_ip)
+    pub static_ip: ::std::vec::Vec<u8>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadProjection.is_net_workload)
+    pub is_net_workload: bool,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadProjection.ssh_configured)
+    pub ssh_configured: bool,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadProjection.lifecycle)
+    pub lifecycle: ::protobuf::MessageField<WorkloadLifecycleProjection>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadProjection.runtime)
+    pub runtime: ::protobuf::MessageField<RuntimeProjection>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadProjection.services)
+    pub services: ::std::vec::Vec<ServiceProjection>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadProjection.autostart)
+    pub autostart: ::protobuf::MessageField<AutostartProjection>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadProjection.deployment)
+    pub deployment: ::protobuf::MessageField<DeploymentProjection>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadProjection.runner_parity)
+    pub runner_parity: ::protobuf::MessageField<RunnerParityProjection>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadProjection.api_ready)
+    pub api_ready: ::protobuf::EnumOrUnknown<ApiReadyState>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadProjection.live_pool_integrity)
+    pub live_pool_integrity: ::protobuf::MessageField<LivePoolIntegrityProjection>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadProjection.qemu_media)
+    pub qemu_media: ::protobuf::MessageField<QemuMediaProjection>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadProjection.usb)
+    pub usb: ::protobuf::MessageField<UsbProjection>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadProjection.bridge_checks)
+    pub bridge_checks: ::std::vec::Vec<BridgeProjection>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadProjection.declared_roles)
+    pub declared_roles: ::std::vec::Vec<::std::string::String>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.WorkloadProjection.readiness)
+    pub readiness: ::std::vec::Vec<ReadinessProjection>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.WorkloadProjection.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a WorkloadProjection {
+    fn default() -> &'a WorkloadProjection {
+        <WorkloadProjection as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl WorkloadProjection {
+    pub fn new() -> WorkloadProjection {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(22);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, WorkloadIdentityProjection>(
+            "identity",
+            |m: &WorkloadProjection| { &m.identity },
+            |m: &mut WorkloadProjection| { &mut m.identity },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "name",
+            |m: &WorkloadProjection| { &m.name },
+            |m: &mut WorkloadProjection| { &mut m.name },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "environment",
+            |m: &WorkloadProjection| { &m.environment },
+            |m: &mut WorkloadProjection| { &mut m.environment },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "graphics",
+            |m: &WorkloadProjection| { &m.graphics },
+            |m: &mut WorkloadProjection| { &mut m.graphics },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "tpm",
+            |m: &WorkloadProjection| { &m.tpm },
+            |m: &mut WorkloadProjection| { &mut m.tpm },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "usbip",
+            |m: &WorkloadProjection| { &m.usbip },
+            |m: &mut WorkloadProjection| { &mut m.usbip },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "static_ip",
+            |m: &WorkloadProjection| { &m.static_ip },
+            |m: &mut WorkloadProjection| { &mut m.static_ip },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "is_net_workload",
+            |m: &WorkloadProjection| { &m.is_net_workload },
+            |m: &mut WorkloadProjection| { &mut m.is_net_workload },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "ssh_configured",
+            |m: &WorkloadProjection| { &m.ssh_configured },
+            |m: &mut WorkloadProjection| { &mut m.ssh_configured },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, WorkloadLifecycleProjection>(
+            "lifecycle",
+            |m: &WorkloadProjection| { &m.lifecycle },
+            |m: &mut WorkloadProjection| { &mut m.lifecycle },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, RuntimeProjection>(
+            "runtime",
+            |m: &WorkloadProjection| { &m.runtime },
+            |m: &mut WorkloadProjection| { &mut m.runtime },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "services",
+            |m: &WorkloadProjection| { &m.services },
+            |m: &mut WorkloadProjection| { &mut m.services },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, AutostartProjection>(
+            "autostart",
+            |m: &WorkloadProjection| { &m.autostart },
+            |m: &mut WorkloadProjection| { &mut m.autostart },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, DeploymentProjection>(
+            "deployment",
+            |m: &WorkloadProjection| { &m.deployment },
+            |m: &mut WorkloadProjection| { &mut m.deployment },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, RunnerParityProjection>(
+            "runner_parity",
+            |m: &WorkloadProjection| { &m.runner_parity },
+            |m: &mut WorkloadProjection| { &mut m.runner_parity },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "api_ready",
+            |m: &WorkloadProjection| { &m.api_ready },
+            |m: &mut WorkloadProjection| { &mut m.api_ready },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, LivePoolIntegrityProjection>(
+            "live_pool_integrity",
+            |m: &WorkloadProjection| { &m.live_pool_integrity },
+            |m: &mut WorkloadProjection| { &mut m.live_pool_integrity },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, QemuMediaProjection>(
+            "qemu_media",
+            |m: &WorkloadProjection| { &m.qemu_media },
+            |m: &mut WorkloadProjection| { &mut m.qemu_media },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, UsbProjection>(
+            "usb",
+            |m: &WorkloadProjection| { &m.usb },
+            |m: &mut WorkloadProjection| { &mut m.usb },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "bridge_checks",
+            |m: &WorkloadProjection| { &m.bridge_checks },
+            |m: &mut WorkloadProjection| { &mut m.bridge_checks },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "declared_roles",
+            |m: &WorkloadProjection| { &m.declared_roles },
+            |m: &mut WorkloadProjection| { &mut m.declared_roles },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "readiness",
+            |m: &WorkloadProjection| { &m.readiness },
+            |m: &mut WorkloadProjection| { &mut m.readiness },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<WorkloadProjection>(
+            "WorkloadProjection",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for WorkloadProjection {
+    const NAME: &'static str = "WorkloadProjection";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.identity)?;
+                },
+                18 => {
+                    self.name = is.read_string()?;
+                },
+                26 => {
+                    self.environment = is.read_string()?;
+                },
+                32 => {
+                    self.graphics = is.read_bool()?;
+                },
+                40 => {
+                    self.tpm = is.read_bool()?;
+                },
+                48 => {
+                    self.usbip = is.read_bool()?;
+                },
+                58 => {
+                    self.static_ip = is.read_bytes()?;
+                },
+                64 => {
+                    self.is_net_workload = is.read_bool()?;
+                },
+                72 => {
+                    self.ssh_configured = is.read_bool()?;
+                },
+                82 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.lifecycle)?;
+                },
+                90 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.runtime)?;
+                },
+                98 => {
+                    self.services.push(is.read_message()?);
+                },
+                106 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.autostart)?;
+                },
+                114 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.deployment)?;
+                },
+                122 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.runner_parity)?;
+                },
+                128 => {
+                    self.api_ready = is.read_enum_or_unknown()?;
+                },
+                138 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.live_pool_integrity)?;
+                },
+                146 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.qemu_media)?;
+                },
+                154 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.usb)?;
+                },
+                162 => {
+                    self.bridge_checks.push(is.read_message()?);
+                },
+                170 => {
+                    self.declared_roles.push(is.read_string()?);
+                },
+                178 => {
+                    self.readiness.push(is.read_message()?);
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.identity.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if !self.name.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.name);
+        }
+        if !self.environment.is_empty() {
+            my_size += ::protobuf::rt::string_size(3, &self.environment);
+        }
+        if self.graphics != false {
+            my_size += 1 + 1;
+        }
+        if self.tpm != false {
+            my_size += 1 + 1;
+        }
+        if self.usbip != false {
+            my_size += 1 + 1;
+        }
+        if !self.static_ip.is_empty() {
+            my_size += ::protobuf::rt::bytes_size(7, &self.static_ip);
+        }
+        if self.is_net_workload != false {
+            my_size += 1 + 1;
+        }
+        if self.ssh_configured != false {
+            my_size += 1 + 1;
+        }
+        if let Some(v) = self.lifecycle.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if let Some(v) = self.runtime.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        for value in &self.services {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
+        if let Some(v) = self.autostart.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if let Some(v) = self.deployment.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if let Some(v) = self.runner_parity.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if self.api_ready != ::protobuf::EnumOrUnknown::new(ApiReadyState::API_READY_STATE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(16, self.api_ready.value());
+        }
+        if let Some(v) = self.live_pool_integrity.as_ref() {
+            let len = v.compute_size();
+            my_size += 2 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if let Some(v) = self.qemu_media.as_ref() {
+            let len = v.compute_size();
+            my_size += 2 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if let Some(v) = self.usb.as_ref() {
+            let len = v.compute_size();
+            my_size += 2 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        for value in &self.bridge_checks {
+            let len = value.compute_size();
+            my_size += 2 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
+        for value in &self.declared_roles {
+            my_size += ::protobuf::rt::string_size(21, &value);
+        };
+        for value in &self.readiness {
+            let len = value.compute_size();
+            my_size += 2 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.identity.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        }
+        if !self.name.is_empty() {
+            os.write_string(2, &self.name)?;
+        }
+        if !self.environment.is_empty() {
+            os.write_string(3, &self.environment)?;
+        }
+        if self.graphics != false {
+            os.write_bool(4, self.graphics)?;
+        }
+        if self.tpm != false {
+            os.write_bool(5, self.tpm)?;
+        }
+        if self.usbip != false {
+            os.write_bool(6, self.usbip)?;
+        }
+        if !self.static_ip.is_empty() {
+            os.write_bytes(7, &self.static_ip)?;
+        }
+        if self.is_net_workload != false {
+            os.write_bool(8, self.is_net_workload)?;
+        }
+        if self.ssh_configured != false {
+            os.write_bool(9, self.ssh_configured)?;
+        }
+        if let Some(v) = self.lifecycle.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(10, v, os)?;
+        }
+        if let Some(v) = self.runtime.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(11, v, os)?;
+        }
+        for v in &self.services {
+            ::protobuf::rt::write_message_field_with_cached_size(12, v, os)?;
+        };
+        if let Some(v) = self.autostart.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(13, v, os)?;
+        }
+        if let Some(v) = self.deployment.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(14, v, os)?;
+        }
+        if let Some(v) = self.runner_parity.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(15, v, os)?;
+        }
+        if self.api_ready != ::protobuf::EnumOrUnknown::new(ApiReadyState::API_READY_STATE_UNSPECIFIED) {
+            os.write_enum(16, ::protobuf::EnumOrUnknown::value(&self.api_ready))?;
+        }
+        if let Some(v) = self.live_pool_integrity.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(17, v, os)?;
+        }
+        if let Some(v) = self.qemu_media.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(18, v, os)?;
+        }
+        if let Some(v) = self.usb.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(19, v, os)?;
+        }
+        for v in &self.bridge_checks {
+            ::protobuf::rt::write_message_field_with_cached_size(20, v, os)?;
+        };
+        for v in &self.declared_roles {
+            os.write_string(21, &v)?;
+        };
+        for v in &self.readiness {
+            ::protobuf::rt::write_message_field_with_cached_size(22, v, os)?;
+        };
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> WorkloadProjection {
+        WorkloadProjection::new()
+    }
+
+    fn clear(&mut self) {
+        self.identity.clear();
+        self.name.clear();
+        self.environment.clear();
+        self.graphics = false;
+        self.tpm = false;
+        self.usbip = false;
+        self.static_ip.clear();
+        self.is_net_workload = false;
+        self.ssh_configured = false;
+        self.lifecycle.clear();
+        self.runtime.clear();
+        self.services.clear();
+        self.autostart.clear();
+        self.deployment.clear();
+        self.runner_parity.clear();
+        self.api_ready = ::protobuf::EnumOrUnknown::new(ApiReadyState::API_READY_STATE_UNSPECIFIED);
+        self.live_pool_integrity.clear();
+        self.qemu_media.clear();
+        self.usb.clear();
+        self.bridge_checks.clear();
+        self.declared_roles.clear();
+        self.readiness.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static WorkloadProjection {
+        static instance: WorkloadProjection = WorkloadProjection {
+            identity: ::protobuf::MessageField::none(),
+            name: ::std::string::String::new(),
+            environment: ::std::string::String::new(),
+            graphics: false,
+            tpm: false,
+            usbip: false,
+            static_ip: ::std::vec::Vec::new(),
+            is_net_workload: false,
+            ssh_configured: false,
+            lifecycle: ::protobuf::MessageField::none(),
+            runtime: ::protobuf::MessageField::none(),
+            services: ::std::vec::Vec::new(),
+            autostart: ::protobuf::MessageField::none(),
+            deployment: ::protobuf::MessageField::none(),
+            runner_parity: ::protobuf::MessageField::none(),
+            api_ready: ::protobuf::EnumOrUnknown::from_i32(0),
+            live_pool_integrity: ::protobuf::MessageField::none(),
+            qemu_media: ::protobuf::MessageField::none(),
+            usb: ::protobuf::MessageField::none(),
+            bridge_checks: ::std::vec::Vec::new(),
+            declared_roles: ::std::vec::Vec::new(),
+            readiness: ::std::vec::Vec::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for WorkloadProjection {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("WorkloadProjection").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for WorkloadProjection {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for WorkloadProjection {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.ListWorkloadsResponse)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ListWorkloadsResponse {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.ListWorkloadsResponse.outcome)
+    pub outcome: ::protobuf::EnumOrUnknown<super::common::Outcome>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.ListWorkloadsResponse.workloads)
+    pub workloads: ::std::vec::Vec<WorkloadProjection>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.ListWorkloadsResponse.page)
+    pub page: ::protobuf::MessageField<PageInfo>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.ListWorkloadsResponse.error)
+    pub error: ::protobuf::MessageField<super::common::ErrorEnvelope>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.ListWorkloadsResponse.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ListWorkloadsResponse {
+    fn default() -> &'a ListWorkloadsResponse {
+        <ListWorkloadsResponse as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ListWorkloadsResponse {
+    pub fn new() -> ListWorkloadsResponse {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(4);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "outcome",
+            |m: &ListWorkloadsResponse| { &m.outcome },
+            |m: &mut ListWorkloadsResponse| { &mut m.outcome },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "workloads",
+            |m: &ListWorkloadsResponse| { &m.workloads },
+            |m: &mut ListWorkloadsResponse| { &mut m.workloads },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, PageInfo>(
+            "page",
+            |m: &ListWorkloadsResponse| { &m.page },
+            |m: &mut ListWorkloadsResponse| { &mut m.page },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, super::common::ErrorEnvelope>(
+            "error",
+            |m: &ListWorkloadsResponse| { &m.error },
+            |m: &mut ListWorkloadsResponse| { &mut m.error },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ListWorkloadsResponse>(
+            "ListWorkloadsResponse",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ListWorkloadsResponse {
+    const NAME: &'static str = "ListWorkloadsResponse";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.outcome = is.read_enum_or_unknown()?;
+                },
+                18 => {
+                    self.workloads.push(is.read_message()?);
+                },
+                26 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.page)?;
+                },
+                34 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.error)?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.outcome != ::protobuf::EnumOrUnknown::new(super::common::Outcome::OUTCOME_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(1, self.outcome.value());
+        }
+        for value in &self.workloads {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
+        if let Some(v) = self.page.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if let Some(v) = self.error.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.outcome != ::protobuf::EnumOrUnknown::new(super::common::Outcome::OUTCOME_UNSPECIFIED) {
+            os.write_enum(1, ::protobuf::EnumOrUnknown::value(&self.outcome))?;
+        }
+        for v in &self.workloads {
+            ::protobuf::rt::write_message_field_with_cached_size(2, v, os)?;
+        };
+        if let Some(v) = self.page.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(3, v, os)?;
+        }
+        if let Some(v) = self.error.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(4, v, os)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ListWorkloadsResponse {
+        ListWorkloadsResponse::new()
+    }
+
+    fn clear(&mut self) {
+        self.outcome = ::protobuf::EnumOrUnknown::new(super::common::Outcome::OUTCOME_UNSPECIFIED);
+        self.workloads.clear();
+        self.page.clear();
+        self.error.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ListWorkloadsResponse {
+        static instance: ListWorkloadsResponse = ListWorkloadsResponse {
+            outcome: ::protobuf::EnumOrUnknown::from_i32(0),
+            workloads: ::std::vec::Vec::new(),
+            page: ::protobuf::MessageField::none(),
+            error: ::protobuf::MessageField::none(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ListWorkloadsResponse {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ListWorkloadsResponse").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ListWorkloadsResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ListWorkloadsResponse {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.InspectResponse)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct InspectResponse {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.InspectResponse.outcome)
+    pub outcome: ::protobuf::EnumOrUnknown<super::common::Outcome>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.InspectResponse.workloads)
+    pub workloads: ::std::vec::Vec<WorkloadProjection>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.InspectResponse.page)
+    pub page: ::protobuf::MessageField<PageInfo>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.InspectResponse.error)
+    pub error: ::protobuf::MessageField<super::common::ErrorEnvelope>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.InspectResponse.read_model)
+    pub read_model: ::std::string::String,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.InspectResponse.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a InspectResponse {
+    fn default() -> &'a InspectResponse {
+        <InspectResponse as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl InspectResponse {
+    pub fn new() -> InspectResponse {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(5);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "outcome",
+            |m: &InspectResponse| { &m.outcome },
+            |m: &mut InspectResponse| { &mut m.outcome },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "workloads",
+            |m: &InspectResponse| { &m.workloads },
+            |m: &mut InspectResponse| { &mut m.workloads },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, PageInfo>(
+            "page",
+            |m: &InspectResponse| { &m.page },
+            |m: &mut InspectResponse| { &mut m.page },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, super::common::ErrorEnvelope>(
+            "error",
+            |m: &InspectResponse| { &m.error },
+            |m: &mut InspectResponse| { &mut m.error },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "read_model",
+            |m: &InspectResponse| { &m.read_model },
+            |m: &mut InspectResponse| { &mut m.read_model },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<InspectResponse>(
+            "InspectResponse",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for InspectResponse {
+    const NAME: &'static str = "InspectResponse";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.outcome = is.read_enum_or_unknown()?;
+                },
+                18 => {
+                    self.workloads.push(is.read_message()?);
+                },
+                26 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.page)?;
+                },
+                34 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.error)?;
+                },
+                42 => {
+                    self.read_model = is.read_string()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.outcome != ::protobuf::EnumOrUnknown::new(super::common::Outcome::OUTCOME_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(1, self.outcome.value());
+        }
+        for value in &self.workloads {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
+        if let Some(v) = self.page.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if let Some(v) = self.error.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if !self.read_model.is_empty() {
+            my_size += ::protobuf::rt::string_size(5, &self.read_model);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.outcome != ::protobuf::EnumOrUnknown::new(super::common::Outcome::OUTCOME_UNSPECIFIED) {
+            os.write_enum(1, ::protobuf::EnumOrUnknown::value(&self.outcome))?;
+        }
+        for v in &self.workloads {
+            ::protobuf::rt::write_message_field_with_cached_size(2, v, os)?;
+        };
+        if let Some(v) = self.page.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(3, v, os)?;
+        }
+        if let Some(v) = self.error.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(4, v, os)?;
+        }
+        if !self.read_model.is_empty() {
+            os.write_string(5, &self.read_model)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> InspectResponse {
+        InspectResponse::new()
+    }
+
+    fn clear(&mut self) {
+        self.outcome = ::protobuf::EnumOrUnknown::new(super::common::Outcome::OUTCOME_UNSPECIFIED);
+        self.workloads.clear();
+        self.page.clear();
+        self.error.clear();
+        self.read_model.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static InspectResponse {
+        static instance: InspectResponse = InspectResponse {
+            outcome: ::protobuf::EnumOrUnknown::from_i32(0),
+            workloads: ::std::vec::Vec::new(),
+            page: ::protobuf::MessageField::none(),
+            error: ::protobuf::MessageField::none(),
+            read_model: ::std::string::String::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for InspectResponse {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("InspectResponse").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for InspectResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for InspectResponse {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.TerminalOpenRequest)
+#[derive(PartialEq,Clone,Default)]
+pub struct TerminalOpenRequest {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalOpenRequest.metadata)
+    pub metadata: ::protobuf::MessageField<super::common::RequestMetadata>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalOpenRequest.scope)
+    pub scope: ::protobuf::MessageField<super::common::IdentityScope>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalOpenRequest.resource_id)
+    pub resource_id: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalOpenRequest.operation_id)
+    pub operation_id: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalOpenRequest.request_digest)
+    pub request_digest: ::std::vec::Vec<u8>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.TerminalOpenRequest.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TerminalOpenRequest {
+    fn default() -> &'a TerminalOpenRequest {
+        <TerminalOpenRequest as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TerminalOpenRequest {
+    pub fn new() -> TerminalOpenRequest {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(5);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, super::common::RequestMetadata>(
+            "metadata",
+            |m: &TerminalOpenRequest| { &m.metadata },
+            |m: &mut TerminalOpenRequest| { &mut m.metadata },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, super::common::IdentityScope>(
+            "scope",
+            |m: &TerminalOpenRequest| { &m.scope },
+            |m: &mut TerminalOpenRequest| { &mut m.scope },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "resource_id",
+            |m: &TerminalOpenRequest| { &m.resource_id },
+            |m: &mut TerminalOpenRequest| { &mut m.resource_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "operation_id",
+            |m: &TerminalOpenRequest| { &m.operation_id },
+            |m: &mut TerminalOpenRequest| { &mut m.operation_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "request_digest",
+            |m: &TerminalOpenRequest| { &m.request_digest },
+            |m: &mut TerminalOpenRequest| { &mut m.request_digest },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TerminalOpenRequest>(
+            "TerminalOpenRequest",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for TerminalOpenRequest {
+    const NAME: &'static str = "TerminalOpenRequest";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.metadata)?;
+                },
+                18 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.scope)?;
+                },
+                26 => {
+                    self.resource_id = is.read_string()?;
+                },
+                34 => {
+                    self.operation_id = is.read_string()?;
+                },
+                42 => {
+                    self.request_digest = is.read_bytes()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.metadata.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if let Some(v) = self.scope.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if !self.resource_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(3, &self.resource_id);
+        }
+        if !self.operation_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(4, &self.operation_id);
+        }
+        if !self.request_digest.is_empty() {
+            my_size += ::protobuf::rt::bytes_size(5, &self.request_digest);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.metadata.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        }
+        if let Some(v) = self.scope.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(2, v, os)?;
+        }
+        if !self.resource_id.is_empty() {
+            os.write_string(3, &self.resource_id)?;
+        }
+        if !self.operation_id.is_empty() {
+            os.write_string(4, &self.operation_id)?;
+        }
+        if !self.request_digest.is_empty() {
+            os.write_bytes(5, &self.request_digest)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TerminalOpenRequest {
+        TerminalOpenRequest::new()
+    }
+
+    fn clear(&mut self) {
+        self.metadata.clear();
+        self.scope.clear();
+        self.resource_id.clear();
+        self.operation_id.clear();
+        self.request_digest.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TerminalOpenRequest {
+        static instance: TerminalOpenRequest = TerminalOpenRequest {
+            metadata: ::protobuf::MessageField::none(),
+            scope: ::protobuf::MessageField::none(),
+            resource_id: ::std::string::String::new(),
+            operation_id: ::std::string::String::new(),
+            request_digest: ::std::vec::Vec::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for TerminalOpenRequest {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("TerminalOpenRequest").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for TerminalOpenRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TerminalOpenRequest {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.TerminalOpenResponse)
+#[derive(PartialEq,Clone,Default)]
+pub struct TerminalOpenResponse {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalOpenResponse.outcome)
+    pub outcome: ::protobuf::EnumOrUnknown<super::common::Outcome>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalOpenResponse.operation_id)
+    pub operation_id: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalOpenResponse.stream_id)
+    pub stream_id: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalOpenResponse.session_generation)
+    pub session_generation: u64,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalOpenResponse.request_id)
+    pub request_id: ::std::vec::Vec<u8>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalOpenResponse.error)
+    pub error: ::protobuf::MessageField<super::common::ErrorEnvelope>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.TerminalOpenResponse.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TerminalOpenResponse {
+    fn default() -> &'a TerminalOpenResponse {
+        <TerminalOpenResponse as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TerminalOpenResponse {
+    pub fn new() -> TerminalOpenResponse {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(6);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "outcome",
+            |m: &TerminalOpenResponse| { &m.outcome },
+            |m: &mut TerminalOpenResponse| { &mut m.outcome },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "operation_id",
+            |m: &TerminalOpenResponse| { &m.operation_id },
+            |m: &mut TerminalOpenResponse| { &mut m.operation_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "stream_id",
+            |m: &TerminalOpenResponse| { &m.stream_id },
+            |m: &mut TerminalOpenResponse| { &mut m.stream_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "session_generation",
+            |m: &TerminalOpenResponse| { &m.session_generation },
+            |m: &mut TerminalOpenResponse| { &mut m.session_generation },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "request_id",
+            |m: &TerminalOpenResponse| { &m.request_id },
+            |m: &mut TerminalOpenResponse| { &mut m.request_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, super::common::ErrorEnvelope>(
+            "error",
+            |m: &TerminalOpenResponse| { &m.error },
+            |m: &mut TerminalOpenResponse| { &mut m.error },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TerminalOpenResponse>(
+            "TerminalOpenResponse",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for TerminalOpenResponse {
+    const NAME: &'static str = "TerminalOpenResponse";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.outcome = is.read_enum_or_unknown()?;
+                },
+                18 => {
+                    self.operation_id = is.read_string()?;
+                },
+                26 => {
+                    self.stream_id = is.read_string()?;
+                },
+                32 => {
+                    self.session_generation = is.read_uint64()?;
+                },
+                42 => {
+                    self.request_id = is.read_bytes()?;
+                },
+                50 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.error)?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.outcome != ::protobuf::EnumOrUnknown::new(super::common::Outcome::OUTCOME_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(1, self.outcome.value());
+        }
+        if !self.operation_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.operation_id);
+        }
+        if !self.stream_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(3, &self.stream_id);
+        }
+        if self.session_generation != 0 {
+            my_size += ::protobuf::rt::uint64_size(4, self.session_generation);
+        }
+        if !self.request_id.is_empty() {
+            my_size += ::protobuf::rt::bytes_size(5, &self.request_id);
+        }
+        if let Some(v) = self.error.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.outcome != ::protobuf::EnumOrUnknown::new(super::common::Outcome::OUTCOME_UNSPECIFIED) {
+            os.write_enum(1, ::protobuf::EnumOrUnknown::value(&self.outcome))?;
+        }
+        if !self.operation_id.is_empty() {
+            os.write_string(2, &self.operation_id)?;
+        }
+        if !self.stream_id.is_empty() {
+            os.write_string(3, &self.stream_id)?;
+        }
+        if self.session_generation != 0 {
+            os.write_uint64(4, self.session_generation)?;
+        }
+        if !self.request_id.is_empty() {
+            os.write_bytes(5, &self.request_id)?;
+        }
+        if let Some(v) = self.error.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(6, v, os)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TerminalOpenResponse {
+        TerminalOpenResponse::new()
+    }
+
+    fn clear(&mut self) {
+        self.outcome = ::protobuf::EnumOrUnknown::new(super::common::Outcome::OUTCOME_UNSPECIFIED);
+        self.operation_id.clear();
+        self.stream_id.clear();
+        self.session_generation = 0;
+        self.request_id.clear();
+        self.error.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TerminalOpenResponse {
+        static instance: TerminalOpenResponse = TerminalOpenResponse {
+            outcome: ::protobuf::EnumOrUnknown::from_i32(0),
+            operation_id: ::std::string::String::new(),
+            stream_id: ::std::string::String::new(),
+            session_generation: 0,
+            request_id: ::std::vec::Vec::new(),
+            error: ::protobuf::MessageField::none(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for TerminalOpenResponse {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("TerminalOpenResponse").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for TerminalOpenResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TerminalOpenResponse {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.TerminalSize)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct TerminalSize {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalSize.rows)
+    pub rows: u32,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalSize.columns)
+    pub columns: u32,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.TerminalSize.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TerminalSize {
+    fn default() -> &'a TerminalSize {
+        <TerminalSize as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TerminalSize {
+    pub fn new() -> TerminalSize {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(2);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "rows",
+            |m: &TerminalSize| { &m.rows },
+            |m: &mut TerminalSize| { &mut m.rows },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "columns",
+            |m: &TerminalSize| { &m.columns },
+            |m: &mut TerminalSize| { &mut m.columns },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TerminalSize>(
+            "TerminalSize",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for TerminalSize {
+    const NAME: &'static str = "TerminalSize";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.rows = is.read_uint32()?;
+                },
+                16 => {
+                    self.columns = is.read_uint32()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.rows != 0 {
+            my_size += ::protobuf::rt::uint32_size(1, self.rows);
+        }
+        if self.columns != 0 {
+            my_size += ::protobuf::rt::uint32_size(2, self.columns);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.rows != 0 {
+            os.write_uint32(1, self.rows)?;
+        }
+        if self.columns != 0 {
+            os.write_uint32(2, self.columns)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TerminalSize {
+        TerminalSize::new()
+    }
+
+    fn clear(&mut self) {
+        self.rows = 0;
+        self.columns = 0;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TerminalSize {
+        static instance: TerminalSize = TerminalSize {
+            rows: 0,
+            columns: 0,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for TerminalSize {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("TerminalSize").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for TerminalSize {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TerminalSize {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.ArbitraryExecSelection)
+#[derive(PartialEq,Clone,Default)]
+pub struct ArbitraryExecSelection {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.ArbitraryExecSelection.argv)
+    pub argv: ::std::vec::Vec<::std::vec::Vec<u8>>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.ArbitraryExecSelection.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ArbitraryExecSelection {
+    fn default() -> &'a ArbitraryExecSelection {
+        <ArbitraryExecSelection as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ArbitraryExecSelection {
+    pub fn new() -> ArbitraryExecSelection {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(1);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "argv",
+            |m: &ArbitraryExecSelection| { &m.argv },
+            |m: &mut ArbitraryExecSelection| { &mut m.argv },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ArbitraryExecSelection>(
+            "ArbitraryExecSelection",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ArbitraryExecSelection {
+    const NAME: &'static str = "ArbitraryExecSelection";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.argv.push(is.read_bytes()?);
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        for value in &self.argv {
+            my_size += ::protobuf::rt::bytes_size(1, &value);
+        };
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        for v in &self.argv {
+            os.write_bytes(1, &v)?;
+        };
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ArbitraryExecSelection {
+        ArbitraryExecSelection::new()
+    }
+
+    fn clear(&mut self) {
+        self.argv.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ArbitraryExecSelection {
+        static instance: ArbitraryExecSelection = ArbitraryExecSelection {
+            argv: ::std::vec::Vec::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ArbitraryExecSelection {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ArbitraryExecSelection").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ArbitraryExecSelection {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ArbitraryExecSelection {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.ConfiguredLaunchSelection)
+#[derive(PartialEq,Clone,Default)]
+pub struct ConfiguredLaunchSelection {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.ConfiguredLaunchSelection.configured_item_id)
+    pub configured_item_id: ::std::string::String,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.ConfiguredLaunchSelection.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ConfiguredLaunchSelection {
+    fn default() -> &'a ConfiguredLaunchSelection {
+        <ConfiguredLaunchSelection as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ConfiguredLaunchSelection {
+    pub fn new() -> ConfiguredLaunchSelection {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(1);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "configured_item_id",
+            |m: &ConfiguredLaunchSelection| { &m.configured_item_id },
+            |m: &mut ConfiguredLaunchSelection| { &mut m.configured_item_id },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ConfiguredLaunchSelection>(
+            "ConfiguredLaunchSelection",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ConfiguredLaunchSelection {
+    const NAME: &'static str = "ConfiguredLaunchSelection";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.configured_item_id = is.read_string()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if !self.configured_item_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(1, &self.configured_item_id);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if !self.configured_item_id.is_empty() {
+            os.write_string(1, &self.configured_item_id)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ConfiguredLaunchSelection {
+        ConfiguredLaunchSelection::new()
+    }
+
+    fn clear(&mut self) {
+        self.configured_item_id.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ConfiguredLaunchSelection {
+        static instance: ConfiguredLaunchSelection = ConfiguredLaunchSelection {
+            configured_item_id: ::std::string::String::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ConfiguredLaunchSelection {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ConfiguredLaunchSelection").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ConfiguredLaunchSelection {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ConfiguredLaunchSelection {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.ExecSelection)
+#[derive(PartialEq,Clone,Default)]
+pub struct ExecSelection {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.ExecSelection.authority)
+    pub authority: ::protobuf::EnumOrUnknown<ExecAuthority>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.ExecSelection.tty)
+    pub tty: bool,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.ExecSelection.detached)
+    pub detached: bool,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.ExecSelection.initial_size)
+    pub initial_size: ::protobuf::MessageField<TerminalSize>,
+    // message oneof groups
+    pub selection: ::std::option::Option<exec_selection::Selection>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.ExecSelection.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ExecSelection {
+    fn default() -> &'a ExecSelection {
+        <ExecSelection as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ExecSelection {
+    pub fn new() -> ExecSelection {
+        ::std::default::Default::default()
+    }
+
+    // .d2b.daemon.v2.ArbitraryExecSelection arbitrary = 2;
+
+    pub fn arbitrary(&self) -> &ArbitraryExecSelection {
+        match self.selection {
+            ::std::option::Option::Some(exec_selection::Selection::Arbitrary(ref v)) => v,
+            _ => <ArbitraryExecSelection as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_arbitrary(&mut self) {
+        self.selection = ::std::option::Option::None;
+    }
+
+    pub fn has_arbitrary(&self) -> bool {
+        match self.selection {
+            ::std::option::Option::Some(exec_selection::Selection::Arbitrary(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_arbitrary(&mut self, v: ArbitraryExecSelection) {
+        self.selection = ::std::option::Option::Some(exec_selection::Selection::Arbitrary(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_arbitrary(&mut self) -> &mut ArbitraryExecSelection {
+        if let ::std::option::Option::Some(exec_selection::Selection::Arbitrary(_)) = self.selection {
+        } else {
+            self.selection = ::std::option::Option::Some(exec_selection::Selection::Arbitrary(ArbitraryExecSelection::new()));
+        }
+        match self.selection {
+            ::std::option::Option::Some(exec_selection::Selection::Arbitrary(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_arbitrary(&mut self) -> ArbitraryExecSelection {
+        if self.has_arbitrary() {
+            match self.selection.take() {
+                ::std::option::Option::Some(exec_selection::Selection::Arbitrary(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            ArbitraryExecSelection::new()
+        }
+    }
+
+    // .d2b.daemon.v2.ConfiguredLaunchSelection configured_launch = 3;
+
+    pub fn configured_launch(&self) -> &ConfiguredLaunchSelection {
+        match self.selection {
+            ::std::option::Option::Some(exec_selection::Selection::ConfiguredLaunch(ref v)) => v,
+            _ => <ConfiguredLaunchSelection as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_configured_launch(&mut self) {
+        self.selection = ::std::option::Option::None;
+    }
+
+    pub fn has_configured_launch(&self) -> bool {
+        match self.selection {
+            ::std::option::Option::Some(exec_selection::Selection::ConfiguredLaunch(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_configured_launch(&mut self, v: ConfiguredLaunchSelection) {
+        self.selection = ::std::option::Option::Some(exec_selection::Selection::ConfiguredLaunch(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_configured_launch(&mut self) -> &mut ConfiguredLaunchSelection {
+        if let ::std::option::Option::Some(exec_selection::Selection::ConfiguredLaunch(_)) = self.selection {
+        } else {
+            self.selection = ::std::option::Option::Some(exec_selection::Selection::ConfiguredLaunch(ConfiguredLaunchSelection::new()));
+        }
+        match self.selection {
+            ::std::option::Option::Some(exec_selection::Selection::ConfiguredLaunch(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_configured_launch(&mut self) -> ConfiguredLaunchSelection {
+        if self.has_configured_launch() {
+            match self.selection.take() {
+                ::std::option::Option::Some(exec_selection::Selection::ConfiguredLaunch(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            ConfiguredLaunchSelection::new()
+        }
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(6);
+        let mut oneofs = ::std::vec::Vec::with_capacity(1);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "authority",
+            |m: &ExecSelection| { &m.authority },
+            |m: &mut ExecSelection| { &mut m.authority },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, ArbitraryExecSelection>(
+            "arbitrary",
+            ExecSelection::has_arbitrary,
+            ExecSelection::arbitrary,
+            ExecSelection::mut_arbitrary,
+            ExecSelection::set_arbitrary,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, ConfiguredLaunchSelection>(
+            "configured_launch",
+            ExecSelection::has_configured_launch,
+            ExecSelection::configured_launch,
+            ExecSelection::mut_configured_launch,
+            ExecSelection::set_configured_launch,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "tty",
+            |m: &ExecSelection| { &m.tty },
+            |m: &mut ExecSelection| { &mut m.tty },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "detached",
+            |m: &ExecSelection| { &m.detached },
+            |m: &mut ExecSelection| { &mut m.detached },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, TerminalSize>(
+            "initial_size",
+            |m: &ExecSelection| { &m.initial_size },
+            |m: &mut ExecSelection| { &mut m.initial_size },
+        ));
+        oneofs.push(exec_selection::Selection::generated_oneof_descriptor_data());
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ExecSelection>(
+            "ExecSelection",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ExecSelection {
+    const NAME: &'static str = "ExecSelection";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.authority = is.read_enum_or_unknown()?;
+                },
+                18 => {
+                    self.selection = ::std::option::Option::Some(exec_selection::Selection::Arbitrary(is.read_message()?));
+                },
+                26 => {
+                    self.selection = ::std::option::Option::Some(exec_selection::Selection::ConfiguredLaunch(is.read_message()?));
+                },
+                32 => {
+                    self.tty = is.read_bool()?;
+                },
+                40 => {
+                    self.detached = is.read_bool()?;
+                },
+                50 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.initial_size)?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.authority != ::protobuf::EnumOrUnknown::new(ExecAuthority::EXEC_AUTHORITY_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(1, self.authority.value());
+        }
+        if self.tty != false {
+            my_size += 1 + 1;
+        }
+        if self.detached != false {
+            my_size += 1 + 1;
+        }
+        if let Some(v) = self.initial_size.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if let ::std::option::Option::Some(ref v) = self.selection {
+            match v {
+                &exec_selection::Selection::Arbitrary(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+                &exec_selection::Selection::ConfiguredLaunch(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+            };
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.authority != ::protobuf::EnumOrUnknown::new(ExecAuthority::EXEC_AUTHORITY_UNSPECIFIED) {
+            os.write_enum(1, ::protobuf::EnumOrUnknown::value(&self.authority))?;
+        }
+        if self.tty != false {
+            os.write_bool(4, self.tty)?;
+        }
+        if self.detached != false {
+            os.write_bool(5, self.detached)?;
+        }
+        if let Some(v) = self.initial_size.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(6, v, os)?;
+        }
+        if let ::std::option::Option::Some(ref v) = self.selection {
+            match v {
+                &exec_selection::Selection::Arbitrary(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(2, v, os)?;
+                },
+                &exec_selection::Selection::ConfiguredLaunch(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(3, v, os)?;
+                },
+            };
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ExecSelection {
+        ExecSelection::new()
+    }
+
+    fn clear(&mut self) {
+        self.authority = ::protobuf::EnumOrUnknown::new(ExecAuthority::EXEC_AUTHORITY_UNSPECIFIED);
+        self.selection = ::std::option::Option::None;
+        self.selection = ::std::option::Option::None;
+        self.tty = false;
+        self.detached = false;
+        self.initial_size.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ExecSelection {
+        static instance: ExecSelection = ExecSelection {
+            authority: ::protobuf::EnumOrUnknown::from_i32(0),
+            tty: false,
+            detached: false,
+            initial_size: ::protobuf::MessageField::none(),
+            selection: ::std::option::Option::None,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ExecSelection {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ExecSelection").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ExecSelection {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ExecSelection {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+/// Nested message and enums of message `ExecSelection`
+pub mod exec_selection {
+
+    #[derive(Clone,PartialEq)]
+    #[non_exhaustive]
+    // @@protoc_insertion_point(oneof:d2b.daemon.v2.ExecSelection.selection)
+    pub enum Selection {
+        // @@protoc_insertion_point(oneof_field:d2b.daemon.v2.ExecSelection.arbitrary)
+        Arbitrary(super::ArbitraryExecSelection),
+        // @@protoc_insertion_point(oneof_field:d2b.daemon.v2.ExecSelection.configured_launch)
+        ConfiguredLaunch(super::ConfiguredLaunchSelection),
+    }
+
+    impl ::protobuf::Oneof for Selection {
+    }
+
+    impl ::protobuf::OneofFull for Selection {
+        fn descriptor() -> ::protobuf::reflect::OneofDescriptor {
+            static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::OneofDescriptor> = ::protobuf::rt::Lazy::new();
+            descriptor.get(|| <super::ExecSelection as ::protobuf::MessageFull>::descriptor().oneof_by_name("selection").unwrap()).clone()
+        }
+    }
+
+    impl Selection {
+        pub(in super) fn generated_oneof_descriptor_data() -> ::protobuf::reflect::GeneratedOneofDescriptorData {
+            ::protobuf::reflect::GeneratedOneofDescriptorData::new::<Selection>("selection")
+        }
+    }
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.ShellSelection)
+#[derive(PartialEq,Clone,Default)]
+pub struct ShellSelection {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.ShellSelection.shell_name)
+    pub shell_name: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.ShellSelection.use_default)
+    pub use_default: bool,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.ShellSelection.force)
+    pub force: bool,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.ShellSelection.initial_size)
+    pub initial_size: ::protobuf::MessageField<TerminalSize>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.ShellSelection.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ShellSelection {
+    fn default() -> &'a ShellSelection {
+        <ShellSelection as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ShellSelection {
+    pub fn new() -> ShellSelection {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(4);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "shell_name",
+            |m: &ShellSelection| { &m.shell_name },
+            |m: &mut ShellSelection| { &mut m.shell_name },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "use_default",
+            |m: &ShellSelection| { &m.use_default },
+            |m: &mut ShellSelection| { &mut m.use_default },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "force",
+            |m: &ShellSelection| { &m.force },
+            |m: &mut ShellSelection| { &mut m.force },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, TerminalSize>(
+            "initial_size",
+            |m: &ShellSelection| { &m.initial_size },
+            |m: &mut ShellSelection| { &mut m.initial_size },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ShellSelection>(
+            "ShellSelection",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ShellSelection {
+    const NAME: &'static str = "ShellSelection";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.shell_name = is.read_string()?;
+                },
+                16 => {
+                    self.use_default = is.read_bool()?;
+                },
+                24 => {
+                    self.force = is.read_bool()?;
+                },
+                34 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.initial_size)?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if !self.shell_name.is_empty() {
+            my_size += ::protobuf::rt::string_size(1, &self.shell_name);
+        }
+        if self.use_default != false {
+            my_size += 1 + 1;
+        }
+        if self.force != false {
+            my_size += 1 + 1;
+        }
+        if let Some(v) = self.initial_size.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if !self.shell_name.is_empty() {
+            os.write_string(1, &self.shell_name)?;
+        }
+        if self.use_default != false {
+            os.write_bool(2, self.use_default)?;
+        }
+        if self.force != false {
+            os.write_bool(3, self.force)?;
+        }
+        if let Some(v) = self.initial_size.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(4, v, os)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ShellSelection {
+        ShellSelection::new()
+    }
+
+    fn clear(&mut self) {
+        self.shell_name.clear();
+        self.use_default = false;
+        self.force = false;
+        self.initial_size.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ShellSelection {
+        static instance: ShellSelection = ShellSelection {
+            shell_name: ::std::string::String::new(),
+            use_default: false,
+            force: false,
+            initial_size: ::protobuf::MessageField::none(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ShellSelection {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ShellSelection").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ShellSelection {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ShellSelection {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.ConsoleSelection)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ConsoleSelection {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.ConsoleSelection.initial_size)
+    pub initial_size: ::protobuf::MessageField<TerminalSize>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.ConsoleSelection.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ConsoleSelection {
+    fn default() -> &'a ConsoleSelection {
+        <ConsoleSelection as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ConsoleSelection {
+    pub fn new() -> ConsoleSelection {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(1);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, TerminalSize>(
+            "initial_size",
+            |m: &ConsoleSelection| { &m.initial_size },
+            |m: &mut ConsoleSelection| { &mut m.initial_size },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ConsoleSelection>(
+            "ConsoleSelection",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ConsoleSelection {
+    const NAME: &'static str = "ConsoleSelection";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.initial_size)?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.initial_size.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.initial_size.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ConsoleSelection {
+        ConsoleSelection::new()
+    }
+
+    fn clear(&mut self) {
+        self.initial_size.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ConsoleSelection {
+        static instance: ConsoleSelection = ConsoleSelection {
+            initial_size: ::protobuf::MessageField::none(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ConsoleSelection {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ConsoleSelection").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ConsoleSelection {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ConsoleSelection {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.TerminalSelection)
+#[derive(PartialEq,Clone,Default)]
+pub struct TerminalSelection {
+    // message oneof groups
+    pub selection: ::std::option::Option<terminal_selection::Selection>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.TerminalSelection.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TerminalSelection {
+    fn default() -> &'a TerminalSelection {
+        <TerminalSelection as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TerminalSelection {
+    pub fn new() -> TerminalSelection {
+        ::std::default::Default::default()
+    }
+
+    // .d2b.daemon.v2.ExecSelection exec = 1;
+
+    pub fn exec(&self) -> &ExecSelection {
+        match self.selection {
+            ::std::option::Option::Some(terminal_selection::Selection::Exec(ref v)) => v,
+            _ => <ExecSelection as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_exec(&mut self) {
+        self.selection = ::std::option::Option::None;
+    }
+
+    pub fn has_exec(&self) -> bool {
+        match self.selection {
+            ::std::option::Option::Some(terminal_selection::Selection::Exec(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_exec(&mut self, v: ExecSelection) {
+        self.selection = ::std::option::Option::Some(terminal_selection::Selection::Exec(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_exec(&mut self) -> &mut ExecSelection {
+        if let ::std::option::Option::Some(terminal_selection::Selection::Exec(_)) = self.selection {
+        } else {
+            self.selection = ::std::option::Option::Some(terminal_selection::Selection::Exec(ExecSelection::new()));
+        }
+        match self.selection {
+            ::std::option::Option::Some(terminal_selection::Selection::Exec(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_exec(&mut self) -> ExecSelection {
+        if self.has_exec() {
+            match self.selection.take() {
+                ::std::option::Option::Some(terminal_selection::Selection::Exec(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            ExecSelection::new()
+        }
+    }
+
+    // .d2b.daemon.v2.ShellSelection shell = 2;
+
+    pub fn shell(&self) -> &ShellSelection {
+        match self.selection {
+            ::std::option::Option::Some(terminal_selection::Selection::Shell(ref v)) => v,
+            _ => <ShellSelection as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_shell(&mut self) {
+        self.selection = ::std::option::Option::None;
+    }
+
+    pub fn has_shell(&self) -> bool {
+        match self.selection {
+            ::std::option::Option::Some(terminal_selection::Selection::Shell(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_shell(&mut self, v: ShellSelection) {
+        self.selection = ::std::option::Option::Some(terminal_selection::Selection::Shell(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_shell(&mut self) -> &mut ShellSelection {
+        if let ::std::option::Option::Some(terminal_selection::Selection::Shell(_)) = self.selection {
+        } else {
+            self.selection = ::std::option::Option::Some(terminal_selection::Selection::Shell(ShellSelection::new()));
+        }
+        match self.selection {
+            ::std::option::Option::Some(terminal_selection::Selection::Shell(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_shell(&mut self) -> ShellSelection {
+        if self.has_shell() {
+            match self.selection.take() {
+                ::std::option::Option::Some(terminal_selection::Selection::Shell(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            ShellSelection::new()
+        }
+    }
+
+    // .d2b.daemon.v2.ConsoleSelection console = 3;
+
+    pub fn console(&self) -> &ConsoleSelection {
+        match self.selection {
+            ::std::option::Option::Some(terminal_selection::Selection::Console(ref v)) => v,
+            _ => <ConsoleSelection as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_console(&mut self) {
+        self.selection = ::std::option::Option::None;
+    }
+
+    pub fn has_console(&self) -> bool {
+        match self.selection {
+            ::std::option::Option::Some(terminal_selection::Selection::Console(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_console(&mut self, v: ConsoleSelection) {
+        self.selection = ::std::option::Option::Some(terminal_selection::Selection::Console(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_console(&mut self) -> &mut ConsoleSelection {
+        if let ::std::option::Option::Some(terminal_selection::Selection::Console(_)) = self.selection {
+        } else {
+            self.selection = ::std::option::Option::Some(terminal_selection::Selection::Console(ConsoleSelection::new()));
+        }
+        match self.selection {
+            ::std::option::Option::Some(terminal_selection::Selection::Console(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_console(&mut self) -> ConsoleSelection {
+        if self.has_console() {
+            match self.selection.take() {
+                ::std::option::Option::Some(terminal_selection::Selection::Console(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            ConsoleSelection::new()
+        }
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(3);
+        let mut oneofs = ::std::vec::Vec::with_capacity(1);
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, ExecSelection>(
+            "exec",
+            TerminalSelection::has_exec,
+            TerminalSelection::exec,
+            TerminalSelection::mut_exec,
+            TerminalSelection::set_exec,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, ShellSelection>(
+            "shell",
+            TerminalSelection::has_shell,
+            TerminalSelection::shell,
+            TerminalSelection::mut_shell,
+            TerminalSelection::set_shell,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, ConsoleSelection>(
+            "console",
+            TerminalSelection::has_console,
+            TerminalSelection::console,
+            TerminalSelection::mut_console,
+            TerminalSelection::set_console,
+        ));
+        oneofs.push(terminal_selection::Selection::generated_oneof_descriptor_data());
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TerminalSelection>(
+            "TerminalSelection",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for TerminalSelection {
+    const NAME: &'static str = "TerminalSelection";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.selection = ::std::option::Option::Some(terminal_selection::Selection::Exec(is.read_message()?));
+                },
+                18 => {
+                    self.selection = ::std::option::Option::Some(terminal_selection::Selection::Shell(is.read_message()?));
+                },
+                26 => {
+                    self.selection = ::std::option::Option::Some(terminal_selection::Selection::Console(is.read_message()?));
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let ::std::option::Option::Some(ref v) = self.selection {
+            match v {
+                &terminal_selection::Selection::Exec(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+                &terminal_selection::Selection::Shell(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+                &terminal_selection::Selection::Console(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+            };
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let ::std::option::Option::Some(ref v) = self.selection {
+            match v {
+                &terminal_selection::Selection::Exec(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+                },
+                &terminal_selection::Selection::Shell(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(2, v, os)?;
+                },
+                &terminal_selection::Selection::Console(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(3, v, os)?;
+                },
+            };
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TerminalSelection {
+        TerminalSelection::new()
+    }
+
+    fn clear(&mut self) {
+        self.selection = ::std::option::Option::None;
+        self.selection = ::std::option::Option::None;
+        self.selection = ::std::option::Option::None;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TerminalSelection {
+        static instance: TerminalSelection = TerminalSelection {
+            selection: ::std::option::Option::None,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for TerminalSelection {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("TerminalSelection").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for TerminalSelection {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TerminalSelection {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+/// Nested message and enums of message `TerminalSelection`
+pub mod terminal_selection {
+
+    #[derive(Clone,PartialEq)]
+    #[non_exhaustive]
+    // @@protoc_insertion_point(oneof:d2b.daemon.v2.TerminalSelection.selection)
+    pub enum Selection {
+        // @@protoc_insertion_point(oneof_field:d2b.daemon.v2.TerminalSelection.exec)
+        Exec(super::ExecSelection),
+        // @@protoc_insertion_point(oneof_field:d2b.daemon.v2.TerminalSelection.shell)
+        Shell(super::ShellSelection),
+        // @@protoc_insertion_point(oneof_field:d2b.daemon.v2.TerminalSelection.console)
+        Console(super::ConsoleSelection),
+    }
+
+    impl ::protobuf::Oneof for Selection {
+    }
+
+    impl ::protobuf::OneofFull for Selection {
+        fn descriptor() -> ::protobuf::reflect::OneofDescriptor {
+            static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::OneofDescriptor> = ::protobuf::rt::Lazy::new();
+            descriptor.get(|| <super::TerminalSelection as ::protobuf::MessageFull>::descriptor().oneof_by_name("selection").unwrap()).clone()
+        }
+    }
+
+    impl Selection {
+        pub(in super) fn generated_oneof_descriptor_data() -> ::protobuf::reflect::GeneratedOneofDescriptorData {
+            ::protobuf::reflect::GeneratedOneofDescriptorData::new::<Selection>("selection")
+        }
+    }
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.TerminalStarted)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct TerminalStarted {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalStarted.kind)
+    pub kind: ::protobuf::EnumOrUnknown<TerminalKind>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalStarted.tty)
+    pub tty: bool,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalStarted.stdout_offset)
+    pub stdout_offset: u64,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalStarted.stderr_offset)
+    pub stderr_offset: u64,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalStarted.console_provider)
+    pub console_provider: ::protobuf::EnumOrUnknown<ConsoleProviderKind>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.TerminalStarted.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TerminalStarted {
+    fn default() -> &'a TerminalStarted {
+        <TerminalStarted as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TerminalStarted {
+    pub fn new() -> TerminalStarted {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(5);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "kind",
+            |m: &TerminalStarted| { &m.kind },
+            |m: &mut TerminalStarted| { &mut m.kind },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "tty",
+            |m: &TerminalStarted| { &m.tty },
+            |m: &mut TerminalStarted| { &mut m.tty },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "stdout_offset",
+            |m: &TerminalStarted| { &m.stdout_offset },
+            |m: &mut TerminalStarted| { &mut m.stdout_offset },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "stderr_offset",
+            |m: &TerminalStarted| { &m.stderr_offset },
+            |m: &mut TerminalStarted| { &mut m.stderr_offset },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "console_provider",
+            |m: &TerminalStarted| { &m.console_provider },
+            |m: &mut TerminalStarted| { &mut m.console_provider },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TerminalStarted>(
+            "TerminalStarted",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for TerminalStarted {
+    const NAME: &'static str = "TerminalStarted";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.kind = is.read_enum_or_unknown()?;
+                },
+                16 => {
+                    self.tty = is.read_bool()?;
+                },
+                24 => {
+                    self.stdout_offset = is.read_uint64()?;
+                },
+                32 => {
+                    self.stderr_offset = is.read_uint64()?;
+                },
+                40 => {
+                    self.console_provider = is.read_enum_or_unknown()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.kind != ::protobuf::EnumOrUnknown::new(TerminalKind::TERMINAL_KIND_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(1, self.kind.value());
+        }
+        if self.tty != false {
+            my_size += 1 + 1;
+        }
+        if self.stdout_offset != 0 {
+            my_size += ::protobuf::rt::uint64_size(3, self.stdout_offset);
+        }
+        if self.stderr_offset != 0 {
+            my_size += ::protobuf::rt::uint64_size(4, self.stderr_offset);
+        }
+        if self.console_provider != ::protobuf::EnumOrUnknown::new(ConsoleProviderKind::CONSOLE_PROVIDER_KIND_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(5, self.console_provider.value());
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.kind != ::protobuf::EnumOrUnknown::new(TerminalKind::TERMINAL_KIND_UNSPECIFIED) {
+            os.write_enum(1, ::protobuf::EnumOrUnknown::value(&self.kind))?;
+        }
+        if self.tty != false {
+            os.write_bool(2, self.tty)?;
+        }
+        if self.stdout_offset != 0 {
+            os.write_uint64(3, self.stdout_offset)?;
+        }
+        if self.stderr_offset != 0 {
+            os.write_uint64(4, self.stderr_offset)?;
+        }
+        if self.console_provider != ::protobuf::EnumOrUnknown::new(ConsoleProviderKind::CONSOLE_PROVIDER_KIND_UNSPECIFIED) {
+            os.write_enum(5, ::protobuf::EnumOrUnknown::value(&self.console_provider))?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TerminalStarted {
+        TerminalStarted::new()
+    }
+
+    fn clear(&mut self) {
+        self.kind = ::protobuf::EnumOrUnknown::new(TerminalKind::TERMINAL_KIND_UNSPECIFIED);
+        self.tty = false;
+        self.stdout_offset = 0;
+        self.stderr_offset = 0;
+        self.console_provider = ::protobuf::EnumOrUnknown::new(ConsoleProviderKind::CONSOLE_PROVIDER_KIND_UNSPECIFIED);
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TerminalStarted {
+        static instance: TerminalStarted = TerminalStarted {
+            kind: ::protobuf::EnumOrUnknown::from_i32(0),
+            tty: false,
+            stdout_offset: 0,
+            stderr_offset: 0,
+            console_provider: ::protobuf::EnumOrUnknown::from_i32(0),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for TerminalStarted {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("TerminalStarted").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for TerminalStarted {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TerminalStarted {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.TerminalStdin)
+#[derive(PartialEq,Clone,Default)]
+pub struct TerminalStdin {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalStdin.offset)
+    pub offset: u64,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalStdin.data)
+    pub data: ::std::vec::Vec<u8>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalStdin.eof)
+    pub eof: bool,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.TerminalStdin.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TerminalStdin {
+    fn default() -> &'a TerminalStdin {
+        <TerminalStdin as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TerminalStdin {
+    pub fn new() -> TerminalStdin {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(3);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "offset",
+            |m: &TerminalStdin| { &m.offset },
+            |m: &mut TerminalStdin| { &mut m.offset },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "data",
+            |m: &TerminalStdin| { &m.data },
+            |m: &mut TerminalStdin| { &mut m.data },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "eof",
+            |m: &TerminalStdin| { &m.eof },
+            |m: &mut TerminalStdin| { &mut m.eof },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TerminalStdin>(
+            "TerminalStdin",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for TerminalStdin {
+    const NAME: &'static str = "TerminalStdin";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.offset = is.read_uint64()?;
+                },
+                18 => {
+                    self.data = is.read_bytes()?;
+                },
+                24 => {
+                    self.eof = is.read_bool()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.offset != 0 {
+            my_size += ::protobuf::rt::uint64_size(1, self.offset);
+        }
+        if !self.data.is_empty() {
+            my_size += ::protobuf::rt::bytes_size(2, &self.data);
+        }
+        if self.eof != false {
+            my_size += 1 + 1;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.offset != 0 {
+            os.write_uint64(1, self.offset)?;
+        }
+        if !self.data.is_empty() {
+            os.write_bytes(2, &self.data)?;
+        }
+        if self.eof != false {
+            os.write_bool(3, self.eof)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TerminalStdin {
+        TerminalStdin::new()
+    }
+
+    fn clear(&mut self) {
+        self.offset = 0;
+        self.data.clear();
+        self.eof = false;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TerminalStdin {
+        static instance: TerminalStdin = TerminalStdin {
+            offset: 0,
+            data: ::std::vec::Vec::new(),
+            eof: false,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for TerminalStdin {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("TerminalStdin").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for TerminalStdin {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TerminalStdin {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.TerminalOutput)
+#[derive(PartialEq,Clone,Default)]
+pub struct TerminalOutput {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalOutput.offset)
+    pub offset: u64,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalOutput.data)
+    pub data: ::std::vec::Vec<u8>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalOutput.eof)
+    pub eof: bool,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalOutput.dropped_bytes)
+    pub dropped_bytes: u64,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalOutput.truncated)
+    pub truncated: bool,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.TerminalOutput.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TerminalOutput {
+    fn default() -> &'a TerminalOutput {
+        <TerminalOutput as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TerminalOutput {
+    pub fn new() -> TerminalOutput {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(5);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "offset",
+            |m: &TerminalOutput| { &m.offset },
+            |m: &mut TerminalOutput| { &mut m.offset },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "data",
+            |m: &TerminalOutput| { &m.data },
+            |m: &mut TerminalOutput| { &mut m.data },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "eof",
+            |m: &TerminalOutput| { &m.eof },
+            |m: &mut TerminalOutput| { &mut m.eof },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "dropped_bytes",
+            |m: &TerminalOutput| { &m.dropped_bytes },
+            |m: &mut TerminalOutput| { &mut m.dropped_bytes },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "truncated",
+            |m: &TerminalOutput| { &m.truncated },
+            |m: &mut TerminalOutput| { &mut m.truncated },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TerminalOutput>(
+            "TerminalOutput",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for TerminalOutput {
+    const NAME: &'static str = "TerminalOutput";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.offset = is.read_uint64()?;
+                },
+                18 => {
+                    self.data = is.read_bytes()?;
+                },
+                24 => {
+                    self.eof = is.read_bool()?;
+                },
+                32 => {
+                    self.dropped_bytes = is.read_uint64()?;
+                },
+                40 => {
+                    self.truncated = is.read_bool()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.offset != 0 {
+            my_size += ::protobuf::rt::uint64_size(1, self.offset);
+        }
+        if !self.data.is_empty() {
+            my_size += ::protobuf::rt::bytes_size(2, &self.data);
+        }
+        if self.eof != false {
+            my_size += 1 + 1;
+        }
+        if self.dropped_bytes != 0 {
+            my_size += ::protobuf::rt::uint64_size(4, self.dropped_bytes);
+        }
+        if self.truncated != false {
+            my_size += 1 + 1;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.offset != 0 {
+            os.write_uint64(1, self.offset)?;
+        }
+        if !self.data.is_empty() {
+            os.write_bytes(2, &self.data)?;
+        }
+        if self.eof != false {
+            os.write_bool(3, self.eof)?;
+        }
+        if self.dropped_bytes != 0 {
+            os.write_uint64(4, self.dropped_bytes)?;
+        }
+        if self.truncated != false {
+            os.write_bool(5, self.truncated)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TerminalOutput {
+        TerminalOutput::new()
+    }
+
+    fn clear(&mut self) {
+        self.offset = 0;
+        self.data.clear();
+        self.eof = false;
+        self.dropped_bytes = 0;
+        self.truncated = false;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TerminalOutput {
+        static instance: TerminalOutput = TerminalOutput {
+            offset: 0,
+            data: ::std::vec::Vec::new(),
+            eof: false,
+            dropped_bytes: 0,
+            truncated: false,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for TerminalOutput {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("TerminalOutput").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for TerminalOutput {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TerminalOutput {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.TerminalResize)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct TerminalResize {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalResize.operation_sequence)
+    pub operation_sequence: u64,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalResize.size)
+    pub size: ::protobuf::MessageField<TerminalSize>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.TerminalResize.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TerminalResize {
+    fn default() -> &'a TerminalResize {
+        <TerminalResize as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TerminalResize {
+    pub fn new() -> TerminalResize {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(2);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "operation_sequence",
+            |m: &TerminalResize| { &m.operation_sequence },
+            |m: &mut TerminalResize| { &mut m.operation_sequence },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, TerminalSize>(
+            "size",
+            |m: &TerminalResize| { &m.size },
+            |m: &mut TerminalResize| { &mut m.size },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TerminalResize>(
+            "TerminalResize",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for TerminalResize {
+    const NAME: &'static str = "TerminalResize";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.operation_sequence = is.read_uint64()?;
+                },
+                18 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.size)?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.operation_sequence != 0 {
+            my_size += ::protobuf::rt::uint64_size(1, self.operation_sequence);
+        }
+        if let Some(v) = self.size.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.operation_sequence != 0 {
+            os.write_uint64(1, self.operation_sequence)?;
+        }
+        if let Some(v) = self.size.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(2, v, os)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TerminalResize {
+        TerminalResize::new()
+    }
+
+    fn clear(&mut self) {
+        self.operation_sequence = 0;
+        self.size.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TerminalResize {
+        static instance: TerminalResize = TerminalResize {
+            operation_sequence: 0,
+            size: ::protobuf::MessageField::none(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for TerminalResize {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("TerminalResize").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for TerminalResize {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TerminalResize {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.TerminalSignal)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct TerminalSignal {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalSignal.operation_sequence)
+    pub operation_sequence: u64,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalSignal.signal)
+    pub signal: ::protobuf::EnumOrUnknown<TerminalSignalKind>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.TerminalSignal.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TerminalSignal {
+    fn default() -> &'a TerminalSignal {
+        <TerminalSignal as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TerminalSignal {
+    pub fn new() -> TerminalSignal {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(2);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "operation_sequence",
+            |m: &TerminalSignal| { &m.operation_sequence },
+            |m: &mut TerminalSignal| { &mut m.operation_sequence },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "signal",
+            |m: &TerminalSignal| { &m.signal },
+            |m: &mut TerminalSignal| { &mut m.signal },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TerminalSignal>(
+            "TerminalSignal",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for TerminalSignal {
+    const NAME: &'static str = "TerminalSignal";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.operation_sequence = is.read_uint64()?;
+                },
+                16 => {
+                    self.signal = is.read_enum_or_unknown()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.operation_sequence != 0 {
+            my_size += ::protobuf::rt::uint64_size(1, self.operation_sequence);
+        }
+        if self.signal != ::protobuf::EnumOrUnknown::new(TerminalSignalKind::TERMINAL_SIGNAL_KIND_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(2, self.signal.value());
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.operation_sequence != 0 {
+            os.write_uint64(1, self.operation_sequence)?;
+        }
+        if self.signal != ::protobuf::EnumOrUnknown::new(TerminalSignalKind::TERMINAL_SIGNAL_KIND_UNSPECIFIED) {
+            os.write_enum(2, ::protobuf::EnumOrUnknown::value(&self.signal))?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TerminalSignal {
+        TerminalSignal::new()
+    }
+
+    fn clear(&mut self) {
+        self.operation_sequence = 0;
+        self.signal = ::protobuf::EnumOrUnknown::new(TerminalSignalKind::TERMINAL_SIGNAL_KIND_UNSPECIFIED);
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TerminalSignal {
+        static instance: TerminalSignal = TerminalSignal {
+            operation_sequence: 0,
+            signal: ::protobuf::EnumOrUnknown::from_i32(0),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for TerminalSignal {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("TerminalSignal").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for TerminalSignal {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TerminalSignal {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.TerminalCloseStdin)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct TerminalCloseStdin {
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.TerminalCloseStdin.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TerminalCloseStdin {
+    fn default() -> &'a TerminalCloseStdin {
+        <TerminalCloseStdin as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TerminalCloseStdin {
+    pub fn new() -> TerminalCloseStdin {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(0);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TerminalCloseStdin>(
+            "TerminalCloseStdin",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for TerminalCloseStdin {
+    const NAME: &'static str = "TerminalCloseStdin";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TerminalCloseStdin {
+        TerminalCloseStdin::new()
+    }
+
+    fn clear(&mut self) {
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TerminalCloseStdin {
+        static instance: TerminalCloseStdin = TerminalCloseStdin {
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for TerminalCloseStdin {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("TerminalCloseStdin").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for TerminalCloseStdin {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TerminalCloseStdin {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.TerminalDetach)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct TerminalDetach {
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.TerminalDetach.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TerminalDetach {
+    fn default() -> &'a TerminalDetach {
+        <TerminalDetach as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TerminalDetach {
+    pub fn new() -> TerminalDetach {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(0);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TerminalDetach>(
+            "TerminalDetach",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for TerminalDetach {
+    const NAME: &'static str = "TerminalDetach";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TerminalDetach {
+        TerminalDetach::new()
+    }
+
+    fn clear(&mut self) {
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TerminalDetach {
+        static instance: TerminalDetach = TerminalDetach {
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for TerminalDetach {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("TerminalDetach").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for TerminalDetach {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TerminalDetach {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.TerminalClose)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct TerminalClose {
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.TerminalClose.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TerminalClose {
+    fn default() -> &'a TerminalClose {
+        <TerminalClose as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TerminalClose {
+    pub fn new() -> TerminalClose {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(0);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TerminalClose>(
+            "TerminalClose",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for TerminalClose {
+    const NAME: &'static str = "TerminalClose";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TerminalClose {
+        TerminalClose::new()
+    }
+
+    fn clear(&mut self) {
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TerminalClose {
+        static instance: TerminalClose = TerminalClose {
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for TerminalClose {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("TerminalClose").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for TerminalClose {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TerminalClose {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.TerminalCancel)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct TerminalCancel {
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.TerminalCancel.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TerminalCancel {
+    fn default() -> &'a TerminalCancel {
+        <TerminalCancel as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TerminalCancel {
+    pub fn new() -> TerminalCancel {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(0);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TerminalCancel>(
+            "TerminalCancel",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for TerminalCancel {
+    const NAME: &'static str = "TerminalCancel";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TerminalCancel {
+        TerminalCancel::new()
+    }
+
+    fn clear(&mut self) {
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TerminalCancel {
+        static instance: TerminalCancel = TerminalCancel {
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for TerminalCancel {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("TerminalCancel").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for TerminalCancel {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TerminalCancel {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.TerminalStatus)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct TerminalStatus {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalStatus.status)
+    pub status: ::protobuf::EnumOrUnknown<TerminalStatusKind>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalStatus.next_stdin_offset)
+    pub next_stdin_offset: u64,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.TerminalStatus.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TerminalStatus {
+    fn default() -> &'a TerminalStatus {
+        <TerminalStatus as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TerminalStatus {
+    pub fn new() -> TerminalStatus {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(2);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "status",
+            |m: &TerminalStatus| { &m.status },
+            |m: &mut TerminalStatus| { &mut m.status },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "next_stdin_offset",
+            |m: &TerminalStatus| { &m.next_stdin_offset },
+            |m: &mut TerminalStatus| { &mut m.next_stdin_offset },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TerminalStatus>(
+            "TerminalStatus",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for TerminalStatus {
+    const NAME: &'static str = "TerminalStatus";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.status = is.read_enum_or_unknown()?;
+                },
+                16 => {
+                    self.next_stdin_offset = is.read_uint64()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.status != ::protobuf::EnumOrUnknown::new(TerminalStatusKind::TERMINAL_STATUS_KIND_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(1, self.status.value());
+        }
+        if self.next_stdin_offset != 0 {
+            my_size += ::protobuf::rt::uint64_size(2, self.next_stdin_offset);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.status != ::protobuf::EnumOrUnknown::new(TerminalStatusKind::TERMINAL_STATUS_KIND_UNSPECIFIED) {
+            os.write_enum(1, ::protobuf::EnumOrUnknown::value(&self.status))?;
+        }
+        if self.next_stdin_offset != 0 {
+            os.write_uint64(2, self.next_stdin_offset)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TerminalStatus {
+        TerminalStatus::new()
+    }
+
+    fn clear(&mut self) {
+        self.status = ::protobuf::EnumOrUnknown::new(TerminalStatusKind::TERMINAL_STATUS_KIND_UNSPECIFIED);
+        self.next_stdin_offset = 0;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TerminalStatus {
+        static instance: TerminalStatus = TerminalStatus {
+            status: ::protobuf::EnumOrUnknown::from_i32(0),
+            next_stdin_offset: 0,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for TerminalStatus {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("TerminalStatus").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for TerminalStatus {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TerminalStatus {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.TerminalExited)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct TerminalExited {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalExited.exit_code)
+    pub exit_code: i32,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.TerminalExited.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TerminalExited {
+    fn default() -> &'a TerminalExited {
+        <TerminalExited as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TerminalExited {
+    pub fn new() -> TerminalExited {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(1);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "exit_code",
+            |m: &TerminalExited| { &m.exit_code },
+            |m: &mut TerminalExited| { &mut m.exit_code },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TerminalExited>(
+            "TerminalExited",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for TerminalExited {
+    const NAME: &'static str = "TerminalExited";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.exit_code = is.read_int32()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.exit_code != 0 {
+            my_size += ::protobuf::rt::int32_size(1, self.exit_code);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.exit_code != 0 {
+            os.write_int32(1, self.exit_code)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TerminalExited {
+        TerminalExited::new()
+    }
+
+    fn clear(&mut self) {
+        self.exit_code = 0;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TerminalExited {
+        static instance: TerminalExited = TerminalExited {
+            exit_code: 0,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for TerminalExited {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("TerminalExited").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for TerminalExited {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TerminalExited {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.TerminalSignaled)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct TerminalSignaled {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalSignaled.signal)
+    pub signal: u32,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.TerminalSignaled.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TerminalSignaled {
+    fn default() -> &'a TerminalSignaled {
+        <TerminalSignaled as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TerminalSignaled {
+    pub fn new() -> TerminalSignaled {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(1);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "signal",
+            |m: &TerminalSignaled| { &m.signal },
+            |m: &mut TerminalSignaled| { &mut m.signal },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TerminalSignaled>(
+            "TerminalSignaled",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for TerminalSignaled {
+    const NAME: &'static str = "TerminalSignaled";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.signal = is.read_uint32()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.signal != 0 {
+            my_size += ::protobuf::rt::uint32_size(1, self.signal);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.signal != 0 {
+            os.write_uint32(1, self.signal)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TerminalSignaled {
+        TerminalSignaled::new()
+    }
+
+    fn clear(&mut self) {
+        self.signal = 0;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TerminalSignaled {
+        static instance: TerminalSignaled = TerminalSignaled {
+            signal: 0,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for TerminalSignaled {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("TerminalSignaled").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for TerminalSignaled {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TerminalSignaled {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.TerminalCancelled)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct TerminalCancelled {
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.TerminalCancelled.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TerminalCancelled {
+    fn default() -> &'a TerminalCancelled {
+        <TerminalCancelled as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TerminalCancelled {
+    pub fn new() -> TerminalCancelled {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(0);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TerminalCancelled>(
+            "TerminalCancelled",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for TerminalCancelled {
+    const NAME: &'static str = "TerminalCancelled";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TerminalCancelled {
+        TerminalCancelled::new()
+    }
+
+    fn clear(&mut self) {
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TerminalCancelled {
+        static instance: TerminalCancelled = TerminalCancelled {
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for TerminalCancelled {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("TerminalCancelled").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for TerminalCancelled {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TerminalCancelled {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.TerminalDetached)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct TerminalDetached {
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.TerminalDetached.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TerminalDetached {
+    fn default() -> &'a TerminalDetached {
+        <TerminalDetached as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TerminalDetached {
+    pub fn new() -> TerminalDetached {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(0);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TerminalDetached>(
+            "TerminalDetached",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for TerminalDetached {
+    const NAME: &'static str = "TerminalDetached";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TerminalDetached {
+        TerminalDetached::new()
+    }
+
+    fn clear(&mut self) {
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TerminalDetached {
+        static instance: TerminalDetached = TerminalDetached {
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for TerminalDetached {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("TerminalDetached").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for TerminalDetached {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TerminalDetached {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.TerminalClosed)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct TerminalClosed {
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.TerminalClosed.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TerminalClosed {
+    fn default() -> &'a TerminalClosed {
+        <TerminalClosed as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TerminalClosed {
+    pub fn new() -> TerminalClosed {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(0);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TerminalClosed>(
+            "TerminalClosed",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for TerminalClosed {
+    const NAME: &'static str = "TerminalClosed";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TerminalClosed {
+        TerminalClosed::new()
+    }
+
+    fn clear(&mut self) {
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TerminalClosed {
+        static instance: TerminalClosed = TerminalClosed {
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for TerminalClosed {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("TerminalClosed").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for TerminalClosed {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TerminalClosed {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.TerminalFailed)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct TerminalFailed {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalFailed.error)
+    pub error: ::protobuf::EnumOrUnknown<TerminalErrorKind>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalFailed.retry)
+    pub retry: ::protobuf::EnumOrUnknown<super::common::RetryClass>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.TerminalFailed.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TerminalFailed {
+    fn default() -> &'a TerminalFailed {
+        <TerminalFailed as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TerminalFailed {
+    pub fn new() -> TerminalFailed {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(2);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "error",
+            |m: &TerminalFailed| { &m.error },
+            |m: &mut TerminalFailed| { &mut m.error },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "retry",
+            |m: &TerminalFailed| { &m.retry },
+            |m: &mut TerminalFailed| { &mut m.retry },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TerminalFailed>(
+            "TerminalFailed",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for TerminalFailed {
+    const NAME: &'static str = "TerminalFailed";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.error = is.read_enum_or_unknown()?;
+                },
+                16 => {
+                    self.retry = is.read_enum_or_unknown()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.error != ::protobuf::EnumOrUnknown::new(TerminalErrorKind::TERMINAL_ERROR_KIND_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(1, self.error.value());
+        }
+        if self.retry != ::protobuf::EnumOrUnknown::new(super::common::RetryClass::RETRY_CLASS_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(2, self.retry.value());
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.error != ::protobuf::EnumOrUnknown::new(TerminalErrorKind::TERMINAL_ERROR_KIND_UNSPECIFIED) {
+            os.write_enum(1, ::protobuf::EnumOrUnknown::value(&self.error))?;
+        }
+        if self.retry != ::protobuf::EnumOrUnknown::new(super::common::RetryClass::RETRY_CLASS_UNSPECIFIED) {
+            os.write_enum(2, ::protobuf::EnumOrUnknown::value(&self.retry))?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TerminalFailed {
+        TerminalFailed::new()
+    }
+
+    fn clear(&mut self) {
+        self.error = ::protobuf::EnumOrUnknown::new(TerminalErrorKind::TERMINAL_ERROR_KIND_UNSPECIFIED);
+        self.retry = ::protobuf::EnumOrUnknown::new(super::common::RetryClass::RETRY_CLASS_UNSPECIFIED);
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TerminalFailed {
+        static instance: TerminalFailed = TerminalFailed {
+            error: ::protobuf::EnumOrUnknown::from_i32(0),
+            retry: ::protobuf::EnumOrUnknown::from_i32(0),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for TerminalFailed {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("TerminalFailed").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for TerminalFailed {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TerminalFailed {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.TerminalOutcome)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct TerminalOutcome {
+    // message oneof groups
+    pub outcome: ::std::option::Option<terminal_outcome::Outcome>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.TerminalOutcome.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TerminalOutcome {
+    fn default() -> &'a TerminalOutcome {
+        <TerminalOutcome as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TerminalOutcome {
+    pub fn new() -> TerminalOutcome {
+        ::std::default::Default::default()
+    }
+
+    // .d2b.daemon.v2.TerminalExited exited = 1;
+
+    pub fn exited(&self) -> &TerminalExited {
+        match self.outcome {
+            ::std::option::Option::Some(terminal_outcome::Outcome::Exited(ref v)) => v,
+            _ => <TerminalExited as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_exited(&mut self) {
+        self.outcome = ::std::option::Option::None;
+    }
+
+    pub fn has_exited(&self) -> bool {
+        match self.outcome {
+            ::std::option::Option::Some(terminal_outcome::Outcome::Exited(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_exited(&mut self, v: TerminalExited) {
+        self.outcome = ::std::option::Option::Some(terminal_outcome::Outcome::Exited(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_exited(&mut self) -> &mut TerminalExited {
+        if let ::std::option::Option::Some(terminal_outcome::Outcome::Exited(_)) = self.outcome {
+        } else {
+            self.outcome = ::std::option::Option::Some(terminal_outcome::Outcome::Exited(TerminalExited::new()));
+        }
+        match self.outcome {
+            ::std::option::Option::Some(terminal_outcome::Outcome::Exited(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_exited(&mut self) -> TerminalExited {
+        if self.has_exited() {
+            match self.outcome.take() {
+                ::std::option::Option::Some(terminal_outcome::Outcome::Exited(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            TerminalExited::new()
+        }
+    }
+
+    // .d2b.daemon.v2.TerminalSignaled signaled = 2;
+
+    pub fn signaled(&self) -> &TerminalSignaled {
+        match self.outcome {
+            ::std::option::Option::Some(terminal_outcome::Outcome::Signaled(ref v)) => v,
+            _ => <TerminalSignaled as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_signaled(&mut self) {
+        self.outcome = ::std::option::Option::None;
+    }
+
+    pub fn has_signaled(&self) -> bool {
+        match self.outcome {
+            ::std::option::Option::Some(terminal_outcome::Outcome::Signaled(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_signaled(&mut self, v: TerminalSignaled) {
+        self.outcome = ::std::option::Option::Some(terminal_outcome::Outcome::Signaled(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_signaled(&mut self) -> &mut TerminalSignaled {
+        if let ::std::option::Option::Some(terminal_outcome::Outcome::Signaled(_)) = self.outcome {
+        } else {
+            self.outcome = ::std::option::Option::Some(terminal_outcome::Outcome::Signaled(TerminalSignaled::new()));
+        }
+        match self.outcome {
+            ::std::option::Option::Some(terminal_outcome::Outcome::Signaled(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_signaled(&mut self) -> TerminalSignaled {
+        if self.has_signaled() {
+            match self.outcome.take() {
+                ::std::option::Option::Some(terminal_outcome::Outcome::Signaled(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            TerminalSignaled::new()
+        }
+    }
+
+    // .d2b.daemon.v2.TerminalCancelled cancelled = 3;
+
+    pub fn cancelled(&self) -> &TerminalCancelled {
+        match self.outcome {
+            ::std::option::Option::Some(terminal_outcome::Outcome::Cancelled(ref v)) => v,
+            _ => <TerminalCancelled as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_cancelled(&mut self) {
+        self.outcome = ::std::option::Option::None;
+    }
+
+    pub fn has_cancelled(&self) -> bool {
+        match self.outcome {
+            ::std::option::Option::Some(terminal_outcome::Outcome::Cancelled(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_cancelled(&mut self, v: TerminalCancelled) {
+        self.outcome = ::std::option::Option::Some(terminal_outcome::Outcome::Cancelled(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_cancelled(&mut self) -> &mut TerminalCancelled {
+        if let ::std::option::Option::Some(terminal_outcome::Outcome::Cancelled(_)) = self.outcome {
+        } else {
+            self.outcome = ::std::option::Option::Some(terminal_outcome::Outcome::Cancelled(TerminalCancelled::new()));
+        }
+        match self.outcome {
+            ::std::option::Option::Some(terminal_outcome::Outcome::Cancelled(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_cancelled(&mut self) -> TerminalCancelled {
+        if self.has_cancelled() {
+            match self.outcome.take() {
+                ::std::option::Option::Some(terminal_outcome::Outcome::Cancelled(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            TerminalCancelled::new()
+        }
+    }
+
+    // .d2b.daemon.v2.TerminalDetached detached = 4;
+
+    pub fn detached(&self) -> &TerminalDetached {
+        match self.outcome {
+            ::std::option::Option::Some(terminal_outcome::Outcome::Detached(ref v)) => v,
+            _ => <TerminalDetached as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_detached(&mut self) {
+        self.outcome = ::std::option::Option::None;
+    }
+
+    pub fn has_detached(&self) -> bool {
+        match self.outcome {
+            ::std::option::Option::Some(terminal_outcome::Outcome::Detached(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_detached(&mut self, v: TerminalDetached) {
+        self.outcome = ::std::option::Option::Some(terminal_outcome::Outcome::Detached(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_detached(&mut self) -> &mut TerminalDetached {
+        if let ::std::option::Option::Some(terminal_outcome::Outcome::Detached(_)) = self.outcome {
+        } else {
+            self.outcome = ::std::option::Option::Some(terminal_outcome::Outcome::Detached(TerminalDetached::new()));
+        }
+        match self.outcome {
+            ::std::option::Option::Some(terminal_outcome::Outcome::Detached(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_detached(&mut self) -> TerminalDetached {
+        if self.has_detached() {
+            match self.outcome.take() {
+                ::std::option::Option::Some(terminal_outcome::Outcome::Detached(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            TerminalDetached::new()
+        }
+    }
+
+    // .d2b.daemon.v2.TerminalClosed closed = 5;
+
+    pub fn closed(&self) -> &TerminalClosed {
+        match self.outcome {
+            ::std::option::Option::Some(terminal_outcome::Outcome::Closed(ref v)) => v,
+            _ => <TerminalClosed as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_closed(&mut self) {
+        self.outcome = ::std::option::Option::None;
+    }
+
+    pub fn has_closed(&self) -> bool {
+        match self.outcome {
+            ::std::option::Option::Some(terminal_outcome::Outcome::Closed(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_closed(&mut self, v: TerminalClosed) {
+        self.outcome = ::std::option::Option::Some(terminal_outcome::Outcome::Closed(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_closed(&mut self) -> &mut TerminalClosed {
+        if let ::std::option::Option::Some(terminal_outcome::Outcome::Closed(_)) = self.outcome {
+        } else {
+            self.outcome = ::std::option::Option::Some(terminal_outcome::Outcome::Closed(TerminalClosed::new()));
+        }
+        match self.outcome {
+            ::std::option::Option::Some(terminal_outcome::Outcome::Closed(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_closed(&mut self) -> TerminalClosed {
+        if self.has_closed() {
+            match self.outcome.take() {
+                ::std::option::Option::Some(terminal_outcome::Outcome::Closed(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            TerminalClosed::new()
+        }
+    }
+
+    // .d2b.daemon.v2.TerminalFailed failed = 6;
+
+    pub fn failed(&self) -> &TerminalFailed {
+        match self.outcome {
+            ::std::option::Option::Some(terminal_outcome::Outcome::Failed(ref v)) => v,
+            _ => <TerminalFailed as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_failed(&mut self) {
+        self.outcome = ::std::option::Option::None;
+    }
+
+    pub fn has_failed(&self) -> bool {
+        match self.outcome {
+            ::std::option::Option::Some(terminal_outcome::Outcome::Failed(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_failed(&mut self, v: TerminalFailed) {
+        self.outcome = ::std::option::Option::Some(terminal_outcome::Outcome::Failed(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_failed(&mut self) -> &mut TerminalFailed {
+        if let ::std::option::Option::Some(terminal_outcome::Outcome::Failed(_)) = self.outcome {
+        } else {
+            self.outcome = ::std::option::Option::Some(terminal_outcome::Outcome::Failed(TerminalFailed::new()));
+        }
+        match self.outcome {
+            ::std::option::Option::Some(terminal_outcome::Outcome::Failed(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_failed(&mut self) -> TerminalFailed {
+        if self.has_failed() {
+            match self.outcome.take() {
+                ::std::option::Option::Some(terminal_outcome::Outcome::Failed(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            TerminalFailed::new()
+        }
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(6);
+        let mut oneofs = ::std::vec::Vec::with_capacity(1);
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, TerminalExited>(
+            "exited",
+            TerminalOutcome::has_exited,
+            TerminalOutcome::exited,
+            TerminalOutcome::mut_exited,
+            TerminalOutcome::set_exited,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, TerminalSignaled>(
+            "signaled",
+            TerminalOutcome::has_signaled,
+            TerminalOutcome::signaled,
+            TerminalOutcome::mut_signaled,
+            TerminalOutcome::set_signaled,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, TerminalCancelled>(
+            "cancelled",
+            TerminalOutcome::has_cancelled,
+            TerminalOutcome::cancelled,
+            TerminalOutcome::mut_cancelled,
+            TerminalOutcome::set_cancelled,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, TerminalDetached>(
+            "detached",
+            TerminalOutcome::has_detached,
+            TerminalOutcome::detached,
+            TerminalOutcome::mut_detached,
+            TerminalOutcome::set_detached,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, TerminalClosed>(
+            "closed",
+            TerminalOutcome::has_closed,
+            TerminalOutcome::closed,
+            TerminalOutcome::mut_closed,
+            TerminalOutcome::set_closed,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, TerminalFailed>(
+            "failed",
+            TerminalOutcome::has_failed,
+            TerminalOutcome::failed,
+            TerminalOutcome::mut_failed,
+            TerminalOutcome::set_failed,
+        ));
+        oneofs.push(terminal_outcome::Outcome::generated_oneof_descriptor_data());
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TerminalOutcome>(
+            "TerminalOutcome",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for TerminalOutcome {
+    const NAME: &'static str = "TerminalOutcome";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.outcome = ::std::option::Option::Some(terminal_outcome::Outcome::Exited(is.read_message()?));
+                },
+                18 => {
+                    self.outcome = ::std::option::Option::Some(terminal_outcome::Outcome::Signaled(is.read_message()?));
+                },
+                26 => {
+                    self.outcome = ::std::option::Option::Some(terminal_outcome::Outcome::Cancelled(is.read_message()?));
+                },
+                34 => {
+                    self.outcome = ::std::option::Option::Some(terminal_outcome::Outcome::Detached(is.read_message()?));
+                },
+                42 => {
+                    self.outcome = ::std::option::Option::Some(terminal_outcome::Outcome::Closed(is.read_message()?));
+                },
+                50 => {
+                    self.outcome = ::std::option::Option::Some(terminal_outcome::Outcome::Failed(is.read_message()?));
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let ::std::option::Option::Some(ref v) = self.outcome {
+            match v {
+                &terminal_outcome::Outcome::Exited(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+                &terminal_outcome::Outcome::Signaled(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+                &terminal_outcome::Outcome::Cancelled(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+                &terminal_outcome::Outcome::Detached(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+                &terminal_outcome::Outcome::Closed(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+                &terminal_outcome::Outcome::Failed(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+            };
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let ::std::option::Option::Some(ref v) = self.outcome {
+            match v {
+                &terminal_outcome::Outcome::Exited(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+                },
+                &terminal_outcome::Outcome::Signaled(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(2, v, os)?;
+                },
+                &terminal_outcome::Outcome::Cancelled(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(3, v, os)?;
+                },
+                &terminal_outcome::Outcome::Detached(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(4, v, os)?;
+                },
+                &terminal_outcome::Outcome::Closed(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(5, v, os)?;
+                },
+                &terminal_outcome::Outcome::Failed(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(6, v, os)?;
+                },
+            };
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TerminalOutcome {
+        TerminalOutcome::new()
+    }
+
+    fn clear(&mut self) {
+        self.outcome = ::std::option::Option::None;
+        self.outcome = ::std::option::Option::None;
+        self.outcome = ::std::option::Option::None;
+        self.outcome = ::std::option::Option::None;
+        self.outcome = ::std::option::Option::None;
+        self.outcome = ::std::option::Option::None;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TerminalOutcome {
+        static instance: TerminalOutcome = TerminalOutcome {
+            outcome: ::std::option::Option::None,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for TerminalOutcome {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("TerminalOutcome").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for TerminalOutcome {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TerminalOutcome {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+/// Nested message and enums of message `TerminalOutcome`
+pub mod terminal_outcome {
+
+    #[derive(Clone,PartialEq,Debug)]
+    #[non_exhaustive]
+    // @@protoc_insertion_point(oneof:d2b.daemon.v2.TerminalOutcome.outcome)
+    pub enum Outcome {
+        // @@protoc_insertion_point(oneof_field:d2b.daemon.v2.TerminalOutcome.exited)
+        Exited(super::TerminalExited),
+        // @@protoc_insertion_point(oneof_field:d2b.daemon.v2.TerminalOutcome.signaled)
+        Signaled(super::TerminalSignaled),
+        // @@protoc_insertion_point(oneof_field:d2b.daemon.v2.TerminalOutcome.cancelled)
+        Cancelled(super::TerminalCancelled),
+        // @@protoc_insertion_point(oneof_field:d2b.daemon.v2.TerminalOutcome.detached)
+        Detached(super::TerminalDetached),
+        // @@protoc_insertion_point(oneof_field:d2b.daemon.v2.TerminalOutcome.closed)
+        Closed(super::TerminalClosed),
+        // @@protoc_insertion_point(oneof_field:d2b.daemon.v2.TerminalOutcome.failed)
+        Failed(super::TerminalFailed),
+    }
+
+    impl ::protobuf::Oneof for Outcome {
+    }
+
+    impl ::protobuf::OneofFull for Outcome {
+        fn descriptor() -> ::protobuf::reflect::OneofDescriptor {
+            static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::OneofDescriptor> = ::protobuf::rt::Lazy::new();
+            descriptor.get(|| <super::TerminalOutcome as ::protobuf::MessageFull>::descriptor().oneof_by_name("outcome").unwrap()).clone()
+        }
+    }
+
+    impl Outcome {
+        pub(in super) fn generated_oneof_descriptor_data() -> ::protobuf::reflect::GeneratedOneofDescriptorData {
+            ::protobuf::reflect::GeneratedOneofDescriptorData::new::<Outcome>("outcome")
+        }
+    }
+}
+
+// @@protoc_insertion_point(message:d2b.daemon.v2.TerminalStreamFrame)
+#[derive(PartialEq,Clone,Default)]
+pub struct TerminalStreamFrame {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalStreamFrame.session_generation)
+    pub session_generation: u64,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalStreamFrame.request_id)
+    pub request_id: ::std::vec::Vec<u8>,
+    // @@protoc_insertion_point(field:d2b.daemon.v2.TerminalStreamFrame.sequence)
+    pub sequence: u64,
+    // message oneof groups
+    pub frame: ::std::option::Option<terminal_stream_frame::Frame>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.daemon.v2.TerminalStreamFrame.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TerminalStreamFrame {
+    fn default() -> &'a TerminalStreamFrame {
+        <TerminalStreamFrame as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TerminalStreamFrame {
+    pub fn new() -> TerminalStreamFrame {
+        ::std::default::Default::default()
+    }
+
+    // .d2b.daemon.v2.TerminalSelection select = 10;
+
+    pub fn select(&self) -> &TerminalSelection {
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Select(ref v)) => v,
+            _ => <TerminalSelection as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_select(&mut self) {
+        self.frame = ::std::option::Option::None;
+    }
+
+    pub fn has_select(&self) -> bool {
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Select(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_select(&mut self, v: TerminalSelection) {
+        self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Select(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_select(&mut self) -> &mut TerminalSelection {
+        if let ::std::option::Option::Some(terminal_stream_frame::Frame::Select(_)) = self.frame {
+        } else {
+            self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Select(TerminalSelection::new()));
+        }
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Select(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_select(&mut self) -> TerminalSelection {
+        if self.has_select() {
+            match self.frame.take() {
+                ::std::option::Option::Some(terminal_stream_frame::Frame::Select(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            TerminalSelection::new()
+        }
+    }
+
+    // .d2b.daemon.v2.TerminalStarted started = 11;
+
+    pub fn started(&self) -> &TerminalStarted {
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Started(ref v)) => v,
+            _ => <TerminalStarted as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_started(&mut self) {
+        self.frame = ::std::option::Option::None;
+    }
+
+    pub fn has_started(&self) -> bool {
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Started(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_started(&mut self, v: TerminalStarted) {
+        self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Started(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_started(&mut self) -> &mut TerminalStarted {
+        if let ::std::option::Option::Some(terminal_stream_frame::Frame::Started(_)) = self.frame {
+        } else {
+            self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Started(TerminalStarted::new()));
+        }
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Started(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_started(&mut self) -> TerminalStarted {
+        if self.has_started() {
+            match self.frame.take() {
+                ::std::option::Option::Some(terminal_stream_frame::Frame::Started(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            TerminalStarted::new()
+        }
+    }
+
+    // .d2b.daemon.v2.TerminalStdin stdin = 12;
+
+    pub fn stdin(&self) -> &TerminalStdin {
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Stdin(ref v)) => v,
+            _ => <TerminalStdin as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_stdin(&mut self) {
+        self.frame = ::std::option::Option::None;
+    }
+
+    pub fn has_stdin(&self) -> bool {
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Stdin(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_stdin(&mut self, v: TerminalStdin) {
+        self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Stdin(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_stdin(&mut self) -> &mut TerminalStdin {
+        if let ::std::option::Option::Some(terminal_stream_frame::Frame::Stdin(_)) = self.frame {
+        } else {
+            self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Stdin(TerminalStdin::new()));
+        }
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Stdin(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_stdin(&mut self) -> TerminalStdin {
+        if self.has_stdin() {
+            match self.frame.take() {
+                ::std::option::Option::Some(terminal_stream_frame::Frame::Stdin(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            TerminalStdin::new()
+        }
+    }
+
+    // .d2b.daemon.v2.TerminalOutput stdout = 13;
+
+    pub fn stdout(&self) -> &TerminalOutput {
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Stdout(ref v)) => v,
+            _ => <TerminalOutput as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_stdout(&mut self) {
+        self.frame = ::std::option::Option::None;
+    }
+
+    pub fn has_stdout(&self) -> bool {
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Stdout(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_stdout(&mut self, v: TerminalOutput) {
+        self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Stdout(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_stdout(&mut self) -> &mut TerminalOutput {
+        if let ::std::option::Option::Some(terminal_stream_frame::Frame::Stdout(_)) = self.frame {
+        } else {
+            self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Stdout(TerminalOutput::new()));
+        }
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Stdout(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_stdout(&mut self) -> TerminalOutput {
+        if self.has_stdout() {
+            match self.frame.take() {
+                ::std::option::Option::Some(terminal_stream_frame::Frame::Stdout(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            TerminalOutput::new()
+        }
+    }
+
+    // .d2b.daemon.v2.TerminalOutput stderr = 14;
+
+    pub fn stderr(&self) -> &TerminalOutput {
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Stderr(ref v)) => v,
+            _ => <TerminalOutput as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_stderr(&mut self) {
+        self.frame = ::std::option::Option::None;
+    }
+
+    pub fn has_stderr(&self) -> bool {
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Stderr(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_stderr(&mut self, v: TerminalOutput) {
+        self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Stderr(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_stderr(&mut self) -> &mut TerminalOutput {
+        if let ::std::option::Option::Some(terminal_stream_frame::Frame::Stderr(_)) = self.frame {
+        } else {
+            self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Stderr(TerminalOutput::new()));
+        }
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Stderr(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_stderr(&mut self) -> TerminalOutput {
+        if self.has_stderr() {
+            match self.frame.take() {
+                ::std::option::Option::Some(terminal_stream_frame::Frame::Stderr(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            TerminalOutput::new()
+        }
+    }
+
+    // .d2b.daemon.v2.TerminalResize resize = 15;
+
+    pub fn resize(&self) -> &TerminalResize {
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Resize(ref v)) => v,
+            _ => <TerminalResize as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_resize(&mut self) {
+        self.frame = ::std::option::Option::None;
+    }
+
+    pub fn has_resize(&self) -> bool {
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Resize(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_resize(&mut self, v: TerminalResize) {
+        self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Resize(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_resize(&mut self) -> &mut TerminalResize {
+        if let ::std::option::Option::Some(terminal_stream_frame::Frame::Resize(_)) = self.frame {
+        } else {
+            self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Resize(TerminalResize::new()));
+        }
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Resize(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_resize(&mut self) -> TerminalResize {
+        if self.has_resize() {
+            match self.frame.take() {
+                ::std::option::Option::Some(terminal_stream_frame::Frame::Resize(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            TerminalResize::new()
+        }
+    }
+
+    // .d2b.daemon.v2.TerminalSignal signal = 16;
+
+    pub fn signal(&self) -> &TerminalSignal {
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Signal(ref v)) => v,
+            _ => <TerminalSignal as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_signal(&mut self) {
+        self.frame = ::std::option::Option::None;
+    }
+
+    pub fn has_signal(&self) -> bool {
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Signal(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_signal(&mut self, v: TerminalSignal) {
+        self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Signal(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_signal(&mut self) -> &mut TerminalSignal {
+        if let ::std::option::Option::Some(terminal_stream_frame::Frame::Signal(_)) = self.frame {
+        } else {
+            self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Signal(TerminalSignal::new()));
+        }
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Signal(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_signal(&mut self) -> TerminalSignal {
+        if self.has_signal() {
+            match self.frame.take() {
+                ::std::option::Option::Some(terminal_stream_frame::Frame::Signal(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            TerminalSignal::new()
+        }
+    }
+
+    // .d2b.daemon.v2.TerminalCloseStdin close_stdin = 17;
+
+    pub fn close_stdin(&self) -> &TerminalCloseStdin {
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::CloseStdin(ref v)) => v,
+            _ => <TerminalCloseStdin as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_close_stdin(&mut self) {
+        self.frame = ::std::option::Option::None;
+    }
+
+    pub fn has_close_stdin(&self) -> bool {
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::CloseStdin(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_close_stdin(&mut self, v: TerminalCloseStdin) {
+        self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::CloseStdin(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_close_stdin(&mut self) -> &mut TerminalCloseStdin {
+        if let ::std::option::Option::Some(terminal_stream_frame::Frame::CloseStdin(_)) = self.frame {
+        } else {
+            self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::CloseStdin(TerminalCloseStdin::new()));
+        }
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::CloseStdin(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_close_stdin(&mut self) -> TerminalCloseStdin {
+        if self.has_close_stdin() {
+            match self.frame.take() {
+                ::std::option::Option::Some(terminal_stream_frame::Frame::CloseStdin(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            TerminalCloseStdin::new()
+        }
+    }
+
+    // .d2b.daemon.v2.TerminalDetach detach = 18;
+
+    pub fn detach(&self) -> &TerminalDetach {
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Detach(ref v)) => v,
+            _ => <TerminalDetach as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_detach(&mut self) {
+        self.frame = ::std::option::Option::None;
+    }
+
+    pub fn has_detach(&self) -> bool {
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Detach(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_detach(&mut self, v: TerminalDetach) {
+        self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Detach(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_detach(&mut self) -> &mut TerminalDetach {
+        if let ::std::option::Option::Some(terminal_stream_frame::Frame::Detach(_)) = self.frame {
+        } else {
+            self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Detach(TerminalDetach::new()));
+        }
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Detach(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_detach(&mut self) -> TerminalDetach {
+        if self.has_detach() {
+            match self.frame.take() {
+                ::std::option::Option::Some(terminal_stream_frame::Frame::Detach(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            TerminalDetach::new()
+        }
+    }
+
+    // .d2b.daemon.v2.TerminalClose close = 19;
+
+    pub fn close(&self) -> &TerminalClose {
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Close(ref v)) => v,
+            _ => <TerminalClose as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_close(&mut self) {
+        self.frame = ::std::option::Option::None;
+    }
+
+    pub fn has_close(&self) -> bool {
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Close(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_close(&mut self, v: TerminalClose) {
+        self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Close(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_close(&mut self) -> &mut TerminalClose {
+        if let ::std::option::Option::Some(terminal_stream_frame::Frame::Close(_)) = self.frame {
+        } else {
+            self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Close(TerminalClose::new()));
+        }
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Close(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_close(&mut self) -> TerminalClose {
+        if self.has_close() {
+            match self.frame.take() {
+                ::std::option::Option::Some(terminal_stream_frame::Frame::Close(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            TerminalClose::new()
+        }
+    }
+
+    // .d2b.daemon.v2.TerminalCancel cancel = 20;
+
+    pub fn cancel(&self) -> &TerminalCancel {
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Cancel(ref v)) => v,
+            _ => <TerminalCancel as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_cancel(&mut self) {
+        self.frame = ::std::option::Option::None;
+    }
+
+    pub fn has_cancel(&self) -> bool {
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Cancel(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_cancel(&mut self, v: TerminalCancel) {
+        self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Cancel(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_cancel(&mut self) -> &mut TerminalCancel {
+        if let ::std::option::Option::Some(terminal_stream_frame::Frame::Cancel(_)) = self.frame {
+        } else {
+            self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Cancel(TerminalCancel::new()));
+        }
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Cancel(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_cancel(&mut self) -> TerminalCancel {
+        if self.has_cancel() {
+            match self.frame.take() {
+                ::std::option::Option::Some(terminal_stream_frame::Frame::Cancel(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            TerminalCancel::new()
+        }
+    }
+
+    // .d2b.daemon.v2.TerminalStatus status = 21;
+
+    pub fn status(&self) -> &TerminalStatus {
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Status(ref v)) => v,
+            _ => <TerminalStatus as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_status(&mut self) {
+        self.frame = ::std::option::Option::None;
+    }
+
+    pub fn has_status(&self) -> bool {
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Status(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_status(&mut self, v: TerminalStatus) {
+        self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Status(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_status(&mut self) -> &mut TerminalStatus {
+        if let ::std::option::Option::Some(terminal_stream_frame::Frame::Status(_)) = self.frame {
+        } else {
+            self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Status(TerminalStatus::new()));
+        }
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Status(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_status(&mut self) -> TerminalStatus {
+        if self.has_status() {
+            match self.frame.take() {
+                ::std::option::Option::Some(terminal_stream_frame::Frame::Status(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            TerminalStatus::new()
+        }
+    }
+
+    // .d2b.daemon.v2.TerminalOutcome outcome = 22;
+
+    pub fn outcome(&self) -> &TerminalOutcome {
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Outcome(ref v)) => v,
+            _ => <TerminalOutcome as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_outcome(&mut self) {
+        self.frame = ::std::option::Option::None;
+    }
+
+    pub fn has_outcome(&self) -> bool {
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Outcome(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_outcome(&mut self, v: TerminalOutcome) {
+        self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Outcome(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_outcome(&mut self) -> &mut TerminalOutcome {
+        if let ::std::option::Option::Some(terminal_stream_frame::Frame::Outcome(_)) = self.frame {
+        } else {
+            self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Outcome(TerminalOutcome::new()));
+        }
+        match self.frame {
+            ::std::option::Option::Some(terminal_stream_frame::Frame::Outcome(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_outcome(&mut self) -> TerminalOutcome {
+        if self.has_outcome() {
+            match self.frame.take() {
+                ::std::option::Option::Some(terminal_stream_frame::Frame::Outcome(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            TerminalOutcome::new()
+        }
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(16);
+        let mut oneofs = ::std::vec::Vec::with_capacity(1);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "session_generation",
+            |m: &TerminalStreamFrame| { &m.session_generation },
+            |m: &mut TerminalStreamFrame| { &mut m.session_generation },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "request_id",
+            |m: &TerminalStreamFrame| { &m.request_id },
+            |m: &mut TerminalStreamFrame| { &mut m.request_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "sequence",
+            |m: &TerminalStreamFrame| { &m.sequence },
+            |m: &mut TerminalStreamFrame| { &mut m.sequence },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, TerminalSelection>(
+            "select",
+            TerminalStreamFrame::has_select,
+            TerminalStreamFrame::select,
+            TerminalStreamFrame::mut_select,
+            TerminalStreamFrame::set_select,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, TerminalStarted>(
+            "started",
+            TerminalStreamFrame::has_started,
+            TerminalStreamFrame::started,
+            TerminalStreamFrame::mut_started,
+            TerminalStreamFrame::set_started,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, TerminalStdin>(
+            "stdin",
+            TerminalStreamFrame::has_stdin,
+            TerminalStreamFrame::stdin,
+            TerminalStreamFrame::mut_stdin,
+            TerminalStreamFrame::set_stdin,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, TerminalOutput>(
+            "stdout",
+            TerminalStreamFrame::has_stdout,
+            TerminalStreamFrame::stdout,
+            TerminalStreamFrame::mut_stdout,
+            TerminalStreamFrame::set_stdout,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, TerminalOutput>(
+            "stderr",
+            TerminalStreamFrame::has_stderr,
+            TerminalStreamFrame::stderr,
+            TerminalStreamFrame::mut_stderr,
+            TerminalStreamFrame::set_stderr,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, TerminalResize>(
+            "resize",
+            TerminalStreamFrame::has_resize,
+            TerminalStreamFrame::resize,
+            TerminalStreamFrame::mut_resize,
+            TerminalStreamFrame::set_resize,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, TerminalSignal>(
+            "signal",
+            TerminalStreamFrame::has_signal,
+            TerminalStreamFrame::signal,
+            TerminalStreamFrame::mut_signal,
+            TerminalStreamFrame::set_signal,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, TerminalCloseStdin>(
+            "close_stdin",
+            TerminalStreamFrame::has_close_stdin,
+            TerminalStreamFrame::close_stdin,
+            TerminalStreamFrame::mut_close_stdin,
+            TerminalStreamFrame::set_close_stdin,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, TerminalDetach>(
+            "detach",
+            TerminalStreamFrame::has_detach,
+            TerminalStreamFrame::detach,
+            TerminalStreamFrame::mut_detach,
+            TerminalStreamFrame::set_detach,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, TerminalClose>(
+            "close",
+            TerminalStreamFrame::has_close,
+            TerminalStreamFrame::close,
+            TerminalStreamFrame::mut_close,
+            TerminalStreamFrame::set_close,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, TerminalCancel>(
+            "cancel",
+            TerminalStreamFrame::has_cancel,
+            TerminalStreamFrame::cancel,
+            TerminalStreamFrame::mut_cancel,
+            TerminalStreamFrame::set_cancel,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, TerminalStatus>(
+            "status",
+            TerminalStreamFrame::has_status,
+            TerminalStreamFrame::status,
+            TerminalStreamFrame::mut_status,
+            TerminalStreamFrame::set_status,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, TerminalOutcome>(
+            "outcome",
+            TerminalStreamFrame::has_outcome,
+            TerminalStreamFrame::outcome,
+            TerminalStreamFrame::mut_outcome,
+            TerminalStreamFrame::set_outcome,
+        ));
+        oneofs.push(terminal_stream_frame::Frame::generated_oneof_descriptor_data());
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TerminalStreamFrame>(
+            "TerminalStreamFrame",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for TerminalStreamFrame {
+    const NAME: &'static str = "TerminalStreamFrame";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.session_generation = is.read_uint64()?;
+                },
+                18 => {
+                    self.request_id = is.read_bytes()?;
+                },
+                24 => {
+                    self.sequence = is.read_uint64()?;
+                },
+                82 => {
+                    self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Select(is.read_message()?));
+                },
+                90 => {
+                    self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Started(is.read_message()?));
+                },
+                98 => {
+                    self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Stdin(is.read_message()?));
+                },
+                106 => {
+                    self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Stdout(is.read_message()?));
+                },
+                114 => {
+                    self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Stderr(is.read_message()?));
+                },
+                122 => {
+                    self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Resize(is.read_message()?));
+                },
+                130 => {
+                    self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Signal(is.read_message()?));
+                },
+                138 => {
+                    self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::CloseStdin(is.read_message()?));
+                },
+                146 => {
+                    self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Detach(is.read_message()?));
+                },
+                154 => {
+                    self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Close(is.read_message()?));
+                },
+                162 => {
+                    self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Cancel(is.read_message()?));
+                },
+                170 => {
+                    self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Status(is.read_message()?));
+                },
+                178 => {
+                    self.frame = ::std::option::Option::Some(terminal_stream_frame::Frame::Outcome(is.read_message()?));
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.session_generation != 0 {
+            my_size += ::protobuf::rt::uint64_size(1, self.session_generation);
+        }
+        if !self.request_id.is_empty() {
+            my_size += ::protobuf::rt::bytes_size(2, &self.request_id);
+        }
+        if self.sequence != 0 {
+            my_size += ::protobuf::rt::uint64_size(3, self.sequence);
+        }
+        if let ::std::option::Option::Some(ref v) = self.frame {
+            match v {
+                &terminal_stream_frame::Frame::Select(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+                &terminal_stream_frame::Frame::Started(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+                &terminal_stream_frame::Frame::Stdin(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+                &terminal_stream_frame::Frame::Stdout(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+                &terminal_stream_frame::Frame::Stderr(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+                &terminal_stream_frame::Frame::Resize(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+                &terminal_stream_frame::Frame::Signal(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 2 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+                &terminal_stream_frame::Frame::CloseStdin(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 2 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+                &terminal_stream_frame::Frame::Detach(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 2 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+                &terminal_stream_frame::Frame::Close(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 2 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+                &terminal_stream_frame::Frame::Cancel(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 2 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+                &terminal_stream_frame::Frame::Status(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 2 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+                &terminal_stream_frame::Frame::Outcome(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 2 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+                },
+            };
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.session_generation != 0 {
+            os.write_uint64(1, self.session_generation)?;
+        }
+        if !self.request_id.is_empty() {
+            os.write_bytes(2, &self.request_id)?;
+        }
+        if self.sequence != 0 {
+            os.write_uint64(3, self.sequence)?;
+        }
+        if let ::std::option::Option::Some(ref v) = self.frame {
+            match v {
+                &terminal_stream_frame::Frame::Select(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(10, v, os)?;
+                },
+                &terminal_stream_frame::Frame::Started(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(11, v, os)?;
+                },
+                &terminal_stream_frame::Frame::Stdin(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(12, v, os)?;
+                },
+                &terminal_stream_frame::Frame::Stdout(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(13, v, os)?;
+                },
+                &terminal_stream_frame::Frame::Stderr(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(14, v, os)?;
+                },
+                &terminal_stream_frame::Frame::Resize(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(15, v, os)?;
+                },
+                &terminal_stream_frame::Frame::Signal(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(16, v, os)?;
+                },
+                &terminal_stream_frame::Frame::CloseStdin(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(17, v, os)?;
+                },
+                &terminal_stream_frame::Frame::Detach(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(18, v, os)?;
+                },
+                &terminal_stream_frame::Frame::Close(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(19, v, os)?;
+                },
+                &terminal_stream_frame::Frame::Cancel(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(20, v, os)?;
+                },
+                &terminal_stream_frame::Frame::Status(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(21, v, os)?;
+                },
+                &terminal_stream_frame::Frame::Outcome(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(22, v, os)?;
+                },
+            };
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TerminalStreamFrame {
+        TerminalStreamFrame::new()
+    }
+
+    fn clear(&mut self) {
+        self.session_generation = 0;
+        self.request_id.clear();
+        self.sequence = 0;
+        self.frame = ::std::option::Option::None;
+        self.frame = ::std::option::Option::None;
+        self.frame = ::std::option::Option::None;
+        self.frame = ::std::option::Option::None;
+        self.frame = ::std::option::Option::None;
+        self.frame = ::std::option::Option::None;
+        self.frame = ::std::option::Option::None;
+        self.frame = ::std::option::Option::None;
+        self.frame = ::std::option::Option::None;
+        self.frame = ::std::option::Option::None;
+        self.frame = ::std::option::Option::None;
+        self.frame = ::std::option::Option::None;
+        self.frame = ::std::option::Option::None;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TerminalStreamFrame {
+        static instance: TerminalStreamFrame = TerminalStreamFrame {
+            session_generation: 0,
+            request_id: ::std::vec::Vec::new(),
+            sequence: 0,
+            frame: ::std::option::Option::None,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for TerminalStreamFrame {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("TerminalStreamFrame").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for TerminalStreamFrame {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TerminalStreamFrame {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+/// Nested message and enums of message `TerminalStreamFrame`
+pub mod terminal_stream_frame {
+
+    #[derive(Clone,PartialEq)]
+    #[non_exhaustive]
+    // @@protoc_insertion_point(oneof:d2b.daemon.v2.TerminalStreamFrame.frame)
+    pub enum Frame {
+        // @@protoc_insertion_point(oneof_field:d2b.daemon.v2.TerminalStreamFrame.select)
+        Select(super::TerminalSelection),
+        // @@protoc_insertion_point(oneof_field:d2b.daemon.v2.TerminalStreamFrame.started)
+        Started(super::TerminalStarted),
+        // @@protoc_insertion_point(oneof_field:d2b.daemon.v2.TerminalStreamFrame.stdin)
+        Stdin(super::TerminalStdin),
+        // @@protoc_insertion_point(oneof_field:d2b.daemon.v2.TerminalStreamFrame.stdout)
+        Stdout(super::TerminalOutput),
+        // @@protoc_insertion_point(oneof_field:d2b.daemon.v2.TerminalStreamFrame.stderr)
+        Stderr(super::TerminalOutput),
+        // @@protoc_insertion_point(oneof_field:d2b.daemon.v2.TerminalStreamFrame.resize)
+        Resize(super::TerminalResize),
+        // @@protoc_insertion_point(oneof_field:d2b.daemon.v2.TerminalStreamFrame.signal)
+        Signal(super::TerminalSignal),
+        // @@protoc_insertion_point(oneof_field:d2b.daemon.v2.TerminalStreamFrame.close_stdin)
+        CloseStdin(super::TerminalCloseStdin),
+        // @@protoc_insertion_point(oneof_field:d2b.daemon.v2.TerminalStreamFrame.detach)
+        Detach(super::TerminalDetach),
+        // @@protoc_insertion_point(oneof_field:d2b.daemon.v2.TerminalStreamFrame.close)
+        Close(super::TerminalClose),
+        // @@protoc_insertion_point(oneof_field:d2b.daemon.v2.TerminalStreamFrame.cancel)
+        Cancel(super::TerminalCancel),
+        // @@protoc_insertion_point(oneof_field:d2b.daemon.v2.TerminalStreamFrame.status)
+        Status(super::TerminalStatus),
+        // @@protoc_insertion_point(oneof_field:d2b.daemon.v2.TerminalStreamFrame.outcome)
+        Outcome(super::TerminalOutcome),
+    }
+
+    impl ::protobuf::Oneof for Frame {
+    }
+
+    impl ::protobuf::OneofFull for Frame {
+        fn descriptor() -> ::protobuf::reflect::OneofDescriptor {
+            static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::OneofDescriptor> = ::protobuf::rt::Lazy::new();
+            descriptor.get(|| <super::TerminalStreamFrame as ::protobuf::MessageFull>::descriptor().oneof_by_name("frame").unwrap()).clone()
+        }
+    }
+
+    impl Frame {
+        pub(in super) fn generated_oneof_descriptor_data() -> ::protobuf::reflect::GeneratedOneofDescriptorData {
+            ::protobuf::reflect::GeneratedOneofDescriptorData::new::<Frame>("frame")
+        }
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.daemon.v2.RealmMode)
+pub enum RealmMode {
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.RealmMode.REALM_MODE_UNSPECIFIED)
+    REALM_MODE_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.RealmMode.REALM_MODE_HOST_LOCAL)
+    REALM_MODE_HOST_LOCAL = 1,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.RealmMode.REALM_MODE_GATEWAY_BACKED)
+    REALM_MODE_GATEWAY_BACKED = 2,
+}
+
+impl ::protobuf::Enum for RealmMode {
+    const NAME: &'static str = "RealmMode";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<RealmMode> {
+        match value {
+            0 => ::std::option::Option::Some(RealmMode::REALM_MODE_UNSPECIFIED),
+            1 => ::std::option::Option::Some(RealmMode::REALM_MODE_HOST_LOCAL),
+            2 => ::std::option::Option::Some(RealmMode::REALM_MODE_GATEWAY_BACKED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<RealmMode> {
+        match str {
+            "REALM_MODE_UNSPECIFIED" => ::std::option::Option::Some(RealmMode::REALM_MODE_UNSPECIFIED),
+            "REALM_MODE_HOST_LOCAL" => ::std::option::Option::Some(RealmMode::REALM_MODE_HOST_LOCAL),
+            "REALM_MODE_GATEWAY_BACKED" => ::std::option::Option::Some(RealmMode::REALM_MODE_GATEWAY_BACKED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [RealmMode] = &[
+        RealmMode::REALM_MODE_UNSPECIFIED,
+        RealmMode::REALM_MODE_HOST_LOCAL,
+        RealmMode::REALM_MODE_GATEWAY_BACKED,
+    ];
+}
+
+impl ::protobuf::EnumFull for RealmMode {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("RealmMode").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for RealmMode {
+    fn default() -> Self {
+        RealmMode::REALM_MODE_UNSPECIFIED
+    }
+}
+
+impl RealmMode {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<RealmMode>("RealmMode")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.daemon.v2.RealmState)
+pub enum RealmState {
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.RealmState.REALM_STATE_UNSPECIFIED)
+    REALM_STATE_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.RealmState.REALM_STATE_READY)
+    REALM_STATE_READY = 1,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.RealmState.REALM_STATE_DEGRADED)
+    REALM_STATE_DEGRADED = 2,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.RealmState.REALM_STATE_STOPPED)
+    REALM_STATE_STOPPED = 3,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.RealmState.REALM_STATE_UNAVAILABLE)
+    REALM_STATE_UNAVAILABLE = 4,
+}
+
+impl ::protobuf::Enum for RealmState {
+    const NAME: &'static str = "RealmState";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<RealmState> {
+        match value {
+            0 => ::std::option::Option::Some(RealmState::REALM_STATE_UNSPECIFIED),
+            1 => ::std::option::Option::Some(RealmState::REALM_STATE_READY),
+            2 => ::std::option::Option::Some(RealmState::REALM_STATE_DEGRADED),
+            3 => ::std::option::Option::Some(RealmState::REALM_STATE_STOPPED),
+            4 => ::std::option::Option::Some(RealmState::REALM_STATE_UNAVAILABLE),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<RealmState> {
+        match str {
+            "REALM_STATE_UNSPECIFIED" => ::std::option::Option::Some(RealmState::REALM_STATE_UNSPECIFIED),
+            "REALM_STATE_READY" => ::std::option::Option::Some(RealmState::REALM_STATE_READY),
+            "REALM_STATE_DEGRADED" => ::std::option::Option::Some(RealmState::REALM_STATE_DEGRADED),
+            "REALM_STATE_STOPPED" => ::std::option::Option::Some(RealmState::REALM_STATE_STOPPED),
+            "REALM_STATE_UNAVAILABLE" => ::std::option::Option::Some(RealmState::REALM_STATE_UNAVAILABLE),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [RealmState] = &[
+        RealmState::REALM_STATE_UNSPECIFIED,
+        RealmState::REALM_STATE_READY,
+        RealmState::REALM_STATE_DEGRADED,
+        RealmState::REALM_STATE_STOPPED,
+        RealmState::REALM_STATE_UNAVAILABLE,
+    ];
+}
+
+impl ::protobuf::EnumFull for RealmState {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("RealmState").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for RealmState {
+    fn default() -> Self {
+        RealmState::REALM_STATE_UNSPECIFIED
+    }
+}
+
+impl RealmState {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<RealmState>("RealmState")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.daemon.v2.CrossRealmPolicy)
+pub enum CrossRealmPolicy {
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.CrossRealmPolicy.CROSS_REALM_POLICY_UNSPECIFIED)
+    CROSS_REALM_POLICY_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.CrossRealmPolicy.CROSS_REALM_POLICY_DEFAULT_DENY)
+    CROSS_REALM_POLICY_DEFAULT_DENY = 1,
+}
+
+impl ::protobuf::Enum for CrossRealmPolicy {
+    const NAME: &'static str = "CrossRealmPolicy";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<CrossRealmPolicy> {
+        match value {
+            0 => ::std::option::Option::Some(CrossRealmPolicy::CROSS_REALM_POLICY_UNSPECIFIED),
+            1 => ::std::option::Option::Some(CrossRealmPolicy::CROSS_REALM_POLICY_DEFAULT_DENY),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<CrossRealmPolicy> {
+        match str {
+            "CROSS_REALM_POLICY_UNSPECIFIED" => ::std::option::Option::Some(CrossRealmPolicy::CROSS_REALM_POLICY_UNSPECIFIED),
+            "CROSS_REALM_POLICY_DEFAULT_DENY" => ::std::option::Option::Some(CrossRealmPolicy::CROSS_REALM_POLICY_DEFAULT_DENY),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [CrossRealmPolicy] = &[
+        CrossRealmPolicy::CROSS_REALM_POLICY_UNSPECIFIED,
+        CrossRealmPolicy::CROSS_REALM_POLICY_DEFAULT_DENY,
+    ];
+}
+
+impl ::protobuf::EnumFull for CrossRealmPolicy {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("CrossRealmPolicy").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for CrossRealmPolicy {
+    fn default() -> Self {
+        CrossRealmPolicy::CROSS_REALM_POLICY_UNSPECIFIED
+    }
+}
+
+impl CrossRealmPolicy {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<CrossRealmPolicy>("CrossRealmPolicy")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.daemon.v2.CredentialBoundary)
+pub enum CredentialBoundary {
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.CredentialBoundary.CREDENTIAL_BOUNDARY_UNSPECIFIED)
+    CREDENTIAL_BOUNDARY_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.CredentialBoundary.CREDENTIAL_BOUNDARY_HOST_LOCAL)
+    CREDENTIAL_BOUNDARY_HOST_LOCAL = 1,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.CredentialBoundary.CREDENTIAL_BOUNDARY_GATEWAY_GUEST)
+    CREDENTIAL_BOUNDARY_GATEWAY_GUEST = 2,
+}
+
+impl ::protobuf::Enum for CredentialBoundary {
+    const NAME: &'static str = "CredentialBoundary";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<CredentialBoundary> {
+        match value {
+            0 => ::std::option::Option::Some(CredentialBoundary::CREDENTIAL_BOUNDARY_UNSPECIFIED),
+            1 => ::std::option::Option::Some(CredentialBoundary::CREDENTIAL_BOUNDARY_HOST_LOCAL),
+            2 => ::std::option::Option::Some(CredentialBoundary::CREDENTIAL_BOUNDARY_GATEWAY_GUEST),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<CredentialBoundary> {
+        match str {
+            "CREDENTIAL_BOUNDARY_UNSPECIFIED" => ::std::option::Option::Some(CredentialBoundary::CREDENTIAL_BOUNDARY_UNSPECIFIED),
+            "CREDENTIAL_BOUNDARY_HOST_LOCAL" => ::std::option::Option::Some(CredentialBoundary::CREDENTIAL_BOUNDARY_HOST_LOCAL),
+            "CREDENTIAL_BOUNDARY_GATEWAY_GUEST" => ::std::option::Option::Some(CredentialBoundary::CREDENTIAL_BOUNDARY_GATEWAY_GUEST),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [CredentialBoundary] = &[
+        CredentialBoundary::CREDENTIAL_BOUNDARY_UNSPECIFIED,
+        CredentialBoundary::CREDENTIAL_BOUNDARY_HOST_LOCAL,
+        CredentialBoundary::CREDENTIAL_BOUNDARY_GATEWAY_GUEST,
+    ];
+}
+
+impl ::protobuf::EnumFull for CredentialBoundary {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("CredentialBoundary").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for CredentialBoundary {
+    fn default() -> Self {
+        CredentialBoundary::CREDENTIAL_BOUNDARY_UNSPECIFIED
+    }
+}
+
+impl CredentialBoundary {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<CredentialBoundary>("CredentialBoundary")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.daemon.v2.WorkloadLifecycleState)
+pub enum WorkloadLifecycleState {
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.WorkloadLifecycleState.WORKLOAD_LIFECYCLE_STATE_UNSPECIFIED)
+    WORKLOAD_LIFECYCLE_STATE_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.WorkloadLifecycleState.WORKLOAD_LIFECYCLE_STATE_STOPPED)
+    WORKLOAD_LIFECYCLE_STATE_STOPPED = 1,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.WorkloadLifecycleState.WORKLOAD_LIFECYCLE_STATE_STARTING)
+    WORKLOAD_LIFECYCLE_STATE_STARTING = 2,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.WorkloadLifecycleState.WORKLOAD_LIFECYCLE_STATE_BOOTED)
+    WORKLOAD_LIFECYCLE_STATE_BOOTED = 3,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.WorkloadLifecycleState.WORKLOAD_LIFECYCLE_STATE_RUNNING)
+    WORKLOAD_LIFECYCLE_STATE_RUNNING = 4,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.WorkloadLifecycleState.WORKLOAD_LIFECYCLE_STATE_STOPPING)
+    WORKLOAD_LIFECYCLE_STATE_STOPPING = 5,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.WorkloadLifecycleState.WORKLOAD_LIFECYCLE_STATE_RESTARTING)
+    WORKLOAD_LIFECYCLE_STATE_RESTARTING = 6,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.WorkloadLifecycleState.WORKLOAD_LIFECYCLE_STATE_FAILED)
+    WORKLOAD_LIFECYCLE_STATE_FAILED = 7,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.WorkloadLifecycleState.WORKLOAD_LIFECYCLE_STATE_UNKNOWN)
+    WORKLOAD_LIFECYCLE_STATE_UNKNOWN = 8,
+}
+
+impl ::protobuf::Enum for WorkloadLifecycleState {
+    const NAME: &'static str = "WorkloadLifecycleState";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<WorkloadLifecycleState> {
+        match value {
+            0 => ::std::option::Option::Some(WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_UNSPECIFIED),
+            1 => ::std::option::Option::Some(WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_STOPPED),
+            2 => ::std::option::Option::Some(WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_STARTING),
+            3 => ::std::option::Option::Some(WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_BOOTED),
+            4 => ::std::option::Option::Some(WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_RUNNING),
+            5 => ::std::option::Option::Some(WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_STOPPING),
+            6 => ::std::option::Option::Some(WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_RESTARTING),
+            7 => ::std::option::Option::Some(WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_FAILED),
+            8 => ::std::option::Option::Some(WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_UNKNOWN),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<WorkloadLifecycleState> {
+        match str {
+            "WORKLOAD_LIFECYCLE_STATE_UNSPECIFIED" => ::std::option::Option::Some(WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_UNSPECIFIED),
+            "WORKLOAD_LIFECYCLE_STATE_STOPPED" => ::std::option::Option::Some(WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_STOPPED),
+            "WORKLOAD_LIFECYCLE_STATE_STARTING" => ::std::option::Option::Some(WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_STARTING),
+            "WORKLOAD_LIFECYCLE_STATE_BOOTED" => ::std::option::Option::Some(WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_BOOTED),
+            "WORKLOAD_LIFECYCLE_STATE_RUNNING" => ::std::option::Option::Some(WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_RUNNING),
+            "WORKLOAD_LIFECYCLE_STATE_STOPPING" => ::std::option::Option::Some(WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_STOPPING),
+            "WORKLOAD_LIFECYCLE_STATE_RESTARTING" => ::std::option::Option::Some(WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_RESTARTING),
+            "WORKLOAD_LIFECYCLE_STATE_FAILED" => ::std::option::Option::Some(WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_FAILED),
+            "WORKLOAD_LIFECYCLE_STATE_UNKNOWN" => ::std::option::Option::Some(WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_UNKNOWN),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [WorkloadLifecycleState] = &[
+        WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_UNSPECIFIED,
+        WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_STOPPED,
+        WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_STARTING,
+        WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_BOOTED,
+        WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_RUNNING,
+        WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_STOPPING,
+        WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_RESTARTING,
+        WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_FAILED,
+        WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_UNKNOWN,
+    ];
+}
+
+impl ::protobuf::EnumFull for WorkloadLifecycleState {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("WorkloadLifecycleState").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for WorkloadLifecycleState {
+    fn default() -> Self {
+        WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_UNSPECIFIED
+    }
+}
+
+impl WorkloadLifecycleState {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<WorkloadLifecycleState>("WorkloadLifecycleState")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.daemon.v2.RuntimeKind)
+pub enum RuntimeKind {
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.RuntimeKind.RUNTIME_KIND_UNSPECIFIED)
+    RUNTIME_KIND_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.RuntimeKind.RUNTIME_KIND_NIXOS)
+    RUNTIME_KIND_NIXOS = 1,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.RuntimeKind.RUNTIME_KIND_QEMU_MEDIA)
+    RUNTIME_KIND_QEMU_MEDIA = 2,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.RuntimeKind.RUNTIME_KIND_UNSAFE_LOCAL)
+    RUNTIME_KIND_UNSAFE_LOCAL = 3,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.RuntimeKind.RUNTIME_KIND_ACA_SANDBOX)
+    RUNTIME_KIND_ACA_SANDBOX = 4,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.RuntimeKind.RUNTIME_KIND_REMOTE)
+    RUNTIME_KIND_REMOTE = 5,
+}
+
+impl ::protobuf::Enum for RuntimeKind {
+    const NAME: &'static str = "RuntimeKind";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<RuntimeKind> {
+        match value {
+            0 => ::std::option::Option::Some(RuntimeKind::RUNTIME_KIND_UNSPECIFIED),
+            1 => ::std::option::Option::Some(RuntimeKind::RUNTIME_KIND_NIXOS),
+            2 => ::std::option::Option::Some(RuntimeKind::RUNTIME_KIND_QEMU_MEDIA),
+            3 => ::std::option::Option::Some(RuntimeKind::RUNTIME_KIND_UNSAFE_LOCAL),
+            4 => ::std::option::Option::Some(RuntimeKind::RUNTIME_KIND_ACA_SANDBOX),
+            5 => ::std::option::Option::Some(RuntimeKind::RUNTIME_KIND_REMOTE),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<RuntimeKind> {
+        match str {
+            "RUNTIME_KIND_UNSPECIFIED" => ::std::option::Option::Some(RuntimeKind::RUNTIME_KIND_UNSPECIFIED),
+            "RUNTIME_KIND_NIXOS" => ::std::option::Option::Some(RuntimeKind::RUNTIME_KIND_NIXOS),
+            "RUNTIME_KIND_QEMU_MEDIA" => ::std::option::Option::Some(RuntimeKind::RUNTIME_KIND_QEMU_MEDIA),
+            "RUNTIME_KIND_UNSAFE_LOCAL" => ::std::option::Option::Some(RuntimeKind::RUNTIME_KIND_UNSAFE_LOCAL),
+            "RUNTIME_KIND_ACA_SANDBOX" => ::std::option::Option::Some(RuntimeKind::RUNTIME_KIND_ACA_SANDBOX),
+            "RUNTIME_KIND_REMOTE" => ::std::option::Option::Some(RuntimeKind::RUNTIME_KIND_REMOTE),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [RuntimeKind] = &[
+        RuntimeKind::RUNTIME_KIND_UNSPECIFIED,
+        RuntimeKind::RUNTIME_KIND_NIXOS,
+        RuntimeKind::RUNTIME_KIND_QEMU_MEDIA,
+        RuntimeKind::RUNTIME_KIND_UNSAFE_LOCAL,
+        RuntimeKind::RUNTIME_KIND_ACA_SANDBOX,
+        RuntimeKind::RUNTIME_KIND_REMOTE,
+    ];
+}
+
+impl ::protobuf::EnumFull for RuntimeKind {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("RuntimeKind").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for RuntimeKind {
+    fn default() -> Self {
+        RuntimeKind::RUNTIME_KIND_UNSPECIFIED
+    }
+}
+
+impl RuntimeKind {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<RuntimeKind>("RuntimeKind")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.daemon.v2.RuntimeCapability)
+pub enum RuntimeCapability {
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.RuntimeCapability.RUNTIME_CAPABILITY_UNSPECIFIED)
+    RUNTIME_CAPABILITY_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.RuntimeCapability.RUNTIME_CAPABILITY_LIFECYCLE)
+    RUNTIME_CAPABILITY_LIFECYCLE = 1,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.RuntimeCapability.RUNTIME_CAPABILITY_DISPLAY)
+    RUNTIME_CAPABILITY_DISPLAY = 2,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.RuntimeCapability.RUNTIME_CAPABILITY_USB_HOTPLUG)
+    RUNTIME_CAPABILITY_USB_HOTPLUG = 3,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.RuntimeCapability.RUNTIME_CAPABILITY_CONFIG_SYNC)
+    RUNTIME_CAPABILITY_CONFIG_SYNC = 4,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.RuntimeCapability.RUNTIME_CAPABILITY_EXEC)
+    RUNTIME_CAPABILITY_EXEC = 5,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.RuntimeCapability.RUNTIME_CAPABILITY_GUEST_CONTROL)
+    RUNTIME_CAPABILITY_GUEST_CONTROL = 6,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.RuntimeCapability.RUNTIME_CAPABILITY_IN_GUEST_OBSERVABILITY)
+    RUNTIME_CAPABILITY_IN_GUEST_OBSERVABILITY = 7,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.RuntimeCapability.RUNTIME_CAPABILITY_KEYS)
+    RUNTIME_CAPABILITY_KEYS = 8,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.RuntimeCapability.RUNTIME_CAPABILITY_SHELL)
+    RUNTIME_CAPABILITY_SHELL = 9,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.RuntimeCapability.RUNTIME_CAPABILITY_STORE_SYNC)
+    RUNTIME_CAPABILITY_STORE_SYNC = 10,
+}
+
+impl ::protobuf::Enum for RuntimeCapability {
+    const NAME: &'static str = "RuntimeCapability";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<RuntimeCapability> {
+        match value {
+            0 => ::std::option::Option::Some(RuntimeCapability::RUNTIME_CAPABILITY_UNSPECIFIED),
+            1 => ::std::option::Option::Some(RuntimeCapability::RUNTIME_CAPABILITY_LIFECYCLE),
+            2 => ::std::option::Option::Some(RuntimeCapability::RUNTIME_CAPABILITY_DISPLAY),
+            3 => ::std::option::Option::Some(RuntimeCapability::RUNTIME_CAPABILITY_USB_HOTPLUG),
+            4 => ::std::option::Option::Some(RuntimeCapability::RUNTIME_CAPABILITY_CONFIG_SYNC),
+            5 => ::std::option::Option::Some(RuntimeCapability::RUNTIME_CAPABILITY_EXEC),
+            6 => ::std::option::Option::Some(RuntimeCapability::RUNTIME_CAPABILITY_GUEST_CONTROL),
+            7 => ::std::option::Option::Some(RuntimeCapability::RUNTIME_CAPABILITY_IN_GUEST_OBSERVABILITY),
+            8 => ::std::option::Option::Some(RuntimeCapability::RUNTIME_CAPABILITY_KEYS),
+            9 => ::std::option::Option::Some(RuntimeCapability::RUNTIME_CAPABILITY_SHELL),
+            10 => ::std::option::Option::Some(RuntimeCapability::RUNTIME_CAPABILITY_STORE_SYNC),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<RuntimeCapability> {
+        match str {
+            "RUNTIME_CAPABILITY_UNSPECIFIED" => ::std::option::Option::Some(RuntimeCapability::RUNTIME_CAPABILITY_UNSPECIFIED),
+            "RUNTIME_CAPABILITY_LIFECYCLE" => ::std::option::Option::Some(RuntimeCapability::RUNTIME_CAPABILITY_LIFECYCLE),
+            "RUNTIME_CAPABILITY_DISPLAY" => ::std::option::Option::Some(RuntimeCapability::RUNTIME_CAPABILITY_DISPLAY),
+            "RUNTIME_CAPABILITY_USB_HOTPLUG" => ::std::option::Option::Some(RuntimeCapability::RUNTIME_CAPABILITY_USB_HOTPLUG),
+            "RUNTIME_CAPABILITY_CONFIG_SYNC" => ::std::option::Option::Some(RuntimeCapability::RUNTIME_CAPABILITY_CONFIG_SYNC),
+            "RUNTIME_CAPABILITY_EXEC" => ::std::option::Option::Some(RuntimeCapability::RUNTIME_CAPABILITY_EXEC),
+            "RUNTIME_CAPABILITY_GUEST_CONTROL" => ::std::option::Option::Some(RuntimeCapability::RUNTIME_CAPABILITY_GUEST_CONTROL),
+            "RUNTIME_CAPABILITY_IN_GUEST_OBSERVABILITY" => ::std::option::Option::Some(RuntimeCapability::RUNTIME_CAPABILITY_IN_GUEST_OBSERVABILITY),
+            "RUNTIME_CAPABILITY_KEYS" => ::std::option::Option::Some(RuntimeCapability::RUNTIME_CAPABILITY_KEYS),
+            "RUNTIME_CAPABILITY_SHELL" => ::std::option::Option::Some(RuntimeCapability::RUNTIME_CAPABILITY_SHELL),
+            "RUNTIME_CAPABILITY_STORE_SYNC" => ::std::option::Option::Some(RuntimeCapability::RUNTIME_CAPABILITY_STORE_SYNC),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [RuntimeCapability] = &[
+        RuntimeCapability::RUNTIME_CAPABILITY_UNSPECIFIED,
+        RuntimeCapability::RUNTIME_CAPABILITY_LIFECYCLE,
+        RuntimeCapability::RUNTIME_CAPABILITY_DISPLAY,
+        RuntimeCapability::RUNTIME_CAPABILITY_USB_HOTPLUG,
+        RuntimeCapability::RUNTIME_CAPABILITY_CONFIG_SYNC,
+        RuntimeCapability::RUNTIME_CAPABILITY_EXEC,
+        RuntimeCapability::RUNTIME_CAPABILITY_GUEST_CONTROL,
+        RuntimeCapability::RUNTIME_CAPABILITY_IN_GUEST_OBSERVABILITY,
+        RuntimeCapability::RUNTIME_CAPABILITY_KEYS,
+        RuntimeCapability::RUNTIME_CAPABILITY_SHELL,
+        RuntimeCapability::RUNTIME_CAPABILITY_STORE_SYNC,
+    ];
+}
+
+impl ::protobuf::EnumFull for RuntimeCapability {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("RuntimeCapability").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for RuntimeCapability {
+    fn default() -> Self {
+        RuntimeCapability::RUNTIME_CAPABILITY_UNSPECIFIED
+    }
+}
+
+impl RuntimeCapability {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<RuntimeCapability>("RuntimeCapability")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.daemon.v2.ServiceKind)
+pub enum ServiceKind {
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ServiceKind.SERVICE_KIND_UNSPECIFIED)
+    SERVICE_KIND_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ServiceKind.SERVICE_KIND_DAEMON)
+    SERVICE_KIND_DAEMON = 1,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ServiceKind.SERVICE_KIND_HYPERVISOR)
+    SERVICE_KIND_HYPERVISOR = 2,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ServiceKind.SERVICE_KIND_QEMU_MEDIA)
+    SERVICE_KIND_QEMU_MEDIA = 3,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ServiceKind.SERVICE_KIND_VIRTIOFSD)
+    SERVICE_KIND_VIRTIOFSD = 4,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ServiceKind.SERVICE_KIND_GPU)
+    SERVICE_KIND_GPU = 5,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ServiceKind.SERVICE_KIND_VIDEO)
+    SERVICE_KIND_VIDEO = 6,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ServiceKind.SERVICE_KIND_AUDIO)
+    SERVICE_KIND_AUDIO = 7,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ServiceKind.SERVICE_KIND_SWTPM)
+    SERVICE_KIND_SWTPM = 8,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ServiceKind.SERVICE_KIND_GUEST_CONTROL)
+    SERVICE_KIND_GUEST_CONTROL = 9,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ServiceKind.SERVICE_KIND_OBSERVABILITY)
+    SERVICE_KIND_OBSERVABILITY = 10,
+}
+
+impl ::protobuf::Enum for ServiceKind {
+    const NAME: &'static str = "ServiceKind";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ServiceKind> {
+        match value {
+            0 => ::std::option::Option::Some(ServiceKind::SERVICE_KIND_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ServiceKind::SERVICE_KIND_DAEMON),
+            2 => ::std::option::Option::Some(ServiceKind::SERVICE_KIND_HYPERVISOR),
+            3 => ::std::option::Option::Some(ServiceKind::SERVICE_KIND_QEMU_MEDIA),
+            4 => ::std::option::Option::Some(ServiceKind::SERVICE_KIND_VIRTIOFSD),
+            5 => ::std::option::Option::Some(ServiceKind::SERVICE_KIND_GPU),
+            6 => ::std::option::Option::Some(ServiceKind::SERVICE_KIND_VIDEO),
+            7 => ::std::option::Option::Some(ServiceKind::SERVICE_KIND_AUDIO),
+            8 => ::std::option::Option::Some(ServiceKind::SERVICE_KIND_SWTPM),
+            9 => ::std::option::Option::Some(ServiceKind::SERVICE_KIND_GUEST_CONTROL),
+            10 => ::std::option::Option::Some(ServiceKind::SERVICE_KIND_OBSERVABILITY),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ServiceKind> {
+        match str {
+            "SERVICE_KIND_UNSPECIFIED" => ::std::option::Option::Some(ServiceKind::SERVICE_KIND_UNSPECIFIED),
+            "SERVICE_KIND_DAEMON" => ::std::option::Option::Some(ServiceKind::SERVICE_KIND_DAEMON),
+            "SERVICE_KIND_HYPERVISOR" => ::std::option::Option::Some(ServiceKind::SERVICE_KIND_HYPERVISOR),
+            "SERVICE_KIND_QEMU_MEDIA" => ::std::option::Option::Some(ServiceKind::SERVICE_KIND_QEMU_MEDIA),
+            "SERVICE_KIND_VIRTIOFSD" => ::std::option::Option::Some(ServiceKind::SERVICE_KIND_VIRTIOFSD),
+            "SERVICE_KIND_GPU" => ::std::option::Option::Some(ServiceKind::SERVICE_KIND_GPU),
+            "SERVICE_KIND_VIDEO" => ::std::option::Option::Some(ServiceKind::SERVICE_KIND_VIDEO),
+            "SERVICE_KIND_AUDIO" => ::std::option::Option::Some(ServiceKind::SERVICE_KIND_AUDIO),
+            "SERVICE_KIND_SWTPM" => ::std::option::Option::Some(ServiceKind::SERVICE_KIND_SWTPM),
+            "SERVICE_KIND_GUEST_CONTROL" => ::std::option::Option::Some(ServiceKind::SERVICE_KIND_GUEST_CONTROL),
+            "SERVICE_KIND_OBSERVABILITY" => ::std::option::Option::Some(ServiceKind::SERVICE_KIND_OBSERVABILITY),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ServiceKind] = &[
+        ServiceKind::SERVICE_KIND_UNSPECIFIED,
+        ServiceKind::SERVICE_KIND_DAEMON,
+        ServiceKind::SERVICE_KIND_HYPERVISOR,
+        ServiceKind::SERVICE_KIND_QEMU_MEDIA,
+        ServiceKind::SERVICE_KIND_VIRTIOFSD,
+        ServiceKind::SERVICE_KIND_GPU,
+        ServiceKind::SERVICE_KIND_VIDEO,
+        ServiceKind::SERVICE_KIND_AUDIO,
+        ServiceKind::SERVICE_KIND_SWTPM,
+        ServiceKind::SERVICE_KIND_GUEST_CONTROL,
+        ServiceKind::SERVICE_KIND_OBSERVABILITY,
+    ];
+}
+
+impl ::protobuf::EnumFull for ServiceKind {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ServiceKind").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ServiceKind {
+    fn default() -> Self {
+        ServiceKind::SERVICE_KIND_UNSPECIFIED
+    }
+}
+
+impl ServiceKind {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ServiceKind>("ServiceKind")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.daemon.v2.ServiceState)
+pub enum ServiceState {
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ServiceState.SERVICE_STATE_UNSPECIFIED)
+    SERVICE_STATE_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ServiceState.SERVICE_STATE_ACTIVE)
+    SERVICE_STATE_ACTIVE = 1,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ServiceState.SERVICE_STATE_INACTIVE)
+    SERVICE_STATE_INACTIVE = 2,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ServiceState.SERVICE_STATE_STARTING)
+    SERVICE_STATE_STARTING = 3,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ServiceState.SERVICE_STATE_STOPPING)
+    SERVICE_STATE_STOPPING = 4,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ServiceState.SERVICE_STATE_FAILED)
+    SERVICE_STATE_FAILED = 5,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ServiceState.SERVICE_STATE_UNAVAILABLE)
+    SERVICE_STATE_UNAVAILABLE = 6,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ServiceState.SERVICE_STATE_UNSUPPORTED)
+    SERVICE_STATE_UNSUPPORTED = 7,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ServiceState.SERVICE_STATE_UNKNOWN)
+    SERVICE_STATE_UNKNOWN = 8,
+}
+
+impl ::protobuf::Enum for ServiceState {
+    const NAME: &'static str = "ServiceState";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ServiceState> {
+        match value {
+            0 => ::std::option::Option::Some(ServiceState::SERVICE_STATE_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ServiceState::SERVICE_STATE_ACTIVE),
+            2 => ::std::option::Option::Some(ServiceState::SERVICE_STATE_INACTIVE),
+            3 => ::std::option::Option::Some(ServiceState::SERVICE_STATE_STARTING),
+            4 => ::std::option::Option::Some(ServiceState::SERVICE_STATE_STOPPING),
+            5 => ::std::option::Option::Some(ServiceState::SERVICE_STATE_FAILED),
+            6 => ::std::option::Option::Some(ServiceState::SERVICE_STATE_UNAVAILABLE),
+            7 => ::std::option::Option::Some(ServiceState::SERVICE_STATE_UNSUPPORTED),
+            8 => ::std::option::Option::Some(ServiceState::SERVICE_STATE_UNKNOWN),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ServiceState> {
+        match str {
+            "SERVICE_STATE_UNSPECIFIED" => ::std::option::Option::Some(ServiceState::SERVICE_STATE_UNSPECIFIED),
+            "SERVICE_STATE_ACTIVE" => ::std::option::Option::Some(ServiceState::SERVICE_STATE_ACTIVE),
+            "SERVICE_STATE_INACTIVE" => ::std::option::Option::Some(ServiceState::SERVICE_STATE_INACTIVE),
+            "SERVICE_STATE_STARTING" => ::std::option::Option::Some(ServiceState::SERVICE_STATE_STARTING),
+            "SERVICE_STATE_STOPPING" => ::std::option::Option::Some(ServiceState::SERVICE_STATE_STOPPING),
+            "SERVICE_STATE_FAILED" => ::std::option::Option::Some(ServiceState::SERVICE_STATE_FAILED),
+            "SERVICE_STATE_UNAVAILABLE" => ::std::option::Option::Some(ServiceState::SERVICE_STATE_UNAVAILABLE),
+            "SERVICE_STATE_UNSUPPORTED" => ::std::option::Option::Some(ServiceState::SERVICE_STATE_UNSUPPORTED),
+            "SERVICE_STATE_UNKNOWN" => ::std::option::Option::Some(ServiceState::SERVICE_STATE_UNKNOWN),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ServiceState] = &[
+        ServiceState::SERVICE_STATE_UNSPECIFIED,
+        ServiceState::SERVICE_STATE_ACTIVE,
+        ServiceState::SERVICE_STATE_INACTIVE,
+        ServiceState::SERVICE_STATE_STARTING,
+        ServiceState::SERVICE_STATE_STOPPING,
+        ServiceState::SERVICE_STATE_FAILED,
+        ServiceState::SERVICE_STATE_UNAVAILABLE,
+        ServiceState::SERVICE_STATE_UNSUPPORTED,
+        ServiceState::SERVICE_STATE_UNKNOWN,
+    ];
+}
+
+impl ::protobuf::EnumFull for ServiceState {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ServiceState").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ServiceState {
+    fn default() -> Self {
+        ServiceState::SERVICE_STATE_UNSPECIFIED
+    }
+}
+
+impl ServiceState {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ServiceState>("ServiceState")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.daemon.v2.AutostartMode)
+pub enum AutostartMode {
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.AutostartMode.AUTOSTART_MODE_UNSPECIFIED)
+    AUTOSTART_MODE_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.AutostartMode.AUTOSTART_MODE_ENABLED)
+    AUTOSTART_MODE_ENABLED = 1,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.AutostartMode.AUTOSTART_MODE_DISABLED)
+    AUTOSTART_MODE_DISABLED = 2,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.AutostartMode.AUTOSTART_MODE_MANUAL_ONLY)
+    AUTOSTART_MODE_MANUAL_ONLY = 3,
+}
+
+impl ::protobuf::Enum for AutostartMode {
+    const NAME: &'static str = "AutostartMode";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<AutostartMode> {
+        match value {
+            0 => ::std::option::Option::Some(AutostartMode::AUTOSTART_MODE_UNSPECIFIED),
+            1 => ::std::option::Option::Some(AutostartMode::AUTOSTART_MODE_ENABLED),
+            2 => ::std::option::Option::Some(AutostartMode::AUTOSTART_MODE_DISABLED),
+            3 => ::std::option::Option::Some(AutostartMode::AUTOSTART_MODE_MANUAL_ONLY),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<AutostartMode> {
+        match str {
+            "AUTOSTART_MODE_UNSPECIFIED" => ::std::option::Option::Some(AutostartMode::AUTOSTART_MODE_UNSPECIFIED),
+            "AUTOSTART_MODE_ENABLED" => ::std::option::Option::Some(AutostartMode::AUTOSTART_MODE_ENABLED),
+            "AUTOSTART_MODE_DISABLED" => ::std::option::Option::Some(AutostartMode::AUTOSTART_MODE_DISABLED),
+            "AUTOSTART_MODE_MANUAL_ONLY" => ::std::option::Option::Some(AutostartMode::AUTOSTART_MODE_MANUAL_ONLY),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [AutostartMode] = &[
+        AutostartMode::AUTOSTART_MODE_UNSPECIFIED,
+        AutostartMode::AUTOSTART_MODE_ENABLED,
+        AutostartMode::AUTOSTART_MODE_DISABLED,
+        AutostartMode::AUTOSTART_MODE_MANUAL_ONLY,
+    ];
+}
+
+impl ::protobuf::EnumFull for AutostartMode {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("AutostartMode").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for AutostartMode {
+    fn default() -> Self {
+        AutostartMode::AUTOSTART_MODE_UNSPECIFIED
+    }
+}
+
+impl AutostartMode {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<AutostartMode>("AutostartMode")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.daemon.v2.ApiReadyState)
+pub enum ApiReadyState {
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ApiReadyState.API_READY_STATE_UNSPECIFIED)
+    API_READY_STATE_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ApiReadyState.API_READY_STATE_READY)
+    API_READY_STATE_READY = 1,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ApiReadyState.API_READY_STATE_PENDING)
+    API_READY_STATE_PENDING = 2,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ApiReadyState.API_READY_STATE_TIMEOUT)
+    API_READY_STATE_TIMEOUT = 3,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ApiReadyState.API_READY_STATE_ERROR)
+    API_READY_STATE_ERROR = 4,
+}
+
+impl ::protobuf::Enum for ApiReadyState {
+    const NAME: &'static str = "ApiReadyState";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ApiReadyState> {
+        match value {
+            0 => ::std::option::Option::Some(ApiReadyState::API_READY_STATE_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ApiReadyState::API_READY_STATE_READY),
+            2 => ::std::option::Option::Some(ApiReadyState::API_READY_STATE_PENDING),
+            3 => ::std::option::Option::Some(ApiReadyState::API_READY_STATE_TIMEOUT),
+            4 => ::std::option::Option::Some(ApiReadyState::API_READY_STATE_ERROR),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ApiReadyState> {
+        match str {
+            "API_READY_STATE_UNSPECIFIED" => ::std::option::Option::Some(ApiReadyState::API_READY_STATE_UNSPECIFIED),
+            "API_READY_STATE_READY" => ::std::option::Option::Some(ApiReadyState::API_READY_STATE_READY),
+            "API_READY_STATE_PENDING" => ::std::option::Option::Some(ApiReadyState::API_READY_STATE_PENDING),
+            "API_READY_STATE_TIMEOUT" => ::std::option::Option::Some(ApiReadyState::API_READY_STATE_TIMEOUT),
+            "API_READY_STATE_ERROR" => ::std::option::Option::Some(ApiReadyState::API_READY_STATE_ERROR),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ApiReadyState] = &[
+        ApiReadyState::API_READY_STATE_UNSPECIFIED,
+        ApiReadyState::API_READY_STATE_READY,
+        ApiReadyState::API_READY_STATE_PENDING,
+        ApiReadyState::API_READY_STATE_TIMEOUT,
+        ApiReadyState::API_READY_STATE_ERROR,
+    ];
+}
+
+impl ::protobuf::EnumFull for ApiReadyState {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ApiReadyState").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ApiReadyState {
+    fn default() -> Self {
+        ApiReadyState::API_READY_STATE_UNSPECIFIED
+    }
+}
+
+impl ApiReadyState {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ApiReadyState>("ApiReadyState")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.daemon.v2.QemuMediaFirmwareMode)
+pub enum QemuMediaFirmwareMode {
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.QemuMediaFirmwareMode.QEMU_MEDIA_FIRMWARE_MODE_UNSPECIFIED)
+    QEMU_MEDIA_FIRMWARE_MODE_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.QemuMediaFirmwareMode.QEMU_MEDIA_FIRMWARE_MODE_NONE)
+    QEMU_MEDIA_FIRMWARE_MODE_NONE = 1,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.QemuMediaFirmwareMode.QEMU_MEDIA_FIRMWARE_MODE_UEFI)
+    QEMU_MEDIA_FIRMWARE_MODE_UEFI = 2,
+}
+
+impl ::protobuf::Enum for QemuMediaFirmwareMode {
+    const NAME: &'static str = "QemuMediaFirmwareMode";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<QemuMediaFirmwareMode> {
+        match value {
+            0 => ::std::option::Option::Some(QemuMediaFirmwareMode::QEMU_MEDIA_FIRMWARE_MODE_UNSPECIFIED),
+            1 => ::std::option::Option::Some(QemuMediaFirmwareMode::QEMU_MEDIA_FIRMWARE_MODE_NONE),
+            2 => ::std::option::Option::Some(QemuMediaFirmwareMode::QEMU_MEDIA_FIRMWARE_MODE_UEFI),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<QemuMediaFirmwareMode> {
+        match str {
+            "QEMU_MEDIA_FIRMWARE_MODE_UNSPECIFIED" => ::std::option::Option::Some(QemuMediaFirmwareMode::QEMU_MEDIA_FIRMWARE_MODE_UNSPECIFIED),
+            "QEMU_MEDIA_FIRMWARE_MODE_NONE" => ::std::option::Option::Some(QemuMediaFirmwareMode::QEMU_MEDIA_FIRMWARE_MODE_NONE),
+            "QEMU_MEDIA_FIRMWARE_MODE_UEFI" => ::std::option::Option::Some(QemuMediaFirmwareMode::QEMU_MEDIA_FIRMWARE_MODE_UEFI),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [QemuMediaFirmwareMode] = &[
+        QemuMediaFirmwareMode::QEMU_MEDIA_FIRMWARE_MODE_UNSPECIFIED,
+        QemuMediaFirmwareMode::QEMU_MEDIA_FIRMWARE_MODE_NONE,
+        QemuMediaFirmwareMode::QEMU_MEDIA_FIRMWARE_MODE_UEFI,
+    ];
+}
+
+impl ::protobuf::EnumFull for QemuMediaFirmwareMode {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("QemuMediaFirmwareMode").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for QemuMediaFirmwareMode {
+    fn default() -> Self {
+        QemuMediaFirmwareMode::QEMU_MEDIA_FIRMWARE_MODE_UNSPECIFIED
+    }
+}
+
+impl QemuMediaFirmwareMode {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<QemuMediaFirmwareMode>("QemuMediaFirmwareMode")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.daemon.v2.QemuMediaReadiness)
+pub enum QemuMediaReadiness {
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.QemuMediaReadiness.QEMU_MEDIA_READINESS_UNSPECIFIED)
+    QEMU_MEDIA_READINESS_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.QemuMediaReadiness.QEMU_MEDIA_READINESS_NOT_STARTED)
+    QEMU_MEDIA_READINESS_NOT_STARTED = 1,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.QemuMediaReadiness.QEMU_MEDIA_READINESS_PENDING)
+    QEMU_MEDIA_READINESS_PENDING = 2,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.QemuMediaReadiness.QEMU_MEDIA_READINESS_READY)
+    QEMU_MEDIA_READINESS_READY = 3,
+}
+
+impl ::protobuf::Enum for QemuMediaReadiness {
+    const NAME: &'static str = "QemuMediaReadiness";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<QemuMediaReadiness> {
+        match value {
+            0 => ::std::option::Option::Some(QemuMediaReadiness::QEMU_MEDIA_READINESS_UNSPECIFIED),
+            1 => ::std::option::Option::Some(QemuMediaReadiness::QEMU_MEDIA_READINESS_NOT_STARTED),
+            2 => ::std::option::Option::Some(QemuMediaReadiness::QEMU_MEDIA_READINESS_PENDING),
+            3 => ::std::option::Option::Some(QemuMediaReadiness::QEMU_MEDIA_READINESS_READY),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<QemuMediaReadiness> {
+        match str {
+            "QEMU_MEDIA_READINESS_UNSPECIFIED" => ::std::option::Option::Some(QemuMediaReadiness::QEMU_MEDIA_READINESS_UNSPECIFIED),
+            "QEMU_MEDIA_READINESS_NOT_STARTED" => ::std::option::Option::Some(QemuMediaReadiness::QEMU_MEDIA_READINESS_NOT_STARTED),
+            "QEMU_MEDIA_READINESS_PENDING" => ::std::option::Option::Some(QemuMediaReadiness::QEMU_MEDIA_READINESS_PENDING),
+            "QEMU_MEDIA_READINESS_READY" => ::std::option::Option::Some(QemuMediaReadiness::QEMU_MEDIA_READINESS_READY),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [QemuMediaReadiness] = &[
+        QemuMediaReadiness::QEMU_MEDIA_READINESS_UNSPECIFIED,
+        QemuMediaReadiness::QEMU_MEDIA_READINESS_NOT_STARTED,
+        QemuMediaReadiness::QEMU_MEDIA_READINESS_PENDING,
+        QemuMediaReadiness::QEMU_MEDIA_READINESS_READY,
+    ];
+}
+
+impl ::protobuf::EnumFull for QemuMediaReadiness {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("QemuMediaReadiness").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for QemuMediaReadiness {
+    fn default() -> Self {
+        QemuMediaReadiness::QEMU_MEDIA_READINESS_UNSPECIFIED
+    }
+}
+
+impl QemuMediaReadiness {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<QemuMediaReadiness>("QemuMediaReadiness")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.daemon.v2.QemuMediaProgress)
+pub enum QemuMediaProgress {
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.QemuMediaProgress.QEMU_MEDIA_PROGRESS_UNSPECIFIED)
+    QEMU_MEDIA_PROGRESS_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.QemuMediaProgress.QEMU_MEDIA_PROGRESS_NOT_STARTED)
+    QEMU_MEDIA_PROGRESS_NOT_STARTED = 1,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.QemuMediaProgress.QEMU_MEDIA_PROGRESS_WAITING_FOR_QMP)
+    QEMU_MEDIA_PROGRESS_WAITING_FOR_QMP = 2,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.QemuMediaProgress.QEMU_MEDIA_PROGRESS_PAUSED_BEFORE_CONT)
+    QEMU_MEDIA_PROGRESS_PAUSED_BEFORE_CONT = 3,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.QemuMediaProgress.QEMU_MEDIA_PROGRESS_RUNNING)
+    QEMU_MEDIA_PROGRESS_RUNNING = 4,
+}
+
+impl ::protobuf::Enum for QemuMediaProgress {
+    const NAME: &'static str = "QemuMediaProgress";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<QemuMediaProgress> {
+        match value {
+            0 => ::std::option::Option::Some(QemuMediaProgress::QEMU_MEDIA_PROGRESS_UNSPECIFIED),
+            1 => ::std::option::Option::Some(QemuMediaProgress::QEMU_MEDIA_PROGRESS_NOT_STARTED),
+            2 => ::std::option::Option::Some(QemuMediaProgress::QEMU_MEDIA_PROGRESS_WAITING_FOR_QMP),
+            3 => ::std::option::Option::Some(QemuMediaProgress::QEMU_MEDIA_PROGRESS_PAUSED_BEFORE_CONT),
+            4 => ::std::option::Option::Some(QemuMediaProgress::QEMU_MEDIA_PROGRESS_RUNNING),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<QemuMediaProgress> {
+        match str {
+            "QEMU_MEDIA_PROGRESS_UNSPECIFIED" => ::std::option::Option::Some(QemuMediaProgress::QEMU_MEDIA_PROGRESS_UNSPECIFIED),
+            "QEMU_MEDIA_PROGRESS_NOT_STARTED" => ::std::option::Option::Some(QemuMediaProgress::QEMU_MEDIA_PROGRESS_NOT_STARTED),
+            "QEMU_MEDIA_PROGRESS_WAITING_FOR_QMP" => ::std::option::Option::Some(QemuMediaProgress::QEMU_MEDIA_PROGRESS_WAITING_FOR_QMP),
+            "QEMU_MEDIA_PROGRESS_PAUSED_BEFORE_CONT" => ::std::option::Option::Some(QemuMediaProgress::QEMU_MEDIA_PROGRESS_PAUSED_BEFORE_CONT),
+            "QEMU_MEDIA_PROGRESS_RUNNING" => ::std::option::Option::Some(QemuMediaProgress::QEMU_MEDIA_PROGRESS_RUNNING),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [QemuMediaProgress] = &[
+        QemuMediaProgress::QEMU_MEDIA_PROGRESS_UNSPECIFIED,
+        QemuMediaProgress::QEMU_MEDIA_PROGRESS_NOT_STARTED,
+        QemuMediaProgress::QEMU_MEDIA_PROGRESS_WAITING_FOR_QMP,
+        QemuMediaProgress::QEMU_MEDIA_PROGRESS_PAUSED_BEFORE_CONT,
+        QemuMediaProgress::QEMU_MEDIA_PROGRESS_RUNNING,
+    ];
+}
+
+impl ::protobuf::EnumFull for QemuMediaProgress {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("QemuMediaProgress").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for QemuMediaProgress {
+    fn default() -> Self {
+        QemuMediaProgress::QEMU_MEDIA_PROGRESS_UNSPECIFIED
+    }
+}
+
+impl QemuMediaProgress {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<QemuMediaProgress>("QemuMediaProgress")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.daemon.v2.QemuMediaSourceKind)
+pub enum QemuMediaSourceKind {
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.QemuMediaSourceKind.QEMU_MEDIA_SOURCE_KIND_UNSPECIFIED)
+    QEMU_MEDIA_SOURCE_KIND_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.QemuMediaSourceKind.QEMU_MEDIA_SOURCE_KIND_PHYSICAL_USB)
+    QEMU_MEDIA_SOURCE_KIND_PHYSICAL_USB = 1,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.QemuMediaSourceKind.QEMU_MEDIA_SOURCE_KIND_IMAGE_FILE)
+    QEMU_MEDIA_SOURCE_KIND_IMAGE_FILE = 2,
+}
+
+impl ::protobuf::Enum for QemuMediaSourceKind {
+    const NAME: &'static str = "QemuMediaSourceKind";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<QemuMediaSourceKind> {
+        match value {
+            0 => ::std::option::Option::Some(QemuMediaSourceKind::QEMU_MEDIA_SOURCE_KIND_UNSPECIFIED),
+            1 => ::std::option::Option::Some(QemuMediaSourceKind::QEMU_MEDIA_SOURCE_KIND_PHYSICAL_USB),
+            2 => ::std::option::Option::Some(QemuMediaSourceKind::QEMU_MEDIA_SOURCE_KIND_IMAGE_FILE),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<QemuMediaSourceKind> {
+        match str {
+            "QEMU_MEDIA_SOURCE_KIND_UNSPECIFIED" => ::std::option::Option::Some(QemuMediaSourceKind::QEMU_MEDIA_SOURCE_KIND_UNSPECIFIED),
+            "QEMU_MEDIA_SOURCE_KIND_PHYSICAL_USB" => ::std::option::Option::Some(QemuMediaSourceKind::QEMU_MEDIA_SOURCE_KIND_PHYSICAL_USB),
+            "QEMU_MEDIA_SOURCE_KIND_IMAGE_FILE" => ::std::option::Option::Some(QemuMediaSourceKind::QEMU_MEDIA_SOURCE_KIND_IMAGE_FILE),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [QemuMediaSourceKind] = &[
+        QemuMediaSourceKind::QEMU_MEDIA_SOURCE_KIND_UNSPECIFIED,
+        QemuMediaSourceKind::QEMU_MEDIA_SOURCE_KIND_PHYSICAL_USB,
+        QemuMediaSourceKind::QEMU_MEDIA_SOURCE_KIND_IMAGE_FILE,
+    ];
+}
+
+impl ::protobuf::EnumFull for QemuMediaSourceKind {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("QemuMediaSourceKind").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for QemuMediaSourceKind {
+    fn default() -> Self {
+        QemuMediaSourceKind::QEMU_MEDIA_SOURCE_KIND_UNSPECIFIED
+    }
+}
+
+impl QemuMediaSourceKind {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<QemuMediaSourceKind>("QemuMediaSourceKind")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.daemon.v2.QemuMediaFormat)
+pub enum QemuMediaFormat {
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.QemuMediaFormat.QEMU_MEDIA_FORMAT_UNSPECIFIED)
+    QEMU_MEDIA_FORMAT_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.QemuMediaFormat.QEMU_MEDIA_FORMAT_RAW)
+    QEMU_MEDIA_FORMAT_RAW = 1,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.QemuMediaFormat.QEMU_MEDIA_FORMAT_QCOW2)
+    QEMU_MEDIA_FORMAT_QCOW2 = 2,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.QemuMediaFormat.QEMU_MEDIA_FORMAT_ISO)
+    QEMU_MEDIA_FORMAT_ISO = 3,
+}
+
+impl ::protobuf::Enum for QemuMediaFormat {
+    const NAME: &'static str = "QemuMediaFormat";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<QemuMediaFormat> {
+        match value {
+            0 => ::std::option::Option::Some(QemuMediaFormat::QEMU_MEDIA_FORMAT_UNSPECIFIED),
+            1 => ::std::option::Option::Some(QemuMediaFormat::QEMU_MEDIA_FORMAT_RAW),
+            2 => ::std::option::Option::Some(QemuMediaFormat::QEMU_MEDIA_FORMAT_QCOW2),
+            3 => ::std::option::Option::Some(QemuMediaFormat::QEMU_MEDIA_FORMAT_ISO),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<QemuMediaFormat> {
+        match str {
+            "QEMU_MEDIA_FORMAT_UNSPECIFIED" => ::std::option::Option::Some(QemuMediaFormat::QEMU_MEDIA_FORMAT_UNSPECIFIED),
+            "QEMU_MEDIA_FORMAT_RAW" => ::std::option::Option::Some(QemuMediaFormat::QEMU_MEDIA_FORMAT_RAW),
+            "QEMU_MEDIA_FORMAT_QCOW2" => ::std::option::Option::Some(QemuMediaFormat::QEMU_MEDIA_FORMAT_QCOW2),
+            "QEMU_MEDIA_FORMAT_ISO" => ::std::option::Option::Some(QemuMediaFormat::QEMU_MEDIA_FORMAT_ISO),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [QemuMediaFormat] = &[
+        QemuMediaFormat::QEMU_MEDIA_FORMAT_UNSPECIFIED,
+        QemuMediaFormat::QEMU_MEDIA_FORMAT_RAW,
+        QemuMediaFormat::QEMU_MEDIA_FORMAT_QCOW2,
+        QemuMediaFormat::QEMU_MEDIA_FORMAT_ISO,
+    ];
+}
+
+impl ::protobuf::EnumFull for QemuMediaFormat {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("QemuMediaFormat").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for QemuMediaFormat {
+    fn default() -> Self {
+        QemuMediaFormat::QEMU_MEDIA_FORMAT_UNSPECIFIED
+    }
+}
+
+impl QemuMediaFormat {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<QemuMediaFormat>("QemuMediaFormat")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.daemon.v2.UsbDeviceState)
+pub enum UsbDeviceState {
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.UsbDeviceState.USB_DEVICE_STATE_UNSPECIFIED)
+    USB_DEVICE_STATE_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.UsbDeviceState.USB_DEVICE_STATE_READY)
+    USB_DEVICE_STATE_READY = 1,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.UsbDeviceState.USB_DEVICE_STATE_ATTACHED)
+    USB_DEVICE_STATE_ATTACHED = 2,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.UsbDeviceState.USB_DEVICE_STATE_DETACHED)
+    USB_DEVICE_STATE_DETACHED = 3,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.UsbDeviceState.USB_DEVICE_STATE_CONFLICT)
+    USB_DEVICE_STATE_CONFLICT = 4,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.UsbDeviceState.USB_DEVICE_STATE_UNAVAILABLE)
+    USB_DEVICE_STATE_UNAVAILABLE = 5,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.UsbDeviceState.USB_DEVICE_STATE_DEGRADED)
+    USB_DEVICE_STATE_DEGRADED = 6,
+}
+
+impl ::protobuf::Enum for UsbDeviceState {
+    const NAME: &'static str = "UsbDeviceState";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<UsbDeviceState> {
+        match value {
+            0 => ::std::option::Option::Some(UsbDeviceState::USB_DEVICE_STATE_UNSPECIFIED),
+            1 => ::std::option::Option::Some(UsbDeviceState::USB_DEVICE_STATE_READY),
+            2 => ::std::option::Option::Some(UsbDeviceState::USB_DEVICE_STATE_ATTACHED),
+            3 => ::std::option::Option::Some(UsbDeviceState::USB_DEVICE_STATE_DETACHED),
+            4 => ::std::option::Option::Some(UsbDeviceState::USB_DEVICE_STATE_CONFLICT),
+            5 => ::std::option::Option::Some(UsbDeviceState::USB_DEVICE_STATE_UNAVAILABLE),
+            6 => ::std::option::Option::Some(UsbDeviceState::USB_DEVICE_STATE_DEGRADED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<UsbDeviceState> {
+        match str {
+            "USB_DEVICE_STATE_UNSPECIFIED" => ::std::option::Option::Some(UsbDeviceState::USB_DEVICE_STATE_UNSPECIFIED),
+            "USB_DEVICE_STATE_READY" => ::std::option::Option::Some(UsbDeviceState::USB_DEVICE_STATE_READY),
+            "USB_DEVICE_STATE_ATTACHED" => ::std::option::Option::Some(UsbDeviceState::USB_DEVICE_STATE_ATTACHED),
+            "USB_DEVICE_STATE_DETACHED" => ::std::option::Option::Some(UsbDeviceState::USB_DEVICE_STATE_DETACHED),
+            "USB_DEVICE_STATE_CONFLICT" => ::std::option::Option::Some(UsbDeviceState::USB_DEVICE_STATE_CONFLICT),
+            "USB_DEVICE_STATE_UNAVAILABLE" => ::std::option::Option::Some(UsbDeviceState::USB_DEVICE_STATE_UNAVAILABLE),
+            "USB_DEVICE_STATE_DEGRADED" => ::std::option::Option::Some(UsbDeviceState::USB_DEVICE_STATE_DEGRADED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [UsbDeviceState] = &[
+        UsbDeviceState::USB_DEVICE_STATE_UNSPECIFIED,
+        UsbDeviceState::USB_DEVICE_STATE_READY,
+        UsbDeviceState::USB_DEVICE_STATE_ATTACHED,
+        UsbDeviceState::USB_DEVICE_STATE_DETACHED,
+        UsbDeviceState::USB_DEVICE_STATE_CONFLICT,
+        UsbDeviceState::USB_DEVICE_STATE_UNAVAILABLE,
+        UsbDeviceState::USB_DEVICE_STATE_DEGRADED,
+    ];
+}
+
+impl ::protobuf::EnumFull for UsbDeviceState {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("UsbDeviceState").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for UsbDeviceState {
+    fn default() -> Self {
+        UsbDeviceState::USB_DEVICE_STATE_UNSPECIFIED
+    }
+}
+
+impl UsbDeviceState {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<UsbDeviceState>("UsbDeviceState")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.daemon.v2.TerminalKind)
+pub enum TerminalKind {
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.TerminalKind.TERMINAL_KIND_UNSPECIFIED)
+    TERMINAL_KIND_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.TerminalKind.TERMINAL_KIND_EXEC)
+    TERMINAL_KIND_EXEC = 1,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.TerminalKind.TERMINAL_KIND_SHELL)
+    TERMINAL_KIND_SHELL = 2,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.TerminalKind.TERMINAL_KIND_CONSOLE)
+    TERMINAL_KIND_CONSOLE = 3,
+}
+
+impl ::protobuf::Enum for TerminalKind {
+    const NAME: &'static str = "TerminalKind";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<TerminalKind> {
+        match value {
+            0 => ::std::option::Option::Some(TerminalKind::TERMINAL_KIND_UNSPECIFIED),
+            1 => ::std::option::Option::Some(TerminalKind::TERMINAL_KIND_EXEC),
+            2 => ::std::option::Option::Some(TerminalKind::TERMINAL_KIND_SHELL),
+            3 => ::std::option::Option::Some(TerminalKind::TERMINAL_KIND_CONSOLE),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<TerminalKind> {
+        match str {
+            "TERMINAL_KIND_UNSPECIFIED" => ::std::option::Option::Some(TerminalKind::TERMINAL_KIND_UNSPECIFIED),
+            "TERMINAL_KIND_EXEC" => ::std::option::Option::Some(TerminalKind::TERMINAL_KIND_EXEC),
+            "TERMINAL_KIND_SHELL" => ::std::option::Option::Some(TerminalKind::TERMINAL_KIND_SHELL),
+            "TERMINAL_KIND_CONSOLE" => ::std::option::Option::Some(TerminalKind::TERMINAL_KIND_CONSOLE),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [TerminalKind] = &[
+        TerminalKind::TERMINAL_KIND_UNSPECIFIED,
+        TerminalKind::TERMINAL_KIND_EXEC,
+        TerminalKind::TERMINAL_KIND_SHELL,
+        TerminalKind::TERMINAL_KIND_CONSOLE,
+    ];
+}
+
+impl ::protobuf::EnumFull for TerminalKind {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("TerminalKind").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for TerminalKind {
+    fn default() -> Self {
+        TerminalKind::TERMINAL_KIND_UNSPECIFIED
+    }
+}
+
+impl TerminalKind {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<TerminalKind>("TerminalKind")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.daemon.v2.ExecAuthority)
+pub enum ExecAuthority {
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ExecAuthority.EXEC_AUTHORITY_UNSPECIFIED)
+    EXEC_AUTHORITY_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ExecAuthority.EXEC_AUTHORITY_ADMIN_ARBITRARY)
+    EXEC_AUTHORITY_ADMIN_ARBITRARY = 1,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ExecAuthority.EXEC_AUTHORITY_CONFIGURED_LAUNCH)
+    EXEC_AUTHORITY_CONFIGURED_LAUNCH = 2,
+}
+
+impl ::protobuf::Enum for ExecAuthority {
+    const NAME: &'static str = "ExecAuthority";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ExecAuthority> {
+        match value {
+            0 => ::std::option::Option::Some(ExecAuthority::EXEC_AUTHORITY_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ExecAuthority::EXEC_AUTHORITY_ADMIN_ARBITRARY),
+            2 => ::std::option::Option::Some(ExecAuthority::EXEC_AUTHORITY_CONFIGURED_LAUNCH),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ExecAuthority> {
+        match str {
+            "EXEC_AUTHORITY_UNSPECIFIED" => ::std::option::Option::Some(ExecAuthority::EXEC_AUTHORITY_UNSPECIFIED),
+            "EXEC_AUTHORITY_ADMIN_ARBITRARY" => ::std::option::Option::Some(ExecAuthority::EXEC_AUTHORITY_ADMIN_ARBITRARY),
+            "EXEC_AUTHORITY_CONFIGURED_LAUNCH" => ::std::option::Option::Some(ExecAuthority::EXEC_AUTHORITY_CONFIGURED_LAUNCH),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ExecAuthority] = &[
+        ExecAuthority::EXEC_AUTHORITY_UNSPECIFIED,
+        ExecAuthority::EXEC_AUTHORITY_ADMIN_ARBITRARY,
+        ExecAuthority::EXEC_AUTHORITY_CONFIGURED_LAUNCH,
+    ];
+}
+
+impl ::protobuf::EnumFull for ExecAuthority {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ExecAuthority").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ExecAuthority {
+    fn default() -> Self {
+        ExecAuthority::EXEC_AUTHORITY_UNSPECIFIED
+    }
+}
+
+impl ExecAuthority {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ExecAuthority>("ExecAuthority")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.daemon.v2.ConsoleProviderKind)
+pub enum ConsoleProviderKind {
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ConsoleProviderKind.CONSOLE_PROVIDER_KIND_UNSPECIFIED)
+    CONSOLE_PROVIDER_KIND_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ConsoleProviderKind.CONSOLE_PROVIDER_KIND_LOCAL_HYPERVISOR)
+    CONSOLE_PROVIDER_KIND_LOCAL_HYPERVISOR = 1,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ConsoleProviderKind.CONSOLE_PROVIDER_KIND_QEMU_MEDIA)
+    CONSOLE_PROVIDER_KIND_QEMU_MEDIA = 2,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.ConsoleProviderKind.CONSOLE_PROVIDER_KIND_ACA_SANDBOX)
+    CONSOLE_PROVIDER_KIND_ACA_SANDBOX = 3,
+}
+
+impl ::protobuf::Enum for ConsoleProviderKind {
+    const NAME: &'static str = "ConsoleProviderKind";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ConsoleProviderKind> {
+        match value {
+            0 => ::std::option::Option::Some(ConsoleProviderKind::CONSOLE_PROVIDER_KIND_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ConsoleProviderKind::CONSOLE_PROVIDER_KIND_LOCAL_HYPERVISOR),
+            2 => ::std::option::Option::Some(ConsoleProviderKind::CONSOLE_PROVIDER_KIND_QEMU_MEDIA),
+            3 => ::std::option::Option::Some(ConsoleProviderKind::CONSOLE_PROVIDER_KIND_ACA_SANDBOX),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ConsoleProviderKind> {
+        match str {
+            "CONSOLE_PROVIDER_KIND_UNSPECIFIED" => ::std::option::Option::Some(ConsoleProviderKind::CONSOLE_PROVIDER_KIND_UNSPECIFIED),
+            "CONSOLE_PROVIDER_KIND_LOCAL_HYPERVISOR" => ::std::option::Option::Some(ConsoleProviderKind::CONSOLE_PROVIDER_KIND_LOCAL_HYPERVISOR),
+            "CONSOLE_PROVIDER_KIND_QEMU_MEDIA" => ::std::option::Option::Some(ConsoleProviderKind::CONSOLE_PROVIDER_KIND_QEMU_MEDIA),
+            "CONSOLE_PROVIDER_KIND_ACA_SANDBOX" => ::std::option::Option::Some(ConsoleProviderKind::CONSOLE_PROVIDER_KIND_ACA_SANDBOX),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ConsoleProviderKind] = &[
+        ConsoleProviderKind::CONSOLE_PROVIDER_KIND_UNSPECIFIED,
+        ConsoleProviderKind::CONSOLE_PROVIDER_KIND_LOCAL_HYPERVISOR,
+        ConsoleProviderKind::CONSOLE_PROVIDER_KIND_QEMU_MEDIA,
+        ConsoleProviderKind::CONSOLE_PROVIDER_KIND_ACA_SANDBOX,
+    ];
+}
+
+impl ::protobuf::EnumFull for ConsoleProviderKind {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ConsoleProviderKind").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ConsoleProviderKind {
+    fn default() -> Self {
+        ConsoleProviderKind::CONSOLE_PROVIDER_KIND_UNSPECIFIED
+    }
+}
+
+impl ConsoleProviderKind {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ConsoleProviderKind>("ConsoleProviderKind")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.daemon.v2.TerminalSignalKind)
+pub enum TerminalSignalKind {
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.TerminalSignalKind.TERMINAL_SIGNAL_KIND_UNSPECIFIED)
+    TERMINAL_SIGNAL_KIND_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.TerminalSignalKind.TERMINAL_SIGNAL_KIND_INTERRUPT)
+    TERMINAL_SIGNAL_KIND_INTERRUPT = 1,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.TerminalSignalKind.TERMINAL_SIGNAL_KIND_TERMINATE)
+    TERMINAL_SIGNAL_KIND_TERMINATE = 2,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.TerminalSignalKind.TERMINAL_SIGNAL_KIND_SUSPEND)
+    TERMINAL_SIGNAL_KIND_SUSPEND = 3,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.TerminalSignalKind.TERMINAL_SIGNAL_KIND_HANGUP)
+    TERMINAL_SIGNAL_KIND_HANGUP = 4,
+}
+
+impl ::protobuf::Enum for TerminalSignalKind {
+    const NAME: &'static str = "TerminalSignalKind";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<TerminalSignalKind> {
+        match value {
+            0 => ::std::option::Option::Some(TerminalSignalKind::TERMINAL_SIGNAL_KIND_UNSPECIFIED),
+            1 => ::std::option::Option::Some(TerminalSignalKind::TERMINAL_SIGNAL_KIND_INTERRUPT),
+            2 => ::std::option::Option::Some(TerminalSignalKind::TERMINAL_SIGNAL_KIND_TERMINATE),
+            3 => ::std::option::Option::Some(TerminalSignalKind::TERMINAL_SIGNAL_KIND_SUSPEND),
+            4 => ::std::option::Option::Some(TerminalSignalKind::TERMINAL_SIGNAL_KIND_HANGUP),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<TerminalSignalKind> {
+        match str {
+            "TERMINAL_SIGNAL_KIND_UNSPECIFIED" => ::std::option::Option::Some(TerminalSignalKind::TERMINAL_SIGNAL_KIND_UNSPECIFIED),
+            "TERMINAL_SIGNAL_KIND_INTERRUPT" => ::std::option::Option::Some(TerminalSignalKind::TERMINAL_SIGNAL_KIND_INTERRUPT),
+            "TERMINAL_SIGNAL_KIND_TERMINATE" => ::std::option::Option::Some(TerminalSignalKind::TERMINAL_SIGNAL_KIND_TERMINATE),
+            "TERMINAL_SIGNAL_KIND_SUSPEND" => ::std::option::Option::Some(TerminalSignalKind::TERMINAL_SIGNAL_KIND_SUSPEND),
+            "TERMINAL_SIGNAL_KIND_HANGUP" => ::std::option::Option::Some(TerminalSignalKind::TERMINAL_SIGNAL_KIND_HANGUP),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [TerminalSignalKind] = &[
+        TerminalSignalKind::TERMINAL_SIGNAL_KIND_UNSPECIFIED,
+        TerminalSignalKind::TERMINAL_SIGNAL_KIND_INTERRUPT,
+        TerminalSignalKind::TERMINAL_SIGNAL_KIND_TERMINATE,
+        TerminalSignalKind::TERMINAL_SIGNAL_KIND_SUSPEND,
+        TerminalSignalKind::TERMINAL_SIGNAL_KIND_HANGUP,
+    ];
+}
+
+impl ::protobuf::EnumFull for TerminalSignalKind {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("TerminalSignalKind").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for TerminalSignalKind {
+    fn default() -> Self {
+        TerminalSignalKind::TERMINAL_SIGNAL_KIND_UNSPECIFIED
+    }
+}
+
+impl TerminalSignalKind {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<TerminalSignalKind>("TerminalSignalKind")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.daemon.v2.TerminalStatusKind)
+pub enum TerminalStatusKind {
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.TerminalStatusKind.TERMINAL_STATUS_KIND_UNSPECIFIED)
+    TERMINAL_STATUS_KIND_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.TerminalStatusKind.TERMINAL_STATUS_KIND_RUNNING)
+    TERMINAL_STATUS_KIND_RUNNING = 1,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.TerminalStatusKind.TERMINAL_STATUS_KIND_STDIN_ACCEPTED)
+    TERMINAL_STATUS_KIND_STDIN_ACCEPTED = 2,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.TerminalStatusKind.TERMINAL_STATUS_KIND_STDIN_BACKPRESSURED)
+    TERMINAL_STATUS_KIND_STDIN_BACKPRESSURED = 3,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.TerminalStatusKind.TERMINAL_STATUS_KIND_STDIN_CLOSED)
+    TERMINAL_STATUS_KIND_STDIN_CLOSED = 4,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.TerminalStatusKind.TERMINAL_STATUS_KIND_CONTROL_APPLIED)
+    TERMINAL_STATUS_KIND_CONTROL_APPLIED = 5,
+}
+
+impl ::protobuf::Enum for TerminalStatusKind {
+    const NAME: &'static str = "TerminalStatusKind";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<TerminalStatusKind> {
+        match value {
+            0 => ::std::option::Option::Some(TerminalStatusKind::TERMINAL_STATUS_KIND_UNSPECIFIED),
+            1 => ::std::option::Option::Some(TerminalStatusKind::TERMINAL_STATUS_KIND_RUNNING),
+            2 => ::std::option::Option::Some(TerminalStatusKind::TERMINAL_STATUS_KIND_STDIN_ACCEPTED),
+            3 => ::std::option::Option::Some(TerminalStatusKind::TERMINAL_STATUS_KIND_STDIN_BACKPRESSURED),
+            4 => ::std::option::Option::Some(TerminalStatusKind::TERMINAL_STATUS_KIND_STDIN_CLOSED),
+            5 => ::std::option::Option::Some(TerminalStatusKind::TERMINAL_STATUS_KIND_CONTROL_APPLIED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<TerminalStatusKind> {
+        match str {
+            "TERMINAL_STATUS_KIND_UNSPECIFIED" => ::std::option::Option::Some(TerminalStatusKind::TERMINAL_STATUS_KIND_UNSPECIFIED),
+            "TERMINAL_STATUS_KIND_RUNNING" => ::std::option::Option::Some(TerminalStatusKind::TERMINAL_STATUS_KIND_RUNNING),
+            "TERMINAL_STATUS_KIND_STDIN_ACCEPTED" => ::std::option::Option::Some(TerminalStatusKind::TERMINAL_STATUS_KIND_STDIN_ACCEPTED),
+            "TERMINAL_STATUS_KIND_STDIN_BACKPRESSURED" => ::std::option::Option::Some(TerminalStatusKind::TERMINAL_STATUS_KIND_STDIN_BACKPRESSURED),
+            "TERMINAL_STATUS_KIND_STDIN_CLOSED" => ::std::option::Option::Some(TerminalStatusKind::TERMINAL_STATUS_KIND_STDIN_CLOSED),
+            "TERMINAL_STATUS_KIND_CONTROL_APPLIED" => ::std::option::Option::Some(TerminalStatusKind::TERMINAL_STATUS_KIND_CONTROL_APPLIED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [TerminalStatusKind] = &[
+        TerminalStatusKind::TERMINAL_STATUS_KIND_UNSPECIFIED,
+        TerminalStatusKind::TERMINAL_STATUS_KIND_RUNNING,
+        TerminalStatusKind::TERMINAL_STATUS_KIND_STDIN_ACCEPTED,
+        TerminalStatusKind::TERMINAL_STATUS_KIND_STDIN_BACKPRESSURED,
+        TerminalStatusKind::TERMINAL_STATUS_KIND_STDIN_CLOSED,
+        TerminalStatusKind::TERMINAL_STATUS_KIND_CONTROL_APPLIED,
+    ];
+}
+
+impl ::protobuf::EnumFull for TerminalStatusKind {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("TerminalStatusKind").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for TerminalStatusKind {
+    fn default() -> Self {
+        TerminalStatusKind::TERMINAL_STATUS_KIND_UNSPECIFIED
+    }
+}
+
+impl TerminalStatusKind {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<TerminalStatusKind>("TerminalStatusKind")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.daemon.v2.TerminalErrorKind)
+pub enum TerminalErrorKind {
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.TerminalErrorKind.TERMINAL_ERROR_KIND_UNSPECIFIED)
+    TERMINAL_ERROR_KIND_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.TerminalErrorKind.TERMINAL_ERROR_KIND_INVALID_SELECTION)
+    TERMINAL_ERROR_KIND_INVALID_SELECTION = 1,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.TerminalErrorKind.TERMINAL_ERROR_KIND_UNAUTHORIZED)
+    TERMINAL_ERROR_KIND_UNAUTHORIZED = 2,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.TerminalErrorKind.TERMINAL_ERROR_KIND_NOT_FOUND)
+    TERMINAL_ERROR_KIND_NOT_FOUND = 3,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.TerminalErrorKind.TERMINAL_ERROR_KIND_CONFLICT)
+    TERMINAL_ERROR_KIND_CONFLICT = 4,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.TerminalErrorKind.TERMINAL_ERROR_KIND_UNAVAILABLE)
+    TERMINAL_ERROR_KIND_UNAVAILABLE = 5,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.TerminalErrorKind.TERMINAL_ERROR_KIND_RESOURCE_EXHAUSTED)
+    TERMINAL_ERROR_KIND_RESOURCE_EXHAUSTED = 6,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.TerminalErrorKind.TERMINAL_ERROR_KIND_GENERATION_MISMATCH)
+    TERMINAL_ERROR_KIND_GENERATION_MISMATCH = 7,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.TerminalErrorKind.TERMINAL_ERROR_KIND_PROTOCOL)
+    TERMINAL_ERROR_KIND_PROTOCOL = 8,
+    // @@protoc_insertion_point(enum_value:d2b.daemon.v2.TerminalErrorKind.TERMINAL_ERROR_KIND_INTERNAL)
+    TERMINAL_ERROR_KIND_INTERNAL = 9,
+}
+
+impl ::protobuf::Enum for TerminalErrorKind {
+    const NAME: &'static str = "TerminalErrorKind";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<TerminalErrorKind> {
+        match value {
+            0 => ::std::option::Option::Some(TerminalErrorKind::TERMINAL_ERROR_KIND_UNSPECIFIED),
+            1 => ::std::option::Option::Some(TerminalErrorKind::TERMINAL_ERROR_KIND_INVALID_SELECTION),
+            2 => ::std::option::Option::Some(TerminalErrorKind::TERMINAL_ERROR_KIND_UNAUTHORIZED),
+            3 => ::std::option::Option::Some(TerminalErrorKind::TERMINAL_ERROR_KIND_NOT_FOUND),
+            4 => ::std::option::Option::Some(TerminalErrorKind::TERMINAL_ERROR_KIND_CONFLICT),
+            5 => ::std::option::Option::Some(TerminalErrorKind::TERMINAL_ERROR_KIND_UNAVAILABLE),
+            6 => ::std::option::Option::Some(TerminalErrorKind::TERMINAL_ERROR_KIND_RESOURCE_EXHAUSTED),
+            7 => ::std::option::Option::Some(TerminalErrorKind::TERMINAL_ERROR_KIND_GENERATION_MISMATCH),
+            8 => ::std::option::Option::Some(TerminalErrorKind::TERMINAL_ERROR_KIND_PROTOCOL),
+            9 => ::std::option::Option::Some(TerminalErrorKind::TERMINAL_ERROR_KIND_INTERNAL),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<TerminalErrorKind> {
+        match str {
+            "TERMINAL_ERROR_KIND_UNSPECIFIED" => ::std::option::Option::Some(TerminalErrorKind::TERMINAL_ERROR_KIND_UNSPECIFIED),
+            "TERMINAL_ERROR_KIND_INVALID_SELECTION" => ::std::option::Option::Some(TerminalErrorKind::TERMINAL_ERROR_KIND_INVALID_SELECTION),
+            "TERMINAL_ERROR_KIND_UNAUTHORIZED" => ::std::option::Option::Some(TerminalErrorKind::TERMINAL_ERROR_KIND_UNAUTHORIZED),
+            "TERMINAL_ERROR_KIND_NOT_FOUND" => ::std::option::Option::Some(TerminalErrorKind::TERMINAL_ERROR_KIND_NOT_FOUND),
+            "TERMINAL_ERROR_KIND_CONFLICT" => ::std::option::Option::Some(TerminalErrorKind::TERMINAL_ERROR_KIND_CONFLICT),
+            "TERMINAL_ERROR_KIND_UNAVAILABLE" => ::std::option::Option::Some(TerminalErrorKind::TERMINAL_ERROR_KIND_UNAVAILABLE),
+            "TERMINAL_ERROR_KIND_RESOURCE_EXHAUSTED" => ::std::option::Option::Some(TerminalErrorKind::TERMINAL_ERROR_KIND_RESOURCE_EXHAUSTED),
+            "TERMINAL_ERROR_KIND_GENERATION_MISMATCH" => ::std::option::Option::Some(TerminalErrorKind::TERMINAL_ERROR_KIND_GENERATION_MISMATCH),
+            "TERMINAL_ERROR_KIND_PROTOCOL" => ::std::option::Option::Some(TerminalErrorKind::TERMINAL_ERROR_KIND_PROTOCOL),
+            "TERMINAL_ERROR_KIND_INTERNAL" => ::std::option::Option::Some(TerminalErrorKind::TERMINAL_ERROR_KIND_INTERNAL),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [TerminalErrorKind] = &[
+        TerminalErrorKind::TERMINAL_ERROR_KIND_UNSPECIFIED,
+        TerminalErrorKind::TERMINAL_ERROR_KIND_INVALID_SELECTION,
+        TerminalErrorKind::TERMINAL_ERROR_KIND_UNAUTHORIZED,
+        TerminalErrorKind::TERMINAL_ERROR_KIND_NOT_FOUND,
+        TerminalErrorKind::TERMINAL_ERROR_KIND_CONFLICT,
+        TerminalErrorKind::TERMINAL_ERROR_KIND_UNAVAILABLE,
+        TerminalErrorKind::TERMINAL_ERROR_KIND_RESOURCE_EXHAUSTED,
+        TerminalErrorKind::TERMINAL_ERROR_KIND_GENERATION_MISMATCH,
+        TerminalErrorKind::TERMINAL_ERROR_KIND_PROTOCOL,
+        TerminalErrorKind::TERMINAL_ERROR_KIND_INTERNAL,
+    ];
+}
+
+impl ::protobuf::EnumFull for TerminalErrorKind {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("TerminalErrorKind").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for TerminalErrorKind {
+    fn default() -> Self {
+        TerminalErrorKind::TERMINAL_ERROR_KIND_UNSPECIFIED
+    }
+}
+
+impl TerminalErrorKind {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<TerminalErrorKind>("TerminalErrorKind")
+    }
+}
+
 static file_descriptor_proto_data: &'static [u8] = b"\
-    \n\x0cdaemon.proto\x12\rd2b.daemon.v2\x1a\x0ccommon.proto2\xd3\x07\n\rDa\
-    emonService\x12H\n\x07Resolve\x12\x1d.d2b.common.v2.ServiceRequest\x1a\
-    \x1e.d2b.common.v2.ServiceResponse\x12K\n\nListRealms\x12\x1d.d2b.common\
-    .v2.ServiceRequest\x1a\x1e.d2b.common.v2.ServiceResponse\x12N\n\rListWor\
-    kloads\x12\x1d.d2b.common.v2.ServiceRequest\x1a\x1e.d2b.common.v2.Servic\
-    eResponse\x12H\n\x07Inspect\x12\x1d.d2b.common.v2.ServiceRequest\x1a\x1e\
-    .d2b.common.v2.ServiceResponse\x12F\n\x05Apply\x12\x1d.d2b.common.v2.Ser\
-    viceRequest\x1a\x1e.d2b.common.v2.ServiceResponse\x12F\n\x05Start\x12\
-    \x1d.d2b.common.v2.ServiceRequest\x1a\x1e.d2b.common.v2.ServiceResponse\
-    \x12E\n\x04Stop\x12\x1d.d2b.common.v2.ServiceRequest\x1a\x1e.d2b.common.\
-    v2.ServiceResponse\x12H\n\x07Restart\x12\x1d.d2b.common.v2.ServiceReques\
-    t\x1a\x1e.d2b.common.v2.ServiceResponse\x12E\n\x04Exec\x12\x1d.d2b.commo\
-    n.v2.ServiceRequest\x1a\x1e.d2b.common.v2.ServiceResponse\x12F\n\x05Shel\
-    l\x12\x1d.d2b.common.v2.ServiceRequest\x1a\x1e.d2b.common.v2.ServiceResp\
-    onse\x12L\n\x0bOpenConsole\x12\x1d.d2b.common.v2.ServiceRequest\x1a\x1e.\
-    d2b.common.v2.ServiceResponse\x12L\n\x0bExportAudit\x12\x1d.d2b.common.v\
-    2.ServiceRequest\x1a\x1e.d2b.common.v2.ServiceResponse\x12E\n\x06Cancel\
-    \x12\x1c.d2b.common.v2.CancelRequest\x1a\x1d.d2b.common.v2.CancelRespons\
-    eb\x06proto3\
+    \n\x0cdaemon.proto\x12\rd2b.daemon.v2\x1a\x0ccommon.proto\"\xc6\x01\n\
+    \x08PageInfo\x12\x1c\n\ttruncated\x18\x01\x20\x01(\x08R\ttruncated\x12(\
+    \n\x10next_page_cursor\x18\x02\x20\x01(\tR\x0enextPageCursor\x12%\n\x0er\
+    eturned_items\x18\x03\x20\x01(\rR\rreturnedItems\x12*\n\x11total_items_k\
+    nown\x18\x04\x20\x01(\x08R\x0ftotalItemsKnown\x12\x1f\n\x0btotal_items\
+    \x18\x05\x20\x01(\rR\ntotalItems\"\xe5\x03\n\x0fRealmProjection\x12\x19\
+    \n\x08realm_id\x18\x01\x20\x01(\tR\x07realmId\x12\x1d\n\nrealm_path\x18\
+    \x02\x20\x01(\tR\trealmPath\x12\x1f\n\x0brealm_label\x18\x03\x20\x01(\tR\
+    \nrealmLabel\x12,\n\x04mode\x18\x04\x20\x01(\x0e2\x18.d2b.daemon.v2.Real\
+    mModeR\x04mode\x12/\n\x05state\x18\x05\x20\x01(\x0e2\x19.d2b.daemon.v2.R\
+    ealmStateR\x05state\x12M\n\x12cross_realm_policy\x18\x06\x20\x01(\x0e2\
+    \x1f.d2b.daemon.v2.CrossRealmPolicyR\x10crossRealmPolicy\x12R\n\x13crede\
+    ntial_boundary\x18\x07\x20\x01(\x0e2!.d2b.daemon.v2.CredentialBoundaryR\
+    \x12credentialBoundary\x12.\n\x13gateway_workload_id\x18\x08\x20\x01(\tR\
+    \x11gatewayWorkloadId\x12%\n\x0egateway_target\x18\t\x20\x01(\tR\rgatewa\
+    yTarget\x12\x1e\n\ngeneration\x18\n\x20\x01(\x04R\ngeneration\"\xdf\x01\
+    \n\x12ListRealmsResponse\x120\n\x07outcome\x18\x01\x20\x01(\x0e2\x16.d2b\
+    .common.v2.OutcomeR\x07outcome\x126\n\x06realms\x18\x02\x20\x03(\x0b2\
+    \x1e.d2b.daemon.v2.RealmProjectionR\x06realms\x12+\n\x04page\x18\x03\x20\
+    \x01(\x0b2\x17.d2b.daemon.v2.PageInfoR\x04page\x122\n\x05error\x18\x04\
+    \x20\x01(\x0b2\x1c.d2b.common.v2.ErrorEnvelopeR\x05error\"\x89\x02\n\x1b\
+    WorkloadLifecycleProjection\x12;\n\x05state\x18\x01\x20\x01(\x0e2%.d2b.d\
+    aemon.v2.WorkloadLifecycleStateR\x05state\x12\x1a\n\x08degraded\x18\x02\
+    \x20\x01(\x08R\x08degraded\x12'\n\x0fpending_restart\x18\x03\x20\x01(\
+    \x08R\x0ependingRestart\x12H\n\x10degraded_reasons\x18\x04\x20\x03(\x0b2\
+    \x1d.d2b.daemon.v2.DegradedReasonR\x0fdegradedReasons\x12\x1e\n\ngenerat\
+    ion\x18\x05\x20\x01(\x04R\ngeneration\"J\n\x0eDegradedReason\x12\x16\n\
+    \x06reason\x18\x01\x20\x01(\tR\x06reason\x12\x20\n\x0bremediation\x18\
+    \x02\x20\x01(\tR\x0bremediation\"\x91\x02\n\x11RuntimeProjection\x12.\n\
+    \x04kind\x18\x01\x20\x01(\x0e2\x1a.d2b.daemon.v2.RuntimeKindR\x04kind\
+    \x12\x16\n\x06detail\x18\x02\x20\x01(\tR\x06detail\x12W\n\x16supported_c\
+    apabilities\x18\x03\x20\x03(\x0e2\x20.d2b.daemon.v2.RuntimeCapabilityR\
+    \x15supportedCapabilities\x12[\n\x18unsupported_capabilities\x18\x04\x20\
+    \x03(\x0e2\x20.d2b.daemon.v2.RuntimeCapabilityR\x17unsupportedCapabiliti\
+    es\"\x8f\x01\n\x11ServiceProjection\x12.\n\x04kind\x18\x01\x20\x01(\x0e2\
+    \x1a.d2b.daemon.v2.ServiceKindR\x04kind\x12\x17\n\x07role_id\x18\x02\x20\
+    \x01(\tR\x06roleId\x121\n\x05state\x18\x03\x20\x01(\x0e2\x1b.d2b.daemon.\
+    v2.ServiceStateR\x05state\"_\n\x13AutostartProjection\x120\n\x04mode\x18\
+    \x01\x20\x01(\x0e2\x1c.d2b.daemon.v2.AutostartModeR\x04mode\x12\x16\n\
+    \x06reason\x18\x02\x20\x01(\tR\x06reason\"\xc7\x01\n\x1aWorkloadIdentity\
+    Projection\x12\x19\n\x08realm_id\x18\x01\x20\x01(\tR\x07realmId\x12\x1f\
+    \n\x0bworkload_id\x18\x02\x20\x01(\tR\nworkloadId\x12\x1d\n\nrealm_path\
+    \x18\x03\x20\x01(\tR\trealmPath\x12#\n\rworkload_name\x18\x04\x20\x01(\t\
+    R\x0cworkloadName\x12)\n\x10canonical_target\x18\x05\x20\x01(\tR\x0fcano\
+    nicalTarget\"\xa8\x01\n\x14DeploymentProjection\x124\n\x16declared_guest\
+    _closure\x18\x01\x20\x01(\tR\x14declaredGuestClosure\x12-\n\x12current_g\
+    eneration\x18\x02\x20\x01(\tR\x11currentGeneration\x12+\n\x11booted_gene\
+    ration\x18\x03\x20\x01(\tR\x10bootedGeneration\"\x89\x01\n\x16RunnerPari\
+    tyProjection\x12'\n\x0fdeclared_runner\x18\x01\x20\x01(\tR\x0edeclaredRu\
+    nner\x12)\n\x10parity_reference\x18\x02\x20\x01(\tR\x0fparityReference\
+    \x12\x1b\n\tparity_ok\x18\x03\x20\x01(\x08R\x08parityOk\"\xde\x01\n\x1bL\
+    ivePoolIntegrityProjection\x121\n\x05state\x18\x01\x20\x01(\x0e2\x1b.d2b\
+    .daemon.v2.ServiceStateR\x05state\x12\x16\n\x06reason\x18\x02\x20\x01(\t\
+    R\x06reason\x12'\n\x0faudit_reference\x18\x03\x20\x01(\tR\x0eauditRefere\
+    nce\x12)\n\x10repair_attempted\x18\x04\x20\x01(\x08R\x0frepairAttempted\
+    \x12\x20\n\x0bremediation\x18\x05\x20\x01(\tR\x0bremediation\"r\n\x1bQem\
+    uMediaRegistryProjection\x121\n\x05state\x18\x01\x20\x01(\x0e2\x1b.d2b.d\
+    aemon.v2.ServiceStateR\x05state\x12\x20\n\x0bremediation\x18\x02\x20\x01\
+    (\tR\x0bremediation\"\xae\x02\n\x19QemuMediaSourceProjection\x12\x1b\n\t\
+    media_ref\x18\x01\x20\x01(\tR\x08mediaRef\x12\x12\n\x04slot\x18\x02\x20\
+    \x01(\tR\x04slot\x12C\n\x0bsource_kind\x18\x03\x20\x01(\x0e2\".d2b.daemo\
+    n.v2.QemuMediaSourceKindR\nsourceKind\x126\n\x06format\x18\x04\x20\x01(\
+    \x0e2\x1e.d2b.daemon.v2.QemuMediaFormatR\x06format\x12\x1b\n\tread_only\
+    \x18\x05\x20\x01(\x08R\x08readOnly\x12F\n\x08registry\x18\x06\x20\x01(\
+    \x0b2*.d2b.daemon.v2.QemuMediaRegistryProjectionR\x08registry\"\xf6\x02\
+    \n\x13QemuMediaProjection\x12I\n\rfirmware_mode\x18\x01\x20\x01(\x0e2$.d\
+    2b.daemon.v2.QemuMediaFirmwareModeR\x0cfirmwareMode\x12>\n\x0crunner_sta\
+    te\x18\x02\x20\x01(\x0e2\x1b.d2b.daemon.v2.ServiceStateR\x0brunnerState\
+    \x12F\n\rqmp_readiness\x18\x03\x20\x01(\x0e2!.d2b.daemon.v2.QemuMediaRea\
+    dinessR\x0cqmpReadiness\x12L\n\x11pre_cont_progress\x18\x04\x20\x01(\x0e\
+    2\x20.d2b.daemon.v2.QemuMediaProgressR\x0fpreContProgress\x12>\n\x05medi\
+    a\x18\x05\x20\x03(\x0b2(.d2b.daemon.v2.QemuMediaSourceProjectionR\x05med\
+    ia\"\xc0\x02\n\x13UsbDeviceProjection\x12\x1b\n\tdevice_id\x18\x01\x20\
+    \x01(\tR\x08deviceId\x123\n\x05state\x18\x02\x20\x01(\x0e2\x1d.d2b.daemo\
+    n.v2.UsbDeviceStateR\x05state\x12*\n\x11owner_workload_id\x18\x03\x20\
+    \x01(\tR\x0fownerWorkloadId\x12\x12\n\x04slot\x18\x04\x20\x01(\tR\x04slo\
+    t\x12\x1b\n\tmedia_ref\x18\x05\x20\x01(\tR\x08mediaRef\x120\n\x14candida\
+    te_device_ids\x18\x06\x20\x03(\tR\x12candidateDeviceIds\x12H\n\x10degrad\
+    ed_reasons\x18\x07\x20\x03(\x0b2\x1d.d2b.daemon.v2.DegradedReasonR\x0fde\
+    gradedReasons\"i\n\rUsbProjection\x12\x1a\n\x08degraded\x18\x01\x20\x01(\
+    \x08R\x08degraded\x12<\n\x07devices\x18\x02\x20\x03(\x0b2\".d2b.daemon.v\
+    2.UsbDeviceProjectionR\x07devices\"V\n\x10BridgeProjection\x12\x16\n\x06\
+    bridge\x18\x01\x20\x01(\tR\x06bridge\x12\x18\n\x07present\x18\x02\x20\
+    \x01(\x08R\x07present\x12\x10\n\x03tap\x18\x03\x20\x01(\tR\x03tap\"\x84\
+    \x01\n\x13ReadinessProjection\x12\x17\n\x07role_id\x18\x01\x20\x01(\tR\
+    \x06roleId\x12!\n\x0cpredicate_id\x18\x02\x20\x01(\tR\x0bpredicateId\x12\
+    1\n\x05state\x18\x03\x20\x01(\x0e2\x1b.d2b.daemon.v2.ServiceStateR\x05st\
+    ate\"\x91\t\n\x12WorkloadProjection\x12E\n\x08identity\x18\x01\x20\x01(\
+    \x0b2).d2b.daemon.v2.WorkloadIdentityProjectionR\x08identity\x12\x12\n\
+    \x04name\x18\x02\x20\x01(\tR\x04name\x12\x20\n\x0benvironment\x18\x03\
+    \x20\x01(\tR\x0benvironment\x12\x1a\n\x08graphics\x18\x04\x20\x01(\x08R\
+    \x08graphics\x12\x10\n\x03tpm\x18\x05\x20\x01(\x08R\x03tpm\x12\x14\n\x05\
+    usbip\x18\x06\x20\x01(\x08R\x05usbip\x12\x1b\n\tstatic_ip\x18\x07\x20\
+    \x01(\x0cR\x08staticIp\x12&\n\x0fis_net_workload\x18\x08\x20\x01(\x08R\r\
+    isNetWorkload\x12%\n\x0essh_configured\x18\t\x20\x01(\x08R\rsshConfigure\
+    d\x12H\n\tlifecycle\x18\n\x20\x01(\x0b2*.d2b.daemon.v2.WorkloadLifecycle\
+    ProjectionR\tlifecycle\x12:\n\x07runtime\x18\x0b\x20\x01(\x0b2\x20.d2b.d\
+    aemon.v2.RuntimeProjectionR\x07runtime\x12<\n\x08services\x18\x0c\x20\
+    \x03(\x0b2\x20.d2b.daemon.v2.ServiceProjectionR\x08services\x12@\n\tauto\
+    start\x18\r\x20\x01(\x0b2\".d2b.daemon.v2.AutostartProjectionR\tautostar\
+    t\x12C\n\ndeployment\x18\x0e\x20\x01(\x0b2#.d2b.daemon.v2.DeploymentProj\
+    ectionR\ndeployment\x12J\n\rrunner_parity\x18\x0f\x20\x01(\x0b2%.d2b.dae\
+    mon.v2.RunnerParityProjectionR\x0crunnerParity\x129\n\tapi_ready\x18\x10\
+    \x20\x01(\x0e2\x1c.d2b.daemon.v2.ApiReadyStateR\x08apiReady\x12Z\n\x13li\
+    ve_pool_integrity\x18\x11\x20\x01(\x0b2*.d2b.daemon.v2.LivePoolIntegrity\
+    ProjectionR\x11livePoolIntegrity\x12A\n\nqemu_media\x18\x12\x20\x01(\x0b\
+    2\".d2b.daemon.v2.QemuMediaProjectionR\tqemuMedia\x12.\n\x03usb\x18\x13\
+    \x20\x01(\x0b2\x1c.d2b.daemon.v2.UsbProjectionR\x03usb\x12D\n\rbridge_ch\
+    ecks\x18\x14\x20\x03(\x0b2\x1f.d2b.daemon.v2.BridgeProjectionR\x0cbridge\
+    Checks\x12%\n\x0edeclared_roles\x18\x15\x20\x03(\tR\rdeclaredRoles\x12@\
+    \n\treadiness\x18\x16\x20\x03(\x0b2\".d2b.daemon.v2.ReadinessProjectionR\
+    \treadiness\"\xeb\x01\n\x15ListWorkloadsResponse\x120\n\x07outcome\x18\
+    \x01\x20\x01(\x0e2\x16.d2b.common.v2.OutcomeR\x07outcome\x12?\n\tworkloa\
+    ds\x18\x02\x20\x03(\x0b2!.d2b.daemon.v2.WorkloadProjectionR\tworkloads\
+    \x12+\n\x04page\x18\x03\x20\x01(\x0b2\x17.d2b.daemon.v2.PageInfoR\x04pag\
+    e\x122\n\x05error\x18\x04\x20\x01(\x0b2\x1c.d2b.common.v2.ErrorEnvelopeR\
+    \x05error\"\x84\x02\n\x0fInspectResponse\x120\n\x07outcome\x18\x01\x20\
+    \x01(\x0e2\x16.d2b.common.v2.OutcomeR\x07outcome\x12?\n\tworkloads\x18\
+    \x02\x20\x03(\x0b2!.d2b.daemon.v2.WorkloadProjectionR\tworkloads\x12+\n\
+    \x04page\x18\x03\x20\x01(\x0b2\x17.d2b.daemon.v2.PageInfoR\x04page\x122\
+    \n\x05error\x18\x04\x20\x01(\x0b2\x1c.d2b.common.v2.ErrorEnvelopeR\x05er\
+    ror\x12\x1d\n\nread_model\x18\x05\x20\x01(\tR\treadModel\"\x87\x02\n\x13\
+    TerminalOpenRequest\x12:\n\x08metadata\x18\x01\x20\x01(\x0b2\x1e.d2b.com\
+    mon.v2.RequestMetadataR\x08metadata\x122\n\x05scope\x18\x02\x20\x01(\x0b\
+    2\x1c.d2b.common.v2.IdentityScopeR\x05scope\x12\x1f\n\x0bresource_id\x18\
+    \x03\x20\x01(\tR\nresourceId\x12!\n\x0coperation_id\x18\x04\x20\x01(\tR\
+    \x0boperationId\x12%\n\x0erequest_digest\x18\x05\x20\x01(\x0cR\rrequestD\
+    igestJ\x04\x08\x06\x10\x07J\x04\x08\x07\x10\x08R\tstream_id\"\x8a\x02\n\
+    \x14TerminalOpenResponse\x120\n\x07outcome\x18\x01\x20\x01(\x0e2\x16.d2b\
+    .common.v2.OutcomeR\x07outcome\x12!\n\x0coperation_id\x18\x02\x20\x01(\t\
+    R\x0boperationId\x12\x1b\n\tstream_id\x18\x03\x20\x01(\tR\x08streamId\
+    \x12-\n\x12session_generation\x18\x04\x20\x01(\x04R\x11sessionGeneration\
+    \x12\x1d\n\nrequest_id\x18\x05\x20\x01(\x0cR\trequestId\x122\n\x05error\
+    \x18\x06\x20\x01(\x0b2\x1c.d2b.common.v2.ErrorEnvelopeR\x05error\"<\n\
+    \x0cTerminalSize\x12\x12\n\x04rows\x18\x01\x20\x01(\rR\x04rows\x12\x18\n\
+    \x07columns\x18\x02\x20\x01(\rR\x07columns\",\n\x16ArbitraryExecSelectio\
+    n\x12\x12\n\x04argv\x18\x01\x20\x03(\x0cR\x04argv\"I\n\x19ConfiguredLaun\
+    chSelection\x12,\n\x12configured_item_id\x18\x01\x20\x01(\tR\x10configur\
+    edItemId\"\xe6\x02\n\rExecSelection\x12:\n\tauthority\x18\x01\x20\x01(\
+    \x0e2\x1c.d2b.daemon.v2.ExecAuthorityR\tauthority\x12E\n\tarbitrary\x18\
+    \x02\x20\x01(\x0b2%.d2b.daemon.v2.ArbitraryExecSelectionH\0R\tarbitrary\
+    \x12W\n\x11configured_launch\x18\x03\x20\x01(\x0b2(.d2b.daemon.v2.Config\
+    uredLaunchSelectionH\0R\x10configuredLaunch\x12\x10\n\x03tty\x18\x04\x20\
+    \x01(\x08R\x03tty\x12\x1a\n\x08detached\x18\x05\x20\x01(\x08R\x08detache\
+    d\x12>\n\x0cinitial_size\x18\x06\x20\x01(\x0b2\x1b.d2b.daemon.v2.Termina\
+    lSizeR\x0binitialSizeB\x0b\n\tselection\"\xa6\x01\n\x0eShellSelection\
+    \x12\x1d\n\nshell_name\x18\x01\x20\x01(\tR\tshellName\x12\x1f\n\x0buse_d\
+    efault\x18\x02\x20\x01(\x08R\nuseDefault\x12\x14\n\x05force\x18\x03\x20\
+    \x01(\x08R\x05force\x12>\n\x0cinitial_size\x18\x04\x20\x01(\x0b2\x1b.d2b\
+    .daemon.v2.TerminalSizeR\x0binitialSize\"R\n\x10ConsoleSelection\x12>\n\
+    \x0cinitial_size\x18\x01\x20\x01(\x0b2\x1b.d2b.daemon.v2.TerminalSizeR\
+    \x0binitialSize\"\xc8\x01\n\x11TerminalSelection\x122\n\x04exec\x18\x01\
+    \x20\x01(\x0b2\x1c.d2b.daemon.v2.ExecSelectionH\0R\x04exec\x125\n\x05she\
+    ll\x18\x02\x20\x01(\x0b2\x1d.d2b.daemon.v2.ShellSelectionH\0R\x05shell\
+    \x12;\n\x07console\x18\x03\x20\x01(\x0b2\x1f.d2b.daemon.v2.ConsoleSelect\
+    ionH\0R\x07consoleB\x0b\n\tselection\"\xed\x01\n\x0fTerminalStarted\x12/\
+    \n\x04kind\x18\x01\x20\x01(\x0e2\x1b.d2b.daemon.v2.TerminalKindR\x04kind\
+    \x12\x10\n\x03tty\x18\x02\x20\x01(\x08R\x03tty\x12#\n\rstdout_offset\x18\
+    \x03\x20\x01(\x04R\x0cstdoutOffset\x12#\n\rstderr_offset\x18\x04\x20\x01\
+    (\x04R\x0cstderrOffset\x12M\n\x10console_provider\x18\x05\x20\x01(\x0e2\
+    \".d2b.daemon.v2.ConsoleProviderKindR\x0fconsoleProvider\"M\n\rTerminalS\
+    tdin\x12\x16\n\x06offset\x18\x01\x20\x01(\x04R\x06offset\x12\x12\n\x04da\
+    ta\x18\x02\x20\x01(\x0cR\x04data\x12\x10\n\x03eof\x18\x03\x20\x01(\x08R\
+    \x03eof\"\x91\x01\n\x0eTerminalOutput\x12\x16\n\x06offset\x18\x01\x20\
+    \x01(\x04R\x06offset\x12\x12\n\x04data\x18\x02\x20\x01(\x0cR\x04data\x12\
+    \x10\n\x03eof\x18\x03\x20\x01(\x08R\x03eof\x12#\n\rdropped_bytes\x18\x04\
+    \x20\x01(\x04R\x0cdroppedBytes\x12\x1c\n\ttruncated\x18\x05\x20\x01(\x08\
+    R\ttruncated\"p\n\x0eTerminalResize\x12-\n\x12operation_sequence\x18\x01\
+    \x20\x01(\x04R\x11operationSequence\x12/\n\x04size\x18\x02\x20\x01(\x0b2\
+    \x1b.d2b.daemon.v2.TerminalSizeR\x04size\"z\n\x0eTerminalSignal\x12-\n\
+    \x12operation_sequence\x18\x01\x20\x01(\x04R\x11operationSequence\x129\n\
+    \x06signal\x18\x02\x20\x01(\x0e2!.d2b.daemon.v2.TerminalSignalKindR\x06s\
+    ignal\"\x14\n\x12TerminalCloseStdin\"\x10\n\x0eTerminalDetach\"\x0f\n\rT\
+    erminalClose\"\x10\n\x0eTerminalCancel\"w\n\x0eTerminalStatus\x129\n\x06\
+    status\x18\x01\x20\x01(\x0e2!.d2b.daemon.v2.TerminalStatusKindR\x06statu\
+    s\x12*\n\x11next_stdin_offset\x18\x02\x20\x01(\x04R\x0fnextStdinOffset\"\
+    -\n\x0eTerminalExited\x12\x1b\n\texit_code\x18\x01\x20\x01(\x05R\x08exit\
+    Code\"*\n\x10TerminalSignaled\x12\x16\n\x06signal\x18\x01\x20\x01(\rR\
+    \x06signal\"\x13\n\x11TerminalCancelled\"\x12\n\x10TerminalDetached\"\
+    \x10\n\x0eTerminalClosed\"y\n\x0eTerminalFailed\x126\n\x05error\x18\x01\
+    \x20\x01(\x0e2\x20.d2b.daemon.v2.TerminalErrorKindR\x05error\x12/\n\x05r\
+    etry\x18\x02\x20\x01(\x0e2\x19.d2b.common.v2.RetryClassR\x05retry\"\x87\
+    \x03\n\x0fTerminalOutcome\x127\n\x06exited\x18\x01\x20\x01(\x0b2\x1d.d2b\
+    .daemon.v2.TerminalExitedH\0R\x06exited\x12=\n\x08signaled\x18\x02\x20\
+    \x01(\x0b2\x1f.d2b.daemon.v2.TerminalSignaledH\0R\x08signaled\x12@\n\tca\
+    ncelled\x18\x03\x20\x01(\x0b2\x20.d2b.daemon.v2.TerminalCancelledH\0R\tc\
+    ancelled\x12=\n\x08detached\x18\x04\x20\x01(\x0b2\x1f.d2b.daemon.v2.Term\
+    inalDetachedH\0R\x08detached\x127\n\x06closed\x18\x05\x20\x01(\x0b2\x1d.\
+    d2b.daemon.v2.TerminalClosedH\0R\x06closed\x127\n\x06failed\x18\x06\x20\
+    \x01(\x0b2\x1d.d2b.daemon.v2.TerminalFailedH\0R\x06failedB\t\n\x07outcom\
+    e\"\xfd\x06\n\x13TerminalStreamFrame\x12-\n\x12session_generation\x18\
+    \x01\x20\x01(\x04R\x11sessionGeneration\x12\x1d\n\nrequest_id\x18\x02\
+    \x20\x01(\x0cR\trequestId\x12\x1a\n\x08sequence\x18\x03\x20\x01(\x04R\
+    \x08sequence\x12:\n\x06select\x18\n\x20\x01(\x0b2\x20.d2b.daemon.v2.Term\
+    inalSelectionH\0R\x06select\x12:\n\x07started\x18\x0b\x20\x01(\x0b2\x1e.\
+    d2b.daemon.v2.TerminalStartedH\0R\x07started\x124\n\x05stdin\x18\x0c\x20\
+    \x01(\x0b2\x1c.d2b.daemon.v2.TerminalStdinH\0R\x05stdin\x127\n\x06stdout\
+    \x18\r\x20\x01(\x0b2\x1d.d2b.daemon.v2.TerminalOutputH\0R\x06stdout\x127\
+    \n\x06stderr\x18\x0e\x20\x01(\x0b2\x1d.d2b.daemon.v2.TerminalOutputH\0R\
+    \x06stderr\x127\n\x06resize\x18\x0f\x20\x01(\x0b2\x1d.d2b.daemon.v2.Term\
+    inalResizeH\0R\x06resize\x127\n\x06signal\x18\x10\x20\x01(\x0b2\x1d.d2b.\
+    daemon.v2.TerminalSignalH\0R\x06signal\x12D\n\x0bclose_stdin\x18\x11\x20\
+    \x01(\x0b2!.d2b.daemon.v2.TerminalCloseStdinH\0R\ncloseStdin\x127\n\x06d\
+    etach\x18\x12\x20\x01(\x0b2\x1d.d2b.daemon.v2.TerminalDetachH\0R\x06deta\
+    ch\x124\n\x05close\x18\x13\x20\x01(\x0b2\x1c.d2b.daemon.v2.TerminalClose\
+    H\0R\x05close\x127\n\x06cancel\x18\x14\x20\x01(\x0b2\x1d.d2b.daemon.v2.T\
+    erminalCancelH\0R\x06cancel\x127\n\x06status\x18\x15\x20\x01(\x0b2\x1d.d\
+    2b.daemon.v2.TerminalStatusH\0R\x06status\x12:\n\x07outcome\x18\x16\x20\
+    \x01(\x0b2\x1e.d2b.daemon.v2.TerminalOutcomeH\0R\x07outcomeB\x07\n\x05fr\
+    ame*a\n\tRealmMode\x12\x1a\n\x16REALM_MODE_UNSPECIFIED\x10\0\x12\x19\n\
+    \x15REALM_MODE_HOST_LOCAL\x10\x01\x12\x1d\n\x19REALM_MODE_GATEWAY_BACKED\
+    \x10\x02*\x90\x01\n\nRealmState\x12\x1b\n\x17REALM_STATE_UNSPECIFIED\x10\
+    \0\x12\x15\n\x11REALM_STATE_READY\x10\x01\x12\x18\n\x14REALM_STATE_DEGRA\
+    DED\x10\x02\x12\x17\n\x13REALM_STATE_STOPPED\x10\x03\x12\x1b\n\x17REALM_\
+    STATE_UNAVAILABLE\x10\x04*[\n\x10CrossRealmPolicy\x12\"\n\x1eCROSS_REALM\
+    _POLICY_UNSPECIFIED\x10\0\x12#\n\x1fCROSS_REALM_POLICY_DEFAULT_DENY\x10\
+    \x01*\x84\x01\n\x12CredentialBoundary\x12#\n\x1fCREDENTIAL_BOUNDARY_UNSP\
+    ECIFIED\x10\0\x12\"\n\x1eCREDENTIAL_BOUNDARY_HOST_LOCAL\x10\x01\x12%\n!C\
+    REDENTIAL_BOUNDARY_GATEWAY_GUEST\x10\x02*\xf5\x02\n\x16WorkloadLifecycle\
+    State\x12(\n$WORKLOAD_LIFECYCLE_STATE_UNSPECIFIED\x10\0\x12$\n\x20WORKLO\
+    AD_LIFECYCLE_STATE_STOPPED\x10\x01\x12%\n!WORKLOAD_LIFECYCLE_STATE_START\
+    ING\x10\x02\x12#\n\x1fWORKLOAD_LIFECYCLE_STATE_BOOTED\x10\x03\x12$\n\x20\
+    WORKLOAD_LIFECYCLE_STATE_RUNNING\x10\x04\x12%\n!WORKLOAD_LIFECYCLE_STATE\
+    _STOPPING\x10\x05\x12'\n#WORKLOAD_LIFECYCLE_STATE_RESTARTING\x10\x06\x12\
+    #\n\x1fWORKLOAD_LIFECYCLE_STATE_FAILED\x10\x07\x12$\n\x20WORKLOAD_LIFECY\
+    CLE_STATE_UNKNOWN\x10\x08*\xb6\x01\n\x0bRuntimeKind\x12\x1c\n\x18RUNTIME\
+    _KIND_UNSPECIFIED\x10\0\x12\x16\n\x12RUNTIME_KIND_NIXOS\x10\x01\x12\x1b\
+    \n\x17RUNTIME_KIND_QEMU_MEDIA\x10\x02\x12\x1d\n\x19RUNTIME_KIND_UNSAFE_L\
+    OCAL\x10\x03\x12\x1c\n\x18RUNTIME_KIND_ACA_SANDBOX\x10\x04\x12\x17\n\x13\
+    RUNTIME_KIND_REMOTE\x10\x05*\x91\x03\n\x11RuntimeCapability\x12\"\n\x1eR\
+    UNTIME_CAPABILITY_UNSPECIFIED\x10\0\x12\x20\n\x1cRUNTIME_CAPABILITY_LIFE\
+    CYCLE\x10\x01\x12\x1e\n\x1aRUNTIME_CAPABILITY_DISPLAY\x10\x02\x12\"\n\
+    \x1eRUNTIME_CAPABILITY_USB_HOTPLUG\x10\x03\x12\"\n\x1eRUNTIME_CAPABILITY\
+    _CONFIG_SYNC\x10\x04\x12\x1b\n\x17RUNTIME_CAPABILITY_EXEC\x10\x05\x12$\n\
+    \x20RUNTIME_CAPABILITY_GUEST_CONTROL\x10\x06\x12-\n)RUNTIME_CAPABILITY_I\
+    N_GUEST_OBSERVABILITY\x10\x07\x12\x1b\n\x17RUNTIME_CAPABILITY_KEYS\x10\
+    \x08\x12\x1c\n\x18RUNTIME_CAPABILITY_SHELL\x10\t\x12!\n\x1dRUNTIME_CAPAB\
+    ILITY_STORE_SYNC\x10\n*\xb8\x02\n\x0bServiceKind\x12\x1c\n\x18SERVICE_KI\
+    ND_UNSPECIFIED\x10\0\x12\x17\n\x13SERVICE_KIND_DAEMON\x10\x01\x12\x1b\n\
+    \x17SERVICE_KIND_HYPERVISOR\x10\x02\x12\x1b\n\x17SERVICE_KIND_QEMU_MEDIA\
+    \x10\x03\x12\x1a\n\x16SERVICE_KIND_VIRTIOFSD\x10\x04\x12\x14\n\x10SERVIC\
+    E_KIND_GPU\x10\x05\x12\x16\n\x12SERVICE_KIND_VIDEO\x10\x06\x12\x16\n\x12\
+    SERVICE_KIND_AUDIO\x10\x07\x12\x16\n\x12SERVICE_KIND_SWTPM\x10\x08\x12\
+    \x1e\n\x1aSERVICE_KIND_GUEST_CONTROL\x10\t\x12\x1e\n\x1aSERVICE_KIND_OBS\
+    ERVABILITY\x10\n*\x8e\x02\n\x0cServiceState\x12\x1d\n\x19SERVICE_STATE_U\
+    NSPECIFIED\x10\0\x12\x18\n\x14SERVICE_STATE_ACTIVE\x10\x01\x12\x1a\n\x16\
+    SERVICE_STATE_INACTIVE\x10\x02\x12\x1a\n\x16SERVICE_STATE_STARTING\x10\
+    \x03\x12\x1a\n\x16SERVICE_STATE_STOPPING\x10\x04\x12\x18\n\x14SERVICE_ST\
+    ATE_FAILED\x10\x05\x12\x1d\n\x19SERVICE_STATE_UNAVAILABLE\x10\x06\x12\
+    \x1d\n\x19SERVICE_STATE_UNSUPPORTED\x10\x07\x12\x19\n\x15SERVICE_STATE_U\
+    NKNOWN\x10\x08*\x88\x01\n\rAutostartMode\x12\x1e\n\x1aAUTOSTART_MODE_UNS\
+    PECIFIED\x10\0\x12\x1a\n\x16AUTOSTART_MODE_ENABLED\x10\x01\x12\x1b\n\x17\
+    AUTOSTART_MODE_DISABLED\x10\x02\x12\x1e\n\x1aAUTOSTART_MODE_MANUAL_ONLY\
+    \x10\x03*\xa0\x01\n\rApiReadyState\x12\x1f\n\x1bAPI_READY_STATE_UNSPECIF\
+    IED\x10\0\x12\x19\n\x15API_READY_STATE_READY\x10\x01\x12\x1b\n\x17API_RE\
+    ADY_STATE_PENDING\x10\x02\x12\x1b\n\x17API_READY_STATE_TIMEOUT\x10\x03\
+    \x12\x19\n\x15API_READY_STATE_ERROR\x10\x04*\x87\x01\n\x15QemuMediaFirmw\
+    areMode\x12(\n$QEMU_MEDIA_FIRMWARE_MODE_UNSPECIFIED\x10\0\x12!\n\x1dQEMU\
+    _MEDIA_FIRMWARE_MODE_NONE\x10\x01\x12!\n\x1dQEMU_MEDIA_FIRMWARE_MODE_UEF\
+    I\x10\x02*\xa2\x01\n\x12QemuMediaReadiness\x12$\n\x20QEMU_MEDIA_READINES\
+    S_UNSPECIFIED\x10\0\x12$\n\x20QEMU_MEDIA_READINESS_NOT_STARTED\x10\x01\
+    \x12\x20\n\x1cQEMU_MEDIA_READINESS_PENDING\x10\x02\x12\x1e\n\x1aQEMU_MED\
+    IA_READINESS_READY\x10\x03*\xd3\x01\n\x11QemuMediaProgress\x12#\n\x1fQEM\
+    U_MEDIA_PROGRESS_UNSPECIFIED\x10\0\x12#\n\x1fQEMU_MEDIA_PROGRESS_NOT_STA\
+    RTED\x10\x01\x12'\n#QEMU_MEDIA_PROGRESS_WAITING_FOR_QMP\x10\x02\x12*\n&Q\
+    EMU_MEDIA_PROGRESS_PAUSED_BEFORE_CONT\x10\x03\x12\x1f\n\x1bQEMU_MEDIA_PR\
+    OGRESS_RUNNING\x10\x04*\x8d\x01\n\x13QemuMediaSourceKind\x12&\n\"QEMU_ME\
+    DIA_SOURCE_KIND_UNSPECIFIED\x10\0\x12'\n#QEMU_MEDIA_SOURCE_KIND_PHYSICAL\
+    _USB\x10\x01\x12%\n!QEMU_MEDIA_SOURCE_KIND_IMAGE_FILE\x10\x02*\x87\x01\n\
+    \x0fQemuMediaFormat\x12!\n\x1dQEMU_MEDIA_FORMAT_UNSPECIFIED\x10\0\x12\
+    \x19\n\x15QEMU_MEDIA_FORMAT_RAW\x10\x01\x12\x1b\n\x17QEMU_MEDIA_FORMAT_Q\
+    COW2\x10\x02\x12\x19\n\x15QEMU_MEDIA_FORMAT_ISO\x10\x03*\xec\x01\n\x0eUs\
+    bDeviceState\x12\x20\n\x1cUSB_DEVICE_STATE_UNSPECIFIED\x10\0\x12\x1a\n\
+    \x16USB_DEVICE_STATE_READY\x10\x01\x12\x1d\n\x19USB_DEVICE_STATE_ATTACHE\
+    D\x10\x02\x12\x1d\n\x19USB_DEVICE_STATE_DETACHED\x10\x03\x12\x1d\n\x19US\
+    B_DEVICE_STATE_CONFLICT\x10\x04\x12\x20\n\x1cUSB_DEVICE_STATE_UNAVAILABL\
+    E\x10\x05\x12\x1d\n\x19USB_DEVICE_STATE_DEGRADED\x10\x06*y\n\x0cTerminal\
+    Kind\x12\x1d\n\x19TERMINAL_KIND_UNSPECIFIED\x10\0\x12\x16\n\x12TERMINAL_\
+    KIND_EXEC\x10\x01\x12\x17\n\x13TERMINAL_KIND_SHELL\x10\x02\x12\x19\n\x15\
+    TERMINAL_KIND_CONSOLE\x10\x03*y\n\rExecAuthority\x12\x1e\n\x1aEXEC_AUTHO\
+    RITY_UNSPECIFIED\x10\0\x12\"\n\x1eEXEC_AUTHORITY_ADMIN_ARBITRARY\x10\x01\
+    \x12$\n\x20EXEC_AUTHORITY_CONFIGURED_LAUNCH\x10\x02*\xb5\x01\n\x13Consol\
+    eProviderKind\x12%\n!CONSOLE_PROVIDER_KIND_UNSPECIFIED\x10\0\x12*\n&CONS\
+    OLE_PROVIDER_KIND_LOCAL_HYPERVISOR\x10\x01\x12$\n\x20CONSOLE_PROVIDER_KI\
+    ND_QEMU_MEDIA\x10\x02\x12%\n!CONSOLE_PROVIDER_KIND_ACA_SANDBOX\x10\x03*\
+    \xc5\x01\n\x12TerminalSignalKind\x12$\n\x20TERMINAL_SIGNAL_KIND_UNSPECIF\
+    IED\x10\0\x12\"\n\x1eTERMINAL_SIGNAL_KIND_INTERRUPT\x10\x01\x12\"\n\x1eT\
+    ERMINAL_SIGNAL_KIND_TERMINATE\x10\x02\x12\x20\n\x1cTERMINAL_SIGNAL_KIND_\
+    SUSPEND\x10\x03\x12\x1f\n\x1bTERMINAL_SIGNAL_KIND_HANGUP\x10\x04*\x84\
+    \x02\n\x12TerminalStatusKind\x12$\n\x20TERMINAL_STATUS_KIND_UNSPECIFIED\
+    \x10\0\x12\x20\n\x1cTERMINAL_STATUS_KIND_RUNNING\x10\x01\x12'\n#TERMINAL\
+    _STATUS_KIND_STDIN_ACCEPTED\x10\x02\x12,\n(TERMINAL_STATUS_KIND_STDIN_BA\
+    CKPRESSURED\x10\x03\x12%\n!TERMINAL_STATUS_KIND_STDIN_CLOSED\x10\x04\x12\
+    (\n$TERMINAL_STATUS_KIND_CONTROL_APPLIED\x10\x05*\x90\x03\n\x11TerminalE\
+    rrorKind\x12#\n\x1fTERMINAL_ERROR_KIND_UNSPECIFIED\x10\0\x12)\n%TERMINAL\
+    _ERROR_KIND_INVALID_SELECTION\x10\x01\x12$\n\x20TERMINAL_ERROR_KIND_UNAU\
+    THORIZED\x10\x02\x12!\n\x1dTERMINAL_ERROR_KIND_NOT_FOUND\x10\x03\x12\x20\
+    \n\x1cTERMINAL_ERROR_KIND_CONFLICT\x10\x04\x12#\n\x1fTERMINAL_ERROR_KIND\
+    _UNAVAILABLE\x10\x05\x12*\n&TERMINAL_ERROR_KIND_RESOURCE_EXHAUSTED\x10\
+    \x06\x12+\n'TERMINAL_ERROR_KIND_GENERATION_MISMATCH\x10\x07\x12\x20\n\
+    \x1cTERMINAL_ERROR_KIND_PROTOCOL\x10\x08\x12\x20\n\x1cTERMINAL_ERROR_KIN\
+    D_INTERNAL\x10\t2\xfa\x07\n\rDaemonService\x12H\n\x07Resolve\x12\x1d.d2b\
+    .common.v2.ServiceRequest\x1a\x1e.d2b.common.v2.ServiceResponse\x12N\n\n\
+    ListRealms\x12\x1d.d2b.common.v2.ServiceRequest\x1a!.d2b.daemon.v2.ListR\
+    ealmsResponse\x12T\n\rListWorkloads\x12\x1d.d2b.common.v2.ServiceRequest\
+    \x1a$.d2b.daemon.v2.ListWorkloadsResponse\x12H\n\x07Inspect\x12\x1d.d2b.\
+    common.v2.ServiceRequest\x1a\x1e.d2b.daemon.v2.InspectResponse\x12F\n\
+    \x05Apply\x12\x1d.d2b.common.v2.ServiceRequest\x1a\x1e.d2b.common.v2.Ser\
+    viceResponse\x12F\n\x05Start\x12\x1d.d2b.common.v2.ServiceRequest\x1a\
+    \x1e.d2b.common.v2.ServiceResponse\x12E\n\x04Stop\x12\x1d.d2b.common.v2.\
+    ServiceRequest\x1a\x1e.d2b.common.v2.ServiceResponse\x12H\n\x07Restart\
+    \x12\x1d.d2b.common.v2.ServiceRequest\x1a\x1e.d2b.common.v2.ServiceRespo\
+    nse\x12O\n\x04Exec\x12\".d2b.daemon.v2.TerminalOpenRequest\x1a#.d2b.daem\
+    on.v2.TerminalOpenResponse\x12P\n\x05Shell\x12\".d2b.daemon.v2.TerminalO\
+    penRequest\x1a#.d2b.daemon.v2.TerminalOpenResponse\x12V\n\x0bOpenConsole\
+    \x12\".d2b.daemon.v2.TerminalOpenRequest\x1a#.d2b.daemon.v2.TerminalOpen\
+    Response\x12L\n\x0bExportAudit\x12\x1d.d2b.common.v2.ServiceRequest\x1a\
+    \x1e.d2b.common.v2.ServiceResponse\x12E\n\x06Cancel\x12\x1c.d2b.common.v\
+    2.CancelRequest\x1a\x1d.d2b.common.v2.CancelResponseb\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file
@@ -66,8 +11998,80 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
         let generated_file_descriptor = generated_file_descriptor_lazy.get(|| {
             let mut deps = ::std::vec::Vec::with_capacity(1);
             deps.push(super::common::file_descriptor().clone());
-            let mut messages = ::std::vec::Vec::with_capacity(0);
-            let mut enums = ::std::vec::Vec::with_capacity(0);
+            let mut messages = ::std::vec::Vec::with_capacity(49);
+            messages.push(PageInfo::generated_message_descriptor_data());
+            messages.push(RealmProjection::generated_message_descriptor_data());
+            messages.push(ListRealmsResponse::generated_message_descriptor_data());
+            messages.push(WorkloadLifecycleProjection::generated_message_descriptor_data());
+            messages.push(DegradedReason::generated_message_descriptor_data());
+            messages.push(RuntimeProjection::generated_message_descriptor_data());
+            messages.push(ServiceProjection::generated_message_descriptor_data());
+            messages.push(AutostartProjection::generated_message_descriptor_data());
+            messages.push(WorkloadIdentityProjection::generated_message_descriptor_data());
+            messages.push(DeploymentProjection::generated_message_descriptor_data());
+            messages.push(RunnerParityProjection::generated_message_descriptor_data());
+            messages.push(LivePoolIntegrityProjection::generated_message_descriptor_data());
+            messages.push(QemuMediaRegistryProjection::generated_message_descriptor_data());
+            messages.push(QemuMediaSourceProjection::generated_message_descriptor_data());
+            messages.push(QemuMediaProjection::generated_message_descriptor_data());
+            messages.push(UsbDeviceProjection::generated_message_descriptor_data());
+            messages.push(UsbProjection::generated_message_descriptor_data());
+            messages.push(BridgeProjection::generated_message_descriptor_data());
+            messages.push(ReadinessProjection::generated_message_descriptor_data());
+            messages.push(WorkloadProjection::generated_message_descriptor_data());
+            messages.push(ListWorkloadsResponse::generated_message_descriptor_data());
+            messages.push(InspectResponse::generated_message_descriptor_data());
+            messages.push(TerminalOpenRequest::generated_message_descriptor_data());
+            messages.push(TerminalOpenResponse::generated_message_descriptor_data());
+            messages.push(TerminalSize::generated_message_descriptor_data());
+            messages.push(ArbitraryExecSelection::generated_message_descriptor_data());
+            messages.push(ConfiguredLaunchSelection::generated_message_descriptor_data());
+            messages.push(ExecSelection::generated_message_descriptor_data());
+            messages.push(ShellSelection::generated_message_descriptor_data());
+            messages.push(ConsoleSelection::generated_message_descriptor_data());
+            messages.push(TerminalSelection::generated_message_descriptor_data());
+            messages.push(TerminalStarted::generated_message_descriptor_data());
+            messages.push(TerminalStdin::generated_message_descriptor_data());
+            messages.push(TerminalOutput::generated_message_descriptor_data());
+            messages.push(TerminalResize::generated_message_descriptor_data());
+            messages.push(TerminalSignal::generated_message_descriptor_data());
+            messages.push(TerminalCloseStdin::generated_message_descriptor_data());
+            messages.push(TerminalDetach::generated_message_descriptor_data());
+            messages.push(TerminalClose::generated_message_descriptor_data());
+            messages.push(TerminalCancel::generated_message_descriptor_data());
+            messages.push(TerminalStatus::generated_message_descriptor_data());
+            messages.push(TerminalExited::generated_message_descriptor_data());
+            messages.push(TerminalSignaled::generated_message_descriptor_data());
+            messages.push(TerminalCancelled::generated_message_descriptor_data());
+            messages.push(TerminalDetached::generated_message_descriptor_data());
+            messages.push(TerminalClosed::generated_message_descriptor_data());
+            messages.push(TerminalFailed::generated_message_descriptor_data());
+            messages.push(TerminalOutcome::generated_message_descriptor_data());
+            messages.push(TerminalStreamFrame::generated_message_descriptor_data());
+            let mut enums = ::std::vec::Vec::with_capacity(23);
+            enums.push(RealmMode::generated_enum_descriptor_data());
+            enums.push(RealmState::generated_enum_descriptor_data());
+            enums.push(CrossRealmPolicy::generated_enum_descriptor_data());
+            enums.push(CredentialBoundary::generated_enum_descriptor_data());
+            enums.push(WorkloadLifecycleState::generated_enum_descriptor_data());
+            enums.push(RuntimeKind::generated_enum_descriptor_data());
+            enums.push(RuntimeCapability::generated_enum_descriptor_data());
+            enums.push(ServiceKind::generated_enum_descriptor_data());
+            enums.push(ServiceState::generated_enum_descriptor_data());
+            enums.push(AutostartMode::generated_enum_descriptor_data());
+            enums.push(ApiReadyState::generated_enum_descriptor_data());
+            enums.push(QemuMediaFirmwareMode::generated_enum_descriptor_data());
+            enums.push(QemuMediaReadiness::generated_enum_descriptor_data());
+            enums.push(QemuMediaProgress::generated_enum_descriptor_data());
+            enums.push(QemuMediaSourceKind::generated_enum_descriptor_data());
+            enums.push(QemuMediaFormat::generated_enum_descriptor_data());
+            enums.push(UsbDeviceState::generated_enum_descriptor_data());
+            enums.push(TerminalKind::generated_enum_descriptor_data());
+            enums.push(ExecAuthority::generated_enum_descriptor_data());
+            enums.push(ConsoleProviderKind::generated_enum_descriptor_data());
+            enums.push(TerminalSignalKind::generated_enum_descriptor_data());
+            enums.push(TerminalStatusKind::generated_enum_descriptor_data());
+            enums.push(TerminalErrorKind::generated_enum_descriptor_data());
             ::protobuf::reflect::GeneratedFileDescriptor::new_generated(
                 file_descriptor_proto(),
                 deps,
@@ -77,4 +12081,82 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
         });
         ::protobuf::reflect::FileDescriptor::new_generated_2(generated_file_descriptor)
     })
+}
+
+impl ::std::fmt::Debug for TerminalOpenRequest {
+    fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        formatter.write_str("TerminalOpenRequest(REDACTED)")
+    }
+}
+
+impl ::std::fmt::Debug for TerminalOpenResponse {
+    fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        formatter.write_str("TerminalOpenResponse(REDACTED)")
+    }
+}
+
+impl ::std::fmt::Debug for ArbitraryExecSelection {
+    fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        formatter.write_str("ArbitraryExecSelection(REDACTED)")
+    }
+}
+
+impl ::std::fmt::Debug for ConfiguredLaunchSelection {
+    fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        formatter.write_str("ConfiguredLaunchSelection(REDACTED)")
+    }
+}
+
+impl ::std::fmt::Debug for ExecSelection {
+    fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        formatter.write_str("ExecSelection(REDACTED)")
+    }
+}
+
+impl ::std::fmt::Debug for ShellSelection {
+    fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        formatter.write_str("ShellSelection(REDACTED)")
+    }
+}
+
+impl ::std::fmt::Debug for TerminalSelection {
+    fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        formatter.write_str("TerminalSelection(REDACTED)")
+    }
+}
+
+impl ::std::fmt::Debug for TerminalStdin {
+    fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        formatter.write_str("TerminalStdin(REDACTED)")
+    }
+}
+
+impl ::std::fmt::Debug for TerminalOutput {
+    fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        formatter.write_str("TerminalOutput(REDACTED)")
+    }
+}
+
+impl ::std::fmt::Debug for TerminalStreamFrame {
+    fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        formatter.write_str("TerminalStreamFrame(REDACTED)")
+    }
+}
+
+impl ::std::fmt::Debug for exec_selection::Selection {
+    fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        formatter.write_str("Selection(REDACTED)")
+    }
+}
+
+impl ::std::fmt::Debug for terminal_selection::Selection {
+    fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        formatter.write_str("Selection(REDACTED)")
+    }
+}
+
+impl ::std::fmt::Debug for terminal_stream_frame::Frame {
+    fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        formatter.write_str("Frame(REDACTED)")
+    }
 }

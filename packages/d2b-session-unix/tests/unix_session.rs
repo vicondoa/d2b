@@ -1,9 +1,9 @@
 use d2b_contracts::v2_component_session::{
     AttachmentAccess, AttachmentCreditClass, AttachmentDescriptor, AttachmentKind,
     AttachmentPacket, AttachmentPolicy, AttachmentPolicyKind, AttachmentPurpose, BoundedVec,
-    EndpointPolicy, EndpointPurpose, EndpointRole, IdentityEvidenceRequirement, KernelObjectType,
-    LimitProfile, Locality, NoiseProfile, PurposeClass, RequestId, ServicePackage,
-    TransportBinding, TransportClass,
+    EndpointPolicy, EndpointPolicyIdentity, EndpointPurpose, EndpointRole,
+    IdentityEvidenceRequirement, KernelObjectType, LimitProfile, Locality, NoiseProfile,
+    PurposeClass, RequestId, ServicePackage, TransportBinding, TransportClass,
 };
 use d2b_session::{
     AttachmentPayload, AttachmentValidationError, HandshakeCredentials, OwnedAttachment,
@@ -465,6 +465,16 @@ async fn owned_transport_adapters_transfer_packets_and_owned_files_end_to_end() 
     let attachment =
         OwnedUnixAttachment::file(metadata.clone(), read_end, DescriptorPolicy::File(identity))
             .unwrap();
+    let unix_payload = attachment
+        .payload()
+        .and_then(|payload| payload.downcast_ref::<UnixAttachmentPayload>())
+        .unwrap();
+    let mut wrong_generation = metadata.clone();
+    wrong_generation.reconnect_generation += 1;
+    assert_eq!(
+        AttachmentPayload::validate_descriptor(unix_payload, &wrong_generation),
+        Err(AttachmentValidationError::Other)
+    );
     sender
         .send(TransportPacket::with_attachments(
             b"protected-record".to_vec(),
@@ -924,8 +934,14 @@ async fn session_engine_transfers_and_binds_seqpacket_attachments_end_to_end() {
         attachment_policy,
     };
     let now = Instant::now();
+    let endpoint_identity = EndpointPolicyIdentity::from(&endpoint);
     let (initiator, responder) = tokio::join!(
-        SessionEngine::establish_initiator(sender, endpoint.clone(), HandshakeCredentials::Nn, now,),
+        SessionEngine::establish_initiator_with_generation_discovery(
+            sender,
+            endpoint_identity,
+            HandshakeCredentials::Nn,
+            now,
+        ),
         SessionEngine::establish_responder(receiver, endpoint, HandshakeCredentials::Nn, now,),
     );
     let mut initiator = initiator.unwrap();
@@ -937,6 +953,7 @@ async fn session_engine_transfers_and_binds_seqpacket_attachments_end_to_end() {
         false,
     );
     metadata.service = ServicePackage::BrokerV2;
+    metadata.reconnect_generation = 7;
     let attachment =
         OwnedUnixAttachment::file(metadata, read_end, DescriptorPolicy::File(identity)).unwrap();
     initiator.send_attachments(vec![attachment]).await.unwrap();

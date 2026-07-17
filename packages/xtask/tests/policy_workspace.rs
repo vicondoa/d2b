@@ -1451,7 +1451,7 @@ fn w4_provider_delivery_fingerprints_cover_every_reserved_file() {
 fn shared_contract_policy_freezes_services_dependencies_and_ownership() {
     let root = repo_root();
     let policy = xtask::wave_policy::read_policy(&root).expect("shared-contract policy");
-    assert_eq!(policy.schema_version, 5);
+    assert_eq!(policy.schema_version, 6);
     assert_eq!(policy.authority_repository, "github.com/vicondoa/d2b");
     let frozen = policy
         .frozen_service_packages
@@ -1589,6 +1589,32 @@ fn shared_contract_policy_freezes_services_dependencies_and_ownership() {
                 method.request, method.response
             )),
             "generated broker binding does not freeze {} as {} -> {}",
+            method.method,
+            method.request,
+            method.response
+        );
+    }
+    let generated =
+        read_repo_file("packages/d2b-contracts/src/generated_v2_services/daemon_ttrpc.rs");
+    for method in &policy.daemon_typed_methods {
+        let method_name = match method.method.as_str() {
+            "ListRealms" => "list_realms",
+            "ListWorkloads" => "list_workloads",
+            "OpenConsole" => "open_console",
+            other => other,
+        }
+        .to_ascii_lowercase();
+        let request_module = if method.request == "ServiceRequest" {
+            "common"
+        } else {
+            "daemon"
+        };
+        assert!(
+            generated.contains(&format!(
+                "pub async fn {method_name}(&self, ctx: ttrpc::context::Context, req: &super::{request_module}::{}) -> ::ttrpc::Result<super::daemon::{}>",
+                method.request, method.response
+            )),
+            "generated daemon binding does not freeze {} as {} -> {}",
             method.method,
             method.request,
             method.response

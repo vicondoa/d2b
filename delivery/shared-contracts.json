@@ -1,5 +1,5 @@
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "authority_repository": "github.com/vicondoa/d2b",
   "shared_root_branch": "adr0045-post-w4-contracts",
   "waves": [
@@ -295,6 +295,38 @@
       "method": "Spawn",
       "request": "SpawnRealmChildrenRequest",
       "response": "SpawnRealmChildrenResponse"
+    }
+  ],
+  "daemon_typed_methods": [
+    {
+      "method": "Exec",
+      "request": "TerminalOpenRequest",
+      "response": "TerminalOpenResponse"
+    },
+    {
+      "method": "Inspect",
+      "request": "ServiceRequest",
+      "response": "InspectResponse"
+    },
+    {
+      "method": "ListRealms",
+      "request": "ServiceRequest",
+      "response": "ListRealmsResponse"
+    },
+    {
+      "method": "ListWorkloads",
+      "request": "ServiceRequest",
+      "response": "ListWorkloadsResponse"
+    },
+    {
+      "method": "OpenConsole",
+      "request": "TerminalOpenRequest",
+      "response": "TerminalOpenResponse"
+    },
+    {
+      "method": "Shell",
+      "request": "TerminalOpenRequest",
+      "response": "TerminalOpenResponse"
     }
   ],
   "service_dependency_edges": [

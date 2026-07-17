@@ -12,6 +12,10 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added bounded typed daemon realm/workload/inspect projections, server-allocated
+  terminal named-stream framing, and authenticated local session-generation
+  discovery without JSON payloads, caller-selected stream IDs, or generation
+  wildcards.
 - Added integrity-bound, typed `allocator.json` authority for bounded paired
   child-realm controller/broker launches, with strict exact lookup, canonical
   content digests, opaque references, redacted diagnostics, and no ambient

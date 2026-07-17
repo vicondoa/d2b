@@ -50,6 +50,26 @@ both the global 16 KiB ceiling and its own selected
 encode and decode. An endpoint compares every offer field for equality with its
 policy; it never selects a weaker value.
 
+### Local generation discovery
+
+A local command client may know the daemon endpoint identity while not knowing
+the daemon's restart generation. For `unix-stream` and `unix-seqpacket`
+endpoints using directional Unix identity evidence, it may begin with the
+bounded generation-discovery exchange. The query carries the canonical
+140-byte `EndpointPolicyIdentity`: every offer field except generation. The
+responder compares every field with its endpoint policy before returning a
+nonzero generation and a SHA-256 binding to the exact query.
+
+The Unix transport authenticates peer credentials and endpoint provenance
+before this exchange. The client treats the returned generation as negotiated
+only after completing the normal Noise handshake whose exact offer contains
+that generation. A modified reply therefore causes either exact-offer
+generation rejection or transcript failure. Generation discovery is not
+available to enrolled, bootstrap, vsock, provider-stream, or direct-configured
+endpoints. It does not make generation zero valid, does not weaken
+`EndpointPolicy` equality, and is not a separate discovery socket or legacy
+fallback.
+
 ### Service packages
 
 The closed inventory is:

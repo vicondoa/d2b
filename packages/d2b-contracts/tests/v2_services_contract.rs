@@ -17,12 +17,14 @@ use d2b_contracts::v2_provider::{
 };
 use d2b_contracts::v2_services::{
     BROKER_PIDFD_ATTACHMENT_INDEX, CONTROLLER_PIDFD_ATTACHMENT_INDEX, MAX_REALM_CHILD_FDS,
-    MAX_SERVICE_STRING_BYTES, SERVICE_INVENTORY, SERVICE_PACKAGES, ServiceContractError,
-    ServiceInventoryDocument, StrictWireMessage, broker, common, decode_spawn_response_for_request,
-    decode_strict, encode_strict, observability_query_response_from_wire,
-    observability_query_result_to_wire, provider_method_for_capability, provider_operation_input,
-    service_inventory_document, validate_provider_response_for_method,
-    validate_spawn_response_for_request,
+    MAX_SERVICE_STRING_BYTES, MAX_TERMINAL_CHUNK_BYTES, RedactedTerminalFrame, SERVICE_INVENTORY,
+    SERVICE_PACKAGES, ServiceContractError, ServiceInventoryDocument, StrictWireMessage,
+    TerminalFrameDirection, TerminalStreamValidator, broker, common, daemon,
+    decode_spawn_response_for_request, decode_strict, encode_strict,
+    observability_query_response_from_wire, observability_query_result_to_wire,
+    provider_method_for_capability, provider_operation_input, service_inventory_document,
+    validate_provider_response_for_method, validate_spawn_response_for_request,
+    validate_terminal_open_response_for_request,
 };
 use protobuf::{Enum, EnumOrUnknown, Message, MessageField};
 
@@ -1440,7 +1442,12 @@ fn method_ids_are_stable_and_collision_free() {
 
 #[test]
 fn payload_surface_has_no_secret_path_or_execution_authority_fields() {
-    let combined = PROTO_SOURCES.join("\n");
+    let combined = PROTO_SOURCES
+        .iter()
+        .copied()
+        .filter(|source| !source.contains("package d2b.daemon.v2"))
+        .collect::<Vec<_>>()
+        .join("\n");
     for forbidden in [
         "secret_bytes",
         "credential_bytes",
@@ -1458,6 +1465,11 @@ fn payload_surface_has_no_secret_path_or_execution_authority_fields() {
             "forbidden protobuf field: {forbidden}"
         );
     }
+    let daemon = include_str!("../proto/v2/daemon.proto");
+    assert_eq!(daemon.matches("repeated bytes argv").count(), 1);
+    assert!(!daemon.contains("string cwd"));
+    assert!(!daemon.contains("ExecEnv"));
+    assert!(!daemon.contains("stream_id = 6"));
     assert!(!combined.contains(".v1"));
     for (_, _, generated) in TTRPC_SOURCES {
         assert!(!generated.contains(".v1"));
@@ -1480,4 +1492,409 @@ fn request_debug_wrapper_redacts_values() {
     assert!(!rendered.contains("correlation-1"));
     assert!(!rendered.contains("aaaaaaaaaaaaaaaaaaaa"));
     assert!(!rendered.contains("11, 11"));
+}
+
+fn valid_workload_projection() -> daemon::WorkloadProjection {
+    let identity = daemon::WorkloadIdentityProjection {
+        realm_id: "aaaaaaaaaaaaaaaaaaaa".to_owned(),
+        workload_id: "bbbbbbbbbbbbbbbbbbba".to_owned(),
+        realm_path: "local-root".to_owned(),
+        workload_name: "workload".to_owned(),
+        canonical_target: "workload.local-root.d2b".to_owned(),
+        ..Default::default()
+    };
+    let lifecycle = daemon::WorkloadLifecycleProjection {
+        state: daemon::WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_RUNNING.into(),
+        pending_restart: true,
+        generation: 7,
+        ..Default::default()
+    };
+    let runtime = daemon::RuntimeProjection {
+        kind: daemon::RuntimeKind::RUNTIME_KIND_NIXOS.into(),
+        detail: "running".to_owned(),
+        supported_capabilities: vec![
+            daemon::RuntimeCapability::RUNTIME_CAPABILITY_LIFECYCLE.into(),
+            daemon::RuntimeCapability::RUNTIME_CAPABILITY_EXEC.into(),
+        ],
+        ..Default::default()
+    };
+    let service = daemon::ServiceProjection {
+        kind: daemon::ServiceKind::SERVICE_KIND_DAEMON.into(),
+        role_id: "daemon".to_owned(),
+        state: daemon::ServiceState::SERVICE_STATE_ACTIVE.into(),
+        ..Default::default()
+    };
+    daemon::WorkloadProjection {
+        identity: MessageField::some(identity),
+        name: "workload".to_owned(),
+        environment: "work".to_owned(),
+        graphics: true,
+        tpm: true,
+        usbip: true,
+        static_ip: vec![10, 42, 0, 2],
+        ssh_configured: true,
+        lifecycle: MessageField::some(lifecycle),
+        runtime: MessageField::some(runtime),
+        services: vec![service],
+        api_ready: daemon::ApiReadyState::API_READY_STATE_READY.into(),
+        ..Default::default()
+    }
+}
+
+fn page(returned: u32) -> daemon::PageInfo {
+    daemon::PageInfo {
+        returned_items: returned,
+        total_items_known: true,
+        total_items: returned,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn typed_daemon_list_and_inspect_results_round_trip_nonempty() {
+    let workload = valid_workload_projection();
+    let list = daemon::ListWorkloadsResponse {
+        outcome: common::Outcome::OUTCOME_SUCCEEDED.into(),
+        workloads: vec![workload.clone()],
+        page: MessageField::some(page(1)),
+        ..Default::default()
+    };
+    let encoded = encode_strict(&list, false).expect("typed workload list encodes");
+    assert_eq!(
+        decode_strict::<daemon::ListWorkloadsResponse>(&encoded, false).unwrap(),
+        list
+    );
+
+    let inspect = daemon::InspectResponse {
+        outcome: common::Outcome::OUTCOME_SUCCEEDED.into(),
+        workloads: vec![workload],
+        page: MessageField::some(page(1)),
+        read_model: "realm-controller".to_owned(),
+        ..Default::default()
+    };
+    let encoded = encode_strict(&inspect, false).expect("typed inspect encodes");
+    assert_eq!(
+        decode_strict::<daemon::InspectResponse>(&encoded, false).unwrap(),
+        inspect
+    );
+
+    let realm = daemon::RealmProjection {
+        realm_id: "aaaaaaaaaaaaaaaaaaaa".to_owned(),
+        realm_path: "local-root".to_owned(),
+        realm_label: "local-root".to_owned(),
+        mode: daemon::RealmMode::REALM_MODE_HOST_LOCAL.into(),
+        state: daemon::RealmState::REALM_STATE_READY.into(),
+        cross_realm_policy: daemon::CrossRealmPolicy::CROSS_REALM_POLICY_DEFAULT_DENY.into(),
+        credential_boundary: daemon::CredentialBoundary::CREDENTIAL_BOUNDARY_HOST_LOCAL.into(),
+        generation: 7,
+        ..Default::default()
+    };
+    let realms = daemon::ListRealmsResponse {
+        outcome: common::Outcome::OUTCOME_SUCCEEDED.into(),
+        realms: vec![realm],
+        page: MessageField::some(page(1)),
+        ..Default::default()
+    };
+    let encoded = encode_strict(&realms, false).expect("typed realms encode");
+    assert_eq!(
+        decode_strict::<daemon::ListRealmsResponse>(&encoded, false).unwrap(),
+        realms
+    );
+}
+
+#[test]
+fn typed_daemon_results_enforce_bounds_and_pagination() {
+    let mut workload = valid_workload_projection();
+    workload.runtime.as_mut().unwrap().supported_capabilities = vec![
+            daemon::RuntimeCapability::RUNTIME_CAPABILITY_EXEC.into();
+            d2b_contracts::v2_services::MAX_DAEMON_CAPABILITIES + 1
+        ];
+    let response = daemon::ListWorkloadsResponse {
+        outcome: common::Outcome::OUTCOME_SUCCEEDED.into(),
+        workloads: vec![workload],
+        page: MessageField::some(page(1)),
+        ..Default::default()
+    };
+    assert_eq!(
+        response.validate_wire(false),
+        Err(ServiceContractError::BoundExceeded)
+    );
+
+    let mut inconsistent = daemon::ListWorkloadsResponse {
+        outcome: common::Outcome::OUTCOME_SUCCEEDED.into(),
+        workloads: vec![valid_workload_projection()],
+        page: MessageField::some(page(1)),
+        ..Default::default()
+    };
+    inconsistent.page.as_mut().unwrap().truncated = true;
+    assert_eq!(
+        inconsistent.validate_wire(false),
+        Err(ServiceContractError::BoundExceeded)
+    );
+    inconsistent.page.as_mut().unwrap().next_page_cursor = "cursor-1".to_owned();
+    inconsistent.validate_wire(false).unwrap();
+}
+
+fn valid_terminal_open_request() -> daemon::TerminalOpenRequest {
+    let request = valid_request();
+    daemon::TerminalOpenRequest {
+        metadata: request.metadata,
+        scope: request.scope,
+        resource_id: "workload-1".to_owned(),
+        operation_id: "operation-1".to_owned(),
+        request_digest: vec![0x44; 32],
+        ..Default::default()
+    }
+}
+
+fn arbitrary_exec_selection() -> daemon::TerminalSelection {
+    let mut exec = daemon::ExecSelection {
+        authority: daemon::ExecAuthority::EXEC_AUTHORITY_ADMIN_ARBITRARY.into(),
+        tty: true,
+        initial_size: MessageField::some(daemon::TerminalSize {
+            rows: 24,
+            columns: 80,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    exec.set_arbitrary(daemon::ArbitraryExecSelection {
+        argv: vec![b"printf".to_vec(), b"private-argument".to_vec()],
+        ..Default::default()
+    });
+    let mut selection = daemon::TerminalSelection::new();
+    selection.set_exec(exec);
+    selection
+}
+
+fn terminal_frame(
+    sequence: u64,
+    frame: daemon::terminal_stream_frame::Frame,
+) -> daemon::TerminalStreamFrame {
+    daemon::TerminalStreamFrame {
+        session_generation: 7,
+        request_id: vec![0x11; 16],
+        sequence,
+        frame: Some(frame),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn terminal_opener_has_only_server_selected_stream_authority() {
+    let request = valid_terminal_open_request();
+    request.validate_wire(true).unwrap();
+    let mut encoded = request.write_to_bytes().unwrap();
+    encoded.extend_from_slice(&[0x3a, 0x0a]);
+    encoded.extend_from_slice(b"stream-256");
+    assert_eq!(
+        decode_strict::<daemon::TerminalOpenRequest>(&encoded, true),
+        Err(ServiceContractError::UnknownField)
+    );
+
+    let response = daemon::TerminalOpenResponse {
+        outcome: common::Outcome::OUTCOME_ACCEPTED.into(),
+        operation_id: "operation-1".to_owned(),
+        stream_id: "stream-256".to_owned(),
+        session_generation: 1,
+        request_id: vec![0x11; 16],
+        ..Default::default()
+    };
+    validate_terminal_open_response_for_request(&request, &response).unwrap();
+
+    let mut mismatch = response;
+    mismatch.session_generation = 2;
+    assert_eq!(
+        validate_terminal_open_response_for_request(&request, &mismatch),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+}
+
+#[test]
+fn every_terminal_frame_variant_is_strict_and_bounded() {
+    use daemon::terminal_stream_frame::Frame;
+    let variants = vec![
+        Frame::Select(arbitrary_exec_selection()),
+        Frame::Started(daemon::TerminalStarted {
+            kind: daemon::TerminalKind::TERMINAL_KIND_EXEC.into(),
+            tty: true,
+            ..Default::default()
+        }),
+        Frame::Stdin(daemon::TerminalStdin {
+            data: b"input".to_vec(),
+            ..Default::default()
+        }),
+        Frame::Stdout(daemon::TerminalOutput {
+            data: b"output".to_vec(),
+            ..Default::default()
+        }),
+        Frame::Stderr(daemon::TerminalOutput {
+            data: b"error".to_vec(),
+            ..Default::default()
+        }),
+        Frame::Resize(daemon::TerminalResize {
+            operation_sequence: 1,
+            size: MessageField::some(daemon::TerminalSize {
+                rows: 25,
+                columns: 81,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        Frame::Signal(daemon::TerminalSignal {
+            operation_sequence: 2,
+            signal: daemon::TerminalSignalKind::TERMINAL_SIGNAL_KIND_INTERRUPT.into(),
+            ..Default::default()
+        }),
+        Frame::CloseStdin(daemon::TerminalCloseStdin::new()),
+        Frame::Detach(daemon::TerminalDetach::new()),
+        Frame::Close(daemon::TerminalClose::new()),
+        Frame::Cancel(daemon::TerminalCancel::new()),
+        Frame::Status(daemon::TerminalStatus {
+            status: daemon::TerminalStatusKind::TERMINAL_STATUS_KIND_RUNNING.into(),
+            ..Default::default()
+        }),
+        Frame::Outcome({
+            let mut outcome = daemon::TerminalOutcome::new();
+            outcome.set_exited(daemon::TerminalExited {
+                exit_code: 0,
+                ..Default::default()
+            });
+            outcome
+        }),
+    ];
+    for (sequence, variant) in variants.into_iter().enumerate() {
+        let frame = terminal_frame(sequence as u64, variant);
+        let encoded = encode_strict(&frame, false).expect("terminal frame encodes");
+        assert_eq!(
+            decode_strict::<daemon::TerminalStreamFrame>(&encoded, false).unwrap(),
+            frame
+        );
+    }
+
+    let mut oversized = terminal_frame(
+        0,
+        Frame::Stdin(daemon::TerminalStdin {
+            data: vec![0x55; MAX_TERMINAL_CHUNK_BYTES + 1],
+            ..Default::default()
+        }),
+    );
+    assert_eq!(
+        oversized.validate_wire(false),
+        Err(ServiceContractError::BoundExceeded)
+    );
+    oversized.frame = None;
+    assert_eq!(
+        oversized.validate_wire(false),
+        Err(ServiceContractError::MissingOperationInput)
+    );
+}
+
+#[test]
+fn terminal_state_machine_binds_direction_generation_and_one_outcome() {
+    use daemon::terminal_stream_frame::Frame;
+    let mut validator =
+        TerminalStreamValidator::new(daemon::TerminalKind::TERMINAL_KIND_EXEC, 7, [0x11; 16])
+            .unwrap();
+    validator
+        .accept(
+            TerminalFrameDirection::ClientToServer,
+            &terminal_frame(0, Frame::Select(arbitrary_exec_selection())),
+        )
+        .unwrap();
+    validator
+        .accept(
+            TerminalFrameDirection::ServerToClient,
+            &terminal_frame(
+                0,
+                Frame::Started(daemon::TerminalStarted {
+                    kind: daemon::TerminalKind::TERMINAL_KIND_EXEC.into(),
+                    tty: true,
+                    ..Default::default()
+                }),
+            ),
+        )
+        .unwrap();
+    validator
+        .accept(
+            TerminalFrameDirection::ClientToServer,
+            &terminal_frame(
+                1,
+                Frame::Stdin(daemon::TerminalStdin {
+                    data: b"private-input".to_vec(),
+                    ..Default::default()
+                }),
+            ),
+        )
+        .unwrap();
+    validator
+        .accept(
+            TerminalFrameDirection::ServerToClient,
+            &terminal_frame(
+                1,
+                Frame::Stdout(daemon::TerminalOutput {
+                    data: b"private-output".to_vec(),
+                    ..Default::default()
+                }),
+            ),
+        )
+        .unwrap();
+    validator
+        .accept(
+            TerminalFrameDirection::ClientToServer,
+            &terminal_frame(2, Frame::Cancel(daemon::TerminalCancel::new())),
+        )
+        .unwrap();
+    let mut outcome = daemon::TerminalOutcome::new();
+    outcome.set_cancelled(daemon::TerminalCancelled::new());
+    validator
+        .accept(
+            TerminalFrameDirection::ServerToClient,
+            &terminal_frame(2, Frame::Outcome(outcome.clone())),
+        )
+        .unwrap();
+    assert!(validator.is_terminal());
+    assert_eq!(
+        validator.accept(
+            TerminalFrameDirection::ServerToClient,
+            &terminal_frame(3, Frame::Outcome(outcome))
+        ),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+
+    let mut mismatch =
+        TerminalStreamValidator::new(daemon::TerminalKind::TERMINAL_KIND_EXEC, 7, [0x11; 16])
+            .unwrap();
+    let mut frame = terminal_frame(0, Frame::Select(arbitrary_exec_selection()));
+    frame.session_generation = 8;
+    assert_eq!(
+        mismatch.accept(TerminalFrameDirection::ClientToServer, &frame),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+}
+
+#[test]
+fn terminal_debug_and_errors_do_not_expose_argv_or_bytes() {
+    use daemon::terminal_stream_frame::Frame;
+    let frame = terminal_frame(0, Frame::Select(arbitrary_exec_selection()));
+    let rendered = format!("{:?}", RedactedTerminalFrame(&frame));
+    assert!(!rendered.contains("private-argument"));
+    assert!(!rendered.contains("11, 11"));
+    assert!(rendered.contains("select"));
+    let generated_debug = format!("{frame:?}");
+    assert_eq!(generated_debug, "TerminalStreamFrame(REDACTED)");
+    assert!(!format!("{:?}", frame.frame).contains("private-argument"));
+
+    let error = terminal_frame(
+        0,
+        Frame::Stdin(daemon::TerminalStdin {
+            data: vec![0x61; MAX_TERMINAL_CHUNK_BYTES + 1],
+            ..Default::default()
+        }),
+    )
+    .validate_wire(false)
+    .unwrap_err()
+    .to_string();
+    assert_eq!(error, "v2-service-bound-exceeded");
+    assert!(!error.contains("private"));
 }

@@ -738,7 +738,6 @@ fn same_descriptor_binding(expected: &AttachmentDescriptor, actual: &AttachmentD
     let mut expected = expected.clone();
     expected.index = actual.index;
     expected.packet_sequence = actual.packet_sequence;
-    expected.reconnect_generation = actual.reconnect_generation;
     expected == *actual
 }
 

@@ -29,8 +29,11 @@ pub use engine::{SessionEngine, SessionEvent};
 pub use error::{Result, SessionError};
 pub use fragmentation::{Fragment, Fragmenter, Reassembler};
 pub use handshake::{
-    EstablishedHandshake, HandshakeCredentials, HandshakeRole, NegotiatedOffer, NoiseHandshake,
-    encode_offer, negotiate_offer,
+    EstablishedHandshake, GENERATION_DISCOVERY_REQUEST_LEN, GENERATION_DISCOVERY_RESPONSE_LEN,
+    HandshakeCredentials, HandshakeRole, NegotiatedOffer, NoiseHandshake,
+    accept_generation_discovery_request, decode_generation_discovery_response,
+    encode_generation_discovery_request, encode_generation_discovery_response, encode_offer,
+    is_generation_discovery_request, negotiate_offer,
 };
 pub use lifecycle::{KeepaliveAction, SessionLifecycle, SessionPhase};
 pub use metrics::{MetricEvent, MetricsSink, NoopMetrics};

@@ -1,18 +1,547 @@
 syntax = "proto3";
 package d2b.daemon.v2;
+
 import "common.proto";
+
 service DaemonService {
   rpc Resolve(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
-  rpc ListRealms(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
-  rpc ListWorkloads(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
-  rpc Inspect(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc ListRealms(d2b.common.v2.ServiceRequest) returns (ListRealmsResponse);
+  rpc ListWorkloads(d2b.common.v2.ServiceRequest) returns (ListWorkloadsResponse);
+  rpc Inspect(d2b.common.v2.ServiceRequest) returns (InspectResponse);
   rpc Apply(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
   rpc Start(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
   rpc Stop(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
   rpc Restart(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
-  rpc Exec(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
-  rpc Shell(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
-  rpc OpenConsole(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc Exec(TerminalOpenRequest) returns (TerminalOpenResponse);
+  rpc Shell(TerminalOpenRequest) returns (TerminalOpenResponse);
+  rpc OpenConsole(TerminalOpenRequest) returns (TerminalOpenResponse);
   rpc ExportAudit(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
   rpc Cancel(d2b.common.v2.CancelRequest) returns (d2b.common.v2.CancelResponse);
+}
+
+message PageInfo {
+  bool truncated = 1;
+  string next_page_cursor = 2;
+  uint32 returned_items = 3;
+  bool total_items_known = 4;
+  uint32 total_items = 5;
+}
+
+enum RealmMode {
+  REALM_MODE_UNSPECIFIED = 0;
+  REALM_MODE_HOST_LOCAL = 1;
+  REALM_MODE_GATEWAY_BACKED = 2;
+}
+
+enum RealmState {
+  REALM_STATE_UNSPECIFIED = 0;
+  REALM_STATE_READY = 1;
+  REALM_STATE_DEGRADED = 2;
+  REALM_STATE_STOPPED = 3;
+  REALM_STATE_UNAVAILABLE = 4;
+}
+
+enum CrossRealmPolicy {
+  CROSS_REALM_POLICY_UNSPECIFIED = 0;
+  CROSS_REALM_POLICY_DEFAULT_DENY = 1;
+}
+
+enum CredentialBoundary {
+  CREDENTIAL_BOUNDARY_UNSPECIFIED = 0;
+  CREDENTIAL_BOUNDARY_HOST_LOCAL = 1;
+  CREDENTIAL_BOUNDARY_GATEWAY_GUEST = 2;
+}
+
+message RealmProjection {
+  string realm_id = 1;
+  string realm_path = 2;
+  string realm_label = 3;
+  RealmMode mode = 4;
+  RealmState state = 5;
+  CrossRealmPolicy cross_realm_policy = 6;
+  CredentialBoundary credential_boundary = 7;
+  string gateway_workload_id = 8;
+  string gateway_target = 9;
+  uint64 generation = 10;
+}
+
+message ListRealmsResponse {
+  d2b.common.v2.Outcome outcome = 1;
+  repeated RealmProjection realms = 2;
+  PageInfo page = 3;
+  d2b.common.v2.ErrorEnvelope error = 4;
+}
+
+enum WorkloadLifecycleState {
+  WORKLOAD_LIFECYCLE_STATE_UNSPECIFIED = 0;
+  WORKLOAD_LIFECYCLE_STATE_STOPPED = 1;
+  WORKLOAD_LIFECYCLE_STATE_STARTING = 2;
+  WORKLOAD_LIFECYCLE_STATE_BOOTED = 3;
+  WORKLOAD_LIFECYCLE_STATE_RUNNING = 4;
+  WORKLOAD_LIFECYCLE_STATE_STOPPING = 5;
+  WORKLOAD_LIFECYCLE_STATE_RESTARTING = 6;
+  WORKLOAD_LIFECYCLE_STATE_FAILED = 7;
+  WORKLOAD_LIFECYCLE_STATE_UNKNOWN = 8;
+}
+
+message WorkloadLifecycleProjection {
+  WorkloadLifecycleState state = 1;
+  bool degraded = 2;
+  bool pending_restart = 3;
+  repeated DegradedReason degraded_reasons = 4;
+  uint64 generation = 5;
+}
+
+message DegradedReason {
+  string reason = 1;
+  string remediation = 2;
+}
+
+enum RuntimeKind {
+  RUNTIME_KIND_UNSPECIFIED = 0;
+  RUNTIME_KIND_NIXOS = 1;
+  RUNTIME_KIND_QEMU_MEDIA = 2;
+  RUNTIME_KIND_UNSAFE_LOCAL = 3;
+  RUNTIME_KIND_ACA_SANDBOX = 4;
+  RUNTIME_KIND_REMOTE = 5;
+}
+
+enum RuntimeCapability {
+  RUNTIME_CAPABILITY_UNSPECIFIED = 0;
+  RUNTIME_CAPABILITY_LIFECYCLE = 1;
+  RUNTIME_CAPABILITY_DISPLAY = 2;
+  RUNTIME_CAPABILITY_USB_HOTPLUG = 3;
+  RUNTIME_CAPABILITY_CONFIG_SYNC = 4;
+  RUNTIME_CAPABILITY_EXEC = 5;
+  RUNTIME_CAPABILITY_GUEST_CONTROL = 6;
+  RUNTIME_CAPABILITY_IN_GUEST_OBSERVABILITY = 7;
+  RUNTIME_CAPABILITY_KEYS = 8;
+  RUNTIME_CAPABILITY_SHELL = 9;
+  RUNTIME_CAPABILITY_STORE_SYNC = 10;
+}
+
+message RuntimeProjection {
+  RuntimeKind kind = 1;
+  string detail = 2;
+  repeated RuntimeCapability supported_capabilities = 3;
+  repeated RuntimeCapability unsupported_capabilities = 4;
+}
+
+enum ServiceKind {
+  SERVICE_KIND_UNSPECIFIED = 0;
+  SERVICE_KIND_DAEMON = 1;
+  SERVICE_KIND_HYPERVISOR = 2;
+  SERVICE_KIND_QEMU_MEDIA = 3;
+  SERVICE_KIND_VIRTIOFSD = 4;
+  SERVICE_KIND_GPU = 5;
+  SERVICE_KIND_VIDEO = 6;
+  SERVICE_KIND_AUDIO = 7;
+  SERVICE_KIND_SWTPM = 8;
+  SERVICE_KIND_GUEST_CONTROL = 9;
+  SERVICE_KIND_OBSERVABILITY = 10;
+}
+
+enum ServiceState {
+  SERVICE_STATE_UNSPECIFIED = 0;
+  SERVICE_STATE_ACTIVE = 1;
+  SERVICE_STATE_INACTIVE = 2;
+  SERVICE_STATE_STARTING = 3;
+  SERVICE_STATE_STOPPING = 4;
+  SERVICE_STATE_FAILED = 5;
+  SERVICE_STATE_UNAVAILABLE = 6;
+  SERVICE_STATE_UNSUPPORTED = 7;
+  SERVICE_STATE_UNKNOWN = 8;
+}
+
+message ServiceProjection {
+  ServiceKind kind = 1;
+  string role_id = 2;
+  ServiceState state = 3;
+}
+
+enum AutostartMode {
+  AUTOSTART_MODE_UNSPECIFIED = 0;
+  AUTOSTART_MODE_ENABLED = 1;
+  AUTOSTART_MODE_DISABLED = 2;
+  AUTOSTART_MODE_MANUAL_ONLY = 3;
+}
+
+message AutostartProjection {
+  AutostartMode mode = 1;
+  string reason = 2;
+}
+
+message WorkloadIdentityProjection {
+  string realm_id = 1;
+  string workload_id = 2;
+  string realm_path = 3;
+  string workload_name = 4;
+  string canonical_target = 5;
+}
+
+message DeploymentProjection {
+  string declared_guest_closure = 1;
+  string current_generation = 2;
+  string booted_generation = 3;
+}
+
+message RunnerParityProjection {
+  string declared_runner = 1;
+  string parity_reference = 2;
+  bool parity_ok = 3;
+}
+
+enum ApiReadyState {
+  API_READY_STATE_UNSPECIFIED = 0;
+  API_READY_STATE_READY = 1;
+  API_READY_STATE_PENDING = 2;
+  API_READY_STATE_TIMEOUT = 3;
+  API_READY_STATE_ERROR = 4;
+}
+
+message LivePoolIntegrityProjection {
+  ServiceState state = 1;
+  string reason = 2;
+  string audit_reference = 3;
+  bool repair_attempted = 4;
+  string remediation = 5;
+}
+
+enum QemuMediaFirmwareMode {
+  QEMU_MEDIA_FIRMWARE_MODE_UNSPECIFIED = 0;
+  QEMU_MEDIA_FIRMWARE_MODE_NONE = 1;
+  QEMU_MEDIA_FIRMWARE_MODE_UEFI = 2;
+}
+
+enum QemuMediaReadiness {
+  QEMU_MEDIA_READINESS_UNSPECIFIED = 0;
+  QEMU_MEDIA_READINESS_NOT_STARTED = 1;
+  QEMU_MEDIA_READINESS_PENDING = 2;
+  QEMU_MEDIA_READINESS_READY = 3;
+}
+
+enum QemuMediaProgress {
+  QEMU_MEDIA_PROGRESS_UNSPECIFIED = 0;
+  QEMU_MEDIA_PROGRESS_NOT_STARTED = 1;
+  QEMU_MEDIA_PROGRESS_WAITING_FOR_QMP = 2;
+  QEMU_MEDIA_PROGRESS_PAUSED_BEFORE_CONT = 3;
+  QEMU_MEDIA_PROGRESS_RUNNING = 4;
+}
+
+enum QemuMediaSourceKind {
+  QEMU_MEDIA_SOURCE_KIND_UNSPECIFIED = 0;
+  QEMU_MEDIA_SOURCE_KIND_PHYSICAL_USB = 1;
+  QEMU_MEDIA_SOURCE_KIND_IMAGE_FILE = 2;
+}
+
+enum QemuMediaFormat {
+  QEMU_MEDIA_FORMAT_UNSPECIFIED = 0;
+  QEMU_MEDIA_FORMAT_RAW = 1;
+  QEMU_MEDIA_FORMAT_QCOW2 = 2;
+  QEMU_MEDIA_FORMAT_ISO = 3;
+}
+
+message QemuMediaRegistryProjection {
+  ServiceState state = 1;
+  string remediation = 2;
+}
+
+message QemuMediaSourceProjection {
+  string media_ref = 1;
+  string slot = 2;
+  QemuMediaSourceKind source_kind = 3;
+  QemuMediaFormat format = 4;
+  bool read_only = 5;
+  QemuMediaRegistryProjection registry = 6;
+}
+
+message QemuMediaProjection {
+  QemuMediaFirmwareMode firmware_mode = 1;
+  ServiceState runner_state = 2;
+  QemuMediaReadiness qmp_readiness = 3;
+  QemuMediaProgress pre_cont_progress = 4;
+  repeated QemuMediaSourceProjection media = 5;
+}
+
+enum UsbDeviceState {
+  USB_DEVICE_STATE_UNSPECIFIED = 0;
+  USB_DEVICE_STATE_READY = 1;
+  USB_DEVICE_STATE_ATTACHED = 2;
+  USB_DEVICE_STATE_DETACHED = 3;
+  USB_DEVICE_STATE_CONFLICT = 4;
+  USB_DEVICE_STATE_UNAVAILABLE = 5;
+  USB_DEVICE_STATE_DEGRADED = 6;
+}
+
+message UsbDeviceProjection {
+  string device_id = 1;
+  UsbDeviceState state = 2;
+  string owner_workload_id = 3;
+  string slot = 4;
+  string media_ref = 5;
+  repeated string candidate_device_ids = 6;
+  repeated DegradedReason degraded_reasons = 7;
+}
+
+message UsbProjection {
+  bool degraded = 1;
+  repeated UsbDeviceProjection devices = 2;
+}
+
+message BridgeProjection {
+  string bridge = 1;
+  bool present = 2;
+  string tap = 3;
+}
+
+message ReadinessProjection {
+  string role_id = 1;
+  string predicate_id = 2;
+  ServiceState state = 3;
+}
+
+message WorkloadProjection {
+  WorkloadIdentityProjection identity = 1;
+  string name = 2;
+  string environment = 3;
+  bool graphics = 4;
+  bool tpm = 5;
+  bool usbip = 6;
+  bytes static_ip = 7;
+  bool is_net_workload = 8;
+  bool ssh_configured = 9;
+  WorkloadLifecycleProjection lifecycle = 10;
+  RuntimeProjection runtime = 11;
+  repeated ServiceProjection services = 12;
+  AutostartProjection autostart = 13;
+  DeploymentProjection deployment = 14;
+  RunnerParityProjection runner_parity = 15;
+  ApiReadyState api_ready = 16;
+  LivePoolIntegrityProjection live_pool_integrity = 17;
+  QemuMediaProjection qemu_media = 18;
+  UsbProjection usb = 19;
+  repeated BridgeProjection bridge_checks = 20;
+  repeated string declared_roles = 21;
+  repeated ReadinessProjection readiness = 22;
+}
+
+message ListWorkloadsResponse {
+  d2b.common.v2.Outcome outcome = 1;
+  repeated WorkloadProjection workloads = 2;
+  PageInfo page = 3;
+  d2b.common.v2.ErrorEnvelope error = 4;
+}
+
+message InspectResponse {
+  d2b.common.v2.Outcome outcome = 1;
+  repeated WorkloadProjection workloads = 2;
+  PageInfo page = 3;
+  d2b.common.v2.ErrorEnvelope error = 4;
+  string read_model = 5;
+}
+
+// A terminal opener never carries a stream identifier. The authenticated
+// server reserves a nonzero named-stream channel and returns its canonical
+// `stream-N` name in TerminalOpenResponse.
+message TerminalOpenRequest {
+  reserved 6, 7;
+  reserved "stream_id";
+  d2b.common.v2.RequestMetadata metadata = 1;
+  d2b.common.v2.IdentityScope scope = 2;
+  string resource_id = 3;
+  string operation_id = 4;
+  bytes request_digest = 5;
+}
+
+message TerminalOpenResponse {
+  d2b.common.v2.Outcome outcome = 1;
+  string operation_id = 2;
+  string stream_id = 3;
+  uint64 session_generation = 4;
+  bytes request_id = 5;
+  d2b.common.v2.ErrorEnvelope error = 6;
+}
+
+enum TerminalKind {
+  TERMINAL_KIND_UNSPECIFIED = 0;
+  TERMINAL_KIND_EXEC = 1;
+  TERMINAL_KIND_SHELL = 2;
+  TERMINAL_KIND_CONSOLE = 3;
+}
+
+message TerminalSize {
+  uint32 rows = 1;
+  uint32 columns = 2;
+}
+
+enum ExecAuthority {
+  EXEC_AUTHORITY_UNSPECIFIED = 0;
+  EXEC_AUTHORITY_ADMIN_ARBITRARY = 1;
+  EXEC_AUTHORITY_CONFIGURED_LAUNCH = 2;
+}
+
+message ArbitraryExecSelection {
+  repeated bytes argv = 1;
+}
+
+message ConfiguredLaunchSelection {
+  string configured_item_id = 1;
+}
+
+message ExecSelection {
+  ExecAuthority authority = 1;
+  oneof selection {
+    ArbitraryExecSelection arbitrary = 2;
+    ConfiguredLaunchSelection configured_launch = 3;
+  }
+  bool tty = 4;
+  bool detached = 5;
+  TerminalSize initial_size = 6;
+}
+
+message ShellSelection {
+  string shell_name = 1;
+  bool use_default = 2;
+  bool force = 3;
+  TerminalSize initial_size = 4;
+}
+
+message ConsoleSelection {
+  TerminalSize initial_size = 1;
+}
+
+message TerminalSelection {
+  oneof selection {
+    ExecSelection exec = 1;
+    ShellSelection shell = 2;
+    ConsoleSelection console = 3;
+  }
+}
+
+enum ConsoleProviderKind {
+  CONSOLE_PROVIDER_KIND_UNSPECIFIED = 0;
+  CONSOLE_PROVIDER_KIND_LOCAL_HYPERVISOR = 1;
+  CONSOLE_PROVIDER_KIND_QEMU_MEDIA = 2;
+  CONSOLE_PROVIDER_KIND_ACA_SANDBOX = 3;
+}
+
+message TerminalStarted {
+  TerminalKind kind = 1;
+  bool tty = 2;
+  uint64 stdout_offset = 3;
+  uint64 stderr_offset = 4;
+  ConsoleProviderKind console_provider = 5;
+}
+
+message TerminalStdin {
+  uint64 offset = 1;
+  bytes data = 2;
+  bool eof = 3;
+}
+
+message TerminalOutput {
+  uint64 offset = 1;
+  bytes data = 2;
+  bool eof = 3;
+  uint64 dropped_bytes = 4;
+  bool truncated = 5;
+}
+
+message TerminalResize {
+  uint64 operation_sequence = 1;
+  TerminalSize size = 2;
+}
+
+enum TerminalSignalKind {
+  TERMINAL_SIGNAL_KIND_UNSPECIFIED = 0;
+  TERMINAL_SIGNAL_KIND_INTERRUPT = 1;
+  TERMINAL_SIGNAL_KIND_TERMINATE = 2;
+  TERMINAL_SIGNAL_KIND_SUSPEND = 3;
+  TERMINAL_SIGNAL_KIND_HANGUP = 4;
+}
+
+message TerminalSignal {
+  uint64 operation_sequence = 1;
+  TerminalSignalKind signal = 2;
+}
+
+message TerminalCloseStdin {}
+message TerminalDetach {}
+message TerminalClose {}
+message TerminalCancel {}
+
+enum TerminalStatusKind {
+  TERMINAL_STATUS_KIND_UNSPECIFIED = 0;
+  TERMINAL_STATUS_KIND_RUNNING = 1;
+  TERMINAL_STATUS_KIND_STDIN_ACCEPTED = 2;
+  TERMINAL_STATUS_KIND_STDIN_BACKPRESSURED = 3;
+  TERMINAL_STATUS_KIND_STDIN_CLOSED = 4;
+  TERMINAL_STATUS_KIND_CONTROL_APPLIED = 5;
+}
+
+message TerminalStatus {
+  TerminalStatusKind status = 1;
+  uint64 next_stdin_offset = 2;
+}
+
+enum TerminalErrorKind {
+  TERMINAL_ERROR_KIND_UNSPECIFIED = 0;
+  TERMINAL_ERROR_KIND_INVALID_SELECTION = 1;
+  TERMINAL_ERROR_KIND_UNAUTHORIZED = 2;
+  TERMINAL_ERROR_KIND_NOT_FOUND = 3;
+  TERMINAL_ERROR_KIND_CONFLICT = 4;
+  TERMINAL_ERROR_KIND_UNAVAILABLE = 5;
+  TERMINAL_ERROR_KIND_RESOURCE_EXHAUSTED = 6;
+  TERMINAL_ERROR_KIND_GENERATION_MISMATCH = 7;
+  TERMINAL_ERROR_KIND_PROTOCOL = 8;
+  TERMINAL_ERROR_KIND_INTERNAL = 9;
+}
+
+message TerminalExited {
+  int32 exit_code = 1;
+}
+
+message TerminalSignaled {
+  uint32 signal = 1;
+}
+
+message TerminalCancelled {}
+message TerminalDetached {}
+message TerminalClosed {}
+
+message TerminalFailed {
+  TerminalErrorKind error = 1;
+  d2b.common.v2.RetryClass retry = 2;
+}
+
+message TerminalOutcome {
+  oneof outcome {
+    TerminalExited exited = 1;
+    TerminalSignaled signaled = 2;
+    TerminalCancelled cancelled = 3;
+    TerminalDetached detached = 4;
+    TerminalClosed closed = 5;
+    TerminalFailed failed = 6;
+  }
+}
+
+message TerminalStreamFrame {
+  uint64 session_generation = 1;
+  bytes request_id = 2;
+  uint64 sequence = 3;
+  oneof frame {
+    TerminalSelection select = 10;
+    TerminalStarted started = 11;
+    TerminalStdin stdin = 12;
+    TerminalOutput stdout = 13;
+    TerminalOutput stderr = 14;
+    TerminalResize resize = 15;
+    TerminalSignal signal = 16;
+    TerminalCloseStdin close_stdin = 17;
+    TerminalDetach detach = 18;
+    TerminalClose close = 19;
+    TerminalCancel cancel = 20;
+    TerminalStatus status = 21;
+    TerminalOutcome outcome = 22;
+  }
 }

@@ -60,6 +60,7 @@ pub struct SharedContractPolicy {
     pub documentation_prefixes: Vec<String>,
     pub frozen_service_packages: Vec<String>,
     pub broker_typed_methods: Vec<TypedBrokerMethod>,
+    pub daemon_typed_methods: Vec<TypedBrokerMethod>,
     pub service_dependency_edges: Vec<ServiceDependencyEdge>,
     pub w7_contract_test_migrations: Vec<W7ContractTestMigration>,
     pub workspace_dependencies: Vec<WorkspaceDependency>,
@@ -117,7 +118,7 @@ pub struct W7ContractTestMigration {
 
 impl SharedContractPolicy {
     pub fn validate(&self) -> Result<(), String> {
-        if self.schema_version != 5 {
+        if self.schema_version != 6 {
             return Err("unsupported shared-contract policy schema".to_owned());
         }
         if self.authority_repository != "github.com/vicondoa/d2b" {
@@ -216,6 +217,7 @@ impl SharedContractPolicy {
         validate_sorted_directory_prefixes(&self.documentation_prefixes, "documentation prefixes")?;
         validate_sorted_strings(&self.frozen_service_packages, "frozen service packages")?;
         validate_sorted_values(&self.broker_typed_methods, "typed broker methods")?;
+        validate_sorted_values(&self.daemon_typed_methods, "typed daemon methods")?;
         validate_sorted_values(&self.service_dependency_edges, "service dependency edges")?;
         for edge in &self.service_dependency_edges {
             validate_identifier(&edge.consumer, "service dependency consumer")

@@ -22,6 +22,11 @@ use d2b_contracts::{
         VmExecLogsOutputV1, VmExecStatusOutputV1,
     },
     provider_registry_v2::ProviderRegistryV2,
+    v2_component_session::{
+        AttachmentPacket, BootstrapPskBinding, CancelAck, CancelRequest, CloseRecord,
+        EndpointPolicyIdentity, FragmentHeader, HandshakeAccept, HandshakeOffer, HandshakeReject,
+        KeepaliveRecord, MetricLabels, RecordHeader, RequestEnvelope,
+    },
     v2_services::{ServiceInventoryDocument, service_inventory_document},
     v2_state::StateStorageSyncAuditContract,
 };
@@ -549,6 +554,9 @@ fn gen_v2_services() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
                 return Err("v2 service codegen emitted an unexpected output".into());
             }
             sanitize_generated_rust(&entry.path())?;
+            if entry.file_name() == "daemon.rs" {
+                redact_daemon_terminal_debug(&entry.path())?;
+            }
             if entry.file_name() == "runtime_systemd_user_ttrpc.rs" {
                 let source = fs::read_to_string(entry.path())?;
                 let rewritten =
@@ -596,6 +604,7 @@ fn gen_v2_services() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         let reference_dir = repo_root.join("docs/reference");
         let inventory_path = reference_dir.join("v2-services.json");
         let schema_path = reference_dir.join("v2-services-schema.json");
+        let component_session_schema_path = reference_dir.join("component-session-v2-schema.json");
         let inventory = service_inventory_document();
         fs::write(
             &inventory_path,
@@ -606,8 +615,36 @@ fn gen_v2_services() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
             &schema_path,
             format!("{}\n", serde_json::to_string_pretty(&schema)?),
         )?;
+        let component_session_schema = serde_json::json!({
+            "contract": "d2b-component-session-v2",
+            "formatVersion": 1,
+            "schemas": {
+                "attachmentPacket": schemars::schema_for!(AttachmentPacket),
+                "bootstrapPskBinding": schemars::schema_for!(BootstrapPskBinding),
+                "cancelAck": schemars::schema_for!(CancelAck),
+                "cancelRequest": schemars::schema_for!(CancelRequest),
+                "closeRecord": schemars::schema_for!(CloseRecord),
+                "endpointPolicyIdentity": schemars::schema_for!(EndpointPolicyIdentity),
+                "fragmentHeader": schemars::schema_for!(FragmentHeader),
+                "handshakeAccept": schemars::schema_for!(HandshakeAccept),
+                "handshakeOffer": schemars::schema_for!(HandshakeOffer),
+                "handshakeReject": schemars::schema_for!(HandshakeReject),
+                "keepaliveRecord": schemars::schema_for!(KeepaliveRecord),
+                "metricLabels": schemars::schema_for!(MetricLabels),
+                "recordHeader": schemars::schema_for!(RecordHeader),
+                "requestEnvelope": schemars::schema_for!(RequestEnvelope),
+            }
+        });
+        fs::write(
+            &component_session_schema_path,
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&component_session_schema)?
+            ),
+        )?;
         installed.push(inventory_path);
         installed.push(schema_path);
+        installed.push(component_session_schema_path);
         Ok(installed)
     })();
 
@@ -618,6 +655,70 @@ fn gen_v2_services() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         return Err(error.into());
     }
     generation
+}
+
+fn redact_daemon_terminal_debug(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let mut source = fs::read_to_string(path)?;
+    let messages = [
+        "TerminalOpenRequest",
+        "TerminalOpenResponse",
+        "ArbitraryExecSelection",
+        "ConfiguredLaunchSelection",
+        "ExecSelection",
+        "ShellSelection",
+        "TerminalSelection",
+        "TerminalStdin",
+        "TerminalOutput",
+        "TerminalStreamFrame",
+    ];
+    for message in messages {
+        let marker = format!(
+            "// @@protoc_insertion_point(message:d2b.daemon.v2.{message})\n\
+             #[derive(PartialEq,Clone,Default,Debug)]\n\
+             pub struct {message}"
+        );
+        let replacement = format!(
+            "// @@protoc_insertion_point(message:d2b.daemon.v2.{message})\n\
+             #[derive(PartialEq,Clone,Default)]\n\
+             pub struct {message}"
+        );
+        if !source.contains(&marker) {
+            return Err(format!("generated daemon message {message} has an unknown shape").into());
+        }
+        source = source.replacen(&marker, &replacement, 1);
+        source.push_str(&format!(
+            "\nimpl ::std::fmt::Debug for {message} {{\n\
+             \x20   fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {{\n\
+             \x20       formatter.write_str(\"{message}(REDACTED)\")\n\
+             \x20   }}\n\
+             }}\n"
+        ));
+    }
+    for (module, oneof) in [
+        ("exec_selection", "Selection"),
+        ("terminal_selection", "Selection"),
+        ("terminal_stream_frame", "Frame"),
+    ] {
+        let module_marker = format!("pub mod {module} {{");
+        let module_start = source
+            .find(&module_marker)
+            .ok_or_else(|| format!("generated daemon module {module} is absent"))?;
+        let derive = "#[derive(Clone,PartialEq,Debug)]";
+        let relative = source[module_start..].find(derive).ok_or_else(|| {
+            format!("generated daemon oneof {module}::{oneof} has an unknown shape")
+        })?;
+        let start = module_start + relative;
+        source.replace_range(start..start + derive.len(), "#[derive(Clone,PartialEq)]");
+        source.push_str(&format!(
+            "\nimpl ::std::fmt::Debug for {module}::{oneof} {{\n\
+             \x20   fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {{\n\
+             \x20       formatter.write_str(\"{oneof}(REDACTED)\")\n\
+             \x20   }}\n\
+             }}\n"
+        ));
+    }
+    fs::write(path, source)?;
+    Ok(())
 }
 
 fn gen_guest_proto() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {

@@ -400,6 +400,355 @@
       "title": "CloseRecord",
       "type": "object"
     },
+    "endpointPolicyIdentity": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "AttachmentPolicy": {
+          "additionalProperties": false,
+          "properties": {
+            "credentialsAllowed": {
+              "type": "boolean"
+            },
+            "kind": {
+              "$ref": "#/definitions/AttachmentPolicyKind"
+            },
+            "maxPerOperation": {
+              "format": "uint16",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "maxPerPacket": {
+              "format": "uint16",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "maxPerRequest": {
+              "format": "uint16",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "maxPerSession": {
+              "format": "uint16",
+              "minimum": 0.0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "credentialsAllowed",
+            "kind",
+            "maxPerOperation",
+            "maxPerPacket",
+            "maxPerRequest",
+            "maxPerSession"
+          ],
+          "type": "object"
+        },
+        "AttachmentPolicyKind": {
+          "enum": [
+            "disabled",
+            "packet-atomic"
+          ],
+          "type": "string"
+        },
+        "EndpointPurpose": {
+          "enum": [
+            "daemon-local",
+            "daemon-remote",
+            "realm-peer",
+            "realm-bootstrap",
+            "guest-control",
+            "guest-bootstrap",
+            "provider-agent",
+            "privileged-broker",
+            "user-agent",
+            "runtime-systemd-user",
+            "shell-supervisor",
+            "clipboard-control",
+            "clipboard-picker",
+            "clipboard-bridge",
+            "desktop-observer",
+            "security-key",
+            "activation-helper",
+            "tty-helper",
+            "wayland-proxy"
+          ],
+          "type": "string"
+        },
+        "EndpointRole": {
+          "enum": [
+            "command-client",
+            "local-root-controller",
+            "realm-controller",
+            "local-root-broker",
+            "realm-broker",
+            "guest-agent",
+            "provider-agent",
+            "user-agent",
+            "runtime-systemd-user-agent",
+            "shell-supervisor",
+            "clipboard-daemon",
+            "clipboard-picker",
+            "wayland-proxy",
+            "desktop-observer",
+            "security-key-frontend",
+            "security-key-controller",
+            "activation-helper",
+            "tty-helper",
+            "remote-peer"
+          ],
+          "type": "string"
+        },
+        "IdentityEvidenceRequirement": {
+          "enum": [
+            "directional-unix",
+            "enrolled-static-keys",
+            "parent-static-and-single-use-psk"
+          ],
+          "type": "string"
+        },
+        "LimitProfile": {
+          "additionalProperties": false,
+          "properties": {
+            "activeNamedStreams": {
+              "format": "uint16",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "aggregateNamedStreamQueueBytes": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "handshakeDeadlineMs": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "handshakeOfferBytes": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "keepaliveIntervalMs": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "keepaliveTimeoutMs": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "logicalNamedStreamBytes": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "logicalTtrpcBytes": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "namedStreamQueueBytes": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "protectedCiphertextBytes": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "reconnectAttempts": {
+              "format": "uint16",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "reconnectDeadlineMs": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "reconnectWindowMs": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "sessionControlQueueBytes": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "ttrpcControlQueueBytes": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "activeNamedStreams",
+            "aggregateNamedStreamQueueBytes",
+            "handshakeDeadlineMs",
+            "handshakeOfferBytes",
+            "keepaliveIntervalMs",
+            "keepaliveTimeoutMs",
+            "logicalNamedStreamBytes",
+            "logicalTtrpcBytes",
+            "namedStreamQueueBytes",
+            "protectedCiphertextBytes",
+            "reconnectAttempts",
+            "reconnectDeadlineMs",
+            "reconnectWindowMs",
+            "sessionControlQueueBytes",
+            "ttrpcControlQueueBytes"
+          ],
+          "type": "object"
+        },
+        "Locality": {
+          "enum": [
+            "process-local",
+            "host-local",
+            "guest-local",
+            "remote"
+          ],
+          "type": "string"
+        },
+        "NoiseProfile": {
+          "enum": [
+            "Noise_NN_25519_ChaChaPoly_SHA256",
+            "Noise_KK_25519_ChaChaPoly_SHA256",
+            "Noise_IKpsk2_25519_ChaChaPoly_SHA256"
+          ],
+          "type": "string"
+        },
+        "PurposeClass": {
+          "enum": [
+            "local",
+            "enrolled",
+            "bootstrap"
+          ],
+          "type": "string"
+        },
+        "ServicePackage": {
+          "enum": [
+            "d2b.daemon.v2",
+            "d2b.realm.v2",
+            "d2b.guest.v2",
+            "d2b.provider.v2",
+            "d2b.broker.v2",
+            "d2b.user.v2",
+            "d2b.runtime.systemd-user.v2",
+            "d2b.shell.v2",
+            "d2b.clipboard.v2",
+            "d2b.clipboard.picker.v2",
+            "d2b.notify.v2",
+            "d2b.security-key.v2",
+            "d2b.wayland.v2",
+            "d2b.activation.v2",
+            "d2b.tty.v2"
+          ],
+          "type": "string"
+        },
+        "TransportBinding": {
+          "additionalProperties": false,
+          "properties": {
+            "channelBinding": {
+              "items": {
+                "format": "uint8",
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              "maxItems": 32,
+              "minItems": 32,
+              "type": "array"
+            },
+            "identityEvidence": {
+              "$ref": "#/definitions/IdentityEvidenceRequirement"
+            },
+            "locality": {
+              "$ref": "#/definitions/Locality"
+            },
+            "transport": {
+              "$ref": "#/definitions/TransportClass"
+            }
+          },
+          "required": [
+            "channelBinding",
+            "identityEvidence",
+            "locality",
+            "transport"
+          ],
+          "type": "object"
+        },
+        "TransportClass": {
+          "enum": [
+            "unix-stream",
+            "unix-seqpacket",
+            "inherited-socketpair",
+            "native-vsock",
+            "cloud-hypervisor-vsock",
+            "provider-stream",
+            "direct-configured"
+          ],
+          "type": "string"
+        }
+      },
+      "description": "Exact endpoint policy fields that are stable before a local daemon restart generation is known. This is not an authenticated session policy and cannot validate a request until a nonzero generation has been negotiated.",
+      "properties": {
+        "attachmentPolicy": {
+          "$ref": "#/definitions/AttachmentPolicy"
+        },
+        "initiatorRole": {
+          "$ref": "#/definitions/EndpointRole"
+        },
+        "limits": {
+          "$ref": "#/definitions/LimitProfile"
+        },
+        "noiseProfile": {
+          "$ref": "#/definitions/NoiseProfile"
+        },
+        "purpose": {
+          "$ref": "#/definitions/EndpointPurpose"
+        },
+        "purposeClass": {
+          "$ref": "#/definitions/PurposeClass"
+        },
+        "responderRole": {
+          "$ref": "#/definitions/EndpointRole"
+        },
+        "schemaFingerprint": {
+          "items": {
+            "format": "uint8",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "maxItems": 32,
+          "minItems": 32,
+          "type": "array"
+        },
+        "service": {
+          "$ref": "#/definitions/ServicePackage"
+        },
+        "transportBinding": {
+          "$ref": "#/definitions/TransportBinding"
+        }
+      },
+      "required": [
+        "attachmentPolicy",
+        "initiatorRole",
+        "limits",
+        "noiseProfile",
+        "purpose",
+        "purposeClass",
+        "responderRole",
+        "schemaFingerprint",
+        "service",
+        "transportBinding"
+      ],
+      "title": "EndpointPolicyIdentity",
+      "type": "object"
+    },
     "fragmentHeader": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,

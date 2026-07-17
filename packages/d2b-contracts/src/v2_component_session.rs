@@ -27,6 +27,7 @@ pub const COMPONENT_SESSION_MAJOR: u16 = 2;
 pub const COMPONENT_SESSION_MINOR: u16 = 0;
 pub const MAX_HANDSHAKE_OFFER_BYTES: usize = 16 * 1024;
 pub const HANDSHAKE_OFFER_CANONICAL_LEN: usize = 148;
+pub const ENDPOINT_POLICY_IDENTITY_CANONICAL_LEN: usize = HANDSHAKE_OFFER_CANONICAL_LEN - 8;
 pub const MAX_PROTECTED_CIPHERTEXT_BYTES: u32 = u16::MAX as u32;
 pub const NOISE_TAG_BYTES: u32 = 16;
 pub const RECORD_LENGTH_BYTES: u32 = 2;
@@ -647,6 +648,186 @@ pub struct EndpointPolicy {
     pub transport_binding: TransportBinding,
     pub reconnect_generation: u64,
     pub attachment_policy: AttachmentPolicy,
+}
+
+/// Exact endpoint policy fields that are stable before a local daemon restart
+/// generation is known. This is not an authenticated session policy and cannot
+/// validate a request until a nonzero generation has been negotiated.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct EndpointPolicyIdentity {
+    pub purpose: EndpointPurpose,
+    pub purpose_class: PurposeClass,
+    pub initiator_role: EndpointRole,
+    pub responder_role: EndpointRole,
+    pub service: ServicePackage,
+    pub schema_fingerprint: [u8; 32],
+    pub noise_profile: NoiseProfile,
+    pub limits: LimitProfile,
+    pub transport_binding: TransportBinding,
+    pub attachment_policy: AttachmentPolicy,
+}
+
+impl From<&EndpointPolicy> for EndpointPolicyIdentity {
+    fn from(value: &EndpointPolicy) -> Self {
+        Self {
+            purpose: value.purpose,
+            purpose_class: value.purpose_class,
+            initiator_role: value.initiator_role,
+            responder_role: value.responder_role,
+            service: value.service,
+            schema_fingerprint: value.schema_fingerprint,
+            noise_profile: value.noise_profile,
+            limits: value.limits,
+            transport_binding: value.transport_binding,
+            attachment_policy: value.attachment_policy,
+        }
+    }
+}
+
+impl EndpointPolicyIdentity {
+    pub fn validate(&self) -> Result<(), ContractError> {
+        self.limits.validate()?;
+        self.attachment_policy
+            .validate(self.transport_binding.transport)?;
+        if !self.noise_profile.valid_for(self.purpose_class)
+            || self.noise_profile.identity_evidence() != self.transport_binding.identity_evidence
+        {
+            return Err(ContractError::IdentityEvidenceMismatch);
+        }
+        if self.schema_fingerprint == [0; 32] || self.transport_binding.channel_binding == [0; 32] {
+            return Err(ContractError::InvalidBinding);
+        }
+        Ok(())
+    }
+
+    pub fn validate_local_generation_discovery(&self) -> Result<(), ContractError> {
+        self.validate()?;
+        if self.purpose_class != PurposeClass::Local
+            || self.noise_profile != NoiseProfile::Nn25519ChaChaPolySha256
+            || self.transport_binding.identity_evidence
+                != IdentityEvidenceRequirement::DirectionalUnix
+            || !matches!(
+                self.transport_binding.transport,
+                TransportClass::UnixStream | TransportClass::UnixSeqpacket
+            )
+        {
+            return Err(ContractError::IdentityEvidenceMismatch);
+        }
+        Ok(())
+    }
+
+    pub fn with_generation(
+        &self,
+        reconnect_generation: u64,
+    ) -> Result<EndpointPolicy, ContractError> {
+        let policy = EndpointPolicy {
+            purpose: self.purpose,
+            purpose_class: self.purpose_class,
+            initiator_role: self.initiator_role,
+            responder_role: self.responder_role,
+            service: self.service,
+            schema_fingerprint: self.schema_fingerprint,
+            noise_profile: self.noise_profile,
+            limits: self.limits,
+            transport_binding: self.transport_binding,
+            reconnect_generation,
+            attachment_policy: self.attachment_policy,
+        };
+        HandshakeOffer::from(policy.clone()).validate()?;
+        Ok(policy)
+    }
+
+    pub fn validate_exact(&self, policy: &EndpointPolicy) -> Result<(), HandshakeRejectReason> {
+        let expected = Self::from(policy);
+        if self.purpose != expected.purpose {
+            return Err(HandshakeRejectReason::PurposeMismatch);
+        }
+        if self.purpose_class != expected.purpose_class {
+            return Err(HandshakeRejectReason::PurposeClassMismatch);
+        }
+        if self.initiator_role != expected.initiator_role
+            || self.responder_role != expected.responder_role
+        {
+            return Err(HandshakeRejectReason::RoleMismatch);
+        }
+        if self.service != expected.service {
+            return Err(HandshakeRejectReason::ServiceMismatch);
+        }
+        if self.schema_fingerprint != expected.schema_fingerprint {
+            return Err(HandshakeRejectReason::SchemaMismatch);
+        }
+        if self.noise_profile != expected.noise_profile {
+            return Err(HandshakeRejectReason::NoiseProfileMismatch);
+        }
+        if self.limits != expected.limits {
+            return Err(HandshakeRejectReason::LimitProfileMismatch);
+        }
+        if self.transport_binding != expected.transport_binding {
+            return Err(HandshakeRejectReason::ChannelBindingMismatch);
+        }
+        if self.attachment_policy != expected.attachment_policy {
+            return Err(HandshakeRejectReason::AttachmentPolicyMismatch);
+        }
+        self.validate()
+            .map_err(|_| HandshakeRejectReason::MalformedOffer)
+    }
+
+    pub fn encode_canonical(&self) -> Result<Vec<u8>, BinaryError> {
+        self.validate().map_err(BinaryError::InvalidContract)?;
+        let mut writer = BinaryWriter::with_capacity(ENDPOINT_POLICY_IDENTITY_CANONICAL_LEN);
+        writer.u8(HANDSHAKE_BINARY_VERSION);
+        writer.u8(self.purpose.tag());
+        writer.u8(self.purpose_class.tag());
+        writer.u8(self.initiator_role.tag());
+        writer.u8(self.responder_role.tag());
+        writer.u8(self.service.tag());
+        writer.bytes(&self.schema_fingerprint);
+        writer.u8(self.noise_profile.tag());
+        encode_limits(&mut writer, self.limits);
+        writer.u8(self.transport_binding.transport.tag());
+        writer.u8(self.transport_binding.locality.tag());
+        writer.bytes(&self.transport_binding.channel_binding);
+        writer.u8(self.transport_binding.identity_evidence.tag());
+        encode_attachment_policy(&mut writer, self.attachment_policy);
+        if writer.len() != ENDPOINT_POLICY_IDENTITY_CANONICAL_LEN {
+            return Err(BinaryError::NonCanonical);
+        }
+        Ok(writer.finish())
+    }
+
+    pub fn decode_canonical(bytes: &[u8]) -> Result<Self, BinaryError> {
+        if bytes.len() != ENDPOINT_POLICY_IDENTITY_CANONICAL_LEN {
+            return Err(BinaryError::LengthExceeded);
+        }
+        let mut reader = BinaryReader::new(bytes);
+        if reader.u8()? != HANDSHAKE_BINARY_VERSION {
+            return Err(BinaryError::UnsupportedVersion);
+        }
+        let identity = Self {
+            purpose: EndpointPurpose::from_tag(reader.u8()?)?,
+            purpose_class: PurposeClass::from_tag(reader.u8()?)?,
+            initiator_role: EndpointRole::from_tag(reader.u8()?)?,
+            responder_role: EndpointRole::from_tag(reader.u8()?)?,
+            service: ServicePackage::from_tag(reader.u8()?)?,
+            schema_fingerprint: reader.array()?,
+            noise_profile: NoiseProfile::from_tag(reader.u8()?)?,
+            limits: decode_limits(&mut reader)?,
+            transport_binding: TransportBinding {
+                transport: TransportClass::from_tag(reader.u8()?)?,
+                locality: Locality::from_tag(reader.u8()?)?,
+                channel_binding: reader.array()?,
+                identity_evidence: IdentityEvidenceRequirement::from_tag(reader.u8()?)?,
+            },
+            attachment_policy: decode_attachment_policy(&mut reader)?,
+        };
+        reader.finish()?;
+        identity.validate().map_err(BinaryError::InvalidContract)?;
+        if identity.encode_canonical()?.as_slice() != bytes {
+            return Err(BinaryError::NonCanonical);
+        }
+        Ok(identity)
+    }
 }
 
 impl From<EndpointPolicy> for HandshakeOffer {

@@ -109,10 +109,68 @@ is rejected. `decode_spawn_response_for_request` performs strict protobuf
 decoding and this correlation as one acceptance step. The service schema
 fingerprint includes these allocator and child-spawn message shapes.
 
+### Daemon result projections
+
+`DaemonService.ListRealms`, `ListWorkloads`, and `Inspect` return generated
+protobuf projections rather than digests, generic observations, private bundle
+objects, or JSON. Realm rows carry canonical realm identity, placement mode,
+gateway identity when applicable, lifecycle state, cross-realm policy,
+credential boundary, and generation. Workload rows carry canonical
+realm/workload identity, environment, lifecycle and pending-restart state,
+runtime kind and capabilities, graphics/TPM/USB posture, service-role states,
+network address bytes, deployment references, readiness, runner parity,
+console-media details, USB summary, and degraded details used by list and
+status renderers.
+
+Every repeated field has a closed maximum and every string has a byte limit.
+Runtime, lifecycle, service, capability, autostart, readiness, and media state
+use closed enums. Responses contain at most 64 realms or 256 workloads.
+`PageInfo.returned_items` must equal the encoded row count; truncation requires
+a bounded next cursor, and a supplied total cannot be smaller than the returned
+count. Error outcomes cannot carry rows or pagination. The daemon service
+fingerprint hashes the canonical daemon protobuf source, so a projection or
+stream shape change changes the advertised schema identity.
+
+### Daemon terminal streams
+
+`Exec`, `Shell`, and `OpenConsole` accept `TerminalOpenRequest`, which has no
+stream-id field. After admission, the server reserves a ComponentSession named
+channel in the range `0x0100..=0xffff` and returns its canonical `stream-N`
+spelling. The client opens exactly that returned stream. A client cannot name,
+preselect, or cause the server to open a caller-selected channel.
+
+The first logical message is a client-to-server `TerminalSelection` matching
+the opening method. Exec selection is either bounded arbitrary argv with the
+closed `admin-arbitrary` authority or one opaque configured-item ID with the
+closed `configured-launch` authority. The latter is resolved from the
+integrity-checked bundle; it carries no argv. Shell selection carries only a
+bounded optional shell name and terminal shape. Console selection carries only
+terminal shape. No selection carries environment variables, a working
+directory, a host path, credentials, or provider-native data.
+
+Each frame binds the exact authenticated session generation and 16-byte opening
+request ID. Client and server frame sequences are independent, start at zero,
+increase by one, and are capped. Client frames are selection, bounded stdin,
+PTY resize, a closed signal, stdin close, detach, close, or cancellation.
+Server frames are start acknowledgement, bounded stdout/stderr, closed status,
+or one terminal outcome. Resize is valid only for a selected PTY. Once a
+client requests detach, close, or cancellation, only in-flight server
+output/status and the terminal outcome remain valid. No frame is valid after
+the first terminal outcome.
+
+Arbitrary argv is limited to 256 UTF-8 arguments, 4 KiB per argument and
+64 KiB total. Terminal chunks are limited to 64 KiB. Generated Debug
+implementations for stream/opening messages and oneofs are redacted; validation
+errors are closed slugs. Runtime logging, audit, traces, and metrics must never
+format raw generated messages or record argv, terminal bytes, configured item
+IDs, shell names, request IDs, stream IDs, environment, working directories, or
+paths.
+
 ## Bounds and strictness
 
 A protobuf message is at most 1 MiB. Strings and opaque IDs are at most 64
-bytes, digests are 32 bytes, a page has at most 256 observations or
+bytes unless a field declares the 128-byte cursor, 256-byte detail, or 512-byte
+reference bound. Digests are 32 bytes, a page has at most 256 observations or
 observability records, and a request references at most 64 unique
 ComponentSession attachments. An observability result declares at most 1 MiB
 of encoded records. Decode rejects unknown protobuf fields, unknown enum
