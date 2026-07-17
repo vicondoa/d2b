@@ -283,16 +283,17 @@ fn tap_dag_contract_doc_matches_implementation() {
         "tap-dag-contract-doc-eval: doc must reference ChNetHandoffMode"
     );
 
-    // ==> launcher group naming (daemon-only canonical). The doc claims the
-    // broker public socket sits behind the daemon-only `d2b` group
-    // declared by host-daemon.nix; sanity check that's still true.
+    // ==> local-root public group naming. Realm principal normalization owns
+    // the canonical `d2b` group and host-daemon consumes that principal.
     assert!(
         doc.contains("d2b"),
         "tap-dag-contract-doc-eval: doc must reference daemon-only d2b group"
     );
     assert!(
-        read_repo_file("nixos-modules/host-daemon.nix").contains("users.groups.d2b"),
-        "tap-dag-contract-doc-eval: host-daemon.nix no longer declares d2b group"
+        read_repo_file("nixos-modules/realm-users.nix").contains(r#"publicGroup = "d2b";"#)
+            && read_repo_file("nixos-modules/host-daemon.nix")
+                .contains("SocketGroup = publicSocketPrincipal.group;"),
+        "tap-dag-contract-doc-eval: local-root d2b group is not wired through realm principals"
     );
 }
 
