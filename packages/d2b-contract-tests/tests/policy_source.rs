@@ -141,8 +141,26 @@ fn guest_session_credential_codec_has_one_shared_authority() {
     const AUTHORITY: &str = "packages/d2b-contracts/src/v2_component_session.rs";
     let authority = read_repo_file(AUTHORITY);
     assert!(authority.contains("GuestSessionCredentialV1"));
+    assert!(authority.contains("pub struct GuestSessionCredentialBytes"));
+    assert!(authority.contains("pub struct GuestBootstrapPsk"));
     assert!(authority.contains("GUEST_SESSION_CREDENTIAL_MAGIC"));
     assert!(authority.contains(concat!("D2B", "GSV2")));
+    assert!(authority.contains("requires_clone::<GuestSessionCredentialBytes>()"));
+    assert!(authority.contains("requires_serialize::<GuestSessionCredentialBytes>()"));
+    assert!(authority.contains("pub struct GuestBootstrapPsk {\n    bytes: Zeroizing<Vec<u8>>"));
+    assert!(!authority.contains("Zeroizing<[u8; 32]>"));
+    assert!(authority.contains("let psk = decode_psk(&mut bootstrap_reader)?"));
+    for forbidden_impl in [
+        "impl Clone for GuestSessionCredentialBytes",
+        "impl Serialize for GuestSessionCredentialBytes",
+        "impl serde::Serialize for GuestSessionCredentialBytes",
+        "impl Deref for GuestSessionCredentialBytes",
+    ] {
+        assert!(
+            !authority.contains(forbidden_impl),
+            "opaque encoded credential bytes must not expose {forbidden_impl}"
+        );
+    }
 
     let forbidden = [
         concat!("D2B", "GSV2"),

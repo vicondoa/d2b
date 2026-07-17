@@ -337,7 +337,11 @@ fn guest_session_credential(with_bootstrap: bool) -> GuestSessionCredentialV1 {
                 expires_at_unix_ms: 9_000,
             },
             1_000,
-            [0x88; 32],
+            GuestBootstrapPsk::generate_with(|bytes| {
+                bytes.fill(0x88);
+                Ok(())
+            })
+            .unwrap(),
         )
         .unwrap()
     });
@@ -349,8 +353,11 @@ fn guest_session_credential(with_bootstrap: bool) -> GuestSessionCredentialV1 {
 fn guest_session_credential_has_canonical_round_trips_and_fixed_vectors() {
     let base = guest_session_credential(false);
     let base_encoded = base.encode().unwrap();
-    assert_eq!(base_encoded.len(), GUEST_SESSION_CREDENTIAL_V1_BASE_BYTES);
-    let base_decoded = GuestSessionCredentialV1::decode(&base_encoded).unwrap();
+    assert_eq!(
+        base_encoded.as_slice().len(),
+        GUEST_SESSION_CREDENTIAL_V1_BASE_BYTES
+    );
+    let base_decoded = GuestSessionCredentialV1::decode(base_encoded.as_slice()).unwrap();
     assert_eq!(base_decoded.schema_version(), 1);
     assert_eq!(base_decoded.codec_version(), 1);
     assert_eq!(base_decoded.session_generation(), 7);
@@ -391,11 +398,11 @@ fn guest_session_credential_has_canonical_round_trips_and_fixed_vectors() {
     expected.extend_from_slice(&[0x88; 32]);
     assert_eq!(encoded.as_slice(), expected.as_slice());
     assert_eq!(
-        encoded.len(),
+        encoded.as_slice().len(),
         GUEST_SESSION_CREDENTIAL_V1_WITH_BOOTSTRAP_BYTES
     );
 
-    let decoded = GuestSessionCredentialV1::decode(&encoded).unwrap();
+    let decoded = GuestSessionCredentialV1::decode(encoded.as_slice()).unwrap();
     let bootstrap = decoded.bootstrap().unwrap();
     assert_eq!(bootstrap.binding().operation_id.as_bytes(), &[0x66; 16]);
     assert_eq!(bootstrap.binding().replay_nonce, [0x77; 32]);
@@ -407,14 +414,14 @@ fn guest_session_credential_has_canonical_round_trips_and_fixed_vectors() {
 #[test]
 fn guest_session_credential_rejects_every_noncanonical_shape() {
     let encoded = guest_session_credential(true).encode().unwrap();
-    for length in 0..encoded.len() {
+    for length in 0..encoded.as_slice().len() {
         assert!(
-            GuestSessionCredentialV1::decode(&encoded[..length]).is_err(),
+            GuestSessionCredentialV1::decode(&encoded.as_slice()[..length]).is_err(),
             "truncation at {length} unexpectedly decoded"
         );
     }
 
-    let mut trailing = encoded.clone();
+    let mut trailing = encoded.as_slice().to_vec();
     trailing.push(0);
     assert_eq!(
         GuestSessionCredentialV1::decode(&trailing).unwrap_err(),
@@ -428,7 +435,7 @@ fn guest_session_credential_rejects_every_noncanonical_shape() {
         (13, 2, GuestSessionCredentialError::InvalidFlags),
         (15, 1, GuestSessionCredentialError::InvalidReserved),
     ] {
-        let mut malformed = encoded.clone();
+        let mut malformed = encoded.as_slice().to_vec();
         malformed[offset] = value;
         assert_eq!(
             GuestSessionCredentialV1::decode(&malformed).unwrap_err(),
@@ -436,21 +443,21 @@ fn guest_session_credential_rejects_every_noncanonical_shape() {
         );
     }
 
-    let mut legacy = encoded.clone();
+    let mut legacy = encoded.as_slice().to_vec();
     legacy[..8].copy_from_slice(b"D2BGSV1\0");
     assert_eq!(
         GuestSessionCredentialV1::decode(&legacy).unwrap_err(),
         GuestSessionCredentialError::InvalidMagic
     );
 
-    let mut oversized_operation = encoded.clone();
+    let mut oversized_operation = encoded.as_slice().to_vec();
     oversized_operation[158..160].copy_from_slice(&65_u16.to_be_bytes());
     assert_eq!(
         GuestSessionCredentialV1::decode(&oversized_operation).unwrap_err(),
         GuestSessionCredentialError::LengthExceeded
     );
 
-    let mut oversized_total = encoded.clone();
+    let mut oversized_total = encoded.as_slice().to_vec();
     oversized_total[16..20].copy_from_slice(
         &u32::try_from(GUEST_SESSION_CREDENTIAL_MAX_BYTES + 1)
             .unwrap()
@@ -472,7 +479,7 @@ fn guest_session_credential_rejects_every_noncanonical_shape() {
         (216..224, GuestSessionCredentialError::InvalidDeadline),
         (224..256, GuestSessionCredentialError::InvalidPsk),
     ] {
-        let mut malformed = encoded.clone();
+        let mut malformed = encoded.as_slice().to_vec();
         malformed[range].fill(0);
         assert_eq!(
             GuestSessionCredentialV1::decode(&malformed).unwrap_err(),
@@ -480,7 +487,7 @@ fn guest_session_credential_rejects_every_noncanonical_shape() {
         );
     }
 
-    let mut excessive_lifetime = encoded.clone();
+    let mut excessive_lifetime = encoded.as_slice().to_vec();
     excessive_lifetime[208..216].copy_from_slice(&1_u64.to_be_bytes());
     excessive_lifetime[216..224]
         .copy_from_slice(&(MAX_GUEST_BOOTSTRAP_CREDENTIAL_LIFETIME_MS + 2).to_be_bytes());
@@ -489,7 +496,7 @@ fn guest_session_credential_rejects_every_noncanonical_shape() {
         GuestSessionCredentialError::LifetimeExceeded
     );
 
-    let mut reversed_lifetime = encoded;
+    let mut reversed_lifetime = encoded.as_slice().to_vec();
     reversed_lifetime[208..216].copy_from_slice(&u64::MAX.to_be_bytes());
     reversed_lifetime[216..224].copy_from_slice(&1_u64.to_be_bytes());
     assert_eq!(
@@ -509,7 +516,10 @@ fn bootstrap_credential_at(
             expires_at_unix_ms,
         },
         issued_at_unix_ms,
-        [0x88; 32],
+        GuestBootstrapPsk::generate_with(|bytes| {
+            bytes.fill(0x88);
+            Ok(())
+        })?,
     )
 }
 
@@ -568,6 +578,10 @@ fn guest_session_credential_debug_and_errors_are_redacted_and_schema_excludes_se
     assert_eq!(
         format!("{:?}", credential.bootstrap().unwrap()),
         "GuestBootstrapCredentialV1(REDACTED)"
+    );
+    assert_eq!(
+        format!("{:?}", credential.encode().unwrap()),
+        "GuestSessionCredentialBytes(REDACTED)"
     );
     let error = GuestSessionCredentialV1::decode(b"private-material").unwrap_err();
     let rendered = format!("{error:?}");

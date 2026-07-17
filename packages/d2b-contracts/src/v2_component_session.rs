@@ -18,6 +18,7 @@ use serde::{
 use std::{
     error::Error,
     fmt,
+    io::{self, Write},
     ops::{Deref, DerefMut},
 };
 use zeroize::{Zeroize, Zeroizing};
@@ -1865,73 +1866,162 @@ impl fmt::Display for GuestSessionCredentialError {
 
 impl Error for GuestSessionCredentialError {}
 
-struct SecretPsk32 {
-    bytes: Zeroizing<[u8; 32]>,
+/// Heap-backed bootstrap PSK ownership.
+///
+/// Prefer [`Self::generate_with`] so entropy is written directly into stable
+/// zeroizing storage. Callers that first generate material in another buffer
+/// remain responsible for wiping every source and scratch copy.
+pub struct GuestBootstrapPsk {
+    bytes: Zeroizing<Vec<u8>>,
     #[cfg(test)]
-    drop_observer: Option<std::sync::Arc<std::sync::Mutex<[u8; 32]>>>,
+    drop_observer: Option<std::sync::Arc<std::sync::Mutex<Option<SecretPskDropObservation>>>>,
 }
 
-impl SecretPsk32 {
-    fn new(bytes: [u8; 32]) -> Self {
+impl GuestBootstrapPsk {
+    fn zeroed() -> Self {
         Self {
-            bytes: Zeroizing::new(bytes),
+            bytes: Zeroizing::new(vec![0; 32]),
             #[cfg(test)]
             drop_observer: None,
         }
     }
 
+    pub fn generate_with(
+        generate: impl FnOnce(&mut [u8; 32]) -> Result<(), GuestSessionCredentialError>,
+    ) -> Result<Self, GuestSessionCredentialError> {
+        let mut value = Self::zeroed();
+        generate(
+            value
+                .bytes
+                .as_mut_slice()
+                .try_into()
+                .expect("fixed PSK storage"),
+        )?;
+        value.validate()?;
+        Ok(value)
+    }
+
+    pub fn copy_from_and_zeroize(
+        source: &mut [u8; 32],
+    ) -> Result<Self, GuestSessionCredentialError> {
+        let result = Self::generate_with(|destination| {
+            destination.copy_from_slice(source);
+            Ok(())
+        });
+        source.zeroize();
+        result
+    }
+
     fn expose(&self) -> &[u8; 32] {
-        &self.bytes
+        self.bytes.as_slice().try_into().expect("fixed PSK storage")
+    }
+
+    fn validate(&self) -> Result<(), GuestSessionCredentialError> {
+        if self.expose() == &[0; 32] {
+            Err(GuestSessionCredentialError::InvalidPsk)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn decode_from(reader: &mut BinaryReader<'_>) -> Result<Self, GuestSessionCredentialError> {
+        let mut value = Self::zeroed();
+        let source = reader.take(32).map_err(map_guest_credential_binary_error)?;
+        value.bytes.as_mut_slice().copy_from_slice(source);
+        value.validate()?;
+        Ok(value)
     }
 
     #[cfg(test)]
-    fn with_drop_observer(
-        bytes: [u8; 32],
-        observer: std::sync::Arc<std::sync::Mutex<[u8; 32]>>,
-    ) -> Self {
-        Self {
-            bytes: Zeroizing::new(bytes),
-            drop_observer: Some(observer),
-        }
+    fn generate_with_drop_observer(
+        generate: impl FnOnce(&mut [u8; 32]),
+        observer: std::sync::Arc<std::sync::Mutex<Option<SecretPskDropObservation>>>,
+    ) -> Result<Self, GuestSessionCredentialError> {
+        let mut value = Self::zeroed();
+        value.drop_observer = Some(observer);
+        generate(
+            value
+                .bytes
+                .as_mut_slice()
+                .try_into()
+                .expect("fixed PSK storage"),
+        );
+        value.validate()?;
+        Ok(value)
+    }
+
+    #[cfg(test)]
+    fn decode_from_with_drop_observer(
+        reader: &mut BinaryReader<'_>,
+        observer: std::sync::Arc<std::sync::Mutex<Option<SecretPskDropObservation>>>,
+    ) -> Result<Self, GuestSessionCredentialError> {
+        let mut value = Self::zeroed();
+        value.drop_observer = Some(observer);
+        let source = reader.take(32).map_err(map_guest_credential_binary_error)?;
+        value.bytes.as_mut_slice().copy_from_slice(source);
+        value.validate()?;
+        Ok(value)
+    }
+
+    #[cfg(test)]
+    fn storage_address(&self) -> usize {
+        self.bytes.as_ptr() as usize
     }
 }
 
-impl Drop for SecretPsk32 {
+impl fmt::Debug for GuestBootstrapPsk {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("GuestBootstrapPsk(REDACTED)")
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug, PartialEq, Eq)]
+struct SecretPskDropObservation {
+    storage_address: usize,
+    bytes_after_zeroize: [u8; 32],
+}
+
+impl Drop for GuestBootstrapPsk {
     fn drop(&mut self) {
-        self.bytes.zeroize();
+        #[cfg(test)]
+        let storage_address = self.storage_address();
+        self.bytes.as_mut_slice().zeroize();
         #[cfg(test)]
         if let Some(observer) = self.drop_observer.as_ref()
             && let Ok(mut observed) = observer.lock()
         {
-            *observed = *self.bytes;
+            *observed = Some(SecretPskDropObservation {
+                storage_address,
+                bytes_after_zeroize: self.bytes.as_slice().try_into().expect("fixed PSK storage"),
+            });
         }
+        self.bytes.zeroize();
     }
 }
 
 pub struct GuestBootstrapCredentialV1 {
     binding: BootstrapPskBinding,
     issued_at_unix_ms: u64,
-    psk: SecretPsk32,
+    psk: GuestBootstrapPsk,
 }
 
 impl GuestBootstrapCredentialV1 {
     pub fn new(
         binding: BootstrapPskBinding,
         issued_at_unix_ms: u64,
-        psk: [u8; 32],
+        psk: GuestBootstrapPsk,
     ) -> Result<Self, GuestSessionCredentialError> {
-        Self::from_secret(binding, issued_at_unix_ms, SecretPsk32::new(psk))
+        Self::from_secret(binding, issued_at_unix_ms, psk)
     }
 
     fn from_secret(
         binding: BootstrapPskBinding,
         issued_at_unix_ms: u64,
-        psk: SecretPsk32,
+        psk: GuestBootstrapPsk,
     ) -> Result<Self, GuestSessionCredentialError> {
         validate_guest_bootstrap_binding(&binding, issued_at_unix_ms)?;
-        if psk.expose() == &[0; 32] {
-            return Err(GuestSessionCredentialError::InvalidPsk);
-        }
+        psk.validate()?;
         Ok(Self {
             binding,
             issued_at_unix_ms,
@@ -1961,25 +2051,72 @@ impl GuestBootstrapCredentialV1 {
         }
         Ok(())
     }
-
-    #[cfg(test)]
-    fn with_drop_observer(
-        binding: BootstrapPskBinding,
-        issued_at_unix_ms: u64,
-        psk: [u8; 32],
-        observer: std::sync::Arc<std::sync::Mutex<[u8; 32]>>,
-    ) -> Result<Self, GuestSessionCredentialError> {
-        Self::from_secret(
-            binding,
-            issued_at_unix_ms,
-            SecretPsk32::with_drop_observer(psk, observer),
-        )
-    }
 }
 
 impl fmt::Debug for GuestBootstrapCredentialV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("GuestBootstrapCredentialV1(REDACTED)")
+    }
+}
+
+/// Opaque encoded guest-session credential bytes.
+///
+/// The bounded bytes can only be borrowed for decoding or written to a sink.
+/// The backing allocation is wiped on release and intentionally implements
+/// neither `Clone` nor serde traits.
+///
+/// ```compile_fail
+/// use d2b_contracts::v2_component_session::GuestSessionCredentialBytes;
+/// fn requires_clone<T: Clone>() {}
+/// requires_clone::<GuestSessionCredentialBytes>();
+/// ```
+///
+/// ```compile_fail
+/// use d2b_contracts::v2_component_session::GuestSessionCredentialBytes;
+/// fn requires_serialize<T: serde::Serialize>() {}
+/// requires_serialize::<GuestSessionCredentialBytes>();
+/// ```
+pub struct GuestSessionCredentialBytes {
+    bytes: Zeroizing<Vec<u8>>,
+    #[cfg(test)]
+    drop_observer: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+}
+
+impl GuestSessionCredentialBytes {
+    fn new(bytes: Zeroizing<Vec<u8>>) -> Self {
+        debug_assert!(bytes.len() <= GUEST_SESSION_CREDENTIAL_MAX_BYTES);
+        Self {
+            bytes,
+            #[cfg(test)]
+            drop_observer: None,
+        }
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        self.bytes.as_slice()
+    }
+
+    pub fn write_to(&self, writer: &mut impl Write) -> io::Result<()> {
+        writer.write_all(self.as_slice())
+    }
+}
+
+impl fmt::Debug for GuestSessionCredentialBytes {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("GuestSessionCredentialBytes(REDACTED)")
+    }
+}
+
+impl Drop for GuestSessionCredentialBytes {
+    fn drop(&mut self) {
+        self.bytes.zeroize();
+        #[cfg(test)]
+        if let Some(observer) = self.drop_observer.as_ref() {
+            observer.store(
+                self.bytes.is_empty() || self.bytes.iter().all(|byte| *byte == 0),
+                std::sync::atomic::Ordering::SeqCst,
+            );
+        }
     }
 }
 
@@ -2049,7 +2186,7 @@ impl GuestSessionCredentialV1 {
         self.bootstrap.as_ref()
     }
 
-    pub fn encode(&self) -> Result<Zeroizing<Vec<u8>>, GuestSessionCredentialError> {
+    pub fn encode(&self) -> Result<GuestSessionCredentialBytes, GuestSessionCredentialError> {
         self.validate()?;
         let bootstrap_bytes = self
             .bootstrap
@@ -2114,6 +2251,18 @@ impl GuestSessionCredentialV1 {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, GuestSessionCredentialError> {
+        Self::decode_with_psk_decoder(bytes, GuestBootstrapPsk::decode_from)
+    }
+
+    fn decode_with_psk_decoder<F>(
+        bytes: &[u8],
+        decode_psk: F,
+    ) -> Result<Self, GuestSessionCredentialError>
+    where
+        F: for<'reader> FnOnce(
+            &mut BinaryReader<'reader>,
+        ) -> Result<GuestBootstrapPsk, GuestSessionCredentialError>,
+    {
         if bytes.len() > GUEST_SESSION_CREDENTIAL_MAX_BYTES {
             return Err(GuestSessionCredentialError::LengthExceeded);
         }
@@ -2198,11 +2347,7 @@ impl GuestSessionCredentialV1 {
             let expires_at_unix_ms = bootstrap_reader
                 .u64()
                 .map_err(map_guest_credential_binary_error)?;
-            let psk = SecretPsk32::new(
-                bootstrap_reader
-                    .array::<32>()
-                    .map_err(map_guest_credential_binary_error)?,
-            );
+            let psk = decode_psk(&mut bootstrap_reader)?;
             bootstrap_reader
                 .finish()
                 .map_err(map_guest_credential_binary_error)?;
@@ -2251,9 +2396,7 @@ impl GuestSessionCredentialV1 {
         }
         if let Some(bootstrap) = self.bootstrap.as_ref() {
             validate_guest_bootstrap_binding(&bootstrap.binding, bootstrap.issued_at_unix_ms)?;
-            if bootstrap.psk.expose() == &[0; 32] {
-                return Err(GuestSessionCredentialError::InvalidPsk);
-            }
+            bootstrap.psk.validate()?;
         }
         Ok(())
     }
@@ -3020,8 +3163,8 @@ impl GuestCredentialWriter {
         self.bytes.extend_from_slice(value);
     }
 
-    fn finish(self) -> Zeroizing<Vec<u8>> {
-        self.bytes
+    fn finish(self) -> GuestSessionCredentialBytes {
+        GuestSessionCredentialBytes::new(self.bytes)
     }
 }
 
@@ -3127,40 +3270,59 @@ impl<'a> BinaryReader<'a> {
 mod guest_session_credential_tests {
     use super::*;
 
+    fn observed_psk(
+        observer: std::sync::Arc<std::sync::Mutex<Option<SecretPskDropObservation>>>,
+    ) -> GuestBootstrapPsk {
+        GuestBootstrapPsk::generate_with_drop_observer(|bytes| bytes.fill(0x88), observer).unwrap()
+    }
+
+    fn test_credential(psk: GuestBootstrapPsk) -> GuestSessionCredentialV1 {
+        let bootstrap = GuestBootstrapCredentialV1::new(
+            BootstrapPskBinding {
+                operation_id: OperationId::new(vec![0x66; 16]).unwrap(),
+                replay_nonce: [0x77; 32],
+                expires_at_unix_ms: 9_000,
+            },
+            1_000,
+            psk,
+        )
+        .unwrap();
+        GuestSessionCredentialV1::new(
+            7,
+            [0x11; 32],
+            [0x22; 32],
+            [0x33; 32],
+            [0x44; 32],
+            Some(bootstrap),
+        )
+        .unwrap()
+    }
+
     #[test]
     fn dropping_guest_session_credential_zeroes_bootstrap_psk() {
-        let observed = std::sync::Arc::new(std::sync::Mutex::new([0xff; 32]));
+        let observed = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let storage_address;
         {
-            let bootstrap = GuestBootstrapCredentialV1::with_drop_observer(
-                BootstrapPskBinding {
-                    operation_id: OperationId::new(vec![0x66; 16]).unwrap(),
-                    replay_nonce: [0x77; 32],
-                    expires_at_unix_ms: 9_000,
-                },
-                1_000,
-                [0x88; 32],
-                std::sync::Arc::clone(&observed),
-            )
-            .unwrap();
-            let credential = GuestSessionCredentialV1::new(
-                7,
-                [0x11; 32],
-                [0x22; 32],
-                [0x33; 32],
-                [0x44; 32],
-                Some(bootstrap),
-            )
-            .unwrap();
+            let psk = observed_psk(std::sync::Arc::clone(&observed));
+            storage_address = psk.storage_address();
+            let credential = test_credential(psk);
             assert_eq!(credential.bootstrap().unwrap().expose_psk(), &[0x88; 32]);
-            assert_eq!(*observed.lock().unwrap(), [0xff; 32]);
+            assert!(observed.lock().unwrap().is_none());
         }
-        assert_eq!(*observed.lock().unwrap(), [0; 32]);
+        assert_eq!(
+            *observed.lock().unwrap(),
+            Some(SecretPskDropObservation {
+                storage_address,
+                bytes_after_zeroize: [0; 32],
+            })
+        );
     }
 
     #[test]
     fn bootstrap_validation_error_zeroes_owned_psk() {
-        let observed = std::sync::Arc::new(std::sync::Mutex::new([0xff; 32]));
-        let secret = SecretPsk32::with_drop_observer([0x88; 32], std::sync::Arc::clone(&observed));
+        let observed = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let secret = observed_psk(std::sync::Arc::clone(&observed));
+        let storage_address = secret.storage_address();
         let result = GuestBootstrapCredentialV1::from_secret(
             BootstrapPskBinding {
                 operation_id: OperationId::new(vec![0x66; 16]).unwrap(),
@@ -3174,36 +3336,122 @@ mod guest_session_credential_tests {
             result,
             Err(GuestSessionCredentialError::InvalidDeadline)
         ));
-        assert_eq!(*observed.lock().unwrap(), [0; 32]);
+        assert_eq!(
+            *observed.lock().unwrap(),
+            Some(SecretPskDropObservation {
+                storage_address,
+                bytes_after_zeroize: [0; 32],
+            })
+        );
     }
 
     #[test]
-    fn encoded_credential_buffer_has_zeroizing_release_semantics() {
-        fn require_zeroizing(_: &Zeroizing<Vec<u8>>) {}
+    fn copied_psk_source_is_zeroized_before_ownership_returns() {
+        let mut source = [0x88; 32];
+        let psk = GuestBootstrapPsk::copy_from_and_zeroize(&mut source).unwrap();
+        assert_eq!(source, [0; 32]);
+        assert_eq!(psk.expose(), &[0x88; 32]);
+    }
 
-        let bootstrap = GuestBootstrapCredentialV1::new(
-            BootstrapPskBinding {
-                operation_id: OperationId::new(vec![0x66; 16]).unwrap(),
-                replay_nonce: [0x77; 32],
-                expires_at_unix_ms: 9_000,
-            },
-            1_000,
-            [0x88; 32],
+    #[test]
+    fn decoded_psk_stays_in_one_heap_allocation_until_zeroized_drop() {
+        let encoded = test_credential(
+            GuestBootstrapPsk::generate_with(|bytes| {
+                bytes.fill(0x88);
+                Ok(())
+            })
+            .unwrap(),
         )
+        .encode()
         .unwrap();
-        let credential = GuestSessionCredentialV1::new(
-            7,
-            [0x11; 32],
-            [0x22; 32],
-            [0x33; 32],
-            [0x44; 32],
-            Some(bootstrap),
+        let observed = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let created_address = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let decoded = GuestSessionCredentialV1::decode_with_psk_decoder(encoded.as_slice(), {
+            let observed = std::sync::Arc::clone(&observed);
+            let created_address = std::sync::Arc::clone(&created_address);
+            move |reader| {
+                let psk = GuestBootstrapPsk::decode_from_with_drop_observer(reader, observed)?;
+                *created_address.lock().unwrap() = Some(psk.storage_address());
+                Ok(psk)
+            }
+        })
+        .unwrap();
+        let stable_address = decoded.bootstrap().unwrap().psk.storage_address();
+        assert_eq!(*created_address.lock().unwrap(), Some(stable_address));
+        drop(decoded);
+        assert_eq!(
+            *observed.lock().unwrap(),
+            Some(SecretPskDropObservation {
+                storage_address: stable_address,
+                bytes_after_zeroize: [0; 32],
+            })
+        );
+    }
+
+    #[test]
+    fn malformed_trailing_data_after_psk_zeroes_heap_storage() {
+        let encoded = test_credential(
+            GuestBootstrapPsk::generate_with(|bytes| {
+                bytes.fill(0x88);
+                Ok(())
+            })
+            .unwrap(),
         )
+        .encode()
         .unwrap();
-        let mut encoded = credential.encode().unwrap();
-        require_zeroizing(&encoded);
-        assert!(encoded.windows(32).any(|window| window == [0x88; 32]));
-        encoded.zeroize();
-        assert!(encoded.is_empty() || encoded.iter().all(|byte| *byte == 0));
+        let mut malformed = encoded.as_slice().to_vec();
+        malformed.push(0xa5);
+        let malformed_len = u32::try_from(malformed.len()).unwrap();
+        malformed[16..20].copy_from_slice(&malformed_len.to_be_bytes());
+        malformed[156..158].copy_from_slice(
+            &u16::try_from(GUEST_BOOTSTRAP_CREDENTIAL_V1_BYTES + 1)
+                .unwrap()
+                .to_be_bytes(),
+        );
+
+        let observed = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let result = GuestSessionCredentialV1::decode_with_psk_decoder(&malformed, {
+            let observed = std::sync::Arc::clone(&observed);
+            move |reader| GuestBootstrapPsk::decode_from_with_drop_observer(reader, observed)
+        });
+        assert_eq!(
+            result.unwrap_err(),
+            GuestSessionCredentialError::TrailingBytes
+        );
+        let observation = observed.lock().unwrap();
+        let observation = observation
+            .as_ref()
+            .expect("post-PSK failure must drop owned storage");
+        assert_ne!(observation.storage_address, 0);
+        assert_eq!(observation.bytes_after_zeroize, [0; 32]);
+    }
+
+    #[test]
+    fn encoded_credential_buffer_is_opaque_redacted_and_zeroizing() {
+        let observer = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut encoded = test_credential(
+            GuestBootstrapPsk::generate_with(|bytes| {
+                bytes.fill(0x88);
+                Ok(())
+            })
+            .unwrap(),
+        )
+        .encode()
+        .unwrap();
+        assert_eq!(
+            format!("{encoded:?}"),
+            "GuestSessionCredentialBytes(REDACTED)"
+        );
+        assert!(!format!("{encoded:?}").contains("D2BGSV2"));
+        assert!(!format!("{encoded:?}").contains("136"));
+        assert!(
+            encoded
+                .as_slice()
+                .windows(32)
+                .any(|window| window == [0x88; 32])
+        );
+        encoded.drop_observer = Some(std::sync::Arc::clone(&observer));
+        drop(encoded);
+        assert!(observer.load(std::sync::atomic::Ordering::SeqCst));
     }
 }

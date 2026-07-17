@@ -180,6 +180,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Made encoded guest-session credentials opaque and non-cloneable, and moved
+  decoded bootstrap PSKs directly into stable heap-backed zeroizing ownership
+  before validation.
 - Bounded bootstrap credentials to an explicit issue/expiry window, rejected
   future or effectively non-expiring PSKs, and moved PSK plus encoded credential
   storage to zeroizing buffers on success and error paths.

@@ -71,9 +71,13 @@ codec versions, unknown flags, nonzero reserved fields, inconsistent or
 over-limit lengths, generation zero, zero bindings/digests/public keys/nonces/
 issue time/expiry/PSK, invalid or overflowing lifetimes, and malformed operation
 IDs. No legacy magic or alternate layout is accepted. Secret Debug output is
-fully redacted. PSKs are held in `Zeroizing<[u8; 32]>`, decode temporaries wipe
-on success and error, and encoded credentials are returned as
-`Zeroizing<Vec<u8>>` so the broker's output buffer wipes on release.
+fully redacted. PSKs are copied directly from the decoder input into stable
+heap-backed zeroizing storage and only the owning pointer moves afterward.
+`GuestBootstrapPsk::generate_with` lets a broker fill that storage directly;
+callers that generate material in any other source or scratch buffer remain
+responsible for wiping those copies. Encoded credentials are returned as opaque,
+non-cloneable `GuestSessionCredentialBytes` with redacted Debug, bounded
+`as_slice`/`write_to` access, and guaranteed backing-buffer wipe on release.
 
 ## Handshake contract
 
