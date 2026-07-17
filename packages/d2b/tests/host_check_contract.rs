@@ -160,44 +160,11 @@ fn write_fixture(dir: &Path, name: &str, value: &Value) -> PathBuf {
     path
 }
 
-/// Copy the fixture-smoke artifacts into `dir` and rewrite `bundle.json` so its
-/// `hostPath` / `processesPath` / `privilegesPath` are RELATIVE — see the
-/// module-level hermeticity note. When `drift` is set, additionally rewrite
-/// `closures/corp-vm.json` to break runner parity (mirrors
-/// `d2b_cli_smoke_bundle_tree_runner_drift`).
+/// Build a test-owned, integrity-valid bundle tree. When `drift` is set,
+/// additionally rewrite `closures/corp-vm.json` to break runner parity
+/// (mirrors `d2b_cli_smoke_bundle_tree_runner_drift`).
 fn build_hermetic_bundle_tree(fixtures: &str, dir: &Path, drift: bool) {
-    fs::create_dir_all(dir.join("closures")).expect("mk closures dir");
-
-    // fs::write (not fs::copy) so the destinations are writable (the
-    // nix-store sources are 0444) and re-rewritable for the drift case.
-    for name in [
-        "host.json",
-        "processes.json",
-        "manifest.json",
-        "privileges.json",
-    ] {
-        if let Ok(bytes) = fs::read(format!("{fixtures}/{name}")) {
-            fs::write(dir.join(name), bytes).unwrap_or_else(|err| panic!("write {name}: {err}"));
-        }
-    }
-    for entry in fs::read_dir(format!("{fixtures}/closures")).expect("read fixture closures dir") {
-        let entry = entry.expect("closures dir entry");
-        let bytes = fs::read(entry.path()).expect("read fixture closure");
-        fs::write(dir.join("closures").join(entry.file_name()), bytes).expect("write closure");
-    }
-
-    let bundle_bytes =
-        fs::read(format!("{fixtures}/bundle.json")).expect("read fixture bundle.json");
-    let mut bundle: Value = serde_json::from_slice(&bundle_bytes).expect("decode bundle.json");
-    let obj = bundle.as_object_mut().expect("bundle is a JSON object");
-    obj.insert("hostPath".to_owned(), json!("host.json"));
-    obj.insert("processesPath".to_owned(), json!("processes.json"));
-    obj.insert("privilegesPath".to_owned(), json!("privileges.json"));
-    fs::write(
-        dir.join("bundle.json"),
-        serde_json::to_vec_pretty(&bundle).expect("serialize bundle.json"),
-    )
-    .expect("write rewritten bundle.json");
+    common::build_hermetic_bundle_tree(Path::new(fixtures), dir);
 
     if drift {
         let path = dir.join("closures").join("corp-vm.json");
@@ -216,6 +183,7 @@ fn build_hermetic_bundle_tree(fixtures: &str, dir: &Path, drift: bool) {
             serde_json::to_vec_pretty(&closure).expect("serialize drift closure"),
         )
         .expect("write drift closure");
+        common::refresh_bundle_integrity(dir, &["closures/corp-vm.json"]);
     }
 }
 
