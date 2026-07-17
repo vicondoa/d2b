@@ -1451,7 +1451,7 @@ fn w4_provider_delivery_fingerprints_cover_every_reserved_file() {
 fn shared_contract_policy_freezes_services_dependencies_and_ownership() {
     let root = repo_root();
     let policy = xtask::wave_policy::read_policy(&root).expect("shared-contract policy");
-    assert_eq!(policy.schema_version, 7);
+    assert_eq!(policy.schema_version, 8);
     assert_eq!(policy.authority_repository, "github.com/vicondoa/d2b");
     let frozen = policy
         .frozen_service_packages
@@ -1895,6 +1895,160 @@ fn w5_service_dependency_edges_are_locked_and_directional() {
             );
         }
     }
+}
+
+#[test]
+fn w5_guest_signing_retirement_seam_is_exact() {
+    let policy =
+        xtask::wave_policy::read_policy(&repo_root()).expect("shared-contract retirement policy");
+    assert_eq!(policy.w5_contract_retirements.len(), 1);
+    let retirement = &policy.w5_contract_retirements[0];
+    assert_eq!(retirement.component, "guest-signing");
+    assert_eq!(retirement.operation, "GuestControlSign");
+
+    let expected_sources = BTreeSet::from([
+        "packages/d2b-contracts/src/broker_wire.rs".to_owned(),
+        "packages/d2b-core/src/privileges.rs".to_owned(),
+        "packages/d2b-core/src/privileges_w3.rs".to_owned(),
+    ]);
+    let expected_companions = BTreeSet::from([
+        "docs/reference/broker-w2-dispositions.md".to_owned(),
+        "docs/reference/daemon-api.md".to_owned(),
+        "docs/reference/privileges.md".to_owned(),
+        "docs/reference/schemas/v2/privileges.json".to_owned(),
+        "docs/reference/schemas/v2/wire-protocol.json".to_owned(),
+    ]);
+    assert_eq!(
+        retirement
+            .source_paths
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        expected_sources
+    );
+    assert_eq!(
+        retirement
+            .companion_paths
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        expected_companions
+    );
+
+    let expected_selectors = BTreeMap::from([(
+        "packages/d2b-contract-tests/tests/privileges_parity.rs",
+        BTreeSet::from(["rendered_privileges_matches_rust_matrix"]),
+    )]);
+    let actual_selectors = retirement
+        .test_selectors
+        .iter()
+        .map(|selector| {
+            (
+                selector.test_file.as_str(),
+                selector
+                    .test_names
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(actual_selectors, expected_selectors);
+    for selector in &retirement.test_selectors {
+        let source = read_repo_file(&selector.test_file);
+        for test in &selector.test_names {
+            assert!(
+                source.contains(&format!("fn {test}(")),
+                "{} does not contain retirement selector {test}",
+                selector.test_file
+            );
+        }
+    }
+
+    let authorized = retirement
+        .source_paths
+        .iter()
+        .chain(
+            retirement
+                .test_selectors
+                .iter()
+                .map(|selector| &selector.test_file),
+        )
+        .chain(retirement.companion_paths.iter())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let w5 = policy
+        .waves
+        .iter()
+        .find(|wave| wave.wave == "w5")
+        .expect("W5 ownership");
+    assert_eq!(
+        w5.additional_protected_paths
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        authorized
+    );
+    assert_eq!(
+        w5.allowed_protected_paths
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        authorized
+    );
+    let authorized = authorized.into_iter().collect::<Vec<_>>();
+    xtask::wave_policy::check_changed_paths(&policy, "w5", &authorized)
+        .expect("exact GuestControlSign retirement paths");
+
+    for path in retirement
+        .source_paths
+        .iter()
+        .chain(retirement.companion_paths.iter())
+    {
+        assert!(
+            read_repo_file(path).contains("GuestControlSign"),
+            "retirement path does not contain GuestControlSign: {path}"
+        );
+    }
+    for broader in [
+        "packages/d2b-contract-tests/tests/policy_broker_dispositions.rs",
+        "packages/d2b-contract-tests/tests/policy_source.rs",
+        "packages/d2b-contracts/src/public_wire.rs",
+        "packages/d2b-core/src/lib.rs",
+    ] {
+        assert!(
+            xtask::wave_policy::check_changed_paths(&policy, "w5", &[broader.to_owned()]).is_err(),
+            "W5 must not gain broader frozen authority: {broader}"
+        );
+    }
+    for wave in ["w6", "w7"] {
+        for source in &retirement.source_paths {
+            assert!(
+                xtask::wave_policy::check_changed_paths(
+                    &policy,
+                    wave,
+                    std::slice::from_ref(source),
+                )
+                .is_err(),
+                "{wave} must not own W5 GuestControlSign retirement source {source}"
+            );
+        }
+    }
+
+    let mut widened = policy.clone();
+    let widened_w5 = widened
+        .waves
+        .iter_mut()
+        .find(|wave| wave.wave == "w5")
+        .expect("W5 ownership");
+    widened_w5
+        .allowed_protected_paths
+        .push("packages/d2b-core/src/lib.rs".to_owned());
+    widened_w5.allowed_protected_paths.sort();
+    assert!(
+        widened.validate().is_err(),
+        "policy validation must reject extra W5 retirement authority"
+    );
 }
 
 #[test]

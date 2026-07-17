@@ -63,6 +63,7 @@ pub struct SharedContractPolicy {
     pub daemon_typed_methods: Vec<TypedBrokerMethod>,
     pub guest_typed_methods: Vec<TypedBrokerMethod>,
     pub service_dependency_edges: Vec<ServiceDependencyEdge>,
+    pub w5_contract_retirements: Vec<W5ContractRetirement>,
     pub w7_contract_test_migrations: Vec<W7ContractTestMigration>,
     pub workspace_dependencies: Vec<WorkspaceDependency>,
 }
@@ -109,6 +110,23 @@ pub struct ServiceDependencyEdge {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 #[serde(deny_unknown_fields)]
+pub struct W5ContractRetirement {
+    pub component: String,
+    pub operation: String,
+    pub source_paths: Vec<String>,
+    pub test_selectors: Vec<ContractTestSelector>,
+    pub companion_paths: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[serde(deny_unknown_fields)]
+pub struct ContractTestSelector {
+    pub test_file: String,
+    pub test_names: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[serde(deny_unknown_fields)]
 pub struct W7ContractTestMigration {
     pub component: String,
     pub test_file: String,
@@ -119,7 +137,7 @@ pub struct W7ContractTestMigration {
 
 impl SharedContractPolicy {
     pub fn validate(&self) -> Result<(), String> {
-        if self.schema_version != 7 {
+        if self.schema_version != 8 {
             return Err("unsupported shared-contract policy schema".to_owned());
         }
         if self.authority_repository != "github.com/vicondoa/d2b" {
@@ -233,6 +251,78 @@ impl SharedContractPolicy {
                     edge.consumer, edge.dependency
                 ));
             }
+        }
+        validate_sorted_values(&self.w5_contract_retirements, "W5 contract retirements")?;
+        if self.w5_contract_retirements.len() != 1 {
+            return Err(
+                "W5 contract retirement authority must contain exactly one migration row"
+                    .to_owned(),
+            );
+        }
+        let retirement = &self.w5_contract_retirements[0];
+        if retirement.component != "guest-signing" || retirement.operation != "GuestControlSign" {
+            return Err(
+                "W5 contract retirement authority is limited to GuestControlSign".to_owned(),
+            );
+        }
+        validate_sorted_relative_paths(
+            &retirement.source_paths,
+            "W5 contract retirement source paths",
+        )?;
+        validate_sorted_values(
+            &retirement.test_selectors,
+            "W5 contract retirement test selectors",
+        )?;
+        for selector in &retirement.test_selectors {
+            validate_relative_path(Path::new(&selector.test_file))?;
+            if !selector.test_file.ends_with(".rs") {
+                return Err(format!(
+                    "W5 contract retirement selector is not a Rust source: {}",
+                    selector.test_file
+                ));
+            }
+            validate_sorted_strings(&selector.test_names, "W5 contract retirement test names")?;
+            for name in &selector.test_names {
+                validate_identifier(name, "W5 contract retirement test name")
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        validate_sorted_relative_paths(
+            &retirement.companion_paths,
+            "W5 contract retirement companion paths",
+        )?;
+        let retirement_paths = retirement
+            .source_paths
+            .iter()
+            .chain(
+                retirement
+                    .test_selectors
+                    .iter()
+                    .map(|selector| &selector.test_file),
+            )
+            .chain(retirement.companion_paths.iter())
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let w5 = self
+            .wave("w5")
+            .map_err(|_| "shared-contract policy has no W5 owner".to_owned())?;
+        if w5
+            .additional_protected_paths
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            != retirement_paths
+            || w5
+                .allowed_protected_paths
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>()
+                != retirement_paths
+        {
+            return Err(
+                "W5 protected exceptions must exactly match the contract retirement inventory"
+                    .to_owned(),
+            );
         }
         validate_sorted_values(
             &self.w7_contract_test_migrations,

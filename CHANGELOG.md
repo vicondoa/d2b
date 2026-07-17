@@ -76,6 +76,9 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Added a selector-bound retirement seam for the exact legacy guest-control
+  signing contracts and generated references, without opening their frozen
+  crate prefixes to general changes.
 - Routed the CLI dependency authority through `d2b-daemon-access`, the sole
   owner of the exact no-default-features `d2b-client/host-socket` edge, instead
   of permitting duplicate endpoint and channel-binding policy.

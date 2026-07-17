@@ -1,5 +1,5 @@
 {
-  "schema_version": 7,
+  "schema_version": 8,
   "authority_repository": "github.com/vicondoa/d2b",
   "shared_root_branch": "adr0045-post-w4-contracts",
   "waves": [
@@ -51,8 +51,28 @@
         "tests/unit/nix/",
         "tests/unit/smoke/"
       ],
-      "additional_protected_paths": [],
-      "allowed_protected_paths": []
+      "additional_protected_paths": [
+        "docs/reference/broker-w2-dispositions.md",
+        "docs/reference/daemon-api.md",
+        "docs/reference/privileges.md",
+        "docs/reference/schemas/v2/privileges.json",
+        "docs/reference/schemas/v2/wire-protocol.json",
+        "packages/d2b-contract-tests/tests/privileges_parity.rs",
+        "packages/d2b-contracts/src/broker_wire.rs",
+        "packages/d2b-core/src/privileges.rs",
+        "packages/d2b-core/src/privileges_w3.rs"
+      ],
+      "allowed_protected_paths": [
+        "docs/reference/broker-w2-dispositions.md",
+        "docs/reference/daemon-api.md",
+        "docs/reference/privileges.md",
+        "docs/reference/schemas/v2/privileges.json",
+        "docs/reference/schemas/v2/wire-protocol.json",
+        "packages/d2b-contract-tests/tests/privileges_parity.rs",
+        "packages/d2b-contracts/src/broker_wire.rs",
+        "packages/d2b-core/src/privileges.rs",
+        "packages/d2b-core/src/privileges_w3.rs"
+      ]
     },
     {
       "wave": "w6",
@@ -184,9 +204,14 @@
     "delivery/manifest.json",
     "delivery/shared-contracts.json",
     "docs/adr/0045-provider-and-transport-framework.md",
+    "docs/reference/broker-w2-dispositions.md",
+    "docs/reference/daemon-api.md",
     "docs/reference/delivery-tooling.md",
+    "docs/reference/privileges.md",
+    "docs/reference/schemas/v2/privileges.json",
     "docs/reference/schemas/v2/provider-registry-v2.json",
     "docs/reference/schemas/v2/provider-registry-v2.md",
+    "docs/reference/schemas/v2/wire-protocol.json",
     "docs/reference/v2-provider-implementations.md",
     "docs/reference/v2-services-schema.json",
     "docs/reference/v2-services.json",
@@ -199,10 +224,14 @@
     "packages/d2b-contract-tests/tests/policy_misc.rs",
     "packages/d2b-contract-tests/tests/policy_modules.rs",
     "packages/d2b-contract-tests/tests/policy_source.rs",
+    "packages/d2b-contract-tests/tests/privileges_parity.rs",
     "packages/d2b-contract-tests/tests/realm_workload_schema_contract.rs",
     "packages/d2b-contract-tests/tests/storage_sync_contracts.rs",
+    "packages/d2b-contracts/src/broker_wire.rs",
     "packages/d2b-contracts/src/v2_services.rs",
     "packages/d2b-contracts/tests/v2_services_contract.rs",
+    "packages/d2b-core/src/privileges.rs",
+    "packages/d2b-core/src/privileges_w3.rs",
     "packages/d2b-realm-core/src/allocator.rs",
     "packages/d2b-realm-core/src/allocator_engine.rs",
     "packages/d2bd/src/provider_effects.rs",
@@ -474,6 +503,32 @@
         "broker",
         "guest",
         "v2-component-session"
+      ]
+    }
+  ],
+  "w5_contract_retirements": [
+    {
+      "component": "guest-signing",
+      "operation": "GuestControlSign",
+      "source_paths": [
+        "packages/d2b-contracts/src/broker_wire.rs",
+        "packages/d2b-core/src/privileges.rs",
+        "packages/d2b-core/src/privileges_w3.rs"
+      ],
+      "test_selectors": [
+        {
+          "test_file": "packages/d2b-contract-tests/tests/privileges_parity.rs",
+          "test_names": [
+            "rendered_privileges_matches_rust_matrix"
+          ]
+        }
+      ],
+      "companion_paths": [
+        "docs/reference/broker-w2-dispositions.md",
+        "docs/reference/daemon-api.md",
+        "docs/reference/privileges.md",
+        "docs/reference/schemas/v2/privileges.json",
+        "docs/reference/schemas/v2/wire-protocol.json"
       ]
     }
   ],
