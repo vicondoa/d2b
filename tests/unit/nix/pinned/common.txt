@@ -282,6 +282,7 @@ observability/frozen-provider-mapping-is-consumed
 observability/no-second-registration-path
 observability/projections-stay-bounded-and-redacted
 observability/realm-workload-identity
+observability/same-name-sources-use-canonical-ids
 observability/secrets-are-declarative-workload-resources
 per-vm-state-ownership/all-descriptions-nonempty
 per-vm-state-ownership/all-groups-strings

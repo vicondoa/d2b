@@ -53,6 +53,7 @@ in
   enabled = rows.enabled;
   inherit (rows) schemaVersion;
   inherit (rows.workload) canonicalTarget realmId workloadId;
+  hostEgress = rows.endpoints.hostEgress;
   provider = rows.projections.provider;
   projection = {
     inherit (rows.projections.policy)

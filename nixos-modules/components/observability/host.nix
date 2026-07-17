@@ -56,35 +56,6 @@ let
 
   runtimePrep = pkgs.writeShellScript "d2b-host-otel-runtime-prep" ''
     set -eu
-    ${pkgs.coreutils}/bin/install -d -m 0750 -o d2bd -g d2b ${otelRuntimeDir}
-    ${pkgs.acl}/bin/setfacl -m u:d2b-host-otel-collector:--x /run/d2b
-    # Access ACL on ${otelRuntimeDir}: collector gets --x (traverse only, NO
-    # write authority on the directory itself). The mask m::rwx preserves the
-    # bridge uid's rwx effective access (set by activation) so it can still
-    # create host-egress.sock here.
-    #
-    # Default ACL: d:u:d2b-host-otel-collector:rw is intentionally kept so
-    # that when the broker-spawned bridge creates host-egress.sock AFTER this
-    # runtimePrep runs, the socket inherits rw for the collector automatically
-    # (connect(2) requires write on the socket file). Without this default ACL
-    # the collector could not connect to a socket created after startup. The
-    # default mask is d:m::rwx (write-capable) so the bridge runner's rwx
-    # effective access on newly created children is not masked away.
-    ${pkgs.acl}/bin/setfacl \
-      -m u:d2b-host-otel-collector:--x \
-      -m m::rwx \
-      -m d:u:d2b-host-otel-collector:rw \
-      -m d:m::rwx \
-      ${otelRuntimeDir}
-    if [ -S ${hostEgressSocket} ]; then
-      ${pkgs.acl}/bin/setfacl -m u:d2b-host-otel-collector:rw,m::rw ${hostEgressSocket}
-    fi
-
-    export_dir=${lib.escapeShellArg storeSyncExportDir}
-    if [ -d "$export_dir" ]; then
-      ${pkgs.acl}/bin/setfacl -m "u:d2b-host-otel-collector:r-x" "$export_dir" 2>/dev/null || true
-      ${pkgs.acl}/bin/setfacl -d -m "u:d2b-host-otel-collector:r--" "$export_dir" 2>/dev/null || true
-    fi
     ${lib.optionalString scrapeJournal ''
 
       # Pre-create the journald file_storage cursor dir with explicit perms.
@@ -106,7 +77,7 @@ let
       ${pkgs.acl}/bin/setfacl -b ${otelIngestDir}
       ${pkgs.coreutils}/bin/chmod ${ingestDirMode} ${otelIngestDir}
       ${lib.optionalString (clientGroup != null) ''
-        ${pkgs.acl}/bin/setfacl -m g:${clientGroup}:--x /run/d2b ${otelRuntimeDir}
+        ${pkgs.acl}/bin/setfacl -m g:${clientGroup}:--x /run/d2b
       ''}
       # Remove a stale pathname socket so AF_UNIX bind(2) succeeds after an
       # unclean exit (Restart=on-failure).
@@ -285,10 +256,7 @@ lib.mkIf cfg.enable {
   # without parsing the generated YAML.
   d2b.observability._internal.hostCollectorConfig = collectorAttrs;
 
-  systemd.tmpfiles.rules = [
-    "d ${otelRuntimeDir} 0750 d2bd d2b -"
-    "L+ /run/d2b/host-egress.sock - - - - ${hostEgressSocket}"
-  ] ++ lib.optional otlpIngest
+  systemd.tmpfiles.rules = lib.optional otlpIngest
     # The OTLP ingest subdir MUST exist before the unit's mount namespace
     # is constructed: systemd builds the ReadWritePaths bind mount for it
     # at start, and a missing path fails the unit at the NAMESPACE step
