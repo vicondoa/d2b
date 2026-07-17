@@ -5,6 +5,7 @@ let
   d2bLib = import ./lib.nix { inherit lib; };
   enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
   qemuMediaVms = d2bLib.qemuMediaVms cfg.vms;
+  realmStorageRows = import ./realm-storage-rows.nix { inherit config lib; };
 
   actor = kind: value: { inherit kind value; };
   lockId = prefix: key: "${prefix}:${builtins.hashString "sha256" key}";
@@ -237,7 +238,8 @@ let
     ++ (lib.mapAttrsToList (vm: _: vmStartLock vm) enabledVms)
     ++ (lib.mapAttrsToList (vm: _: storeSyncLock vm) enabledVms)
     ++ (lib.mapAttrsToList (vm: _: qemuMediaTapGrant vm) qemuMediaVms)
-    ++ usbipLocks;
+    ++ usbipLocks
+    ++ realmStorageRows.locks;
   };
 
 in
