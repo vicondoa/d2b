@@ -223,6 +223,7 @@ impl AllocatorLedgerGeneration {
         self.0
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     fn checked_next(self) -> Result<Self, AllocatorEngineError> {
         self.0
             .checked_add(1)
