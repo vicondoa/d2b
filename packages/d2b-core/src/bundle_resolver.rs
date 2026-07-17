@@ -22,9 +22,9 @@
 //! # Design
 //!
 //! `BundleResolver` loads the trusted bundle artifacts from disk
-//! (`bundle.json` + the `host.json`, `processes.json`,
-//! `manifest.json`, and per-VM `closures/<vm>.json` paths it points
-//! at) and builds a deterministic
+//! (`bundle.json` + the `host.json`, `processes.json`, optional
+//! `allocator.json`, `manifest.json`, and per-VM `closures/<vm>.json`
+//! paths it points at) and builds a deterministic
 //! intent table keyed by a documented `BundleOpId` encoding:
 //!
 //! | Intent          | `BundleOpId` format                                       | Source data                                                       |
@@ -64,6 +64,7 @@
 //!   role→binary mapping; the resolver shape keeps that wiring drop
 //!   purely additive.
 
+use crate::allocator_config::{AllocatorJson, AllocatorProcessLaunch};
 use crate::bundle::Bundle;
 use crate::closures::ClosureMetadata;
 use crate::error::Error;
@@ -100,6 +101,7 @@ pub struct BundleResolver {
     pub processes: ProcessesJson,
     pub storage: Option<StorageJson>,
     pub sync: Option<SyncJson>,
+    pub allocator: Option<AllocatorJson>,
     pub realm_controllers: Option<RealmControllersJson>,
     pub realm_identity: Option<RealmIdentityConfigJson>,
     pub realm_workloads_launcher_v2: Option<RealmWorkloadsLauncherV2Json>,
@@ -133,6 +135,7 @@ struct ParsedBundleArtifacts {
     processes: ProcessesJson,
     storage: Option<StorageJson>,
     sync: Option<SyncJson>,
+    allocator: Option<AllocatorJson>,
     realm_controllers: Option<RealmControllersJson>,
     realm_identity: Option<RealmIdentityConfigJson>,
     realm_workloads_launcher_v2: Option<RealmWorkloadsLauncherV2Json>,
@@ -1015,6 +1018,7 @@ impl BundleResolver {
                 processes,
                 storage: None,
                 sync: None,
+                allocator: None,
                 realm_controllers: None,
                 realm_identity: None,
                 realm_workloads_launcher_v2: None,
@@ -1036,6 +1040,7 @@ impl BundleResolver {
             processes,
             storage,
             sync,
+            allocator,
             realm_controllers,
             realm_identity,
             realm_workloads_launcher_v2,
@@ -1073,6 +1078,7 @@ impl BundleResolver {
             processes,
             storage,
             sync,
+            allocator,
             realm_controllers,
             realm_identity,
             realm_workloads_launcher_v2,
@@ -1124,6 +1130,7 @@ impl BundleResolver {
                 processes,
                 storage,
                 sync,
+                allocator: None,
                 realm_controllers,
                 realm_identity,
                 realm_workloads_launcher_v2: None,
@@ -1166,6 +1173,7 @@ impl BundleResolver {
         })?;
         let storage = load_optional_storage_artifact(&bundle, bundle_root, policy)?;
         let sync = load_optional_sync_artifact(&bundle, bundle_root, policy)?;
+        let allocator = load_optional_allocator_artifact(&bundle, bundle_root, policy)?;
         let realm_controllers =
             load_optional_realm_controllers_artifact(&bundle, bundle_root, policy)?;
         let realm_identity = load_optional_realm_identity_artifact(&bundle, bundle_root, policy)?;
@@ -1187,6 +1195,7 @@ impl BundleResolver {
                 processes,
                 storage,
                 sync,
+                allocator,
                 realm_controllers,
                 realm_identity,
                 realm_workloads_launcher_v2,
@@ -1208,6 +1217,18 @@ impl BundleResolver {
 
     pub fn provider_registry_v2_bytes(&self) -> Option<&[u8]> {
         self.provider_registry_v2_bytes.as_deref()
+    }
+
+    /// Resolve one integrity-loaded, exactly validated realm-child launch
+    /// authority row. Missing or malformed lookup keys have no fallback.
+    pub fn find_realm_child_launch_record(
+        &self,
+        realm_id: &str,
+        controller_generation: &str,
+    ) -> Option<&AllocatorProcessLaunch> {
+        self.allocator
+            .as_ref()?
+            .find_process_launch(realm_id, controller_generation)
     }
 
     pub fn find_unsafe_local_workload(&self, target: &str) -> Option<&UnsafeLocalWorkload> {
@@ -2945,6 +2966,31 @@ fn load_optional_sync_artifact(
         Error::manifest_parse_error("sync.json", manifest_parse_reason(&e.to_string()))
     })?;
     Ok(Some(sync))
+}
+
+fn load_optional_allocator_artifact(
+    bundle: &Bundle,
+    bundle_root: &Path,
+    policy: &BundleVerifyPolicy,
+) -> Result<Option<AllocatorJson>, Error> {
+    let Some(allocator_ref) = bundle.allocator_path.as_deref() else {
+        return Ok(None);
+    };
+    let allocator_path = resolve_bundle_ref(bundle_root, allocator_ref);
+    let bytes = secure_open_and_read(&allocator_path, policy)?;
+    verify_artifact_hash(
+        &allocator_path,
+        &bytes,
+        bundle.artifact_hashes.as_ref(),
+        allocator_ref,
+    )?;
+    let allocator: AllocatorJson = serde_json::from_slice(&bytes).map_err(|error| {
+        Error::manifest_parse_error("allocator.json", manifest_parse_reason(&error.to_string()))
+    })?;
+    allocator.validate().map_err(|error| {
+        Error::manifest_parse_error("allocator.json", manifest_parse_reason(&error.to_string()))
+    })?;
+    Ok(Some(allocator))
 }
 
 fn load_optional_realm_controllers_artifact(

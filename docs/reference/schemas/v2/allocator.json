@@ -27,6 +27,13 @@
         "$ref": "#/definitions/AllocatorPathPartition"
       }
     },
+    "processLaunch": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/AllocatorProcessLaunch"
+      },
+      "maxItems": 64
+    },
     "providerPlacements": {
       "type": "array",
       "items": {
@@ -132,6 +139,13 @@
         "external"
       ]
     },
+    "AllocatorExecutableRef": {
+      "description": "Integrity-bound executable reference under /nix/store or /run/current-system/sw/bin.",
+      "type": "string",
+      "maxLength": 1024,
+      "minLength": 1,
+      "pattern": "^(/nix/store/|/run/current-system/sw/bin/)[A-Za-z0-9._+/-]+$"
+    },
     "AllocatorHostResourceKind": {
       "type": "string",
       "enum": [
@@ -165,6 +179,36 @@
       },
       "additionalProperties": false
     },
+    "AllocatorLaunchDigest": {
+      "description": "SHA-256 digest. Debug output is always redacted.",
+      "type": "string",
+      "maxLength": 71,
+      "minLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "AllocatorLaunchRef": {
+      "description": "Opaque bounded allocator launch-authority reference. Paths and credential-shaped values are rejected.",
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "AllocatorNamespaceAuthority": {
+      "type": "object",
+      "required": [
+        "digest",
+        "refId"
+      ],
+      "properties": {
+        "digest": {
+          "$ref": "#/definitions/AllocatorLaunchDigest"
+        },
+        "refId": {
+          "$ref": "#/definitions/AllocatorLaunchRef"
+        }
+      },
+      "additionalProperties": false
+    },
     "AllocatorPathPartition": {
       "type": "object",
       "required": [
@@ -193,6 +237,38 @@
         },
         "stateDir": {
           "$ref": "#/definitions/PathTemplate"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AllocatorProcessLaunch": {
+      "type": "object",
+      "required": [
+        "broker",
+        "controller",
+        "controllerGeneration",
+        "launchRecordDigest",
+        "realmId",
+        "realmPath"
+      ],
+      "properties": {
+        "broker": {
+          "$ref": "#/definitions/AllocatorRealmChildLaunch"
+        },
+        "controller": {
+          "$ref": "#/definitions/AllocatorRealmChildLaunch"
+        },
+        "controllerGeneration": {
+          "$ref": "#/definitions/AllocatorLaunchRef"
+        },
+        "launchRecordDigest": {
+          "$ref": "#/definitions/AllocatorLaunchDigest"
+        },
+        "realmId": {
+          "$ref": "#/definitions/AllocatorRealmId"
+        },
+        "realmPath": {
+          "$ref": "#/definitions/AllocatorRealmPath"
         }
       },
       "additionalProperties": false
@@ -313,6 +389,180 @@
         }
       },
       "additionalProperties": false
+    },
+    "AllocatorRealmChildLaunch": {
+      "type": "object",
+      "required": [
+        "auditRootRef",
+        "bootstrapSessionRef",
+        "cgroupDigest",
+        "cgroupRef",
+        "configDigest",
+        "configRef",
+        "executableDigest",
+        "executableRef",
+        "gid",
+        "leaseRefs",
+        "listenerRef",
+        "namespaces",
+        "processId",
+        "resourceRefs",
+        "role",
+        "spawn",
+        "stateRootRef",
+        "uid"
+      ],
+      "properties": {
+        "auditRootRef": {
+          "$ref": "#/definitions/AllocatorLaunchRef"
+        },
+        "bootstrapSessionRef": {
+          "$ref": "#/definitions/AllocatorLaunchRef"
+        },
+        "cgroupDigest": {
+          "$ref": "#/definitions/AllocatorLaunchDigest"
+        },
+        "cgroupRef": {
+          "$ref": "#/definitions/AllocatorLaunchRef"
+        },
+        "configDigest": {
+          "$ref": "#/definitions/AllocatorLaunchDigest"
+        },
+        "configRef": {
+          "$ref": "#/definitions/AllocatorLaunchRef"
+        },
+        "executableDigest": {
+          "$ref": "#/definitions/AllocatorLaunchDigest"
+        },
+        "executableRef": {
+          "$ref": "#/definitions/AllocatorExecutableRef"
+        },
+        "gid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "leaseRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AllocatorLaunchRef"
+          },
+          "maxItems": 32
+        },
+        "listenerRef": {
+          "$ref": "#/definitions/AllocatorLaunchRef"
+        },
+        "namespaces": {
+          "$ref": "#/definitions/AllocatorRealmChildNamespaces"
+        },
+        "processId": {
+          "$ref": "#/definitions/AllocatorLaunchRef"
+        },
+        "resourceRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AllocatorLaunchRef"
+          },
+          "maxItems": 32
+        },
+        "role": {
+          "$ref": "#/definitions/AllocatorRealmChildRole"
+        },
+        "spawn": {
+          "$ref": "#/definitions/AllocatorRealmChildSpawnAuthority"
+        },
+        "stateRootRef": {
+          "$ref": "#/definitions/AllocatorLaunchRef"
+        },
+        "uid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "AllocatorRealmChildNamespaces": {
+      "type": "object",
+      "required": [
+        "cgroup",
+        "ipc",
+        "mount",
+        "network",
+        "pid",
+        "user"
+      ],
+      "properties": {
+        "cgroup": {
+          "$ref": "#/definitions/AllocatorNamespaceAuthority"
+        },
+        "ipc": {
+          "$ref": "#/definitions/AllocatorNamespaceAuthority"
+        },
+        "mount": {
+          "$ref": "#/definitions/AllocatorNamespaceAuthority"
+        },
+        "network": {
+          "$ref": "#/definitions/AllocatorNamespaceAuthority"
+        },
+        "pid": {
+          "$ref": "#/definitions/AllocatorNamespaceAuthority"
+        },
+        "user": {
+          "$ref": "#/definitions/AllocatorNamespaceAuthority"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AllocatorRealmChildRole": {
+      "type": "string",
+      "enum": [
+        "controller",
+        "broker"
+      ]
+    },
+    "AllocatorRealmChildSpawnAuthority": {
+      "type": "object",
+      "required": [
+        "clone3WithPidfd",
+        "closedEnvironment",
+        "directCgroupPlacement",
+        "emptyInitialCapabilities",
+        "executableOnlyArgv",
+        "inheritedFdAuthorityOnly",
+        "noNewPrivileges"
+      ],
+      "properties": {
+        "clone3WithPidfd": {
+          "type": "boolean"
+        },
+        "closedEnvironment": {
+          "type": "boolean"
+        },
+        "directCgroupPlacement": {
+          "type": "boolean"
+        },
+        "emptyInitialCapabilities": {
+          "type": "boolean"
+        },
+        "executableOnlyArgv": {
+          "type": "boolean"
+        },
+        "inheritedFdAuthorityOnly": {
+          "type": "boolean"
+        },
+        "noNewPrivileges": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AllocatorRealmId": {
+      "description": "Canonical bounded lowercase realm identifier used by host-local child processes.",
+      "type": "string",
+      "maxLength": 20,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]*$"
     },
     "AllocatorRealmPath": {
       "description": "Realm path copied from d2b.realms, most-specific first, with 1-16 DNS-style labels and a 255-byte cap.",

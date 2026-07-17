@@ -12,6 +12,10 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added integrity-bound, typed `allocator.json` authority for bounded paired
+  child-realm controller/broker launches, with strict exact lookup, canonical
+  content digests, opaque references, redacted diagnostics, and no ambient
+  spawn fallback.
 - Added the post-W4 shared contract/tooling root: separate W5/W6/W7 delivery
   authorities, typed allocator and child-realm broker DTOs, frozen service and
   dependency inventories, parent-commit-trusted ownership checks with explicit
