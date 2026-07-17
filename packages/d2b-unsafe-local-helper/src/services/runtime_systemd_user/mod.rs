@@ -963,11 +963,11 @@ mod tests {
             realm_id: "host".to_owned(),
             workload_id: "tools".to_owned(),
             resource_id: "browser".to_owned(),
-            operation_id: method
-                .mutating()
-                .then_some("operation-1")
-                .unwrap_or_default()
-                .to_owned(),
+            operation_id: if method.mutating() {
+                "operation-1".to_owned()
+            } else {
+                String::new()
+            },
             request_digest: method.mutating().then_some([3; 32]),
             stream_id: String::new(),
             attachment_indexes: Vec::new(),
