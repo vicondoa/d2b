@@ -78,6 +78,9 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Bound the public daemon handshake fingerprint to ordered, domain-separated
+  daemon and proxied guest package descriptors while retaining a separate direct
+  guest fingerprint.
 - Added a selector-bound retirement seam for the exact legacy guest-control
   signing contracts and generated references, without opening their frozen
   crate prefixes to general changes.

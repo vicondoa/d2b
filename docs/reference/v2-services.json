@@ -1,10 +1,10 @@
 {
-  "schemaVersion": 6,
+  "schemaVersion": 7,
   "services": [
     {
       "package": "d2b.daemon.v2",
       "service": "DaemonService",
-      "schemaFingerprint": "d99ef3f122a6575478f80437c47253d3428eaeb5a5037ccf86b78283f3a645a7",
+      "schemaFingerprint": "4b2834c89162e5a2c17ea879052c066fd546cdc440d1473955a99e2d9521a54a",
       "methods": [
         {
           "name": "Resolve",

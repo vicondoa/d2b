@@ -127,9 +127,17 @@ Runtime, lifecycle, service, capability, autostart, readiness, and media state
 use closed enums. Responses contain at most 64 realms or 256 workloads.
 `PageInfo.returned_items` must equal the encoded row count; truncation requires
 a bounded next cursor, and a supplied total cannot be smaller than the returned
-count. Error outcomes cannot carry rows or pagination. The daemon service
-fingerprint hashes the canonical daemon and shared terminal protobuf sources,
-so a projection or stream shape change changes the advertised schema identity.
+count. Error outcomes cannot carry rows or pagination.
+
+The public `DaemonV2` endpoint registers `DaemonService` and a workload-scoped
+`GuestService` proxy on one authenticated session. Its schema fingerprint hashes
+an ordered `daemon-service`, then `guest-proxy`, package descriptor list. Every
+descriptor is domain-separated and length-prefixed and covers package/service
+identity, ordered methods, canonical package protobuf, and ordered common and
+terminal protobuf dependencies. Daemon-only, guest-only, method, message, or
+dependency drift therefore changes the public handshake identity without
+ambiguous byte concatenation. The direct daemon-to-guest `GuestV2` fingerprint
+remains a separate guest-service identity.
 
 ### Shared terminal streams
 

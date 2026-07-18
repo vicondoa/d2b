@@ -482,7 +482,7 @@ pub struct MethodDocument {
 
 pub fn service_inventory_document() -> ServiceInventoryDocument {
     ServiceInventoryDocument {
-        schema_version: 6,
+        schema_version: 7,
         services: SERVICE_INVENTORY
             .iter()
             .map(|service| ServiceDocument {
@@ -507,6 +507,50 @@ pub fn service_inventory_document() -> ServiceInventoryDocument {
 }
 
 pub fn service_schema_fingerprint(service: &ServiceSpec) -> [u8; 32] {
+    if service.package == "d2b.daemon.v2" {
+        return public_daemon_schema_fingerprint();
+    }
+    direct_service_schema_fingerprint(service)
+}
+
+pub fn public_daemon_schema_fingerprint() -> [u8; 32] {
+    let daemon = SERVICE_INVENTORY
+        .iter()
+        .find(|service| service.package == "d2b.daemon.v2")
+        .expect("daemon service inventory");
+    let guest = SERVICE_INVENTORY
+        .iter()
+        .find(|service| service.package == "d2b.guest.v2")
+        .expect("guest service inventory");
+    public_endpoint_fingerprint(&[
+        PackageSchemaDescriptor {
+            role: "daemon-service",
+            service: daemon,
+            proto: include_bytes!("../proto/v2/daemon.proto"),
+            dependencies: &[
+                ("d2b.common.v2", include_bytes!("../proto/v2/common.proto")),
+                (
+                    "d2b.terminal.v2",
+                    include_bytes!("../proto/v2/terminal.proto"),
+                ),
+            ],
+        },
+        PackageSchemaDescriptor {
+            role: "guest-proxy",
+            service: guest,
+            proto: include_bytes!("../proto/v2/guest.proto"),
+            dependencies: &[
+                ("d2b.common.v2", include_bytes!("../proto/v2/common.proto")),
+                (
+                    "d2b.terminal.v2",
+                    include_bytes!("../proto/v2/terminal.proto"),
+                ),
+            ],
+        },
+    ])
+}
+
+fn direct_service_schema_fingerprint(service: &ServiceSpec) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(b"d2b-service-schema-v2\0");
     digest.update(service.package.as_bytes());
@@ -546,6 +590,339 @@ pub fn service_schema_fingerprint(service: &ServiceSpec) -> [u8; 32] {
         digest.update(method.max_lifetime_ms.to_be_bytes());
     }
     digest.finalize().into()
+}
+
+struct PackageSchemaDescriptor<'a> {
+    role: &'a str,
+    service: &'a ServiceSpec,
+    proto: &'a [u8],
+    dependencies: &'a [(&'a str, &'a [u8])],
+}
+
+fn public_endpoint_fingerprint(descriptors: &[PackageSchemaDescriptor<'_>]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"d2b-public-endpoint-schema-v1\0");
+    update_framed(
+        &mut digest,
+        b"package-count",
+        &u32::try_from(descriptors.len())
+            .expect("bounded package descriptor count")
+            .to_be_bytes(),
+    );
+    for (index, descriptor) in descriptors.iter().enumerate() {
+        update_framed(
+            &mut digest,
+            b"package-index",
+            &u32::try_from(index)
+                .expect("bounded package descriptor index")
+                .to_be_bytes(),
+        );
+        update_framed(&mut digest, b"package-role", descriptor.role.as_bytes());
+        update_framed(
+            &mut digest,
+            b"package-descriptor",
+            &package_schema_fingerprint(descriptor),
+        );
+    }
+    digest.finalize().into()
+}
+
+fn package_schema_fingerprint(descriptor: &PackageSchemaDescriptor<'_>) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"d2b-ordered-package-schema-v1\0");
+    update_framed(&mut digest, b"role", descriptor.role.as_bytes());
+    update_framed(
+        &mut digest,
+        b"package",
+        descriptor.service.package.as_bytes(),
+    );
+    update_framed(
+        &mut digest,
+        b"service",
+        descriptor.service.service.as_bytes(),
+    );
+    update_framed(&mut digest, b"proto", descriptor.proto);
+    update_framed(
+        &mut digest,
+        b"dependency-count",
+        &u32::try_from(descriptor.dependencies.len())
+            .expect("bounded dependency descriptor count")
+            .to_be_bytes(),
+    );
+    for (index, (package, proto)) in descriptor.dependencies.iter().enumerate() {
+        update_framed(
+            &mut digest,
+            b"dependency-index",
+            &u32::try_from(index)
+                .expect("bounded dependency descriptor index")
+                .to_be_bytes(),
+        );
+        update_framed(&mut digest, b"dependency-package", package.as_bytes());
+        update_framed(&mut digest, b"dependency-proto", proto);
+    }
+    update_framed(
+        &mut digest,
+        b"method-count",
+        &u32::try_from(descriptor.service.methods.len())
+            .expect("bounded method descriptor count")
+            .to_be_bytes(),
+    );
+    for (index, method) in descriptor.service.methods.iter().enumerate() {
+        update_framed(
+            &mut digest,
+            b"method-index",
+            &u32::try_from(index)
+                .expect("bounded method descriptor index")
+                .to_be_bytes(),
+        );
+        update_framed(&mut digest, b"method-name", method.name.as_bytes());
+        update_framed(
+            &mut digest,
+            b"method-id",
+            &method
+                .method_id(descriptor.service.package, descriptor.service.service)
+                .to_be_bytes(),
+        );
+        update_framed(
+            &mut digest,
+            b"method-flags",
+            &[
+                u8::from(method.mutating),
+                u8::from(method.requires_idempotency),
+            ],
+        );
+        update_framed(
+            &mut digest,
+            b"method-max-request-bytes",
+            &method.max_request_bytes.to_be_bytes(),
+        );
+        update_framed(
+            &mut digest,
+            b"method-max-lifetime-ms",
+            &method.max_lifetime_ms.to_be_bytes(),
+        );
+    }
+    digest.finalize().into()
+}
+
+fn update_framed(digest: &mut Sha256, domain: &[u8], value: &[u8]) {
+    digest.update(
+        u32::try_from(domain.len())
+            .expect("bounded descriptor domain")
+            .to_be_bytes(),
+    );
+    digest.update(domain);
+    digest.update(
+        u64::try_from(value.len())
+            .expect("bounded descriptor value")
+            .to_be_bytes(),
+    );
+    digest.update(value);
+}
+
+#[cfg(test)]
+mod endpoint_fingerprint_tests {
+    use super::*;
+
+    fn daemon() -> &'static ServiceSpec {
+        SERVICE_INVENTORY
+            .iter()
+            .find(|service| service.package == "d2b.daemon.v2")
+            .unwrap()
+    }
+
+    fn guest() -> &'static ServiceSpec {
+        SERVICE_INVENTORY
+            .iter()
+            .find(|service| service.package == "d2b.guest.v2")
+            .unwrap()
+    }
+
+    fn composite(
+        daemon: &ServiceSpec,
+        guest: &ServiceSpec,
+        daemon_proto: &[u8],
+        guest_proto: &[u8],
+        common_proto: &[u8],
+        terminal_proto: &[u8],
+        reverse: bool,
+    ) -> [u8; 32] {
+        let daemon_dependencies = [
+            ("d2b.common.v2", common_proto),
+            ("d2b.terminal.v2", terminal_proto),
+        ];
+        let guest_dependencies = [
+            ("d2b.common.v2", common_proto),
+            ("d2b.terminal.v2", terminal_proto),
+        ];
+        let daemon_descriptor = PackageSchemaDescriptor {
+            role: "daemon-service",
+            service: daemon,
+            proto: daemon_proto,
+            dependencies: &daemon_dependencies,
+        };
+        let guest_descriptor = PackageSchemaDescriptor {
+            role: "guest-proxy",
+            service: guest,
+            proto: guest_proto,
+            dependencies: &guest_dependencies,
+        };
+        if reverse {
+            public_endpoint_fingerprint(&[guest_descriptor, daemon_descriptor])
+        } else {
+            public_endpoint_fingerprint(&[daemon_descriptor, guest_descriptor])
+        }
+    }
+
+    #[test]
+    fn public_endpoint_fingerprint_binds_both_services_dependencies_and_order() {
+        let daemon_proto = include_bytes!("../proto/v2/daemon.proto");
+        let guest_proto = include_bytes!("../proto/v2/guest.proto");
+        let common_proto = include_bytes!("../proto/v2/common.proto");
+        let terminal_proto = include_bytes!("../proto/v2/terminal.proto");
+        let baseline = composite(
+            daemon(),
+            guest(),
+            daemon_proto,
+            guest_proto,
+            common_proto,
+            terminal_proto,
+            false,
+        );
+        assert_eq!(baseline, public_daemon_schema_fingerprint());
+
+        let mut changed_daemon = daemon_proto.to_vec();
+        changed_daemon.push(b'\n');
+        assert_ne!(
+            baseline,
+            composite(
+                daemon(),
+                guest(),
+                &changed_daemon,
+                guest_proto,
+                common_proto,
+                terminal_proto,
+                false,
+            )
+        );
+        let mut changed_guest = guest_proto.to_vec();
+        changed_guest.push(b'\n');
+        assert_ne!(
+            baseline,
+            composite(
+                daemon(),
+                guest(),
+                daemon_proto,
+                &changed_guest,
+                common_proto,
+                terminal_proto,
+                false,
+            )
+        );
+        let mut changed_terminal = terminal_proto.to_vec();
+        changed_terminal.push(b'\n');
+        assert_ne!(
+            baseline,
+            composite(
+                daemon(),
+                guest(),
+                daemon_proto,
+                guest_proto,
+                common_proto,
+                &changed_terminal,
+                false,
+            )
+        );
+        let mut changed_common = common_proto.to_vec();
+        changed_common.push(b'\n');
+        assert_ne!(
+            baseline,
+            composite(
+                daemon(),
+                guest(),
+                daemon_proto,
+                guest_proto,
+                &changed_common,
+                terminal_proto,
+                false,
+            )
+        );
+        assert_ne!(
+            baseline,
+            composite(
+                daemon(),
+                guest(),
+                daemon_proto,
+                guest_proto,
+                common_proto,
+                terminal_proto,
+                true,
+            )
+        );
+    }
+
+    #[test]
+    fn public_endpoint_fingerprint_binds_daemon_and_guest_method_descriptors() {
+        let mut daemon_methods = daemon().methods.to_vec();
+        daemon_methods[0].mutating = !daemon_methods[0].mutating;
+        let daemon_methods = Box::leak(daemon_methods.into_boxed_slice());
+        let changed_daemon = ServiceSpec {
+            methods: daemon_methods,
+            ..*daemon()
+        };
+        let mut guest_methods = guest().methods.to_vec();
+        guest_methods[0].max_request_bytes -= 1;
+        let guest_methods = Box::leak(guest_methods.into_boxed_slice());
+        let changed_guest = ServiceSpec {
+            methods: guest_methods,
+            ..*guest()
+        };
+        let daemon_proto = include_bytes!("../proto/v2/daemon.proto");
+        let guest_proto = include_bytes!("../proto/v2/guest.proto");
+        let common_proto = include_bytes!("../proto/v2/common.proto");
+        let terminal_proto = include_bytes!("../proto/v2/terminal.proto");
+        let baseline = public_daemon_schema_fingerprint();
+        assert_ne!(
+            baseline,
+            composite(
+                &changed_daemon,
+                guest(),
+                daemon_proto,
+                guest_proto,
+                common_proto,
+                terminal_proto,
+                false,
+            )
+        );
+        assert_ne!(
+            baseline,
+            composite(
+                daemon(),
+                &changed_guest,
+                daemon_proto,
+                guest_proto,
+                common_proto,
+                terminal_proto,
+                false,
+            )
+        );
+    }
+
+    #[test]
+    fn direct_guest_fingerprint_remains_separate_from_public_endpoint() {
+        assert_eq!(
+            service_schema_fingerprint(guest()),
+            direct_service_schema_fingerprint(guest())
+        );
+        assert_ne!(
+            public_daemon_schema_fingerprint(),
+            service_schema_fingerprint(guest())
+        );
+        assert_ne!(
+            public_daemon_schema_fingerprint(),
+            direct_service_schema_fingerprint(daemon())
+        );
+    }
 }
 
 fn hex_digest(value: [u8; 32]) -> String {

@@ -22,7 +22,8 @@ use d2b_contracts::v2_services::{
     StrictWireMessage, TerminalFrameDirection, TerminalStreamValidator, broker, common, daemon,
     decode_spawn_response_for_request, decode_strict, encode_strict,
     observability_query_response_from_wire, observability_query_result_to_wire,
-    provider_method_for_capability, provider_operation_input, service_inventory_document, terminal,
+    provider_method_for_capability, provider_operation_input, public_daemon_schema_fingerprint,
+    service_inventory_document, service_schema_fingerprint, terminal,
     validate_provider_response_for_method, validate_spawn_response_for_request,
     validate_terminal_open_response_for_request,
 };
@@ -1421,6 +1422,39 @@ fn inventory_fixture_and_schema_are_local_and_strict() {
         schema["definitions"]["MethodDocument"]["additionalProperties"],
         false
     );
+}
+
+#[test]
+fn public_daemon_and_direct_guest_fingerprints_are_fixed_and_distinct() {
+    fn hex(bytes: [u8; 32]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    let daemon = SERVICE_INVENTORY
+        .iter()
+        .find(|service| service.package == "d2b.daemon.v2")
+        .unwrap();
+    let guest = SERVICE_INVENTORY
+        .iter()
+        .find(|service| service.package == "d2b.guest.v2")
+        .unwrap();
+    assert_eq!(
+        hex(public_daemon_schema_fingerprint()),
+        "4b2834c89162e5a2c17ea879052c066fd546cdc440d1473955a99e2d9521a54a"
+    );
+    assert_eq!(
+        hex(service_schema_fingerprint(guest)),
+        "9358614db1a1384cc9cd7ec21b916d3ce5e6042f1eb006fde537399c39079694"
+    );
+    assert_eq!(
+        service_schema_fingerprint(daemon),
+        public_daemon_schema_fingerprint()
+    );
+    assert_ne!(
+        service_schema_fingerprint(daemon),
+        service_schema_fingerprint(guest)
+    );
+    assert_eq!(service_inventory_document().schema_version, 7);
 }
 
 #[test]

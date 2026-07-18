@@ -19,6 +19,9 @@ use d2b_contracts::v2_component_session::{
     Remediation, RequestEnvelope, RequestId, ServicePackage, SessionErrorCode, TransportBinding,
     TransportClass,
 };
+use d2b_contracts::v2_services::{
+    SERVICE_INVENTORY, public_daemon_schema_fingerprint, service_schema_fingerprint,
+};
 use d2b_session::{
     AttachmentPayload, AttachmentValidationError, BootstrapAdmission, BootstrapPsk,
     ComponentSessionDriver, DeadlineBudget, FairScheduler, Fragmenter, HandshakeCredentials,
@@ -259,6 +262,34 @@ fn fixed_negotiation_and_all_noise_profiles_are_strict() {
     assert_eq!(
         initiator.read_next(&second).unwrap_err().code(),
         SessionErrorCode::AuthenticationFailed
+    );
+}
+
+#[test]
+fn public_daemon_handshake_rejects_a_guest_only_schema_peer() {
+    let mut public_offer = offer(NoiseProfile::Nn25519ChaChaPolySha256);
+    public_offer.purpose = EndpointPurpose::DaemonLocal;
+    public_offer.initiator_role = EndpointRole::CommandClient;
+    public_offer.responder_role = EndpointRole::LocalRootController;
+    public_offer.service = ServicePackage::DaemonV2;
+    public_offer.schema_fingerprint = public_daemon_schema_fingerprint();
+    negotiated(&public_offer);
+
+    let guest = SERVICE_INVENTORY
+        .iter()
+        .find(|service| service.package == "d2b.guest.v2")
+        .unwrap();
+    let mut guest_only_peer = policy(&public_offer);
+    guest_only_peer.schema_fingerprint = service_schema_fingerprint(guest);
+    let encoded = public_offer.encode_canonical().unwrap();
+    let preface = d2b_session::contract::ComponentSessionPreface::new(encoded.len())
+        .unwrap()
+        .encode();
+    assert_eq!(
+        negotiate_offer(&preface, &encoded, &guest_only_peer)
+            .unwrap_err()
+            .code(),
+        SessionErrorCode::SchemaMismatch
     );
 }
 
