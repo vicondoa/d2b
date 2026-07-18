@@ -472,7 +472,8 @@
       "default_features": false,
       "features": [
         "guest",
-        "v2-component-session"
+        "v2-component-session",
+        "v2-guest-configured-launches"
       ]
     },
     {
@@ -502,7 +503,8 @@
       "features": [
         "broker",
         "guest",
-        "v2-component-session"
+        "v2-component-session",
+        "v2-guest-configured-launches"
       ]
     }
   ],

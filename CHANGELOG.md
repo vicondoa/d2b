@@ -12,6 +12,8 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added one bounded, redacted binary configured-launch catalog shared by the
+  broker and guest, bound to one workload identity and integrity digest.
 - Added one canonical, redacted, zeroizing binary guest-session credential
   codec for broker encoding and guestd decoding, including optional
   replay-bound bootstrap PSK material.

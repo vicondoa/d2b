@@ -38,6 +38,13 @@ cli-output = ["public"]
 unsafe-local = ["public"]
 v2-identity = ["dep:schemars", "dep:serde", "dep:sha2"]
 v2-component-session = ["v2-identity", "dep:schemars", "dep:serde", "dep:zeroize"]
+v2-guest-configured-launches = [
+    "v2-identity",
+    "dep:d2b-core",
+    "dep:d2b-realm-core",
+    "dep:sha2",
+    "dep:zeroize",
+]
 v2-provider = ["v2-component-session", "dep:schemars", "dep:serde"]
 v2-state = ["v2-identity", "dep:schemars", "dep:serde"]
 v2-services = [
@@ -57,6 +64,7 @@ schema = [
     "unsafe-local",
     "v2-identity",
     "v2-component-session",
+    "v2-guest-configured-launches",
     "v2-services",
     "v2-provider",
     "v2-state",

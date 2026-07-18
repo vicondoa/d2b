@@ -14,7 +14,7 @@ workspace = true
 async-trait.workspace = true
 futures = "0.3"
 hmac = "0.12"
-d2b-contracts = { workspace = true, features = ["guest", "v2-component-session"] }
+d2b-contracts = { workspace = true, features = ["guest", "v2-component-session", "v2-guest-configured-launches"] }
 d2b-exec-runner = { workspace = true }
 d2b-realm-core = { workspace = true }
 d2b-session = { workspace = true, default-features = false }

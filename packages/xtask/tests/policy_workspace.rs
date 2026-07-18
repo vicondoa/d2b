@@ -1821,7 +1821,11 @@ fn w5_service_dependency_edges_are_locked_and_directional() {
     let expected_component_session_consumers = BTreeMap::from([
         (
             "d2b-guestd",
-            BTreeSet::from(["guest".to_owned(), "v2-component-session".to_owned()]),
+            BTreeSet::from([
+                "guest".to_owned(),
+                "v2-component-session".to_owned(),
+                "v2-guest-configured-launches".to_owned(),
+            ]),
         ),
         (
             "d2b-priv-broker",
@@ -1829,6 +1833,7 @@ fn w5_service_dependency_edges_are_locked_and_directional() {
                 "broker".to_owned(),
                 "guest".to_owned(),
                 "v2-component-session".to_owned(),
+                "v2-guest-configured-launches".to_owned(),
             ]),
         ),
         (
@@ -1840,7 +1845,18 @@ fn w5_service_dependency_edges_are_locked_and_directional() {
             BTreeSet::from(["v2-component-session".to_owned()]),
         ),
     ]);
+    let expected_configured_launch_consumers = BTreeMap::from([
+        (
+            "d2b-guestd",
+            expected_component_session_consumers["d2b-guestd"].clone(),
+        ),
+        (
+            "d2b-priv-broker",
+            expected_component_session_consumers["d2b-priv-broker"].clone(),
+        ),
+    ]);
     let mut component_session_consumers = BTreeMap::new();
+    let mut configured_launch_consumers = BTreeMap::new();
     for package in packages {
         let consumer = package["name"].as_str().expect("package name");
         for dependency in package["dependencies"]
@@ -1857,6 +1873,24 @@ fn w5_service_dependency_edges_are_locked_and_directional() {
                 .iter()
                 .map(|feature| feature.as_str().expect("feature").to_owned())
                 .collect::<BTreeSet<_>>();
+            if features.contains("v2-guest-configured-launches") {
+                assert_eq!(
+                    dependency["uses_default_features"],
+                    serde_json::Value::Bool(false),
+                    "{consumer} configured-launch edge must disable default features"
+                );
+                assert_eq!(
+                    Some(&features),
+                    expected_configured_launch_consumers.get(consumer),
+                    "{consumer} has unauthorized configured-launch feature amplification"
+                );
+                assert!(
+                    configured_launch_consumers
+                        .insert(consumer, features.clone())
+                        .is_none(),
+                    "duplicate configured-launch dependency for {consumer}"
+                );
+            }
             if features.contains("v2-component-session") {
                 assert_eq!(
                     dependency["uses_default_features"],
@@ -1880,6 +1914,10 @@ fn w5_service_dependency_edges_are_locked_and_directional() {
     assert_eq!(
         component_session_consumers,
         expected_component_session_consumers
+    );
+    assert_eq!(
+        configured_launch_consumers,
+        expected_configured_launch_consumers
     );
 
     for (consumer, forbidden) in [

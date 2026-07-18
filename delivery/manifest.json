@@ -469,6 +469,11 @@
       "path": "docs/reference/component-session-v2-vectors.json"
     },
     {
+      "name": "v2-guest-configured-launches-contract",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/v2_guest_configured_launches.rs"
+    },
+    {
       "name": "v2-identity-contract",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2b-contracts/src/v2_identity.rs"

@@ -27,8 +27,8 @@ them only after removing the source dependency.
 `protobuf` is optional and activated only by `guest` and `v2-services`. The
 generated guest-control message bindings remain checked in under `generated`;
 normal builds do not run protobuf or ttRPC code generation. `schemars`, `serde`,
-`serde_json`, and `sha2` are optional and activated only by families whose DTOs
-use them.
+`serde_json`, `sha2`, and `zeroize` are optional and activated only by families
+whose DTOs use them.
 
 ## d2b 2.0 ownership rails
 
@@ -36,6 +36,7 @@ use them.
 | --- | --- | --- | --- |
 | `v2-identity` | `v2_identity` | `serde`, `schemars`, `sha2` | Identity contracts |
 | `v2-component-session` | `v2_component_session` | `v2-identity`, `serde`, `schemars` | Component-session contracts |
+| `v2-guest-configured-launches` | `v2_guest_configured_launches` | Identity, configured argv, protocol tokens, `sha2`, `zeroize` | Guest configured-launch contracts |
 | `v2-services` | `v2_services` | Component session, provider, state, async ttRPC/protobuf, schema derives | Service contracts |
 | `v2-provider` | `v2_provider` | Component session, identity, schema derives | Provider contracts |
 | `v2-state` | `v2_state` | Identity, schema derives | State and audit contracts |
@@ -50,10 +51,11 @@ module without editing central feature wiring.
 | --- | --- |
 | `d2b-realm-codec-protobuf` | `common` |
 | `d2b-host` | `broker` |
-| `d2b-guestd`, `d2b-userd` | `guest` |
+| `d2b-guestd` | `guest`, `v2-component-session`, `v2-guest-configured-launches` |
+| `d2b-userd` | `guest` |
 | `d2b-daemon-access` | `public` |
 | `d2b` | `cli-output` |
-| `d2b-priv-broker` | `broker`, `guest` |
+| `d2b-priv-broker` | `broker`, `guest`, `v2-component-session`, `v2-guest-configured-launches` |
 | `d2bd`, `d2b-unsafe-local-helper` | `unsafe-local` |
 | `xtask`, `d2b-contract-tests` | `schema` |
 

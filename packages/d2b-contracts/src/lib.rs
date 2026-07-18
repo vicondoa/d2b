@@ -38,6 +38,8 @@ pub mod usbip;
 
 #[cfg(feature = "v2-component-session")]
 pub mod v2_component_session;
+#[cfg(feature = "v2-guest-configured-launches")]
+pub mod v2_guest_configured_launches;
 #[cfg(feature = "v2-identity")]
 pub mod v2_identity;
 #[cfg(feature = "v2-provider")]
