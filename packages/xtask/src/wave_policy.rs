@@ -2378,25 +2378,238 @@ mod tests {
     }
 
     fn retirement_parent_blobs(retirement: &W5ContractRetirement) -> BTreeMap<String, Vec<u8>> {
-        let root = repository_root().expect("repository root");
-        retirement
-            .source_paths
-            .iter()
-            .chain(
-                retirement
-                    .test_selectors
-                    .iter()
-                    .map(|selector| &selector.test_file),
-            )
-            .chain(retirement.companion_paths.iter())
-            .map(|path| {
-                (
-                    path.clone(),
-                    fs::read(root.join(path))
-                        .unwrap_or_else(|error| panic!("read retirement fixture {path}: {error}")),
-                )
+        let privileges = concat!(
+            "const ROWS: &[()] = &[\n",
+            "    row(\n",
+            "        \"GuestControlSign\",\n",
+            "        \"guest-control token\",\n",
+            "        \"per-VM\",\n",
+            "        &[\"d2bd\"],\n",
+            "        false,\n",
+            "        SecretAccess::RedactedOnly,\n",
+            "        BrokerRequirement::Yes,\n",
+            "        AuditMode::Yes,\n",
+            "    ),\n",
+            "    row(\"InjectSecretById\"),\n",
+            "];\n",
+        );
+        let privileges_w3 = concat!(
+            "pub enum W3BrokerOperation {\n",
+            "    GuestControlSign,\n",
+            "    ModprobeIfAllowed,\n",
+            "}\n\n",
+            "impl W3BrokerOperation {\n",
+            "    fn wire_tag(self) -> &'static str {\n",
+            "        match self {\n",
+            "            Self::GuestControlSign => \"GuestControlSign\",\n",
+            "            Self::ModprobeIfAllowed => \"ModprobeIfAllowed\",\n",
+            "        }\n",
+            "    }\n\n",
+            "    fn all() -> &'static [Self] {\n",
+            "        &[\n",
+            "            Self::GuestControlSign,\n",
+            "            Self::ModprobeIfAllowed,\n",
+            "        ]\n",
+            "    }\n\n",
+            "    fn flags(self) -> W3OperationFlags {\n",
+            "        match self {\n",
+            "            Self::GuestControlSign => W3OperationFlags {\n",
+            "                audit: true,\n",
+            "                destructive: false,\n",
+            "                secret_access: true,\n",
+            "            },\n",
+            "            Self::ModprobeIfAllowed => W3OperationFlags {\n",
+            "                audit: true,\n",
+            "                destructive: true,\n",
+            "                secret_access: false,\n",
+            "            },\n",
+            "        }\n",
+            "    }\n",
+            "}\n\n",
+            "#[cfg(test)]\n",
+            "mod tests {\n",
+            "    #[test]\n",
+            "    fn only_guest_control_sign_grants_secret_access() {\n",
+            "        assert!(true);\n",
+            "    }\n",
+            "}\n",
+        );
+        let broker_wire = concat!(
+            "use crate::guest_auth::AUTH_NONCE_LEN;\n\n",
+            "pub enum BrokerRequest {\n",
+            "    GuestControlSign(GuestControlSignRequest),\n",
+            "    Other,\n",
+            "}\n\n",
+            "impl BrokerRequest {\n",
+            "    fn op_name(&self) -> &'static str {\n",
+            "        match self {\n",
+            "            Self::GuestControlSign(_) => \"GuestControlSign\",\n",
+            "            Self::Other => \"Other\",\n",
+            "        }\n",
+            "    }\n\n",
+            "    fn opaque_target_id(&self) -> &'static str {\n",
+            "        match self {\n",
+            "            Self::GuestControlSign(_) => \"guest-control-auth\",\n",
+            "            Self::Other => \"operation\",\n",
+            "        }\n",
+            "    }\n",
+            "}\n\n",
+            "pub enum BrokerResponse {\n",
+            "    GuestControlSign(GuestControlSignResponse),\n",
+            "    Ack,\n",
+            "}\n\n",
+            "#[derive(Debug)]\n",
+            "pub enum GuestControlProofRole {\n",
+            "    HostProof,\n",
+            "}\n\n",
+            "#[derive(Debug)]\n",
+            "pub enum GuestControlDirection {\n",
+            "    HostToGuest,\n",
+            "}\n\n",
+            "#[derive(Debug)]\n",
+            "pub enum GuestControlAuthPurpose {\n",
+            "    GuestControlAuthV1,\n",
+            "}\n\n",
+            "#[derive(Debug)]\n",
+            "pub struct GuestBootIdWire(pub String);\n\n",
+            "impl GuestBootIdWire {\n",
+            "    fn as_str(&self) -> &str { &self.0 }\n",
+            "}\n\n",
+            "impl JsonSchema for GuestBootIdWire {\n",
+            "    fn marker() {}\n",
+            "}\n\n",
+            "#[derive(Debug)]\n",
+            "pub struct GuestControlSignRequest {\n",
+            "    nonce: [u8; AUTH_NONCE_LEN],\n",
+            "}\n\n",
+            "impl GuestControlSignRequest {\n",
+            "    fn validate_shape(&self) -> bool { self.nonce.len() == AUTH_NONCE_LEN }\n",
+            "}\n\n",
+            "#[derive(Debug)]\n",
+            "pub struct GuestControlSignResponse {\n",
+            "    tag: [u8; 32],\n",
+            "}\n",
+        );
+        let parity = concat!(
+            "#[test]\n",
+            "fn rendered_privileges_matches_rust_matrix() {\n",
+            "    let rendered = load_privileges_fixture_from_env();\n",
+            "    let rust = PrivilegesJson::w1(rendered.schema_version.clone());\n",
+            "    assert_eq!(rendered.broker_operations, rust.broker_operations);\n",
+            "}\n",
+        );
+        let privileges_doc = concat!(
+            "# Privileges\n\n",
+            "- **secret** — `yes` for operations whose implementation reads secret\n",
+            "  material or whose audit record may reference secret-material\n",
+            "  identifiers. `redacted-only` rows carry only derived/redacted metadata:\n",
+            "  for example `GuestControlSign` records token-transcript metadata\n",
+            "  (`transcript_len`, `peer_cid_present`, `capabilities_hash_present`),\n",
+            "  and `UsbipBind` records normalized device identity plus serial HMAC\n",
+            "  correlations, never the per-VM token, signature bytes, raw serial, raw\n",
+            "  sysfs path, or device path.\n\n",
+            "Unknown variants and unknown fields are denied.\n\n",
+            "| Operation | Subject |\n",
+            "| --- | --- |\n",
+            "| `GuestControlSign` | guest-control token |\n",
+            "| `InjectSecretById` | secret |\n",
+        );
+        let daemon_api = concat!(
+            "# Daemon API\n\n",
+            "| Type | Kind | Source | Shape |\n",
+            "| --- | --- | --- | --- |\n",
+            "| `BrokerRequest` | enum | [`BrokerRequest`](../../packages/d2b-contracts/src/broker_wire.rs#L3) | `GuestControlSign` — (GuestControlSignRequest); `Other` |\n",
+            "| `GuestControlSignRequest` | struct | source | request |\n",
+            "| `GuestControlProofRole` | enum | source | role |\n",
+            "| `GuestControlDirection` | enum | source | direction |\n",
+            "| `GuestControlAuthPurpose` | enum | source | purpose |\n",
+            "| `BrokerResponse` | enum | [`BrokerResponse`](../../packages/d2b-contracts/src/broker_wire.rs#L24) | `GuestControlSign` — (GuestControlSignResponse); `Ack` |\n",
+            "| `GuestControlSignResponse` | struct | source | response |\n",
+        );
+        let privileges_schema = serde_json::json!({
+            "definitions": {
+                "OperationAuthz": {
+                    "properties": {
+                        "operation": {
+                            "enum": ["InjectSecretById", "GuestControlSign"]
+                        }
+                    }
+                }
+            }
+        });
+        let signing_variant = |payload: &str| {
+            serde_json::json!({
+                "properties": {
+                    "kind": {"enum": ["GuestControlSign"]},
+                    "payload": {"$ref": payload}
+                }
             })
-            .collect()
+        };
+        let wire_schema = serde_json::json!({
+            "definitions": {
+                "BrokerRequest": {
+                    "oneOf": [
+                        {"properties": {"kind": {"enum": ["Other"]}}},
+                        signing_variant("#/definitions/GuestControlSignRequest")
+                    ]
+                },
+                "BrokerResponse": {
+                    "oneOf": [
+                        {"properties": {"kind": {"enum": ["Ack"]}}},
+                        signing_variant("#/definitions/GuestControlSignResponse")
+                    ]
+                },
+                "GuestBootIdWire": {},
+                "GuestControlAuthPurpose": {},
+                "GuestControlDirection": {},
+                "GuestControlProofRole": {},
+                "GuestControlSignRequest": {},
+                "GuestControlSignResponse": {},
+                "Other": {}
+            }
+        });
+        let fixtures = BTreeMap::from([
+            (W5_BROKER_WIRE_PATH.to_owned(), broker_wire.as_bytes().to_vec()),
+            (W5_PRIVILEGES_PATH.to_owned(), privileges.as_bytes().to_vec()),
+            (
+                W5_PRIVILEGES_W3_PATH.to_owned(),
+                privileges_w3.as_bytes().to_vec(),
+            ),
+            (
+                W5_PRIVILEGES_PARITY_PATH.to_owned(),
+                parity.as_bytes().to_vec(),
+            ),
+            (
+                W5_BROKER_DISPOSITIONS_DOC_PATH.to_owned(),
+                b"| Variant | Disposition |\n| --- | --- |\n| GuestControlSign | callable-read-only |\n| Other | deny |\n"
+                    .to_vec(),
+            ),
+            (
+                W5_DAEMON_API_PATH.to_owned(),
+                daemon_api.as_bytes().to_vec(),
+            ),
+            (
+                W5_PRIVILEGES_DOC_PATH.to_owned(),
+                privileges_doc.as_bytes().to_vec(),
+            ),
+            (
+                W5_PRIVILEGES_SCHEMA_PATH.to_owned(),
+                canonical_json_bytes(&privileges_schema).unwrap(),
+            ),
+            (
+                W5_WIRE_SCHEMA_PATH.to_owned(),
+                canonical_json_bytes(&wire_schema).unwrap(),
+            ),
+        ]);
+        let authorized = retirement_paths(retirement)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            fixtures.keys().cloned().collect::<BTreeSet<_>>(),
+            authorized,
+            "synthetic retirement fixtures must cover every authorized path"
+        );
+        fixtures
     }
 
     fn retirement_candidate_blobs(
@@ -2499,6 +2712,27 @@ mod tests {
                         && path == W5_BROKER_WIRE_PATH
                 })
         );
+    }
+
+    #[test]
+    fn canonical_retirement_fixtures_ignore_current_tree_operation_state() {
+        let policy = policy();
+        let retirement = &policy.w5_contract_retirements[0];
+        let synthetic_parent = retirement_parent_blobs(retirement);
+        let synthetic_candidate = retirement_candidate_blobs(retirement, &synthetic_parent);
+        let simulated_current_trees = [&synthetic_parent, &synthetic_candidate];
+        let states = simulated_current_trees.map(|current| {
+            String::from_utf8_lossy(current.get(W5_BROKER_WIRE_PATH).unwrap())
+                .contains("GuestControlSign")
+        });
+        assert_eq!(states, [true, false]);
+
+        for _current_tree in simulated_current_trees {
+            let parent = retirement_parent_blobs(retirement);
+            let candidate = retirement_candidate_blobs(retirement, &parent);
+            verify_w5_contract_retirement_contents(retirement, &parent, &candidate)
+                .expect("tree-independent canonical retirement fixtures");
+        }
     }
 
     fn assert_retirement_mutation_rejected(

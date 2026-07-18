@@ -188,6 +188,8 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Stabilized guest-signing retirement policy tests with canonical synthetic
+  parent fixtures that remain valid before and after the retirement lands.
 - Preserved the stable broker request wire shape after retiring legacy signing
   without allowing the resulting variant-size lint to break strict builds.
 - Allowed initial guest bootstrap to establish and return a new guest identity
