@@ -78,6 +78,8 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Authorized the broker's direct generated-service dependency feature alongside
+  its credential and broker contract features.
 - Bound the public daemon handshake fingerprint to ordered, domain-separated
   daemon and proxied guest package descriptors while retaining a separate direct
   guest fingerprint.

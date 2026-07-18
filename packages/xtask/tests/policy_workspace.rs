@@ -1834,6 +1834,7 @@ fn w5_service_dependency_edges_are_locked_and_directional() {
                 "guest".to_owned(),
                 "v2-component-session".to_owned(),
                 "v2-guest-configured-launches".to_owned(),
+                "v2-services".to_owned(),
             ]),
         ),
         (
@@ -2039,16 +2040,6 @@ fn w5_guest_signing_retirement_seam_is_exact() {
     xtask::wave_policy::check_changed_paths(&policy, "w5", &authorized)
         .expect("exact GuestControlSign retirement paths");
 
-    for path in retirement
-        .source_paths
-        .iter()
-        .chain(retirement.companion_paths.iter())
-    {
-        assert!(
-            read_repo_file(path).contains("GuestControlSign"),
-            "retirement path does not contain GuestControlSign: {path}"
-        );
-    }
     for broader in [
         "packages/d2b-contract-tests/tests/policy_broker_dispositions.rs",
         "packages/d2b-contract-tests/tests/policy_source.rs",

@@ -504,7 +504,8 @@
         "broker",
         "guest",
         "v2-component-session",
-        "v2-guest-configured-launches"
+        "v2-guest-configured-launches",
+        "v2-services"
       ]
     }
   ],
