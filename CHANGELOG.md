@@ -188,6 +188,8 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Preserved the stable broker request wire shape after retiring legacy signing
+  without allowing the resulting variant-size lint to break strict builds.
 - Allowed initial guest bootstrap to establish and return a new guest identity
   while requiring enrolled reconnects to match the pinned identity and public key.
 - Bound the guest-control signing retirement exception to a parent-authoritative,

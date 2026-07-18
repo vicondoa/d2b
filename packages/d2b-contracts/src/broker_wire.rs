@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", content = "payload")]
+#[allow(clippy::large_enum_variant)] // Preserve the stable internally tagged broker wire shape.
 pub enum BrokerRequest {
     ApplyNftables(ApplyNftablesRequest),
     ApplyNmUnmanaged(ApplyNmUnmanagedRequest),
