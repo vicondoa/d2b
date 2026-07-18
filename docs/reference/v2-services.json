@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 7,
+  "schemaVersion": 8,
   "services": [
     {
       "package": "d2b.daemon.v2",
@@ -186,7 +186,7 @@
     {
       "package": "d2b.guest.v2",
       "service": "GuestService",
-      "schemaFingerprint": "9358614db1a1384cc9cd7ec21b916d3ce5e6042f1eb006fde537399c39079694",
+      "schemaFingerprint": "e6d2fd47db903deff84b5b9cb58a0aed17e2f6ef43010182925890878a15dd3d",
       "methods": [
         {
           "name": "Bootstrap",

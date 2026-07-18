@@ -28,6 +28,7 @@ use d2b_contracts::v2_services::{
     validate_terminal_open_response_for_request,
 };
 use protobuf::{Enum, EnumOrUnknown, Message, MessageField};
+use sha2::{Digest, Sha256};
 
 const TTRPC_SOURCES: &[(&str, &str, &str)] = &[
     (
@@ -1425,7 +1426,7 @@ fn inventory_fixture_and_schema_are_local_and_strict() {
 }
 
 #[test]
-fn public_daemon_and_direct_guest_fingerprints_are_fixed_and_distinct() {
+fn daemon_guest_activation_fingerprints_are_fixed_and_distinct() {
     fn hex(bytes: [u8; 32]) -> String {
         bytes.iter().map(|byte| format!("{byte:02x}")).collect()
     }
@@ -1438,13 +1439,21 @@ fn public_daemon_and_direct_guest_fingerprints_are_fixed_and_distinct() {
         .iter()
         .find(|service| service.package == "d2b.guest.v2")
         .unwrap();
+    let activation = SERVICE_INVENTORY
+        .iter()
+        .find(|service| service.package == "d2b.activation.v2")
+        .unwrap();
     assert_eq!(
         hex(public_daemon_schema_fingerprint()),
         "4b2834c89162e5a2c17ea879052c066fd546cdc440d1473955a99e2d9521a54a"
     );
     assert_eq!(
         hex(service_schema_fingerprint(guest)),
-        "9358614db1a1384cc9cd7ec21b916d3ce5e6042f1eb006fde537399c39079694"
+        "e6d2fd47db903deff84b5b9cb58a0aed17e2f6ef43010182925890878a15dd3d"
+    );
+    assert_eq!(
+        hex(service_schema_fingerprint(activation)),
+        "ca29e72948be3be0e19feead1ae7399d61dad1e67ff04cabf67d7510df025e4b"
     );
     assert_eq!(
         service_schema_fingerprint(daemon),
@@ -1454,7 +1463,39 @@ fn public_daemon_and_direct_guest_fingerprints_are_fixed_and_distinct() {
         service_schema_fingerprint(daemon),
         service_schema_fingerprint(guest)
     );
-    assert_eq!(service_inventory_document().schema_version, 7);
+    assert_eq!(service_inventory_document().schema_version, 8);
+}
+
+#[test]
+fn guest_and_activation_generated_bindings_are_byte_stable() {
+    for (name, bytes, expected) in [
+        (
+            "guest.rs",
+            include_bytes!("../src/generated_v2_services/guest.rs").as_slice(),
+            "88c9d5610f7726bdcfa69ffe50bbb554b9603ffa74990a56ad029a1e54aaa175",
+        ),
+        (
+            "guest_ttrpc.rs",
+            include_bytes!("../src/generated_v2_services/guest_ttrpc.rs").as_slice(),
+            "a395ded5b13c11687695f6cd7111224a940c25d24d3fb76bc6c6c32437a0e3ad",
+        ),
+        (
+            "activation.rs",
+            include_bytes!("../src/generated_v2_services/activation.rs").as_slice(),
+            "c95ef1c1e9cd52a75204fd36c73e695a1f12ef9b08ff4d8fe9cf3896c7164131",
+        ),
+        (
+            "activation_ttrpc.rs",
+            include_bytes!("../src/generated_v2_services/activation_ttrpc.rs").as_slice(),
+            "e4ab08650b8e41619aca5a851b7529a4fb0925608064764e6d9ee17bb0901b02",
+        ),
+    ] {
+        let actual = Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        assert_eq!(actual, expected, "{name}");
+    }
 }
 
 #[test]

@@ -78,6 +78,9 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Bound the authenticated direct guest handshake fingerprint to ordered guest
+  and system-activation service descriptors while keeping the public daemon
+  proxy surface unchanged.
 - Authorized d2bd's exact private configured-launch codec feature alongside its
   existing unsafe-local and provider contract features.
 - Authorized the broker's direct generated-service dependency feature alongside

@@ -20,7 +20,8 @@ use d2b_contracts::v2_component_session::{
     TransportClass,
 };
 use d2b_contracts::v2_services::{
-    SERVICE_INVENTORY, public_daemon_schema_fingerprint, service_schema_fingerprint,
+    SERVICE_INVENTORY, direct_guest_schema_fingerprint, public_daemon_schema_fingerprint,
+    service_schema_fingerprint,
 };
 use d2b_session::{
     AttachmentPayload, AttachmentValidationError, BootstrapAdmission, BootstrapPsk,
@@ -131,6 +132,15 @@ fn public(private: &[u8; 32]) -> [u8; 32] {
     let mut dh = DefaultResolver.resolve_dh(&DHChoice::Curve25519).unwrap();
     dh.set(private);
     dh.pubkey().try_into().unwrap()
+}
+
+fn schema_fingerprint(hex: &str) -> [u8; 32] {
+    assert_eq!(hex.len(), 64);
+    let mut fingerprint = [0; 32];
+    for (index, byte) in fingerprint.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&hex[index * 2..index * 2 + 2], 16).unwrap();
+    }
+    fingerprint
 }
 
 fn credentials(profile: NoiseProfile) -> (HandshakeCredentials, HandshakeCredentials) {
@@ -287,6 +297,27 @@ fn public_daemon_handshake_rejects_a_guest_only_schema_peer() {
         .encode();
     assert_eq!(
         negotiate_offer(&preface, &encoded, &guest_only_peer)
+            .unwrap_err()
+            .code(),
+        SessionErrorCode::SchemaMismatch
+    );
+}
+
+#[test]
+fn direct_guest_handshake_rejects_a_guest_service_only_schema_peer() {
+    let mut direct_guest_offer = offer(NoiseProfile::Ikpsk2_25519ChaChaPolySha256);
+    direct_guest_offer.schema_fingerprint = direct_guest_schema_fingerprint();
+    negotiated(&direct_guest_offer);
+
+    let mut guest_service_only_peer = policy(&direct_guest_offer);
+    guest_service_only_peer.schema_fingerprint =
+        schema_fingerprint("9358614db1a1384cc9cd7ec21b916d3ce5e6042f1eb006fde537399c39079694");
+    let encoded = direct_guest_offer.encode_canonical().unwrap();
+    let preface = d2b_session::contract::ComponentSessionPreface::new(encoded.len())
+        .unwrap()
+        .encode();
+    assert_eq!(
+        negotiate_offer(&preface, &encoded, &guest_service_only_peer)
             .unwrap_err()
             .code(),
         SessionErrorCode::SchemaMismatch

@@ -482,7 +482,7 @@ pub struct MethodDocument {
 
 pub fn service_inventory_document() -> ServiceInventoryDocument {
     ServiceInventoryDocument {
-        schema_version: 7,
+        schema_version: 8,
         services: SERVICE_INVENTORY
             .iter()
             .map(|service| ServiceDocument {
@@ -510,6 +510,9 @@ pub fn service_schema_fingerprint(service: &ServiceSpec) -> [u8; 32] {
     if service.package == "d2b.daemon.v2" {
         return public_daemon_schema_fingerprint();
     }
+    if service.package == "d2b.guest.v2" {
+        return direct_guest_schema_fingerprint();
+    }
     direct_service_schema_fingerprint(service)
 }
 
@@ -522,32 +525,69 @@ pub fn public_daemon_schema_fingerprint() -> [u8; 32] {
         .iter()
         .find(|service| service.package == "d2b.guest.v2")
         .expect("guest service inventory");
-    public_endpoint_fingerprint(&[
-        PackageSchemaDescriptor {
-            role: "daemon-service",
-            service: daemon,
-            proto: include_bytes!("../proto/v2/daemon.proto"),
-            dependencies: &[
-                ("d2b.common.v2", include_bytes!("../proto/v2/common.proto")),
-                (
-                    "d2b.terminal.v2",
-                    include_bytes!("../proto/v2/terminal.proto"),
-                ),
-            ],
-        },
-        PackageSchemaDescriptor {
-            role: "guest-proxy",
-            service: guest,
-            proto: include_bytes!("../proto/v2/guest.proto"),
-            dependencies: &[
-                ("d2b.common.v2", include_bytes!("../proto/v2/common.proto")),
-                (
-                    "d2b.terminal.v2",
-                    include_bytes!("../proto/v2/terminal.proto"),
-                ),
-            ],
-        },
-    ])
+    ordered_endpoint_fingerprint(
+        b"d2b-public-endpoint-schema-v1\0",
+        &[
+            PackageSchemaDescriptor {
+                role: "daemon-service",
+                service: daemon,
+                proto: include_bytes!("../proto/v2/daemon.proto"),
+                dependencies: &[
+                    ("d2b.common.v2", include_bytes!("../proto/v2/common.proto")),
+                    (
+                        "d2b.terminal.v2",
+                        include_bytes!("../proto/v2/terminal.proto"),
+                    ),
+                ],
+            },
+            PackageSchemaDescriptor {
+                role: "guest-proxy",
+                service: guest,
+                proto: include_bytes!("../proto/v2/guest.proto"),
+                dependencies: &[
+                    ("d2b.common.v2", include_bytes!("../proto/v2/common.proto")),
+                    (
+                        "d2b.terminal.v2",
+                        include_bytes!("../proto/v2/terminal.proto"),
+                    ),
+                ],
+            },
+        ],
+    )
+}
+
+pub fn direct_guest_schema_fingerprint() -> [u8; 32] {
+    let guest = SERVICE_INVENTORY
+        .iter()
+        .find(|service| service.package == "d2b.guest.v2")
+        .expect("guest service inventory");
+    let activation = SERVICE_INVENTORY
+        .iter()
+        .find(|service| service.package == "d2b.activation.v2")
+        .expect("activation service inventory");
+    ordered_endpoint_fingerprint(
+        b"d2b-direct-guest-endpoint-schema-v1\0",
+        &[
+            PackageSchemaDescriptor {
+                role: "guest-service",
+                service: guest,
+                proto: include_bytes!("../proto/v2/guest.proto"),
+                dependencies: &[
+                    ("d2b.common.v2", include_bytes!("../proto/v2/common.proto")),
+                    (
+                        "d2b.terminal.v2",
+                        include_bytes!("../proto/v2/terminal.proto"),
+                    ),
+                ],
+            },
+            PackageSchemaDescriptor {
+                role: "activation-service",
+                service: activation,
+                proto: include_bytes!("../proto/v2/activation.proto"),
+                dependencies: &[("d2b.common.v2", include_bytes!("../proto/v2/common.proto"))],
+            },
+        ],
+    )
 }
 
 fn direct_service_schema_fingerprint(service: &ServiceSpec) -> [u8; 32] {
@@ -599,9 +639,12 @@ struct PackageSchemaDescriptor<'a> {
     dependencies: &'a [(&'a str, &'a [u8])],
 }
 
-fn public_endpoint_fingerprint(descriptors: &[PackageSchemaDescriptor<'_>]) -> [u8; 32] {
+fn ordered_endpoint_fingerprint(
+    domain: &[u8],
+    descriptors: &[PackageSchemaDescriptor<'_>],
+) -> [u8; 32] {
     let mut digest = Sha256::new();
-    digest.update(b"d2b-public-endpoint-schema-v1\0");
+    digest.update(domain);
     update_framed(
         &mut digest,
         b"package-count",
@@ -738,6 +781,13 @@ mod endpoint_fingerprint_tests {
             .unwrap()
     }
 
+    fn activation() -> &'static ServiceSpec {
+        SERVICE_INVENTORY
+            .iter()
+            .find(|service| service.package == "d2b.activation.v2")
+            .unwrap()
+    }
+
     fn composite(
         daemon: &ServiceSpec,
         guest: &ServiceSpec,
@@ -768,9 +818,54 @@ mod endpoint_fingerprint_tests {
             dependencies: &guest_dependencies,
         };
         if reverse {
-            public_endpoint_fingerprint(&[guest_descriptor, daemon_descriptor])
+            ordered_endpoint_fingerprint(
+                b"d2b-public-endpoint-schema-v1\0",
+                &[guest_descriptor, daemon_descriptor],
+            )
         } else {
-            public_endpoint_fingerprint(&[daemon_descriptor, guest_descriptor])
+            ordered_endpoint_fingerprint(
+                b"d2b-public-endpoint-schema-v1\0",
+                &[daemon_descriptor, guest_descriptor],
+            )
+        }
+    }
+
+    fn direct_guest_composite(
+        guest: &ServiceSpec,
+        activation: &ServiceSpec,
+        guest_proto: &[u8],
+        activation_proto: &[u8],
+        common_proto: &[u8],
+        terminal_proto: &[u8],
+        reverse: bool,
+    ) -> [u8; 32] {
+        let guest_dependencies = [
+            ("d2b.common.v2", common_proto),
+            ("d2b.terminal.v2", terminal_proto),
+        ];
+        let activation_dependencies = [("d2b.common.v2", common_proto)];
+        let guest_descriptor = PackageSchemaDescriptor {
+            role: "guest-service",
+            service: guest,
+            proto: guest_proto,
+            dependencies: &guest_dependencies,
+        };
+        let activation_descriptor = PackageSchemaDescriptor {
+            role: "activation-service",
+            service: activation,
+            proto: activation_proto,
+            dependencies: &activation_dependencies,
+        };
+        if reverse {
+            ordered_endpoint_fingerprint(
+                b"d2b-direct-guest-endpoint-schema-v1\0",
+                &[activation_descriptor, guest_descriptor],
+            )
+        } else {
+            ordered_endpoint_fingerprint(
+                b"d2b-direct-guest-endpoint-schema-v1\0",
+                &[guest_descriptor, activation_descriptor],
+            )
         }
     }
 
@@ -909,15 +1004,118 @@ mod endpoint_fingerprint_tests {
     }
 
     #[test]
-    fn direct_guest_fingerprint_remains_separate_from_public_endpoint() {
+    fn direct_guest_fingerprint_binds_activation_and_remains_separate_from_public_endpoint() {
+        let guest_proto = include_bytes!("../proto/v2/guest.proto");
+        let activation_proto = include_bytes!("../proto/v2/activation.proto");
+        let common_proto = include_bytes!("../proto/v2/common.proto");
+        let terminal_proto = include_bytes!("../proto/v2/terminal.proto");
+        let baseline = direct_guest_schema_fingerprint();
         assert_eq!(
             service_schema_fingerprint(guest()),
-            direct_service_schema_fingerprint(guest())
+            direct_guest_schema_fingerprint()
+        );
+        assert_eq!(
+            baseline,
+            direct_guest_composite(
+                guest(),
+                activation(),
+                guest_proto,
+                activation_proto,
+                common_proto,
+                terminal_proto,
+                false,
+            )
+        );
+        let mut changed_activation = activation_proto.to_vec();
+        changed_activation.push(b'\n');
+        assert_ne!(
+            baseline,
+            direct_guest_composite(
+                guest(),
+                activation(),
+                guest_proto,
+                &changed_activation,
+                common_proto,
+                terminal_proto,
+                false,
+            )
+        );
+        let mut changed_guest = guest_proto.to_vec();
+        changed_guest.push(b'\n');
+        assert_ne!(
+            baseline,
+            direct_guest_composite(
+                guest(),
+                activation(),
+                &changed_guest,
+                activation_proto,
+                common_proto,
+                terminal_proto,
+                false,
+            )
+        );
+        let mut changed_terminal = terminal_proto.to_vec();
+        changed_terminal.push(b'\n');
+        assert_ne!(
+            baseline,
+            direct_guest_composite(
+                guest(),
+                activation(),
+                guest_proto,
+                activation_proto,
+                common_proto,
+                &changed_terminal,
+                false,
+            )
+        );
+        let mut changed_common = common_proto.to_vec();
+        changed_common.push(b'\n');
+        assert_ne!(
+            baseline,
+            direct_guest_composite(
+                guest(),
+                activation(),
+                guest_proto,
+                activation_proto,
+                &changed_common,
+                terminal_proto,
+                false,
+            )
+        );
+        let mut activation_methods = activation().methods.to_vec();
+        activation_methods[0].max_lifetime_ms -= 1;
+        let activation_methods = Box::leak(activation_methods.into_boxed_slice());
+        let changed_activation = ServiceSpec {
+            methods: activation_methods,
+            ..*activation()
+        };
+        assert_ne!(
+            baseline,
+            direct_guest_composite(
+                guest(),
+                &changed_activation,
+                guest_proto,
+                activation_proto,
+                common_proto,
+                terminal_proto,
+                false,
+            )
         );
         assert_ne!(
-            public_daemon_schema_fingerprint(),
-            service_schema_fingerprint(guest())
+            baseline,
+            direct_guest_composite(
+                guest(),
+                activation(),
+                guest_proto,
+                activation_proto,
+                common_proto,
+                terminal_proto,
+                true,
+            )
         );
+        assert_ne!(baseline, direct_service_schema_fingerprint(guest()));
+        assert_ne!(baseline, service_schema_fingerprint(activation()));
+        assert_ne!(baseline, public_daemon_schema_fingerprint());
         assert_ne!(
             public_daemon_schema_fingerprint(),
             direct_service_schema_fingerprint(daemon())

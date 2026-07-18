@@ -136,8 +136,14 @@ descriptor is domain-separated and length-prefixed and covers package/service
 identity, ordered methods, canonical package protobuf, and ordered common and
 terminal protobuf dependencies. Daemon-only, guest-only, method, message, or
 dependency drift therefore changes the public handshake identity without
-ambiguous byte concatenation. The direct daemon-to-guest `GuestV2` fingerprint
-remains a separate guest-service identity.
+ambiguous byte concatenation. That public endpoint does not proxy
+`ActivationService`, so activation-only drift does not change its fingerprint.
+
+The authenticated direct daemon-to-guest `GuestV2` endpoint instead hashes an
+ordered `guest-service`, then `activation-service`, descriptor list. The guest
+descriptor binds common and terminal dependencies; the activation descriptor
+binds its common dependency. Activation-only method or message drift therefore
+fails the direct guest handshake without widening the public daemon surface.
 
 ### Shared terminal streams
 
