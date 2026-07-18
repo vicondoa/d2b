@@ -1,4 +1,5 @@
 use super::*;
+use sha2::{Digest, Sha256};
 
 pub const MAX_GUEST_CAPABILITIES: usize = 32;
 pub const MAX_GUEST_EXEC_LIST_ENTRIES: usize = 32;
@@ -114,6 +115,12 @@ fn validate_capabilities(
     Ok(())
 }
 
+fn public_key_digest_matches(public_key: &[u8], digest: &[u8]) -> bool {
+    required_digest(public_key)
+        && required_digest(digest)
+        && Sha256::digest(public_key).as_slice() == digest
+}
+
 impl StrictWireMessage for guest::GuestBootstrapRequest {
     fn validate_wire(&self, requires_idempotency: bool) -> Result<(), ServiceContractError> {
         reject_unknown(self)?;
@@ -139,7 +146,13 @@ impl StrictWireMessage for guest::GuestReconnectRequest {
         if self.expected_generation == 0
             || self.expected_generation != metadata.session_generation
             || !bounded_opaque(&self.guest_identity_handle, MAX_SERVICE_STRING_BYTES)
+            || !required_digest(&self.expected_guest_identity_digest)
+            || !required_digest(&self.expected_guest_static_public_key)
             || !required_digest(&self.expected_guest_static_public_key_digest)
+            || !public_key_digest_matches(
+                &self.expected_guest_static_public_key,
+                &self.expected_guest_static_public_key_digest,
+            )
             || !required_digest(&self.expected_parent_static_public_key_digest)
         {
             return Err(ServiceContractError::InvalidOperationInput);
@@ -165,7 +178,13 @@ impl StrictWireMessage for guest::GuestSessionResponse {
             common::Outcome::OUTCOME_SUCCEEDED => {
                 if self.error.is_some()
                     || !bounded_opaque(&self.guest_identity_handle, MAX_SERVICE_STRING_BYTES)
+                    || !required_digest(&self.guest_identity_digest)
+                    || !required_digest(&self.guest_static_public_key)
                     || !required_digest(&self.guest_static_public_key_digest)
+                    || !public_key_digest_matches(
+                        &self.guest_static_public_key,
+                        &self.guest_static_public_key_digest,
+                    )
                     || !required_digest(&self.parent_static_public_key_digest)
                 {
                     return Err(ServiceContractError::InconsistentResponse);
@@ -176,6 +195,8 @@ impl StrictWireMessage for guest::GuestSessionResponse {
             | common::Outcome::OUTCOME_CANCELLED
             | common::Outcome::OUTCOME_FAILED => {
                 if !self.guest_identity_handle.is_empty()
+                    || !self.guest_identity_digest.is_empty()
+                    || !self.guest_static_public_key.is_empty()
                     || !self.guest_static_public_key_digest.is_empty()
                     || !self.parent_static_public_key_digest.is_empty()
                     || !self.capabilities.is_empty()
@@ -197,7 +218,7 @@ fn validate_guest_session_response(
     context: &guest::GuestOperationContext,
     expected_generation: u64,
     expected_parent_digest: &[u8],
-    expected_guest_digest: Option<&[u8]>,
+    expected_guest_binding: Option<(&[u8], &[u8], &[u8])>,
     response: &guest::GuestSessionResponse,
 ) -> Result<(), ServiceContractError> {
     response.validate_wire(false)?;
@@ -211,8 +232,13 @@ fn validate_guest_session_response(
     }
     if response.outcome.enum_value().ok() == Some(common::Outcome::OUTCOME_SUCCEEDED)
         && (response.parent_static_public_key_digest != expected_parent_digest
-            || expected_guest_digest
-                .is_some_and(|digest| response.guest_static_public_key_digest != digest))
+            || expected_guest_binding.is_some_and(
+                |(identity_digest, public_key, public_key_digest)| {
+                    response.guest_identity_digest != identity_digest
+                        || response.guest_static_public_key != public_key
+                        || response.guest_static_public_key_digest != public_key_digest
+                },
+            ))
     {
         return Err(ServiceContractError::InconsistentResponse);
     }
@@ -253,7 +279,11 @@ pub fn validate_guest_session_response_for_reconnect(
         guest_context(&request.context)?,
         request.expected_generation,
         &request.expected_parent_static_public_key_digest,
-        Some(&request.expected_guest_static_public_key_digest),
+        Some((
+            &request.expected_guest_identity_digest,
+            &request.expected_guest_static_public_key,
+            &request.expected_guest_static_public_key_digest,
+        )),
         response,
     )?;
     if response.outcome.enum_value().ok() == Some(common::Outcome::OUTCOME_SUCCEEDED)

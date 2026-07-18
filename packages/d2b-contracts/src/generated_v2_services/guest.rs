@@ -644,6 +644,10 @@ pub struct GuestReconnectRequest {
     pub expected_parent_static_public_key_digest: ::std::vec::Vec<u8>,
     // @@protoc_insertion_point(field:d2b.guest.v2.GuestReconnectRequest.required_capabilities)
     pub required_capabilities: ::std::vec::Vec<::protobuf::EnumOrUnknown<GuestCapability>>,
+    // @@protoc_insertion_point(field:d2b.guest.v2.GuestReconnectRequest.expected_guest_identity_digest)
+    pub expected_guest_identity_digest: ::std::vec::Vec<u8>,
+    // @@protoc_insertion_point(field:d2b.guest.v2.GuestReconnectRequest.expected_guest_static_public_key)
+    pub expected_guest_static_public_key: ::std::vec::Vec<u8>,
     // special fields
     // @@protoc_insertion_point(special_field:d2b.guest.v2.GuestReconnectRequest.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -661,7 +665,7 @@ impl GuestReconnectRequest {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(6);
+        let mut fields = ::std::vec::Vec::with_capacity(8);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, GuestOperationContext>(
             "context",
@@ -692,6 +696,16 @@ impl GuestReconnectRequest {
             "required_capabilities",
             |m: &GuestReconnectRequest| { &m.required_capabilities },
             |m: &mut GuestReconnectRequest| { &mut m.required_capabilities },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "expected_guest_identity_digest",
+            |m: &GuestReconnectRequest| { &m.expected_guest_identity_digest },
+            |m: &mut GuestReconnectRequest| { &mut m.expected_guest_identity_digest },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "expected_guest_static_public_key",
+            |m: &GuestReconnectRequest| { &m.expected_guest_static_public_key },
+            |m: &mut GuestReconnectRequest| { &mut m.expected_guest_static_public_key },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<GuestReconnectRequest>(
             "GuestReconnectRequest",
@@ -732,6 +746,12 @@ impl ::protobuf::Message for GuestReconnectRequest {
                 50 => {
                     ::protobuf::rt::read_repeated_packed_enum_or_unknown_into(is, &mut self.required_capabilities)?
                 },
+                58 => {
+                    self.expected_guest_identity_digest = is.read_bytes()?;
+                },
+                66 => {
+                    self.expected_guest_static_public_key = is.read_bytes()?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -761,6 +781,12 @@ impl ::protobuf::Message for GuestReconnectRequest {
             my_size += ::protobuf::rt::bytes_size(5, &self.expected_parent_static_public_key_digest);
         }
         my_size += ::protobuf::rt::vec_packed_enum_or_unknown_size(6, &self.required_capabilities);
+        if !self.expected_guest_identity_digest.is_empty() {
+            my_size += ::protobuf::rt::bytes_size(7, &self.expected_guest_identity_digest);
+        }
+        if !self.expected_guest_static_public_key.is_empty() {
+            my_size += ::protobuf::rt::bytes_size(8, &self.expected_guest_static_public_key);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -783,6 +809,12 @@ impl ::protobuf::Message for GuestReconnectRequest {
             os.write_bytes(5, &self.expected_parent_static_public_key_digest)?;
         }
         os.write_repeated_packed_enum_or_unknown(6, &self.required_capabilities)?;
+        if !self.expected_guest_identity_digest.is_empty() {
+            os.write_bytes(7, &self.expected_guest_identity_digest)?;
+        }
+        if !self.expected_guest_static_public_key.is_empty() {
+            os.write_bytes(8, &self.expected_guest_static_public_key)?;
+        }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -806,6 +838,8 @@ impl ::protobuf::Message for GuestReconnectRequest {
         self.expected_guest_static_public_key_digest.clear();
         self.expected_parent_static_public_key_digest.clear();
         self.required_capabilities.clear();
+        self.expected_guest_identity_digest.clear();
+        self.expected_guest_static_public_key.clear();
         self.special_fields.clear();
     }
 
@@ -817,6 +851,8 @@ impl ::protobuf::Message for GuestReconnectRequest {
             expected_guest_static_public_key_digest: ::std::vec::Vec::new(),
             expected_parent_static_public_key_digest: ::std::vec::Vec::new(),
             required_capabilities: ::std::vec::Vec::new(),
+            expected_guest_identity_digest: ::std::vec::Vec::new(),
+            expected_guest_static_public_key: ::std::vec::Vec::new(),
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -862,6 +898,10 @@ pub struct GuestSessionResponse {
     pub capabilities: ::std::vec::Vec<::protobuf::EnumOrUnknown<GuestCapability>>,
     // @@protoc_insertion_point(field:d2b.guest.v2.GuestSessionResponse.error)
     pub error: ::protobuf::MessageField<super::common::ErrorEnvelope>,
+    // @@protoc_insertion_point(field:d2b.guest.v2.GuestSessionResponse.guest_identity_digest)
+    pub guest_identity_digest: ::std::vec::Vec<u8>,
+    // @@protoc_insertion_point(field:d2b.guest.v2.GuestSessionResponse.guest_static_public_key)
+    pub guest_static_public_key: ::std::vec::Vec<u8>,
     // special fields
     // @@protoc_insertion_point(special_field:d2b.guest.v2.GuestSessionResponse.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -879,7 +919,7 @@ impl GuestSessionResponse {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(9);
+        let mut fields = ::std::vec::Vec::with_capacity(11);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "outcome",
@@ -925,6 +965,16 @@ impl GuestSessionResponse {
             "error",
             |m: &GuestSessionResponse| { &m.error },
             |m: &mut GuestSessionResponse| { &mut m.error },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "guest_identity_digest",
+            |m: &GuestSessionResponse| { &m.guest_identity_digest },
+            |m: &mut GuestSessionResponse| { &mut m.guest_identity_digest },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "guest_static_public_key",
+            |m: &GuestSessionResponse| { &m.guest_static_public_key },
+            |m: &mut GuestSessionResponse| { &mut m.guest_static_public_key },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<GuestSessionResponse>(
             "GuestSessionResponse",
@@ -974,6 +1024,12 @@ impl ::protobuf::Message for GuestSessionResponse {
                 74 => {
                     ::protobuf::rt::read_singular_message_into_field(is, &mut self.error)?;
                 },
+                82 => {
+                    self.guest_identity_digest = is.read_bytes()?;
+                },
+                90 => {
+                    self.guest_static_public_key = is.read_bytes()?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -1012,6 +1068,12 @@ impl ::protobuf::Message for GuestSessionResponse {
             let len = v.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
         }
+        if !self.guest_identity_digest.is_empty() {
+            my_size += ::protobuf::rt::bytes_size(10, &self.guest_identity_digest);
+        }
+        if !self.guest_static_public_key.is_empty() {
+            my_size += ::protobuf::rt::bytes_size(11, &self.guest_static_public_key);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -1043,6 +1105,12 @@ impl ::protobuf::Message for GuestSessionResponse {
         if let Some(v) = self.error.as_ref() {
             ::protobuf::rt::write_message_field_with_cached_size(9, v, os)?;
         }
+        if !self.guest_identity_digest.is_empty() {
+            os.write_bytes(10, &self.guest_identity_digest)?;
+        }
+        if !self.guest_static_public_key.is_empty() {
+            os.write_bytes(11, &self.guest_static_public_key)?;
+        }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -1069,6 +1137,8 @@ impl ::protobuf::Message for GuestSessionResponse {
         self.parent_static_public_key_digest.clear();
         self.capabilities.clear();
         self.error.clear();
+        self.guest_identity_digest.clear();
+        self.guest_static_public_key.clear();
         self.special_fields.clear();
     }
 
@@ -1083,6 +1153,8 @@ impl ::protobuf::Message for GuestSessionResponse {
             parent_static_public_key_digest: ::std::vec::Vec::new(),
             capabilities: ::std::vec::Vec::new(),
             error: ::protobuf::MessageField::none(),
+            guest_identity_digest: ::std::vec::Vec::new(),
+            guest_static_public_key: ::std::vec::Vec::new(),
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -9221,7 +9293,7 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     _generation\x18\x02\x20\x01(\x04R\x12expectedGeneration\x12U\n(expected_\
     parent_static_public_key_digest\x18\x03\x20\x01(\x0cR#expectedParentStat\
     icPublicKeyDigest\x12T\n\x16requested_capabilities\x18\x04\x20\x03(\x0e2\
-    \x1d.d2b.guest.v2.GuestCapabilityR\x15requestedCapabilities\"\xbb\x03\n\
+    \x1d.d2b.guest.v2.GuestCapabilityR\x15requestedCapabilities\"\xc8\x04\n\
     \x15GuestReconnectRequest\x12=\n\x07context\x18\x01\x20\x01(\x0b2#.d2b.g\
     uest.v2.GuestOperationContextR\x07context\x12/\n\x13expected_generation\
     \x18\x02\x20\x01(\x04R\x12expectedGeneration\x122\n\x15guest_identity_ha\
@@ -9230,29 +9302,34 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     eyDigest\x12U\n(expected_parent_static_public_key_digest\x18\x05\x20\x01\
     (\x0cR#expectedParentStaticPublicKeyDigest\x12R\n\x15required_capabiliti\
     es\x18\x06\x20\x03(\x0e2\x1d.d2b.guest.v2.GuestCapabilityR\x14requiredCa\
-    pabilities\"\xee\x03\n\x14GuestSessionResponse\x120\n\x07outcome\x18\x01\
-    \x20\x01(\x0e2\x16.d2b.common.v2.OutcomeR\x07outcome\x12!\n\x0coperation\
-    _id\x18\x02\x20\x01(\tR\x0boperationId\x12-\n\x12session_generation\x18\
-    \x03\x20\x01(\x04R\x11sessionGeneration\x12\x1d\n\nrequest_id\x18\x04\
-    \x20\x01(\x0cR\trequestId\x122\n\x15guest_identity_handle\x18\x05\x20\
-    \x01(\tR\x13guestIdentityHandle\x12B\n\x1eguest_static_public_key_digest\
-    \x18\x06\x20\x01(\x0cR\x1aguestStaticPublicKeyDigest\x12D\n\x1fparent_st\
-    atic_public_key_digest\x18\x07\x20\x01(\x0cR\x1bparentStaticPublicKeyDig\
-    est\x12A\n\x0ccapabilities\x18\x08\x20\x03(\x0e2\x1d.d2b.guest.v2.GuestC\
-    apabilityR\x0ccapabilities\x122\n\x05error\x18\t\x20\x01(\x0b2\x1c.d2b.c\
-    ommon.v2.ErrorEnvelopeR\x05error\"\xe8\x01\n\x16GuestCancelExecRequest\
-    \x12=\n\x07context\x18\x01\x20\x01(\x0b2#.d2b.guest.v2.GuestOperationCon\
-    textR\x07context\x12'\n\x0fresource_handle\x18\x02\x20\x01(\tR\x0eresour\
-    ceHandle\x12)\n\x10control_sequence\x18\x03\x20\x01(\x04R\x0fcontrolSequ\
-    ence\x12;\n\x06reason\x18\x04\x20\x01(\x0e2#.d2b.guest.v2.GuestExecCance\
-    lReasonR\x06reason\"\xe9\x02\n\x17GuestCancelExecResponse\x120\n\x07outc\
-    ome\x18\x01\x20\x01(\x0e2\x16.d2b.common.v2.OutcomeR\x07outcome\x12!\n\
-    \x0coperation_id\x18\x02\x20\x01(\tR\x0boperationId\x12-\n\x12session_ge\
-    neration\x18\x03\x20\x01(\x04R\x11sessionGeneration\x12\x1d\n\nrequest_i\
-    d\x18\x04\x20\x01(\x0cR\trequestId\x12'\n\x0fresource_handle\x18\x05\x20\
-    \x01(\tR\x0eresourceHandle\x12N\n\x0ccancellation\x18\x06\x20\x01(\x0e2*\
-    .d2b.guest.v2.GuestExecCancellationOutcomeR\x0ccancellation\x122\n\x05er\
-    ror\x18\x07\x20\x01(\x0b2\x1c.d2b.common.v2.ErrorEnvelopeR\x05error\"?\n\
+    pabilities\x12C\n\x1eexpected_guest_identity_digest\x18\x07\x20\x01(\x0c\
+    R\x1bexpectedGuestIdentityDigest\x12F\n\x20expected_guest_static_public_\
+    key\x18\x08\x20\x01(\x0cR\x1cexpectedGuestStaticPublicKey\"\xd9\x04\n\
+    \x14GuestSessionResponse\x120\n\x07outcome\x18\x01\x20\x01(\x0e2\x16.d2b\
+    .common.v2.OutcomeR\x07outcome\x12!\n\x0coperation_id\x18\x02\x20\x01(\t\
+    R\x0boperationId\x12-\n\x12session_generation\x18\x03\x20\x01(\x04R\x11s\
+    essionGeneration\x12\x1d\n\nrequest_id\x18\x04\x20\x01(\x0cR\trequestId\
+    \x122\n\x15guest_identity_handle\x18\x05\x20\x01(\tR\x13guestIdentityHan\
+    dle\x12B\n\x1eguest_static_public_key_digest\x18\x06\x20\x01(\x0cR\x1agu\
+    estStaticPublicKeyDigest\x12D\n\x1fparent_static_public_key_digest\x18\
+    \x07\x20\x01(\x0cR\x1bparentStaticPublicKeyDigest\x12A\n\x0ccapabilities\
+    \x18\x08\x20\x03(\x0e2\x1d.d2b.guest.v2.GuestCapabilityR\x0ccapabilities\
+    \x122\n\x05error\x18\t\x20\x01(\x0b2\x1c.d2b.common.v2.ErrorEnvelopeR\
+    \x05error\x122\n\x15guest_identity_digest\x18\n\x20\x01(\x0cR\x13guestId\
+    entityDigest\x125\n\x17guest_static_public_key\x18\x0b\x20\x01(\x0cR\x14\
+    guestStaticPublicKey\"\xe8\x01\n\x16GuestCancelExecRequest\x12=\n\x07con\
+    text\x18\x01\x20\x01(\x0b2#.d2b.guest.v2.GuestOperationContextR\x07conte\
+    xt\x12'\n\x0fresource_handle\x18\x02\x20\x01(\tR\x0eresourceHandle\x12)\
+    \n\x10control_sequence\x18\x03\x20\x01(\x04R\x0fcontrolSequence\x12;\n\
+    \x06reason\x18\x04\x20\x01(\x0e2#.d2b.guest.v2.GuestExecCancelReasonR\
+    \x06reason\"\xe9\x02\n\x17GuestCancelExecResponse\x120\n\x07outcome\x18\
+    \x01\x20\x01(\x0e2\x16.d2b.common.v2.OutcomeR\x07outcome\x12!\n\x0copera\
+    tion_id\x18\x02\x20\x01(\tR\x0boperationId\x12-\n\x12session_generation\
+    \x18\x03\x20\x01(\x04R\x11sessionGeneration\x12\x1d\n\nrequest_id\x18\
+    \x04\x20\x01(\x0cR\trequestId\x12'\n\x0fresource_handle\x18\x05\x20\x01(\
+    \tR\x0eresourceHandle\x12N\n\x0ccancellation\x18\x06\x20\x01(\x0e2*.d2b.\
+    guest.v2.GuestExecCancellationOutcomeR\x0ccancellation\x122\n\x05error\
+    \x18\x07\x20\x01(\x0b2\x1c.d2b.common.v2.ErrorEnvelopeR\x05error\"?\n\
     \x14GuestExecStatusQuery\x12'\n\x0fresource_handle\x18\x01\x20\x01(\tR\
     \x0eresourceHandle\"\x92\x01\n\x12GuestExecWaitQuery\x12'\n\x0fresource_\
     handle\x18\x01\x20\x01(\tR\x0eresourceHandle\x124\n\x16known_state_gener\

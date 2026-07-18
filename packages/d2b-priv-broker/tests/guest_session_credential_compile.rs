@@ -1,6 +1,7 @@
 use d2b_contracts::v2_component_session::{
     BootstrapPskBinding, GUEST_SESSION_CREDENTIAL_V1_WITH_BOOTSTRAP_BYTES,
-    GuestBootstrapCredentialV1, GuestBootstrapPsk, GuestSessionCredentialV1, OperationId,
+    GuestBootstrapCredentialV1, GuestBootstrapPsk, GuestIdentityBindingV1,
+    GuestSessionCredentialV1, OperationId,
 };
 use std::io::{self, Write};
 
@@ -38,8 +39,7 @@ fn broker_can_encode_the_shared_guest_session_credential() {
         7,
         [0x11; 32],
         [0x22; 32],
-        [0x33; 32],
-        [0x44; 32],
+        GuestIdentityBindingV1::UnboundBootstrap,
         Some(bootstrap),
     )
     .unwrap();

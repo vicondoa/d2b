@@ -328,25 +328,47 @@ fn closed_inventory_and_noise_identity_requirements_are_complete() {
     }
 }
 
+fn guest_bootstrap_credential() -> GuestBootstrapCredentialV1 {
+    GuestBootstrapCredentialV1::new(
+        BootstrapPskBinding {
+            operation_id: OperationId::new(vec![0x66; 16]).unwrap(),
+            replay_nonce: [0x77; 32],
+            expires_at_unix_ms: 9_000,
+        },
+        1_000,
+        GuestBootstrapPsk::generate_with(|bytes| {
+            bytes.fill(0x88);
+            Ok(())
+        })
+        .unwrap(),
+    )
+    .unwrap()
+}
+
 fn guest_session_credential(with_bootstrap: bool) -> GuestSessionCredentialV1 {
-    let bootstrap = with_bootstrap.then(|| {
-        GuestBootstrapCredentialV1::new(
-            BootstrapPskBinding {
-                operation_id: OperationId::new(vec![0x66; 16]).unwrap(),
-                replay_nonce: [0x77; 32],
-                expires_at_unix_ms: 9_000,
-            },
-            1_000,
-            GuestBootstrapPsk::generate_with(|bytes| {
-                bytes.fill(0x88);
-                Ok(())
-            })
-            .unwrap(),
-        )
-        .unwrap()
-    });
-    GuestSessionCredentialV1::new(7, [0x11; 32], [0x22; 32], [0x33; 32], [0x44; 32], bootstrap)
-        .unwrap()
+    let bootstrap = with_bootstrap.then(guest_bootstrap_credential);
+    GuestSessionCredentialV1::new(
+        7,
+        [0x11; 32],
+        [0x22; 32],
+        GuestIdentityBindingV1::Enrolled {
+            guest_identity_digest: [0x33; 32],
+            guest_static_public_key: [0x44; 32],
+        },
+        bootstrap,
+    )
+    .unwrap()
+}
+
+fn unbound_guest_session_credential() -> GuestSessionCredentialV1 {
+    GuestSessionCredentialV1::new(
+        7,
+        [0x11; 32],
+        [0x22; 32],
+        GuestIdentityBindingV1::UnboundBootstrap,
+        Some(guest_bootstrap_credential()),
+    )
+    .unwrap()
 }
 
 #[test]
@@ -363,8 +385,8 @@ fn guest_session_credential_has_canonical_round_trips_and_fixed_vectors() {
     assert_eq!(base_decoded.session_generation(), 7);
     assert_eq!(base_decoded.parent_static_public_key(), &[0x11; 32]);
     assert_eq!(base_decoded.channel_binding(), &[0x22; 32]);
-    assert_eq!(base_decoded.guest_identity_digest(), &[0x33; 32]);
-    assert_eq!(base_decoded.guest_static_public_key(), &[0x44; 32]);
+    assert_eq!(base_decoded.guest_identity_digest(), Some(&[0x33; 32]));
+    assert_eq!(base_decoded.guest_static_public_key(), Some(&[0x44; 32]));
     assert!(base_decoded.bootstrap().is_none());
 
     let credential = guest_session_credential(true);
@@ -412,6 +434,51 @@ fn guest_session_credential_has_canonical_round_trips_and_fixed_vectors() {
 }
 
 #[test]
+fn guest_session_credential_encodes_only_bootstrap_as_unbound() {
+    let credential = unbound_guest_session_credential();
+    let encoded = credential.encode().unwrap();
+    assert_eq!(
+        u16::from_be_bytes(encoded.as_slice()[12..14].try_into().unwrap()),
+        GUEST_SESSION_CREDENTIAL_FLAG_BOOTSTRAP
+            | GUEST_SESSION_CREDENTIAL_FLAG_UNBOUND_GUEST_IDENTITY
+    );
+    assert_eq!(&encoded.as_slice()[92..156], &[0; 64]);
+    assert_eq!(
+        encoded.as_slice().len(),
+        GUEST_SESSION_CREDENTIAL_V1_WITH_BOOTSTRAP_BYTES
+    );
+    let mut expected = guest_session_credential(true)
+        .encode()
+        .unwrap()
+        .as_slice()
+        .to_vec();
+    expected[12..14].copy_from_slice(
+        &(GUEST_SESSION_CREDENTIAL_FLAG_BOOTSTRAP
+            | GUEST_SESSION_CREDENTIAL_FLAG_UNBOUND_GUEST_IDENTITY)
+            .to_be_bytes(),
+    );
+    expected[92..156].fill(0);
+    assert_eq!(encoded.as_slice(), expected.as_slice());
+
+    let decoded = GuestSessionCredentialV1::decode(encoded.as_slice()).unwrap();
+    assert!(decoded.guest_identity_is_unbound());
+    assert!(decoded.guest_identity_digest().is_none());
+    assert!(decoded.guest_static_public_key().is_none());
+    assert!(decoded.bootstrap().is_some());
+
+    assert!(matches!(
+        GuestSessionCredentialV1::new(
+            7,
+            [0x11; 32],
+            [0x22; 32],
+            GuestIdentityBindingV1::UnboundBootstrap,
+            None,
+        ),
+        Err(GuestSessionCredentialError::InvalidBinding)
+    ));
+}
+
+#[test]
 fn guest_session_credential_rejects_every_noncanonical_shape() {
     let encoded = guest_session_credential(true).encode().unwrap();
     for length in 0..encoded.as_slice().len() {
@@ -432,7 +499,7 @@ fn guest_session_credential_rejects_every_noncanonical_shape() {
         (0, b'X', GuestSessionCredentialError::InvalidMagic),
         (9, 2, GuestSessionCredentialError::UnsupportedSchema),
         (11, 2, GuestSessionCredentialError::UnsupportedVersion),
-        (13, 2, GuestSessionCredentialError::InvalidFlags),
+        (13, 4, GuestSessionCredentialError::InvalidFlags),
         (15, 1, GuestSessionCredentialError::InvalidReserved),
     ] {
         let mut malformed = encoded.as_slice().to_vec();
@@ -502,6 +569,63 @@ fn guest_session_credential_rejects_every_noncanonical_shape() {
     assert_eq!(
         GuestSessionCredentialV1::decode(&reversed_lifetime).unwrap_err(),
         GuestSessionCredentialError::InvalidDeadline
+    );
+
+    let mut unbound_with_enrolled_fields = guest_session_credential(true)
+        .encode()
+        .unwrap()
+        .as_slice()
+        .to_vec();
+    unbound_with_enrolled_fields[12..14].copy_from_slice(
+        &(GUEST_SESSION_CREDENTIAL_FLAG_BOOTSTRAP
+            | GUEST_SESSION_CREDENTIAL_FLAG_UNBOUND_GUEST_IDENTITY)
+            .to_be_bytes(),
+    );
+    assert_eq!(
+        GuestSessionCredentialV1::decode(&unbound_with_enrolled_fields).unwrap_err(),
+        GuestSessionCredentialError::InvalidBinding
+    );
+
+    let mut enrolled_without_binding = guest_session_credential(false)
+        .encode()
+        .unwrap()
+        .as_slice()
+        .to_vec();
+    enrolled_without_binding[92..156].fill(0);
+    assert_eq!(
+        GuestSessionCredentialV1::decode(&enrolled_without_binding).unwrap_err(),
+        GuestSessionCredentialError::InvalidBinding
+    );
+
+    let mut unbound_without_bootstrap = enrolled_without_binding;
+    unbound_without_bootstrap[12..14]
+        .copy_from_slice(&GUEST_SESSION_CREDENTIAL_FLAG_UNBOUND_GUEST_IDENTITY.to_be_bytes());
+    assert_eq!(
+        GuestSessionCredentialV1::decode(&unbound_without_bootstrap).unwrap_err(),
+        GuestSessionCredentialError::InvalidBinding
+    );
+
+    let mut partially_bound_unbound = unbound_guest_session_credential()
+        .encode()
+        .unwrap()
+        .as_slice()
+        .to_vec();
+    partially_bound_unbound[92] = 1;
+    assert_eq!(
+        GuestSessionCredentialV1::decode(&partially_bound_unbound).unwrap_err(),
+        GuestSessionCredentialError::InvalidBinding
+    );
+
+    let mut downgraded_unbound = unbound_guest_session_credential()
+        .encode()
+        .unwrap()
+        .as_slice()
+        .to_vec();
+    downgraded_unbound[12..14]
+        .copy_from_slice(&GUEST_SESSION_CREDENTIAL_FLAG_BOOTSTRAP.to_be_bytes());
+    assert_eq!(
+        GuestSessionCredentialV1::decode(&downgraded_unbound).unwrap_err(),
+        GuestSessionCredentialError::InvalidBinding
     );
 }
 

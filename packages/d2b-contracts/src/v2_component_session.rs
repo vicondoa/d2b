@@ -76,7 +76,8 @@ pub const MAX_GUEST_BOOTSTRAP_CREDENTIAL_LIFETIME_MS: u64 = 5 * 60 * 1_000;
 
 const HANDSHAKE_BINARY_VERSION: u8 = 1;
 const NAMED_STREAM_CHANNEL_MIN: u16 = 0x0100;
-const GUEST_SESSION_CREDENTIAL_FLAG_BOOTSTRAP: u16 = 1;
+pub const GUEST_SESSION_CREDENTIAL_FLAG_BOOTSTRAP: u16 = 1;
+pub const GUEST_SESSION_CREDENTIAL_FLAG_UNBOUND_GUEST_IDENTITY: u16 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
@@ -2126,9 +2127,22 @@ pub struct GuestSessionCredentialV1 {
     session_generation: u64,
     parent_static_public_key: [u8; 32],
     channel_binding: [u8; 32],
-    guest_identity_digest: [u8; 32],
-    guest_static_public_key: [u8; 32],
+    guest_identity: GuestIdentityBindingV1,
     bootstrap: Option<GuestBootstrapCredentialV1>,
+}
+
+pub enum GuestIdentityBindingV1 {
+    Enrolled {
+        guest_identity_digest: [u8; 32],
+        guest_static_public_key: [u8; 32],
+    },
+    UnboundBootstrap,
+}
+
+impl fmt::Debug for GuestIdentityBindingV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("GuestIdentityBindingV1(REDACTED)")
+    }
 }
 
 impl GuestSessionCredentialV1 {
@@ -2136,8 +2150,7 @@ impl GuestSessionCredentialV1 {
         session_generation: u64,
         parent_static_public_key: [u8; 32],
         channel_binding: [u8; 32],
-        guest_identity_digest: [u8; 32],
-        guest_static_public_key: [u8; 32],
+        guest_identity: GuestIdentityBindingV1,
         bootstrap: Option<GuestBootstrapCredentialV1>,
     ) -> Result<Self, GuestSessionCredentialError> {
         let value = Self {
@@ -2146,8 +2159,7 @@ impl GuestSessionCredentialV1 {
             session_generation,
             parent_static_public_key,
             channel_binding,
-            guest_identity_digest,
-            guest_static_public_key,
+            guest_identity,
             bootstrap,
         };
         value.validate()?;
@@ -2174,12 +2186,31 @@ impl GuestSessionCredentialV1 {
         &self.channel_binding
     }
 
-    pub const fn guest_identity_digest(&self) -> &[u8; 32] {
-        &self.guest_identity_digest
+    pub const fn guest_identity_digest(&self) -> Option<&[u8; 32]> {
+        match &self.guest_identity {
+            GuestIdentityBindingV1::Enrolled {
+                guest_identity_digest,
+                ..
+            } => Some(guest_identity_digest),
+            GuestIdentityBindingV1::UnboundBootstrap => None,
+        }
     }
 
-    pub const fn guest_static_public_key(&self) -> &[u8; 32] {
-        &self.guest_static_public_key
+    pub const fn guest_static_public_key(&self) -> Option<&[u8; 32]> {
+        match &self.guest_identity {
+            GuestIdentityBindingV1::Enrolled {
+                guest_static_public_key,
+                ..
+            } => Some(guest_static_public_key),
+            GuestIdentityBindingV1::UnboundBootstrap => None,
+        }
+    }
+
+    pub const fn guest_identity_is_unbound(&self) -> bool {
+        matches!(
+            &self.guest_identity,
+            GuestIdentityBindingV1::UnboundBootstrap
+        )
     }
 
     pub fn bootstrap(&self) -> Option<&GuestBootstrapCredentialV1> {
@@ -2214,11 +2245,14 @@ impl GuestSessionCredentialV1 {
         writer.bytes(&GUEST_SESSION_CREDENTIAL_MAGIC);
         writer.u16(self.schema_version);
         writer.u16(self.codec_version);
-        writer.u16(if self.bootstrap.is_some() {
-            GUEST_SESSION_CREDENTIAL_FLAG_BOOTSTRAP
-        } else {
-            0
-        });
+        let mut flags = 0;
+        if self.bootstrap.is_some() {
+            flags |= GUEST_SESSION_CREDENTIAL_FLAG_BOOTSTRAP;
+        }
+        if self.guest_identity_is_unbound() {
+            flags |= GUEST_SESSION_CREDENTIAL_FLAG_UNBOUND_GUEST_IDENTITY;
+        }
+        writer.u16(flags);
         writer.u16(0);
         writer.u32(
             u32::try_from(total_bytes).map_err(|_| GuestSessionCredentialError::LengthExceeded)?,
@@ -2226,8 +2260,19 @@ impl GuestSessionCredentialV1 {
         writer.u64(self.session_generation);
         writer.bytes(&self.parent_static_public_key);
         writer.bytes(&self.channel_binding);
-        writer.bytes(&self.guest_identity_digest);
-        writer.bytes(&self.guest_static_public_key);
+        match &self.guest_identity {
+            GuestIdentityBindingV1::Enrolled {
+                guest_identity_digest,
+                guest_static_public_key,
+            } => {
+                writer.bytes(guest_identity_digest);
+                writer.bytes(guest_static_public_key);
+            }
+            GuestIdentityBindingV1::UnboundBootstrap => {
+                writer.bytes(&[0; 32]);
+                writer.bytes(&[0; 32]);
+            }
+        }
         if let Some(bootstrap) = self.bootstrap.as_ref() {
             writer.u16(
                 u16::try_from(bootstrap_bytes)
@@ -2282,7 +2327,11 @@ impl GuestSessionCredentialV1 {
             return Err(GuestSessionCredentialError::UnsupportedVersion);
         }
         let flags = reader.u16().map_err(map_guest_credential_binary_error)?;
-        if flags & !GUEST_SESSION_CREDENTIAL_FLAG_BOOTSTRAP != 0 {
+        if flags
+            & !(GUEST_SESSION_CREDENTIAL_FLAG_BOOTSTRAP
+                | GUEST_SESSION_CREDENTIAL_FLAG_UNBOUND_GUEST_IDENTITY)
+            != 0
+        {
             return Err(GuestSessionCredentialError::InvalidFlags);
         }
         if reader.u16().map_err(map_guest_credential_binary_error)? != 0 {
@@ -2313,7 +2362,7 @@ impl GuestSessionCredentialV1 {
         let guest_static_public_key = reader
             .array::<32>()
             .map_err(map_guest_credential_binary_error)?;
-        let bootstrap = if flags == GUEST_SESSION_CREDENTIAL_FLAG_BOOTSTRAP {
+        let bootstrap = if flags & GUEST_SESSION_CREDENTIAL_FLAG_BOOTSTRAP != 0 {
             let bootstrap_bytes =
                 usize::from(reader.u16().map_err(map_guest_credential_binary_error)?);
             if bootstrap_bytes > GUEST_BOOTSTRAP_CREDENTIAL_OVERHEAD_BYTES + MAX_ID_BYTES {
@@ -2364,14 +2413,30 @@ impl GuestSessionCredentialV1 {
             None
         };
         reader.finish().map_err(map_guest_credential_binary_error)?;
+        let guest_identity = if flags & GUEST_SESSION_CREDENTIAL_FLAG_UNBOUND_GUEST_IDENTITY != 0 {
+            if guest_identity_digest != [0; 32] || guest_static_public_key != [0; 32] {
+                return Err(GuestSessionCredentialError::InvalidBinding);
+            }
+            GuestIdentityBindingV1::UnboundBootstrap
+        } else {
+            if guest_identity_digest == [0; 32] {
+                return Err(GuestSessionCredentialError::InvalidBinding);
+            }
+            if guest_static_public_key == [0; 32] {
+                return Err(GuestSessionCredentialError::InvalidPublicKey);
+            }
+            GuestIdentityBindingV1::Enrolled {
+                guest_identity_digest,
+                guest_static_public_key,
+            }
+        };
         let value = Self {
             schema_version,
             codec_version,
             session_generation,
             parent_static_public_key,
             channel_binding,
-            guest_identity_digest,
-            guest_static_public_key,
+            guest_identity,
             bootstrap,
         };
         value.validate()?;
@@ -2388,11 +2453,28 @@ impl GuestSessionCredentialV1 {
         if self.session_generation == 0 {
             return Err(GuestSessionCredentialError::InvalidGeneration);
         }
-        if self.parent_static_public_key == [0; 32] || self.guest_static_public_key == [0; 32] {
+        if self.parent_static_public_key == [0; 32] {
             return Err(GuestSessionCredentialError::InvalidPublicKey);
         }
-        if self.channel_binding == [0; 32] || self.guest_identity_digest == [0; 32] {
+        if self.channel_binding == [0; 32] {
             return Err(GuestSessionCredentialError::InvalidBinding);
+        }
+        match &self.guest_identity {
+            GuestIdentityBindingV1::Enrolled {
+                guest_identity_digest,
+                guest_static_public_key,
+            } => {
+                if *guest_identity_digest == [0; 32] {
+                    return Err(GuestSessionCredentialError::InvalidBinding);
+                }
+                if *guest_static_public_key == [0; 32] {
+                    return Err(GuestSessionCredentialError::InvalidPublicKey);
+                }
+            }
+            GuestIdentityBindingV1::UnboundBootstrap if self.bootstrap.is_none() => {
+                return Err(GuestSessionCredentialError::InvalidBinding);
+            }
+            GuestIdentityBindingV1::UnboundBootstrap => {}
         }
         if let Some(bootstrap) = self.bootstrap.as_ref() {
             validate_guest_bootstrap_binding(&bootstrap.binding, bootstrap.issued_at_unix_ms)?;
@@ -3291,8 +3373,10 @@ mod guest_session_credential_tests {
             7,
             [0x11; 32],
             [0x22; 32],
-            [0x33; 32],
-            [0x44; 32],
+            GuestIdentityBindingV1::Enrolled {
+                guest_identity_digest: [0x33; 32],
+                guest_static_public_key: [0x44; 32],
+            },
             Some(bootstrap),
         )
         .unwrap()

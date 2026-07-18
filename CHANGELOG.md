@@ -185,6 +185,8 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Allowed initial guest bootstrap to establish and return a new guest identity
+  while requiring enrolled reconnects to match the pinned identity and public key.
 - Bound the guest-control signing retirement exception to a parent-authoritative,
   exact content transformation so same-file unrelated edits, renames, mixed
   hunks, and generated-schema decoys fail closed.

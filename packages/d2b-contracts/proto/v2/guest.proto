@@ -62,6 +62,8 @@ message GuestReconnectRequest {
   bytes expected_guest_static_public_key_digest = 4;
   bytes expected_parent_static_public_key_digest = 5;
   repeated GuestCapability required_capabilities = 6;
+  bytes expected_guest_identity_digest = 7;
+  bytes expected_guest_static_public_key = 8;
 }
 
 message GuestSessionResponse {
@@ -74,6 +76,8 @@ message GuestSessionResponse {
   bytes parent_static_public_key_digest = 7;
   repeated GuestCapability capabilities = 8;
   d2b.common.v2.ErrorEnvelope error = 9;
+  bytes guest_identity_digest = 10;
+  bytes guest_static_public_key = 11;
 }
 
 enum GuestExecCancelReason {

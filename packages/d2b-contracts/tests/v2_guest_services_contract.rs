@@ -15,6 +15,7 @@ use d2b_contracts::v2_services::{
     method_spec, terminal,
 };
 use protobuf::{Message, MessageField};
+use sha2::{Digest, Sha256};
 
 const GENERATION: u64 = 7;
 const REQUEST_ID: [u8; 16] = [0x11; 16];
@@ -149,26 +150,33 @@ fn bootstrap_and_reconnect_bind_identity_generation_and_capabilities() {
         ],
         ..Default::default()
     };
+    let guest_static_public_key = vec![0x55; 32];
+    let guest_static_public_key_digest = Sha256::digest(&guest_static_public_key).to_vec();
     let response = guest::GuestSessionResponse {
         outcome: common::Outcome::OUTCOME_SUCCEEDED.into(),
         operation_id: "operation-1".to_owned(),
         session_generation: GENERATION,
         request_id: REQUEST_ID.to_vec(),
         guest_identity_handle: "guest-identity-1".to_owned(),
-        guest_static_public_key_digest: vec![0x55; 32],
+        guest_identity_digest: vec![0x66; 32],
+        guest_static_public_key: guest_static_public_key.clone(),
+        guest_static_public_key_digest: guest_static_public_key_digest.clone(),
         parent_static_public_key_digest: vec![0x44; 32],
         capabilities: bootstrap.requested_capabilities.clone(),
         ..Default::default()
     };
     round_trip(&bootstrap, true);
     round_trip(&response, false);
+    assert_eq!(format!("{response:?}"), "GuestSessionResponse(REDACTED)");
     validate_guest_session_response_for_bootstrap(&bootstrap, &response).unwrap();
 
     let reconnect = guest::GuestReconnectRequest {
         context: MessageField::some(context()),
         expected_generation: GENERATION,
         guest_identity_handle: "guest-identity-1".to_owned(),
-        expected_guest_static_public_key_digest: vec![0x55; 32],
+        expected_guest_identity_digest: vec![0x66; 32],
+        expected_guest_static_public_key: guest_static_public_key,
+        expected_guest_static_public_key_digest: guest_static_public_key_digest,
         expected_parent_static_public_key_digest: vec![0x44; 32],
         required_capabilities: vec![guest::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED.into()],
         ..Default::default()
@@ -176,10 +184,56 @@ fn bootstrap_and_reconnect_bind_identity_generation_and_capabilities() {
     round_trip(&reconnect, true);
     validate_guest_session_response_for_reconnect(&reconnect, &response).unwrap();
 
-    let mut mismatch = response;
+    let mut mismatch = response.clone();
     mismatch.session_generation += 1;
     assert_eq!(
         validate_guest_session_response_for_reconnect(&reconnect, &mismatch),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+
+    let mut missing_identity = response.clone();
+    missing_identity.guest_identity_digest.clear();
+    assert_eq!(
+        validate_guest_session_response_for_bootstrap(&bootstrap, &missing_identity),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+    let mut missing_public_key = response.clone();
+    missing_public_key.guest_static_public_key.clear();
+    assert_eq!(
+        validate_guest_session_response_for_bootstrap(&bootstrap, &missing_public_key),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+    let mut mismatched_public_key_digest = response.clone();
+    mismatched_public_key_digest.guest_static_public_key_digest = vec![0x77; 32];
+    assert_eq!(
+        validate_guest_session_response_for_bootstrap(&bootstrap, &mismatched_public_key_digest),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+
+    let mut unbound_reconnect = reconnect.clone();
+    unbound_reconnect.expected_guest_identity_digest.clear();
+    assert_eq!(
+        validate_guest_session_response_for_reconnect(&unbound_reconnect, &response),
+        Err(ServiceContractError::InvalidOperationInput)
+    );
+    let mut mismatched_reconnect_digest = reconnect.clone();
+    mismatched_reconnect_digest.expected_guest_static_public_key_digest = vec![0x77; 32];
+    assert_eq!(
+        validate_guest_session_response_for_reconnect(&mismatched_reconnect_digest, &response),
+        Err(ServiceContractError::InvalidOperationInput)
+    );
+    let mut substituted_identity = response.clone();
+    substituted_identity.guest_identity_digest = vec![0x78; 32];
+    assert_eq!(
+        validate_guest_session_response_for_reconnect(&reconnect, &substituted_identity),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+    let mut substituted_key = response;
+    substituted_key.guest_static_public_key = vec![0x79; 32];
+    substituted_key.guest_static_public_key_digest =
+        Sha256::digest(&substituted_key.guest_static_public_key).to_vec();
+    assert_eq!(
+        validate_guest_session_response_for_reconnect(&reconnect, &substituted_key),
         Err(ServiceContractError::InconsistentResponse)
     );
 }

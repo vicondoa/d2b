@@ -186,7 +186,7 @@
     {
       "package": "d2b.guest.v2",
       "service": "GuestService",
-      "schemaFingerprint": "af42630b97ccf809c107bef26680afecb9be31ac26248ad517a7e3ea42be4514",
+      "schemaFingerprint": "9358614db1a1384cc9cd7ec21b916d3ce5e6042f1eb006fde537399c39079694",
       "methods": [
         {
           "name": "Bootstrap",
