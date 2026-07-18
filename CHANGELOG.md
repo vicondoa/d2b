@@ -192,6 +192,8 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Kept guest-exec policy checks bound to capability and TTY mappings after
+  those responsibilities move into focused runtime modules.
 - Stabilized guest-signing retirement policy tests with canonical synthetic
   parent fixtures that remain valid before and after the retirement lands.
 - Preserved the stable broker request wire shape after retiring legacy signing
