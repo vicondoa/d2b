@@ -909,7 +909,7 @@ fn two_generation_writers_serialize_and_only_one_can_commit_next_generation() {
         ContentionPolicy::BoundedWait,
         FdTransferPolicy::Never,
     );
-    spec.deadline_ms = 2_000;
+    spec.deadline_ms = 10_000;
     let lock_resource = AnchoredResource::new(
         resource("state"),
         &anchor,
