@@ -507,6 +507,16 @@
         "v2-guest-configured-launches",
         "v2-services"
       ]
+    },
+    {
+      "consumer": "d2bd",
+      "dependency": "d2b-contracts",
+      "default_features": false,
+      "features": [
+        "unsafe-local",
+        "v2-guest-configured-launches",
+        "v2-provider"
+      ]
     }
   ],
   "w5_contract_retirements": [

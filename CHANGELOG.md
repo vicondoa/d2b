@@ -78,6 +78,8 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Authorized d2bd's exact private configured-launch codec feature alongside its
+  existing unsafe-local and provider contract features.
 - Authorized the broker's direct generated-service dependency feature alongside
   its credential and broker contract features.
 - Bound the public daemon handshake fingerprint to ordered, domain-separated

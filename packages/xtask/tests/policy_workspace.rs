@@ -1848,6 +1848,14 @@ fn w5_service_dependency_edges_are_locked_and_directional() {
     ]);
     let expected_configured_launch_consumers = BTreeMap::from([
         (
+            "d2bd",
+            BTreeSet::from([
+                "unsafe-local".to_owned(),
+                "v2-guest-configured-launches".to_owned(),
+                "v2-provider".to_owned(),
+            ]),
+        ),
+        (
             "d2b-guestd",
             expected_component_session_consumers["d2b-guestd"].clone(),
         ),

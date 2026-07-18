@@ -22,7 +22,7 @@ parking_lot = { version = "0.12", features = ["arc_lock"] }
 rustix = { workspace = true }
 d2b-core = { workspace = true }
 d2b-host = { workspace = true }
-d2b-contracts = { workspace = true, features = ["unsafe-local", "v2-provider"] }
+d2b-contracts = { workspace = true, features = ["unsafe-local", "v2-guest-configured-launches", "v2-provider"] }
 d2b-provider = { workspace = true, default-features = false }
 d2b-provider-audio-pipewire-vhost-user = { workspace = true, default-features = false }
 d2b-provider-device-host-mediated = { workspace = true, default-features = false }
