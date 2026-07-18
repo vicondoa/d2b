@@ -5,7 +5,11 @@ use std::{
     process::ExitCode,
 };
 
-use serde::Deserialize;
+use serde::{
+    Deserialize,
+    de::{MapAccess, SeqAccess, Visitor},
+};
+use serde_json::Value;
 
 use crate::delivery::{
     command::{
@@ -45,6 +49,15 @@ const REQUIRED_DOCUMENTATION_PREFIXES: &[&str] = &[
     "docs/manpages/",
     "docs/reference/",
 ];
+const W5_BROKER_WIRE_PATH: &str = "packages/d2b-contracts/src/broker_wire.rs";
+const W5_PRIVILEGES_PATH: &str = "packages/d2b-core/src/privileges.rs";
+const W5_PRIVILEGES_W3_PATH: &str = "packages/d2b-core/src/privileges_w3.rs";
+const W5_PRIVILEGES_PARITY_PATH: &str = "packages/d2b-contract-tests/tests/privileges_parity.rs";
+const W5_BROKER_DISPOSITIONS_DOC_PATH: &str = "docs/reference/broker-w2-dispositions.md";
+const W5_DAEMON_API_PATH: &str = "docs/reference/daemon-api.md";
+const W5_PRIVILEGES_DOC_PATH: &str = "docs/reference/privileges.md";
+const W5_PRIVILEGES_SCHEMA_PATH: &str = "docs/reference/schemas/v2/privileges.json";
+const W5_WIRE_SCHEMA_PATH: &str = "docs/reference/schemas/v2/wire-protocol.json";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -112,6 +125,7 @@ pub struct ServiceDependencyEdge {
 #[serde(deny_unknown_fields)]
 pub struct W5ContractRetirement {
     pub component: String,
+    pub diff_policy: String,
     pub operation: String,
     pub source_paths: Vec<String>,
     pub test_selectors: Vec<ContractTestSelector>,
@@ -137,7 +151,7 @@ pub struct W7ContractTestMigration {
 
 impl SharedContractPolicy {
     pub fn validate(&self) -> Result<(), String> {
-        if self.schema_version != 8 {
+        if self.schema_version != 9 {
             return Err("unsupported shared-contract policy schema".to_owned());
         }
         if self.authority_repository != "github.com/vicondoa/d2b" {
@@ -260,7 +274,10 @@ impl SharedContractPolicy {
             );
         }
         let retirement = &self.w5_contract_retirements[0];
-        if retirement.component != "guest-signing" || retirement.operation != "GuestControlSign" {
+        if retirement.component != "guest-signing"
+            || retirement.diff_policy != "guest-control-sign-v1"
+            || retirement.operation != "GuestControlSign"
+        {
             return Err(
                 "W5 contract retirement authority is limited to GuestControlSign".to_owned(),
             );
@@ -1043,6 +1060,15 @@ fn verify_ownership<P: OwnershipProbe>(
     verify_checked_in_manifest(&manifest, ownership)?;
     let paths = probe.changed_paths(&candidate_root, &base_oid, &head_oid)?;
     check_changed_paths(&policy, &ownership.wave, &paths)?;
+    verify_w5_contract_retirement(
+        probe,
+        &candidate_root,
+        &base_oid,
+        &head_oid,
+        &policy,
+        ownership,
+        &paths,
+    )?;
     Ok(VerifiedOwnership {
         wave: ownership.wave.clone(),
         branch,
@@ -1249,6 +1275,690 @@ pub fn check_changed_paths(
             violations.join("\n")
         ))
     }
+}
+
+fn verify_w5_contract_retirement<P: OwnershipProbe>(
+    probe: &P,
+    candidate_root: &Path,
+    base_oid: &str,
+    head_oid: &str,
+    policy: &SharedContractPolicy,
+    ownership: &WaveOwnership,
+    changed_paths: &[String],
+) -> Result<(), String> {
+    if ownership.wave != "w5" {
+        return Ok(());
+    }
+    let retirement = policy
+        .w5_contract_retirements
+        .first()
+        .ok_or_else(|| "W5 contract retirement policy is missing".to_owned())?;
+    let authorized = retirement
+        .source_paths
+        .iter()
+        .chain(
+            retirement
+                .test_selectors
+                .iter()
+                .map(|selector| &selector.test_file),
+        )
+        .chain(retirement.companion_paths.iter())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let changed_retirement_paths = changed_paths
+        .iter()
+        .filter(|path| authorized.contains(*path))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if changed_retirement_paths.is_empty() {
+        return Ok(());
+    }
+    if changed_retirement_paths != authorized {
+        return Err(
+            "GuestControlSign retirement must update its exact complete path inventory".to_owned(),
+        );
+    }
+
+    let mut parent_blobs = BTreeMap::new();
+    let mut candidate_blobs = BTreeMap::new();
+    for path in &authorized {
+        let parent = probe
+            .tracked_blob(candidate_root, base_oid, path)
+            .map_err(|_| format!("GuestControlSign retirement parent blob is missing: {path}"))?;
+        let candidate = probe
+            .tracked_blob(candidate_root, head_oid, path)
+            .map_err(|_| {
+                format!("GuestControlSign retirement candidate blob is missing: {path}")
+            })?;
+        parent_blobs.insert(path.clone(), parent);
+        candidate_blobs.insert(path.clone(), candidate);
+    }
+    verify_w5_contract_retirement_contents(retirement, &parent_blobs, &candidate_blobs)
+}
+
+fn verify_w5_contract_retirement_contents(
+    retirement: &W5ContractRetirement,
+    parent_blobs: &BTreeMap<String, Vec<u8>>,
+    candidate_blobs: &BTreeMap<String, Vec<u8>>,
+) -> Result<(), String> {
+    if retirement.diff_policy != "guest-control-sign-v1"
+        || retirement.operation != "GuestControlSign"
+    {
+        return Err("unsupported W5 contract retirement diff policy".to_owned());
+    }
+
+    let mut expected = BTreeMap::new();
+    for path in retirement
+        .source_paths
+        .iter()
+        .chain(
+            retirement
+                .test_selectors
+                .iter()
+                .map(|selector| &selector.test_file),
+        )
+        .chain(retirement.companion_paths.iter())
+        .filter(|path| path.as_str() != W5_DAEMON_API_PATH)
+    {
+        let parent = parent_blobs
+            .get(path)
+            .ok_or_else(|| format!("missing parent retirement fixture: {path}"))?;
+        expected.insert(
+            path.clone(),
+            expected_guest_signing_retirement_blob(path, parent)?,
+        );
+    }
+
+    let parent_daemon_api = parent_blobs
+        .get(W5_DAEMON_API_PATH)
+        .ok_or_else(|| "missing parent daemon API retirement fixture".to_owned())?;
+    let expected_broker_wire = expected
+        .get(W5_BROKER_WIRE_PATH)
+        .ok_or_else(|| "missing transformed broker wire retirement fixture".to_owned())?;
+    expected.insert(
+        W5_DAEMON_API_PATH.to_owned(),
+        expected_daemon_api_retirement(parent_daemon_api, expected_broker_wire)?,
+    );
+
+    for (path, expected_bytes) in expected {
+        let actual = candidate_blobs
+            .get(&path)
+            .ok_or_else(|| format!("missing candidate retirement fixture: {path}"))?;
+        let matches = if path == W5_PRIVILEGES_SCHEMA_PATH || path == W5_WIRE_SCHEMA_PATH {
+            parse_json_without_duplicates(actual, &path)?
+                == parse_json_without_duplicates(&expected_bytes, &path)?
+        } else {
+            actual == &expected_bytes
+        };
+        if !matches {
+            return Err(format!(
+                "GuestControlSign retirement changed noncanonical content in {path}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn expected_guest_signing_retirement_blob(path: &str, parent: &[u8]) -> Result<Vec<u8>, String> {
+    match path {
+        W5_PRIVILEGES_SCHEMA_PATH => transform_privileges_schema(parent),
+        W5_WIRE_SCHEMA_PATH => transform_wire_schema(parent),
+        W5_BROKER_WIRE_PATH => transform_broker_wire(parent),
+        W5_PRIVILEGES_PATH => transform_privileges_source(parent),
+        W5_PRIVILEGES_W3_PATH => transform_privileges_w3_source(parent),
+        W5_PRIVILEGES_PARITY_PATH => transform_privileges_parity(parent),
+        W5_BROKER_DISPOSITIONS_DOC_PATH => transform_broker_dispositions_doc(parent),
+        W5_PRIVILEGES_DOC_PATH => transform_privileges_doc(parent),
+        other => Err(format!(
+            "no canonical GuestControlSign retirement transform for {other}"
+        )),
+    }
+}
+
+fn utf8_retirement_blob<'a>(path: &str, bytes: &'a [u8]) -> Result<&'a str, String> {
+    std::str::from_utf8(bytes)
+        .map_err(|_| format!("GuestControlSign retirement source is not UTF-8: {path}"))
+}
+
+fn remove_exact_once(source: &mut String, needle: &str, label: &str) -> Result<(), String> {
+    if source.match_indices(needle).count() != 1 {
+        return Err(format!(
+            "GuestControlSign parent contract has unexpected {label} shape"
+        ));
+    }
+    *source = source.replacen(needle, "", 1);
+    Ok(())
+}
+
+fn replace_exact_once(
+    source: &mut String,
+    needle: &str,
+    replacement: &str,
+    label: &str,
+) -> Result<(), String> {
+    if source.match_indices(needle).count() != 1 {
+        return Err(format!(
+            "GuestControlSign parent contract has unexpected {label} shape"
+        ));
+    }
+    *source = source.replacen(needle, replacement, 1);
+    Ok(())
+}
+
+fn remove_rust_item(source: &mut String, marker: &str, label: &str) -> Result<(), String> {
+    if source.match_indices(marker).count() != 1 {
+        return Err(format!(
+            "GuestControlSign parent Rust contract has unexpected {label} item"
+        ));
+    }
+    let marker_offset = source.find(marker).expect("counted marker");
+    let mut start = source[..marker_offset]
+        .rfind('\n')
+        .map_or(0, |offset| offset + 1);
+    loop {
+        if start == 0 {
+            break;
+        }
+        let previous_end = start - 1;
+        let previous_start = source[..previous_end]
+            .rfind('\n')
+            .map_or(0, |offset| offset + 1);
+        if source[previous_start..previous_end]
+            .trim_start()
+            .starts_with("#[")
+        {
+            start = previous_start;
+        } else {
+            break;
+        }
+    }
+
+    let declaration_end = source[marker_offset..]
+        .find('\n')
+        .map_or(source.len(), |offset| marker_offset + offset);
+    let declaration = &source[marker_offset..declaration_end];
+    let mut end = if declaration.contains(';') && !declaration.contains('{') {
+        declaration_end
+    } else {
+        let open = source[marker_offset..]
+            .find('{')
+            .map(|offset| marker_offset + offset)
+            .ok_or_else(|| format!("GuestControlSign {label} item has no body"))?;
+        let mut depth = 0usize;
+        let mut close = None;
+        for (offset, byte) in source.as_bytes()[open..].iter().enumerate() {
+            match byte {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth = depth
+                        .checked_sub(1)
+                        .ok_or_else(|| format!("GuestControlSign {label} item is malformed"))?;
+                    if depth == 0 {
+                        close = Some(open + offset + 1);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        close.ok_or_else(|| format!("GuestControlSign {label} item is unterminated"))?
+    };
+    if source.as_bytes().get(end) == Some(&b'\n') {
+        end += 1;
+    }
+    source.replace_range(start..end, "");
+    Ok(())
+}
+
+fn transform_privileges_source(parent: &[u8]) -> Result<Vec<u8>, String> {
+    let mut source = utf8_retirement_blob(W5_PRIVILEGES_PATH, parent)?.to_owned();
+    remove_exact_once(
+        &mut source,
+        "    row(\n        \"GuestControlSign\",\n        \"guest-control token\",\n        \"per-VM\",\n        &[\"d2bd\"],\n        false,\n        SecretAccess::RedactedOnly,\n        BrokerRequirement::Yes,\n        AuditMode::Yes,\n    ),\n",
+        "privilege row",
+    )?;
+    Ok(source.into_bytes())
+}
+
+fn transform_privileges_w3_source(parent: &[u8]) -> Result<Vec<u8>, String> {
+    let mut source = utf8_retirement_blob(W5_PRIVILEGES_W3_PATH, parent)?.to_owned();
+    for (needle, label) in [
+        ("    GuestControlSign,\n", "W3 enum variant"),
+        (
+            "            Self::GuestControlSign => \"GuestControlSign\",\n",
+            "W3 wire-tag arm",
+        ),
+        (
+            "            Self::GuestControlSign,\n",
+            "W3 operation inventory entry",
+        ),
+        (
+            "            Self::GuestControlSign => W3OperationFlags {\n                audit: true,\n                destructive: false,\n                secret_access: true,\n            },\n",
+            "W3 operation flags arm",
+        ),
+    ] {
+        remove_exact_once(&mut source, needle, label)?;
+    }
+    remove_rust_item(
+        &mut source,
+        "fn only_guest_control_sign_grants_secret_access()",
+        "W3 secret-access test",
+    )?;
+    Ok(source.into_bytes())
+}
+
+fn transform_broker_wire(parent: &[u8]) -> Result<Vec<u8>, String> {
+    let mut source = utf8_retirement_blob(W5_BROKER_WIRE_PATH, parent)?.to_owned();
+    for (needle, label) in [
+        (
+            "use crate::guest_auth::AUTH_NONCE_LEN;\n",
+            "guest-auth nonce import",
+        ),
+        (
+            "    GuestControlSign(GuestControlSignRequest),\n",
+            "broker request variant",
+        ),
+        (
+            "            Self::GuestControlSign(_) => \"GuestControlSign\",\n",
+            "broker operation-name arm",
+        ),
+        (
+            "            Self::GuestControlSign(_) => \"guest-control-auth\",\n",
+            "broker target arm",
+        ),
+        (
+            "    GuestControlSign(GuestControlSignResponse),\n",
+            "broker response variant",
+        ),
+    ] {
+        remove_exact_once(&mut source, needle, label)?;
+    }
+    for (marker, label) in [
+        ("pub enum GuestControlProofRole", "guest-control proof-role"),
+        ("pub enum GuestControlDirection", "guest-control direction"),
+        ("pub enum GuestControlAuthPurpose", "guest-control purpose"),
+        ("pub struct GuestBootIdWire", "guest boot identifier"),
+        ("impl GuestBootIdWire {", "guest boot identifier methods"),
+        (
+            "impl JsonSchema for GuestBootIdWire",
+            "guest boot identifier schema",
+        ),
+        (
+            "pub struct GuestControlSignRequest",
+            "guest-control signing request",
+        ),
+        (
+            "impl GuestControlSignRequest",
+            "guest-control signing validation",
+        ),
+        (
+            "pub struct GuestControlSignResponse",
+            "guest-control signing response",
+        ),
+    ] {
+        remove_rust_item(&mut source, marker, label)?;
+    }
+    Ok(source.into_bytes())
+}
+
+fn transform_privileges_parity(parent: &[u8]) -> Result<Vec<u8>, String> {
+    let mut source = utf8_retirement_blob(W5_PRIVILEGES_PARITY_PATH, parent)?.to_owned();
+    replace_exact_once(
+        &mut source,
+        "    let rendered = load_privileges_fixture_from_env();\n    let rust = PrivilegesJson::w1(rendered.schema_version.clone());\n",
+        "    let mut rendered = load_privileges_fixture_from_env();\n    let retired = rendered\n        .broker_operations\n        .iter()\n        .position(|operation| operation.operation == \"GuestControlSign\")\n        .expect(\"Nix privilege emitter must retain GuestControlSign until declarative retirement\");\n    rendered.broker_operations.remove(retired);\n    let rust = PrivilegesJson::w1(rendered.schema_version.clone());\n",
+        "privileges parity selector",
+    )?;
+    Ok(source.into_bytes())
+}
+
+fn transform_broker_dispositions_doc(parent: &[u8]) -> Result<Vec<u8>, String> {
+    let mut source = utf8_retirement_blob(W5_BROKER_DISPOSITIONS_DOC_PATH, parent)?.to_owned();
+    remove_markdown_row(
+        &mut source,
+        "| GuestControlSign |",
+        "broker disposition row",
+    )?;
+    Ok(source.into_bytes())
+}
+
+fn transform_privileges_doc(parent: &[u8]) -> Result<Vec<u8>, String> {
+    let mut source = utf8_retirement_blob(W5_PRIVILEGES_DOC_PATH, parent)?.to_owned();
+    replace_exact_once(
+        &mut source,
+        "- **secret** — `yes` for operations whose implementation reads secret\n  material or whose audit record may reference secret-material\n  identifiers. `redacted-only` rows carry only derived/redacted metadata:\n  for example `GuestControlSign` records token-transcript metadata\n  (`transcript_len`, `peer_cid_present`, `capabilities_hash_present`),\n  and `UsbipBind` records normalized device identity plus serial HMAC\n  correlations, never the per-VM token, signature bytes, raw serial, raw\n  sysfs path, or device path.\n",
+        "- **secret** — `yes` for operations whose implementation reads secret\n  material or whose audit record may reference secret-material\n  identifiers. `redacted-only` rows carry only derived/redacted metadata:\n  `UsbipBind` records normalized device identity plus serial HMAC\n  correlations, never the raw serial, raw sysfs path, or device path.\n",
+        "privilege secret-metadata paragraph",
+    )?;
+    remove_markdown_row(
+        &mut source,
+        "| `GuestControlSign` |",
+        "privilege matrix row",
+    )?;
+    Ok(source.into_bytes())
+}
+
+fn remove_markdown_row(source: &mut String, row_prefix: &str, label: &str) -> Result<(), String> {
+    let matches = source
+        .match_indices(row_prefix)
+        .filter_map(|(offset, _)| {
+            (offset == 0 || source.as_bytes().get(offset - 1) == Some(&b'\n')).then_some(offset)
+        })
+        .collect::<Vec<_>>();
+    if matches.len() != 1 {
+        return Err(format!(
+            "GuestControlSign parent documentation has unexpected {label} shape"
+        ));
+    }
+    let start = matches[0];
+    let end = source[start..]
+        .find('\n')
+        .map_or(source.len(), |offset| start + offset + 1);
+    source.replace_range(start..end, "");
+    Ok(())
+}
+
+fn transform_privileges_schema(parent: &[u8]) -> Result<Vec<u8>, String> {
+    let mut schema = parse_json_without_duplicates(parent, W5_PRIVILEGES_SCHEMA_PATH)?;
+    let values = schema
+        .pointer_mut("/definitions/OperationAuthz/properties/operation/enum")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| "parent privileges schema has no operation enum".to_owned())?;
+    let matches = values
+        .iter()
+        .enumerate()
+        .filter_map(|(index, value)| (value.as_str() == Some("GuestControlSign")).then_some(index))
+        .collect::<Vec<_>>();
+    let [index] = matches.as_slice() else {
+        return Err(
+            "parent privileges schema has noncanonical GuestControlSign entries".to_owned(),
+        );
+    };
+    values.remove(*index);
+    canonical_json_bytes(&schema)
+}
+
+fn transform_wire_schema(parent: &[u8]) -> Result<Vec<u8>, String> {
+    let mut schema = parse_json_without_duplicates(parent, W5_WIRE_SCHEMA_PATH)?;
+    remove_schema_variant(
+        &mut schema,
+        "BrokerRequest",
+        "#/definitions/GuestControlSignRequest",
+    )?;
+    remove_schema_variant(
+        &mut schema,
+        "BrokerResponse",
+        "#/definitions/GuestControlSignResponse",
+    )?;
+    let definitions = schema
+        .get_mut("definitions")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| "parent wire schema has no definitions".to_owned())?;
+    for name in [
+        "GuestBootIdWire",
+        "GuestControlAuthPurpose",
+        "GuestControlDirection",
+        "GuestControlProofRole",
+        "GuestControlSignRequest",
+        "GuestControlSignResponse",
+    ] {
+        if definitions.remove(name).is_none() {
+            return Err(format!(
+                "parent wire schema is missing GuestControlSign definition {name}"
+            ));
+        }
+    }
+    canonical_json_bytes(&schema)
+}
+
+fn remove_schema_variant(
+    schema: &mut Value,
+    definition: &str,
+    expected_payload: &str,
+) -> Result<(), String> {
+    let variants = schema
+        .pointer_mut(&format!("/definitions/{definition}/oneOf"))
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| format!("parent wire schema has no {definition} variants"))?;
+    let matches = variants
+        .iter()
+        .enumerate()
+        .filter_map(|(index, variant)| {
+            let names = variant
+                .pointer("/properties/kind/enum")
+                .and_then(Value::as_array)?;
+            (names.len() == 1 && names[0].as_str() == Some("GuestControlSign")).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let [index] = matches.as_slice() else {
+        return Err(format!(
+            "parent wire schema has noncanonical GuestControlSign {definition} variants"
+        ));
+    };
+    if variants[*index]
+        .pointer("/properties/payload/$ref")
+        .and_then(Value::as_str)
+        != Some(expected_payload)
+    {
+        return Err(format!(
+            "parent wire schema has unexpected GuestControlSign {definition} payload"
+        ));
+    }
+    variants.remove(*index);
+    Ok(())
+}
+
+fn canonical_json_bytes(value: &Value) -> Result<Vec<u8>, String> {
+    let mut bytes = serde_json::to_vec_pretty(value)
+        .map_err(|error| format!("cannot canonicalize retirement schema: {error}"))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+struct DuplicateFreeJson(Value);
+
+impl<'de> Deserialize<'de> for DuplicateFreeJson {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(DuplicateFreeJsonVisitor)
+    }
+}
+
+struct DuplicateFreeJsonVisitor;
+
+impl<'de> Visitor<'de> for DuplicateFreeJsonVisitor {
+    type Value = DuplicateFreeJson;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("JSON without duplicate object keys")
+    }
+
+    fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
+        Ok(DuplicateFreeJson(Value::Bool(value)))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
+        Ok(DuplicateFreeJson(Value::Number(value.into())))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+        Ok(DuplicateFreeJson(Value::Number(value.into())))
+    }
+
+    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        serde_json::Number::from_f64(value)
+            .map(Value::Number)
+            .map(DuplicateFreeJson)
+            .ok_or_else(|| E::custom("non-finite JSON number"))
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+        Ok(DuplicateFreeJson(Value::String(value.to_owned())))
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+        Ok(DuplicateFreeJson(Value::String(value)))
+    }
+
+    fn visit_none<E>(self) -> Result<Self::Value, E> {
+        Ok(DuplicateFreeJson(Value::Null))
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(DuplicateFreeJson(Value::Null))
+    }
+
+    fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        DuplicateFreeJson::deserialize(deserializer)
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let mut values = Vec::new();
+        while let Some(value) = sequence.next_element::<DuplicateFreeJson>()? {
+            values.push(value.0);
+        }
+        Ok(DuplicateFreeJson(Value::Array(values)))
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut values = serde_json::Map::new();
+        while let Some(key) = map.next_key::<String>()? {
+            if values.contains_key(&key) {
+                return Err(<A::Error as serde::de::Error>::custom(
+                    "duplicate JSON object key",
+                ));
+            }
+            let value = map.next_value::<DuplicateFreeJson>()?;
+            values.insert(key, value.0);
+        }
+        Ok(DuplicateFreeJson(Value::Object(values)))
+    }
+}
+
+fn parse_json_without_duplicates(bytes: &[u8], path: &str) -> Result<Value, String> {
+    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+    let value = DuplicateFreeJson::deserialize(&mut deserializer)
+        .map_err(|error| format!("invalid retirement JSON in {path}: {error}"))?;
+    deserializer
+        .end()
+        .map_err(|error| format!("trailing retirement JSON in {path}: {error}"))?;
+    Ok(value.0)
+}
+
+fn expected_daemon_api_retirement(
+    parent: &[u8],
+    expected_broker_wire: &[u8],
+) -> Result<Vec<u8>, String> {
+    let mut doc = utf8_retirement_blob(W5_DAEMON_API_PATH, parent)?.to_owned();
+    for (needle, label) in [
+        (
+            "`GuestControlSign` — (GuestControlSignRequest); ",
+            "daemon request variant",
+        ),
+        (
+            "`GuestControlSign` — (GuestControlSignResponse); ",
+            "daemon response variant",
+        ),
+    ] {
+        remove_exact_once(&mut doc, needle, label)?;
+    }
+    for (row_prefix, label) in [
+        (
+            "| `GuestControlSignRequest` |",
+            "daemon signing request row",
+        ),
+        (
+            "| `GuestControlSignResponse` |",
+            "daemon signing response row",
+        ),
+        ("| `GuestControlProofRole` |", "daemon proof-role row"),
+        ("| `GuestControlDirection` |", "daemon direction row"),
+        ("| `GuestControlAuthPurpose` |", "daemon purpose row"),
+    ] {
+        remove_markdown_row(&mut doc, row_prefix, label)?;
+    }
+    let broker_wire = utf8_retirement_blob(W5_BROKER_WIRE_PATH, expected_broker_wire)?;
+    Ok(rebind_broker_wire_links(&doc, broker_wire)?.into_bytes())
+}
+
+fn rebind_broker_wire_links(doc: &str, broker_wire: &str) -> Result<String, String> {
+    const PREFIX: &str = "../../packages/d2b-contracts/src/broker_wire.rs#L";
+    let mut output = String::with_capacity(doc.len());
+    let mut cursor = 0usize;
+    while let Some(relative) = doc[cursor..].find(PREFIX) {
+        let offset = cursor + relative;
+        output.push_str(&doc[cursor..offset]);
+        output.push_str(PREFIX);
+        let label_start = doc[..offset]
+            .rfind("[`")
+            .ok_or_else(|| "daemon API broker-wire link has no item label".to_owned())?;
+        let label_end = doc[label_start + 2..offset]
+            .find("`](")
+            .map(|end| label_start + 2 + end)
+            .ok_or_else(|| "daemon API broker-wire link has malformed item label".to_owned())?;
+        if label_end + 3 != offset {
+            return Err("daemon API broker-wire link is not canonical".to_owned());
+        }
+        let label = &doc[label_start + 2..label_end];
+        let line = rust_item_line(broker_wire, label)?;
+        output.push_str(&line.to_string());
+        let digits_start = offset + PREFIX.len();
+        let digits = doc[digits_start..]
+            .bytes()
+            .take_while(u8::is_ascii_digit)
+            .count();
+        if digits == 0 {
+            return Err("daemon API broker-wire link has no line number".to_owned());
+        }
+        cursor = digits_start + digits;
+    }
+    output.push_str(&doc[cursor..]);
+    Ok(output)
+}
+
+fn rust_item_line(source: &str, name: &str) -> Result<usize, String> {
+    let struct_prefix = format!("pub struct {name}");
+    let enum_prefix = format!("pub enum {name}");
+    let matches = source
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let line = line.trim_start();
+            (rust_declaration_matches(line, &struct_prefix)
+                || rust_declaration_matches(line, &enum_prefix))
+            .then_some(index + 1)
+        })
+        .collect::<Vec<_>>();
+    let [line] = matches.as_slice() else {
+        return Err(format!(
+            "transformed broker wire has no unique daemon API item {name}"
+        ));
+    };
+    Ok(*line)
+}
+
+fn rust_declaration_matches(line: &str, prefix: &str) -> bool {
+    line.strip_prefix(prefix).is_some_and(|suffix| {
+        suffix.is_empty()
+            || suffix.starts_with(char::is_whitespace)
+            || suffix.starts_with('{')
+            || suffix.starts_with('(')
+            || suffix.starts_with('<')
+    })
 }
 
 fn verify_checked_in_manifest(bytes: &[u8], ownership: &WaveOwnership) -> Result<(), String> {
@@ -1495,6 +2205,7 @@ mod tests {
         ancestor_refs: BTreeMap<String, String>,
         ancestor_pull_requests: BTreeMap<String, OrdinaryPullRequest>,
         blob_reads: RefCell<Vec<(PathBuf, String, String)>>,
+        blobs: BTreeMap<(String, String), Vec<u8>>,
         rewrite_metadata: BTreeMap<PathBuf, String>,
     }
 
@@ -1518,6 +2229,7 @@ mod tests {
                 ancestor_refs: BTreeMap::new(),
                 ancestor_pull_requests: BTreeMap::new(),
                 blob_reads: RefCell::new(Vec::new()),
+                blobs: BTreeMap::new(),
                 rewrite_metadata: BTreeMap::new(),
             }
         }
@@ -1642,6 +2354,11 @@ mod tests {
             if root == Path::new(CANDIDATE_ROOT) && commit == self.head_oid && path == POLICY_PATH {
                 return Ok(br#"{"schema_version":999,"waves":[]}"#.to_vec());
             }
+            if root == Path::new(CANDIDATE_ROOT)
+                && let Some(bytes) = self.blobs.get(&(commit.to_owned(), path.to_owned()))
+            {
+                return Ok(bytes.clone());
+            }
             Err(format!("unexpected blob {commit}:{path}"))
         }
 
@@ -1658,6 +2375,281 @@ mod tests {
                 Err("unexpected diff request".to_owned())
             }
         }
+    }
+
+    fn retirement_parent_blobs(retirement: &W5ContractRetirement) -> BTreeMap<String, Vec<u8>> {
+        let root = repository_root().expect("repository root");
+        retirement
+            .source_paths
+            .iter()
+            .chain(
+                retirement
+                    .test_selectors
+                    .iter()
+                    .map(|selector| &selector.test_file),
+            )
+            .chain(retirement.companion_paths.iter())
+            .map(|path| {
+                (
+                    path.clone(),
+                    fs::read(root.join(path))
+                        .unwrap_or_else(|error| panic!("read retirement fixture {path}: {error}")),
+                )
+            })
+            .collect()
+    }
+
+    fn retirement_candidate_blobs(
+        retirement: &W5ContractRetirement,
+        parent: &BTreeMap<String, Vec<u8>>,
+    ) -> BTreeMap<String, Vec<u8>> {
+        let mut candidate = BTreeMap::new();
+        for (path, bytes) in parent {
+            if path != W5_DAEMON_API_PATH {
+                candidate.insert(
+                    path.clone(),
+                    expected_guest_signing_retirement_blob(path, bytes)
+                        .unwrap_or_else(|error| panic!("transform {path}: {error}")),
+                );
+            }
+        }
+        candidate.insert(
+            W5_DAEMON_API_PATH.to_owned(),
+            expected_daemon_api_retirement(
+                parent
+                    .get(W5_DAEMON_API_PATH)
+                    .expect("parent daemon API fixture"),
+                {
+                    let broker_wire = candidate
+                        .get(W5_BROKER_WIRE_PATH)
+                        .expect("candidate broker wire fixture");
+                    assert!(
+                        String::from_utf8_lossy(broker_wire).contains("pub enum BrokerRequest"),
+                        "canonical broker transform removed BrokerRequest"
+                    );
+                    broker_wire
+                },
+            )
+            .expect("transform daemon API"),
+        );
+        assert_eq!(candidate.len(), parent.len());
+        assert_eq!(
+            candidate.keys().collect::<BTreeSet<_>>(),
+            parent.keys().collect::<BTreeSet<_>>()
+        );
+        assert_eq!(retirement.operation, "GuestControlSign");
+        candidate
+    }
+
+    fn retirement_paths(retirement: &W5ContractRetirement) -> Vec<String> {
+        retirement
+            .source_paths
+            .iter()
+            .chain(
+                retirement
+                    .test_selectors
+                    .iter()
+                    .map(|selector| &selector.test_file),
+            )
+            .chain(retirement.companion_paths.iter())
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    fn probe_with_retirement_fixtures() -> FakeProbe {
+        let policy = policy();
+        let retirement = &policy.w5_contract_retirements[0];
+        let parent = retirement_parent_blobs(retirement);
+        let candidate = retirement_candidate_blobs(retirement, &parent);
+        let mut probe = FakeProbe::valid();
+        probe.changed_paths = retirement_paths(retirement);
+        for (path, bytes) in parent {
+            probe.blobs.insert((BASE_OID.to_owned(), path), bytes);
+        }
+        for (path, bytes) in candidate {
+            probe.blobs.insert((HEAD_OID.to_owned(), path), bytes);
+        }
+        probe
+    }
+
+    #[test]
+    fn canonical_guest_signing_retirement_fixtures_are_accepted() {
+        let policy = policy();
+        let retirement = &policy.w5_contract_retirements[0];
+        let parent = retirement_parent_blobs(retirement);
+        let candidate = retirement_candidate_blobs(retirement, &parent);
+        verify_w5_contract_retirement_contents(retirement, &parent, &candidate)
+            .expect("canonical GuestControlSign retirement");
+
+        let probe = probe_with_retirement_fixtures();
+        let verified =
+            verify_ownership(&probe, Path::new(AUTHORITY_ROOT), Path::new(CANDIDATE_ROOT))
+                .expect("parent-authoritative canonical retirement");
+        assert_eq!(verified.wave, "w5");
+        assert!(
+            probe
+                .blob_reads
+                .borrow()
+                .iter()
+                .any(|(root, commit, path)| {
+                    root == Path::new(CANDIDATE_ROOT)
+                        && commit == BASE_OID
+                        && path == W5_BROKER_WIRE_PATH
+                })
+        );
+    }
+
+    fn assert_retirement_mutation_rejected(
+        label: &str,
+        mutate: impl FnOnce(&mut BTreeMap<String, Vec<u8>>),
+    ) {
+        let policy = policy();
+        let retirement = &policy.w5_contract_retirements[0];
+        let parent = retirement_parent_blobs(retirement);
+        let mut candidate = retirement_candidate_blobs(retirement, &parent);
+        mutate(&mut candidate);
+        let error = verify_w5_contract_retirement_contents(retirement, &parent, &candidate)
+            .expect_err(label);
+        assert!(
+            error.contains("noncanonical") || error.contains("missing"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn signing_retirement_rejects_unrelated_rust_rows_enums_and_test_edits() {
+        assert_retirement_mutation_rejected("unrelated privilege row", |candidate| {
+            let source = candidate.get_mut(W5_PRIVILEGES_PATH).unwrap();
+            let source = String::from_utf8(source.clone()).unwrap().replacen(
+                "\"InjectSecretById\"",
+                "\"InjectSecretByIdChanged\"",
+                1,
+            );
+            *candidate.get_mut(W5_PRIVILEGES_PATH).unwrap() = source.into_bytes();
+        });
+        assert_retirement_mutation_rejected("unrelated W3 enum", |candidate| {
+            let source = candidate.get_mut(W5_PRIVILEGES_W3_PATH).unwrap();
+            let source = String::from_utf8(source.clone()).unwrap().replacen(
+                "    ModprobeIfAllowed,\n",
+                "    UnrelatedOperation,\n    ModprobeIfAllowed,\n",
+                1,
+            );
+            *candidate.get_mut(W5_PRIVILEGES_W3_PATH).unwrap() = source.into_bytes();
+        });
+        assert_retirement_mutation_rejected("unrelated parity test helper", |candidate| {
+            candidate
+                .get_mut(W5_PRIVILEGES_PARITY_PATH)
+                .unwrap()
+                .extend_from_slice(b"\n// unrelated test edit\n");
+        });
+    }
+
+    #[test]
+    fn signing_retirement_rejects_unrelated_docs_and_mixed_hunks() {
+        assert_retirement_mutation_rejected("unrelated documentation", |candidate| {
+            candidate
+                .get_mut(W5_PRIVILEGES_DOC_PATH)
+                .unwrap()
+                .extend_from_slice(b"\nunrelated prose\n");
+        });
+        assert_retirement_mutation_rejected("unrelated documentation deletion", |candidate| {
+            let doc = candidate.get_mut(W5_PRIVILEGES_DOC_PATH).unwrap();
+            let changed = String::from_utf8(doc.clone()).unwrap().replacen(
+                "Unknown variants and unknown fields",
+                "Unknown fields",
+                1,
+            );
+            *doc = changed.into_bytes();
+        });
+        assert_retirement_mutation_rejected("mixed authorized and unrelated hunks", |candidate| {
+            candidate
+                .get_mut(W5_BROKER_WIRE_PATH)
+                .unwrap()
+                .extend_from_slice(b"\nconst UNRELATED: bool = true;\n");
+            candidate
+                .get_mut(W5_BROKER_DISPOSITIONS_DOC_PATH)
+                .unwrap()
+                .extend_from_slice(b"\nunrelated disposition\n");
+        });
+    }
+
+    #[test]
+    fn signing_retirement_rejects_schema_and_generated_output_decoys() {
+        assert_retirement_mutation_rejected("unrelated privilege schema enum", |candidate| {
+            let schema = candidate.get_mut(W5_PRIVILEGES_SCHEMA_PATH).unwrap();
+            let mut value: Value = serde_json::from_slice(schema).unwrap();
+            value
+                .pointer_mut("/definitions/OperationAuthz/properties/operation/enum")
+                .and_then(Value::as_array_mut)
+                .unwrap()
+                .push(Value::String("UnrelatedOperation".to_owned()));
+            *schema = canonical_json_bytes(&value).unwrap();
+        });
+        assert_retirement_mutation_rejected("wire schema definition decoy", |candidate| {
+            let schema = candidate.get_mut(W5_WIRE_SCHEMA_PATH).unwrap();
+            let mut value: Value = serde_json::from_slice(schema).unwrap();
+            value
+                .get_mut("definitions")
+                .and_then(Value::as_object_mut)
+                .unwrap()
+                .insert(
+                    "GuestControlSignDecoy".to_owned(),
+                    serde_json::json!({"type": "null"}),
+                );
+            *schema = canonical_json_bytes(&value).unwrap();
+        });
+        assert_retirement_mutation_rejected("generated daemon API decoy", |candidate| {
+            candidate
+                .get_mut(W5_DAEMON_API_PATH)
+                .unwrap()
+                .extend_from_slice(b"\n| `GuestControlSignDecoy` |\n");
+        });
+    }
+
+    #[test]
+    fn signing_retirement_rejects_renames_and_partial_inventory() {
+        let policy = policy();
+        let retirement = &policy.w5_contract_retirements[0];
+        let mut probe = probe_with_retirement_fixtures();
+        probe
+            .blobs
+            .remove(&(HEAD_OID.to_owned(), W5_BROKER_WIRE_PATH.to_owned()));
+        let error = verify_ownership(&probe, Path::new(AUTHORITY_ROOT), Path::new(CANDIDATE_ROOT))
+            .expect_err("renamed retirement file");
+        assert!(error.contains("candidate blob is missing"), "{error}");
+
+        let mut probe = FakeProbe::valid();
+        probe.changed_paths = retirement_paths(retirement);
+        probe.changed_paths.pop();
+        let error = verify_ownership(&probe, Path::new(AUTHORITY_ROOT), Path::new(CANDIDATE_ROOT))
+            .expect_err("partial retirement inventory");
+        assert!(error.contains("exact complete path inventory"), "{error}");
+    }
+
+    #[test]
+    fn signing_retirement_cannot_replace_the_parent_checker() {
+        let mut probe = probe_with_retirement_fixtures();
+        probe
+            .changed_paths
+            .push("packages/xtask/src/wave_policy.rs".to_owned());
+        probe.changed_paths.sort();
+        let error = verify_ownership(&probe, Path::new(AUTHORITY_ROOT), Path::new(CANDIDATE_ROOT))
+            .expect_err("candidate checker replacement");
+        assert!(
+            error.contains("packages/xtask/src/wave_policy.rs"),
+            "{error}"
+        );
+        assert!(
+            probe
+                .blob_reads
+                .borrow()
+                .iter()
+                .any(|(root, commit, path)| {
+                    root == Path::new(AUTHORITY_ROOT) && commit == BASE_OID && path == POLICY_PATH
+                })
+        );
     }
 
     #[test]

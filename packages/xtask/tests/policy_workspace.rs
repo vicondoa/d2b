@@ -1451,7 +1451,7 @@ fn w4_provider_delivery_fingerprints_cover_every_reserved_file() {
 fn shared_contract_policy_freezes_services_dependencies_and_ownership() {
     let root = repo_root();
     let policy = xtask::wave_policy::read_policy(&root).expect("shared-contract policy");
-    assert_eq!(policy.schema_version, 8);
+    assert_eq!(policy.schema_version, 9);
     assert_eq!(policy.authority_repository, "github.com/vicondoa/d2b");
     let frozen = policy
         .frozen_service_packages
@@ -1904,6 +1904,7 @@ fn w5_guest_signing_retirement_seam_is_exact() {
     assert_eq!(policy.w5_contract_retirements.len(), 1);
     let retirement = &policy.w5_contract_retirements[0];
     assert_eq!(retirement.component, "guest-signing");
+    assert_eq!(retirement.diff_policy, "guest-control-sign-v1");
     assert_eq!(retirement.operation, "GuestControlSign");
 
     let expected_sources = BTreeSet::from([
@@ -2048,6 +2049,13 @@ fn w5_guest_signing_retirement_seam_is_exact() {
     assert!(
         widened.validate().is_err(),
         "policy validation must reject extra W5 retirement authority"
+    );
+
+    let mut unbound = policy;
+    unbound.w5_contract_retirements[0].diff_policy = "path-only".to_owned();
+    assert!(
+        unbound.validate().is_err(),
+        "W5 retirement authority must remain bound to the canonical diff policy"
     );
 }
 

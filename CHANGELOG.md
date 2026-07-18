@@ -183,6 +183,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Bound the guest-control signing retirement exception to a parent-authoritative,
+  exact content transformation so same-file unrelated edits, renames, mixed
+  hunks, and generated-schema decoys fail closed.
 - Made encoded guest-session credentials opaque and non-cloneable, and moved
   decoded bootstrap PSKs directly into stable heap-backed zeroizing ownership
   before validation.
