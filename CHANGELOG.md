@@ -232,6 +232,8 @@ deprecations ship one minor release before removal.
   and protected-path inventories so it can account for the intentionally later
   declarative removal, with matching canonical synthetic fixtures and workspace
   policy assertions.
+- Made the competing state-generation writer regression coordinate lock
+  contention explicitly instead of depending on scheduler time.
 - Classified the shared ComponentSession, service, provider, allocator, and
   provider-registry contract pages explicitly as Diataxis references.
 - Documented the provider-binding consumer fallback required when the strict
