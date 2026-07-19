@@ -664,19 +664,9 @@
       "path": "packages/d2b-client/src/client.rs"
     },
     {
-      "name": "w3-client-daemon-service",
-      "repository": "github.com/vicondoa/d2b",
-      "path": "packages/d2b-client/src/daemon_service.rs"
-    },
-    {
       "name": "w3-client-error",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2b-client/src/error.rs"
-    },
-    {
-      "name": "w3-client-guest-service",
-      "repository": "github.com/vicondoa/d2b",
-      "path": "packages/d2b-client/src/guest_service.rs"
     },
     {
       "name": "w3-client-host-socket",

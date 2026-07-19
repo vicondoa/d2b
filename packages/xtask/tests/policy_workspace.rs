@@ -1451,7 +1451,7 @@ fn w4_provider_delivery_fingerprints_cover_every_reserved_file() {
 fn shared_contract_policy_freezes_services_dependencies_and_ownership() {
     let root = repo_root();
     let policy = xtask::wave_policy::read_policy(&root).expect("shared-contract policy");
-    assert_eq!(policy.schema_version, 9);
+    assert_eq!(policy.schema_version, 10);
     assert_eq!(policy.authority_repository, "github.com/vicondoa/d2b");
     let frozen = policy
         .frozen_service_packages
@@ -1983,10 +1983,6 @@ fn w5_guest_signing_retirement_seam_is_exact() {
         expected_companions
     );
 
-    let expected_selectors = BTreeMap::from([(
-        "packages/d2b-contract-tests/tests/privileges_parity.rs",
-        BTreeSet::from(["rendered_privileges_matches_rust_matrix"]),
-    )]);
     let actual_selectors = retirement
         .test_selectors
         .iter()
@@ -2001,7 +1997,7 @@ fn w5_guest_signing_retirement_seam_is_exact() {
             )
         })
         .collect::<BTreeMap<_, _>>();
-    assert_eq!(actual_selectors, expected_selectors);
+    assert!(actual_selectors.is_empty());
     for selector in &retirement.test_selectors {
         let source = read_repo_file(&selector.test_file);
         for test in &selector.test_names {
@@ -2013,7 +2009,7 @@ fn w5_guest_signing_retirement_seam_is_exact() {
         }
     }
 
-    let authorized = retirement
+    let mut authorized = retirement
         .source_paths
         .iter()
         .chain(
@@ -2025,6 +2021,24 @@ fn w5_guest_signing_retirement_seam_is_exact() {
         .chain(retirement.companion_paths.iter())
         .cloned()
         .collect::<BTreeSet<_>>();
+    let expected_pins = BTreeSet::from([
+        "tests/golden/pinned/broker-export-audit.txt".to_owned(),
+        "tests/golden/pinned/broker-socket-acl.txt".to_owned(),
+        "tests/golden/pinned/cli-vm-verbs.txt".to_owned(),
+        "tests/golden/pinned/daemon-socket-acl.txt".to_owned(),
+        "tests/golden/pinned/daemon-state-persistence.txt".to_owned(),
+        "tests/golden/pinned/daemon-version-negotiation.txt".to_owned(),
+        "tests/golden/pinned/guest-control-token-materializer.txt".to_owned(),
+    ]);
+    assert_eq!(
+        policy
+            .w5_successor_pin_paths
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        expected_pins
+    );
+    authorized.extend(expected_pins);
     let w5 = policy
         .waves
         .iter()
@@ -2046,7 +2060,7 @@ fn w5_guest_signing_retirement_seam_is_exact() {
     );
     let authorized = authorized.into_iter().collect::<Vec<_>>();
     xtask::wave_policy::check_changed_paths(&policy, "w5", &authorized)
-        .expect("exact GuestControlSign retirement paths");
+        .expect("exact W5 retirement and successor-pin paths");
 
     for broader in [
         "packages/d2b-contract-tests/tests/policy_broker_dispositions.rs",

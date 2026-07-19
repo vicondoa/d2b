@@ -124,6 +124,8 @@ deprecations ship one minor release before removal.
 - Moved immutable validator execution, sockets, caches, and test scratch into
   bounded process-owned temporary roots with cleanup required before evidence
   publication.
+- Kept the W4 foundation fingerprint inventory limited to files present in the
+  root tree while W5's own manifest fingerprints its runtime client services.
 - Predeclared exact W5 ownership for fail-closed successor pins and synchronized
   their shared migration ledgers with the ComponentSession v2 test inventory,
   separately from the closed `GuestControlSign` retirement.
