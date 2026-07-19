@@ -21973,9 +21973,7 @@ fn dispatch_audit(
     peer: &PeerIdentity,
     request: public_wire::AuditRequest,
 ) -> Result<Value, TypedError> {
-    if peer.role != PeerRole::Admin {
-        return Err(TypedError::AuthzAuditRequiresAdmin);
-    }
+    require_audit_admin(peer)?;
     let socket = connect_seqpacket(&state.config.broker_socket_path).map_err(|error| {
         TypedError::InternalBrokerUnavailable {
             path: state.config.broker_socket_path.clone(),
@@ -22031,6 +22029,30 @@ fn dispatch_audit(
         context: "serialize audit response".to_owned(),
         detail: err.to_string(),
     })
+}
+
+fn require_audit_admin(peer: &PeerIdentity) -> Result<(), TypedError> {
+    if peer.role == PeerRole::Admin {
+        Ok(())
+    } else {
+        Err(TypedError::AuthzAuditRequiresAdmin)
+    }
+}
+
+#[cfg(test)]
+mod audit_authorization_tests {
+    use super::*;
+
+    #[test]
+    fn launcher_is_denied_audit_before_broker_access() {
+        let error = require_audit_admin(&PeerIdentity {
+            role: PeerRole::Launcher,
+            uid: 4242,
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), "authz-audit-requires-admin");
+        assert_eq!(error.exit_code(), 32);
+    }
 }
 
 fn dispatch_host_check(

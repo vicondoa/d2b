@@ -350,7 +350,11 @@ deprecations ship one minor release before removal.
 - Kept privileges parity exact while excluding only the Nix-emitted
   `GuestControlSign` row until its W7-owned declarative retirement lands.
 - Removed production-compiled peer-identity environment overrides; integration
-  tests now exercise the daemon binary through real Unix `SO_PEERCRED`.
+  and performance tests now exercise the daemon binary through real Unix
+  `SO_PEERCRED`.
+- Split audit authorization coverage between daemon-side launcher-role
+  enforcement and a bounded CLI error-frame mock, avoiding a same-uid live
+  harness that cannot represent a production launcher.
 - Matched `/proc/<pid>/cgroup`'s leading-slash format during realm-child
   adoption and added a successful production-verifier regression test whose
   helper signals readiness only after `exec`.
