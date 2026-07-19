@@ -24,6 +24,9 @@ carry argv, host paths, or credential material.
 - `schemaVersion` is `v2`.
 - `registryGeneration` must match every descriptor generation.
 - Provider entries are bounded, unique, and sorted by canonical provider ID.
+- `ProviderBindingV2` wire decoding remains strict to variants declared by the
+  current schema. Downstream consumers must retain an explicit unsupported
+  fallback so a newly declared variant cannot silently activate behavior.
 - Each local-runtime descriptor's provider ID is re-derived from the realm in
   descriptor placement and the workload ID in its binding. Its configuration
   fingerprint and scope digest are recomputed from those closed fields, while

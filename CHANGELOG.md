@@ -225,6 +225,8 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Documented the provider-binding consumer fallback required when the strict
+  wire schema gains a newly declared variant.
 - Kept the legacy guest credential-path test strict under immutable `/tmp`
   scratch without treating a sticky world-writable ancestor as production-safe.
 - Tested legacy guest signing through its in-memory HMAC boundary while keeping
