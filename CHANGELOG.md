@@ -119,6 +119,8 @@ deprecations ship one minor release before removal.
   a single canonical row deletion.
 - Moved the general daemon API v2 rewrite and broker-wire link updates into
   shared-root, leaving W5 only the canonical signing rows and variants removal.
+- Moved general privilege reference updates into shared-root, leaving W5 only
+  the canonical signing metadata paragraph and matrix-row retirement.
 - Moved immutable validator execution, sockets, caches, and test scratch into
   bounded process-owned temporary roots with cleanup required before evidence
   publication.
