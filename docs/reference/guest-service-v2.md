@@ -1,5 +1,7 @@
 # Guest service v2
 
+**Diataxis category:** reference.
+
 `d2b-guestd` serves typed `d2b.guest.v2.GuestService` and
 `d2b.activation.v2.ActivationService` over one authenticated direct
 ComponentSession. The frozen daemon and direct guest endpoint schema

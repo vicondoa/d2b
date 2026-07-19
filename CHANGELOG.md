@@ -358,6 +358,8 @@ deprecations ship one minor release before removal.
   with safe Rustix file, filesystem, and socket primitives.
 - Kept direct allocator-service test runs inside an owned temporary socket
   directory instead of trying to change shared `/tmp` permissions.
+- Classified the guest-service and configured-launch contract pages explicitly
+  as Diataxis reference documentation.
 - Materialized the retired guest-control v1 ttrpc binding marker after the W5
   service switched entirely to generated v2 bindings.
 - Kept the legacy guest credential-path test strict under immutable `/tmp`
