@@ -1859,6 +1859,11 @@
       "path": "packages/d2b-client/src/daemon_service.rs"
     },
     {
+      "name": "w5-client-guest-service",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-client/src/guest_service.rs"
+    },
+    {
       "name": "w5-prep-allocator-service-reference",
       "repository": "github.com/vicondoa/d2b",
       "path": "docs/reference/allocator-service-api.md"
