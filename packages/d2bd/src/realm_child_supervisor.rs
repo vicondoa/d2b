@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::io::Read;
-use std::os::fd::{AsFd, AsRawFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::path::{Path, PathBuf};
 
 use d2b_host::realm_children::{RealmChildRole, validate_realm_id};
@@ -91,10 +91,10 @@ impl RealmChildSupervisor {
         verifier: &V,
     ) -> Result<(), RealmChildSupervisorError> {
         candidate.validate_shape()?;
-        verifier.verify(&candidate.controller)?;
-        verifier.verify(&candidate.broker)?;
         let controller_pidfd = open_pidfd(candidate.controller.pid)?;
         let broker_pidfd = open_pidfd(candidate.broker.pid)?;
+        verifier.verify(&candidate.controller, controller_pidfd.as_fd())?;
+        verifier.verify(&candidate.broker, broker_pidfd.as_fd())?;
         let pair = RealmChildPair {
             realm_id: candidate.realm_id,
             controller: candidate.controller.into_handle(controller_pidfd),
@@ -154,6 +154,7 @@ pub trait RealmChildAdoptionVerifier {
     fn verify(
         &self,
         candidate: &RealmChildAdoptionCandidate,
+        pidfd: BorrowedFd<'_>,
     ) -> Result<(), RealmChildSupervisorError>;
 }
 
@@ -164,7 +165,9 @@ impl RealmChildAdoptionVerifier for ProcRealmChildAdoptionVerifier {
     fn verify(
         &self,
         candidate: &RealmChildAdoptionCandidate,
+        pidfd: BorrowedFd<'_>,
     ) -> Result<(), RealmChildSupervisorError> {
+        validate_pidfd(pidfd, candidate.pid)?;
         let proc_root = PathBuf::from("/proc").join(candidate.pid.to_string());
         let executable = std::fs::read_link(proc_root.join("exe"))
             .map_err(|_| RealmChildSupervisorError::ProcessMissing)?;

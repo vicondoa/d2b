@@ -1,3 +1,4 @@
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 use std::path::PathBuf;
 use std::process::{Child, Command};
 
@@ -83,19 +84,30 @@ fn rejects_duplicate_realm_without_replacing_authority() {
     assert_eq!(supervisor.len(), 1);
 }
 
-struct AcceptingVerifier;
+struct PidfdVerifier;
 
-impl RealmChildAdoptionVerifier for AcceptingVerifier {
+impl RealmChildAdoptionVerifier for PidfdVerifier {
     fn verify(
         &self,
-        _candidate: &RealmChildAdoptionCandidate,
+        candidate: &RealmChildAdoptionCandidate,
+        pidfd: BorrowedFd<'_>,
     ) -> Result<(), RealmChildSupervisorError> {
-        Ok(())
+        let fdinfo = std::fs::read_to_string(format!("/proc/self/fdinfo/{}", pidfd.as_raw_fd()))
+            .map_err(|_| RealmChildSupervisorError::ProcessMissing)?;
+        let pinned_pid = fdinfo
+            .lines()
+            .find_map(|line| line.strip_prefix("Pid:"))
+            .and_then(|value| value.trim().parse::<u32>().ok());
+        if pinned_pid == Some(candidate.pid) {
+            Ok(())
+        } else {
+            Err(RealmChildSupervisorError::InvalidPair)
+        }
     }
 }
 
 #[test]
-fn verified_adoption_opens_fresh_pidfds_atomically() {
+fn verified_adoption_pins_each_process_before_identity_verification() {
     let (children, _) = spawn_pair();
     let controller_pid = children.0[0].id();
     let broker_pid = children.0[1].id();
@@ -122,9 +134,7 @@ fn verified_adoption_opens_fresh_pidfds_atomically() {
         },
     };
     let mut supervisor = RealmChildSupervisor::default();
-    supervisor
-        .adopt_pair(candidate, &AcceptingVerifier)
-        .unwrap();
+    supervisor.adopt_pair(candidate, &PidfdVerifier).unwrap();
     assert_eq!(supervisor.len(), 1);
 }
 
@@ -142,9 +152,10 @@ fn proc_verifier_fails_closed_on_executable_mismatch() {
         controller_generation_id: "generation-1".into(),
         cgroup_leaf: PathBuf::from("/sys/fs/cgroup/d2b.slice/r-work/controller"),
     };
+    let process_pidfd = pidfd(pid);
     assert_eq!(
         ProcRealmChildAdoptionVerifier
-            .verify(&candidate)
+            .verify(&candidate, process_pidfd.as_fd())
             .unwrap_err(),
         RealmChildSupervisorError::ExecutableMismatch
     );
