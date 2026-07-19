@@ -699,6 +699,7 @@ enum VmCommand {
     /// to manage detached execs.
     Exec(VmExecArgs),
     /// Manage gateway display sessions for provider-backed targets.
+    #[command(hide = true)]
     Display(VmDisplayArgs),
 }
 
@@ -13140,6 +13141,14 @@ mod host_install_dispatch_tests {
             },
         );
         assert_eq!(result.expect("console daemon-down exit"), 1);
+    }
+
+    #[test]
+    fn vm_display_is_hidden_until_a_typed_handler_exists() {
+        let mut command = <super::NativeCli as clap::CommandFactory>::command();
+        let vm = command.find_subcommand_mut("vm").expect("vm subcommand");
+        let help = vm.render_long_help().to_string();
+        assert!(!help.contains("display"));
     }
 
     fn parse_vm_exec(argv: &[&str]) -> VmExecArgs {

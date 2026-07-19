@@ -365,6 +365,11 @@ make the host persist a remote node/workload registry.
 
 ### `vm display`
 
+This namespace is reserved but hidden from generated help and completions until
+the typed ComponentSession display handler exists. Direct invocation fails
+closed with the standard `not-yet-implemented` envelope (exit 78); the shapes
+below remain the future typed contract and do not describe current availability.
+
 **Synopsis:**
 
 - `d2b vm display list [--target <workload>.<realm>.d2b] [--human | --json]`
