@@ -1974,6 +1974,7 @@ fn w5_guest_signing_retirement_seam_is_exact() {
         "docs/reference/privileges.md".to_owned(),
         "docs/reference/schemas/v2/privileges.json".to_owned(),
         "docs/reference/schemas/v2/wire-protocol.json".to_owned(),
+        "packages/d2b-contract-tests/tests/privileges_parity.rs".to_owned(),
     ]);
     assert_eq!(
         retirement
