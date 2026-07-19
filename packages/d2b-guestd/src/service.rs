@@ -5672,19 +5672,16 @@ mod tests {
     }
 
     #[test]
-    fn credential_loader_rejects_unsafe_sources_without_leaking_path() {
+    fn credential_path_rejects_unsafe_sources_without_leaking_path() {
         let root = scratch_dir("credential-loader");
         let token = root.join(TOKEN_FILE_NAME);
         fs::write(&token, b"secret-token\n").unwrap();
         fs::set_permissions(&token, fs::Permissions::from_mode(0o600)).unwrap();
 
-        assert_eq!(
-            load_token_from_credentials_dir(&root).unwrap(),
-            b"secret-token"
-        );
+        validate_token_path(&root, &token).expect("root-owned mode-0600 token file");
 
         fs::set_permissions(&token, fs::Permissions::from_mode(0o666)).unwrap();
-        let error = load_token_from_credentials_dir(&root).unwrap_err();
+        let error = validate_token_path(&root, &token).unwrap_err();
         assert_eq!(error, GuestdServiceError::UnsafeCredential);
         assert!(
             !error.public_message().contains(

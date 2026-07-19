@@ -225,6 +225,8 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Kept the legacy guest credential-path test strict under immutable `/tmp`
+  scratch without treating a sticky world-writable ancestor as production-safe.
 - Kept guest-exec policy checks bound to capability and TTY mappings after
   those responsibilities move into focused runtime modules.
 - Stabilized guest-signing retirement policy tests with canonical synthetic
