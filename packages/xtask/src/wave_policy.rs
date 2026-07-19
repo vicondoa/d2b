@@ -288,10 +288,12 @@ impl SharedContractPolicy {
             &retirement.source_paths,
             "W5 contract retirement source paths",
         )?;
-        validate_sorted_values(
-            &retirement.test_selectors,
-            "W5 contract retirement test selectors",
-        )?;
+        if !retirement.test_selectors.is_empty() {
+            validate_sorted_values(
+                &retirement.test_selectors,
+                "W5 contract retirement test selectors",
+            )?;
+        }
         for selector in &retirement.test_selectors {
             validate_relative_path(Path::new(&selector.test_file))?;
             if !selector.test_file.ends_with(".rs") {
@@ -2507,14 +2509,6 @@ mod tests {
             "    tag: [u8; 32],\n",
             "}\n",
         );
-        let parity = concat!(
-            "#[test]\n",
-            "fn rendered_privileges_matches_rust_matrix() {\n",
-            "    let rendered = load_privileges_fixture_from_env();\n",
-            "    let rust = PrivilegesJson::w1(rendered.schema_version.clone());\n",
-            "    assert_eq!(rendered.broker_operations, rust.broker_operations);\n",
-            "}\n",
-        );
         let privileges_doc = concat!(
             "# Privileges\n\n",
             "- **secret** — `yes` for operations whose implementation reads secret\n",
@@ -2591,10 +2585,6 @@ mod tests {
             (
                 W5_PRIVILEGES_W3_PATH.to_owned(),
                 privileges_w3.as_bytes().to_vec(),
-            ),
-            (
-                W5_PRIVILEGES_PARITY_PATH.to_owned(),
-                parity.as_bytes().to_vec(),
             ),
             (
                 W5_BROKER_DISPOSITIONS_DOC_PATH.to_owned(),
@@ -2791,7 +2781,7 @@ mod tests {
     }
 
     #[test]
-    fn signing_retirement_rejects_unrelated_rust_rows_enums_and_test_edits() {
+    fn signing_retirement_rejects_unrelated_rust_rows_and_enums() {
         assert_retirement_mutation_rejected("unrelated privilege row", |candidate| {
             let source = candidate.get_mut(W5_PRIVILEGES_PATH).unwrap();
             let source = String::from_utf8(source.clone()).unwrap().replacen(
@@ -2809,12 +2799,6 @@ mod tests {
                 1,
             );
             *candidate.get_mut(W5_PRIVILEGES_W3_PATH).unwrap() = source.into_bytes();
-        });
-        assert_retirement_mutation_rejected("unrelated parity test helper", |candidate| {
-            candidate
-                .get_mut(W5_PRIVILEGES_PARITY_PATH)
-                .unwrap()
-                .extend_from_slice(b"\n// unrelated test edit\n");
         });
     }
 

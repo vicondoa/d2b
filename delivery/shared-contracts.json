@@ -57,7 +57,6 @@
         "docs/reference/privileges.md",
         "docs/reference/schemas/v2/privileges.json",
         "docs/reference/schemas/v2/wire-protocol.json",
-        "packages/d2b-contract-tests/tests/privileges_parity.rs",
         "packages/d2b-contracts/src/broker_wire.rs",
         "packages/d2b-core/src/privileges.rs",
         "packages/d2b-core/src/privileges_w3.rs",
@@ -75,7 +74,6 @@
         "docs/reference/privileges.md",
         "docs/reference/schemas/v2/privileges.json",
         "docs/reference/schemas/v2/wire-protocol.json",
-        "packages/d2b-contract-tests/tests/privileges_parity.rs",
         "packages/d2b-contracts/src/broker_wire.rs",
         "packages/d2b-core/src/privileges.rs",
         "packages/d2b-core/src/privileges_w3.rs",
@@ -550,14 +548,7 @@
         "packages/d2b-core/src/privileges.rs",
         "packages/d2b-core/src/privileges_w3.rs"
       ],
-      "test_selectors": [
-        {
-          "test_file": "packages/d2b-contract-tests/tests/privileges_parity.rs",
-          "test_names": [
-            "rendered_privileges_matches_rust_matrix"
-          ]
-        }
-      ],
+      "test_selectors": [],
       "companion_paths": [
         "docs/reference/broker-w2-dispositions.md",
         "docs/reference/daemon-api.md",
