@@ -258,7 +258,7 @@ fn vm_list_requires_authenticated_daemon_session() {
 }
 
 #[test]
-fn top_level_list_requires_authenticated_daemon_session() {
+fn top_level_list_emits_typed_daemon_down_without_static_fallback() {
     let (_guard, paths) = scratch(VM_MANIFEST_JSON);
     let out = run_cli(&paths, &["list", "--json"]);
     assert_ne!(
@@ -269,15 +269,21 @@ fn top_level_list_requires_authenticated_daemon_session() {
     );
     assert_eq!(
         out.status.code(),
-        Some(69),
-        "list expected ComponentSession transport exit 69\nstderr:\n{}",
+        Some(1),
+        "list expected typed daemon-down exit 1\nstderr:\n{}",
         stderr_of(&out),
     );
-    assert!(
-        out.stdout.is_empty(),
-        "list must not emit a static fallback document"
+    let envelope: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("list daemon-down JSON");
+    assert_eq!(
+        envelope.get("code").and_then(serde_json::Value::as_str),
+        Some("daemon-down")
     );
-    assert!(stderr_of(&out).contains("client-connect-failed"));
+    assert_eq!(
+        envelope.get("exitCode").and_then(serde_json::Value::as_i64),
+        Some(1)
+    );
+    assert!(out.stderr.is_empty());
 }
 
 #[test]
