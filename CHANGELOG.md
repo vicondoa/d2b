@@ -114,6 +114,9 @@ deprecations ship one minor release before removal.
   across the frozen parent and its W5 consumer.
 - Completed the shared Unix/vsock ComponentSession adapters and descriptor
   validation needed by runtime service implementations.
+- Updated the shared broker disposition reference for generated service methods
+  and typed descriptor attachments while leaving the W5 signing retirement as
+  a single canonical row deletion.
 - Moved immutable validator execution, sockets, caches, and test scratch into
   bounded process-owned temporary roots with cleanup required before evidence
   publication.
