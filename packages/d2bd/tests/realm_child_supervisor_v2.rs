@@ -1,6 +1,7 @@
+use std::io::Read as _;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 use std::path::PathBuf;
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 
 use d2b_host::realm_children::RealmChildRole;
 use d2bd::realm_child_supervisor::{
@@ -164,12 +165,23 @@ fn proc_verifier_fails_closed_on_executable_mismatch() {
 
 #[test]
 fn proc_verifier_accepts_the_pinned_process_identity() {
-    let child = Command::new("sleep")
-        .arg("30")
+    let mut child = Command::new("sh")
+        .args(["-c", "printf ready; read _"])
         .env("D2B_CONTROLLER_GENERATION", "generation-1")
         .env("D2B_PROCESS_ID", "controller-1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
         .spawn()
         .unwrap();
+    let mut ready = [0_u8; 5];
+    child
+        .stdout
+        .as_mut()
+        .expect("child readiness pipe")
+        .read_exact(&mut ready)
+        .unwrap();
+    assert_eq!(&ready, b"ready");
     let pid = child.id();
     let _children = Children(vec![child]);
     let proc_root = PathBuf::from("/proc").join(pid.to_string());

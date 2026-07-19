@@ -352,7 +352,8 @@ deprecations ship one minor release before removal.
 - Removed production-compiled peer-identity environment overrides; integration
   tests now exercise the daemon binary through real Unix `SO_PEERCRED`.
 - Matched `/proc/<pid>/cgroup`'s leading-slash format during realm-child
-  adoption and added a successful production-verifier regression test.
+  adoption and added a successful production-verifier regression test whose
+  helper signals readiness only after `exec`.
 - Made launch, list, status, shell, and console emit the common typed
   `daemon-down` envelope before attempting a missing public socket.
 - Hid the reserved `vm display` namespace from generated help and completions
