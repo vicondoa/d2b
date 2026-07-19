@@ -33,7 +33,7 @@ pub use handshake::{
     HandshakeCredentials, HandshakeRole, NegotiatedOffer, NoiseHandshake,
     accept_generation_discovery_request, decode_generation_discovery_response,
     encode_generation_discovery_request, encode_generation_discovery_response, encode_offer,
-    is_generation_discovery_request, negotiate_offer,
+    is_generation_discovery_request, negotiate_offer, x25519_public_key,
 };
 pub use lifecycle::{KeepaliveAction, SessionLifecycle, SessionPhase};
 pub use metrics::{MetricEvent, MetricsSink, NoopMetrics};

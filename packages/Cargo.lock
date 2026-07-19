@@ -442,7 +442,7 @@ dependencies = [
  "bitflags 2.13.0",
  "cexpr",
  "clang-sys",
- "itertools 0.10.5",
+ "itertools",
  "proc-macro2",
  "quote",
  "regex",
@@ -1006,6 +1006,7 @@ dependencies = [
  "d2b-realm-core",
  "d2b-realm-router",
  "nix 0.29.0",
+ "protobuf",
  "rustix 0.38.44",
  "schemars",
  "serde",
@@ -1031,7 +1032,9 @@ dependencies = [
  "d2b-contracts",
  "d2b-session",
  "d2b-session-unix",
+ "nix 0.29.0",
  "protobuf",
+ "sha2",
  "tokio",
  "ttrpc",
 ]
@@ -1144,10 +1147,7 @@ version = "2.0.0"
 dependencies = [
  "async-trait",
  "d2b-realm-core",
- "hmac",
  "serde",
- "serde_json",
- "sha2",
  "tokio",
 ]
 
@@ -1161,13 +1161,16 @@ dependencies = [
  "chacha20poly1305",
  "d2b-contracts",
  "d2b-gateway",
+ "d2b-provider",
  "d2b-provider-aca",
  "d2b-provider-relay",
+ "d2b-provider-toolkit",
  "d2b-realm-core",
  "d2b-realm-provider",
  "d2b-session",
  "getrandom 0.2.17",
  "libc",
+ "protobuf",
  "serde",
  "serde_json",
  "sha2",
@@ -1175,6 +1178,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "ttrpc",
 ]
 
 [[package]]
@@ -1219,6 +1223,7 @@ dependencies = [
  "d2b-core",
  "d2b-realm-core",
  "d2b-realm-provider",
+ "d2b-session-unix",
  "libc",
  "miniz_oxide",
  "nix 0.29.0",
@@ -1230,6 +1235,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "ttrpc",
+ "zeroize",
 ]
 
 [[package]]
@@ -1253,12 +1259,18 @@ dependencies = [
 name = "d2b-priv-broker"
 version = "2.0.0"
 dependencies = [
+ "async-trait",
  "d2b-contracts",
  "d2b-core",
  "d2b-host",
  "d2b-realm-core",
+ "d2b-session",
+ "d2b-session-unix",
+ "d2b-state",
+ "futures",
  "hmac",
  "nix 0.29.0",
+ "protobuf",
  "rustix 0.38.44",
  "serde",
  "serde_json",
@@ -1267,6 +1279,8 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "ttrpc",
+ "zeroize",
 ]
 
 [[package]]
@@ -1537,13 +1551,6 @@ dependencies = [
 [[package]]
 name = "d2b-realm-codec-protobuf"
 version = "2.0.0"
-dependencies = [
- "d2b-contracts",
- "d2b-realm-core",
- "d2b-realm-provider",
- "prost 0.13.5",
- "serde_json",
-]
 
 [[package]]
 name = "d2b-realm-core"
@@ -1571,18 +1578,18 @@ dependencies = [
 name = "d2b-realm-router"
 version = "2.0.0"
 dependencies = [
- "chacha20poly1305",
- "d2b-realm-codec-protobuf",
+ "async-trait",
+ "d2b-contracts",
  "d2b-realm-core",
  "d2b-realm-provider",
  "d2b-realm-transport",
- "hmac",
- "serde",
+ "d2b-session",
+ "protobuf",
  "serde_json",
  "sha2",
- "subtle",
  "tokio",
  "tracing",
+ "ttrpc",
 ]
 
 [[package]]
@@ -1616,8 +1623,10 @@ dependencies = [
  "async-trait",
  "d2b-contracts",
  "d2b-session",
+ "libc",
  "rustix 0.38.44",
  "tokio",
+ "tokio-vsock",
 ]
 
 [[package]]
@@ -1733,6 +1742,9 @@ dependencies = [
  "d2b-realm-core",
  "d2b-realm-provider",
  "d2b-realm-router",
+ "d2b-session",
+ "d2b-session-unix",
+ "futures",
  "getrandom 0.2.17",
  "libc",
  "nix 0.29.0",
@@ -1740,7 +1752,6 @@ dependencies = [
  "protobuf",
  "regex",
  "rustix 0.38.44",
- "semver",
  "serde",
  "serde_json",
  "sha2",
@@ -1752,6 +1763,7 @@ dependencies = [
  "tracing-subscriber",
  "ttrpc",
  "uzers",
+ "zeroize",
 ]
 
 [[package]]
@@ -2593,15 +2605,6 @@ name = "itertools"
 version = "0.10.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
 dependencies = [
  "either",
 ]
@@ -3655,17 +3658,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "de5e2533f59d08fcf364fd374ebda0692a70bd6d7e66ef97f306f45c6c5d8020"
 dependencies = [
  "bytes",
- "prost-derive 0.8.0",
-]
-
-[[package]]
-name = "prost"
-version = "0.13.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2796faa41db3ec313a31f7624d9286acf277b52de526150b7e69f3debf891ee5"
-dependencies = [
- "bytes",
- "prost-derive 0.13.5",
+ "prost-derive",
 ]
 
 [[package]]
@@ -3676,11 +3669,11 @@ checksum = "355f634b43cdd80724ee7848f95770e7e70eefa6dcf14fea676216573b8fd603"
 dependencies = [
  "bytes",
  "heck 0.3.3",
- "itertools 0.10.5",
+ "itertools",
  "log",
  "multimap",
  "petgraph",
- "prost 0.8.0",
+ "prost",
  "prost-types",
  "tempfile",
  "which 4.4.2",
@@ -3693,23 +3686,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "600d2f334aa05acb02a755e217ef1ab6dea4d51b58b7846588b747edec04efba"
 dependencies = [
  "anyhow",
- "itertools 0.10.5",
+ "itertools",
  "proc-macro2",
  "quote",
  "syn 1.0.109",
-]
-
-[[package]]
-name = "prost-derive"
-version = "0.13.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
-dependencies = [
- "anyhow",
- "itertools 0.14.0",
- "proc-macro2",
- "quote",
- "syn 2.0.118",
 ]
 
 [[package]]
@@ -3719,7 +3699,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "603bbd6394701d13f3f25aada59c7de9d35a6a5887cfc156181234a44002771b"
 dependencies = [
  "bytes",
- "prost 0.8.0",
+ "prost",
 ]
 
 [[package]]
@@ -5222,7 +5202,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3aa71f4a44711b3b9cc10ed0c7e239ff0fe4b8e6c900a142fb3bb26401385718"
 dependencies = [
  "derive-new",
- "prost 0.8.0",
+ "prost",
  "prost-build",
  "prost-types",
  "protobuf",

@@ -147,6 +147,7 @@ impl PidfdIdentityPolicy {
 #[derive(Clone)]
 pub enum DescriptorPolicy {
     File(ObjectIdentity),
+    SealedReadOnlyMemfd,
     Pidfd(PidfdIdentityPolicy),
     Credentials(PeerCredentials),
 }
@@ -155,6 +156,7 @@ impl fmt::Debug for DescriptorPolicy {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::File(_) => "DescriptorPolicy::File(REDACTED)",
+            Self::SealedReadOnlyMemfd => "DescriptorPolicy::SealedReadOnlyMemfd",
             Self::Pidfd(_) => "DescriptorPolicy::Pidfd(REDACTED)",
             Self::Credentials(_) => "DescriptorPolicy::Credentials(REDACTED)",
         })
@@ -326,6 +328,29 @@ impl ReceivedPacket {
                 (
                     ReceivedControl::File(fd),
                     AttachmentKind::FileDescriptor,
+                    DescriptorPolicy::SealedReadOnlyMemfd,
+                ) if descriptor.object_type == KernelObjectType::Memfd
+                    && descriptor.access == AttachmentAccess::ReadOnly =>
+                {
+                    let actual = inspect_identity(
+                        &fd,
+                        KernelObjectType::Memfd,
+                        AttachmentAccess::ReadOnly,
+                        false,
+                    )?;
+                    require_fully_sealed(&actual)?;
+                    if identities.iter().any(|(prior, prior_allows)| {
+                        prior.same_kernel_object(&actual)
+                            && (!descriptor.duplicate_object_allowed || !prior_allows)
+                    }) {
+                        return Err(UnixSessionError::DuplicateObject);
+                    }
+                    identities.push((actual, descriptor.duplicate_object_allowed));
+                    accepted.push(AcceptedAttachment::File(fd));
+                }
+                (
+                    ReceivedControl::File(fd),
+                    AttachmentKind::FileDescriptor,
                     DescriptorPolicy::Pidfd(policy),
                 ) if descriptor.object_type == KernelObjectType::Pidfd => {
                     let actual = policy.validate(&fd, descriptor.access)?;
@@ -476,9 +501,38 @@ pub(crate) fn validate_owned_file_identity(
         DescriptorPolicy::Pidfd(policy) if descriptor.object_type == KernelObjectType::Pidfd => {
             policy.validate(fd, descriptor.access)
         }
+        DescriptorPolicy::SealedReadOnlyMemfd
+            if descriptor.object_type == KernelObjectType::Memfd
+                && descriptor.access == AttachmentAccess::ReadOnly =>
+        {
+            let actual = inspect_identity(
+                fd,
+                KernelObjectType::Memfd,
+                AttachmentAccess::ReadOnly,
+                false,
+            )?;
+            require_fully_sealed(&actual)?;
+            Ok(actual)
+        }
         DescriptorPolicy::File(_)
+        | DescriptorPolicy::SealedReadOnlyMemfd
         | DescriptorPolicy::Pidfd(_)
         | DescriptorPolicy::Credentials(_) => Err(UnixSessionError::DescriptorMismatch),
+    }
+}
+
+fn require_fully_sealed(identity: &ObjectIdentity) -> Result<(), UnixSessionError> {
+    let required =
+        (libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL) as u32;
+    if identity.object_type == KernelObjectType::Memfd
+        && identity.access == AttachmentAccess::ReadOnly
+        && identity
+            .seals
+            .is_some_and(|seals| seals & required == required)
+    {
+        Ok(())
+    } else {
+        Err(UnixSessionError::DescriptorMismatch)
     }
 }
 

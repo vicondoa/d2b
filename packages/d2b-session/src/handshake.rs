@@ -6,7 +6,11 @@ use d2b_contracts::v2_component_session::{
     SessionErrorCode,
 };
 use sha2::{Digest, Sha256};
-use snow::{Builder, HandshakeState, TransportState, params::NoiseParams};
+use snow::{
+    Builder, HandshakeState, TransportState,
+    params::{DHChoice, NoiseParams},
+    resolvers::{CryptoResolver, DefaultResolver},
+};
 
 use crate::{AdmittedBootstrapPsk, Result, Secret32, SessionError};
 
@@ -17,6 +21,19 @@ const GENERATION_REPLY_MAGIC: &[u8; 8] = b"D2BGD2A\n";
 pub const GENERATION_DISCOVERY_REQUEST_LEN: usize =
     GENERATION_QUERY_MAGIC.len() + ENDPOINT_POLICY_IDENTITY_CANONICAL_LEN;
 pub const GENERATION_DISCOVERY_RESPONSE_LEN: usize = GENERATION_REPLY_MAGIC.len() + 32 + 8;
+
+pub fn x25519_public_key(private_key: &[u8; 32]) -> Result<[u8; 32]> {
+    if private_key == &[0; 32] {
+        return Err(SessionError::new(SessionErrorCode::AuthenticationFailed));
+    }
+    let mut dh = DefaultResolver
+        .resolve_dh(&DHChoice::Curve25519)
+        .ok_or_else(|| SessionError::new(SessionErrorCode::AuthenticationFailed))?;
+    dh.set(private_key);
+    dh.pubkey()
+        .try_into()
+        .map_err(|_| SessionError::new(SessionErrorCode::AuthenticationFailed))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandshakeRole {

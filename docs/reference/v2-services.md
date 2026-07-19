@@ -94,6 +94,63 @@ controller and one broker record with distinct nonzero numeric PIDs, distinct
 opaque process IDs, executable digests, and role-bound pidfd attachments:
 controller is response attachment zero and broker is response attachment one.
 
+`BrokerService.Apply` method ID `2253834528` materializes guest runtime
+credentials when `resource_id` is the exact private-bundle storage ID
+`path:workload-guest-session-credential:<workload>`. The authenticated request
+also carries the exact realm/workload scope, operation ID, generation, and a
+SHA-256 digest over the closed authority inputs. It carries no path, key, PSK,
+argv, inventory, or byte payload.
+
+The owning realm broker resolves both storage rows and the configured-launch
+inventory from its integrity-verified private bundle. A realm-session authority
+connector supplies the exact generation, parent X25519 public key, channel
+binding, enrolled guest identity digest/static public key, and optional
+operation-bound bootstrap secret. The connector has no ambient file, token, or
+environment fallback. The broker verifies the complete request digest before
+encoding with the shared `GuestSessionCredentialV1` implementation.
+
+The guest-material dispatcher is installed only in a realm-bound production
+handler whose authenticated endpoint roles are `realm-controller` and
+`realm-broker` and whose request realm must equal the child broker's launch
+realm. The local-root broker has no guest-material authority connector and
+denies this resource class.
+
+Success is an atomic pair:
+
+1. response attachment zero is `d2b-guest-session-v2`;
+2. response attachment one is `d2b-configured-launch-v2`.
+
+Both are read-only, close-on-exec, fully sealed regular-file memfds. The broker
+also atomically replaces the pair at their declared broker-owned runtime
+storage rows using the bundle-selected root/private ownership and modes.
+Failure while creating the second member restores the prior pair or removes
+both new members. The response result digest binds both credential digests.
+The opened parent directory itself must be owned by uid 0 and have neither
+group nor world write permission. Both prior members are snapshotted before
+either replacement. First-member, second-member, rename, parent-fsync, handler
+drop, and mandatory-audit failures restore both snapshots. The replacement
+transaction remains rollback-armed until the mandatory path-free audit append
+succeeds.
+
+The configured-launch payload is encoded exclusively by the shared
+`GuestConfiguredLaunchesV1` codec documented in
+[`guest-configured-launches-v2.md`](guest-configured-launches-v2.md). The broker
+derives canonical realm/workload short IDs, binds the integrity digest of the
+exact private workload definition, and includes only its configured exec items.
+Argv remains confined to this credential; it is absent from request/response
+messages, audit, Debug, errors, and public launcher metadata.
+
+Bootstrap lifetime is at most five minutes and its PSK is single-use.
+Consumption is authority-owned and keyed by the exact realm, workload,
+bootstrap binding operation ID, and replay nonce—not the Apply request
+operation ID. The append-and-sync replay ledger survives connection and
+connector recreation. A replay, scope/generation/identity mismatch, stale or
+unregistered storage ID, wrong descriptor count, cancellation, or deadline
+expiry fails closed. Drop-armed request reservations terminally record
+in-progress operations and attempt the same failure audit. Audit records contain
+only realm/workload/operation/storage IDs, generations, digests, closed outcomes,
+and closed error kinds.
+
 Listener, bootstrap-session, namespace, cgroup, state-root, and audit-root
 bindings are singleton authority: each request has at most one binding for a
 `(role, kind)` pair, and each such binding must omit `resource_id`. `Resource`
@@ -157,6 +214,10 @@ range `0x0100..=0xffff` and returns its canonical `stream-N` spelling plus a
 bounded opaque resource handle. The client opens exactly that returned stream,
 once. A client cannot name, preselect, reuse, or cause the server to open a
 caller-selected channel.
+
+The production guest implementation, identity bootstrap, runtime credential,
+backend readiness, and stream ownership rules are specified in
+[`guest-service-v2.md`](./guest-service-v2.md).
 
 The first logical message is a client-to-server `TerminalSelection` matching
 the opening method. Exec selection is either bounded arbitrary argv with the

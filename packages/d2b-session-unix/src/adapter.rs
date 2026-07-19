@@ -692,7 +692,9 @@ fn validate_value(
         (
             UnixAttachmentValue::File(fd),
             AttachmentKind::FileDescriptor,
-            DescriptorPolicy::File(_) | DescriptorPolicy::Pidfd(_),
+            DescriptorPolicy::File(_)
+            | DescriptorPolicy::SealedReadOnlyMemfd
+            | DescriptorPolicy::Pidfd(_),
         ) => validate_owned_file_identity(fd, descriptor, policy).map(Some),
         (UnixAttachmentValue::File(_), _, _) => Err(UnixSessionError::DescriptorMismatch),
     }
