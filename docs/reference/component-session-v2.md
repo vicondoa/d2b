@@ -1,5 +1,7 @@
 # ComponentSession v2 contract
 
+**Diataxis category:** reference.
+
 ComponentSession is the authenticated record boundary for d2b-owned live IPC.
 This document describes the wire contract. It does not define transport I/O,
 Noise state-machine execution, scheduling, or descriptor ownership.

@@ -1,5 +1,7 @@
 # `allocator.json` schema (`v2`)
 
+**Diataxis category:** reference.
+
 Schema: [`allocator.json`](./allocator.json)
 
 `allocator.json` is private, metadata-only local-root allocator configuration.

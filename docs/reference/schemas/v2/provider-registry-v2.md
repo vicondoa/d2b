@@ -1,5 +1,7 @@
 # `provider-registry-v2.json` schema (`v2`)
 
+**Diataxis category:** reference.
+
 Schema: [`provider-registry-v2.json`](./provider-registry-v2.json)
 
 This private artifact binds canonical provider descriptors to closed,

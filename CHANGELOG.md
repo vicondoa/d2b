@@ -225,6 +225,8 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Classified the shared ComponentSession, service, provider, allocator, and
+  provider-registry contract pages explicitly as Diataxis references.
 - Documented the provider-binding consumer fallback required when the strict
   wire schema gains a newly declared variant.
 - Kept the legacy guest credential-path test strict under immutable `/tmp`

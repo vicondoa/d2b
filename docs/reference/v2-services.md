@@ -1,5 +1,7 @@
 # ComponentSession v2 services
 
+**Diataxis category:** reference.
+
 This reference defines the internal protobuf/ttrpc services carried by the
 reserved ComponentSession control channel. The machine-readable inventory is
 [`v2-services.json`](./v2-services.json); its JSON Schema is

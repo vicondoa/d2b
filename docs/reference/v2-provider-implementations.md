@@ -1,5 +1,7 @@
 # d2b 2.0 provider implementation crates
 
+**Diataxis category:** reference.
+
 First-party provider implementations use the base-first
 `d2b-provider-<type>-<implementation>` naming convention. Each crate below
 owns one authority boundary and consumes the canonical `d2b-provider` traits
