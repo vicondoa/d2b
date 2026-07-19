@@ -229,7 +229,8 @@ deprecations ship one minor release before removal.
   keeping host-check coverage in hermetic CLI cases and audit role enforcement
   in daemon unit tests; performance readiness now uses socket/version artifacts,
   while top-level list pins typed daemon-down and pending-restart projection
-  remains covered by typed service tests.
+  remains covered by typed service tests; status keeps only its local
+  check-bridges contract.
 - Included the privileges parity test in the exact W5 guest-signing retirement
   and protected-path inventories so it can account for the intentionally later
   declarative removal, with matching canonical synthetic fixtures and workspace
