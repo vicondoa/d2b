@@ -1,5 +1,7 @@
 # Guest control exec I/O credit
 
+**Diataxis category:** reference.
+
 Exec, shell, file, and terminal data use ComponentSession named-stream credit.
 The former guest-specific credit-window candidate is retired.
 

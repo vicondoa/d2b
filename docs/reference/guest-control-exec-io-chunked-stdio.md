@@ -1,5 +1,7 @@
 # Guest control exec I/O
 
+**Diataxis category:** reference.
+
 Guest exec uses the authenticated `d2b.guest.v2` ComponentSession. The
 historical chunked unary stdio RPC protocol is retired. Exec lifecycle is
 typed control RPC; stdin, stdout, stderr, retained logs, and PTY data use

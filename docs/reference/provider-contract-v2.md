@@ -1,5 +1,7 @@
 # Provider contract v2
 
+**Diataxis category:** reference.
+
 The canonical provider DTOs live in
 `d2b_contracts::v2_provider`. The same object-safe traits and request/result
 types are defined for trusted first-party in-process adapters and authenticated

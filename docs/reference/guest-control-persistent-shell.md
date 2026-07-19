@@ -1,5 +1,7 @@
 # Guest-control persistent shell
 
+**Diataxis category:** reference.
+
 Persistent guest shells use the authenticated `d2b.guest.v2` `OpenShell`
 operation. Terminal traffic uses a bounded ComponentSession named stream; the
 retired specialized shell and terminal RPCs are not accepted.

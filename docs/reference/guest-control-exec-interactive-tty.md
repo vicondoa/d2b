@@ -1,5 +1,7 @@
 # Guest control interactive exec
 
+**Diataxis category:** reference.
+
 Interactive exec is a typed `d2b.guest.v2` `Exec` operation plus a bounded,
 bidirectional ComponentSession named stream. PTY bytes never appear in control
 RPCs.

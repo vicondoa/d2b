@@ -355,6 +355,8 @@ deprecations ship one minor release before removal.
   `daemon-down` envelope before attempting a missing public socket.
 - Hid the reserved `vm display` namespace from generated help and completions
   until its typed ComponentSession handler exists.
+- Classified the guest-control exec, I/O, shell, and provider contract pages
+  explicitly as Diataxis references.
 - Classified the shared ComponentSession, service, provider, allocator, and
   provider-registry contract pages explicitly as Diataxis references.
 - Documented the provider-binding consumer fallback required when the strict
