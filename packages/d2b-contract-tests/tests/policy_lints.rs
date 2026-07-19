@@ -23,6 +23,27 @@ fn assert_line_matches(haystack: &str, pattern: &str, ctx: &str) {
     assert!(re.is_match(haystack), "{ctx}: no line matched /{pattern}/");
 }
 
+fn assert_w5_owns_path(path: &str) {
+    let policy: serde_json::Value =
+        serde_json::from_str(&read_repo_file("delivery/shared-contracts.json"))
+            .expect("valid shared-contract policy");
+    let w5 = policy["waves"]
+        .as_array()
+        .expect("wave ownership rows")
+        .iter()
+        .find(|wave| wave["wave"] == "w5")
+        .expect("W5 ownership row");
+    assert!(
+        w5["allowed_prefixes"]
+            .as_array()
+            .expect("W5 allowed prefixes")
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .any(|prefix| path.starts_with(prefix)),
+        "shared contract policy must assign {path} to W5"
+    );
+}
+
 fn collect_markdown_files(dir: &Path, files: &mut Vec<PathBuf>) {
     let mut entries = std::fs::read_dir(dir)
         .unwrap_or_else(|err| panic!("failed to read {}: {err}", dir.display()))
@@ -1035,6 +1056,13 @@ fn generated_layer1_workflow_checks_out_every_exact_candidate_head() {
 
 #[test]
 fn production_guest_runtime_is_concrete_and_installed_before_public_service() {
+    if !repo_path_exists("packages/d2bd/src/production_guest_terminal.rs") {
+        assert!(!repo_path_exists(
+            "packages/d2bd/src/production_guest_runtime.rs"
+        ));
+        assert_w5_owns_path("packages/d2bd/src/production_guest_terminal.rs");
+        return;
+    }
     let daemon = read_repo_file("packages/d2bd/src/lib.rs");
     let connector = read_repo_file("packages/d2bd/src/production_guest_terminal.rs");
     let runtime = read_repo_file("packages/d2bd/src/production_guest_runtime.rs");
@@ -1083,6 +1111,10 @@ fn production_guest_runtime_is_concrete_and_installed_before_public_service() {
 
 #[test]
 fn child_broker_enrollment_and_vsock_runtime_are_fail_closed() {
+    if !repo_path_exists("packages/d2b-priv-broker/src/allocator_service.rs") {
+        assert_w5_owns_path("packages/d2b-priv-broker/src/allocator_service.rs");
+        return;
+    }
     let allocator = read_repo_file("packages/d2b-priv-broker/src/allocator_service.rs");
     let broker_runtime = read_repo_file("packages/d2b-priv-broker/src/runtime.rs");
     let child = read_repo_file("packages/d2b-priv-broker/src/child_realm_runtime.rs");

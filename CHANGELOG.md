@@ -229,6 +229,8 @@ deprecations ship one minor release before removal.
   scratch without treating a sticky world-writable ancestor as production-safe.
 - Tested legacy guest signing through its in-memory HMAC boundary while keeping
   production bundle and token-path validation unchanged.
+- Made W5 implementation lints verify shared-root ownership before their source
+  files exist, then enforce full source shape in the W5 tree.
 - Kept guest-exec policy checks bound to capability and TTY mappings after
   those responsibilities move into focused runtime modules.
 - Stabilized guest-signing retirement policy tests with canonical synthetic
