@@ -14647,7 +14647,7 @@ mod tests {
         use d2b_contracts::broker_wire::{ChildExitKind, ChildExitStatus, ChildReapedNotification};
         use nix::sys::signal::{Signal, kill};
         use nix::unistd::Pid;
-        use std::process::Command;
+        use std::process::{Command, Stdio};
         use std::sync::{Mutex, MutexGuard, OnceLock};
         use std::time::{Duration, Instant};
 
@@ -14715,10 +14715,11 @@ mod tests {
             let _guard = ReapTestGuard::new();
             let _rt = start_test_reaper("reap-exited-child");
 
-            let child = Command::new("sleep")
-                .arg("1")
+            let mut child = Command::new("cat")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
                 .spawn()
-                .expect("spawn sleep child");
+                .expect("spawn blocked exit child");
             let pid = child.id() as i32;
             let runner_id = format!("test-vm:test-role-{pid}");
             {
@@ -14728,6 +14729,7 @@ mod tests {
                     .expect("registry lock")
                     .insert(runner_id.clone(), pidfd);
             }
+            drop(child.stdin.take().expect("blocked child stdin"));
             std::mem::forget(child);
 
             let notif = wait_for_notification(&runner_id, Duration::from_secs(3))

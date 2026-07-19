@@ -357,6 +357,8 @@ deprecations ship one minor release before removal.
   production bundle and token-path validation unchanged.
 - Made W5 implementation lints verify shared-root ownership before their source
   files exist, then enforce full source shape in the W5 tree.
+- Removed a SIGCHLD reaper test race by holding the exit-zero child on a pipe
+  until its pidfd registry entry is published.
 - Made allocator-spawned child-realm controller/broker pairs cancellation-safe
   so dropping credential authentication terminates both children exactly once.
 - Made child-realm controllers adopt the allocator's public-listener,
