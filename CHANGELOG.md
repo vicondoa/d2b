@@ -353,6 +353,8 @@ deprecations ship one minor release before removal.
   adoption and added a successful production-verifier regression test.
 - Made launch, list, status, shell, and console emit the common typed
   `daemon-down` envelope before attempting a missing public socket.
+- Made the competing state-generation writer regression coordinate lock
+  contention explicitly instead of depending on scheduler time.
 - Hid the reserved `vm display` namespace from generated help and completions
   until its typed ComponentSession handler exists.
 - Classified the guest-control exec, I/O, shell, and provider contract pages
