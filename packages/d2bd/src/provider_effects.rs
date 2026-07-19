@@ -1629,8 +1629,8 @@ mod tests {
                 ProviderMethod::ObservabilityExport,
                 ProviderOperationInput::ObservabilityExport {
                     format: ObservabilityExportFormat::JsonLines,
-                    start_at_unix_ms: now.saturating_sub(1_000),
-                    end_at_unix_ms: now.saturating_add(1_000),
+                    start_at_unix_ms: now.saturating_sub(30_000),
+                    end_at_unix_ms: now.saturating_add(30_000),
                 },
             )
             .expect("export request");
@@ -1670,8 +1670,8 @@ mod tests {
                 ProviderMethod::ObservabilityExport,
                 ProviderOperationInput::ObservabilityExport {
                     format: ObservabilityExportFormat::OtlpProtobuf,
-                    start_at_unix_ms: now.saturating_sub(1_000),
-                    end_at_unix_ms: now.saturating_add(1_000),
+                    start_at_unix_ms: now.saturating_sub(30_000),
+                    end_at_unix_ms: now.saturating_add(30_000),
                 },
             )
             .expect("OTLP export request");
@@ -1769,8 +1769,8 @@ mod tests {
                 ProviderMethod::ObservabilityExport,
                 ProviderOperationInput::ObservabilityExport {
                     format: ObservabilityExportFormat::JsonLines,
-                    start_at_unix_ms: now.saturating_sub(1_000),
-                    end_at_unix_ms: now.saturating_add(1_000),
+                    start_at_unix_ms: now.saturating_sub(30_000),
+                    end_at_unix_ms: now.saturating_add(30_000),
                 },
             )
             .expect("ambiguous export request");
@@ -1826,8 +1826,8 @@ mod tests {
                 ProviderMethod::ObservabilityExport,
                 ProviderOperationInput::ObservabilityExport {
                     format: ObservabilityExportFormat::JsonLines,
-                    start_at_unix_ms: now.saturating_sub(1_000),
-                    end_at_unix_ms: now.saturating_add(1_000),
+                    start_at_unix_ms: now.saturating_sub(30_000),
+                    end_at_unix_ms: now.saturating_add(30_000),
                 },
             )
             .expect("blocked export request");

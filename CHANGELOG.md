@@ -234,6 +234,8 @@ deprecations ship one minor release before removal.
   policy assertions.
 - Made the competing state-generation writer regression coordinate lock
   contention explicitly instead of depending on scheduler time.
+- Made observability export tests use the configured bounded time window rather
+  than a one-second wall-clock race under concurrent Rust gates.
 - Classified the shared ComponentSession, service, provider, allocator, and
   provider-registry contract pages explicitly as Diataxis references.
 - Documented the provider-binding consumer fallback required when the strict
