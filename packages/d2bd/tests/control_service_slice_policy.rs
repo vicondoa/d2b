@@ -71,10 +71,14 @@ const REQUIRED_OWNERS: [(&str, &str); 26] = [
     ),
     (GUEST_TOKEN_PIN, "guest-service"),
 ];
-const W5_PREP_FINGERPRINTS: [(&str, &str); 35] = [
+const W5_PREP_FINGERPRINTS: [(&str, &str); 36] = [
     (
         "w5-client-daemon-service",
         "packages/d2b-client/src/daemon_service.rs",
+    ),
+    (
+        "w5-client-guest-service",
+        "packages/d2b-client/src/guest_service.rs",
     ),
     (
         "w5-prep-allocator-service-reference",
