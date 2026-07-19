@@ -60,7 +60,14 @@
         "packages/d2b-contract-tests/tests/privileges_parity.rs",
         "packages/d2b-contracts/src/broker_wire.rs",
         "packages/d2b-core/src/privileges.rs",
-        "packages/d2b-core/src/privileges_w3.rs"
+        "packages/d2b-core/src/privileges_w3.rs",
+        "tests/golden/pinned/broker-export-audit.txt",
+        "tests/golden/pinned/broker-socket-acl.txt",
+        "tests/golden/pinned/cli-vm-verbs.txt",
+        "tests/golden/pinned/daemon-socket-acl.txt",
+        "tests/golden/pinned/daemon-state-persistence.txt",
+        "tests/golden/pinned/daemon-version-negotiation.txt",
+        "tests/golden/pinned/guest-control-token-materializer.txt"
       ],
       "allowed_protected_paths": [
         "docs/reference/broker-w2-dispositions.md",
@@ -71,7 +78,14 @@
         "packages/d2b-contract-tests/tests/privileges_parity.rs",
         "packages/d2b-contracts/src/broker_wire.rs",
         "packages/d2b-core/src/privileges.rs",
-        "packages/d2b-core/src/privileges_w3.rs"
+        "packages/d2b-core/src/privileges_w3.rs",
+        "tests/golden/pinned/broker-export-audit.txt",
+        "tests/golden/pinned/broker-socket-acl.txt",
+        "tests/golden/pinned/cli-vm-verbs.txt",
+        "tests/golden/pinned/daemon-socket-acl.txt",
+        "tests/golden/pinned/daemon-state-persistence.txt",
+        "tests/golden/pinned/daemon-version-negotiation.txt",
+        "tests/golden/pinned/guest-control-token-materializer.txt"
       ]
     },
     {

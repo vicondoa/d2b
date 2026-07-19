@@ -109,6 +109,13 @@ deprecations ship one minor release before removal.
 - Made CLI completion generation patch `vm exec logs` structurally instead of
   depending on unrelated `--env` and `--cwd` flags, preserving reproducibility
   across the frozen parent and its W5 consumer.
+- Completed the shared Unix/vsock ComponentSession adapters and descriptor
+  validation needed by runtime service implementations.
+- Moved immutable validator execution, sockets, caches, and test scratch into
+  bounded process-owned temporary roots with cleanup required before evidence
+  publication.
+- Predeclared exact W5 ownership for fail-closed successor pins and synchronized
+  their shared migration ledgers with the ComponentSession v2 test inventory.
 - Made provider-registry bindings non-exhaustive for Rust consumers while
   preserving strict wire variants, and added a registered consumer view whose
   explicit daemon fallback rejects newly declared bindings until an adapter is
