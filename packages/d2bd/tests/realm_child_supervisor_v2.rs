@@ -8,6 +8,7 @@ use d2bd::realm_child_supervisor::{
     RealmChildAdoptionVerifier, RealmChildHandle, RealmChildPair, RealmChildSupervisor,
     RealmChildSupervisorError,
 };
+use sha2::{Digest as _, Sha256};
 
 struct Children(Vec<Child>);
 
@@ -159,4 +160,43 @@ fn proc_verifier_fails_closed_on_executable_mismatch() {
             .unwrap_err(),
         RealmChildSupervisorError::ExecutableMismatch
     );
+}
+
+#[test]
+fn proc_verifier_accepts_the_pinned_process_identity() {
+    let child = Command::new("sleep")
+        .arg("30")
+        .env("D2B_CONTROLLER_GENERATION", "generation-1")
+        .env("D2B_PROCESS_ID", "controller-1")
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    let _children = Children(vec![child]);
+    let proc_root = PathBuf::from("/proc").join(pid.to_string());
+    let executable = std::fs::read_link(proc_root.join("exe")).unwrap();
+    let executable_digest: [u8; 32] = Sha256::digest(std::fs::read(proc_root.join("exe")).unwrap())
+        .as_slice()
+        .try_into()
+        .unwrap();
+    let cgroup_path = std::fs::read_to_string(proc_root.join("cgroup"))
+        .unwrap()
+        .lines()
+        .find_map(|line| line.strip_prefix("0::"))
+        .unwrap()
+        .trim_start_matches('/')
+        .to_owned();
+    let candidate = RealmChildAdoptionCandidate {
+        role: RealmChildRole::Controller,
+        process_id: "controller-1".into(),
+        pid,
+        executable,
+        executable_digest,
+        controller_generation_id: "generation-1".into(),
+        cgroup_leaf: PathBuf::from("/sys/fs/cgroup").join(cgroup_path),
+    };
+    let process_pidfd = pidfd(pid);
+
+    ProcRealmChildAdoptionVerifier
+        .verify(&candidate, process_pidfd.as_fd())
+        .unwrap();
 }

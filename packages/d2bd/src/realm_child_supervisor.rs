@@ -198,9 +198,10 @@ impl RealmChildAdoptionVerifier for ProcRealmChildAdoptionVerifier {
             .cgroup_leaf
             .strip_prefix("/sys/fs/cgroup")
             .unwrap_or(&candidate.cgroup_leaf);
+        let expected_cgroup = path_text(expected_cgroup).trim_start_matches('/');
         if !cgroups
             .lines()
-            .any(|line| line.strip_prefix("0::") == Some(path_text(expected_cgroup)))
+            .any(|line| line.strip_prefix("0::/") == Some(expected_cgroup))
         {
             return Err(RealmChildSupervisorError::CgroupMismatch);
         }
