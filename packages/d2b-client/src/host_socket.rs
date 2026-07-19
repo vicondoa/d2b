@@ -1,16 +1,41 @@
-use std::{collections::BTreeMap, fmt, sync::Arc, time::Instant};
+use std::{
+    collections::BTreeMap,
+    fmt,
+    io::IoSliceMut,
+    os::fd::{AsRawFd, OwnedFd},
+    sync::Arc,
+    time::Instant,
+};
 
 use async_trait::async_trait;
 use d2b_contracts::{
     v2_component_session::{
-        EndpointPolicy, RequestId, ServicePackage, SessionErrorCode, TransportClass,
+        AttachmentPolicy, EndpointPolicyIdentity, EndpointPurpose, EndpointRole,
+        IdentityEvidenceRequirement, LimitProfile, Locality, NoiseProfile, PurposeClass, RequestId,
+        ServicePackage, SessionErrorCode, TransportBinding, TransportClass,
     },
-    v2_services::{common, decode_strict},
+    v2_services::{
+        SERVICE_INVENTORY, broker, common, decode_strict, guest, service_schema_fingerprint,
+        terminal,
+    },
 };
-use d2b_session::{ComponentSessionDriver, HandshakeCredentials, SessionEngine};
+use d2b_session::{
+    ComponentSessionDriver, HandshakeCredentials, OwnedTransport, SessionEngine,
+    TransportDescriptor, TransportError, TransportPacket,
+};
 use d2b_session_unix::UnixSeqpacketTransport;
+use nix::{
+    cmsg_space,
+    sys::socket::{
+        ControlMessageOwned, MsgFlags, Shutdown, SockType, getsockopt, recvmsg, send, shutdown,
+        sockopt,
+    },
+    unistd::close,
+};
 use protobuf::{EnumOrUnknown, Message, MessageField};
+use sha2::{Digest, Sha256};
 use tokio::{
+    io::unix::AsyncFd,
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt, DuplexStream},
     sync::{Mutex, OwnedSemaphorePermit, Semaphore, mpsc},
 };
@@ -25,9 +50,203 @@ use crate::{
 };
 
 struct PendingSession {
-    transport: UnixSeqpacketTransport,
-    policy: EndpointPolicy,
+    transport: HostTransport,
+    identity: EndpointPolicyIdentity,
     credentials: HandshakeCredentials,
+}
+
+enum HostTransport {
+    Unix(Box<UnixSeqpacketTransport>),
+    Daemon(DaemonSeqpacketTransport),
+}
+
+#[async_trait]
+impl OwnedTransport for HostTransport {
+    fn descriptor(&self) -> TransportDescriptor {
+        match self {
+            Self::Unix(transport) => transport.descriptor(),
+            Self::Daemon(transport) => transport.descriptor(),
+        }
+    }
+
+    async fn receive(&mut self, protected_limit: usize) -> Result<TransportPacket, TransportError> {
+        match self {
+            Self::Unix(transport) => transport.receive(protected_limit).await,
+            Self::Daemon(transport) => transport.receive(protected_limit).await,
+        }
+    }
+
+    async fn send(&mut self, packet: TransportPacket) -> Result<(), TransportError> {
+        match self {
+            Self::Unix(transport) => transport.send(packet).await,
+            Self::Daemon(transport) => transport.send(packet).await,
+        }
+    }
+
+    async fn close(&mut self) -> Result<(), TransportError> {
+        match self {
+            Self::Unix(transport) => transport.close().await,
+            Self::Daemon(transport) => transport.close().await,
+        }
+    }
+}
+
+struct DaemonSeqpacketTransport {
+    socket: AsyncFd<OwnedFd>,
+    closed: bool,
+}
+
+impl DaemonSeqpacketTransport {
+    fn new(fd: OwnedFd, expected_peer_uid: u32) -> Result<Self, ClientError> {
+        let peer = getsockopt(&fd, sockopt::PeerCredentials)
+            .map_err(|_| ClientError::TransportPolicyMismatch)?;
+        if getsockopt(&fd, sockopt::SockType).ok() != Some(SockType::SeqPacket)
+            || peer.uid() != expected_peer_uid
+        {
+            return Err(ClientError::TransportPolicyMismatch);
+        }
+        Ok(Self {
+            socket: AsyncFd::new(fd).map_err(|_| ClientError::ConnectFailed)?,
+            closed: false,
+        })
+    }
+}
+
+impl fmt::Debug for DaemonSeqpacketTransport {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DaemonSeqpacketTransport")
+            .field("closed", &self.closed)
+            .finish()
+    }
+}
+
+#[async_trait]
+impl OwnedTransport for DaemonSeqpacketTransport {
+    fn descriptor(&self) -> TransportDescriptor {
+        TransportDescriptor {
+            class: TransportClass::UnixSeqpacket,
+            locality: Locality::HostLocal,
+            packet_atomic: true,
+            supports_attachments: false,
+        }
+    }
+
+    async fn receive(&mut self, protected_limit: usize) -> Result<TransportPacket, TransportError> {
+        if self.closed {
+            return Err(TransportError::Disconnected);
+        }
+        loop {
+            let mut ready = self
+                .socket
+                .readable()
+                .await
+                .map_err(|_| TransportError::Disconnected)?;
+            match ready.try_io(|inner| receive_daemon_packet(inner.get_ref(), protected_limit)) {
+                Ok(Ok(result)) => return result,
+                Ok(Err(error)) => return Err(classify_io_error(error)),
+                Err(_) => continue,
+            }
+        }
+    }
+
+    async fn send(&mut self, packet: TransportPacket) -> Result<(), TransportError> {
+        if self.closed {
+            return Err(TransportError::Disconnected);
+        }
+        if !packet.attachments().is_empty() || packet.as_bytes().is_empty() {
+            return Err(TransportError::InvalidAttachment);
+        }
+        loop {
+            let mut ready = self
+                .socket
+                .writable()
+                .await
+                .map_err(|_| TransportError::Disconnected)?;
+            let result = ready.try_io(|inner| {
+                send(
+                    inner.get_ref().as_raw_fd(),
+                    packet.as_bytes(),
+                    MsgFlags::MSG_DONTWAIT | MsgFlags::MSG_NOSIGNAL,
+                )
+                .map_err(nix_io_error)
+            });
+            match result {
+                Ok(Ok(sent)) if sent == packet.as_bytes().len() => return Ok(()),
+                Ok(Ok(_)) => return Err(TransportError::Truncated),
+                Ok(Err(error)) => return Err(classify_io_error(error)),
+                Err(_) => continue,
+            }
+        }
+    }
+
+    async fn close(&mut self) -> Result<(), TransportError> {
+        if !self.closed {
+            self.closed = true;
+            shutdown(self.socket.get_ref().as_raw_fd(), Shutdown::Both)
+                .map_err(|error| classify_io_error(nix_io_error(error)))?;
+        }
+        Ok(())
+    }
+}
+
+fn receive_daemon_packet(
+    fd: &OwnedFd,
+    protected_limit: usize,
+) -> std::io::Result<Result<TransportPacket, TransportError>> {
+    let mut bytes = vec![0_u8; protected_limit];
+    let mut io = [IoSliceMut::new(&mut bytes)];
+    let mut ancillary = cmsg_space!([i32; 1]);
+    let message = recvmsg::<()>(
+        fd.as_raw_fd(),
+        &mut io,
+        Some(&mut ancillary),
+        MsgFlags::MSG_DONTWAIT | MsgFlags::MSG_TRUNC | MsgFlags::MSG_CMSG_CLOEXEC,
+    )
+    .map_err(nix_io_error)?;
+    let received = message.bytes;
+    let truncated = message
+        .flags
+        .intersects(MsgFlags::MSG_TRUNC | MsgFlags::MSG_CTRUNC)
+        || received > protected_limit;
+    let mut unexpected_control = false;
+    if let Ok(controls) = message.cmsgs() {
+        for control in controls {
+            unexpected_control = true;
+            if let ControlMessageOwned::ScmRights(rights) = control {
+                for received_fd in rights {
+                    let _ = close(received_fd);
+                }
+            }
+        }
+    }
+    if truncated {
+        return Ok(Err(TransportError::LimitExceeded));
+    }
+    if unexpected_control {
+        return Ok(Err(TransportError::InvalidAttachment));
+    }
+    if received == 0 {
+        return Ok(Err(TransportError::Disconnected));
+    }
+    bytes.truncate(received);
+    Ok(Ok(TransportPacket::new(bytes)))
+}
+
+fn nix_io_error(error: nix::errno::Errno) -> std::io::Error {
+    std::io::Error::from_raw_os_error(error as i32)
+}
+
+fn classify_io_error(error: std::io::Error) -> TransportError {
+    match error.kind() {
+        std::io::ErrorKind::UnexpectedEof
+        | std::io::ErrorKind::BrokenPipe
+        | std::io::ErrorKind::ConnectionAborted
+        | std::io::ErrorKind::ConnectionReset
+        | std::io::ErrorKind::NotConnected => TransportError::Disconnected,
+        std::io::ErrorKind::WouldBlock => TransportError::WouldBlock,
+        _ => TransportError::Other,
+    }
 }
 
 pub struct HostSocketConnector {
@@ -38,23 +257,85 @@ pub struct HostSocketConnector {
 impl HostSocketConnector {
     pub fn new(
         transport: UnixSeqpacketTransport,
-        policy: EndpointPolicy,
+        identity: EndpointPolicyIdentity,
         credentials: HandshakeCredentials,
     ) -> Result<Self, ClientError> {
-        let selected = match policy.transport_binding.transport {
+        identity
+            .validate_local_generation_discovery()
+            .map_err(|_| ClientError::TransportPolicyMismatch)?;
+        let selected = match identity.transport_binding.transport {
             TransportClass::UnixSeqpacket => TransportKind::LocalUnix,
-            TransportClass::InheritedSocketpair => TransportKind::InheritedSocket,
             _ => return Err(ClientError::TransportPolicyMismatch),
         };
         Ok(Self {
             transport: selected,
             pending: Mutex::new(Some(PendingSession {
-                transport,
-                policy,
+                transport: HostTransport::Unix(Box::new(transport)),
+                identity,
                 credentials,
             })),
         })
     }
+
+    pub fn from_seqpacket_fd(
+        fd: OwnedFd,
+        expected_peer_uid: u32,
+        identity: EndpointPolicyIdentity,
+        credentials: HandshakeCredentials,
+    ) -> Result<Self, ClientError> {
+        identity
+            .validate_local_generation_discovery()
+            .map_err(|_| ClientError::TransportPolicyMismatch)?;
+        if identity.transport_binding.transport != TransportClass::UnixSeqpacket {
+            return Err(ClientError::TransportPolicyMismatch);
+        }
+        Ok(Self {
+            transport: TransportKind::LocalUnix,
+            pending: Mutex::new(Some(PendingSession {
+                transport: HostTransport::Daemon(DaemonSeqpacketTransport::new(
+                    fd,
+                    expected_peer_uid,
+                )?),
+                identity,
+                credentials,
+            })),
+        })
+    }
+}
+
+pub fn local_daemon_endpoint_identity(
+    client_uid: u32,
+    client_gid: u32,
+) -> Result<EndpointPolicyIdentity, ClientError> {
+    let service = SERVICE_INVENTORY
+        .iter()
+        .find(|service| service.package == "d2b.daemon.v2" && service.service == "DaemonService")
+        .ok_or(ClientError::InvalidService)?;
+    let mut binding = Sha256::new();
+    binding.update(b"d2b.daemon.v2\0unix-seqpacket\0");
+    binding.update(client_uid.to_be_bytes());
+    binding.update(client_gid.to_be_bytes());
+    let identity = EndpointPolicyIdentity {
+        purpose: EndpointPurpose::DaemonLocal,
+        purpose_class: PurposeClass::Local,
+        initiator_role: EndpointRole::CommandClient,
+        responder_role: EndpointRole::LocalRootController,
+        service: ServicePackage::DaemonV2,
+        schema_fingerprint: service_schema_fingerprint(service),
+        noise_profile: NoiseProfile::Nn25519ChaChaPolySha256,
+        limits: LimitProfile::local_default(),
+        transport_binding: TransportBinding {
+            transport: TransportClass::UnixSeqpacket,
+            locality: Locality::HostLocal,
+            channel_binding: binding.finalize().into(),
+            identity_evidence: IdentityEvidenceRequirement::DirectionalUnix,
+        },
+        attachment_policy: AttachmentPolicy::disabled(),
+    };
+    identity
+        .validate_local_generation_discovery()
+        .map_err(|_| ClientError::TransportPolicyMismatch)?;
+    Ok(identity)
 }
 
 impl fmt::Debug for HostSocketConnector {
@@ -79,12 +360,13 @@ impl ComponentSessionConnector for HostSocketConnector {
             .await
             .take()
             .ok_or(ClientError::ConnectFailed)?;
-        if pending.policy.service != service_package(service) {
+        if pending.identity.service != service_package(service) {
             return Err(ClientError::InvalidService);
         }
-        let engine = SessionEngine::establish_initiator(
+        let limits = pending.identity.limits;
+        let engine = SessionEngine::establish_initiator_with_generation_discovery(
             pending.transport,
-            pending.policy,
+            pending.identity,
             pending.credentials,
             Instant::now(),
         )
@@ -96,6 +378,7 @@ impl ComponentSessionConnector for HostSocketConnector {
         Ok(ConnectedSession {
             driver,
             ttrpc_socket: Socket::new(client),
+            limits,
         })
     }
 }
@@ -287,7 +570,7 @@ async fn dispatch_cancel_request(
     driver: Arc<dyn ComponentSessionDriver>,
     in_flight: &Mutex<BTreeMap<u32, InFlightRequest>>,
 ) -> Result<Vec<u8>, ()> {
-    if request.method == "Cancel" {
+    if request.method == "Cancel" && service_method(&request).is_some() {
         let cancel =
             decode_strict::<common::CancelRequest>(&request.payload, false).map_err(|_| ())?;
         let request_id = RequestId::new(cancel.request_id).map_err(|_| ())?;
@@ -377,14 +660,112 @@ fn encode_ttrpc_response(stream_id: u32, response: ttrpc::Response) -> Result<Ve
 }
 
 fn request_id(request: &ttrpc::Request) -> Result<RequestId, ()> {
-    let bytes = decode_strict::<common::ServiceRequest>(&request.payload, false)
-        .map_err(|_| ())?
-        .metadata
-        .as_ref()
-        .ok_or(())?
-        .request_id
-        .clone();
-    RequestId::new(bytes).map_err(|_| ())
+    let service = service_method(request).ok_or(())?;
+    let metadata = match (service.package, request.method.as_str()) {
+        ("d2b.daemon.v2", "Exec" | "Shell" | "OpenConsole") => {
+            decode_strict::<terminal::TerminalOpenRequest>(&request.payload, true)
+                .map_err(|_| ())?
+                .metadata
+                .into_option()
+                .ok_or(())?
+        }
+        ("d2b.guest.v2", "Exec") => {
+            decode_strict::<guest::GuestExecRequest>(&request.payload, true)
+                .map_err(|_| ())?
+                .terminal
+                .as_ref()
+                .and_then(|terminal| terminal.metadata.as_ref())
+                .cloned()
+                .ok_or(())?
+        }
+        ("d2b.guest.v2", "OpenShell") => {
+            decode_strict::<guest::GuestOpenShellRequest>(&request.payload, true)
+                .map_err(|_| ())?
+                .terminal
+                .as_ref()
+                .and_then(|terminal| terminal.metadata.as_ref())
+                .cloned()
+                .ok_or(())?
+        }
+        ("d2b.guest.v2", method) => guest_request_metadata(method, &request.payload)?,
+        ("d2b.broker.v2", "Allocate") => {
+            decode_strict::<broker::AllocateRequest>(&request.payload, true)
+                .map_err(|_| ())?
+                .metadata
+                .into_option()
+                .ok_or(())?
+        }
+        ("d2b.broker.v2", "Spawn") => {
+            decode_strict::<broker::SpawnRealmChildrenRequest>(&request.payload, true)
+                .map_err(|_| ())?
+                .metadata
+                .into_option()
+                .ok_or(())?
+        }
+        (package, "Capabilities") if package.starts_with("d2b.provider.") => {
+            decode_strict::<common::CapabilityRequest>(&request.payload, false)
+                .map_err(|_| ())?
+                .context
+                .as_ref()
+                .and_then(|context| context.metadata.as_ref())
+                .cloned()
+                .ok_or(())?
+        }
+        (package, _) if package.starts_with("d2b.provider.") => {
+            decode_strict::<common::ProviderRequest>(&request.payload, false)
+                .map_err(|_| ())?
+                .context
+                .as_ref()
+                .and_then(|context| context.metadata.as_ref())
+                .cloned()
+                .ok_or(())?
+        }
+        _ => decode_strict::<common::ServiceRequest>(&request.payload, false)
+            .map_err(|_| ())?
+            .metadata
+            .into_option()
+            .ok_or(())?,
+    };
+    RequestId::new(metadata.request_id).map_err(|_| ())
+}
+
+fn service_method(
+    request: &ttrpc::Request,
+) -> Option<&'static d2b_contracts::v2_services::ServiceSpec> {
+    SERVICE_INVENTORY.iter().find(|service| {
+        request.service == format!("{}.{}", service.package, service.service)
+            && service
+                .methods
+                .iter()
+                .any(|method| method.name == request.method)
+    })
+}
+
+fn guest_request_metadata(method: &str, payload: &[u8]) -> Result<common::RequestMetadata, ()> {
+    macro_rules! context_metadata {
+        ($message:ty, $requires_idempotency:expr) => {{
+            decode_strict::<$message>(payload, $requires_idempotency)
+                .map_err(|_| ())?
+                .context
+                .as_ref()
+                .and_then(|context| context.metadata.as_ref())
+                .cloned()
+                .ok_or(())
+        }};
+    }
+    match method {
+        "Bootstrap" => context_metadata!(guest::GuestBootstrapRequest, true),
+        "Reconnect" => context_metadata!(guest::GuestReconnectRequest, true),
+        "CancelExec" => context_metadata!(guest::GuestCancelExecRequest, true),
+        "InspectExec" => context_metadata!(guest::GuestInspectExecRequest, false),
+        "OpenExecRetainedLog" => {
+            context_metadata!(guest::GuestOpenExecRetainedLogRequest, true)
+        }
+        "FileTransfer" => context_metadata!(guest::GuestFileTransferRequest, true),
+        "SecurityKey" => context_metadata!(guest::GuestSecurityKeyRequest, true),
+        "Shutdown" => context_metadata!(guest::GuestShutdownRequest, true),
+        _ => Err(()),
+    }
 }
 
 fn service_package(service: ServiceKind) -> ServicePackage {
@@ -440,6 +821,9 @@ mod tests {
     use tokio::{io::AsyncWriteExt, sync::Notify};
 
     use super::*;
+    use crate::{Client, RouteRecord, RouteTable, ServiceOwner, TargetInput, TransportSelection};
+
+    const TEST_GENERATION: u64 = 23;
 
     struct BlockingDriver {
         started: AtomicUsize,
@@ -481,7 +865,7 @@ mod tests {
     #[async_trait]
     impl ComponentSessionDriver for BlockingDriver {
         fn generation(&self) -> u64 {
-            1
+            TEST_GENERATION
         }
 
         async fn start_ttrpc(&self, _request_id: RequestId, _frame: Vec<u8>) -> SessionResult<()> {
@@ -593,7 +977,7 @@ mod tests {
 
     fn request_frame(stream_id: u32, method: &str, payload: Vec<u8>) -> Vec<u8> {
         let request = ttrpc::Request {
-            service: "d2b.daemon.v2.Daemon".to_owned(),
+            service: "d2b.daemon.v2.DaemonService".to_owned(),
             method: method.to_owned(),
             payload,
             ..Default::default()
@@ -612,7 +996,7 @@ mod tests {
         metadata.request_id = request_id;
         metadata.issued_at_unix_ms = 1;
         metadata.expires_at_unix_ms = 2;
-        metadata.session_generation = 1;
+        metadata.session_generation = TEST_GENERATION;
         let mut scope = common::IdentityScope::new();
         scope.realm_id = "aaaaaaaaaaaaaaaaaaaa".to_owned();
         let mut request = common::ServiceRequest::new();
@@ -624,9 +1008,30 @@ mod tests {
     fn cancel_payload(request_id: Vec<u8>) -> Vec<u8> {
         let mut request = common::CancelRequest::new();
         request.request_id = request_id;
-        request.session_generation = 1;
+        request.session_generation = TEST_GENERATION;
         request.validate_wire(false).unwrap();
         request.write_to_bytes().unwrap()
+    }
+
+    fn guest_context(request_id: [u8; 16], idempotent: bool) -> guest::GuestOperationContext {
+        let mut metadata = common::RequestMetadata::new();
+        metadata.request_id = request_id.to_vec();
+        metadata.issued_at_unix_ms = 1;
+        metadata.expires_at_unix_ms = 2;
+        metadata.session_generation = TEST_GENERATION;
+        if idempotent {
+            metadata.idempotency_key = vec![8; 16];
+        }
+        let mut scope = common::IdentityScope::new();
+        scope.realm_id = "aaaaaaaaaaaaaaaaaaaa".to_owned();
+        scope.workload_id = "bbbbbbbbbbbbbbbbbbba".to_owned();
+        guest::GuestOperationContext {
+            metadata: MessageField::some(metadata),
+            scope: MessageField::some(scope),
+            operation_id: "operation-1".to_owned(),
+            request_digest: vec![9; 32],
+            ..Default::default()
+        }
     }
 
     async fn read_response_frame(socket: &mut DuplexStream) -> Vec<u8> {
@@ -668,6 +1073,103 @@ mod tests {
         tokio::task::yield_now().await;
         assert!(!pump.is_finished());
         pump.abort();
+    }
+
+    #[test]
+    fn request_ids_are_decoded_by_service_and_final_guest_method() {
+        let request_id_bytes = [7; 16];
+        let requests = [
+            (
+                "InspectExec",
+                encode_strict(
+                    &guest::GuestInspectExecRequest {
+                        context: MessageField::some(guest_context(request_id_bytes, false)),
+                        query: MessageField::some(guest::GuestInspectExecQuery {
+                            query: Some(guest::guest_inspect_exec_query::Query::Status(
+                                guest::GuestExecStatusQuery {
+                                    resource_handle: "exec-1".to_owned(),
+                                    ..Default::default()
+                                },
+                            )),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    false,
+                )
+                .unwrap(),
+            ),
+            (
+                "CancelExec",
+                encode_strict(
+                    &guest::GuestCancelExecRequest {
+                        context: MessageField::some(guest_context(request_id_bytes, true)),
+                        resource_handle: "exec-1".to_owned(),
+                        control_sequence: 1,
+                        reason: EnumOrUnknown::new(
+                            guest::GuestExecCancelReason::GUEST_EXEC_CANCEL_REASON_USER_REQUESTED,
+                        ),
+                        ..Default::default()
+                    },
+                    true,
+                )
+                .unwrap(),
+            ),
+            (
+                "OpenExecRetainedLog",
+                encode_strict(
+                    &guest::GuestOpenExecRetainedLogRequest {
+                        context: MessageField::some(guest_context(request_id_bytes, true)),
+                        resource_handle: "exec-1".to_owned(),
+                        output: EnumOrUnknown::new(terminal::OutputStream::OUTPUT_STREAM_STDOUT),
+                        max_bytes: 64,
+                        ..Default::default()
+                    },
+                    true,
+                )
+                .unwrap(),
+            ),
+        ];
+        for (method, payload) in requests {
+            let request = ttrpc::Request {
+                service: "d2b.guest.v2.GuestService".to_owned(),
+                method: method.to_owned(),
+                payload,
+                ..Default::default()
+            };
+            assert_eq!(
+                request_id(&request).unwrap().as_bytes(),
+                request_id_bytes.as_slice()
+            );
+        }
+
+        let mistyped = ttrpc::Request {
+            service: "d2b.daemon.v2.DaemonService".to_owned(),
+            method: "Inspect".to_owned(),
+            payload: requests_forbidden_guest_payload(),
+            ..Default::default()
+        };
+        assert!(request_id(&mistyped).is_err());
+    }
+
+    fn requests_forbidden_guest_payload() -> Vec<u8> {
+        encode_strict(
+            &guest::GuestInspectExecRequest {
+                context: MessageField::some(guest_context([7; 16], false)),
+                query: MessageField::some(guest::GuestInspectExecQuery {
+                    query: Some(guest::guest_inspect_exec_query::Query::Status(
+                        guest::GuestExecStatusQuery {
+                            resource_handle: "exec-1".to_owned(),
+                            ..Default::default()
+                        },
+                    )),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            false,
+        )
+        .unwrap()
     }
 
     #[tokio::test]
@@ -747,5 +1249,113 @@ mod tests {
         driver.wait_for(&driver.completed, 2).await;
         assert!(!pump.is_finished());
         pump.abort();
+    }
+
+    #[tokio::test]
+    async fn connector_discovers_and_authenticates_the_driver_generation() {
+        let generation = 41;
+        let identity = local_daemon_endpoint_identity(1000, 100).unwrap();
+        let policy = identity.with_generation(generation).unwrap();
+        let (client_fd, server_fd) = nix::sys::socket::socketpair(
+            nix::sys::socket::AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            nix::sys::socket::SockFlag::SOCK_CLOEXEC | nix::sys::socket::SockFlag::SOCK_NONBLOCK,
+        )
+        .unwrap();
+        let uid = nix::unistd::Uid::effective().as_raw();
+        let server_transport = DaemonSeqpacketTransport::new(server_fd, uid).unwrap();
+        let server = tokio::spawn(async move {
+            SessionEngine::establish_responder(
+                HostTransport::Daemon(server_transport),
+                policy,
+                HandshakeCredentials::Nn,
+                Instant::now(),
+            )
+            .await
+            .unwrap()
+        });
+        let connector = HostSocketConnector::from_seqpacket_fd(
+            client_fd,
+            uid,
+            identity,
+            HandshakeCredentials::Nn,
+        )
+        .unwrap();
+        let realm = d2b_contracts::v2_identity::RealmId::parse("aaaaaaaaaaaaaaaaaaaa").unwrap();
+        let connected = Client::new(
+            RouteTable::new(vec![RouteRecord {
+                owner: ServiceOwner::LocalRoot(realm.clone()),
+                transport: TransportKind::LocalUnix,
+            }]),
+            connector,
+        )
+        .connect(
+            TargetInput::LocalRoot(realm),
+            ServiceKind::Daemon,
+            TransportSelection::exact(TransportKind::LocalUnix),
+        )
+        .await
+        .unwrap();
+        assert_eq!(connected.session_generation(), generation);
+        assert_eq!(server.await.unwrap().generation(), generation);
+    }
+
+    #[test]
+    fn host_socket_feature_provides_a_tokio_io_driver() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .build()
+            .expect("host-socket must enable Tokio I/O");
+    }
+
+    #[tokio::test]
+    async fn daemon_transport_rejects_ancillary_data_and_oversized_packets() {
+        use std::io::IoSlice;
+
+        use nix::sys::socket::{AddressFamily, ControlMessage, SockFlag, sendmsg, socketpair};
+
+        let pair = || {
+            socketpair(
+                AddressFamily::Unix,
+                SockType::SeqPacket,
+                None,
+                SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+            )
+            .unwrap()
+        };
+        let (receiver, _sender) = pair();
+        assert_eq!(
+            DaemonSeqpacketTransport::new(
+                receiver,
+                nix::unistd::Uid::effective().as_raw().wrapping_add(1),
+            )
+            .unwrap_err(),
+            ClientError::TransportPolicyMismatch
+        );
+        let (receiver, sender) = pair();
+        let (passed, _peer) = pair();
+        sendmsg::<()>(
+            sender.as_raw_fd(),
+            &[IoSlice::new(b"protected")],
+            &[ControlMessage::ScmRights(&[passed.as_raw_fd()])],
+            MsgFlags::empty(),
+            None,
+        )
+        .unwrap();
+        let uid = nix::unistd::Uid::effective().as_raw();
+        let mut transport = DaemonSeqpacketTransport::new(receiver, uid).unwrap();
+        assert_eq!(
+            transport.receive(64).await.unwrap_err(),
+            TransportError::InvalidAttachment
+        );
+
+        let (receiver, sender) = pair();
+        send(sender.as_raw_fd(), &[7; 128], MsgFlags::empty()).unwrap();
+        let mut transport = DaemonSeqpacketTransport::new(receiver, uid).unwrap();
+        assert_eq!(
+            transport.receive(16).await.unwrap_err(),
+            TransportError::LimitExceeded
+        );
     }
 }

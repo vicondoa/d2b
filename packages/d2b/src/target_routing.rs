@@ -1024,7 +1024,7 @@ mod tests {
     }
 
     #[test]
-    fn old_local_target_forms_preserve_local_fast_path() {
+    fn multi_label_local_suffix_does_not_bypass_realm_routing() {
         let table = RealmEntrypointTable::with_local_default();
         assert_eq!(
             route("demo.d2b", &table).unwrap(),
@@ -1032,12 +1032,10 @@ mod tests {
                 vm: "demo".to_owned()
             }
         );
-        assert_eq!(
-            route("demo.this.local.d2b", &table).unwrap(),
-            Route::Local {
-                vm: "demo".to_owned()
-            }
-        );
+        assert!(matches!(
+            route("demo.this.local.d2b", &table),
+            Err(RouteError::NoRealmEntrypoint { realm, .. }) if realm == "this.local"
+        ));
     }
 
     #[test]

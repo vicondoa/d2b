@@ -22,7 +22,7 @@ use protobuf::{EnumOrUnknown, MessageField};
 
 use crate::exec_session::{ExecOpDeadlines, ExecOpError, ExecStartSpec, GuestOpError};
 use crate::guest_control_bridge::{
-    BrokerSigner, GUEST_CONTROL_ATTEMPT_CAP, ProbeParams, VMADDR_CID_HOST,
+    GUEST_CONTROL_ATTEMPT_CAP, ProbeParams, UnavailableLegacyGuestProofSigner, VMADDR_CID_HOST,
     connect_and_build_client, host_nonce,
 };
 use crate::guest_control_health::{
@@ -503,7 +503,8 @@ impl DetachedClient<TtrpcGuestControlClient> {
             exec_session_real::ESTABLISH_TIMEOUT,
             GUEST_CONTROL_ATTEMPT_CAP,
         );
-        let signer = BrokerSigner::new(broker_socket, budget);
+        let _ = broker_socket;
+        let signer = UnavailableLegacyGuestProofSigner;
         let nonce = host_nonce().map_err(|_| ExecOpError::Transport)?;
         let vm_id = params.vm_id.clone();
         let client = connect_and_build_client(&params, budget)

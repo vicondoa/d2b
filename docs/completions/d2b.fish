@@ -26,8 +26,8 @@ end
 
 complete -c d2b -n "__fish_d2b_needs_command" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c d2b -n "__fish_d2b_needs_command" -s V -l version -d 'Print version'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "list" -d 'List declared VMs with daemon runtime state when d2bd is reachable'
-complete -c d2b -n "__fish_d2b_needs_command" -f -a "status" -d 'Show per-VM runtime status plus bridge health'
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "list" -d 'List typed daemon workload projections over ComponentSession'
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "status" -d 'Show typed daemon workload status plus bridge health'
 complete -c d2b -n "__fish_d2b_needs_command" -f -a "launch" -d 'Launch a trusted configured workload item through its runtime provider'
 complete -c d2b -n "__fish_d2b_needs_command" -f -a "usb" -d 'USB attach / detach / probe'
 complete -c d2b -n "__fish_d2b_needs_command" -f -a "console" -d 'Foreground serial console bridge for headless VMs'
@@ -65,7 +65,7 @@ complete -c d2b -n "__fish_d2b_using_subcommand status" -l json
 complete -c d2b -n "__fish_d2b_using_subcommand status" -l human
 complete -c d2b -n "__fish_d2b_using_subcommand status" -l check-bridges
 complete -c d2b -n "__fish_d2b_using_subcommand status" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand launch" -l item -d 'Configured launcher item id. Omit to use the declared default or sole item' -r
+complete -c d2b -n "__fish_d2b_using_subcommand launch" -l item -d 'Configured launcher item id. Required: the v2 launch contract carries only a configured item id and has no default-item selection signal' -r
 complete -c d2b -n "__fish_d2b_using_subcommand launch" -l json -d 'Emit a structured JSON result'
 complete -c d2b -n "__fish_d2b_using_subcommand launch" -l human -d 'Force human-readable output'
 complete -c d2b -n "__fish_d2b_using_subcommand launch" -s h -l help -d 'Print help'
@@ -222,7 +222,7 @@ complete -c d2b -n "__fish_d2b_using_subcommand realm; and __fish_seen_subcomman
 complete -c d2b -n "__fish_d2b_using_subcommand realm; and __fish_seen_subcommand_from help" -f -a "enter" -d 'Open an interactive shell inside the realm gateway VM'
 complete -c d2b -n "__fish_d2b_using_subcommand realm; and __fish_seen_subcommand_from help" -f -a "run" -d 'Run a one-shot command inside the realm gateway VM'
 complete -c d2b -n "__fish_d2b_using_subcommand realm; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c d2b -n "__fish_d2b_using_subcommand shell" -l name -d 'Persistent shell session name. Omit to use the target\'s configured default' -r
+complete -c d2b -n "__fish_d2b_using_subcommand shell" -l name -d 'Configured shell id for attach, or server-issued handle for detach/kill' -r
 complete -c d2b -n "__fish_d2b_using_subcommand shell" -l force -d 'Detach an existing attached client before attaching to this session'
 complete -c d2b -n "__fish_d2b_using_subcommand shell" -l json -d 'Render machine-readable JSON'
 complete -c d2b -n "__fish_d2b_using_subcommand shell" -l human -d 'Render human-readable output'
@@ -272,16 +272,14 @@ complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_f
 complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from status" -l json
 complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from status" -l human
 complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from status" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec" -l env -d 'Set an environment variable in the guest command (`KEY=VALUE`). Repeatable' -r
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec" -l cwd -d 'Working directory for the guest command' -r
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs" -l stdout-offset -d 'Resume stdout from this byte offset. The daemon clamps stale offsets' -r
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs" -l stderr-offset -d 'Resume stderr from this byte offset. The daemon clamps stale offsets' -r
-complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs" -l max-len -d 'Maximum retained bytes to request per stream' -r
 complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec" -s d -l detach -d 'Start the command detached and print its exec id. Incompatible with `-i`/`-t`; detached execs are managed with `d2b vm exec <vm> {list|logs|status|kill}`'
 complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec" -s i -l interactive -d 'Forward host stdin into the guest command (`-i`). Requires `-t`/`--tty`; use `-it` for an interactive shell'
 complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec" -s t -l tty -d 'Allocate a PTY in the guest and put the host terminal in raw mode (`-t`). Implies stdin forwarding. Human-only (incompatible with `--json`)'
 complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec" -l json -d 'Emit a single terminal JSON envelope (exit code + source/reason + bounded captured output). Non-interactive only'
 complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec" -l human -d 'Force human output'
+complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs" -l stdout-offset -d 'Resume stdout from this byte offset. The daemon clamps stale offsets' -r
+complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs" -l stderr-offset -d 'Resume stderr from this byte offset. The daemon clamps stale offsets' -r
+complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs" -l max-len -d 'Maximum retained bytes to request per stream' -r
 complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec" -s h -l help -d 'Print help'
 complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from display" -s h -l help -d 'Print help'
 complete -c d2b -n "__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from display" -f -a "list" -d 'List active gateway display sessions'
@@ -428,8 +426,8 @@ complete -c d2b -n "__fish_d2b_using_subcommand clipboard; and __fish_seen_subco
 complete -c d2b -n "__fish_d2b_using_subcommand clipboard; and __fish_seen_subcommand_from arm" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c d2b -n "__fish_d2b_using_subcommand clipboard; and __fish_seen_subcommand_from help" -f -a "arm" -d 'Open the picker and request paste replay for the focused target'
 complete -c d2b -n "__fish_d2b_using_subcommand clipboard; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "list" -d 'List declared VMs with daemon runtime state when d2bd is reachable'
-complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "status" -d 'Show per-VM runtime status plus bridge health'
+complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "list" -d 'List typed daemon workload projections over ComponentSession'
+complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "status" -d 'Show typed daemon workload status plus bridge health'
 complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "launch" -d 'Launch a trusted configured workload item through its runtime provider'
 complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "usb" -d 'USB attach / detach / probe'
 complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcommand_from list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help" -f -a "console" -d 'Foreground serial console bridge for headless VMs'

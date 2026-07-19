@@ -1,30 +1,12 @@
-//! `AcaGatewayWorkload` — the production [`GatewayWorkload`] adapter that drives
-//! the in-sandbox display agent through the Azure Container Apps data plane
-//! (ADR 0032, P0).
+//! Fail-closed compatibility surface for the retired ACA gateway workload.
 //!
-//! The orchestrator hands this adapter an [`AgentSpawnRequest`] carrying the
-//! session binding + the one-shot secret `S`; the adapter shapes a single
-//! `executeShellCommand` body (delivered over the MI-authenticated, TLS ACA
-//! control plane — never the relay, never a persistent log) that:
-//!
-//!   1. receives `S` in the exec body, writes it to a tmpfile, reads it into
-//!      `D2B_SESSION_SECRET_B64`, and shreds the file (so `S` is never a
-//!      long-lived process argv);
-//!   2. exports the binding fields as `D2B_SESSION_*`;
-//!   3. installs relay sender auth: either a gateway-minted short-lived Send
-//!      bearer in `D2B_RELAY_SAS_TOKEN` (P0's live path) or an ACA
-//!      Managed-Identity token in `D2B_RELAY_ENTRA_TOKEN`;
-//!   4. starts the gated `d2b-gateway-relay sender` (which writes the
-//!      handshake prologue), then launches the requested app as the child of
-//!      `waypipe server`.
-//!
-//! The command-shaping is a pure function ([`build_agent_command`]) so it is
-//! unit-tested without any Azure round-trip; the I/O is a single delegated
-//! `exec_shell` call.
+//! The only command this adapter can shape is the reserved
+//! `d2b-provider-agent` entrypoint. It does not place session, relay, credential,
+//! or application data in the environment or argv.
 
 use async_trait::async_trait;
 use base64::Engine;
-use d2b_gateway::{AgentHandle, AgentSpawnRequest, GatewayError, GatewayWorkload, SessionBinding};
+use d2b_gateway::{AgentHandle, AgentSpawnRequest, GatewayError, GatewayWorkload};
 use d2b_provider_aca::AcaWorkloadProvider;
 use d2b_realm_core::WorkloadId;
 
@@ -46,8 +28,8 @@ pub struct RelayCoords {
 /// In-image binary + tunable names for the agent command.
 #[derive(Debug, Clone)]
 pub struct AgentBinaries {
-    /// The gated relay sender (this crate's `d2b-gateway-relay`).
-    pub gateway_relay: String,
+    /// The typed provider-agent process.
+    pub provider_agent: String,
     /// The upstream `waypipe` binary.
     pub waypipe: String,
     /// Waypipe channel compression (`zstd`/`lz4`/`none`); must match the host.
@@ -59,7 +41,7 @@ pub struct AgentBinaries {
 impl Default for AgentBinaries {
     fn default() -> Self {
         Self {
-            gateway_relay: "d2b-gateway-relay".to_owned(),
+            provider_agent: "d2b-provider-agent".to_owned(),
             waypipe: "waypipe".to_owned(),
             compression: "zstd".to_owned(),
             display: "wayland-d2b".to_owned(),
@@ -67,26 +49,15 @@ impl Default for AgentBinaries {
     }
 }
 
-/// The shell expression that sets `D2B_RELAY_ENTRA_TOKEN` to a bearer token
-/// for `https://relay.azure.net`. The default uses the ACA-injected
-/// `IDENTITY_ENDPOINT`/`IDENTITY_HEADER` MSI endpoint; production P0 can
-/// override this with [`relay_sas_token_snippet`] to avoid the observed ACA
-/// Entra Relay substream close while still never handing the SAS rule key to
-/// the container.
+/// Retained configuration helper for callers migrating from the old adapter.
+/// The reserved provider-agent command does not consume this value.
 pub fn default_entra_token_snippet() -> String {
-    // The ACA minimal image lacks grep/sed; `d2b-gateway-relay` reads the
-    // token from env, so we extract it with a here-doc-free, tool-light
-    // parse: curl the MSI endpoint and let the relay binary's own `--msi`
-    // helper would normally parse it, but to keep the agent self-contained we
-    // rely on the image's baked `d2b-msi-token` helper (provisioned in
-    // image.nix) which prints the bare access_token for a resource.
     "D2B_RELAY_ENTRA_TOKEN=\"$(d2b-msi-token https://relay.azure.net/ \"${D2B_MI_CLIENT_ID:-}\")\""
         .to_owned()
 }
 
-/// Build a relay-auth snippet from a gateway-minted short-lived SAS bearer.
-/// This passes only the bearer token to the sandbox, never the authorization
-/// rule key; the per-session handshake still gates display-byte admission.
+/// Retained configuration helper. The reserved provider-agent command ignores
+/// this value and never receives it through ambient process state.
 pub fn relay_sas_token_snippet(token: &str) -> String {
     format!("D2B_RELAY_SAS_TOKEN={}", sh_quote(token))
 }
@@ -202,113 +173,15 @@ fn sh_quote(s: &str) -> String {
     out
 }
 
-/// Build the `executeShellCommand` body for an [`AgentSpawnRequest`]. Pure: the
-/// session secret is base64-encoded into the (TLS, MI-authed) exec body and
-/// shredded from the in-sandbox filesystem after it is read into env. The
-/// returned script prints `D2B_AGENT_WORKDIR=<dir>` as its last line so the
-/// caller can derive a durable cleanup handle.
+/// Build the only permitted compatibility command. The request and legacy
+/// relay parameters are deliberately ignored.
 pub fn build_agent_command(
-    req: &AgentSpawnRequest,
-    relay: &RelayCoords,
+    _req: &AgentSpawnRequest,
+    _relay: &RelayCoords,
     bins: &AgentBinaries,
-    relay_auth_snippet: &str,
+    _relay_auth_snippet: &str,
 ) -> String {
-    let b: &SessionBinding = &req.binding;
-    let secret_b64 = base64::engine::general_purpose::STANDARD.encode(req.secret.expose());
-
-    let mut s = String::new();
-    s.push_str("set -e\n");
-    s.push_str("W=$(mktemp -d /tmp/d2b-disp.XXXXXX)\n");
-    s.push_str("echo \"D2B_AGENT_WORKDIR=$W\"\n");
-    s.push_str("export XDG_RUNTIME_DIR=\"$W\"\n");
-    // Secret: arrives in the exec body, written to a file, read into env, then
-    // shredded so it is never a long-lived process argv.
-    s.push_str(&format!(
-        "printf '%s' {} > \"$W/s\"\n",
-        sh_quote(&secret_b64)
-    ));
-    s.push_str("D2B_SESSION_SECRET_B64=\"$(cat \"$W/s\")\"; rm -f \"$W/s\"\n");
-    // Binding fields (non-secret identifiers).
-    for (k, v) in [
-        ("D2B_SESSION_REALM", b.realm.as_str()),
-        ("D2B_SESSION_GENERATION", &b.generation.to_string()),
-        ("D2B_SESSION_ID", b.session_id.as_str()),
-        ("D2B_SESSION_EPOCH", &b.epoch.to_string()),
-        ("D2B_SESSION_OP", b.operation_id.as_str()),
-        ("D2B_SESSION_PRINCIPAL", b.principal.as_str()),
-        ("D2B_SESSION_WORKLOAD", b.workload.as_str()),
-        ("D2B_SESSION_NOT_AFTER", &b.not_after.to_string()),
-    ] {
-        s.push_str(&format!("{k}={}\n", sh_quote(v)));
-    }
-    // Relay sender auth. The default uses container MI; production P0 can
-    // override this with a gateway-minted short-lived Send bearer.
-    if let Some(client_id) = relay
-        .managed_identity_client_id
-        .as_ref()
-        .filter(|client_id| !client_id.trim().is_empty())
-    {
-        s.push_str(&format!("D2B_MI_CLIENT_ID={}\n", sh_quote(client_id)));
-    }
-    s.push_str(relay_auth_snippet);
-    s.push('\n');
-    // Relay coordinates for the gated sender.
-    s.push_str(&format!(
-        "D2B_RELAY_NAMESPACE={}\n",
-        sh_quote(&relay.namespace)
-    ));
-    s.push_str(&format!("D2B_RELAY_ENTITY={}\n", sh_quote(&relay.entity)));
-    s.push_str("D2B_RELAY_TARGET=\"unix-listen:$W/wp.sock\"\n");
-    let mut relay_exports = vec![
-        "D2B_SESSION_SECRET_B64",
-        "D2B_SESSION_REALM",
-        "D2B_SESSION_GENERATION",
-        "D2B_SESSION_ID",
-        "D2B_SESSION_EPOCH",
-        "D2B_SESSION_OP",
-        "D2B_SESSION_PRINCIPAL",
-        "D2B_SESSION_WORKLOAD",
-        "D2B_SESSION_NOT_AFTER",
-        "D2B_RELAY_ENTRA_TOKEN",
-        "D2B_RELAY_SAS_TOKEN",
-        "D2B_RELAY_NAMESPACE",
-        "D2B_RELAY_ENTITY",
-        "D2B_RELAY_TARGET",
-    ];
-    if let Some(ca) = &relay.ca_file {
-        s.push_str(&format!("D2B_RELAY_CA_FILE={}\n", sh_quote(ca)));
-        relay_exports.push("D2B_RELAY_CA_FILE");
-    }
-    // Gated relay sender: binds wp.sock, writes the handshake prologue to the
-    // relay, then bridges the Waypipe server connection.
-    s.push_str(&format!(
-        "( export {relay_exports}; nohup {relay_bin} sender >\"$W/relay.log\" 2>&1 < /dev/null & echo $! >> \"$W/pids\" )\n",
-        relay_exports = relay_exports.join(" "),
-        relay_bin = sh_quote(&bins.gateway_relay),
-    ));
-    s.push_str("for _ in $(seq 1 300); do [ -S \"$W/wp.sock\" ] && break; sleep 0.1; done\n");
-    s.push_str(
-        "[ -S \"$W/wp.sock\" ] || { echo \"relay sender did not become ready\"; exit 1; }\n",
-    );
-    let app_argv: String = req
-        .app
-        .argv()
-        .iter()
-        .map(|a| sh_quote(a))
-        .collect::<Vec<_>>()
-        .join(" ");
-    // Launch the app as Waypipe's child. This is the proven ACA path: Waypipe
-    // owns the compositor socket lifecycle for the app instead of racing a
-    // separately-started client against a persistent server.
-    s.push_str(&format!(
-        "( nohup {wp} --no-gpu -c {comp} -s \"$W/wp.sock\" server -- {argv} >\"$W/app.log\" 2>&1 < /dev/null & echo $! >> \"$W/pids\" )\n",
-        wp = sh_quote(&bins.waypipe),
-        comp = bins.compression,
-        argv = app_argv,
-    ));
-    s.push_str("sleep 3\n");
-    s.push_str("echo \"D2B_AGENT_WORKDIR=$W\"\n");
-    s
+    format!("set -e\nexec {}\n", sh_quote(&bins.provider_agent))
 }
 
 /// Build the idempotent cleanup command for a spawned agent: kill the recorded
@@ -403,7 +276,9 @@ impl GatewayWorkload for AcaGatewayWorkload {
 mod tests {
     use super::*;
     use d2b_gateway::SECRET_LEN;
-    use d2b_gateway::{AppCommand, DisplaySessionContext, DisplaySessionId, SessionSecret};
+    use d2b_gateway::{
+        AppCommand, DisplaySessionContext, DisplaySessionId, SessionBinding, SessionSecret,
+    };
     use d2b_realm_core::{OperationId, PrincipalId, RealmId, RealmPath, WorkloadId};
 
     fn req(app: Vec<&str>) -> AgentSpawnRequest {
@@ -442,111 +317,18 @@ mod tests {
     }
 
     #[test]
-    fn command_delivers_binding_and_launches_the_gated_stack() {
+    fn command_uses_only_the_reserved_provider_agent() {
         let cmd = build_agent_command(
             &req(vec!["foot"]),
             &coords(),
             &AgentBinaries::default(),
             "D2B_RELAY_ENTRA_TOKEN=tok",
         );
-        // Binding fields are shell variables; only the relay subshell exports
-        // them, so the app does not inherit control-plane metadata/secrets.
-        assert!(cmd.contains("D2B_SESSION_REALM='work'"));
-        assert!(cmd.contains("D2B_SESSION_GENERATION='7'"));
-        assert!(cmd.contains("D2B_SESSION_ID='sess-42'"));
-        assert!(cmd.contains("D2B_SESSION_OP='op-9'"));
-        assert!(cmd.contains("D2B_SESSION_WORKLOAD='demo'"));
-        assert!(cmd.contains("D2B_SESSION_NOT_AFTER='1000000'"));
-        // The gated sender + waypipe-owned app launch are emitted.
-        assert!(cmd.contains("export D2B_SESSION_SECRET_B64"));
-        assert!(cmd.contains("nohup 'd2b-gateway-relay' sender"));
-        assert!(
-            cmd.contains("nohup 'waypipe' --no-gpu -c zstd -s \"$W/wp.sock\" server -- 'foot'")
-        );
-        // Relay coords.
-        assert!(cmd.contains("D2B_RELAY_ENTITY='hc-d2b-display'"));
-        assert!(cmd.contains("D2B_RELAY_TARGET=\"unix-listen:$W/wp.sock\""));
-        // Workdir handle is the last line.
-        assert!(cmd.trim_end().ends_with("echo \"D2B_AGENT_WORKDIR=$W\""));
-    }
-
-    #[test]
-    fn command_can_pass_managed_identity_client_id_to_token_helper() {
-        let mut relay = coords();
-        relay.managed_identity_client_id = Some("b3ad7d90-e6d5-4d12-84e9-c9ef77b80b02".to_owned());
-        let cmd = build_agent_command(
-            &req(vec!["foot"]),
-            &relay,
-            &AgentBinaries::default(),
-            &default_entra_token_snippet(),
-        );
-        assert!(cmd.contains("D2B_MI_CLIENT_ID='b3ad7d90-e6d5-4d12-84e9-c9ef77b80b02'"));
-        assert!(cmd.contains(
-            "D2B_RELAY_ENTRA_TOKEN=\"$(d2b-msi-token https://relay.azure.net/ \"${D2B_MI_CLIENT_ID:-}\")\""
-        ));
-        let app_line = cmd
-            .lines()
-            .find(|l| l.contains("server -- 'foot'"))
-            .unwrap();
-        assert!(!app_line.contains("D2B_MI_CLIENT_ID"));
-    }
-
-    #[test]
-    fn command_accepts_gateway_minted_sas_token_without_key_material() {
-        let cmd = build_agent_command(
-            &req(vec!["foot"]),
-            &coords(),
-            &AgentBinaries::default(),
-            &relay_sas_token_snippet("SharedAccessSignature sr=x&sig=y"),
-        );
-        assert!(cmd.contains("D2B_RELAY_SAS_TOKEN='SharedAccessSignature sr=x&sig=y'"));
-        assert!(cmd.contains("export D2B_SESSION_SECRET_B64"));
-        assert!(cmd.contains("D2B_RELAY_SAS_TOKEN"));
-        assert!(!cmd.contains("D2B_RELAY_KEY="));
-        assert!(!cmd.contains("D2B_RELAY_KEY_NAME="));
-    }
-
-    #[test]
-    fn secret_is_filed_and_shredded_never_a_bare_export() {
-        let cmd = build_agent_command(&req(vec!["foot"]), &coords(), &AgentBinaries::default(), "");
-        // The raw base64 secret is delivered via a file write, then shredded.
-        let b64 = base64::engine::general_purpose::STANDARD.encode([0xABu8; SECRET_LEN]);
-        assert!(cmd.contains(&format!("printf '%s' '{b64}' > \"$W/s\"")));
-        assert!(cmd.contains("rm -f \"$W/s\""));
-        // It is never placed directly on an `export D2B_SESSION_SECRET_B64=<b64>`.
-        assert!(!cmd.contains(&format!("export D2B_SESSION_SECRET_B64={b64}")));
-        assert!(!cmd.contains(&format!("D2B_SESSION_SECRET_B64='{b64}'")));
-    }
-
-    #[test]
-    fn app_launch_does_not_inherit_relay_or_session_secrets() {
-        let cmd = build_agent_command(
-            &req(vec!["foot"]),
-            &coords(),
-            &AgentBinaries::default(),
-            "D2B_RELAY_ENTRA_TOKEN=tok",
-        );
-        let app_line = cmd
-            .lines()
-            .find(|l| l.contains("server -- 'foot'"))
-            .unwrap();
-        assert!(!app_line.contains("D2B_SESSION_SECRET_B64"));
-        assert!(!app_line.contains("D2B_RELAY_ENTRA_TOKEN"));
-        assert!(!app_line.contains("D2B_RELAY_KEY"));
-    }
-
-    #[test]
-    fn app_argv_is_shell_quoted_against_injection() {
-        let cmd = build_agent_command(
-            &req(vec!["foot", "--title=a'b; rm -rf /"]),
-            &coords(),
-            &AgentBinaries::default(),
-            "",
-        );
-        // The malicious arg is fully single-quoted; the `;` cannot start a new
-        // command.
-        assert!(cmd.contains("'--title=a'\\''b; rm -rf /'"));
-        assert!(!cmd.contains("a'b; rm -rf /'\n"));
+        assert_eq!(cmd, "set -e\nexec 'd2b-provider-agent'\n");
+        assert!(!cmd.contains("D2B_SESSION"));
+        assert!(!cmd.contains("D2B_RELAY"));
+        assert!(!cmd.contains("waypipe"));
+        assert!(!cmd.contains("gateway-relay"));
     }
 
     #[test]

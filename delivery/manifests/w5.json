@@ -9,7 +9,7 @@
       "id": "github.com/vicondoa/d2b",
       "object_format": "sha1",
       "trunk_ref": "main",
-      "integration_ref": "adr0045-post-w4-contracts"
+      "integration_ref": "adr0045-w5-control"
     }
   ],
   "stack_nodes": [
@@ -25,6 +25,13 @@
       "repository": "github.com/vicondoa/d2b",
       "branch": "adr0045-post-w4-contracts",
       "pr_number": 315,
+      "external_dependencies": []
+    },
+    {
+      "id": "d2b-w5",
+      "repository": "github.com/vicondoa/d2b",
+      "branch": "adr0045-w5-control",
+      "pr_number": 317,
       "external_dependencies": []
     }
   ],
@@ -103,6 +110,39 @@
     },
     {
       "node": "d2b-w4",
+      "name": "eval-shell-tests",
+      "publisher": {
+        "kind": "check_run",
+        "app_slug": "github-actions",
+        "app_id": 15368,
+        "workflow": "pr-eval-shell-tests",
+        "workflow_id": 289704928
+      }
+    },
+    {
+      "node": "d2b-w5",
+      "name": "check",
+      "publisher": {
+        "kind": "check_run",
+        "app_slug": "github-actions",
+        "app_id": 15368,
+        "workflow": "pr-l1-static-fast",
+        "workflow_id": 286033206
+      }
+    },
+    {
+      "node": "d2b-w5",
+      "name": "eval",
+      "publisher": {
+        "kind": "check_run",
+        "app_slug": "github-actions",
+        "app_id": 15368,
+        "workflow": "eval-with-entra-id",
+        "workflow_id": 283041463
+      }
+    },
+    {
+      "node": "d2b-w5",
       "name": "eval-shell-tests",
       "publisher": {
         "kind": "check_run",
@@ -1812,6 +1852,181 @@
       "name": "w4-provider-transport-local-lib",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2b-provider-transport-local/src/lib.rs"
+    },
+    {
+      "name": "w5-client-daemon-service",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-client/src/daemon_service.rs"
+    },
+    {
+      "name": "w5-prep-allocator-service-reference",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "docs/reference/allocator-service-api.md"
+    },
+    {
+      "name": "w5-prep-cli-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b/src/lib.rs"
+    },
+    {
+      "name": "w5-prep-cli-service",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b/src/service_v2.rs"
+    },
+    {
+      "name": "w5-prep-client-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-client/src/lib.rs"
+    },
+    {
+      "name": "w5-prep-daemon-access-component-session",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-daemon-access/src/component_session.rs"
+    },
+    {
+      "name": "w5-prep-daemon-access-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-daemon-access/src/lib.rs"
+    },
+    {
+      "name": "w5-prep-daemon-composition-allocator",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2bd/src/control_services/allocator.rs"
+    },
+    {
+      "name": "w5-prep-daemon-composition-broker",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2bd/src/control_services/broker.rs"
+    },
+    {
+      "name": "w5-prep-daemon-composition-daemon",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2bd/src/control_services/daemon.rs"
+    },
+    {
+      "name": "w5-prep-daemon-composition-guest",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2bd/src/control_services/guest.rs"
+    },
+    {
+      "name": "w5-prep-daemon-composition-provider",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2bd/src/control_services/provider.rs"
+    },
+    {
+      "name": "w5-prep-daemon-composition-realm",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2bd/src/control_services/realm.rs"
+    },
+    {
+      "name": "w5-prep-daemon-composition-root",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2bd/src/control_services/mod.rs"
+    },
+    {
+      "name": "w5-prep-daemon-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2bd/src/lib.rs"
+    },
+    {
+      "name": "w5-prep-daemon-realm-child-supervisor",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2bd/src/realm_child_supervisor.rs"
+    },
+    {
+      "name": "w5-prep-daemon-slice-policy",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2bd/tests/control_service_slice_policy.rs"
+    },
+    {
+      "name": "w5-prep-daemon-slice-policy-fixture",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2bd/tests/fixtures/control-service-slices.json"
+    },
+    {
+      "name": "w5-prep-guest-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-guestd/src/lib.rs"
+    },
+    {
+      "name": "w5-prep-guest-service",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-guestd/src/service_v2.rs"
+    },
+    {
+      "name": "w5-prep-guest-token-materializer-pin",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "tests/golden/pinned/guest-control-token-materializer.txt"
+    },
+    {
+      "name": "w5-prep-guest-token-materializer-test",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-host/tests/guest_control_token_materializer.rs"
+    },
+    {
+      "name": "w5-prep-guest-vsock-ttrpc-test",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-host/tests/guest_vsock_ttrpc_compile.rs"
+    },
+    {
+      "name": "w5-prep-host-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-host/src/lib.rs"
+    },
+    {
+      "name": "w5-prep-host-realm-children",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-host/src/realm_children.rs"
+    },
+    {
+      "name": "w5-prep-priv-broker-allocator-service",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-priv-broker/src/allocator_service.rs"
+    },
+    {
+      "name": "w5-prep-priv-broker-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-priv-broker/src/lib.rs"
+    },
+    {
+      "name": "w5-prep-priv-broker-service",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-priv-broker/src/service_v2.rs"
+    },
+    {
+      "name": "w5-prep-provider-agent-bin",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-gateway-runtime/src/bin/d2b-provider-agent.rs"
+    },
+    {
+      "name": "w5-prep-provider-agent-cargo",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-gateway-runtime/Cargo.toml"
+    },
+    {
+      "name": "w5-prep-provider-agent-composition-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-gateway-runtime/src/lib.rs"
+    },
+    {
+      "name": "w5-prep-provider-agent-service",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-gateway-runtime/src/provider_agent.rs"
+    },
+    {
+      "name": "w5-prep-realm-router-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-realm-router/src/lib.rs"
+    },
+    {
+      "name": "w5-prep-realm-router-service",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-realm-router/src/service_v2.rs"
+    },
+    {
+      "name": "w5-prep-realm-service-identity-reference",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "docs/reference/realm-service-identity.md"
     }
   ]
 }

@@ -37,6 +37,58 @@ use super::AuditDecision;
 
 pub(crate) const DEFAULT_DELEGATED_PARENT_SLICE: &str = "/sys/fs/cgroup/d2b.slice";
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RealmCgroupLayout {
+    pub root: PathBuf,
+    pub controller: PathBuf,
+    pub broker: PathBuf,
+    pub workloads: PathBuf,
+}
+
+/// Create the fixed process-free realm ancestor and the two process leaves
+/// before either child is cloned. Ownership is the internal realm cgroup group,
+/// never the public access group.
+pub fn prepare_realm_cgroup_layout<B: CgroupBackend>(
+    backend: &B,
+    parent_slice: &Path,
+    realm_id: &str,
+    cgroup_uid: u32,
+    cgroup_gid: u32,
+) -> Result<RealmCgroupLayout, CgroupOpError> {
+    d2b_host::realm_children::validate_realm_id(realm_id).map_err(|error| {
+        CgroupOpError::Host(CgroupError::Io {
+            detail: error.to_string(),
+        })
+    })?;
+    let root = parent_slice.join(format!("r-{realm_id}"));
+    let controller = root.join("controller");
+    let broker = root.join("broker");
+    let workloads = root.join("workloads");
+    for path in [&root, &controller, &broker, &workloads] {
+        if !backend.exists(path) {
+            backend.mkdir(path)?;
+        }
+        backend.fchown(path, cgroup_uid, cgroup_gid)?;
+    }
+    for path in [&root, &workloads] {
+        let pids = backend.read_procs(path)?;
+        if !pids.is_empty() {
+            return Err(CgroupOpError::Host(
+                CgroupError::CgroupInternalProcessesPresent {
+                    path: path.clone(),
+                    pids,
+                },
+            ));
+        }
+    }
+    Ok(RealmCgroupLayout {
+        root,
+        controller,
+        broker,
+        workloads,
+    })
+}
+
 /// Sub-error for [`super::OpError::Cgroup`]. Stays kebab-case to match
 /// the audit `error_kind` field.
 #[derive(Debug)]

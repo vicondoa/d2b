@@ -3,8 +3,7 @@
 The canonical provider DTOs live in
 `d2b_contracts::v2_provider`. The same object-safe traits and request/result
 types are defined for trusted first-party in-process adapters and authenticated
-provider-agent proxies over ComponentSession service `d2b.provider.v2` in later
-implementation waves.
+provider-agent proxies over ComponentSession service `d2b.provider.v2`.
 
 ## Authority
 
@@ -123,6 +122,29 @@ descriptor, placement, and target. `Fixture::new` is only the deterministic
 fake-provider convenience. Registration, provider-agent serving, and toolkit
 admission share the dispatchability policy from `d2b-provider`; they do not
 maintain independent method allowlists.
+
+## Provider-agent process
+
+`d2b-gateway-runtime::provider_agent::ProviderAgentProcess` serves exactly one
+typed registry instance over an established ComponentSession. It exposes the
+generated Runtime, Infrastructure, Transport, Substrate, Credential, Display,
+Network, Storage, Device, Audio, or Observability service matching that
+instance. The process cannot be built from a descriptor alone: the provider ID
+must resolve in an accepting `ProviderRegistry`, and the resulting instance
+must pass the toolkit's placement and capability checks.
+
+The dispatcher accepts only bounded unary ttrpc request frames, limits
+concurrent dispatch to 64 calls, and retains at most 1,024 closed audit outcomes
+by default. Request payload validation, session generation, deadlines,
+cancellation, credential co-location, object bounds, and response validation
+remain in `GeneratedProviderServiceServer`. Errors returned by the process use
+closed reason strings and audit records contain only provider type and outcome.
+
+The standalone binary has no environment-selected adapter, dynamic loader, or
+fallback registry. Starting it without a statically composed typed registry and
+established ComponentSession fails closed. Composition owners use
+`ProviderAgentProcess::from_registry` and then `run_registered` (or `serve`
+inside an existing runtime).
 
 ## Artifacts
 

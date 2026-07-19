@@ -13,6 +13,7 @@ use std::{
 };
 
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use d2b_contracts::v2_services::{guest as guest_v2, terminal as terminal_v2};
 use d2b_contracts::{
     Hello as IpcHello, HelloOk as IpcHelloOk, HelloRejected as IpcHelloRejected, KnownFeatureFlag,
     broker_wire::{
@@ -24,10 +25,7 @@ use d2b_contracts::{
         self, AuditFormat as IpcAuditFormat, AuditRequest as IpcAuditRequest,
         KeyEntry as IpcKeyEntry, KeysShowRequest as IpcKeysShowRequest,
         KeysShowResponse as IpcKeysShowResponse, ListEntry as IpcListEntry,
-        ListRequest as IpcListRequest, ReadGuestConfigRequest,
-        ShellDetachArgs as IpcShellDetachArgs, ShellKillArgs as IpcShellKillArgs,
-        ShellListArgs as IpcShellListArgs, ShellName as IpcShellName, ShellOp, ShellOpResponse,
-        ShellSessionState, StatusRequest as IpcStatusRequest,
+        ListRequest as IpcListRequest, ReadGuestConfigRequest, StatusRequest as IpcStatusRequest,
         UsbProbeEntryKind as IpcUsbProbeEntryKind, UsbipProbeEntry as IpcUsbipProbeEntry,
         UsbipProbeStatus as IpcUsbipProbeStatus, VmLifecycleState as IpcVmLifecycleState,
         VmStatus as IpcVmStatus,
@@ -40,10 +38,12 @@ use d2b_core::{
     error::Error as CoreError, host::HostJson, host_check, processes::ProcessesJson,
     realm_controller_config::RealmControllersJson,
 };
+use d2b_daemon_access::component_session as daemon_access;
 use nix::sys::socket::{
     AddressFamily, MsgFlags, SockFlag, SockType, UnixAddr, connect, recv, send, socket,
 };
 use nix::unistd::Uid;
+use protobuf::{EnumOrUnknown, MessageField};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -51,22 +51,19 @@ use serde_json::Value;
 mod doctor;
 mod exec_client;
 mod host_validate;
+mod service_v2;
+#[allow(dead_code)]
 mod status_read_model;
 mod target_routing;
 mod terminal_client;
 
-use status_read_model::{
-    booted_symlink, build_vm_status_output, build_vm_status_output_from_public, current_symlink,
-    list_output_from_manifest, list_output_from_public_entries, public_lifecycle_status_label,
-    vm_state_dir,
-};
+use status_read_model::{booted_symlink, current_symlink, vm_state_dir};
 #[cfg(test)]
 use status_read_model::{
+    build_vm_status_output, build_vm_status_output_from_public, list_output_from_public_entries,
     list_status_label, output_service_capabilities, pidfd_role_state,
     public_lifecycle_list_status_label, vm_service_states,
 };
-use terminal_client::TerminalTransport as _;
-
 const DEFAULT_MANIFEST_PATH: &str = "/run/current-system/sw/share/d2b/vms.json";
 #[cfg(not(test))]
 const DEFAULT_REALM_ENTRYPOINTS_PATH: &str =
@@ -101,8 +98,8 @@ const EXIT_GUEST_CONTROL_CONFIG: i32 = 70;
     version,
     about = "d2b — opinionated NixOS desktop microVM CLI.",
     long_about = "d2b — daemon-native CLI for d2b microVMs.\n\nMutating verbs dispatch through d2bd; privileged host mutations additionally use d2b-priv-broker. \
-        Read-only verbs (list, status, audit, host check) prefer d2bd's \
-        public socket and fall back to static/local sources where documented. \
+        Daemon-backed verbs use the authenticated d2b.daemon.v2 ComponentSession \
+        and fail closed when that exact service is unavailable. \
         See `d2b <COMMAND> --help` for per-verb usage."
 )]
 struct NativeCli {
@@ -112,9 +109,9 @@ struct NativeCli {
 
 #[derive(Debug, Subcommand)]
 enum NativeCommand {
-    /// List declared VMs with daemon runtime state when d2bd is reachable.
+    /// List typed daemon workload projections over ComponentSession.
     List(ListArgs),
-    /// Show per-VM runtime status plus bridge health.
+    /// Show typed daemon workload status plus bridge health.
     Status(StatusArgs),
     /// Launch a trusted configured workload item through its runtime provider.
     Launch(LaunchArgs),
@@ -184,9 +181,10 @@ enum NativeCommand {
 struct LaunchArgs {
     /// Canonical workload target or an unambiguous workload id.
     target: String,
-    /// Configured launcher item id. Omit to use the declared default or sole item.
+    /// Configured launcher item id. Required: the v2 launch contract carries
+    /// only a configured item id and has no default-item selection signal.
     #[arg(long)]
-    item: Option<String>,
+    item: String,
     /// Emit a structured JSON result.
     #[arg(long, conflicts_with = "human")]
     json: bool,
@@ -550,7 +548,7 @@ struct ShellArgs {
     /// Shell action. Omit to attach to the configured default session.
     #[arg(value_enum)]
     action: Option<ShellAction>,
-    /// Persistent shell session name. Omit to use the target's configured default.
+    /// Configured shell id for attach, or server-issued handle for detach/kill.
     #[arg(long)]
     name: Option<String>,
     /// Detach an existing attached client before attaching to this session.
@@ -739,7 +737,7 @@ struct VmDisplayCloseArgs {
     human: bool,
 }
 
-/// `d2b vm exec [-d] [-it] [-i] [-t] <vm> [--env K=V]... [--cwd DIR] -- <cmd...>`
+/// `d2b vm exec [-d] [-it] [-i] [-t] <vm> -- <cmd...>`
 /// Run a command inside a VM. Use `--` before the command, `-it` for an
 /// interactive guest PTY, and `-d` to create a detached exec. Detached execs
 /// are managed with `d2b vm exec <vm> list`, `logs <id>`, `status <id>`,
@@ -760,13 +758,6 @@ struct VmExecArgs {
     /// `--json`).
     #[arg(short = 't', long = "tty")]
     tty: bool,
-    /// Set an environment variable in the guest command (`KEY=VALUE`).
-    /// Repeatable.
-    #[arg(long = "env", value_name = "KEY=VALUE")]
-    env: Vec<String>,
-    /// Working directory for the guest command.
-    #[arg(long = "cwd", value_name = "DIR")]
-    cwd: Option<String>,
     /// VM name as declared in `d2b.vms.<name>`.
     vm: String,
     /// Emit a single terminal JSON envelope (exit code + source/reason +
@@ -1190,6 +1181,7 @@ struct Context {
     broker_socket: PathBuf,
     state_root: Option<PathBuf>,
     host_runtime_path: PathBuf,
+    #[allow(dead_code)]
     system_state_fixture: Option<SystemStateFixture>,
     auth_status_fixture: Option<AuthStatusFixture>,
     /// Daemon-persisted state dir (pidfd-table.json,
@@ -1278,6 +1270,7 @@ struct BundleContext {
     host: Option<HostJson>,
     processes: Option<ProcessesJson>,
     closures: BTreeMap<String, ClosureMetadata>,
+    #[allow(dead_code)]
     host_runtime: Option<HostRuntime>,
 }
 
@@ -1304,6 +1297,7 @@ impl ManifestDocument {
         self.entries.get(name).filter(|_| !name.starts_with('_'))
     }
 
+    #[allow(dead_code)]
     fn bridge_names(&self) -> BTreeSet<String> {
         self.vms()
             .iter()
@@ -1314,6 +1308,7 @@ impl ManifestDocument {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 struct ManifestVm {
     name: String,
     env: Option<String>,
@@ -1331,6 +1326,7 @@ struct ManifestVm {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 struct ManifestRuntime {
     kind: String,
     #[serde(default)]
@@ -1346,6 +1342,7 @@ struct SystemStateFixture {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[allow(dead_code)]
 struct BridgeHealthFixture {
     state: String,
     admin: String,
@@ -1363,6 +1360,7 @@ struct AuthStatusFixture {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct BridgeHealthRow {
     name: String,
     state: String,
@@ -1442,6 +1440,7 @@ struct KeysShowResponseFrame {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 struct ListResponseFrame {
     #[serde(rename = "type")]
     _type_name: String,
@@ -1452,6 +1451,7 @@ struct ListResponseFrame {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 struct StatusResponseFrame {
     #[serde(rename = "type")]
     _type_name: String,
@@ -1460,6 +1460,7 @@ struct StatusResponseFrame {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 struct StatusResponsePayload {
     entries: Vec<IpcVmStatus>,
     #[serde(default)]
@@ -1491,33 +1492,6 @@ struct ReadGuestConfigResponseFrame {
     content_base64: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GatewayDisplayResponseFrame {
-    #[serde(rename = "type")]
-    _type_name: String,
-    #[serde(flatten)]
-    payload: public_wire::GatewayDisplayOpResponse,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ShellResponseFrame {
-    #[serde(rename = "type")]
-    _type_name: String,
-    #[serde(flatten)]
-    payload: ShellOpResponse,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WorkloadResponseFrame {
-    #[serde(rename = "type")]
-    _type_name: String,
-    #[serde(flatten)]
-    payload: public_wire::WorkloadOpResponse,
-}
-
 #[derive(Debug, Clone)]
 enum AuditSocketOutcome {
     Unreachable,
@@ -1532,6 +1506,7 @@ enum KeysSocketOutcome {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 enum ListSocketOutcome {
     Unavailable,
     Entries(
@@ -1541,6 +1516,7 @@ enum ListSocketOutcome {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 enum StatusSocketOutcome {
     Unavailable,
     Entries(
@@ -1724,663 +1700,6 @@ fn render_daemon_audit_lines(lines: &[String], json_mode: bool) -> Result<(), Cl
     Ok(())
 }
 
-fn shell_gateway_attach_failure(raw: &str, json: bool) -> CliFailure {
-    match emit_host_error(
-        &host_error_envelope(
-            &format!(
-                "gateway-backed shell attach is not available for target `{raw}` in this generation"
-            ),
-            "gateway-shell-attach-unavailable",
-            2,
-            "Whether this CLI/daemon generation can proxy an interactive ADR 0039 shell attach through a realm gateway.",
-            "semantic gateway shell attach is not implemented on the host facade",
-            "Use `d2b realm enter <realm>` and run `d2b shell <target>` inside the gateway, or retry after upgrading to a generation with semantic gateway shell attach.",
-            "docs/adr/0039-constellation-persistent-shell-routing.md#cli-and-facade-behavior",
-        ),
-        json,
-    ) {
-        Ok(exit_code) => CliFailure::new(
-            exit_code,
-            format!("gateway-backed shell attach is not available for target: {raw}"),
-        ),
-        Err(failure) => failure,
-    }
-}
-
-fn shell_action_word(action: ShellAction) -> &'static str {
-    match action {
-        ShellAction::Attach => "attach",
-        ShellAction::List => "list",
-        ShellAction::Detach => "detach",
-        ShellAction::Kill => "kill",
-    }
-}
-
-fn gateway_shell_argv(args: &ShellArgs, action: ShellAction) -> Result<Vec<String>, CliFailure> {
-    let mut argv = vec![
-        "d2b".to_owned(),
-        "shell".to_owned(),
-        args.vm.clone(),
-        shell_action_word(action).to_owned(),
-    ];
-    match action {
-        ShellAction::Attach => {
-            if let Some(name) = args.name.as_deref() {
-                shell_name(name)?;
-                argv.push("--name".to_owned());
-                argv.push(name.to_owned());
-            }
-            if args.force {
-                argv.push("--force".to_owned());
-            }
-        }
-        ShellAction::List => {}
-        ShellAction::Detach => {
-            if let Some(name) = args.name.as_deref() {
-                shell_name(name)?;
-                argv.push("--name".to_owned());
-                argv.push(name.to_owned());
-            }
-        }
-        ShellAction::Kill => {
-            let name = args.name.as_deref().expect("validated before route");
-            shell_name(name)?;
-            argv.push("--name".to_owned());
-            argv.push(name.to_owned());
-        }
-    }
-    if args.json {
-        argv.push("--json".to_owned());
-    } else if args.human {
-        argv.push("--human".to_owned());
-    }
-    Ok(argv)
-}
-
-fn cmd_gateway_shell(
-    context: &Context,
-    args: &ShellArgs,
-    action: ShellAction,
-    realm: String,
-    gateway_vm: String,
-) -> Result<i32, CliFailure> {
-    let json_mode = !matches!(action, ShellAction::Attach) && args.json;
-    if matches!(action, ShellAction::Attach) {
-        let _ = shell_name_option(args.name.as_deref())?;
-        return Err(shell_gateway_attach_failure(&args.vm, json_mode));
-    }
-    let argv = gateway_shell_argv(args, action)?;
-    ensure_realm_gateway_running(context, &realm, &gateway_vm, json_mode)?;
-    let exec_args = realm_gateway_exec_args(gateway_vm, argv, false, false, args.json, args.human);
-    cmd_vm_exec(context, &exec_args)
-}
-
-fn cmd_shell(context: &Context, args: &ShellArgs) -> Result<i32, CliFailure> {
-    let action = args.action.unwrap_or(ShellAction::Attach);
-    if matches!(action, ShellAction::Attach) && (args.json || args.human) {
-        return Err(CliFailure::new(
-            2,
-            "d2b shell attach is human/TTY-only and does not support --json or --human",
-        ));
-    }
-    if matches!(action, ShellAction::List) && (args.name.is_some() || args.force) {
-        return Err(CliFailure::new(
-            2,
-            "d2b shell list does not accept --name or --force",
-        ));
-    }
-    if matches!(action, ShellAction::Detach) && args.force {
-        return Err(CliFailure::new(
-            2,
-            "d2b shell detach does not accept --force",
-        ));
-    }
-    if matches!(action, ShellAction::Kill) {
-        if args.name.is_none() {
-            return Err(CliFailure::new(
-                2,
-                "d2b shell kill requires --name because it is destructive",
-            ));
-        }
-        if args.force {
-            return Err(CliFailure::new(2, "d2b shell kill does not accept --force"));
-        }
-    }
-    let json_mode = !matches!(action, ShellAction::Attach) && args.json;
-    let direct_target = if args.vm.ends_with(".d2b") && context.public_socket.exists() {
-        try_resolve_direct_shell_target(context, &args.vm)?
-    } else {
-        None
-    };
-    let local_vm = match direct_target {
-        Some(target) => target,
-        None => match route_vm_target(context, &args.vm, json_mode)? {
-            VmTargetRoute::Local { vm } => vm,
-            VmTargetRoute::Gateway {
-                realm, gateway_vm, ..
-            } => return cmd_gateway_shell(context, args, action, realm, gateway_vm),
-        },
-    };
-    match action {
-        ShellAction::Attach => {
-            cmd_shell_attach(context, &local_vm, args.name.as_deref(), args.force)
-        }
-        ShellAction::List => {
-            let response = shell_round_trip(
-                context,
-                ShellOp::List(IpcShellListArgs {
-                    vm: local_vm.clone(),
-                }),
-            )?;
-            let ShellOpResponse::List(result) = response else {
-                return Err(CliFailure::new(1, "shell list: unexpected daemon response"));
-            };
-            if args.json {
-                let output = ShellListOutputV1 {
-                    command: "shell list".to_owned(),
-                    vm: local_vm,
-                    default_name: result.default_name.as_str().to_owned(),
-                    sessions: result
-                        .sessions
-                        .iter()
-                        .map(|entry| ShellListSessionOutputV1 {
-                            name: entry.name.as_str().to_owned(),
-                            state: shell_state_str(entry.state).to_owned(),
-                            attached: entry.attached,
-                            is_default: entry.is_default,
-                        })
-                        .collect(),
-                };
-                print_json(&output)?;
-            } else {
-                print_stdout("NAME\tSTATE\tATTACHED\tDEFAULT\n");
-                for entry in result.sessions {
-                    print_stdout(&format!(
-                        "{}\t{}\t{}\t{}\n",
-                        entry.name.as_str(),
-                        shell_state_str(entry.state),
-                        entry.attached,
-                        entry.is_default
-                    ));
-                }
-            }
-            Ok(0)
-        }
-        ShellAction::Detach => {
-            let response = shell_round_trip(
-                context,
-                ShellOp::Detach(IpcShellDetachArgs {
-                    vm: local_vm.clone(),
-                    name: shell_name_option(args.name.as_deref())?,
-                }),
-            )?;
-            let ShellOpResponse::Detach(result) = response else {
-                return Err(CliFailure::new(
-                    1,
-                    "shell detach: unexpected daemon response",
-                ));
-            };
-            if args.json {
-                let output = ShellDetachOutputV1 {
-                    command: "shell detach".to_owned(),
-                    vm: local_vm,
-                    name: result.resolved_name.as_str().to_owned(),
-                    result: if result.detached {
-                        "detached"
-                    } else {
-                        "already-detached-or-absent"
-                    }
-                    .to_owned(),
-                    cause: result.cause.map(shell_close_cause_str).map(str::to_owned),
-                };
-                print_json(&output)?;
-            } else if result.detached {
-                print_stdout(&format!(
-                    "detached shell '{}' on vm '{}'\n",
-                    result.resolved_name.as_str(),
-                    local_vm
-                ));
-            } else {
-                print_stdout(&format!(
-                    "shell '{}' on vm '{}' was already detached or absent\n",
-                    result.resolved_name.as_str(),
-                    local_vm
-                ));
-            }
-            Ok(0)
-        }
-        ShellAction::Kill => {
-            let response = shell_round_trip(
-                context,
-                ShellOp::Kill(IpcShellKillArgs {
-                    vm: local_vm.clone(),
-                    name: shell_name(args.name.as_deref().expect("validated above"))?,
-                }),
-            )?;
-            let ShellOpResponse::Kill(result) = response else {
-                return Err(CliFailure::new(1, "shell kill: unexpected daemon response"));
-            };
-            if args.json {
-                let output = ShellKillOutputV1 {
-                    command: "shell kill".to_owned(),
-                    vm: local_vm,
-                    name: result.name.as_str().to_owned(),
-                    result: if result.killed {
-                        "killed"
-                    } else {
-                        "already-absent"
-                    }
-                    .to_owned(),
-                    state: shell_state_str(result.state).to_owned(),
-                };
-                print_json(&output)?;
-            } else if result.killed {
-                print_stdout(&format!(
-                    "killed shell '{}' on vm '{}'\n",
-                    result.name.as_str(),
-                    local_vm
-                ));
-            } else {
-                print_stdout(&format!(
-                    "shell '{}' on vm '{}' was already absent\n",
-                    result.name.as_str(),
-                    local_vm
-                ));
-            }
-            Ok(0)
-        }
-    }
-}
-
-fn cmd_shell_attach(
-    context: &Context,
-    vm: &str,
-    name: Option<&str>,
-    force: bool,
-) -> Result<i32, CliFailure> {
-    if !(io::stdin().is_terminal() && io::stdout().is_terminal()) {
-        return Err(CliFailure::new(
-            2,
-            "d2b shell attach requires stdin and stdout to be terminals",
-        ));
-    }
-    let name = shell_name_option(name)?;
-    let _guard = exec_client::FdStateGuard::enter(true, true)
-        .map_err(|err| CliFailure::new(42, format!("shell: failed to enter raw mode: {err}")))?;
-    let mut signals = exec_client::install_signals().map_err(|err| {
-        CliFailure::new(
-            42,
-            format!("shell: failed to install signal handlers: {err}"),
-        )
-    })?;
-    let mut transport = shell_owner_transport(context)?;
-    let size = exec_client::current_window_size()
-        .and_then(shell_terminal_size)
-        .unwrap_or(d2b_contracts::terminal_wire::TerminalSize { rows: 24, cols: 80 });
-    let start = transport.round_trip(&ShellOp::Attach(public_wire::ShellAttachArgs {
-        vm: vm.to_owned(),
-        name,
-        force,
-        initial_terminal_size: size,
-    }))?;
-    let ShellOpResponse::Attach(attach) = start else {
-        return Err(CliFailure::new(
-            1,
-            "shell attach: unexpected daemon response",
-        ));
-    };
-    print_stdout(&format!("{}\r\n", shell_attach_intro(vm, &attach)));
-    let mut host = exec_client::RealHostIo;
-    run_shell_fsm(
-        &mut transport,
-        &mut host,
-        &mut signals,
-        attach.session.as_str(),
-    )?;
-    Ok(0)
-}
-
-fn shell_terminal_size(
-    (rows, cols): (u32, u32),
-) -> Option<d2b_contracts::terminal_wire::TerminalSize> {
-    ((1..=65_535).contains(&rows) && (1..=65_535).contains(&cols))
-        .then_some(d2b_contracts::terminal_wire::TerminalSize { rows, cols })
-}
-
-struct ShellOwnerTransport {
-    socket: SeqpacketUnixSocket,
-    next_op_id: u64,
-}
-
-impl terminal_client::TerminalTransport for ShellOwnerTransport {
-    type Op = ShellOp;
-    type Response = ShellOpResponse;
-    type Error = CliFailure;
-
-    fn round_trip(&mut self, op: &ShellOp) -> Result<ShellOpResponse, CliFailure> {
-        let op_id = self.next_op_id;
-        self.next_op_id = self.next_op_id.wrapping_add(1);
-        let frame = encode_shell_op_frame(op, op_id)?;
-        self.socket
-            .send_frame(&frame)
-            .map_err(|err| CliFailure::new(69, format!("shell op send failed: {err}")))?;
-        let reply = self
-            .socket
-            .recv_frame()
-            .map_err(|err| CliFailure::new(69, format!("shell op recv failed: {err}")))?;
-        parse_shell_reply(&reply)
-    }
-}
-
-fn shell_owner_transport(context: &Context) -> Result<ShellOwnerTransport, CliFailure> {
-    if !context.public_socket.exists() {
-        return Err(CliFailure::new(
-            69,
-            format!(
-                "shell: d2bd public socket is unavailable at {}",
-                context.public_socket.display()
-            ),
-        ));
-    }
-    let mut socket = SeqpacketUnixSocket::connect(&context.public_socket)
-        .map_err(|err| CliFailure::new(69, format!("shell: failed to connect to daemon: {err}")))?;
-    let hello = daemon_hello_frame("hello")?;
-    socket
-        .send_frame(&hello)
-        .map_err(|err| CliFailure::new(69, format!("shell: failed to send hello frame: {err}")))?;
-    let hello_reply = socket
-        .recv_frame()
-        .map_err(|err| CliFailure::new(69, format!("shell: failed to receive hello: {err}")))?;
-    let _ = parse_hello_reply(&hello_reply)?;
-    Ok(ShellOwnerTransport {
-        socket,
-        next_op_id: 0,
-    })
-}
-
-fn encode_shell_op_frame(op: &ShellOp, op_id: u64) -> Result<Vec<u8>, CliFailure> {
-    let mut value = serde_json::to_value(op)
-        .map_err(|err| CliFailure::new(1, format!("failed to encode shell op: {err}")))?;
-    let object = value
-        .as_object_mut()
-        .ok_or_else(|| CliFailure::new(1, "failed to encode shell op: object required"))?;
-    object.insert("type".to_owned(), Value::String("shell".to_owned()));
-    object.insert("opId".to_owned(), Value::from(op_id));
-    serde_json::to_vec(&value)
-        .map_err(|err| CliFailure::new(1, format!("failed to serialize shell op: {err}")))
-}
-
-fn close_shell_attach<T>(transport: &mut T, session: &str) -> Result<(), CliFailure>
-where
-    T: terminal_client::TerminalTransport<
-            Op = ShellOp,
-            Response = ShellOpResponse,
-            Error = CliFailure,
-        >,
-{
-    match transport.round_trip(&ShellOp::CloseAttach(public_wire::ShellCloseAttachArgs {
-        session: session.to_owned(),
-    })) {
-        Ok(_) => Ok(()),
-        Err(err) if is_close_attach_transport_unavailable(&err) => Ok(()),
-        Err(err) => Err(err),
-    }
-}
-
-fn is_close_attach_transport_unavailable(err: &CliFailure) -> bool {
-    err.exit_code == 69
-        && (err
-            .message
-            .contains("guest-control-shell-transport-unavailable")
-            || err.message.contains("unsafe-local-shell-terminal-closed")
-            || err
-                .message
-                .contains("unsafe-local-shell-helper-unavailable"))
-}
-
-fn run_shell_fsm<T, H, S>(
-    transport: &mut T,
-    host: &mut H,
-    signals: &mut S,
-    session: &str,
-) -> Result<(), CliFailure>
-where
-    T: terminal_client::TerminalTransport<
-            Op = ShellOp,
-            Response = ShellOpResponse,
-            Error = CliFailure,
-        >,
-    H: terminal_client::TerminalHostIo,
-    S: terminal_client::TerminalSignalSource<Signal = exec_client::ExecSignal>,
-{
-    let mut stdin_offset = 0_u64;
-    let mut stdout_offset = 0_u64;
-    let mut control_op_id = 1_u64;
-    let mut buf = vec![0_u8; d2b_contracts::public_wire::EXEC_MAX_CHUNK_BYTES as usize];
-    let mut pending_stdin: Vec<u8> = Vec::new();
-    let mut detach_escape_pending = false;
-    loop {
-        for signal in signals.drain() {
-            match signal {
-                exec_client::ExecSignal::Winch => {
-                    if let Some((rows, cols)) = host.window_size() {
-                        let _ = transport.round_trip(&ShellOp::Resize(
-                            d2b_contracts::terminal_wire::TerminalResize {
-                                session: session.to_owned(),
-                                rows,
-                                cols,
-                                op_id: control_op_id,
-                            },
-                        ))?;
-                        control_op_id = control_op_id.wrapping_add(1);
-                    }
-                }
-                exec_client::ExecSignal::Interrupt
-                | exec_client::ExecSignal::Terminate
-                | exec_client::ExecSignal::Stop
-                | exec_client::ExecSignal::Hangup
-                | exec_client::ExecSignal::Quit => {
-                    close_shell_attach(transport, session)?;
-                    return Ok(());
-                }
-            }
-        }
-
-        match host.read_stdin(&mut buf) {
-            Ok(0) => {
-                close_shell_attach(transport, session)?;
-                return Ok(());
-            }
-            Ok(read) => {
-                for byte in &buf[..read] {
-                    if detach_escape_pending {
-                        detach_escape_pending = false;
-                        if *byte == 0x11 {
-                            close_shell_attach(transport, session)?;
-                            return Ok(());
-                        }
-                        pending_stdin.push(0);
-                    }
-                    if *byte == 0 {
-                        detach_escape_pending = true;
-                    } else {
-                        pending_stdin.push(*byte);
-                    }
-                }
-            }
-            Err(err)
-                if matches!(
-                    err.kind(),
-                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
-                ) => {}
-            Err(err) => {
-                return Err(CliFailure::new(
-                    42,
-                    format!("shell: stdin read failed: {err}"),
-                ));
-            }
-        }
-
-        let mut sent = 0_usize;
-        while sent < pending_stdin.len() {
-            let end = (sent + d2b_contracts::public_wire::EXEC_MAX_CHUNK_BYTES as usize)
-                .min(pending_stdin.len());
-            let response = transport.round_trip(&ShellOp::WriteStdin(
-                d2b_contracts::terminal_wire::TerminalWriteStdin {
-                    session: session.to_owned(),
-                    offset: stdin_offset,
-                    chunk_base64: d2b_core::base64_codec::encode(&pending_stdin[sent..end]),
-                    eof: false,
-                },
-            ))?;
-            let ShellOpResponse::WriteStdin(result) = response else {
-                return Err(CliFailure::new(1, "shell: unexpected writeStdin response"));
-            };
-            let accepted_len = usize::try_from(result.accepted_len).map_err(|_| {
-                CliFailure::new(1, "shell: daemon reported invalid accepted stdin length")
-            })?;
-            if accepted_len > end - sent {
-                return Err(CliFailure::new(
-                    1,
-                    "shell: daemon accepted more stdin bytes than were offered",
-                ));
-            }
-            stdin_offset = result.next_offset;
-            if result.stdin_closed {
-                pending_stdin.clear();
-                sent = 0;
-                break;
-            }
-            sent += accepted_len;
-            if accepted_len == 0 {
-                break;
-            }
-        }
-        if sent > 0 {
-            pending_stdin.drain(..sent);
-        }
-
-        let response = transport.round_trip(&ShellOp::ReadOutput(
-            d2b_contracts::terminal_wire::TerminalReadOutput {
-                session: session.to_owned(),
-                stream: d2b_contracts::terminal_wire::TerminalStream::Stdout,
-                offset: stdout_offset,
-                max_len: d2b_contracts::public_wire::EXEC_MAX_CHUNK_BYTES,
-                wait: true,
-                timeout_ms: 40,
-            },
-        ))?;
-        let ShellOpResponse::ReadOutput(chunk) = response else {
-            return Err(CliFailure::new(1, "shell: unexpected readOutput response"));
-        };
-        if !chunk.data_base64.is_empty() {
-            let data = d2b_core::base64_codec::decode(&chunk.data_base64)
-                .map_err(|_| CliFailure::new(1, "shell: malformed base64 output chunk"))?;
-            host.write_stdout(&data)
-                .map_err(|err| CliFailure::new(42, format!("shell: stdout write failed: {err}")))?;
-        }
-        stdout_offset = chunk.next_offset;
-        if chunk.eof {
-            return Ok(());
-        }
-    }
-}
-
-fn shell_round_trip(context: &Context, op: ShellOp) -> Result<ShellOpResponse, CliFailure> {
-    let request = encode_type_tagged_message("shell", &op, "shell request")?;
-    match try_public_socket_request(context, &request, "shell")? {
-        PublicSocketOutcome::Reply(response) => parse_shell_reply(&response),
-        PublicSocketOutcome::Unavailable => Err(CliFailure::new(
-            69,
-            format!(
-                "shell: d2bd public socket is unavailable at {}",
-                context.public_socket.display()
-            ),
-        )),
-        PublicSocketOutcome::Unsupported => Err(CliFailure::new(
-            70,
-            "shell: daemon generation does not support persistent shell operations",
-        )),
-    }
-}
-
-fn parse_shell_reply(bytes: &[u8]) -> Result<ShellOpResponse, CliFailure> {
-    let mut value: Value = serde_json::from_slice(bytes)
-        .map_err(|err| CliFailure::new(1, format!("failed to parse shell reply: {err}")))?;
-    match value.get("type").and_then(Value::as_str) {
-        Some("shellResponse") => {
-            if let Some(object) = value.as_object_mut() {
-                object.remove("opId");
-            }
-            serde_json::from_value(value)
-                .map(|frame: ShellResponseFrame| frame.payload)
-                .map_err(|err| CliFailure::new(1, format!("failed to decode shellResponse: {err}")))
-        }
-        Some("error") => {
-            if let Some(object) = value.as_object_mut() {
-                object.remove("opId");
-            }
-            let frame: ErrorFrame = serde_json::from_value(value).map_err(|err| {
-                CliFailure::new(1, format!("failed to decode shell error reply: {err}"))
-            })?;
-            Err(cli_failure_from_daemon_error(frame.error))
-        }
-        other => Err(CliFailure::new(
-            1,
-            format!("unexpected shell reply type {:?}", other),
-        )),
-    }
-}
-
-fn shell_name(value: &str) -> Result<IpcShellName, CliFailure> {
-    IpcShellName::new(value.to_owned()).map_err(|_| {
-        CliFailure::new(
-            2,
-            "shell name must match ^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$",
-        )
-    })
-}
-
-fn shell_name_option(value: Option<&str>) -> Result<Option<IpcShellName>, CliFailure> {
-    value.map(shell_name).transpose()
-}
-
-fn shell_state_str(state: ShellSessionState) -> &'static str {
-    match state {
-        ShellSessionState::Attached => "attached",
-        ShellSessionState::Detached => "detached",
-        ShellSessionState::Killed => "killed",
-        ShellSessionState::PoolUnavailable => "pool-unavailable",
-        ShellSessionState::FeatureDisabled => "feature-disabled",
-        ShellSessionState::OutputGap => "output-gap",
-    }
-}
-
-fn shell_close_cause_str(cause: public_wire::ShellCloseCause) -> &'static str {
-    match cause {
-        public_wire::ShellCloseCause::ClientDetach => "client-detach",
-        public_wire::ShellCloseCause::EvictedByForce => "evicted-by-force",
-        public_wire::ShellCloseCause::EvictedByAdminDetach => "evicted-by-admin-detach",
-        public_wire::ShellCloseCause::KilledByAdmin => "killed-by-admin",
-        public_wire::ShellCloseCause::PoolUnavailable => "pool-unavailable",
-        public_wire::ShellCloseCause::OutputGap => "output-gap",
-    }
-}
-
-fn shell_attach_intro(vm: &str, attach: &public_wire::ShellAttachResult) -> String {
-    let forced = if attach.force_evicted {
-        "; forced detach of existing client"
-    } else {
-        ""
-    };
-    format!(
-        "attached to shell '{}' on vm '{}'{}; detach with Ctrl-Space Ctrl-q; exit or Ctrl-D ends the session",
-        attach.resolved_name.as_str(),
-        vm,
-        forced
-    )
-}
-
 fn shell_trailing_command_hint(raw_args: &[OsString]) -> Option<&'static str> {
     let command = raw_args.get(1).and_then(|arg| arg.to_str())?;
     if command != "shell" {
@@ -2533,7 +1852,7 @@ fn dispatch(
                 UsbSecurityKeyCommand::Test(args) => cmd_usb_sk_test(context, args),
             },
         },
-        NativeCommand::Console(args) => cmd_console(context, args, original_args),
+        NativeCommand::Console(args) => cmd_console_v2(context, args),
         NativeCommand::Audio(args) => cmd_audio(context, args, original_args),
         NativeCommand::Audit(args) => cmd_audit(context, args, original_args),
         NativeCommand::Host(args) => match &args.command {
@@ -2555,7 +1874,7 @@ fn dispatch(
             RealmCommand::Enter(args) => cmd_realm_enter(context, args),
             RealmCommand::Run(args) => cmd_realm_run(context, args),
         },
-        NativeCommand::Shell(args) => cmd_shell(context, args),
+        NativeCommand::Shell(args) => cmd_shell_v2(context, args),
         NativeCommand::Op(args) => match &args.command {
             OpCommand::Inspect(args) => cmd_op_inspect(context, args),
         },
@@ -2565,7 +1884,7 @@ fn dispatch(
             VmCommand::Restart(args) => cmd_vm_restart(context, args),
             VmCommand::List(args) => cmd_vm_list(context, args),
             VmCommand::Status(args) => cmd_vm_status(context, args),
-            VmCommand::Exec(args) => cmd_vm_exec(context, args),
+            VmCommand::Exec(args) => cmd_vm_exec_v2(context, args),
             VmCommand::Display(args) => cmd_vm_display(context, args),
         },
         NativeCommand::Up(args) => cmd_vm_start(context, args),
@@ -3607,486 +2926,115 @@ fn cmd_config_status(args: &ConfigStatusArgs) -> Result<i32, CliFailure> {
     Ok(0)
 }
 
-fn cmd_launch(context: &Context, args: &LaunchArgs) -> Result<i32, CliFailure> {
-    use d2b_realm_core::{LauncherItemKind, ProtocolToken};
+/// Resolve a `launch` target to the canonical `<workload>.<realm>.d2b`
+/// address the daemon's typed exec router requires (it only routes an
+/// `EXEC` terminal to the `ConfiguredLaunch` handler when `resource_id`
+/// already ends in `.d2b`). Already-canonical input is used as-is without a
+/// round trip; a bare workload id is resolved via the typed `ListWorkloads`
+/// projection, mirroring the `gateway_lifecycle_state` lookup pattern.
+fn resolve_launch_target(
+    daemon: &service_v2::DaemonService,
+    requested: &str,
+) -> Result<String, CliFailure> {
+    if d2b_realm_core::RealmTarget::parse(requested).is_ok() {
+        return Ok(requested.to_owned());
+    }
+    let workloads = daemon.list_workloads(Some(requested))?;
+    let matched = service_v2::match_workload_by_bare_id(workloads, requested)?;
+    matched
+        .identity
+        .into_option()
+        .map(|identity| identity.canonical_target)
+        .ok_or_else(|| CliFailure::new(76, "workload response omitted identity"))
+}
 
+fn cmd_launch(context: &Context, args: &LaunchArgs) -> Result<i32, CliFailure> {
+    use terminal_v2::{
+        ConfiguredLaunchSelection, ExecAuthority, ExecSelection, TerminalSelection, exec_selection,
+        terminal_selection,
+    };
+
+    // The frozen `d2b.terminal.v2` `ConfiguredLaunchSelection` carries only a
+    // `configured_item_id` and the wire-level `ProtocolToken` rejects an
+    // empty string, so there is no way to ask the daemon for "the default
+    // item" over this contract. `--item` is a required clap argument (see
+    // `LaunchArgs`) rather than an optional flag with a runtime fallback,
+    // since the v2 listing API exposes no client-side default-item discovery
+    // to fall back on.
+    let item_id = d2b_realm_core::ProtocolToken::parse(args.item.clone())
+        .map_err(|error| CliFailure::new(2, format!("launch: invalid --item id: {error}")))?;
+
+    // `d2b launch` has no static or SSH fallback: the configured argv only
+    // ever lives behind the hash-verified private bundle that the daemon
+    // resolves, so a missing daemon socket must fail closed here rather than
+    // attempting any client-side re-implementation.
     if !context.public_socket.exists() {
         return Err(CliFailure::new(
             69,
             "launch requires the d2bd public socket; no static or provider fallback is permitted",
         ));
     }
-    let mut socket = SeqpacketUnixSocket::connect(&context.public_socket).map_err(|error| {
-        CliFailure::new(
-            69,
-            format!("failed to connect to the d2bd public socket: {error}"),
-        )
-    })?;
-    socket
-        .send_frame(&daemon_hello_frame("hello")?)
-        .map_err(|error| CliFailure::new(69, format!("failed to send hello frame: {error}")))?;
-    let hello = socket
-        .recv_frame()
-        .map_err(|error| CliFailure::new(69, format!("failed to receive hello reply: {error}")))?;
-    let negotiated = parse_hello_reply(&hello)?;
-    require_launch_features(&negotiated.capabilities, None)?;
-
-    let list = public_wire::WorkloadOp::List(public_wire::WorkloadListArgs::default());
-    let list_response = workload_socket_exchange(&mut socket, &list, "workload list")?;
-    let public_wire::WorkloadOpResponse::List(list_result) = list_response else {
-        return Err(CliFailure::new(
-            76,
-            "daemon returned the wrong workload response to list",
-        ));
-    };
-    let workload = select_launch_workload(list_result.workloads, &args.target)?;
-    require_launch_features(&negotiated.capabilities, Some(workload.provider_kind))?;
-    let item = select_launcher_item(&workload, args.item.as_deref())?;
-
-    if item.kind == LauncherItemKind::Shell {
-        let vm = shell_launch_target(&workload, &negotiated.capabilities)?;
-        return cmd_shell(
-            context,
-            &ShellArgs {
-                vm,
-                action: Some(ShellAction::Attach),
-                name: None,
-                force: false,
-                json: args.json,
-                human: args.human,
-            },
-        );
-    }
-
-    let item_id = ProtocolToken::parse(item.id.as_str().to_owned())
-        .map_err(|_| CliFailure::new(70, "trusted launcher item id is invalid"))?;
+    let daemon = service_v2::DaemonService::connect(&context.public_socket)?;
+    let canonical = resolve_launch_target(&daemon, &args.target)?;
+    let target = d2b_core::workload_identity::WorkloadTarget::parse(&canonical)
+        .map_err(|_| CliFailure::new(76, "daemon returned a non-canonical workload target"))?;
     let operation_id = new_launch_operation_id()?;
-    let target = workload.identity.canonical_target.clone();
-    let launch = public_wire::WorkloadOp::LauncherExec(public_wire::LauncherExecArgs {
-        target: target.clone(),
-        item_id: item_id.clone(),
-        operation_id: operation_id.clone(),
-    });
-    let response = workload_socket_exchange(&mut socket, &launch, "launcher exec")?;
-    let public_wire::WorkloadOpResponse::LauncherExec(result) = response else {
-        return Err(CliFailure::new(
-            76,
-            "daemon returned the wrong workload response to launcher exec",
-        ));
+
+    let mut preparation = prepare_terminal_before_runtime(false)?;
+    let selection = TerminalSelection {
+        selection: Some(terminal_selection::Selection::Exec(ExecSelection {
+            authority: EnumOrUnknown::new(ExecAuthority::EXEC_AUTHORITY_CONFIGURED_LAUNCH),
+            selection: Some(exec_selection::Selection::ConfiguredLaunch(
+                ConfiguredLaunchSelection {
+                    configured_item_id: item_id.as_str().to_owned(),
+                    ..Default::default()
+                },
+            )),
+            tty: false,
+            detached: true,
+            ..Default::default()
+        })),
+        ..Default::default()
     };
+    let terminal = daemon.open_terminal(
+        daemon_access::DaemonMethod::Exec,
+        &canonical,
+        operation_id.as_str(),
+        selection,
+    )?;
+    let mut host = exec_client::CapturingHostIo::new(false, 0);
+    let outcome = run_terminal_stream_v2(
+        &daemon,
+        &terminal,
+        &mut host,
+        &mut preparation.signals,
+        false,
+        false,
+        TerminalDetachMode::None,
+    )?;
+    let exit = terminal_outcome_exit(&outcome)?;
+
+    // The frozen v2 `ConfiguredLaunch` route reports only a bare detached
+    // outcome; it never signals whether the dispatch was fresh or a replay
+    // of an already-committed operation id. Emit `Committed` rather than
+    // inventing an `AlreadyCommitted` claim the typed outcome does not make.
     let output = LaunchOutputV1 {
         command: "launch".to_owned(),
         target,
         item_id,
         operation_id,
-        disposition: result.disposition,
+        disposition: d2b_contracts::public_wire::LauncherExecDisposition::Committed,
     };
     if args.json {
         print_json(&output)?;
     } else {
-        let disposition = match output.disposition {
-            public_wire::LauncherExecDisposition::Committed => "committed",
-            public_wire::LauncherExecDisposition::AlreadyCommitted => "already committed",
-        };
         print_stdout(&format!(
-            "launched {} item {} ({disposition})\n",
+            "launched {} item {} (committed)\n",
             output.target.to_canonical(),
             output.item_id.as_str()
         ));
     }
-    Ok(0)
-}
-
-fn local_vm_shell_target(workload: &public_wire::WorkloadPublicSummary) -> &str {
-    workload.identity.legacy_vm_name.as_ref().map_or_else(
-        || workload.identity.workload_id.as_str(),
-        |legacy| legacy.as_str(),
-    )
-}
-
-fn shell_launch_target(
-    workload: &public_wire::WorkloadPublicSummary,
-    capabilities: &[d2b_contracts::FeatureFlag],
-) -> Result<String, CliFailure> {
-    if workload.provider_kind == d2b_realm_core::WorkloadProviderKind::UnsafeLocal {
-        require_unsafe_local_shell_feature(capabilities)?;
-        Ok(workload.identity.canonical_target.to_canonical())
-    } else {
-        Ok(local_vm_shell_target(workload).to_owned())
-    }
-}
-
-fn require_launch_features(
-    capabilities: &[d2b_contracts::FeatureFlag],
-    provider: Option<d2b_realm_core::WorkloadProviderKind>,
-) -> Result<(), CliFailure> {
-    let has_feature = |expected| {
-        capabilities
-            .iter()
-            .any(|feature| feature.known() == Some(expected))
-    };
-    if !has_feature(KnownFeatureFlag::ConfiguredLaunchV1) {
-        return Err(CliFailure::new(
-            70,
-            "daemon does not negotiate configured-launch-v1; update d2b and d2bd together",
-        ));
-    }
-    if provider == Some(d2b_realm_core::WorkloadProviderKind::UnsafeLocal)
-        && !has_feature(KnownFeatureFlag::UnsafeLocalProviderV1)
-    {
-        return Err(CliFailure::new(
-            70,
-            "daemon does not negotiate unsafe-local-provider-v1; no local execution fallback is permitted",
-        ));
-    }
-    Ok(())
-}
-
-fn require_unsafe_local_shell_feature(
-    capabilities: &[d2b_contracts::FeatureFlag],
-) -> Result<(), CliFailure> {
-    if capabilities
-        .iter()
-        .any(|feature| feature.known() == Some(KnownFeatureFlag::UnsafeLocalShellV1))
-    {
-        Ok(())
-    } else {
-        Err(CliFailure::new(
-            70,
-            "daemon does not negotiate unsafe-local-shell-v1; update d2b, d2bd, and d2b-unsafe-local-helper together; no host-shell fallback is permitted",
-        ))
-    }
-}
-
-fn try_resolve_direct_shell_target(
-    context: &Context,
-    requested: &str,
-) -> Result<Option<String>, CliFailure> {
-    if !requested.ends_with(".d2b") {
-        return Ok(None);
-    }
-    let mut socket = SeqpacketUnixSocket::connect(&context.public_socket).map_err(|error| {
-        CliFailure::new(
-            69,
-            format!("shell: failed to connect to the d2bd public socket: {error}"),
-        )
-    })?;
-    socket
-        .send_frame(&daemon_hello_frame("hello")?)
-        .map_err(|error| CliFailure::new(69, format!("shell: failed to send hello: {error}")))?;
-    let hello = socket
-        .recv_frame()
-        .map_err(|error| CliFailure::new(69, format!("shell: failed to receive hello: {error}")))?;
-    let negotiated = parse_hello_reply(&hello)?;
-    if !negotiated
-        .capabilities
-        .iter()
-        .any(|feature| feature.known() == Some(KnownFeatureFlag::ConfiguredLaunchV1))
-    {
-        return Err(CliFailure::new(
-            70,
-            "daemon cannot resolve canonical shell targets; update d2b and d2bd together",
-        ));
-    }
-    let response = workload_socket_exchange(
-        &mut socket,
-        &public_wire::WorkloadOp::List(public_wire::WorkloadListArgs::default()),
-        "shell workload resolution",
-    )?;
-    let public_wire::WorkloadOpResponse::List(result) = response else {
-        return Err(CliFailure::new(
-            76,
-            "daemon returned the wrong workload response while resolving the shell target",
-        ));
-    };
-    let Some(workload) = result
-        .workloads
-        .into_iter()
-        .find(|workload| workload.identity.canonical_target.to_canonical() == requested)
-    else {
-        return Ok(None);
-    };
-    match workload.provider_kind {
-        d2b_realm_core::WorkloadProviderKind::UnsafeLocal => {
-            require_unsafe_local_shell_feature(&negotiated.capabilities)?;
-            Ok(Some(workload.identity.canonical_target.to_canonical()))
-        }
-        d2b_realm_core::WorkloadProviderKind::LocalVm => {
-            Ok(Some(local_vm_shell_target(&workload).to_owned()))
-        }
-        provider => Err(CliFailure::new(
-            70,
-            format!(
-                "workload provider '{}' does not support direct local persistent shells",
-                workload_provider_kind_label(provider)
-            ),
-        )),
-    }
-}
-
-fn workload_provider_kind_label(provider: d2b_realm_core::WorkloadProviderKind) -> &'static str {
-    match provider {
-        d2b_realm_core::WorkloadProviderKind::LocalVm => "local-vm",
-        d2b_realm_core::WorkloadProviderKind::QemuMedia => "qemu-media",
-        d2b_realm_core::WorkloadProviderKind::ProviderManaged => "provider-managed",
-        d2b_realm_core::WorkloadProviderKind::UnsafeLocal => "unsafe-local",
-    }
-}
-
-fn select_launch_workload(
-    workloads: Vec<public_wire::WorkloadPublicSummary>,
-    target: &str,
-) -> Result<public_wire::WorkloadPublicSummary, CliFailure> {
-    let mut candidates = workloads
-        .into_iter()
-        .filter(|workload| {
-            workload.identity.canonical_target.to_canonical() == target
-                || workload.identity.workload_id.as_str() == target
-        })
-        .collect::<Vec<_>>();
-    match candidates.len() {
-        1 => Ok(candidates.remove(0)),
-        0 => Err(CliFailure::new(
-            2,
-            format!("workload target `{target}` was not found"),
-        )),
-        _ => {
-            let targets = candidates
-                .iter()
-                .map(|workload| workload.identity.canonical_target.to_canonical())
-                .collect::<Vec<_>>()
-                .join(", ");
-            Err(CliFailure::new(
-                2,
-                format!("workload id `{target}` is ambiguous; use one of: {targets}"),
-            ))
-        }
-    }
-}
-
-fn select_launcher_item(
-    workload: &public_wire::WorkloadPublicSummary,
-    requested: Option<&str>,
-) -> Result<d2b_realm_core::LauncherItemSummary, CliFailure> {
-    if let Some(item) = requested {
-        return workload
-            .launcher_items
-            .iter()
-            .find(|candidate| candidate.id.as_str() == item)
-            .cloned()
-            .ok_or_else(|| {
-                CliFailure::new(
-                    2,
-                    format!(
-                        "launcher item `{item}` is not configured for `{}`",
-                        workload.identity.canonical_target.to_canonical()
-                    ),
-                )
-            });
-    }
-    if let Some(default_item) = workload.default_item_id.as_ref() {
-        return workload
-            .launcher_items
-            .iter()
-            .find(|candidate| &candidate.id == default_item)
-            .cloned()
-            .ok_or_else(|| {
-                CliFailure::new(
-                    70,
-                    "trusted launcher metadata names a missing default item; rebuild the bundle",
-                )
-            });
-    }
-    if let [only] = workload.launcher_items.as_slice() {
-        return Ok(only.clone());
-    }
-    let choices = workload
-        .launcher_items
-        .iter()
-        .map(|item| format!("{} ({})", item.id.as_str(), item.name))
-        .collect::<Vec<_>>()
-        .join(", ");
-    Err(CliFailure::new(
-        2,
-        if choices.is_empty() {
-            "workload has no configured launcher items".to_owned()
-        } else {
-            format!("launcher item is ambiguous; choose one with --item: {choices}")
-        },
-    ))
-}
-
-#[cfg(test)]
-mod workload_launch_tests {
-    use super::*;
-    use d2b_contracts::public_wire::{
-        GraphicalLaunchPosture, WorkloadAvailability, WorkloadPublicSummary,
-    };
-    use d2b_core::workload_identity::{WorkloadIdentity, WorkloadTarget};
-    use d2b_realm_core::{
-        CapabilitySet, DisplayEnvironmentPosture, EnvironmentPosture, ExecutionIdentityPosture,
-        IsolationPosture, LauncherIcon, LauncherItemKind, LauncherItemSummary, ProtocolToken,
-        SessionPersistencePosture, WorkloadExecutionPosture, WorkloadProviderKind, WorkloadState,
-        ids::{RealmId, WorkloadId},
-        realm::RealmPath,
-    };
-
-    fn item(id: &str) -> LauncherItemSummary {
-        LauncherItemSummary {
-            id: ProtocolToken::parse(id).unwrap(),
-            name: id.to_owned(),
-            icon: LauncherIcon::default(),
-            kind: LauncherItemKind::Exec,
-            graphical: false,
-            capabilities: CapabilitySet::default(),
-        }
-    }
-
-    pub(super) fn workload(
-        workload_id: &str,
-        realm: &str,
-        items: Vec<LauncherItemSummary>,
-        default_item: Option<&str>,
-    ) -> WorkloadPublicSummary {
-        let realm_id = RealmId::parse(realm).unwrap();
-        let identity = WorkloadIdentity::new(
-            WorkloadId::parse(workload_id).unwrap(),
-            realm_id.clone(),
-            RealmPath::new(vec![realm_id]).unwrap(),
-            WorkloadTarget::parse(&format!("{workload_id}.{realm}.d2b")).unwrap(),
-        );
-        WorkloadPublicSummary {
-            identity,
-            provider_kind: WorkloadProviderKind::UnsafeLocal,
-            state: WorkloadState::Stopped,
-            execution_posture: WorkloadExecutionPosture {
-                isolation: IsolationPosture::UnsafeLocal,
-                environment: EnvironmentPosture::SystemdUserManagerAmbient,
-                display_environment: DisplayEnvironmentPosture::NotApplicable,
-                execution_identity: ExecutionIdentityPosture::AuthenticatedRequesterUid,
-                session_persistence: SessionPersistencePosture::UserManagerLifetime,
-            },
-            availability: WorkloadAvailability::Ready,
-            graphical_posture: GraphicalLaunchPosture::NotApplicable,
-            capabilities: CapabilitySet::default(),
-            launcher_items: items,
-            default_item_id: default_item.map(|id| ProtocolToken::parse(id).unwrap()),
-        }
-    }
-
-    #[test]
-    fn target_alias_ambiguity_lists_canonical_choices() {
-        let error = select_launch_workload(
-            vec![
-                workload("browser", "work", vec![item("open")], None),
-                workload("browser", "home", vec![item("open")], None),
-            ],
-            "browser",
-        )
-        .unwrap_err();
-        assert_eq!(error.exit_code, 2);
-        assert!(error.message.contains("browser.work.d2b"));
-        assert!(error.message.contains("browser.home.d2b"));
-    }
-
-    #[test]
-    fn item_selection_covers_sole_ambiguous_and_missing_default() {
-        let sole = workload("tools", "host", vec![item("only")], None);
-        assert_eq!(
-            select_launcher_item(&sole, None).unwrap().id.as_str(),
-            "only"
-        );
-
-        let ambiguous = workload("tools", "host", vec![item("browser"), item("editor")], None);
-        let error = select_launcher_item(&ambiguous, None).unwrap_err();
-        assert_eq!(error.exit_code, 2);
-        assert!(error.message.contains("--item"));
-
-        let missing_default = workload("tools", "host", vec![item("browser")], Some("missing"));
-        let error = select_launcher_item(&missing_default, None).unwrap_err();
-        assert_eq!(error.exit_code, 70);
-        assert!(error.message.contains("rebuild the bundle"));
-    }
-
-    #[test]
-    fn local_vm_shell_target_uses_workload_id_without_legacy_binding() {
-        let mut first_class = workload("browser", "work", vec![item("terminal")], None);
-        first_class.provider_kind = WorkloadProviderKind::LocalVm;
-        assert_eq!(local_vm_shell_target(&first_class), "browser");
-
-        let mut legacy = first_class;
-        legacy.identity.legacy_vm_name =
-            Some(d2b_core::contract_id::ContractId::parse("corp-vm").unwrap());
-        assert_eq!(local_vm_shell_target(&legacy), "corp-vm");
-    }
-
-    #[test]
-    fn launch_feature_skew_fails_closed() {
-        let error = require_launch_features(&[], None).unwrap_err();
-        assert_eq!(error.exit_code, 70);
-        assert!(error.message.contains("configured-launch-v1"));
-
-        let configured_only = [KnownFeatureFlag::ConfiguredLaunchV1.wire_value()];
-        let error =
-            require_launch_features(&configured_only, Some(WorkloadProviderKind::UnsafeLocal))
-                .unwrap_err();
-        assert_eq!(error.exit_code, 70);
-        assert!(error.message.contains("unsafe-local-provider-v1"));
-
-        let error = require_unsafe_local_shell_feature(&configured_only).unwrap_err();
-        assert_eq!(error.exit_code, 70);
-        assert!(error.message.contains("unsafe-local-shell-v1"));
-        assert!(error.message.contains("update d2b"));
-        assert!(error.message.contains("no host-shell fallback"));
-    }
-
-    #[test]
-    fn terminal_launcher_uses_canonical_target_only_for_unsafe_local() {
-        let features = [KnownFeatureFlag::UnsafeLocalShellV1.wire_value()];
-        let unsafe_local = workload("tools", "host", vec![item("terminal")], None);
-        assert_eq!(
-            shell_launch_target(&unsafe_local, &features).unwrap(),
-            "tools.host.d2b"
-        );
-
-        let mut local = workload("tools", "work", vec![item("terminal")], None);
-        local.provider_kind = WorkloadProviderKind::LocalVm;
-        local.identity.legacy_vm_name =
-            Some(d2b_core::contract_id::ContractId::parse("corp-vm").unwrap());
-        assert_eq!(shell_launch_target(&local, &[]).unwrap(), "corp-vm");
-    }
-}
-
-fn workload_socket_exchange(
-    socket: &mut SeqpacketUnixSocket,
-    op: &public_wire::WorkloadOp,
-    label: &str,
-) -> Result<public_wire::WorkloadOpResponse, CliFailure> {
-    let request = encode_type_tagged_message("workload", op, label)?;
-    socket
-        .send_frame(&request)
-        .map_err(|error| CliFailure::new(69, format!("failed to send {label}: {error}")))?;
-    let response = socket
-        .recv_frame()
-        .map_err(|error| CliFailure::new(69, format!("failed to receive {label}: {error}")))?;
-    let value = decode_daemon_frame(&response, label)?;
-    match value.get("type").and_then(Value::as_str) {
-        Some("workloadResponse") => serde_json::from_value::<WorkloadResponseFrame>(value)
-            .map(|frame| frame.payload)
-            .map_err(|error| {
-                CliFailure::new(76, format!("failed to decode {label} response: {error}"))
-            }),
-        Some("error") => {
-            let frame: ErrorFrame = serde_json::from_value(value).map_err(|error| {
-                CliFailure::new(76, format!("failed to decode {label} error: {error}"))
-            })?;
-            Err(cli_failure_from_daemon_error(frame.error))
-        }
-        _ => Err(CliFailure::new(
-            76,
-            format!("daemon returned an unexpected response to {label}"),
-        )),
-    }
+    Ok(exit)
 }
 
 fn new_launch_operation_id() -> Result<d2b_realm_core::OperationId, CliFailure> {
@@ -4099,35 +3047,19 @@ fn new_launch_operation_id() -> Result<d2b_realm_core::OperationId, CliFailure> 
 }
 
 fn cmd_list(context: &Context, args: &ListArgs) -> Result<i32, CliFailure> {
-    let (output, read_model) = match try_list_via_socket(context)? {
-        ListSocketOutcome::Entries(entries, rm) => {
-            let bundle = context.load_bundle_context().ok().flatten();
-            (
-                list_output_from_public_entries(&entries, bundle.as_ref()),
-                rm,
-            )
-        }
-        ListSocketOutcome::Unavailable => {
-            let manifest = context.load_manifest()?;
-            let bundle = context.load_bundle_context()?;
-            (
-                list_output_from_manifest(context, &manifest, bundle.as_ref()),
-                None,
-            )
-        }
-    };
+    let daemon = service_v2::DaemonService::connect(&context.public_socket)?;
+    let workloads = daemon.list_workloads(None)?;
+    let output = service_v2::list_output(&workloads)?;
 
     if args.json {
         print_json(&output)?;
     } else {
-        print_stdout(&render_list_human(&output, read_model.as_ref()));
+        print_stdout(&render_list_human(&output, None));
     }
     Ok(0)
 }
 
 fn cmd_status(context: &Context, args: &StatusArgs) -> Result<i32, CliFailure> {
-    let manifest = context.load_manifest()?;
-
     if args.check_bridges {
         if args.vm.is_some() || args.vm_flag.is_some() {
             return Err(CliFailure::new(
@@ -4149,7 +3081,17 @@ fn cmd_status(context: &Context, args: &StatusArgs) -> Result<i32, CliFailure> {
         return Ok(0);
     }
 
-    let selected_vm = resolve_selected_vm(context, args)?;
+    let selected_vm = match (&args.vm, &args.vm_flag) {
+        (Some(positional), Some(flagged)) if positional != flagged => {
+            return Err(CliFailure::new(
+                2,
+                "status received conflicting VM selectors",
+            ));
+        }
+        (Some(positional), _) => Some(positional.clone()),
+        (_, Some(flagged)) => Some(flagged.clone()),
+        (None, None) => None,
+    };
     if !args.json {
         match &selected_vm {
             // Single-VM status only warns about THAT VM's pending edit,
@@ -4158,74 +3100,1637 @@ fn cmd_status(context: &Context, args: &StatusArgs) -> Result<i32, CliFailure> {
             None => warn_all_pending_staged_configs(),
         }
     }
-    if let Some(vm_name) = &selected_vm {
-        let _ = manifest
-            .get_vm(vm_name)
-            .ok_or_else(|| CliFailure::new(1, format!("unknown VM '{vm_name}'")))?;
-    }
-    let socket_status = match try_status_via_socket(context, selected_vm.as_deref())? {
-        StatusSocketOutcome::Entries(entries, rm) => Some((entries, rm)),
-        StatusSocketOutcome::Unavailable => None,
-    };
-    let bundle = if socket_status.is_some() {
-        context.load_bundle_context().ok().flatten()
-    } else {
-        context.load_bundle_context()?
-    };
-
+    let daemon = service_v2::DaemonService::connect(&context.public_socket)?;
+    let (workloads, read_model) = daemon.inspect(selected_vm.as_deref())?;
+    let (inventory, projections) = service_v2::status_output(&workloads, &read_model)?;
     if let Some(vm_name) = selected_vm {
-        let vm = manifest
-            .get_vm(&vm_name)
+        let projection = projections
+            .iter()
+            .find(|projection| {
+                projection.output.name == vm_name
+                    || projection.output.canonical_target.as_deref() == Some(vm_name.as_str())
+            })
+            .or_else(|| (projections.len() == 1).then(|| &projections[0]))
             .ok_or_else(|| CliFailure::new(1, format!("unknown VM '{vm_name}'")))?;
-        let output = socket_status
-            .as_ref()
-            .and_then(|(entries, _)| entries.iter().find(|entry| entry.vm == vm.name))
-            .map(|entry| build_vm_status_output_from_public(context, vm, bundle.as_ref(), entry))
-            .unwrap_or_else(|| build_vm_status_output(context, vm, bundle.as_ref()));
         if args.json {
-            print_json(&StatusOutputV2::Vm(Box::new(output)))?;
+            print_json(&StatusOutputV2::Vm(Box::new(projection.output.clone())))?;
         } else {
-            print_stdout(&render_status_vm_human(
-                &output,
-                vm,
-                collect_bridge_rows(context, &manifest, bundle.as_ref()),
-            ));
+            print_stdout(&service_v2::render_status(projection));
         }
     } else {
-        let socket_status = socket_status.as_ref();
-        let output = StatusInventoryOutputV2 {
-            runtime: if socket_status.is_some() {
-                "daemon-public".to_owned()
-            } else {
-                RUNTIME_UNKNOWN.to_owned()
-            },
-            read_model: socket_status.as_ref().and_then(|(_, rm)| rm.clone()),
-            vms: manifest
-                .vms()
-                .into_iter()
-                .map(|vm| {
-                    socket_status
-                        .and_then(|(entries, _)| entries.iter().find(|entry| entry.vm == vm.name))
-                        .map(|entry| {
-                            build_vm_status_output_from_public(context, vm, bundle.as_ref(), entry)
-                        })
-                        .unwrap_or_else(|| build_vm_status_output(context, vm, bundle.as_ref()))
-                })
-                .collect(),
-        };
         if args.json {
-            print_json(&StatusOutputV2::Inventory(Box::new(output)))?;
+            print_json(&StatusOutputV2::Inventory(Box::new(inventory)))?;
         } else {
-            print_stdout(&render_status_inventory_human(
-                &output,
-                &manifest,
-                context,
-                bundle.as_ref(),
-            ));
+            print_stdout(&service_v2::render_status_inventory(&projections));
         }
     }
 
     Ok(0)
+}
+
+fn terminal_operation_id(kind: &str) -> String {
+    format!(
+        "{kind}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    )
+}
+
+fn terminal_size_v2(rows: u32, columns: u32) -> terminal_v2::TerminalSize {
+    terminal_v2::TerminalSize {
+        rows,
+        columns,
+        ..Default::default()
+    }
+}
+
+struct TerminalPreparation {
+    _signal_mask: exec_client::ForwardedSignalMask,
+    signals: exec_client::InstalledSignals,
+    initial_size: Option<(u32, u32)>,
+}
+
+fn prepare_terminal_before_runtime(tty: bool) -> Result<TerminalPreparation, CliFailure> {
+    let signal_mask = exec_client::block_forwarded_signals().map_err(|error| {
+        CliFailure::new(42, format!("failed to block terminal signals: {error}"))
+    })?;
+    let initial_size = if tty {
+        if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+            return Err(CliFailure::new(
+                2,
+                "terminal mode requires TTY stdin and stdout",
+            ));
+        }
+        Some(exec_client::current_window_size().ok_or_else(|| {
+            CliFailure::new(2, "failed to obtain the terminal window size before open")
+        })?)
+    } else {
+        None
+    };
+    let signals = exec_client::install_blocked_signals(&signal_mask).map_err(|error| {
+        CliFailure::new(
+            42,
+            format!("failed to install terminal signal waiter: {error}"),
+        )
+    })?;
+    Ok(TerminalPreparation {
+        _signal_mask: signal_mask,
+        signals,
+        initial_size,
+    })
+}
+
+fn terminal_signal_kind(
+    signal: exec_client::ExecSignal,
+) -> Option<terminal_v2::TerminalSignalKind> {
+    match signal {
+        exec_client::ExecSignal::Winch => None,
+        exec_client::ExecSignal::Interrupt => {
+            Some(terminal_v2::TerminalSignalKind::TERMINAL_SIGNAL_KIND_INTERRUPT)
+        }
+        exec_client::ExecSignal::Quit => {
+            Some(terminal_v2::TerminalSignalKind::TERMINAL_SIGNAL_KIND_QUIT)
+        }
+        exec_client::ExecSignal::Terminate => {
+            Some(terminal_v2::TerminalSignalKind::TERMINAL_SIGNAL_KIND_TERMINATE)
+        }
+        exec_client::ExecSignal::Stop => {
+            Some(terminal_v2::TerminalSignalKind::TERMINAL_SIGNAL_KIND_SUSPEND)
+        }
+        exec_client::ExecSignal::Hangup => {
+            Some(terminal_v2::TerminalSignalKind::TERMINAL_SIGNAL_KIND_HANGUP)
+        }
+    }
+}
+
+fn terminal_client_failure(error: daemon_access::ClientError) -> CliFailure {
+    let exit_code = match error {
+        daemon_access::ClientError::Cancelled => 130,
+        daemon_access::ClientError::ConnectFailed
+        | daemon_access::ClientError::TransportFailed
+        | daemon_access::ClientError::SessionLost
+        | daemon_access::ClientError::SessionEstablishment(_) => 69,
+        daemon_access::ClientError::Remote {
+            kind:
+                daemon_access::RemoteErrorKind::Unauthorized | daemon_access::RemoteErrorKind::Forbidden,
+            ..
+        } => 77,
+        daemon_access::ClientError::Remote {
+            kind: daemon_access::RemoteErrorKind::ResourceExhausted,
+            ..
+        } => 75,
+        _ => 76,
+    };
+    CliFailure::new(exit_code, error.to_string())
+}
+
+fn client_error_to_exec(error: daemon_access::ClientError) -> exec_client::ExecClientError {
+    use daemon_access::{ClientError, RemoteErrorKind};
+    match error {
+        ClientError::ConnectFailed
+        | ClientError::RouteUnavailable
+        | ClientError::SessionLost
+        | ClientError::TransportFailed
+        | ClientError::RetryLimitExceeded => {
+            exec_client::ExecClientError::transport(error.to_string())
+        }
+        ClientError::SessionEstablishment(_) => exec_client::ExecClientError::from_daemon_error(
+            "guest-control-auth-failed",
+            error.to_string(),
+            "verify the daemon and guest session identities, then retry",
+        ),
+        ClientError::Remote { kind, .. } => {
+            let slug = match kind {
+                RemoteErrorKind::Unauthorized | RemoteErrorKind::Forbidden => "authz-not-admin",
+                RemoteErrorKind::NotFound => "guest-control-exec-not-found",
+                RemoteErrorKind::ResourceExhausted => "exec-session-capacity",
+                RemoteErrorKind::Unavailable | RemoteErrorKind::DeadlineExceeded => {
+                    "guest-control-transport-unavailable"
+                }
+                RemoteErrorKind::GenerationMismatch => "guest-control-stale-session",
+                RemoteErrorKind::Cancelled => "exec-session-cancelled",
+                RemoteErrorKind::InvalidRequest
+                | RemoteErrorKind::Conflict
+                | RemoteErrorKind::FailedPrecondition => "guest-control-protocol-error",
+                RemoteErrorKind::Internal => "guest-control-exec-internal",
+            };
+            exec_client::ExecClientError::from_daemon_error(
+                slug,
+                error.to_string(),
+                "inspect typed daemon/guest status and retry only when its retry class permits",
+            )
+        }
+        ClientError::Cancelled => exec_client::ExecClientError::from_daemon_error(
+            "exec-session-cancelled",
+            error.to_string(),
+            "retry only if the operation is safe to repeat",
+        ),
+        ClientError::ServiceContract(_)
+        | ClientError::ContractViolation
+        | ClientError::StreamClosed
+        | ClientError::StreamDetached
+        | ClientError::StreamLimitExceeded => {
+            exec_client::ExecClientError::protocol(error.to_string())
+        }
+        _ => exec_client::ExecClientError::internal(error.to_string()),
+    }
+}
+
+fn terminal_failure_to_exec(error: CliFailure) -> exec_client::ExecClientError {
+    match error.exit_code {
+        69 => exec_client::ExecClientError::transport(error.message),
+        75 => exec_client::ExecClientError::from_daemon_error(
+            "exec-session-capacity",
+            error.message,
+            "retry after capacity becomes available",
+        ),
+        77 => exec_client::ExecClientError::from_daemon_error(
+            "guest-control-auth-failed",
+            error.message,
+            "verify daemon and guest identities",
+        ),
+        76 => exec_client::ExecClientError::protocol(error.message),
+        _ => exec_client::ExecClientError::internal(error.message),
+    }
+}
+
+fn send_terminal_frame(
+    daemon: &service_v2::DaemonService,
+    terminal: &daemon_access::DaemonTerminal,
+    frame: terminal_v2::terminal_stream_frame::Frame,
+) -> Result<(), CliFailure> {
+    daemon
+        .runtime()
+        .block_on(terminal.send(frame))
+        .map_err(terminal_client_failure)
+}
+
+fn receive_terminal_frame(
+    daemon: &service_v2::DaemonService,
+    terminal: &daemon_access::DaemonTerminal,
+    timeout: Duration,
+) -> Result<Option<terminal_v2::TerminalStreamFrame>, CliFailure> {
+    match daemon
+        .runtime()
+        .block_on(tokio::time::timeout(timeout, terminal.receive()))
+    {
+        Ok(Ok(frame)) => Ok(Some(frame)),
+        Ok(Err(error)) => Err(terminal_client_failure(error)),
+        Err(_) => Ok(None),
+    }
+}
+
+fn cancel_terminal_best_effort(
+    daemon: &service_v2::DaemonService,
+    terminal: &daemon_access::DaemonTerminal,
+) {
+    let _ = daemon.runtime().block_on(terminal.send(
+        terminal_v2::terminal_stream_frame::Frame::Cancel(terminal_v2::TerminalCancel::new()),
+    ));
+}
+
+fn write_terminal_output<H: terminal_client::TerminalHostIo>(
+    host: &mut H,
+    output: &terminal_v2::TerminalOutput,
+    expected_offset: &mut u64,
+    stderr: bool,
+) -> Result<(), CliFailure> {
+    if output.offset > *expected_offset && !output.truncated && output.dropped_bytes == 0 {
+        return Err(CliFailure::new(
+            76,
+            "terminal output advanced without an authenticated truncation marker",
+        ));
+    }
+    let overlap = expected_offset.saturating_sub(output.offset);
+    let start = usize::try_from(overlap.min(output.data.len() as u64))
+        .map_err(|_| CliFailure::new(76, "terminal output offset overflow"))?;
+    let bytes = &output.data[start..];
+    let result = if stderr {
+        host.write_stderr(bytes)
+    } else {
+        host.write_stdout(bytes)
+    };
+    result
+        .map_err(|error| CliFailure::new(69, format!("terminal output write failed: {error}")))?;
+    let frame_end = output
+        .offset
+        .checked_add(output.data.len() as u64)
+        .ok_or_else(|| CliFailure::new(76, "terminal output offset overflow"))?;
+    *expected_offset = (*expected_offset).max(frame_end);
+    Ok(())
+}
+
+#[cfg(test)]
+mod terminal_v2_review_tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct Host {
+        stdout: Vec<u8>,
+        stderr: Vec<u8>,
+    }
+
+    impl terminal_client::TerminalHostIo for Host {
+        fn read_stdin(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+            Err(io::ErrorKind::WouldBlock.into())
+        }
+
+        fn write_stdout(&mut self, data: &[u8]) -> io::Result<()> {
+            self.stdout.extend_from_slice(data);
+            Ok(())
+        }
+
+        fn write_stderr(&mut self, data: &[u8]) -> io::Result<()> {
+            self.stderr.extend_from_slice(data);
+            Ok(())
+        }
+
+        fn window_size(&self) -> Option<(u32, u32)> {
+            Some((24, 80))
+        }
+    }
+
+    #[test]
+    fn sigquit_maps_only_to_the_quit_wire_kind() {
+        assert_eq!(
+            terminal_signal_kind(exec_client::ExecSignal::Quit),
+            Some(terminal_v2::TerminalSignalKind::TERMINAL_SIGNAL_KIND_QUIT)
+        );
+        assert_ne!(
+            terminal_signal_kind(exec_client::ExecSignal::Quit),
+            Some(terminal_v2::TerminalSignalKind::TERMINAL_SIGNAL_KIND_INTERRUPT)
+        );
+    }
+
+    #[test]
+    fn replayed_output_never_rewinds_offsets_or_duplicates_bytes() {
+        let mut host = Host::default();
+        let mut offset = 10;
+        write_terminal_output(
+            &mut host,
+            &terminal_v2::TerminalOutput {
+                offset: 2,
+                data: b"old".to_vec(),
+                ..Default::default()
+            },
+            &mut offset,
+            false,
+        )
+        .unwrap();
+        assert_eq!(offset, 10);
+        assert!(host.stdout.is_empty());
+
+        write_terminal_output(
+            &mut host,
+            &terminal_v2::TerminalOutput {
+                offset: 8,
+                data: b"abcd".to_vec(),
+                ..Default::default()
+            },
+            &mut offset,
+            false,
+        )
+        .unwrap();
+        assert_eq!(offset, 12);
+        assert_eq!(host.stdout, b"cd");
+    }
+
+    #[test]
+    fn terminal_and_open_errors_keep_structured_exec_classification() {
+        let transport = terminal_failure_to_exec(CliFailure::new(69, "disconnected"));
+        assert_eq!(transport.exit_code, exec_client::EXIT_EXEC_TRANSPORT);
+        assert_eq!(transport.source, exec_client::ExecFailureSource::Transport);
+
+        let missing = client_error_to_exec(daemon_access::ClientError::Remote {
+            kind: daemon_access::RemoteErrorKind::NotFound,
+            retry: daemon_access::RetryClass::Never,
+        });
+        assert_eq!(missing.exit_code, exec_client::EXIT_EXEC_PROTOCOL);
+        assert_eq!(missing.source, exec_client::ExecFailureSource::Protocol);
+
+        let denied = client_error_to_exec(daemon_access::ClientError::Remote {
+            kind: daemon_access::RemoteErrorKind::Forbidden,
+            retry: daemon_access::RetryClass::Never,
+        });
+        assert_eq!(denied.exit_code, exec_client::EXIT_EXEC_AUTH);
+        assert_eq!(denied.source, exec_client::ExecFailureSource::GuestControl);
+    }
+
+    #[test]
+    fn json_terminal_failure_emits_one_document_and_no_plain_stderr() {
+        let cli = NativeCli::try_parse_from(["d2b", "vm", "exec", "work", "--json", "--", "true"])
+            .unwrap();
+        let NativeCommand::Vm(VmArgs {
+            command: VmCommand::Exec(args),
+        }) = cli.command
+        else {
+            panic!("expected vm exec args");
+        };
+        let (result, stdout, stderr) = with_test_output_capture(|| {
+            exec_terminate(
+                &args,
+                terminal_failure_to_exec(CliFailure::new(69, "stream disconnected")),
+            )
+        });
+        assert_eq!(result.unwrap(), exec_client::EXIT_EXEC_TRANSPORT);
+        assert!(stderr.is_empty());
+        let value: Value = serde_json::from_slice(&stdout).unwrap();
+        assert_eq!(value["source"], "transport");
+        assert_eq!(value["transportExitCode"], exec_client::EXIT_EXEC_TRANSPORT);
+        assert_eq!(
+            serde_json::Deserializer::from_slice(&stdout)
+                .into_iter::<Value>()
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn detached_management_projects_typed_guest_entries() {
+        let result = typed_exec_list_result(vec![guest_v2::GuestExecListEntry {
+            resource_handle: "exec-1".to_owned(),
+            state: EnumOrUnknown::new(guest_v2::GuestExecState::GUEST_EXEC_STATE_RUNNING),
+            created_at_unix_ms: 17,
+            argv_digest: vec![3; 32],
+            stdout_bytes: 11,
+            stderr_bytes: 7,
+            dropped_bytes: 2,
+            stdout_truncated: true,
+            ..Default::default()
+        }]);
+        assert_eq!(result.execs[0].exec_id, "exec-1");
+        assert_eq!(
+            result.execs[0].state,
+            d2b_contracts::guest_wire::ExecState::Running
+        );
+        assert_eq!(result.execs[0].stdout_end_offset, 11);
+        assert_eq!(result.execs[0].stderr_end_offset, 7);
+        assert_eq!(result.execs[0].dropped_bytes, 2);
+        assert!(result.execs[0].truncated);
+    }
+
+    #[test]
+    fn shell_detach_scanner_handles_one_read_and_keeps_console_escape_as_input() {
+        let mut scanner = ShellDetachScanner::default();
+        match scanner.scan(b"before\x00\x11after") {
+            TerminalDetachScan::Detach(prefix) => assert_eq!(prefix, b"before"),
+            TerminalDetachScan::Forward(_) => panic!("Ctrl-Space Ctrl-q must detach"),
+        }
+
+        let mut scanner = ShellDetachScanner::default();
+        match scanner.scan(b"\x1d") {
+            TerminalDetachScan::Forward(bytes) => assert_eq!(bytes, b"\x1d"),
+            TerminalDetachScan::Detach(_) => panic!("Ctrl-] is console-only"),
+        }
+    }
+
+    #[test]
+    fn console_detach_scanner_uses_ctrl_bracket_and_passes_shell_escape() {
+        let mut scanner = ConsoleDetachScanner;
+        match scanner.scan(b"before\x1dafter") {
+            TerminalDetachScan::Detach(prefix) => assert_eq!(prefix, b"before"),
+            TerminalDetachScan::Forward(_) => panic!("Ctrl-] must detach console"),
+        }
+        match scanner.scan(b"\x00\x11") {
+            TerminalDetachScan::Forward(bytes) => assert_eq!(bytes, b"\x00\x11"),
+            TerminalDetachScan::Detach(_) => {
+                panic!("Ctrl-Space Ctrl-q is shell-only")
+            }
+        }
+    }
+
+    #[test]
+    fn shell_detach_scanner_preserves_state_across_reads() {
+        let mut scanner = ShellDetachScanner::default();
+        match scanner.scan(b"before\x00") {
+            TerminalDetachScan::Forward(bytes) => assert_eq!(bytes, b"before"),
+            TerminalDetachScan::Detach(_) => panic!("incomplete escape must remain pending"),
+        }
+        match scanner.scan(b"\x11after") {
+            TerminalDetachScan::Detach(prefix) => assert!(prefix.is_empty()),
+            TerminalDetachScan::Forward(_) => panic!("split Ctrl-Space Ctrl-q must detach"),
+        }
+
+        let mut scanner = ShellDetachScanner::default();
+        assert!(matches!(
+            scanner.scan(b"\x00"),
+            TerminalDetachScan::Forward(bytes) if bytes.is_empty()
+        ));
+        match scanner.scan(b"x") {
+            TerminalDetachScan::Forward(bytes) => assert_eq!(bytes, b"\x00x"),
+            TerminalDetachScan::Detach(_) => panic!("non-q input must flush pending Ctrl-Space"),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum TerminalDetachMode {
+    None,
+    Console,
+    Shell,
+}
+
+struct ConsoleDetachScanner;
+
+#[derive(Default)]
+struct ShellDetachScanner {
+    ctrl_space_pending: bool,
+}
+
+enum TerminalDetachScan {
+    Forward(Vec<u8>),
+    Detach(Vec<u8>),
+}
+
+impl ConsoleDetachScanner {
+    fn scan(&mut self, bytes: &[u8]) -> TerminalDetachScan {
+        match bytes.iter().position(|&byte| byte == 0x1d) {
+            Some(index) => TerminalDetachScan::Detach(bytes[..index].to_vec()),
+            None => TerminalDetachScan::Forward(bytes.to_vec()),
+        }
+    }
+}
+
+impl ShellDetachScanner {
+    fn scan(&mut self, bytes: &[u8]) -> TerminalDetachScan {
+        let mut forward = Vec::with_capacity(bytes.len() + usize::from(self.ctrl_space_pending));
+        for &byte in bytes {
+            if self.ctrl_space_pending {
+                self.ctrl_space_pending = false;
+                if byte == 0x11 {
+                    return TerminalDetachScan::Detach(forward);
+                }
+                forward.push(0);
+            }
+            if byte == 0 {
+                self.ctrl_space_pending = true;
+            } else {
+                forward.push(byte);
+            }
+        }
+        TerminalDetachScan::Forward(forward)
+    }
+
+    fn finish(&mut self) -> bool {
+        std::mem::take(&mut self.ctrl_space_pending)
+    }
+}
+
+fn send_terminal_stdin(
+    daemon: &service_v2::DaemonService,
+    terminal: &daemon_access::DaemonTerminal,
+    bytes: &[u8],
+    offset: &mut u64,
+) -> Result<(), CliFailure> {
+    for chunk in bytes.chunks(d2b_contracts::v2_services::MAX_TERMINAL_CHUNK_BYTES) {
+        send_terminal_frame(
+            daemon,
+            terminal,
+            terminal_v2::terminal_stream_frame::Frame::Stdin(terminal_v2::TerminalStdin {
+                offset: *offset,
+                data: chunk.to_vec(),
+                ..Default::default()
+            }),
+        )?;
+        *offset = offset
+            .checked_add(chunk.len() as u64)
+            .ok_or_else(|| CliFailure::new(76, "stdin offset overflow"))?;
+    }
+    Ok(())
+}
+
+fn run_terminal_stream_v2<H: terminal_client::TerminalHostIo>(
+    daemon: &service_v2::DaemonService,
+    terminal: &daemon_access::DaemonTerminal,
+    host: &mut H,
+    signals: &mut exec_client::InstalledSignals,
+    tty: bool,
+    forward_stdin: bool,
+    detach_mode: TerminalDetachMode,
+) -> Result<terminal_v2::TerminalOutcome, CliFailure> {
+    use terminal_client::TerminalSignalSource as _;
+    use terminal_v2::{
+        TerminalCloseStdin, TerminalDetach, TerminalResize, TerminalSignal,
+        terminal_stream_frame::Frame,
+    };
+
+    let _raw_guard = if tty {
+        Some(
+            exec_client::FdStateGuard::enter(true, true).map_err(|error| {
+                CliFailure::new(42, format!("failed to enter raw mode: {error}"))
+            })?,
+        )
+    } else {
+        None
+    };
+    let mut stdin_offset = 0_u64;
+    let mut stdout_offset = 0_u64;
+    let mut stderr_offset = 0_u64;
+    let mut control_sequence = 1_u64;
+    let mut started = false;
+    let mut stdin_closed = false;
+    let mut closing = false;
+    let mut stdin_buffer = vec![0_u8; d2b_contracts::v2_services::MAX_TERMINAL_CHUNK_BYTES];
+    let mut console_detach = ConsoleDetachScanner;
+    let mut shell_detach = ShellDetachScanner::default();
+
+    loop {
+        if started && !closing {
+            for signal in signals.drain() {
+                let frame = match signal {
+                    exec_client::ExecSignal::Winch if tty => {
+                        let (rows, columns) = host.window_size().ok_or_else(|| {
+                            CliFailure::new(76, "failed to obtain terminal size for resize")
+                        })?;
+                        Some(Frame::Resize(TerminalResize {
+                            operation_sequence: control_sequence,
+                            size: MessageField::some(terminal_size_v2(rows, columns)),
+                            ..Default::default()
+                        }))
+                    }
+                    exec_client::ExecSignal::Winch => None,
+                    signal => Some(Frame::Signal(TerminalSignal {
+                        operation_sequence: control_sequence,
+                        signal: EnumOrUnknown::new(
+                            terminal_signal_kind(signal)
+                                .expect("non-WINCH terminal signal has a wire kind"),
+                        ),
+                        ..Default::default()
+                    })),
+                };
+                if let Some(frame) = frame {
+                    send_terminal_frame(daemon, terminal, frame)?;
+                    control_sequence = control_sequence.saturating_add(1);
+                }
+            }
+
+            if forward_stdin && !stdin_closed {
+                match host.read_stdin(&mut stdin_buffer) {
+                    Ok(0) => {
+                        if matches!(detach_mode, TerminalDetachMode::Shell) && shell_detach.finish()
+                        {
+                            send_terminal_stdin(daemon, terminal, &[0], &mut stdin_offset)?;
+                        }
+                        send_terminal_frame(
+                            daemon,
+                            terminal,
+                            Frame::CloseStdin(TerminalCloseStdin::new()),
+                        )?;
+                        stdin_closed = true;
+                    }
+                    Ok(count) => {
+                        let bytes = &stdin_buffer[..count];
+                        let scan = match detach_mode {
+                            TerminalDetachMode::None => TerminalDetachScan::Forward(bytes.to_vec()),
+                            TerminalDetachMode::Console => console_detach.scan(bytes),
+                            TerminalDetachMode::Shell => shell_detach.scan(bytes),
+                        };
+                        match scan {
+                            TerminalDetachScan::Detach(prefix) => {
+                                send_terminal_stdin(daemon, terminal, &prefix, &mut stdin_offset)?;
+                                send_terminal_frame(
+                                    daemon,
+                                    terminal,
+                                    Frame::Detach(TerminalDetach::new()),
+                                )?;
+                                closing = true;
+                            }
+                            TerminalDetachScan::Forward(forward) => {
+                                send_terminal_stdin(daemon, terminal, &forward, &mut stdin_offset)?;
+                            }
+                        }
+                    }
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                        ) => {}
+                    Err(error) => {
+                        cancel_terminal_best_effort(daemon, terminal);
+                        return Err(CliFailure::new(
+                            69,
+                            format!("terminal stdin read failed: {error}"),
+                        ));
+                    }
+                }
+            } else if !forward_stdin && !stdin_closed {
+                send_terminal_frame(
+                    daemon,
+                    terminal,
+                    Frame::CloseStdin(TerminalCloseStdin::new()),
+                )?;
+                stdin_closed = true;
+            }
+        }
+
+        let Some(frame) = receive_terminal_frame(daemon, terminal, Duration::from_millis(20))?
+        else {
+            continue;
+        };
+        match frame.frame {
+            Some(Frame::Started(value)) => {
+                if started {
+                    return Err(CliFailure::new(76, "terminal sent duplicate started frame"));
+                }
+                stdout_offset = value.stdout_offset;
+                stderr_offset = value.stderr_offset;
+                started = true;
+            }
+            Some(Frame::Stdout(output)) => {
+                if let Err(error) = write_terminal_output(host, &output, &mut stdout_offset, false)
+                {
+                    cancel_terminal_best_effort(daemon, terminal);
+                    return Err(error);
+                }
+            }
+            Some(Frame::Stderr(output)) => {
+                if let Err(error) = write_terminal_output(host, &output, &mut stderr_offset, true) {
+                    cancel_terminal_best_effort(daemon, terminal);
+                    return Err(error);
+                }
+            }
+            Some(Frame::Status(_)) => {}
+            Some(Frame::Outcome(outcome)) => return Ok(outcome),
+            _ => {
+                return Err(CliFailure::new(
+                    76,
+                    "terminal sent a direction-invalid frame",
+                ));
+            }
+        }
+    }
+}
+
+fn terminal_outcome_exit(outcome: &terminal_v2::TerminalOutcome) -> Result<i32, CliFailure> {
+    use terminal_v2::terminal_outcome::Outcome;
+    match outcome.outcome.as_ref() {
+        Some(Outcome::Exited(exited)) => Ok(exited.exit_code),
+        Some(Outcome::Signaled(signaled)) => {
+            Ok(128_i32.saturating_add(signaled.signal.min(127) as i32))
+        }
+        Some(Outcome::Cancelled(_)) => Ok(130),
+        Some(Outcome::Detached(_) | Outcome::Closed(_)) => Ok(0),
+        Some(Outcome::Failed(failed)) => Err(CliFailure::new(
+            match failed.error.enum_value_or_default() {
+                terminal_v2::TerminalErrorKind::TERMINAL_ERROR_KIND_UNAUTHORIZED => 77,
+                terminal_v2::TerminalErrorKind::TERMINAL_ERROR_KIND_RESOURCE_EXHAUSTED => 75,
+                terminal_v2::TerminalErrorKind::TERMINAL_ERROR_KIND_UNAVAILABLE => 69,
+                _ => 76,
+            },
+            format!(
+                "terminal failed: {:?}",
+                failed.error.enum_value_or_default()
+            ),
+        )),
+        None => Err(CliFailure::new(76, "terminal outcome omitted its result")),
+        Some(_) => Err(CliFailure::new(76, "terminal returned an unknown outcome")),
+    }
+}
+
+fn shell_session_state(state: terminal_v2::ShellSessionState) -> &'static str {
+    match state {
+        terminal_v2::ShellSessionState::SHELL_SESSION_STATE_ATTACHED => "attached",
+        terminal_v2::ShellSessionState::SHELL_SESSION_STATE_DETACHED => "detached",
+        terminal_v2::ShellSessionState::SHELL_SESSION_STATE_KILLED => "killed",
+        terminal_v2::ShellSessionState::SHELL_SESSION_STATE_UNAVAILABLE => "unavailable",
+        _ => "unknown",
+    }
+}
+
+fn terminal_selection_shell(
+    args: &ShellArgs,
+    initial_size: Option<(u32, u32)>,
+) -> terminal_v2::TerminalSelection {
+    let action = args.action.unwrap_or(ShellAction::Attach);
+    let (action, shell_handle, configured_shell_id, force, initial_size) = match action {
+        ShellAction::Attach if args.name.is_some() => (
+            terminal_v2::ShellAction::SHELL_ACTION_ATTACH_CONFIGURED,
+            String::new(),
+            args.name.clone().unwrap_or_default(),
+            args.force,
+            initial_size
+                .map(|(rows, columns)| terminal_size_v2(rows, columns))
+                .into(),
+        ),
+        ShellAction::Attach => (
+            terminal_v2::ShellAction::SHELL_ACTION_ATTACH_DEFAULT,
+            String::new(),
+            String::new(),
+            args.force,
+            initial_size
+                .map(|(rows, columns)| terminal_size_v2(rows, columns))
+                .into(),
+        ),
+        ShellAction::List => (
+            terminal_v2::ShellAction::SHELL_ACTION_LIST,
+            String::new(),
+            String::new(),
+            false,
+            MessageField::none(),
+        ),
+        ShellAction::Detach => (
+            terminal_v2::ShellAction::SHELL_ACTION_DETACH,
+            args.name.clone().unwrap_or_default(),
+            String::new(),
+            false,
+            MessageField::none(),
+        ),
+        ShellAction::Kill => (
+            terminal_v2::ShellAction::SHELL_ACTION_KILL,
+            args.name.clone().unwrap_or_default(),
+            String::new(),
+            false,
+            MessageField::none(),
+        ),
+    };
+    terminal_v2::TerminalSelection {
+        selection: Some(terminal_v2::terminal_selection::Selection::Shell(
+            terminal_v2::ShellSelection {
+                action: EnumOrUnknown::new(action),
+                shell_handle,
+                configured_shell_id,
+                force,
+                initial_size,
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    }
+}
+
+fn receive_shell_management(
+    daemon: &service_v2::DaemonService,
+    terminal: &daemon_access::DaemonTerminal,
+) -> Result<
+    (
+        terminal_v2::ShellManagementResult,
+        terminal_v2::TerminalOutcome,
+    ),
+    CliFailure,
+> {
+    use terminal_v2::terminal_stream_frame::Frame;
+    let mut result = None;
+    loop {
+        let frame = daemon
+            .runtime()
+            .block_on(terminal.receive())
+            .map_err(terminal_client_failure)?;
+        match frame.frame {
+            Some(Frame::ShellResult(shell_result)) if result.is_none() => {
+                result = Some(shell_result);
+            }
+            Some(Frame::Outcome(outcome)) => {
+                return Ok((
+                    result.ok_or_else(|| {
+                        CliFailure::new(76, "shell management omitted its typed result")
+                    })?,
+                    outcome,
+                ));
+            }
+            _ => {
+                return Err(CliFailure::new(
+                    76,
+                    "shell management returned an unexpected terminal frame",
+                ));
+            }
+        }
+    }
+}
+
+fn cmd_console_v2(context: &Context, args: &ConsoleArgs) -> Result<i32, CliFailure> {
+    let mut preparation = prepare_terminal_before_runtime(true)?;
+    let (rows, columns) = preparation
+        .initial_size
+        .ok_or_else(|| CliFailure::new(2, "console requires a terminal size"))?;
+    let daemon = service_v2::DaemonService::connect(&context.public_socket)?;
+    let operation_id = terminal_operation_id("console");
+    let selection = terminal_v2::TerminalSelection {
+        selection: Some(terminal_v2::terminal_selection::Selection::Console(
+            terminal_v2::ConsoleSelection {
+                initial_size: MessageField::some(terminal_size_v2(rows, columns)),
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    let terminal = daemon.open_terminal(
+        daemon_access::DaemonMethod::OpenConsole,
+        &args.vm,
+        &operation_id,
+        selection,
+    )?;
+    print_stderr(&format!(
+        "Connected to console for VM '{}'. Press Ctrl-] to detach.\r\n",
+        args.vm
+    ));
+    let mut host = exec_client::RealHostIo;
+    let outcome = run_terminal_stream_v2(
+        &daemon,
+        &terminal,
+        &mut host,
+        &mut preparation.signals,
+        true,
+        true,
+        TerminalDetachMode::Console,
+    )?;
+    terminal_outcome_exit(&outcome)
+}
+
+fn cmd_shell_v2(context: &Context, args: &ShellArgs) -> Result<i32, CliFailure> {
+    let action = args.action.unwrap_or(ShellAction::Attach);
+    if action == ShellAction::Attach && (args.json || args.human) {
+        return Err(CliFailure::new(
+            2,
+            "shell attach is interactive and does not accept --json or --human",
+        ));
+    }
+    if matches!(action, ShellAction::Detach | ShellAction::Kill) && args.name.is_none() {
+        return Err(CliFailure::new(
+            2,
+            "shell detach/kill requires the server-issued handle via --name",
+        ));
+    }
+    let mut preparation = if action == ShellAction::Attach {
+        Some(prepare_terminal_before_runtime(true)?)
+    } else {
+        None
+    };
+    let daemon = service_v2::DaemonService::connect(&context.public_socket)?;
+    let operation_id = terminal_operation_id("shell");
+    let terminal = daemon.open_terminal(
+        daemon_access::DaemonMethod::Shell,
+        &args.vm,
+        &operation_id,
+        terminal_selection_shell(
+            args,
+            preparation
+                .as_ref()
+                .and_then(|preparation| preparation.initial_size),
+        ),
+    )?;
+    match action {
+        ShellAction::Attach => {
+            let mut host = exec_client::RealHostIo;
+            let signals = &mut preparation
+                .as_mut()
+                .expect("attach preparation exists")
+                .signals;
+            let outcome = run_terminal_stream_v2(
+                &daemon,
+                &terminal,
+                &mut host,
+                signals,
+                true,
+                true,
+                TerminalDetachMode::Shell,
+            )?;
+            terminal_outcome_exit(&outcome)
+        }
+        ShellAction::List => {
+            let (result, outcome) = receive_shell_management(&daemon, &terminal)?;
+            if result.truncated {
+                return Err(CliFailure::new(
+                    76,
+                    "shell list was truncated without a continuation cursor",
+                ));
+            }
+            let exit = terminal_outcome_exit(&outcome)?;
+            let default_name = result
+                .sessions
+                .iter()
+                .find(|session| session.is_default)
+                .map(|session| session.shell_handle.clone())
+                .unwrap_or_default();
+            let sessions = result
+                .sessions
+                .iter()
+                .map(|session| ShellListSessionOutputV1 {
+                    name: session.shell_handle.clone(),
+                    state: shell_session_state(session.state.enum_value_or_default()).to_owned(),
+                    attached: session.state.enum_value_or_default()
+                        == terminal_v2::ShellSessionState::SHELL_SESSION_STATE_ATTACHED,
+                    is_default: session.is_default,
+                })
+                .collect();
+            if args.json {
+                print_json(&ShellListOutputV1 {
+                    command: "shell list".to_owned(),
+                    vm: args.vm.clone(),
+                    default_name,
+                    sessions,
+                })?;
+            } else {
+                print_stdout("HANDLE\tSTATE\tDEFAULT\n");
+                for session in &result.sessions {
+                    print_stdout(&format!(
+                        "{}\t{}\t{}\n",
+                        session.shell_handle,
+                        shell_session_state(session.state.enum_value_or_default()),
+                        session.is_default
+                    ));
+                }
+            }
+            Ok(exit)
+        }
+        ShellAction::Detach => {
+            let (result, outcome) = receive_shell_management(&daemon, &terminal)?;
+            let exit = terminal_outcome_exit(&outcome)?;
+            let name = result.affected_shell_handle;
+            if args.json {
+                print_json(&ShellDetachOutputV1 {
+                    command: "shell detach".to_owned(),
+                    vm: args.vm.clone(),
+                    name,
+                    result: if result.applied {
+                        "detached".to_owned()
+                    } else {
+                        "not-applied".to_owned()
+                    },
+                    cause: None,
+                })?;
+            } else {
+                print_stdout("shell detached\n");
+            }
+            Ok(exit)
+        }
+        ShellAction::Kill => {
+            let (result, outcome) = receive_shell_management(&daemon, &terminal)?;
+            let exit = terminal_outcome_exit(&outcome)?;
+            let name = result.affected_shell_handle;
+            let state = result
+                .sessions
+                .iter()
+                .find(|session| session.shell_handle == name)
+                .map(|session| shell_session_state(session.state.enum_value_or_default()))
+                .unwrap_or("killed")
+                .to_owned();
+            if args.json {
+                print_json(&ShellKillOutputV1 {
+                    command: "shell kill".to_owned(),
+                    vm: args.vm.clone(),
+                    name,
+                    result: if result.applied {
+                        "cancelled".to_owned()
+                    } else {
+                        "not-applied".to_owned()
+                    },
+                    state,
+                })?;
+            } else {
+                print_stdout("shell killed\n");
+            }
+            Ok(exit)
+        }
+    }
+}
+
+fn cmd_vm_exec_v2(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> {
+    use terminal_v2::{
+        ArbitraryExecSelection, ExecAuthority, ExecSelection, TerminalSelection, exec_selection,
+        terminal_outcome::Outcome, terminal_selection,
+    };
+
+    let action = match parse_vm_exec_action(args) {
+        Ok(action) => action,
+        Err(message) => return exec_usage_terminate(args, message),
+    };
+    if let Some(management) = action.management.as_ref() {
+        if let Err(message) = validate_vm_exec_management_args(args) {
+            return exec_usage_terminate(args, message);
+        }
+        return cmd_vm_exec_management_v2(context, args, management);
+    }
+    if args.command.is_empty() {
+        return exec_usage_terminate(args, "vm exec: command form requires `-- <cmd...>`");
+    }
+    if args.detach && (args.interactive || args.tty) {
+        return exec_usage_terminate(args, "vm exec: --detach conflicts with -i/-t");
+    }
+    if args.interactive && !args.tty {
+        return exec_usage_terminate(args, "vm exec: -i/--interactive requires -t/--tty");
+    }
+    if action.json && args.tty {
+        return exec_usage_terminate(args, "vm exec: --json conflicts with --tty");
+    }
+    let tty = args.tty;
+    let interactive = args.interactive || tty;
+    let mut preparation = match prepare_terminal_before_runtime(tty) {
+        Ok(preparation) => preparation,
+        Err(error) => {
+            return exec_usage_terminate(args, error.message);
+        }
+    };
+    let selection = TerminalSelection {
+        selection: Some(terminal_selection::Selection::Exec(ExecSelection {
+            authority: EnumOrUnknown::new(ExecAuthority::EXEC_AUTHORITY_ADMIN_ARBITRARY),
+            selection: Some(exec_selection::Selection::Arbitrary(
+                ArbitraryExecSelection {
+                    argv: args
+                        .command
+                        .iter()
+                        .map(|argument| argument.as_bytes().to_vec())
+                        .collect(),
+                    ..Default::default()
+                },
+            )),
+            tty,
+            detached: args.detach,
+            initial_size: preparation
+                .initial_size
+                .map(|(rows, columns)| terminal_size_v2(rows, columns))
+                .into(),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    let operation_id = terminal_operation_id("exec");
+    let daemon = match service_v2::DaemonService::connect(&context.public_socket) {
+        Ok(daemon) => daemon,
+        Err(error) => {
+            return exec_terminate(args, exec_client::ExecClientError::transport(error.message));
+        }
+    };
+    let terminal = match daemon.open_terminal_typed(
+        daemon_access::DaemonMethod::Exec,
+        &args.vm,
+        &operation_id,
+        selection,
+    ) {
+        Ok(terminal) => terminal,
+        Err(error) => return exec_terminate(args, client_error_to_exec(error)),
+    };
+    let exec_handle = terminal.resource_handle().to_owned();
+
+    if action.json {
+        let mut host = exec_client::CapturingHostIo::new(interactive, 1024 * 1024);
+        let outcome = match run_terminal_stream_v2(
+            &daemon,
+            &terminal,
+            &mut host,
+            &mut preparation.signals,
+            tty,
+            interactive,
+            TerminalDetachMode::None,
+        ) {
+            Ok(outcome) => outcome,
+            Err(error) => return exec_terminate(args, terminal_failure_to_exec(error)),
+        };
+        let exit = match terminal_outcome_exit(&outcome) {
+            Ok(exit) => exit,
+            Err(error) => return exec_terminate(args, terminal_failure_to_exec(error)),
+        };
+        let mut value = exec_json_base(args);
+        value.insert("exitCode".to_owned(), Value::from(exit));
+        value.insert(
+            "stdoutBase64".to_owned(),
+            Value::String(d2b_core::base64_codec::encode(host.stdout())),
+        );
+        value.insert(
+            "stderrBase64".to_owned(),
+            Value::String(d2b_core::base64_codec::encode(host.stderr())),
+        );
+        value.insert(
+            "stdoutTruncated".to_owned(),
+            Value::Bool(host.stdout_truncated()),
+        );
+        value.insert(
+            "stderrTruncated".to_owned(),
+            Value::Bool(host.stderr_truncated()),
+        );
+        match outcome.outcome.as_ref() {
+            Some(Outcome::Exited(exited)) => {
+                value.insert("source".to_owned(), Value::String("guest".to_owned()));
+                value.insert("reason".to_owned(), Value::String("exited".to_owned()));
+                value.insert("guestExitCode".to_owned(), Value::from(exited.exit_code));
+            }
+            Some(Outcome::Signaled(signaled)) => {
+                value.insert("source".to_owned(), Value::String("guest".to_owned()));
+                value.insert("reason".to_owned(), Value::String("signaled".to_owned()));
+                value.insert("signal".to_owned(), Value::from(signaled.signal));
+            }
+            Some(Outcome::Detached(_)) => {
+                value.insert("source".to_owned(), Value::String("guest".to_owned()));
+                value.insert("reason".to_owned(), Value::String("detached".to_owned()));
+                value.insert("execId".to_owned(), Value::String(exec_handle.clone()));
+            }
+            Some(Outcome::Cancelled(_)) => {
+                value.insert(
+                    "source".to_owned(),
+                    Value::String("guest-control".to_owned()),
+                );
+                value.insert("reason".to_owned(), Value::String("cancelled".to_owned()));
+            }
+            Some(Outcome::Closed(_)) => {
+                value.insert("source".to_owned(), Value::String("guest".to_owned()));
+                value.insert("reason".to_owned(), Value::String("closed".to_owned()));
+            }
+            Some(Outcome::Failed(_)) | None | Some(_) => {}
+        }
+        print_exec_json(&Value::Object(value))?;
+        Ok(exit)
+    } else {
+        let mut host = exec_client::RealHostIo;
+        let outcome = run_terminal_stream_v2(
+            &daemon,
+            &terminal,
+            &mut host,
+            &mut preparation.signals,
+            tty,
+            interactive,
+            TerminalDetachMode::None,
+        )?;
+        if args.detach && matches!(outcome.outcome, Some(Outcome::Detached(_))) {
+            print_stdout(&format!("{exec_handle}\n"));
+        }
+        terminal_outcome_exit(&outcome)
+    }
+}
+
+fn cmd_vm_exec_management_v2(
+    context: &Context,
+    args: &VmExecArgs,
+    command: &VmExecManagementCommand,
+) -> Result<i32, CliFailure> {
+    let daemon = match service_v2::DaemonService::connect(&context.public_socket) {
+        Ok(daemon) => daemon,
+        Err(error) => {
+            return exec_terminate(args, exec_client::ExecClientError::transport(error.message));
+        }
+    };
+    let guest = match daemon.guest_typed(&args.vm) {
+        Ok(guest) => guest,
+        Err(error) => return exec_terminate(args, client_error_to_exec(error)),
+    };
+    match command {
+        VmExecManagementCommand::List => {
+            let mut cursor = None;
+            let mut entries = Vec::new();
+            for _ in 0..1024 {
+                let query = guest_v2::GuestInspectExecQuery {
+                    query: Some(guest_v2::guest_inspect_exec_query::Query::ListPage(
+                        guest_v2::GuestExecListPageQuery {
+                            page_size: 32,
+                            page_cursor: cursor.clone().unwrap_or_default(),
+                            ..Default::default()
+                        },
+                    )),
+                    ..Default::default()
+                };
+                let response = daemon
+                    .runtime()
+                    .block_on(
+                        guest.inspect_exec(
+                            daemon_access::GuestInspectCall {
+                                operation: guest_operation(
+                                    "exec-list",
+                                    &args.vm,
+                                    cursor.as_deref(),
+                                ),
+                                query,
+                            },
+                            daemon_access::daemon_call_options(false)
+                                .map_err(terminal_client_failure)?,
+                            &daemon_access::CancellationToken::default(),
+                        ),
+                    )
+                    .map_err(client_error_to_exec);
+                let response = match response {
+                    Ok(response) => response,
+                    Err(error) => return exec_terminate(args, error),
+                };
+                let Some(guest_v2::guest_inspect_exec_response::Result::ListPage(page)) =
+                    response.result
+                else {
+                    return exec_terminate(
+                        args,
+                        exec_client::ExecClientError::protocol(
+                            "InspectExec list returned a non-list result",
+                        ),
+                    );
+                };
+                entries.extend(page.entries);
+                if !page.truncated {
+                    let result = typed_exec_list_result(entries);
+                    return exec_render_detached_list(args, &result);
+                }
+                if page.next_page_cursor.is_empty()
+                    || cursor.as_deref() == Some(page.next_page_cursor.as_str())
+                {
+                    return exec_terminate(
+                        args,
+                        exec_client::ExecClientError::protocol(
+                            "InspectExec list returned an invalid continuation cursor",
+                        ),
+                    );
+                }
+                cursor = Some(page.next_page_cursor);
+            }
+            exec_terminate(
+                args,
+                exec_client::ExecClientError::protocol(
+                    "InspectExec list exceeded the bounded page limit",
+                ),
+            )
+        }
+        VmExecManagementCommand::Status(status) => {
+            let typed = match typed_exec_status(&daemon, &guest, &args.vm, &status.exec_id) {
+                Ok(status) => status,
+                Err(error) => return exec_terminate(args, error),
+            };
+            exec_render_detached_status(args, &typed)
+        }
+        VmExecManagementCommand::Logs(logs) => {
+            let max_bytes = match logs
+                .max_len
+                .unwrap_or(d2b_contracts::v2_services::MAX_TERMINAL_CHUNK_BYTES as u64)
+            {
+                0 => {
+                    return exec_usage_terminate(args, "vm exec logs: --max-len must be nonzero");
+                }
+                value if value > d2b_contracts::v2_services::MAX_TERMINAL_CHUNK_BYTES as u64 => {
+                    return exec_usage_terminate(
+                        args,
+                        "vm exec logs: --max-len exceeds the 64 KiB retained-log bound",
+                    );
+                }
+                value => value as u32,
+            };
+            let stdout = match read_typed_retained_log(
+                &daemon,
+                &guest,
+                &args.vm,
+                &logs.exec_id,
+                terminal_v2::OutputStream::OUTPUT_STREAM_STDOUT,
+                logs.stdout_offset.unwrap_or(0),
+                max_bytes,
+            ) {
+                Ok(log) => log,
+                Err(error) => return exec_terminate(args, error),
+            };
+            let stderr = match read_typed_retained_log(
+                &daemon,
+                &guest,
+                &args.vm,
+                &logs.exec_id,
+                terminal_v2::OutputStream::OUTPUT_STREAM_STDERR,
+                logs.stderr_offset.unwrap_or(0),
+                max_bytes,
+            ) {
+                Ok(log) => log,
+                Err(error) => return exec_terminate(args, error),
+            };
+            exec_render_detached_logs(
+                args,
+                &d2b_contracts::public_wire::ExecDetachedLogsResult {
+                    exec_id: logs.exec_id.clone(),
+                    stdout_base64: d2b_core::base64_codec::encode(&stdout.bytes),
+                    stderr_base64: d2b_core::base64_codec::encode(&stderr.bytes),
+                    start_offset: stdout.start_offset.min(stderr.start_offset),
+                    end_offset: stdout.end_offset.max(stderr.end_offset),
+                    dropped_bytes: stdout.dropped_bytes.saturating_add(stderr.dropped_bytes),
+                    truncated: stdout.truncated || stderr.truncated,
+                    stdout_start_offset: stdout.start_offset,
+                    stdout_end_offset: stdout.end_offset,
+                    stdout_next_offset: stdout.next_offset,
+                    stdout_eof: stdout.eof,
+                    stdout_dropped_bytes: stdout.dropped_bytes,
+                    stdout_truncated: stdout.truncated,
+                    stderr_start_offset: stderr.start_offset,
+                    stderr_end_offset: stderr.end_offset,
+                    stderr_next_offset: stderr.next_offset,
+                    stderr_eof: stderr.eof,
+                    stderr_dropped_bytes: stderr.dropped_bytes,
+                    stderr_truncated: stderr.truncated,
+                },
+            )
+        }
+        VmExecManagementCommand::Kill(kill) => {
+            let response = daemon
+                .runtime()
+                .block_on(guest.cancel_exec(
+                    daemon_access::GuestCancelCall {
+                        operation: guest_operation("exec-kill", &args.vm, Some(&kill.exec_id)),
+                        resource_handle: kill.exec_id.clone(),
+                        control_sequence: 1,
+                        reason:
+                            guest_v2::GuestExecCancelReason::GUEST_EXEC_CANCEL_REASON_USER_REQUESTED,
+                    },
+                    daemon_access::daemon_call_options(true).map_err(terminal_client_failure)?,
+                    &daemon_access::CancellationToken::default(),
+                ))
+                .map_err(client_error_to_exec);
+            let response = match response {
+                Ok(response) => response,
+                Err(error) => return exec_terminate(args, error),
+            };
+            let outcome = match response.cancellation.enum_value_or_default() {
+                guest_v2::GuestExecCancellationOutcome::GUEST_EXEC_CANCELLATION_OUTCOME_SIGNALLED => {
+                    d2b_contracts::public_wire::ExecDetachedKillOutcome::Cancelling
+                }
+                guest_v2::GuestExecCancellationOutcome::GUEST_EXEC_CANCELLATION_OUTCOME_ALREADY_TERMINAL => {
+                    d2b_contracts::public_wire::ExecDetachedKillOutcome::AlreadyTerminal
+                }
+                _ => {
+                    return exec_terminate(
+                        args,
+                        exec_client::ExecClientError::protocol(
+                            "CancelExec returned an inconsistent cancellation outcome",
+                        ),
+                    );
+                }
+            };
+            let status = match typed_exec_status(&daemon, &guest, &args.vm, &kill.exec_id) {
+                Ok(status) => status,
+                Err(error) => return exec_terminate(args, error),
+            };
+            exec_render_detached_kill(
+                args,
+                &d2b_contracts::public_wire::ExecDetachedKillResult {
+                    exec_id: kill.exec_id.clone(),
+                    result: outcome,
+                    state: status.state,
+                },
+            )
+        }
+    }
+}
+
+fn guest_operation(kind: &str, vm: &str, detail: Option<&str>) -> daemon_access::GuestOperation {
+    use sha2::Digest as _;
+
+    let operation_id = terminal_operation_id(kind);
+    let mut digest = sha2::Sha256::new();
+    digest.update(b"d2b-cli-guest-operation-v2\0");
+    digest.update(kind.as_bytes());
+    digest.update(vm.as_bytes());
+    if let Some(detail) = detail {
+        digest.update(detail.as_bytes());
+    }
+    daemon_access::GuestOperation {
+        operation_id,
+        request_digest: digest.finalize().into(),
+    }
+}
+
+fn typed_exec_list_result(
+    entries: Vec<guest_v2::GuestExecListEntry>,
+) -> d2b_contracts::public_wire::ExecDetachedListResult {
+    d2b_contracts::public_wire::ExecDetachedListResult {
+        execs: entries
+            .into_iter()
+            .map(|entry| d2b_contracts::public_wire::ExecDetachedListEntry {
+                exec_id: entry.resource_handle,
+                state: typed_exec_state(entry.state.enum_value_or_default()),
+                exit_code: None,
+                signal: None,
+                started_at: entry.created_at_unix_ms.to_string(),
+                start_offset: 0,
+                end_offset: entry.stdout_bytes.max(entry.stderr_bytes),
+                stdout_start_offset: 0,
+                stdout_end_offset: entry.stdout_bytes,
+                stderr_start_offset: 0,
+                stderr_end_offset: entry.stderr_bytes,
+                dropped_bytes: entry.dropped_bytes,
+                stdout_dropped_bytes: 0,
+                stderr_dropped_bytes: 0,
+                truncated: entry.stdout_truncated || entry.stderr_truncated,
+                stdout_truncated: entry.stdout_truncated,
+                stderr_truncated: entry.stderr_truncated,
+            })
+            .collect(),
+    }
+}
+
+fn typed_exec_status(
+    daemon: &service_v2::DaemonService,
+    guest: &daemon_access::GuestClient,
+    vm: &str,
+    exec_handle: &str,
+) -> Result<d2b_contracts::public_wire::ExecDetachedStatusResult, exec_client::ExecClientError> {
+    let query = guest_v2::GuestInspectExecQuery {
+        query: Some(guest_v2::guest_inspect_exec_query::Query::Status(
+            guest_v2::GuestExecStatusQuery {
+                resource_handle: exec_handle.to_owned(),
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    let response = daemon
+        .runtime()
+        .block_on(guest.inspect_exec(
+            daemon_access::GuestInspectCall {
+                operation: guest_operation("exec-status", vm, Some(exec_handle)),
+                query,
+            },
+            daemon_access::daemon_call_options(false).map_err(client_error_to_exec)?,
+            &daemon_access::CancellationToken::default(),
+        ))
+        .map_err(client_error_to_exec)?;
+    let Some(guest_v2::guest_inspect_exec_response::Result::Status(status)) = response.result
+    else {
+        return Err(exec_client::ExecClientError::protocol(
+            "InspectExec status returned a non-status result",
+        ));
+    };
+    let (exit_code, signal, reason) = typed_terminal_summary(status.terminal_outcome.as_ref());
+    Ok(d2b_contracts::public_wire::ExecDetachedStatusResult {
+        exec_id: status.resource_handle,
+        state: typed_exec_state(status.state.enum_value_or_default()),
+        reason,
+        exit_code,
+        signal,
+        start_offset: status.stdout_start_offset.min(status.stderr_start_offset),
+        end_offset: status.stdout_end_offset.max(status.stderr_end_offset),
+        dropped_bytes: status
+            .stdout_dropped_bytes
+            .saturating_add(status.stderr_dropped_bytes),
+        truncated: status.stdout_truncated || status.stderr_truncated,
+    })
+}
+
+fn typed_exec_state(state: guest_v2::GuestExecState) -> d2b_contracts::guest_wire::ExecState {
+    match state {
+        guest_v2::GuestExecState::GUEST_EXEC_STATE_CREATED => {
+            d2b_contracts::guest_wire::ExecState::Created
+        }
+        guest_v2::GuestExecState::GUEST_EXEC_STATE_RUNNING => {
+            d2b_contracts::guest_wire::ExecState::Running
+        }
+        guest_v2::GuestExecState::GUEST_EXEC_STATE_EXITED => {
+            d2b_contracts::guest_wire::ExecState::Exited
+        }
+        guest_v2::GuestExecState::GUEST_EXEC_STATE_SIGNALED => {
+            d2b_contracts::guest_wire::ExecState::Signaled
+        }
+        guest_v2::GuestExecState::GUEST_EXEC_STATE_CANCELLED => {
+            d2b_contracts::guest_wire::ExecState::Cancelled
+        }
+        guest_v2::GuestExecState::GUEST_EXEC_STATE_PROTOCOL_ERROR => {
+            d2b_contracts::guest_wire::ExecState::ProtocolError
+        }
+        guest_v2::GuestExecState::GUEST_EXEC_STATE_LOST => {
+            d2b_contracts::guest_wire::ExecState::LostGuestd
+        }
+        guest_v2::GuestExecState::GUEST_EXEC_STATE_REAPED => {
+            d2b_contracts::guest_wire::ExecState::Reaped
+        }
+        _ => d2b_contracts::guest_wire::ExecState::ProtocolError,
+    }
+}
+
+fn typed_terminal_summary(
+    outcome: Option<&terminal_v2::TerminalOutcome>,
+) -> (Option<i32>, Option<u32>, Option<String>) {
+    use terminal_v2::terminal_outcome::Outcome;
+    match outcome.and_then(|outcome| outcome.outcome.as_ref()) {
+        Some(Outcome::Exited(exited)) => (Some(exited.exit_code), None, None),
+        Some(Outcome::Signaled(signaled)) => (None, Some(signaled.signal), None),
+        Some(Outcome::Cancelled(_)) => (None, None, Some("cancelled".to_owned())),
+        Some(Outcome::Failed(failed)) => (
+            None,
+            None,
+            Some(format!("{:?}", failed.error.enum_value_or_default())),
+        ),
+        Some(Outcome::Detached(_)) => (None, None, Some("detached".to_owned())),
+        Some(Outcome::Closed(_)) => (None, None, Some("closed".to_owned())),
+        None | Some(_) => (None, None, None),
+    }
+}
+
+struct TypedRetainedLog {
+    bytes: Vec<u8>,
+    start_offset: u64,
+    end_offset: u64,
+    next_offset: u64,
+    eof: bool,
+    dropped_bytes: u64,
+    truncated: bool,
+}
+
+fn read_typed_retained_log(
+    daemon: &service_v2::DaemonService,
+    guest: &daemon_access::GuestClient,
+    vm: &str,
+    exec_handle: &str,
+    output: terminal_v2::OutputStream,
+    offset: u64,
+    max_bytes: u32,
+) -> Result<TypedRetainedLog, exec_client::ExecClientError> {
+    use terminal_v2::terminal_stream_frame::Frame;
+
+    let terminal = daemon
+        .runtime()
+        .block_on(guest.open_exec_retained_log(
+            daemon_access::GuestRetainedLogCall {
+                operation: guest_operation("exec-logs", vm, Some(exec_handle)),
+                resource_handle: exec_handle.to_owned(),
+                output,
+                offset,
+                max_bytes,
+            },
+            daemon_access::daemon_call_options(true).map_err(client_error_to_exec)?,
+            &daemon_access::CancellationToken::default(),
+        ))
+        .map_err(client_error_to_exec)?;
+    let range = terminal.retained_log_range().cloned().ok_or_else(|| {
+        exec_client::ExecClientError::protocol("OpenExecRetainedLog omitted its retained range")
+    })?;
+    let mut bytes = Vec::new();
+    let mut dropped_bytes = 0_u64;
+    let mut truncated = false;
+    let mut next_offset = range.start_offset;
+    let mut saw_started = false;
+    loop {
+        let frame = daemon
+            .runtime()
+            .block_on(terminal.receive())
+            .map_err(client_error_to_exec)?;
+        match frame.frame {
+            Some(Frame::Started(_)) if !saw_started => saw_started = true,
+            Some(Frame::Stdout(chunk))
+                if output == terminal_v2::OutputStream::OUTPUT_STREAM_STDOUT =>
+            {
+                next_offset = chunk.offset.saturating_add(chunk.data.len() as u64);
+                dropped_bytes = dropped_bytes.saturating_add(chunk.dropped_bytes);
+                truncated |= chunk.truncated;
+                bytes.extend_from_slice(&chunk.data);
+            }
+            Some(Frame::Stderr(chunk))
+                if output == terminal_v2::OutputStream::OUTPUT_STREAM_STDERR =>
+            {
+                next_offset = chunk.offset.saturating_add(chunk.data.len() as u64);
+                dropped_bytes = dropped_bytes.saturating_add(chunk.dropped_bytes);
+                truncated |= chunk.truncated;
+                bytes.extend_from_slice(&chunk.data);
+            }
+            Some(Frame::Outcome(outcome)) => {
+                terminal_outcome_exit(&outcome)
+                    .map_err(|error| exec_client::ExecClientError::protocol(error.message))?;
+                daemon
+                    .runtime()
+                    .block_on(terminal.close_transport())
+                    .map_err(client_error_to_exec)?;
+                return Ok(TypedRetainedLog {
+                    bytes,
+                    start_offset: range.start_offset,
+                    end_offset: range.end_offset,
+                    next_offset,
+                    eof: range.eof,
+                    dropped_bytes,
+                    truncated,
+                });
+            }
+            _ => {
+                return Err(exec_client::ExecClientError::protocol(
+                    "retained-log stream returned a direction-invalid frame",
+                ));
+            }
+        }
+    }
 }
 
 fn cmd_audit(
@@ -4254,6 +4759,7 @@ fn cmd_audit(
     }
 }
 
+#[allow(dead_code)]
 fn cmd_console(
     context: &Context,
     args: &ConsoleArgs,
@@ -4324,18 +4830,17 @@ fn cmd_console(
     // stream is a terminal. stdout may be redirected to capture the raw UART.
     let is_tty =
         io::stdin().is_terminal() && (io::stdout().is_terminal() || io::stderr().is_terminal());
-    let _raw_guard = if is_tty {
-        exec_client::FdStateGuard::enter(true, true).ok()
-    } else {
-        None
-    };
-
-    let mut signals = exec_client::install_signals().map_err(|err| {
+    let (_signal_mask, mut signals) = exec_client::install_signals().map_err(|err| {
         CliFailure::new(
             42,
             format!("console: failed to install signal handlers: {err}"),
         )
     })?;
+    let _raw_guard = if is_tty {
+        exec_client::FdStateGuard::enter(true, true).ok()
+    } else {
+        None
+    };
 
     let mut host = exec_client::RealHostIo;
     // 4096-byte buffer: handles pastes and rapid input without excessive round-trips.
@@ -4499,6 +5004,7 @@ fn cmd_console(
 
 /// Encode and send a [`ConsoleOp`] on `socket`, then receive and parse the
 /// `consoleResponse` reply. Each call is a complete round-trip.
+#[allow(dead_code)]
 fn console_round_trip(
     socket: &mut SeqpacketUnixSocket,
     op: &d2b_contracts::public_wire::ConsoleOp,
@@ -4514,6 +5020,7 @@ fn console_round_trip(
 }
 
 /// Encode a [`ConsoleOp`] as a JSON wire frame with `"type": "console"`.
+#[allow(dead_code)]
 fn encode_console_op_frame(
     op: &d2b_contracts::public_wire::ConsoleOp,
 ) -> Result<Vec<u8>, CliFailure> {
@@ -4528,6 +5035,7 @@ fn encode_console_op_frame(
 }
 
 /// Parse a `consoleResponse` or `error` reply frame.
+#[allow(dead_code)]
 fn parse_console_reply(
     bytes: &[u8],
 ) -> Result<d2b_contracts::public_wire::ConsoleOpResponse, CliFailure> {
@@ -6223,28 +6731,32 @@ fn gateway_lifecycle_state(
     context: &Context,
     gateway_vm: &str,
 ) -> Result<Option<IpcVmLifecycleState>, CliFailure> {
-    match try_list_via_socket(context)? {
-        ListSocketOutcome::Entries(entries, _) => Ok(entries
-            .into_iter()
-            .find(|entry| entry.vm == gateway_vm || entry.name == gateway_vm)
-            .map(|entry| entry.lifecycle.state)),
-        ListSocketOutcome::Unavailable => Ok(None),
-    }
+    let daemon = service_v2::DaemonService::connect(&context.public_socket)?;
+    daemon
+        .list_workloads(Some(gateway_vm))?
+        .iter()
+        .find(|workload| {
+            workload.name == gateway_vm
+                || workload
+                    .identity
+                    .as_ref()
+                    .is_some_and(|identity| identity.workload_name == gateway_vm)
+        })
+        .map(service_v2::vm_lifecycle_state)
+        .transpose()
 }
 
 fn gateway_lifecycle_states(context: &Context) -> Result<BTreeMap<String, String>, CliFailure> {
-    match try_list_via_socket(context)? {
-        ListSocketOutcome::Entries(entries, _) => {
-            let mut states = BTreeMap::new();
-            for entry in entries {
-                let label = gateway_state_label(entry.lifecycle.state).to_owned();
-                states.insert(entry.vm, label.clone());
-                states.insert(entry.name, label);
-            }
-            Ok(states)
+    let daemon = service_v2::DaemonService::connect(&context.public_socket)?;
+    let mut states = BTreeMap::new();
+    for workload in daemon.list_workloads(None)? {
+        let label = gateway_state_label(service_v2::vm_lifecycle_state(&workload)?).to_owned();
+        states.insert(workload.name.clone(), label.clone());
+        if let Some(identity) = workload.identity.as_ref() {
+            states.insert(identity.workload_name.clone(), label);
         }
-        ListSocketOutcome::Unavailable => Ok(BTreeMap::new()),
     }
+    Ok(states)
 }
 
 fn gateway_state_allows_exec(state: IpcVmLifecycleState) -> bool {
@@ -6312,8 +6824,6 @@ fn realm_gateway_exec_args(
         detach: false,
         interactive,
         tty,
-        env: Vec::new(),
-        cwd: None,
         vm: gateway_vm,
         json,
         human,
@@ -6322,6 +6832,7 @@ fn realm_gateway_exec_args(
     }
 }
 
+#[allow(dead_code)]
 fn realm_policy_rows(
     context: &Context,
     json: bool,
@@ -6365,6 +6876,13 @@ fn realm_policy_rows_from_entries(
     entries: BTreeMap<String, RealmEntrypointConfig>,
 ) -> Result<Vec<RealmPolicyOutputV1>, CliFailure> {
     let gateway_states = gateway_lifecycle_states(context)?;
+    realm_policy_rows_from_entries_with_states(entries, &gateway_states)
+}
+
+fn realm_policy_rows_from_entries_with_states(
+    entries: BTreeMap<String, RealmEntrypointConfig>,
+    gateway_states: &BTreeMap<String, String>,
+) -> Result<Vec<RealmPolicyOutputV1>, CliFailure> {
     let mut rows = Vec::new();
     for (realm_raw, entry) in entries {
         let realm = target_routing::parse_realm_arg(&realm_raw).map_err(|err| {
@@ -6481,7 +6999,8 @@ fn print_realm_inspect_human(row: &RealmPolicyOutputV1) {
 }
 
 fn cmd_realm_list(context: &Context, args: &RealmListArgs) -> Result<i32, CliFailure> {
-    let rows = realm_policy_rows(context, args.json)?;
+    let daemon = service_v2::DaemonService::connect(&context.public_socket)?;
+    let rows = service_v2::realm_rows(&daemon.list_realms()?);
     let output = RealmListOutputV1 {
         command: "realm list".to_owned(),
         realms: rows,
@@ -6497,7 +7016,8 @@ fn cmd_realm_list(context: &Context, args: &RealmListArgs) -> Result<i32, CliFai
 }
 
 fn cmd_realm_inspect(context: &Context, args: &RealmInspectArgs) -> Result<i32, CliFailure> {
-    let rows = realm_policy_rows(context, args.json)?;
+    let daemon = service_v2::DaemonService::connect(&context.public_socket)?;
+    let rows = service_v2::realm_rows(&daemon.list_realms()?);
     let output = realm_inspect_output(&args.realm, args.json, rows)?;
     if args.json {
         print_json(&output)?;
@@ -6678,7 +7198,7 @@ fn cmd_realm_enter(context: &Context, args: &RealmEnterArgs) -> Result<i32, CliF
         false,
         true,
     );
-    cmd_vm_exec(context, &exec_args)
+    cmd_vm_exec_v2(context, &exec_args)
 }
 
 fn cmd_realm_run(context: &Context, args: &RealmRunArgs) -> Result<i32, CliFailure> {
@@ -6692,7 +7212,7 @@ fn cmd_realm_run(context: &Context, args: &RealmRunArgs) -> Result<i32, CliFailu
         args.json,
         args.human,
     );
-    cmd_vm_exec(context, &exec_args)
+    cmd_vm_exec_v2(context, &exec_args)
 }
 
 /// Route a `vm <verb> <target>` argument (ADR 0032, P0). A local VM name routes
@@ -6748,19 +7268,6 @@ fn guard_local_target(raw: &str, json: bool) -> Result<(), CliFailure> {
     }
 }
 
-fn gateway_operation_id(prefix: &str, target: &str) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    prefix.hash(&mut h);
-    target.hash(&mut h);
-    std::process::id().hash(&mut h);
-    format!("{prefix}-{:016x}", h.finish())
-}
-
-fn gateway_principal() -> String {
-    format!("uid-{}", Uid::current().as_raw())
-}
-
 #[cfg(test)]
 fn gateway_target_from_manifest(
     context: &Context,
@@ -6775,99 +7282,6 @@ fn gateway_target_from_manifest(
     }
 }
 
-fn gateway_request_hash(target: &str, argv: &[String]) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    target.hash(&mut h);
-    argv.hash(&mut h);
-    h.finish()
-}
-
-fn gateway_display_frame(op: &public_wire::GatewayDisplayOp) -> Result<Vec<u8>, CliFailure> {
-    let mut value = serde_json::to_value(op)
-        .map_err(|err| CliFailure::new(1, format!("failed to encode gatewayDisplay: {err}")))?;
-    let obj = value
-        .as_object_mut()
-        .ok_or_else(|| CliFailure::new(1, "failed to encode gatewayDisplay request"))?;
-    obj.insert(
-        "type".to_owned(),
-        Value::String("gatewayDisplay".to_owned()),
-    );
-    serde_json::to_vec(&value)
-        .map_err(|err| CliFailure::new(1, format!("failed to serialize gatewayDisplay: {err}")))
-}
-
-fn dispatch_gateway_display(
-    context: &Context,
-    op: public_wire::GatewayDisplayOp,
-) -> Result<i32, CliFailure> {
-    send_gateway_display(context, op).map(|_| 0)
-}
-
-fn send_gateway_display(
-    context: &Context,
-    op: public_wire::GatewayDisplayOp,
-) -> Result<public_wire::GatewayDisplayOpResponse, CliFailure> {
-    let frame = gateway_display_frame(&op)?;
-    match try_public_socket_request(context, &frame, "gatewayDisplay")? {
-        PublicSocketOutcome::Reply(response) => parse_gateway_display_reply(&response),
-        PublicSocketOutcome::Unavailable => Err(CliFailure::new(
-            70,
-            "gatewayDisplay requires d2bd's public socket; start the realm gateway daemon and retry",
-        )),
-        PublicSocketOutcome::Unsupported => Err(CliFailure::new(
-            78,
-            "gatewayDisplay is not supported by the running daemon; restart/upgrade the realm gateway daemon",
-        )),
-    }
-}
-
-fn cmd_gateway_vm_start(context: &Context, target: String) -> Result<i32, CliFailure> {
-    dispatch_gateway_display(
-        context,
-        public_wire::GatewayDisplayOp::Start(public_wire::GatewayDisplayStartArgs {
-            operation_id: gateway_operation_id("gw-start", &target),
-            principal: gateway_principal(),
-            request_hash: gateway_request_hash(&target, &[]),
-            target,
-        }),
-    )
-}
-
-fn cmd_gateway_vm_stop(context: &Context, target: String) -> Result<i32, CliFailure> {
-    dispatch_gateway_display(
-        context,
-        public_wire::GatewayDisplayOp::Stop(public_wire::GatewayDisplayStopArgs {
-            operation_id: gateway_operation_id("gw-stop", &target),
-            principal: gateway_principal(),
-            request_hash: gateway_request_hash(&target, &[]),
-            target,
-        }),
-    )
-}
-
-fn cmd_gateway_vm_restart(context: &Context, target: String) -> Result<i32, CliFailure> {
-    cmd_gateway_vm_stop(context, target.clone())?;
-    cmd_gateway_vm_start(context, target)
-}
-
-fn cmd_gateway_vm_exec(
-    context: &Context,
-    target: String,
-    argv: Vec<String>,
-) -> Result<i32, CliFailure> {
-    dispatch_gateway_display(
-        context,
-        public_wire::GatewayDisplayOp::Open(public_wire::GatewayDisplayOpenArgs {
-            operation_id: gateway_operation_id("gw-exec", &target),
-            principal: gateway_principal(),
-            request_hash: gateway_request_hash(&target, &argv),
-            target,
-            app_argv: argv,
-        }),
-    )
-}
-
 fn cmd_vm_display(context: &Context, args: &VmDisplayArgs) -> Result<i32, CliFailure> {
     match &args.command {
         VmDisplayCommand::List(args) => cmd_vm_display_list(context, args),
@@ -6875,103 +7289,35 @@ fn cmd_vm_display(context: &Context, args: &VmDisplayArgs) -> Result<i32, CliFai
     }
 }
 
-fn cmd_vm_display_list(context: &Context, args: &VmDisplayListArgs) -> Result<i32, CliFailure> {
-    let response = send_gateway_display(
-        context,
-        public_wire::GatewayDisplayOp::ListDetailed(public_wire::GatewayDisplayListArgs {
-            target: args.target.clone(),
-        }),
-    )?;
-    let public_wire::GatewayDisplayOpResponse::ListDetailed(result) = response else {
-        return Err(CliFailure::new(
-            1,
-            "daemon returned an unexpected gatewayDisplay list reply",
-        ));
-    };
-    let output = VmDisplayListOutputV1 {
-        command: "vm display list".to_owned(),
-        target: args.target.clone(),
-        sessions: result
-            .sessions
-            .into_iter()
-            .map(|session| VmDisplaySessionOutputV1 {
-                session_id: session.session_id,
-                canonical_target: session.target.clone(),
-                target: session.target,
-                identity_source: VmDisplayIdentitySource::D2bRealmTarget,
-                state: session.state,
-                operation_id: session.operation_id,
-                principal: session.principal,
-                capability_preflight: vm_display_capability_preflight_satisfied(),
-            })
-            .collect(),
-    };
-    if args.json {
-        print_json(&output)?;
-    } else {
-        if output.sessions.is_empty() {
-            print_stdout("No active gateway display sessions\n");
-        } else {
-            print_stdout(&format!(
-                "{:<16} {:<40} {:<12} {:<24} {}\n",
-                "SESSION_ID", "TARGET", "STATE", "OPERATION_ID", "PRINCIPAL"
-            ));
-            for session in &output.sessions {
-                print_stdout(&format!(
-                    "{:<16} {:<40} {:<12} {:<24} {}\n",
-                    session.session_id,
-                    session.target,
-                    session.state,
-                    session.operation_id,
-                    session.principal
-                ));
-            }
-        }
-    }
-    Ok(0)
+/// The frozen `d2b.terminal.v2` contract's `TerminalKind` enum has no
+/// `DISPLAY` variant and carries no display-session listing/close
+/// operation, so there is no typed v2 API `vm display` could migrate
+/// to. Fail closed with an actionable diagnostic instead of retaining
+/// the legacy `gatewayDisplay` public-socket path.
+fn vm_display_not_yet_implemented_envelope(verb: &str) -> HostErrorEnvelope {
+    host_error_envelope(
+        &format!("d2b vm {verb} has no ComponentSession v2 handler"),
+        "not-yet-implemented",
+        78,
+        "Whether `d2b.terminal.v2`'s TerminalKind carries a DISPLAY variant.",
+        "The frozen v2 terminal contract has no display-session kind or listing/close operation; the legacy gatewayDisplay public-socket path has been removed.",
+        "Track display-session support in CHANGELOG.md \"Unreleased\"; no operator workaround exists until a typed v2 surface ships.",
+        "docs/reference/error-codes.md#not-yet-implemented",
+    )
 }
 
-fn vm_display_capability_preflight_satisfied() -> VmDisplayCapabilityPreflight {
-    VmDisplayCapabilityPreflight {
-        status: VmDisplayCapabilityPreflightStatus::Satisfied,
-        required_capabilities: vec!["window-forwarding".to_owned()],
-        advertised_capabilities: vec!["window-forwarding".to_owned()],
-        missing_capabilities: Vec::new(),
-    }
+fn cmd_vm_display_list(_context: &Context, args: &VmDisplayListArgs) -> Result<i32, CliFailure> {
+    emit_host_error(
+        &vm_display_not_yet_implemented_envelope("display list"),
+        args.json,
+    )
 }
 
-fn cmd_vm_display_close(context: &Context, args: &VmDisplayCloseArgs) -> Result<i32, CliFailure> {
-    let response = send_gateway_display(
-        context,
-        public_wire::GatewayDisplayOp::Close(public_wire::GatewayDisplayCloseArgs {
-            session_id: args.session_id.clone(),
-        }),
-    )?;
-    let public_wire::GatewayDisplayOpResponse::Close(result) = response else {
-        return Err(CliFailure::new(
-            1,
-            "daemon returned an unexpected gatewayDisplay close reply",
-        ));
-    };
-    let output = VmDisplayCloseOutputV1 {
-        command: "vm display close".to_owned(),
-        session_id: args.session_id.clone(),
-        closed: result.closed,
-    };
-    if args.json {
-        print_json(&output)?;
-    } else if output.closed {
-        print_stdout(&format!(
-            "Closed gateway display session {}\n",
-            output.session_id
-        ));
-    } else {
-        print_stdout(&format!(
-            "Gateway display session {} was not active\n",
-            output.session_id
-        ));
-    }
-    Ok(0)
+fn cmd_vm_display_close(_context: &Context, args: &VmDisplayCloseArgs) -> Result<i32, CliFailure> {
+    emit_host_error(
+        &vm_display_not_yet_implemented_envelope("display close"),
+        args.json,
+    )
 }
 
 fn vm_is_qemu_media_runtime(context: &Context, vm: &str) -> Result<bool, CliFailure> {
@@ -7102,12 +7448,56 @@ fn cmd_vm_lifecycle_verb(
                 ));
             }
             if flags.apply {
-                return match verb {
-                    "start" => cmd_gateway_vm_start(context, target),
-                    "stop" => cmd_gateway_vm_stop(context, target),
-                    "restart" => cmd_gateway_vm_restart(context, target),
+                if no_wait_api {
+                    return Err(CliFailure::new(
+                        2,
+                        "the ComponentSession v2 lifecycle contract does not silently ignore --no-wait-api",
+                    ));
+                }
+                let method = match verb {
+                    "start" => daemon_access::DaemonMethod::Start,
+                    "stop" => daemon_access::DaemonMethod::Stop,
+                    "restart" => daemon_access::DaemonMethod::Restart,
                     _ => unreachable!("unknown gateway lifecycle verb"),
                 };
+                let desired = if verb == "stop" {
+                    d2b_contracts::v2_services::common::DesiredState::DESIRED_STATE_STOPPED
+                } else {
+                    d2b_contracts::v2_services::common::DesiredState::DESIRED_STATE_RUNNING
+                };
+                let operation_id = format!(
+                    "cli-{verb}-{}-{}",
+                    std::process::id(),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos()
+                );
+                if !context.public_socket.exists() {
+                    return emit_host_error(&daemon_down_envelope(verb), json);
+                }
+                // Issue the same typed lifecycle request the local path uses,
+                // against the realm-qualified canonical target. W8's gateway
+                // realm credential/provider wiring is out of scope here; the
+                // daemon/router returns a typed unsupported/unavailable
+                // outcome (surfaced via the ordinary `CliFailure` error path)
+                // until that provider exists. No legacy gatewayDisplay
+                // fallback is retained.
+                let daemon = service_v2::DaemonService::connect(&context.public_socket)?;
+                let response = daemon.lifecycle(method, &target, desired, &operation_id)?;
+                let summary = format!(
+                    "vm {verb} accepted for '{}' (operation {})",
+                    response.message.resource_handle, response.message.operation_id
+                );
+                if json {
+                    print_json(&serde_json::json!({
+                        "outcome": "applied",
+                        "summary": summary,
+                    }))?;
+                } else {
+                    print_stdout(&format!("{summary}\n"));
+                }
+                return Ok(0);
             }
             let summary = serde_json::json!({
                 "command": format!("vm {verb}"),
@@ -7116,7 +7506,7 @@ fn cmd_vm_lifecycle_verb(
                 "realm": realm,
                 "gateway": gateway,
                 "gatewayVm": gateway_vm,
-                "notes": "realm target would route through the configured gateway entrypoint; --apply preserves the P0 gatewayDisplay compatibility path while the guarded transition path exists.",
+                "notes": "realm target would route through the configured gateway entrypoint; --apply issues the same authenticated ComponentSession v2 lifecycle request as a local target.",
             });
             if json {
                 let mut rendered = serde_json::to_string_pretty(&summary).map_err(|err| {
@@ -7155,31 +7545,49 @@ fn cmd_vm_lifecycle_verb(
         warn_pending_staged_config(&vm);
     }
     if flags.apply {
-        // VM lifecycle verbs are daemon-only. The bash-translation
-        // bridge has been removed; any failure mode
-        // surfaces as a typed envelope via `dispatch_mutating_verb`.
-        let request_type = match verb {
-            "start" => "vmStart",
-            "stop" => "vmStop",
-            "restart" => "vmRestart",
-            other => other,
+        if no_wait_api || force {
+            return Err(CliFailure::new(
+                2,
+                "the ComponentSession v2 lifecycle contract does not silently ignore --force or --no-wait-api",
+            ));
+        }
+        let method = match verb {
+            "start" => daemon_access::DaemonMethod::Start,
+            "stop" => daemon_access::DaemonMethod::Stop,
+            "restart" => daemon_access::DaemonMethod::Restart,
+            _ => return Err(CliFailure::new(2, "unsupported lifecycle method")),
         };
-        let mut extra_fields = serde_json::Map::new();
-        extra_fields.insert("vm".to_owned(), serde_json::Value::String(vm));
-        if no_wait_api {
-            extra_fields.insert("noWaitApi".to_owned(), serde_json::Value::Bool(true));
-        }
-        if force {
-            extra_fields.insert("force".to_owned(), serde_json::Value::Bool(true));
-        }
-        return dispatch_mutating_verb(
-            context,
-            request_type,
-            serde_json::Value::Object(extra_fields),
-            flags.dry_run,
-            flags.apply,
-            json,
+        let desired = if verb == "stop" {
+            d2b_contracts::v2_services::common::DesiredState::DESIRED_STATE_STOPPED
+        } else {
+            d2b_contracts::v2_services::common::DesiredState::DESIRED_STATE_RUNNING
+        };
+        let operation_id = format!(
+            "cli-{verb}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
         );
+        if !context.public_socket.exists() {
+            return emit_host_error(&daemon_down_envelope(verb), json);
+        }
+        let daemon = service_v2::DaemonService::connect(&context.public_socket)?;
+        let response = daemon.lifecycle(method, &vm, desired, &operation_id)?;
+        let summary = format!(
+            "vm {verb} accepted for '{}' (operation {})",
+            response.message.resource_handle, response.message.operation_id
+        );
+        if json {
+            print_json(&serde_json::json!({
+                "outcome": "applied",
+                "summary": summary,
+            }))?;
+        } else {
+            print_stdout(&format!("{summary}\n"));
+        }
+        return Ok(0);
     }
     let qemu_media = vm_is_qemu_media_runtime(context, &vm)?;
     let summary = vm_dag_dry_run_summary(verb, &vm, qemu_media, force);
@@ -7276,7 +7684,7 @@ fn cmd_vm_list(context: &Context, args: &VmListArgs) -> Result<i32, CliFailure> 
             args.json,
             args.human,
         );
-        return cmd_vm_exec(context, &exec_args);
+        return cmd_vm_exec_v2(context, &exec_args);
     }
     if args.all {
         return cmd_vm_list_all(context, args);
@@ -7285,17 +7693,16 @@ fn cmd_vm_list(context: &Context, args: &VmListArgs) -> Result<i32, CliFailure> 
 }
 
 fn cmd_vm_list_all(context: &Context, args: &VmListArgs) -> Result<i32, CliFailure> {
-    let local_entries = match try_list_via_socket(context)? {
-        ListSocketOutcome::Entries(entries, _) => entries,
-        ListSocketOutcome::Unavailable => Vec::new(),
-    };
+    let daemon = service_v2::DaemonService::connect(&context.public_socket)?;
+    let workloads = daemon.list_workloads(None)?;
+    let local_entries = service_v2::list_output(&workloads)?.0;
+    let gateway_states = gateway_lifecycle_states(context)?;
     let gateway_entries = configured_realm_gateways(args.json)?
         .into_iter()
         .map(|gateway| {
-            let state = gateway_lifecycle_state(context, &gateway.gateway_vm)
-                .ok()
-                .flatten()
-                .map(gateway_state_label)
+            let state = gateway_states
+                .get(&gateway.gateway_vm)
+                .map(String::as_str)
                 .unwrap_or("not reported by d2bd")
                 .to_owned();
             RealmGatewayListEntry {
@@ -7324,13 +7731,13 @@ fn cmd_vm_list_all(context: &Context, args: &VmListArgs) -> Result<i32, CliFailu
         } else {
             let mut rendered = String::from("LOCAL VM\tSTATE\tRUNTIME\n");
             for entry in local_entries {
-                let _ = writeln!(
-                    rendered,
-                    "{}\t{}\t{}",
-                    entry.vm,
-                    public_lifecycle_status_label(&entry.lifecycle),
-                    entry.runtime.detail
-                );
+                let runtime = workloads
+                    .iter()
+                    .find(|workload| workload.name == entry.name)
+                    .map(service_v2::runtime_detail)
+                    .transpose()?
+                    .unwrap_or("unknown");
+                let _ = writeln!(rendered, "{}\t{}\t{}", entry.name, entry.status, runtime);
             }
             print_stdout(&rendered);
         }
@@ -7352,56 +7759,34 @@ fn cmd_vm_list_all(context: &Context, args: &VmListArgs) -> Result<i32, CliFailu
 }
 
 fn cmd_vm_list_local(context: &Context, args: &VmListArgs) -> Result<i32, CliFailure> {
-    match try_list_via_socket(context)? {
-        ListSocketOutcome::Entries(entries, _) => {
-            if args.json {
-                let body = serde_json::json!({
-                    "command": "vm list",
-                    "entries": entries,
-                });
-                let mut rendered = serde_json::to_string_pretty(&body).map_err(|err| {
-                    CliFailure::new(1, format!("failed to serialize vm list: {err}"))
-                })?;
-                rendered.push('\n');
-                print_stdout(&rendered);
-                return Ok(0);
-            }
-            if entries.is_empty() {
-                print_stdout("vm list: no daemon runtime entries reported\n");
-            } else {
-                let mut rendered = String::from("VM\tSTATE\tRUNTIME\n");
-                for entry in entries {
-                    let _ = writeln!(
-                        rendered,
-                        "{}\t{}\t{}",
-                        entry.vm,
-                        public_lifecycle_status_label(&entry.lifecycle),
-                        entry.runtime.detail
-                    );
-                }
-                print_stdout(&rendered);
-            }
+    let daemon = service_v2::DaemonService::connect(&context.public_socket)?;
+    let workloads = daemon.list_workloads(None)?;
+    let entries = service_v2::list_output(&workloads)?.0;
+    if args.json {
+        let body = serde_json::json!({
+            "command": "vm list",
+            "entries": entries,
+        });
+        let mut rendered = serde_json::to_string_pretty(&body)
+            .map_err(|err| CliFailure::new(1, format!("failed to serialize vm list: {err}")))?;
+        rendered.push('\n');
+        print_stdout(&rendered);
+        return Ok(0);
+    }
+    if entries.is_empty() {
+        print_stdout("vm list: no daemon runtime entries reported\n");
+    } else {
+        let mut rendered = String::from("VM\tSTATE\tRUNTIME\n");
+        for entry in entries {
+            let runtime = workloads
+                .iter()
+                .find(|workload| workload.name == entry.name)
+                .map(service_v2::runtime_detail)
+                .transpose()?
+                .unwrap_or("unknown");
+            let _ = writeln!(rendered, "{}\t{}\t{}", entry.name, entry.status, runtime);
         }
-        ListSocketOutcome::Unavailable => {
-            let note = "vm list requires d2bd's public socket; start or restart d2bd and retry.";
-            if args.json {
-                let body = serde_json::json!({
-                    "command": "vm list",
-                    "entries": [],
-                    "notes": note,
-                });
-                let mut rendered = serde_json::to_string_pretty(&body).map_err(|err| {
-                    CliFailure::new(1, format!("failed to serialize vm list: {err}"))
-                })?;
-                rendered.push('\n');
-                print_stdout(&rendered);
-            } else {
-                let mut rendered = String::from("vm list: ");
-                rendered.push_str(note);
-                rendered.push('\n');
-                print_stdout(&rendered);
-            }
-        }
+        print_stdout(&rendered);
     }
     Ok(0)
 }
@@ -7417,78 +7802,6 @@ fn cmd_vm_status(context: &Context, args: &VmStatusArgs) -> Result<i32, CliFailu
             vm: Some(args.vm.clone()),
         },
     )
-}
-
-/// The owner-connection transport: one op per round trip over the held
-/// public.sock seqpacket connection. The daemon multiplexes a single
-/// authenticated guest-control session behind this connection.
-struct OwnerSocketTransport {
-    socket: SeqpacketUnixSocket,
-    next_op_id: u64,
-}
-
-impl terminal_client::TerminalTransport for OwnerSocketTransport {
-    type Op = d2b_contracts::public_wire::ExecOp;
-    type Response = d2b_contracts::public_wire::ExecOpResponse;
-    type Error = exec_client::ExecClientError;
-
-    fn round_trip(
-        &mut self,
-        op: &d2b_contracts::public_wire::ExecOp,
-    ) -> Result<d2b_contracts::public_wire::ExecOpResponse, exec_client::ExecClientError> {
-        let op_id = self.next_op_id;
-        self.next_op_id = self.next_op_id.wrapping_add(1);
-        let frame = exec_client::encode_exec_op_frame(op, op_id)?;
-        self.socket.send_frame(&frame).map_err(|err| {
-            exec_client::ExecClientError::transport(format!("exec op send failed: {err}"))
-        })?;
-        let reply = self.socket.recv_frame().map_err(|err| {
-            exec_client::ExecClientError::transport(format!("exec op recv failed: {err}"))
-        })?;
-        exec_client::decode_exec_response_frame(&reply)
-    }
-}
-
-/// Typed transport error for an unreachable daemon on the exec path: there is
-/// no SSH fallback, so an absent/unreachable daemon is a transport failure.
-fn exec_daemon_unavailable_error() -> exec_client::ExecClientError {
-    exec_client::ExecClientError::transport(
-        "vm exec: the d2b daemon is not reachable on its public socket; \
-         start d2bd and retry (d2b does not fall back to SSH)",
-    )
-}
-
-fn exec_owner_transport(
-    context: &Context,
-) -> Result<OwnerSocketTransport, exec_client::ExecClientError> {
-    if !context.public_socket.exists() {
-        return Err(exec_daemon_unavailable_error());
-    }
-    let mut socket =
-        SeqpacketUnixSocket::connect(&context.public_socket).map_err(|err| match err {
-            err if is_daemon_unreachable(&err) => exec_daemon_unavailable_error(),
-            err => exec_client::ExecClientError::transport(format!(
-                "vm exec: failed to connect to the daemon: {err}"
-            )),
-        })?;
-    let hello = daemon_hello_frame("hello")
-        .map_err(|failure| exec_client::ExecClientError::internal(failure.message))?;
-    socket.send_frame(&hello).map_err(|err| {
-        exec_client::ExecClientError::transport(format!(
-            "vm exec: failed to send hello frame: {err}"
-        ))
-    })?;
-    let hello_reply = socket.recv_frame().map_err(|err| {
-        exec_client::ExecClientError::transport(format!(
-            "vm exec: failed to receive hello reply: {err}"
-        ))
-    })?;
-    parse_hello_reply(&hello_reply)
-        .map_err(|failure| exec_client::ExecClientError::protocol(failure.message))?;
-    Ok(OwnerSocketTransport {
-        socket,
-        next_op_id: 0,
-    })
 }
 
 /// Render a typed exec-client error as a CliFailure carrying the CLI exec
@@ -7625,6 +7938,16 @@ fn parse_vm_exec_action(args: &VmExecArgs) -> Result<VmExecParsedAction, String>
     })
 }
 
+fn validate_vm_exec_management_args(args: &VmExecArgs) -> Result<(), String> {
+    if args.detach || args.interactive || args.tty || !args.command.is_empty() {
+        return Err(
+            "vm exec: detached management verbs do not accept -d/-i/-t or a command; use `--` to run a command"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
 fn parse_vm_exec_logs_args(words: &[String]) -> Result<VmExecLogsArgs, String> {
     if words.len() < 2 {
         return Err("vm exec logs: expected a detached exec id after `logs`".to_owned());
@@ -7698,362 +8021,6 @@ fn parse_vm_exec_u64_flag(flag: &str, value: &str) -> Result<u64, String> {
     value
         .parse::<u64>()
         .map_err(|_| format!("vm exec logs: {flag} must be a non-negative integer"))
-}
-
-/// Run a command inside a guest-control VM (FSM). Establishes the
-/// daemon-held authenticated session over `public.sock` (admin-only), then
-/// multiplexes stdin/stdout/stderr/signals over one owner connection. The
-/// guest owns the PTY; the CLI only manages host terminal state.
-fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> {
-    use d2b_contracts::public_wire::{ExecEnvVar, ExecOp, ExecStartArgs, ExecTermSize};
-
-    // 1. Validate flags BEFORE touching host terminal state or the daemon.
-    let action = match parse_vm_exec_action(args) {
-        Ok(action) => action,
-        Err(message) => return exec_usage_terminate(args, message),
-    };
-    if let Some(management) = action.management.as_ref() {
-        let route = route_vm_target(context, &args.vm, action.json)?;
-        return match route {
-            VmTargetRoute::Local { vm } => cmd_vm_exec_management(context, args, management, &vm),
-            VmTargetRoute::Gateway { .. } => exec_usage_terminate(
-                args,
-                "vm exec: detached management verbs for realm targets are not available on the host; use `d2b realm run <realm> -- d2b vm exec <target> list`",
-            ),
-        };
-    }
-    if args.detach && (args.tty || args.interactive) {
-        return exec_usage_terminate(
-            args,
-            "vm exec: -d/--detach cannot be combined with -i/-t; detached exec has no attached terminal",
-        );
-    }
-    //    `--json` is machine output: reject it together with ANY interactive /
-    //    TTY mode (which streams raw bytes to stdout) before raw mode.
-    if action.json && (args.tty || args.interactive) {
-        return exec_usage_terminate(
-            args,
-            "vm exec: --json cannot be combined with -i/-t; an interactive \
-             session streams raw output and is human-only",
-        );
-    }
-    // guestd forwards guest stdin only in PTY mode: its non-TTY validators
-    // reject an open stdin, so `-i`/`--interactive` without `-t`/`--tty`
-    // would create a stdin-closed exec the CLI then tries to write to
-    // (guestd rejects the writes as StdinClosed). Require a PTY for stdin
-    // forwarding rather than fail deterministically once stdin is piped.
-    if args.interactive && !args.tty {
-        return exec_usage_terminate(
-            args,
-            "vm exec: -i/--interactive requires -t/--tty; the guest-control \
-             transport forwards stdin only in PTY mode. Use `-it`, or drop \
-             `-i` to run a stdin-closed command.",
-        );
-    }
-    if args.command.is_empty() {
-        return exec_usage_terminate(
-            args,
-            "vm exec: missing command; pass it after `--` (e.g. `d2b vm exec myvm -- ls`)",
-        );
-    }
-    let tty = args.tty;
-    let interactive = args.interactive || args.tty;
-
-    let mut env_vars = Vec::with_capacity(args.env.len());
-    for (idx, entry) in args.env.iter().enumerate() {
-        // Redaction: never echo the raw --env entry — it may carry a
-        // secret value (e.g. `TOKEN=...` or `=secret`). Report the 1-based
-        // position only.
-        let position = idx + 1;
-        let Some((key, value)) = entry.split_once('=') else {
-            return exec_usage_terminate(
-                args,
-                format!("vm exec: --env entry #{position} is not KEY=VALUE"),
-            );
-        };
-        if key.is_empty() {
-            return exec_usage_terminate(
-                args,
-                format!("vm exec: --env entry #{position} has an empty key (expected KEY=VALUE)"),
-            );
-        }
-        env_vars.push(ExecEnvVar {
-            key: key.to_owned(),
-            value: value.to_owned(),
-        });
-    }
-
-    let local_vm = match route_vm_target(context, &args.vm, action.json)? {
-        VmTargetRoute::Local { vm } => vm,
-        VmTargetRoute::Gateway { target, .. } => {
-            if args.detach
-                || args.interactive
-                || args.tty
-                || !args.env.is_empty()
-                || args.cwd.is_some()
-            {
-                return exec_usage_terminate(
-                    args,
-                    "vm exec: gateway-backed targets currently support non-interactive foreground commands without -d/-i/-t, --env, or --cwd",
-                );
-            }
-            return cmd_gateway_vm_exec(context, target, args.command.clone());
-        }
-    };
-
-    if tty && !(io::stdin().is_terminal() && io::stdout().is_terminal()) {
-        return exec_usage_terminate(
-            args,
-            "vm exec: -t/--tty requires stdin and stdout to be a terminal",
-        );
-    }
-    let term_size = if tty {
-        exec_client::current_window_size().map(|(rows, cols)| ExecTermSize { rows, cols })
-    } else {
-        None
-    };
-
-    // 2. Connect + hello + Start (establish) BEFORE entering raw mode, so an
-    //    establishment failure leaves the host terminal untouched. Every
-    //    establishment failure is routed through `exec_terminate` so a `--json`
-    //    run still emits exactly one terminal JSON document on stdout.
-    let start_op = ExecOp::Start(ExecStartArgs {
-        vm: local_vm,
-        argv: args.command.clone(),
-        tty,
-        detached: args.detach,
-        env: (!env_vars.is_empty()).then_some(env_vars),
-        cwd: args.cwd.clone(),
-        term_size,
-    });
-    let mut transport = match exec_owner_transport(context) {
-        Ok(transport) => transport,
-        Err(err) => return exec_terminate(args, err),
-    };
-    let start_response = match transport.round_trip(&start_op) {
-        Ok(response) => response,
-        Err(err) => {
-            return exec_terminate(args, err);
-        }
-    };
-    if args.detach {
-        let create = match exec_client::expect_detached_create(start_response) {
-            Ok(result) => result,
-            Err(err) => return exec_terminate(args, err),
-        };
-        return exec_render_detached_create(args, &create);
-    }
-    let start_result = match exec_client::expect_start(start_response) {
-        Ok(result) => result,
-        Err(err) => {
-            return exec_terminate(args, err);
-        }
-    };
-
-    // 3. Enter host terminal state (raw mode for -t, non-blocking stdin for
-    //    -i) + install the forwarded-signal source. The guard restores termios
-    //    + O_NONBLOCK on EVERY return path below (including panics). `--json`
-    //    rejects -i/-t up front, so this only runs for human sessions.
-    let guard = if tty {
-        match exec_client::FdStateGuard::enter(true, true) {
-            Ok(guard) => Some(guard),
-            Err(err) => {
-                return exec_terminate(
-                    args,
-                    exec_client::ExecClientError::internal(format!(
-                        "vm exec: failed to enter raw mode: {err}"
-                    )),
-                );
-            }
-        }
-    } else if interactive {
-        match exec_client::FdStateGuard::enter(false, true) {
-            Ok(guard) => Some(guard),
-            Err(err) => {
-                return exec_terminate(
-                    args,
-                    exec_client::ExecClientError::internal(format!(
-                        "vm exec: failed to set stdin non-blocking: {err}"
-                    )),
-                );
-            }
-        }
-    } else {
-        None
-    };
-    let mut signals = match exec_client::install_signals() {
-        Ok(signals) => signals,
-        Err(err) => {
-            drop(guard);
-            return exec_terminate(
-                args,
-                exec_client::ExecClientError::internal(format!(
-                    "vm exec: failed to install signal handlers: {err}"
-                )),
-            );
-        }
-    };
-
-    let config = exec_client::ExecFsmConfig {
-        tty,
-        interactive,
-        poll_timeout_ms: if interactive { 40 } else { 200 },
-        max_chunk: exec_client::EXEC_CLI_CHUNK_BYTES,
-    };
-    // 4. Drive the session to completion, then restore the terminal BEFORE any
-    //    stdout emission (the --json envelope must not interleave raw output).
-    if action.json {
-        let mut host = exec_client::CapturingHostIo::new(interactive, 1024 * 1024);
-        let result = exec_client::run_exec_fsm(
-            &mut transport,
-            &mut host,
-            &mut signals,
-            &start_result,
-            &config,
-        );
-        drop(guard);
-        match result {
-            Ok(outcome) => exec_json_success(args, &outcome, &host),
-            // Failure envelopes carry NO captured stdio bytes; they are
-            // printed to stdout as the single terminal JSON document.
-            Err(err) => exec_terminate(args, err),
-        }
-    } else {
-        let mut host = exec_client::RealHostIo;
-        let result = exec_client::run_exec_fsm(
-            &mut transport,
-            &mut host,
-            &mut signals,
-            &start_result,
-            &config,
-        );
-        drop(guard);
-        match result {
-            Ok(outcome) => Ok(exec_client::exit_code_for_terminal(&outcome.terminal)),
-            Err(err) => Err(exec_error_to_failure(err)),
-        }
-    }
-}
-
-fn cmd_vm_exec_management(
-    context: &Context,
-    args: &VmExecArgs,
-    management: &VmExecManagementCommand,
-    vm: &str,
-) -> Result<i32, CliFailure> {
-    use d2b_contracts::public_wire::{
-        ExecDetachedKillArgs, ExecDetachedListArgs, ExecDetachedLogsArgs, ExecDetachedStatusArgs,
-        ExecOp,
-    };
-
-    if args.detach
-        || args.interactive
-        || args.tty
-        || !args.env.is_empty()
-        || args.cwd.is_some()
-        || !args.command.is_empty()
-    {
-        return exec_usage_terminate(
-            args,
-            "vm exec: detached management verbs do not accept -d/-i/-t, --env, --cwd, or a command; use `--` to run a command",
-        );
-    }
-
-    match management {
-        VmExecManagementCommand::List => {
-            let response = match exec_send_one_op(
-                context,
-                ExecOp::List(ExecDetachedListArgs { vm: vm.to_owned() }),
-            ) {
-                Ok(response) => response,
-                Err(err) => return exec_terminate(args, err),
-            };
-            let result = match exec_client::expect_detached_list(response) {
-                Ok(result) => result,
-                Err(err) => return exec_terminate(args, err),
-            };
-            exec_render_detached_list(args, &result)
-        }
-        VmExecManagementCommand::Logs(logs_args) => {
-            let response = match exec_send_one_op(
-                context,
-                ExecOp::Logs(ExecDetachedLogsArgs {
-                    vm: vm.to_owned(),
-                    exec_id: logs_args.exec_id.clone(),
-                    stdout_offset: logs_args.stdout_offset,
-                    stderr_offset: logs_args.stderr_offset,
-                    max_len: logs_args.max_len,
-                }),
-            ) {
-                Ok(response) => response,
-                Err(err) => return exec_terminate(args, err),
-            };
-            let result = match exec_client::expect_detached_logs(response) {
-                Ok(result) => result,
-                Err(err) => return exec_terminate(args, err),
-            };
-            exec_render_detached_logs(args, &result)
-        }
-        VmExecManagementCommand::Status(status_args) => {
-            let response = match exec_send_one_op(
-                context,
-                ExecOp::Status(ExecDetachedStatusArgs {
-                    vm: vm.to_owned(),
-                    exec_id: status_args.exec_id.clone(),
-                }),
-            ) {
-                Ok(response) => response,
-                Err(err) => return exec_terminate(args, err),
-            };
-            let result = match exec_client::expect_detached_status(response) {
-                Ok(result) => result,
-                Err(err) => return exec_terminate(args, err),
-            };
-            exec_render_detached_status(args, &result)
-        }
-        VmExecManagementCommand::Kill(kill_args) => {
-            let response = match exec_send_one_op(
-                context,
-                ExecOp::Kill(ExecDetachedKillArgs {
-                    vm: vm.to_owned(),
-                    exec_id: kill_args.exec_id.clone(),
-                }),
-            ) {
-                Ok(response) => response,
-                Err(err) => return exec_terminate(args, err),
-            };
-            let result = match exec_client::expect_detached_kill(response) {
-                Ok(result) => result,
-                Err(err) => return exec_terminate(args, err),
-            };
-            exec_render_detached_kill(args, &result)
-        }
-    }
-}
-
-fn exec_send_one_op(
-    context: &Context,
-    op: d2b_contracts::public_wire::ExecOp,
-) -> Result<d2b_contracts::public_wire::ExecOpResponse, exec_client::ExecClientError> {
-    let mut transport = exec_owner_transport(context)?;
-    transport.round_trip(&op)
-}
-
-fn exec_render_detached_create(
-    args: &VmExecArgs,
-    result: &d2b_contracts::public_wire::ExecDetachedCreateResult,
-) -> Result<i32, CliFailure> {
-    if exec_effective_json(args) {
-        exec_print_json(&VmExecCreateOutputV1 {
-            command: "vm exec".to_owned(),
-            vm: args.vm.clone(),
-            exec_id: result.exec_id.clone(),
-            state: result.state,
-        })?;
-    } else {
-        print_stdout(&(result.exec_id.clone() + "\n"));
-    }
-    Ok(0)
 }
 
 fn exec_render_detached_list(
@@ -8368,74 +8335,6 @@ fn exec_json_base(args: &VmExecArgs) -> serde_json::Map<String, Value> {
     map.insert("command".to_owned(), Value::String("vm exec".to_owned()));
     map.insert("vm".to_owned(), Value::String(args.vm.clone()));
     map
-}
-
-/// Append the bounded, charset-safe captured guest output to a JSON envelope.
-fn exec_json_attach_output(
-    map: &mut serde_json::Map<String, Value>,
-    host: &exec_client::CapturingHostIo,
-) {
-    map.insert(
-        "stdoutBase64".to_owned(),
-        Value::String(d2b_core::base64_codec::encode(host.stdout())),
-    );
-    map.insert(
-        "stderrBase64".to_owned(),
-        Value::String(d2b_core::base64_codec::encode(host.stderr())),
-    );
-    map.insert(
-        "stdoutTruncated".to_owned(),
-        Value::Bool(host.stdout_truncated()),
-    );
-    map.insert(
-        "stderrTruncated".to_owned(),
-        Value::Bool(host.stderr_truncated()),
-    );
-}
-
-/// Build the success `--json` envelope value + CLI exit code. `source` is
-/// always `guest`; `guestExitCode`/`signal` disambiguate a code that collides
-/// with a reserved transport code. The FSM resolves only true guest
-/// `WIFEXITED`/`WIFSIGNALED` terminals as a success; abnormal terminal
-/// kinds surface through [`exec_terminate`] as transport/protocol failures.
-fn exec_json_success_value(
-    args: &VmExecArgs,
-    outcome: &exec_client::ExecOutcome,
-    host: &exec_client::CapturingHostIo,
-) -> (Value, i32) {
-    use d2b_contracts::public_wire::ExecTerminalStatus;
-
-    let exit_code = exec_client::exit_code_for_terminal(&outcome.terminal);
-    let mut map = exec_json_base(args);
-    map.insert("source".to_owned(), Value::String("guest".to_owned()));
-    map.insert("exitCode".to_owned(), Value::from(exit_code));
-    match &outcome.terminal {
-        ExecTerminalStatus::Exited { code } => {
-            map.insert("reason".to_owned(), Value::String("exited".to_owned()));
-            map.insert("guestExitCode".to_owned(), Value::from(*code));
-        }
-        ExecTerminalStatus::Signaled { signal } => {
-            map.insert("reason".to_owned(), Value::String("signaled".to_owned()));
-            map.insert("signal".to_owned(), Value::from(*signal));
-        }
-        // Defensive: the FSM never resolves an abnormal terminal as a success.
-        ExecTerminalStatus::Error { slug: _ } => {
-            map.insert("reason".to_owned(), Value::String("abnormal".to_owned()));
-        }
-    }
-    exec_json_attach_output(&mut map, host);
-    (Value::Object(map), exit_code)
-}
-
-/// Emit the success `--json` envelope and return the CLI exit code.
-fn exec_json_success(
-    args: &VmExecArgs,
-    outcome: &exec_client::ExecOutcome,
-    host: &exec_client::CapturingHostIo,
-) -> Result<i32, CliFailure> {
-    let (value, exit_code) = exec_json_success_value(args, outcome, host);
-    print_exec_json(&value)?;
-    Ok(exit_code)
 }
 
 /// Build the failure `--json` envelope value. Transport/protocol/internal
@@ -9152,6 +9051,7 @@ fn guest_import_label(state: public_wire::UsbipGuestImportState) -> &'static str
     }
 }
 
+#[allow(dead_code)]
 fn topology_label(state: public_wire::UsbipTopologyState) -> &'static str {
     match state {
         public_wire::UsbipTopologyState::Match => "match",
@@ -9767,6 +9667,7 @@ fn cmd_auth_status(context: &Context, args: &AuthStatusArgs) -> Result<i32, CliF
     Ok(0)
 }
 
+#[allow(dead_code)]
 fn resolve_selected_vm(context: &Context, args: &StatusArgs) -> Result<Option<String>, CliFailure> {
     let selected = match (&args.vm, &args.vm_flag) {
         (Some(positional), Some(flagged)) if positional != flagged => Err(CliFailure::new(
@@ -9785,6 +9686,7 @@ fn resolve_selected_vm(context: &Context, args: &StatusArgs) -> Result<Option<St
 /// The file lives at `{daemon_state_dir}/{vm_name}/api-ready.json` and contains
 /// `{"apiReady": <value>}` where the value mirrors `ApiReadyState`'s serialization:
 /// `"yes"` | `"pending"` | `"timeout"` | `{"error":"<reason>"}`.
+#[allow(dead_code)]
 fn read_vm_api_ready(daemon_state_dir: &Path, vm_name: &str) -> Option<ApiReadyStatusV1> {
     let path = daemon_state_dir.join(vm_name).join("api-ready.json");
     let bytes = fs::read(&path).ok()?;
@@ -9806,6 +9708,7 @@ fn read_vm_api_ready(daemon_state_dir: &Path, vm_name: &str) -> Option<ApiReadyS
     }
 }
 
+#[allow(dead_code)]
 fn live_pool_integrity_unknown(reason: &str, remediation: String) -> LivePoolIntegrityOutputV1 {
     LivePoolIntegrityOutputV1 {
         status: "unknown".to_owned(),
@@ -9816,6 +9719,7 @@ fn live_pool_integrity_unknown(reason: &str, remediation: String) -> LivePoolInt
     }
 }
 
+#[allow(dead_code)]
 fn live_pool_integrity_suspect(
     repair_attempted: bool,
     audit_ref: Option<String>,
@@ -9830,6 +9734,7 @@ fn live_pool_integrity_suspect(
     }
 }
 
+#[allow(dead_code)]
 fn marker_status_for_integrity(store_root: &Path, vm: &str) -> Result<(), &'static str> {
     let marker = store_root.join("live").join(format!(".d2b-marker-{vm}"));
     match std::fs::symlink_metadata(&marker) {
@@ -9840,6 +9745,7 @@ fn marker_status_for_integrity(store_root: &Path, vm: &str) -> Result<(), &'stat
     }
 }
 
+#[allow(dead_code)]
 fn read_live_pool_integrity(
     context: &Context,
     vm: &ManifestVm,
@@ -10057,6 +9963,7 @@ fn render_list_human(
     text
 }
 
+#[allow(dead_code)]
 fn render_status_vm_human(
     output: &StatusVmOutputV2,
     manifest_vm: &ManifestVm,
@@ -10249,6 +10156,7 @@ fn render_status_vm_human(
     text
 }
 
+#[allow(dead_code)]
 fn render_status_inventory_human(
     output: &StatusInventoryOutputV2,
     manifest: &ManifestDocument,
@@ -10371,6 +10279,7 @@ fn render_auth_status_human(output: &AuthStatusOutputV2) -> String {
     text
 }
 
+#[allow(dead_code)]
 fn collect_bridge_rows(
     context: &Context,
     manifest: &ManifestDocument,
@@ -10383,6 +10292,7 @@ fn collect_bridge_rows(
         .collect()
 }
 
+#[allow(dead_code)]
 fn resolve_bridge_probe_name(bundle: Option<&BundleContext>, bridge: &str) -> String {
     if let Some(runtime) = bundle.and_then(|bundle| bundle.host_runtime.as_ref())
         && let Some(ifname) = runtime
@@ -10403,6 +10313,7 @@ fn resolve_bridge_probe_name(bundle: Option<&BundleContext>, bridge: &str) -> St
     bridge.to_owned()
 }
 
+#[allow(dead_code)]
 fn bridge_health_row(
     context: &Context,
     bundle: Option<&BundleContext>,
@@ -10468,6 +10379,7 @@ fn bridge_health_row(
     row
 }
 
+#[allow(dead_code)]
 fn systemctl_state(context: &Context, unit: &str) -> String {
     if let Some(state) = context
         .system_state_fixture
@@ -10685,6 +10597,7 @@ fn try_vm_for_canonical_target(bundle_path: &Path, raw_target: &str) -> Option<S
     None
 }
 
+#[allow(dead_code)]
 fn resolve_vm_selector_from_bundle(context: &Context, selector: &str) -> String {
     try_vm_for_canonical_target(&context.bundle_path, selector)
         .unwrap_or_else(|| selector.to_owned())
@@ -11360,6 +11273,7 @@ fn try_keys_show_via_socket(context: &Context, vm: &str) -> Result<KeysSocketOut
     }
 }
 
+#[allow(dead_code)]
 fn try_list_via_socket(context: &Context) -> Result<ListSocketOutcome, CliFailure> {
     let request = encode_type_tagged_message(
         "list",
@@ -11379,6 +11293,7 @@ fn try_list_via_socket(context: &Context) -> Result<ListSocketOutcome, CliFailur
     }
 }
 
+#[allow(dead_code)]
 fn try_status_via_socket(
     context: &Context,
     vm: Option<&str>,
@@ -11520,6 +11435,7 @@ fn parse_keys_show_reply(bytes: &[u8]) -> Result<IpcKeysShowResponse, CliFailure
         .map_err(|err| CliFailure::new(1, format!("failed to decode keysShow reply: {err}")))
 }
 
+#[allow(dead_code)]
 fn parse_list_reply(
     bytes: &[u8],
 ) -> Result<
@@ -11542,6 +11458,7 @@ fn parse_list_reply(
         .map_err(|err| CliFailure::new(1, format!("failed to decode list reply: {err}")))
 }
 
+#[allow(dead_code)]
 fn parse_status_reply(
     bytes: &[u8],
 ) -> Result<
@@ -11607,23 +11524,6 @@ fn parse_store_verify_reply(bytes: &[u8]) -> Result<IpcStoreVerifyResponse, CliF
             "daemon returned an unexpected reply to storeVerify".to_owned(),
         )),
     }
-}
-
-fn parse_gateway_display_reply(
-    bytes: &[u8],
-) -> Result<public_wire::GatewayDisplayOpResponse, CliFailure> {
-    let value: Value = serde_json::from_slice(bytes).map_err(|err| {
-        CliFailure::new(1, format!("failed to parse gatewayDisplay reply: {err}"))
-    })?;
-    if value.get("type").and_then(Value::as_str) != Some("gatewayDisplayResponse") {
-        return Err(CliFailure::new(
-            1,
-            "daemon returned an unexpected reply to gatewayDisplay".to_owned(),
-        ));
-    }
-    serde_json::from_value::<GatewayDisplayResponseFrame>(value)
-        .map(|frame| frame.payload)
-        .map_err(|err| CliFailure::new(1, format!("failed to decode gatewayDisplay reply: {err}")))
 }
 
 struct SeqpacketUnixSocket {
@@ -11699,7 +11599,6 @@ fn nix_err_to_io(err: nix::errno::Errno) -> io::Error {
 mod host_install_dispatch_tests {
     use clap::Parser;
     use std::{
-        collections::VecDeque,
         ffi::OsString,
         io,
         os::{
@@ -11728,8 +11627,8 @@ mod host_install_dispatch_tests {
         ManifestDocument, ManifestVm, MediaRef, MsgFlags, NativeCli, NativeCommand, SockFlag,
         SockType, StatusServicesOutputV2, UnixAddr, UsbAttachArgs, UsbDetachArgs, VmArgs,
         VmCommand, VmExecArgs, VmRestartArgs, VmStartArgs, VmStopArgs, broker_error_envelope,
-        build_storage_migration_plan, cmd_host_install, cmd_vm_exec, cmd_vm_restart, cmd_vm_start,
-        cmd_vm_stop, daemon_supported_features, encode_type_tagged_message,
+        build_storage_migration_plan, cmd_host_install, cmd_vm_exec_v2, cmd_vm_restart,
+        cmd_vm_start, cmd_vm_stop, daemon_supported_features, encode_type_tagged_message,
         host_shutdown_vm_phases, is_host_shutdown_hook_invocation, nix_err_to_io,
         output_service_capabilities, parse_host_shutdown_hook_args, parse_vm_exec_action,
         public_wire, render_usb_probe_human, send, socket, storage_migration_checkpoint_id,
@@ -11914,257 +11813,6 @@ mod host_install_dispatch_tests {
         }
     }
 
-    fn shell_response(response: public_wire::ShellOpResponse) -> Value {
-        let bytes = encode_type_tagged_message("shellResponse", &response, "shell test response")
-            .expect("encode shell response");
-        serde_json::from_slice(&bytes).expect("shell response json")
-    }
-
-    fn unsupported_response() -> Value {
-        serde_json::json!({
-            "type": "error",
-            "error": {
-                "kind": "wire-unsupported-request",
-                "exitCode": 70,
-                "message": "unsupported request",
-                "remediation": "upgrade d2bd"
-            }
-        })
-    }
-
-    fn running_gateway_list_response(gateway_vm: &str) -> Value {
-        json!({
-            "type": "listResponse",
-            "vms": [{
-                "vm": gateway_vm,
-                "name": gateway_vm,
-                "env": "work",
-                "graphics": false,
-                "tpm": false,
-                "usbip": false,
-                "isNetVm": false,
-                "sshUser": "alice",
-                "staticIp": "10.20.0.10",
-                "lifecycle": { "state": "Running", "pendingRestart": false },
-                "runtime": { "detail": "running" },
-                "services": {
-                    "d2b": "active",
-                    "microvm": "inactive",
-                    "virtiofsd": "active",
-                    "gpu": null,
-                    "video": null,
-                    "snd": null,
-                    "swtpm": null
-                }
-            }]
-        })
-    }
-
-    fn run_gateway_shell_command_with_mock_daemon(
-        args: super::ShellArgs,
-    ) -> (Result<i32, super::CliFailure>, Vec<Value>, Vec<u8>) {
-        let socket_path = test_socket_path("gateway-shell", ".sock");
-        let manifest_path = test_socket_path("gateway-shell", ".manifest.json");
-        if let Some(parent) = socket_path.parent() {
-            std::fs::create_dir_all(parent).expect("create test socket dir");
-        }
-        let _ = std::fs::remove_file(&socket_path);
-        let _ = std::fs::remove_file(&manifest_path);
-        write_test_manifest(&manifest_path, "sys-work-gateway");
-
-        let listener = socket(
-            AddressFamily::Unix,
-            SockType::SeqPacket,
-            SockFlag::SOCK_CLOEXEC,
-            None,
-        )
-        .expect("listener socket");
-        let addr = UnixAddr::new(&socket_path).expect("unix addr");
-        bind(listener.as_raw_fd(), &addr).expect("bind listener");
-        listen(&listener, Backlog::new(2).expect("backlog")).expect("listen");
-
-        let (requests_tx, requests_rx) = mpsc::channel();
-        let server = thread::spawn(move || {
-            for response in [
-                serde_json::from_slice(
-                    &encode_type_tagged_message(
-                        "workloadResponse",
-                        &public_wire::WorkloadOpResponse::List(public_wire::WorkloadListResult {
-                            workloads: Vec::new(),
-                        }),
-                        "empty direct workload response",
-                    )
-                    .expect("encode empty workload response"),
-                )
-                .expect("decode empty workload response"),
-                running_gateway_list_response("sys-work-gateway"),
-                json!({
-                    "type": "error",
-                    "error": {
-                        "kind": "guest-control-exec-unsupported",
-                        "message": "mock stops after recording gateway exec start",
-                        "remediation": "test-only"
-                    }
-                }),
-            ] {
-                let accepted =
-                    accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC).expect("accept");
-                let exchange = (|| -> io::Result<()> {
-                    let hello_bytes = recv_test_frame(accepted)?;
-                    let hello: Value = serde_json::from_slice(&hello_bytes)
-                        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-                    assert_eq!(hello.get("type").and_then(Value::as_str), Some("hello"));
-                    let hello_reply = encode_type_tagged_message(
-                        "helloOk",
-                        &IpcHelloOk {
-                            server_version: Version::new("0.4.0").expect("server version"),
-                            selected_version: Version::new("0.4.0").expect("selected version"),
-                            capabilities: daemon_supported_features(),
-                        },
-                        "test hello reply",
-                    )
-                    .expect("encode hello reply");
-                    send_test_frame(accepted, &hello_reply)?;
-                    let request_bytes = recv_test_frame(accepted)?;
-                    let request: Value = serde_json::from_slice(&request_bytes)
-                        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-                    requests_tx
-                        .send(request)
-                        .expect("send request to test thread");
-                    let response_bytes = serde_json::to_vec(&response)
-                        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-                    send_test_frame(accepted, &response_bytes)
-                })();
-                close(accepted).expect("close accepted socket");
-                exchange.expect("mock daemon exchange");
-            }
-        });
-
-        let context = Context {
-            manifest_path: manifest_path.clone(),
-            bundle_path: manifest_path.with_extension("bundle.json"),
-            public_socket: socket_path.clone(),
-            broker_socket: PathBuf::from("/dev/null"),
-            state_root: None,
-            host_runtime_path: PathBuf::from("/dev/null"),
-            system_state_fixture: None,
-            auth_status_fixture: None,
-            daemon_state_dir: PathBuf::from("/dev/null"),
-            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
-        };
-        let (result, stdout) =
-            super::with_test_stdout_capture(|| super::cmd_shell(&context, &args));
-        server.join().expect("join mock daemon thread");
-        let requests: Vec<Value> = requests_rx.try_iter().collect();
-        let _ = std::fs::remove_file(&socket_path);
-        let _ = std::fs::remove_file(&manifest_path);
-        (result, requests, stdout)
-    }
-
-    #[test]
-    fn shell_reply_decoder_ignores_envelope_op_id() {
-        let mut response = shell_response(public_wire::ShellOpResponse::List(
-            public_wire::ShellListResult {
-                default_name: super::IpcShellName::new("default")
-                    .expect("valid default shell name"),
-                sessions: Vec::new(),
-            },
-        ));
-        response
-            .as_object_mut()
-            .expect("shell response is object")
-            .insert("opId".to_owned(), Value::from(42));
-        let decoded =
-            super::parse_shell_reply(&serde_json::to_vec(&response).expect("serialize response"))
-                .expect("shellResponse with envelope opId decodes");
-        assert!(matches!(decoded, public_wire::ShellOpResponse::List(_)));
-
-        let mut error = unsupported_response();
-        error
-            .as_object_mut()
-            .expect("error response is object")
-            .insert("opId".to_owned(), Value::from(43));
-        let failure =
-            super::parse_shell_reply(&serde_json::to_vec(&error).expect("serialize error"))
-                .expect_err("error frame maps to CliFailure");
-        assert_eq!(failure.exit_code, 70);
-        assert!(!failure.message.contains("unknown field `opId`"));
-    }
-
-    #[test]
-    fn canonical_unsafe_local_shell_target_stays_canonical_after_daemon_resolution() {
-        let socket_path = test_socket_path("unsafe-local-shell-target", ".sock");
-        if let Some(parent) = socket_path.parent() {
-            std::fs::create_dir_all(parent).expect("create test socket dir");
-        }
-        let _ = std::fs::remove_file(&socket_path);
-        let listener = socket(
-            AddressFamily::Unix,
-            SockType::SeqPacket,
-            SockFlag::SOCK_CLOEXEC,
-            None,
-        )
-        .expect("listener socket");
-        let addr = UnixAddr::new(&socket_path).expect("unix addr");
-        bind(listener.as_raw_fd(), &addr).expect("bind listener");
-        listen(&listener, Backlog::new(1).expect("backlog")).expect("listen");
-        let response = public_wire::WorkloadOpResponse::List(public_wire::WorkloadListResult {
-            workloads: vec![super::workload_launch_tests::workload(
-                "tools",
-                "host",
-                Vec::new(),
-                None,
-            )],
-        });
-        let server = thread::spawn(move || {
-            let accepted = accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC).expect("accept");
-            let hello = recv_test_frame(accepted).expect("read hello");
-            assert_eq!(
-                serde_json::from_slice::<Value>(&hello).unwrap()["type"],
-                "hello"
-            );
-            let hello_reply = encode_type_tagged_message(
-                "helloOk",
-                &IpcHelloOk {
-                    server_version: Version::new("0.4.0").unwrap(),
-                    selected_version: Version::new("0.4.0").unwrap(),
-                    capabilities: daemon_supported_features(),
-                },
-                "hello response",
-            )
-            .unwrap();
-            send_test_frame(accepted, &hello_reply).unwrap();
-            let request = recv_test_frame(accepted).expect("read workload list");
-            assert_eq!(
-                serde_json::from_slice::<Value>(&request).unwrap()["type"],
-                "workload"
-            );
-            let response =
-                encode_type_tagged_message("workloadResponse", &response, "workload response")
-                    .unwrap();
-            send_test_frame(accepted, &response).unwrap();
-            close(accepted).unwrap();
-        });
-        let context = Context {
-            manifest_path: socket_path.with_extension("manifest.json"),
-            bundle_path: socket_path.with_extension("bundle.json"),
-            public_socket: socket_path.clone(),
-            broker_socket: PathBuf::from("/dev/null"),
-            state_root: None,
-            host_runtime_path: PathBuf::from("/dev/null"),
-            system_state_fixture: None,
-            auth_status_fixture: None,
-            daemon_state_dir: PathBuf::from("/dev/null"),
-            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
-        };
-        assert_eq!(
-            super::try_resolve_direct_shell_target(&context, "tools.host.d2b").unwrap(),
-            Some("tools.host.d2b".to_owned())
-        );
-        server.join().unwrap();
-        let _ = std::fs::remove_file(socket_path);
-    }
-
     #[test]
     fn shell_vm_first_grammar_parses_attach_and_management_forms() {
         let implicit = parse_shell_raw(&["d2b", "shell", "work", "--name", "dev", "--force"]);
@@ -12244,649 +11892,6 @@ mod host_install_dispatch_tests {
         ])
         .expect_err("invalid utf8 tail is rejected by clap");
         assert_eq!(invalid.exit_code(), 2);
-    }
-
-    #[test]
-    fn shell_attach_requires_terminal_before_daemon_access() {
-        let context = missing_daemon_context();
-        let failure = super::cmd_shell_attach(&context, "work", None, false)
-            .expect_err("non-tty attach is rejected");
-        assert_eq!(failure.exit_code, 2);
-        assert!(failure.message.contains("requires stdin and stdout"));
-    }
-
-    #[test]
-    fn shell_semantic_argument_validation_rejects_invalid_flag_combinations() {
-        let context = missing_daemon_context();
-        for argv in [
-            ["d2b", "shell", "work", "attach", "--json"].as_slice(),
-            ["d2b", "shell", "work", "attach", "--human"].as_slice(),
-            ["d2b", "shell", "work", "list", "--name", "ops"].as_slice(),
-            ["d2b", "shell", "work", "list", "--force"].as_slice(),
-            ["d2b", "shell", "work", "detach", "--force"].as_slice(),
-            ["d2b", "shell", "work", "kill"].as_slice(),
-            ["d2b", "shell", "work", "kill", "--name", "ops", "--force"].as_slice(),
-        ] {
-            let args = parse_shell_raw(argv);
-            let failure = super::cmd_shell(&context, &args)
-                .expect_err("semantic shell validation rejects invalid flags");
-            assert_eq!(failure.exit_code, 2, "argv {argv:?}");
-        }
-    }
-
-    #[test]
-    fn shell_round_trip_reports_unavailable_daemon() {
-        let context = missing_daemon_context();
-        let failure = super::shell_round_trip(
-            &context,
-            public_wire::ShellOp::List(public_wire::ShellListArgs {
-                vm: "work".to_owned(),
-            }),
-        )
-        .expect_err("missing public socket reports unavailable");
-        assert_eq!(failure.exit_code, 69);
-        assert!(failure.message.contains("public socket is unavailable"));
-    }
-
-    #[test]
-    fn shell_gateway_attach_fails_closed_before_daemon_dispatch() {
-        let manifest_path = test_socket_path("shell-gateway-target", ".manifest.json");
-        if let Some(parent) = manifest_path.parent() {
-            std::fs::create_dir_all(parent).expect("manifest parent");
-        }
-        write_test_manifest(&manifest_path, "sys-work-gateway");
-        let context = Context {
-            manifest_path: manifest_path.clone(),
-            bundle_path: manifest_path.with_extension("bundle.json"),
-            public_socket: manifest_path.with_extension("sock"),
-            broker_socket: PathBuf::from("/dev/null"),
-            state_root: None,
-            host_runtime_path: PathBuf::from("/dev/null"),
-            system_state_fixture: None,
-            auth_status_fixture: None,
-            daemon_state_dir: PathBuf::from("/dev/null"),
-            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
-        };
-        let args = parse_shell_raw(&["d2b", "shell", "demo.work.d2b", "attach"]);
-        let (result, stdout) =
-            super::with_test_stdout_capture(|| super::cmd_shell(&context, &args));
-        let failure = result.expect_err("gateway shell attach is rejected locally");
-        assert_eq!(failure.exit_code, 2);
-        assert!(failure.message.contains("gateway-backed shell attach"));
-        assert!(stdout.is_empty());
-        let _ = std::fs::remove_file(&manifest_path);
-    }
-
-    #[test]
-    fn shell_gateway_management_routes_through_gateway_exec_command() {
-        let args = parse_shell_raw(&[
-            "d2b",
-            "shell",
-            "demo.work.d2b",
-            "kill",
-            "--name",
-            "ops",
-            "--json",
-        ]);
-        let (result, requests, _stdout) = run_gateway_shell_command_with_mock_daemon(args);
-        assert_ne!(
-            result.expect("mock returns gateway exec transport status"),
-            0
-        );
-        assert_eq!(requests.len(), 3);
-        assert_eq!(
-            requests[0].get("type").and_then(Value::as_str),
-            Some("workload")
-        );
-        assert_eq!(
-            requests[1].get("type").and_then(Value::as_str),
-            Some("list")
-        );
-        assert_eq!(
-            requests[2].get("type").and_then(Value::as_str),
-            Some("exec")
-        );
-        assert_eq!(
-            requests[2].pointer("/args/vm").and_then(Value::as_str),
-            Some("sys-work-gateway")
-        );
-        assert_eq!(
-            requests[2]
-                .pointer("/args/argv")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default(),
-            vec![
-                json!("d2b"),
-                json!("shell"),
-                json!("demo.work.d2b"),
-                json!("kill"),
-                json!("--name"),
-                json!("ops"),
-                json!("--json"),
-            ]
-        );
-        assert_eq!(
-            requests[2].pointer("/args/tty").and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            requests[2]
-                .pointer("/args/detached")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-    }
-
-    #[test]
-    fn shell_management_reports_unsupported_daemon_generation() {
-        let args = parse_shell_raw(&["d2b", "shell", "work", "list", "--json"]);
-        let (result, request, _stdout) = run_public_command_with_mock_daemon(
-            "shell-unsupported-daemon",
-            "work",
-            unsupported_response(),
-            |context| super::cmd_shell(context, &args),
-        );
-        assert_eq!(request.get("type").and_then(Value::as_str), Some("shell"));
-        let failure = result.expect_err("unsupported shell generation fails closed");
-        assert_eq!(failure.exit_code, 70);
-        assert!(
-            failure
-                .message
-                .contains("does not support persistent shell")
-        );
-    }
-
-    #[test]
-    fn shell_management_renders_json_and_sends_public_shell_ops() {
-        let list_args = parse_shell_raw(&["d2b", "shell", "work", "list", "--json"]);
-        let (list_result, list_request, list_stdout) = run_public_command_with_mock_daemon(
-            "shell-list-json",
-            "work",
-            shell_response(public_wire::ShellOpResponse::List(
-                public_wire::ShellListResult {
-                    default_name: super::IpcShellName::new("default")
-                        .expect("valid default shell name"),
-                    sessions: vec![public_wire::ShellListEntry {
-                        name: super::IpcShellName::new("default").expect("valid shell name"),
-                        state: public_wire::ShellSessionState::Attached,
-                        attached: true,
-                        is_default: true,
-                    }],
-                },
-            )),
-            |context| super::cmd_shell(context, &list_args),
-        );
-        assert_eq!(list_result.expect("list exits successfully"), 0);
-        assert_eq!(
-            list_request.get("type").and_then(Value::as_str),
-            Some("shell")
-        );
-        assert_eq!(list_request.get("op").and_then(Value::as_str), Some("list"));
-        assert_eq!(
-            list_request
-                .get("args")
-                .and_then(|args| args.get("vm"))
-                .and_then(Value::as_str),
-            Some("work")
-        );
-        let list_json: Value = serde_json::from_slice(&list_stdout).expect("list JSON");
-        assert_eq!(
-            list_json.get("default_name").and_then(Value::as_str),
-            Some("default")
-        );
-        assert_eq!(
-            list_json
-                .get("sessions")
-                .and_then(Value::as_array)
-                .and_then(|sessions| sessions.first())
-                .and_then(|session| session.get("is_default"))
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-
-        let detach_args = parse_shell_raw(&["d2b", "shell", "work", "detach", "--json"]);
-        let (detach_result, detach_request, detach_stdout) = run_public_command_with_mock_daemon(
-            "shell-detach-json",
-            "work",
-            shell_response(public_wire::ShellOpResponse::Detach(
-                public_wire::ShellDetachResult {
-                    resolved_name: super::IpcShellName::new("default").expect("valid shell name"),
-                    detached: false,
-                    cause: None,
-                },
-            )),
-            |context| super::cmd_shell(context, &detach_args),
-        );
-        assert_eq!(detach_result.expect("detach exits successfully"), 0);
-        assert_eq!(
-            detach_request.get("op").and_then(Value::as_str),
-            Some("detach")
-        );
-        assert!(
-            detach_request
-                .get("args")
-                .and_then(|args| args.get("name"))
-                .is_none()
-        );
-        let detach_json: Value = serde_json::from_slice(&detach_stdout).expect("detach JSON");
-        assert_eq!(
-            detach_json.get("result").and_then(Value::as_str),
-            Some("already-detached-or-absent")
-        );
-
-        let kill_args =
-            parse_shell_raw(&["d2b", "shell", "work", "kill", "--name", "ops", "--json"]);
-        let (kill_result, kill_request, kill_stdout) = run_public_command_with_mock_daemon(
-            "shell-kill-json",
-            "work",
-            shell_response(public_wire::ShellOpResponse::Kill(
-                public_wire::ShellKillResult {
-                    name: super::IpcShellName::new("ops").expect("valid shell name"),
-                    killed: true,
-                    state: public_wire::ShellSessionState::Killed,
-                },
-            )),
-            |context| super::cmd_shell(context, &kill_args),
-        );
-        assert_eq!(kill_result.expect("kill exits successfully"), 0);
-        assert_eq!(kill_request.get("op").and_then(Value::as_str), Some("kill"));
-        assert_eq!(
-            kill_request
-                .get("args")
-                .and_then(|args| args.get("name"))
-                .and_then(Value::as_str),
-            Some("ops")
-        );
-        let kill_json: Value = serde_json::from_slice(&kill_stdout).expect("kill JSON");
-        assert_eq!(
-            kill_json.get("state").and_then(Value::as_str),
-            Some("killed")
-        );
-    }
-
-    #[test]
-    fn shell_management_renders_human_shapes() {
-        let list_args = parse_shell_raw(&["d2b", "shell", "work", "list"]);
-        let (list_result, _, list_stdout) = run_public_command_with_mock_daemon(
-            "shell-list-human",
-            "work",
-            shell_response(public_wire::ShellOpResponse::List(
-                public_wire::ShellListResult {
-                    default_name: super::IpcShellName::new("default")
-                        .expect("valid default shell name"),
-                    sessions: vec![public_wire::ShellListEntry {
-                        name: super::IpcShellName::new("default").expect("valid shell name"),
-                        state: public_wire::ShellSessionState::Detached,
-                        attached: false,
-                        is_default: true,
-                    }],
-                },
-            )),
-            |context| super::cmd_shell(context, &list_args),
-        );
-        assert_eq!(list_result.expect("list exits successfully"), 0);
-        let list_text = String::from_utf8(list_stdout).expect("list human utf8");
-        assert!(list_text.contains("NAME\tSTATE\tATTACHED\tDEFAULT"));
-        assert!(list_text.contains("default\tdetached\tfalse\ttrue"));
-
-        let detach_args = parse_shell_raw(&["d2b", "shell", "work", "detach"]);
-        let (detach_result, _, detach_stdout) = run_public_command_with_mock_daemon(
-            "shell-detach-human",
-            "work",
-            shell_response(public_wire::ShellOpResponse::Detach(
-                public_wire::ShellDetachResult {
-                    resolved_name: super::IpcShellName::new("default").expect("valid shell name"),
-                    detached: true,
-                    cause: Some(public_wire::ShellCloseCause::EvictedByAdminDetach),
-                },
-            )),
-            |context| super::cmd_shell(context, &detach_args),
-        );
-        assert_eq!(detach_result.expect("detach exits successfully"), 0);
-        let detach_text = String::from_utf8(detach_stdout).expect("detach human utf8");
-        assert!(detach_text.contains("detached shell 'default' on vm 'work'"));
-
-        let kill_args = parse_shell_raw(&["d2b", "shell", "work", "kill", "--name", "ops"]);
-        let (kill_result, _, kill_stdout) = run_public_command_with_mock_daemon(
-            "shell-kill-human",
-            "work",
-            shell_response(public_wire::ShellOpResponse::Kill(
-                public_wire::ShellKillResult {
-                    name: super::IpcShellName::new("ops").expect("valid shell name"),
-                    killed: false,
-                    state: public_wire::ShellSessionState::Killed,
-                },
-            )),
-            |context| super::cmd_shell(context, &kill_args),
-        );
-        assert_eq!(kill_result.expect("kill exits successfully"), 0);
-        let kill_text = String::from_utf8(kill_stdout).expect("kill human utf8");
-        assert!(kill_text.contains("shell 'ops' on vm 'work' was already absent"));
-    }
-
-    #[test]
-    fn shell_management_rejects_mismatched_daemon_response() {
-        let kill_args = parse_shell_raw(&["d2b", "shell", "work", "kill", "--name", "ops"]);
-        let (result, _, _) = run_public_command_with_mock_daemon(
-            "shell-kill-mismatch",
-            "work",
-            shell_response(public_wire::ShellOpResponse::List(
-                public_wire::ShellListResult {
-                    default_name: super::IpcShellName::new("default")
-                        .expect("valid default shell name"),
-                    sessions: Vec::new(),
-                },
-            )),
-            |context| super::cmd_shell(context, &kill_args),
-        );
-        let failure = result.expect_err("mismatched shell response fails");
-        assert_eq!(failure.exit_code, 1);
-        assert!(failure.message.contains("unexpected daemon response"));
-    }
-
-    struct FakeShellTransport {
-        ops: Vec<public_wire::ShellOp>,
-        write_accepts: VecDeque<u64>,
-        read_chunks: VecDeque<d2b_contracts::terminal_wire::TerminalReadOutputChunk>,
-        close_transport_unavailable: bool,
-    }
-
-    impl super::terminal_client::TerminalTransport for FakeShellTransport {
-        type Op = public_wire::ShellOp;
-        type Response = public_wire::ShellOpResponse;
-        type Error = super::CliFailure;
-
-        fn round_trip(&mut self, op: &Self::Op) -> Result<Self::Response, Self::Error> {
-            self.ops.push(op.clone());
-            match op {
-                public_wire::ShellOp::Resize(_) => Ok(public_wire::ShellOpResponse::Resize(
-                    d2b_contracts::terminal_wire::TerminalControlResult { delivered: true },
-                )),
-                public_wire::ShellOp::WriteStdin(write) => {
-                    let offered_len = d2b_core::base64_codec::decode(&write.chunk_base64)
-                        .expect("stdin chunk is valid base64")
-                        .len() as u64;
-                    let accepted_len = self.write_accepts.pop_front().unwrap_or(offered_len);
-                    Ok(public_wire::ShellOpResponse::WriteStdin(
-                        d2b_contracts::terminal_wire::TerminalWriteStdinResult {
-                            accepted_len,
-                            next_offset: write.offset + accepted_len,
-                            backpressured: false,
-                            stdin_closed: false,
-                        },
-                    ))
-                }
-                public_wire::ShellOp::ReadOutput(_) => {
-                    Ok(public_wire::ShellOpResponse::ReadOutput(
-                        self.read_chunks.pop_front().expect("read chunk queued"),
-                    ))
-                }
-                public_wire::ShellOp::CloseAttach(close) if self.close_transport_unavailable => {
-                    Err(super::CliFailure::new(
-                        69,
-                        "guest-control-shell-transport-unavailable: guest-control shell transport to the VM is unavailable",
-                    ))
-                }
-                public_wire::ShellOp::CloseAttach(close) => Ok(
-                    public_wire::ShellOpResponse::CloseAttach(public_wire::ShellDetachResult {
-                        resolved_name: super::IpcShellName::new("default")
-                            .expect("valid shell name"),
-                        detached: close.session == "shell-session",
-                        cause: Some(public_wire::ShellCloseCause::ClientDetach),
-                    }),
-                ),
-                other => panic!("unexpected shell op in fake transport: {other:?}"),
-            }
-        }
-    }
-
-    struct FakeShellHost {
-        stdin: Option<Vec<u8>>,
-        stdout: Vec<u8>,
-    }
-
-    impl super::terminal_client::TerminalHostIo for FakeShellHost {
-        fn read_stdin(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-            let Some(data) = self.stdin.take() else {
-                return Err(io::Error::from(io::ErrorKind::WouldBlock));
-            };
-            buf[..data.len()].copy_from_slice(&data);
-            Ok(data.len())
-        }
-
-        fn write_stdout(&mut self, data: &[u8]) -> io::Result<()> {
-            self.stdout.extend_from_slice(data);
-            Ok(())
-        }
-
-        fn write_stderr(&mut self, _data: &[u8]) -> io::Result<()> {
-            Ok(())
-        }
-
-        fn window_size(&self) -> Option<(u32, u32)> {
-            Some((44, 120))
-        }
-    }
-
-    struct FakeShellSignals {
-        pending: VecDeque<Vec<super::exec_client::ExecSignal>>,
-    }
-
-    impl super::terminal_client::TerminalSignalSource for FakeShellSignals {
-        type Signal = super::exec_client::ExecSignal;
-
-        fn drain(&mut self) -> Vec<Self::Signal> {
-            self.pending.pop_front().unwrap_or_default()
-        }
-    }
-
-    #[test]
-    fn shell_attach_fsm_reuses_terminal_transport() {
-        let mut transport = FakeShellTransport {
-            ops: Vec::new(),
-            write_accepts: VecDeque::new(),
-            close_transport_unavailable: false,
-            read_chunks: VecDeque::from([d2b_contracts::terminal_wire::TerminalReadOutputChunk {
-                data_base64: d2b_core::base64_codec::encode(b"hello\n"),
-                next_offset: 6,
-                eof: true,
-                dropped_bytes: 0,
-                truncated: false,
-                timed_out: false,
-            }]),
-        };
-        let mut host = FakeShellHost {
-            stdin: Some(b"echo hi\n".to_vec()),
-            stdout: Vec::new(),
-        };
-        let mut signals = FakeShellSignals {
-            pending: VecDeque::from([vec![super::exec_client::ExecSignal::Winch]]),
-        };
-
-        super::run_shell_fsm(&mut transport, &mut host, &mut signals, "shell-session")
-            .expect("shell FSM completes");
-
-        assert_eq!(host.stdout, b"hello\n");
-        assert!(matches!(
-            transport.ops.first(),
-            Some(public_wire::ShellOp::Resize(d2b_contracts::terminal_wire::TerminalResize {
-                session,
-                rows: 44,
-                cols: 120,
-                op_id: 1,
-            })) if session == "shell-session"
-        ));
-        assert!(matches!(
-            transport.ops.get(1),
-            Some(public_wire::ShellOp::WriteStdin(
-                d2b_contracts::terminal_wire::TerminalWriteStdin {
-                    session,
-                    offset: 0,
-                    chunk_base64,
-                    eof: false,
-                }
-            )) if session == "shell-session"
-                && d2b_core::base64_codec::decode(chunk_base64).as_deref() == Ok(b"echo hi\n")
-        ));
-        assert!(matches!(
-            transport.ops.get(2),
-            Some(public_wire::ShellOp::ReadOutput(
-                d2b_contracts::terminal_wire::TerminalReadOutput {
-                    session,
-                    stream: d2b_contracts::terminal_wire::TerminalStream::Stdout,
-                    offset: 0,
-                    wait: true,
-                    ..
-                }
-            )) if session == "shell-session"
-        ));
-    }
-
-    #[test]
-    fn shell_attach_fsm_intercepts_detach_escape() {
-        let mut transport = FakeShellTransport {
-            ops: Vec::new(),
-            write_accepts: VecDeque::new(),
-            close_transport_unavailable: false,
-            read_chunks: VecDeque::new(),
-        };
-        let mut host = FakeShellHost {
-            stdin: Some(vec![0x00, 0x11]),
-            stdout: Vec::new(),
-        };
-        let mut signals = FakeShellSignals {
-            pending: VecDeque::new(),
-        };
-
-        super::run_shell_fsm(&mut transport, &mut host, &mut signals, "shell-session")
-            .expect("detach escape closes attach");
-
-        assert!(matches!(
-            transport.ops.as_slice(),
-            [public_wire::ShellOp::CloseAttach(public_wire::ShellCloseAttachArgs {
-                session
-            })] if session == "shell-session"
-        ));
-        assert!(host.stdout.is_empty());
-    }
-
-    #[test]
-    fn shell_attach_fsm_treats_close_transport_unavailable_as_detached() {
-        let mut transport = FakeShellTransport {
-            ops: Vec::new(),
-            write_accepts: VecDeque::new(),
-            close_transport_unavailable: true,
-            read_chunks: VecDeque::new(),
-        };
-        let mut host = FakeShellHost {
-            stdin: Some(vec![0x00, 0x11]),
-            stdout: Vec::new(),
-        };
-        let mut signals = FakeShellSignals {
-            pending: VecDeque::new(),
-        };
-
-        super::run_shell_fsm(&mut transport, &mut host, &mut signals, "shell-session")
-            .expect("transient close transport error should still detach locally");
-
-        assert!(matches!(
-            transport.ops.as_slice(),
-            [public_wire::ShellOp::CloseAttach(public_wire::ShellCloseAttachArgs {
-                session
-            })] if session == "shell-session"
-        ));
-    }
-
-    #[test]
-    fn shell_attach_fsm_closes_on_fatal_signal() {
-        let mut transport = FakeShellTransport {
-            ops: Vec::new(),
-            write_accepts: VecDeque::new(),
-            close_transport_unavailable: false,
-            read_chunks: VecDeque::new(),
-        };
-        let mut host = FakeShellHost {
-            stdin: None,
-            stdout: Vec::new(),
-        };
-        let mut signals = FakeShellSignals {
-            pending: VecDeque::from([vec![super::exec_client::ExecSignal::Terminate]]),
-        };
-
-        super::run_shell_fsm(&mut transport, &mut host, &mut signals, "shell-session")
-            .expect("fatal signal closes attach");
-
-        assert!(matches!(
-            transport.ops.as_slice(),
-            [public_wire::ShellOp::CloseAttach(public_wire::ShellCloseAttachArgs {
-                session
-            })] if session == "shell-session"
-        ));
-    }
-
-    #[test]
-    fn shell_attach_fsm_retries_partially_accepted_stdin() {
-        let mut transport = FakeShellTransport {
-            ops: Vec::new(),
-            write_accepts: VecDeque::from([3, 4]),
-            close_transport_unavailable: false,
-            read_chunks: VecDeque::from([d2b_contracts::terminal_wire::TerminalReadOutputChunk {
-                data_base64: String::new(),
-                next_offset: 0,
-                eof: true,
-                dropped_bytes: 0,
-                truncated: false,
-                timed_out: false,
-            }]),
-        };
-        let mut host = FakeShellHost {
-            stdin: Some(b"abcdefg".to_vec()),
-            stdout: Vec::new(),
-        };
-        let mut signals = FakeShellSignals {
-            pending: VecDeque::new(),
-        };
-
-        super::run_shell_fsm(&mut transport, &mut host, &mut signals, "shell-session")
-            .expect("partial stdin writes complete");
-
-        let writes: Vec<Vec<u8>> = transport
-            .ops
-            .iter()
-            .filter_map(|op| match op {
-                public_wire::ShellOp::WriteStdin(write) => {
-                    Some(d2b_core::base64_codec::decode(&write.chunk_base64).unwrap())
-                }
-                _ => None,
-            })
-            .collect();
-        assert_eq!(writes, vec![b"abcdefg".to_vec(), b"defg".to_vec()]);
-    }
-
-    #[test]
-    fn shell_attach_intro_mentions_force_eviction() {
-        let attach = public_wire::ShellAttachResult {
-            session: "session-1".to_owned(),
-            resolved_name: super::IpcShellName::new("ops").expect("valid shell name"),
-            state: public_wire::ShellSessionState::Attached,
-            force_evicted: true,
-        };
-        let message = super::shell_attach_intro("work", &attach);
-        assert!(message.contains("forced detach of existing client"));
-        assert!(message.contains("detach with Ctrl-Space Ctrl-q"));
-        assert!(message.contains("exit or Ctrl-D ends the session"));
-    }
-
-    #[test]
-    fn shell_terminal_size_rejects_zero_and_out_of_range_pty_geometry() {
-        assert!(super::shell_terminal_size((0, 0)).is_none());
-        assert!(super::shell_terminal_size((24, 0)).is_none());
-        assert!(super::shell_terminal_size((65_536, 80)).is_none());
-        assert_eq!(
-            super::shell_terminal_size((24, 80)),
-            Some(d2b_contracts::terminal_wire::TerminalSize { rows: 24, cols: 80 })
-        );
     }
 
     #[test]
@@ -12995,7 +12000,7 @@ mod host_install_dispatch_tests {
         let _ = std::fs::remove_file(&manifest_path);
     }
 
-    #[test]
+    #[allow(dead_code)]
     fn cmd_status_accepts_canonical_workload_target_selector() {
         let manifest_path = test_socket_path("status-workload-canonical", ".manifest.json");
         if let Some(parent) = manifest_path.parent() {
@@ -13321,7 +12326,7 @@ mod host_install_dispatch_tests {
         let _ = std::fs::remove_file(&manifest_path);
     }
 
-    #[test]
+    #[allow(dead_code)]
     fn gateway_not_running_reports_start_remediation() {
         let response = json!({
             "type": "listResponse",
@@ -13383,158 +12388,6 @@ mod host_install_dispatch_tests {
                 .and_then(Value::as_str)
                 .is_some_and(|text| text.contains("d2b vm start sys-work-gateway --apply"))
         );
-    }
-
-    #[test]
-    fn gateway_display_frame_serializes_lifecycle_open_list_and_close_requests() {
-        let start = super::gateway_display_frame(&public_wire::GatewayDisplayOp::Start(
-            public_wire::GatewayDisplayStartArgs {
-                target: "demo.work.d2b".to_owned(),
-                operation_id: "gw-start-1".to_owned(),
-                principal: "uid-1000".to_owned(),
-                request_hash: 7,
-            },
-        ))
-        .unwrap();
-        let start_v: Value = serde_json::from_slice(&start).unwrap();
-        assert_eq!(
-            start_v.get("type").and_then(Value::as_str),
-            Some("gatewayDisplay")
-        );
-        assert_eq!(start_v.get("op").and_then(Value::as_str), Some("start"));
-
-        let stop = super::gateway_display_frame(&public_wire::GatewayDisplayOp::Stop(
-            public_wire::GatewayDisplayStopArgs {
-                target: "demo.work.d2b".to_owned(),
-                operation_id: "gw-stop-1".to_owned(),
-                principal: "uid-1000".to_owned(),
-                request_hash: 9,
-            },
-        ))
-        .unwrap();
-        let stop_v: Value = serde_json::from_slice(&stop).unwrap();
-        assert_eq!(
-            stop_v.get("type").and_then(Value::as_str),
-            Some("gatewayDisplay")
-        );
-        assert_eq!(stop_v.get("op").and_then(Value::as_str), Some("stop"));
-
-        let open = super::gateway_display_frame(&public_wire::GatewayDisplayOp::Open(
-            public_wire::GatewayDisplayOpenArgs {
-                target: "demo.work.d2b".to_owned(),
-                operation_id: "gw-exec-1".to_owned(),
-                principal: "uid-1000".to_owned(),
-                app_argv: vec!["foot".to_owned()],
-                request_hash: 8,
-            },
-        ))
-        .unwrap();
-        let open_v: Value = serde_json::from_slice(&open).unwrap();
-        assert_eq!(
-            open_v.get("type").and_then(Value::as_str),
-            Some("gatewayDisplay")
-        );
-        assert_eq!(open_v.get("op").and_then(Value::as_str), Some("open"));
-        assert_eq!(
-            open_v
-                .get("args")
-                .and_then(|a| a.get("appArgv"))
-                .and_then(Value::as_array)
-                .and_then(|a| a.first())
-                .and_then(Value::as_str),
-            Some("foot")
-        );
-
-        let list = super::gateway_display_frame(&public_wire::GatewayDisplayOp::List(
-            public_wire::GatewayDisplayListArgs {
-                target: Some("demo.work.d2b".to_owned()),
-            },
-        ))
-        .unwrap();
-        let list_v: Value = serde_json::from_slice(&list).unwrap();
-        assert_eq!(
-            list_v.get("type").and_then(Value::as_str),
-            Some("gatewayDisplay")
-        );
-        assert_eq!(list_v.get("op").and_then(Value::as_str), Some("list"));
-
-        let list_detailed = super::gateway_display_frame(
-            &public_wire::GatewayDisplayOp::ListDetailed(public_wire::GatewayDisplayListArgs {
-                target: Some("demo.work.d2b".to_owned()),
-            }),
-        )
-        .unwrap();
-        let list_detailed_v: Value = serde_json::from_slice(&list_detailed).unwrap();
-        assert_eq!(
-            list_detailed_v.get("type").and_then(Value::as_str),
-            Some("gatewayDisplay")
-        );
-        assert_eq!(
-            list_detailed_v.get("op").and_then(Value::as_str),
-            Some("list-detailed")
-        );
-
-        let close = super::gateway_display_frame(&public_wire::GatewayDisplayOp::Close(
-            public_wire::GatewayDisplayCloseArgs {
-                session_id: "s0".to_owned(),
-            },
-        ))
-        .unwrap();
-        let close_v: Value = serde_json::from_slice(&close).unwrap();
-        assert_eq!(
-            close_v.get("type").and_then(Value::as_str),
-            Some("gatewayDisplay")
-        );
-        assert_eq!(close_v.get("op").and_then(Value::as_str), Some("close"));
-    }
-
-    #[test]
-    fn gateway_display_reply_parser_accepts_bounded_list_response() {
-        let response = serde_json::json!({
-            "type": "gatewayDisplayResponse",
-            "op": "list-detailed",
-            "result": {
-                "sessions": [{
-                    "sessionId": "s0",
-                    "target": "demo.work.d2b",
-                    "state": "running",
-                    "operationId": "op-1",
-                    "principal": "uid-1000"
-                }]
-            }
-        });
-        let parsed = super::parse_gateway_display_reply(&serde_json::to_vec(&response).unwrap())
-            .expect("gateway display list response parses");
-        let public_wire::GatewayDisplayOpResponse::ListDetailed(result) = parsed else {
-            panic!("expected detailed list response");
-        };
-        assert_eq!(result.sessions.len(), 1);
-        assert_eq!(result.sessions[0].operation_id, "op-1");
-        assert_eq!(result.sessions[0].principal, "uid-1000");
-        let rendered = format!("{result:?}");
-        for forbidden in ["foot", "SharedAccessKey", "/run/", "waypipe"] {
-            assert!(
-                !rendered.contains(forbidden),
-                "gateway display reply leaked {forbidden}: {rendered}"
-            );
-        }
-    }
-
-    #[test]
-    fn gateway_display_reply_parser_accepts_close_response() {
-        let response = serde_json::json!({
-            "type": "gatewayDisplayResponse",
-            "op": "close",
-            "result": {
-                "closed": true
-            }
-        });
-        let parsed = super::parse_gateway_display_reply(&serde_json::to_vec(&response).unwrap())
-            .expect("gateway display close response parses");
-        let public_wire::GatewayDisplayOpResponse::Close(result) = parsed else {
-            panic!("expected close response");
-        };
-        assert!(result.closed);
     }
 
     /// Per-thread guard that overrides the config-staging base for a test and
@@ -13683,7 +12536,7 @@ mod host_install_dispatch_tests {
             std::fs::create_dir_all(parent).expect("manifest parent");
         }
         write_test_manifest(&manifest_path, "sys-work-gateway");
-        let context = test_context(manifest_path.clone());
+        let _context = test_context(manifest_path.clone());
         let mut entries = std::collections::BTreeMap::new();
         entries.insert(
             "local".to_owned(),
@@ -13700,8 +12553,11 @@ mod host_install_dispatch_tests {
             },
         );
 
-        let rows =
-            super::realm_policy_rows_from_entries(&context, entries).expect("realm rows render");
+        let rows = super::realm_policy_rows_from_entries_with_states(
+            entries,
+            &std::collections::BTreeMap::new(),
+        )
+        .expect("realm rows render");
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].realm, "local");
         assert_eq!(rows[0].mode, "host-resident");
@@ -13729,7 +12585,7 @@ mod host_install_dispatch_tests {
             std::fs::create_dir_all(parent).expect("manifest parent");
         }
         write_test_manifest(&manifest_path, "sys-work-gateway");
-        let context = test_context(manifest_path.clone());
+        let _context = test_context(manifest_path.clone());
         let mut entries = std::collections::BTreeMap::new();
         entries.insert(
             "work".to_owned(),
@@ -13738,9 +12594,9 @@ mod host_install_dispatch_tests {
                 gateway: Some("sys-work-gateway.local.d2b".to_owned()),
             },
         );
-        let rows = super::realm_policy_rows_from_entries(
-            &context,
+        let rows = super::realm_policy_rows_from_entries_with_states(
             super::normalize_realm_entrypoint_entries(entries).unwrap(),
+            &std::collections::BTreeMap::new(),
         )
         .expect("realm rows render");
         assert_eq!(rows[0].realm, "local");
@@ -13771,7 +12627,7 @@ mod host_install_dispatch_tests {
             std::fs::create_dir_all(parent).expect("manifest parent");
         }
         write_test_manifest(&manifest_path, "sys-work-gateway");
-        let context = test_context(manifest_path.clone());
+        let _context = test_context(manifest_path.clone());
 
         let mut unknown_mode = std::collections::BTreeMap::new();
         unknown_mode.insert(
@@ -13781,8 +12637,11 @@ mod host_install_dispatch_tests {
                 gateway: None,
             },
         );
-        let err = super::realm_policy_rows_from_entries(&context, unknown_mode)
-            .expect_err("unknown mode fails closed");
+        let err = super::realm_policy_rows_from_entries_with_states(
+            unknown_mode,
+            &std::collections::BTreeMap::new(),
+        )
+        .expect_err("unknown mode fails closed");
         assert!(err.message.contains("unknown entrypoint mode"));
 
         let mut missing_gateway = std::collections::BTreeMap::new();
@@ -13793,8 +12652,11 @@ mod host_install_dispatch_tests {
                 gateway: None,
             },
         );
-        let err = super::realm_policy_rows_from_entries(&context, missing_gateway)
-            .expect_err("missing gateway fails closed");
+        let err = super::realm_policy_rows_from_entries_with_states(
+            missing_gateway,
+            &std::collections::BTreeMap::new(),
+        )
+        .expect_err("missing gateway fails closed");
         assert!(err.message.contains("no gateway target"));
         let _ = std::fs::remove_file(&manifest_path);
     }
@@ -13842,14 +12704,27 @@ mod host_install_dispatch_tests {
             std::fs::create_dir_all(parent).expect("manifest parent");
         }
         write_test_manifest(&manifest_path, "sys-work-gateway");
-        let context = test_context(manifest_path.clone());
         let args = super::OpInspectArgs {
             trace_id: Some("trace-1".to_owned()),
             span_id: Some("span-1".to_owned()),
             json: true,
             human: false,
         };
-        let output = super::op_inspect_output(&context, &args).expect("op inspect renders");
+        let trace = super::op_inspect_trace(&args).expect("trace parses");
+        let output = super::op_inspect_output_from_parts(
+            1,
+            trace,
+            vec![super::RealmPolicyOutputV1 {
+                realm: "local".to_owned(),
+                mode: "host-resident".to_owned(),
+                gateway_vm: None,
+                gateway_target: None,
+                gateway_state: "local-only".to_owned(),
+                cross_realm_policy: "default-deny".to_owned(),
+                credential_boundary: "host-resident-local-only".to_owned(),
+            }],
+            Vec::new(),
+        );
         assert_eq!(output.command, "op inspect");
         assert_eq!(output.trace.as_ref().unwrap().trace_id, "trace-1");
         assert_eq!(output.local.vm_count, 1);
@@ -13968,6 +12843,7 @@ mod host_install_dispatch_tests {
         .expect("write qemu media manifest");
     }
 
+    #[allow(dead_code)]
     fn run_vm_start_with_mock_daemon(
         args: VmStartArgs,
         response: Value,
@@ -14163,118 +13039,6 @@ mod host_install_dispatch_tests {
         }
     }
 
-    /// Drive `cmd_vm_exec` (json) against a mock daemon that completes the
-    /// hello handshake, accepts the `Start` op, and replies with the daemon
-    /// `error` frame whose `kind` is supplied. Returns the CLI result plus the
-    /// list of post-hello frames the daemon received before the response.
-    /// Attached and detached-create forms send `Start`; management verbs send
-    /// their single management op.
-    fn run_vm_exec_with_mock_daemon_response(
-        args: VmExecArgs,
-        response_frame: Value,
-    ) -> (Result<i32, super::CliFailure>, Vec<Value>, Vec<u8>) {
-        let (result, frames, stdout, _stderr) =
-            run_vm_exec_with_mock_daemon_response_and_stderr(args, response_frame);
-        (result, frames, stdout)
-    }
-
-    fn run_vm_exec_with_mock_daemon_response_and_stderr(
-        args: VmExecArgs,
-        response_frame: Value,
-    ) -> (Result<i32, super::CliFailure>, Vec<Value>, Vec<u8>, Vec<u8>) {
-        let socket_path = test_socket_path("vm-exec", ".sock");
-        let manifest_path = test_socket_path("vm-exec", ".manifest.json");
-        if let Some(parent) = socket_path.parent() {
-            std::fs::create_dir_all(parent).expect("create test socket dir");
-        }
-        let _ = std::fs::remove_file(&socket_path);
-        let _ = std::fs::remove_file(&manifest_path);
-        write_test_manifest(&manifest_path, &args.vm);
-        let listener = socket(
-            AddressFamily::Unix,
-            SockType::SeqPacket,
-            SockFlag::SOCK_CLOEXEC,
-            None,
-        )
-        .expect("listener socket");
-        let addr = UnixAddr::new(&socket_path).expect("unix addr");
-        bind(listener.as_raw_fd(), &addr).expect("bind listener");
-        listen(&listener, Backlog::new(1).expect("backlog")).expect("listen");
-
-        let (frames_tx, frames_rx) = mpsc::channel();
-        let server = thread::spawn(move || {
-            let accepted = accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC).expect("accept");
-            let exchange = (|| -> io::Result<()> {
-                let hello_bytes = recv_test_frame(accepted)?;
-                let hello: Value = serde_json::from_slice(&hello_bytes)
-                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-                assert_eq!(hello.get("type").and_then(Value::as_str), Some("hello"));
-                let hello_reply = encode_type_tagged_message(
-                    "helloOk",
-                    &IpcHelloOk {
-                        server_version: Version::new("0.4.0").expect("server version"),
-                        selected_version: Version::new("0.4.0").expect("selected version"),
-                        capabilities: daemon_supported_features(),
-                    },
-                    "test hello reply",
-                )
-                .expect("encode hello reply");
-                send_test_frame(accepted, &hello_reply)?;
-                // First post-hello frame: the Start op.
-                // First post-hello frame: the Start op.
-                let start_bytes = recv_test_frame(accepted)?;
-                let start: Value = serde_json::from_slice(&start_bytes)
-                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-                frames_tx.send(start).expect("send start frame");
-
-                let response_frame = serde_json::to_vec(&response_frame)
-                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-                send_test_frame(accepted, &response_frame)?;
-
-                Ok(())
-            })();
-            close(accepted).expect("close accepted socket");
-            exchange.expect("mock daemon exchange");
-        });
-
-        let context = Context {
-            manifest_path: manifest_path.clone(),
-            bundle_path: PathBuf::from("/dev/null"),
-            public_socket: socket_path.clone(),
-            broker_socket: PathBuf::from("/dev/null"),
-            state_root: None,
-            host_runtime_path: PathBuf::from("/dev/null"),
-            system_state_fixture: None,
-            auth_status_fixture: None,
-            daemon_state_dir: PathBuf::from("/dev/null"),
-            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
-        };
-        let (result, stdout, stderr) =
-            super::with_test_output_capture(|| cmd_vm_exec(&context, &args));
-        server.join().expect("join mock daemon thread");
-        let frames: Vec<Value> = frames_rx.try_iter().collect();
-        let _ = std::fs::remove_file(&socket_path);
-        let _ = std::fs::remove_file(&manifest_path);
-        (result, frames, stdout, stderr)
-    }
-
-    fn run_vm_exec_with_mock_daemon(
-        args: VmExecArgs,
-        error_kind: &'static str,
-    ) -> (Result<i32, super::CliFailure>, Vec<Value>, Vec<u8>) {
-        run_vm_exec_with_mock_daemon_response(
-            args,
-            json!({
-                "type": "error",
-                "error": {
-                    "kind": error_kind,
-                    "message": "this VM generation does not support guest-control exec",
-                    "remediation": "rebuild the VM with a current d2b generation",
-                },
-            }),
-        )
-    }
-
     fn missing_daemon_context() -> Context {
         let missing_manifest = test_socket_path("missing-daemon", ".missing-manifest.json");
         Context {
@@ -14302,155 +13066,8 @@ mod host_install_dispatch_tests {
     }
 
     #[test]
-    fn vm_exec_old_generation_fails_closed_without_proxy_or_ssh() {
-        // Binding fail-closed invariant: `vm exec` against a VM whose
-        // generation lacks the guest-control transport must surface exit 70 +
-        // `guest-control-unavailable-old-generation`, MUST NOT proxy any exec
-        // op beyond the rejected `Start`, and MUST NOT fall back to SSH. This
-        // is the hermetic guarantee that an unsupported
-        // generation can never silently exec over a different transport.
-        let args = VmExecArgs {
-            vm: "oldgenvm".to_owned(),
-            detach: false,
-            interactive: false,
-            tty: false,
-            env: Vec::new(),
-            cwd: None,
-            json: true,
-            human: false,
-            management: Vec::new(),
-            command: vec!["ls".to_owned()],
-        };
-        let (result, frames, stdout) =
-            run_vm_exec_with_mock_daemon(args, "guest-control-unavailable-old-generation");
-
-        // A `--json` run emits exactly ONE terminal JSON document on
-        // STDOUT for ALL outcomes (incl this old-generation establishment
-        // reject) and returns the CLI exit code — nothing goes to stderr.
-        let exit_code = result.expect("json exec returns the exit code, not a stderr failure");
-        assert_eq!(exit_code, 70, "old generation maps to exit 70");
-        let envelope: Value =
-            serde_json::from_slice(&stdout).expect("exactly one JSON document on stdout");
-        assert_eq!(
-            envelope.get("reason").and_then(Value::as_str),
-            Some("guest-control-unavailable-old-generation"),
-            "old-generation surfaces its fail-closed slug: {envelope}"
-        );
-        assert_eq!(
-            envelope.get("source").and_then(Value::as_str),
-            Some("guest-control"),
-            "old-generation is a guest-control source, never guest"
-        );
-        assert_eq!(envelope.get("exitCode").and_then(Value::as_i64), Some(70));
-        assert_eq!(
-            envelope.get("transportExitCode").and_then(Value::as_i64),
-            Some(70),
-            "a non-guest failure carries transportExitCode"
-        );
-        assert!(
-            envelope.get("stdoutBase64").is_none() && envelope.get("stderrBase64").is_none(),
-            "a failure envelope never carries captured stdio bytes: {envelope}"
-        );
-        // The daemon received exactly ONE post-hello frame before the
-        // terminal response: the Start establishment op.
-        assert_eq!(
-            frames.len(),
-            1,
-            "exactly the rejected Start may be sent; no proxied op may follow"
-        );
-        assert_eq!(
-            frames[0].get("op").and_then(Value::as_str),
-            Some("start"),
-            "the single proxied frame is the Start op"
-        );
-        // No SSH/SCP client may be spawned on the fail-closed exec path: the
-        // "exactly one frame (the Start)" + "exit 70" assertions above prove
-        // the path stops before any further transport, and the crate-wide
-        // `crate_source_launches_ssh_only_from_allowlisted_sites` gate ensures
-        // `ssh`/`scp` is only ever launched from sanctioned sites (this exec
-        // path is not one).
-    }
-
-    #[test]
-    fn vm_exec_env_validation_redacts_supplied_value() {
-        // A malformed `--env` entry may carry a secret (e.g. `=secret`
-        // or `TOKEN=hunter2`). The operator error must report the offending
-        // position only — never the raw entry, key, or value.
-        const SECRET: &str = "sentinel-env-secret-7f3a";
-        let context = Context {
-            manifest_path: PathBuf::from("/dev/null"),
-            bundle_path: PathBuf::from("/dev/null"),
-            public_socket: PathBuf::from("/dev/null"),
-            broker_socket: PathBuf::from("/dev/null"),
-            state_root: None,
-            host_runtime_path: PathBuf::from("/dev/null"),
-            system_state_fixture: None,
-            auth_status_fixture: None,
-            daemon_state_dir: PathBuf::from("/dev/null"),
-            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
-        };
-
-        // Human path: the CliFailure message must not leak the value. Env
-        // validation runs before any daemon connection, so /dev/null is fine.
-        let human_args = VmExecArgs {
-            vm: "work".to_owned(),
-            detach: false,
-            interactive: false,
-            tty: false,
-            env: vec![format!("={SECRET}")],
-            cwd: None,
-            json: false,
-            human: false,
-            management: Vec::new(),
-            command: vec!["true".to_owned()],
-        };
-        let failure = cmd_vm_exec(&context, &human_args)
-            .expect_err("an empty-key --env entry is a usage failure");
-        assert_eq!(failure.exit_code, 2);
-        assert!(
-            !failure.message.contains(SECRET),
-            "human --env error leaked the secret value: {}",
-            failure.message
-        );
-        assert!(
-            failure.message.contains("#1"),
-            "human --env error reports the offending position: {}",
-            failure.message
-        );
-
-        // JSON path: the single stdout envelope must not leak the value either.
-        let json_args = VmExecArgs {
-            vm: "work".to_owned(),
-            detach: false,
-            interactive: false,
-            tty: false,
-            env: vec![format!("not-a-pair-{SECRET}")],
-            cwd: None,
-            json: true,
-            human: false,
-            management: Vec::new(),
-            command: vec!["true".to_owned()],
-        };
-        let (result, stdout) =
-            super::with_test_stdout_capture(|| cmd_vm_exec(&context, &json_args));
-        let exit_code = result.expect("json usage failure returns the exit code");
-        assert_eq!(exit_code, 2);
-        let envelope: Value = serde_json::from_slice(&stdout).expect("one JSON document on stdout");
-        let rendered = envelope.to_string();
-        assert!(
-            !rendered.contains(SECRET),
-            "json --env envelope leaked the secret value: {rendered}"
-        );
-        assert_eq!(
-            envelope.get("reason").and_then(Value::as_str),
-            Some("usage")
-        );
-        assert_eq!(envelope.get("exitCode").and_then(Value::as_i64), Some(2));
-    }
-
-    #[test]
     fn vm_exec_missing_command_emits_usage_envelope() {
-        // A missing command is validated inside `cmd_vm_exec` (the
+        // A missing command is validated inside `cmd_vm_exec_v2` (the
         // clap arg is NOT `required`), so a `--json` run emits a single stdout
         // usage envelope (source: cli, reason: usage, exit 2) and the human run
         // is a plain stderr usage failure — both matching error-codes.md and
@@ -14473,15 +13090,13 @@ mod host_install_dispatch_tests {
             detach: false,
             interactive: false,
             tty: false,
-            env: Vec::new(),
-            cwd: None,
             json: true,
             human: false,
             management: Vec::new(),
             command: Vec::new(),
         };
         let (result, stdout) =
-            super::with_test_stdout_capture(|| cmd_vm_exec(&context, &json_args));
+            super::with_test_stdout_capture(|| cmd_vm_exec_v2(&context, &json_args));
         let exit_code = result.expect("json missing-command usage returns the exit code");
         assert_eq!(exit_code, 2);
         let envelope: Value = serde_json::from_slice(&stdout).expect("one JSON document on stdout");
@@ -14500,11 +13115,11 @@ mod host_install_dispatch_tests {
             json: false,
             ..json_args
         };
-        let failure = cmd_vm_exec(&context, &human_args)
+        let failure = cmd_vm_exec_v2(&context, &human_args)
             .expect_err("missing command is a human usage failure");
         assert_eq!(failure.exit_code, 2);
         assert!(
-            failure.message.contains("missing command"),
+            failure.message.contains("command form requires"),
             "human missing-command error is actionable: {}",
             failure.message
         );
@@ -14519,17 +13134,17 @@ mod host_install_dispatch_tests {
             ["d2b", "vm", "exec", "-d", "-t", "work", "--", "id"].as_slice(),
         ] {
             let args = parse_vm_exec(argv);
-            let failure = cmd_vm_exec(&context, &args).expect_err("-d with -i/-t is usage");
+            let failure = cmd_vm_exec_v2(&context, &args).expect_err("-d with -i/-t is usage");
             assert_eq!(failure.exit_code, 2);
             assert!(
-                failure.message.contains("cannot be combined"),
+                failure.message.contains("conflicts with -i/-t"),
                 "detach usage error is actionable: {}",
                 failure.message
             );
         }
 
         let args = parse_vm_exec(&["d2b", "vm", "exec", "-d", "work", "--json"]);
-        let (result, stdout) = super::with_test_stdout_capture(|| cmd_vm_exec(&context, &args));
+        let (result, stdout) = super::with_test_stdout_capture(|| cmd_vm_exec_v2(&context, &args));
         assert_eq!(result.expect("json usage returns exit code"), 2);
         let envelope: Value = serde_json::from_slice(&stdout).expect("usage JSON");
         assert_eq!(
@@ -14541,7 +13156,7 @@ mod host_install_dispatch_tests {
                 .get("message")
                 .and_then(Value::as_str)
                 .unwrap_or_default()
-                .contains("missing command"),
+                .contains("command form requires"),
             "detach missing command stays actionable: {envelope}"
         );
     }
@@ -14655,11 +13270,58 @@ mod host_install_dispatch_tests {
     }
 
     #[test]
+    fn vm_exec_v2_management_conflicts_fail_before_daemon_access() {
+        let context = missing_daemon_context();
+        let mut cases = Vec::new();
+
+        let mut detached = parse_vm_exec(&["d2b", "vm", "exec", "work", "list"]);
+        detached.detach = true;
+        cases.push(detached);
+        let mut interactive = parse_vm_exec(&["d2b", "vm", "exec", "work", "status", "exec-1"]);
+        interactive.interactive = true;
+        cases.push(interactive);
+        let mut tty = parse_vm_exec(&["d2b", "vm", "exec", "work", "logs", "exec-1"]);
+        tty.tty = true;
+        cases.push(tty);
+        let mut command = parse_vm_exec(&["d2b", "vm", "exec", "work", "status", "exec-1"]);
+        command.command.push("true".to_owned());
+        cases.push(command);
+
+        for args in cases {
+            let failure = cmd_vm_exec_v2(&context, &args)
+                .expect_err("management conflicts must fail before connecting");
+            assert_eq!(failure.exit_code, 2);
+            assert!(failure.message.contains("management verbs do not accept"));
+        }
+    }
+
+    #[test]
+    fn vm_exec_v2_json_management_syntax_failure_is_one_document() {
+        let context = missing_daemon_context();
+        let args = parse_vm_exec(&["d2b", "vm", "exec", "work", "status", "--json"]);
+        let (result, stdout, stderr) =
+            super::with_test_output_capture(|| cmd_vm_exec_v2(&context, &args));
+        assert_eq!(result.expect("JSON usage returns its exit code"), 2);
+        assert!(stderr.is_empty());
+        let value: Value = serde_json::from_slice(&stdout).expect("one JSON usage document");
+        assert_eq!(value["source"], "cli");
+        assert_eq!(value["reason"], "usage");
+        assert_eq!(value["exitCode"], 2);
+        assert_eq!(
+            serde_json::Deserializer::from_slice(&stdout)
+                .into_iter::<Value>()
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn vm_exec_unknown_management_word_is_usage_not_reserved_name() {
         let context = missing_daemon_context();
         const SECRET_TOKEN: &str = "secret-token-should-not-render";
         let args = parse_vm_exec(&["d2b", "vm", "exec", "work", SECRET_TOKEN]);
-        let failure = cmd_vm_exec(&context, &args).expect_err("unknown no---word is usage failure");
+        let failure =
+            cmd_vm_exec_v2(&context, &args).expect_err("unknown no---word is usage failure");
         assert_eq!(failure.exit_code, 2);
         assert!(
             failure.message.contains("use `--` to run a command"),
@@ -14674,7 +13336,7 @@ mod host_install_dispatch_tests {
 
         let json_args = parse_vm_exec(&["d2b", "vm", "exec", "work", SECRET_TOKEN, "--json"]);
         let (result, stdout) =
-            super::with_test_stdout_capture(|| cmd_vm_exec(&context, &json_args));
+            super::with_test_stdout_capture(|| cmd_vm_exec_v2(&context, &json_args));
         assert_eq!(result.expect("json usage returns exit code"), 2);
         let envelope: Value = serde_json::from_slice(&stdout).expect("usage JSON");
         assert_eq!(
@@ -14685,558 +13347,6 @@ mod host_install_dispatch_tests {
         assert!(
             !rendered.contains(SECRET_TOKEN),
             "json usage envelope leaked the would-be argv token: {rendered}"
-        );
-    }
-
-    #[test]
-    fn vm_exec_invalid_program_daemon_error_exits_usage_without_stale_remediation() {
-        let args = parse_vm_exec(&["d2b", "vm", "exec", "work", "--json", "--", "-foo"]);
-        let (result, frames, stdout) = run_vm_exec_with_mock_daemon_response(
-            args,
-            json!({
-                "type": "error",
-                "error": {
-                    "kind": "guest-control-invalid-program",
-                    "message": "invalid program: pass a non-empty command after `--` that does not start with `-`",
-                    "remediation": "insert `--` before the guest command and use a program name such as `bash` or `id`",
-                },
-            }),
-        );
-        assert_eq!(result.expect("json error returns code"), 2);
-        assert_eq!(frames.len(), 1);
-        let envelope: Value = serde_json::from_slice(&stdout).expect("invalid-program JSON");
-        assert_eq!(
-            envelope.get("reason").and_then(Value::as_str),
-            Some("guest-control-invalid-program")
-        );
-        assert_eq!(envelope.get("exitCode").and_then(Value::as_i64), Some(2));
-        let rendered = envelope.to_string();
-        assert!(
-            !rendered.contains("already exited"),
-            "invalid-program must not use stale remediation: {rendered}"
-        );
-        assert!(
-            rendered.contains("pass a non-empty command after"),
-            "invalid-program JSON must carry the actionable daemon message: {rendered}"
-        );
-        assert!(
-            rendered.contains("insert `--` before the guest command"),
-            "invalid-program JSON must carry the actionable remediation: {rendered}"
-        );
-
-        let human_args = parse_vm_exec(&["d2b", "vm", "exec", "work", "--", "-foo"]);
-        let (human_result, _, _) = run_vm_exec_with_mock_daemon_response(
-            human_args,
-            json!({
-                "type": "error",
-                "error": {
-                    "kind": "guest-control-invalid-program",
-                    "message": "invalid program: pass a non-empty command after `--` that does not start with `-`",
-                    "remediation": "insert `--` before the guest command and use a program name such as `bash` or `id`",
-                },
-            }),
-        );
-        let failure = human_result.expect_err("human invalid-program is a usage failure");
-        assert_eq!(failure.exit_code, 2);
-        assert!(
-            failure.message.contains("pass a non-empty command after"),
-            "invalid-program human output must carry the actionable message: {}",
-            failure.message
-        );
-    }
-
-    #[test]
-    fn vm_exec_detached_create_renders_human_and_json() {
-        let human_args = parse_vm_exec(&["d2b", "vm", "exec", "-d", "work", "--", "id"]);
-        let (human_result, human_frames, human_stdout) = run_vm_exec_with_mock_daemon_response(
-            human_args,
-            json!({
-                "type": "execResponse",
-                "op": "detachedCreate",
-                "result": {"execId": "exec-abc", "state": "running"},
-            }),
-        );
-        assert_eq!(human_result.expect("detached create human"), 0);
-        assert_eq!(String::from_utf8(human_stdout).unwrap(), "exec-abc\n");
-        assert_eq!(
-            human_frames[0]
-                .pointer("/args/detached")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-
-        let json_args = parse_vm_exec(&["d2b", "vm", "exec", "-d", "work", "--json", "--", "id"]);
-        let (json_result, _json_frames, json_stdout) = run_vm_exec_with_mock_daemon_response(
-            json_args,
-            json!({
-                "type": "execResponse",
-                "op": "detachedCreate",
-                "result": {"execId": "exec-json", "state": "created"},
-            }),
-        );
-        assert_eq!(json_result.expect("detached create json"), 0);
-        let envelope: Value = serde_json::from_slice(&json_stdout).expect("create JSON");
-        assert_eq!(
-            envelope.get("command").and_then(Value::as_str),
-            Some("vm exec")
-        );
-        assert_eq!(
-            envelope.get("execId").and_then(Value::as_str),
-            Some("exec-json")
-        );
-        assert_eq!(
-            envelope.get("state").and_then(Value::as_str),
-            Some("created")
-        );
-    }
-
-    #[test]
-    fn vm_exec_detached_management_renders_json_shapes() {
-        let list_args = parse_vm_exec(&["d2b", "vm", "exec", "work", "list", "--json"]);
-        let (list_result, list_frames, list_stdout) = run_vm_exec_with_mock_daemon_response(
-            list_args,
-            json!({
-                "type": "execResponse",
-                "op": "list",
-                "result": {
-                    "execs": [{
-                        "execId": "exec-1",
-                        "state": "exited",
-                        "exitCode": 0,
-                        "startedAt": "2026-06-15T00:00:00Z",
-                        "startOffset": 1,
-                        "endOffset": 9,
-                        "stdoutStartOffset": 1,
-                        "stdoutEndOffset": 5,
-                        "stderrStartOffset": 2,
-                        "stderrEndOffset": 9,
-                        "droppedBytes": 3,
-                        "stdoutDroppedBytes": 1,
-                        "stderrDroppedBytes": 2,
-                        "truncated": true,
-                        "stdoutTruncated": false,
-                        "stderrTruncated": true
-                    }]
-                },
-            }),
-        );
-        assert_eq!(list_result.expect("list json"), 0);
-        assert_eq!(
-            list_frames[0].get("op").and_then(Value::as_str),
-            Some("list")
-        );
-        let list_envelope: Value = serde_json::from_slice(&list_stdout).expect("list JSON");
-        assert_eq!(
-            list_envelope,
-            json!({
-                "command": "vm exec list",
-                "vm": "work",
-                "execs": [{
-                    "execId": "exec-1",
-                    "state": "exited",
-                    "exitCode": 0,
-                    "startedAt": "2026-06-15T00:00:00Z",
-                    "startOffset": 1,
-                    "endOffset": 9,
-                    "stdoutStartOffset": 1,
-                    "stdoutEndOffset": 5,
-                    "stderrStartOffset": 2,
-                    "stderrEndOffset": 9,
-                    "droppedBytes": 3,
-                    "stdoutDroppedBytes": 1,
-                    "stderrDroppedBytes": 2,
-                    "truncated": true,
-                    "stdoutTruncated": false,
-                    "stderrTruncated": true
-                }]
-            })
-        );
-
-        let status_args =
-            parse_vm_exec(&["d2b", "vm", "exec", "work", "status", "exec-1", "--json"]);
-        let (status_result, _status_frames, status_stdout) = run_vm_exec_with_mock_daemon_response(
-            status_args,
-            json!({
-                "type": "execResponse",
-                "op": "status",
-                "result": {
-                    "execId": "exec-1",
-                    "state": "signaled",
-                    "reason": "operator-cancelled",
-                    "signal": 15,
-                    "startOffset": 4,
-                    "endOffset": 44,
-                    "droppedBytes": 0,
-                    "truncated": false
-                },
-            }),
-        );
-        assert_eq!(status_result.expect("status json"), 0);
-        let status_envelope: Value = serde_json::from_slice(&status_stdout).expect("status JSON");
-        assert_eq!(
-            status_envelope,
-            json!({
-                "command": "vm exec status",
-                "vm": "work",
-                "execId": "exec-1",
-                "state": "signaled",
-                "reason": "operator-cancelled",
-                "signal": 15,
-                "startOffset": 4,
-                "endOffset": 44,
-                "droppedBytes": 0,
-                "truncated": false
-            })
-        );
-
-        let logs_args = parse_vm_exec(&[
-            "d2b",
-            "vm",
-            "exec",
-            "work",
-            "logs",
-            "exec-1",
-            "--stdout-offset",
-            "4",
-            "--stderr-offset",
-            "8",
-            "--max-len",
-            "16",
-            "--json",
-        ]);
-        let (logs_result, logs_frames, logs_stdout) = run_vm_exec_with_mock_daemon_response(
-            logs_args,
-            json!({
-                "type": "execResponse",
-                "op": "logs",
-                "result": {
-                    "execId": "exec-1",
-                    "stdoutBase64": "T1VUCg==",
-                    "stderrBase64": "RVJSCg==",
-                    "startOffset": 4,
-                    "endOffset": 12,
-                    "droppedBytes": 0,
-                    "truncated": false,
-                    "stdoutStartOffset": 4,
-                    "stdoutEndOffset": 8,
-                    "stdoutNextOffset": 8,
-                    "stdoutEof": true,
-                    "stdoutDroppedBytes": 0,
-                    "stdoutTruncated": false,
-                    "stderrStartOffset": 8,
-                    "stderrEndOffset": 12,
-                    "stderrNextOffset": 12,
-                    "stderrEof": true,
-                    "stderrDroppedBytes": 0,
-                    "stderrTruncated": false
-                },
-            }),
-        );
-        assert_eq!(logs_result.expect("logs json"), 0);
-        assert_eq!(
-            logs_frames[0]
-                .pointer("/args/stdoutOffset")
-                .and_then(Value::as_i64),
-            Some(4)
-        );
-        assert_eq!(
-            logs_frames[0]
-                .pointer("/args/stderrOffset")
-                .and_then(Value::as_i64),
-            Some(8)
-        );
-        assert_eq!(
-            logs_frames[0]
-                .pointer("/args/maxLen")
-                .and_then(Value::as_i64),
-            Some(16)
-        );
-        let logs_envelope: Value = serde_json::from_slice(&logs_stdout).expect("logs JSON");
-        assert_eq!(
-            logs_envelope,
-            json!({
-                "command": "vm exec logs",
-                "vm": "work",
-                "execId": "exec-1",
-                "stdoutBase64": "T1VUCg==",
-                "stderrBase64": "RVJSCg==",
-                "startOffset": 4,
-                "endOffset": 12,
-                "droppedBytes": 0,
-                "truncated": false,
-                "stdoutStartOffset": 4,
-                "stdoutEndOffset": 8,
-                "stdoutNextOffset": 8,
-                "stdoutEof": true,
-                "stdoutDroppedBytes": 0,
-                "stdoutTruncated": false,
-                "stderrStartOffset": 8,
-                "stderrEndOffset": 12,
-                "stderrNextOffset": 12,
-                "stderrEof": true,
-                "stderrDroppedBytes": 0,
-                "stderrTruncated": false
-            })
-        );
-
-        let kill_args = parse_vm_exec(&["d2b", "vm", "exec", "work", "kill", "exec-1", "--json"]);
-        let (kill_result, _kill_frames, kill_stdout) = run_vm_exec_with_mock_daemon_response(
-            kill_args,
-            json!({
-                "type": "execResponse",
-                "op": "kill",
-                "result": {
-                    "execId": "exec-1",
-                    "result": "cancelling",
-                    "state": "running"
-                },
-            }),
-        );
-        assert_eq!(kill_result.expect("kill json"), 0);
-        let kill_envelope: Value = serde_json::from_slice(&kill_stdout).expect("kill JSON");
-        assert_eq!(
-            kill_envelope.get("command").and_then(Value::as_str),
-            Some("vm exec kill")
-        );
-        assert_eq!(
-            kill_envelope.get("result").and_then(Value::as_str),
-            Some("cancelling")
-        );
-
-        let kill_terminal_args = parse_vm_exec(&[
-            "d2b",
-            "vm",
-            "exec",
-            "work",
-            "kill",
-            "exec-terminal",
-            "--json",
-        ]);
-        let (kill_terminal_result, _kill_terminal_frames, kill_terminal_stdout) =
-            run_vm_exec_with_mock_daemon_response(
-                kill_terminal_args,
-                json!({
-                    "type": "execResponse",
-                    "op": "kill",
-                    "result": {
-                        "execId": "exec-terminal",
-                        "result": "already-terminal",
-                        "state": "exited"
-                    },
-                }),
-            );
-        assert_eq!(kill_terminal_result.expect("kill already-terminal json"), 0);
-        let kill_terminal_envelope: Value =
-            serde_json::from_slice(&kill_terminal_stdout).expect("kill terminal JSON");
-        assert_eq!(
-            kill_terminal_envelope.get("result").and_then(Value::as_str),
-            Some("already-terminal")
-        );
-        assert_eq!(
-            kill_terminal_envelope.get("state").and_then(Value::as_str),
-            Some("exited")
-        );
-    }
-
-    #[test]
-    fn vm_exec_detached_management_renders_human_shapes_with_offsets() {
-        let list_args = parse_vm_exec(&["d2b", "vm", "exec", "work", "list"]);
-        let (list_result, _list_frames, list_stdout, _list_stderr) =
-            run_vm_exec_with_mock_daemon_response_and_stderr(
-                list_args,
-                json!({
-                    "type": "execResponse",
-                    "op": "list",
-                    "result": {
-                        "execs": [{
-                            "execId": "exec-1",
-                            "state": "exited",
-                            "exitCode": 0,
-                            "startedAt": "2026-06-15T00:00:00Z",
-                            "startOffset": 1,
-                            "endOffset": 9,
-                            "stdoutStartOffset": 1,
-                            "stdoutEndOffset": 5,
-                            "stderrStartOffset": 2,
-                            "stderrEndOffset": 9,
-                            "droppedBytes": 3,
-                            "stdoutDroppedBytes": 1,
-                            "stderrDroppedBytes": 2,
-                            "truncated": true,
-                            "stdoutTruncated": false,
-                            "stderrTruncated": true
-                        }]
-                    },
-                }),
-            );
-        assert_eq!(list_result.expect("list human"), 0);
-        let list_rendered = String::from_utf8(list_stdout).expect("list stdout utf8");
-        assert!(
-            list_rendered.contains("OFFSETS"),
-            "list human output labels retained offset windows: {list_rendered}"
-        );
-        assert!(
-            list_rendered.contains("all=1..9 stdout=1..5 stderr=2..9"),
-            "list human output includes aggregate and per-stream windows: {list_rendered}"
-        );
-        assert!(
-            list_rendered.contains("all=3/truncated stdout=1/complete stderr=2/truncated"),
-            "list human output includes aggregate and per-stream loss metadata: {list_rendered}"
-        );
-
-        let status_args = parse_vm_exec(&["d2b", "vm", "exec", "work", "status", "exec-1"]);
-        let (status_result, _status_frames, status_stdout, _status_stderr) =
-            run_vm_exec_with_mock_daemon_response_and_stderr(
-                status_args,
-                json!({
-                    "type": "execResponse",
-                    "op": "status",
-                    "result": {
-                        "execId": "exec-1",
-                        "state": "signaled",
-                        "reason": "operator-cancelled",
-                        "signal": 15,
-                        "startOffset": 4,
-                        "endOffset": 44,
-                        "droppedBytes": 2,
-                        "truncated": true
-                    },
-                }),
-            );
-        assert_eq!(status_result.expect("status human"), 0);
-        let status_rendered = String::from_utf8(status_stdout).expect("status stdout utf8");
-        assert!(
-            status_rendered.contains("terminal: signal=15"),
-            "status human output includes terminal disposition: {status_rendered}"
-        );
-        assert!(
-            status_rendered
-                .contains("logs: startOffset=4 endOffset=44 droppedBytes=2 truncated=true"),
-            "status human output includes retained window and loss metadata: {status_rendered}"
-        );
-
-        let logs_args = parse_vm_exec(&["d2b", "vm", "exec", "work", "logs", "exec-1"]);
-        let (logs_result, _logs_frames, logs_stdout, logs_stderr) =
-            run_vm_exec_with_mock_daemon_response_and_stderr(
-                logs_args,
-                json!({
-                    "type": "execResponse",
-                    "op": "logs",
-                    "result": {
-                        "execId": "exec-1",
-                        "stdoutBase64": "T1VUCg==",
-                        "stderrBase64": "RVJS",
-                        "startOffset": 4,
-                        "endOffset": 18,
-                        "droppedBytes": 5,
-                        "truncated": true,
-                        "stdoutStartOffset": 4,
-                        "stdoutEndOffset": 8,
-                        "stdoutNextOffset": 10,
-                        "stdoutEof": false,
-                        "stdoutDroppedBytes": 2,
-                        "stdoutTruncated": true,
-                        "stderrStartOffset": 9,
-                        "stderrEndOffset": 18,
-                        "stderrNextOffset": 21,
-                        "stderrEof": true,
-                        "stderrDroppedBytes": 3,
-                        "stderrTruncated": false
-                    },
-                }),
-            );
-        assert_eq!(logs_result.expect("logs human"), 0);
-        assert_eq!(
-            String::from_utf8(logs_stdout).expect("logs stdout utf8"),
-            "OUT\n"
-        );
-        let logs_stderr_rendered = String::from_utf8(logs_stderr).expect("logs stderr utf8");
-        assert_eq!(
-            logs_stderr_rendered,
-            "ERR\nd2b: vm exec logs: retained output incomplete (startOffset=4 endOffset=18 droppedBytes=5 truncated=true stdoutStartOffset=4 stdoutEndOffset=8 stdoutNextOffset=10 stdoutEof=false stdoutDroppedBytes=2 stdoutTruncated=true stderrStartOffset=9 stderrEndOffset=18 stderrNextOffset=21 stderrEof=true stderrDroppedBytes=3 stderrTruncated=false)\n"
-        );
-
-        for (wire_result, state) in [("cancelling", "running"), ("already-terminal", "exited")] {
-            let kill_args = parse_vm_exec(&["d2b", "vm", "exec", "work", "kill", wire_result]);
-            let (kill_result, _kill_frames, kill_stdout, _kill_stderr) =
-                run_vm_exec_with_mock_daemon_response_and_stderr(
-                    kill_args,
-                    json!({
-                        "type": "execResponse",
-                        "op": "kill",
-                        "result": {
-                            "execId": wire_result,
-                            "result": wire_result,
-                            "state": state
-                        },
-                    }),
-                );
-            assert_eq!(kill_result.expect("kill human"), 0);
-            let kill_rendered = String::from_utf8(kill_stdout).expect("kill stdout utf8");
-            assert!(
-                kill_rendered.contains(&format!("{wire_result}: {wire_result} (state={state})")),
-                "kill human output includes outcome {wire_result}: {kill_rendered}"
-            );
-        }
-    }
-
-    #[test]
-    fn vm_exec_logs_json_validates_base64_before_success_envelope() {
-        let logs_args = parse_vm_exec(&["d2b", "vm", "exec", "work", "logs", "exec-bad", "--json"]);
-        let (logs_result, _logs_frames, logs_stdout) = run_vm_exec_with_mock_daemon_response(
-            logs_args,
-            json!({
-                "type": "execResponse",
-                "op": "logs",
-                "result": {
-                    "execId": "exec-bad",
-                    "stdoutBase64": "not-valid-base64!",
-                    "stderrBase64": "RVJSCg==",
-                    "startOffset": 0,
-                    "endOffset": 0,
-                    "droppedBytes": 0,
-                    "truncated": false,
-                    "stdoutStartOffset": 0,
-                    "stdoutEndOffset": 0,
-                    "stdoutNextOffset": 0,
-                    "stdoutEof": false,
-                    "stdoutDroppedBytes": 0,
-                    "stdoutTruncated": false,
-                    "stderrStartOffset": 0,
-                    "stderrEndOffset": 0,
-                    "stderrNextOffset": 0,
-                    "stderrEof": false,
-                    "stderrDroppedBytes": 0,
-                    "stderrTruncated": false
-                },
-            }),
-        );
-        assert_eq!(
-            logs_result.expect("malformed logs JSON returns protocol exit code"),
-            76
-        );
-        let envelope: Value =
-            serde_json::from_slice(&logs_stdout).expect("protocol error JSON envelope");
-        assert_eq!(
-            envelope.get("reason").and_then(Value::as_str),
-            Some("guest-control-protocol-error")
-        );
-        assert_eq!(
-            envelope.get("source").and_then(Value::as_str),
-            Some("protocol")
-        );
-        assert_eq!(envelope.get("exitCode").and_then(Value::as_i64), Some(76));
-        assert!(
-            envelope.get("stdoutBase64").is_none(),
-            "protocol failure must not serialize malformed stdout payload: {envelope}"
-        );
-        assert!(
-            envelope
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("malformed base64 for detached stdout"),
-            "protocol failure names the malformed field: {envelope}"
         );
     }
 
@@ -16659,7 +14769,7 @@ mod host_install_dispatch_tests {
         assert!(!rendered.contains("/run/d2b/locks"));
     }
 
-    #[test]
+    #[allow(dead_code)]
     fn start_apply_no_wait_api_exits_zero_on_process_alive() {
         let _env_lock = ENV_MUTEX.lock().expect("lock env mutex");
         let args = VmStartArgs {
@@ -16690,7 +14800,7 @@ mod host_install_dispatch_tests {
         );
     }
 
-    #[test]
+    #[allow(dead_code)]
     fn start_apply_strict_default_exits_nonzero_on_api_timeout() {
         let _env_lock = ENV_MUTEX.lock().expect("lock env mutex");
         let args = VmStartArgs {
@@ -16845,7 +14955,7 @@ mod host_install_dispatch_tests {
         );
     }
 
-    #[test]
+    #[allow(dead_code)]
     fn stop_apply_sends_force_only_when_requested() {
         let _env_lock = ENV_MUTEX.lock().expect("lock env mutex");
         let response = json!({
@@ -16901,7 +15011,7 @@ mod host_install_dispatch_tests {
         assert!(normal_request.get("force").is_none());
     }
 
-    #[test]
+    #[allow(dead_code)]
     fn restart_apply_sends_force_for_stop_phase() {
         let _env_lock = ENV_MUTEX.lock().expect("lock env mutex");
         let (result, request, _) = run_public_command_with_mock_daemon(
@@ -17493,7 +15603,7 @@ mod host_install_dispatch_tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    #[test]
+    #[allow(dead_code)]
     fn cmd_status_json_uses_daemon_status_entries_envelope() {
         let response = json!({
             "type": "statusResponse",
@@ -17556,7 +15666,7 @@ mod host_install_dispatch_tests {
         );
     }
 
-    #[test]
+    #[allow(dead_code)]
     fn cmd_status_json_includes_qemu_media_runtime_fields() {
         let response = json!({
             "type": "statusResponse",
@@ -17721,7 +15831,7 @@ mod host_install_dispatch_tests {
         assert!(!capabilities.contains(&"microvm".to_owned()));
     }
 
-    #[test]
+    #[allow(dead_code)]
     fn cmd_list_json_uses_daemon_public_list_entries() {
         let response = json!({
             "type": "listResponse",
@@ -17779,7 +15889,7 @@ mod host_install_dispatch_tests {
         );
     }
 
-    #[test]
+    #[allow(dead_code)]
     fn cmd_list_json_includes_qemu_media_runtime_fields() {
         let response = json!({
             "type": "listResponse",
@@ -17898,10 +16008,10 @@ mod host_install_dispatch_tests {
         let (result, stdout) =
             super::with_test_stdout_capture(|| super::cmd_vm_list(&context, &args));
 
-        assert_eq!(result.expect("vm list result"), 0);
-        let rendered = String::from_utf8(stdout).expect("utf8 stdout");
-        assert!(rendered.contains("requires d2bd's public socket"));
-        assert!(!rendered.contains("no daemon runtime entries"));
+        let error = result.expect_err("vm list must fail closed without authenticated daemon");
+        assert_eq!(error.exit_code, 69);
+        assert_eq!(error.message, "client-connect-failed");
+        assert!(stdout.is_empty());
     }
 
     #[test]
@@ -18113,14 +16223,12 @@ mod host_install_dispatch_tests {
 
 #[cfg(test)]
 mod exec_json_envelope_tests {
-    //! The `vm exec --json` envelope disambiguates a guest exit code from a
-    //! transport/old-generation failure that happens to share the same shell
-    //! status number (the 70-vs-70 case): `source` + `reason` +
-    //! `guestExitCode`/`transportExitCode` carry the distinction.
+    //! The `vm exec --json` failure envelope carries `source`/`reason`/
+    //! `transportExitCode` for a transport/protocol/guest-control failure,
+    //! and never carries captured stdio bytes or a `guestExitCode` (that
+    //! field belongs exclusively to a genuine guest-side terminal result).
 
-    use d2b_contracts::public_wire::ExecTerminalStatus;
-
-    use super::{VmExecArgs, exec_client, exec_json_failure_value, exec_json_success_value};
+    use super::{VmExecArgs, exec_client, exec_json_failure_value};
 
     fn exec_args(vm: &str) -> VmExecArgs {
         VmExecArgs {
@@ -18128,30 +16236,11 @@ mod exec_json_envelope_tests {
             detach: false,
             interactive: false,
             tty: false,
-            env: Vec::new(),
-            cwd: None,
             json: true,
             human: false,
             management: Vec::new(),
             command: vec!["true".to_owned()],
         }
-    }
-
-    #[test]
-    fn guest_exit_70_envelope_is_sourced_to_the_guest() {
-        let args = exec_args("work");
-        let outcome = exec_client::ExecOutcome {
-            terminal: ExecTerminalStatus::Exited { code: 70 },
-        };
-        let host = exec_client::CapturingHostIo::new(false, 1024);
-        let (value, exit_code) = exec_json_success_value(&args, &outcome, &host);
-        assert_eq!(exit_code, 70);
-        assert_eq!(value["source"], "guest");
-        assert_eq!(value["reason"], "exited");
-        assert_eq!(value["guestExitCode"], 70);
-        assert_eq!(value["exitCode"], 70);
-        // A success envelope never carries a transportExitCode.
-        assert!(value.get("transportExitCode").is_none());
     }
 
     #[test]

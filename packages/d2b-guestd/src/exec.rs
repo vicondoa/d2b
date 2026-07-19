@@ -1230,6 +1230,41 @@ where
         }
     }
 
+    /// Idempotently cancel one exec owned by this authenticated connection.
+    /// Returns `true` when the exec was already terminal.
+    pub fn cancel_exec(
+        &self,
+        owner: &ConnectionKey,
+        exec_id: &str,
+        guest_boot_id: &str,
+    ) -> Result<bool, ExecError> {
+        let entry = self.lookup_owned(owner, exec_id, guest_boot_id)?;
+        if entry.is_terminal() {
+            return Ok(true);
+        }
+        match entry.tty.clone() {
+            Some(tty) => {
+                let grace = self.tty_grace;
+                tokio::spawn(teardown_tty(Arc::clone(&entry), tty, None, grace));
+            }
+            None => entry.cancel(),
+        }
+        Ok(false)
+    }
+
+    /// Snapshot all execs owned by this connection and guest boot.
+    pub fn list_owned(
+        &self,
+        owner: &ConnectionKey,
+        guest_boot_id: &str,
+    ) -> Vec<(String, ExecSnapshot)> {
+        self.lock_execs()
+            .iter()
+            .filter(|(_, entry)| &entry.owner == owner && entry.guest_boot_id == guest_boot_id)
+            .map(|(id, entry)| (id.clone(), entry.snapshot()))
+            .collect()
+    }
+
     /// Terminate and forget every exec owned by a disconnecting connection.
     ///
     /// Removal and collection happen atomically under the execs lock, so the

@@ -158,6 +158,14 @@ impl ResolvedTarget {
     pub const fn service(&self) -> ServiceKind {
         self.service
     }
+
+    pub(crate) fn proxy_owner_service(&self, owner: ServiceOwner, service: ServiceKind) -> Self {
+        Self {
+            owner,
+            transport: self.transport,
+            service,
+        }
+    }
 }
 
 pub trait TargetResolver: Send + Sync {

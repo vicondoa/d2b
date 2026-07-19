@@ -1,13 +1,11 @@
 //! Transport-neutral CLI-to-`d2bd` daemon access (ADR 0032).
 //!
-//! The local binding intentionally speaks the existing public daemon wire:
-//! AF_UNIX `SOCK_SEQPACKET`, one 4-byte little-endian length-prefixed JSON
-//! body per packet, `hello` negotiation, then the current type-tagged `list`
-//! request. The primary `vm_list` API returns a daemon-access-local shape that
-//! preserves the public-wire list response exactly; the v2 [`WorkloadSummary`]
-//! projection remains available only as an explicitly lossy compatibility
-//! helper.
+//! The local command binding owns authenticated ComponentSession construction,
+//! daemon peer verification, and exact endpoint policy. Compatibility helpers
+//! for the pre-cutover semantic API remain separate and are never a fallback
+//! from the ComponentSession path.
 
+pub mod component_session;
 pub mod direct_tls;
 pub mod relay;
 

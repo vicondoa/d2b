@@ -11,9 +11,6 @@ use std::time::{Duration, Instant};
 use sha2::{Digest, Sha256};
 use tempfile::{Builder, TempDir};
 
-pub const HELLO_FRAME: &str =
-    r#"{"type":"hello","clientVersion":">=0.4.0, <0.5.0","supportedFeatures":[]}"#;
-
 pub fn d2bd_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_d2bd"))
 }
@@ -28,18 +25,22 @@ pub struct TestPeer {
 
 impl TestPeer {
     pub fn launcher() -> Self {
+        let uid = nix::unistd::Uid::current().as_raw();
+        let gid = nix::unistd::Gid::current().as_raw();
         Self {
-            uid: 60003,
-            gid: 60003,
+            uid,
+            gid,
             username: "launcher-user",
             groups: "wheel",
         }
     }
 
     pub fn admin() -> Self {
+        let uid = nix::unistd::Uid::current().as_raw();
+        let gid = nix::unistd::Gid::current().as_raw();
         Self {
-            uid: 60004,
-            gid: 60004,
+            uid,
+            gid,
             username: "admin-user",
             groups: "wheel",
         }
@@ -409,14 +410,53 @@ pub fn spawn_lock_only(config: &Path, state_lock: &Path, hold_seconds: u64) -> S
     SpawnedProcess::from_child(child)
 }
 
-pub fn test_client(socket: &Path, frames: &[&str]) -> (i32, String) {
-    let mut command = Command::new(d2bd_bin());
-    command.arg("test-client").arg("--socket").arg(socket);
-    for frame in frames {
-        command.arg("--frame-json").arg(frame);
-    }
-    let output = command.output().expect("spawn d2bd test-client");
-    (status_code(&output.status), combined_output(&output))
+pub fn complete_component_session_handshake(socket_path: &Path) {
+    use std::time::Instant;
+
+    use d2b_contracts::v2_component_session::{EndpointPolicyIdentity, Locality};
+    use d2b_session::{HandshakeCredentials, SessionEngine};
+    use d2b_session_unix::SeqpacketSocket;
+    use nix::sys::socket::{AddressFamily, SockFlag, SockType, UnixAddr, connect, socket};
+    use std::os::fd::AsRawFd;
+
+    let fd = socket(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .expect("create ComponentSession probe");
+    let address = UnixAddr::new(socket_path).expect("public socket address");
+    connect(fd.as_raw_fd(), &address).expect("connect ComponentSession probe");
+    let uid = nix::unistd::Uid::current().as_raw();
+    let gid = nix::unistd::Gid::current().as_raw();
+    let policy = d2bd::daemon_service::daemon_endpoint_policy(
+        7,
+        d2bd::daemon_service::daemon_channel_binding(uid, gid),
+    )
+    .expect("daemon endpoint policy");
+    let identity = EndpointPolicyIdentity::from(&policy);
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("ComponentSession runtime")
+        .block_on(async move {
+            let socket = SeqpacketSocket::from_owned(fd).expect("client seqpacket");
+            let transport = d2bd::daemon_service::DaemonSeqpacketTransport::new(
+                socket,
+                Locality::HostLocal,
+                policy.limits,
+            )
+            .expect("daemon client transport");
+            SessionEngine::establish_initiator_with_generation_discovery(
+                transport,
+                identity,
+                HandshakeCredentials::Nn,
+                Instant::now(),
+            )
+            .await
+            .expect("authenticated daemon ComponentSession");
+        });
 }
 
 pub fn run_lock_only(config: &Path, state_lock: &Path, _locks_dir: &Path) -> (i32, String) {

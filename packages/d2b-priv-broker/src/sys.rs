@@ -131,6 +131,118 @@ pub fn peer_uid(fd: RawFd) -> io::Result<u32> {
     peer_credentials(fd).map(|(uid, _, _)| uid)
 }
 
+/// Validate a descriptor before it enters a realm child's inherited table.
+///
+/// The request metadata never upgrades an arbitrary descriptor into authority:
+/// listeners, namespace handles, cgroup leaves, and directory roots must match
+/// their kernel object type, and every descriptor must already be CLOEXEC in
+/// the broker.
+#[allow(unsafe_code)]
+pub fn validate_realm_child_fd(
+    fd: BorrowedFd<'_>,
+    kind: d2b_host::realm_children::RealmChildFdKind,
+) -> io::Result<()> {
+    use d2b_host::realm_children::RealmChildFdKind as K;
+
+    let flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFD) };
+    if flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if flags & libc::FD_CLOEXEC == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "delegated realm-child fd is not CLOEXEC",
+        ));
+    }
+
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(fd.as_raw_fd(), &mut stat) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let object_type = stat.st_mode & libc::S_IFMT;
+    match kind {
+        K::PublicListener | K::BrokerListener | K::BootstrapSession => {
+            if object_type != libc::S_IFSOCK {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "realm-child socket binding is not a socket",
+                ));
+            }
+            let domain = unsafe { getsockopt_int(fd.as_raw_fd(), libc::SO_DOMAIN)? };
+            let socket_type = unsafe { getsockopt_int(fd.as_raw_fd(), libc::SO_TYPE)? };
+            let accepting = unsafe { getsockopt_int(fd.as_raw_fd(), libc::SO_ACCEPTCONN)? };
+            if domain != libc::AF_UNIX || socket_type != libc::SOCK_SEQPACKET {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "realm-child socket must be AF_UNIX SOCK_SEQPACKET",
+                ));
+            }
+            let wants_listener = !matches!(kind, K::BootstrapSession);
+            if (accepting != 0) != wants_listener {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "realm-child socket listener state does not match binding kind",
+                ));
+            }
+        }
+        K::UserNamespace
+        | K::MountNamespace
+        | K::NetworkNamespace
+        | K::IpcNamespace
+        | K::PidNamespace
+        | K::CgroupNamespace => {
+            const NSFS_MAGIC: libc::c_long = 0x6e73_6673;
+            let mut statfs: libc::statfs = unsafe { std::mem::zeroed() };
+            if unsafe { libc::fstatfs(fd.as_raw_fd(), &mut statfs) } < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if statfs.f_type != NSFS_MAGIC {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "realm-child namespace binding is not an nsfs descriptor",
+                ));
+            }
+            let expected = match kind {
+                K::UserNamespace => "user:[",
+                K::MountNamespace => "mnt:[",
+                K::NetworkNamespace => "net:[",
+                K::IpcNamespace => "ipc:[",
+                K::PidNamespace => "pid:[",
+                K::CgroupNamespace => "cgroup:[",
+                _ => unreachable!(),
+            };
+            let target = std::fs::read_link(format!("/proc/self/fd/{}", fd.as_raw_fd()))?;
+            if !target.to_string_lossy().starts_with(expected) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "realm-child namespace descriptor kind mismatch",
+                ));
+            }
+        }
+        K::CgroupLeaf => {
+            const CGROUP2_SUPER_MAGIC: libc::c_long = 0x6367_7270;
+            let mut statfs: libc::statfs = unsafe { std::mem::zeroed() };
+            if object_type != libc::S_IFDIR
+                || unsafe { libc::fstatfs(fd.as_raw_fd(), &mut statfs) } < 0
+                || statfs.f_type != CGROUP2_SUPER_MAGIC
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "realm-child cgroup leaf is not a cgroup-v2 directory",
+                ));
+            }
+        }
+        K::StateRoot | K::AuditRoot if object_type != libc::S_IFDIR => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "realm-child storage root is not a directory",
+            ));
+        }
+        K::StateRoot | K::AuditRoot | K::Resource | K::Lease => {}
+    }
+    Ok(())
+}
+
 /// Audited `TUNSETIFF` helper. Opens a TAP and binds the requested ifname.
 #[allow(unsafe_code)]
 pub fn tun_create_tap_fd(fd: &OwnedFd, ifname: &str) -> io::Result<()> {
@@ -2812,6 +2924,8 @@ pub mod pidfd_sys {
     const CHILD_EXIT_PREOPEN_DUP2: libc::c_int = 76;
     /// setrlimit(RLIMIT_MEMLOCK) failed for a runner that requested it.
     const CHILD_EXIT_MEMLOCK_RLIMIT: libc::c_int = 77;
+    const CHILD_EXIT_REALM_CAPABILITY_DROP: libc::c_int = 78;
+    const CHILD_EXIT_REALM_FD_CLOSE: libc::c_int = 79;
 
     /// Spawn a per-role runner with namespace / seccomp / capability
     /// setup plus `setgroups` + `setgid` + `setuid` + `execve` in a
@@ -2831,6 +2945,87 @@ pub mod pidfd_sys {
         supplementary_groups: Vec<u32>,
         isolation: RunnerIsolationSpec,
     ) -> io::Result<SpawnOutcome> {
+        clone3_spawn_runner_with_extra_flags(
+            binary,
+            argv,
+            env,
+            uid,
+            gid,
+            supplementary_groups,
+            isolation,
+            0,
+            None,
+        )
+    }
+
+    /// Spawn one realm controller or child broker. Unlike ordinary workload
+    /// runners this path requires `clone3`; it never uses the fork fallback
+    /// because PID/user namespace creation and direct cgroup placement are
+    /// security boundaries, not performance features.
+    pub fn clone3_spawn_realm_child(
+        binary: std::ffi::CString,
+        argv: Vec<std::ffi::CString>,
+        env: Vec<std::ffi::CString>,
+        host_uid: u32,
+        host_gid: u32,
+        controller_host_credentials: Option<(u32, u32)>,
+        cgroup_dir_fd: OwnedFd,
+        inherited_fds: Vec<OwnedFd>,
+    ) -> io::Result<SpawnOutcome> {
+        let isolation = RunnerIsolationSpec {
+            capabilities: Vec::new(),
+            namespaces: NamespaceSet {
+                mount: true,
+                pid: true,
+                net: true,
+                ipc: true,
+                uts: false,
+                user: true,
+            },
+            seccomp_program: None,
+            mount_policy: MountPolicy {
+                read_only_paths: Vec::new(),
+                writable_paths: Vec::new(),
+                nix_store_read_only: false,
+                hide_device_nodes_by_default: true,
+                device_binds: Vec::new(),
+                bind_mounts: Vec::new(),
+            },
+            cgroup_dir_fd: Some(cgroup_dir_fd),
+            cgroup_procs_fd: None,
+            user_namespace: Some(UserNamespaceSpec {
+                host_uid_for_zero: host_uid,
+                host_gid_for_zero: host_gid,
+            }),
+            umask: Some(0o077),
+            pre_opened_device_fds: inherited_fds,
+            memlock_limit_bytes: None,
+        };
+        clone3_spawn_runner_with_extra_flags(
+            binary,
+            argv,
+            env,
+            host_uid,
+            host_gid,
+            Vec::new(),
+            isolation,
+            libc::CLONE_NEWCGROUP as u64,
+            controller_host_credentials,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments, unsafe_code)]
+    fn clone3_spawn_runner_with_extra_flags(
+        binary: std::ffi::CString,
+        argv: Vec<std::ffi::CString>,
+        env: Vec<std::ffi::CString>,
+        uid: u32,
+        gid: u32,
+        supplementary_groups: Vec<u32>,
+        isolation: RunnerIsolationSpec,
+        required_clone_flags: u64,
+        additional_user_ns_mapping: Option<(u32, u32)>,
+    ) -> io::Result<SpawnOutcome> {
         // NamespaceSet.user is ALLOWED when
         // RunnerIsolationSpec.user_namespace provides the uid_map/gid_map
         // values. Caller must set both for the child to be fake-root
@@ -2838,6 +3033,15 @@ pub mod pidfd_sys {
         // user_namespace is rejected because the child would land in the
         // namespace with overflowuid (65534) and no caps — never useful.
         let user_ns_spec = isolation.user_namespace;
+        if let (Some(_), Some((additional_uid, additional_gid))) =
+            (user_ns_spec, additional_user_ns_mapping)
+            && (additional_uid == 0 || additional_gid == 0)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "realm child user namespace peer mapping is invalid",
+            ));
+        }
         if isolation.namespaces.user && user_ns_spec.is_none() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -2878,7 +3082,8 @@ pub mod pidfd_sys {
         };
         let root_mask_actions = prepare_root_mask_actions(uid, &isolation.mount_policy)?;
         let unshare_flags = unshare_namespace_flags(&isolation.namespaces, mount_required);
-        let extra_clone_flags = clone3_namespace_flags(&isolation.namespaces);
+        let extra_clone_flags =
+            clone3_namespace_flags(&isolation.namespaces) | required_clone_flags;
         let argv_ptrs = &argv_ptrs_storage;
         let env_ptrs = &env_ptrs_storage;
         let supplementary_groups = &supplementary_groups_storage;
@@ -3171,7 +3376,16 @@ pub mod pidfd_sys {
                     libc::write(2, m.as_ptr() as *const _, m.len());
                     libc::_exit(CHILD_EXIT_SETUID);
                 }
-                if !capabilities.is_empty() && apply_capabilities(capabilities).is_err() {
+                if required_clone_flags != 0 {
+                    for capability in 0..=40 {
+                        if libc::prctl(libc::PR_CAPBSET_DROP, capability, 0, 0, 0) < 0 {
+                            libc::_exit(CHILD_EXIT_REALM_CAPABILITY_DROP);
+                        }
+                    }
+                }
+                if (required_clone_flags != 0 || !capabilities.is_empty())
+                    && apply_capabilities(capabilities).is_err()
+                {
                     libc::_exit(CHILD_EXIT_CAPSET);
                 }
                 // umask MUST precede seccomp. A restrictive BPF filter that
@@ -3228,6 +3442,16 @@ pub mod pidfd_sys {
                     // Clear CLOEXEC so the fd survives execve.
                     libc::fcntl(dst_fd, libc::F_SETFD, 0);
                 }
+                if required_clone_flags != 0 {
+                    let close_low = libc::syscall(libc::SYS_close_range, 3u32, 9u32, 0u32);
+                    let first_after_declared =
+                        RENDER_NODE_INHERITED_FD as u32 + pre_opened_raw_fds.len() as u32;
+                    let close_high =
+                        libc::syscall(libc::SYS_close_range, first_after_declared, u32::MAX, 0u32);
+                    if close_low < 0 || close_high < 0 {
+                        libc::_exit(CHILD_EXIT_REALM_FD_CLOSE);
+                    }
+                }
                 if let Some(program) = seccomp_program.as_ref()
                     && apply_seccomp(program).is_err()
                 {
@@ -3240,6 +3464,14 @@ pub mod pidfd_sys {
             },
         )?;
 
+        if required_clone_flags != 0 && outcome.used_fork_fallback {
+            let _ = pidfd_send_signal(outcome.pidfd.as_fd(), libc::SIGKILL);
+            let _ = reap_spawn_runner_error_child(outcome.pid);
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "realm child spawn requires clone3 namespace and cgroup placement",
+            ));
+        }
         let cgroup_already_placed = cgroup_dir_raw_fd.is_some() && !outcome.used_fork_fallback;
         if let Err(err) = parent_attach_fallback_cgroup(
             cgroup_procs_fd.as_ref(),
@@ -3262,20 +3494,24 @@ pub mod pidfd_sys {
         // parent dies BEFORE this point the child gets EOF on read and
         // exits CHILD_EXIT_USER_NS_SYNC=74.
         if let (Some(sync), Some(spec)) = (user_ns_sync, user_ns_spec) {
-            if let Err(err) = write_user_namespace_maps(outcome.pid, spec).map_err(|err| {
-                // Preserve the underlying io::Error as the source so
-                // callers can chain `.source()` to recover the original
-                // errno/kind information. The outer wrapper adds
-                // operator-friendly context (which /proc path, which pid)
-                // without erasing the cause.
-                io::Error::new(
-                    err.kind(),
-                    UserNsMapWriteError {
-                        pid: outcome.pid,
-                        source: err,
+            if let Err(err) =
+                write_user_namespace_maps(outcome.pid, spec, additional_user_ns_mapping).map_err(
+                    |err| {
+                        // Preserve the underlying io::Error as the source so
+                        // callers can chain `.source()` to recover the original
+                        // errno/kind information. The outer wrapper adds
+                        // operator-friendly context (which /proc path, which pid)
+                        // without erasing the cause.
+                        io::Error::new(
+                            err.kind(),
+                            UserNsMapWriteError {
+                                pid: outcome.pid,
+                                source: err,
+                            },
+                        )
                     },
                 )
-            }) {
+            {
                 drop(sync);
                 let _ = reap_spawn_runner_error_child(outcome.pid);
                 return Err(err);
@@ -3341,17 +3577,31 @@ pub mod pidfd_sys {
     /// Each io::Error is annotated with the specific /proc path that
     /// failed so operators don't have to guess which of the three writes
     /// errored.
-    fn write_user_namespace_maps(child_pid: i32, spec: UserNamespaceSpec) -> io::Result<()> {
+    fn write_user_namespace_maps(
+        child_pid: i32,
+        spec: UserNamespaceSpec,
+        additional: Option<(u32, u32)>,
+    ) -> io::Result<()> {
         use std::fs;
         let uid_map_path = format!("/proc/{child_pid}/uid_map");
         let setgroups_path = format!("/proc/{child_pid}/setgroups");
         let gid_map_path = format!("/proc/{child_pid}/gid_map");
-        fs::write(&uid_map_path, format!("0 {} 1\n", spec.host_uid_for_zero))
+        let mut uid_map = format!("0 {} 1\n", spec.host_uid_for_zero);
+        let mut gid_map = format!("0 {} 1\n", spec.host_gid_for_zero);
+        if let Some((uid, gid)) = additional {
+            if uid != spec.host_uid_for_zero {
+                uid_map.push_str(&format!("1 {uid} 1\n"));
+            }
+            if gid != spec.host_gid_for_zero {
+                gid_map.push_str(&format!("1 {gid} 1\n"));
+            }
+        }
+        fs::write(&uid_map_path, uid_map)
             .map_err(|err| io::Error::new(err.kind(), format!("writing {uid_map_path}: {err}")))?;
         fs::write(&setgroups_path, "deny").map_err(|err| {
             io::Error::new(err.kind(), format!("writing {setgroups_path}: {err}"))
         })?;
-        fs::write(&gid_map_path, format!("0 {} 1\n", spec.host_gid_for_zero))
+        fs::write(&gid_map_path, gid_map)
             .map_err(|err| io::Error::new(err.kind(), format!("writing {gid_map_path}: {err}")))?;
         Ok(())
     }
@@ -3689,7 +3939,8 @@ mod tests {
             "            outcome.pid,\n",
             "            cgroup_already_placed,"
         );
-        let user_ns_maps = "write_user_namespace_maps(outcome.pid, spec)";
+        let user_ns_maps =
+            "write_user_namespace_maps(outcome.pid, spec, additional_user_ns_mapping)";
         let user_ns_signal = "rustix::io::write(&sync.write_fd";
         let reap_error_child = concat!("reap_spawn_runner", "_error_child(outcome.pid)");
         let removed_child_helper = concat!("write_self", "_to_cgroup");
@@ -3711,14 +3962,19 @@ mod tests {
             "fallback cgroup attach must write the child pid before user-NS maps and sync continuation"
         );
         let first_reap_pos = source
+            .get(parent_attach_pos..)
+            .expect("fallback cgroup attach position is in bounds")
             .find(reap_error_child)
+            .map(|offset| parent_attach_pos + offset)
             .expect("post-clone error paths must synchronously reap the child");
         assert!(
             parent_attach_pos < first_reap_pos && first_reap_pos < user_ns_maps_pos,
             "fallback cgroup attach failure must reap before returning Err"
         );
         assert_eq!(
-            source.matches(reap_error_child).count(),
+            source[parent_attach_pos..]
+                .matches(reap_error_child)
+                .count(),
             4,
             "fallback cgroup, user-NS map, sync-write error, and sync-write short-write paths must each reap before returning Err"
         );

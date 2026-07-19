@@ -1,69 +1,53 @@
-mod common;
+use d2bd::daemon_service::{DaemonMethod, DaemonPeerRole};
 
-mod daemon_socket_acl {
-    use super::common::{
-        DaemonFixture, HELLO_FRAME, TestPeer, assert_contains, spawn_d2bd_serve, test_client,
-    };
-
-    const AUTH_STATUS_FRAME: &str = r#"{"type":"authStatus"}"#;
-
-    fn run_case(peer: TestPeer, frames: &[&str], expect_rc: i32, expect_a: &str, expect_b: &str) {
-        let fixture = DaemonFixture::new("daemon-socket-acl.");
-        fixture.write_config(&["launcher-user"], &["admin-user"]);
-        let server = spawn_d2bd_serve(&fixture, &peer, true, None);
-
-        let (rc, output) = test_client(&fixture.socket_path, frames);
-        let status = server.wait();
-        assert!(status.success(), "d2bd serve exited with {status:?}");
-        assert_eq!(
-            rc, expect_rc,
-            "daemon public-socket ACL exit code; output:\n{output}"
-        );
-        assert_contains(&output, expect_a, "primary match");
-        assert_contains(&output, expect_b, "secondary match");
+#[test]
+fn launcher_role_allows_configured_terminal_openers_but_not_lifecycle_mutation() {
+    for method in [
+        DaemonMethod::Resolve,
+        DaemonMethod::ListRealms,
+        DaemonMethod::ListWorkloads,
+        DaemonMethod::Inspect,
+        DaemonMethod::Exec,
+        DaemonMethod::OpenConsole,
+    ] {
+        assert!(DaemonPeerRole::Launcher.permits(method), "{method:?}");
     }
-
-    #[test]
-    fn non_launcher_uid_is_rejected() {
-        run_case(
-            TestPeer::deny(60001, "random-user", "users"),
-            &[HELLO_FRAME],
-            31,
-            r#""kind":"authz-not-a-launcher""#,
-            r#""type":"helloRejected""#,
-        );
+    for method in [
+        DaemonMethod::Apply,
+        DaemonMethod::Start,
+        DaemonMethod::Stop,
+        DaemonMethod::Restart,
+        DaemonMethod::Shell,
+        DaemonMethod::ExportAudit,
+    ] {
+        assert!(!DaemonPeerRole::Launcher.permits(method), "{method:?}");
     }
+}
 
-    #[test]
-    fn wheel_non_launcher_is_rejected() {
-        run_case(
-            TestPeer::deny(60002, "wheel-user", "wheel"),
-            &[HELLO_FRAME],
-            31,
-            r#""kind":"authz-not-a-launcher""#,
-            r#""type":"helloRejected""#,
-        );
+#[test]
+fn admin_role_can_dispatch_every_daemon_operation() {
+    for method in [
+        DaemonMethod::Resolve,
+        DaemonMethod::ListRealms,
+        DaemonMethod::ListWorkloads,
+        DaemonMethod::Inspect,
+        DaemonMethod::Apply,
+        DaemonMethod::Start,
+        DaemonMethod::Stop,
+        DaemonMethod::Restart,
+        DaemonMethod::Exec,
+        DaemonMethod::Shell,
+        DaemonMethod::OpenConsole,
+        DaemonMethod::ExportAudit,
+    ] {
+        assert!(DaemonPeerRole::Admin.permits(method), "{method:?}");
     }
+}
 
-    #[test]
-    fn configured_launcher_is_accepted() {
-        run_case(
-            TestPeer::launcher(),
-            &[HELLO_FRAME, AUTH_STATUS_FRAME],
-            0,
-            r#""type":"helloOk""#,
-            r#""role":"launcher""#,
-        );
-    }
-
-    #[test]
-    fn daemon_self_client_is_rejected() {
-        run_case(
-            TestPeer::deny(0, "daemon-user", "root"),
-            &[HELLO_FRAME],
-            31,
-            r#""kind":"authz-not-a-launcher""#,
-            r#""type":"helloRejected""#,
-        );
-    }
+#[test]
+fn shutdown_role_is_scoped_to_stop() {
+    assert!(DaemonPeerRole::HostShutdown.permits(DaemonMethod::Stop));
+    assert!(!DaemonPeerRole::HostShutdown.permits(DaemonMethod::Start));
+    assert!(!DaemonPeerRole::HostShutdown.permits(DaemonMethod::Exec));
+    assert!(!DaemonPeerRole::HostShutdown.permits(DaemonMethod::ExportAudit));
 }

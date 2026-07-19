@@ -672,10 +672,6 @@ pub enum TypedError {
     GatewayDisplayUnavailable {
         detail: String,
     },
-    WireVersionMismatch {
-        client_range: String,
-        accepted_range: String,
-    },
     WireUnknownField {
         detail: String,
     },
@@ -686,9 +682,6 @@ pub enum TypedError {
         declared: usize,
     },
     WireInvalidFrame {
-        detail: String,
-    },
-    WireBadHello {
         detail: String,
     },
     WireUnsupportedRequest {
@@ -944,12 +937,10 @@ impl TypedError {
             Self::InternalIo { .. } => "internal-io",
             Self::InternalLockParentInvalid { .. } => "internal-lock-parent-invalid",
             Self::GatewayDisplayUnavailable { .. } => "gateway-display-unavailable",
-            Self::WireVersionMismatch { .. } => "wire-version-mismatch",
             Self::WireUnknownField { .. } => "wire-unknown-field",
             Self::WireIfNameInvalid { .. } => "wire-ifname-invalid",
             Self::WireFrameTooLarge { .. } => "wire-frame-too-large",
             Self::WireInvalidFrame { .. } => "wire-invalid-frame",
-            Self::WireBadHello { .. } => "wire-bad-hello",
             Self::WireUnsupportedRequest { .. } => "wire-unsupported-request",
             Self::GuestShellDisabled => "guest-shell-disabled",
             Self::BundleTampered { .. } => "bundle-tampered",
@@ -993,11 +984,9 @@ impl TypedError {
             | Self::InternalLockParentInvalid { .. }
             | Self::GatewayDisplayUnavailable { .. } => 42,
             Self::WireUnknownField { .. } => 51,
-            Self::WireVersionMismatch { .. } => 52,
             Self::WireIfNameInvalid { .. } => 53,
             Self::WireFrameTooLarge { .. }
             | Self::WireInvalidFrame { .. }
-            | Self::WireBadHello { .. }
             | Self::WireUnsupportedRequest { .. } => 54,
             Self::GuestShellDisabled => 70,
             Self::BundleTampered { .. } => 60,
@@ -1082,12 +1071,6 @@ impl TypedError {
                     redact_path_like_tokens(detail)
                 )
             }
-            Self::WireVersionMismatch {
-                client_range,
-                accepted_range,
-            } => format!(
-                "client version range {client_range} does not match server range {accepted_range}"
-            ),
             Self::WireUnknownField { detail } => {
                 format!("request contains an unknown field: {detail}")
             }
@@ -1096,7 +1079,6 @@ impl TypedError {
                 format!("frame length {declared} exceeds the 1 MiB limit")
             }
             Self::WireInvalidFrame { detail } => format!("invalid frame: {detail}"),
-            Self::WireBadHello { detail } => format!("invalid hello handshake: {detail}"),
             Self::WireUnsupportedRequest { request_type } => {
                 format!("unsupported request type {request_type}")
             }
@@ -1264,10 +1246,6 @@ impl TypedError {
                     format!("repair the gateway display configuration and retry: {redacted}")
                 }
             }
-            Self::WireVersionMismatch { .. } => {
-                "use a client whose SemverRange includes the daemon's selected version"
-                    .to_owned()
-            }
             Self::WireUnknownField { .. } => {
                 "remove unknown fields; daemon request decoding is deny_unknown_fields"
                     .to_owned()
@@ -1278,7 +1256,6 @@ impl TypedError {
             }
             Self::WireFrameTooLarge { .. }
             | Self::WireInvalidFrame { .. }
-            | Self::WireBadHello { .. }
             | Self::WireUnsupportedRequest { .. } => {
                 "resend a valid framed JSON request that matches the documented daemon wire shape"
                     .to_owned()
@@ -1532,54 +1509,6 @@ impl TypedError {
             // their public messages (UIDs, version ranges, frame
             // sizes, field names) — no extra logging needed.
             _ => {}
-        }
-    }
-
-    pub fn hello_rejected_reason(&self) -> &'static str {
-        match self {
-            Self::WireVersionMismatch { .. } => "versionMismatch",
-            Self::WireUnknownField { .. }
-            | Self::WireIfNameInvalid { .. }
-            | Self::WireFrameTooLarge { .. }
-            | Self::WireInvalidFrame { .. }
-            | Self::WireBadHello { .. }
-            | Self::WireUnsupportedRequest { .. }
-            | Self::GuestShellDisabled => "internalError",
-            Self::AuthzNotALauncher { .. }
-            | Self::AuthzNotAdmin { .. }
-            | Self::AuthzAuditRequiresAdmin
-            | Self::InternalAlreadyRunning { .. }
-            | Self::InternalBrokerUnavailable { .. }
-            | Self::InternalBrokerTimeout { .. }
-            | Self::InternalConfig { .. }
-            | Self::InternalIo { .. }
-            | Self::InternalLockParentInvalid { .. }
-            | Self::GatewayDisplayUnavailable { .. }
-            | Self::BundleTampered { .. }
-            | Self::OwnershipMatrixDrift { .. }
-            | Self::SshdHostKeyDrift { .. }
-            | Self::BundleDnsmasqDrift { .. }
-            | Self::HostKernelModulesMissing { .. }
-            | Self::OtelHostBridgeReadinessTimeout { .. }
-            | Self::NetRoutePreflightDegraded { .. }
-            | Self::UsbipStepFailed { .. }
-            | Self::UsbipBusidNotPresent { .. }
-            | Self::UsbipExplicitClaimConflict { .. }
-            | Self::UsbipRevocationNotIsolated { .. }
-            | Self::RuntimeCapabilityUnsupported { .. }
-            | Self::GuestControlReadFailed { .. }
-            | Self::GuestControlExecFailed { .. }
-            | Self::GuestControlShellFailed { .. }
-            | Self::UnsafeLocalShellFailed { .. }
-            | Self::WorkloadLaunchFailed { .. }
-            | Self::DaemonBusy
-            | Self::ConsoleVmNotFound { .. }
-            | Self::ConsoleNotRunning { .. }
-            | Self::ConsoleProviderMisconfigured { .. }
-            | Self::ConsoleSessionStale
-            | Self::ConsoleSessionTableFull { .. }
-            | Self::WorkloadTargetNotFound { .. }
-            | Self::WorkloadAliasConflict { .. } => "internalError",
         }
     }
 }
@@ -2038,13 +1967,6 @@ mod tests {
                 "internal-lock-parent-invalid",
             ),
             (
-                TypedError::WireVersionMismatch {
-                    client_range: ">=0.4.0".to_owned(),
-                    accepted_range: ">=0.5.0".to_owned(),
-                },
-                "wire-version-mismatch",
-            ),
-            (
                 TypedError::WireUnknownField {
                     detail: "field x".to_owned(),
                 },
@@ -2067,12 +1989,6 @@ mod tests {
                     detail: "bad".to_owned(),
                 },
                 "wire-invalid-frame",
-            ),
-            (
-                TypedError::WireBadHello {
-                    detail: "missing type".to_owned(),
-                },
-                "wire-bad-hello",
             ),
             (
                 TypedError::WireUnsupportedRequest {

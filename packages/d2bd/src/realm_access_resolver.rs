@@ -1,17 +1,14 @@
-use std::collections::BTreeMap;
-
 use d2b_core::realm_controller_config::{
     RealmControllerConfig, RealmControllerPlacement as MetadataPlacement, RealmControllersJson,
 };
 use d2b_realm_core::{
-    AccessBindingRef, Capability, CapabilityPreflightDenialReason, CapabilityPreflightStatus,
-    CapabilitySet, ControllerGenerationId, DefaultRealmSelectionMetadata,
-    HostLocalPeerCredentialSemantics, ProtocolToken, RealmAccessAliasSource, RealmAccessBinding,
-    RealmAccessCapabilityPreflight, RealmAccessClientBinding, RealmAccessClientBindingKind,
-    RealmAccessClientContract, RealmAccessConflictCandidate, RealmAccessResolverDiagnostic,
-    RealmAccessResolverError, RealmAccessResolverRequest, RealmAccessResolverResponse,
-    RealmControllerPlacement, RealmId, RealmPath, RealmTarget, RealmTransportBinding,
-    UnixSocketPath, WorkloadId,
+    Capability, CapabilityPreflightDenialReason, CapabilityPreflightStatus, CapabilitySet,
+    ControllerGenerationId, HostLocalPeerCredentialSemantics, ProtocolToken,
+    RealmAccessAliasSource, RealmAccessBinding, RealmAccessCapabilityPreflight,
+    RealmAccessClientBinding, RealmAccessClientBindingKind, RealmAccessClientContract,
+    RealmAccessResolverDiagnostic, RealmAccessResolverError, RealmAccessResolverRequest,
+    RealmAccessResolverResponse, RealmControllerPlacement, RealmId, RealmPath, RealmTarget,
+    RealmTransportBinding, UnixSocketPath,
 };
 use sha2::{Digest, Sha256};
 
@@ -72,7 +69,7 @@ pub fn resolve_local_root_realm_access(
         access_binding,
         capability_preflight,
         alias_source: resolved.alias_source,
-        default_realm: resolved.default_realm,
+        default_realm: None,
         diagnostics: Vec::new(),
     })
 }
@@ -204,68 +201,17 @@ pub fn realm_controllers_config_generation(
 struct ResolvedTarget {
     target: RealmTarget,
     alias_source: RealmAccessAliasSource,
-    default_realm: Option<DefaultRealmSelectionMetadata>,
 }
 
 fn resolve_requested_target(
     request: &RealmAccessResolverRequest,
 ) -> Result<ResolvedTarget, RealmAccessResolverError> {
-    let raw = request.requested_target.as_str();
-    if let Ok(target) = RealmTarget::parse(raw) {
-        return Ok(ResolvedTarget {
+    RealmTarget::parse(request.requested_target.as_str())
+        .map(|target| ResolvedTarget {
             target,
             alias_source: RealmAccessAliasSource::FullyQualified,
-            default_realm: request.default_realm.clone(),
-        });
-    }
-
-    let Some(workload) = parse_bare_workload(raw) else {
-        return Err(missing_controller_error(RealmPath::local()));
-    };
-    let mut candidates: BTreeMap<RealmTarget, AccessBindingRef> = BTreeMap::new();
-    for alias in &request.aliases {
-        if alias.alias == workload {
-            candidates
-                .entry(alias.target.clone())
-                .or_insert_with(|| alias.source_ref.clone());
-        }
-    }
-
-    match candidates.len() {
-        0 => {
-            let Some(default_realm) = request.default_realm.clone() else {
-                return Err(missing_controller_error(RealmPath::local()));
-            };
-            let mut applied_default = default_realm;
-            applied_default.applied = true;
-            Ok(ResolvedTarget {
-                target: RealmTarget::new(workload, applied_default.realm.clone()),
-                alias_source: RealmAccessAliasSource::DefaultRealm {
-                    selection: applied_default.clone(),
-                },
-                default_realm: Some(applied_default),
-            })
-        }
-        1 => {
-            let (target, source_ref) = candidates.into_iter().next().expect("one candidate");
-            Ok(ResolvedTarget {
-                target,
-                alias_source: RealmAccessAliasSource::AliasTable {
-                    alias: workload,
-                    source_ref,
-                },
-                default_realm: request.default_realm.clone(),
-            })
-        }
-        _ => Err(alias_ambiguous_error(workload, candidates)),
-    }
-}
-
-fn parse_bare_workload(raw: &str) -> Option<WorkloadId> {
-    if raw.contains('.') || raw.starts_with("d2b://") {
-        return None;
-    }
-    WorkloadId::parse(raw).ok()
+        })
+        .map_err(|_| missing_controller_error(RealmPath::local()))
 }
 
 fn find_controller_for_realm<'a>(
@@ -324,38 +270,13 @@ fn missing_binding_error(target: &RealmTarget) -> RealmAccessResolverError {
     }
 }
 
-fn alias_ambiguous_error(
-    alias: WorkloadId,
-    candidates: BTreeMap<RealmTarget, AccessBindingRef>,
-) -> RealmAccessResolverError {
-    RealmAccessResolverError {
-        diagnostic: RealmAccessResolverDiagnostic::AliasAmbiguous {
-            alias: alias.clone(),
-            candidates: candidates
-                .into_iter()
-                .map(|(target, source_ref)| RealmAccessConflictCandidate {
-                    realm: target.realm.clone(),
-                    target,
-                    alias_source: RealmAccessAliasSource::AliasTable {
-                        alias: alias.clone(),
-                        source_ref,
-                    },
-                    placement: None,
-                })
-                .collect(),
-        },
-        related: Vec::new(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use d2b_core::realm_controller_config::RealmControllerMetadataSummary;
     use d2b_realm_core::{
-        Capability, DefaultRealmSelectionSource, HostLocalPeerCredentialChecker,
-        HostLocalPeerCredentialSource, HostLocalProxyStatus, RealmAccessAliasBinding,
-        RealmAccessTargetInput,
+        Capability, HostLocalPeerCredentialChecker, HostLocalPeerCredentialSource,
+        HostLocalProxyStatus, RealmAccessTargetInput,
     };
 
     fn loaded_controller(public_socket_path: &str) -> LoadedRealmControllersConfig {
@@ -963,32 +884,14 @@ mod tests {
     }
 
     #[test]
-    fn bare_targets_use_default_or_alias_without_proxying() {
+    fn bare_targets_fail_closed() {
         let loaded = loaded_controller("/run/d2b/realms/work/public.sock");
-        let mut req = request("builder");
-        req.default_realm = Some(DefaultRealmSelectionMetadata {
-            realm: realm("work"),
-            source: DefaultRealmSelectionSource::ExplicitRequest,
-            applied: false,
-        });
-        let response = resolve_local_root_realm_access(Some(&loaded), &req, None)
-            .expect("default realm binding");
+        let req = request("builder");
+        let error = resolve_local_root_realm_access(Some(&loaded), &req, None)
+            .expect_err("bare target fails closed");
         assert!(matches!(
-            response.alias_source,
-            RealmAccessAliasSource::DefaultRealm { .. }
-        ));
-
-        let mut req = request("builder");
-        req.aliases = vec![RealmAccessAliasBinding {
-            alias: WorkloadId::parse("builder").expect("alias"),
-            target: RealmTarget::parse("builder.work.d2b").expect("target"),
-            source_ref: AccessBindingRef::parse("aliases-v1").expect("source ref"),
-        }];
-        let response =
-            resolve_local_root_realm_access(Some(&loaded), &req, None).expect("alias binding");
-        assert!(matches!(
-            response.alias_source,
-            RealmAccessAliasSource::AliasTable { .. }
+            error.diagnostic,
+            RealmAccessResolverDiagnostic::MissingRealmController { .. }
         ));
     }
 }

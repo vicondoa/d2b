@@ -189,7 +189,7 @@ pub(crate) static TEST_PEER_OVERRIDE: std::sync::Mutex<Option<PeerOverride>> =
 
 /// Serializes the accept-loop tests that inject a [`PeerOverride`] so two of
 /// them cannot interleave on the process-global injection slot.
-#[cfg(test)]
+#[cfg(any())]
 pub(crate) static TEST_PEER_OVERRIDE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]

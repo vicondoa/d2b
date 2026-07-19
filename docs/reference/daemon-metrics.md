@@ -6,7 +6,7 @@
 > Implementation: [`packages/d2bd/src/metrics.rs`](../../packages/d2bd/src/metrics.rs).
 > Static gate: [`tests/daemon-metrics-eval.sh`](../../tests/daemon-metrics-eval.sh).
 
-> **v1.2 status — scrapable endpoint deferred.** The in-process
+> **Scrapable endpoint deferred.** The in-process
 > registry described below is wired and exercised by the daemon
 > (`broker-fallback` and friends record correctly), but the actual
 > scrapable HTTP `/metrics` listener is **deferred to a later release** —
@@ -18,21 +18,20 @@
 > trust model as the broker. Until then `metrics-endpoint` in
 > `d2b host doctor` warns by design, and the URL/port shape
 > below documents the *intended* contract — not a currently
-> reachable endpoint.
+> reachable endpoint. The authenticated `d2b.daemon.v2` ComponentSession on
+> `/run/d2b/public.sock` never accepts HTTP or Prometheus text.
 
 ## Endpoint shape
 
-`d2bd` exposes a **Prometheus text-format scrape endpoint**
-(content-type `text/plain; version=0.0.4`) on the daemon's public
-socket. The request line is `GET /metrics HTTP/1.1`. The response
-body is the registry rendered in
+The future dedicated metrics listener will expose a **Prometheus text-format
+scrape endpoint** (content-type `text/plain; version=0.0.4`). Its response body
+will render the registry in
 [exposition format v0.0.4](https://prometheus.io/docs/instrumenting/exposition_formats/#text-based-format).
 
 Why scrape and not OTLP push:
 
-- The daemon is long-lived and already owns a listening socket; an
-  additional scrape path is zero new sockets and zero new
-  capabilities.
+- The daemon is long-lived, while metrics remain isolated from authenticated
+  control traffic on a dedicated read-only listener.
 - A scrape collector decides cardinality + retention policy
   out-of-band, so the daemon doesn't need a remote-write client
   buffer, retry loop, or backoff state.
@@ -44,6 +43,14 @@ Why scrape and not OTLP push:
 OTLP push is intentionally *out of scope* for the daemon process
 itself. Operators who need OTLP metrics shipping run an OTel Collector
 pipeline that scrapes this endpoint and exports OTLP downstream.
+
+## ComponentSession dispatch labels
+
+Daemon-service admission and dispatch telemetry may use only the fixed service
+package, generated method, authenticated role class, adapter class, and closed
+outcome/error kind. Request IDs, correlation IDs, stream IDs, operation IDs,
+uids, realm paths, workload names, argv, terminal data, and backend error text
+must never become metric labels.
 
 ## Metric inventory
 

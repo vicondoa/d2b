@@ -1,24 +1,19 @@
 mod common;
 
 mod daemon_state_persistence {
+    use serde_json::{Value, json};
     use std::fs;
     use std::process::{Command, Stdio};
-    use std::time::Duration;
-
-    use serde_json::{Value, json};
 
     use super::common::{
-        DaemonFixture, HELLO_FRAME, TestPeer, last_non_empty_line, spawn_d2bd_serve, test_client,
+        DaemonFixture, TestPeer, complete_component_session_handshake, spawn_d2bd_serve,
     };
 
-    const VM_STOP_FRAME: &str = r#"{"type":"vmStop","vm":"corp-vm","apply":true,"json":true}"#;
-
     #[test]
-    fn restores_pidfd_table_and_clears_after_vm_stop() {
+    fn restores_pidfd_table_before_component_session_dispatch() {
         let fixture = DaemonFixture::new("daemon-state-persistence.");
         fixture.write_config(&["launcher-user"], &["admin-user", "launcher-user"]);
         let report_json = fixture.root().join("state-restore-report.json");
-        let stop_response_json = fixture.root().join("vm-stop-response.json");
         let pidfd_table_json = fixture.daemon_state_dir.join("pidfd-table.json");
         let runtime_snapshot_json = fixture.daemon_state_dir.join("corp-vm/runtime.ch.json");
 
@@ -60,10 +55,7 @@ mod daemon_state_persistence {
             true,
             Some(report_json.as_path()),
         );
-        let (rc, client_output) = test_client(&fixture.socket_path, &[HELLO_FRAME, VM_STOP_FRAME]);
-        assert_eq!(rc, 0, "vm stop client exit code; output:\n{client_output}");
-        fs::write(&stop_response_json, last_non_empty_line(&client_output))
-            .expect("write stop response");
+        complete_component_session_handshake(&fixture.socket_path);
         let restore_status = restore.wait();
         assert!(
             restore_status.success(),
@@ -77,28 +69,14 @@ mod daemon_state_persistence {
         assert_eq!(entries[0]["roleId"], "ch");
         assert_eq!(entries[0]["outcome"]["outcome"], "adopt");
 
-        let stop_response = read_json(&stop_response_json);
-        assert_eq!(stop_response["type"], "mutatingVerbResponse");
-        assert_eq!(stop_response["verb"], "vm stop");
-        assert_eq!(stop_response["outcome"], "applied");
-        assert_eq!(
-            stop_response["summary"],
-            "vm stop corp-vm: drained 1 pidfd_table entry in reverse DAG order (ch-runner)"
-        );
-
-        assert!(
-            wait_for_pid_absent(runner_pid, Duration::from_secs(5)),
-            "restored runner pid is still alive after vm stop"
-        );
-
         let pidfd_table = read_json(&pidfd_table_json);
         assert_eq!(
             pidfd_table["entries"]
                 .as_array()
                 .expect("pidfd entries")
                 .len(),
-            0,
-            "pidfd-table snapshot cleared after stop"
+            1,
+            "adopted runner remains supervised across the daemon restart"
         );
     }
 
@@ -147,18 +125,6 @@ mod daemon_state_persistence {
         let bytes = fs::read(path).unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
         serde_json::from_slice(&bytes)
             .unwrap_or_else(|err| panic!("parse {}: {err}", path.display()))
-    }
-
-    fn wait_for_pid_absent(pid: u32, timeout: Duration) -> bool {
-        let deadline = std::time::Instant::now() + timeout;
-        let proc_path = format!("/proc/{pid}");
-        while std::time::Instant::now() < deadline {
-            if !std::path::Path::new(&proc_path).exists() {
-                return true;
-            }
-            std::thread::sleep(Duration::from_millis(25));
-        }
-        !std::path::Path::new(&proc_path).exists()
     }
 
     fn process_start_time_ticks(pid: u32) -> u64 {

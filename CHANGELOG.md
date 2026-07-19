@@ -12,11 +12,24 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Restored live guest system activation as the generated
+  `d2b.activation.v2.ActivationService` on the authenticated direct GuestV2
+  session, with integrity-bound configured intents, root-private restart-safe
+  status, bounded systemd transient units, typed inspection/cancellation, and
+  fail-closed daemon routing without the retired guest-control transport.
+- Added production guest-session connector orchestration with
+  integrity-verified workload authority, realm-material and direct-session
+  ports, one-use bootstrap enrollment, exact enrolled reconnect, and bounded
+  verified-session caching.
 - Added one bounded, redacted binary configured-launch catalog shared by the
   broker and guest, bound to one workload identity and integrity digest.
 - Added one canonical, redacted, zeroizing binary guest-session credential
   codec for broker encoding and guestd decoding, including optional
   replay-bound bootstrap PSK material.
+- Added the realm-confined broker guest-material bridge: `BrokerService.Apply`
+  now binds integrity-verified session authority and private configured-launch
+  inventory into an atomic, audited pair of sealed runtime credentials without
+  accepting paths, argv, keys, PSKs, or ambient token sources on the wire.
 - Added a distinct transport-neutral terminal quit signal so SIGQUIT remains
   separate from interrupt, terminate, suspend, and hangup.
 - Added transport-neutral terminal contracts and complete typed guest bootstrap,
@@ -31,6 +44,14 @@ deprecations ship one minor release before removal.
   child-realm controller/broker launches, with strict exact lookup, canonical
   content digests, opaque references, redacted diagnostics, and no ambient
   spawn fallback.
+- Added W5 core control-service preparation: compile-only composition seams,
+  baseline call-graph and legacy-handshake inventory, reserved provider-agent
+  executable and service-reference boundaries, and a seven-component exact-file
+  and crate-manifest policy with complete prep fingerprints, guest token/vsock
+  retirement ownership, and caller-environment-sanitized
+  replacement/graft/shallow-safe component diffs that keep implementation
+  slices out of sibling-wave, frozen-provider, shared-contract, and
+  declarative-emission authorities.
 - Added the post-W4 shared contract/tooling root: separate W5/W6/W7 delivery
   authorities, typed allocator and child-realm broker DTOs, frozen service and
   dependency inventories, parent-commit-trusted ownership checks with explicit
@@ -78,6 +99,27 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Bounded broker guest-material audit append work by scanning retained segments
+  only during startup validation and after rotation.
+- Migrated `d2b launch` off the legacy hello/`WorkloadOp` handshake onto the
+  authenticated `ComponentSession` v2 path: it now opens a typed
+  `ConfiguredLaunchSelection` terminal under `ExecAuthority::CONFIGURED_LAUNCH`
+  and requires an explicit `--item <ID>` (the frozen `d2b.terminal.v2` contract
+  carries only a configured item id and has no default-item selection signal
+  to fall back on). Configured argv is never exposed to the client. The
+  `LaunchOutputV1.disposition` field is retained and now always reports
+  `committed`: the typed `ConfiguredLaunch` outcome carries no signal
+  distinguishing a fresh dispatch from a replay of an already-committed
+  operation id, so the CLI never claims `already-committed` without evidence.
+- Migrated gateway-routed `vm start`/`stop`/`restart` and `vm exec` to the
+  authenticated `DaemonService` v2 lifecycle and typed terminal exec path
+  instead of the legacy `public_wire::GatewayDisplayOp`/hello-handshake
+  dispatch; unsupported or unavailable gateway routes now surface as typed
+  daemon/router diagnostics instead of falling back to the old socket path.
+- Moved delivery validator checkouts, build targets, caches, temporary homes,
+  and sockets out of persistent user state into process-bound transient storage;
+  successful evidence publication now requires cleanup, and later validators
+  prune execution trees left by interrupted processes.
 - Bound the authenticated direct guest handshake fingerprint to ordered guest
   and system-activation service descriptors while keeping the public daemon
   proxy surface unchanged.
@@ -85,15 +127,78 @@ deprecations ship one minor release before removal.
   existing unsafe-local and provider contract features.
 - Authorized the broker's direct generated-service dependency feature alongside
   its credential and broker contract features.
+- Hardened the production guest runtime with an explicit allocator-spawned
+  child-realm broker mode, namespace-map identity verification, a closed
+  realm-only material handler, crash-recoverable credential-pair and replay
+  commits, reciprocal controller-to-broker namespace authentication,
+  restart-recovered exactly-once post-commit success audit, crash-framed V3
+  audit records, journal-first recovery cleanup, bounded deterministic V3 audit
+  segmentation, fail-closed rejection of unshipped development formats, full
+  runtime-binding cache eviction, and native-vsock
+  acceptance that ignores foreign guest CIDs without extending the original
+  deadline.
+- Connected production daemon guest routes to the realm broker and direct
+  GuestV2 runtime: controllers now load one fixed zeroizing static identity,
+  materialize and persist enrollment through authenticated realm-local broker
+  sessions, then perform boot-bound IKpsk2 enrollment and KK reconnect over
+  native vsock before exposing the typed guest proxy.
 - Bound the public daemon handshake fingerprint to ordered, domain-separated
   daemon and proxied guest package descriptors while retaining a separate direct
   guest fingerprint.
 - Added a selector-bound retirement seam for the exact legacy guest-control
   signing contracts and generated references, without opening their frozen
   crate prefixes to general changes.
+- Hardened the ComponentSession CLI path with standalone Tokio I/O ownership,
+  service-aware request correlation, authenticated VM/gateway listing, typed
+  detached-exec management, pre-open terminal/signal validation, distinct
+  SIGQUIT forwarding, monotonic output offsets, and structured
+  JSON/terminal-open failures.
+- Completed same-session, workload-scoped GuestService proxying for detached
+  exec management, rejected management conflicts before daemon access,
+  separated console Ctrl-] from stateful shell Ctrl-Space Ctrl-q detach
+  handling, and routed realm gateway exec through typed ComponentSession
+  terminals.
+- Replaced the guest service placeholder with production typed bootstrap and
+  reconnect identity confirmation, backend-ready capability negotiation,
+  server-owned terminal streams, attached and detached non-root exec owners,
+  retained logs, persistent shell ownership, configured artifact transfer,
+  fail-closed security-key readiness, and bounded typed shutdown outcomes.
+- Tightened guest request admission with phase confirmation, deadline and replay
+  enforcement, active cancellation, peer-bound bootstrap evidence,
+  integrity-pinned configured launches, concrete backend readiness, restart-safe
+  detached cancellation, atomic artifact replacement, stable ceremony resume,
+  retry-safe shutdown, and one-shot output EOF.
+- Unified guest session material on the shared opaque binary credential codec,
+  bound the final daemon and guest fingerprints, preserved distinct terminal
+  quit delivery, and moved configured launches to the shared workload-bound
+  catalog codec over the digest-pinned private runtime credential handoff.
+- Made bootstrap and reconnect cancellation race atomically with an explicit
+  point of no return, so cancelled requests cannot seal identity state or
+  authorize operational RPCs.
+- Adopted unbound initial-bootstrap identity credentials so guestd generates and
+  seals its private key locally, returns the established public binding, and
+  requires that exact nonzero binding for enrolled reconnects.
+- Rejected enrolled guest credentials and reconnect correlation when the guest
+  identity digest is not SHA-256 of the pinned static public key.
+
 - Routed the CLI dependency authority through `d2b-daemon-access`, the sole
   owner of the exact no-default-features `d2b-client/host-socket` edge, instead
   of permitting duplicate endpoint and channel-binding policy.
+- Migrated Rust client and CLI daemon operations to authenticated
+  generation-discovered ComponentSession sessions, strict typed realm/workload
+  projections, neutral server-allocated terminal streams, typed guest exec
+  management and retained logs, bounded offsets/cancellation, redacted
+  diagnostics, and daemon-access-owned endpoint construction.
+- Completed daemon-side typed realm, workload, and inspect results with bounded
+  authoritative projections, explicit pagination/read-model state, and exact
+  discovered restart-generation enforcement.
+- Added server-owned neutral terminal streams for host consoles and unsafe-local
+  shells, plus a typed GuestService Exec/OpenShell adapter that fails closed
+  before stream allocation when authenticated guest session material is absent.
+- Replaced the daemon public JSON handshake and global request switch with the
+  authenticated, schema-bound `d2b.daemon.v2` ComponentSession service,
+  generated method dispatch, bounded named streams, deadlines, cancellation,
+  and role-preserving realm, guest, provider, broker, and allocator routing.
 - Made the pure local-root allocator engine generic over narrow, thread-safe
   ledger, observed-state, and controller-liveness adapters while restricting
   in-memory fake adapters to explicit test support.
@@ -252,23 +357,60 @@ deprecations ship one minor release before removal.
   production bundle and token-path validation unchanged.
 - Made W5 implementation lints verify shared-root ownership before their source
   files exist, then enforce full source shape in the W5 tree.
+- Made allocator-spawned child-realm controller/broker pairs cancellation-safe
+  so dropping credential authentication terminates both children exactly once.
+- Made child-realm controllers adopt the allocator's public-listener,
+  bootstrap-session, and cgroup-leaf descriptors, reject invalid or ambient
+  activation state, and authenticate readiness only after startup completes.
+- Completed typed guest startup by passing the canonical workload identity,
+  removing the retired broker-signing privilege from Nix output, and keeping
+  legacy binding regeneration pinned to its retirement marker.
+- Kept guest-material audit appends constant-time between rotations while
+  preserving startup validation and post-rotation segment retention.
 - Kept guest-exec policy checks bound to capability and TTY mappings after
   those responsibilities move into focused runtime modules.
 - Stabilized guest-signing retirement policy tests with canonical synthetic
   parent fixtures that remain valid before and after the retirement lands.
 - Preserved the stable broker request wire shape after retiring legacy signing
   without allowing the resulting variant-size lint to break strict builds.
+- Kept daemon startup available before guest runtime port registration while
+  making guest operations resolve the registered ports dynamically and fail
+  closed when prerequisites are absent.
+- Bound the daemon endpoint policy to the canonical combined daemon/guest-proxy
+  fingerprint and covered both schema-mismatch paths while accepting shared
+  unbound-bootstrap and enrolled guest credential bindings.
 - Allowed initial guest bootstrap to establish and return a new guest identity
   while requiring enrolled reconnects to match the pinned identity and public key.
+- Propagated retained-log cancellation to the upstream guest before public
+  stream admission and kept GuestService cancellation outside saturated
+  operation slots.
 - Bound the guest-control signing retirement exception to a parent-authoritative,
   exact content transformation so same-file unrelated edits, renames, mixed
   hunks, and generated-schema decoys fail closed.
+- Bound guest material Apply to authenticated realm-controller/realm-broker
+  sessions, made parent ownership and transaction rollback fail closed, and
+  moved bootstrap replay authority to a durable realm/workload/binding ledger
+  that survives request and connection recreation.
+- Made guest material request reservations drop-safe so cancellation and
+  deadlines terminally record replay state and audit failure, and made mandatory
+  audit failure restore both credential members before returning.
+- Routed daemon guest-session setup through the shared opaque credential codec
+  and injected ComponentSession connector, removed broker signing calls from
+  daemon guest paths, and preserved terminal quit as a distinct signal.
+- Served the typed guest detached-exec inspect, cancel, and retained-log proxy
+  on authenticated daemon sessions with exact generation rebinding, shared
+  cancellation, server-owned streams, and fail-closed connector absence.
 - Made encoded guest-session credentials opaque and non-cloneable, and moved
   decoded bootstrap PSKs directly into stable heap-backed zeroizing ownership
   before validation.
 - Bounded bootstrap credentials to an explicit issue/expiry window, rejected
   future or effectively non-expiring PSKs, and moved PSK plus encoded credential
   storage to zeroizing buffers on success and error paths.
+- Made daemon terminal relays preserve exact ttRPC message boundaries, share
+  cancellation across unary-to-stream handoff, defer console effects until a
+  validated selection, and emit console EOF and closure exactly once; typed
+  workload inventory now includes realm-native entries and enforces the realm
+  endpoint page cap.
 - Isolated CLI daemon integration tests from deployed host realm, provider, and
   bundle artifacts by binding every runtime input to test-owned paths.
 - Kept guest-service validators inside their versioned service rail and updated
@@ -465,6 +607,10 @@ deprecations ship one minor release before removal.
   when the target's source parent is intentionally read-only.
 - Made schema reproducibility generate twice into validation-owned scratch
   instead of rewriting committed schema paths.
+- Routed xtask heavy-gate fixtures through validation-owned scratch instead of
+  the read-only source tree.
+- Synchronized fail-closed test pins and retirement ledgers with their
+  ComponentSession v2 successor coverage.
 - Made broker nextest inventory use the committed lock fail-closed instead of
   backing it up and restoring it through the source tree.
 - Made canonical drift generation run in a writable detached clone while
@@ -535,9 +681,23 @@ deprecations ship one minor release before removal.
 
 ### Removed
 
+- Removed the legacy `GuestControlSign` wire contract, privilege and audit rows,
+  persistent token reader, and HMAC dispatch; unknown old requests now fail
+  closed with no compatibility path.
 - Removed the superseded standalone Wayland-proxy feasibility crate, redundant
   nested Cargo workspaces and lockfiles, and the stale duplicate
   activation-helper source.
+- Removed the `d2b vm exec --env` and `--cwd` flags: the frozen
+  `d2b.terminal.v2` `ArbitraryExecSelection` carries only `argv`, so the CLI
+  no longer advertises flags the daemon always rejected at runtime.
+- Removed the legacy JSON-socket `vm display list`/`vm display close`
+  handlers and their `public_wire::GatewayDisplayOp` encode/decode path; both
+  verbs now fail closed with an actionable "not yet implemented" diagnostic
+  (exit 78) instead of silently keeping a v1 socket fallback.
+- Removed the now-unreachable legacy shell attach FSM (`cmd_shell`,
+  `cmd_gateway_shell`, and their `ShellOwnerTransport`/hello-handshake
+  helpers), orphaned once `d2b launch` stopped dispatching shell-kind
+  launcher items through the old attach path.
 
 ## [1.4.1] - 2026-07-12
 

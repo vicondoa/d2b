@@ -1,19 +1,11 @@
 //! Shared CLI-side terminal seams.
 //!
-//! The exec client is currently the only consumer. These traits split the
-//! terminal FSM from exec-specific public wire envelopes so future interactive
-//! adapters can drive the same host terminal machinery without copying it.
+//! The exec client is currently the only consumer. These traits split
+//! host I/O and signal draining from exec-specific public wire envelopes
+//! so future interactive adapters can drive the same host terminal
+//! machinery without copying it.
 
 use std::io;
-
-/// One owner-connection terminal round trip.
-pub trait TerminalTransport {
-    type Op;
-    type Response;
-    type Error;
-
-    fn round_trip(&mut self, op: &Self::Op) -> Result<Self::Response, Self::Error>;
-}
 
 /// Host-side terminal I/O used by an attached terminal FSM.
 pub trait TerminalHostIo {

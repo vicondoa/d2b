@@ -144,6 +144,10 @@ impl ServiceHandle {
         &self.generated
     }
 
+    pub(crate) fn proxy(&self, kind: ServiceKind) -> Self {
+        Self::new(kind, self.raw.clone())
+    }
+
     pub fn method(&self, index: u16) -> Result<MethodHandle, ClientError> {
         let spec = self
             .kind

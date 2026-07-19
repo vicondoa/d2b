@@ -1133,16 +1133,6 @@ pub const BROKER_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
         AuditMode::Yes,
     ),
     row(
-        "GuestControlSign",
-        "guest-control token",
-        "per-VM",
-        &["d2bd"],
-        false,
-        SecretAccess::RedactedOnly,
-        BrokerRequirement::Yes,
-        AuditMode::Yes,
-    ),
-    row(
         "InjectSecretById",
         "secret/key",
         "per-VM/key",

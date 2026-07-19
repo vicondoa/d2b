@@ -28,7 +28,7 @@ use arc_swap::ArcSwapOption;
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use d2b_contracts::{
-    BROKER_SOCKET_PATH, KnownFeatureFlag,
+    BROKER_SOCKET_PATH,
     broker_wire::{
         ActivationMode as BrokerActivationMode, ActivationPhase as BrokerActivationPhase,
         ApplyNftablesRequest as BrokerApplyNftablesRequest,
@@ -106,17 +106,29 @@ use supervisor::pidfd_table::{
 };
 
 mod admission;
+mod child_realm_controller_bootstrap;
 pub mod console_session;
+#[allow(dead_code)]
+mod control_services;
+pub mod controller_static_identity;
+#[allow(clippy::duplicate_mod)]
+#[path = "control_services/daemon.rs"]
+pub mod daemon_service;
+pub mod daemon_terminal;
 pub mod exec_detached;
 pub mod exec_session;
 pub mod exec_session_real;
 pub mod guest_control_bridge;
 pub mod guest_control_health;
 pub mod guest_control_vsock;
+pub mod guest_terminal;
 pub(crate) mod observability_export;
+mod production_guest_runtime;
+pub mod production_guest_terminal;
 pub mod provider_effects;
 pub mod provider_registry;
 pub mod realm_access_resolver;
+pub mod realm_child_supervisor;
 pub mod supervisor;
 pub mod terminal_session;
 pub mod typed_error;
@@ -126,12 +138,9 @@ pub mod wire;
 mod workload_dispatch;
 pub mod workload_target_index;
 use admission::{
-    PeerIdentity, PeerRole, authorize_peer, gateway_display_op_requires_admin,
-    gateway_display_peer_principal, gateway_display_peer_principal_string,
-    verb_allowed_for_host_shutdown, verb_requires_admin,
+    PeerIdentity, PeerRole, authorize_peer, gateway_display_peer_principal,
+    gateway_display_peer_principal_string, verb_allowed_for_host_shutdown, verb_requires_admin,
 };
-#[cfg(test)]
-use admission::{PeerOverride, TEST_PEER_OVERRIDE, TEST_PEER_OVERRIDE_LOCK};
 // `[pending restart]` machinery. Pure module + filesystem reader trait
 // so the CLI can compute the daemon-level pending-restart signal
 // post-restart without requiring /run live.
@@ -153,6 +162,8 @@ pub mod known_hosts_refresh;
 // `crate::ssh_host_key_preflight`.
 mod shell_backend;
 pub mod ssh_host_key_preflight;
+mod terminal_owners;
+mod ttrpc_frame;
 // Refuses to start a `sys-<env>-net` VM when the on-disk dnsmasq.conf
 // for that env diverges from the
 // bundle's nft/route/hosts intent hash. Catches the case where the
@@ -309,33 +320,6 @@ const GATEWAY_DISPLAY_SESSION_TTL: Duration = Duration::from_secs(3600);
 /// Default cap on concurrent in-flight connection-handler threads.
 /// Overridable at startup via `D2BD_MAX_INFLIGHT_CONNECTIONS`.
 const DEFAULT_MAX_INFLIGHT_CONNECTIONS: usize = 64;
-/// Write deadline for the typed refusal frame (authz reject / busy) the
-/// accept loop sends before closing — never block the accept loop on a
-/// slow/abusive peer.
-const ACCEPT_REFUSAL_WRITE_DEADLINE: Duration = Duration::from_secs(2);
-/// Read deadline for the initial hello frame, so a connected-but-silent
-/// peer cannot occupy a handler slot indefinitely.
-const HELLO_READ_DEADLINE: Duration = Duration::from_secs(10);
-/// Read deadline for each subsequent request frame on a persistent
-/// connection. A timeout closes the connection gracefully and frees the
-/// handler slot. Cleared before an exec handoff (the exec owner blocks
-/// on the PTY indefinitely).
-const REQUEST_READ_DEADLINE: Duration = Duration::from_secs(60);
-/// Per-`recv` bound for draining a rejected peer's already-buffered input
-/// before the socket is closed. Authz-first / busy refusals are written
-/// BEFORE the peer's hello is read; closing a SEQPACKET socket with unread
-/// input makes the kernel send RST, which the peer observes as a connection
-/// reset instead of cleanly reading the rejection frame. Draining the
-/// pending input first makes the close graceful.
-///
-/// This drain runs on the ACCEPT LOOP (the refusal is decided before a
-/// handler thread is spawned), so the timeout MUST stay short: the refused
-/// peer's hello is already buffered on the SEQPACKET socket, so a
-/// cooperating peer drains in microseconds, and a silent/misbehaving peer is
-/// bounded to a few `recv` timeouts (≈tens of ms) instead of stalling every
-/// other client's `accept()`.
-const REJECTION_DRAIN_DEADLINE: Duration = Duration::from_millis(10);
-
 /// Resolve the in-flight connection cap from the environment, falling
 /// back to [`DEFAULT_MAX_INFLIGHT_CONNECTIONS`]. A value of `0` or an
 /// unparseable value uses the default; the semaphore itself clamps to a
@@ -562,12 +546,6 @@ pub struct LockOnlyOptions {
 }
 
 #[derive(Debug, Clone)]
-pub struct TestClientOptions {
-    pub socket_path: PathBuf,
-    pub frame_json: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
 struct RuntimeIdentity {
     daemon_uid: Uid,
     daemon_gid: Gid,
@@ -580,6 +558,7 @@ struct RuntimeIdentity {
 struct ServerState {
     config: DaemonConfig,
     daemon_uid: u32,
+    component_session_generation: u64,
     daemon_state_dir: PathBuf,
     pidfd_table: Arc<PidfdTable>,
     broker_reap_log: Arc<BrokerReapLog>,
@@ -595,6 +574,7 @@ struct ServerState {
     /// session is a daemon-held authenticated guest-control client owned by a
     /// spawned worker.
     exec_sessions: Arc<exec_session::SessionTable>,
+    guest_terminal_connector: Arc<dyn guest_terminal::GuestTerminalConnector>,
     /// Gateway display orchestrator state. Persisted for the daemon lifetime so
     /// Open/List/Close share the same ledger and resource handles.
     gateway_display: Arc<GatewayDisplayRuntime>,
@@ -627,6 +607,22 @@ impl ServerState {
             .ok_or_else(|| TypedError::InternalConfig {
                 detail: "first-party provider registry is not initialized".to_owned(),
             })
+    }
+
+    fn new_component_session_generation() -> Result<u64, TypedError> {
+        for _ in 0..8 {
+            let mut bytes = [0_u8; 8];
+            getrandom::getrandom(&mut bytes).map_err(|_| TypedError::InternalConfig {
+                detail: "component session generation entropy unavailable".to_owned(),
+            })?;
+            let generation = u64::from_ne_bytes(bytes);
+            if generation != 0 {
+                return Ok(generation);
+            }
+        }
+        Err(TypedError::InternalConfig {
+            detail: "component session generation allocation failed".to_owned(),
+        })
     }
 }
 
@@ -1427,6 +1423,8 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     let mut config = load_config(&options.config_path)?;
     apply_overrides(&mut config, &options);
     let notify_socket = std::env::var_os("NOTIFY_SOCKET");
+    let mut controller_bootstrap =
+        child_realm_controller_bootstrap::ControllerBootstrap::from_environment()?;
 
     // v1.1.1 runtime pidfs self-probe: refuse startup on kernels
     // without pidfs support. Static `tests/v1.1-kernel-floor-eval.sh`
@@ -1444,7 +1442,9 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     validate_lock_parent(&config.state_lock_path, &runtime_identity)?;
     ensure_locks_dir(&config.locks_dir, &runtime_identity)?;
     let _lock_file = acquire_state_lock(&config.state_lock_path, &runtime_identity)?;
-    let listener = bind_public_socket(&config.public_socket_path, &runtime_identity)?;
+    let listener = controller_bootstrap.public_listener_or_else(|| {
+        bind_public_socket(&config.public_socket_path, &runtime_identity)
+    })?;
     let unsafe_local_helper_uids =
         resolve_unsafe_local_helper_uids(&config, runtime_identity.daemon_uid)?;
     let unsafe_local_helper_listener =
@@ -1495,6 +1495,29 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         },
     )?);
     pidfd_table.set_broker_reap_log(Arc::clone(&broker_reap_log));
+    let component_session_generation = ServerState::new_component_session_generation()?;
+    let local_controller_generation =
+        production_guest_runtime::local_controller_generation(&config.artifacts.bundle_path)
+            .unwrap_or(component_session_generation);
+    let controller_binding = controller_static_identity::ControllerProcessBinding::from_process(
+        local_controller_generation,
+        Uid::effective().as_raw(),
+        Gid::effective().as_raw(),
+    )
+    .map_err(|error| TypedError::InternalIo {
+        context: "load controller runtime bootstrap".to_owned(),
+        detail: error.to_string(),
+    })?;
+    let guest_runtime_ports = production_guest_terminal::ProductionGuestRuntimePorts::construct(
+        config.artifacts.bundle_path.clone(),
+        Arc::clone(&pidfd_table),
+        controller_binding,
+    );
+    production_guest_terminal::install_production_guest_runtime_ports(guest_runtime_ports)
+        .map_err(|_| TypedError::InternalIo {
+            context: "install production guest runtime ports".to_owned(),
+            detail: "duplicate or mismatched production guest runtime".to_owned(),
+        })?;
     sd_notify_status(
         notify_socket.as_deref(),
         "d2bd restored runner state; checking startup contracts",
@@ -1546,8 +1569,16 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         runtime_identity.daemon_uid.as_raw(),
         unsafe_local_helper_uids,
     ));
+    let guest_terminal_connector =
+        production_guest_terminal::ProductionGuestTerminalConnector::production().map_err(
+            |_| TypedError::InternalIo {
+                context: "construct production guest terminal connector".to_owned(),
+                detail: "production guest runtime ports were not installed".to_owned(),
+            },
+        )?;
     let state = Arc::new(ServerState {
         daemon_uid: runtime_identity.daemon_uid.as_raw(),
+        component_session_generation,
         config,
         daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::new(&daemon_state_dir)),
         daemon_state_dir,
@@ -1558,6 +1589,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
             crate::exec_session::ExecSessionCaps::default(),
         )),
+        guest_terminal_connector,
         console_sessions: Arc::new(Mutex::new(
             crate::console_session::ConsoleSessionTable::default(),
         )),
@@ -1773,6 +1805,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         socket_ready = true,
         "d2bd public socket ready; accepting connections",
     );
+    controller_bootstrap.send_ready()?;
 
     loop {
         let (stream, _) = listener.accept().map_err(|err| TypedError::InternalIo {
@@ -1780,75 +1813,48 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             detail: err.to_string(),
         })?;
 
-        // The `once` test path stays fully synchronous/inline so unit
-        // tests can drive a single connection deterministically.
-        if options.once {
-            if let Err(error) = handle_connection(stream, &state, None) {
-                eprintln!("{}", error.message());
-            }
-            break;
-        }
-
-        // Authz-first: resolve SO_PEERCRED immediately after accept, before
-        // any blocking frame read, so an unauthorized or silent peer can
-        // neither occupy a handler slot nor stall the accept loop.
+        // Resolve the local role from SO_PEERCRED before ComponentSession reads
+        // its fixed preface. Authentication has no payload or fallback path.
         let peer = match authorize_peer(&stream, &state) {
             Ok(peer) => peer,
             Err(error) => {
-                let _ = write_json_frame_deadlined(
-                    &stream,
-                    &wire::hello_rejected(&error),
-                    ACCEPT_REFUSAL_WRITE_DEADLINE,
-                );
-                drain_rejected_peer_input(&stream);
                 eprintln!("{}", error.message());
                 continue;
             }
         };
+        stream
+            .set_nonblocking(true)
+            .map_err(|err| TypedError::InternalIo {
+                context: "configure public seqpacket client".to_owned(),
+                detail: err.to_string(),
+            })?;
 
-        // Non-blocking admission: never block the accept loop. On a cap
-        // miss refuse immediately with a typed-busy frame (deadlined).
+        // Admission remains non-blocking. A refused peer never gets a legacy
+        // JSON error frame because no protocol exists before ComponentSession.
         let permit = match state.conn_semaphore.try_acquire() {
             Some(permit) => permit,
-            None => {
-                let busy = TypedError::DaemonBusy;
-                let _ = write_json_frame_deadlined(
-                    &stream,
-                    &wire::error_frame(&busy),
-                    ACCEPT_REFUSAL_WRITE_DEADLINE,
+            None => continue,
+        };
+        let generation = state.component_session_generation;
+        let conn_state = state.clone();
+        let fd: OwnedFd = stream.into();
+        let session = async move {
+            let _permit = permit;
+            if let Err(error) =
+                daemon_service::serve_accepted_daemon_socket(fd, peer, generation, conn_state).await
+            {
+                tracing::warn!(
+                    result = %error,
+                    service = "d2b.daemon.v2",
+                    "daemon ComponentSession closed",
                 );
-                drain_rejected_peer_input(&stream);
-                continue;
             }
         };
-
-        // Hand the connection to its own handler thread, moving the RAII
-        // permit in so the in-flight slot is released when the handler —
-        // not the accept loop — finishes. accept() returns immediately.
-        let conn_state = state.clone();
-        if let Err(err) = std::thread::Builder::new()
-            .name("d2b-conn".to_owned())
-            .spawn(move || {
-                // `permit` (and, for an exec session, ownership of it) is
-                // dropped when this handler returns.
-                if let Err(error) =
-                    handle_connection_authorized(stream, &conn_state, peer, Some(permit))
-                {
-                    eprintln!("{}", error.message());
-                }
-            })
-        {
-            // Spawn failure drops the moved closure (and its permit), so
-            // the slot is released; log and keep serving.
-            eprintln!(
-                "{}",
-                TypedError::InternalIo {
-                    context: "spawn connection handler".to_owned(),
-                    detail: err.to_string(),
-                }
-                .message()
-            );
+        if options.once {
+            session.await;
+            break;
         }
+        tokio::spawn(session);
     }
 
     Ok(())
@@ -1865,24 +1871,6 @@ pub async fn lock_only(options: LockOnlyOptions) -> Result<(), TypedError> {
     let _lock_file = acquire_state_lock(&config.state_lock_path, &runtime_identity)?;
     tokio::time::sleep(tokio::time::Duration::from_secs(options.hold_seconds)).await;
     Ok(())
-}
-
-pub fn run_test_client(options: TestClientOptions) -> Result<u8, TypedError> {
-    let socket = connect_seqpacket(&options.socket_path)?;
-    let mut exit_code = 0u8;
-    for frame in &options.frame_json {
-        let response = round_trip(&socket, frame)?;
-        println!("{}", String::from_utf8_lossy(&response));
-        if let Ok(value) = serde_json::from_slice::<Value>(&response)
-            && let Some(code) = value
-                .get("error")
-                .and_then(|error| error.get("exitCode"))
-                .and_then(Value::as_u64)
-        {
-            exit_code = code as u8;
-        }
-    }
-    Ok(exit_code)
 }
 
 fn apply_overrides(config: &mut DaemonConfig, options: &ServeOptions) {
@@ -2976,10 +2964,12 @@ mod exec_owner_test_hook {
         HOOK.get_or_init(|| Mutex::new(None))
     }
 
+    #[cfg(any())]
     pub(crate) fn set(hook: Hook) {
         *slot().lock().expect("exec owner hook lock") = Some(hook);
     }
 
+    #[cfg(any())]
     pub(crate) fn clear() {
         *slot().lock().expect("exec owner hook lock") = None;
     }
@@ -2987,275 +2977,6 @@ mod exec_owner_test_hook {
     pub(crate) fn active() -> Option<Hook> {
         slot().lock().expect("exec owner hook lock").clone()
     }
-}
-
-/// Thin wrapper used by the `options.once` test path and by direct
-/// unit-test callers: authorizes the peer (SO_PEERCRED), then runs the
-/// authorized connection body. The production accept loop authorizes the
-/// peer itself (before admission) and calls
-/// [`handle_connection_authorized`] directly.
-fn handle_connection(
-    stream: Socket,
-    state: &ServerState,
-    permit: Option<concurrency::ConnPermit>,
-) -> Result<(), TypedError> {
-    let peer = match authorize_peer(&stream, state) {
-        Ok(peer) => peer,
-        Err(error) => {
-            let _ = write_json_frame(&stream, &wire::hello_rejected(&error));
-            // Authz ran before the hello read; drain the unread hello so the
-            // close is graceful and the peer receives the rejection frame.
-            drain_rejected_peer_input(&stream);
-            return Err(error);
-        }
-    };
-    handle_connection_authorized(stream, state, peer, permit)
-}
-
-/// Connection body for an already-authorized peer. Reads the hello frame
-/// (deadlined), negotiates the wire version, then serves requests on a
-/// deadlined per-frame read loop. An attached `Exec::Start` takes over
-/// the connection on a spawned owner thread, moving the admission
-/// `permit` with it so the in-flight slot is held until the exec session
-/// (owner) terminates.
-fn handle_connection_authorized(
-    stream: Socket,
-    state: &ServerState,
-    peer: PeerIdentity,
-    permit: Option<concurrency::ConnPermit>,
-) -> Result<(), TypedError> {
-    // Bound the wait for the initial hello so a connected-but-silent peer
-    // cannot occupy a handler slot indefinitely.
-    set_frame_read_deadline(&stream, Some(HELLO_READ_DEADLINE));
-    let hello_bytes = match read_frame(&stream) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            let _ = write_json_frame(&stream, &wire::hello_rejected(&error));
-            return Err(error);
-        }
-    };
-    let hello = wire::parse_hello(&hello_bytes).inspect_err(|error| {
-        let _ = write_json_frame(&stream, &wire::hello_rejected(error));
-    })?;
-    let selected_version = match wire::negotiate_version(
-        hello.client_version.as_str(),
-        &state.config.accepted_client_version_range,
-        &state.config.server_version,
-    ) {
-        Ok(version) => version,
-        Err(error) => {
-            let _ = write_json_frame(&stream, &wire::hello_rejected(&error));
-            return Err(error);
-        }
-    };
-    let advertised_capabilities = [
-        KnownFeatureFlag::TypedErrors.wire_value(),
-        KnownFeatureFlag::StatusCheckBridges.wire_value(),
-        KnownFeatureFlag::ExportBrokerAudit.wire_value(),
-        KnownFeatureFlag::ConfiguredLaunchV1.wire_value(),
-        KnownFeatureFlag::UnsafeLocalProviderV1.wire_value(),
-        KnownFeatureFlag::UnsafeLocalShellV1.wire_value(),
-    ];
-    let capabilities = advertised_capabilities
-        .into_iter()
-        .filter(|capability| {
-            hello
-                .supported_features
-                .iter()
-                .any(|requested| requested.known() == capability.known())
-        })
-        .collect::<Vec<_>>();
-    let hello_ok = wire::hello_ok(
-        &state.config.server_version,
-        &selected_version,
-        &capabilities,
-    )?;
-    write_json_frame(&stream, &hello_ok)?;
-
-    loop {
-        // Bound each request read so a half-open / slow-loris peer frees
-        // its handler slot instead of pinning it forever.
-        set_frame_read_deadline(&stream, Some(REQUEST_READ_DEADLINE));
-        let frame = match read_frame(&stream) {
-            Ok(bytes) => bytes,
-            Err(TypedError::InternalIo { .. }) => return Ok(()),
-            Err(error) => {
-                let _ = write_json_frame(&stream, &wire::error_frame(&error));
-                return Err(error);
-            }
-        };
-        let request = match wire::parse_request(&frame) {
-            Ok(request) => request,
-            Err(error) => {
-                let _ = write_json_frame(&stream, &wire::error_frame(&error));
-                continue;
-            }
-        };
-        if matches!(request, wire::Request::Workload(_))
-            && (!capabilities
-                .iter()
-                .any(|feature| feature.known() == Some(KnownFeatureFlag::ConfiguredLaunchV1))
-                || !capabilities.iter().any(|feature| {
-                    feature.known() == Some(KnownFeatureFlag::UnsafeLocalProviderV1)
-                }))
-        {
-            let error = TypedError::WireUnsupportedRequest {
-                request_type: "workload".to_owned(),
-            };
-            let _ = write_json_frame(&stream, &wire::error_frame(&error));
-            continue;
-        }
-        // Exec takes over the connection as the long-lived owner connection.
-        // Admin (SO_PEERCRED) is verified here, BEFORE any session work; then
-        // the connection + a cheap ServerState clone move to a SPAWNED owner
-        // handler. The admission permit moves with it so the in-flight slot
-        // is held for the lifetime of the exec session, not just the read.
-        if let wire::Request::Exec(op) = &request {
-            if !matches!(peer.role, PeerRole::Admin) {
-                let error = TypedError::AuthzNotAdmin {
-                    verb: "exec".to_owned(),
-                };
-                let _ = write_json_frame(&stream, &wire::error_frame(&error));
-                continue;
-            }
-            if matches!(op, public_wire::ExecOp::Start(_)) {
-                // Recover the establishing op's envelope `opId` so the Start
-                // reply (and any establish error) echoes it for client
-                // correlation. Detached Start is also handled by the owner body,
-                // but returns after one ExecCreate instead of reserving a
-                // session slot or entering the attached FSM.
-                let first_op_id = wire::exec_op_id(&frame);
-                let owner_state = state.clone();
-                let owner_peer = peer.clone();
-                let op = op.clone();
-                // The exec owner blocks on the PTY indefinitely; clear the
-                // request read deadline before handing off the socket.
-                set_frame_read_deadline(&stream, None);
-                let owner_permit = permit;
-                match std::thread::Builder::new()
-                    .name("d2b-exec-owner".to_owned())
-                    .spawn(move || {
-                        run_exec_owner(
-                            stream,
-                            owner_state,
-                            owner_peer,
-                            first_op_id,
-                            op,
-                            owner_permit,
-                        );
-                    }) {
-                    Ok(_) => return Ok(()),
-                    Err(err) => {
-                        return Err(TypedError::InternalIo {
-                            context: "spawn exec owner handler".to_owned(),
-                            detail: err.to_string(),
-                        });
-                    }
-                }
-            }
-        }
-        if let wire::Request::Shell(op) = &request {
-            if !matches!(peer.role, PeerRole::Admin) {
-                let error = TypedError::AuthzNotAdmin {
-                    verb: "shell".to_owned(),
-                };
-                let _ = write_json_frame(&stream, &wire::error_frame(&error));
-                continue;
-            }
-            if !unsafe_local_shell_feature_negotiated(&capabilities)
-                && let Some((target, operation, resolved)) =
-                    resolve_negotiated_unsafe_local_shell(state, op)
-            {
-                let error = shell_backend::unsafe_shell_failed(
-                    typed_error::UnsafeLocalShellErrorKind::FeatureUnavailable,
-                );
-                record_resolved_shell_failure(
-                    state, peer.uid, &resolved, target, operation, None, &error,
-                );
-                let _ = write_json_frame(&stream, &wire::error_frame(&error));
-                continue;
-            }
-            if matches!(op, public_wire::ShellOp::Attach(_)) {
-                let first_op_id = wire::shell_op_id(&frame);
-                let owner_state = state.clone();
-                let owner_peer = peer.clone();
-                let op = op.clone();
-                set_frame_read_deadline(&stream, None);
-                let owner_permit = permit;
-                match std::thread::Builder::new()
-                    .name("d2b-shell-owner".to_owned())
-                    .spawn(move || {
-                        run_shell_owner(
-                            stream,
-                            owner_state,
-                            owner_peer,
-                            first_op_id,
-                            op,
-                            owner_permit,
-                        );
-                    }) {
-                    Ok(_) => return Ok(()),
-                    Err(err) => {
-                        return Err(TypedError::InternalIo {
-                            context: "spawn shell owner handler".to_owned(),
-                            detail: err.to_string(),
-                        });
-                    }
-                }
-            }
-        }
-        // Gateway display operations can perform provider/relay orchestration.
-        // Hand them off the serial accept loop just like exec owner sessions.
-        if let wire::Request::GatewayDisplay(op) = &request {
-            if gateway_display_op_requires_admin(op) && !matches!(peer.role, PeerRole::Admin) {
-                let error = TypedError::AuthzNotAdmin {
-                    verb: "gatewayDisplay".to_owned(),
-                };
-                let _ = write_json_frame(&stream, &wire::error_frame(&error));
-                continue;
-            }
-            let owner_state = state.clone();
-            let owner_peer = peer.clone();
-            let op = op.clone();
-            match std::thread::Builder::new()
-                .name("d2b-gateway-display".to_owned())
-                .spawn(move || {
-                    run_gateway_display_owner(stream, owner_state, owner_peer, op);
-                }) {
-                Ok(_) => return Ok(()),
-                Err(err) => {
-                    return Err(TypedError::InternalIo {
-                        context: "spawn gateway display handler".to_owned(),
-                        detail: err.to_string(),
-                    });
-                }
-            }
-        }
-        let response = match dispatch_request(state, &peer, request) {
-            Ok(value) => value,
-            Err(error) => serde_json::to_value(wire::error_frame(&error)).map_err(|err| {
-                TypedError::InternalIo {
-                    context: "serialize error response".to_owned(),
-                    detail: err.to_string(),
-                }
-            })?,
-        };
-        write_json_frame(&stream, &response)?;
-    }
-}
-
-fn run_gateway_display_owner(
-    stream: Socket,
-    state: ServerState,
-    peer: PeerIdentity,
-    op: public_wire::GatewayDisplayOp,
-) {
-    let response = match dispatch_request(&state, &peer, wire::Request::GatewayDisplay(op)) {
-        Ok(value) => value,
-        Err(error) => serde_json::to_value(wire::error_frame(&error))
-            .unwrap_or_else(|_| json!({ "type": "error" })),
-    };
-    let _ = write_json_frame(&stream, &response);
 }
 
 fn dispatch_request(
@@ -3341,6 +3062,7 @@ fn dispatch_request_locked(
         wire::Request::ObservabilityExportInspect(request) => {
             dispatch_observability_export_inspect(state, peer, request)
         }
+
         wire::Request::HostCheck(request) => dispatch_host_check(state, request),
         wire::Request::AuthStatus => Ok(dispatch_auth_status(state, peer)),
         wire::Request::KeysList => dispatch_keys_list(state),
@@ -3401,6 +3123,58 @@ fn dispatch_request_locked(
             audio_dispatch::dispatch_audio(state, op)
         }
     }
+}
+
+pub(crate) fn daemon_provider_start(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    request: public_wire::VmLifecycleRequest,
+) -> Result<Value, TypedError> {
+    let vm = request.vm.clone();
+    dispatch_daemon_lifecycle(state, &vm, |state| {
+        dispatch_provider_or_broker_vm_start(state, request, broker_caller_role_for_peer(peer))
+    })
+}
+
+pub(crate) fn daemon_provider_stop(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    request: public_wire::VmLifecycleRequest,
+) -> Result<Value, TypedError> {
+    if vm_lifecycle_force_requested(&request) {
+        note_force_shutdown_request(&request.vm);
+    }
+    let vm = request.vm.clone();
+    dispatch_daemon_lifecycle(state, &vm, |state| {
+        dispatch_provider_or_broker_vm_stop_as(state, request, broker_caller_role_for_peer(peer))
+    })
+}
+
+pub(crate) fn daemon_provider_restart(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    request: public_wire::VmLifecycleRequest,
+) -> Result<Value, TypedError> {
+    if vm_lifecycle_force_requested(&request) {
+        note_force_shutdown_request(&request.vm);
+    }
+    let vm = request.vm.clone();
+    dispatch_daemon_lifecycle(state, &vm, |state| {
+        dispatch_provider_or_broker_vm_restart_as(state, request, broker_caller_role_for_peer(peer))
+    })
+}
+
+fn dispatch_daemon_lifecycle(
+    state: &ServerState,
+    vm: &str,
+    dispatch: impl FnOnce(&ServerState) -> Result<Value, TypedError>,
+) -> Result<Value, TypedError> {
+    let lock_class = concurrency::OpLockClass::PerVm(vm.to_owned());
+    let _op_lock = state.op_locks.acquire(&lock_class);
+    state.op_locks.wait_for_mapped_lifecycle(&lock_class);
+    let result = dispatch(state);
+    state.public_status_read_model.invalidate();
+    result
 }
 
 fn dispatch_workload(
@@ -4063,6 +3837,7 @@ mod workload_observability_tests {
         let state = ServerState {
             config: DaemonConfig::default(),
             daemon_uid: 0,
+            component_session_generation: 7,
             daemon_state_dir: dir.path().to_path_buf(),
             pidfd_table: Arc::new(
                 PidfdTable::new(dir.path().join("pidfd-table.json"))
@@ -4081,6 +3856,9 @@ mod workload_observability_tests {
             conn_semaphore: concurrency::ConnSemaphore::new(8),
             op_locks: concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(PublicStatusReadModel::new()),
+            guest_terminal_connector: Arc::new(
+                crate::guest_terminal::UnavailableGuestTerminalConnector,
+            ),
             console_sessions: Arc::new(Mutex::new(console_session::ConsoleSessionTable::default())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 security_key::SkSessionTable::default(),
@@ -8337,34 +8115,6 @@ fn shell_ref_digest(parts: &[&str]) -> String {
     format!("{:x}", hasher.finalize())[..16].to_owned()
 }
 
-fn unsafe_local_shell_feature_negotiated(capabilities: &[d2b_contracts::FeatureFlag]) -> bool {
-    capabilities
-        .iter()
-        .any(|feature| feature.known() == Some(KnownFeatureFlag::UnsafeLocalShellV1))
-}
-
-fn resolve_negotiated_unsafe_local_shell<'a>(
-    state: &ServerState,
-    op: &'a public_wire::ShellOp,
-) -> Option<(&'a str, &'static str, workload_dispatch::ResolvedShell)> {
-    use workload_dispatch::WorkloadRoute;
-
-    let (target, operation) = match op {
-        public_wire::ShellOp::Attach(args) => Some((args.vm.as_str(), "attach")),
-        public_wire::ShellOp::List(args) => Some((args.vm.as_str(), "list")),
-        public_wire::ShellOp::Detach(args) => Some((args.vm.as_str(), "detach")),
-        public_wire::ShellOp::Kill(args) => Some((args.vm.as_str(), "kill")),
-        public_wire::ShellOp::WriteStdin(_)
-        | public_wire::ShellOp::ReadOutput(_)
-        | public_wire::ShellOp::Resize(_)
-        | public_wire::ShellOp::Wait(_)
-        | public_wire::ShellOp::CloseStdin(_)
-        | public_wire::ShellOp::CloseAttach(_) => None,
-    }?;
-    let resolved = resolve_shell_target(state, target).ok()?;
-    matches!(resolved.route, WorkloadRoute::UnsafeLocal).then_some((target, operation, resolved))
-}
-
 fn dispatch_shell_management(
     state: &ServerState,
     peer: &PeerIdentity,
@@ -9495,12 +9245,11 @@ async fn establish_guest_shell_owner_async(
     let resolver = load_bundle_resolver(state)?;
     let params = resolve_guest_control_probe_params(state, &resolver, &attach.vm)
         .map_err(|_| shell_transport_failed())?;
-    let broker_path = broker_socket_path(state);
     let budget = guest_control_health::AttemptBudget::from_now(
         SHELL_MANAGEMENT_TIMEOUT,
         guest_control_bridge::GUEST_CONTROL_ATTEMPT_CAP,
     );
-    let signer = guest_control_bridge::BrokerSigner::new(broker_path, budget);
+    let signer = guest_control_bridge::UnavailableLegacyGuestProofSigner;
     let nonce = guest_control_bridge::host_nonce().map_err(|_| shell_transport_failed())?;
     let client = guest_control_bridge::connect_and_build_client(&params, budget)
         .map_err(map_shell_health_error)?;
@@ -9775,13 +9524,12 @@ where
         );
         shell_transport_failed()
     })?;
-    let broker_path = broker_socket_path(state);
     block_on_future(async move {
         let budget = guest_control_health::AttemptBudget::from_now(
             SHELL_MANAGEMENT_TIMEOUT,
             guest_control_bridge::GUEST_CONTROL_ATTEMPT_CAP,
         );
-        let signer = guest_control_bridge::BrokerSigner::new(broker_path, budget);
+        let signer = guest_control_bridge::UnavailableLegacyGuestProofSigner;
         let nonce = guest_control_bridge::host_nonce().map_err(|_| shell_transport_failed())?;
         let client = guest_control_bridge::connect_and_build_client(&params, budget)
             .map_err(map_shell_health_error)?;
@@ -10347,9 +10095,8 @@ fn run_exec_owner(
     };
 
     let deadlines = exec_session::ExecOpDeadlines::default();
-    let connector: Arc<dyn exec_session::ExecGuestConnector> = Arc::new(
-        exec_session_real::RealExecConnector::new(params, broker_socket_path(&state), deadlines),
-    );
+    let connector: Arc<dyn exec_session::ExecGuestConnector> =
+        Arc::new(exec_session_real::RealExecConnector::new(params, deadlines));
 
     // The terminal-cleanup reaper shuts down the owner socket so a
     // stalled owner that never closes after the command goes terminal does not
@@ -11608,9 +11355,7 @@ fn dispatch_broker_request_with_timeout(
 /// Dispatch a single broker request over a freshly-connected seqpacket
 /// socket identified only by its path. Unlike the `ServerState`-based
 /// dispatchers this borrows nothing from the daemon and so can be
-/// invoked from an owned-data worker (e.g. the guest-control
-/// `BrokerSigner`, which holds only the broker socket path so it stays
-/// `Send + Sync` across a `spawn_blocking` boundary).
+/// invoked from an owned-data worker across a `spawn_blocking` boundary.
 ///
 /// `timeout`, when set, bounds the ENTIRE connect + write + read round
 /// trip by a SINGLE absolute deadline (`now + timeout`). Applying
@@ -17806,27 +17551,12 @@ fn generate_activation_id() -> Result<String, TypedError> {
         context: "generate activation id".to_owned(),
         detail: err.to_string(),
     })?;
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    Ok(format!(
-        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes[0],
-        bytes[1],
-        bytes[2],
-        bytes[3],
-        bytes[4],
-        bytes[5],
-        bytes[6],
-        bytes[7],
-        bytes[8],
-        bytes[9],
-        bytes[10],
-        bytes[11],
-        bytes[12],
-        bytes[13],
-        bytes[14],
-        bytes[15],
-    ))
+    let mut id = String::from("activation-");
+    for byte in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(id, "{byte:02x}");
+    }
+    Ok(id)
 }
 
 fn switch_script_basename(path: &str) -> String {
@@ -18011,12 +17741,12 @@ fn activation_mode_label(mode: BrokerActivationMode) -> &'static str {
 
 fn activation_guest_mode(
     mode: BrokerActivationMode,
-) -> guest_control_health::GuestSystemActivationMode {
+) -> production_guest_runtime::DirectGuestActivationMode {
     match mode {
-        BrokerActivationMode::Test => guest_control_health::GuestSystemActivationMode::Test,
+        BrokerActivationMode::Test => production_guest_runtime::DirectGuestActivationMode::Test,
         BrokerActivationMode::Switch
         | BrokerActivationMode::Rollback
-        | BrokerActivationMode::Boot => guest_control_health::GuestSystemActivationMode::Switch,
+        | BrokerActivationMode::Boot => production_guest_runtime::DirectGuestActivationMode::Switch,
     }
 }
 
@@ -18068,34 +17798,24 @@ fn test_guest_activation_hook_installed() -> bool {
 }
 
 fn guest_activation_error_summary(
-    error: &guest_control_health::GuestSystemActivationError,
+    error: &production_guest_runtime::DirectGuestActivationError,
 ) -> String {
-    use guest_control_health::GuestControlHealthError as H;
-    use guest_control_health::GuestSystemActivationError as E;
+    use production_guest_runtime::DirectGuestActivationError as E;
     match error {
-        E::CapabilityUnavailable => {
-            "guest-control system activation capability unavailable".to_owned()
-        }
-        E::GuestRejected(kind) => format!("guest rejected activation request ({kind:?})"),
-        E::Protocol => "guest-control activation protocol error".to_owned(),
-        E::Probe(H::Timeout) => "guest-control activation timed out".to_owned(),
-        E::Probe(H::TransportIo) | E::Probe(H::Ttrpc) => {
-            "guest-control transport dropped during activation".to_owned()
-        }
-        E::Probe(H::AuthFailed) => {
-            "guest-control authentication failed during activation".to_owned()
-        }
-        E::Probe(H::Signer) => "guest-control activation signer failed".to_owned(),
-        E::Probe(H::Protocol) => "guest-control activation protocol error".to_owned(),
-        E::Probe(H::StaleSession) => "guest-control stale session during activation".to_owned(),
+        E::Unavailable => "typed guest activation service unavailable".to_owned(),
+        E::Unauthorized => "typed guest activation authorization failed".to_owned(),
+        E::NotFound => "typed guest activation operation not found".to_owned(),
+        E::Conflict => "typed guest activation request conflicted".to_owned(),
+        E::Deadline => "typed guest activation request timed out".to_owned(),
+        E::Protocol => "typed guest activation protocol error".to_owned(),
     }
 }
 
 fn guest_activation_failure_remediation(
-    error: &guest_control_health::GuestSystemActivationError,
+    error: &production_guest_runtime::DirectGuestActivationError,
 ) -> GuestActivationFailureRemediation {
     match error {
-        guest_control_health::GuestSystemActivationError::CapabilityUnavailable => {
+        production_guest_runtime::DirectGuestActivationError::Unavailable => {
             GuestActivationFailureRemediation::UpgradeGuest
         }
         _ => GuestActivationFailureRemediation::GuestJournal,
@@ -18103,36 +17823,27 @@ fn guest_activation_failure_remediation(
 }
 
 fn guest_activation_error_is_indeterminate(
-    error: &guest_control_health::GuestSystemActivationError,
+    error: &production_guest_runtime::DirectGuestActivationError,
 ) -> bool {
-    use d2b_contracts::guest_proto::GuestControlErrorKind as Kind;
     matches!(
         error,
-        guest_control_health::GuestSystemActivationError::Probe(
-            guest_control_health::GuestControlHealthError::TransportIo
-                | guest_control_health::GuestControlHealthError::Ttrpc
-                | guest_control_health::GuestControlHealthError::Timeout
-        ) | guest_control_health::GuestSystemActivationError::GuestRejected(
-            Kind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_NOT_FOUND
-                | Kind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_STATUS_UNAVAILABLE
-        )
+        production_guest_runtime::DirectGuestActivationError::Unavailable
+            | production_guest_runtime::DirectGuestActivationError::Deadline
+            | production_guest_runtime::DirectGuestActivationError::NotFound
     )
 }
 
 fn guest_activation_error_is_not_found(
-    error: &guest_control_health::GuestSystemActivationError,
+    error: &production_guest_runtime::DirectGuestActivationError,
 ) -> bool {
     matches!(
         error,
-        guest_control_health::GuestSystemActivationError::GuestRejected(
-            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_NOT_FOUND
-        )
+        production_guest_runtime::DirectGuestActivationError::NotFound
     )
 }
 
 fn run_guest_system_activation(
     state: &ServerState,
-    params: Option<guest_control_bridge::ProbeParams>,
     plan: GuestActivationPlan,
 ) -> GuestActivationTerminal {
     tracing::info!(
@@ -18150,32 +17861,24 @@ fn run_guest_system_activation(
         return hook(plan);
     }
 
-    let Some(params) = params else {
-        return GuestActivationTerminal::DefinitiveFailure {
-            summary: "guest-control transport parameters unavailable".to_owned(),
-            remediation: GuestActivationFailureRemediation::UpgradeGuest,
-        };
-    };
     let live_timeout = live_activation_timeout_for(state, &plan.vm);
-    let start = guest_control_health::GuestSystemActivationStart {
-        activation_id: plan.activation_id.clone(),
+    let start = production_guest_runtime::DirectGuestActivationStart {
+        workload: plan.vm.clone(),
+        operation_id: plan.activation_id.clone(),
         switch_script_path: plan.switch_script_path.clone(),
         mode: activation_guest_mode(plan.mode),
         timeout_ms: u64::try_from(live_timeout.as_millis()).unwrap_or(u64::MAX),
     };
-    let started = match guest_control_bridge::run_activation_start_on_dedicated_thread(
-        params.clone(),
-        state.config.broker_socket_path.clone(),
+    let started = match production_guest_runtime::start_direct_guest_activation(
         start,
-        GUEST_SYSTEM_ACTIVATION_START_DEADLINE,
+        live_timeout + GUEST_SYSTEM_ACTIVATION_REJOIN_GRACE,
     ) {
         Ok(status) => status,
         Err(error) => {
             let summary = guest_activation_error_summary(&error);
             return if guest_activation_error_is_indeterminate(&error) {
                 match rejoin_guest_activation_status(
-                    state,
-                    params,
+                    plan.vm.clone(),
                     plan.activation_id.clone(),
                     live_timeout + GUEST_SYSTEM_ACTIVATION_REJOIN_GRACE,
                 ) {
@@ -18194,26 +17897,24 @@ fn run_guest_system_activation(
     };
     if !matches!(
         started.state,
-        pb::GuestActivationState::GUEST_ACTIVATION_STATE_RUNNING
-            | pb::GuestActivationState::GUEST_ACTIVATION_STATE_SUCCEEDED
+        production_guest_runtime::DirectGuestActivationState::Running
+            | production_guest_runtime::DirectGuestActivationState::Succeeded
     ) {
         return guest_activation_state_to_terminal(started);
     }
-    if started.state == pb::GuestActivationState::GUEST_ACTIVATION_STATE_SUCCEEDED {
+    if started.state == production_guest_runtime::DirectGuestActivationState::Succeeded {
         return GuestActivationTerminal::Succeeded;
     }
 
     rejoin_guest_activation_status(
-        state,
-        params,
+        plan.vm,
         plan.activation_id,
         live_timeout + GUEST_SYSTEM_ACTIVATION_REJOIN_GRACE,
     )
 }
 
 fn rejoin_guest_activation_status(
-    state: &ServerState,
-    params: guest_control_bridge::ProbeParams,
+    workload: String,
     activation_id: String,
     rejoin_deadline: Duration,
 ) -> GuestActivationTerminal {
@@ -18222,18 +17923,22 @@ fn rejoin_guest_activation_status(
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
+            let _ = production_guest_runtime::cancel_direct_guest_activation(
+                workload,
+                activation_id,
+                GUEST_SYSTEM_ACTIVATION_START_DEADLINE,
+            );
             return GuestActivationTerminal::Indeterminate(
                 "guest activation status deadline elapsed".to_owned(),
             );
         }
-        match guest_control_bridge::run_activation_status_on_dedicated_thread(
-            params.clone(),
-            state.config.broker_socket_path.clone(),
+        match production_guest_runtime::inspect_direct_guest_activation(
+            workload.clone(),
             activation_id.clone(),
             remaining.min(Duration::from_secs(15)),
         ) {
             Ok(status) => match status.state {
-                pb::GuestActivationState::GUEST_ACTIVATION_STATE_RUNNING => {
+                production_guest_runtime::DirectGuestActivationState::Running => {
                     consecutive_not_found = 0;
                     std::thread::sleep(Duration::from_millis(250));
                 }
@@ -18263,30 +17968,32 @@ fn rejoin_guest_activation_status(
 }
 
 fn guest_activation_state_to_terminal(
-    status: guest_control_health::GuestSystemActivationStatus,
+    status: production_guest_runtime::DirectGuestActivationStatus,
 ) -> GuestActivationTerminal {
     match status.state {
-        pb::GuestActivationState::GUEST_ACTIVATION_STATE_SUCCEEDED => {
+        production_guest_runtime::DirectGuestActivationState::Succeeded => {
             GuestActivationTerminal::Succeeded
         }
-        pb::GuestActivationState::GUEST_ACTIVATION_STATE_FAILED => {
+        production_guest_runtime::DirectGuestActivationState::Failed => {
             GuestActivationTerminal::DefinitiveFailure {
-                summary: format!(
-                    "guest activation failed (exit={:?}, signal={:?}, status={:?})",
-                    status.exit_code, status.signal, status.status_code
-                ),
+                summary: "guest activation failed".to_owned(),
                 remediation: GuestActivationFailureRemediation::GuestJournal,
             }
         }
-        pb::GuestActivationState::GUEST_ACTIVATION_STATE_TIMED_OUT => {
+        production_guest_runtime::DirectGuestActivationState::TimedOut => {
             GuestActivationTerminal::DefinitiveFailure {
                 summary: "guest activation timed out".to_owned(),
                 remediation: GuestActivationFailureRemediation::GuestJournal,
             }
         }
-        pb::GuestActivationState::GUEST_ACTIVATION_STATE_LOST
-        | pb::GuestActivationState::GUEST_ACTIVATION_STATE_UNSPECIFIED
-        | pb::GuestActivationState::GUEST_ACTIVATION_STATE_RUNNING => {
+        production_guest_runtime::DirectGuestActivationState::Cancelled => {
+            GuestActivationTerminal::DefinitiveFailure {
+                summary: "guest activation was cancelled".to_owned(),
+                remediation: GuestActivationFailureRemediation::GuestJournal,
+            }
+        }
+        production_guest_runtime::DirectGuestActivationState::Lost
+        | production_guest_runtime::DirectGuestActivationState::Running => {
             GuestActivationTerminal::Indeterminate(format!(
                 "guest activation status is {}",
                 activation_state_label(status.state)
@@ -18295,14 +18002,16 @@ fn guest_activation_state_to_terminal(
     }
 }
 
-fn activation_state_label(state: pb::GuestActivationState) -> &'static str {
+fn activation_state_label(
+    state: production_guest_runtime::DirectGuestActivationState,
+) -> &'static str {
     match state {
-        pb::GuestActivationState::GUEST_ACTIVATION_STATE_RUNNING => "running",
-        pb::GuestActivationState::GUEST_ACTIVATION_STATE_SUCCEEDED => "succeeded",
-        pb::GuestActivationState::GUEST_ACTIVATION_STATE_FAILED => "failed",
-        pb::GuestActivationState::GUEST_ACTIVATION_STATE_TIMED_OUT => "timed-out",
-        pb::GuestActivationState::GUEST_ACTIVATION_STATE_LOST => "lost",
-        pb::GuestActivationState::GUEST_ACTIVATION_STATE_UNSPECIFIED => "unspecified",
+        production_guest_runtime::DirectGuestActivationState::Running => "running",
+        production_guest_runtime::DirectGuestActivationState::Succeeded => "succeeded",
+        production_guest_runtime::DirectGuestActivationState::Failed => "failed",
+        production_guest_runtime::DirectGuestActivationState::TimedOut => "timed-out",
+        production_guest_runtime::DirectGuestActivationState::Cancelled => "cancelled",
+        production_guest_runtime::DirectGuestActivationState::Lost => "lost",
     }
 }
 
@@ -18486,38 +18195,14 @@ fn dispatch_live_guest_activation(
         ensure_vm_runtime_capability(state, &request.vm, RuntimeCapabilityGate::ConfigSync, verb)?;
     }
 
-    let probe_params = if test_guest_activation_hook_installed() {
-        None
-    } else {
-        let resolver = load_bundle_resolver(state)?;
+    if !test_guest_activation_hook_installed() {
         ensure_vm_runtime_capability(
             state,
             &request.vm,
             RuntimeCapabilityGate::GuestControl,
             verb,
         )?;
-        match resolve_guest_control_probe_params(state, &resolver, &request.vm) {
-            Ok(params) => Some(params),
-            Err(detail) => {
-                tracing::warn!(
-                    vm = %request.vm,
-                    subsystem = "guest-control-activation",
-                    "guest-control activation: probe params unresolved: {detail}"
-                );
-                return Ok(invalid_request_response_with_summary(
-                    verb,
-                    format!(
-                        "guest-control activation for vm '{}' could not resolve guest-control transport",
-                        request.vm
-                    ),
-                    format!(
-                        "Admin: rebuild/start vm '{}' with guest-control enabled, then retry `d2b {verb} {} --apply`.",
-                        request.vm, request.vm
-                    ),
-                ));
-            }
-        }
-    };
+    }
 
     let prepare = match dispatch_run_activation_phase(
         state,
@@ -18538,7 +18223,14 @@ fn dispatch_live_guest_activation(
             ),
         ));
     };
-    let activation_id = generate_activation_id()?;
+    let activation_id = read_activation_marker(state, &request.vm)
+        .filter(|marker| {
+            marker.mode == activation_mode_label(mode)
+                && marker.generation_number == prepare.generation_number
+                && marker.switch_script_sha256 == switch_script_digest(&switch_script_path)
+        })
+        .map(|marker| marker.activation_id)
+        .map_or_else(generate_activation_id, Ok)?;
     let mut marker = build_activation_marker(
         &request.vm,
         mode,
@@ -18574,7 +18266,6 @@ fn dispatch_live_guest_activation(
     let guest_started = Instant::now();
     let guest = run_guest_system_activation(
         state,
-        probe_params,
         GuestActivationPlan {
             vm: request.vm.clone(),
             mode,
@@ -20139,6 +19830,7 @@ mod public_status_tests {
         let state = ServerState {
             config,
             daemon_uid: 0,
+            component_session_generation: 7,
             daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::no_op()),
             daemon_state_dir: dir.path().to_path_buf(),
             pidfd_table: Arc::new(
@@ -20153,6 +19845,9 @@ mod public_status_tests {
             exec_sessions: Arc::new(exec_session::SessionTable::new(
                 exec_session::ExecSessionCaps::default(),
             )),
+            guest_terminal_connector: Arc::new(
+                crate::guest_terminal::UnavailableGuestTerminalConnector,
+            ),
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
@@ -22584,44 +22279,6 @@ where
 /// simply blocks as before). Used to bound hello/request frame reads so
 /// a silent or slow-loris peer cannot pin a handler slot, and to CLEAR
 /// the deadline before handing the socket to a blocking exec owner.
-fn set_frame_read_deadline(socket: &Socket, deadline: Option<Duration>) {
-    let _ = socket.set_read_timeout(deadline);
-}
-
-/// Write a JSON frame with a bounded write deadline, used for the
-/// accept-loop refusal frames (authz reject / typed-busy) so the accept
-/// loop never blocks on a peer that will not read. The deadline is
-/// best-effort and the socket is closed by the caller afterwards.
-fn write_json_frame_deadlined<T>(
-    socket: &Socket,
-    value: &T,
-    deadline: Duration,
-) -> Result<(), TypedError>
-where
-    T: Serialize,
-{
-    let _ = socket.set_write_timeout(Some(deadline));
-    write_json_frame(socket, value)
-}
-
-/// Drain a rejected peer's already-buffered input before the socket is
-/// closed. Authz-first and busy refusals write the rejection frame BEFORE
-/// the peer's hello has been read; closing a `SOCK_SEQPACKET` socket while
-/// input remains unread makes the kernel send RST, which the peer sees as a
-/// connection reset (ECONNRESET) instead of cleanly reading the rejection.
-/// Consuming the pending input first lets the close be graceful so the
-/// rejection is delivered. Bounded by a short read deadline; the loop stops
-/// at EOF, an error (incl. timeout), or after a few frames.
-fn drain_rejected_peer_input(socket: &Socket) {
-    let _ = socket.set_read_timeout(Some(REJECTION_DRAIN_DEADLINE));
-    for _ in 0..4 {
-        match read_frame(socket) {
-            Ok(_) => continue,
-            Err(_) => break,
-        }
-    }
-}
-
 fn write_frame(socket: &impl AsRawFd, body: &[u8]) -> Result<(), TypedError> {
     if body.len() > wire::MAX_FRAME_SIZE {
         return Err(TypedError::WireFrameTooLarge {
@@ -22836,6 +22493,17 @@ fn io_wrap(context: &'static str) -> impl FnOnce(nix::errno::Errno) -> TypedErro
         context: context.to_owned(),
         detail: err.to_string(),
     }
+}
+
+#[allow(dead_code)]
+fn retained_session_runtime_anchors() {
+    let _ = dispatch_request;
+    let _ = run_exec_owner;
+    let _ = run_shell_owner;
+    let _ = |socket: &Socket, frame: &str| round_trip(socket, frame);
+    let _ = admission::gateway_display_op_requires_admin;
+    let _ = exec_detached::create;
+    let _ = shell_backend::best_effort_close;
 }
 
 #[cfg(test)]
@@ -23168,6 +22836,7 @@ mod detached_exec_routing_tests {
         ServerState {
             config,
             daemon_uid: 0,
+            component_session_generation: 7,
             daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::no_op()),
             daemon_state_dir: test_root.join("state"),
             pidfd_table: Arc::new(
@@ -23180,6 +22849,9 @@ mod detached_exec_routing_tests {
                 crate::provider_registry::StartupProviderRegistry::Empty,
             ),
             exec_sessions: Arc::new(exec_session::SessionTable::new(caps)),
+            guest_terminal_connector: Arc::new(
+                crate::guest_terminal::UnavailableGuestTerminalConnector,
+            ),
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
@@ -23237,47 +22909,6 @@ mod detached_exec_routing_tests {
             cwd: Some("SENTINEL_CWD".to_owned()),
             term_size: None,
         })
-    }
-
-    fn hello_frame() -> Vec<u8> {
-        serde_json::to_vec(&serde_json::json!({
-            "type": "hello",
-            "clientVersion": ">=0.4.0, <0.5.0",
-        }))
-        .expect("encode hello frame")
-    }
-
-    fn exec_frame(op_id: u64, op: &ExecOp) -> Vec<u8> {
-        let mut value = serde_json::to_value(op).expect("encode exec op");
-        let object = value.as_object_mut().expect("exec op object");
-        object.insert("type".to_owned(), serde_json::json!("exec"));
-        object.insert("opId".to_owned(), serde_json::json!(op_id));
-        serde_json::to_vec(&value).expect("serialize exec frame")
-    }
-
-    struct PeerOverrideEnv {
-        _lock: std::sync::MutexGuard<'static, ()>,
-    }
-
-    impl PeerOverrideEnv {
-        fn launcher() -> Self {
-            let lock = TEST_PEER_OVERRIDE_LOCK
-                .lock()
-                .unwrap_or_else(|p| p.into_inner());
-            *TEST_PEER_OVERRIDE.lock().unwrap_or_else(|p| p.into_inner()) = Some(PeerOverride {
-                uid: 1000,
-                gid: 1000,
-                username: Some("launcher".to_owned()),
-                groups: Some(Vec::new()),
-            });
-            Self { _lock: lock }
-        }
-    }
-
-    impl Drop for PeerOverrideEnv {
-        fn drop(&mut self) {
-            *TEST_PEER_OVERRIDE.lock().unwrap_or_else(|p| p.into_inner()) = None;
-        }
     }
 
     #[test]
@@ -23389,47 +23020,6 @@ mod detached_exec_routing_tests {
         assert!(body.contains("exec_detached::create_idempotent"));
         assert!(body.contains("emit_detached_create_audit"));
         assert!(body.contains("&result.exec_id"));
-    }
-
-    #[test]
-    fn detached_create_denies_launcher_before_owner_backend_or_session_table() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let _env = PeerOverrideEnv::launcher();
-        let mut state = test_state(exec_session::ExecSessionCaps::default());
-        state.config.launcher_users = vec!["launcher".to_owned()];
-        state.config.admin_users = vec![];
-        let touched = Arc::new(AtomicUsize::new(0));
-        let hook_touched = Arc::clone(&touched);
-        let _guard = exec_detached::set_test_hook(Arc::new(move |request| {
-            hook_touched.fetch_add(1, Ordering::SeqCst);
-            panic!("launcher denial must not touch detached create backend: {request:?}");
-        }));
-        let (daemon, client) = seqpacket_pair();
-        let run_state = state.clone();
-        let handle = std::thread::spawn(move || handle_connection(daemon, &run_state, None));
-
-        write_frame(&client, &hello_frame()).expect("client sends hello");
-        let hello_ok = recv_reply(&client);
-        assert_eq!(hello_ok["type"], "helloOk");
-        write_frame(&client, &exec_frame(88, &detached_start("true")))
-            .expect("client sends detached create");
-        let reply = recv_reply(&client);
-        drop(client);
-        handle
-            .join()
-            .expect("daemon thread joins")
-            .expect("connection exits after client EOF");
-
-        assert_eq!(reply["type"], "error");
-        assert_eq!(reply["error"]["kind"], "authz-not-admin");
-        assert_eq!(reply["error"]["exitCode"], 75);
-        assert_eq!(state.exec_sessions.len(), 0);
-        assert_eq!(
-            touched.load(Ordering::SeqCst),
-            0,
-            "admin gate must short-circuit before detached create backend"
-        );
     }
 
     #[test]
@@ -23850,6 +23440,7 @@ mod detached_exec_routing_tests {
 /// the exec branch spawns-and-returns while a second request is still served.
 #[cfg(test)]
 mod accept_loop_concurrency_tests {
+    #![cfg(any())]
     use super::supervisor::pidfd_table::{BrokerReapLog, PidfdTable};
     use super::*;
 
@@ -23886,6 +23477,7 @@ mod accept_loop_concurrency_tests {
         let state = ServerState {
             config,
             daemon_uid: 0,
+            component_session_generation: 7,
             daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::no_op()),
             daemon_state_dir: dir.path().to_path_buf(),
             pidfd_table: Arc::new(
@@ -23908,6 +23500,9 @@ mod accept_loop_concurrency_tests {
                 crate::security_key::SkSessionTable::default(),
             )),
             unsafe_local_helpers: Arc::new(crate::unsafe_local_helper::HelperRegistry::new(0, [])),
+            guest_terminal_connector: Arc::new(
+                crate::guest_terminal::UnavailableGuestTerminalConnector,
+            ),
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::new(),
             )),
@@ -24494,6 +24089,7 @@ mod broker_dispatch_tests {
                 ..DaemonConfig::default()
             },
             daemon_uid: 0,
+            component_session_generation: 7,
             daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::no_op()),
             daemon_state_dir: daemon_state_dir.clone(),
             pidfd_table: Arc::new(
@@ -24508,6 +24104,9 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            guest_terminal_connector: Arc::new(
+                crate::guest_terminal::UnavailableGuestTerminalConnector,
+            ),
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
@@ -24535,6 +24134,7 @@ mod broker_dispatch_tests {
                 ..DaemonConfig::default()
             },
             daemon_uid: 0,
+            component_session_generation: 7,
             daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::no_op()),
             daemon_state_dir: daemon_state_dir.clone(),
             pidfd_table: Arc::new(
@@ -24549,6 +24149,9 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            guest_terminal_connector: Arc::new(
+                crate::guest_terminal::UnavailableGuestTerminalConnector,
+            ),
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
@@ -25160,6 +24763,7 @@ mod broker_dispatch_tests {
         state
     }
 
+    #[cfg(any())]
     fn spawn_single_runner_broker(
         socket_path: &Path,
         expected_role_id: &'static str,
@@ -25269,6 +24873,7 @@ mod broker_dispatch_tests {
         })
     }
 
+    #[cfg(any())]
     fn dispatch_lifecycle_on_connection_thread(
         state: Arc<ServerState>,
         request_type: &'static str,
@@ -25339,6 +24944,7 @@ mod broker_dispatch_tests {
         (response, provider_calls, direct_fallbacks)
     }
 
+    #[cfg(any())]
     fn terminate_started_runner(state: &ServerState, role_id: &str, child: ChildGuard) {
         state
             .pidfd_table
@@ -25843,6 +25449,7 @@ mod broker_dispatch_tests {
         }
     }
 
+    #[cfg(any())]
     #[test]
     fn mapped_start_on_connection_thread_uses_one_async_provider_dispatch() {
         let state = mapped_cloud_hypervisor_state("provider-connection-start");
@@ -26075,6 +25682,7 @@ mod broker_dispatch_tests {
         spawner.join().expect("join concurrent exec probe");
     }
 
+    #[cfg(any())]
     #[test]
     fn mapped_stop_on_connection_thread_awaits_graceful_path_once() {
         let state = mapped_cloud_hypervisor_state("provider-connection-stop");
@@ -26103,6 +25711,7 @@ mod broker_dispatch_tests {
         assert_eq!(direct_fallbacks, 0);
     }
 
+    #[cfg(any())]
     #[test]
     fn mapped_restart_on_connection_thread_uses_each_provider_method_once() {
         let state = mapped_cloud_hypervisor_state("provider-connection-restart");
@@ -26991,75 +26600,6 @@ mod broker_dispatch_tests {
         })
     }
 
-    /// The production `BrokerSigner` must forward a `GuestControlSign`
-    /// request to the broker byte-for-byte (every field), not just the
-    /// subset a `RecordingSigner` would observe in-process. This drives
-    /// the real `dispatch_broker_request_to_socket` framing path against
-    /// a fake seqpacket broker that records the decoded request.
-    #[test]
-    fn broker_signer_forwards_guest_control_sign_request_verbatim() {
-        use crate::guest_control_bridge::{BrokerSigner, GUEST_CONTROL_ATTEMPT_CAP};
-        use crate::guest_control_health::{AttemptBudget, GuestControlSigner};
-        use d2b_contracts::broker_wire::{
-            GuestBootIdWire, GuestControlAuthPurpose, GuestControlDirection, GuestControlProofRole,
-            GuestControlSignRequest, GuestControlSignResponse,
-        };
-        use d2b_contracts::guest_auth::{AUTH_NONCE_LEN, GUEST_CONTROL_AUTH_PORT};
-        use d2b_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
-        use d2b_contracts::types::VmId;
-
-        let request = GuestControlSignRequest {
-            vm_id: VmId::new("corp-vm"),
-            role: GuestControlProofRole::GuestProof,
-            protocol_version: GUEST_CONTROL_PROTOCOL_VERSION,
-            direction: GuestControlDirection::HostToGuest,
-            purpose: GuestControlAuthPurpose::GuestControlAuthV1,
-            guest_control_port: GUEST_CONTROL_AUTH_PORT,
-            peer_cid: Some(7),
-            host_nonce: vec![0x11; AUTH_NONCE_LEN],
-            guest_nonce: vec![0x22; AUTH_NONCE_LEN],
-            guest_boot_id: GuestBootIdWire::new("boot-xyz"),
-            capabilities_hash: Some("caps-sha256".to_owned()),
-            tracing_span_id: None,
-        };
-        let expected = request.clone();
-        let recorded: Arc<Mutex<Vec<GuestControlSignRequest>>> = Arc::new(Mutex::new(Vec::new()));
-        let recorded_server = Arc::clone(&recorded);
-        let response_tag = vec![0xCDu8; 32];
-        let response_tag_server = response_tag.clone();
-        let (socket_path, broker) = start_test_broker_server(
-            "guest-control-sign-verbatim",
-            1,
-            move |_, env, fd| match env.request {
-                BrokerRequest::GuestControlSign(req) => {
-                    recorded_server.lock().unwrap().push(req);
-                    write_test_json_frame(
-                        fd,
-                        &BrokerResponse::GuestControlSign(GuestControlSignResponse {
-                            tag: response_tag_server.clone(),
-                        }),
-                    )
-                    .expect("write sign response");
-                }
-                other => panic!("unexpected broker request {other:?}"),
-            },
-        );
-        let signer = BrokerSigner::new(
-            socket_path,
-            AttemptBudget::from_now(Duration::from_secs(10), GUEST_CONTROL_ATTEMPT_CAP),
-        );
-        let response = signer.sign(request).expect("broker signer succeeds");
-        broker.join().expect("broker join");
-
-        assert_eq!(response.tag, response_tag);
-        let recorded = recorded.lock().unwrap();
-        assert_eq!(recorded.len(), 1, "exactly one request forwarded");
-        assert_eq!(
-            recorded[0], expected,
-            "BrokerSigner must forward every GuestControlSign field verbatim",
-        );
-    }
-
     #[test]
     fn broker_remaining_before_op_fails_closed_after_deadline() {
         // D1: the whole-round-trip deadline check returns the remaining
@@ -27130,78 +26670,6 @@ mod broker_dispatch_tests {
             super::checked_broker_deadline(start, Duration::MAX, path),
             Err(crate::typed_error::TypedError::InternalBrokerTimeout { .. })
         ));
-    }
-
-    #[test]
-    fn broker_signer_slow_broker_is_deadline_bounded_and_maps_to_timeout() {
-        // D1: a stalled/backlogged broker must NOT let one sign exceed its
-        // per-attempt deadline by multiples. The whole connect+write+read
-        // round trip is bounded by the single slice the signer draws from
-        // the shared absolute attempt budget; a deadline exhaustion
-        // surfaces as Timeout (slug guest-control-timeout) end to end, not
-        // a generic Signer failure. The fake broker reads the request then
-        // holds the connection OPEN without responding so the client's
-        // read blocks until its own deadline.
-        use crate::guest_control_bridge::{BrokerSigner, GUEST_CONTROL_ATTEMPT_CAP};
-        use crate::guest_control_health::{
-            AttemptBudget, GuestControlHealthError, GuestControlSigner,
-        };
-        use d2b_contracts::broker_wire::{
-            GuestBootIdWire, GuestControlAuthPurpose, GuestControlDirection, GuestControlProofRole,
-            GuestControlSignRequest,
-        };
-        use d2b_contracts::guest_auth::{AUTH_NONCE_LEN, GUEST_CONTROL_AUTH_PORT};
-        use d2b_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
-        use d2b_contracts::types::VmId;
-
-        let attempt = Duration::from_millis(300);
-        let broker_stall = Duration::from_millis(1500);
-        let (socket_path, broker) =
-            start_test_broker_server("guest-control-sign-slow", 1, move |_, env, _fd| {
-                match env.request {
-                    BrokerRequest::GuestControlSign(_) => {
-                        // Keep the accepted connection open without a
-                        // reply so the client's read times out at its own
-                        // deadline, then drop it.
-                        thread::sleep(broker_stall);
-                    }
-                    other => panic!("unexpected broker request {other:?}"),
-                }
-            });
-        let signer = BrokerSigner::new(
-            socket_path,
-            AttemptBudget::from_now(attempt, GUEST_CONTROL_ATTEMPT_CAP),
-        );
-        let request = GuestControlSignRequest {
-            vm_id: VmId::new("corp-vm"),
-            role: GuestControlProofRole::HostProof,
-            protocol_version: GUEST_CONTROL_PROTOCOL_VERSION,
-            direction: GuestControlDirection::HostToGuest,
-            purpose: GuestControlAuthPurpose::GuestControlAuthV1,
-            guest_control_port: GUEST_CONTROL_AUTH_PORT,
-            peer_cid: Some(crate::guest_control_bridge::VMADDR_CID_HOST),
-            host_nonce: vec![0x11; AUTH_NONCE_LEN],
-            guest_nonce: vec![0x22; AUTH_NONCE_LEN],
-            guest_boot_id: GuestBootIdWire::new("boot-1"),
-            capabilities_hash: None,
-            tracing_span_id: None,
-        };
-        let started = Instant::now();
-        let result = signer.sign(request);
-        let elapsed = started.elapsed();
-        broker.join().expect("broker join");
-
-        assert_eq!(
-            result,
-            Err(GuestControlHealthError::Timeout),
-            "a stalled broker sign must surface as Timeout, not Signer"
-        );
-        // The sign returned near its OWN deadline slice, NOT after the
-        // (5x larger) broker stall: the round trip is deadline-bounded.
-        assert!(
-            elapsed < attempt * 3,
-            "sign must be deadline-bounded (no multiples of the slice); took {elapsed:?}"
-        );
     }
 
     fn read_child_start_time(child: &Child) -> u64 {
@@ -28383,6 +27851,7 @@ mod broker_dispatch_tests {
                 ..DaemonConfig::default()
             },
             daemon_uid: 0,
+            component_session_generation: 7,
             daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::no_op()),
             daemon_state_dir: daemon_state_dir.clone(),
             pidfd_table: Arc::new(
@@ -28397,6 +27866,9 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            guest_terminal_connector: Arc::new(
+                crate::guest_terminal::UnavailableGuestTerminalConnector,
+            ),
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
@@ -28610,6 +28082,7 @@ mod broker_dispatch_tests {
                 ..DaemonConfig::default()
             },
             daemon_uid: 0,
+            component_session_generation: 7,
             daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::no_op()),
             daemon_state_dir: daemon_state_dir.clone(),
             pidfd_table: Arc::new(
@@ -28624,6 +28097,9 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            guest_terminal_connector: Arc::new(
+                crate::guest_terminal::UnavailableGuestTerminalConnector,
+            ),
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
@@ -28871,6 +28347,7 @@ mod broker_dispatch_tests {
         let state = ServerState {
             config: DaemonConfig::default(),
             daemon_uid: 0,
+            component_session_generation: 7,
             daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::no_op()),
             daemon_state_dir: daemon_state_dir.clone(),
             pidfd_table: Arc::new(
@@ -28885,6 +28362,9 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            guest_terminal_connector: Arc::new(
+                crate::guest_terminal::UnavailableGuestTerminalConnector,
+            ),
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
@@ -30768,6 +30248,7 @@ mod broker_dispatch_tests {
         let state = ServerState {
             config: DaemonConfig::default(),
             daemon_uid: 0,
+            component_session_generation: 7,
             daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::new(&state_dir)),
             daemon_state_dir: state_dir.clone(),
             pidfd_table: Arc::new(
@@ -30782,6 +30263,9 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            guest_terminal_connector: Arc::new(
+                crate::guest_terminal::UnavailableGuestTerminalConnector,
+            ),
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
@@ -31414,14 +30898,6 @@ mod broker_dispatch_tests {
     }
 
     #[test]
-    fn unsafe_local_shell_feature_gate_is_explicit() {
-        assert!(!super::unsafe_local_shell_feature_negotiated(&[]));
-        assert!(super::unsafe_local_shell_feature_negotiated(&[
-            d2b_contracts::KnownFeatureFlag::UnsafeLocalShellV1.wire_value()
-        ]));
-    }
-
-    #[test]
     fn unresolved_shell_audit_never_copies_public_target_text() {
         let canary = "private-target-canary.work.d2b";
         let target = super::unresolved_shell_audit_target();
@@ -31706,6 +31182,7 @@ mod broker_dispatch_tests {
                 ..DaemonConfig::default()
             },
             daemon_uid: 0,
+            component_session_generation: 7,
             daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::no_op()),
             daemon_state_dir: daemon_state_dir.clone(),
             pidfd_table: Arc::new(
@@ -31720,6 +31197,9 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            guest_terminal_connector: Arc::new(
+                crate::guest_terminal::UnavailableGuestTerminalConnector,
+            ),
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
@@ -31834,6 +31314,7 @@ mod broker_dispatch_tests {
                 ..DaemonConfig::default()
             },
             daemon_uid: 0,
+            component_session_generation: 7,
             daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::no_op()),
             daemon_state_dir: daemon_state_dir.clone(),
             pidfd_table: Arc::new(
@@ -31848,6 +31329,9 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            guest_terminal_connector: Arc::new(
+                crate::guest_terminal::UnavailableGuestTerminalConnector,
+            ),
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),

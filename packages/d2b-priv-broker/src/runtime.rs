@@ -1,64 +1,46 @@
 use std::env;
 use std::fs;
 use std::io;
-#[cfg(not(feature = "layer1-bootstrap"))]
 use std::io::Read;
-use std::os::fd::{AsFd, AsRawFd, OwnedFd};
-#[cfg(not(feature = "layer1-bootstrap"))]
+use std::os::fd::AsFd;
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-#[cfg(not(feature = "layer1-bootstrap"))]
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     sync::OnceLock,
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::sys::{owned_fd_from_raw, path_safe, peer_credentials};
-#[cfg(not(feature = "layer1-bootstrap"))]
+use crate::sys::{owned_fd_from_raw, peer_credentials};
 use hmac::{Hmac, Mac};
-#[cfg(not(feature = "layer1-bootstrap"))]
 use nix::libc;
-#[cfg(not(feature = "layer1-bootstrap"))]
 use nix::sys::socket::{AddressFamily, SockType, socketpair};
 use nix::sys::socket::{SockFlag, accept4};
-#[cfg(not(feature = "layer1-bootstrap"))]
 use nix::unistd::dup;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-#[cfg(not(feature = "layer1-bootstrap"))]
 use sha2::Sha256;
-#[cfg(not(feature = "layer1-bootstrap"))]
 use tracing::info;
 use tracing::warn;
 
 use crate::audit::{AuditLog, AuditWriteClass};
-#[cfg(not(feature = "layer1-bootstrap"))]
 use crate::audit::{BROKER_VERSION, new_event_id, result_for_decision};
-#[cfg(not(feature = "layer1-bootstrap"))]
 use crate::ops::audit_op::{
     OpAuditRecord, OperationFields, UsbAuditDeviceIdentity, UsbSerialCorrelation,
     UsbSerialCorrelationKeyRotationAudit,
 };
-#[cfg(feature = "layer1-bootstrap")]
-use crate::protocol::{bind_seqpacket, connect_seqpacket, recv_json_frame, send_json_frame};
-#[cfg(not(feature = "layer1-bootstrap"))]
-use crate::protocol::{bind_seqpacket, recv_json_frame, send_json_frame, send_json_frame_with_fds};
 
-#[cfg(feature = "layer1-bootstrap")]
+#[cfg(any())]
 #[allow(unused_imports)]
 use crate::bootstrap::manifest as manifest_api;
-#[cfg(feature = "layer1-bootstrap")]
-use crate::bootstrap::wire::{BrokerRequest, BrokerResponse, CallerRole, RequestEnvelope};
-#[cfg(not(feature = "layer1-bootstrap"))]
-use d2b_contracts::broker_wire::{
-    BrokerCallerRole as CallerRole, BrokerRequest, BrokerRequestEnvelope as RequestEnvelope,
-    BrokerResponse,
-};
+#[cfg(any())]
+use crate::bootstrap::wire::{BrokerRequest, BrokerResponse, CallerRole};
+use d2b_contracts::broker_wire::{BrokerCallerRole as CallerRole, BrokerRequest, BrokerResponse};
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 use d2b_core::bundle_resolver::BundleResolver;
 use d2b_core::realm_controller_config::{RealmControllerMetadataSummary, RealmControllersJson};
 use d2b_realm_core::{RealmIdentityConfigJson, RealmIdentityConfigSummary};
@@ -124,23 +106,7 @@ pub struct ServerConfig {
 #[derive(Debug, Clone)]
 pub enum BrokerMode {
     Serve(ServerConfig),
-    #[cfg(feature = "layer1-bootstrap")]
-    ProbeHello {
-        socket_path: PathBuf,
-        test_uid: Option<u32>,
-    },
-    #[cfg(feature = "layer1-bootstrap")]
-    ProbeStub {
-        socket_path: PathBuf,
-        test_uid: Option<u32>,
-        operation: String,
-    },
-    #[cfg(feature = "layer1-bootstrap")]
-    ProbeExportAudit {
-        socket_path: PathBuf,
-        test_uid: Option<u32>,
-        caller_role: CallerRole,
-    },
+    ServeChildRealm,
 }
 
 #[derive(Debug)]
@@ -158,11 +124,11 @@ impl From<io::Error> for RunError {
 
 #[derive(Debug)]
 enum BrokerError {
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    #[cfg_attr(any(), allow(dead_code))]
     MinijailValidation {
         reason: String,
     },
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    #[cfg_attr(any(), allow(dead_code))]
     NoPidfd {
         runner_id: String,
     },
@@ -178,52 +144,52 @@ enum BrokerError {
     /// `UsbipProxyReconcile`) were out of scope for the initial broker
     /// and were wired into the non-bootstrap real-wire dispatch later,
     /// so this variant is only constructed by the bootstrap dispatch arm.
-    #[cfg_attr(not(feature = "layer1-bootstrap"), allow(dead_code))]
+    #[cfg_attr(not(any()), allow(dead_code))]
     UnknownOperation {
         operation: &'static str,
     },
     AuditRequiresAdmin,
-    #[cfg_attr(not(feature = "layer1-bootstrap"), allow(dead_code))]
+    #[cfg_attr(not(any()), allow(dead_code))]
     ValidateBundle(String),
     /// Broker started without a loadable bundle at
     /// `ServerConfig.bundle_path`; bundle-dependent real-wire ops cannot
     /// resolve their `BundleOpId` refs and refuse fail-closed.
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    #[cfg_attr(any(), allow(dead_code))]
     BundleResolverUnavailable,
     /// Bundle artifact at `ServerConfig.bundle_path` failed the
     /// tamper-resistance check (symlink / owner / mode / hash). Every
     /// incoming operation surfaces this error until the broker is
     /// restarted with a clean bundle.
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    #[cfg_attr(any(), allow(dead_code))]
     BundleTampered {
         path: String,
         reason: String,
     },
     /// The daemon-supplied `bundle_*_intent_ref` did not resolve
     /// against the bundle's intent table.
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    #[cfg_attr(any(), allow(dead_code))]
     BundleIntentMissing {
         kind: &'static str,
         intent_id: String,
     },
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    #[cfg_attr(any(), allow(dead_code))]
     StoreViewFilesystemMismatch {
         a: String,
         a_dev: u64,
         b: String,
         b_dev: u64,
     },
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    #[cfg_attr(any(), allow(dead_code))]
     StoreViewMarkerMissing {
         generation_dir: String,
     },
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    #[cfg_attr(any(), allow(dead_code))]
     UsbipDeviceNotAllowed {
         busid: String,
         vendor: u16,
         product: u16,
     },
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    #[cfg_attr(any(), allow(dead_code))]
     UsbipPolicyMismatch {
         busid: String,
         reason: &'static str,
@@ -232,7 +198,7 @@ enum BrokerError {
     /// different VM. The daemon maps this to `LockConflict` via the
     /// wire kind `"Broker.UsbipLockConflict"` without string-matching on
     /// a redacted `LiveHandler` message.
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    #[cfg_attr(any(), allow(dead_code))]
     UsbipLockConflict {
         busid: String,
         owner: String,
@@ -240,24 +206,24 @@ enum BrokerError {
     /// `UsbipBind` refused because the physical USB device is absent in
     /// sysfs. The daemon maps this to `RuntimeAbsent` via the wire kind
     /// `"Broker.UsbipDeviceAbsent"`.
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    #[cfg_attr(any(), allow(dead_code))]
     UsbipDeviceAbsent {
         busid: String,
     },
     /// The live executor reported an error (nft/route/sysctl shellout
     /// failed, pidfd open failed, spawn preflight failed, etc).
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    #[cfg_attr(any(), allow(dead_code))]
     LiveHandler(String),
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    #[cfg_attr(any(), allow(dead_code))]
     CoexistenceRefused {
         manager: d2b_core::host_w3::FirewallManager,
         rationale: String,
     },
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    #[cfg_attr(any(), allow(dead_code))]
     NftScriptParseFailed(String),
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    #[cfg_attr(any(), allow(dead_code))]
     CarveoutOrderingViolation(String),
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    #[cfg_attr(any(), allow(dead_code))]
     NftablesDriftDetected {
         expected: String,
         observed: String,
@@ -268,12 +234,12 @@ enum BrokerError {
     /// only into the obs VM declared in the trusted bundle; any other
     /// target is a closed-set violation and the broker refuses
     /// fail-closed.
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    #[cfg_attr(any(), allow(dead_code))]
     OtelHostBridgeIntentInvalid {
         intent_vm: String,
         expected_obs_vm: String,
     },
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    #[cfg_attr(any(), allow(dead_code))]
     SpawnRunnerIntentMismatch {
         field: &'static str,
         requested: String,
@@ -286,7 +252,7 @@ enum BrokerError {
     /// [`BrokerError::audit`] is a deliberate no-op so the generic dispatch
     /// error path never writes a SECOND record for the same attempt
     /// (exactly one terminal StoreSync record per attempt).
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    #[cfg_attr(any(), allow(dead_code))]
     StoreSyncFailed {
         error_stage: &'static str,
         message: String,
@@ -295,17 +261,13 @@ enum BrokerError {
     PeerCredentialRefused {
         operation: &'static str,
     },
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
-    GuestControlSignRefused {
-        reason: &'static str,
-    },
     /// swtpm-dir first-run hardening (issue #64) refused to proceed.
     /// Carries the path-free [`OperationFields::PrepareSwtpmDir`] audit
     /// so the SpawnRunner dispatch arm emits exactly one terminal
     /// `PrepareSwtpmDir` record (its [`BrokerError::audit`] is a no-op,
     /// mirroring `StoreSyncFailed`). The wire envelope surfaces only the
     /// closed-set, path-free `reason` slug.
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    #[cfg_attr(any(), allow(dead_code))]
     SwtpmDirHardening {
         audit: crate::ops::audit_op::SwtpmDirAudit,
         reason: &'static str,
@@ -324,6 +286,14 @@ where
     let mut args = args.into_iter();
     let subcommand = args.next().unwrap_or_else(|| "serve".to_owned());
     match subcommand.as_str() {
+        "serve-child-realm" => {
+            if args.next().is_some() {
+                return Err(RunError::Usage(
+                    "serve-child-realm accepts no arguments".to_owned(),
+                ));
+            }
+            Ok(BrokerMode::ServeChildRealm)
+        }
         "serve" => {
             // --socket-path is optional.  Resolution order:
             //   1. --socket-path flag (explicit override)
@@ -462,73 +432,102 @@ where
                 test_mode,
             }))
         }
-        #[cfg(feature = "layer1-bootstrap")]
-        "probe-hello" => {
-            let (socket_path, test_uid) = parse_probe_flags(args.collect())?;
-            Ok(BrokerMode::ProbeHello {
-                socket_path,
-                test_uid,
-            })
-        }
-        #[cfg(feature = "layer1-bootstrap")]
-        "probe-stub" => {
-            let rest: Vec<String> = args.collect();
-            let (socket_path, test_uid, operation) = parse_stub_flags(&rest)?;
-            Ok(BrokerMode::ProbeStub {
-                socket_path,
-                test_uid,
-                operation,
-            })
-        }
-        #[cfg(feature = "layer1-bootstrap")]
-        "probe-export-audit" => {
-            let rest: Vec<String> = args.collect();
-            let (socket_path, test_uid, caller_role) = parse_export_flags(&rest)?;
-            Ok(BrokerMode::ProbeExportAudit {
-                socket_path,
-                test_uid,
-                caller_role,
-            })
-        }
-        _ => Err(RunError::Usage(
-            "usage: d2b-priv-broker [serve|probe-hello|probe-stub|probe-export-audit]".to_owned(),
-        )),
+        _ => Err(RunError::Usage("usage: d2b-priv-broker serve".to_owned())),
     }
 }
 
 pub fn run(command: BrokerMode) -> Result<(), RunError> {
     match command {
         BrokerMode::Serve(config) => run_server(config),
-        #[cfg(feature = "layer1-bootstrap")]
-        BrokerMode::ProbeHello {
-            socket_path,
-            test_uid,
-        } => run_probe(
-            socket_path,
-            crate::bootstrap::wire::probe_hello(test_uid),
-            true,
-        ),
-        #[cfg(feature = "layer1-bootstrap")]
-        BrokerMode::ProbeStub {
-            socket_path,
-            test_uid,
-            operation,
-        } => {
-            let request = crate::bootstrap::wire::probe_stub(&operation, test_uid)
-                .ok_or_else(|| RunError::Usage(format!("unknown stub operation: {operation}")))?;
-            run_probe(socket_path, request, true)
+        BrokerMode::ServeChildRealm => {
+            let config = crate::child_realm_runtime::ChildRealmBrokerConfig::from_environment()?;
+            crate::child_realm_runtime::run_child_realm_broker(config)
         }
-        #[cfg(feature = "layer1-bootstrap")]
-        BrokerMode::ProbeExportAudit {
-            socket_path,
-            test_uid,
-            caller_role,
-        } => run_probe(
-            socket_path,
-            crate::bootstrap::wire::probe_export_audit(test_uid, caller_role),
-            false,
-        ),
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn serve_parent_spawned_realm_broker_production<R>(
+    fd: OwnedFd,
+    realm_id: String,
+    controller_uid: u32,
+    controller_gid: u32,
+    generation: u64,
+    replay_ledger_path: PathBuf,
+    replay_owner_uid: u32,
+    replay_owner_gid: u32,
+    resolver: Arc<BundleResolver>,
+    audit: Arc<dyn crate::guest_session_material::GuestMaterialAuditSink>,
+    fallback: R,
+    authorities: Vec<crate::guest_session_material::GuestSessionAuthority>,
+) -> Result<(), crate::service_v2::BrokerServiceFailure>
+where
+    R: crate::service_v2::BrokerRuntimeDispatch + 'static,
+{
+    let runtime = crate::guest_session_material::ParentSpawnedRealmGuestRuntime::production(
+        realm_id,
+        controller_uid,
+        controller_gid,
+        generation,
+        replay_ledger_path,
+        replay_owner_uid,
+        replay_owner_gid,
+        resolver,
+        audit,
+        fallback,
+    )
+    .map_err(crate::service_v2::BrokerServiceFailure::from)?;
+    for authority in authorities {
+        runtime
+            .authority()
+            .install(authority)
+            .map_err(crate::service_v2::BrokerServiceFailure::from)?;
+    }
+    runtime.serve(fd).await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn serve_parent_spawned_realm_broker_with_ports<R>(
+    fd: OwnedFd,
+    realm_id: String,
+    controller_uid: u32,
+    controller_gid: u32,
+    generation: u64,
+    replay_ledger_path: PathBuf,
+    replay_owner_uid: u32,
+    replay_owner_gid: u32,
+    bundle: Arc<dyn crate::guest_session_material::GuestMaterialBundlePort>,
+    store: Arc<dyn crate::guest_session_material::GuestMaterialStore>,
+    audit: Arc<dyn crate::guest_session_material::GuestMaterialAuditSink>,
+    clock: Arc<dyn crate::guest_session_material::GuestMaterialClock>,
+    fallback: R,
+    authorities: Vec<crate::guest_session_material::GuestSessionAuthority>,
+) -> Result<(), crate::service_v2::BrokerServiceFailure>
+where
+    R: crate::service_v2::BrokerRuntimeDispatch + 'static,
+{
+    let runtime = crate::guest_session_material::ParentSpawnedRealmGuestRuntime::with_ports(
+        realm_id,
+        controller_uid,
+        controller_gid,
+        generation,
+        replay_ledger_path,
+        replay_owner_uid,
+        replay_owner_gid,
+        bundle,
+        store,
+        audit,
+        clock,
+        fallback,
+    )
+    .map_err(crate::service_v2::BrokerServiceFailure::from)?;
+    for authority in authorities {
+        runtime
+            .authority()
+            .install(authority)
+            .map_err(crate::service_v2::BrokerServiceFailure::from)?;
+    }
+    runtime.serve(fd).await
 }
 
 /// Attempt to adopt a socket-activated listen fd from systemd's
@@ -732,28 +731,9 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
         }
         Some(Err(err)) => return Err(err),
         None => {
-            // Not socket-activated: legacy / test mode — bind ourselves.
-            validate_socket_parent(&config.socket_path, config.test_mode)?;
-            prepare_socket_path(&config.socket_path)?;
-            // fchmod() on an AF_UNIX socket fd does not change the bound
-            // path's mode on some kernels/filesystems (verified: a socket
-            // bound under umask 0o022 stays 0o755 after fchmod 0o660), so
-            // constrain the creation umask around bind() so the socket is
-            // materialized at 0o660 directly. The fchmod below stays as a
-            // belt-and-suspenders for kernels where it does take effect.
-            // Production uses socket activation (systemd owns the mode);
-            // this is only the non-socket-activated fallback, and the
-            // broker is single-threaded at startup so the transient
-            // process-wide umask change is race-free.
-            let prev_umask = nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o117));
-            let listener_result = bind_seqpacket(&config.socket_path);
-            nix::sys::stat::umask(prev_umask);
-            let listener = listener_result?;
-            path_safe::fchmod(listener.as_fd(), 0o660)?;
-            if !config.test_mode {
-                path_safe::fchown(listener.as_fd(), Some(0), Some(config.d2bd_gid))?;
-            }
-            listener
+            return Err(RunError::Usage(
+                "broker requires one socket-activated priv.sock listener".to_owned(),
+            ));
         }
     };
 
@@ -763,7 +743,6 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
         config.test_mode,
         config.audit_retention_days,
     )?;
-    #[cfg(not(feature = "layer1-bootstrap"))]
     let audit_log = Arc::new(audit_log);
 
     // Signal systemd that the broker is ready to accept connections.
@@ -781,15 +760,22 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
 
     // Start background SIGCHLD reap loop. The runtime handle must stay
     // alive for the broker's lifetime.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     let _sigchld_reaper_rt = start_sigchld_reaper(Arc::clone(&audit_log));
     let ipc_rate_limiter = Arc::new(Mutex::new(IpcRateLimiter::new(
         DEFAULT_IPC_REQUESTS_PER_UID_PER_SECOND,
     )));
+    let session_runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(RunError::Io)?;
+    let mut session_generation = 1_u64;
 
     loop {
-        let accepted = accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC)
-            .map_err(|err| io::Error::from_raw_os_error(err as i32));
+        let accepted = accept4(
+            listener.as_raw_fd(),
+            SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        )
+        .map_err(|err| io::Error::from_raw_os_error(err as i32));
         let connection = match accepted {
             Ok(fd) => owned_fd_from_raw(fd),
             Err(err) => {
@@ -797,7 +783,6 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
                 return Err(RunError::Io(err));
             }
         };
-        #[cfg(not(feature = "layer1-bootstrap"))]
         let (resolver, bundle_tamper) = {
             match try_load_resolver(&config.bundle_path) {
                 BundleSlot::Loaded(r) => (Some(r.clone()), None),
@@ -807,28 +792,51 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
                 }
             }
         };
-        #[cfg(feature = "layer1-bootstrap")]
-        let resolver: Option<()> = None;
-        #[cfg(not(feature = "layer1-bootstrap"))]
         let audit_log_ref: &AuditLog = audit_log.as_ref();
-        #[cfg(feature = "layer1-bootstrap")]
-        let audit_log_ref: &AuditLog = &audit_log;
-        if let Err(err) = handle_connection(
+        let _ = (audit_log_ref, &ipc_rate_limiter);
+        let handler = {
+            let (_, _, peer_pid) = peer_credentials(connection.as_raw_fd())?;
+            let authorized_fds = Arc::new(crate::service_v2::AuthorizedFdRegistry::new());
+            let runtime = RuntimeBrokerOperations {
+                config: config.clone(),
+                audit_log: Arc::clone(&audit_log),
+                resolver: resolver.clone(),
+                bundle_tamper,
+                peer_pid: peer_pid.try_into().map_err(|_| {
+                    RunError::Protocol("broker peer pid outside u32 range".to_owned())
+                })?,
+            };
+            Arc::new(crate::service_v2::ProductionBrokerOperationHandler::new(
+                runtime,
+                RuntimeAllocatorDispatch::new(
+                    config.state_dir.clone(),
+                    resolver,
+                    peer_pid.try_into().map_err(|_| {
+                        RunError::Protocol("broker peer pid outside u32 range".to_owned())
+                    })?,
+                    Arc::clone(&authorized_fds),
+                )?,
+                authorized_fds,
+            ))
+        };
+        if let Err(err) = session_runtime.block_on(crate::service_v2::serve_accepted_broker_socket(
             connection,
-            &config,
-            audit_log_ref,
-            resolver.as_ref(),
-            #[cfg(not(feature = "layer1-bootstrap"))]
-            bundle_tamper,
-            &ipc_rate_limiter,
-        ) {
-            warn!(error = ?err, "broker request failed");
+            config.d2bd_uid,
+            config.d2bd_gid,
+            crate::service_v2::BrokerPeerRole::LocalRootController,
+            d2b_contracts::v2_component_session::EndpointRole::LocalRootBroker,
+            session_generation,
+            handler,
+        )) {
+            warn!(error = %err, "broker component session failed");
         }
+        session_generation = session_generation
+            .checked_add(1)
+            .ok_or_else(|| RunError::Protocol("broker session generation exhausted".to_owned()))?;
     }
 }
 
 /// Outcome of a bundle load attempt at broker startup.
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[derive(Debug)]
 enum BundleSlot {
     /// Bundle loaded and verified successfully.
@@ -841,7 +849,873 @@ enum BundleSlot {
     Tampered { path: String, reason: String },
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
+struct RuntimeBrokerOperations {
+    config: ServerConfig,
+    audit_log: Arc<AuditLog>,
+    resolver: Option<Arc<BundleResolver>>,
+    bundle_tamper: Option<(String, String)>,
+    peer_pid: u32,
+}
+
+pub struct BrokerGuestMaterialAuditSink {
+    audit_log: Arc<AuditLog>,
+    resolver: Arc<BundleResolver>,
+    peer_uid: u32,
+    peer_gid: u32,
+    peer_pid: i32,
+}
+
+impl BrokerGuestMaterialAuditSink {
+    pub fn new(
+        audit_log: Arc<AuditLog>,
+        resolver: Arc<BundleResolver>,
+        peer_uid: u32,
+        peer_gid: u32,
+        peer_pid: i32,
+    ) -> Self {
+        Self {
+            audit_log,
+            resolver,
+            peer_uid,
+            peer_gid,
+            peer_pid,
+        }
+    }
+}
+
+impl crate::guest_session_material::GuestMaterialAuditSink for BrokerGuestMaterialAuditSink {
+    fn record(
+        &self,
+        record: &crate::guest_session_material::GuestMaterialAuditRecord,
+    ) -> Result<(), crate::guest_session_material::GuestMaterialError> {
+        let event_id = new_event_id()
+            .map_err(|_| crate::guest_session_material::GuestMaterialError::AuditFailed)?;
+        let decision =
+            if record.outcome == crate::guest_session_material::GuestMaterialOutcome::Succeeded {
+                "allowed"
+            } else {
+                "errored"
+            };
+        let digest_hex = |digest: &[u8; 32]| {
+            digest
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        };
+        let operation_fields = OperationFields::GuestSessionMaterial {
+            realm_id: record.realm_id.clone(),
+            workload_id: record.workload_id.clone(),
+            session_storage_ref: record.session_storage_ref.clone(),
+            configured_storage_ref: record.configured_storage_ref.clone(),
+            session_generation: record.session_generation,
+            request_digest: digest_hex(&record.request_digest),
+            credential_digest: record
+                .credential_digest
+                .as_ref()
+                .map(digest_hex)
+                .unwrap_or_default(),
+            configured_launch_digest: digest_hex(&record.configured_launch_digest),
+            attachment_count: if record.outcome
+                == crate::guest_session_material::GuestMaterialOutcome::Succeeded
+            {
+                2
+            } else {
+                0
+            },
+        };
+        let operation_fields = serde_json::to_value(operation_fields)
+            .map_err(|_| crate::guest_session_material::GuestMaterialError::AuditFailed)?;
+        self.audit_log
+            .write_op_record(&OpAuditRecord {
+                ts_ms: audit_timestamp_ms(),
+                broker_version: BROKER_VERSION,
+                bundle_version: self.resolver.audit_bundle_version(),
+                bundle_hash: self.resolver.audit_bundle_hash(),
+                operation: "GuestSessionMaterial",
+                public_operation_id: &record.operation_id,
+                event_id: &event_id,
+                peer_uid: self.peer_uid,
+                peer_gid: self.peer_gid,
+                peer_pid: self.peer_pid,
+                peer_role: "realm-controller",
+                authz_result: "allowed",
+                subject_id: &record.workload_id,
+                scope_id: &record.realm_id,
+                verb: "materialize",
+                request_fields: serde_json::json!({
+                    "session_storage_ref": record.session_storage_ref,
+                    "configured_storage_ref": record.configured_storage_ref,
+                }),
+                decision,
+                result: result_for_decision(decision),
+                error_kind: record.error_kind,
+                tracing_span_id: None,
+                duration_us: 0,
+                operation_fields: Some(operation_fields),
+            })
+            .map_err(|_| crate::guest_session_material::GuestMaterialError::AuditFailed)
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::service_v2::BrokerRuntimeDispatch for RuntimeBrokerOperations {
+    async fn dispatch(
+        &self,
+        method: crate::service_v2::BrokerMethod,
+        request: d2b_contracts::v2_services::common::ServiceRequest,
+        attachments: Vec<d2b_session::OwnedAttachment>,
+        context: &crate::service_v2::BrokerCallContext,
+    ) -> Result<
+        crate::service_v2::BrokerReply<d2b_contracts::v2_services::common::ServiceResponse>,
+        crate::service_v2::BrokerServiceFailure,
+    > {
+        use d2b_contracts::broker_wire::{
+            ApplyNftablesRequest, ApplyNmUnmanagedRequest, ApplyRouteRequest, ApplySysctlRequest,
+            UpdateHostsFileRequest,
+        };
+        use d2b_contracts::types::{BundleOpId, ScopeId};
+        use d2b_contracts::v2_services::common::{DesiredState, Outcome, ServiceResponse};
+        use protobuf::EnumOrUnknown;
+
+        if context.peer_role != crate::service_v2::BrokerPeerRole::LocalRootController {
+            return Err(crate::service_v2::BrokerServiceFailure::PermissionDenied);
+        }
+        if method != crate::service_v2::BrokerMethod::Apply || !attachments.is_empty() {
+            return Err(crate::service_v2::BrokerServiceFailure::InvalidRequest);
+        }
+        if request
+            .resource_id
+            .starts_with(crate::guest_session_material::GUEST_SESSION_STORAGE_PREFIX)
+        {
+            return Err(crate::service_v2::BrokerServiceFailure::PermissionDenied);
+        }
+        if self.bundle_tamper.is_some() {
+            return Err(crate::service_v2::BrokerServiceFailure::Backend);
+        }
+        let resolver = self
+            .resolver
+            .as_ref()
+            .ok_or(crate::service_v2::BrokerServiceFailure::Backend)?;
+        let scope = ScopeId::new(request.scope.realm_id.clone());
+        let bundle_op = BundleOpId::new(request.resource_id.clone());
+        let destroy = request.desired_state.enum_value() == Ok(DesiredState::DESIRED_STATE_ABSENT);
+        let operation = request.operation_id.clone();
+
+        let broker_request = if resolver.find_nft_intent(bundle_op.as_str()).is_some() {
+            BrokerRequest::ApplyNftables(ApplyNftablesRequest {
+                bundle_nft_intent_ref: bundle_op,
+                scope_id: scope.clone(),
+                desired_hash: None,
+                destroy,
+                tracing_span_id: None,
+            })
+        } else if resolver.find_route_intent(bundle_op.as_str()).is_some() {
+            BrokerRequest::ApplyRoute(ApplyRouteRequest {
+                bundle_route_intent_ref: bundle_op,
+                scope_id: scope.clone(),
+                destroy,
+                tracing_span_id: None,
+            })
+        } else if resolver.find_sysctl_intent(bundle_op.as_str()).is_some() {
+            BrokerRequest::ApplySysctl(ApplySysctlRequest {
+                bundle_sysctl_intent_ref: bundle_op,
+                scope_id: scope.clone(),
+                destroy,
+                tracing_span_id: None,
+            })
+        } else if resolver
+            .find_nm_unmanaged_intent(bundle_op.as_str())
+            .is_some()
+        {
+            BrokerRequest::ApplyNmUnmanaged(ApplyNmUnmanagedRequest {
+                bundle_nm_intent_ref: bundle_op,
+                scope_id: scope,
+                destroy,
+                tracing_span_id: None,
+            })
+        } else if resolver.find_hosts_intent(bundle_op.as_str()).is_some() {
+            BrokerRequest::UpdateHostsFile(UpdateHostsFileRequest {
+                bundle_hosts_intent_ref: bundle_op,
+                destroy,
+                tracing_span_id: None,
+            })
+        } else {
+            return Err(crate::service_v2::BrokerServiceFailure::InvalidRequest);
+        };
+
+        let caller_role = CallerRole::AdminUid {
+            uid: self.config.d2bd_uid,
+        };
+        let audit_context =
+            DispatchAuditContext::from_request(&broker_request, self.peer_pid as i32, &caller_role)
+                .map_err(|_| crate::service_v2::BrokerServiceFailure::InvalidRequest)?;
+        let response = dispatch_request(
+            broker_request,
+            self.config.d2bd_uid,
+            self.config.d2bd_gid,
+            caller_role,
+            &audit_context,
+            &self.config,
+            &self.audit_log,
+            Some(resolver),
+        )
+        .map_err(|_| crate::service_v2::BrokerServiceFailure::Backend)?;
+        if !response.fds.is_empty() {
+            return Err(crate::service_v2::BrokerServiceFailure::Backend);
+        }
+        let _ = response.response;
+
+        let mut response = ServiceResponse::new();
+        response.outcome = EnumOrUnknown::new(Outcome::OUTCOME_SUCCEEDED);
+        response.operation_id = operation;
+        Ok(crate::service_v2::BrokerReply::message(response))
+    }
+}
+
+const ALLOCATOR_LEDGER_RESOURCE_ID: &str = "allocator-ledger-v2";
+const ALLOCATOR_LEDGER_LOCK_ID: &str = "allocator-ledger-v2-lock";
+const ALLOCATOR_LEDGER_FILE: &str = "allocator-ledger-v2.json";
+const ALLOCATOR_LEDGER_LOCK_FILE: &str = "allocator-ledger-v2.lock";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AllocatorLedgerDocument {
+    generation: u64,
+    next_lease_sequence: u64,
+    leases: Vec<d2b_realm_core::allocator::AllocatorLease>,
+    idempotency: Vec<d2b_realm_core::allocator_engine::AllocatorIdempotencyRecord>,
+}
+
+impl Default for AllocatorLedgerDocument {
+    fn default() -> Self {
+        Self {
+            generation: 0,
+            next_lease_sequence: 1,
+            leases: Vec::new(),
+            idempotency: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct DurableAllocatorLedger {
+    state_dir: PathBuf,
+    metadata: d2b_state::MetadataExpectation,
+}
+
+impl DurableAllocatorLedger {
+    fn new(state_dir: PathBuf) -> Self {
+        Self {
+            state_dir,
+            metadata: d2b_state::MetadataExpectation {
+                uid: rustix::process::geteuid().as_raw(),
+                gid: rustix::process::getegid().as_raw(),
+                mode: 0o640,
+            },
+        }
+    }
+
+    fn resource_id() -> Result<
+        d2b_contracts::v2_state::ResourceId,
+        d2b_realm_core::allocator_engine::AllocatorEngineError,
+    > {
+        d2b_contracts::v2_state::ResourceId::parse(ALLOCATOR_LEDGER_RESOURCE_ID)
+            .map_err(|_| d2b_realm_core::allocator_engine::AllocatorEngineError::LedgerTampered)
+    }
+
+    fn lock_id() -> Result<
+        d2b_contracts::v2_state::ResourceId,
+        d2b_realm_core::allocator_engine::AllocatorEngineError,
+    > {
+        d2b_contracts::v2_state::ResourceId::parse(ALLOCATOR_LEDGER_LOCK_ID)
+            .map_err(|_| d2b_realm_core::allocator_engine::AllocatorEngineError::LedgerTampered)
+    }
+
+    fn anchor(
+        &self,
+    ) -> Result<d2b_state::AnchoredDir, d2b_realm_core::allocator_engine::AllocatorEngineError>
+    {
+        d2b_state::AnchoredDir::open_trusted(&self.state_dir).map_err(map_state_error)
+    }
+
+    fn state_resource(
+        &self,
+        anchor: &d2b_state::AnchoredDir,
+    ) -> Result<d2b_state::AnchoredResource, d2b_realm_core::allocator_engine::AllocatorEngineError>
+    {
+        Ok(d2b_state::AnchoredResource::new(
+            Self::resource_id()?,
+            anchor,
+            d2b_state::LeafName::parse(ALLOCATOR_LEDGER_FILE).map_err(map_state_error)?,
+        ))
+    }
+
+    fn load_document(
+        &self,
+        anchor: &d2b_state::AnchoredDir,
+    ) -> Result<AllocatorLedgerDocument, d2b_realm_core::allocator_engine::AllocatorEngineError>
+    {
+        use d2b_contracts::v2_state::{AuthorityRef, Generation};
+        use d2b_state::{AtomicWrite, GenerationPolicy, ReadPolicy, RealAtomicFilesystem};
+
+        let mut state = AtomicWrite::new(RealAtomicFilesystem::new(self.state_resource(anchor)?));
+        let minimum = Generation::new(1)
+            .map_err(|_| d2b_realm_core::allocator_engine::AllocatorEngineError::LedgerTampered)?;
+        let loaded = match state.read::<AllocatorLedgerDocument>(&ReadPolicy {
+            metadata: self.metadata,
+            writer: AuthorityRef::LocalRootBroker,
+            config_generation: minimum,
+            state_generation: GenerationPolicy::AtLeast(minimum),
+        }) {
+            Ok(loaded) => loaded,
+            Err(error) if error.code() == d2b_state::ErrorCode::Missing => {
+                return Ok(AllocatorLedgerDocument::default());
+            }
+            Err(error) => return Err(map_state_error(error)),
+        };
+        if loaded.state_generation.get() != loaded.payload.generation {
+            return Err(d2b_realm_core::allocator_engine::AllocatorEngineError::LedgerTampered);
+        }
+        validate_ledger_document(&loaded.payload)?;
+        Ok(loaded.payload)
+    }
+}
+
+fn validate_ledger_document(
+    document: &AllocatorLedgerDocument,
+) -> Result<(), d2b_realm_core::allocator_engine::AllocatorEngineError> {
+    use std::collections::BTreeSet;
+
+    if document.next_lease_sequence == 0
+        || document.generation == 0 && document != &AllocatorLedgerDocument::default()
+        || document
+            .leases
+            .iter()
+            .map(|lease| lease.lease_id.as_str())
+            .collect::<BTreeSet<_>>()
+            .len()
+            != document.leases.len()
+        || document
+            .idempotency
+            .iter()
+            .map(|record| record.key().as_str())
+            .collect::<BTreeSet<_>>()
+            .len()
+            != document.idempotency.len()
+    {
+        return Err(d2b_realm_core::allocator_engine::AllocatorEngineError::LedgerTampered);
+    }
+    Ok(())
+}
+
+fn map_state_error(
+    error: d2b_state::Error,
+) -> d2b_realm_core::allocator_engine::AllocatorEngineError {
+    use d2b_realm_core::allocator_engine::AllocatorEngineError;
+    use d2b_state::ErrorCode;
+
+    match error.code() {
+        ErrorCode::LockContended | ErrorCode::Deadline | ErrorCode::Cancelled => {
+            AllocatorEngineError::LedgerLockUnavailable
+        }
+        ErrorCode::GenerationRollback | ErrorCode::GenerationGap => {
+            AllocatorEngineError::LedgerGenerationConflict
+        }
+        ErrorCode::Io | ErrorCode::Missing | ErrorCode::TaskJoin => AllocatorEngineError::LedgerIo,
+        _ => AllocatorEngineError::LedgerTampered,
+    }
+}
+
+impl d2b_realm_core::allocator_engine::AllocatorLedger for DurableAllocatorLedger {
+    fn load(
+        &self,
+    ) -> Result<
+        d2b_realm_core::allocator_engine::AllocatorLedgerSnapshot,
+        d2b_realm_core::allocator_engine::AllocatorEngineError,
+    > {
+        let document = self.load_document(&self.anchor()?)?;
+        Ok(
+            d2b_realm_core::allocator_engine::AllocatorLedgerSnapshot::new(
+                d2b_realm_core::allocator_engine::AllocatorLedgerGeneration::new(
+                    document.generation,
+                ),
+                document.leases,
+                document.idempotency,
+            ),
+        )
+    }
+
+    fn commit_allocation(
+        &mut self,
+        commit: d2b_realm_core::allocator_engine::AllocatorLedgerCommit,
+    ) -> Result<
+        d2b_realm_core::allocator_engine::AllocatorLedgerCommitResult,
+        d2b_realm_core::allocator_engine::AllocatorEngineError,
+    > {
+        use d2b_contracts::v2_state::{
+            AuthorityRef, CancellationPolicy, ContentionPolicy, FdTransferPolicy, Generation,
+            IdentityScope, LockClass, LockKey, LockKind, LockSpec, OwnershipEpoch,
+        };
+        use d2b_realm_core::{
+            allocator::LeaseAllocationResult,
+            allocator_engine::{AllocatorEngineError, AllocatorLedgerCommitKind},
+            ids::AllocatorLeaseId,
+        };
+        use d2b_state::{
+            AnchoredResource, AtomicWrite, LeafName, LockSet, NeverCancelled, RealAtomicFilesystem,
+            WritePolicy,
+        };
+
+        let anchor = self.anchor()?;
+        let resource_id = Self::resource_id()?;
+        let lock_id = Self::lock_id()?;
+        let lock_resource = AnchoredResource::new(
+            resource_id.clone(),
+            &anchor,
+            LeafName::parse(ALLOCATOR_LEDGER_LOCK_FILE).map_err(map_state_error)?,
+        );
+        let spec = LockSpec {
+            lock_id: lock_id.clone(),
+            key: LockKey {
+                class: LockClass::LocalRoot,
+                scope: IdentityScope::LocalRoot,
+                resource_id: resource_id.clone(),
+            },
+            kind: LockKind::Ofd,
+            owner: AuthorityRef::LocalRootBroker,
+            release_authority: AuthorityRef::LocalRootBroker,
+            global_order: 1,
+            acquire_after: Vec::new(),
+            cloexec: true,
+            fd_transfer: FdTransferPolicy::Never,
+            contention: ContentionPolicy::BoundedWait,
+            deadline_ms: 2_000,
+            cancellation: CancellationPolicy::Cancellable,
+        };
+        let ownership_epoch =
+            OwnershipEpoch::new(1).map_err(|_| AllocatorEngineError::LedgerTampered)?;
+        let mut locks = LockSet::new();
+        locks
+            .acquire(
+                &spec,
+                &lock_resource,
+                self.metadata,
+                ownership_epoch,
+                &NeverCancelled,
+            )
+            .map_err(map_state_error)?;
+
+        let mut document = self.load_document(&anchor)?;
+        if document.generation != commit.expected_generation().value() {
+            return Err(AllocatorEngineError::LedgerGenerationConflict);
+        }
+        if document
+            .idempotency
+            .iter()
+            .any(|record| record.key() == commit.idempotency_key())
+        {
+            return Err(AllocatorEngineError::LedgerGenerationConflict);
+        }
+        let lease_id = match commit.kind() {
+            AllocatorLedgerCommitKind::Grant => Some(
+                AllocatorLeaseId::parse(format!(
+                    "allocator-lease-{}",
+                    document.next_lease_sequence
+                ))
+                .map_err(|_| AllocatorEngineError::LedgerTampered)?,
+            ),
+            AllocatorLedgerCommitKind::Denial => None,
+        };
+        let materialized = commit.materialize(lease_id)?;
+        if let LeaseAllocationResult::Granted { lease } = materialized.result() {
+            document.leases.push(lease.clone());
+            document.next_lease_sequence = document
+                .next_lease_sequence
+                .checked_add(1)
+                .ok_or(AllocatorEngineError::LedgerTampered)?;
+        }
+        document
+            .idempotency
+            .push(materialized.idempotency_record().clone());
+        let previous = document.generation;
+        document.generation = previous
+            .checked_add(1)
+            .ok_or(AllocatorEngineError::LedgerTampered)?;
+        validate_ledger_document(&document)?;
+
+        let state_generation = Generation::new(document.generation)
+            .map_err(|_| AllocatorEngineError::LedgerTampered)?;
+        let expected_previous = if previous == 0 {
+            None
+        } else {
+            Some(Generation::new(previous).map_err(|_| AllocatorEngineError::LedgerTampered)?)
+        };
+        AtomicWrite::new(RealAtomicFilesystem::new(self.state_resource(&anchor)?))
+            .write(
+                &document,
+                &WritePolicy {
+                    metadata: self.metadata,
+                    writer: AuthorityRef::LocalRootBroker,
+                    config_generation: Generation::new(1)
+                        .map_err(|_| AllocatorEngineError::LedgerTampered)?,
+                    state_generation,
+                    expected_previous,
+                    lock_id,
+                    ownership_epoch,
+                },
+                locks.last(),
+            )
+            .map_err(map_state_error)?;
+        Ok(materialized)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeObservedAllocatorState {
+    resources: Vec<d2b_realm_core::allocator::ObservedHostResource>,
+}
+
+impl RuntimeObservedAllocatorState {
+    fn from_snapshot(
+        snapshot: &d2b_realm_core::allocator_engine::AllocatorLedgerSnapshot,
+    ) -> Result<Self, d2b_realm_core::allocator_engine::AllocatorEngineError> {
+        use d2b_realm_core::allocator::{
+            ObservedHostResource, ObservedResourceState, ResourceObservationSource,
+        };
+
+        let mut resources = BTreeMap::new();
+        for lease in snapshot.leases() {
+            for resource in &lease.resources {
+                match resources.get(&resource.resource_id) {
+                    Some(existing) if existing != &resource.kind => {
+                        return Err(
+                            d2b_realm_core::allocator_engine::AllocatorEngineError::LedgerTampered,
+                        );
+                    }
+                    _ => {
+                        resources.insert(resource.resource_id.clone(), resource.kind);
+                    }
+                }
+            }
+        }
+        Ok(Self {
+            resources: resources
+                .into_iter()
+                .map(|(resource_id, kind)| ObservedHostResource {
+                    resource_id,
+                    kind,
+                    source: ResourceObservationSource::AllocatorLedger,
+                    state: ObservedResourceState::Present,
+                })
+                .collect(),
+        })
+    }
+}
+
+impl d2b_realm_core::allocator_engine::ObservedAllocatorState for RuntimeObservedAllocatorState {
+    fn resources(&self) -> &[d2b_realm_core::allocator::ObservedHostResource] {
+        &self.resources
+    }
+}
+
+struct RuntimeAllocatorLiveness {
+    owner: d2b_realm_core::allocator::LeaseOwner,
+    peer_pidfd: Arc<OwnedFd>,
+}
+
+impl std::fmt::Debug for RuntimeAllocatorLiveness {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("RuntimeAllocatorLiveness(REDACTED)")
+    }
+}
+
+impl d2b_realm_core::allocator_engine::AllocatorLiveness for RuntimeAllocatorLiveness {
+    fn is_live(&self, owner: &d2b_realm_core::allocator::LeaseOwner) -> bool {
+        owner == &self.owner
+            && crate::sys::pidfd_sys::pidfd_send_signal(self.peer_pidfd.as_fd(), 0).is_ok()
+    }
+}
+
+#[derive(Clone)]
+struct RuntimeLaunchRecordResolver {
+    resolver: Option<Arc<BundleResolver>>,
+}
+
+impl std::fmt::Debug for RuntimeLaunchRecordResolver {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("RuntimeLaunchRecordResolver(REDACTED)")
+    }
+}
+
+impl crate::allocator_service::RealmLaunchRecordResolver for RuntimeLaunchRecordResolver {
+    fn resolve(
+        &self,
+        realm_id: &str,
+        controller_generation_id: &str,
+    ) -> Result<
+        d2b_host::realm_children::RealmChildLaunchRecord,
+        crate::allocator_service::AllocatorServiceError,
+    > {
+        use d2b_core::allocator_config::AllocatorRealmChildLaunch;
+        use d2b_host::realm_children::{
+            RealmChildIdentity, RealmChildLaunchRecord, RealmChildRole,
+        };
+
+        let launch = self
+            .resolver
+            .as_ref()
+            .and_then(|resolver| {
+                resolver.find_realm_child_launch_record(realm_id, controller_generation_id)
+            })
+            .ok_or(
+                crate::allocator_service::AllocatorServiceError::InvalidRequest(
+                    "unknown realm launch record",
+                ),
+            )?;
+        let identity = |child: &AllocatorRealmChildLaunch, role| RealmChildIdentity {
+            role,
+            process_id: child.process_id.as_str().to_owned(),
+            executable: PathBuf::from(child.executable_ref.as_str()),
+            executable_digest: *child.executable_digest.as_bytes(),
+            cgroup_digest: *child.cgroup_digest.as_bytes(),
+            uid: child.uid,
+            gid: child.gid,
+        };
+        Ok(RealmChildLaunchRecord {
+            realm_id: launch.realm_id.as_str().to_owned(),
+            controller_generation_id: launch.controller_generation.as_str().to_owned(),
+            launch_record_digest: *launch.launch_record_digest.as_bytes(),
+            controller: identity(&launch.controller, RealmChildRole::Controller),
+            broker: identity(&launch.broker, RealmChildRole::Broker),
+        })
+    }
+}
+
+struct RuntimeAllocatorDispatch {
+    state_dir: PathBuf,
+    launch_records: RuntimeLaunchRecordResolver,
+    peer_pidfd: Arc<OwnedFd>,
+    authorized_fds: Arc<crate::service_v2::AuthorizedFdRegistry>,
+}
+
+impl RuntimeAllocatorDispatch {
+    fn new(
+        state_dir: PathBuf,
+        resolver: Option<Arc<BundleResolver>>,
+        peer_pid: u32,
+        authorized_fds: Arc<crate::service_v2::AuthorizedFdRegistry>,
+    ) -> Result<Self, RunError> {
+        let peer_pid = i32::try_from(peer_pid)
+            .map_err(|_| RunError::Protocol("broker peer pid outside i32 range".to_owned()))?;
+        let peer_pidfd = crate::sys::pidfd_sys::pidfd_open(peer_pid, 0).map_err(RunError::Io)?;
+        Ok(Self {
+            state_dir,
+            launch_records: RuntimeLaunchRecordResolver { resolver },
+            peer_pidfd: Arc::new(peer_pidfd),
+            authorized_fds,
+        })
+    }
+
+    fn owner_from_allocate(
+        request: &d2b_contracts::v2_services::broker::AllocateRequest,
+    ) -> Result<
+        d2b_realm_core::allocator::LeaseOwner,
+        crate::allocator_service::AllocatorServiceError,
+    > {
+        use d2b_realm_core::{
+            allocator::LeaseOwner,
+            ids::{ControllerGenerationId, NodeId, RealmId},
+            realm::RealmPath,
+        };
+
+        let owner = request.owner.as_ref().ok_or(
+            crate::allocator_service::AllocatorServiceError::InvalidRequest("missing lease owner"),
+        )?;
+        let realm = RealmPath::new(
+            owner
+                .realm_path
+                .split('.')
+                .map(|part| RealmId::parse(part.to_owned()))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| {
+                    crate::allocator_service::AllocatorServiceError::InvalidRequest(
+                        "invalid realm path",
+                    )
+                })?,
+        )
+        .ok_or(
+            crate::allocator_service::AllocatorServiceError::InvalidRequest("invalid realm path"),
+        )?;
+        Ok(LeaseOwner {
+            realm,
+            controller_generation: ControllerGenerationId::parse(
+                owner.controller_generation_id.clone(),
+            )
+            .map_err(|_| {
+                crate::allocator_service::AllocatorServiceError::InvalidRequest(
+                    "invalid controller generation",
+                )
+            })?,
+            node: owner
+                .node_id
+                .as_ref()
+                .map(|node| NodeId::parse(node.clone()))
+                .transpose()
+                .map_err(|_| {
+                    crate::allocator_service::AllocatorServiceError::InvalidRequest(
+                        "invalid owner node",
+                    )
+                })?,
+        })
+    }
+
+    fn service(
+        &self,
+        owner: d2b_realm_core::allocator::LeaseOwner,
+    ) -> Result<
+        crate::allocator_service::AllocatorChildBrokerService<
+            crate::service_v2::AuthorizedResourceBackend,
+            RuntimeLaunchRecordResolver,
+            crate::allocator_service::LinuxRealmChildSpawner,
+            DurableAllocatorLedger,
+            RuntimeObservedAllocatorState,
+            RuntimeAllocatorLiveness,
+        >,
+        crate::allocator_service::AllocatorServiceError,
+    > {
+        use d2b_realm_core::allocator_engine::{AllocatorLedger, LocalRootAllocatorEngine};
+
+        let ledger = DurableAllocatorLedger::new(self.state_dir.clone());
+        let snapshot = ledger.load()?;
+        let observed = RuntimeObservedAllocatorState::from_snapshot(&snapshot)?;
+        let liveness = RuntimeAllocatorLiveness {
+            owner: owner.clone(),
+            peer_pidfd: Arc::clone(&self.peer_pidfd),
+        };
+        Ok(crate::allocator_service::AllocatorChildBrokerService::new(
+            LocalRootAllocatorEngine::new(owner, ledger, observed, liveness),
+            crate::service_v2::AuthorizedResourceBackend::new(Arc::clone(&self.authorized_fds)),
+            self.launch_records.clone(),
+            crate::allocator_service::LinuxRealmChildSpawner,
+        ))
+    }
+}
+
+fn runtime_pidfd_verifier(
+    record: &d2b_host::realm_children::RealmChildLaunchRecord,
+    role: d2b_host::realm_children::RealmChildRole,
+) -> Arc<dyn d2b_host::realm_children::PidfdIdentityVerifier> {
+    use d2b_session_unix::{ProcPidfdIdentityVerifier, ProcSelfFdInfoSource, UnixSessionError};
+
+    let identity = match role {
+        d2b_host::realm_children::RealmChildRole::Controller => &record.controller,
+        d2b_host::realm_children::RealmChildRole::Broker => &record.broker,
+    };
+    let expected_executable =
+        fs::canonicalize(&identity.executable).unwrap_or_else(|_| identity.executable.clone());
+    let executable_digest = identity.executable_digest;
+    let cgroup_leaf = record.cgroup_leaf(role);
+    let expected_cgroup = cgroup_leaf
+        .strip_prefix("/sys/fs/cgroup")
+        .map(|relative| format!("/{}", relative.display()))
+        .unwrap_or_else(|_| cgroup_leaf.to_string_lossy().into_owned());
+    let cgroup_digest = identity.cgroup_digest;
+    Arc::new(ProcPidfdIdentityVerifier::new(
+        ProcSelfFdInfoSource,
+        Arc::new(move |pid| {
+            let path = fs::read_link(format!("/proc/{}/exe", pid.as_raw_nonzero().get()))
+                .map_err(|_| UnixSessionError::PidfdEvidenceUnavailable)?;
+            if path != expected_executable {
+                return Err(UnixSessionError::PidfdIdentityMismatch);
+            }
+            Ok(executable_digest)
+        }),
+        Arc::new(move |pid| {
+            let cgroup = fs::read_to_string(format!("/proc/{}/cgroup", pid.as_raw_nonzero().get()))
+                .map_err(|_| UnixSessionError::PidfdEvidenceUnavailable)?;
+            let expected = format!("0::{expected_cgroup}");
+            if !cgroup.lines().any(|line| line == expected) {
+                return Err(UnixSessionError::PidfdIdentityMismatch);
+            }
+            Ok(cgroup_digest)
+        }),
+    ))
+}
+
+#[async_trait::async_trait]
+impl crate::service_v2::AllocatorServiceDispatch for RuntimeAllocatorDispatch {
+    async fn allocate(
+        &mut self,
+        request: &d2b_contracts::v2_services::broker::AllocateRequest,
+    ) -> Result<
+        crate::allocator_service::ServiceReply<
+            d2b_contracts::v2_services::broker::AllocateResponse,
+        >,
+        crate::allocator_service::AllocatorServiceError,
+    > {
+        self.service(Self::owner_from_allocate(request)?)?
+            .allocate(request)
+    }
+
+    async fn spawn(
+        &self,
+        request: &d2b_contracts::v2_services::broker::SpawnRealmChildrenRequest,
+        attachments: Vec<OwnedFd>,
+        bootstrap: d2b_host::realm_children::RealmChildBootstrapEndpoints,
+    ) -> Result<
+        crate::allocator_service::ServiceReply<
+            d2b_contracts::v2_services::broker::SpawnRealmChildrenResponse,
+            crate::allocator_service::PolicyBoundPidfdAttachments,
+        >,
+        crate::allocator_service::AllocatorServiceError,
+    > {
+        use crate::allocator_service::RealmLaunchRecordResolver;
+        use d2b_host::realm_children::RealmChildRole;
+        use d2b_realm_core::{
+            allocator::LeaseOwner,
+            ids::{ControllerGenerationId, RealmId},
+            realm::RealmPath,
+        };
+
+        let record = self
+            .launch_records
+            .resolve(&request.realm_id, &request.controller_generation_id)?;
+        let owner = LeaseOwner {
+            realm: RealmPath::new(vec![RealmId::parse(request.realm_id.clone()).map_err(
+                |_| {
+                    crate::allocator_service::AllocatorServiceError::InvalidRequest(
+                        "invalid realm id",
+                    )
+                },
+            )?])
+            .ok_or(
+                crate::allocator_service::AllocatorServiceError::InvalidRequest("invalid realm id"),
+            )?,
+            controller_generation: ControllerGenerationId::parse(
+                request.controller_generation_id.clone(),
+            )
+            .map_err(|_| {
+                crate::allocator_service::AllocatorServiceError::InvalidRequest(
+                    "invalid controller generation",
+                )
+            })?,
+            node: None,
+        };
+        let reply = self
+            .service(owner)?
+            .spawn(request, attachments, bootstrap)
+            .await?;
+        let attachments = reply.attachments.bind_policies(
+            runtime_pidfd_verifier(&record, RealmChildRole::Controller),
+            runtime_pidfd_verifier(&record, RealmChildRole::Broker),
+        )?;
+        Ok(crate::allocator_service::ServiceReply {
+            message: reply.message,
+            attachments,
+        })
+    }
+}
+
 fn try_load_resolver(bundle_path: &Path) -> BundleSlot {
     try_load_resolver_with_policy(
         bundle_path,
@@ -849,7 +1723,6 @@ fn try_load_resolver(bundle_path: &Path) -> BundleSlot {
     )
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn try_load_resolver_with_policy(
     bundle_path: &Path,
     policy: &d2b_core::bundle_resolver::BundleVerifyPolicy,
@@ -895,189 +1768,6 @@ fn try_load_resolver_with_policy(
     }
 }
 
-fn handle_connection(
-    fd: OwnedFd,
-    config: &ServerConfig,
-    audit_log: &AuditLog,
-    #[cfg(not(feature = "layer1-bootstrap"))] resolver: Option<&Arc<BundleResolver>>,
-    #[cfg(feature = "layer1-bootstrap")] _resolver: Option<&()>,
-    #[cfg(not(feature = "layer1-bootstrap"))] bundle_tamper: Option<(String, String)>,
-    ipc_rate_limiter: &Arc<Mutex<IpcRateLimiter>>,
-) -> io::Result<()> {
-    let (peer_uid, peer_gid, peer_pid) = peer_credentials(fd.as_raw_fd())?;
-    let envelope = match recv_json_frame::<RequestEnvelope>(fd.as_raw_fd())? {
-        Some(envelope) => envelope,
-        None => return Ok(()),
-    };
-    let request = envelope.request;
-    let effective_uid = if config.test_mode {
-        envelope.test_peer_uid.unwrap_or(peer_uid)
-    } else {
-        peer_uid
-    };
-    let operation = request.op_name();
-    let opaque_target_id = request.opaque_target_id();
-    let (rate_role, rate_operation) = if effective_uid == config.d2bd_uid {
-        (envelope.caller_role.for_display(), operation)
-    } else {
-        ("direct-broker-peer", "direct-broker-connect")
-    };
-    let rate_pool = if effective_uid == config.d2bd_uid {
-        IpcRatePool::Daemon
-    } else {
-        IpcRatePool::Direct
-    };
-    let rate_allowed = ipc_rate_limiter
-        .lock()
-        .map_err(|_| io::Error::other("broker IPC rate limiter mutex poisoned"))?
-        .check(rate_pool, effective_uid, rate_role, rate_operation);
-    if !rate_allowed {
-        write_refusal_audit_bounded(
-            audit_log,
-            if effective_uid == config.d2bd_uid {
-                AuditWriteClass::Privileged
-            } else {
-                AuditWriteClass::Unprivileged
-            },
-            operation,
-            effective_uid,
-            "ipc-rate-limited",
-            opaque_target_id,
-            "closed",
-        )?;
-        if effective_uid == config.d2bd_uid {
-            send_json_frame(fd.as_raw_fd(), &BrokerError::IpcRateLimited.into_response())?;
-        }
-        return Ok(());
-    }
-    if effective_uid != config.d2bd_uid {
-        write_refusal_audit_bounded(
-            audit_log,
-            AuditWriteClass::Unprivileged,
-            operation,
-            effective_uid,
-            "peer-refused",
-            opaque_target_id,
-            "closed",
-        )?;
-        send_json_frame(
-            fd.as_raw_fd(),
-            &BrokerError::PeerCredentialRefused { operation }.into_response(),
-        )?;
-        return Ok(());
-    }
-
-    if let Err(error) = validate_broker_request(&request) {
-        let audit_context = DispatchAuditContext {
-            peer_pid,
-            peer_role: envelope.caller_role.for_display().to_owned(),
-            verb: operation.to_owned(),
-            request_fields: serde_json::json!({ "validation": "failed" }),
-            started_at: Instant::now(),
-        };
-        #[cfg(not(feature = "layer1-bootstrap"))]
-        error.audit(
-            audit_log,
-            effective_uid,
-            peer_gid,
-            &envelope.caller_role,
-            &audit_context,
-            resolver.map(std::sync::Arc::as_ref),
-            operation,
-            opaque_target_id,
-        )?;
-        #[cfg(feature = "layer1-bootstrap")]
-        error.audit(
-            audit_log,
-            effective_uid,
-            peer_gid,
-            &envelope.caller_role,
-            &audit_context,
-            operation,
-            opaque_target_id,
-        )?;
-        send_json_frame(fd.as_raw_fd(), &error.into_response())?;
-        return Ok(());
-    }
-    let audit_context =
-        DispatchAuditContext::from_request(&request, peer_pid, &envelope.caller_role)
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("{err:?}")))?;
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    let dispatch_outcome = if let Some((path, reason)) = bundle_tamper {
-        Err(BrokerError::BundleTampered { path, reason })
-    } else {
-        dispatch_request(
-            request,
-            effective_uid,
-            peer_gid,
-            envelope.caller_role.clone(),
-            &audit_context,
-            config,
-            audit_log,
-            resolver,
-        )
-    };
-    #[cfg(feature = "layer1-bootstrap")]
-    let dispatch_outcome = dispatch_request(
-        request,
-        effective_uid,
-        envelope.caller_role.clone(),
-        &audit_context,
-        config,
-        audit_log,
-    )
-    .map(DispatchResult::no_fds);
-
-    let (response, fds) = match dispatch_outcome {
-        Ok(result) => (result.response, result.fds),
-        Err(error) => {
-            #[cfg(not(feature = "layer1-bootstrap"))]
-            error.audit(
-                audit_log,
-                effective_uid,
-                peer_gid,
-                &envelope.caller_role,
-                &audit_context,
-                resolver.map(std::sync::Arc::as_ref),
-                operation,
-                opaque_target_id,
-            )?;
-            #[cfg(feature = "layer1-bootstrap")]
-            error.audit(
-                audit_log,
-                effective_uid,
-                peer_gid,
-                &envelope.caller_role,
-                &audit_context,
-                operation,
-                opaque_target_id,
-            )?;
-            (error.into_response(), Vec::new())
-        }
-    };
-
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    {
-        if fds.is_empty() {
-            send_json_frame(fd.as_raw_fd(), &response)?;
-        } else {
-            let raw_fds: Vec<i32> = fds.iter().map(|f| f.as_raw_fd()).collect();
-            send_json_frame_with_fds(fd.as_raw_fd(), &response, &raw_fds)?;
-            // Drop ownership: the SCM_RIGHTS send duplicated the fd
-            // into the receiver's table; the broker's copy is the
-            // OwnedFd in `fds` and will close on scope exit, which is
-            // the intended lifecycle.
-            drop(fds);
-        }
-    }
-    #[cfg(feature = "layer1-bootstrap")]
-    {
-        let _ = fds; // layer1-bootstrap dispatch never returns fds
-        send_json_frame(fd.as_raw_fd(), &response)?;
-    }
-    Ok(())
-}
-
 fn write_refusal_audit_bounded(
     audit_log: &AuditLog,
     audit_class: AuditWriteClass,
@@ -1104,14 +1794,14 @@ fn write_refusal_audit_bounded(
 /// Real-wire dispatch results can carry zero-or-more `OwnedFd`s
 /// alongside the JSON response (for `OpenPidfd` / `SpawnRunner`).
 /// Bootstrap dispatch never carries fds.
-#[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+#[cfg_attr(any(), allow(dead_code))]
 #[derive(Debug)]
 struct DispatchResult {
     response: BrokerResponse,
     fds: Vec<OwnedFd>,
 }
 
-#[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+#[cfg_attr(any(), allow(dead_code))]
 impl DispatchResult {
     fn no_fds(response: BrokerResponse) -> Self {
         Self {
@@ -1254,12 +1944,11 @@ impl IpcRateLimiter {
     }
 }
 
-#[cfg(feature = "layer1-bootstrap")]
+#[cfg(any())]
 fn validate_broker_request(_request: &BrokerRequest) -> Result<(), BrokerError> {
     Ok(())
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn validate_broker_request(request: &BrokerRequest) -> Result<(), BrokerError> {
     // Shape-only defense in depth after d2bd has accepted and classified
     // the local peer. Do not add role/bundle authorization here: dispatch must
@@ -1320,12 +2009,10 @@ fn validate_broker_request(request: &BrokerRequest) -> Result<(), BrokerError> {
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn validate_usbip_busid_wire(bus_id: &str) -> Result<(), &'static str> {
     d2b_host::usbip_argv::validate_bus_id(bus_id).map_err(|_| "invalid-usbip-busid")
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn validate_module_name(module_name: &str) -> Result<(), &'static str> {
     if module_name.is_empty() {
         return Err("empty-module-name");
@@ -1348,17 +2035,14 @@ fn validate_module_name(module_name: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn validate_scope_like_id(value: &str) -> Result<(), &'static str> {
     validate_small_wire_id(value, 128, "invalid-scope-id")
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn validate_bundle_op_id(value: &str) -> Result<(), &'static str> {
     validate_small_wire_id(value, 192, "invalid-bundle-op-id")
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn validate_small_wire_id(
     value: &str,
     max_len: usize,
@@ -1409,12 +2093,6 @@ impl DispatchAuditContext {
 }
 
 fn request_fields_value(request: &BrokerRequest) -> Result<Value, BrokerError> {
-    // GuestControlSign carries auth secret material (nonces, token-derived
-    // tag inputs); emit only redacted lengths/presence, never the values.
-    // This branch is real-wire-only: under the `layer1-bootstrap` feature
-    // `BrokerRequest` aliases to the bootstrap `BootstrapCall`, which has no
-    // GuestControlSign variant, so gate it out of the bootstrap build.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     if let BrokerRequest::QemuMediaEnroll(req) = request {
         return Ok(serde_json::json!({
             "vmId": req.vm_id.as_str(),
@@ -1423,20 +2101,17 @@ fn request_fields_value(request: &BrokerRequest) -> Result<Value, BrokerError> {
             "tracingSpanIdPresent": req.tracing_span_id.is_some(),
         }));
     }
-    #[cfg(not(feature = "layer1-bootstrap"))]
     if let BrokerRequest::QemuMediaRefreshRegistry(req) = request {
         return Ok(serde_json::json!({
             "tracingSpanIdPresent": req.tracing_span_id.is_some(),
         }));
     }
-    #[cfg(not(feature = "layer1-bootstrap"))]
     if let BrokerRequest::QemuMediaBoot(req) = request {
         return Ok(serde_json::json!({
             "vmId": req.vm_id.as_str(),
             "tracingSpanIdPresent": req.tracing_span_id.is_some(),
         }));
     }
-    #[cfg(not(feature = "layer1-bootstrap"))]
     if let BrokerRequest::QemuMediaSystemPowerdown(req) | BrokerRequest::QemuMediaQuit(req) =
         request
     {
@@ -1445,7 +2120,6 @@ fn request_fields_value(request: &BrokerRequest) -> Result<Value, BrokerError> {
             "tracingSpanIdPresent": req.tracing_span_id.is_some(),
         }));
     }
-    #[cfg(not(feature = "layer1-bootstrap"))]
     if let BrokerRequest::QemuMediaQueryStatus(req) = request {
         return Ok(serde_json::json!({
             "vmId": req.vm_id.as_str(),
@@ -1453,7 +2127,6 @@ fn request_fields_value(request: &BrokerRequest) -> Result<Value, BrokerError> {
             "tracingSpanIdPresent": req.tracing_span_id.is_some(),
         }));
     }
-    #[cfg(not(feature = "layer1-bootstrap"))]
     if let BrokerRequest::QemuMediaAttach(req) | BrokerRequest::QemuMediaDetach(req) = request {
         return Ok(serde_json::json!({
             "vmId": req.vm_id.as_str(),
@@ -1461,14 +2134,12 @@ fn request_fields_value(request: &BrokerRequest) -> Result<Value, BrokerError> {
             "tracingSpanIdPresent": req.tracing_span_id.is_some(),
         }));
     }
-    #[cfg(not(feature = "layer1-bootstrap"))]
     if let BrokerRequest::UsbipBind(req) = request {
         return Ok(serde_json::json!({
             "bundleUsbipBindIntentRef": req.bundle_usbip_bind_intent_ref.as_str(),
             "tracingSpanIdPresent": req.tracing_span_id.is_some(),
         }));
     }
-    #[cfg(not(feature = "layer1-bootstrap"))]
     if let BrokerRequest::UsbipUnbind(req) = request {
         return Ok(serde_json::json!({
             "bundleUsbipBindIntentRef": req.bundle_usbip_bind_intent_ref.as_str(),
@@ -1476,31 +2147,16 @@ fn request_fields_value(request: &BrokerRequest) -> Result<Value, BrokerError> {
             "tracingSpanIdPresent": req.tracing_span_id.is_some(),
         }));
     }
-    #[cfg(not(feature = "layer1-bootstrap"))]
     if let BrokerRequest::UsbipBindFirewallRule(req) = request {
         return Ok(serde_json::json!({
             "bundleUsbipFirewallIntentRef": req.bundle_usbip_firewall_intent_ref.as_str(),
             "tracingSpanIdPresent": req.tracing_span_id.is_some(),
         }));
     }
-    #[cfg(not(feature = "layer1-bootstrap"))]
     if let BrokerRequest::UsbipProxyReconcile(req) = request {
         return Ok(serde_json::json!({
             "scopeId": req.scope_id.as_str(),
             "tracingSpanIdPresent": req.tracing_span_id.is_some(),
-        }));
-    }
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    if let BrokerRequest::GuestControlSign(req) = request {
-        return Ok(serde_json::json!({
-            "vmId": req.vm_id.as_str(),
-            "role": format!("{:?}", req.role),
-            "purpose": format!("{:?}", req.purpose),
-            "hostNonceLen": req.host_nonce.len(),
-            "guestNonceLen": req.guest_nonce.len(),
-            "guestBootIdPresent": !req.guest_boot_id.as_str().is_empty(),
-            "peerCidPresent": req.peer_cid.is_some(),
-            "capabilitiesHashPresent": req.capabilities_hash.is_some(),
         }));
     }
     let mut value = serde_json::to_value(request)
@@ -1519,7 +2175,7 @@ fn request_fields_value(request: &BrokerRequest) -> Result<Value, BrokerError> {
     }
 }
 
-#[cfg(feature = "layer1-bootstrap")]
+#[cfg(any())]
 fn dispatch_request(
     request: BrokerRequest,
     caller_uid: u32,
@@ -1709,7 +2365,6 @@ fn dispatch_request(
 /// arms can route through `BundleResolver::find_*_intent` and
 /// `live_handlers::*`, transporting fds via SCM_RIGHTS on the response
 /// frame.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn dispatch_request(
     request: BrokerRequest,
     caller_uid: u32,
@@ -1737,7 +2392,6 @@ fn dispatch_request(
     )
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(clippy::too_many_arguments)]
 fn dispatch_request_with_backend<B: DispatchBackend>(
     request: BrokerRequest,
@@ -1784,32 +2438,6 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 },
             )?;
             Ok(DispatchResult::no_fds(hello_ok_response()))
-        }
-        RealBrokerRequest::GuestControlSign(req) => {
-            let response = handle_guest_control_sign(req.clone(), config, resolver)?;
-            write_success_op_record!(
-                audit_log,
-                bundle_metadata,
-                "GuestControlSign",
-                req.vm_id.as_str(),
-                caller_uid,
-                caller_gid,
-                &caller_role,
-                req.vm_id.as_str(),
-                "guest-control-auth",
-                tracing_span_id_str(req.tracing_span_id.as_ref()),
-                OperationFields::GuestControlSign {
-                    vm_id: req.vm_id.as_str().to_owned(),
-                    role: format!("{:?}", req.role),
-                    purpose: format!("{:?}", req.purpose),
-                    transcript_len: guest_control_transcript_len(&req)?,
-                    peer_cid_present: req.peer_cid.is_some(),
-                    capabilities_hash_present: req.capabilities_hash.is_some(),
-                },
-            )?;
-            Ok(DispatchResult::no_fds(BrokerResponse::GuestControlSign(
-                response,
-            )))
         }
         RealBrokerRequest::ValidateBundle => {
             // The broker validates the server-configured bundle path.
@@ -4425,7 +5053,6 @@ struct AuditBundleMetadata<'a> {
     bundle_hash: &'a str,
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn audit_bundle_metadata(resolver: Option<&BundleResolver>) -> AuditBundleMetadata<'_> {
     match resolver {
         Some(resolver) => AuditBundleMetadata {
@@ -4439,7 +5066,6 @@ fn audit_bundle_metadata(resolver: Option<&BundleResolver>) -> AuditBundleMetada
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn caller_role_authz_result(caller_role: &CallerRole) -> &'static str {
     match caller_role {
         CallerRole::AdminUid { .. } | CallerRole::RootUid { .. } => "admin",
@@ -4448,7 +5074,6 @@ fn caller_role_authz_result(caller_role: &CallerRole) -> &'static str {
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn audit_timestamp_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -4456,7 +5081,6 @@ fn audit_timestamp_ms() -> u128 {
         .as_millis()
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(clippy::too_many_arguments)]
 fn write_decision_op_record_impl(
     audit_log: &AuditLog,
@@ -4508,7 +5132,6 @@ fn write_decision_op_record_impl(
         .map_err(|err| BrokerError::Protocol(err.to_string()))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[allow(clippy::too_many_arguments)]
 fn write_success_op_record_impl(
     audit_log: &AuditLog,
@@ -4542,202 +5165,6 @@ fn write_success_op_record_impl(
     )
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
-type GuestControlHmac = Hmac<Sha256>;
-
-#[cfg(not(feature = "layer1-bootstrap"))]
-fn handle_guest_control_sign(
-    req: d2b_contracts::broker_wire::GuestControlSignRequest,
-    config: &ServerConfig,
-    resolver: Option<&Arc<BundleResolver>>,
-) -> Result<d2b_contracts::broker_wire::GuestControlSignResponse, BrokerError> {
-    req.validate_shape()
-        .map_err(|reason| BrokerError::GuestControlSignRefused { reason })?;
-    let resolver = resolver.ok_or(BrokerError::BundleResolverUnavailable)?;
-    if resolver.find_manifest_vm(req.vm_id.as_str()).is_none() {
-        return Err(BrokerError::GuestControlSignRefused {
-            reason: "vm-not-in-bundle",
-        });
-    }
-    let transcript = guest_control_transcript(&req)?;
-    let token = read_guest_control_token(&config.state_dir, req.vm_id.as_str())?;
-    sign_guest_control_transcript(token, &transcript)
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
-fn sign_guest_control_transcript(
-    mut token: Vec<u8>,
-    transcript: &[u8],
-) -> Result<d2b_contracts::broker_wire::GuestControlSignResponse, BrokerError> {
-    let mut mac = GuestControlHmac::new_from_slice(&token).map_err(|_| {
-        BrokerError::GuestControlSignRefused {
-            reason: "token-unavailable",
-        }
-    })?;
-    mac.update(&transcript);
-    let tag = mac.finalize().into_bytes().to_vec();
-    token.fill(0);
-    Ok(d2b_contracts::broker_wire::GuestControlSignResponse { tag })
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
-fn guest_control_transcript_len(
-    req: &d2b_contracts::broker_wire::GuestControlSignRequest,
-) -> Result<usize, BrokerError> {
-    Ok(guest_control_transcript(req)?.len())
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
-fn guest_control_transcript(
-    req: &d2b_contracts::broker_wire::GuestControlSignRequest,
-) -> Result<Vec<u8>, BrokerError> {
-    use d2b_contracts::broker_wire::GuestControlProofRole;
-    use d2b_contracts::guest_auth::{
-        self, AUTH_NONCE_LEN, AuthDirection, AuthPurpose, GUEST_CONTROL_AUTH_PORT,
-        GuestAuthTranscript, ProofRole,
-    };
-    req.validate_shape()
-        .map_err(|reason| BrokerError::GuestControlSignRefused { reason })?;
-    if req.protocol_version != d2b_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION
-        || req.guest_control_port != GUEST_CONTROL_AUTH_PORT
-    {
-        return Err(BrokerError::GuestControlSignRefused {
-            reason: "protocol-or-port",
-        });
-    }
-    let host_nonce: [u8; AUTH_NONCE_LEN] =
-        req.host_nonce
-            .as_slice()
-            .try_into()
-            .map_err(|_| BrokerError::GuestControlSignRefused {
-                reason: "host-nonce-length",
-            })?;
-    let guest_nonce: [u8; AUTH_NONCE_LEN] =
-        req.guest_nonce.as_slice().try_into().map_err(|_| {
-            BrokerError::GuestControlSignRefused {
-                reason: "guest-nonce-length",
-            }
-        })?;
-    let role = match req.role {
-        GuestControlProofRole::HostProof => ProofRole::Host,
-        GuestControlProofRole::GuestProof => ProofRole::Guest,
-    };
-    Ok(guest_auth::encode_transcript(&GuestAuthTranscript {
-        role,
-        direction: AuthDirection::HostToGuest,
-        purpose: AuthPurpose::GuestControlAuthV1,
-        vm_id: req.vm_id.as_str(),
-        protocol_version: req.protocol_version,
-        guest_control_port: req.guest_control_port,
-        peer_cid: req.peer_cid,
-        host_nonce: &host_nonce,
-        guest_nonce: &guest_nonce,
-        guest_boot_id: req.guest_boot_id.as_str(),
-        capabilities_hash: req.capabilities_hash.as_deref().map(str::as_bytes),
-    }))
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
-fn read_guest_control_token(state_dir: &Path, vm_id: &str) -> Result<Vec<u8>, BrokerError> {
-    const MAX_TOKEN_BYTES: usize = 4096;
-    let token_path = state_dir.join(format!("guest-control-{vm_id}/token"));
-    validate_guest_control_token_path(state_dir, &token_path)?;
-    let file = nix::fcntl::open(
-        token_path.as_path(),
-        nix::fcntl::OFlag::O_RDONLY | nix::fcntl::OFlag::O_CLOEXEC | nix::fcntl::OFlag::O_NOFOLLOW,
-        nix::sys::stat::Mode::empty(),
-    )
-    .map_err(|_| BrokerError::GuestControlSignRefused {
-        reason: "token-open",
-    })?;
-    let mut file = fs::File::from(owned_fd_from_raw(file));
-    let mut token = Vec::new();
-    std::io::Read::by_ref(&mut file)
-        .take((MAX_TOKEN_BYTES + 1) as u64)
-        .read_to_end(&mut token)
-        .map_err(|_| BrokerError::GuestControlSignRefused {
-            reason: "token-read",
-        })?;
-    let metadata = file
-        .metadata()
-        .map_err(|_| BrokerError::GuestControlSignRefused {
-            reason: "token-metadata",
-        })?;
-    if !metadata.is_file()
-        || !owner_is_safe_for_guest_control_token(metadata.uid())
-        || !matches!(metadata.mode() & 0o777, 0o400 | 0o440)
-        || token.is_empty()
-        || token.len() > MAX_TOKEN_BYTES
-    {
-        return Err(BrokerError::GuestControlSignRefused {
-            reason: "token-unsafe",
-        });
-    }
-    while matches!(token.last(), Some(b'\n' | b'\r')) {
-        token.pop();
-    }
-    if token.is_empty() {
-        return Err(BrokerError::GuestControlSignRefused {
-            reason: "token-empty",
-        });
-    }
-    Ok(token)
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
-fn validate_guest_control_token_path(
-    state_dir: &Path,
-    token_path: &Path,
-) -> Result<(), BrokerError> {
-    if !state_dir.is_absolute()
-        || state_dir == Path::new("/nix/store")
-        || state_dir.starts_with("/nix/store/")
-        || !token_path.starts_with(state_dir)
-    {
-        return Err(BrokerError::GuestControlSignRefused {
-            reason: "token-path",
-        });
-    }
-    let mut current = PathBuf::new();
-    let parent = token_path
-        .parent()
-        .ok_or(BrokerError::GuestControlSignRefused {
-            reason: "token-parent",
-        })?;
-    for component in parent.components() {
-        current.push(component);
-        let metadata =
-            fs::symlink_metadata(&current).map_err(|_| BrokerError::GuestControlSignRefused {
-                reason: "token-parent",
-            })?;
-        if metadata.file_type().is_symlink()
-            || !metadata.is_dir()
-            || !owner_is_safe_for_guest_control_token(metadata.uid())
-            || metadata.mode() & 0o022 != 0
-        {
-            return Err(BrokerError::GuestControlSignRefused {
-                reason: "token-parent-unsafe",
-            });
-        }
-    }
-    let metadata =
-        fs::symlink_metadata(token_path).map_err(|_| BrokerError::GuestControlSignRefused {
-            reason: "token-missing",
-        })?;
-    if metadata.file_type().is_symlink() {
-        return Err(BrokerError::GuestControlSignRefused {
-            reason: "token-symlink",
-        });
-    }
-    Ok(())
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
-fn owner_is_safe_for_guest_control_token(uid: u32) -> bool {
-    uid == 0 || cfg!(test)
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn activation_mode_name(mode: d2b_contracts::broker_wire::ActivationMode) -> &'static str {
     match mode {
         d2b_contracts::broker_wire::ActivationMode::Switch => "switch",
@@ -4747,7 +5174,6 @@ fn activation_mode_name(mode: d2b_contracts::broker_wire::ActivationMode) -> &'s
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn runner_signal_name(signal: d2b_contracts::broker_wire::RunnerSignal) -> &'static str {
     match signal {
         d2b_contracts::broker_wire::RunnerSignal::Term => "term",
@@ -4756,7 +5182,6 @@ fn runner_signal_name(signal: d2b_contracts::broker_wire::RunnerSignal) -> &'sta
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn runner_signal_number(signal: d2b_contracts::broker_wire::RunnerSignal) -> i32 {
     match signal {
         d2b_contracts::broker_wire::RunnerSignal::Term => libc::SIGTERM,
@@ -4765,7 +5190,6 @@ fn runner_signal_number(signal: d2b_contracts::broker_wire::RunnerSignal) -> i32
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn runner_pidfd_registry() -> &'static Mutex<HashMap<String, OwnedFd>> {
     static REGISTRY: OnceLock<Mutex<HashMap<String, OwnedFd>>> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
@@ -4775,7 +5199,6 @@ fn runner_pidfd_registry() -> &'static Mutex<HashMap<String, OwnedFd>> {
 /// Capped at 256 entries (oldest dropped on overflow). Protected by
 /// a `std::sync::Mutex` so both the tokio reap task and the synchronous
 /// accept loop can access it safely.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn child_reap_buffer()
 -> &'static Mutex<std::collections::VecDeque<d2b_contracts::broker_wire::ChildReapedNotification>> {
     use std::collections::VecDeque;
@@ -4785,12 +5208,10 @@ fn child_reap_buffer()
     BUFFER.get_or_init(|| Mutex::new(VecDeque::with_capacity(256)))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 const CHILD_REAP_BUFFER_CAP: usize = 256;
 
 /// Push one notification to the ring buffer.
 /// If the buffer is full, drops the oldest entry and logs a warning.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn push_child_reap_notification(notif: d2b_contracts::broker_wire::ChildReapedNotification) {
     let mut buf = match child_reap_buffer().lock() {
         Ok(g) => g,
@@ -4813,7 +5234,6 @@ fn push_child_reap_notification(notif: d2b_contracts::broker_wire::ChildReapedNo
 }
 
 /// Drain the ring buffer (used by PollChildReaped handler).
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn drain_child_reap_buffer() -> Vec<d2b_contracts::broker_wire::ChildReapedNotification> {
     match child_reap_buffer().lock() {
         Ok(mut buf) => buf.drain(..).collect(),
@@ -4824,7 +5244,6 @@ fn drain_child_reap_buffer() -> Vec<d2b_contracts::broker_wire::ChildReapedNotif
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn register_runner_pidfd(runner_id: &str, pidfd: &OwnedFd) -> Result<(), BrokerError> {
     let duplicated = dup(pidfd.as_raw_fd())
         .map(owned_fd_from_raw)
@@ -4848,7 +5267,6 @@ fn register_runner_pidfd(runner_id: &str, pidfd: &OwnedFd) -> Result<(), BrokerE
 /// legitimate re-spawn never collides here; a collision is a
 /// concurrent/duplicate spawn and must fail closed. See issue #64
 /// work-review (W1fu1/fu2).
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn reserve_runner_id_for_spawn(runner_id: &str) -> Result<(), BrokerError> {
     let registry = runner_pidfd_registry()
         .lock()
@@ -4861,7 +5279,6 @@ fn reserve_runner_id_for_spawn(runner_id: &str) -> Result<(), BrokerError> {
     Ok(())
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn signal_registered_runner(
     runner_id: &str,
     signal: d2b_contracts::broker_wire::RunnerSignal,
@@ -4878,7 +5295,6 @@ fn signal_registered_runner(
         .map_err(|err| BrokerError::LiveHandler(format!("pidfd_send_signal({runner_id}): {err}")))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn tracing_span_id_str(
     tracing_span_id: Option<&d2b_contracts::types::TracingSpanId>,
 ) -> Option<&str> {
@@ -4889,7 +5305,6 @@ fn tracing_span_id_str(
 /// stable header `error_kind` slug recorded on the terminal StoreSync
 /// failure/denial audit record (ADR 0027). The full signed shape lives in
 /// `operation_fields`; this slug is the coarse, greppable category.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn store_sync_error_kind(stage: crate::ops::store_sync_audit::ErrorStage) -> &'static str {
     use crate::ops::store_sync_audit::ErrorStage;
     match stage {
@@ -4907,7 +5322,6 @@ fn store_sync_error_kind(stage: crate::ops::store_sync_audit::ErrorStage) -> &'s
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 trait DispatchBackend {
     fn apply_nftables(
         &self,
@@ -5058,19 +5472,16 @@ trait DispatchBackend {
     ) -> Result<d2b_contracts::broker_wire::QemuMediaLifecycleResponse, BrokerError>;
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 struct LiveDispatchBackend {
     daemon_uid: u32,
     daemon_gid: u32,
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 struct RunnerPreopenedFds {
     child_fds: Vec<std::os::fd::OwnedFd>,
     response_fds: Vec<std::os::fd::OwnedFd>,
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn prepare_runner_preopened_fds(
     _plan_input: &crate::ops::spawn_runner::SpawnRunnerPlanInput,
     resolver: &BundleResolver,
@@ -5167,7 +5578,6 @@ fn prepare_runner_preopened_fds(
     })
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 impl DispatchBackend for LiveDispatchBackend {
     fn apply_nftables(
         &self,
@@ -5362,7 +5772,6 @@ impl DispatchBackend for LiveDispatchBackend {
         // Reserve the runner_id BEFORE spawning the child: refuse a
         // duplicate active registration up front so we never create an
         // orphan child (see `reserve_runner_id_for_spawn`).
-        #[cfg(not(feature = "layer1-bootstrap"))]
         reserve_runner_id_for_spawn(runner_id)?;
         let preopened = prepare_runner_preopened_fds(
             plan_input,
@@ -5400,7 +5809,6 @@ impl DispatchBackend for LiveDispatchBackend {
             // non-blocking) so a child that has already exited cannot
             // leak as a zombie. Best-effort; the registry entry is
             // already absent on the failure path.
-            #[cfg(not(feature = "layer1-bootstrap"))]
             targeted_reap_runner(runner_id, outcome.pidfd.as_fd());
         })?;
         // Close the registration-window race: if the child exited
@@ -5409,7 +5817,6 @@ impl DispatchBackend for LiveDispatchBackend {
         // ran before the entry existed. A targeted, generation-exact
         // (pidfd-keyed) non-blocking reap here guarantees the child is
         // reaped regardless of SIGCHLD timing.
-        #[cfg(not(feature = "layer1-bootstrap"))]
         targeted_reap_runner(runner_id, outcome.pidfd.as_fd());
         Ok(outcome)
     }
@@ -5607,24 +6014,20 @@ impl DispatchBackend for LiveDispatchBackend {
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn require_resolver_ref(resolver: Option<&BundleResolver>) -> Result<&BundleResolver, BrokerError> {
     resolver.ok_or(BrokerError::BundleResolverUnavailable)
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn require_resolver(
     resolver: Option<&Arc<BundleResolver>>,
 ) -> Result<&Arc<BundleResolver>, BrokerError> {
     resolver.ok_or(BrokerError::BundleResolverUnavailable)
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn live_exec(config: &ServerConfig) -> crate::ops::exec_reconcile::SystemLiveExec {
     crate::ops::exec_reconcile::SystemLiveExec::new(config.d2bd_uid, config.d2bd_gid)
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn dispatch_set_bridge_port_flags_inner(
     req: &d2b_contracts::broker_wire::SetBridgePortFlagsRequest,
     resolver: &BundleResolver,
@@ -5634,7 +6037,6 @@ fn dispatch_set_bridge_port_flags_inner(
         .map_err(|err| BrokerError::LiveHandler(err.to_string()))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn map_activation_live_error(error: crate::live_handlers::LiveHandlerError) -> BrokerError {
     match error {
         crate::live_handlers::LiveHandlerError::ReconcileExec(
@@ -5652,7 +6054,6 @@ fn map_activation_live_error(error: crate::live_handlers::LiveHandlerError) -> B
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn dispatch_run_host_install_intent_inner(
     req: &d2b_contracts::broker_wire::RunHostInstallRequest,
     intent: &d2b_core::bundle_resolver::ResolvedInstallerIntent,
@@ -5676,7 +6077,6 @@ fn dispatch_run_host_install_intent_inner(
     })
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn dispatch_run_host_install_response_inner(
     req: &d2b_contracts::broker_wire::RunHostInstallRequest,
     resolver: Option<&BundleResolver>,
@@ -5693,7 +6093,6 @@ fn dispatch_run_host_install_response_inner(
     dispatch_run_host_install_intent_inner(req, intent, Some(&host_runtime), executor)
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 /// Shared helper: resolve + execute `RunHostInstall` against an injected
 /// executor and map failures onto the broker wire envelope.
 /// The live server uses the inner form so it can write the audit row
@@ -5718,7 +6117,6 @@ pub fn dispatch_run_host_install_response(
 /// `BrokerResponse::Error { kind: "Broker.BundleResolverUnavailable" }` when
 /// the bundle is absent or unreadable. Exposed for the
 /// `bundle_tampered_broker` integration test.
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub fn probe_bundle_load_response(bundle_path: &std::path::Path) -> BrokerResponse {
     match try_load_resolver(bundle_path) {
         BundleSlot::Loaded(_) => {
@@ -5737,7 +6135,6 @@ pub fn probe_bundle_load_response(bundle_path: &std::path::Path) -> BrokerRespon
 /// Tests that need to control uid/gid/mode requirements (e.g. to avoid requiring
 /// root in CI) pass `current_user_policy()` so the uid check passes and only the
 /// intended tamper reason fires.
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub fn probe_bundle_load_response_with_policy(
     bundle_path: &std::path::Path,
     policy: &d2b_core::bundle_resolver::BundleVerifyPolicy,
@@ -5755,7 +6152,6 @@ pub fn probe_bundle_load_response_with_policy(
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 /// Variant for tests that inject a pre-resolved installer intent with
 /// writable artifact paths while still exercising the dispatch-layer
 /// success/error envelope mapping.
@@ -5771,7 +6167,6 @@ pub fn dispatch_run_host_install_response_for_intent(
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub fn dispatch_run_activation_response_for_intent(
     req: &d2b_contracts::broker_wire::RunActivationRequest,
     intent: &d2b_core::bundle_resolver::ResolvedActivationIntent,
@@ -5810,12 +6205,10 @@ pub fn dispatch_run_activation_response_for_intent(
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn nft_binary_path() -> PathBuf {
     PathBuf::from(env::var("D2B_BROKER_NFT_BINARY").unwrap_or_else(|_| "/usr/sbin/nft".to_owned()))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn nft_hash_sidecar_path() -> PathBuf {
     PathBuf::from(
         env::var("D2B_BROKER_NFT_HASH_PATH")
@@ -5823,28 +6216,23 @@ fn nft_hash_sidecar_path() -> PathBuf {
     )
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn persisted_nft_hash() -> Result<Option<String>, crate::ops::exec_reconcile::ReconcileExecError> {
     crate::ops::nft::read_persisted_nft_hash(&nft_hash_sidecar_path())
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn ip_binary_path() -> PathBuf {
     PathBuf::from(env::var("D2B_BROKER_IP_BINARY").unwrap_or_else(|_| "/usr/sbin/ip".to_owned()))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn render_nft_destroy_script(family: &str, table: &str) -> String {
     format!("table {family} {table} {{\n}}\n")
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn destroy_sysctl_value(key: &str) -> Result<&'static str, BrokerError> {
     crate::ops::sysctl::destroy_value_for_key(key)
         .ok_or_else(|| BrokerError::Protocol(format!("unsupported host-destroy sysctl key: {key}")))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn usbip_binary_path() -> PathBuf {
     PathBuf::from(
         env::var("D2B_BROKER_USBIP_BINARY").unwrap_or_else(|_| "/usr/sbin/usbip".to_owned()),
@@ -5856,12 +6244,10 @@ fn usbip_binary_path() -> PathBuf {
 /// opaque string; the bundle index is the `processes.vms[*].vm` field.
 /// We use the wire value as both the opaque key and the human-readable
 /// name today — the daemon emits them identically.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn lookup_vm_name(_resolver: &Arc<BundleResolver>, vm_id: &d2b_contracts::types::VmId) -> String {
     vm_id.as_str().to_owned()
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn apply_vm_start_prerequisites<B: DispatchBackend>(
     backend: &B,
     resolver: &Arc<BundleResolver>,
@@ -5876,7 +6262,6 @@ fn apply_vm_start_prerequisites<B: DispatchBackend>(
     Ok(())
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn execute_vm_start_action<B: DispatchBackend>(
     backend: &B,
     intent: &d2b_core::bundle_resolver::ResolvedVmStartIntent,
@@ -5917,11 +6302,9 @@ fn execute_vm_start_action<B: DispatchBackend>(
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[cfg(test)]
 static TEST_USB_SYSFS_ROOT: OnceLock<PathBuf> = OnceLock::new();
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn usb_device_sysfs_root() -> &'static Path {
     #[cfg(test)]
     if let Some(path) = TEST_USB_SYSFS_ROOT.get() {
@@ -5930,7 +6313,6 @@ fn usb_device_sysfs_root() -> &'static Path {
     Path::new("/sys/bus/usb/devices")
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn read_usb_device_identity(sysfs_root: &Path, bus_id: &str) -> Result<(u16, u16), BrokerError> {
     if d2b_host::usbip_argv::validate_bus_id(bus_id).is_err() {
         return Err(BrokerError::Protocol(format!(
@@ -5943,14 +6325,12 @@ fn read_usb_device_identity(sysfs_root: &Path, bus_id: &str) -> Result<(u16, u16
     Ok((vendor, product))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UsbAuditSerialHmacKeySlot {
     Current,
     Previous,
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct UsbAuditSerialHmacKey {
     slot: UsbAuditSerialHmacKeySlot,
@@ -5958,14 +6338,12 @@ struct UsbAuditSerialHmacKey {
     key: Vec<u8>,
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct UsbAuditSerialHmacKeyring {
     current: UsbAuditSerialHmacKey,
     previous: Option<UsbAuditSerialHmacKey>,
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn usb_audit_device_identity_for_busid(
     sysfs_root: &Path,
     bus_id: &str,
@@ -5993,7 +6371,6 @@ fn usb_audit_device_identity_for_busid(
     ))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn usb_audit_device_identity(
     identity: (u16, u16),
     serial: Option<&str>,
@@ -6017,7 +6394,6 @@ fn usb_audit_device_identity(
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn usb_serial_correlation(
     serial: &str,
     key: &UsbAuditSerialHmacKey,
@@ -6034,30 +6410,19 @@ fn usb_serial_correlation(
     })
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 const USB_AUDIT_SERIAL_HMAC_KEY_BYTES: usize = 32;
-#[cfg(not(feature = "layer1-bootstrap"))]
 const USB_AUDIT_SERIAL_HMAC_RANDOM_BYTES: usize = USB_AUDIT_SERIAL_HMAC_KEY_BYTES + 16;
-#[cfg(not(feature = "layer1-bootstrap"))]
 const USB_AUDIT_SERIAL_HMAC_KEY_DIR: &str = "usb-audit-serial-hmac";
-#[cfg(not(feature = "layer1-bootstrap"))]
 const USB_AUDIT_SERIAL_HMAC_CURRENT_KEY_FILE: &str = "current.key";
-#[cfg(not(feature = "layer1-bootstrap"))]
 const USB_AUDIT_SERIAL_HMAC_PREVIOUS_KEY_FILE: &str = "previous.key";
-#[cfg(not(feature = "layer1-bootstrap"))]
 const USB_AUDIT_SERIAL_HMAC_KEY_MAGIC: &str = "d2b-usb-audit-serial-hmac-v1";
-#[cfg(not(feature = "layer1-bootstrap"))]
 const USB_AUDIT_SERIAL_CORRELATION_VERSION: &str = "d2b-usb-audit-serial-v1";
-#[cfg(not(feature = "layer1-bootstrap"))]
 const USB_AUDIT_SERIAL_HMAC_PREVIOUS_KEY_GRACE_WINDOW_SECONDS: u64 = 30 * 24 * 60 * 60;
-#[cfg(not(feature = "layer1-bootstrap"))]
 static USB_AUDIT_SERIAL_HMAC_ROTATION_LOGGED: OnceLock<Mutex<HashMap<String, ()>>> =
     OnceLock::new();
-#[cfg(not(feature = "layer1-bootstrap"))]
 static USB_AUDIT_SERIAL_HMAC_ROTATION_AUDIT_LOGGED: OnceLock<Mutex<HashMap<String, ()>>> =
     OnceLock::new();
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn usb_serial_correlation_key_rotation_audit(
     keyring: &UsbAuditSerialHmacKeyring,
 ) -> Option<UsbSerialCorrelationKeyRotationAudit> {
@@ -6073,14 +6438,12 @@ fn usb_serial_correlation_key_rotation_audit(
         })
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn usb_audit_serial_hmac_rotation_dedupe_key(
     audit: &UsbSerialCorrelationKeyRotationAudit,
 ) -> String {
     format!("{}|{}", audit.previous_key_id, audit.current_key_id)
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn mark_usb_audit_serial_hmac_rotation_audit_logged(
     audit: &UsbSerialCorrelationKeyRotationAudit,
 ) -> Option<String> {
@@ -6096,7 +6459,6 @@ fn mark_usb_audit_serial_hmac_rotation_audit_logged(
     Some(dedupe_key)
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn unmark_usb_audit_serial_hmac_rotation_audit_logged(dedupe_key: &str) {
     let Some(logged) = USB_AUDIT_SERIAL_HMAC_ROTATION_AUDIT_LOGGED.get() else {
         return;
@@ -6106,7 +6468,6 @@ fn unmark_usb_audit_serial_hmac_rotation_audit_logged(dedupe_key: &str) {
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn log_usb_audit_serial_hmac_rotation_window(keyring: &UsbAuditSerialHmacKeyring) {
     let Some(audit) = usb_serial_correlation_key_rotation_audit(keyring) else {
         return;
@@ -6130,7 +6491,6 @@ fn log_usb_audit_serial_hmac_rotation_window(keyring: &UsbAuditSerialHmacKeyring
     );
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn usb_audit_serial_hmac_keyring(
     state_dir: &Path,
     test_mode: bool,
@@ -6156,14 +6516,12 @@ fn usb_audit_serial_hmac_keyring(
     Ok(keyring)
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn usb_audit_serial_hmac_key_dir(state_dir: &Path) -> PathBuf {
     state_dir
         .join("secrets")
         .join(USB_AUDIT_SERIAL_HMAC_KEY_DIR)
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn ensure_usb_audit_serial_hmac_key_dir(
     key_dir: &Path,
     test_mode: bool,
@@ -6185,7 +6543,6 @@ fn ensure_usb_audit_serial_hmac_key_dir(
     Ok(())
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn read_usb_audit_serial_hmac_key_file(
     path: &Path,
     slot: UsbAuditSerialHmacKeySlot,
@@ -6213,7 +6570,6 @@ fn read_usb_audit_serial_hmac_key_file(
     parse_usb_audit_serial_hmac_key(&contents, slot).map(Some)
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn validate_usb_audit_serial_hmac_key_metadata(
     file: &fs::File,
     test_mode: bool,
@@ -6229,7 +6585,6 @@ fn validate_usb_audit_serial_hmac_key_metadata(
     Ok(())
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn create_usb_audit_serial_hmac_key(
     key_dir: &Path,
     test_mode: bool,
@@ -6259,7 +6614,6 @@ fn create_usb_audit_serial_hmac_key(
     })
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn write_new_usb_audit_serial_hmac_key_file(
     dir_fd: &OwnedFd,
     key: &UsbAuditSerialHmacKey,
@@ -6278,7 +6632,6 @@ fn write_new_usb_audit_serial_hmac_key_file(
     Ok(())
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn generate_usb_audit_serial_hmac_key() -> Result<UsbAuditSerialHmacKey, BrokerError> {
     let random = read_high_entropy_bytes(USB_AUDIT_SERIAL_HMAC_RANDOM_BYTES)?;
     let (key, id_bytes) = random.split_at(USB_AUDIT_SERIAL_HMAC_KEY_BYTES);
@@ -6289,7 +6642,6 @@ fn generate_usb_audit_serial_hmac_key() -> Result<UsbAuditSerialHmacKey, BrokerE
     })
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn read_high_entropy_bytes(len: usize) -> Result<Vec<u8>, BrokerError> {
     let mut file = fs::File::open("/dev/urandom").map_err(|err| {
         BrokerError::LiveHandler(format!(
@@ -6305,7 +6657,6 @@ fn read_high_entropy_bytes(len: usize) -> Result<Vec<u8>, BrokerError> {
     Ok(bytes)
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn render_usb_audit_serial_hmac_key(key: &UsbAuditSerialHmacKey) -> String {
     format!(
         "{USB_AUDIT_SERIAL_HMAC_KEY_MAGIC}\nkey_id={}\nkey_hex={}\n",
@@ -6314,7 +6665,6 @@ fn render_usb_audit_serial_hmac_key(key: &UsbAuditSerialHmacKey) -> String {
     )
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn parse_usb_audit_serial_hmac_key(
     contents: &str,
     slot: UsbAuditSerialHmacKeySlot,
@@ -6348,7 +6698,6 @@ fn parse_usb_audit_serial_hmac_key(
     Ok(UsbAuditSerialHmacKey { slot, key_id, key })
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn usb_audit_key_id_is_safe(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 96
@@ -6357,7 +6706,6 @@ fn usb_audit_key_id_is_safe(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn decode_fixed_hex_key(value: &str, len: usize) -> Result<Vec<u8>, BrokerError> {
     if value.len() != len * 2 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(BrokerError::LiveHandler(
@@ -6374,7 +6722,6 @@ fn decode_fixed_hex_key(value: &str, len: usize) -> Result<Vec<u8>, BrokerError>
         .collect()
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn lower_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -6386,7 +6733,6 @@ fn lower_hex(bytes: &[u8]) -> String {
     out
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn read_usb_serial_for_audit(sysfs_root: &Path, bus_id: &str) -> Option<String> {
     if d2b_host::usbip_argv::validate_bus_id(bus_id).is_err() {
         return None;
@@ -6401,7 +6747,6 @@ fn read_usb_serial_for_audit(sysfs_root: &Path, bus_id: &str) -> Option<String> 
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn usb_device_node_for_busid(sysfs_root: &Path, bus_id: &str) -> Result<PathBuf, BrokerError> {
     d2b_host::usbip_argv::validate_bus_id(bus_id)
         .map_err(|err| BrokerError::LiveHandler(format!("invalid usbip bus_id: {err:?}")))?;
@@ -6413,7 +6758,6 @@ fn usb_device_node_for_busid(sysfs_root: &Path, bus_id: &str) -> Result<PathBuf,
     )))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn read_usb_decimal_attr(device_dir: &Path, attr: &str, bus_id: &str) -> Result<u16, BrokerError> {
     let path = device_dir.join(attr);
     let raw = fs::read_to_string(&path).map_err(|err| {
@@ -6430,20 +6774,20 @@ fn read_usb_decimal_attr(device_dir: &Path, attr: &str, bus_id: &str) -> Result<
     })
 }
 
-#[cfg(all(test, not(feature = "layer1-bootstrap")))]
+#[cfg(all(test, not(any())))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TestUsbipBackendAclEvent {
     Grant { uid: u32 },
     Revoke { uid: u32 },
 }
 
-#[cfg(all(test, not(feature = "layer1-bootstrap")))]
+#[cfg(all(test, not(any())))]
 fn test_usbip_backend_acl_events() -> &'static Mutex<Vec<TestUsbipBackendAclEvent>> {
     static EVENTS: OnceLock<Mutex<Vec<TestUsbipBackendAclEvent>>> = OnceLock::new();
     EVENTS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-#[cfg(all(test, not(feature = "layer1-bootstrap")))]
+#[cfg(all(test, not(any())))]
 fn take_test_usbip_backend_acl_events() -> Vec<TestUsbipBackendAclEvent> {
     let mut events = test_usbip_backend_acl_events()
         .lock()
@@ -6451,7 +6795,6 @@ fn take_test_usbip_backend_acl_events() -> Vec<TestUsbipBackendAclEvent> {
     std::mem::take(&mut *events)
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn rollback_usbip_bind_after_audit_failure<B: DispatchBackend>(
     backend: &B,
     resolver: &Arc<BundleResolver>,
@@ -6493,7 +6836,6 @@ fn rollback_usbip_bind_after_audit_failure<B: DispatchBackend>(
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn rollback_usbip_bind_after_acl_grant_failure<B: DispatchBackend>(
     backend: &B,
     intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
@@ -6530,7 +6872,6 @@ fn rollback_usbip_bind_after_acl_grant_failure<B: DispatchBackend>(
     grant_error
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn handle_usbip_acl_revoke_failure_after_unbind(
     intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
     preserve_durable_claim: bool,
@@ -6588,14 +6929,11 @@ fn handle_usbip_acl_revoke_failure_after_unbind(
     revoke_error
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 const USBIP_BACKEND_ACL_GRANT_ATTEMPTS: usize = 20;
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 const USBIP_BACKEND_ACL_GRANT_RETRY_SLEEP: std::time::Duration =
     std::time::Duration::from_millis(100);
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn retry_usbip_backend_acl_grant<V, G, R, S>(
     uid: u32,
     mut verify_device_node: V,
@@ -6650,7 +6988,6 @@ where
     }))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn grant_usbip_backend_device_acl(
     resolver: &Arc<BundleResolver>,
     intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
@@ -6707,7 +7044,6 @@ fn grant_usbip_backend_device_acl(
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn revoke_usbip_backend_device_acl(
     resolver: &Arc<BundleResolver>,
     intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
@@ -6732,7 +7068,6 @@ fn revoke_usbip_backend_device_acl(
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn reconcile_active_usbip_backend_acls(resolver: &Arc<BundleResolver>) -> Result<(), BrokerError> {
     for intent in active_locked_usbip_bind_intents(resolver)? {
         let inspection = match crate::ops::usbip_host::enforce_usbip_physical_policy(
@@ -6772,7 +7107,6 @@ fn reconcile_active_usbip_backend_acls(resolver: &Arc<BundleResolver>) -> Result
     Ok(())
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn usbip_backend_runner_intent<'a>(
     resolver: &'a Arc<BundleResolver>,
     intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
@@ -6792,7 +7126,6 @@ fn usbip_backend_runner_intent<'a>(
 /// Resolve the env USBIP backend runner UID for the explicit attach path.
 /// Returns the UID of the `sys-<env>-usbipd/backend` runner so the broker
 /// can grant the per-device ACL without needing a full `ResolvedUsbipBindIntent`.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn explicit_usbip_backend_uid(
     resolver: &Arc<BundleResolver>,
     env: &str,
@@ -6812,7 +7145,6 @@ fn explicit_usbip_backend_uid(
 /// attach. Cross-checks the request IPs against the env's declared host config
 /// values to prevent the daemon from installing rules for a different env's
 /// bridge. Returns the rule body string on success.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn build_explicit_usbip_rule_body(
     resolver: &BundleResolver,
     env: &str,
@@ -6909,7 +7241,6 @@ fn build_explicit_usbip_rule_body(
 /// attach path. Unlike `grant_usbip_backend_device_acl` this does NOT check a
 /// vendor/product allowlist; the explicit path carries no bundle allowlist.
 /// Retries up to 20 times with 100ms sleep (same policy as the declared path).
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn grant_explicit_usbip_backend_acl(
     resolver: &Arc<BundleResolver>,
     env: &str,
@@ -6949,7 +7280,7 @@ fn grant_explicit_usbip_backend_acl(
 /// Stability check for explicit USBIP device ACL grant. Uses
 /// `inspect_usbip_host_device` (no allowlist check) to verify the device at
 /// `bus_id` still matches `expected_identity` and `expected_device_node`.
-#[cfg(all(not(feature = "layer1-bootstrap"), not(test)))]
+#[cfg(all(not(any()), not(test)))]
 fn verify_explicit_usbip_device_stable(
     bus_id: &str,
     expected_identity: (u16, u16),
@@ -6976,7 +7307,6 @@ fn verify_explicit_usbip_device_stable(
 
 /// Revoke the per-device ACL from the env's USBIP backend runner for the
 /// explicit attach path rollback. Best-effort; failures are logged only.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn revoke_explicit_usbip_backend_acl(
     resolver: &Arc<BundleResolver>,
     env: &str,
@@ -7014,7 +7344,6 @@ fn revoke_explicit_usbip_backend_acl(
 /// nftables state.
 ///
 /// Entries for `excluding_bus_id` are skipped (caller adds its own carveout).
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn collect_active_explicit_usbip_carveouts(
     resolver: &BundleResolver,
     excluding_bus_id: &str,
@@ -7075,7 +7404,6 @@ fn collect_active_explicit_usbip_carveouts(
 /// Build the nft firewall decision for an explicit USBIP attach. Starts from
 /// the host nft base, preserves all currently-active declared and explicit
 /// carve-outs, and inserts the new carve-out for `bus_id`.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn build_usbip_explicit_firewall_decision(
     resolver: &BundleResolver,
     host_nft_intent: &d2b_core::bundle_resolver::ResolvedNftIntent,
@@ -7165,7 +7493,6 @@ fn build_usbip_explicit_firewall_decision(
     .map_err(|err| BrokerError::LiveHandler(err.to_string()))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn runner_role_for_process_role(
     role: &d2b_core::processes::ProcessRole,
 ) -> Option<d2b_contracts::broker_wire::RunnerRole> {
@@ -7193,7 +7520,6 @@ fn runner_role_for_process_role(
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn validate_spawn_runner_request_matches_intent(
     req: &d2b_contracts::broker_wire::SpawnRunnerRequest,
     intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
@@ -7233,7 +7559,6 @@ fn validate_spawn_runner_request_matches_intent(
     Ok(())
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn read_hex_u16(path: PathBuf, bus_id: &str) -> Result<u16, BrokerError> {
     let raw = fs::read_to_string(&path).map_err(|err| {
         BrokerError::LiveHandler(format!(
@@ -7249,7 +7574,6 @@ fn read_hex_u16(path: PathBuf, bus_id: &str) -> Result<u16, BrokerError> {
     })
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn enforce_usbip_allowlist(
     intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
     sysfs_root: &Path,
@@ -7259,7 +7583,6 @@ fn enforce_usbip_allowlist(
     Ok((inspection.vendor, inspection.product))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn map_usbip_host_inspection_error_for_intent(
     intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
     err: crate::ops::usbip_host::UsbipHostInspectionError,
@@ -7301,7 +7624,6 @@ fn map_usbip_host_inspection_error_for_intent(
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn extend_usbip_backend_device_binds(
     resolver: &BundleResolver,
     vm_id: &str,
@@ -7359,7 +7681,6 @@ fn extend_usbip_backend_device_binds(
     Ok(())
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn extend_audio_runner_pipewire_props(
     vm_id: &str,
     role_id: &str,
@@ -7400,7 +7721,6 @@ fn extend_audio_runner_pipewire_props(
     Ok(())
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn audio_input_target_node(
     env: &[String],
     vm_id: &str,
@@ -7420,7 +7740,6 @@ fn audio_input_target_node(
     Ok(Some(raw.to_owned()))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn audio_state_value<'a>(
     value: &'a Value,
     key: &str,
@@ -7440,7 +7759,6 @@ fn audio_state_value<'a>(
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn cleanup_cloud_hypervisor_stale_sockets(
     role: &d2b_contracts::broker_wire::RunnerRole,
     argv: &[String],
@@ -7457,7 +7775,6 @@ fn cleanup_cloud_hypervisor_stale_sockets(
     Ok(())
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn cleanup_video_stale_socket(
     role: &d2b_contracts::broker_wire::RunnerRole,
     argv: &[String],
@@ -7475,7 +7792,6 @@ fn cleanup_video_stale_socket(
     cleanup_stale_unix_socket_without_probe(&path, "video socket preflight")
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn video_socket_path(argv: &[String]) -> Result<PathBuf, BrokerError> {
     let mut iter = argv.iter();
     while let Some(arg) = iter.next() {
@@ -7503,7 +7819,6 @@ fn video_socket_path(argv: &[String]) -> Result<PathBuf, BrokerError> {
 // socket masks the failure and host telemetry silently stops flowing.
 // Mirror the cloud-hypervisor / video preflight: drop a provably-stale
 // (non-listening) socket before spawn so obs-VM restarts self-heal.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn cleanup_otel_host_bridge_stale_socket(
     role: &d2b_contracts::broker_wire::RunnerRole,
     argv: &[String],
@@ -7521,7 +7836,6 @@ fn cleanup_otel_host_bridge_stale_socket(
     cleanup_stale_unix_socket_without_probe(&path, "otel-host-bridge socket preflight")
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn cleanup_vsock_relay_stale_socket(
     role: &d2b_contracts::broker_wire::RunnerRole,
     vm_state_dir: Option<&str>,
@@ -7550,7 +7864,6 @@ fn cleanup_vsock_relay_stale_socket(
     cleanup_stale_unix_socket_without_probe(&path, "vsock-relay socket preflight")
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn socat_unix_listen_socket_path(argv: &[String], context: &str) -> Result<PathBuf, BrokerError> {
     for arg in argv {
         if let Some(rest) = arg.strip_prefix("UNIX-LISTEN:") {
@@ -7565,7 +7878,6 @@ fn socat_unix_listen_socket_path(argv: &[String], context: &str) -> Result<PathB
     )))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn cloud_hypervisor_socket_paths(argv: &[String]) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     let mut iter = argv.iter();
@@ -7591,7 +7903,6 @@ fn cloud_hypervisor_socket_paths(argv: &[String]) -> Vec<PathBuf> {
     paths
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn cleanup_stale_unix_socket(path: &Path) -> Result<(), BrokerError> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -7634,7 +7945,6 @@ fn cleanup_stale_unix_socket(path: &Path) -> Result<(), BrokerError> {
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn cleanup_stale_unix_socket_without_probe(path: &Path, context: &str) -> Result<(), BrokerError> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -7666,7 +7976,6 @@ fn cleanup_stale_unix_socket_without_probe(path: &Path, context: &str) -> Result
     })
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn unix_socket_listening_path(path: &Path) -> bool {
     const SO_ACCEPTCON: u64 = 0x0001_0000;
     let expected = path.to_string_lossy();
@@ -7685,7 +7994,6 @@ fn unix_socket_listening_path(path: &Path) -> bool {
     })
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn build_usbip_firewall_decision(
     resolver: &BundleResolver,
     host_nft_intent: &d2b_core::bundle_resolver::ResolvedNftIntent,
@@ -7758,7 +8066,6 @@ fn build_usbip_firewall_decision(
     .map_err(|err| BrokerError::LiveHandler(err.to_string()))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn find_usbip_firewall_intent_or_wildcard(
     resolver: &BundleResolver,
     intent_id: &str,
@@ -7779,7 +8086,6 @@ fn find_usbip_firewall_intent_or_wildcard(
     })
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn parse_usbip_firewall_intent_id(intent_id: &str) -> Option<(String, String)> {
     let rest = intent_id.strip_prefix("usbip-fw:env:")?;
     let (env, bus_id) = rest.split_once(":bus:")?;
@@ -7790,7 +8096,6 @@ fn parse_usbip_firewall_intent_id(intent_id: &str) -> Option<(String, String)> {
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn active_dynamic_usbip_bind_intents(
     resolver: &BundleResolver,
 ) -> Vec<d2b_core::bundle_resolver::ResolvedUsbipBindIntent> {
@@ -7808,7 +8113,6 @@ fn active_dynamic_usbip_bind_intents(
         .collect()
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn active_locked_usbip_bind_intents(
     resolver: &BundleResolver,
 ) -> Result<Vec<d2b_core::bundle_resolver::ResolvedUsbipBindIntent>, BrokerError> {
@@ -7832,7 +8136,6 @@ fn active_locked_usbip_bind_intents(
     Ok(out)
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn find_usbip_bind_intent_or_wildcard(
     resolver: &BundleResolver,
     intent_id: &str,
@@ -7850,7 +8153,6 @@ fn find_usbip_bind_intent_or_wildcard(
     Some(dynamic_usbip_bind_intent(source, &bus_id))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn parse_usbip_bind_intent_id(intent_id: &str) -> Option<(String, String, String)> {
     let rest = intent_id.strip_prefix("usbip-bind:env:")?;
     let (env, rest) = rest.split_once(":vm:")?;
@@ -7862,7 +8164,6 @@ fn parse_usbip_bind_intent_id(intent_id: &str) -> Option<(String, String, String
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn find_usbip_bind_intent_for(
     resolver: &BundleResolver,
     vm_name: &str,
@@ -7885,7 +8186,6 @@ fn find_usbip_bind_intent_for(
     })
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn find_usbip_bind_intent_by_busid(
     resolver: &BundleResolver,
     bus_id: &str,
@@ -7905,7 +8205,6 @@ fn find_usbip_bind_intent_by_busid(
     })
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn find_wildcard_usbip_bind_intent_for(
     resolver: &BundleResolver,
     vm_name: &str,
@@ -7925,7 +8224,6 @@ fn find_wildcard_usbip_bind_intent_for(
     })
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn static_usbip_busid_owner(resolver: &BundleResolver, bus_id: &str) -> Option<String> {
     resolver.usbip_bind_intent_ids().find_map(|id| {
         let intent = resolver.find_usbip_bind_intent(id)?;
@@ -7937,7 +8235,6 @@ fn static_usbip_busid_owner(resolver: &BundleResolver, bus_id: &str) -> Option<S
     })
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn dynamic_usbip_bind_intent(
     source: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
     bus_id: &str,
@@ -7957,7 +8254,6 @@ fn dynamic_usbip_bind_intent(
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn usbip_lock_path_for_busid(bus_id: &str) -> PathBuf {
     PathBuf::from(format!("/run/d2b/locks/usbip/{bus_id}"))
 }
@@ -7967,10 +8263,9 @@ fn usbip_lock_path_for_busid(bus_id: &str) -> PathBuf {
 // bootstrap path keeps its own loose "file exists" check in
 // `crate::bootstrap::manifest` because the legacy probe-* test harnesses
 // pre-date the v0.4 schema.
-#[cfg(not(feature = "layer1-bootstrap"))]
 use d2b_core::manifest as manifest_api;
 
-#[cfg(feature = "layer1-bootstrap")]
+#[cfg(any())]
 fn handle_validate_bundle(
     path: &Path,
     caller_uid: u32,
@@ -7990,7 +8285,7 @@ fn handle_validate_bundle(
     Ok(validate_bundle_ok_response())
 }
 
-#[cfg(feature = "layer1-bootstrap")]
+#[cfg(any())]
 fn handle_export_broker_audit(
     since: Option<&str>,
     filter: Option<&str>,
@@ -8061,143 +8356,6 @@ fn validate_socket_parent(path: &Path, test_mode: bool) -> Result<(), RunError> 
     Ok(())
 }
 
-fn prepare_socket_path(path: &Path) -> io::Result<()> {
-    if fs::symlink_metadata(path).is_ok() {
-        path_safe::remove_nofollow(path)?;
-    }
-    Ok(())
-}
-
-#[cfg(feature = "layer1-bootstrap")]
-fn run_probe(
-    socket_path: PathBuf,
-    request: RequestEnvelope,
-    expect_response: bool,
-) -> Result<(), RunError> {
-    let socket = connect_seqpacket(&socket_path)?;
-    send_json_frame(socket.as_raw_fd(), &request)?;
-    let response = recv_json_frame::<BrokerResponse>(socket.as_raw_fd())?;
-    if let Some(response) = response {
-        println!(
-            "{}",
-            serde_json::to_string(&response).map_err(|err| RunError::Protocol(err.to_string()))?
-        );
-        Ok(())
-    } else if expect_response {
-        Err(RunError::Protocol(
-            "connection closed before response".to_owned(),
-        ))
-    } else {
-        Err(RunError::Protocol(
-            "connection closed before export response".to_owned(),
-        ))
-    }
-}
-
-#[cfg(feature = "layer1-bootstrap")]
-fn parse_probe_flags(rest: Vec<String>) -> Result<(PathBuf, Option<u32>), RunError> {
-    let mut socket_path = PathBuf::from(DEFAULT_SOCKET_PATH);
-    let mut test_uid = None;
-    let mut index = 0;
-    while index < rest.len() {
-        match rest[index].as_str() {
-            "--socket-path" => {
-                index += 1;
-                socket_path = PathBuf::from(expect_arg(&rest, index, "--socket-path")?);
-            }
-            "--test-uid" => {
-                index += 1;
-                test_uid = Some(
-                    expect_arg(&rest, index, "--test-uid")?
-                        .parse()
-                        .map_err(|_| RunError::Usage("invalid --test-uid".to_owned()))?,
-                );
-            }
-            other => return Err(RunError::Usage(format!("unknown probe flag: {other}"))),
-        }
-        index += 1;
-    }
-    Ok((socket_path, test_uid))
-}
-
-#[cfg(feature = "layer1-bootstrap")]
-fn parse_stub_flags(rest: &[String]) -> Result<(PathBuf, Option<u32>, String), RunError> {
-    let mut socket_path = PathBuf::from(DEFAULT_SOCKET_PATH);
-    let mut test_uid = None;
-    let mut operation = None;
-    let mut index = 0;
-    while index < rest.len() {
-        match rest[index].as_str() {
-            "--socket-path" => {
-                index += 1;
-                socket_path = PathBuf::from(expect_arg(rest, index, "--socket-path")?);
-            }
-            "--test-uid" => {
-                index += 1;
-                test_uid = Some(
-                    expect_arg(rest, index, "--test-uid")?
-                        .parse()
-                        .map_err(|_| RunError::Usage("invalid --test-uid".to_owned()))?,
-                );
-            }
-            "--operation" => {
-                index += 1;
-                operation = Some(expect_arg(rest, index, "--operation")?.to_owned());
-            }
-            other => return Err(RunError::Usage(format!("unknown probe-stub flag: {other}"))),
-        }
-        index += 1;
-    }
-    Ok((
-        socket_path,
-        test_uid,
-        operation.ok_or_else(|| RunError::Usage("missing --operation".to_owned()))?,
-    ))
-}
-
-#[cfg(feature = "layer1-bootstrap")]
-fn parse_export_flags(rest: &[String]) -> Result<(PathBuf, Option<u32>, CallerRole), RunError> {
-    let mut socket_path = PathBuf::from(DEFAULT_SOCKET_PATH);
-    let mut test_uid = None;
-    let mut caller_role = None;
-    let mut index = 0;
-    while index < rest.len() {
-        match rest[index].as_str() {
-            "--socket-path" => {
-                index += 1;
-                socket_path = PathBuf::from(expect_arg(rest, index, "--socket-path")?);
-            }
-            "--test-uid" => {
-                index += 1;
-                test_uid = Some(
-                    expect_arg(rest, index, "--test-uid")?
-                        .parse()
-                        .map_err(|_| RunError::Usage("invalid --test-uid".to_owned()))?,
-                );
-            }
-            "--caller-role" => {
-                index += 1;
-                caller_role = crate::bootstrap::wire::caller_role_from_cli(expect_arg(
-                    rest,
-                    index,
-                    "--caller-role",
-                )?);
-            }
-            other => {
-                return Err(RunError::Usage(format!(
-                    "unknown probe-export-audit flag: {other}"
-                )));
-            }
-        }
-        index += 1;
-    }
-    Ok((
-        socket_path,
-        test_uid,
-        caller_role.ok_or_else(|| RunError::Usage("missing --caller-role".to_owned()))?,
-    ))
-}
-
 fn expect_arg<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'a str, RunError> {
     args.get(index)
         .map(String::as_str)
@@ -8205,14 +8363,11 @@ fn expect_arg<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'a st
 }
 
 fn caller_role_is_admin(caller_role: &CallerRole) -> bool {
-    #[cfg(feature = "layer1-bootstrap")]
+    #[cfg(any())]
     {
         caller_role.is_admin_uid()
     }
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    {
-        matches!(caller_role, CallerRole::AdminUid { .. })
-    }
+    matches!(caller_role, CallerRole::AdminUid { .. })
 }
 
 impl BrokerError {
@@ -8224,22 +8379,20 @@ impl BrokerError {
         caller_gid: u32,
         caller_role: &CallerRole,
         audit_context: &DispatchAuditContext,
-        #[cfg(not(feature = "layer1-bootstrap"))] resolver: Option<&BundleResolver>,
+        #[cfg(not(any()))] resolver: Option<&BundleResolver>,
         operation: &str,
         opaque_target_id: &str,
     ) -> io::Result<()> {
-        #[cfg(not(feature = "layer1-bootstrap"))]
         let bundle_metadata = audit_bundle_metadata(resolver);
-        #[cfg(not(feature = "layer1-bootstrap"))]
         let authz_result = caller_role_authz_result(caller_role);
-        #[cfg(feature = "layer1-bootstrap")]
+        #[cfg(any())]
         let bundle_metadata = AuditBundleMetadata {
             bundle_version: "unknown",
             bundle_hash: "",
         };
-        #[cfg(feature = "layer1-bootstrap")]
+        #[cfg(any())]
         let authz_result = "launcher";
-        #[cfg(feature = "layer1-bootstrap")]
+        #[cfg(any())]
         let _ = caller_role;
         match self {
             Self::Unimplemented {
@@ -8664,16 +8817,6 @@ impl BrokerError {
                     ),
                 )?;
             }
-            Self::GuestControlSignRefused { reason } => {
-                audit_log.write_error_entry(
-                    operation,
-                    caller_uid,
-                    "guest-control-sign-refused",
-                    opaque_target_id,
-                    "Broker.GuestControlSignRefused",
-                    reason,
-                )?;
-            }
             // The StoreSync dispatch arm already wrote the signed terminal
             // `OperationFields::StoreSync` record (ADR 0027: exactly one
             // terminal record per attempt). Writing the generic error entry
@@ -8888,13 +9031,6 @@ impl BrokerError {
                 "broker peer credential check refused the private request",
                 "Ensure only d2bd connects to d2b-priv-broker.socket; restart d2bd after host credential changes.",
             ),
-            Self::GuestControlSignRefused { reason } => error_response(
-                "Broker.GuestControlSignRefused",
-                "GuestControlSign",
-                Some("W11"),
-                reason,
-                "Check guest-control token materialization and the structured auth transcript fields.",
-            ),
             Self::OtelHostBridgeIntentInvalid {
                 intent_vm,
                 expected_obs_vm,
@@ -8981,7 +9117,7 @@ fn public_protocol_message(message: &str) -> String {
 }
 
 fn hello_ok_response() -> BrokerResponse {
-    #[cfg(feature = "layer1-bootstrap")]
+    #[cfg(any())]
     {
         BrokerResponse::HelloOk {
             server_version: "0.0.0-w2-bootstrap".to_owned(),
@@ -8989,7 +9125,6 @@ fn hello_ok_response() -> BrokerResponse {
             capabilities: CAPABILITIES.iter().map(|item| (*item).to_owned()).collect(),
         }
     }
-    #[cfg(not(feature = "layer1-bootstrap"))]
     {
         BrokerResponse::Hello(d2b_contracts::broker_wire::HelloResponse {
             server_version: "0.0.0-w2".to_owned(),
@@ -9000,11 +9135,10 @@ fn hello_ok_response() -> BrokerResponse {
 }
 
 fn validate_bundle_ok_response() -> BrokerResponse {
-    #[cfg(feature = "layer1-bootstrap")]
+    #[cfg(any())]
     {
         BrokerResponse::ValidateBundleOk { valid: true }
     }
-    #[cfg(not(feature = "layer1-bootstrap"))]
     {
         BrokerResponse::ValidateBundle(d2b_contracts::broker_wire::ValidateBundleResponse {
             valid: true,
@@ -9013,11 +9147,10 @@ fn validate_bundle_ok_response() -> BrokerResponse {
 }
 
 fn export_broker_audit_ok_response(lines: Vec<String>) -> BrokerResponse {
-    #[cfg(feature = "layer1-bootstrap")]
+    #[cfg(any())]
     {
         BrokerResponse::ExportBrokerAuditOk { lines }
     }
-    #[cfg(not(feature = "layer1-bootstrap"))]
     {
         BrokerResponse::ExportBrokerAudit(d2b_contracts::broker_wire::ExportBrokerAuditResponse {
             lines,
@@ -9025,7 +9158,6 @@ fn export_broker_audit_ok_response(lines: Vec<String>) -> BrokerResponse {
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn ack_response(operation: &str) -> BrokerResponse {
     BrokerResponse::Ack(d2b_contracts::broker_wire::AckResponse {
         accepted: true,
@@ -9062,7 +9194,7 @@ fn error_response(
     message: &str,
     remediation: &str,
 ) -> BrokerResponse {
-    #[cfg(feature = "layer1-bootstrap")]
+    #[cfg(any())]
     {
         BrokerResponse::Error {
             kind: kind.to_owned(),
@@ -9072,7 +9204,6 @@ fn error_response(
             remediation: remediation.to_owned(),
         }
     }
-    #[cfg(not(feature = "layer1-bootstrap"))]
     {
         BrokerResponse::Error(d2b_contracts::broker_wire::BrokerErrorResponse {
             kind: kind.to_owned(),
@@ -9093,7 +9224,6 @@ fn error_response(
 ///
 /// Returns the `tokio::runtime::Runtime` handle — must stay alive for
 /// the duration of the broker process (bind it to a local in `run_server`).
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn start_sigchld_reaper(audit_log: Arc<AuditLog>) -> tokio::runtime::Runtime {
     // Publish the audit handle so the targeted post-spawn reap can
     // write the same forensic ChildReaped record the SIGCHLD loop does.
@@ -9140,7 +9270,6 @@ fn start_sigchld_reaper(audit_log: Arc<AuditLog>) -> tokio::runtime::Runtime {
 /// has exited are removed from the registry, a `ChildReaped` notification
 /// is pushed to the ring buffer, and a forensics record is appended to the
 /// audit log.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn reap_all_pidfds(audit_log: &AuditLog) {
     use d2b_contracts::broker_wire::{ChildExitKind, ChildExitStatus, ChildReapedNotification};
     use nix::errno::Errno;
@@ -9225,7 +9354,6 @@ fn reap_all_pidfds(audit_log: &AuditLog) {
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn reaped_at_ms_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -9239,7 +9367,6 @@ fn reaped_at_ms_now() -> i64 {
 /// audit record the SIGCHLD loop writes, without threading an
 /// `AuditLog` reference through the `DispatchBackend::spawn_runner`
 /// trait boundary.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn broker_audit_log_handle() -> &'static OnceLock<Arc<AuditLog>> {
     static HANDLE: OnceLock<Arc<AuditLog>> = OnceLock::new();
     &HANDLE
@@ -9264,7 +9391,6 @@ fn broker_audit_log_handle() -> &'static OnceLock<Arc<AuditLog>> {
 /// audit record is appended. `ECHILD` means the SIGCHLD loop already
 /// reaped it (also a clean terminal state); `StillAlive` leaves the
 /// child for the SIGCHLD loop.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn targeted_reap_runner(runner_id: &str, pidfd: std::os::fd::BorrowedFd<'_>) {
     use d2b_contracts::broker_wire::{ChildExitKind, ChildExitStatus, ChildReapedNotification};
     use nix::errno::Errno;
@@ -9322,7 +9448,6 @@ fn targeted_reap_runner(runner_id: &str, pidfd: std::os::fd::BorrowedFd<'_>) {
 /// write the forensic audit record when the process-global audit
 /// handle is available. Mirrors [`remove_and_notify`] but resolves the
 /// audit log from the global handle instead of a passed reference.
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn deliver_targeted_reap(
     runner_id: &str,
     notif: d2b_contracts::broker_wire::ChildReapedNotification,
@@ -9344,7 +9469,6 @@ fn deliver_targeted_reap(
     }
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn remove_and_notify(
     runner_id: &str,
     notif: d2b_contracts::broker_wire::ChildReapedNotification,
@@ -9363,38 +9487,26 @@ fn remove_and_notify(
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(not(feature = "layer1-bootstrap"))]
     use crate::ops::exec_reconcile::{FakeReconcileExecutor, ReconcileOp};
-    #[cfg(not(feature = "layer1-bootstrap"))]
     use d2b_contracts::broker_wire::{
         ActivationMode, ActivationPhase, RunActivationRequest, RunActivationResponse,
     };
-    #[cfg(not(feature = "layer1-bootstrap"))]
     use d2b_contracts::types::BundleOpId;
-    #[cfg(not(feature = "layer1-bootstrap"))]
     use d2b_core::bundle_resolver::{ResolvedActivationIntent, ResolvedStoreViewIntent};
     use nix::unistd::Gid;
-    #[cfg(not(feature = "layer1-bootstrap"))]
     use serde::Serialize;
     use serde_json::Value;
-    #[cfg(not(feature = "layer1-bootstrap"))]
     use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
-    #[cfg(not(feature = "layer1-bootstrap"))]
     use std::os::fd::OwnedFd;
-    #[cfg(not(feature = "layer1-bootstrap"))]
     use std::path::Path;
     use std::path::PathBuf;
-    #[cfg(not(feature = "layer1-bootstrap"))]
     use std::sync::Arc;
-    #[cfg(not(feature = "layer1-bootstrap"))]
     use std::sync::MutexGuard;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     static TEST_USB_SYSFS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn usb_sysfs_test_lock() -> MutexGuard<'static, ()> {
         TEST_USB_SYSFS_LOCK
             .get_or_init(|| Mutex::new(()))
@@ -9402,7 +9514,231 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
+    struct AllocatorStateFixture(tempfile::TempDir);
+
+    impl AllocatorStateFixture {
+        fn new(label: &str) -> Self {
+            Self(crate::test_tempdir(&format!("allocator-state-{label}")))
+        }
+
+        fn path(&self) -> &Path {
+            self.0.path()
+        }
+    }
+
+    fn allocator_test_owner() -> d2b_realm_core::allocator::LeaseOwner {
+        use d2b_realm_core::{
+            allocator::LeaseOwner,
+            ids::{ControllerGenerationId, RealmId},
+            realm::RealmPath,
+        };
+
+        LeaseOwner {
+            realm: RealmPath::new(vec![RealmId::parse("work").expect("realm")]).expect("path"),
+            controller_generation: ControllerGenerationId::parse("generation-1")
+                .expect("generation"),
+            node: None,
+        }
+    }
+
+    fn allocator_test_request(key: &str) -> d2b_realm_core::allocator::LeaseAllocationRequest {
+        use d2b_realm_core::{
+            allocator::{
+                HostResourceKind, LeaseAllocationRequest, LeaseResourceRequest,
+                ResourceAcquisitionOrder, ResourceShareMode,
+            },
+            ids::{CorrelationId, HostResourceId, IdempotencyKey, OperationId},
+        };
+
+        LeaseAllocationRequest {
+            operation_id: OperationId::parse(format!("operation-{key}")).expect("operation"),
+            correlation_id: CorrelationId::parse(format!("correlation-{key}"))
+                .expect("correlation"),
+            idempotency_key: IdempotencyKey::parse(format!("idempotency-{key}"))
+                .expect("idempotency"),
+            owner: allocator_test_owner(),
+            resources: vec![LeaseResourceRequest {
+                resource_id: HostResourceId::parse("realm-work-state").expect("resource"),
+                kind: HostResourceKind::HostFilePartition,
+                share: ResourceShareMode::Exclusive,
+                acquisition_order: ResourceAcquisitionOrder {
+                    phase: 1,
+                    ordinal: 0,
+                },
+            }],
+            trace: None,
+        }
+    }
+
+    fn allocator_test_liveness() -> RuntimeAllocatorLiveness {
+        RuntimeAllocatorLiveness {
+            owner: allocator_test_owner(),
+            peer_pidfd: Arc::new(
+                crate::sys::pidfd_sys::pidfd_open(std::process::id() as i32, 0)
+                    .expect("open test pidfd"),
+            ),
+        }
+    }
+
+    #[test]
+    fn production_launch_authority_missing_fails_closed() {
+        use crate::allocator_service::RealmLaunchRecordResolver;
+
+        assert!(matches!(
+            RuntimeLaunchRecordResolver { resolver: None }.resolve("work", "generation-1"),
+            Err(
+                crate::allocator_service::AllocatorServiceError::InvalidRequest(
+                    "unknown realm launch record"
+                )
+            )
+        ));
+    }
+
+    #[test]
+    fn durable_allocator_ledger_replays_across_restart() {
+        use d2b_realm_core::{
+            allocator::LeaseAllocationResult,
+            allocator_engine::{AllocatorLedger, LocalRootAllocatorEngine},
+        };
+
+        let fixture = AllocatorStateFixture::new("restart");
+        let ledger = DurableAllocatorLedger::new(fixture.path().to_path_buf());
+        let observed =
+            RuntimeObservedAllocatorState::from_snapshot(&ledger.load().expect("empty snapshot"))
+                .expect("empty observation");
+        let request = allocator_test_request("restart");
+        let first = LocalRootAllocatorEngine::new(
+            allocator_test_owner(),
+            ledger,
+            observed,
+            allocator_test_liveness(),
+        )
+        .allocate(request.clone())
+        .expect("first allocation");
+        let first_lease = match first.response.result {
+            LeaseAllocationResult::Granted { lease } => lease.lease_id,
+            other => panic!("expected durable grant, got {other:?}"),
+        };
+
+        let restarted_ledger = DurableAllocatorLedger::new(fixture.path().to_path_buf());
+        let restarted_snapshot = restarted_ledger.load().expect("restart snapshot");
+        assert_eq!(restarted_snapshot.generation().value(), 1);
+        assert_eq!(restarted_snapshot.leases().len(), 1);
+        let restarted_observed = RuntimeObservedAllocatorState::from_snapshot(&restarted_snapshot)
+            .expect("restart observation");
+        let replay = LocalRootAllocatorEngine::new(
+            allocator_test_owner(),
+            restarted_ledger,
+            restarted_observed,
+            allocator_test_liveness(),
+        )
+        .allocate(request)
+        .expect("idempotent replay");
+        match replay.response.result {
+            LeaseAllocationResult::Granted { lease } => assert_eq!(lease.lease_id, first_lease),
+            other => panic!("expected replayed grant, got {other:?}"),
+        }
+        assert_eq!(
+            DurableAllocatorLedger::new(fixture.path().to_path_buf())
+                .load()
+                .expect("post-replay snapshot")
+                .generation()
+                .value(),
+            1,
+            "idempotent replay must not publish another transaction"
+        );
+    }
+
+    #[test]
+    fn durable_allocator_ledger_rejects_tamper() {
+        use d2b_realm_core::allocator_engine::{
+            AllocatorEngineError, AllocatorLedger, LocalRootAllocatorEngine,
+        };
+
+        let fixture = AllocatorStateFixture::new("tamper");
+        let ledger = DurableAllocatorLedger::new(fixture.path().to_path_buf());
+        let observed =
+            RuntimeObservedAllocatorState::from_snapshot(&ledger.load().expect("empty snapshot"))
+                .expect("empty observation");
+        LocalRootAllocatorEngine::new(
+            allocator_test_owner(),
+            ledger,
+            observed,
+            allocator_test_liveness(),
+        )
+        .allocate(allocator_test_request("tamper"))
+        .expect("seed durable state");
+        fs::write(fixture.path().join(ALLOCATOR_LEDGER_FILE), b"{}")
+            .expect("tamper allocator state");
+        assert_eq!(
+            DurableAllocatorLedger::new(fixture.path().to_path_buf()).load(),
+            Err(AllocatorEngineError::LedgerTampered)
+        );
+    }
+
+    #[test]
+    fn allocator_lock_failure_never_publishes_grant() {
+        use d2b_contracts::v2_state::{
+            AuthorityRef, CancellationPolicy, ContentionPolicy, FdTransferPolicy, IdentityScope,
+            LockClass, LockKey, LockKind, LockSpec, OwnershipEpoch,
+        };
+        use d2b_realm_core::allocator_engine::{
+            AllocatorEngineError, AllocatorLedger, LocalRootAllocatorEngine,
+        };
+        use d2b_state::{AnchoredResource, LeafName, LockSet, NeverCancelled};
+
+        let fixture = AllocatorStateFixture::new("lock-failure");
+        let ledger = DurableAllocatorLedger::new(fixture.path().to_path_buf());
+        let observed =
+            RuntimeObservedAllocatorState::from_snapshot(&ledger.load().expect("empty snapshot"))
+                .expect("empty observation");
+        let anchor = ledger.anchor().expect("state anchor");
+        let resource_id = DurableAllocatorLedger::resource_id().expect("resource id");
+        let lock_id = DurableAllocatorLedger::lock_id().expect("lock id");
+        let lock_resource = AnchoredResource::new(
+            resource_id.clone(),
+            &anchor,
+            LeafName::parse(ALLOCATOR_LEDGER_LOCK_FILE).expect("lock leaf"),
+        );
+        let spec = LockSpec {
+            lock_id,
+            key: LockKey {
+                class: LockClass::LocalRoot,
+                scope: IdentityScope::LocalRoot,
+                resource_id,
+            },
+            kind: LockKind::Ofd,
+            owner: AuthorityRef::LocalRootBroker,
+            release_authority: AuthorityRef::LocalRootBroker,
+            global_order: 1,
+            acquire_after: Vec::new(),
+            cloexec: true,
+            fd_transfer: FdTransferPolicy::Never,
+            contention: ContentionPolicy::FailFast,
+            deadline_ms: 100,
+            cancellation: CancellationPolicy::Cancellable,
+        };
+        let mut held = LockSet::new();
+        held.acquire(
+            &spec,
+            &lock_resource,
+            ledger.metadata,
+            OwnershipEpoch::new(1).expect("epoch"),
+            &NeverCancelled,
+        )
+        .expect("hold allocator lock");
+
+        let result = LocalRootAllocatorEngine::new(
+            allocator_test_owner(),
+            ledger,
+            observed,
+            allocator_test_liveness(),
+        )
+        .allocate(allocator_test_request("lock-failure"));
+        assert_eq!(result, Err(AllocatorEngineError::LedgerLockUnavailable));
+        assert!(!fixture.path().join(ALLOCATOR_LEDGER_FILE).exists());
+    }
+
     #[test]
     fn runner_role_mapping_covers_video_and_spawnable_roles() {
         use d2b_contracts::broker_wire::RunnerRole;
@@ -9436,7 +9772,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn qemu_media_enroll_request_fields_redact_raw_busid() {
         let request =
@@ -9459,7 +9794,6 @@ mod tests {
         assert!(!rendered.contains("usb-Vendor_SecretSerial"));
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn qemu_media_hotplug_request_fields_redact_runtime_busid() {
         let request =
@@ -9478,7 +9812,6 @@ mod tests {
         assert!(!rendered.contains("usb-Vendor_SecretSerial"));
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usbip_request_fields_project_trace_presence_without_trace_value() {
         let trace = d2b_contracts::types::TracingSpanId::new("usb-start-0000000000000001");
@@ -9522,7 +9855,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn qemu_media_boot_request_fields_are_vm_only() {
         let request =
@@ -9539,7 +9871,6 @@ mod tests {
         assert!(!rendered.contains("usb-Vendor_SecretSerial"));
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn qemu_media_lifecycle_request_fields_are_bounded() {
         let request = BrokerRequest::QemuMediaQueryStatus(
@@ -9685,7 +10016,6 @@ mod tests {
         #[allow(clippy::infallible_destructuring_match)]
         let config = match mode {
             BrokerMode::Serve(config) => config,
-            #[cfg(feature = "layer1-bootstrap")]
             other => panic!("expected serve mode, got {other:?}"),
         };
         assert_eq!(
@@ -9707,7 +10037,6 @@ mod tests {
         #[allow(clippy::infallible_destructuring_match)]
         let config = match mode {
             BrokerMode::Serve(config) => config,
-            #[cfg(feature = "layer1-bootstrap")]
             other => panic!("expected serve mode, got {other:?}"),
         };
         assert_eq!(
@@ -9717,6 +10046,22 @@ mod tests {
         assert_eq!(
             config.realm_identity_path,
             PathBuf::from(DEFAULT_REALM_IDENTITY_PATH)
+        );
+    }
+
+    #[test]
+    fn parse_command_accepts_only_closed_child_realm_mode() {
+        assert!(matches!(
+            parse_command(["serve-child-realm".to_owned()]).unwrap(),
+            BrokerMode::ServeChildRealm
+        ));
+        assert!(
+            parse_command([
+                "serve-child-realm".to_owned(),
+                "--socket-path".to_owned(),
+                "/run/forbidden.sock".to_owned(),
+            ])
+            .is_err()
         );
     }
 
@@ -9837,7 +10182,6 @@ mod tests {
         assert!(load_realm_identity_config(&invariant_path).is_err());
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn write_json_file<T: Serialize>(path: &Path, value: &T) {
         use std::os::unix::fs::PermissionsExt;
         if let Some(parent) = path.parent() {
@@ -9852,7 +10196,6 @@ mod tests {
         fs::set_permissions(path, perms).expect("chmod test json to 0640");
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     struct TestBundle {
         bundle_path: PathBuf,
         manifest_path: PathBuf,
@@ -9861,7 +10204,6 @@ mod tests {
         resolver: Arc<BundleResolver>,
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn build_test_bundle(root: &Path) -> TestBundle {
         use d2b_core::bundle::{Bundle, BundleClosureRef, BundleGeneration};
         use d2b_core::closures::{ClosureGeneration, ClosureMetadata};
@@ -10221,7 +10563,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn broker_bundle_load_sees_rewritten_processes_without_restart() {
         use d2b_core::bundle_resolver::{BundleVerifyPolicy, intent_id_runner};
@@ -10295,7 +10636,6 @@ mod tests {
         assert_eq!(intent.umask, Some(7));
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn build_invalid_minijail_test_bundle(root: &Path) -> TestBundle {
         use d2b_core::processes::ProcessesJson;
 
@@ -10317,7 +10657,6 @@ mod tests {
         bundle
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn set_usbip_allowlist(
         bundle: &mut TestBundle,
         allowlist: Vec<d2b_core::host::VendorProductPair>,
@@ -10336,7 +10675,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn prepare_test_usb_sysfs_device(vendor: &str, product: &str, devpath: &str) -> PathBuf {
         let base = std::env::var_os("CARGO_TARGET_TMPDIR")
             .map(PathBuf::from)
@@ -10357,7 +10695,6 @@ mod tests {
         root
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn test_server_config(root: &Path, manifest_path: &Path) -> ServerConfig {
         ServerConfig {
             socket_path: root.join("broker.sock"),
@@ -10374,7 +10711,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn test_usbip_intent_with_lock(
         root: &Path,
         bundle: &TestBundle,
@@ -10391,7 +10727,6 @@ mod tests {
     /// appended for `config` (today's rotated file). Returns the parsed
     /// records plus the raw JSON objects so tests can assert both the
     /// typed shape and the exact serialized key-set.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn read_store_sync_export(
         config: &ServerConfig,
     ) -> Vec<(
@@ -10425,7 +10760,6 @@ mod tests {
 
     /// Assert the exported JSON object's key-set equals the signed
     /// allow-list and that no redaction field leaked.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn assert_export_allow_list(obj: &serde_json::Map<String, serde_json::Value>) {
         use crate::ops::store_sync_export::{EXPORTED_KEYS, REDACTED_KEYS};
         let mut actual: Vec<&str> = obj.keys().map(String::as_str).collect();
@@ -10444,98 +10778,12 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    fn write_guest_control_token(state_dir: &Path, vm: &str, mode: u32) {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = state_dir.join(format!("guest-control-{vm}"));
-        fs::create_dir_all(&dir).expect("create guest-control token dir");
-        fs::set_permissions(&dir, fs::Permissions::from_mode(0o750))
-            .expect("chmod guest-control token dir");
-        let token = dir.join("token");
-        if token.exists() {
-            fs::set_permissions(&token, fs::Permissions::from_mode(0o600))
-                .expect("restore token write perms");
-            fs::remove_file(&token).expect("remove old token");
-        }
-        fs::write(&token, b"broker-test-token\n").expect("write token");
-        fs::set_permissions(&token, fs::Permissions::from_mode(mode)).expect("chmod token");
-    }
-
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    fn guest_control_sign_request(
-        role: d2b_contracts::broker_wire::GuestControlProofRole,
-    ) -> d2b_contracts::broker_wire::GuestControlSignRequest {
-        d2b_contracts::broker_wire::GuestControlSignRequest {
-            vm_id: d2b_contracts::types::VmId::new("corp-vm"),
-            role,
-            protocol_version: d2b_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
-            direction: d2b_contracts::broker_wire::GuestControlDirection::HostToGuest,
-            purpose: d2b_contracts::broker_wire::GuestControlAuthPurpose::GuestControlAuthV1,
-            guest_control_port: d2b_contracts::guest_auth::GUEST_CONTROL_AUTH_PORT,
-            peer_cid: Some(2),
-            host_nonce: vec![0x11; d2b_contracts::guest_auth::AUTH_NONCE_LEN],
-            guest_nonce: vec![0x22; d2b_contracts::guest_auth::AUTH_NONCE_LEN],
-            guest_boot_id: d2b_contracts::broker_wire::GuestBootIdWire::new("boot-1"),
-            capabilities_hash: match role {
-                d2b_contracts::broker_wire::GuestControlProofRole::HostProof => None,
-                d2b_contracts::broker_wire::GuestControlProofRole::GuestProof => {
-                    Some("caps-sha256".to_owned())
-                }
-            },
-            tracing_span_id: None,
-        }
-    }
-
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    #[test]
-    fn guest_control_sign_returns_only_fixed_tag() {
-        let request = guest_control_sign_request(
-            d2b_contracts::broker_wire::GuestControlProofRole::HostProof,
-        );
-        let transcript = guest_control_transcript(&request).expect("transcript");
-        let response = sign_guest_control_transcript(b"broker-test-token\n".to_vec(), &transcript)
-            .expect("sign");
-        assert_eq!(response.tag.len(), d2b_contracts::guest_auth::AUTH_TAG_LEN);
-    }
-
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    #[test]
-    fn guest_control_sign_rejects_role_confusion_and_unsafe_token() {
-        let root = crate::test_tempdir("guest-control-sign");
-        let bundle = build_test_bundle(root.path());
-        let config = test_server_config(root.path(), &bundle.bundle_path);
-        write_guest_control_token(&config.state_dir, "corp-vm", 0o440);
-
-        let mut bad = guest_control_sign_request(
-            d2b_contracts::broker_wire::GuestControlProofRole::HostProof,
-        );
-        bad.capabilities_hash = Some("caps-sha256".to_owned());
-        assert!(matches!(
-            handle_guest_control_sign(bad, &config, Some(&bundle.resolver)),
-            Err(BrokerError::GuestControlSignRefused { .. })
-        ));
-
-        write_guest_control_token(&config.state_dir, "corp-vm", 0o666);
-        assert!(matches!(
-            handle_guest_control_sign(
-                guest_control_sign_request(
-                    d2b_contracts::broker_wire::GuestControlProofRole::HostProof
-                ),
-                &config,
-                Some(&bundle.resolver),
-            ),
-            Err(BrokerError::GuestControlSignRefused { .. })
-        ));
-    }
-
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn dummy_fd() -> OwnedFd {
         std::fs::File::open("/dev/null")
             .expect("open /dev/null for dummy fd")
             .into()
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn is_uuid_v4_like(value: &str) -> bool {
         let chars: Vec<char> = value.chars().collect();
         chars.len() == 36
@@ -10547,21 +10795,18 @@ mod tests {
             && matches!(chars.get(19), Some('8' | '9' | 'a' | 'b'))
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[derive(Default)]
     struct FakeDispatchBackend {
         registered_runners: Mutex<std::collections::BTreeSet<String>>,
         usbip_events: Mutex<Vec<FakeUsbipEvent>>,
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum FakeUsbipEvent {
         Bind { intent_id: String },
         Unbind { intent_id: String },
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     impl FakeDispatchBackend {
         fn remember_runner(&self, runner_id: &str) -> Result<(), BrokerError> {
             self.registered_runners
@@ -10597,7 +10842,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     impl DispatchBackend for FakeDispatchBackend {
         fn apply_nftables(
             &self,
@@ -10912,7 +11156,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn qemu_media_lifecycle_dispatch_audits_mutations_but_not_status_poll() {
         use d2b_contracts::broker_wire::{
@@ -11011,7 +11254,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn dispatch_run_activation_response_for_intent_uses_native_sequence() {
         let root = test_audit_dir("run-activation-native");
@@ -11072,7 +11314,6 @@ mod tests {
         ));
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     #[cfg_attr(
         not(test_root),
@@ -11882,7 +12123,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn spawn_runner_rejects_invalid_minijail_profile() {
         use d2b_contracts::broker_wire::{
@@ -11977,7 +12217,6 @@ mod tests {
     /// unprivileged. `host_generation` controls the resolved generation so
     /// a mismatching wire token can deterministically force a pre-lock
     /// failure. Returns the bundle plus the per-VM hardlink-farm root.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn store_sync_dispatch_bundle(root: &Path, host_generation: u32) -> (TestBundle, PathBuf) {
         use d2b_core::closures::{ClosureGeneration, ClosureMetadata};
         use d2b_core::manifest_v04::ManifestV04;
@@ -12038,7 +12277,6 @@ mod tests {
         (bundle, farm_path)
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     fn store_sync_request(generation_token: u32) -> d2b_contracts::broker_wire::BrokerRequest {
         use d2b_contracts::broker_wire::{BrokerRequest, StoreSyncRequest};
         use d2b_contracts::types::{BundleClosureRef, TracingSpanId, VmId};
@@ -12055,7 +12293,6 @@ mod tests {
     /// W3 success emission must survive the W4 dispatch-arm refactor: the
     /// first (non-fast) sync emits EXACTLY ONE allowed terminal record with
     /// the deferred-cleanup `ok_non_fast_path` shape.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn store_sync_dispatch_emits_single_success_record() {
         use crate::ops::store_sync_audit::{
@@ -12156,7 +12393,6 @@ mod tests {
     /// A second sync of the same closure must take the fast path and still
     /// emit EXACTLY ONE allowed record carrying `skipped_fast_path` +
     /// `fast_path`.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn store_sync_dispatch_fast_path_emits_single_skipped_record() {
         use crate::ops::store_sync_audit::{CleanupReason, CleanupStatus, SyncStatus};
@@ -12254,7 +12490,6 @@ mod tests {
     /// `failed` terminal record (decision = errored), leak no guest
     /// metadata, and NOT produce a duplicate record when the outer
     /// error-audit path runs.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn store_sync_dispatch_failure_emits_single_signed_failure_record() {
         use crate::ops::store_sync_audit::{
@@ -12396,7 +12631,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn store_verify_repair_emits_store_sync_audit_and_export() {
         use crate::ops::store_sync_audit::SyncStatus;
@@ -12512,7 +12746,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn otel_host_bridge_socket_path_extracts_unix_listen_target() {
         let argv = vec![
@@ -12533,7 +12766,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn otel_host_bridge_socket_path_errors_without_unix_listen() {
         let argv = vec![
@@ -12546,7 +12778,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn cleanup_otel_host_bridge_stale_socket_noop_for_other_role() {
         use d2b_contracts::broker_wire::RunnerRole;
@@ -12557,7 +12788,6 @@ mod tests {
             .expect("non-bridge role is a no-op");
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn cleanup_otel_host_bridge_stale_socket_rejects_path_outside_otel_runtime_dir() {
         use d2b_contracts::broker_wire::RunnerRole;
@@ -12571,13 +12801,12 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn cleanup_vsock_relay_stale_socket_removes_only_stale_vm_socket() {
         use d2b_contracts::broker_wire::RunnerRole;
         use std::os::unix::net::UnixListener;
 
-        let root = tempfile::tempdir().expect("short socket fixture root");
+        let root = crate::test_socket_tempdir();
         let state_dir = root.path().join("vms/corp-vm");
         fs::create_dir_all(&state_dir).expect("create VM state dir");
         let socket_path = state_dir.join("vsock.sock_14317");
@@ -12597,13 +12826,12 @@ mod tests {
         assert!(!socket_path.exists(), "stale relay socket must be removed");
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn cleanup_vsock_relay_stale_socket_refuses_active_listener() {
         use d2b_contracts::broker_wire::RunnerRole;
         use std::os::unix::net::UnixListener;
 
-        let root = tempfile::tempdir().expect("short socket fixture root");
+        let root = crate::test_socket_tempdir();
         let state_dir = root.path().join("vms/corp-vm");
         fs::create_dir_all(&state_dir).expect("create VM state dir");
         let socket_path = state_dir.join("vsock.sock_14317");
@@ -12623,7 +12851,6 @@ mod tests {
         let _ = fs::remove_file(&socket_path);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn cleanup_vsock_relay_stale_socket_rejects_untrusted_paths() {
         use d2b_contracts::broker_wire::RunnerRole;
@@ -12652,7 +12879,6 @@ mod tests {
         .expect("non-relay role must not inspect the path");
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn spawn_runner_rejects_otel_host_bridge_role_for_non_bridge_intent() {
         // The broker MUST refuse a request that claims
@@ -12732,7 +12958,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn spawn_runner_rejects_otel_host_bridge_intent_for_non_obs_vm() {
         use d2b_contracts::broker_wire::{
@@ -12856,7 +13081,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn signal_runner_returns_no_pidfd_for_unknown_runner() {
         use d2b_contracts::broker_wire::{BrokerCallerRole, BrokerRequest, RunnerSignal};
@@ -12908,7 +13132,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usbip_bind_rejects_device_outside_allowlist() {
         let root = test_audit_dir("usbip-allowlist");
@@ -12949,7 +13172,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usbip_bind_rejects_missing_allowlist_as_required_policy() {
         let root = test_audit_dir("usbip-missing-allowlist");
@@ -12979,7 +13201,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usbip_bind_rejects_topology_mismatch_as_required_policy() {
         let root = test_audit_dir("usbip-topology-policy");
@@ -13024,115 +13245,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    #[test]
-    fn usb_broker_ipc_refuses_non_daemon_so_peercred_before_dispatch() {
-        use d2b_contracts::broker_wire::{
-            BrokerCallerRole, BrokerRequestEnvelope, UsbipBindFirewallRuleRequest,
-            UsbipBindRequest, UsbipProxyReconcileRequest, UsbipUnbindRequest,
-        };
-        use d2b_contracts::types::{BundleOpId, ScopeId};
-        use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
-        use nix::unistd::Uid;
-        use std::os::fd::AsRawFd;
-        use std::sync::Mutex;
-
-        let root = test_audit_dir("usb-peercred-refused");
-        fs::create_dir_all(&root).expect("create audit test dir");
-        let actual_uid = Uid::current().as_raw();
-        let configured_daemon_uid = if actual_uid == 0 { 1 } else { 0 };
-        let mut config = test_server_config(&root, &root.join("unused-bundle.json"));
-        config.test_mode = false;
-        config.d2bd_uid = configured_daemon_uid;
-        let log = AuditLog::open(
-            &config.audit_dir,
-            Gid::current().as_raw(),
-            true,
-            config.audit_retention_days,
-        )
-        .expect("open audit log");
-        let limiter = Arc::new(Mutex::new(IpcRateLimiter::new(64)));
-
-        let requests = vec![
-            BrokerRequest::UsbipBind(UsbipBindRequest {
-                bundle_usbip_bind_intent_ref: BundleOpId::new(
-                    "usbip-bind:env:work:vm:corp-vm:bus:1-2.3",
-                ),
-                tracing_span_id: None,
-            }),
-            BrokerRequest::UsbipUnbind(UsbipUnbindRequest {
-                bundle_usbip_bind_intent_ref: BundleOpId::new(
-                    "usbip-bind:env:work:vm:corp-vm:bus:1-2.3",
-                ),
-                preserve_durable_claim: false,
-                tracing_span_id: None,
-            }),
-            BrokerRequest::UsbipBindFirewallRule(UsbipBindFirewallRuleRequest {
-                bundle_usbip_firewall_intent_ref: BundleOpId::new("usbip-fw:env:work:bus:1-2.3"),
-                tracing_span_id: None,
-            }),
-            BrokerRequest::UsbipProxyReconcile(UsbipProxyReconcileRequest {
-                scope_id: ScopeId::new("env:work"),
-                tracing_span_id: None,
-            }),
-        ];
-        let mut operations = Vec::new();
-
-        for request in requests {
-            let operation = request.op_name();
-            operations.push(operation);
-            let envelope = BrokerRequestEnvelope {
-                request,
-                caller_role: BrokerCallerRole::AdminUid {
-                    uid: configured_daemon_uid,
-                },
-                // Ignored because config.test_mode=false: the broker must use the
-                // kernel SO_PEERCRED uid, not a caller-supplied envelope field.
-                test_peer_uid: Some(configured_daemon_uid),
-            };
-            let (client, server) = socketpair(
-                AddressFamily::Unix,
-                SockType::SeqPacket,
-                None,
-                SockFlag::SOCK_CLOEXEC,
-            )
-            .expect("socketpair");
-            crate::protocol::send_json_frame(client.as_raw_fd(), &envelope)
-                .expect("send broker request");
-            handle_connection(server, &config, &log, None, None, &limiter)
-                .expect("handle refused peer");
-            let response = crate::protocol::recv_json_frame::<BrokerResponse>(client.as_raw_fd())
-                .expect("receive refusal response")
-                .expect("broker sends typed refusal");
-            let BrokerResponse::Error(error) = response else {
-                panic!("expected peer credential refusal for {operation}");
-            };
-            assert_eq!(error.kind, "Broker.PeerCredentialRefused");
-            assert_eq!(error.operation, operation);
-            let rendered = format!("{} {}", error.message, error.action);
-            assert!(!rendered.contains(&actual_uid.to_string()), "{rendered}");
-            assert!(!rendered.contains("1-2.3"), "{rendered}");
-            assert!(!rendered.contains("/"), "{rendered}");
-        }
-
-        let audit = fs::read_to_string(log.current_daily_path()).expect("read audit log");
-        for operation in operations {
-            assert!(audit.contains(&format!(r#""op":"{operation}""#)), "{audit}");
-        }
-        assert_eq!(
-            audit.matches(r#""disposition":"peer-refused""#).count(),
-            4,
-            "{audit}"
-        );
-        assert!(
-            audit.contains(&format!(r#""caller_uid":{actual_uid}"#)),
-            "{audit}"
-        );
-
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usb_broker_ipc_validation_rejects_traversal_and_oversized_inputs() {
         use d2b_contracts::broker_wire::{
@@ -13212,7 +13324,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usb_broker_ipc_validation_is_shape_only_not_authorization() {
         use d2b_contracts::broker_wire::{
@@ -13246,7 +13357,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usb_broker_public_errors_are_fail_secure() {
         let sensitive = [
@@ -13294,7 +13404,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usb_audit_identity_keeps_vid_pid_and_redacts_raw_serial() {
         let identity = usb_audit_device_identity(
@@ -13316,7 +13425,6 @@ mod tests {
         assert!(!encoded.contains("serial-should-never-serialize"));
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usb_audit_identity_uses_deterministic_hmac_serial_correlation() {
         let keyring = UsbAuditSerialHmacKeyring {
@@ -13348,7 +13456,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usb_audit_identity_emits_current_and_previous_key_correlations() {
         let keyring = UsbAuditSerialHmacKeyring {
@@ -13380,7 +13487,6 @@ mod tests {
         assert_eq!(previous.hmac_sha256.len(), 64);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usb_audit_rotation_event_is_scrubbed_and_bounded() {
         let keyring = UsbAuditSerialHmacKeyring {
@@ -13429,7 +13535,6 @@ mod tests {
         assert!(!rendered.contains("1-2.3"));
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usbip_bind_audit_failure_rolls_back_backend_bind_and_acl() {
         use d2b_contracts::broker_wire::{BrokerCallerRole, BrokerRequest};
@@ -13506,7 +13611,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usbip_bind_acl_grant_failure_releases_lock_after_successful_rollback_unbind() {
         let root = test_audit_dir("usbip-bind-acl-grant-failure-lock-release");
@@ -13548,7 +13652,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usbip_bind_acl_grant_failure_does_not_rollback_same_vm_replay() {
         let root = test_audit_dir("usbip-bind-acl-grant-failure-replay-preserve");
@@ -13588,7 +13691,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usbip_bind_audit_failure_does_not_rollback_same_vm_replay() {
         let _usb_sysfs_guard = usb_sysfs_test_lock();
@@ -13633,7 +13735,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usbip_proxy_reconcile_skips_absent_locked_device_acl_refresh() {
         let _usb_sysfs_guard = usb_sysfs_test_lock();
@@ -13675,7 +13776,6 @@ mod tests {
         let _ = fs::remove_dir_all(&sysfs_root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usbip_unbind_acl_revoke_failure_releases_lock_when_device_is_unbound() {
         let _usb_sysfs_guard = usb_sysfs_test_lock();
@@ -13710,7 +13810,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usbip_unbind_acl_revoke_failure_preserves_lock_when_device_still_bound() {
         use std::os::unix::fs::symlink;
@@ -13759,7 +13858,6 @@ mod tests {
     // ------------------------------------------------------------------
 
     /// Helper that tracks grant/revoke calls for retry function unit tests.
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[derive(Default, Debug)]
     struct AclCallLog {
         grants: Vec<PathBuf>,
@@ -13767,7 +13865,6 @@ mod tests {
         sleeps: usize,
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn retry_acl_grant_succeeds_immediately_when_node_is_stable() {
         use std::cell::RefCell;
@@ -13793,7 +13890,6 @@ mod tests {
         assert_eq!(log.sleeps, 0, "no sleep on first-attempt success");
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn retry_acl_grant_converges_after_transient_node_change() {
         // Simulate a device re-enumeration: first verify returns node A,
@@ -13848,7 +13944,6 @@ mod tests {
         assert_eq!(log.sleeps, 1, "exactly one sleep between attempts");
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn retry_acl_grant_fails_when_verify_permanently_fails() {
         use std::cell::RefCell;
@@ -13883,7 +13978,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn retry_acl_grant_revokes_before_every_retry_on_post_grant_verify_failure() {
         // Grant succeeds, but post-grant verify always returns a different
@@ -13932,7 +14026,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn retry_acl_grant_tolerates_benign_enoent_during_revoke() {
         // After a node change the old node may already be gone (kernel
@@ -13983,7 +14076,6 @@ mod tests {
         assert!(log.grants.contains(&node_b), "retry grant on stable node B");
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usb_audit_rotation_audit_dedupe_suppresses_repeats_and_allows_retry() {
         let unique = SystemTime::now()
@@ -14009,7 +14101,6 @@ mod tests {
         unmark_usb_audit_serial_hmac_rotation_audit_logged(&retry_dedupe_key);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usbip_bind_with_previous_serial_hmac_key_emits_one_rotation_audit_record_per_key_pair() {
         use d2b_contracts::broker_wire::{BrokerCallerRole, BrokerRequest};
@@ -14211,7 +14302,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usb_audit_serial_hmac_keyring_creates_root_only_current_key_and_reads_previous() {
         use std::os::unix::fs::PermissionsExt;
@@ -14382,7 +14472,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usbip_static_busid_owner_is_global_authority() {
         let root = test_audit_dir("usbip-static-owner");
@@ -14492,7 +14581,6 @@ mod tests {
                     request_fields: Value::Object(Default::default()),
                     started_at: Instant::now(),
                 };
-                #[cfg(not(feature = "layer1-bootstrap"))]
                 case.error
                     .audit(
                         &log,
@@ -14505,7 +14593,7 @@ mod tests {
                         &case.target_id,
                     )
                     .expect("audit error");
-                #[cfg(feature = "layer1-bootstrap")]
+                #[cfg(any())]
                 case.error
                     .audit(
                         &log,
@@ -14554,7 +14642,6 @@ mod tests {
         let _ = fs::remove_dir_all(&audit_dir);
     }
 
-    #[cfg(not(feature = "layer1-bootstrap"))]
     mod reap_tests {
         use super::*;
         use d2b_contracts::broker_wire::{ChildExitKind, ChildExitStatus, ChildReapedNotification};

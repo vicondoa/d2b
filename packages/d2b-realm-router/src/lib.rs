@@ -28,10 +28,9 @@
 //! per-session router would let reconnect retries bypass dedup and
 //! double-dispatch. See `d2bd`'s `PeerOperationRouter` for the wiring.
 //!
-//! Dependency direction: depends ONLY on `d2b-realm-core` +
-//! `d2b-realm-provider`. It MUST NOT depend on `prost`, a codec
-//! crate, a transport impl, or any host-only internals (enforced by the
-//! constellation dependency-direction CI gate).
+//! Realm service traffic uses the generated `d2b.realm.v2` ttrpc surface over
+//! an authenticated ComponentSession. No custom codec, version negotiation, or
+//! semantic handshake is part of the router.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -42,21 +41,13 @@ use d2b_realm_core::{
     StreamKind,
 };
 
-pub mod display_transport;
 pub mod execution;
-pub mod mux_session;
 pub mod remote_node;
-pub mod secure_session;
-pub mod session;
+pub mod service_v2;
 pub mod session_lifecycle;
 pub mod target_resolver;
 
-pub use display_transport::{
-    DISPLAY_TOKEN_LEN, DISPLAY_VSOCK_PORT, DisplayTransportBinding, DisplayTransportToken,
-    encode_display_preface, verify_display_preface,
-};
 pub use execution::{DEFAULT_MAX_EXECUTIONS, DurableExecTable};
-pub use mux_session::MuxSession;
 pub use remote_node::{
     DEFAULT_HEARTBEAT_TIMEOUT, DEFAULT_MAX_REMOTE_NODES, RemoteDispatchOutcome,
     RemoteFullHostAdapter, RemoteNodeAuditLabels, RemoteNodeAvailability, RemoteNodeEntry,
@@ -65,10 +56,6 @@ pub use remote_node::{
     ensure_remote_execution_generation, ensure_remote_shell_generation,
     retry_action_after_disconnect,
 };
-pub use secure_session::{
-    NonceReplayGuard, SecurePeerIdentity, SecurePeerSession, SecureSessionKey,
-};
-pub use session::{MAX_FRAME_BYTES, PROTOCOL_VERSION, PeerSession};
 pub use session_lifecycle::{LifecycleError, SessionLifecycle, SessionPhase};
 pub use target_resolver::{DispatchTarget, RealmEntrypoint, RealmEntrypointTable, ResolveError};
 

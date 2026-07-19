@@ -4,13 +4,13 @@
 .SH NAME
 launch \- Launch a trusted configured workload item through its runtime provider
 .SH SYNOPSIS
-\fBlaunch\fR [\fB\-\-item\fR] [\fB\-\-json\fR] [\fB\-\-human\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITARGET\fR>
+\fBlaunch\fR <\fB\-\-item\fR> [\fB\-\-json\fR] [\fB\-\-human\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITARGET\fR>
 .SH DESCRIPTION
 Launch a trusted configured workload item through its runtime provider
 .SH OPTIONS
 .TP
 \fB\-\-item\fR \fI<ITEM>\fR
-Configured launcher item id. Omit to use the declared default or sole item
+Configured launcher item id. Required: the v2 launch contract carries only a configured item id and has no default\-item selection signal
 .TP
 \fB\-\-json\fR
 Emit a structured JSON result

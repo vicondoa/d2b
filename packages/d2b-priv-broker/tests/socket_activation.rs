@@ -5,7 +5,7 @@
 //! that the broker:
 //!
 //! 1. Adopts the inherited fd rather than binding the socket itself.
-//! 2. Starts serving requests on it (verified by a round-trip Hello).
+//! 2. Establishes an authenticated `d2b.broker.v2` ComponentSession.
 //!
 //! # How LISTEN_PID is set correctly
 //!
@@ -22,29 +22,44 @@
 //! The `3>&<fd>` redirect duplicates the inherited listen socket to fd 3;
 //! `dup2` (internally used by the shell) clears FD_CLOEXEC on fd 3.
 
-#![cfg(not(feature = "layer1-bootstrap"))]
-
 use std::io;
 use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::Command;
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use d2b_contracts::broker_wire::{
-    BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse, HelloRequest,
+use d2b_contracts::v2_component_session::{AttachmentDescriptor, EndpointRole, Locality};
+use d2b_priv_broker::service_v2::{BrokerPeerRole, broker_endpoint_policy};
+use d2b_session::{HandshakeCredentials, SessionEngine};
+use d2b_session_unix::{
+    CreditPool, CreditScopeSet, PeerIdentityPolicy, SeqpacketSocket, UnixSeqpacketTransport,
+    UnixSessionError,
 };
-use d2b_priv_broker::protocol::{connect_seqpacket, recv_json_frame, send_json_frame};
 use nix::sys::socket::{
-    AddressFamily, Backlog, SockFlag, SockType, UnixAddr, bind, listen, socket,
+    AddressFamily, Backlog, SockFlag, SockType, UnixAddr, bind, connect, listen, socket,
 };
-use tempfile::TempDir;
-
 /// Path to the broker binary under test; set by cargo when building
 /// integration tests for this package.
 const BROKER_BIN: &str = env!("CARGO_BIN_EXE_d2b-priv-broker");
 
-fn scratch_dir() -> TempDir {
-    tempfile::tempdir().expect("tempdir")
+struct ScratchDir(tempfile::TempDir);
+
+impl ScratchDir {
+    fn path(&self) -> &std::path::Path {
+        self.0.path()
+    }
+}
+
+fn scratch_dir() -> ScratchDir {
+    let root = std::env::var_os("D2B_VALIDATION_SOCKET_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    std::fs::create_dir_all(&root).expect("create socket activation test root");
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
+        .expect("harden socket activation test root");
+    ScratchDir(tempfile::tempdir_in(root).expect("create socket activation tempdir"))
 }
 
 /// Create a bound, listening `AF_UNIX SOCK_SEQPACKET` socket at `path`.
@@ -66,15 +81,41 @@ fn bind_seqpacket_listen(path: &std::path::Path) -> io::Result<OwnedFd> {
     Ok(fd)
 }
 
-/// Verify the broker adopts the socket-activated fd and handles a Hello.
+fn credit_scopes(limit: usize) -> CreditScopeSet {
+    CreditScopeSet::new(
+        CreditPool::new(limit).expect("packet credit"),
+        CreditPool::new(limit).expect("request credit"),
+        CreditPool::new(limit).expect("operation credit"),
+        CreditPool::new(limit).expect("session credit"),
+        CreditPool::new(limit).expect("process credit"),
+        CreditPool::new(limit).expect("host credit"),
+    )
+}
+
+fn connect_seqpacket(path: &std::path::Path) -> io::Result<OwnedFd> {
+    let fd = socket(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .map_err(|error| io::Error::from_raw_os_error(error as i32))?;
+    let address =
+        UnixAddr::new(path).map_err(|error| io::Error::from_raw_os_error(error as i32))?;
+    connect(fd.as_raw_fd(), &address)
+        .map_err(|error| io::Error::from_raw_os_error(error as i32))?;
+    Ok(fd)
+}
+
+/// Verify the broker adopts the socket-activated fd and authenticates v2.
 ///
 /// We launch the broker via a POSIX `sh` one-liner so that `LISTEN_PID=$$`
 /// expands to the shell's PID, which becomes the broker's PID after `exec`.
 /// The listen socket is passed into the shell via its inherited fd number;
 /// the shell redirects it to fd 3 before exec-ing the broker.
-#[test]
+#[tokio::test(flavor = "current_thread")]
 #[allow(unsafe_code)]
-fn broker_adopts_socket_activated_fd_and_serves_hello() {
+async fn broker_adopts_socket_activated_fd_and_serves_component_session() {
     let scratch = scratch_dir();
     let sock_path = scratch.path().join("priv.sock");
     let audit_dir = scratch.path().join("audit");
@@ -150,38 +191,58 @@ fn broker_adopts_socket_activated_fd_and_serves_hello() {
         );
     }
 
-    // Connect and round-trip a Hello request.
+    // Connect and complete the authenticated broker-v2 handshake. No JSON
+    // negotiation or compatibility probe is sent.
     let client_fd = connect_seqpacket(&sock_path).expect("connect to activated socket");
-
-    let envelope = BrokerRequestEnvelope {
-        request: BrokerRequest::Hello(HelloRequest {
-            client_version: "test-0".to_owned(),
-            supported_features: vec![],
-        }),
-        caller_role: BrokerCallerRole::default(),
-        test_peer_uid: Some(current_uid),
-    };
-    send_json_frame(client_fd.as_raw_fd(), &envelope).expect("send hello");
-
-    let response: Option<BrokerResponse> =
-        recv_json_frame(client_fd.as_raw_fd()).expect("recv hello response");
-    let response = response.expect("expected a response, got EOF");
+    let socket = SeqpacketSocket::from_owned(client_fd).expect("client seqpacket");
+    let listener_owner_pid = std::process::id();
+    let verifier = Arc::new(move |peer: &SeqpacketSocket| {
+        let credentials = peer.acceptor_peer_credentials()?;
+        if Some(credentials.pid())
+            == rustix::process::Pid::from_raw(i32::try_from(listener_owner_pid).unwrap_or(-1))
+            && credentials.uid().as_raw() == current_uid
+            && credentials.gid().as_raw() == current_gid
+        {
+            Ok(())
+        } else {
+            Err(UnixSessionError::CredentialMismatch)
+        }
+    });
+    let policy = broker_endpoint_policy(
+        BrokerPeerRole::LocalRootController,
+        EndpointRole::LocalRootBroker,
+        1,
+        d2b_priv_broker::service_v2::broker_channel_binding(
+            current_uid,
+            current_gid,
+            EndpointRole::LocalRootBroker,
+        ),
+    )
+    .expect("broker policy");
+    let resolver = Arc::new(|_: &AttachmentDescriptor| Err(UnixSessionError::DescriptorMismatch));
+    let transport = UnixSeqpacketTransport::new(
+        socket,
+        Locality::HostLocal,
+        policy.limits,
+        policy.attachment_policy,
+        credit_scopes(usize::from(policy.attachment_policy.max_per_session)),
+        resolver,
+        PeerIdentityPolicy::pathname(verifier),
+    )
+    .expect("client transport");
+    let session = SessionEngine::establish_initiator(
+        transport,
+        policy,
+        HandshakeCredentials::Nn,
+        Instant::now(),
+    )
+    .await
+    .expect("authenticated broker component session");
+    drop(session);
 
     // Kill the broker before asserting so cleanup runs even on assertion failure.
     let _ = broker_proc.kill();
     let _ = broker_proc.wait();
-
-    match response {
-        BrokerResponse::Hello(ref hello_resp) => {
-            assert!(
-                !hello_resp.server_version.is_empty(),
-                "HelloResponse.server_version should be non-empty"
-            );
-        }
-        other => {
-            panic!("expected BrokerResponse::Hello, got {:?}", other);
-        }
-    }
 }
 
 use nix::libc;

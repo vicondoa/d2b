@@ -7,7 +7,7 @@ mod daemon_version_file {
     use serde_json::Value;
 
     use super::common::{
-        DaemonFixture, HELLO_FRAME, TestPeer, assert_contains, spawn_d2bd_serve, test_client,
+        DaemonFixture, TestPeer, complete_component_session_handshake, spawn_d2bd_serve,
         wait_for_file,
     };
 
@@ -46,10 +46,8 @@ mod daemon_version_file {
             Value::from(u64::from(d2b_contracts::PROTOCOL_VERSION))
         );
 
-        let (rc, output) = test_client(&fixture.socket_path, &[HELLO_FRAME]);
+        complete_component_session_handshake(&fixture.socket_path);
         let status = server.wait();
         assert!(status.success(), "d2bd serve exited with {status:?}");
-        assert_eq!(rc, 0, "hello client exit code; output:\n{output}");
-        assert_contains(&output, r#""type":"helloOk""#, "hello response");
     }
 }

@@ -9,9 +9,10 @@ use std::{
 
 use d2b_contracts::{
     v2_component_session::{
-        AttachmentPurpose, CorrelationId, IdempotencyKey, MAX_ACTIVE_NAMED_STREAMS,
-        MAX_REQUEST_LIFETIME_MS, RequestId, ServicePackage, TraceId,
+        AttachmentPurpose, CorrelationId, IdempotencyKey, LimitProfile, MAX_REQUEST_LIFETIME_MS,
+        RequestId, ServicePackage, TraceId,
     },
+    v2_identity::{WorkloadId, WorkloadName},
     v2_services::{
         StrictWireMessage,
         common::{
@@ -27,8 +28,8 @@ use crate::session::StreamDispatcher;
 use crate::{
     ClientError, ComponentSessionConnector, MethodHandle, NamedStream, OwnedAttachment,
     RemoteErrorKind, ResolvedTarget, RetryClass, ServiceHandle, ServiceKind, ServiceOwner,
-    SessionCall, SessionFailure, SessionReply, TargetInput, TargetResolver, TransportPacket,
-    TransportSelection,
+    SessionCall, SessionFailure, SessionReply, TargetInput, TargetResolver, TransportKind,
+    TransportPacket, TransportSelection,
 };
 
 pub trait WallClock: Send + Sync {
@@ -125,6 +126,13 @@ impl MetadataInput {
         Ok(())
     }
 
+    pub(crate) fn request_id_bytes(&self) -> [u8; 16] {
+        self.request_id
+            .as_bytes()
+            .try_into()
+            .expect("RequestId is exactly 16 bytes")
+    }
+
     fn protobuf(&self, trusted_generation: u64) -> Result<common::RequestMetadata, ClientError> {
         if trusted_generation == 0 {
             return Err(ClientError::ContractViolation);
@@ -218,7 +226,7 @@ impl CancellationToken {
         self.state.cancelled.load(Ordering::Acquire)
     }
 
-    async fn cancelled(&self) {
+    pub(crate) async fn cancelled(&self) {
         if self.is_cancelled() {
             return;
         }
@@ -281,6 +289,7 @@ where
             service: ServiceHandle::new(service, generated),
             driver: connected.driver,
             generation,
+            limits: connected.limits,
             clock: self.clock.clone(),
             active_streams: Arc::new(AtomicU16::new(0)),
             stream_dispatcher,
@@ -293,6 +302,7 @@ pub struct ConnectedClient {
     service: ServiceHandle,
     driver: crate::SharedDriver,
     generation: u64,
+    limits: LimitProfile,
     clock: Arc<dyn WallClock>,
     active_streams: Arc<AtomicU16>,
     stream_dispatcher: Arc<StreamDispatcher>,
@@ -304,7 +314,8 @@ impl fmt::Debug for ConnectedClient {
             .debug_struct("ConnectedClient")
             .field("target", &self.target)
             .field("service", &self.service.kind())
-            .field("generation", &self.generation)
+            .field("generation", &"<authenticated>")
+            .field("limits", &"<negotiated>")
             .finish()
     }
 }
@@ -325,8 +336,44 @@ impl fmt::Debug for Response {
 }
 
 impl ConnectedClient {
+    pub const fn session_generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub const fn session_limits(&self) -> LimitProfile {
+        self.limits
+    }
+
     pub fn service(&self) -> &ServiceHandle {
         &self.service
+    }
+
+    pub(crate) fn local_daemon_guest_proxy(
+        &self,
+        workload: &WorkloadName,
+    ) -> Result<Self, ClientError> {
+        if self.service.kind() != ServiceKind::Daemon
+            || self.target.transport() != TransportKind::LocalUnix
+        {
+            return Err(ClientError::TransportPolicyMismatch);
+        }
+        let ServiceOwner::LocalRoot(realm) = self.target.owner() else {
+            return Err(ClientError::TransportPolicyMismatch);
+        };
+        let owner = ServiceOwner::Workload {
+            realm: realm.clone(),
+            workload: WorkloadId::derive(realm, workload),
+        };
+        Ok(Self {
+            target: self.target.proxy_owner_service(owner, ServiceKind::Guest),
+            service: self.service.proxy(ServiceKind::Guest),
+            driver: Arc::clone(&self.driver),
+            generation: self.generation,
+            limits: self.limits,
+            clock: Arc::clone(&self.clock),
+            active_streams: Arc::clone(&self.active_streams),
+            stream_dispatcher: Arc::clone(&self.stream_dispatcher),
+        })
     }
 
     pub async fn invoke(
@@ -509,7 +556,7 @@ impl ConnectedClient {
         Ok(relative.as_nanos().try_into().unwrap_or(u64::MAX))
     }
 
-    async fn cancel_request(&self, metadata: &MetadataInput) {
+    pub(crate) async fn cancel_request(&self, metadata: &MetadataInput) {
         let _ = self
             .driver
             .cancel(self.generation, metadata.request_id.clone())
@@ -517,15 +564,18 @@ impl ConnectedClient {
     }
 
     pub async fn named_stream(&self, response: &Response) -> Result<NamedStream, ClientError> {
-        if response.message.stream_id.is_empty() {
+        self.open_server_stream(&response.message.stream_id).await
+    }
+
+    pub(crate) async fn open_server_stream(
+        &self,
+        stream_name: &str,
+    ) -> Result<NamedStream, ClientError> {
+        if stream_name.is_empty() {
             return Err(ClientError::ContractViolation);
         }
-        let channel = response
-            .message
-            .stream_id
-            .strip_prefix("stream-")
-            .and_then(|value| value.parse::<u16>().ok())
-            .ok_or(ClientError::ContractViolation)?;
+        let channel = d2b_contracts::v2_services::parse_server_stream_name(stream_name)
+            .map_err(ClientError::ServiceContract)?;
         let id = d2b_session::StreamId::new(channel).map_err(|_| ClientError::ContractViolation)?;
         self.reserve_stream()?;
         let stream = match NamedStream::new(
@@ -544,8 +594,8 @@ impl ConnectedClient {
             .driver
             .open_named_stream(
                 id,
-                d2b_contracts::v2_component_session::MAX_NAMED_STREAM_QUEUE_BYTES,
-                d2b_contracts::v2_component_session::MAX_NAMED_STREAM_QUEUE_BYTES,
+                self.limits.named_stream_queue_bytes,
+                self.limits.named_stream_queue_bytes,
             )
             .await
             .is_err()
@@ -559,10 +609,122 @@ impl ConnectedClient {
     fn reserve_stream(&self) -> Result<(), ClientError> {
         self.active_streams
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
-                (active < MAX_ACTIVE_NAMED_STREAMS).then_some(active + 1)
+                (active < self.limits.active_named_streams).then_some(active + 1)
             })
             .map(|_| ())
             .map_err(|_| ClientError::StreamLimitExceeded)
+    }
+
+    pub(crate) fn prepare_typed_request(
+        &self,
+        method: MethodHandle,
+        mut request: ServiceRequest,
+        options: &CallOptions,
+    ) -> Result<(ServiceRequest, ttrpc::context::Context), ClientError> {
+        if method.service() != self.service.kind() {
+            return Err(ClientError::InvalidMethod);
+        }
+        let spec = method.spec();
+        if spec.requires_idempotency && options.metadata.idempotency_key.is_none() {
+            return Err(ClientError::IdempotencyRequired);
+        }
+        options.metadata.validate_lifetime()?;
+        request.scope = MessageField::some(scope_for(self.target.owner()));
+        request.metadata = MessageField::some(options.metadata.protobuf(self.generation)?);
+        request
+            .validate_wire(spec.requires_idempotency)
+            .map_err(ClientError::ServiceContract)?;
+        let remaining_ms = options
+            .metadata
+            .expires_at_unix_ms
+            .checked_sub(self.clock.now_unix_ms())
+            .ok_or(ClientError::DeadlineExpired)?
+            .min(u64::from(spec.max_lifetime_ms));
+        if remaining_ms == 0 {
+            return Err(ClientError::DeadlineExpired);
+        }
+        let timeout_nanos = Duration::from_millis(remaining_ms)
+            .as_nanos()
+            .min(i64::MAX as u128) as i64;
+        Ok((request, ttrpc::context::with_timeout(timeout_nanos)))
+    }
+
+    pub(crate) fn prepare_operation_context(
+        &self,
+        method: MethodHandle,
+        options: &CallOptions,
+    ) -> Result<
+        (
+            common::RequestMetadata,
+            common::IdentityScope,
+            ttrpc::context::Context,
+        ),
+        ClientError,
+    > {
+        if method.service() != self.service.kind() {
+            return Err(ClientError::InvalidMethod);
+        }
+        let spec = method.spec();
+        if spec.requires_idempotency && options.metadata.idempotency_key.is_none() {
+            return Err(ClientError::IdempotencyRequired);
+        }
+        options.metadata.validate_lifetime()?;
+        let remaining_ms = options
+            .metadata
+            .expires_at_unix_ms
+            .checked_sub(self.clock.now_unix_ms())
+            .ok_or(ClientError::DeadlineExpired)?
+            .min(u64::from(spec.max_lifetime_ms));
+        if remaining_ms == 0 {
+            return Err(ClientError::DeadlineExpired);
+        }
+        let timeout_nanos = Duration::from_millis(remaining_ms)
+            .as_nanos()
+            .min(i64::MAX as u128) as i64;
+        Ok((
+            options.metadata.protobuf(self.generation)?,
+            scope_for(self.target.owner()),
+            ttrpc::context::with_timeout(timeout_nanos),
+        ))
+    }
+
+    pub(crate) fn prepare_terminal_open(
+        &self,
+        method: MethodHandle,
+        mut request: d2b_contracts::v2_services::terminal::TerminalOpenRequest,
+        options: &CallOptions,
+    ) -> Result<
+        (
+            d2b_contracts::v2_services::terminal::TerminalOpenRequest,
+            ttrpc::context::Context,
+        ),
+        ClientError,
+    > {
+        if method.service() != self.service.kind() || !method.spec().requires_idempotency {
+            return Err(ClientError::InvalidMethod);
+        }
+        if options.metadata.idempotency_key.is_none() {
+            return Err(ClientError::IdempotencyRequired);
+        }
+        options.metadata.validate_lifetime()?;
+        request.scope = MessageField::some(scope_for(self.target.owner()));
+        request.metadata = MessageField::some(options.metadata.protobuf(self.generation)?);
+        request
+            .validate_wire(true)
+            .map_err(ClientError::ServiceContract)?;
+        let remaining_ms = options
+            .metadata
+            .expires_at_unix_ms
+            .checked_sub(self.clock.now_unix_ms())
+            .ok_or(ClientError::DeadlineExpired)?
+            .min(u64::from(method.spec().max_lifetime_ms));
+        if remaining_ms == 0 {
+            return Err(ClientError::DeadlineExpired);
+        }
+        let timeout_nanos = Duration::from_millis(remaining_ms)
+            .as_nanos()
+            .min(i64::MAX as u128) as i64;
+        Ok((request, ttrpc::context::with_timeout(timeout_nanos)))
     }
 }
 
