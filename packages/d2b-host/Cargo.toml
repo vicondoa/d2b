@@ -24,13 +24,14 @@ default = []
 # Opt-in test backends used by scope agents to drive fake/recorded I/O
 # without touching the real netlink / cgroup / nft surfaces. Real
 # implementations live behind the default build.
-fake-backends = []
+fake-backends = ["d2b-realm-core/test-support"]
 
 [dependencies]
 d2b-realm-core = { workspace = true }
 d2b-realm-provider = { workspace = true }
 d2b-core = { workspace = true }
-d2b-contracts = { workspace = true, features = ["broker"] }
+d2b-contracts = { workspace = true, features = ["broker", "v2-services"] }
+d2b-session-unix = { workspace = true, features = ["host-socket"] }
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -45,6 +46,8 @@ rustix = { workspace = true }
 nix = { version = "0.29", default-features = false, features = ["fs", "user"] }
 libc = "0.2"
 sha2 = { workspace = true }
+zeroize.workspace = true
+tokio = { workspace = true, features = ["net", "time"] }
 # `miniz_oxide` is a raw-DEFLATE decoder; d2b-host wraps it in a
 # tiny inline gzip header/trailer skipper so the W3 kernel-module
 # probe can read `/proc/config.gz` as a secondary kernel-config

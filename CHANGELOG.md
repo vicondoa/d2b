@@ -106,6 +106,9 @@ deprecations ship one minor release before removal.
 - Predeclared the CLI-to-client, guestd-to-session, and provider-agent
   service/session dependency edges with least-privilege contract and Tokio
   features in the shared workspace lock.
+- Made the shared workspace manifests a compatible dependency union for the
+  root and W5 trees, including the provider-agent binary scaffold, so one
+  authoritative lockfile remains valid across the stack.
 - Made CLI completion generation patch `vm exec logs` structurally instead of
   depending on unrelated `--env` and `--cwd` flags, preserving reproducibility
   across the frozen parent and its W5 consumer.

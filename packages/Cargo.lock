@@ -1147,7 +1147,10 @@ version = "2.0.0"
 dependencies = [
  "async-trait",
  "d2b-realm-core",
+ "hmac",
  "serde",
+ "serde_json",
+ "sha2",
  "tokio",
 ]
 
@@ -1551,6 +1554,13 @@ dependencies = [
 [[package]]
 name = "d2b-realm-codec-protobuf"
 version = "2.0.0"
+dependencies = [
+ "d2b-contracts",
+ "d2b-realm-core",
+ "d2b-realm-provider",
+ "prost 0.13.5",
+ "serde_json",
+]
 
 [[package]]
 name = "d2b-realm-core"
@@ -1579,14 +1589,19 @@ name = "d2b-realm-router"
 version = "2.0.0"
 dependencies = [
  "async-trait",
+ "chacha20poly1305",
  "d2b-contracts",
+ "d2b-realm-codec-protobuf",
  "d2b-realm-core",
  "d2b-realm-provider",
  "d2b-realm-transport",
  "d2b-session",
+ "hmac",
  "protobuf",
+ "serde",
  "serde_json",
  "sha2",
+ "subtle",
  "tokio",
  "tracing",
  "ttrpc",
@@ -1752,6 +1767,7 @@ dependencies = [
  "protobuf",
  "regex",
  "rustix 0.38.44",
+ "semver",
  "serde",
  "serde_json",
  "sha2",
@@ -3658,7 +3674,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "de5e2533f59d08fcf364fd374ebda0692a70bd6d7e66ef97f306f45c6c5d8020"
 dependencies = [
  "bytes",
- "prost-derive",
+ "prost-derive 0.8.0",
+]
+
+[[package]]
+name = "prost"
+version = "0.13.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2796faa41db3ec313a31f7624d9286acf277b52de526150b7e69f3debf891ee5"
+dependencies = [
+ "bytes",
+ "prost-derive 0.13.5",
 ]
 
 [[package]]
@@ -3673,7 +3699,7 @@ dependencies = [
  "log",
  "multimap",
  "petgraph",
- "prost",
+ "prost 0.8.0",
  "prost-types",
  "tempfile",
  "which 4.4.2",
@@ -3693,13 +3719,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "prost-derive"
+version = "0.13.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
+dependencies = [
+ "anyhow",
+ "itertools",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+]
+
+[[package]]
 name = "prost-types"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "603bbd6394701d13f3f25aada59c7de9d35a6a5887cfc156181234a44002771b"
 dependencies = [
  "bytes",
- "prost",
+ "prost 0.8.0",
 ]
 
 [[package]]
@@ -5202,7 +5241,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3aa71f4a44711b3b9cc10ed0c7e239ff0fe4b8e6c900a142fb3bb26401385718"
 dependencies = [
  "derive-new",
- "prost",
+ "prost 0.8.0",
  "prost-build",
  "prost-types",
  "protobuf",

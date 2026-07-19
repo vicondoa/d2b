@@ -22,6 +22,7 @@ pub mod audit_jsonl;
 pub mod credential;
 pub mod display_listener;
 pub mod production;
+pub mod provider_agent;
 pub mod waypipe_display;
 pub use aca_workload::{
     AcaGatewayWorkload, AgentBinaries, RelayCoords, build_agent_command, build_cleanup_command,

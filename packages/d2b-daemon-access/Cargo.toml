@@ -24,7 +24,7 @@ d2b-client = { workspace = true, default-features = false, features = ["host-soc
 d2b-contracts = { workspace = true, features = ["public"] }
 d2b-core = { workspace = true }
 async-trait.workspace = true
-nix = { version = "0.29", default-features = false, features = ["socket"] }
+nix = { version = "0.29", default-features = false, features = ["socket", "user"] }
 serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["io-util", "net", "rt"] }
