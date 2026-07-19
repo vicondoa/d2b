@@ -226,7 +226,8 @@ deprecations ship one minor release before removal.
 ### Fixed
 
 - Included the privileges parity test in the exact W5 guest-signing retirement
-  inventory so it can account for the intentionally later declarative removal.
+  and protected-path inventories so it can account for the intentionally later
+  declarative removal, with matching canonical synthetic policy fixtures.
 - Classified the shared ComponentSession, service, provider, allocator, and
   provider-registry contract pages explicitly as Diataxis references.
 - Documented the provider-binding consumer fallback required when the strict

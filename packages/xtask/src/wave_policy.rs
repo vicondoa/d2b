@@ -2461,6 +2461,12 @@ mod tests {
             "    }\n",
             "}\n",
         );
+        let privileges_parity = concat!(
+            "fn rendered_privileges_matches_rust_matrix() {\n",
+            "    let rendered = load_privileges_fixture_from_env();\n",
+            "    let rust = PrivilegesJson::w1(rendered.schema_version.clone());\n",
+            "}\n",
+        );
         let broker_wire = concat!(
             "use crate::guest_auth::AUTH_NONCE_LEN;\n\n",
             "pub enum BrokerRequest {\n",
@@ -2588,6 +2594,10 @@ mod tests {
             }
         });
         let fixtures = BTreeMap::from([
+            (
+                W5_PRIVILEGES_PARITY_PATH.to_owned(),
+                privileges_parity.as_bytes().to_vec(),
+            ),
             (W5_BROKER_WIRE_PATH.to_owned(), broker_wire.as_bytes().to_vec()),
             (W5_PRIVILEGES_PATH.to_owned(), privileges.as_bytes().to_vec()),
             (
