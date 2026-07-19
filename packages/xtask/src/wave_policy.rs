@@ -1563,6 +1563,7 @@ fn transform_privileges_w3_source(parent: &[u8]) -> Result<Vec<u8>, String> {
         "fn only_guest_control_sign_grants_secret_access()",
         "W3 secret-access test",
     )?;
+    normalize_retired_rust_spacing(&mut source);
     Ok(source.into_bytes())
 }
 
@@ -1617,10 +1618,14 @@ fn transform_broker_wire(parent: &[u8]) -> Result<Vec<u8>, String> {
     ] {
         remove_rust_item(&mut source, marker, label)?;
     }
-    while source.contains("\n\n\n") {
-        source = source.replace("\n\n\n", "\n\n");
-    }
+    normalize_retired_rust_spacing(&mut source);
     Ok(source.into_bytes())
+}
+
+fn normalize_retired_rust_spacing(source: &mut String) {
+    while source.contains("\n\n\n") {
+        *source = source.replace("\n\n\n", "\n\n");
+    }
 }
 
 fn transform_privileges_parity(parent: &[u8]) -> Result<Vec<u8>, String> {
