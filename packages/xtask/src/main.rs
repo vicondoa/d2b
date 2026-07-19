@@ -1201,46 +1201,71 @@ fn write_manpage(path: &Path, rendered: Vec<u8>) -> Result<(), Box<dyn std::erro
 }
 
 fn patch_vm_exec_logs_bash_completion(
-    generated: String,
+    mut generated: String,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let generated = replace_once(
-        generated,
-        r#"            opts="-d -i -t -h --detach --interactive --tty --env --cwd --json --human --help <VM> [MANAGEMENT]... [COMMAND]..."
-"#,
-        r#"            opts="-d -i -t -h --detach --interactive --tty --env --cwd --json --human --help <VM> [MANAGEMENT]... [COMMAND]..."
-            if [[ " ${COMP_WORDS[*]} " == *" logs "* ]] ; then
+    const COMMAND_MARKER: &str = "        d2b__subcmd__vm__subcmd__exec)\n";
+    const COMMAND_END: &str = "\n            ;;\n";
+    const OPTS_PREFIX: &str = "            opts=\"";
+    const WILDCARD_ARM: &str = "                *)\n";
+    const LOGS_OPTS: &str = r#"            if [[ " ${COMP_WORDS[*]} " == *" logs "* ]] ; then
                 opts="${opts} --stdout-offset --stderr-offset --max-len"
             fi
-"#,
-        "bash vm exec opts",
-    )?;
-    replace_once(
-        generated,
-        r#"                --cwd)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-"#,
-        r#"                --cwd)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --stdout-offset|--stderr-offset|--max-len)
+"#;
+    const LOGS_VALUE_ARM: &str = r#"                --stdout-offset|--stderr-offset|--max-len)
                     COMPREPLY=()
                     return 0
                     ;;
-"#,
-        "bash vm exec logs flag values",
-    )
+"#;
+
+    let start = generated
+        .find(COMMAND_MARKER)
+        .ok_or("could not patch generated completion: missing bash vm exec command")?;
+    let end = generated[start..]
+        .find(COMMAND_END)
+        .map(|offset| start + offset)
+        .ok_or("could not patch generated completion: unterminated bash vm exec command")?;
+    let mut command = generated[start..end].to_owned();
+
+    let opts_start = command
+        .find(OPTS_PREFIX)
+        .ok_or("could not patch generated completion: missing bash vm exec opts")?;
+    let opts_end = command[opts_start..]
+        .find('\n')
+        .map(|offset| opts_start + offset + 1)
+        .ok_or("could not patch generated completion: unterminated bash vm exec opts")?;
+    command.insert_str(opts_end, LOGS_OPTS);
+
+    if command.matches(WILDCARD_ARM).count() != 1 {
+        return Err(
+            "could not patch generated completion: ambiguous bash vm exec wildcard arm".into(),
+        );
+    }
+    let wildcard = command
+        .find(WILDCARD_ARM)
+        .expect("exactly one wildcard arm checked above");
+    command.insert_str(wildcard, LOGS_VALUE_ARM);
+
+    generated.replace_range(start..end, &command);
+    Ok(generated)
 }
 
 fn patch_vm_exec_logs_fish_completion(
     generated: String,
 ) -> Result<String, Box<dyn std::error::Error>> {
+    const CWD: &str = "complete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec\" -l cwd -d 'Working directory for the guest command' -r\n";
+    const HUMAN: &str = "complete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec\" -l human -d 'Force human output'\n";
+    const LOGS: &str = "complete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs\" -l stdout-offset -d 'Resume stdout from this byte offset. The daemon clamps stale offsets' -r\ncomplete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs\" -l stderr-offset -d 'Resume stderr from this byte offset. The daemon clamps stale offsets' -r\ncomplete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs\" -l max-len -d 'Maximum retained bytes to request per stream' -r\n";
+    let anchor = if generated.contains(CWD) {
+        CWD
+    } else if generated.contains(HUMAN) {
+        HUMAN
+    } else {
+        return Err("could not patch generated completion: missing fish vm exec anchor".into());
+    };
     replace_once(
         generated,
-        "complete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec\" -l cwd -d 'Working directory for the guest command' -r\n",
-        "complete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec\" -l cwd -d 'Working directory for the guest command' -r\ncomplete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs\" -l stdout-offset -d 'Resume stdout from this byte offset. The daemon clamps stale offsets' -r\ncomplete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs\" -l stderr-offset -d 'Resume stderr from this byte offset. The daemon clamps stale offsets' -r\ncomplete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs\" -l max-len -d 'Maximum retained bytes to request per stream' -r\n",
+        anchor,
+        &format!("{anchor}{LOGS}"),
         "fish vm exec logs flags",
     )
 }
@@ -1901,4 +1926,47 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
     (y, m, d)
+}
+
+#[cfg(test)]
+mod completion_patch_tests {
+    use super::{patch_vm_exec_logs_bash_completion, patch_vm_exec_logs_fish_completion};
+
+    const LOGS_VALUE_ARM: &str = "                --stdout-offset|--stderr-offset|--max-len)\n";
+
+    fn bash_completion(opts: &str, value_arms: &str) -> String {
+        format!(
+            "prefix\n        d2b__subcmd__vm__subcmd__exec)\n            opts=\"{opts}\"\n            if [[ ${{cur}} == -* || ${{COMP_CWORD}} -eq 3 ]] ; then\n                return 0\n            fi\n            case \"${{prev}}\" in\n{value_arms}                *)\n                    COMPREPLY=()\n                    ;;\n            esac\n            return 0\n            ;;\nsuffix\n"
+        )
+    }
+
+    #[test]
+    fn bash_vm_exec_logs_patch_accepts_exec_flags_with_or_without_env_and_cwd() {
+        for (opts, value_arms) in [
+            (
+                "-d --env --cwd --json <VM>",
+                "                --cwd)\n                    return 0\n                    ;;\n",
+            ),
+            ("-d --json <VM>", ""),
+        ] {
+            let patched = patch_vm_exec_logs_bash_completion(bash_completion(opts, value_arms))
+                .expect("patch bash completion");
+            assert!(patched.contains(&format!("opts=\"{opts}\"")));
+            assert!(patched.contains("opts=\"${opts} --stdout-offset --stderr-offset --max-len\""));
+            assert_eq!(patched.matches(LOGS_VALUE_ARM).count(), 1);
+        }
+    }
+
+    #[test]
+    fn fish_vm_exec_logs_patch_accepts_exec_flags_with_or_without_cwd() {
+        let cwd = "complete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec\" -l cwd -d 'Working directory for the guest command' -r\n";
+        let human = "complete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec\" -l human -d 'Force human output'\n";
+        for generated in [format!("{cwd}{human}"), human.to_owned()] {
+            let patched =
+                patch_vm_exec_logs_fish_completion(generated).expect("patch fish completion");
+            assert_eq!(patched.matches("-l stdout-offset").count(), 1);
+            assert_eq!(patched.matches("-l stderr-offset").count(), 1);
+            assert_eq!(patched.matches("-l max-len").count(), 1);
+        }
+    }
 }
