@@ -554,7 +554,8 @@
         "docs/reference/daemon-api.md",
         "docs/reference/privileges.md",
         "docs/reference/schemas/v2/privileges.json",
-        "docs/reference/schemas/v2/wire-protocol.json"
+        "docs/reference/schemas/v2/wire-protocol.json",
+        "packages/d2b-contract-tests/tests/privileges_parity.rs"
       ]
     }
   ],
