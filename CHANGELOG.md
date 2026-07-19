@@ -351,6 +351,8 @@ deprecations ship one minor release before removal.
   tests now exercise the daemon binary through real Unix `SO_PEERCRED`.
 - Matched `/proc/<pid>/cgroup`'s leading-slash format during realm-child
   adoption and added a successful production-verifier regression test.
+- Made launch, list, status, shell, and console emit the common typed
+  `daemon-down` envelope before attempting a missing public socket.
 - Classified the shared ComponentSession, service, provider, allocator, and
   provider-registry contract pages explicitly as Diataxis references.
 - Documented the provider-binding consumer fallback required when the strict

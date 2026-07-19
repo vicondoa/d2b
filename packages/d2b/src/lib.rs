@@ -2969,10 +2969,7 @@ fn cmd_launch(context: &Context, args: &LaunchArgs) -> Result<i32, CliFailure> {
     // resolves, so a missing daemon socket must fail closed here rather than
     // attempting any client-side re-implementation.
     if !context.public_socket.exists() {
-        return Err(CliFailure::new(
-            69,
-            "launch requires the d2bd public socket; no static or provider fallback is permitted",
-        ));
+        return emit_host_error(&daemon_down_envelope("launch"), args.json);
     }
     let daemon = service_v2::DaemonService::connect(&context.public_socket)?;
     let canonical = resolve_launch_target(&daemon, &args.target)?;
@@ -3047,6 +3044,9 @@ fn new_launch_operation_id() -> Result<d2b_realm_core::OperationId, CliFailure> 
 }
 
 fn cmd_list(context: &Context, args: &ListArgs) -> Result<i32, CliFailure> {
+    if !context.public_socket.exists() {
+        return emit_host_error(&daemon_down_envelope("list"), args.json);
+    }
     let daemon = service_v2::DaemonService::connect(&context.public_socket)?;
     let workloads = daemon.list_workloads(None)?;
     let output = service_v2::list_output(&workloads)?;
@@ -3092,6 +3092,9 @@ fn cmd_status(context: &Context, args: &StatusArgs) -> Result<i32, CliFailure> {
         (_, Some(flagged)) => Some(flagged.clone()),
         (None, None) => None,
     };
+    if !context.public_socket.exists() {
+        return emit_host_error(&daemon_down_envelope("status"), args.json);
+    }
     if !args.json {
         match &selected_vm {
             // Single-VM status only warns about THAT VM's pending edit,
@@ -3941,6 +3944,9 @@ fn receive_shell_management(
 }
 
 fn cmd_console_v2(context: &Context, args: &ConsoleArgs) -> Result<i32, CliFailure> {
+    if !context.public_socket.exists() {
+        return emit_host_error(&daemon_down_envelope("console"), false);
+    }
     let mut preparation = prepare_terminal_before_runtime(true)?;
     let (rows, columns) = preparation
         .initial_size
@@ -3992,6 +3998,9 @@ fn cmd_shell_v2(context: &Context, args: &ShellArgs) -> Result<i32, CliFailure> 
             2,
             "shell detach/kill requires the server-issued handle via --name",
         ));
+    }
+    if !context.public_socket.exists() {
+        return emit_host_error(&daemon_down_envelope("shell"), args.json);
     }
     let mut preparation = if action == ShellAction::Attach {
         Some(prepare_terminal_before_runtime(true)?)
@@ -13053,6 +13062,84 @@ mod host_install_dispatch_tests {
             daemon_state_dir: PathBuf::from("/dev/null"),
             metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
         }
+    }
+
+    fn assert_daemon_down_json(result: Result<i32, super::CliFailure>, stdout: Vec<u8>) {
+        assert_eq!(result.expect("daemon-down returns its exit code"), 1);
+        let envelope: Value =
+            serde_json::from_slice(&stdout).expect("daemon-down emits one JSON document");
+        assert_eq!(
+            envelope.get("code").and_then(Value::as_str),
+            Some("daemon-down")
+        );
+        assert_eq!(envelope.get("exitCode").and_then(Value::as_i64), Some(1));
+    }
+
+    #[test]
+    fn daemon_backed_v2_commands_emit_typed_daemon_down_envelopes() {
+        let mut context = missing_daemon_context();
+        context.public_socket = test_socket_path("typed-daemon-down", ".missing.sock");
+
+        let (result, stdout) = super::with_test_stdout_capture(|| {
+            super::cmd_launch(
+                &context,
+                &super::LaunchArgs {
+                    target: "demo".to_owned(),
+                    item: "editor".to_owned(),
+                    json: true,
+                    human: false,
+                },
+            )
+        });
+        assert_daemon_down_json(result, stdout);
+
+        let (result, stdout) = super::with_test_stdout_capture(|| {
+            super::cmd_list(
+                &context,
+                &super::ListArgs {
+                    json: true,
+                    human: false,
+                },
+            )
+        });
+        assert_daemon_down_json(result, stdout);
+
+        let (result, stdout) = super::with_test_stdout_capture(|| {
+            super::cmd_status(
+                &context,
+                &super::StatusArgs {
+                    json: true,
+                    human: false,
+                    check_bridges: false,
+                    vm_flag: None,
+                    vm: None,
+                },
+            )
+        });
+        assert_daemon_down_json(result, stdout);
+
+        let (result, stdout) = super::with_test_stdout_capture(|| {
+            super::cmd_shell_v2(
+                &context,
+                &super::ShellArgs {
+                    vm: "demo".to_owned(),
+                    action: Some(super::ShellAction::List),
+                    name: None,
+                    force: false,
+                    json: true,
+                    human: false,
+                },
+            )
+        });
+        assert_daemon_down_json(result, stdout);
+
+        let result = super::cmd_console_v2(
+            &context,
+            &super::ConsoleArgs {
+                vm: "demo".to_owned(),
+            },
+        );
+        assert_eq!(result.expect("console daemon-down exit"), 1);
     }
 
     fn parse_vm_exec(argv: &[&str]) -> VmExecArgs {
