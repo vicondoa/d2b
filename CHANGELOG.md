@@ -126,6 +126,8 @@ deprecations ship one minor release before removal.
   publication.
 - Kept the W4 foundation fingerprint inventory limited to files present in the
   root tree while W5's own manifest fingerprints its runtime client services.
+- Retired the generated guest-control v1 ttrpc stub to its explicit marker in
+  shared-root so drift generation is stable before W5 runtime code lands.
 - Predeclared exact W5 ownership for fail-closed successor pins and synchronized
   their shared migration ledgers with the ComponentSession v2 test inventory,
   separately from the closed `GuestControlSign` retirement.
