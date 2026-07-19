@@ -1144,6 +1144,11 @@
       "path": "packages/d2b-session-unix/tests/unix_session.rs"
     },
     {
+      "name": "w3-session-unix-vsock",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session-unix/src/vsock.rs"
+    },
+    {
       "name": "w3-session-vectors",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2b-session/tests/noise_vectors.rs"
