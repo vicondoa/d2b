@@ -1382,8 +1382,17 @@ fn v2_foundation_crates_are_default_empty_and_not_publishable() {
 
 #[test]
 fn v2_foundation_delivery_fingerprints_cover_every_tracked_file() {
+    let tracked = git_tracked_files();
+    let authority = if tracked
+        .iter()
+        .any(|path| path == "packages/d2b-client/src/daemon_service.rs")
+    {
+        "delivery/manifests/w5.json"
+    } else {
+        "delivery/manifest.json"
+    };
     let manifest: serde_json::Value =
-        serde_json::from_str(&read_repo_file("delivery/manifest.json")).expect("delivery manifest");
+        serde_json::from_str(&read_repo_file(authority)).expect("delivery manifest");
     let actual = manifest["contract_fingerprints"]
         .as_array()
         .expect("contract fingerprints")
@@ -1398,7 +1407,7 @@ fn v2_foundation_delivery_fingerprints_cover_every_tracked_file() {
         })
         .collect::<BTreeSet<_>>();
 
-    let mut expected = git_tracked_files()
+    let mut expected = tracked
         .into_iter()
         .filter(|path| {
             V2_FOUNDATION_CRATES
