@@ -356,6 +356,8 @@ deprecations ship one minor release before removal.
   helper signals readiness only after `exec`.
 - Made launch, list, status, shell, and console emit the common typed
   `daemon-down` envelope before attempting a missing public socket.
+- Made child-controller bootstrap tests verify closure of inherited kernel
+  objects without assuming closed descriptor numbers cannot be reused.
 - Hid the reserved `vm display` namespace from generated help and completions
   until its typed ComponentSession handler exists.
 - Classified the guest-control exec, I/O, shell, and provider contract pages

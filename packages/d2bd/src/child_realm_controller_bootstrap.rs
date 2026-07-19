@@ -329,12 +329,12 @@ mod tests {
         io::IoSliceMut,
         os::fd::{AsRawFd, IntoRawFd, OwnedFd, RawFd},
         os::unix::ffi::OsStringExt,
+        path::PathBuf,
         sync::Mutex,
         sync::atomic::{AtomicU64, Ordering},
     };
 
     use nix::{
-        errno::Errno,
         fcntl::{FcntlArg, FdFlag, fcntl},
         sys::socket::{
             AddressFamily as NixAddressFamily, Backlog, SockFlag, SockType, UnixAddr, bind,
@@ -385,21 +385,34 @@ mod tests {
         }
     }
 
-    fn adopted_child() -> (ControllerBootstrap, OwnedFd, UnixAddr, [RawFd; 3]) {
+    fn adopted_child() -> (
+        ControllerBootstrap,
+        OwnedFd,
+        UnixAddr,
+        [(RawFd, PathBuf); 3],
+    ) {
         let (listener, address) = seqpacket_listener();
         let (bootstrap_parent, bootstrap_child) =
             d2b_session_unix::prearmed_seqpacket_pair().unwrap();
         set_socket_passcred(&bootstrap_parent, true).unwrap();
-        let cgroup = File::open(".").unwrap();
+        let cgroup_dir = tempfile::tempdir().unwrap();
+        let cgroup = File::open(cgroup_dir.path()).unwrap();
+        let raw_fds = [
+            listener.as_raw_fd(),
+            bootstrap_child.as_raw_fd(),
+            cgroup.as_raw_fd(),
+        ];
+        let original_targets =
+            raw_fds.map(|raw| std::fs::read_link(format!("/proc/self/fd/{raw}")).unwrap());
         let originals = [
-            listener.into_raw_fd(),
-            bootstrap_child.into_raw_fd(),
-            cgroup.into_raw_fd(),
+            (listener.into_raw_fd(), original_targets[0].clone()),
+            (bootstrap_child.into_raw_fd(), original_targets[1].clone()),
+            (cgroup.into_raw_fd(), original_targets[2].clone()),
         ];
         let adopted = ControllerBootstrap::from_snapshot(child_snapshot(
-            originals[0],
-            originals[1],
-            originals[2],
+            originals[0].0,
+            originals[1].0,
+            originals[2].0,
         ))
         .unwrap();
         (adopted, bootstrap_parent, address, originals)
@@ -409,8 +422,12 @@ mod tests {
     fn exact_child_environment_adopts_cloexec_authority_and_reuses_listener() {
         let _guard = TEST_LOCK.lock().unwrap();
         let (mut bootstrap, _bootstrap_parent, address, originals) = adopted_child();
-        for raw in originals {
-            assert_eq!(fcntl(raw, FcntlArg::F_GETFD), Err(Errno::EBADF));
+        for (raw, original_target) in originals {
+            match std::fs::read_link(format!("/proc/self/fd/{raw}")) {
+                Ok(current_target) => assert_ne!(current_target, original_target),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => panic!("inspect inherited fd {raw}: {error}"),
+            }
         }
         let child = bootstrap.child.as_ref().unwrap();
         for fd in [&child.bootstrap, &child._cgroup] {
