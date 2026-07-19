@@ -350,9 +350,9 @@ fn transaction_service(failure: LedgerFailurePoint) -> (TransactionTestService, 
 static CREDENTIAL_SOCKET_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 fn socket_tempdir() -> tempfile::TempDir {
-    let root = std::env::var_os("D2B_VALIDATION_SOCKET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
+    let Some(root) = std::env::var_os("D2B_VALIDATION_SOCKET_DIR").map(PathBuf::from) else {
+        return tempfile::tempdir().expect("create allocator socket tempdir");
+    };
     std::fs::create_dir_all(&root).expect("create allocator test socket root");
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
         .expect("harden allocator test socket root");

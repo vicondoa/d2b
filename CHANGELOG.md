@@ -356,6 +356,8 @@ deprecations ship one minor release before removal.
   between verification and supervision.
 - Replaced the new realm-child inherited-descriptor validator's raw libc calls
   with safe Rustix file, filesystem, and socket primitives.
+- Kept direct allocator-service test runs inside an owned temporary socket
+  directory instead of trying to change shared `/tmp` permissions.
 - Materialized the retired guest-control v1 ttrpc binding marker after the W5
   service switched entirely to generated v2 bindings.
 - Kept the legacy guest credential-path test strict under immutable `/tmp`
