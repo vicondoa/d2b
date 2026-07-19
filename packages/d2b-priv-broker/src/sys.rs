@@ -131,54 +131,55 @@ pub fn peer_uid(fd: RawFd) -> io::Result<u32> {
     peer_credentials(fd).map(|(uid, _, _)| uid)
 }
 
+fn rustix_error_to_io(error: rustix::io::Errno) -> io::Error {
+    io::Error::from_raw_os_error(error.raw_os_error())
+}
+
 /// Validate a descriptor before it enters a realm child's inherited table.
 ///
 /// The request metadata never upgrades an arbitrary descriptor into authority:
 /// listeners, namespace handles, cgroup leaves, and directory roots must match
 /// their kernel object type, and every descriptor must already be CLOEXEC in
 /// the broker.
-#[allow(unsafe_code)]
 pub fn validate_realm_child_fd(
     fd: BorrowedFd<'_>,
     kind: d2b_host::realm_children::RealmChildFdKind,
 ) -> io::Result<()> {
     use d2b_host::realm_children::RealmChildFdKind as K;
 
-    let flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFD) };
-    if flags < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    if flags & libc::FD_CLOEXEC == 0 {
+    let flags = rustix::io::fcntl_getfd(fd).map_err(rustix_error_to_io)?;
+    if !flags.contains(rustix::io::FdFlags::CLOEXEC) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "delegated realm-child fd is not CLOEXEC",
         ));
     }
 
-    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
-    if unsafe { libc::fstat(fd.as_raw_fd(), &mut stat) } < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    let object_type = stat.st_mode & libc::S_IFMT;
+    let stat = rustix::fs::fstat(fd).map_err(rustix_error_to_io)?;
+    let object_type = rustix::fs::FileType::from_raw_mode(stat.st_mode);
     match kind {
         K::PublicListener | K::BrokerListener | K::BootstrapSession => {
-            if object_type != libc::S_IFSOCK {
+            if object_type != rustix::fs::FileType::Socket {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "realm-child socket binding is not a socket",
                 ));
             }
-            let domain = unsafe { getsockopt_int(fd.as_raw_fd(), libc::SO_DOMAIN)? };
-            let socket_type = unsafe { getsockopt_int(fd.as_raw_fd(), libc::SO_TYPE)? };
-            let accepting = unsafe { getsockopt_int(fd.as_raw_fd(), libc::SO_ACCEPTCONN)? };
-            if domain != libc::AF_UNIX || socket_type != libc::SOCK_SEQPACKET {
+            let domain = rustix::net::sockopt::get_socket_domain(fd).map_err(rustix_error_to_io)?;
+            let socket_type =
+                rustix::net::sockopt::get_socket_type(fd).map_err(rustix_error_to_io)?;
+            let accepting =
+                rustix::net::sockopt::get_socket_acceptconn(fd).map_err(rustix_error_to_io)?;
+            if domain != rustix::net::AddressFamily::UNIX
+                || socket_type != rustix::net::SocketType::SEQPACKET
+            {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "realm-child socket must be AF_UNIX SOCK_SEQPACKET",
                 ));
             }
             let wants_listener = !matches!(kind, K::BootstrapSession);
-            if (accepting != 0) != wants_listener {
+            if accepting != wants_listener {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "realm-child socket listener state does not match binding kind",
@@ -191,12 +192,9 @@ pub fn validate_realm_child_fd(
         | K::IpcNamespace
         | K::PidNamespace
         | K::CgroupNamespace => {
-            const NSFS_MAGIC: libc::c_long = 0x6e73_6673;
-            let mut statfs: libc::statfs = unsafe { std::mem::zeroed() };
-            if unsafe { libc::fstatfs(fd.as_raw_fd(), &mut statfs) } < 0 {
-                return Err(io::Error::last_os_error());
-            }
-            if statfs.f_type != NSFS_MAGIC {
+            const NSFS_MAGIC: u32 = 0x6e73_6673;
+            let statfs = rustix::fs::fstatfs(fd).map_err(rustix_error_to_io)?;
+            if statfs.f_type != rustix::fs::FsWord::from(NSFS_MAGIC) {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "realm-child namespace binding is not an nsfs descriptor",
@@ -220,11 +218,10 @@ pub fn validate_realm_child_fd(
             }
         }
         K::CgroupLeaf => {
-            const CGROUP2_SUPER_MAGIC: libc::c_long = 0x6367_7270;
-            let mut statfs: libc::statfs = unsafe { std::mem::zeroed() };
-            if object_type != libc::S_IFDIR
-                || unsafe { libc::fstatfs(fd.as_raw_fd(), &mut statfs) } < 0
-                || statfs.f_type != CGROUP2_SUPER_MAGIC
+            const CGROUP2_SUPER_MAGIC: u32 = 0x6367_7270;
+            let statfs = rustix::fs::fstatfs(fd).map_err(rustix_error_to_io)?;
+            if object_type != rustix::fs::FileType::Directory
+                || statfs.f_type != rustix::fs::FsWord::from(CGROUP2_SUPER_MAGIC)
             {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -232,7 +229,7 @@ pub fn validate_realm_child_fd(
                 ));
             }
         }
-        K::StateRoot | K::AuditRoot if object_type != libc::S_IFDIR => {
+        K::StateRoot | K::AuditRoot if object_type != rustix::fs::FileType::Directory => {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "realm-child storage root is not a directory",

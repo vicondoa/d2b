@@ -354,6 +354,8 @@ deprecations ship one minor release before removal.
 - Pinned each adoptable realm child with a fresh pidfd before inspecting
   `/proc`, preventing a recycled numeric PID from changing process identity
   between verification and supervision.
+- Replaced the new realm-child inherited-descriptor validator's raw libc calls
+  with safe Rustix file, filesystem, and socket primitives.
 - Materialized the retired guest-control v1 ttrpc binding marker after the W5
   service switched entirely to generated v2 bindings.
 - Kept the legacy guest credential-path test strict under immutable `/tmp`
