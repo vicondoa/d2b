@@ -77,6 +77,8 @@ pub struct SharedContractPolicy {
     pub guest_typed_methods: Vec<TypedBrokerMethod>,
     pub service_dependency_edges: Vec<ServiceDependencyEdge>,
     pub w5_contract_retirements: Vec<W5ContractRetirement>,
+    #[serde(default)]
+    pub w5_successor_pin_paths: Vec<String>,
     pub w7_contract_test_migrations: Vec<W7ContractTestMigration>,
     pub workspace_dependencies: Vec<WorkspaceDependency>,
 }
@@ -151,7 +153,7 @@ pub struct W7ContractTestMigration {
 
 impl SharedContractPolicy {
     pub fn validate(&self) -> Result<(), String> {
-        if self.schema_version != 9 {
+        if self.schema_version != 10 {
             return Err("unsupported shared-contract policy schema".to_owned());
         }
         if self.authority_repository != "github.com/vicondoa/d2b" {
@@ -320,6 +322,21 @@ impl SharedContractPolicy {
             .chain(retirement.companion_paths.iter())
             .cloned()
             .collect::<BTreeSet<_>>();
+        validate_sorted_relative_paths(&self.w5_successor_pin_paths, "W5 successor pin paths")?;
+        if self
+            .w5_successor_pin_paths
+            .iter()
+            .any(|path| !path.starts_with("tests/golden/pinned/") || !path.ends_with(".txt"))
+        {
+            return Err(
+                "W5 successor pin paths must be exact tests/golden/pinned/*.txt files".to_owned(),
+            );
+        }
+        let w5_protected_paths = retirement_paths
+            .iter()
+            .chain(self.w5_successor_pin_paths.iter())
+            .cloned()
+            .collect::<BTreeSet<_>>();
         let w5 = self
             .wave("w5")
             .map_err(|_| "shared-contract policy has no W5 owner".to_owned())?;
@@ -328,13 +345,13 @@ impl SharedContractPolicy {
             .iter()
             .cloned()
             .collect::<BTreeSet<_>>()
-            != retirement_paths
+            != w5_protected_paths
             || w5
                 .allowed_protected_paths
                 .iter()
                 .cloned()
                 .collect::<BTreeSet<_>>()
-                != retirement_paths
+                != w5_protected_paths
         {
             return Err(
                 "W5 protected exceptions must exactly match the contract retirement inventory"
@@ -2685,6 +2702,27 @@ mod tests {
             probe.blobs.insert((HEAD_OID.to_owned(), path), bytes);
         }
         probe
+    }
+
+    #[test]
+    fn w5_successor_pin_exceptions_are_exact_and_separate_from_contract_retirement() {
+        let policy = policy();
+        assert_eq!(policy.w5_successor_pin_paths.len(), 7);
+        assert!(
+            policy
+                .w5_successor_pin_paths
+                .iter()
+                .all(|path| { path.starts_with("tests/golden/pinned/") && path.ends_with(".txt") })
+        );
+
+        let mut incomplete = policy.clone();
+        incomplete.w5_successor_pin_paths.pop();
+        assert!(
+            incomplete
+                .validate()
+                .expect_err("incomplete W5 pin inventory must fail")
+                .contains("W5 protected exceptions must exactly match")
+        );
     }
 
     #[test]

@@ -1,5 +1,5 @@
 {
-  "schema_version": 9,
+  "schema_version": 10,
   "authority_repository": "github.com/vicondoa/d2b",
   "shared_root_branch": "adr0045-post-w4-contracts",
   "waves": [
@@ -258,6 +258,13 @@
     "packages/xtask/tests/heavy_gate_cli.rs",
     "packages/xtask/tests/policy_workspace.rs",
     "tests/AGENTS.md",
+    "tests/golden/pinned/broker-export-audit.txt",
+    "tests/golden/pinned/broker-socket-acl.txt",
+    "tests/golden/pinned/cli-vm-verbs.txt",
+    "tests/golden/pinned/daemon-socket-acl.txt",
+    "tests/golden/pinned/daemon-state-persistence.txt",
+    "tests/golden/pinned/daemon-version-negotiation.txt",
+    "tests/golden/pinned/guest-control-token-materializer.txt",
     "tests/migration-ledger.toml",
     "tests/migration-state.d/polkit-allowlist-eval.toml",
     "tests/migration-state.d/vm-submodule-cutover-eval.toml",
@@ -559,6 +566,15 @@
         "docs/reference/schemas/v2/wire-protocol.json"
       ]
     }
+  ],
+  "w5_successor_pin_paths": [
+    "tests/golden/pinned/broker-export-audit.txt",
+    "tests/golden/pinned/broker-socket-acl.txt",
+    "tests/golden/pinned/cli-vm-verbs.txt",
+    "tests/golden/pinned/daemon-socket-acl.txt",
+    "tests/golden/pinned/daemon-state-persistence.txt",
+    "tests/golden/pinned/daemon-version-negotiation.txt",
+    "tests/golden/pinned/guest-control-token-materializer.txt"
   ],
   "w7_contract_test_migrations": [
     {
