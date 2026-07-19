@@ -402,11 +402,22 @@ fn gen_guest_ttrpc() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let out_dir = repo_root.join("packages/d2b-guestd/src/generated");
     fs::create_dir_all(&out_dir)?;
     let out_file = out_dir.join("guest_control_ttrpc.rs");
+    let service_source = fs::read_to_string(repo_root.join("packages/d2b-guestd/src/service.rs"))?;
+    if guest_ttrpc_legacy_binding_required(&service_source) {
+        if !out_file.is_file() {
+            return Err("legacy guest service requires its checked-in ttrpc binding".into());
+        }
+        return Ok(vec![out_file]);
+    }
     fs::write(
         &out_file,
         "//! Retired: guest service bindings are provided by\n//! `d2b_contracts::v2_services::guest_ttrpc`.\n",
     )?;
     Ok(vec![out_file])
+}
+
+fn guest_ttrpc_legacy_binding_required(service_source: &str) -> bool {
+    service_source.contains("generated::guest_control_ttrpc::{GuestControl, create_guest_control}")
 }
 
 fn gen_ttrpc_api_fit_spike() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
@@ -1920,7 +1931,10 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
 
 #[cfg(test)]
 mod completion_patch_tests {
-    use super::{patch_vm_exec_logs_bash_completion, patch_vm_exec_logs_fish_completion};
+    use super::{
+        guest_ttrpc_legacy_binding_required, patch_vm_exec_logs_bash_completion,
+        patch_vm_exec_logs_fish_completion,
+    };
 
     const LOGS_VALUE_ARM: &str = "                --stdout-offset|--stderr-offset|--max-len)\n";
 
@@ -1958,5 +1972,15 @@ mod completion_patch_tests {
             assert_eq!(patched.matches("-l stderr-offset").count(), 1);
             assert_eq!(patched.matches("-l max-len").count(), 1);
         }
+    }
+
+    #[test]
+    fn guest_ttrpc_generation_tracks_the_service_binding_generation() {
+        assert!(guest_ttrpc_legacy_binding_required(
+            "generated::guest_control_ttrpc::{GuestControl, create_guest_control}"
+        ));
+        assert!(!guest_ttrpc_legacy_binding_required(
+            "d2b_contracts::v2_services::guest_ttrpc"
+        ));
     }
 }
