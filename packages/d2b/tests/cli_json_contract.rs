@@ -1,32 +1,12 @@
 //! W3 CLI-contract integration test, migrated from tests/cli-json.sh.
 //!
-//! The retired bash gate built a synthetic `nixosSystem` fixture and asserted
-//! the machine-readable JSON contract for `list` / `status` / `keys` / `audit`.
-//! Its KEY-SET shape checks (the exact `keys | sort` jq assertions for `list`,
-//! `status`, `services`, `runnerParity`, `livePoolIntegrity`) are now covered by
-//! the strict `deny_unknown_fields` DTO deserializes in `cli_contract.rs` and
-//! `status_contract.rs` — a successful typed deserialize into
-//! `d2b_contracts::cli_output::{ListOutputV2, StatusVmOutputV2}` IS the exact-key-set check.
-//!
-//! This module covers only the behaviours unique to the cli-json gate:
-//!   * `pending-restart`: when a VM's `booted != current` AND it counts as
-//!     running, `list --json` reports `status == "pending-restart"` and
-//!     `status <vm> --json` reports `pendingRestart == true` with running
-//!     services and consistent `current`/`booted` (deserialized strictly into
-//!     `d2b_contracts::cli_output::{ListOutputV2, StatusVmOutputV2}`);
+//! This module covers the remaining behaviours unique to the cli-json gate:
 //!   * `keys list --json` with no daemon: exit 1, empty stderr, and the
 //!     structured daemon-down envelope on stdout with
 //!     `kind == "d2b keys list requires d2bd"`;
 //!   * `audit --json` run under a PTY (a real TTY): stays JSON (not the human
 //!     stderr form) and returns the daemon-down envelope
 //!     `kind == "d2b audit requires d2bd"`, exit 1.
-//!
-//! The pending-restart cases reuse the rendered fixture-smoke bundle via
-//! `D2B_FIXTURES` (the same artifact dir cli_contract.rs / status_contract.rs
-//! consume); they skip cleanly when it is unset (the plain
-//! `cargo test --workspace` pass with no Nix sandbox). The daemon-down keys /
-//! audit cases need no fixture — they only point the public socket at a missing
-//! path — so they always run.
 
 use std::io::Read;
 use std::os::fd::OwnedFd;
@@ -34,7 +14,6 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use d2b_contracts::cli_output::{ListOutputV2, StatusVmOutputV2};
 use serde_json::Value;
 
 /// The exact key set of the structured host-error (`daemon-down`) envelope,
@@ -48,140 +27,6 @@ const ENVELOPE_KEYS: &[&str] = &[
     "remediation",
     "whatWasChecked",
 ];
-
-/// corp-vm's `current`/`booted` symlink targets are deliberately DIFFERENT
-/// store-path strings so `is_pending_restart` sees `current != booted`.
-const CURRENT_TARGET: &str = "/nix/store/d2b-current";
-const BOOTED_TARGET: &str = "/nix/store/d2b-booted";
-
-/// System-state fixture pinning `d2bd.service` active. With the daemon
-/// active, `vm_counts_as_running` is true, so a `current != booted` mismatch
-/// resolves to `pending-restart`. (Mirrors the bash gate's
-/// system-state-active.json.)
-const SYSTEM_STATE_ACTIVE_JSON: &str = r#"{"units":{"d2bd.service":"active"},"bridges":{}}"#;
-
-/// pidfd-table marking corp-vm's ch-runner running, so `status`'s
-/// `services.microvm` resolves to `running` (mirrors the bash gate).
-const PIDFD_TABLE_JSON: &str = r#"{"entries":[{"vm":"corp-vm","role":"ch-runner","pid":12345}]}"#;
-
-/// The fixture-smoke output dir, or `None` when D2B_FIXTURES is unset (plain
-/// non-gated `cargo test` runs). The gated rust-workspace-checks.sh step always
-/// sets it.
-fn fixtures_dir() -> Option<String> {
-    std::env::var("D2B_FIXTURES").ok()
-}
-
-/// Copy the fixture-smoke bundle artifacts into `tmp/bundle` and rewrite the
-/// absolute `processesPath`/`hostPath` to relative basenames so the bundle
-/// context resolves the COPIED fixture, never the host's deployed
-/// `/etc/d2b/*.json` (this host IS a deployed d2b host). Returns the
-/// temp bundle.json path. (Same hermeticity fix as status_contract.rs.)
-fn build_hermetic_bundle(fixtures: &str, tmp: &Path) -> PathBuf {
-    let bundle_dir = tmp.join("bundle");
-    let closures_dir = bundle_dir.join("closures");
-    std::fs::create_dir_all(&closures_dir).expect("mk bundle dir");
-
-    std::fs::copy(
-        format!("{fixtures}/processes.json"),
-        bundle_dir.join("processes.json"),
-    )
-    .expect("copy processes.json");
-    std::fs::copy(
-        format!("{fixtures}/host.json"),
-        bundle_dir.join("host.json"),
-    )
-    .expect("copy host.json");
-    for entry in std::fs::read_dir(format!("{fixtures}/closures")).expect("read closures dir") {
-        let entry = entry.expect("closure dirent");
-        std::fs::copy(entry.path(), closures_dir.join(entry.file_name())).expect("copy closure");
-    }
-
-    let raw = std::fs::read(format!("{fixtures}/bundle.json")).expect("read bundle.json");
-    let mut bundle: serde_json::Value =
-        serde_json::from_slice(&raw).expect("parse fixture bundle.json");
-    bundle["processesPath"] = serde_json::Value::String("processes.json".to_owned());
-    bundle["hostPath"] = serde_json::Value::String("host.json".to_owned());
-    let bundle_path = bundle_dir.join("bundle.json");
-    std::fs::write(
-        &bundle_path,
-        serde_json::to_vec(&bundle).expect("serialize rewritten bundle"),
-    )
-    .expect("write rewritten bundle.json");
-    bundle_path
-}
-
-/// A hermetic `list`/`status` invocation environment that forces corp-vm into
-/// the `pending-restart` state: a temp bundle copied from the fixture-smoke
-/// output, a per-VM state-root whose `current`/`booted` symlinks point at
-/// DIFFERENT store paths, a daemon-state dir whose pidfd-table marks the
-/// ch-runner running, and a system-state fixture pinning `d2bd.service`
-/// active. Built once, reused across the list/status assertions.
-struct PendingRestartEnv {
-    _tmp: tempfile::TempDir,
-    manifest: String,
-    bundle: PathBuf,
-    state_root: PathBuf,
-    daemon_state: PathBuf,
-    sys: PathBuf,
-    missing_public: PathBuf,
-    missing_broker: PathBuf,
-}
-
-impl PendingRestartEnv {
-    fn new(fixtures: &str) -> Self {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let bundle = build_hermetic_bundle(fixtures, tmp.path());
-
-        let state_root = tmp.path().join("state");
-        let vm_state = state_root.join("corp-vm");
-        std::fs::create_dir_all(&vm_state).expect("mk corp-vm state dir");
-        std::os::unix::fs::symlink(CURRENT_TARGET, vm_state.join("current"))
-            .expect("symlink current");
-        std::os::unix::fs::symlink(BOOTED_TARGET, vm_state.join("booted")).expect("symlink booted");
-
-        let daemon_state = tmp.path().join("daemon-state");
-        std::fs::create_dir_all(&daemon_state).expect("mk daemon-state dir");
-        std::fs::write(daemon_state.join("pidfd-table.json"), PIDFD_TABLE_JSON)
-            .expect("write pidfd-table");
-
-        let sys = tmp.path().join("system-state-active.json");
-        std::fs::write(&sys, SYSTEM_STATE_ACTIVE_JSON).expect("write system-state fixture");
-
-        Self {
-            manifest: format!("{fixtures}/manifest.json"),
-            bundle,
-            state_root,
-            daemon_state,
-            sys,
-            missing_public: tmp.path().join("missing-public.sock"),
-            missing_broker: tmp.path().join("missing-priv.sock"),
-            _tmp: tmp,
-        }
-    }
-
-    fn run(&self, args: &[&str]) -> std::process::Output {
-        Command::new(env!("CARGO_BIN_EXE_d2b"))
-            .args(args)
-            .env("D2B_MANIFEST_PATH", &self.manifest)
-            .env("D2B_BUNDLE_PATH", &self.bundle)
-            .env("D2B_STATE_ROOT", &self.state_root)
-            .env("D2B_DAEMON_STATE_DIR", &self.daemon_state)
-            .env("D2B_TEST_SYSTEM_STATE_JSON", &self.sys)
-            .env("D2B_PUBLIC_SOCKET", &self.missing_public)
-            .env("D2B_BROKER_SOCKET", &self.missing_broker)
-            .output()
-            .unwrap_or_else(|err| panic!("spawn d2b {}: {err}", args.join(" ")))
-    }
-}
-
-fn assert_success(out: &std::process::Output, what: &str) {
-    assert!(
-        out.status.success(),
-        "`d2b {what}` exited {:?}; stderr:\n{}",
-        out.status.code(),
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
 
 /// Assert `value` is the structured daemon-down envelope for `verb`: the exact
 /// key set, `code == "daemon-down"`, `exitCode == 1`, the documented
@@ -223,83 +68,6 @@ fn assert_daemon_down_envelope(value: &Value, verb: &str) {
     assert_eq!(
         value["docsAnchor"],
         "docs/reference/error-codes.md#daemon-down"
-    );
-}
-
-#[test]
-fn list_reports_pending_restart_when_booted_differs_and_active() {
-    let Some(fixtures) = fixtures_dir() else {
-        eprintln!("SKIP: D2B_FIXTURES unset (not the gated CLI-contract step)");
-        return;
-    };
-    let env = PendingRestartEnv::new(&fixtures);
-    let out = env.run(&["list", "--json"]);
-    assert_success(&out, "list --json");
-
-    // Strict schema validation: ListItemOutputV2 is deny_unknown_fields, so a
-    // successful typed deserialize is the exact-key-set check the bash gate did
-    // via jq.
-    let list: ListOutputV2 = serde_json::from_slice(&out.stdout).unwrap_or_else(|err| {
-        panic!(
-            "list --json did not match the ListOutputV2 schema: {err}\noutput:\n{}",
-            String::from_utf8_lossy(&out.stdout)
-        )
-    });
-    let corp = list
-        .0
-        .iter()
-        .find(|i| i.name == "corp-vm")
-        .expect("corp-vm in inventory");
-    assert_eq!(
-        corp.status, "pending-restart",
-        "corp-vm: current != booted + daemon active -> pending-restart"
-    );
-}
-
-#[test]
-fn status_reports_pending_restart_with_consistent_current_booted() {
-    let Some(fixtures) = fixtures_dir() else {
-        eprintln!("SKIP: D2B_FIXTURES unset (not the gated CLI-contract step)");
-        return;
-    };
-    let env = PendingRestartEnv::new(&fixtures);
-    let out = env.run(&["status", "corp-vm", "--json"]);
-    assert_success(&out, "status corp-vm --json");
-
-    // Strict schema validation: StatusVmOutputV2 is deny_unknown_fields, so a
-    // successful direct deserialize is the exact-key-set check (services,
-    // runnerParity, livePoolIntegrity sub-shapes included) the bash gate did.
-    let vm: StatusVmOutputV2 = serde_json::from_slice(&out.stdout).unwrap_or_else(|err| {
-        panic!(
-            "status --json did not strictly match StatusVmOutputV2: {err}\noutput:\n{}",
-            String::from_utf8_lossy(&out.stdout)
-        )
-    });
-
-    assert_eq!(vm.name, "corp-vm");
-    assert_eq!(vm.env.as_deref(), Some("work"));
-    assert!(
-        vm.pending_restart,
-        "corp-vm: current != booted + daemon active -> pendingRestart true"
-    );
-    assert_eq!(vm.current.as_deref(), Some(CURRENT_TARGET));
-    assert_eq!(vm.booted.as_deref(), Some(BOOTED_TARGET));
-    assert_eq!(
-        vm.services.d2b, "active",
-        "d2bd.service pinned active in the system-state fixture"
-    );
-    assert_eq!(
-        vm.services.microvm, "running",
-        "pidfd-table marks corp-vm ch-runner running"
-    );
-    assert_eq!(vm.runtime, "unknown");
-    let parity = vm
-        .runner_parity
-        .as_ref()
-        .expect("corp-vm runner parity must be present (closure emitted in fixture-smoke)");
-    assert!(
-        parity.runner_parity_ok,
-        "corp-vm runner parity must be OK against its committed closure"
     );
 }
 
