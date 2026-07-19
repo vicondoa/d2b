@@ -293,7 +293,7 @@ in
                       " --shell-systemctl-path ${pkgs.systemd}/bin/systemctl"
                 );
             in
-            "${guestPackages.d2b-guestd-static}/bin/d2b-guestd --serve --vm-id ${lib.escapeShellArg name}${execFlags}${execRuntimeFlags}${configFlags}${usbipFlags}${audioFlags}${activationFlags}${shellFlags}";
+            "${guestPackages.d2b-guestd-static}/bin/d2b-guestd --serve --vm-id ${lib.escapeShellArg name} --workload-id ${lib.escapeShellArg name}${execFlags}${execRuntimeFlags}${configFlags}${usbipFlags}${audioFlags}${activationFlags}${shellFlags}";
           LoadCredential = [
             "guest_control_token:/run/d2b-guest-control-host/token"
           ];

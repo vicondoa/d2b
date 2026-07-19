@@ -200,7 +200,8 @@ deprecations ship one minor release before removal.
   requires that exact nonzero binding for enrolled reconnects.
 - Rejected enrolled guest credentials and reconnect correlation when the guest
   identity digest is not SHA-256 of the pinned static public key.
-
+- Passed the canonical workload identity to guestd and removed the retired
+  `GuestControlSign` operation from the declarative privilege inventory.
 - Routed the CLI dependency authority through `d2b-daemon-access`, the sole
   owner of the exact no-default-features `d2b-client/host-socket` edge, instead
   of permitting duplicate endpoint and channel-binding policy.
