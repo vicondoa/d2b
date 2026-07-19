@@ -2715,7 +2715,7 @@ mod tests {
     #[test]
     fn w5_successor_pin_exceptions_are_exact_and_separate_from_contract_retirement() {
         let policy = policy();
-        assert_eq!(policy.w5_successor_pin_paths.len(), 7);
+        assert_eq!(policy.w5_successor_pin_paths.len(), 9);
         assert!(
             policy
                 .w5_successor_pin_paths

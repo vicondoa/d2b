@@ -371,22 +371,23 @@ elif command -v nix >/dev/null 2>&1; then
   # JSON envelopes strictly against the committed ListOutputV2/StatusOutputV2
   # DTOs (deny_unknown_fields). Successor of the cli-rust-native-* bash gates.
   #
-  # A few CLI-contract cases (audit/host-check daemon-backed paths) spawn a
-  # real, KVM-free `d2bd serve --once --test-listen-on` and talk to it over
-  # AF_UNIX + SO_PEERCRED. Build d2bd and hand its path to the test via
-  # D2B_TEST_D2BD_BIN so those cases run instead of skipping. d2b
-  # does NOT depend on d2bd (the static-rust-dependency-direction gate
-  # forbids it), so the path is delivered out-of-band rather than via a dep edge.
-  log "--> cargo build -p d2bd (CLI-contract daemon-spawn harness binary)"
-  CARGO_TARGET_DIR="$workspace_target_dir" \
-    cargo build --locked --manifest-path "$manifest" -p d2bd
-  d2bd_bin="$workspace_target_dir/debug/d2bd"
-  [ -x "$d2bd_bin" ] || fail "d2bd binary not found at $d2bd_bin"
-  log "--> cargo test -p d2b --tests (CLI-contract, D2B_FIXTURES = fixture-smoke)"
-  D2B_FIXTURES="$contract_fixtures" \
-  D2B_TEST_D2BD_BIN="$d2bd_bin" \
-  CARGO_TARGET_DIR="$workspace_target_dir" \
-    cargo test --locked --manifest-path "$manifest" -p d2b --tests
+  if grep -Fq 'TestClient {' "$ROOT/packages/d2bd/src/main.rs"; then
+    log "--> cargo build -p d2bd (legacy CLI-contract daemon harness)"
+    CARGO_TARGET_DIR="$workspace_target_dir" \
+      cargo build --locked --manifest-path "$manifest" -p d2bd
+    d2bd_bin="$workspace_target_dir/debug/d2bd"
+    [ -x "$d2bd_bin" ] || fail "d2bd binary not found at $d2bd_bin"
+    log "--> cargo test -p d2b --tests (CLI-contract with legacy daemon harness)"
+    D2B_FIXTURES="$contract_fixtures" \
+    D2B_TEST_D2BD_BIN="$d2bd_bin" \
+    CARGO_TARGET_DIR="$workspace_target_dir" \
+      cargo test --locked --manifest-path "$manifest" -p d2b --tests
+  else
+    log "--> cargo test -p d2b --tests (CLI-contract, no legacy daemon harness)"
+    D2B_FIXTURES="$contract_fixtures" \
+    CARGO_TARGET_DIR="$workspace_target_dir" \
+      cargo test --locked --manifest-path "$manifest" -p d2b --tests
+  fi
   ok "cargo test -p d2b --tests (CLI-contract layer)"
 else
   log "  SKIP: d2b-contract-tests (nix unavailable to build fixture-smoke)"

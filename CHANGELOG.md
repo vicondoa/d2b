@@ -225,6 +225,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Retired CLI-contract daemon wrappers for the removed legacy `d2bd test-client`,
+  keeping host-check coverage in hermetic CLI cases and audit role enforcement
+  in daemon unit tests; performance readiness now uses socket/version artifacts.
 - Included the privileges parity test in the exact W5 guest-signing retirement
   and protected-path inventories so it can account for the intentionally later
   declarative removal, with matching canonical synthetic fixtures and workspace
