@@ -351,6 +351,8 @@ deprecations ship one minor release before removal.
   provider-registry contract pages explicitly as Diataxis references.
 - Documented the provider-binding consumer fallback required when the strict
   wire schema gains a newly declared variant.
+- Materialized the retired guest-control v1 ttrpc binding marker after the W5
+  service switched entirely to generated v2 bindings.
 - Kept the legacy guest credential-path test strict under immutable `/tmp`
   scratch without treating a sticky world-writable ancestor as production-safe.
 - Tested legacy guest signing through its in-memory HMAC boundary while keeping
