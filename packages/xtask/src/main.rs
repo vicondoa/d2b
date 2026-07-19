@@ -399,23 +399,13 @@ fn run_inventory(output_path: Option<PathBuf>) -> std::process::ExitCode {
 
 fn gen_guest_ttrpc() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let repo_root = repo_root()?;
-    let proto_dir = repo_root.join("packages/d2b-contracts/proto");
-    let proto = proto_dir.join("guest_control.proto");
     let out_dir = repo_root.join("packages/d2b-guestd/src/generated");
     fs::create_dir_all(&out_dir)?;
-
-    ttrpc_codegen::Codegen::new()
-        .out_dir(&out_dir)
-        .input(&proto)
-        .include(&proto_dir)
-        .customize(ttrpc_codegen::Customize {
-            async_server: true,
-            ..Default::default()
-        })
-        .run()?;
-
     let out_file = out_dir.join("guest_control_ttrpc.rs");
-    sanitize_generated_rust(&out_file)?;
+    fs::write(
+        &out_file,
+        "//! Retired: guest service bindings are provided by\n//! `d2b_contracts::v2_services::guest_ttrpc`.\n",
+    )?;
     Ok(vec![out_file])
 }
 

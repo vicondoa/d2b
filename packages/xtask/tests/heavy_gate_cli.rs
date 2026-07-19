@@ -22,13 +22,16 @@ struct Scratch(PathBuf);
 
 impl Scratch {
     fn new(label: &str) -> Self {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("repository root")
-            .to_path_buf();
+        let root = std::env::var_os("D2B_VALIDATION_OUTPUT_DIR")
+            .map(PathBuf::from)
+            .map(|root| root.join("rust-test-scratch/xtask-heavy-gate-cli"))
+            .unwrap_or_else(|| {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/test-scratch")
+            });
+        fs::create_dir_all(&root).expect("scratch root");
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("scratch root mode");
         let path = root.join(format!(
-            ".d2b-heavy-gate-cli-{label}-{}-{}",
+            "{label}-{}-{}",
             std::process::id(),
             NEXT_SCRATCH.fetch_add(1, Ordering::Relaxed)
         ));

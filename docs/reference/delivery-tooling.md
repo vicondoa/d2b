@@ -89,10 +89,10 @@ For the noninteractive setup, propose, update, and retarget procedure, see
 
 ## Wave ownership authority
 
-The post-W4 W5, W6, and W7 branches are checked by tooling built from their
-trusted immediate parent, not by the candidate's copy of `xtask`. Keep a clean
-worktree at the exact parent commit corroborated by Git Town and the candidate's
-ordinary GitHub PR, then run:
+Implementation branches above the shared contract root are checked by tooling
+built from their trusted immediate parent, not by the candidate's copy of
+`xtask`. Keep a clean worktree at the exact parent commit corroborated by Git
+Town and the candidate's ordinary GitHub PR, then run:
 
 ```console
 make -C "$TRUSTED_PARENT_ROOT" wave-policy-check \
@@ -103,11 +103,11 @@ Do not run this target from the wave worktree. The trusted command accepts no
 `--wave` or `--base`: it derives the wave from the candidate's canonical branch
 stem, reads the immediate parent with `git-town config get-parent`, discovers
 the unique open ordinary PR in the policy-pinned repository, and requires its
-local and GitHub base/head refs and OIDs to match. It walks every W5/W6 ancestor
-and corroborates each Git Town edge with that branch's ordinary PR through the
-shared root. Its own clean source worktree must be checked out at the
-candidate's exact immediate base commit. A base equal to its branch `HEAD`
-fails.
+local and GitHub base/head refs and OIDs to match. It walks every configured
+implementation ancestor and corroborates each Git Town edge with that branch's
+ordinary PR through the shared root. Its own clean source worktree must be
+checked out at the candidate's exact immediate base commit. A base equal to its
+branch `HEAD` fails.
 
 The checker reads `delivery/shared-contracts.json` from the verified parent Git
 object, reads the selected per-wave manifest from the candidate `HEAD` object,
@@ -126,22 +126,23 @@ additions or type changes.
 
 The policy's implementation partition is fail-closed across waves:
 
-| Wave | Owned implementation |
+| Partition | Owned implementation |
 | --- | --- |
-| W5 | Core CLI/client/daemon, realm, guest, provider-agent, broker, host, and allocator crate prefixes |
-| W6 | Userd, systemd-user/shell, clipboard, notify/wlcontrol, Wayland, security-key, activation, TTY, and retained-helper crate prefixes |
-| W7 | `nixos-modules/`, `pkgs/`, `examples/`, `templates/`, and Nix eval-test emission |
+| Core runtime | CLI/client/daemon, realm, guest, provider-agent, broker, host, and allocator crate prefixes |
+| User and desktop services | Userd, systemd-user/shell, clipboard, notify/wlcontrol, Wayland, security-key, activation, TTY, and retained-helper crate prefixes |
+| Declarative emission | `nixos-modules/`, `pkgs/`, `examples/`, `templates/`, and Nix eval-test emission |
 
 Allowed prefixes are positive authority, not documentation: a changed
-implementation path must classify to the current wave. Each wave records the
-exact union of the other waves' prefixes as foreign, existing W4 implementation
-prefixes are frozen, unowned paths fail closed, and the prefix root itself
-cannot become a symlink, gitlink, or file. Shared-root contracts and tooling
-stay protected; only explicit documentation paths/prefixes, the current wave
-manifest, and W7's narrow provider-registry/`flake.nix` exceptions are allowed.
-Before linearization all three waves use the shared root as parent. In the final
-W5-to-W6-to-W7 chain, W6 uses W5 and W7 uses W6 as the exact trusted parent;
-partial linearization is rejected.
+implementation path must classify to the current partition. Each partition
+records the exact union of the other partitions' prefixes as foreign, landed
+implementation prefixes are frozen, unowned paths fail closed, and the prefix
+root itself cannot become a symlink, gitlink, or file. Shared-root contracts and
+tooling stay protected; only explicit documentation paths/prefixes, the current
+manifest, and the declarative partition's narrow provider-registry/`flake.nix`
+exceptions are allowed. Before linearization all implementation branches use
+the shared root as parent. In the final dependency chain, each dependent
+partition uses its immediate predecessor as the exact trusted parent; partial
+linearization is rejected.
 
 ## External evidence and check summaries
 

@@ -972,6 +972,14 @@ feature branches; `main` itself is maintained as a by-release history.
 
 ## Disk hygiene contract
 
+- Delivery validators MUST keep cloned sources, Cargo targets, temporary homes,
+  caches, and other execution-only state under the private
+  `/tmp/d2b-validation-execution-<uid>/` root, with sockets under the short
+  `/tmp/d2b-vs-<uid>/` root, never under persistent delivery
+  state or a Copilot session directory. Normal completion must remove both run
+  trees before publishing evidence; each new run prunes trees whose recorded
+  owning process no longer exists. Candidate state retains only bounded
+  validation payloads and immutable evidence.
 - Test eval expressions MUST resolve the flake via `git+file://$ROOT`
   (use the `d2b_flake_ref` helper in `tests/lib.sh`), **never**
   `builtins.getFlake (toString $ROOT)`. A bare path makes Nix use the
@@ -1217,8 +1225,33 @@ contract:
   listener, state/audit root, cgroup partition, and process. The allocator
   pre-binds both listeners and parent-spawns both processes; neither is a PID1
   unit or receives `SD_LISTEN_FDS`.
+- The broker child runs only the fixed `serve-child-realm` argv mode, adopts the
+  allocator listener/bootstrap/cgroup/authority/runtime FDs, requires namespace
+  uid/gid 0, verifies `uid_map`/`gid_map` bind namespace root to its recorded
+  host principal, recovers any prepared guest-material transaction, and serves
+  only realm-scoped guest material before sending readiness. Allocator/global
+  operations remain denied. The unsuffixed local-root broker remains systemd
+  socket activated only.
+- The reciprocal child-controller namespace maps the allocator-recorded broker
+  principal as well as controller root. Its sealed bootstrap authority records
+  the translated broker uid/gid; startup verifies both id maps, rejects
+  overflow ids, and authenticates broker `SO_PEERCRED` with namespace ids.
+- Guest enrollment recovery journals bind prior/new pair digests and the
+  path-free success-audit outcome/dedup key. Startup must append a missing
+  committed success audit exactly once before journal cleanup or readiness.
+  Audit records use V3 payload/checksum plus a separately-fsynced commit
+  trailer; validated V1/V2 journals are archived byte-for-byte before
+  an integrity-bound import marker preserves archive query semantics. V3
+  active files rotate below 64 MiB into deterministic 20-digit segments with
+  bounded retention. Cleanup removes and fsyncs the main recovery journal
+  before sidecars, and journal-absent startup reaps orphan sidecars.
 - The local-root controller supervises and adopts child controller/broker
   pidfds. Each realm controller supervises only its workload DAGs.
+- A controller static private key is accepted only through the fixed
+  `d2b-controller-static-v2` systemd credential for local root or the
+  allocator-issued sealed `controller-static-identity-v2` inherited resource
+  for a child. It remains zeroizing process memory; there is no key path,
+  environment-secret, store generation, or on-demand fallback.
 - There are no per-realm child `.socket`/`.service` units.
 - There are no per-workload systemd templates or units. Unit count does not
   scale with realm or workload count.

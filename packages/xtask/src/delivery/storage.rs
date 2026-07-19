@@ -332,13 +332,6 @@ impl StateLayout {
             .join(format!("{validation_id}.bundle.jsonl"))
     }
 
-    pub fn validation_execution_dir(&self, validation_id: &str, run_id: &str) -> PathBuf {
-        self.candidate
-            .join("execution")
-            .join(validation_id)
-            .join(run_id)
-    }
-
     pub fn panel_request(&self) -> PathBuf {
         self.candidate.join("panel-request.json")
     }

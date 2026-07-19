@@ -279,13 +279,17 @@ pub fn run_validation<P: RepositoryProbe, A: CommandOutputAdapter>(
         .find(|repository| repository.id == required.cwd.repository)
         .ok_or_else(|| DeliveryError::new("validation repository binding is missing"))?;
     let run_id = local_run_id()?;
-    let execution_root = context
-        .layout
-        .validation_execution_dir(validation_id, &run_id);
+    let execution_base = validation_execution_base();
+    create_private_directory(&execution_base)?;
+    prune_stale_validation_executions(&execution_base)?;
+    let execution_root = execution_base.join(validation_execution_name(&run_id)?);
     create_private_directory(&execution_root)?;
-    let socket_root = PathBuf::from("/tmp").join(format!("d2b-validation-{}", &run_id[..24]));
+    let socket_base = validation_socket_base();
+    create_private_directory(&socket_base)?;
+    prune_stale_validation_executions(&socket_base)?;
+    let socket_root = socket_base.join(validation_socket_name(&run_id)?);
     create_private_directory(&socket_root)?;
-    let execution = ValidationExecution::new(execution_root.clone(), socket_root.clone());
+    let mut execution = ValidationExecution::new(vec![execution_root.clone(), socket_root.clone()]);
     let source = execution_root.join("source");
     let output_root = execution_root.join("output");
     create_private_directory(&output_root)?;
@@ -377,9 +381,7 @@ pub fn run_validation<P: RepositoryProbe, A: CommandOutputAdapter>(
     let payload = retained_output_payload(&output.stdout, &output.stderr)?;
     let payload_relative =
         Path::new("validation-output").join(format!("{validation_id}-{run_id}.bin"));
-    let payload_sha256 = context
-        .layout
-        .write_candidate_file(&payload_relative, &payload)?;
+    let payload_sha256 = super::storage::sha256_bytes(&payload);
     let output_capture = EvidenceOutputCapture {
         stdout_bytes: output.stdout.len() as u64,
         stderr_bytes: output.stderr.len() as u64,
@@ -423,7 +425,15 @@ pub fn run_validation<P: RepositoryProbe, A: CommandOutputAdapter>(
         },
     };
     validate_record(&context, &record)?;
-    drop(execution);
+    execution.cleanup()?;
+    let retained_payload_sha256 = context
+        .layout
+        .write_candidate_file(&payload_relative, &payload)?;
+    if retained_payload_sha256 != record.payload_sha256 {
+        return Err(DeliveryError::new(
+            "retained validation payload digest changed",
+        ));
+    }
     let path = evidence_path(&context, validation_id);
     context.layout.write_candidate_json(
         Path::new("validation").join(format!("{validation_id}.json")),
@@ -433,23 +443,182 @@ pub fn run_validation<P: RepositoryProbe, A: CommandOutputAdapter>(
 }
 
 struct ValidationExecution {
-    root: PathBuf,
-    socket_root: PathBuf,
+    roots: Vec<PathBuf>,
 }
 
 impl ValidationExecution {
-    fn new(root: PathBuf, socket_root: PathBuf) -> Self {
-        Self { root, socket_root }
+    fn new(roots: Vec<PathBuf>) -> Self {
+        Self { roots }
+    }
+
+    fn cleanup(&mut self) -> Result<()> {
+        while let Some(root) = self.roots.last() {
+            make_tree_removable(root)?;
+            fs::remove_dir_all(root).map_err(|error| {
+                DeliveryError::new(format!(
+                    "cannot remove transient validation execution tree: {error}"
+                ))
+            })?;
+            self.roots.pop();
+        }
+        Ok(())
     }
 }
 
 impl Drop for ValidationExecution {
     fn drop(&mut self) {
-        let _ = make_tree_writable(&self.root);
-        let _ = fs::remove_dir_all(&self.root);
-        let _ = make_tree_writable(&self.socket_root);
-        let _ = fs::remove_dir_all(&self.socket_root);
+        let _ = self.cleanup();
     }
+}
+
+fn validation_execution_base() -> PathBuf {
+    PathBuf::from("/tmp").join(format!(
+        "d2b-validation-execution-{}",
+        rustix::process::geteuid().as_raw()
+    ))
+}
+
+fn validation_socket_base() -> PathBuf {
+    PathBuf::from("/tmp").join(format!("d2b-vs-{}", rustix::process::geteuid().as_raw()))
+}
+
+fn validation_execution_name(run_id: &str) -> Result<String> {
+    validation_run_name(run_id, 64)
+}
+
+fn validation_socket_name(run_id: &str) -> Result<String> {
+    validation_run_name(run_id, 8)
+}
+
+fn validation_run_name(run_id: &str, token_bytes: usize) -> Result<String> {
+    validate_sha256(run_id, "local validation run ID")?;
+    let pid = std::process::id();
+    let start_ticks = match process_start_ticks(pid)? {
+        ProcessStart::Observed(start_ticks) => start_ticks,
+        ProcessStart::Missing | ProcessStart::Unavailable => {
+            return Err(DeliveryError::new(
+                "cannot read current validator process start identity",
+            ));
+        }
+    };
+    Ok(format!(
+        "v1-{pid:x}-{start_ticks:x}-{}",
+        &run_id[..token_bytes]
+    ))
+}
+
+fn prune_stale_validation_executions(base: &Path) -> Result<()> {
+    for entry in fs::read_dir(base)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if !file_type.is_dir() || file_type.is_symlink() {
+            continue;
+        }
+        let Ok((pid, start_ticks)) = parse_validation_execution_name(&entry.file_name()) else {
+            continue;
+        };
+        match process_start_ticks(pid)? {
+            ProcessStart::Observed(observed) if observed == start_ticks => continue,
+            ProcessStart::Unavailable => continue,
+            ProcessStart::Observed(_) | ProcessStart::Missing => {}
+        }
+        let path = entry.path();
+        make_tree_removable(&path)?;
+        fs::remove_dir_all(&path).map_err(|error| {
+            DeliveryError::new(format!(
+                "cannot prune stale validation execution tree: {error}"
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+fn parse_validation_execution_name(name: &std::ffi::OsStr) -> Result<(u32, u64)> {
+    let name = name
+        .to_str()
+        .ok_or_else(|| DeliveryError::new("validation execution name is not UTF-8"))?;
+    let mut parts = name.split('-');
+    let version = parts.next();
+    let pid = parts.next();
+    let start_ticks = parts.next();
+    let run_id = parts.next();
+    if version != Some("v1") || parts.next().is_some() {
+        return Err(DeliveryError::new(
+            "transient validation root contains an invalid execution name",
+        ));
+    }
+    let pid = u32::from_str_radix(
+        pid.ok_or_else(|| DeliveryError::new("validation execution name is missing a process ID"))?,
+        16,
+    )
+    .map_err(|_| DeliveryError::new("validation execution process ID is invalid"))?;
+    let start_ticks = u64::from_str_radix(
+        start_ticks.ok_or_else(|| {
+            DeliveryError::new("validation execution name is missing process start identity")
+        })?,
+        16,
+    )
+    .map_err(|_| DeliveryError::new("validation execution process identity is invalid"))?;
+    let run_id = run_id
+        .ok_or_else(|| DeliveryError::new("validation execution name is missing a run ID"))?;
+    if !matches!(run_id.len(), 8 | 64)
+        || !run_id
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(DeliveryError::new("validation execution run ID is invalid"));
+    }
+    Ok((pid, start_ticks))
+}
+
+enum ProcessStart {
+    Missing,
+    Observed(u64),
+    Unavailable,
+}
+
+fn process_start_ticks(pid: u32) -> Result<ProcessStart> {
+    let path = PathBuf::from("/proc").join(pid.to_string()).join("stat");
+    let stat = match fs::read_to_string(path) {
+        Ok(stat) => stat,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(ProcessStart::Missing);
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            return Ok(ProcessStart::Unavailable);
+        }
+        Err(error) => {
+            return Err(DeliveryError::new(format!(
+                "cannot read validator process identity: {error}"
+            )));
+        }
+    };
+    let fields = stat
+        .rsplit_once(')')
+        .ok_or_else(|| DeliveryError::new("validator process identity is malformed"))?
+        .1;
+    let start_ticks = fields
+        .split_whitespace()
+        .nth(19)
+        .ok_or_else(|| DeliveryError::new("validator process identity is incomplete"))?
+        .parse::<u64>()
+        .map_err(|_| DeliveryError::new("validator process start identity is invalid"))?;
+    Ok(ProcessStart::Observed(start_ticks))
+}
+
+fn make_tree_removable(path: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_dir() {
+        return Ok(());
+    }
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            make_tree_removable(&entry.path())?;
+        }
+    }
+    Ok(())
 }
 
 fn run_checked<A: CommandOutputAdapter>(
@@ -1240,7 +1409,11 @@ mod tests {
         command::{CommandOutput, CommandOutputAdapter},
         model::GitObjectFormat,
     };
-    use std::{cell::RefCell, fs, os::unix::fs::symlink};
+    use std::{
+        cell::RefCell,
+        fs,
+        os::unix::{fs::symlink, net::UnixListener},
+    };
 
     struct FakeCommand {
         output: CommandOutput,
@@ -1342,6 +1515,63 @@ mod tests {
 
         make_tree_writable(&root).expect("restore writable tree");
         fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn stale_validation_execution_is_pruned_without_touching_live_process() {
+        let base = PathBuf::from("/tmp").join(format!(
+            "d2b-vp-{}-{}",
+            std::process::id(),
+            NEXT_LOCAL_RUN.fetch_add(1, Ordering::Relaxed)
+        ));
+        create_private_directory(&base).expect("execution base");
+        let live_pid = std::process::id();
+        let ProcessStart::Observed(live_start) =
+            process_start_ticks(live_pid).expect("live process identity")
+        else {
+            panic!("live process is observable");
+        };
+        let run_id = "a".repeat(8);
+        let live = base.join(format!("v1-{live_pid:x}-{live_start:x}-{run_id}"));
+        let stale = base.join(format!("v1-ffffffff-1-{}", "b".repeat(8)));
+        let unknown_file = base.join("operator-note");
+        let unknown_directory = base.join("future-format");
+        create_private_directory(&live).expect("live execution");
+        create_private_directory(&stale).expect("stale execution");
+        fs::write(&unknown_file, b"leave unknown entries untouched").expect("unknown file");
+        create_private_directory(&unknown_directory).expect("unknown directory");
+        fs::write(stale.join("output"), b"reproducible build output").expect("stale output");
+        let external = base.with_extension("external");
+        fs::write(&external, b"must not be followed").expect("external target");
+        fs::set_permissions(&external, fs::Permissions::from_mode(0o400))
+            .expect("external target mode");
+        symlink(&external, stale.join("external-link")).expect("execution symlink");
+        let socket = UnixListener::bind(stale.join("socket")).expect("execution socket");
+        drop(socket);
+        fs::set_permissions(stale.join("output"), fs::Permissions::from_mode(0o400))
+            .expect("read-only output");
+        fs::set_permissions(&stale, fs::Permissions::from_mode(0o500))
+            .expect("read-only stale execution");
+
+        prune_stale_validation_executions(&base).expect("prune stale execution");
+
+        assert!(live.is_dir());
+        assert!(!stale.exists());
+        assert!(unknown_file.is_file());
+        assert!(unknown_directory.is_dir());
+        assert_eq!(
+            fs::metadata(&external)
+                .expect("external target metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o400
+        );
+        fs::remove_dir_all(live).expect("remove live execution");
+        fs::remove_file(unknown_file).expect("remove unknown file");
+        fs::remove_dir(unknown_directory).expect("remove unknown directory");
+        fs::remove_dir(base).expect("remove execution base");
+        fs::remove_file(external).expect("remove external target");
     }
 
     #[test]

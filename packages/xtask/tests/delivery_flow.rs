@@ -877,6 +877,23 @@ fn snapshot_base_relative_diff_digests_are_reverified() {
 }
 
 #[test]
+fn local_validation_retains_no_execution_tree_in_candidate_state() {
+    let fixture = Fixture::new("compact-validation-state", ValidationAuthority::LocalRunner);
+    let snapshot = fixture.snapshot();
+    run_validation(
+        &GitProbe::new(ProcessCommandOutput),
+        &ProcessCommandOutput,
+        &fixture.roots,
+        &snapshot,
+        "unit",
+    )
+    .expect("validation evidence");
+    let candidate = snapshot.parent().expect("candidate directory");
+    assert!(!candidate.join("execution").exists());
+    assert!(candidate.join("validation/unit.json").is_file());
+}
+
+#[test]
 fn merge_queue_without_exact_merge_group_authority_fails_closed() {
     let fixture = Fixture::new("merge-queue", ValidationAuthority::LocalRunner);
     let snapshot = fixture.snapshot();
