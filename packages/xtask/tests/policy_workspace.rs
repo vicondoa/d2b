@@ -2038,6 +2038,7 @@ fn w5_guest_signing_retirement_seam_is_exact() {
         "tests/golden/pinned/cli-contract.txt".to_owned(),
         "tests/golden/pinned/cli-host-check.txt".to_owned(),
         "tests/golden/pinned/cli-json.txt".to_owned(),
+        "tests/golden/pinned/cli-json-output-contract.txt".to_owned(),
         "tests/golden/pinned/cli-status.txt".to_owned(),
         "tests/golden/pinned/cli-vm-verbs.txt".to_owned(),
         "tests/golden/pinned/daemon-socket-acl.txt".to_owned(),

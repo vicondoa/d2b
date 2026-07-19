@@ -1,8 +1,7 @@
 status = "retired"
 successor_ids = [
   "tests/unit/gates/drift-check.sh (cargo xtask gen-cli-schemas plus git diff over docs/reference/cli-output/; folded into the consolidated generated-artifact drift runner)",
-  "packages/d2b/tests/cli_json_output_contract.rs::list_output_matches_cli_json_drift_goldens (list --human/list --json goldens plus list v0.4.0 bash subset equivalence)",
-  "packages/d2b/tests/cli_json_output_contract.rs::status_goldens_preserve_v04_bash_subset (committed status-json/status-human/status.v04bash baseline; current daemon-only runtime semantics remain covered by status_contract.rs)",
+  "packages/d2b/tests/cli_json_output_contract.rs::status_goldens_preserve_v04_bash_subset (committed status-json/status-human/status.v04bash baseline; current daemon-only runtime semantics are covered by typed service tests)",
   "packages/d2b/tests/cli_json_output_contract.rs::audit_output_matches_cli_json_drift_goldens (audit --human/--json renderer goldens via daemon auditResponse plus audit v0.4.0 byte-equivalence)",
   "packages/d2b/tests/cli_json_output_contract.rs::host_check_and_auth_status_outputs_match_goldens (host-check and auth-status human/json goldens)",
   "packages/d2b/tests/cli_json_output_contract.rs::vm_lifecycle_dry_run_outputs_match_goldens (vm start/stop/restart human/json dry-run goldens)",
