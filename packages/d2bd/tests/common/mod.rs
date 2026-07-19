@@ -15,45 +15,11 @@ pub fn d2bd_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_d2bd"))
 }
 
-#[derive(Debug, Clone)]
-pub struct TestPeer {
-    pub uid: u32,
-    pub gid: u32,
-    pub username: &'static str,
-    pub groups: &'static str,
-}
-
-impl TestPeer {
-    pub fn launcher() -> Self {
-        let uid = nix::unistd::Uid::current().as_raw();
-        let gid = nix::unistd::Gid::current().as_raw();
-        Self {
-            uid,
-            gid,
-            username: "launcher-user",
-            groups: "wheel",
-        }
-    }
-
-    pub fn admin() -> Self {
-        let uid = nix::unistd::Uid::current().as_raw();
-        let gid = nix::unistd::Gid::current().as_raw();
-        Self {
-            uid,
-            gid,
-            username: "admin-user",
-            groups: "wheel",
-        }
-    }
-
-    pub fn deny(uid: u32, username: &'static str, groups: &'static str) -> Self {
-        Self {
-            uid,
-            gid: uid,
-            username,
-            groups,
-        }
-    }
+pub fn current_username() -> String {
+    uzers::get_current_username()
+        .expect("current uid has a username")
+        .to_string_lossy()
+        .into_owned()
 }
 
 pub struct DaemonFixture {
@@ -352,7 +318,6 @@ impl Drop for SpawnedProcess {
 
 pub fn spawn_d2bd_serve(
     fixture: &DaemonFixture,
-    peer: &TestPeer,
     once: bool,
     state_restore_report: Option<&Path>,
 ) -> SpawnedProcess {
@@ -376,10 +341,6 @@ pub fn spawn_d2bd_serve(
     command
         .arg("--allow-unprivileged-runtime-dir")
         .arg("--no-drop-privileges")
-        .env("D2BD_TEST_PEER_UID", peer.uid.to_string())
-        .env("D2BD_TEST_PEER_GID", peer.gid.to_string())
-        .env("D2BD_TEST_PEER_USERNAME", peer.username)
-        .env("D2BD_TEST_PEER_GROUPS", peer.groups)
         .env("D2B_SKIP_KERNEL_MODULE_CHECK", "1")
         .env("RUST_LOG", "off")
         .stdout(Stdio::null())

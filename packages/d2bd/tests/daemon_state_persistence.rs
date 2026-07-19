@@ -6,18 +6,19 @@ mod daemon_state_persistence {
     use std::process::{Command, Stdio};
 
     use super::common::{
-        DaemonFixture, TestPeer, complete_component_session_handshake, spawn_d2bd_serve,
+        DaemonFixture, complete_component_session_handshake, current_username, spawn_d2bd_serve,
     };
 
     #[test]
     fn restores_pidfd_table_before_component_session_dispatch() {
         let fixture = DaemonFixture::new("daemon-state-persistence.");
-        fixture.write_config(&["launcher-user"], &["admin-user", "launcher-user"]);
+        let username = current_username();
+        fixture.write_config(&[&username], &[&username]);
         let report_json = fixture.root().join("state-restore-report.json");
         let pidfd_table_json = fixture.daemon_state_dir.join("pidfd-table.json");
         let runtime_snapshot_json = fixture.daemon_state_dir.join("corp-vm/runtime.ch.json");
 
-        let initial = spawn_d2bd_serve(&fixture, &TestPeer::launcher(), false, None);
+        let initial = spawn_d2bd_serve(&fixture, false, None);
         initial.kill_and_wait();
         fixture.reset_runtime_endpoints();
 
@@ -49,12 +50,7 @@ mod daemon_state_persistence {
             }),
         );
 
-        let restore = spawn_d2bd_serve(
-            &fixture,
-            &TestPeer::launcher(),
-            true,
-            Some(report_json.as_path()),
-        );
+        let restore = spawn_d2bd_serve(&fixture, true, Some(report_json.as_path()));
         complete_component_session_handshake(&fixture.socket_path);
         let restore_status = restore.wait();
         assert!(

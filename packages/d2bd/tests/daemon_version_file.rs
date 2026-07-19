@@ -7,17 +7,18 @@ mod daemon_version_file {
     use serde_json::Value;
 
     use super::common::{
-        DaemonFixture, TestPeer, complete_component_session_handshake, spawn_d2bd_serve,
+        DaemonFixture, complete_component_session_handshake, current_username, spawn_d2bd_serve,
         wait_for_file,
     };
 
     #[test]
     fn startup_writes_version_file_next_to_public_socket() {
         let fixture = DaemonFixture::new("daemon-version-file.");
-        fixture.write_config(&["launcher-user"], &["admin-user"]);
+        let username = current_username();
+        fixture.write_config(&[&username], &[&username]);
         let version_path = fixture.run_dir.join("version");
 
-        let server = spawn_d2bd_serve(&fixture, &TestPeer::launcher(), true, None);
+        let server = spawn_d2bd_serve(&fixture, true, None);
         wait_for_file(&version_path, Duration::from_secs(15));
 
         let version: Value = serde_json::from_slice(
