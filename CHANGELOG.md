@@ -127,6 +127,8 @@ deprecations ship one minor release before removal.
   separately from the closed `GuestControlSign` retirement.
 - Kept the already-updated privilege parity test frozen in shared-root while
   limiting the W5 signing-retirement proof to paths that actually differ.
+- Normalized blank runs left by canonical Rust item retirement so the policy
+  proof matches the formatter-stable W5 broker source.
 - Made provider-registry bindings non-exhaustive for Rust consumers while
   preserving strict wire variants, and added a registered consumer view whose
   explicit daemon fallback rejects newly declared bindings until an adapter is

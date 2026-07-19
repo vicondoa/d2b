@@ -1617,6 +1617,9 @@ fn transform_broker_wire(parent: &[u8]) -> Result<Vec<u8>, String> {
     ] {
         remove_rust_item(&mut source, marker, label)?;
     }
+    while source.contains("\n\n\n") {
+        source = source.replace("\n\n\n", "\n\n");
+    }
     Ok(source.into_bytes())
 }
 
