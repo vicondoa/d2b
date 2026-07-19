@@ -347,14 +347,14 @@ deprecations ship one minor release before removal.
   contention explicitly instead of depending on scheduler time.
 - Made observability export tests use the configured bounded time window rather
   than a one-second wall-clock race under concurrent Rust gates.
+- Kept privileges parity exact while excluding only the Nix-emitted
+  `GuestControlSign` row until its W7-owned declarative retirement lands.
 - Removed production-compiled peer-identity environment overrides; integration
   tests now exercise the daemon binary through real Unix `SO_PEERCRED`.
 - Matched `/proc/<pid>/cgroup`'s leading-slash format during realm-child
   adoption and added a successful production-verifier regression test.
 - Made launch, list, status, shell, and console emit the common typed
   `daemon-down` envelope before attempting a missing public socket.
-- Made the competing state-generation writer regression coordinate lock
-  contention explicitly instead of depending on scheduler time.
 - Hid the reserved `vm display` namespace from generated help and completions
   until its typed ComponentSession handler exists.
 - Classified the guest-control exec, I/O, shell, and provider contract pages
