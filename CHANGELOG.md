@@ -326,11 +326,11 @@ deprecations ship one minor release before removal.
   preserving strict wire variants, and added a registered consumer view whose
   explicit daemon fallback rejects newly declared bindings until an adapter is
   implemented.
-- Pinned both toolkit distributions and their shared foundation contract gate to
-  the landed canonical W4 source revision, kept historical Git and Cargo-target
-  inventory validation stable after the W5 rebase, and refreshed the exact open
-  sibling PR head, base, ownership, and consumer-distribution fingerprint
-  records, including WeezTerm's canonical client-toolkit facade migration.
+- Pinned the client toolkit distribution to the frozen W6 source and its
+  daemon/user/desktop service clients while retaining the provider toolkit's
+  audited W4 source, refreshed exact Git and Cargo-target inventories and
+  fingerprints, and recorded running desktop-consumer follow-ups against the new
+  client facade.
 - Made dependency-ready wave launch and file-overlap-based component dispatch
   mandatory after shared contract prep, preventing one persistent agent from
   serializing unrelated implementation and review scopes, with shipped-package

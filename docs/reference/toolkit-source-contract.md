@@ -26,9 +26,9 @@ response DTO, session preface, frame codec, handshake, resolver, or provider
 record. The canonical SDK crates remain `publish = false`; crates.io is not a
 fallback.
 
-The current client and provider distributions pin the landed source revision
-`4018d9c9652bd826c2e6a9abccdcdcafb832d944`. Coordination records and contract
-gates must use that full revision rather than a feature-branch commit.
+The client distribution pins the content-frozen source revision
+`9dc902243cdd7aba7ef269988b96f0aae6e037da`. Coordination records and contract
+gates use that full immutable revision.
 
 Source ownership is package-complete rather than module-selected. For each
 canonical package, the inventory includes every non-ignored file reported by
@@ -122,11 +122,13 @@ in the canonical d2b source before a sibling consumes it.
 | Provider toolkit distribution | Immutable source pin, templates, examples, conformance commands, Nix integration, release automation, and provider-author documentation |
 | Desktop and terminal consumers | Repository-local presentation models, UI, source pin, adapter composition, tests, lockfile, and migration documentation |
 
-The client/provider foundation is sufficient to prepare both distributions.
-Live daemon discovery and lifecycle adapters require the content-frozen
-core-control service API. Persistent shells, notifications, desktop actions,
-and Wayland control require the content-frozen user/desktop service API as
-well. Presentation-only work must not guess either pending API.
+The content-frozen control and user/desktop service APIs are included in the
+client distribution through the canonical crates. The canonical client accepts
+an exact route, authenticated endpoint policy, credentials, and owned transport;
+live endpoint and credential acquisition remain integration behavior and must
+not be guessed by a distribution. Persistent-shell, notification, desktop
+action, and Wayland helpers likewise remain outside the distribution until the
+integrated runtime behavior is available.
 
 The audited repository ownership and dependency split is recorded with ADR 0045
 in

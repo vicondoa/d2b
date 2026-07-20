@@ -4,8 +4,8 @@
   "distributionSources": [
     {
       "id": "d2b-client-toolkit",
-      "sourceRevision": "4018d9c9652bd826c2e6a9abccdcdcafb832d944",
-      "fingerprint": "c2c99bdd77ba66948fce81161dcc3efde608eefefb96f28fa934c9f58d96d838"
+      "sourceRevision": "9dc902243cdd7aba7ef269988b96f0aae6e037da",
+      "fingerprint": "5a20cef3a64281df819eeb76bdfe385999755479b467b559653011582fb9c043"
     },
     {
       "id": "d2b-provider-toolkit",
@@ -29,7 +29,8 @@
     {
       "id": "core-control-services",
       "planMilestone": "W5 content freeze",
-      "status": "content-freeze-required",
+      "status": "available",
+      "sourceRevision": "9dc902243cdd7aba7ef269988b96f0aae6e037da",
       "provides": [
         "daemon target resolution and lifecycle service",
         "provider-agent endpoint bootstrap and registration",
@@ -39,7 +40,8 @@
     {
       "id": "edge-user-desktop-services",
       "planMilestone": "W6 content freeze",
-      "status": "content-freeze-required",
+      "status": "available",
+      "sourceRevision": "9dc902243cdd7aba7ef269988b96f0aae6e037da",
       "provides": [
         "persistent shell and systemd-user service behavior",
         "notify and desktop action streams",
@@ -53,7 +55,7 @@
       "repository": "vicondoa/d2b-toolkit",
       "futureRepository": "vicondoa/d2b-client-toolkit",
       "auditedRef": "adr0045-w9-client-toolkit",
-      "auditedRevision": "800c2878533f600d8f085b3d2aafcddb970232b2",
+      "auditedRevision": "3d6b75d47c8df66c1722ea324d64334a127d43ec",
       "defaultBranchRevision": "fde6af8b842718e7150f5056d4eba73093d4ad77",
       "protocolPolicy": "canonical-only",
       "ownership": {
@@ -83,7 +85,8 @@
         "canonical d2b-client source pin and re-export",
         "removal of copied public framing, hello, error, shell, and workload DTOs",
         "presentation-only color and Waybar helpers",
-        "source fingerprint and release packaging"
+        "source fingerprint and release packaging",
+        "content-frozen daemon, guest, user, runtime, shell, notify, Wayland, activation, security-key, clipboard, and TTY service clients"
       ],
       "blockedFeatures": [
         {
@@ -120,7 +123,7 @@
       "repository": "vicondoa/d2b-provider-toolkit",
       "futureRepository": null,
       "auditedRef": "adr0045-w9-provider-toolkit",
-      "auditedRevision": "5f9bada8edf7cf21c6985d72d8936e629149c71a",
+      "auditedRevision": "202d1d64d2578a9198a26b300ded0332cce879d6",
       "defaultBranchRevision": "d6c0b4b29d1a2c69902f6518a459d6c7591deb84",
       "protocolPolicy": "canonical-only",
       "ownership": {
@@ -164,6 +167,12 @@
         "revision": "800c2878533f600d8f085b3d2aafcddb970232b2",
         "sourceRevision": "4018d9c9652bd826c2e6a9abccdcdcafb832d944",
         "fingerprint": "c2c99bdd77ba66948fce81161dcc3efde608eefefb96f28fa934c9f58d96d838"
+      },
+      "followup": {
+        "status": "running",
+        "targetRevision": "3d6b75d47c8df66c1722ea324d64334a127d43ec",
+        "targetSourceRevision": "9dc902243cdd7aba7ef269988b96f0aae6e037da",
+        "targetFingerprint": "5a20cef3a64281df819eeb76bdfe385999755479b467b559653011582fb9c043"
       },
       "ownership": {
         "mode": "exclusive-repository",
@@ -234,6 +243,12 @@
         "sourceRevision": "4018d9c9652bd826c2e6a9abccdcdcafb832d944",
         "fingerprint": "c2c99bdd77ba66948fce81161dcc3efde608eefefb96f28fa934c9f58d96d838"
       },
+      "followup": {
+        "status": "running",
+        "targetRevision": "3d6b75d47c8df66c1722ea324d64334a127d43ec",
+        "targetSourceRevision": "9dc902243cdd7aba7ef269988b96f0aae6e037da",
+        "targetFingerprint": "5a20cef3a64281df819eeb76bdfe385999755479b467b559653011582fb9c043"
+      },
       "ownership": {
         "mode": "exclusive-repository",
         "paths": [
@@ -302,6 +317,12 @@
         "sourceRevision": "4018d9c9652bd826c2e6a9abccdcdcafb832d944",
         "fingerprint": "c2c99bdd77ba66948fce81161dcc3efde608eefefb96f28fa934c9f58d96d838"
       },
+      "followup": {
+        "status": "running",
+        "targetRevision": "3d6b75d47c8df66c1722ea324d64334a127d43ec",
+        "targetSourceRevision": "9dc902243cdd7aba7ef269988b96f0aae6e037da",
+        "targetFingerprint": "5a20cef3a64281df819eeb76bdfe385999755479b467b559653011582fb9c043"
+      },
       "ownership": {
         "mode": "exclusive-file-set",
         "paths": [
@@ -366,7 +387,7 @@
   "globalBlockers": [
     {
       "id": "client-endpoint-bootstrap",
-      "detail": "The d2b-toolkit pull request 6 facade does not yet expose the W5/W6 DaemonClient APIs required by wlcontrol and wlterm. The canonical client accepts an owned route, endpoint policy, credentials, and transport; live public endpoint discovery and bootstrap remain owned by the core-control service API."
+      "detail": "The client toolkit exposes the frozen daemon and user/desktop service clients. It still accepts an owned route, endpoint policy, credentials, and transport; live endpoint and credential acquisition remain integrated runtime behavior rather than distribution-owned discovery."
     },
     {
       "id": "runtime-adapter",
@@ -377,8 +398,8 @@
       "detail": "No canonical general-purpose client wire-redaction wrapper exists. Consumers may keep presentation-only models but cannot carry forward the old wire-serializable wrapper."
     },
     {
-      "id": "content-freeze",
-      "detail": "Consumer branches that use daemon, shell, notify, or Wayland methods cannot finalize until the owning service APIs are content-frozen."
+      "id": "downstream-refresh",
+      "detail": "The wlcontrol, wlterm, and WeezTerm audited heads still consume the prior client-toolkit revision. Their follow-ups are running against the frozen W6 source and current distribution fingerprint."
     }
   ]
 }

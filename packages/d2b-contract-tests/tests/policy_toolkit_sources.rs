@@ -15,6 +15,12 @@ use serde_json::{Value, json};
 const INVENTORY_PATH: &str = "docs/reference/toolkit-source-contract.json";
 const COORDINATION_PATH: &str = "docs/adr/0045-toolkit-sibling-coordination.json";
 const FOUNDATION_SOURCE_REVISION: &str = "4018d9c9652bd826c2e6a9abccdcdcafb832d944";
+const CLIENT_SOURCE_REVISION: &str = "9dc902243cdd7aba7ef269988b96f0aae6e037da";
+const LEGACY_CLIENT_DISTRIBUTION_REVISION: &str = "800c2878533f600d8f085b3d2aafcddb970232b2";
+const LEGACY_CLIENT_DISTRIBUTION_FINGERPRINT: &str =
+    "c2c99bdd77ba66948fce81161dcc3efde608eefefb96f28fa934c9f58d96d838";
+const LEGACY_PROVIDER_DISTRIBUTION_FINGERPRINT: &str =
+    "89f76b9ab63515ecccf46c642676ac5d3c6b4e53bfc642d1dacb69818e3e8588";
 const CURRENT_SOURCE_SUPPLEMENTS: [&str; 2] = [
     "docs/reference/toolkit-source-contract.md",
     "docs/reference/v2-foundation-crates.md",
@@ -257,7 +263,7 @@ fn canonical_source_bytes(rel: &str) -> Vec<u8> {
             .args([
                 "cat-file",
                 "blob",
-                &format!("{FOUNDATION_SOURCE_REVISION}:{rel}"),
+                &format!("{CLIENT_SOURCE_REVISION}:{rel}"),
             ]),
         &format!("read {rel} at canonical source revision"),
     )
@@ -282,7 +288,7 @@ fn git_listed_files_at_source_revision(rel: &str) -> Vec<String> {
                 "-r",
                 "-z",
                 "--name-only",
-                FOUNDATION_SOURCE_REVISION,
+                CLIENT_SOURCE_REVISION,
                 "--",
                 rel,
             ]),
@@ -308,9 +314,19 @@ fn pinned_cargo_targets(package: &str) -> &'static [(&'static str, &'static str,
                 "packages/d2b-contracts/tests/component_session_v2.rs",
             ),
             (
+                "guest_configured_launches_v2",
+                "test",
+                "packages/d2b-contracts/tests/guest_configured_launches_v2.rs",
+            ),
+            (
                 "guest_proto_bindings",
                 "test",
                 "packages/d2b-contracts/tests/guest_proto_bindings.rs",
+            ),
+            (
+                "v2_guest_services_contract",
+                "test",
+                "packages/d2b-contracts/tests/v2_guest_services_contract.rs",
             ),
             (
                 "v2_identity_contract",
@@ -559,28 +575,47 @@ fn refresh_coordination_revisions(inventory: &Value) {
     let mut source = read_repo_file(COORDINATION_PATH);
     let coordination: Value =
         serde_json::from_str(&source).expect("valid toolkit sibling coordination graph");
-    let source_revision = coordination["contractGates"]
+    let inventory_fingerprints = inventory["distributions"]
         .as_array()
-        .expect("contractGates array")
+        .expect("distributions array")
         .iter()
-        .find(|gate| gate["id"] == "client-provider-foundation")
-        .and_then(|gate| gate["sourceRevision"].as_str())
-        .expect("foundation source revision")
-        .to_owned();
-    let records = inventory["distributions"]
+        .map(|distribution| {
+            (
+                distribution["id"].as_str().expect("distribution id"),
+                distribution["fingerprint"]
+                    .as_str()
+                    .expect("distribution fingerprint"),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let records = coordination["distributionSources"]
         .as_array()
-        .expect("distributions array");
+        .expect("distributionSources array");
     let mut block = String::from("  \"distributionSources\": [\n");
     for (index, distribution) in records.iter().enumerate() {
+        let id = distribution["id"].as_str().expect("distribution id");
+        let (source_revision, fingerprint) = if id == "d2b-client-toolkit" {
+            (
+                CLIENT_SOURCE_REVISION,
+                *inventory_fingerprints
+                    .get(id)
+                    .expect("client distribution fingerprint"),
+            )
+        } else {
+            (
+                distribution["sourceRevision"]
+                    .as_str()
+                    .expect("distribution source revision"),
+                distribution["fingerprint"]
+                    .as_str()
+                    .expect("distribution fingerprint"),
+            )
+        };
         let separator = if index + 1 == records.len() { "" } else { "," };
         block.push_str(&format!(
             "    {{\n      \"id\": \"{}\",\n      \"sourceRevision\": \
              \"{}\",\n      \"fingerprint\": \"{}\"\n    }}{separator}\n",
-            distribution["id"].as_str().expect("distribution id"),
-            source_revision,
-            distribution["fingerprint"]
-                .as_str()
-                .expect("distribution fingerprint")
+            id, source_revision, fingerprint
         ));
     }
     block.push_str("  ],\n");
@@ -986,7 +1021,7 @@ fn toolkit_feature_and_generated_binding_inventory_matches_sources() {
             format!("packages/d2b-contracts/proto/v2/{stem}.proto")
         );
         let generated = string_array(&binding["rust"], "binding rust paths");
-        let expected = if stem == "common" {
+        let expected = if matches!(stem, "common" | "terminal") {
             vec![format!(
                 "packages/d2b-contracts/src/generated_v2_services/{stem}.rs"
             )]
@@ -1093,6 +1128,17 @@ fn sibling_coordination_graph_has_disjoint_repository_ownership() {
         source_revision, FOUNDATION_SOURCE_REVISION,
         "foundation source revision must be the landed canonical source"
     );
+    for gate_id in ["core-control-services", "edge-user-desktop-services"] {
+        let gate = gates
+            .iter()
+            .find(|gate| gate["id"] == gate_id)
+            .unwrap_or_else(|| panic!("missing {gate_id} gate"));
+        assert_eq!(gate["status"], "available", "{gate_id} gate status");
+        assert_eq!(
+            gate["sourceRevision"], CLIENT_SOURCE_REVISION,
+            "{gate_id} frozen source revision"
+        );
+    }
     let inventory_fingerprints = inventory["distributions"]
         .as_array()
         .expect("distributions array")
@@ -1115,26 +1161,39 @@ fn sibling_coordination_graph_has_disjoint_repository_ownership() {
         .expect("distributionSources array")
         .iter()
         .map(|source| {
-            assert_eq!(
-                source["sourceRevision"].as_str(),
-                Some(source_revision),
-                "coordination source revision drifted"
-            );
             (
                 source["id"]
                     .as_str()
                     .expect("coordination distribution id")
                     .to_owned(),
-                source["fingerprint"]
-                    .as_str()
-                    .expect("coordination distribution fingerprint")
-                    .to_owned(),
+                (
+                    source["sourceRevision"]
+                        .as_str()
+                        .expect("coordination source revision")
+                        .to_owned(),
+                    source["fingerprint"]
+                        .as_str()
+                        .expect("coordination distribution fingerprint")
+                        .to_owned(),
+                ),
             )
         })
         .collect::<BTreeMap<_, _>>();
     assert_eq!(
-        coordination_sources, inventory_fingerprints,
-        "coordination distribution revisions must match the source inventory"
+        coordination_sources.get("d2b-client-toolkit"),
+        Some(&(
+            CLIENT_SOURCE_REVISION.to_owned(),
+            inventory_fingerprints["d2b-client-toolkit"].clone()
+        )),
+        "client coordination source must match the current source inventory"
+    );
+    assert_eq!(
+        coordination_sources.get("d2b-provider-toolkit"),
+        Some(&(
+            FOUNDATION_SOURCE_REVISION.to_owned(),
+            LEGACY_PROVIDER_DISTRIBUTION_FINGERPRINT.to_owned()
+        )),
+        "provider coordination source must retain its audited distribution pin"
     );
     let component_records = graph["components"].as_array().expect("components array");
     let client_distribution = component_records
@@ -1149,6 +1208,7 @@ fn sibling_coordination_graph_has_disjoint_repository_ownership() {
         .expect("client toolkit audited revision");
     let client_distribution_fingerprint = coordination_sources
         .get("d2b-client-toolkit")
+        .map(|(_, fingerprint)| fingerprint)
         .expect("client toolkit distribution fingerprint");
 
     let expected = BTreeMap::from([
@@ -1209,19 +1269,46 @@ fn sibling_coordination_graph_has_disjoint_repository_ownership() {
                 pin["repository"], client_distribution_repository,
                 "{id} distribution repository"
             );
-            assert_eq!(
-                pin["revision"], client_distribution_revision,
-                "{id} distribution revision"
-            );
-            assert_eq!(
-                pin["sourceRevision"], source_revision,
-                "{id} canonical source revision"
-            );
-            assert_eq!(
-                pin["fingerprint"].as_str(),
-                Some(client_distribution_fingerprint.as_str()),
-                "{id} distribution fingerprint"
-            );
+            let pin_revision = pin["revision"].as_str().expect("consumer revision");
+            if pin_revision == client_distribution_revision {
+                assert_eq!(
+                    pin["sourceRevision"], CLIENT_SOURCE_REVISION,
+                    "{id} canonical source revision"
+                );
+                assert_eq!(
+                    pin["fingerprint"].as_str(),
+                    Some(client_distribution_fingerprint.as_str()),
+                    "{id} distribution fingerprint"
+                );
+            } else {
+                assert_eq!(
+                    pin_revision, LEGACY_CLIENT_DISTRIBUTION_REVISION,
+                    "{id} must consume the audited or follow-up toolkit revision"
+                );
+                assert_eq!(
+                    pin["sourceRevision"], FOUNDATION_SOURCE_REVISION,
+                    "{id} legacy canonical source revision"
+                );
+                assert_eq!(
+                    pin["fingerprint"], LEGACY_CLIENT_DISTRIBUTION_FINGERPRINT,
+                    "{id} legacy distribution fingerprint"
+                );
+                let followup = object(&component["followup"], "consumer follow-up");
+                assert_eq!(followup["status"], "running", "{id} follow-up status");
+                assert_eq!(
+                    followup["targetRevision"], client_distribution_revision,
+                    "{id} follow-up toolkit revision"
+                );
+                assert_eq!(
+                    followup["targetSourceRevision"], CLIENT_SOURCE_REVISION,
+                    "{id} follow-up source revision"
+                );
+                assert_eq!(
+                    followup["targetFingerprint"].as_str(),
+                    Some(client_distribution_fingerprint.as_str()),
+                    "{id} follow-up fingerprint"
+                );
+            }
         }
         assert!(
             !string_array(&ownership["paths"], "ownership paths").is_empty(),
