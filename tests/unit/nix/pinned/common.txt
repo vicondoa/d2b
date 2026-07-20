@@ -331,6 +331,7 @@ store-overlay-emit/ready-marker-is-read-only
 store-overlay-emit/short-id-store-view-path
 store-overlay-emit/virtiofs-live-view-is-read-only
 store-overlay-emit/virtiofs-serves-live-view
+unsafe-local/group-membership-fails-closed-on-non-systemd-user-runtime
 unsafe-local/runtime-user-endpoints-follow-normalized-bindings
 usbip-gating/allocator-lease-request
 usbip-gating/default-off

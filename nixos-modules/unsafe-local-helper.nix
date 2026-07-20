@@ -32,20 +32,21 @@ EOF
     '';
   };
   helperPackage = sourcePackage;
-  unsafeLocalWorkloads = lib.filter
-    (workload: (workload.spec.kind or null) == "unsafe-local")
-    cfg._index.workloads.enabledList;
+  # Canonical authority: a workload is unsafe-local iff its normalized
+  # runtime provider binding resolves to the `systemd-user` implementation.
+  # There is no `spec.kind` field in the closed workload schema (see
+  # nixos-modules/options-realms-workloads.nix); selecting on it is
+  # unreachable dead code that silently excludes every real unsafe-local
+  # workload from this group. Fail-closed here means: no normalized
+  # systemd-user binding => no group membership, matching the pattern
+  # already used by nixos-modules/{bundle-artifacts,clipboard}.nix.
+  isUnsafeLocalWorkload = workload:
+    let runtime = workload.providerBindings.runtime or null;
+    in runtime != null && runtime.implementationId == "systemd-user";
+  unsafeLocalWorkloads =
+    lib.filter isUnsafeLocalWorkload cfg._index.workloads.enabledList;
   unsafeLocalRealmIds =
-    lib.unique (map
-      (workload:
-        let
-          runtime = workload.providerBindings.runtime or null;
-        in
-        if runtime == null || runtime.implementationId != "systemd-user"
-        then throw
-          "unsafe-local workload ${workload.workloadId} requires a normalized systemd-user runtime binding"
-        else workload.realmId)
-      unsafeLocalWorkloads);
+    lib.unique (map (workload: workload.realmId) unsafeLocalWorkloads);
   unsafeLocalRealms =
     map (realmId: cfg._index.realms.enabledById.${realmId}) unsafeLocalRealmIds;
   eligibleUsers = lib.sort lib.lessThan

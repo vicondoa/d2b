@@ -19,8 +19,12 @@ pkgs.testers.runNixOSTest {
       d2b.realms.host = {
         allowedUsers = [ "alice" ];
         policy.allowUnsafeLocal = true;
+        providers.systemd-user = {
+          type = "runtime";
+          implementationId = "systemd-user";
+        };
         workloads.tools = {
-          kind = "unsafe-local";
+          providerRefs.runtime = "systemd-user";
           launcher.items.probe = {
             type = "exec";
             name = "Probe";

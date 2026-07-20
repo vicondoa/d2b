@@ -34,7 +34,12 @@ let
       (attrPathOr [ "runtime" "implementationId" ]
         (if (spec.kind or null) == "local-vm" then "cloud-hypervisor"
          else if (spec.kind or null) == "qemu-media" then "qemu-media"
-         else if (spec.kind or null) == "unsafe-local" then "systemd-user"
+         # There is no unsafe-local `spec.kind` fallback: the closed
+         # workload schema never declares `kind` (see
+         # nixos-modules/options-realms-workloads.nix), so a systemd-user
+         # runtime is only ever resolved from an explicit `spec.runtime.*`
+         # override or, below in `roleRows`, the workload's normalized
+         # provider binding.
          else null)
         spec)
       spec;

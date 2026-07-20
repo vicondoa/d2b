@@ -93,6 +93,38 @@ let
   unsafeClipboardJson =
     builtins.fromJSON unsafeEnabled.config.environment.etc."d2b/clipboard.json".text;
 
+  # nixos-modules/unsafe-local-helper.nix must select `d2b-unsafe-local`
+  # group membership from the workload's normalized `runtime` provider
+  # binding (`implementationId == "systemd-user"`), never from a `spec.kind`
+  # field — the closed workload schema (options-realms-workloads.nix) never
+  # declares `kind`, so a kind-based filter is unreachable dead code that
+  # silently excludes every real unsafe-local workload. This fixture pairs
+  # a systemd-user-bound realm (alice, allowed) with a cloud-hypervisor-bound
+  # realm (bob, allowed in that realm but not systemd-user-backed) to prove
+  # the selection is fail-closed on the typed binding rather than on
+  # realm/user allowance alone.
+  unsafeWrongRuntimeEnabled = evalWith [
+    ({ ... }: {
+      d2b.site.clipboard = {
+        enable = true;
+        niri.external = true;
+        clipd.package = fakeClipd;
+        picker.package = fakePicker;
+      };
+      d2b.realms.guarded = {
+        allowedUsers = [ "bob" ];
+        policy.allowUnsafeLocal = true;
+        providers.runtime = {
+          type = "runtime";
+          implementationId = "cloud-hypervisor";
+        };
+        workloads.tools = {
+          providerRefs.runtime = "runtime";
+        };
+      };
+    })
+  ];
+
   desktopMetadataEval = lib.evalModules {
     modules = [
       ({ lib, ... }: {
@@ -205,6 +237,11 @@ in
           unsafeEnabled.config.d2b._index.realms.enabledList;
       aliceEndpoint = hasUnsafeEndpoint 1000;
       bobEndpoint = hasUnsafeEndpoint 1001;
+      groupDeclared = unsafeEnabled.config.users.groups ? d2b-unsafe-local;
+      aliceInUnsafeLocalGroup =
+        lib.elem "d2b-unsafe-local" unsafeEnabled.config.users.users.alice.extraGroups;
+      bobInUnsafeLocalGroup =
+        lib.elem "d2b-unsafe-local" unsafeEnabled.config.users.users.bob.extraGroups;
       privateIdentity = {
         inherit (unsafePrivateWorkload.identity)
           canonicalTarget providerId realmId runtimeKind workloadId;
@@ -223,6 +260,9 @@ in
       normalizedRowsExcludeAllowedUsers = true;
       aliceEndpoint = true;
       bobEndpoint = false;
+      groupDeclared = true;
+      aliceInUnsafeLocalGroup = true;
+      bobInUnsafeLocalGroup = false;
       privateIdentity = {
         inherit (unsafeWorkload) canonicalTarget realmId workloadId;
         providerId = unsafeRuntimeProvider.providerId;
@@ -231,6 +271,27 @@ in
       privateArgv = [ "firefox" ];
       runtimeSocket = "/run/d2b/u/%U/runtime-agent.sock";
       userServiceSocket = "/run/d2b/u/%U/userd.sock";
+    };
+  };
+
+  "unsafe-local/group-membership-fails-closed-on-non-systemd-user-runtime" = {
+    expr = {
+      # bob is `allowedUsers`-eligible for the "guarded" realm, but that
+      # realm's only workload binds a cloud-hypervisor runtime, not
+      # systemd-user. Selection must stay fail-closed: no normalized
+      # systemd-user binding anywhere means no `d2b-unsafe-local` group
+      # membership for anyone, proving the selection is driven by the
+      # typed runtime binding rather than realm/user allowance alone (and
+      # rather than the removed, always-false `spec.kind` check).
+      groupDeclared =
+        unsafeWrongRuntimeEnabled.config.users.groups ? d2b-unsafe-local;
+      bobInUnsafeLocalGroup =
+        lib.elem "d2b-unsafe-local"
+          unsafeWrongRuntimeEnabled.config.users.users.bob.extraGroups;
+    };
+    expected = {
+      groupDeclared = true;
+      bobInUnsafeLocalGroup = false;
     };
   };
 
