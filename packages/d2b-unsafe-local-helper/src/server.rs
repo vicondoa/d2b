@@ -933,6 +933,525 @@ mod tests {
         request
     }
 
+    fn response_error_kind(response: &ServiceResponse) -> ErrorKind {
+        response.error.as_ref().unwrap().kind.enum_value().unwrap()
+    }
+
+    #[test]
+    fn runtime_decoder_projects_a_complete_valid_request_without_debug_disclosure() {
+        let mut wire = request(17, WireDesiredState::DESIRED_STATE_RUNNING);
+        wire.stream_id = "terminal".to_owned();
+        wire.attachment_indexes = vec![0];
+        let decoded = decode_runtime_request(&wire).unwrap();
+
+        assert_eq!(decoded.request_id, [1; 16]);
+        assert_eq!(decoded.idempotency_key, Some([2; 32]));
+        assert_eq!(decoded.session_generation, 17);
+        assert!(decoded.realm_id == "work");
+        assert!(decoded.workload_id == "shell");
+        assert!(decoded.resource_id == "session");
+        assert!(decoded.operation_id == "operation");
+        assert_eq!(decoded.request_digest, Some([3; 32]));
+        assert!(decoded.stream_id == "terminal");
+        assert_eq!(decoded.attachment_indexes, [0]);
+        assert_eq!(decoded.desired_state, DesiredState::Running);
+        let debug = format!("{decoded:?}");
+        for value in ["work", "shell", "session", "operation", "terminal"] {
+            assert!(!debug.contains(value));
+        }
+    }
+
+    #[test]
+    fn shell_decoder_projects_every_method_and_action_without_debug_disclosure() {
+        let cases = [
+            (ShellMethod::Create, true),
+            (ShellMethod::Attach, true),
+            (ShellMethod::Detach, true),
+            (ShellMethod::List, false),
+            (ShellMethod::Inspect, false),
+            (ShellMethod::Kill, true),
+            (ShellMethod::Cancel, false),
+        ];
+        for (method, mutating) in cases {
+            let mut wire = request(19, WireDesiredState::DESIRED_STATE_UNSPECIFIED);
+            wire.stream_id = "terminal".to_owned();
+            wire.attachment_indexes = vec![0];
+            wire.page_size = 4096;
+            let decoded = decode_shell_request(method, &wire).unwrap();
+
+            assert_eq!(decoded.method, method);
+            assert_eq!(decoded.method.mutating(), mutating);
+            assert_eq!(decoded.request_id, [1; 16]);
+            assert_eq!(decoded.idempotency_key, Some([2; 32]));
+            assert_eq!(decoded.session_generation, 19);
+            assert!(decoded.realm_id == "work");
+            assert!(decoded.workload_id == "shell");
+            assert!(decoded.resource_id == "session");
+            assert!(decoded.operation_id == "operation");
+            assert!(decoded.stream_id == "terminal");
+            assert_eq!(decoded.attachment_indexes, [0]);
+            assert_eq!(decoded.output_ring_bytes, 4096);
+            let debug = format!("{decoded:?}");
+            for value in ["work", "shell", "session", "operation", "terminal"] {
+                assert!(!debug.contains(value));
+            }
+        }
+    }
+
+    #[test]
+    fn decoders_reject_missing_metadata_scope_and_malformed_request_identity() {
+        let mut wire = request(7, WireDesiredState::DESIRED_STATE_PRESENT);
+        wire.metadata = MessageField::none();
+        assert_eq!(
+            decode_runtime_request(&wire).unwrap_err(),
+            ErrorKind::ERROR_KIND_INVALID_REQUEST
+        );
+        assert_eq!(
+            decode_shell_request(ShellMethod::Create, &wire).unwrap_err(),
+            ErrorKind::ERROR_KIND_INVALID_REQUEST
+        );
+
+        let mut wire = request(7, WireDesiredState::DESIRED_STATE_PRESENT);
+        wire.scope = MessageField::none();
+        assert_eq!(
+            decode_runtime_request(&wire).unwrap_err(),
+            ErrorKind::ERROR_KIND_INVALID_REQUEST
+        );
+        assert_eq!(
+            decode_shell_request(ShellMethod::Create, &wire).unwrap_err(),
+            ErrorKind::ERROR_KIND_INVALID_REQUEST
+        );
+
+        for invalid in [Vec::new(), vec![0; 16], vec![1; 15], vec![1; 17]] {
+            let mut wire = request(7, WireDesiredState::DESIRED_STATE_PRESENT);
+            wire.metadata.as_mut().unwrap().request_id = invalid;
+            assert_eq!(
+                decode_runtime_request(&wire).unwrap_err(),
+                ErrorKind::ERROR_KIND_INVALID_REQUEST
+            );
+            assert_eq!(
+                decode_shell_request(ShellMethod::Create, &wire).unwrap_err(),
+                ErrorKind::ERROR_KIND_INVALID_REQUEST
+            );
+        }
+    }
+
+    #[test]
+    fn decoders_reject_malformed_optional_keys_and_runtime_digests() {
+        for invalid in [vec![0; 32], vec![2; 31], vec![2; 33]] {
+            let mut wire = request(7, WireDesiredState::DESIRED_STATE_PRESENT);
+            wire.metadata.as_mut().unwrap().idempotency_key = invalid;
+            assert_eq!(
+                decode_runtime_request(&wire).unwrap_err(),
+                ErrorKind::ERROR_KIND_INVALID_REQUEST
+            );
+            assert_eq!(
+                decode_shell_request(ShellMethod::Create, &wire).unwrap_err(),
+                ErrorKind::ERROR_KIND_INVALID_REQUEST
+            );
+        }
+
+        for invalid in [vec![0; 32], vec![3; 31], vec![3; 33]] {
+            let mut wire = request(7, WireDesiredState::DESIRED_STATE_PRESENT);
+            wire.request_digest = invalid;
+            assert_eq!(
+                decode_runtime_request(&wire).unwrap_err(),
+                ErrorKind::ERROR_KIND_INVALID_REQUEST
+            );
+        }
+
+        let mut wire = request(7, WireDesiredState::DESIRED_STATE_PRESENT);
+        wire.metadata.as_mut().unwrap().idempotency_key.clear();
+        wire.request_digest.clear();
+        let decoded = decode_runtime_request(&wire).unwrap();
+        assert_eq!(decoded.idempotency_key, None);
+        assert_eq!(decoded.request_digest, None);
+        assert_eq!(
+            decode_shell_request(ShellMethod::List, &wire)
+                .unwrap()
+                .idempotency_key,
+            None
+        );
+    }
+
+    #[test]
+    fn runtime_decoder_accepts_only_the_closed_desired_state_set() {
+        let accepted = [
+            (
+                WireDesiredState::DESIRED_STATE_UNSPECIFIED,
+                DesiredState::Unspecified,
+            ),
+            (
+                WireDesiredState::DESIRED_STATE_PRESENT,
+                DesiredState::Present,
+            ),
+            (
+                WireDesiredState::DESIRED_STATE_RUNNING,
+                DesiredState::Running,
+            ),
+            (
+                WireDesiredState::DESIRED_STATE_STOPPED,
+                DesiredState::Stopped,
+            ),
+            (
+                WireDesiredState::DESIRED_STATE_ATTACHED,
+                DesiredState::Attached,
+            ),
+        ];
+        for (wire_state, decoded_state) in accepted {
+            assert_eq!(
+                decode_runtime_request(&request(7, wire_state))
+                    .unwrap()
+                    .desired_state,
+                decoded_state
+            );
+        }
+
+        for rejected in [
+            WireDesiredState::DESIRED_STATE_ABSENT,
+            WireDesiredState::DESIRED_STATE_ENABLED,
+            WireDesiredState::DESIRED_STATE_DISABLED,
+            WireDesiredState::DESIRED_STATE_OPEN,
+            WireDesiredState::DESIRED_STATE_CLOSED,
+            WireDesiredState::DESIRED_STATE_DETACHED,
+        ] {
+            assert_eq!(
+                decode_runtime_request(&request(7, rejected)).unwrap_err(),
+                ErrorKind::ERROR_KIND_INVALID_REQUEST
+            );
+        }
+        let mut wire = request(7, WireDesiredState::DESIRED_STATE_PRESENT);
+        wire.desired_state = EnumOrUnknown::from_i32(i32::MAX);
+        assert_eq!(
+            decode_runtime_request(&wire).unwrap_err(),
+            ErrorKind::ERROR_KIND_INVALID_REQUEST
+        );
+    }
+
+    #[test]
+    fn decoders_preserve_generation_and_attachment_bindings_for_service_validation() {
+        let mut wire = request(0, WireDesiredState::DESIRED_STATE_ATTACHED);
+        wire.attachment_indexes = vec![0, 0, u32::MAX];
+
+        let runtime = decode_runtime_request(&wire).unwrap();
+        assert_eq!(runtime.session_generation, 0);
+        assert_eq!(runtime.attachment_indexes, [0, 0, u32::MAX]);
+
+        let shell = decode_shell_request(ShellMethod::Attach, &wire).unwrap();
+        assert_eq!(shell.session_generation, 0);
+        assert_eq!(shell.attachment_indexes, [0, 0, u32::MAX]);
+    }
+
+    #[test]
+    fn runtime_methods_have_closed_names_and_mutation_actions() {
+        let cases = [
+            (RuntimeMethod::EnsureScope, "EnsureScope", true),
+            (RuntimeMethod::StartProcess, "StartProcess", true),
+            (RuntimeMethod::InspectProcess, "InspectProcess", false),
+            (RuntimeMethod::AdoptProcess, "AdoptProcess", true),
+            (RuntimeMethod::StopProcess, "StopProcess", true),
+            (RuntimeMethod::OpenTerminal, "OpenTerminal", true),
+        ];
+        for (method, name, mutating) in cases {
+            assert_eq!(method.name(), name);
+            assert_eq!(method.mutating(), mutating);
+        }
+    }
+
+    #[test]
+    fn adapters_close_malformed_identity_generation_and_attachment_requests() {
+        if geteuid().is_root() {
+            return;
+        }
+        let dispatch_runtime = |wire| {
+            RuntimeAdapter(Arc::new(SessionServices::new(7)))
+                .dispatch(RuntimeMethod::EnsureScope, wire)
+                .unwrap()
+        };
+        let dispatch_shell = |wire| {
+            ShellAdapter(Arc::new(SessionServices::new(7)))
+                .dispatch(ShellMethod::Attach, wire)
+                .unwrap()
+        };
+
+        let mut malformed_identity = request(7, WireDesiredState::DESIRED_STATE_PRESENT);
+        malformed_identity.scope.as_mut().unwrap().realm_id.clear();
+        assert_eq!(
+            response_error_kind(&dispatch_runtime(malformed_identity)),
+            ErrorKind::ERROR_KIND_UNAUTHORIZED
+        );
+
+        let zero_generation = request(0, WireDesiredState::DESIRED_STATE_PRESENT);
+        assert_eq!(
+            response_error_kind(&dispatch_runtime(zero_generation)),
+            ErrorKind::ERROR_KIND_GENERATION_MISMATCH
+        );
+
+        let mut invalid_attachment = request(7, WireDesiredState::DESIRED_STATE_PRESENT);
+        invalid_attachment.attachment_indexes = vec![0];
+        assert_eq!(
+            response_error_kind(&dispatch_runtime(invalid_attachment)),
+            ErrorKind::ERROR_KIND_INVALID_REQUEST
+        );
+
+        let mut shell_attachment = request(7, WireDesiredState::DESIRED_STATE_UNSPECIFIED);
+        shell_attachment.attachment_indexes = vec![0, 1];
+        assert_eq!(
+            response_error_kind(&dispatch_shell(shell_attachment)),
+            ErrorKind::ERROR_KIND_INVALID_REQUEST
+        );
+    }
+
+    #[test]
+    fn composition_errors_map_to_closed_wire_kinds() {
+        let cases = [
+            (
+                CompositionError::OwnerMismatch,
+                ErrorKind::ERROR_KIND_UNAUTHORIZED,
+            ),
+            (
+                CompositionError::SessionUnavailable,
+                ErrorKind::ERROR_KIND_UNAVAILABLE,
+            ),
+            (
+                CompositionError::InvalidLifecycle,
+                ErrorKind::ERROR_KIND_INVARIANT_VIOLATION,
+            ),
+            (
+                CompositionError::ReconnectLimit,
+                ErrorKind::ERROR_KIND_INVARIANT_VIOLATION,
+            ),
+            (
+                CompositionError::RecoveryMismatch,
+                ErrorKind::ERROR_KIND_INVARIANT_VIOLATION,
+            ),
+            (
+                CompositionError::TeardownFailed,
+                ErrorKind::ERROR_KIND_INVARIANT_VIOLATION,
+            ),
+            (
+                CompositionError::Runtime(RuntimeServiceError::Unauthenticated),
+                ErrorKind::ERROR_KIND_INVALID_REQUEST,
+            ),
+            (
+                CompositionError::Runtime(RuntimeServiceError::ContractMismatch),
+                ErrorKind::ERROR_KIND_INVALID_REQUEST,
+            ),
+            (
+                CompositionError::Runtime(RuntimeServiceError::OwnerMismatch),
+                ErrorKind::ERROR_KIND_UNAUTHORIZED,
+            ),
+            (
+                CompositionError::Runtime(RuntimeServiceError::GenerationMismatch),
+                ErrorKind::ERROR_KIND_GENERATION_MISMATCH,
+            ),
+            (
+                CompositionError::Runtime(RuntimeServiceError::DeadlineExpired),
+                ErrorKind::ERROR_KIND_DEADLINE_EXCEEDED,
+            ),
+            (
+                CompositionError::Runtime(RuntimeServiceError::InvalidRequest),
+                ErrorKind::ERROR_KIND_INVALID_REQUEST,
+            ),
+            (
+                CompositionError::Runtime(RuntimeServiceError::InvalidResolvedProcess),
+                ErrorKind::ERROR_KIND_INVALID_REQUEST,
+            ),
+            (
+                CompositionError::Runtime(RuntimeServiceError::ResolverMismatch),
+                ErrorKind::ERROR_KIND_INVALID_REQUEST,
+            ),
+            (
+                CompositionError::Runtime(RuntimeServiceError::AttachmentMismatch),
+                ErrorKind::ERROR_KIND_INVALID_REQUEST,
+            ),
+            (
+                CompositionError::Runtime(RuntimeServiceError::WaylandUnavailable),
+                ErrorKind::ERROR_KIND_UNAVAILABLE,
+            ),
+            (
+                CompositionError::Runtime(RuntimeServiceError::Unavailable),
+                ErrorKind::ERROR_KIND_UNAVAILABLE,
+            ),
+            (
+                CompositionError::Runtime(RuntimeServiceError::Conflict),
+                ErrorKind::ERROR_KIND_CONFLICT,
+            ),
+            (
+                CompositionError::Runtime(RuntimeServiceError::NotFound),
+                ErrorKind::ERROR_KIND_NOT_FOUND,
+            ),
+            (
+                CompositionError::Runtime(RuntimeServiceError::BackendInvariant),
+                ErrorKind::ERROR_KIND_INVARIANT_VIOLATION,
+            ),
+            (
+                CompositionError::Shell(ShellServiceError::Unauthenticated),
+                ErrorKind::ERROR_KIND_INVALID_REQUEST,
+            ),
+            (
+                CompositionError::Shell(ShellServiceError::ContractMismatch),
+                ErrorKind::ERROR_KIND_INVALID_REQUEST,
+            ),
+            (
+                CompositionError::Shell(ShellServiceError::OwnerMismatch),
+                ErrorKind::ERROR_KIND_UNAUTHORIZED,
+            ),
+            (
+                CompositionError::Shell(ShellServiceError::GenerationMismatch),
+                ErrorKind::ERROR_KIND_GENERATION_MISMATCH,
+            ),
+            (
+                CompositionError::Shell(ShellServiceError::DeadlineExpired),
+                ErrorKind::ERROR_KIND_DEADLINE_EXCEEDED,
+            ),
+            (
+                CompositionError::Shell(ShellServiceError::InvalidRequest),
+                ErrorKind::ERROR_KIND_INVALID_REQUEST,
+            ),
+            (
+                CompositionError::Shell(ShellServiceError::AttachmentMismatch),
+                ErrorKind::ERROR_KIND_INVALID_REQUEST,
+            ),
+            (
+                CompositionError::Shell(ShellServiceError::ScopeOwnershipMismatch),
+                ErrorKind::ERROR_KIND_INVALID_REQUEST,
+            ),
+            (
+                CompositionError::Shell(ShellServiceError::ReservationExhausted),
+                ErrorKind::ERROR_KIND_RESOURCE_EXHAUSTED,
+            ),
+            (
+                CompositionError::Shell(ShellServiceError::AlreadyExists),
+                ErrorKind::ERROR_KIND_CONFLICT,
+            ),
+            (
+                CompositionError::Shell(ShellServiceError::AlreadyAttached),
+                ErrorKind::ERROR_KIND_CONFLICT,
+            ),
+            (
+                CompositionError::Shell(ShellServiceError::NotFound),
+                ErrorKind::ERROR_KIND_NOT_FOUND,
+            ),
+            (
+                CompositionError::Shell(ShellServiceError::RuntimeUnavailable),
+                ErrorKind::ERROR_KIND_UNAVAILABLE,
+            ),
+            (
+                CompositionError::Tty(TtyOneShotError::InvalidPolicy),
+                ErrorKind::ERROR_KIND_INVALID_REQUEST,
+            ),
+            (
+                CompositionError::Tty(TtyOneShotError::InvalidRequest),
+                ErrorKind::ERROR_KIND_INVALID_REQUEST,
+            ),
+            (
+                CompositionError::Tty(TtyOneShotError::OwnerMismatch),
+                ErrorKind::ERROR_KIND_INVALID_REQUEST,
+            ),
+            (
+                CompositionError::Tty(TtyOneShotError::AttachmentMismatch),
+                ErrorKind::ERROR_KIND_INVALID_REQUEST,
+            ),
+            (
+                CompositionError::Tty(TtyOneShotError::ScopeOwnershipMismatch),
+                ErrorKind::ERROR_KIND_INVALID_REQUEST,
+            ),
+            (
+                CompositionError::Tty(TtyOneShotError::CapacityExceeded),
+                ErrorKind::ERROR_KIND_RESOURCE_EXHAUSTED,
+            ),
+            (
+                CompositionError::Tty(TtyOneShotError::RequestConflict),
+                ErrorKind::ERROR_KIND_INVALID_REQUEST,
+            ),
+            (
+                CompositionError::Tty(TtyOneShotError::RuntimeUnavailable),
+                ErrorKind::ERROR_KIND_UNAVAILABLE,
+            ),
+            (
+                CompositionError::Tty(TtyOneShotError::TeardownFailed),
+                ErrorKind::ERROR_KIND_INVARIANT_VIOLATION,
+            ),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(composition_error_kind(error), expected);
+        }
+    }
+
+    #[test]
+    fn error_responses_use_closed_outcomes_and_retry_classes() {
+        let cases = [
+            (
+                ErrorKind::ERROR_KIND_UNAVAILABLE,
+                RetryClass::RETRY_CLASS_AFTER_OBSERVATION,
+            ),
+            (
+                ErrorKind::ERROR_KIND_DEADLINE_EXCEEDED,
+                RetryClass::RETRY_CLASS_SAME_OPERATION,
+            ),
+            (
+                ErrorKind::ERROR_KIND_INVALID_REQUEST,
+                RetryClass::RETRY_CLASS_NEVER,
+            ),
+            (
+                ErrorKind::ERROR_KIND_UNAUTHENTICATED,
+                RetryClass::RETRY_CLASS_NEVER,
+            ),
+            (
+                ErrorKind::ERROR_KIND_UNAUTHORIZED,
+                RetryClass::RETRY_CLASS_NEVER,
+            ),
+            (
+                ErrorKind::ERROR_KIND_NOT_FOUND,
+                RetryClass::RETRY_CLASS_NEVER,
+            ),
+            (
+                ErrorKind::ERROR_KIND_CONFLICT,
+                RetryClass::RETRY_CLASS_NEVER,
+            ),
+            (
+                ErrorKind::ERROR_KIND_CAPABILITY_DENIED,
+                RetryClass::RETRY_CLASS_NEVER,
+            ),
+            (
+                ErrorKind::ERROR_KIND_CANCELLED,
+                RetryClass::RETRY_CLASS_NEVER,
+            ),
+            (
+                ErrorKind::ERROR_KIND_GENERATION_MISMATCH,
+                RetryClass::RETRY_CLASS_NEVER,
+            ),
+            (
+                ErrorKind::ERROR_KIND_RESOURCE_EXHAUSTED,
+                RetryClass::RETRY_CLASS_NEVER,
+            ),
+            (
+                ErrorKind::ERROR_KIND_INVARIANT_VIOLATION,
+                RetryClass::RETRY_CLASS_NEVER,
+            ),
+            (
+                ErrorKind::ERROR_KIND_INTERNAL,
+                RetryClass::RETRY_CLASS_NEVER,
+            ),
+            (
+                ErrorKind::ERROR_KIND_UNSPECIFIED,
+                RetryClass::RETRY_CLASS_NEVER,
+            ),
+        ];
+        for (kind, retry) in cases {
+            let response = error_response(kind);
+            assert_eq!(
+                response.outcome.enum_value().unwrap(),
+                Outcome::OUTCOME_FAILED
+            );
+            let error = response.error.as_ref().unwrap();
+            assert_eq!(error.kind.enum_value().unwrap(), kind);
+            assert_eq!(error.retry.enum_value().unwrap(), retry);
+            assert!(error.correlation_id.is_empty());
+        }
+    }
+
     #[test]
     fn endpoint_policy_is_same_uid_and_runtime_specific() {
         assert!(endpoint_policy(0, 0, 1).is_none());
