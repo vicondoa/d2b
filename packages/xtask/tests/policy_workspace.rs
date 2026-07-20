@@ -1430,9 +1430,9 @@ fn v2_foundation_delivery_authorities_cover_every_tracked_file() {
         &service_migration_fingerprints,
         &authenticated_edge_fingerprints,
     ]
-        .into_iter()
-        .flat_map(|fingerprints| fingerprints.iter().cloned())
-        .collect::<BTreeSet<_>>();
+    .into_iter()
+    .flat_map(|fingerprints| fingerprints.iter().cloned())
+    .collect::<BTreeSet<_>>();
 
     let mut expected = tracked
         .into_iter()
