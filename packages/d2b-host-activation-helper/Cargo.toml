@@ -8,4 +8,6 @@ publish = false
 license.workspace = true
 
 [dependencies]
+# This helper is an activation-time argv/status boundary, not a framework IPC
+# participant. Keep it independent of the daemon, session, and wire crates.
 libc = "0.2"

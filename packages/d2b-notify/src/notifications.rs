@@ -1,50 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Desktop notification structs, pluggable `Notifier` trait, and per-event
-//! notification builders for security-key ceremonies.
+//! Bounded presentation notifications derived from observer events.
 //!
-//! Design mirrors `d2b-clipd/src/notifications.rs` but adds:
-//! - Optional [`NotificationAction`] list for Freedesktop action buttons.
-//! - Per-action nonce tokens (from [`crate::nonce`]) embedded in the action
-//!   key so the daemon can validate callbacks fail-closed.
-//!
-//! The `Notifier` trait is kept pluggable so callers can inject a
-//! `RecordingNotifier` in tests and a `DesktopNotifier` (backed by
-//! `notify-rust` or direct D-Bus) in production.
+//! Notifications contain no callback token or control authority. Authenticated
+//! actions belong to the `InvokeAction` method of `d2b.notify.v2`, not to this
+//! read-model renderer.
 
 use crate::events::{BlockReason, BusyDetail, SecurityKeyEvent};
-use crate::nonce::action_key_for;
-
-/// An action button on a desktop notification.
-///
-/// The `action_key` encodes the nonce in the `d2b-sk-<verb>:<hex>` format
-/// produced by [`crate::nonce::action_key_for`].  The notification daemon
-/// passes this string back on `ActionInvoked`; the callback looks it up with
-/// [`crate::nonce::ActionNonceStore::validate_and_consume`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NotificationAction {
-    /// Full Freedesktop action key including the embedded nonce.
-    pub action_key: String,
-    /// Human-readable label shown on the button.
-    pub label: String,
-}
-
-impl NotificationAction {
-    /// Build a `Cancel request` action for the given pre-minted nonce.
-    pub fn cancel(nonce: &str) -> Self {
-        Self {
-            action_key: action_key_for("cancel", nonce),
-            label: "Cancel request".to_owned(),
-        }
-    }
-
-    /// Build an `Open status` action for the given pre-minted nonce.
-    pub fn open_status(nonce: &str) -> Self {
-        Self {
-            action_key: action_key_for("open-status", nonce),
-            label: "Open status".to_owned(),
-        }
-    }
-}
 
 /// A ready-to-emit desktop notification.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,9 +14,6 @@ pub struct Notification {
     pub summary: String,
     /// Optional longer body text.
     pub body: String,
-    /// Freedesktop action buttons.  Empty when no actions are available or
-    /// when the caller chose not to populate them.
-    pub actions: Vec<NotificationAction>,
 }
 
 /// Pluggable notification sink.
@@ -105,11 +63,7 @@ pub fn sanitize(input: &str, max_chars: usize) -> String {
 // ---------------------------------------------------------------------------
 
 /// Build the notification for a [`SecurityKeyEvent::Started`] event.
-pub fn started(
-    vm_name: &str,
-    rp_id: Option<&str>,
-    actions: Vec<NotificationAction>,
-) -> Notification {
+pub fn started(vm_name: &str, rp_id: Option<&str>) -> Notification {
     let vm = sanitize(vm_name, 64);
     let body = match rp_id {
         Some(rp) => format!(
@@ -121,49 +75,44 @@ pub fn started(
     Notification {
         summary: "Security key request".to_owned(),
         body,
-        actions,
     }
 }
 
 /// Build the notification for a [`SecurityKeyEvent::TouchNeeded`] event.
-pub fn touch_needed(vm_name: &str, actions: Vec<NotificationAction>) -> Notification {
+pub fn touch_needed(vm_name: &str) -> Notification {
     let vm = sanitize(vm_name, 64);
     Notification {
         summary: "Touch your security key".to_owned(),
         body: format!("{vm} is waiting for a physical touch on the security key."),
-        actions,
     }
 }
 
 /// Build the notification for a [`SecurityKeyEvent::Busy`] event.
-pub fn busy(vm_name: &str, detail: &BusyDetail, actions: Vec<NotificationAction>) -> Notification {
+pub fn busy(vm_name: &str, detail: &BusyDetail) -> Notification {
     let vm = sanitize(vm_name, 64);
     let holder = sanitize(&detail.holder_vm, 64);
     Notification {
         summary: "Security key busy".to_owned(),
         body: format!("{vm} is waiting — {holder} is currently using the security key."),
-        actions,
     }
 }
 
 /// Build the notification for a [`SecurityKeyEvent::TimedOut`] event.
-pub fn timed_out(vm_name: &str, actions: Vec<NotificationAction>) -> Notification {
+pub fn timed_out(vm_name: &str) -> Notification {
     let vm = sanitize(vm_name, 64);
     Notification {
         summary: "Security key request timed out".to_owned(),
         body: format!("{vm} did not receive a security key response in time."),
-        actions,
     }
 }
 
 /// Build the notification for a [`SecurityKeyEvent::Failed`] event.
-pub fn failed(vm_name: &str, reason: &str, actions: Vec<NotificationAction>) -> Notification {
+pub fn failed(vm_name: &str, reason: &str) -> Notification {
     let vm = sanitize(vm_name, 64);
     let r = sanitize(reason, 128);
     Notification {
         summary: "Security key request failed".to_owned(),
         body: format!("{vm}: {r}"),
-        actions,
     }
 }
 
@@ -173,16 +122,11 @@ pub fn canceled(vm_name: &str) -> Notification {
     Notification {
         summary: "Security key request canceled".to_owned(),
         body: format!("The security key request from {vm} was canceled."),
-        actions: vec![],
     }
 }
 
 /// Build the notification for a [`SecurityKeyEvent::Blocked`] event.
-pub fn blocked(
-    vm_name: &str,
-    reason: &BlockReason,
-    actions: Vec<NotificationAction>,
-) -> Notification {
+pub fn blocked(vm_name: &str, reason: &BlockReason) -> Notification {
     let vm = sanitize(vm_name, 64);
     let reason_text = match reason {
         BlockReason::KeyNotPresent => "the security key is not present",
@@ -193,44 +137,43 @@ pub fn blocked(
     Notification {
         summary: "Security key request blocked".to_owned(),
         body: format!("{vm}: {reason_text}."),
-        actions,
     }
 }
 
 /// Dispatch a [`SecurityKeyEvent`] to the `Notifier` using the appropriate
-/// builder, attaching the provided `actions`.
+/// bounded presentation builder.
 ///
 /// [`SecurityKeyEvent::Queued`] and [`SecurityKeyEvent::Completed`] are
 /// intentionally not surfaced as desktop notifications: queuing is internal
 /// bookkeeping and completion is the silent success case.
-pub fn emit_for_event<N: Notifier>(
-    notifier: &mut N,
-    event: &SecurityKeyEvent,
-    actions: Vec<NotificationAction>,
-) {
+pub fn notification_for_event(event: &SecurityKeyEvent) -> Option<Notification> {
     if !event.is_user_visible() {
-        return;
+        return None;
     }
     let notification = match event {
-        SecurityKeyEvent::Started { vm_name, rp_id, .. } => {
-            started(vm_name, rp_id.as_deref(), actions)
-        }
-        SecurityKeyEvent::TouchNeeded { vm_name, .. } => touch_needed(vm_name, actions),
+        SecurityKeyEvent::Started { vm_name, rp_id, .. } => started(vm_name, rp_id.as_deref()),
+        SecurityKeyEvent::TouchNeeded { vm_name, .. } => touch_needed(vm_name),
         SecurityKeyEvent::Busy {
             vm_name, detail, ..
-        } => busy(vm_name, detail, actions),
-        SecurityKeyEvent::TimedOut { vm_name, .. } => timed_out(vm_name, actions),
+        } => busy(vm_name, detail),
+        SecurityKeyEvent::TimedOut { vm_name, .. } => timed_out(vm_name),
         SecurityKeyEvent::Failed {
             vm_name, reason, ..
-        } => failed(vm_name, reason, actions),
+        } => failed(vm_name, reason),
         SecurityKeyEvent::Canceled { vm_name, .. } => canceled(vm_name),
         SecurityKeyEvent::Blocked {
             vm_name, reason, ..
-        } => blocked(vm_name, reason, actions),
+        } => blocked(vm_name, reason),
         // Queued and Completed are handled by is_user_visible() returning false above.
-        SecurityKeyEvent::Queued { .. } | SecurityKeyEvent::Completed { .. } => return,
+        SecurityKeyEvent::Queued { .. } | SecurityKeyEvent::Completed { .. } => return None,
     };
-    notifier.notify(notification);
+    Some(notification)
+}
+
+pub fn emit_for_event<N: Notifier>(notifier: &mut N, event: &SecurityKeyEvent) {
+    if let Some(notification) = notification_for_event(event) {
+        notifier.notify(notification);
+    }
 }
 
 #[cfg(test)]
@@ -238,32 +181,23 @@ mod tests {
     use super::*;
     use crate::events::{BlockReason, BusyDetail, SecurityKeyEvent};
 
-    fn no_actions() -> Vec<NotificationAction> {
-        vec![]
-    }
-
-    fn test_nonce() -> String {
-        String::from_utf8(vec![b'a'; crate::nonce::NONCE_BYTES * 2])
-            .expect("test nonce bytes are ASCII")
-    }
-
     #[test]
     fn started_summary_is_stable() {
-        let n = started("personal-dev", None, no_actions());
+        let n = started("personal-dev", None);
         assert_eq!(n.summary, "Security key request");
         assert!(n.body.contains("personal-dev"));
     }
 
     #[test]
     fn started_with_rp_id_includes_it() {
-        let n = started("work-aad", Some("github.com"), no_actions());
+        let n = started("work-aad", Some("github.com"));
         assert!(n.body.contains("github.com"), "rp_id must appear in body");
         assert!(!n.body.contains('\n'));
     }
 
     #[test]
     fn touch_needed_summary_is_stable() {
-        let n = touch_needed("work-aad", no_actions());
+        let n = touch_needed("work-aad");
         assert_eq!(n.summary, "Touch your security key");
         assert!(n.body.contains("work-aad"));
     }
@@ -274,7 +208,7 @@ mod tests {
             holder_vm: "personal-dev".to_owned(),
             waiting_vms: vec![],
         };
-        let n = busy("work-aad", &detail, no_actions());
+        let n = busy("work-aad", &detail);
         assert!(n.body.contains("personal-dev"));
         assert!(n.body.contains("work-aad"));
     }
@@ -294,29 +228,13 @@ mod tests {
     }
 
     #[test]
-    fn cancel_action_has_expected_label() {
-        let nonce = test_nonce();
-        let a = NotificationAction::cancel(&nonce);
-        assert_eq!(a.label, "Cancel request");
-        assert!(a.action_key.starts_with("d2b-sk-cancel:"));
-    }
-
-    #[test]
-    fn open_status_action_has_expected_label() {
-        let nonce = test_nonce();
-        let a = NotificationAction::open_status(&nonce);
-        assert_eq!(a.label, "Open status");
-        assert!(a.action_key.starts_with("d2b-sk-open-status:"));
-    }
-
-    #[test]
     fn emit_for_event_skips_non_user_visible() {
         let mut rec = RecordingNotifier::default();
         let completed = SecurityKeyEvent::Completed {
             session_id: "s1".to_owned(),
             vm_name: "vm1".to_owned(),
         };
-        emit_for_event(&mut rec, &completed, no_actions());
+        emit_for_event(&mut rec, &completed);
         assert!(
             rec.notifications.is_empty(),
             "Completed must not emit a notification"
@@ -327,7 +245,7 @@ mod tests {
             vm_name: "vm1".to_owned(),
             queue_position: 1,
         };
-        emit_for_event(&mut rec, &queued, no_actions());
+        emit_for_event(&mut rec, &queued);
         assert!(
             rec.notifications.is_empty(),
             "Queued must not emit a notification"
@@ -375,7 +293,7 @@ mod tests {
         ];
         let mut rec = RecordingNotifier::default();
         for event in &events {
-            emit_for_event(&mut rec, event, no_actions());
+            emit_for_event(&mut rec, event);
         }
         assert_eq!(rec.notifications.len(), events.len());
     }
@@ -399,7 +317,7 @@ mod tests {
         ];
         let mut rec = RecordingNotifier::default();
         for event in &events {
-            emit_for_event(&mut rec, event, no_actions());
+            emit_for_event(&mut rec, event);
         }
         for n in &rec.notifications {
             assert!(
@@ -411,5 +329,13 @@ mod tests {
                 "notification summary must not contain newline"
             );
         }
+    }
+
+    #[test]
+    fn presentation_notifications_carry_no_callback_authority() {
+        let notification = started("personal", Some("example.test"));
+        let encoded = format!("{notification:?}");
+        assert!(!encoded.contains("nonce"));
+        assert!(!encoded.contains("action"));
     }
 }

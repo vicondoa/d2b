@@ -1,9 +1,4 @@
-use std::{
-    io::{self, Write},
-    os::unix::net::UnixStream,
-    path::Path,
-    time::Duration,
-};
+use std::{io, path::Path};
 
 use d2b_core::workload_identity::WorkloadTarget;
 use d2b_realm_core::WorkloadProviderKind;
@@ -79,27 +74,50 @@ impl ProxyReadinessEvent {
     }
 }
 
-#[derive(Debug)]
 pub struct ReadinessReporter {
     identity: ProxyIdentity,
-    stream: Option<UnixStream>,
+    sink: Option<Box<dyn ReadinessSink>>,
+}
+
+impl std::fmt::Debug for ReadinessReporter {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ReadinessReporter")
+            .field("component_session", &self.sink.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+pub trait ReadinessSink {
+    fn emit(&mut self, event: &ProxyReadinessEvent) -> io::Result<()>;
 }
 
 impl ReadinessReporter {
     pub fn disabled(identity: ProxyIdentity) -> Self {
         Self {
             identity,
-            stream: None,
+            sink: None,
         }
     }
 
-    pub fn connect(identity: ProxyIdentity, path: &Path) -> io::Result<Self> {
-        let stream = UnixStream::connect(path)?;
-        stream.set_write_timeout(Some(Duration::from_millis(250)))?;
+    pub fn component_session(
+        identity: ProxyIdentity,
+        sink: Box<dyn ReadinessSink>,
+    ) -> io::Result<Self> {
+        identity.require_component_session().map_err(|_| {
+            io::Error::new(io::ErrorKind::PermissionDenied, "unauthenticated control")
+        })?;
         Ok(Self {
             identity,
-            stream: Some(stream),
+            sink: Some(sink),
         })
+    }
+
+    pub fn connect(_: ProxyIdentity, _: &Path) -> io::Result<Self> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "legacy pathname readiness control is disabled",
+        ))
     }
 
     pub fn ready(&mut self, stage: ProxyReadinessStage) -> io::Result<()> {
@@ -117,12 +135,10 @@ impl ReadinessReporter {
     }
 
     fn emit(&mut self, event: &ProxyReadinessEvent) -> io::Result<()> {
-        let Some(stream) = self.stream.as_mut() else {
+        let Some(sink) = self.sink.as_mut() else {
             return Ok(());
         };
-        serde_json::to_writer(&mut *stream, event).map_err(io::Error::other)?;
-        stream.write_all(b"\n")?;
-        stream.flush()
+        sink.emit(event)
     }
 }
 
@@ -165,5 +181,12 @@ mod tests {
 
         assert!(json.contains(r#""failure":"first-client-timeout""#));
         assert!(!json.contains("/run/"));
+    }
+
+    #[test]
+    fn legacy_pathname_readiness_has_no_fallback() {
+        let error =
+            ReadinessReporter::connect(identity(), Path::new("target/legacy.sock")).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
     }
 }

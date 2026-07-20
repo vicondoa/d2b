@@ -13,6 +13,8 @@ D2b clipboard policy is enforced by `d2b-clipd`, not by the picker.
   token, and normally a picker selection.
 - Missing intent, missing picker, timeout, crash, audit failure, or policy denial
   closes the target transfer FD without writing.
+- Clipboard control accepts only authenticated host-local ComponentSessions for
+  `d2b.clipboard.v2`; there is no legacy IPC fallback.
 
 The initial MIME allowlist is:
 
@@ -38,6 +40,12 @@ when asymmetric protocol frame caps are invalid.
 `d2b.site.clipboard.ttl.*` declares history, picker request, paste intent,
 pending-FD, and explicit paste action timeouts.
 
+Every mutating service call requires the frozen service contract's idempotency
+key and current ComponentSession generation. Calls are rejected after their
+bounded deadline. Active offers, idempotency receipts, formal audit records,
+operation observations, Wayland MIME names, and Niri metadata collections all
+have fixed caps; reaching a transfer or audit cap fails closed.
+
 ## Lifecycle cleanup
 
 VM lock, pause, stop, and destroy cleanup is declared in
@@ -56,7 +64,9 @@ memory use, held FDs, Niri/bridge status, and latencies. They must not label by
 request id, app title, arbitrary app id, URL, preview, or raw MIME outside the
 closed allowlist. Formal audit delivery is fail-closed for the associated
 transfer; droppable diagnostics and metrics may be coalesced or dropped with a
-counter.
+counter. Clipboard service operations map to the frozen observability operation
+labels (`health`, `attach`, `detach`, `inspect`, and `set-state`) rather than
+introducing service-specific free-form labels.
 
 ## Diagnostic probes
 

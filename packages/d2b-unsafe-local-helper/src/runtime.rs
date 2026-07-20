@@ -472,7 +472,7 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
         wayland_proxy_binary: Option<PathBuf>,
     ) -> Result<Self, RuntimeError> {
         let uid = get_current_uid();
-        if uid == 0 {
+        if uid == 0 || manager.authenticated_uid() != uid {
             return Err(RuntimeError::InvalidIdentity);
         }
         let user = get_user_by_uid(uid).ok_or(RuntimeError::InvalidIdentity)?;

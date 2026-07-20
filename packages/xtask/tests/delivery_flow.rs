@@ -894,6 +894,55 @@ fn local_validation_retains_no_execution_tree_in_candidate_state() {
 }
 
 #[test]
+fn local_validation_disables_persistent_compiler_cache_servers() {
+    let mut fixture = Fixture::new("validation-no-sccache", ValidationAuthority::LocalRunner);
+    let manifest_path = fixture.repository.join("delivery/manifest.json");
+    let mut manifest: DeliveryManifest =
+        serde_json::from_slice(&fs::read(&manifest_path).expect("manifest"))
+            .expect("manifest JSON");
+    manifest.required_validations[0].argv = vec![
+        "sh".to_owned(),
+        "-c".to_owned(),
+        concat!(
+            "test \"$D2B_NO_SCCACHE\" = 1 && ",
+            "test -z \"$RUSTC_WRAPPER\" && ",
+            "test -z \"$CARGO_BUILD_RUSTC_WRAPPER\" && ",
+            "test \"$SCCACHE_DIR\" = \"$D2B_VALIDATION_OUTPUT_DIR/sccache\""
+        )
+        .to_owned(),
+    ];
+    write_source_json(&manifest_path, &manifest);
+    git(&fixture.repository, &["add", "delivery/manifest.json"]);
+    git(
+        &fixture.repository,
+        &[
+            "-c",
+            "commit.gpgSign=false",
+            "commit",
+            "--amend",
+            "--no-edit",
+        ],
+    );
+    let probe = GitProbe::new(ProcessCommandOutput);
+    let head = probe
+        .resolve_commit(&fixture.repository, "feature")
+        .expect("updated head");
+    fixture.graph = StaticGraph {
+        graph: graph(&fixture.status.base_oid, &head),
+    };
+    fixture.status = status(&fixture.status.base_oid, &head);
+    let snapshot = fixture.snapshot();
+    run_validation(
+        &probe,
+        &ProcessCommandOutput,
+        &fixture.roots,
+        &snapshot,
+        "unit",
+    )
+    .expect("validation with isolated compiler cache state");
+}
+
+#[test]
 fn merge_queue_without_exact_merge_group_authority_fails_closed() {
     let fixture = Fixture::new("merge-queue", ValidationAuthority::LocalRunner);
     let snapshot = fixture.snapshot();

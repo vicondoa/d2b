@@ -166,9 +166,15 @@ impl UhidDevice {
             UHID_OUTPUT => {
                 // uhid_output_req layout (packed):
                 //   data[4096], size(__u16), rtype(__u8)
+                if n < 4 + 4099 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "short uhid output event",
+                    ));
+                }
                 let size = u16::from_le_bytes([payload[4096], payload[4097]]) as usize;
                 let rtype = payload[4098];
-                let data = parse_output_report(payload, size);
+                let data = parse_output_report(payload, size)?;
                 UhidEvent::Output {
                     _rtype: rtype,
                     data,
@@ -176,6 +182,12 @@ impl UhidDevice {
             }
             UHID_GET_REPORT => {
                 // uhid_get_report_req: id(__u32), rnum(__u8), rtype(__u8)
+                if n < 4 + 6 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "short uhid get-report event",
+                    ));
+                }
                 let id = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
                 let rnum = payload[4];
                 let rtype = payload[5];
@@ -305,20 +317,26 @@ fn build_input2_event(data: &[u8; CTAPHID_REPORT_LEN]) -> Vec<u8> {
     buf
 }
 
-fn parse_output_report(payload: &[u8], size: usize) -> [u8; CTAPHID_REPORT_LEN] {
-    let start = if size == CTAPHID_REPORT_LEN + 1 && payload.first() == Some(&0) {
-        1
-    } else {
-        0
+fn parse_output_report(payload: &[u8], size: usize) -> io::Result<[u8; CTAPHID_REPORT_LEN]> {
+    let start = match size {
+        CTAPHID_REPORT_LEN => 0,
+        size if size == CTAPHID_REPORT_LEN + 1 && payload.first() == Some(&0) => 1,
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid CTAPHID output report length",
+            ));
+        }
     };
-    let available = payload.len().saturating_sub(start);
-    let copy_len = size
-        .saturating_sub(start)
-        .min(CTAPHID_REPORT_LEN)
-        .min(available);
+    if payload.len() < start + CTAPHID_REPORT_LEN {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "truncated CTAPHID output report",
+        ));
+    }
     let mut data = [0u8; CTAPHID_REPORT_LEN];
-    data[..copy_len].copy_from_slice(&payload[start..start + copy_len]);
-    data
+    data.copy_from_slice(&payload[start..start + CTAPHID_REPORT_LEN]);
+    Ok(data)
 }
 
 fn build_get_report_reply_error(id: u32) -> Vec<u8> {
@@ -448,7 +466,7 @@ mod tests {
         payload[4] = 0x86;
         payload[63] = 0xee;
 
-        let report = parse_output_report(&payload, CTAPHID_REPORT_LEN);
+        let report = parse_output_report(&payload, CTAPHID_REPORT_LEN).unwrap();
 
         assert_eq!(&report[..5], &[0xff, 0xff, 0xff, 0xff, 0x86]);
         assert_eq!(report[63], 0xee);
@@ -465,7 +483,7 @@ mod tests {
         payload[5] = 0x86;
         payload[64] = 0xee;
 
-        let report = parse_output_report(&payload, CTAPHID_REPORT_LEN + 1);
+        let report = parse_output_report(&payload, CTAPHID_REPORT_LEN + 1).unwrap();
 
         assert_eq!(&report[..5], &[0xff, 0xff, 0xff, 0xff, 0x86]);
         assert_eq!(report[63], 0xee);
@@ -474,6 +492,25 @@ mod tests {
     #[test]
     fn fido_descriptor_is_valid_length() {
         assert_eq!(FIDO_HID_DESCRIPTOR.len(), 34);
+    }
+
+    #[test]
+    fn malformed_output_report_is_rejected_not_truncated() {
+        let payload = [0u8; 4099];
+        for size in [0, CTAPHID_REPORT_LEN - 1, CTAPHID_REPORT_LEN + 2, 4096] {
+            assert_eq!(
+                parse_output_report(&payload, size).unwrap_err().kind(),
+                io::ErrorKind::InvalidData
+            );
+        }
+        let mut nonzero_report_id = payload;
+        nonzero_report_id[0] = 1;
+        assert_eq!(
+            parse_output_report(&nonzero_report_id, CTAPHID_REPORT_LEN + 1)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
     }
 
     #[test]

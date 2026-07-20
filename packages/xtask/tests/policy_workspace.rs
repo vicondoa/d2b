@@ -1350,11 +1350,27 @@ fn v2_foundation_crates_are_default_empty_and_not_publishable() {
             "rust-version.workspace = true",
             "publish = false",
             "[features]\ndefault = []",
-            "[lints]\nworkspace = true",
         ] {
             assert!(
                 manifest.contains(required),
                 "{package} manifest is missing {required:?}"
+            );
+        }
+        if package == &"d2b-session-unix" {
+            for required in [
+                "[lints.rust]\nunsafe_code = \"deny\"",
+                "unexpected_cfgs = { level = \"warn\", check-cfg = [\"cfg(test_root)\"] }",
+                "[lints.clippy]\nall = \"warn\"",
+            ] {
+                assert!(
+                    manifest.contains(required),
+                    "{package} manifest is missing scoped activation lint {required:?}"
+                );
+            }
+        } else {
+            assert!(
+                manifest.contains("[lints]\nworkspace = true"),
+                "{package} manifest must inherit workspace lints"
             );
         }
 
@@ -1381,31 +1397,42 @@ fn v2_foundation_crates_are_default_empty_and_not_publishable() {
 }
 
 #[test]
-fn v2_foundation_delivery_fingerprints_cover_every_tracked_file() {
+fn v2_foundation_delivery_authorities_cover_every_tracked_file() {
     let tracked = git_tracked_files();
-    let authority = if tracked
-        .iter()
-        .any(|path| path == "packages/d2b-client/src/daemon_service.rs")
-    {
-        "delivery/manifests/w5.json"
-    } else {
-        "delivery/manifest.json"
+    let integrated: serde_json::Value =
+        serde_json::from_str(&read_repo_file("delivery/manifest.json")).expect("delivery manifest");
+    let service_migration: serde_json::Value =
+        serde_json::from_str(&read_repo_file("delivery/manifests/w5.json"))
+            .expect("service-migration delivery manifest");
+    let authenticated_edge: serde_json::Value =
+        serde_json::from_str(&read_repo_file("delivery/manifests/w6.json"))
+            .expect("authenticated-edge delivery manifest");
+    let foundation_fingerprints = |manifest: &serde_json::Value| {
+        manifest["contract_fingerprints"]
+            .as_array()
+            .expect("contract fingerprints")
+            .iter()
+            .map(|row| row["path"].as_str().expect("fingerprint path").to_owned())
+            .filter(|path| {
+                V2_FOUNDATION_CRATES
+                    .iter()
+                    .any(|package| path.starts_with(&format!("packages/{package}/")))
+                    || path == "docs/reference/v2-foundation-crates.md"
+                    || path == "packages/xtask/tests/policy_workspace.rs"
+            })
+            .collect::<BTreeSet<_>>()
     };
-    let manifest: serde_json::Value =
-        serde_json::from_str(&read_repo_file(authority)).expect("delivery manifest");
-    let actual = manifest["contract_fingerprints"]
-        .as_array()
-        .expect("contract fingerprints")
-        .iter()
-        .map(|row| row["path"].as_str().expect("fingerprint path").to_owned())
-        .filter(|path| {
-            V2_FOUNDATION_CRATES
-                .iter()
-                .any(|package| path.starts_with(&format!("packages/{package}/")))
-                || path == "docs/reference/v2-foundation-crates.md"
-                || path == "packages/xtask/tests/policy_workspace.rs"
-        })
-        .collect::<BTreeSet<_>>();
+    let integrated_fingerprints = foundation_fingerprints(&integrated);
+    let service_migration_fingerprints = foundation_fingerprints(&service_migration);
+    let authenticated_edge_fingerprints = foundation_fingerprints(&authenticated_edge);
+    let actual = [
+        &integrated_fingerprints,
+        &service_migration_fingerprints,
+        &authenticated_edge_fingerprints,
+    ]
+    .into_iter()
+    .flat_map(|fingerprints| fingerprints.iter().cloned())
+    .collect::<BTreeSet<_>>();
 
     let mut expected = tracked
         .into_iter()
@@ -1419,6 +1446,24 @@ fn v2_foundation_delivery_fingerprints_cover_every_tracked_file() {
     expected.insert("packages/xtask/tests/policy_workspace.rs".to_owned());
 
     assert_eq!(actual, expected);
+    for required in [
+        "packages/d2b-session/src/server.rs",
+        "packages/d2b-session-unix/src/systemd.rs",
+    ] {
+        assert!(
+            authenticated_edge_fingerprints.contains(required),
+            "authenticated-edge delivery authority omits {required}"
+        );
+    }
+    for required in [
+        "packages/d2b-client/src/daemon_service.rs",
+        "packages/d2b-client/src/guest_service.rs",
+    ] {
+        assert!(
+            service_migration_fingerprints.contains(required),
+            "service-migration delivery authority omits {required}"
+        );
+    }
 }
 
 #[test]
@@ -1709,7 +1754,7 @@ fn shared_contract_policy_freezes_services_dependencies_and_ownership() {
 }
 
 #[test]
-fn w5_service_dependency_edges_are_locked_and_directional() {
+fn service_dependency_edges_are_locked_and_directional() {
     let policy =
         xtask::wave_policy::read_policy(&repo_root()).expect("shared-contract dependency policy");
     let metadata = workspace_metadata();

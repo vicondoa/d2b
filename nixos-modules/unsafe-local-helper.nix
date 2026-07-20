@@ -3,10 +3,6 @@
 let
   cfg = config.d2b;
   d2bLib = import ./lib.nix { inherit lib; };
-  prebuilt =
-    if cfg.site.usePrebuiltHostTools
-    then import ./prebuilt-packages.nix { inherit pkgs lib; }
-    else { };
   packagesSrc = d2bLib.cleanRustPackagesSource ../packages;
   sourcePackage = pkgs.rustPlatform.buildRustPackage {
     pname = "d2b-unsafe-local-helper";
@@ -35,16 +31,15 @@ EOF
       runHook postInstall
     '';
   };
-  helperPackage =
-    if prebuilt != null && prebuilt ? "d2b-unsafe-local-helper"
-    then prebuilt."d2b-unsafe-local-helper"
-    else sourcePackage;
-  unsafeLocalRealms = lib.filter
-    (realm:
-      lib.any
-        (workload: workload.enable && workload.kind == "unsafe-local")
-        realm.workloads)
-    cfg._index.realms.enabledList;
+  helperPackage = sourcePackage;
+  unsafeLocalRealmIds = lib.unique (map
+    (workload: workload.realmId)
+    (lib.filter
+      (workload: workload.kind == "unsafe-local")
+      cfg._index.realms.workloads.enabled));
+  unsafeLocalRealms = map
+    (realmId: cfg._index.realms.enabledById.${realmId})
+    unsafeLocalRealmIds;
   eligibleUsers = lib.sort lib.lessThan
     (lib.unique (lib.concatMap (realm: realm.allowedUsers) unsafeLocalRealms));
 in
@@ -58,16 +53,38 @@ in
     d2b._hostToolPackages.d2bUnsafeLocalHelper = helperPackage;
     environment.systemPackages = [ helperPackage ];
 
-    systemd.user.services.d2b-unsafe-local-helper = {
-      description = "d2b same-uid unsafe-local runtime helper";
-      wantedBy = [ "default.target" ];
+    systemd.user.sockets.d2b-runtime-systemd-user = {
+      description = "d2b authenticated systemd user runtime endpoint";
+      wantedBy = [ "sockets.target" ];
+      unitConfig.ConditionGroup = "d2b-unsafe-local";
+      socketConfig = {
+        ListenSequentialPacket = "/run/d2b/u/%U/runtime-agent.sock";
+        FileDescriptorName = "runtime-systemd-user";
+        SocketMode = "0600";
+        DirectoryMode = "0700";
+        RemoveOnStop = true;
+        Service = "d2b-runtime-systemd-user.service";
+      };
+    };
+
+    systemd.user.services.d2b-runtime-systemd-user = {
+      description = "d2b authenticated same-uid systemd user runtime";
+      requires = [ "d2b-runtime-systemd-user.socket" ];
+      after = [ "d2b-runtime-systemd-user.socket" ];
       unitConfig.ConditionGroup = "d2b-unsafe-local";
       serviceConfig = {
         Type = "simple";
-        ExecStart = "${helperPackage}/bin/d2b-unsafe-local-helper --wayland-proxy ${cfg._hostToolPackages.d2bWaylandProxy}/bin/d2b-wayland-proxy";
+        ExecStart = "${helperPackage}/bin/d2b-unsafe-local-helper";
         Restart = "on-failure";
+        RestartPreventExitStatus = "78";
         RestartSec = "5s";
         Slice = "app.slice";
+        UMask = "0077";
+        NoNewPrivileges = true;
+        LockPersonality = true;
+        MemoryDenyWriteExecute = true;
+        RestrictRealtime = true;
+        RestrictSUIDSGID = true;
       };
     };
   };

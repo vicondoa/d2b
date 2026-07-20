@@ -39,6 +39,27 @@ spellings for `runtime.systemd-user` and `security-key` therefore use
 the generated ttrpc method and registration paths to the exact ComponentSession
 package names above. Tests fail if either dispatch path retains an underscore.
 
+## Fixed per-user endpoints
+
+The systemd user manager owns the two fixed local `SOCK_SEQPACKET` listeners:
+
+| Unit | Path | Named descriptor | Service package |
+| --- | --- | --- | --- |
+| `d2b-userd.socket` | `/run/d2b/u/%U/userd.sock` | `user-agent` | `d2b.user.v2` |
+| `d2b-runtime-systemd-user.socket` | `/run/d2b/u/%U/runtime-agent.sock` | `runtime-systemd-user` | `d2b.runtime.systemd-user.v2` |
+
+Both sockets are mode `0600` below a mode `0700` per-user directory. The shared
+activation adapter adopts only the exact named descriptor after validating
+`LISTEN_PID`, `LISTEN_FDS`, `LISTEN_FDNAMES`, Unix address family,
+`SOCK_SEQPACKET`, listening state, and `CLOEXEC`. The pathname locates the fixed
+endpoint but supplies no request or identity authority. Ttrpc services run over
+the established ComponentSession driver.
+
+Parent composition must connect each service implementation to those adapters.
+The current direct `d2b-userd` and `d2b-unsafe-local-helper` entrypoints remain
+unavailable and exit with configuration status rather than exposing another
+local protocol.
+
 ## Authority and payload rules
 
 Caller identity is authenticated by ComponentSession and is not a request

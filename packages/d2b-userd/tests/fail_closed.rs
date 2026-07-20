@@ -1,7 +1,7 @@
 use std::process::Command;
 
 #[test]
-fn binary_fails_closed_until_user_socket_loop_lands() {
+fn binary_requires_production_composition_and_activated_user_listener() {
     let bin = env!("CARGO_BIN_EXE_d2b-userd");
 
     let no_args = Command::new(bin).status().expect("run d2b-userd");

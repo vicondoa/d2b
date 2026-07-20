@@ -413,7 +413,7 @@ in
       label = flagValue "--border-label" proxyDefaultArgv;
       target = flagValue "--target" proxyDefaultArgv;
       providerKind = flagValue "--provider-kind" proxyDefaultArgv;
-      realmTarget = flagValue "--realm-target" proxyDefaultArgv;
+      realmTarget = flagValue "--target" proxyDefaultArgv;
       legacyThickness = builtins.elem "--border-thickness" proxyDefaultArgv;
       legacyLabelPosition = builtins.elem "--border-label-position" proxyDefaultArgv;
     };
@@ -508,7 +508,7 @@ in
   };
   "niri-vm-borders/wayland-proxy-realm-workload-target-is-canonical" = {
     # Realm target is <workload>.<realmPath>.d2b for a realm-mapped VM.
-    expr = flagValue "--realm-target" proxyRealmArgv;
+    expr = flagValue "--target" proxyRealmArgv;
     expected = "work.corp.d2b";
   };
   "niri-vm-borders/wayland-proxy-realm-explicit-label-override-preserved" = {
@@ -518,7 +518,7 @@ in
   };
   "niri-vm-borders/wayland-proxy-realm-explicit-label-override-target-unchanged" = {
     # Even with a label override, the realm target is still the canonical form.
-    expr = flagValue "--realm-target" proxyRealmLabelOverrideArgv;
+    expr = flagValue "--target" proxyRealmLabelOverrideArgv;
     expected = "work.corp.d2b";
   };
   "niri-vm-borders/wayland-proxy-ambiguous-realm-uses-vm-defaults" = {
@@ -526,7 +526,7 @@ in
     # to the host-local transitional defaults (vmName label, vmName.local.d2b).
     expr = {
       label = flagValue "--border-label" proxyMultiRealmArgv;
-      realmTarget = flagValue "--realm-target" proxyMultiRealmArgv;
+      realmTarget = flagValue "--target" proxyMultiRealmArgv;
     };
     expected = {
       label = "work";

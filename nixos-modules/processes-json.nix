@@ -629,15 +629,11 @@ EOF
     };
 
   # wayland-proxy runner: d2b-wayland-proxy host-side proxy.
-  # Runs as d2b-<vm>-wlproxy, listens on the per-VM proxy socket,
-  # and connects upstream to the real host compositor socket. The broker
-  # grants the wlproxy principal an ACL on exactly that socket.
+  # Runs as d2b-<vm>-wlproxy with controller-provided listener and upstream
+  # descriptors. It never resolves or self-binds either pathname.
   waylandProxyRunner = providerKind: name: vm:
     let
       vmName = name;
-      filterSock = "/run/d2b-wlproxy/${vmName}/wayland-0";
-      upstreamSock = waylandHostSock;
-      bridgeSock = "${config.d2b.site.clipboard.runtime.bridgeRoot}/${waylandUid}/bridge/${vmName}/${config.d2b.site.clipboard.runtime.bridgeSocketName}";
       appIdPrefix = "d2b.${vmName}.";
       # Realm identity: present when one enabled realm workload row references
       # this VM. Multiple rows are rejected by assertions; no rows use the
@@ -650,6 +646,8 @@ EOF
         if unambiguousRow != null
         then unambiguousRow.canonicalTarget
         else "${vmName}.local.d2b";
+      realmId = if unambiguousRow != null then unambiguousRow.realmId else "local";
+      workloadId = if unambiguousRow != null then unambiguousRow.workloadId else vmName;
       titlePrefix = "[${vmName}] ";
       border = vm.graphics.waylandProxy.border;
       borderColors = cfg._uiColors.vms.${vmName}.border;
@@ -700,17 +698,15 @@ EOF
       ];
       argv = [
         "d2b-${vmName}-wlproxy"
-        "--listen" filterSock
-        "--connect" upstreamSock
+        "--session-generation" "1"
         "--target" realmTarget
         "--provider-kind" providerKind
-        "--vm-name" vmName
+        "--realm-id" realmId
+        "--workload-id" workloadId
+        "--provider-id" "display-wayland"
         "--app-id-prefix" appIdPrefix
-        "--realm-target" realmTarget
         "--title-prefix" titlePrefix
-      ] ++ borderArgs ++ lib.optionals config.d2b.site.clipboard.enable [
-        "--clipd-bridge-socket" bridgeSock
-      ] ++ denyArgs ++ allowArgs ++ maxVersionArgs ++ dmabufAllowArgs ++ dmabufDenyArgs;
+      ] ++ borderArgs ++ denyArgs ++ allowArgs ++ maxVersionArgs ++ dmabufAllowArgs ++ dmabufDenyArgs;
     };
 
   videoBinaryPath = _name:
@@ -1151,20 +1147,6 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         id = "guest-control-health";
         role = "guest-control-health";
         readiness = [ (guestControlHealthReady name) ];
-      })
-      ++ lib.optional vm.usb.securityKey.enable (node name {
-        # The sk-frontend DAG node tracks the readiness of the host-side
-        # vsock socket endpoint that the guest frontend connects to. The
-        # socket is created by the host broker (security-key broker workstream)
-        # at the path <vsock_base>_14320. The node has no runner: the actual
-        # frontend process runs inside the guest VM supervised by the guest's
-        # systemd. The host daemon uses the readiness predicate to determine
-        # when the broker endpoint is available for guest connections.
-        id = "sk-frontend";
-        role = "security-key-frontend";
-        readiness = [
-          (unixSocketExists (vsockSocketForPort "${manifest.stateDir}/vsock.sock" d2bLib.securityKeyVsockPort))
-        ];
       });
       edges = [
         (edge "host-reconcile" "store-virtiofs-preflight" "Host reconciliation must complete before store and virtiofs preflight runs.")
@@ -1199,9 +1181,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       )
       ++ edgesFromNodes preVmmNodeIds "cloud-hypervisor" "Cloud Hypervisor starts only after every prerequisite sidecar is ready."
       ++ lib.optional guestControlEnabled
-        (edge "cloud-hypervisor" "guest-control-health" "Authenticated guest-control Health readiness is probed only after Cloud Hypervisor is running.")
-      ++ lib.optional vm.usb.securityKey.enable
-        (edge "cloud-hypervisor" "sk-frontend" "The sk-frontend vsock endpoint tracking starts only after Cloud Hypervisor creates the base vsock socket.");
+        (edge "cloud-hypervisor" "guest-control-health" "Authenticated guest-control Health readiness is probed only after Cloud Hypervisor is running.");
       invariants = {
         perVmAuditPipeline = true;
         swtpmPreStartFlush = true;

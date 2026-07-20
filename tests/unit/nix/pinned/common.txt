@@ -655,6 +655,7 @@ realm-workloads/realm-row-workload-names
 realm-workloads/realm-with-no-workloads-empty-index
 realm-workloads/unsafe-local-artifacts-and-bundle-v12
 realm-workloads/unsafe-local-helper-user-service-and-eligibility
+realm-workloads/unsafe-local-helper-uses-canonical-workload-index
 realm-workloads/unsafe-local-index-posture-and-items
 realm-workloads/unsafe-local-omitted-from-launcher-v1
 realm-workloads/unsafe-local-private-artifact-carries-argv
@@ -690,10 +691,10 @@ restart-policy/swtpm
 restart-policy/video
 security-key-gating/default-dag-node-absent
 security-key-gating/default-manifest-false
-security-key-gating/enabled-dag-node-present
-security-key-gating/enabled-dag-node-role
+security-key-gating/enabled-host-dag-node-absent
 security-key-gating/enabled-manifest-true
 security-key-gating/guest-declares-plugdev-group
+security-key-gating/guest-frontend-awaits-runtime-session-material
 security-key-gating/guest-udev-uses-plugdev
 security-key-gating/qemu-media-conflict-fires
 security-key-gating/yubikey-conflict-fires

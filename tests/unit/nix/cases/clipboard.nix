@@ -91,11 +91,27 @@ in
       wantedBy = service.wantedBy;
       partOf = service.partOf;
       after = service.after;
+      conditionUser = unitConfig.ConditionUser;
+      socketConditionUsers = map
+        (name:
+          enabled.config.systemd.user.sockets.${name}.unitConfig.ConditionUser)
+        [
+          "d2b-clipd-control"
+          "d2b-clipd-picker"
+          "d2b-clipd-bridge"
+        ];
     };
     expected = {
-      wantedBy = [ "graphical-session.target" ];
+      wantedBy = [ ];
       partOf = [ "graphical-session.target" ];
-      after = [ "graphical-session.target" ];
+      after = [
+        "graphical-session.target"
+        "d2b-clipd-control.socket"
+        "d2b-clipd-picker.socket"
+        "d2b-clipd-bridge.socket"
+      ];
+      conditionUser = "alice";
+      socketConditionUsers = [ "alice" "alice" "alice" ];
     };
   };
 
@@ -118,6 +134,7 @@ in
   "clipboard/user-service-restart-hardening" = {
     expr = {
       restart = serviceConfig.Restart;
+      restartPreventExitStatus = serviceConfig.RestartPreventExitStatus;
       noNewPrivileges = serviceConfig.NoNewPrivileges;
       umask = serviceConfig.UMask;
       lockPersonality = serviceConfig.LockPersonality;
@@ -126,6 +143,7 @@ in
     };
     expected = {
       restart = "on-failure";
+      restartPreventExitStatus = "78";
       noNewPrivileges = true;
       umask = "0077";
       lockPersonality = true;
@@ -137,8 +155,8 @@ in
   "clipboard/execstart-uses-package-and-config" = {
     expr =
       lib.hasInfix "/bin/d2b-clipd" serviceConfig.ExecStart
-      && lib.hasInfix "--config /etc/d2b/clipboard.json" serviceConfig.ExecStart
-      && lib.hasInfix "--bridge-root /run/d2b/clipd" serviceConfig.ExecStart;
+      && !(lib.hasInfix "--config" serviceConfig.ExecStart)
+      && !(lib.hasInfix "--bridge-root" serviceConfig.ExecStart);
     expected = true;
   };
 
@@ -157,7 +175,7 @@ in
         ];
         execStart = weirdExec.config.systemd.user.services.d2b-clipd.serviceConfig.ExecStart;
       in
-      lib.hasInfix "d2b-clipd%%" execStart && lib.hasInfix "d2b-clip-picker$$" execStart;
+      lib.hasInfix "d2b-clipd%%" execStart && !(lib.hasInfix "d2b-clip-picker$$" execStart);
     expected = true;
   };
 
@@ -242,12 +260,20 @@ in
   };
 
   "clipboard/wayland-user-can-traverse-bridge-parents" = {
-    expr = lib.all
-      (rule: builtins.elem rule unsafeEnabled.config.systemd.tmpfiles.rules)
-      [
-        "a+ /run/d2b - - - - u:alice:--x"
-        "a+ /run/d2b/clipd - - - - u:alice:--x"
-      ];
+    expr =
+      let
+        traverseRule = "a+ /run/d2b - - - - u:alice:--x";
+        endpointParentRule = "d /run/d2b/u 0711 root root -";
+        endpointRulesText =
+          lib.concatStringsSep "\n" enabled.config.systemd.tmpfiles.rules;
+      in
+      lib.hasInfix "${traverseRule}\n${endpointParentRule}" endpointRulesText
+      && lib.all
+        (rule: builtins.elem rule unsafeEnabled.config.systemd.tmpfiles.rules)
+        [
+          traverseRule
+          "a+ /run/d2b/clipd - - - - u:alice:--x"
+        ];
     expected = true;
   };
 

@@ -639,9 +639,9 @@ fn host_doctor_private_broker_socket_denial_is_pass() {
 #[test]
 fn host_doctor_inaccessible_broker_parent_is_fail() {
     let mut sandbox = Sandbox::new();
-    let broker_dir = sandbox._tmp.path().join("private-broker-dir");
+    let broker_dir = sandbox._tmp.path().join("p");
     std::fs::create_dir(&broker_dir).expect("create private broker dir");
-    sandbox.broker_socket = broker_dir.join("broker.sock");
+    sandbox.broker_socket = broker_dir.join("s");
     let _broker = listen_seqpacket(&sandbox.broker_socket);
     let mut perms = std::fs::metadata(&broker_dir)
         .expect("stat broker dir")

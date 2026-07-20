@@ -9,7 +9,7 @@
       "id": "github.com/vicondoa/d2b",
       "object_format": "sha1",
       "trunk_ref": "main",
-      "integration_ref": "adr0045-post-w4-contracts"
+      "integration_ref": "adr0045-w6-edge"
     }
   ],
   "stack_nodes": [
@@ -25,6 +25,20 @@
       "repository": "github.com/vicondoa/d2b",
       "branch": "adr0045-post-w4-contracts",
       "pr_number": 315,
+      "external_dependencies": []
+    },
+    {
+      "id": "d2b-w5",
+      "repository": "github.com/vicondoa/d2b",
+      "branch": "adr0045-w5-control",
+      "pr_number": 317,
+      "external_dependencies": []
+    },
+    {
+      "id": "d2b-w6-edge",
+      "repository": "github.com/vicondoa/d2b",
+      "branch": "adr0045-w6-edge",
+      "pr_number": 321,
       "external_dependencies": []
     }
   ],
@@ -103,6 +117,72 @@
     },
     {
       "node": "d2b-w4",
+      "name": "eval-shell-tests",
+      "publisher": {
+        "kind": "check_run",
+        "app_slug": "github-actions",
+        "app_id": 15368,
+        "workflow": "pr-eval-shell-tests",
+        "workflow_id": 289704928
+      }
+    },
+    {
+      "node": "d2b-w5",
+      "name": "check",
+      "publisher": {
+        "kind": "check_run",
+        "app_slug": "github-actions",
+        "app_id": 15368,
+        "workflow": "pr-l1-static-fast",
+        "workflow_id": 286033206
+      }
+    },
+    {
+      "node": "d2b-w5",
+      "name": "eval",
+      "publisher": {
+        "kind": "check_run",
+        "app_slug": "github-actions",
+        "app_id": 15368,
+        "workflow": "eval-with-entra-id",
+        "workflow_id": 283041463
+      }
+    },
+    {
+      "node": "d2b-w5",
+      "name": "eval-shell-tests",
+      "publisher": {
+        "kind": "check_run",
+        "app_slug": "github-actions",
+        "app_id": 15368,
+        "workflow": "pr-eval-shell-tests",
+        "workflow_id": 289704928
+      }
+    },
+    {
+      "node": "d2b-w6-edge",
+      "name": "check",
+      "publisher": {
+        "kind": "check_run",
+        "app_slug": "github-actions",
+        "app_id": 15368,
+        "workflow": "pr-l1-static-fast",
+        "workflow_id": 286033206
+      }
+    },
+    {
+      "node": "d2b-w6-edge",
+      "name": "eval",
+      "publisher": {
+        "kind": "check_run",
+        "app_slug": "github-actions",
+        "app_id": 15368,
+        "workflow": "eval-with-entra-id",
+        "workflow_id": 283041463
+      }
+    },
+    {
+      "node": "d2b-w6-edge",
       "name": "eval-shell-tests",
       "publisher": {
         "kind": "check_run",
@@ -1812,6 +1892,101 @@
       "name": "w4-provider-transport-local-lib",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2b-provider-transport-local/src/lib.rs"
+    },
+    {
+      "name": "w6-clipboard-bridge-composition",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-clipd/src/services/bridge/mod.rs"
+    },
+    {
+      "name": "w6-clipboard-control-composition",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-clipd/src/services/control/mod.rs"
+    },
+    {
+      "name": "w6-clipboard-daemon-composition",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-clipd/src/daemon.rs"
+    },
+    {
+      "name": "w6-clipboard-picker-composition",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-clipd/src/services/picker/mod.rs"
+    },
+    {
+      "name": "w6-edge-ownership-policy",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-userd/tests/edge_composition_policy.rs"
+    },
+    {
+      "name": "w6-edge-segment-preflight",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-userd/tests/edge_segment_preflight.rs"
+    },
+    {
+      "name": "w6-notify-actions-composition",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-notify/src/services/actions/mod.rs"
+    },
+    {
+      "name": "w6-notify-observer-composition",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-notify/src/services/observer/mod.rs"
+    },
+    {
+      "name": "w6-retained-shell-composition",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-guest-shell-runner/src/services/retained_shell/mod.rs"
+    },
+    {
+      "name": "w6-runtime-systemd-user-composition",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-unsafe-local-helper/src/services/runtime_systemd_user/mod.rs"
+    },
+    {
+      "name": "w6-runtime-systemd-user-daemon",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-unsafe-local-helper/src/server.rs"
+    },
+    {
+      "name": "w6-security-key-composition",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-sk-frontend/src/services/security_key/mod.rs"
+    },
+    {
+      "name": "w6-session-server",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session/src/server.rs"
+    },
+    {
+      "name": "w6-session-unix-systemd",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session-unix/src/systemd.rs"
+    },
+    {
+      "name": "w6-shell-supervisor-composition",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-unsafe-local-helper/src/services/shell/mod.rs"
+    },
+    {
+      "name": "w6-tty-composition",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-unsafe-local-helper/src/services/tty/mod.rs"
+    },
+    {
+      "name": "w6-user-agent-composition",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-userd/src/services/user/mod.rs"
+    },
+    {
+      "name": "w6-user-agent-daemon",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-userd/src/services/user/runtime.rs"
+    },
+    {
+      "name": "w6-wayland-composition",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-wayland-proxy/src/services/wayland/mod.rs"
     }
   ]
 }

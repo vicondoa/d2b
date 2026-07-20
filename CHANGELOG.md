@@ -44,6 +44,10 @@ deprecations ship one minor release before removal.
   child-realm controller/broker launches, with strict exact lookup, canonical
   content digests, opaque references, redacted diagnostics, and no ambient
   spawn fallback.
+- Added authenticated fixed user-manager service contracts for user secrets and
+  same-UID runtime operations, descriptor-bound Wayland, clipboard, terminal,
+  and helper flows, authenticated activation and notification adapters, plus an
+  attachment-free security-key report stream.
 - Added W5 core control-service preparation: compile-only composition seams,
   baseline call-graph and legacy-handshake inventory, reserved provider-agent
   executable and service-reference boundaries, and a seven-component exact-file
@@ -99,6 +103,14 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Activated `d2b-userd`, `d2b-clipd`, and the unsafe-local user runtime on their
+  fixed systemd-user `SOCK_SEQPACKET` listeners with authenticated
+  ComponentSession services, bounded shutdown and cancellation, same-UID
+  authorization, clipboard audit/metric draining, and no legacy IPC fallback.
+- Hardened activated-service descriptor validation and inherited stdio remapping,
+  removed unsafe default ACL inheritance from `/run/d2b`, added explicit
+  per-user traversal, and prevented fail-closed service exit 78 from causing
+  restart loops.
 - Bounded broker guest-material audit append work by scanning retained segments
   only during startup validation and after rotation.
 - Migrated `d2b launch` off the legacy hello/`WorkloadOp` handshake onto the
@@ -205,6 +217,10 @@ deprecations ship one minor release before removal.
 - Replaced split allocator lease-id, lease, and idempotency writes with one
   fallible generation-bound transaction, closed detail-free state errors, and
   fail-closed replay semantics for commit and acknowledgement failures.
+- Composed fixed user-manager endpoints for user, runtime, and clipboard
+  services over authenticated component sessions; migrated Wayland bootstrap
+  to pre-bound descriptors and retired the daemon-owned unsafe-local helper and
+  newline-JSON clipboard endpoint paths.
 - Reserved exact W7 ownership for the frozen contract assertions and migration
   pins that must be rewritten or retired atomically with legacy declarative
   source deletion, without opening the rest of the contract-test crate.

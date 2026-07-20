@@ -55,16 +55,16 @@ d2b.realms.host = {
 };
 ```
 
-Rebuild the host, log in through a PAM-backed session, and verify the user
-helper is active:
+Rebuild the host, log in through a PAM-backed session, and verify the
+authenticated runtime and shell services are reachable:
 
 ```bash
-systemctl --user status d2b-unsafe-local-helper.service
 d2b shell tools.host.d2b list
 ```
 
-The daemon must negotiate `unsafe-local-shell-v1`. Version skew fails with an
-update recommendation; there is no static, SSH, or host-shell fallback.
+The runtime agent and supervisor use `d2b.runtime.systemd-user.v2` and
+`d2b.shell.v2` ComponentSessions. Version or identity mismatch fails closed;
+there is no legacy helper protocol, static, SSH, or host-shell fallback.
 
 ## Attach to the default shell
 
@@ -150,6 +150,6 @@ already running as the same workload UID can reach that AF_UNIX socket. Do not
 co-locate untrusted same-UID services with persistent admin shells.
 
 Unsafe-local has the same trust limitation on the host uid. Its shell survives
-CLI, d2bd, and helper reconnects while the verified transient user scope stays
-alive. Logging out terminates the non-lingering user manager and its shells by
-design.
+CLI, d2bd, and runtime-agent reconnects while the verified transient user scope
+stays alive. Logging out terminates the non-lingering user manager and its
+shells by design.

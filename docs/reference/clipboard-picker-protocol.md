@@ -1,166 +1,69 @@
-# Clipboard picker protocol
+# Clipboard picker service
 
 **Diataxis category:** reference.
 
-The picker protocol is a small, versioned, newline-delimited JSON protocol over
-an anonymous AF_UNIX `socketpair()` inherited by the picker process. It is
-public so the separate picker repository can implement it without depending on
-d2b internal Rust crates.
+The picker uses the frozen `d2b.clipboard.picker.v2` service over an
+authenticated local ComponentSession. The generated protobuf service contract
+is the authoritative private service definition:
 
-## Transport
+| Method | Mutating | Purpose |
+| --- | --- | --- |
+| `ListOffers` | no | Return bounded display metadata for offers addressed to one canonical target. |
+| `SelectOffer` | yes | Select one offer for the exact canonical destination. |
+| `CancelSelection` | yes | Cancel one active selection for the exact canonical destination. |
+| `Cancel` | no | Apply the common cancellation contract. |
 
-- `d2b-clipd` creates one socketpair per picker request and supervises the
-  picker process.
-- The inherited FD number is passed through a non-secret argument such as
-  `--ipc-fd=3`.
-- No launch token is needed on the socketpair path.
-- If a future side-channel nonce is added, it must be at least 256 bits from a
-  CSPRNG and must not be passed through argv or environment.
-- Transfer FDs are never sent to the picker.
-- The picker is not given `NIRI_SOCKET`; placement and destination labels arrive
-  in `OpenRequest`.
+Mutating requests require a bounded idempotency key. Every request is bound to
+the authenticated session generation and deadline. Unknown, malformed,
+expired, cross-generation, or target-mismatched input is rejected.
 
-All frames are UTF-8 JSON objects terminated by `\n`. Decoders are bounded.
-`d2b.site.clipboard.protocol.pickerToClipdMaxFrameBytes` caps picker-to-daemon
-frames, while `clipdToPickerMaxFrameBytes` caps larger daemon-to-picker
-`OpenRequest` frames. Unknown message kinds are rejected. Unknown fields in
-stable v1 daemon-received messages are rejected.
+## Transport and authentication
 
-## Version 1 messages
+`d2b-clipd` supervises the picker and gives it a connected local transport
+descriptor. The descriptor is used only to establish ComponentSession with:
 
-### `ClientHello` picker → clipd
+- service package `d2b.clipboard.picker.v2`;
+- endpoint purpose `clipboard-picker`;
+- endpoint role `clipboard-picker`; and
+- the frozen local transport, limit, and attachment policy.
 
-```json
-{"type":"client_hello","protocol_version_range":{"min":1,"max":1},"picker_version":"0.1.0"}
-```
+The picker has no socket pathname, launch token, or custom version negotiation.
+ComponentSession owns packet framing, authentication, reconnect generation,
+deadlines, and request bounds. Clipboard picker requests carry no attachments;
+clipboard transfer descriptors are never sent to the picker.
 
-### `OpenRequest` clipd → picker
+## Typed selections
 
-Contains the selected protocol version, `clipd_version`, request id,
-destination metadata, requested MIME type, expiry, placement hints, and
-filtered candidates. Clipboard payload bytes are not included.
+Offer, selection, and operation identifiers are opaque, non-empty ASCII values
+of at most 64 bytes. A list returns no more than 64 offers. The retained offer
+set is bounded, as are MIME types, application labels, previews, and optional
+PNG thumbnails.
 
-```json
-{
-  "type": "open_request",
-  "selected_protocol_version": 1,
-  "clipd_version": "0.0.0-bootstrap",
-  "picker_version": "0.1.0",
-  "request_id": "opaque",
-  "destination": {
-    "realm": "Personal",
-    "realm_kind": "vm",
-    "canonical_target": "firefox.personal.local.d2b",
-    "application": "Firefox",
-    "app_id": "org.mozilla.firefox",
-    "title": null,
-    "workspace": "dev",
-    "output": "DP-1",
-    "attribution": "exact_client",
-    "capability_preflight": {
-      "status": "satisfied",
-      "required_capabilities": ["clipboard"],
-      "advertised_capabilities": ["clipboard"],
-      "missing_capabilities": [],
-      "authority": "picker_clipd"
-    }
-  },
-  "requested_mime_type": "text/plain",
-  "expires_at_unix_ms": 1760000000000,
-  "placement_hints": null,
-  "candidates": [
-    {
-      "entry_id": "opaque-entry",
-      "source_realm": "Host",
-      "source_realm_kind": "host",
-      "source_canonical_target": null,
-      "source_app": "Text Editor",
-      "source_app_id": "org.gnome.TextEditor",
-      "source_attribution": "focused_window_guess",
-      "preview_text": null,
-      "content_type": "text/plain",
-      "timestamp_unix_ms": 1760000000000,
-      "thumbnail_png_base64": null,
-      "byte_count": 128,
-      "confirmation_required": false,
-      "capability_preflight": {
-        "status": "satisfied",
-        "required_capabilities": ["clipboard"],
-        "advertised_capabilities": ["clipboard"],
-        "missing_capabilities": [],
-        "authority": "picker_clipd"
-      }
-    }
-  ]
-}
-```
+Workload destinations and sources use parsed canonical
+`<workload>.<realm-path>.d2b` targets. Host-origin offers use the explicit host
+target variant rather than an empty or guessed workload string. Selection and
+cancellation require an exact destination match; display labels, application
+ids, titles, and workspace names never supply routing authority.
 
-### `Select` picker → clipd
+## Picker-visible metadata
 
-```json
-{"type":"select","selected_protocol_version":1,"request_id":"opaque","entry_id":"opaque"}
-```
+The picker may receive:
 
-### `Cancel` picker → clipd
+- opaque offer id;
+- canonical source and destination identity;
+- closed provider kind for workload targets;
+- allowlisted MIME type and optional byte count;
+- bounded plain-text preview;
+- optional capped PNG thumbnail;
+- bounded source-application label;
+- closed attribution and capability-preflight states;
+- observation and expiry times; and
+- whether confirmation is required.
 
-```json
-{"type":"cancel","selected_protocol_version":1,"request_id":"opaque"}
-```
+Preview text rejects terminal control sequences and non-display controls.
+Metadata that exceeds a bound is rejected rather than truncated into a
+different meaning. Expired offers and offers for another destination are not
+listed. A denied or unknown capability preflight cannot be selected.
 
-### `Error` / `Close` clipd → picker
-
-Carries a bounded reason code and optional request id. It must not include raw
-clipboard contents.
-
-## Placement hints
-
-`placement_hints` is optional display metadata generated by `d2b-clipd`.
-The picker may use it to place a Layer Shell surface near the pointer or on the
-destination output, but placement never affects policy. Fields are:
-
-- `pointer_x`, `pointer_y`: optional compositor-local pointer coordinates.
-- `output_width`, `output_height`: optional current-output dimensions.
-- `overlay_width`, `overlay_height`: desired picker size.
-- `output`: optional output label, such as a Niri output name.
-
-## Realm identity and capability metadata
-
-`canonical_target` and `source_canonical_target` are optional canonical realm
-addresses in `<workload>.<realm>.d2b` form. For current local VM clipboard
-sources, `d2b-clipd` emits `<vm>.local.d2b`; host clipboard sources use `null`.
-These fields are asserted by d2b metadata, not by guest-provided titles or app
-ids.
-
-`capability_preflight` records the bounded preflight status that the picker may
-display. Clipboard transfers are still fulfilled only by d2b-clipd after picker
-selection; `authority: "picker_clipd"` means direct host/VM clipboard offers are
-discovery metadata only.
-
-## Candidate metadata
-
-Candidates may include:
-
-- `entry_id`
-- `source_realm`
-- `source_realm_kind` (`host`, `vm`)
-- `source_canonical_target`
-- `source_app`
-- `source_app_id`
-- `source_attribution` (`exact_client`, `focused_window_guess`,
-  `cache_stale_focused_window_guess`, `broker_injected_debug`)
-- bounded, redacted `preview_text`
-- closed-allowlist `content_type`
-- `timestamp_unix_ms`
-- optional capped PNG thumbnail metadata
-- `confirmation_required`
-- `capability_preflight`
-
-Text and HTML previews are rendered as plain text only. ANSI escapes,
-non-printable controls, rich HTML, Pango markup, and remote resources are not
-allowed. Guest-origin image thumbnails are not sent in v1; guest image entries
-use safe metadata such as byte count.
-
-## Schema
-
-The v1 JSON schema is committed at
-[`schemas/clipboard-picker-protocol-v1.json`](./schemas/clipboard-picker-protocol-v1.json).
+The picker never receives clipboard payload bytes, transfer descriptors,
+`NIRI_SOCKET`, data-control authority, or policy authority.

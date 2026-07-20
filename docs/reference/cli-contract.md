@@ -71,11 +71,10 @@ default-item selection signal on the wire, so `--item` is required — the CLI
 never guesses `defaultItem` or a sole item on the caller's behalf. The
 resulting terminal request never carries argv, uid, environment, cwd, display
 paths, process ids, or unit names; the CLI opens it through the same
-authenticated `ComponentSession` v2 path used by `vm exec` and `shell`, and
-never negotiates the retired hello/`WorkloadOp` handshake. There is no
-host-shell or SSH fallback: what the selected item actually runs (an exec, a
-persistent shell, or another provider-defined action) is a daemon/provider
-decision, not a CLI-side branch.
+authenticated `ComponentSession` v2 path used by `vm exec` and `shell`. There
+is no host-shell or SSH fallback: what the selected item actually runs (an
+exec, a persistent shell, or another provider-defined action) is a
+daemon/provider decision, not a CLI-side branch.
 
 For local-VM exec items, d2bd derives an opaque guest exec id from the
 authenticated requester, operation id, target, and item id. Guestd persists that
@@ -268,22 +267,19 @@ warning directing operators to `d2b clipboard arm`.
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | The picker opened, or picker launch/handshake failed and `d2b-clipd` successfully armed the native paste fallback. | — |
-| `2` | The control socket was unavailable, malformed, timed out, or returned a daemon error. | [`usage`](./error-codes.md#usage) |
+| `0` | Reserved for a completed authenticated picker request. | — |
+| `2` | Authenticated picker control is unavailable. | [`usage`](./error-codes.md#usage) |
 
-The CLI connects to `$XDG_RUNTIME_DIR/d2b-clipd/clipd.sock`, sends one bounded
-arm request, and applies five-second read and write deadlines to the
-control socket so a wedged `d2b-clipd` cannot hang the terminal. The
-daemon owns all clipboard state and transfer FDs; this command only asks
-the daemon to open the picker for d2b-owned paste replay.
+Clipboard operations use the fixed per-user ComponentSession endpoints under
+`/run/d2b/u/<uid>/clipd/`. Until the authenticated picker request is available
+through the CLI client, `clipboard arm` fails closed without opening another
+control transport.
 
 **Human examples**
 
 ```text
 $ d2b clipboard arm
-picker opened
-$ d2b clipboard arm
-picker_not_configured
+authenticated clipboard picker control is unavailable
 ```
 
 **`--json` examples**

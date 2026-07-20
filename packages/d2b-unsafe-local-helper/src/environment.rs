@@ -37,6 +37,16 @@ impl fmt::Debug for ManagerEnvironment {
 }
 
 impl ManagerEnvironment {
+    pub fn parse_for_authenticated_uid(
+        raw: Vec<String>,
+        authenticated_uid: u32,
+    ) -> Result<Self, EnvironmentError> {
+        if authenticated_uid == 0 || authenticated_uid != nix::unistd::getuid().as_raw() {
+            return Err(EnvironmentError::RuntimeDirectoryInvalid);
+        }
+        Self::parse(raw)
+    }
+
     pub fn parse(raw: Vec<String>) -> Result<Self, EnvironmentError> {
         if raw.len() > MAX_MANAGER_ENVIRONMENT_ENTRIES {
             return Err(EnvironmentError::TooManyEntries);
@@ -316,6 +326,24 @@ mod tests {
         assert_eq!(
             ManagerEnvironment::parse(vec!["1BAD=value".to_owned()]),
             Err(EnvironmentError::InvalidEntry)
+        );
+    }
+
+    #[test]
+    fn authenticated_environment_rejects_cross_uid_projection() {
+        let uid = nix::unistd::getuid().as_raw();
+        if uid != 0 {
+            assert!(
+                ManagerEnvironment::parse_for_authenticated_uid(vec!["PATH=/bin".to_owned()], uid)
+                    .is_ok()
+            );
+        }
+        assert_eq!(
+            ManagerEnvironment::parse_for_authenticated_uid(
+                vec!["PATH=/bin".to_owned()],
+                uid.saturating_add(1)
+            ),
+            Err(EnvironmentError::RuntimeDirectoryInvalid)
         );
     }
 }

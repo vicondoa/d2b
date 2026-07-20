@@ -718,6 +718,14 @@ fn registered_host_mutation_sources() -> BTreeMap<&'static str, &'static str> {
             "nixos-modules/observability-host-secrets.nix",
             "storage root:path:state-root",
         ),
+        (
+            "nixos-modules/unsafe-local-helper.nix",
+            "storage root:path:run-root",
+        ),
+        (
+            "nixos-modules/user-services.nix",
+            "storage root:path:run-root",
+        ),
         ("nixos-modules/store.nix", "storage root:path:state-root"),
         (
             "packages/d2b/src/host_validate.rs",

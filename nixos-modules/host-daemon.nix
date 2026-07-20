@@ -88,15 +88,16 @@ EOF
     cfg.vms);
   hostLocalRealms =
     lib.filter (realm: realm.placement == "host-local") cfg._index.realms.enabledList;
-  unsafeLocalRealms = lib.filter
-    (realm:
-      lib.any
-        (workload: workload.enable && workload.kind == "unsafe-local")
-        realm.workloads)
-    cfg._index.realms.enabledList;
+  unsafeLocalRealmIds = lib.unique (map
+    (workload: workload.realmId)
+    (lib.filter
+      (workload: workload.kind == "unsafe-local")
+      cfg._index.realms.workloads.enabled));
+  unsafeLocalRealms = map
+    (realmId: cfg._index.realms.enabledById.${realmId})
+    unsafeLocalRealmIds;
   unsafeLocalHelperUsers = lib.sort lib.lessThan
     (lib.unique (lib.concatMap (realm: realm.allowedUsers) unsafeLocalRealms));
-  unsafeLocalHelperEnabled = unsafeLocalHelperUsers != [ ];
   brokerMaterializedFor = realm:
     realm.controller.broker.materializedSocket && realm.controller.broker.materializedService;
   serviceAttrName = unitName: lib.removeSuffix ".service" unitName;
@@ -207,10 +208,6 @@ EOF
     daemonUser = "d2bd";
     daemonGroup = "d2bd";
     publicSocketGroup = "d2b";
-    unsafeLocalHelperSocketPath =
-      if unsafeLocalHelperEnabled then "/run/d2b/unsafe-local-helper.sock" else null;
-    unsafeLocalHelperSocketGroup =
-      if unsafeLocalHelperEnabled then "d2b-unsafe-local" else null;
     inherit unsafeLocalHelperUsers;
     launcherUsers = cfg.site.launcherUsers;
     adminUsers = cfg.site.adminUsers;
@@ -238,8 +235,6 @@ EOF
     daemonUser = realm.controller.daemon.user;
     daemonGroup = realm.controller.daemon.group;
     publicSocketGroup = realm.controller.daemon.publicSocketGroup;
-    unsafeLocalHelperSocketPath = null;
-    unsafeLocalHelperSocketGroup = null;
     unsafeLocalHelperUsers = [ ];
     launcherUsers = realm.allowedUsers;
     adminUsers = cfg.site.adminUsers;
@@ -458,7 +453,7 @@ in
         # supplementary). The daemon failed at startup with
         # "internal-io" when chown(public.sock, -1, 1000)
         # returned EPERM.
-        extraGroups = [ "d2b" ] ++ lib.optional unsafeLocalHelperEnabled "d2b-unsafe-local";
+        extraGroups = [ "d2b" ];
       };
     };
 
@@ -517,9 +512,7 @@ in
       "z /run/d2b 1770 root d2b -"
       "a+ /run/d2b - - - - g::r-x"
       "a+ /run/d2b - - - - u:d2bd:rwx"
-    ] ++ lib.optional unsafeLocalHelperEnabled
-      "a+ /run/d2b - - - - g:d2b-unsafe-local:r-x"
-    ++ [
+    ] ++ [
       "a+ /run/d2b - - - - m::rwx"
       "f /run/d2b/daemon.lock 0640 d2bd d2bd -"
       # /run/d2b/locks holds per-VM `flock(LOCK_EX |
@@ -610,8 +603,7 @@ in
         # the public socket group; this SupplementaryGroups entry
         # gives the systemd unit's primary uid the second gid it
         # needs to chgrp the socket.
-        SupplementaryGroups =
-          [ "d2b" ] ++ lib.optional unsafeLocalHelperEnabled "d2b-unsafe-local";
+        SupplementaryGroups = [ "d2b" ];
       };
       };
     } // realmDaemonServices;

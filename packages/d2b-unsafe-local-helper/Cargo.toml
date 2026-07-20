@@ -12,17 +12,23 @@ description = "Same-uid user-session runtime helper for d2b unsafe-local workloa
 workspace = true
 
 [dependencies]
+async-trait.workspace = true
 clap = { version = "4.5", features = ["derive"] }
-d2b-contracts = { workspace = true, features = ["unsafe-local"] }
+d2b-contracts = { workspace = true, features = ["unsafe-local", "v2-services"] }
 d2b-core = { workspace = true }
 d2b-realm-core = { workspace = true }
+d2b-session.workspace = true
+d2b-session-unix = { workspace = true, features = ["host-socket"] }
 d2b-wayland-proxy = { workspace = true }
 getrandom = "0.2"
 nix = { version = "0.29", features = ["fs", "poll", "socket", "uio", "user", "signal", "process"] }
+protobuf.workspace = true
 rustix = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 socket2 = "0.5"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync"] }
+ttrpc = { workspace = true, features = ["async"] }
 uzers = "0.12"
 zbus = { version = "5.16", features = ["blocking-api"] }

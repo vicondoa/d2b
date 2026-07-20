@@ -204,9 +204,10 @@ let
 
   unsafeLocalFixture = lib.recursiveUpdate hostBase {
     users.users.bob = { isNormalUser = true; uid = 1001; };
+    users.users.charlie = { isNormalUser = true; uid = 1002; };
     d2b.daemonExperimental.enable = true;
     d2b.realms.host = {
-      allowedUsers = [ "alice" ];
+      allowedUsers = [ "alice" "bob" ];
       policy.allowUnsafeLocal = true;
       network.ui.accentColor = "#cc3344";
       workloads.tools = {
@@ -240,6 +241,26 @@ let
     };
   };
   unsafeCfg = (mkEval [ unsafeLocalFixture ]).config;
+  unsafeIndexWithoutRealmWorkloads =
+    let
+      original = unsafeCfg.d2b._index;
+      stripWorkloads = lib.mapAttrs (_: realm: removeAttrs realm [ "workloads" ]);
+    in
+    original // {
+      realms = original.realms // {
+        enabledList = map
+          (realm: removeAttrs realm [ "workloads" ])
+          original.realms.enabledList;
+        enabledById = stripWorkloads original.realms.enabledById;
+        enabledByPath = stripWorkloads original.realms.enabledByPath;
+      };
+    };
+  normalizedUnsafeCfg = (mkEval [
+    unsafeLocalFixture
+    ({ lib, ... }: {
+      d2b._index = lib.mkForce unsafeIndexWithoutRealmWorkloads;
+    })
+  ]).config;
   unsafeRow = builtins.head unsafeCfg.d2b._index.realms.workloads.enabled;
 
   workloadNames = prefix: count:
@@ -1084,7 +1105,10 @@ in
   "realm-workloads/unsafe-local-helper-user-service-and-eligibility" = {
     expr =
       let
-        service = unsafeCfg.systemd.user.services.d2b-unsafe-local-helper;
+        service = unsafeCfg.systemd.user.services.d2b-runtime-systemd-user;
+        socket = unsafeCfg.systemd.user.sockets.d2b-runtime-systemd-user;
+        userdService = unsafeCfg.systemd.user.services.d2b-userd;
+        userdSocket = unsafeCfg.systemd.user.sockets.d2b-userd;
         daemonConfig =
           builtins.fromJSON unsafeCfg.environment.etc."d2b/daemon-config.json".text;
         rootUnits =
@@ -1099,29 +1123,60 @@ in
               lib.hasInfix "unsafe-local" row.operation
               && lib.hasInfix "shell" row.operation)
             privileges.brokerOperations;
+        runParentAclRules = builtins.filter
+          (rule: lib.hasPrefix "a+ /run/d2b - - - - " rule)
+          unsafeCfg.systemd.tmpfiles.rules;
       in {
         helperGroupDeclared = unsafeCfg.users.groups ? d2b-unsafe-local;
         eligibleHasLifecycleGroup =
           builtins.elem "d2b" unsafeCfg.users.users.alice.extraGroups;
         eligibleHasHelperGroup =
           builtins.elem "d2b-unsafe-local" unsafeCfg.users.users.alice.extraGroups;
-        ineligibleUserGroups = unsafeCfg.users.users.bob.extraGroups;
+        realmOnlyHasNoLifecycleGroup =
+          !(builtins.elem "d2b" unsafeCfg.users.users.bob.extraGroups);
+        realmOnlyHasHelperGroup =
+          builtins.elem "d2b-unsafe-local" unsafeCfg.users.users.bob.extraGroups;
+        realmOnlyHasUserServiceGroup =
+          builtins.elem "d2b-user-services" unsafeCfg.users.users.bob.extraGroups;
+        ineligibleUserGroups = unsafeCfg.users.users.charlie.extraGroups;
         conditionGroup = service.unitConfig.ConditionGroup;
+        userdConditionGroup = userdService.unitConfig.ConditionGroup;
         restart = service.serviceConfig.Restart;
+        restartPreventExitStatus =
+          service.serviceConfig.RestartPreventExitStatus;
+        userdRestartPreventExitStatus =
+          userdService.serviceConfig.RestartPreventExitStatus;
+        configurationExitIsNotSuccessful =
+          !(service.serviceConfig ? SuccessExitStatus)
+          && !(userdService.serviceConfig ? SuccessExitStatus);
         execStartHasHelper =
           lib.hasInfix "/bin/d2b-unsafe-local-helper" service.serviceConfig.ExecStart;
-        execStartHasImmutableProxy =
-          lib.hasInfix
-            (builtins.unsafeDiscardStringContext
-              "--wayland-proxy ${unsafeCfg.d2b._hostToolPackages.d2bWaylandProxy}/bin/d2b-wayland-proxy")
+        execStartHasLegacyProxyArg =
+          lib.hasInfix "--wayland-proxy"
             (builtins.unsafeDiscardStringContext service.serviceConfig.ExecStart);
         proxyPackageConfigured =
           unsafeCfg.d2b._hostToolPackages.d2bWaylandProxy != null;
-        daemonSocketPath = daemonConfig.unsafeLocalHelperSocketPath;
-        daemonSocketGroup = daemonConfig.unsafeLocalHelperSocketGroup;
+        daemonSocketPathAbsent = !(daemonConfig ? unsafeLocalHelperSocketPath);
+        daemonSocketGroupAbsent = !(daemonConfig ? unsafeLocalHelperSocketGroup);
         daemonAllowedUsers = daemonConfig.unsafeLocalHelperUsers;
+        currentHelperPackage =
+          unsafeCfg.d2b._hostToolPackages.d2bUnsafeLocalHelper.name;
+        userSocketPath = socket.socketConfig.ListenSequentialPacket;
+        userSocketFdName = socket.socketConfig.FileDescriptorName;
+        userSocketMode = socket.socketConfig.SocketMode;
+        userdSocketPath = userdSocket.socketConfig.ListenSequentialPacket;
+        userdSocketFdName = userdSocket.socketConfig.FileDescriptorName;
+        realmOnlyEndpointRules = builtins.filter
+          (rule: lib.hasInfix " /run/d2b/u/1001 " rule)
+          unsafeCfg.systemd.tmpfiles.rules;
+        realmOnlyTraverseAcl = builtins.elem
+          "a+ /run/d2b - - - - u:bob:--x"
+          unsafeCfg.systemd.tmpfiles.rules;
+        finalRunParentAclRules =
+          lib.take 2 (lib.reverseList runParentAclRules);
         helperRootUnitAbsent =
           !(builtins.elem "d2b-unsafe-local-helper" rootUnits);
+        userdRootUnitAbsent = !(builtins.elem "d2b-userd" rootUnits);
         noHelperBrokerSocketUnit =
           !(builtins.elem "d2b-unsafe-local-helper" (lib.attrNames unsafeCfg.systemd.sockets));
         unsafeLocalShellRootUnits =
@@ -1129,24 +1184,67 @@ in
         shellBrokerRequired = shellPrivilege.brokerRequired;
         unsafeLocalShellBrokerOps = unsafeLocalShellBrokerOps;
       };
+
     expected = {
       helperGroupDeclared = true;
       eligibleHasLifecycleGroup = true;
       eligibleHasHelperGroup = true;
+      realmOnlyHasNoLifecycleGroup = true;
+      realmOnlyHasHelperGroup = true;
+      realmOnlyHasUserServiceGroup = true;
       ineligibleUserGroups = [ ];
       conditionGroup = "d2b-unsafe-local";
+      userdConditionGroup = "d2b-user-services";
       restart = "on-failure";
+      restartPreventExitStatus = "78";
+      userdRestartPreventExitStatus = "78";
+      configurationExitIsNotSuccessful = true;
       execStartHasHelper = true;
-      execStartHasImmutableProxy = true;
+      execStartHasLegacyProxyArg = false;
       proxyPackageConfigured = true;
-      daemonSocketPath = "/run/d2b/unsafe-local-helper.sock";
-      daemonSocketGroup = "d2b-unsafe-local";
-      daemonAllowedUsers = [ "alice" ];
+      daemonSocketPathAbsent = true;
+      daemonSocketGroupAbsent = true;
+      daemonAllowedUsers = [ "alice" "bob" ];
+      currentHelperPackage = "d2b-unsafe-local-helper-2.0.0";
+      userSocketPath = "/run/d2b/u/%U/runtime-agent.sock";
+      userSocketFdName = "runtime-systemd-user";
+      userSocketMode = "0600";
+      userdSocketPath = "/run/d2b/u/%U/userd.sock";
+      userdSocketFdName = "user-agent";
+      realmOnlyEndpointRules = [
+        "d /run/d2b/u/1001 0700 bob users -"
+        "z /run/d2b/u/1001 0700 bob users -"
+      ];
+      realmOnlyTraverseAcl = true;
+      finalRunParentAclRules = [
+        "a+ /run/d2b - - - - m::rwx"
+        "a+ /run/d2b - - - - u:bob:--x"
+      ];
       helperRootUnitAbsent = true;
+      userdRootUnitAbsent = true;
       noHelperBrokerSocketUnit = true;
       unsafeLocalShellRootUnits = [ ];
       shellBrokerRequired = "no";
       unsafeLocalShellBrokerOps = [ ];
+    };
+  };
+
+  "realm-workloads/unsafe-local-helper-uses-canonical-workload-index" = {
+    expr = {
+      daemonAllowedUsers =
+        (builtins.fromJSON
+          normalizedUnsafeCfg.environment.etc."d2b/daemon-config.json".text
+        ).unsafeLocalHelperUsers;
+      eligibleUsers = builtins.filter
+        (user:
+          builtins.elem
+            "d2b-unsafe-local"
+            normalizedUnsafeCfg.users.users.${user}.extraGroups)
+        [ "alice" "bob" "charlie" ];
+    };
+    expected = {
+      daemonAllowedUsers = [ "alice" "bob" ];
+      eligibleUsers = [ "alice" "bob" ];
     };
   };
 

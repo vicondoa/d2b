@@ -23,7 +23,8 @@
 use std::fs::{self, File};
 use std::io;
 use std::os::fd::{AsFd, OwnedFd};
-use std::os::unix::fs::{FileTypeExt, MetadataExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -2716,6 +2717,7 @@ fn refresh_spawn_runner_acls(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerEr
     if plan.uid == 0 {
         return Ok(());
     }
+
     for device in &plan.mount_policy.device_binds {
         match device.as_str() {
             "/dev/kvm" | "/dev/vhost-net" | "/dev/net/tun" | "/dev/dri/renderD128" => {
@@ -2997,6 +2999,69 @@ fn refresh_spawn_runner_acls(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerEr
     refresh_guest_control_fs_acl(plan)?;
 
     Ok(())
+}
+
+fn wayland_proxy_stdio(
+    plan: &SpawnRunnerPlan,
+) -> Result<Option<(OwnedFd, OwnedFd)>, LiveHandlerError> {
+    if plan.seccomp_policy_ref.as_deref() != Some("w1-wayland-proxy") {
+        return Ok(None);
+    }
+    let workload_id = plan
+        .argv
+        .windows(2)
+        .find_map(|pair| (pair[0] == "--workload-id").then_some(pair[1].as_str()))
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= 128
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        })
+        .ok_or_else(|| LiveHandlerError::SpawnFailed {
+            detail: "wayland-proxy workload identity is missing or invalid".to_owned(),
+        })?;
+    let runtime_dir =
+        env_value(plan, "XDG_RUNTIME_DIR").ok_or_else(|| LiveHandlerError::SpawnFailed {
+            detail: "graphical-session-not-active: XDG_RUNTIME_DIR not set".to_owned(),
+        })?;
+    let wayland_display = env_value(plan, "WAYLAND_DISPLAY").unwrap_or("wayland-0");
+    let upstream =
+        UnixStream::connect(Path::new(runtime_dir).join(wayland_display)).map_err(|error| {
+            LiveHandlerError::SpawnFailed {
+                detail: format!("connect authenticated Wayland upstream descriptor: {error}"),
+            }
+        })?;
+
+    let listener_path = PathBuf::from(format!("/run/d2b-wlproxy/{workload_id}/wayland-0"));
+    match fs::symlink_metadata(&listener_path) {
+        Ok(metadata) if metadata.file_type().is_socket() => {
+            fs::remove_file(&listener_path).map_err(|error| LiveHandlerError::SpawnFailed {
+                detail: format!("remove stale Wayland listener: {error}"),
+            })?;
+        }
+        Ok(_) => {
+            return Err(LiveHandlerError::SpawnFailed {
+                detail: "refusing to replace non-socket Wayland listener".to_owned(),
+            });
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(LiveHandlerError::SpawnFailed {
+                detail: format!("inspect Wayland listener: {error}"),
+            });
+        }
+    }
+    let listener =
+        UnixListener::bind(&listener_path).map_err(|error| LiveHandlerError::SpawnFailed {
+            detail: format!("pre-bind Wayland listener descriptor: {error}"),
+        })?;
+    fs::set_permissions(&listener_path, fs::Permissions::from_mode(0o660)).map_err(|error| {
+        LiveHandlerError::SpawnFailed {
+            detail: format!("set Wayland listener posture: {error}"),
+        }
+    })?;
+    Ok(Some((upstream.into(), listener.into())))
 }
 
 fn cloud_hypervisor_api_socket(plan: &SpawnRunnerPlan) -> Option<PathBuf> {
@@ -3553,6 +3618,7 @@ pub fn live_spawn_runner(
     let seccomp_program = load_runner_seccomp(&plan)?;
     let cgroup_fds = prepare_runner_cgroup_fds(&plan.cgroup_placement)?;
     refresh_spawn_runner_acls(&plan)?;
+    let inherited_stdio = wayland_proxy_stdio(&plan)?;
 
     // swtpm-dir first-run hardening (issue #64). Gated on the
     // `w1-swtpm` role and run BEFORE clone3 so the persistent TPM2
@@ -3632,6 +3698,7 @@ pub fn live_spawn_runner(
         // The sys layer dup2's it to fd 10 in the user-NS child before
         // execve.
         pre_opened_device_fds,
+        inherited_stdio,
         memlock_limit_bytes,
     };
 

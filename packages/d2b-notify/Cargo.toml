@@ -6,7 +6,7 @@ rust-version.workspace = true
 repository.workspace = true
 publish = false
 license.workspace = true
-description = "Reusable notification/event mechanism for d2b desktop UX"
+description = "Authenticated desktop observer and action services for d2b"
 
 [lints]
 workspace = true

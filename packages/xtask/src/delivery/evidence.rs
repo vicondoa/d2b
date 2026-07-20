@@ -359,6 +359,13 @@ pub fn run_validation<P: RepositoryProbe, A: CommandOutputAdapter>(
             OsString::from("HOME"),
             output_root.join("home").into_os_string(),
         ),
+        (
+            OsString::from("SCCACHE_DIR"),
+            output_root.join("sccache").into_os_string(),
+        ),
+        (OsString::from("D2B_NO_SCCACHE"), OsString::from("1")),
+        (OsString::from("RUSTC_WRAPPER"), OsString::new()),
+        (OsString::from("CARGO_BUILD_RUSTC_WRAPPER"), OsString::new()),
     ]);
     let output = runner.output_with_environment(
         &required.argv[0],
