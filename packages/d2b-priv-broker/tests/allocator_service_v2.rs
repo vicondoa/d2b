@@ -21,7 +21,9 @@ use d2b_priv_broker::allocator_service::{
     PendingSpawnedRealmChild, PendingSpawnedRealmPair, RealmChildSpawner,
     RealmLaunchRecordResolver,
 };
-use d2b_priv_broker::live_handlers::prebind_realm_listeners;
+use d2b_priv_broker::live_handlers::{
+    RealmListenerOwnership, prebind_realm_listeners, prebind_realm_listeners_for_identities,
+};
 use d2b_realm_core::allocator::{
     AllocatorLease, AllocatorLeaseState, GrantedHostResource, HostResourceKind, LeaseOwner,
 };
@@ -1161,4 +1163,32 @@ fn listeners_refuse_a_group_or_world_writable_runtime_root() {
 
     std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     root.close().expect("remove listener fixture");
+}
+
+#[test]
+fn listener_ownership_is_applied_through_the_bound_socket_fds() {
+    let uid = nix::unistd::geteuid().as_raw();
+    let gid = nix::unistd::getegid().as_raw();
+    if uid == 0 {
+        return;
+    }
+    let root = socket_tempdir();
+    let owner = RealmListenerOwnership {
+        uid,
+        gid,
+        mode: 0o660,
+    };
+    let listeners =
+        prebind_realm_listeners_for_identities(root.path(), "work", owner, owner).unwrap();
+    for path in [
+        root.path().join("work/public.sock"),
+        root.path().join("work/broker.sock"),
+    ] {
+        let metadata = std::fs::symlink_metadata(path).unwrap();
+        assert_eq!(metadata.uid(), uid);
+        assert_eq!(metadata.gid(), gid);
+        assert_eq!(metadata.mode() & 0o777, 0o660);
+    }
+    drop(listeners);
+    root.close().unwrap();
 }

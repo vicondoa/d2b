@@ -4203,11 +4203,9 @@ fn cmd_vm_exec_v2(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailur
         ..Default::default()
     };
     let operation_id = terminal_operation_id("exec");
-    let daemon = match service_v2::DaemonService::connect(&context.public_socket) {
-        Ok(daemon) => daemon,
-        Err(error) => {
-            return exec_terminate(args, exec_client::ExecClientError::transport(error.message));
-        }
+    let daemon = match connect_daemon_for_command(context, "vm exec", action.json)? {
+        DaemonCommandConnection::Connected(daemon) => daemon,
+        DaemonCommandConnection::Unavailable(exit) => return Ok(exit),
     };
     let terminal = match daemon.open_terminal_typed(
         daemon_access::DaemonMethod::Exec,
@@ -4310,11 +4308,9 @@ fn cmd_vm_exec_management_v2(
     args: &VmExecArgs,
     command: &VmExecManagementCommand,
 ) -> Result<i32, CliFailure> {
-    let daemon = match service_v2::DaemonService::connect(&context.public_socket) {
-        Ok(daemon) => daemon,
-        Err(error) => {
-            return exec_terminate(args, exec_client::ExecClientError::transport(error.message));
-        }
+    let daemon = match connect_daemon_for_command(context, "vm exec", args.json)? {
+        DaemonCommandConnection::Connected(daemon) => daemon,
+        DaemonCommandConnection::Unavailable(exit) => return Ok(exit),
     };
     let guest = match daemon.guest_typed(&args.vm) {
         Ok(guest) => guest,
@@ -13252,6 +13248,42 @@ mod host_install_dispatch_tests {
                     json: true,
                     human: false,
                 },
+            )
+        });
+        assert_daemon_down_json(result, stdout);
+
+        let (result, stdout) = super::with_test_stdout_capture(|| {
+            super::cmd_vm_exec_v2(
+                &context,
+                &super::VmExecArgs {
+                    vm: "demo".to_owned(),
+                    detach: false,
+                    interactive: false,
+                    tty: false,
+                    json: true,
+                    human: false,
+                    management: Vec::new(),
+                    command: vec!["true".to_owned()],
+                },
+            )
+        });
+        assert_daemon_down_json(result, stdout);
+
+        let management_args = super::VmExecArgs {
+            vm: "demo".to_owned(),
+            detach: false,
+            interactive: false,
+            tty: false,
+            json: true,
+            human: false,
+            management: Vec::new(),
+            command: Vec::new(),
+        };
+        let (result, stdout) = super::with_test_stdout_capture(|| {
+            super::cmd_vm_exec_management_v2(
+                &context,
+                &management_args,
+                &super::VmExecManagementCommand::List,
             )
         });
         assert_daemon_down_json(result, stdout);

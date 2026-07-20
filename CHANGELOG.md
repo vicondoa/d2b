@@ -348,6 +348,8 @@ deprecations ship one minor release before removal.
   executor threads, hardened listener ownership beneath broker-owned
   write-protected directories, and documented daemon-down plus clipboard alias
   behavior across the CLI contract.
+- Applied realm listener ownership through the bound socket descriptors and
+  made `vm exec` command and management forms share the typed daemon-down path.
 - Made broker tests honor disposable validation/Cargo targets and create
   private auto-cleaned socket directories instead of leaking crate-local
   targets or attempting to chmod a shared `/tmp`.

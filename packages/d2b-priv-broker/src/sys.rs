@@ -1131,6 +1131,39 @@ pub mod path_safe {
         res.map_err(|err| io::Error::from_raw_os_error(err as i32))
     }
 
+    pub fn fchownat_empty_path(
+        fd: BorrowedFd<'_>,
+        uid: Option<u32>,
+        gid: Option<u32>,
+    ) -> io::Result<()> {
+        nix::unistd::fchownat(
+            Some(fd.as_raw_fd()),
+            "",
+            uid.map(nix::unistd::Uid::from_raw),
+            gid.map(nix::unistd::Gid::from_raw),
+            nix::fcntl::AtFlags::AT_EMPTY_PATH | nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
+        )
+        .map_err(|error| io::Error::from_raw_os_error(error as i32))
+    }
+
+    #[allow(unsafe_code)]
+    pub fn fchmodat_empty_path(fd: BorrowedFd<'_>, mode: u32) -> io::Result<()> {
+        let result = unsafe {
+            libc::syscall(
+                libc::SYS_fchmodat2,
+                fd.as_raw_fd(),
+                c"".as_ptr(),
+                mode as libc::mode_t,
+                libc::AT_EMPTY_PATH,
+            )
+        };
+        if result < 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+
     pub struct FileWriteLease {
         fd: RawFd,
     }

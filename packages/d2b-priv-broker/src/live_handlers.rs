@@ -139,7 +139,7 @@ fn prebind_realm_listeners_inner(
         AddressFamily, Backlog, SockFlag, SockType, UnixAddr, bind, listen, socket,
     };
     use std::os::fd::AsRawFd;
-    use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
 
     fn validate_owned_directory(path: &Path) -> Result<(), LiveHandlerError> {
         let metadata = std::fs::symlink_metadata(path)
@@ -217,21 +217,30 @@ fn prebind_realm_listeners_inner(
                 let apply = |path: &Path, owner: RealmListenerOwnership| {
                     let metadata = std::fs::symlink_metadata(path)
                         .map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
-                    if !metadata.file_type().is_socket() {
-                        return Err(LiveHandlerError::Activation(
-                            "realm listener path is not a socket".to_owned(),
-                        ));
-                    }
-                    nix::unistd::fchownat(
-                        None,
+                    let path_fd = rustix::fs::open(
                         path,
-                        Some(nix::unistd::Uid::from_raw(owner.uid)),
-                        Some(nix::unistd::Gid::from_raw(owner.gid)),
-                        nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
+                        rustix::fs::OFlags::PATH
+                            | rustix::fs::OFlags::NOFOLLOW
+                            | rustix::fs::OFlags::CLOEXEC,
+                        rustix::fs::Mode::empty(),
                     )
                     .map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
-                    std::fs::set_permissions(path, std::fs::Permissions::from_mode(owner.mode))
-                        .map_err(|error| LiveHandlerError::Activation(error.to_string()))
+                    let socket_stat = rustix::fs::fstat(&path_fd)
+                        .map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
+                    if !metadata.file_type().is_socket() || metadata.ino() != socket_stat.st_ino {
+                        return Err(LiveHandlerError::Activation(
+                            "realm listener path does not match its bound socket".to_owned(),
+                        ));
+                    }
+                    crate::sys::path_safe::fchownat_empty_path(
+                        path_fd.as_fd(),
+                        Some(owner.uid),
+                        Some(owner.gid),
+                    )
+                    .and_then(|()| {
+                        crate::sys::path_safe::fchmodat_empty_path(path_fd.as_fd(), owner.mode)
+                    })
+                    .map_err(|error| LiveHandlerError::Activation(error.to_string()))
                 };
                 if let Err(error) = apply(&public_path, public_owner)
                     .and_then(|()| apply(&broker_path, broker_owner))
