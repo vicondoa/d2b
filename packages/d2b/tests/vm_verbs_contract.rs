@@ -311,10 +311,9 @@ fn vm_exec_missing_command_emits_cli_usage_envelope() {
 }
 
 #[test]
-fn vm_exec_no_daemon_emits_transport_unavailable_envelope() {
-    // With the daemon socket absent, `vm exec` surfaces the guest-control
-    // transport-unavailable envelope (proving it reaches cmd_vm_exec and never
-    // falls back to SSH/bash).
+fn vm_exec_no_daemon_emits_daemon_down_envelope() {
+    // With the daemon socket absent, `vm exec` surfaces the common daemon-down
+    // envelope and never falls back to SSH/bash.
     let (_guard, paths) = scratch(KONSOLE_MANIFEST_JSON);
     let out = run_cli(
         &paths,
@@ -332,19 +331,12 @@ fn vm_exec_no_daemon_emits_transport_unavailable_envelope() {
         "vm exec with no daemon should exit non-zero\nstderr:\n{}",
         stderr_of(&out),
     );
-    let envelope = stdout_json(&out, "vm exec transport");
+    let envelope = stdout_json(&out, "vm exec daemon-down");
     assert_eq!(
-        envelope.get("command").and_then(Value::as_str),
-        Some("vm exec")
+        envelope.get("code").and_then(Value::as_str),
+        Some("daemon-down")
     );
-    assert_eq!(
-        envelope.get("source").and_then(Value::as_str),
-        Some("transport"),
-    );
-    assert_eq!(
-        envelope.get("reason").and_then(Value::as_str),
-        Some("guest-control-transport-unavailable"),
-    );
+    assert_eq!(envelope.get("exitCode").and_then(Value::as_i64), Some(1),);
 }
 
 #[test]
