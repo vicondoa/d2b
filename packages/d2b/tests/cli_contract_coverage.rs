@@ -57,8 +57,20 @@ fn launch_entrypoint_uses_typed_configured_launch_selection_only() {
         .expect("function terminator");
     let body = &tail[..end];
     assert!(
-        body.contains("service_v2::DaemonService::connect"),
-        "cmd_launch must use the authenticated ComponentSession v2 daemon service"
+        body.contains("connect_daemon_for_command"),
+        "cmd_launch must use the shared authenticated daemon connection path"
+    );
+    let connect_start = source
+        .find("fn connect_daemon_for_command(")
+        .expect("typed daemon connection helper");
+    let connect_tail = &source[connect_start..];
+    let connect_end = connect_tail
+        .find("\n}\n")
+        .map(|offset| offset + 3)
+        .expect("typed daemon connection helper terminator");
+    assert!(
+        connect_tail[..connect_end].contains("service_v2::DaemonService::connect"),
+        "the shared command connection path must use authenticated ComponentSession v2"
     );
     assert!(
         body.contains("ConfiguredLaunchSelection"),
