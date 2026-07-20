@@ -134,6 +134,7 @@ in
   "clipboard/user-service-restart-hardening" = {
     expr = {
       restart = serviceConfig.Restart;
+      restartPreventExitStatus = serviceConfig.RestartPreventExitStatus;
       noNewPrivileges = serviceConfig.NoNewPrivileges;
       umask = serviceConfig.UMask;
       lockPersonality = serviceConfig.LockPersonality;
@@ -142,6 +143,7 @@ in
     };
     expected = {
       restart = "on-failure";
+      restartPreventExitStatus = "78";
       noNewPrivileges = true;
       umask = "0077";
       lockPersonality = true;
@@ -258,12 +260,20 @@ in
   };
 
   "clipboard/wayland-user-can-traverse-bridge-parents" = {
-    expr = lib.all
-      (rule: builtins.elem rule unsafeEnabled.config.systemd.tmpfiles.rules)
-      [
-        "a+ /run/d2b - - - - u:alice:--x"
-        "a+ /run/d2b/clipd - - - - u:alice:--x"
-      ];
+    expr =
+      let
+        traverseRule = "a+ /run/d2b - - - - u:alice:--x";
+        endpointParentRule = "d /run/d2b/u 0711 root root -";
+        endpointRulesText =
+          lib.concatStringsSep "\n" enabled.config.systemd.tmpfiles.rules;
+      in
+      lib.hasInfix "${traverseRule}\n${endpointParentRule}" endpointRulesText
+      && lib.all
+        (rule: builtins.elem rule unsafeEnabled.config.systemd.tmpfiles.rules)
+        [
+          traverseRule
+          "a+ /run/d2b/clipd - - - - u:alice:--x"
+        ];
     expected = true;
   };
 

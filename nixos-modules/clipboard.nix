@@ -99,22 +99,32 @@ EOF
     vmName = vm;
     expectedUid = d2bLib.stablePrincipalId "d2b-${vm}-wlproxy";
   }) bridgeVms;
+  userServiceEndpointUsers = lib.unique (
+    site.adminUsers
+    ++ site.launcherUsers
+    ++ lib.concatMap (realm: realm.allowedUsers) config.d2b._index.realms.enabledList
+  );
+  waylandUserHasEndpointTraversal =
+    config.d2b.daemonExperimental.enable
+    && lib.elem site.waylandUser userServiceEndpointUsers;
   waylandUid = toString config.users.users.${site.waylandUser}.uid;
   waylandGroup = config.users.users.${site.waylandUser}.group;
-  userEndpointTmpfiles = [
-    "d /run/d2b/u 0711 root root -"
-    "z /run/d2b/u 0711 root root -"
-    "d /run/d2b/u/${waylandUid} 0700 ${site.waylandUser} ${waylandGroup} -"
-    "z /run/d2b/u/${waylandUid} 0700 ${site.waylandUser} ${waylandGroup} -"
-    "d /run/d2b/u/${waylandUid}/clipd 0700 ${site.waylandUser} ${waylandGroup} -"
-    "z /run/d2b/u/${waylandUid}/clipd 0700 ${site.waylandUser} ${waylandGroup} -"
-  ];
+  userEndpointTmpfiles =
+    lib.optional (!waylandUserHasEndpointTraversal)
+      "a+ /run/d2b - - - - u:${site.waylandUser}:--x"
+    ++ [
+      "d /run/d2b/u 0711 root root -"
+      "z /run/d2b/u 0711 root root -"
+      "d /run/d2b/u/${waylandUid} 0700 ${site.waylandUser} ${waylandGroup} -"
+      "z /run/d2b/u/${waylandUid} 0700 ${site.waylandUser} ${waylandGroup} -"
+      "d /run/d2b/u/${waylandUid}/clipd 0700 ${site.waylandUser} ${waylandGroup} -"
+      "z /run/d2b/u/${waylandUid}/clipd 0700 ${site.waylandUser} ${waylandGroup} -"
+    ];
   clipdBridgeRootTmpfiles =
     lib.optionals (cfg.enable && bridgeEndpoints != [ ]) (
       [
         "d ${cfg.runtime.bridgeRoot} 0750 root d2b -"
         "z ${cfg.runtime.bridgeRoot} 0750 root d2b -"
-        "a+ /run/d2b - - - - u:${site.waylandUser}:--x"
         "a+ ${cfg.runtime.bridgeRoot} - - - - u:${site.waylandUser}:--x"
         "d ${cfg.runtime.bridgeRoot}/${waylandUid} 0710 root root -"
         "z ${cfg.runtime.bridgeRoot}/${waylandUid} 0710 root root -"
@@ -630,6 +640,7 @@ in
         Type = "simple";
         ExecStart = systemdExecArgs [ clipdExec ];
         Restart = "on-failure";
+        RestartPreventExitStatus = "78";
         RestartSec = "2s";
         UMask = "0077";
         NoNewPrivileges = true;

@@ -58,7 +58,6 @@ in
       "z /run/d2b/u 0711 root root -"
     ] ++ endpointTmpfiles ++ [
       "a+ /run/d2b - - - - m::rwx"
-      "a+ /run/d2b - - - - default:m::rwx"
     ];
 
     systemd.user.sockets.d2b-userd = {

@@ -1123,6 +1123,9 @@ in
               lib.hasInfix "unsafe-local" row.operation
               && lib.hasInfix "shell" row.operation)
             privileges.brokerOperations;
+        runParentAclRules = builtins.filter
+          (rule: lib.hasPrefix "a+ /run/d2b - - - - " rule)
+          unsafeCfg.systemd.tmpfiles.rules;
       in {
         helperGroupDeclared = unsafeCfg.users.groups ? d2b-unsafe-local;
         eligibleHasLifecycleGroup =
@@ -1169,6 +1172,8 @@ in
         realmOnlyTraverseAcl = builtins.elem
           "a+ /run/d2b - - - - u:bob:--x"
           unsafeCfg.systemd.tmpfiles.rules;
+        finalRunParentAclRules =
+          lib.take 2 (lib.reverseList runParentAclRules);
         helperRootUnitAbsent =
           !(builtins.elem "d2b-unsafe-local-helper" rootUnits);
         userdRootUnitAbsent = !(builtins.elem "d2b-userd" rootUnits);
@@ -1211,6 +1216,10 @@ in
         "z /run/d2b/u/1001 0700 bob users -"
       ];
       realmOnlyTraverseAcl = true;
+      finalRunParentAclRules = [
+        "a+ /run/d2b - - - - m::rwx"
+        "a+ /run/d2b - - - - u:bob:--x"
+      ];
       helperRootUnitAbsent = true;
       userdRootUnitAbsent = true;
       noHelperBrokerSocketUnit = true;
