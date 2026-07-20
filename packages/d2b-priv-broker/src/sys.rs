@@ -3135,6 +3135,7 @@ pub mod pidfd_sys {
             }),
             umask: Some(0o077),
             pre_opened_device_fds: inherited_fds,
+            inherited_stdio: None,
             memlock_limit_bytes: None,
         };
         clone3_spawn_runner_with_extra_flags(

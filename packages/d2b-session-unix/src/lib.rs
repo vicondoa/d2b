@@ -20,10 +20,10 @@ mod error;
 mod pidfd;
 #[cfg(feature = "host-socket")]
 mod socket;
-#[cfg(feature = "native-vsock")]
-mod vsock;
 #[cfg(feature = "host-socket")]
 mod systemd;
+#[cfg(feature = "native-vsock")]
+mod vsock;
 
 #[cfg(feature = "host-socket")]
 pub use adapter::{
@@ -53,9 +53,9 @@ pub use socket::{
     AncillaryCapacity, OutboundPacket, PacketBurst, SendBurst, SentPacket, SeqpacketSocket,
     StreamRead, StreamSocket, prearmed_seqpacket_pair,
 };
-#[cfg(feature = "native-vsock")]
-pub use vsock::{FramedVsockTransport, NativeVsockListener, NativeVsockTransport};
 #[cfg(feature = "host-socket")]
 pub use systemd::{
     ActivatedSeqpacketListener, ActivatedSeqpacketListeners, SystemdActivationError,
 };
+#[cfg(feature = "native-vsock")]
+pub use vsock::{FramedVsockTransport, NativeVsockListener, NativeVsockTransport};
