@@ -1,9 +1,7 @@
-//! ComponentSession-owned unsafe-local user runtime.
-//!
-//! The parent control plane supplies the authenticated session and service
-//! adapters. Direct execution must not recreate the removed helper protocol,
-//! inherited TTY status channel, or supervisor bootstrap fallback.
-fn main() {
-    eprintln!("d2b-unsafe-local-helper: component-session-unavailable");
-    std::process::exit(78);
+#[tokio::main]
+async fn main() {
+    if let Err(error) = d2b_unsafe_local_helper::server::run().await {
+        eprintln!("d2b-unsafe-local-helper: {error}");
+        std::process::exit(1);
+    }
 }

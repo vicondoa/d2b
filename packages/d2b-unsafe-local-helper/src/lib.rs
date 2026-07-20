@@ -4,6 +4,7 @@ mod output_ring;
 // composed crate no longer exposes that helper/supervisor bootstrap surface.
 #[allow(dead_code)]
 mod runtime;
+pub mod server;
 pub mod services;
 pub mod shell_runtime;
 mod shell_socket;
