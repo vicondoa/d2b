@@ -9,7 +9,7 @@ successor_ids = [
   "packages/d2b/tests/vm_verbs_contract.rs::vm_konsole_rejects_retired_ssh_flags (retired host/user/key flags fail closed)",
   "packages/d2b/tests/vm_verbs_contract.rs::vm_konsole_rejects_unknown_vm (unknown VM names fail closed)",
   "packages/d2b/tests/vm_verbs_contract.rs::vm_exec_missing_command_emits_cli_usage_envelope (missing exec command emits the typed usage envelope)",
-  "packages/d2b/tests/vm_verbs_contract.rs::vm_exec_no_daemon_emits_transport_unavailable_envelope (exec without a daemon emits transport unavailable and never SSH/bash)",
+  "packages/d2b/tests/vm_verbs_contract.rs::vm_exec_no_daemon_emits_daemon_down_envelope (exec without a daemon emits typed daemon-down and never SSH/bash)",
   "packages/d2b/tests/vm_verbs_contract.rs::vm_exec_rejects_interactive_without_tty (interactive exec without tty emits usage)",
   "tests/test-rust.sh (runs cargo test -p d2b --tests)",
   "tests/golden/pinned/cli-vm-verbs.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)",
