@@ -4,169 +4,267 @@ let
   requested = mkEval [
     (import (flakeRoot + "/examples/qemu-media-dark-live.nix"))
   ];
-  requestedNiriNative = mkEval [
+  requestedWithDisplay = mkEval [
     (import (flakeRoot + "/examples/qemu-media-dark-live.nix"))
     ({ ... }: {
-      d2b.vms."dark-live".graphics.waylandProxy.border.enable = false;
+      d2b.realms.dark.providers.display = {
+        type = "display";
+        implementationId = "wayland";
+      };
+      d2b.realms.dark.workloads.dark-live = {
+        providerRefs.display = "display";
+        display.wayland = true;
+      };
     })
   ];
+
   cfg = requested.config;
-  vm = cfg.d2b.vms."dark-live";
-  hostJson = cfg.d2b._bundle.hostJson.data;
+  index = cfg.d2b._index;
+  workload = lib.findFirst
+    (row: row.workloadName == "dark-live")
+    (throw "normalized dark-live workload missing")
+    index.workloads.enabledList;
+  realm = index.realms.byId.${workload.realmId};
+  localRoot = index.realms.byName.local-root;
+  runtimeBinding = workload.providerBindings.runtime;
+  runtimeProvider = index.providers.byId.${runtimeBinding.providerId};
+  roles = index.roles.byWorkloadId.${workload.workloadId};
+  qemuRole = lib.findFirst
+    (row: row.roleKind == "qemu-media")
+    (throw "normalized dark-live qemu-media role missing")
+    roles;
+  resources = index.resources.byWorkloadId.${workload.workloadId};
+  resourceFor = kind:
+    lib.findFirst
+      (row: row.kind == kind)
+      (throw "normalized dark-live ${kind} resource missing")
+      resources;
+  mediaResource = resourceFor "workload-media";
+  qemuRuntimeResource = lib.findFirst
+    (row: row.kind == "role-runtime" && row.roleId == qemuRole.roleId)
+    (throw "normalized dark-live qemu runtime resource missing")
+    resources;
+
   processes = cfg.d2b._bundle.processesJson.data.vms;
-  darkProcess = lib.findFirst (entry: entry.vm == "dark-live") null processes;
-  darkQemuNode = lib.findFirst (node: node.id == "qemu-media") null darkProcess.nodes;
-  netProcess = lib.findFirst (entry: entry.vm == "sys-dark-net") null processes;
-  netCloudHypervisorNode = lib.findFirst (node: node.id == "cloud-hypervisor") null netProcess.nodes;
-  kdl = cfg.environment.etc."d2b/niri-vm-borders.kdl".text;
-  niriNativeKdl = requestedNiriNative.config.environment.etc."d2b/niri-vm-borders.kdl".text;
+  workloadProcess = lib.findFirst
+    (row: row.vm == workload.workloadId)
+    (throw "rendered dark-live process DAG missing")
+    processes;
+  qemuNode = lib.findFirst
+    (row: row.id == qemuRole.roleId)
+    (throw "rendered dark-live qemu-media node missing")
+    workloadProcess.nodes;
+
+  hostJson = cfg.d2b._bundle.hostJson.data;
+  providerRegistry = cfg.d2b._bundle.providerRegistryV2Json.data.providers;
+  runtimeRegistry = lib.findFirst
+    (row:
+      (row.binding.axis or null) == "local-runtime"
+      && (row.binding.workloadId or null) == workload.workloadId)
+    (throw "dark-live runtime registry binding missing")
+    providerRegistry;
+  storageRegistry = lib.findFirst
+    (row:
+      (row.binding.axis or null) == "local-storage"
+      && (row.binding.workloadId or null) == workload.workloadId)
+    (throw "dark-live storage registry binding missing")
+    providerRegistry;
+  desktopMetadata =
+    cfg.d2b._bundle.extraArtifacts.desktopMetadataJson.data;
+  desktopWorkload =
+    desktopMetadata.workloads.${workload.canonicalTarget};
+
+  displayCfg = requestedWithDisplay.config;
+  displayWorkload = displayCfg.d2b._index.workloads.byId.${workload.workloadId};
+  displayMapping = lib.findFirst
+    (row: row.workloadId == workload.workloadId)
+    (throw "normalized dark-live display mapping missing")
+    displayCfg.d2b._index.providerRegistryV2Mappings.display;
+  niriKdl =
+    displayCfg.environment.etc."d2b/niri-vm-borders.kdl".text;
+  resolvedAccent =
+    displayCfg.d2b._uiColors.vms.${workload.workloadId}.border.active;
+
   rawArtifactText = builtins.toJSON {
-    inherit (hostJson) qemuMedia vmRuntimes;
-    niri = kdl;
+    host = hostJson;
+    process = workloadProcess;
+    registry = providerRegistry;
+    normalizedResources = map
+      (row: {
+        inherit (row) kind path providerId realmId resourceId roleId workloadId;
+      })
+      resources;
+    desktop = desktopMetadata;
+    niri = niriKdl;
   };
 in
 {
   "requested-vm-config/evaluates-without-hardware" = {
-    expr = lib.all (assertion: assertion.assertion) cfg.assertions;
-    expected = system == "x86_64-linux";
+    expr = {
+      assertionsGreen =
+        lib.all (assertion: assertion.assertion) cfg.assertions;
+      platformBinary =
+        lib.hasSuffix
+          (if system == "x86_64-linux"
+           then "/bin/qemu-system-x86_64"
+           else "/bin/qemu-system-aarch64")
+          qemuNode.binaryPath;
+    };
+    expected = {
+      assertionsGreen = true;
+      platformBinary = true;
+    };
   };
 
   "requested-vm-config/dark-env-declared" = {
     expr = {
-      inherit (cfg.d2b.envs.dark) enable lanSubnet uplinkSubnet;
+      inherit (realm)
+        canonicalTargetSuffix parentRealmId placement realmId realmPath;
+      parentMatches = realm.parentRealmId == localRoot.realmId;
+      network = {
+        inherit (cfg.d2b.realms.dark.network)
+          lanSubnet mode uplinkSubnet;
+      };
     };
     expected = {
-      enable = true;
-      lanSubnet = "10.60.0.0/24";
-      uplinkSubnet = "203.0.113.0/30";
+      canonicalTargetSuffix = "dark.local-root.d2b";
+      parentRealmId = "cvudgfqzh442wwtozs7q";
+      parentMatches = true;
+      placement = "host-local";
+      realmId = "x6oymc5vn56e3dhxriqa";
+      realmPath = "dark.local-root";
+      network = {
+        mode = "declared";
+        lanSubnet = "10.60.0.0/24";
+        uplinkSubnet = "203.0.113.0/30";
+      };
     };
   };
 
   "requested-vm-config/dark-live-manual-qemu-media" = {
     expr = {
-      inherit (vm) enable env index autostart;
-      runtimeKind = vm.runtime.kind;
-      bootDriveSlot = vm.qemuMedia.bootDrive.slot;
-      qemuHypervisorService =
-        lib.findFirst (service: service.role == "hypervisor") null
-          cfg.d2b.manifest."dark-live".runtime.services;
-      cloudHypervisorService =
-        lib.findFirst (service: service.role == "hypervisor") null
-          cfg.d2b.manifest."sys-dark-net".runtime.services;
-      processNodes = {
-        qemu = {
-          inherit (darkQemuNode) id role;
-        };
-        cloudHypervisor = {
-          inherit (netCloudHypervisorNode) id role;
-        };
+      inherit (workload)
+        canonicalTarget enabled providerRefs realmId workloadId;
+      autostart = workload.spec.autostart;
+      runtime = runtimeBinding;
+      processIdentity = workloadProcess.workloadIdentity;
+      qemu = {
+        inherit (qemuNode) id role;
+        startsPaused = builtins.elem "-S" qemuNode.argv;
+        hasGtkDisplay =
+          builtins.elem "-display" qemuNode.argv
+          && builtins.elem "gtk,gl=off,show-cursor=on" qemuNode.argv;
+        runtimePath = qemuRuntimeResource.path;
       };
     };
     expected = {
-      enable = true;
-      env = "dark";
-      index = 10;
+      canonicalTarget = "dark-live.dark.local-root.d2b";
+      enabled = true;
+      providerRefs.runtime = "qemu";
+      realmId = "x6oymc5vn56e3dhxriqa";
+      workloadId = "rx2jpwox2yeifudyjhwq";
       autostart = false;
-      runtimeKind = "qemu-media";
-      bootDriveSlot = "boot";
-      qemuHypervisorService = {
-        id = "qemu-media";
-        role = "hypervisor";
-        optional = false;
+      runtime = {
+        implementationId = "qemu-media";
+        providerId = "lkufv5rli2ulo7a2zgcq";
+        providerType = "runtime";
       };
-      cloudHypervisorService = {
-        id = "cloud-hypervisor";
-        role = "hypervisor";
-        optional = false;
+      processIdentity = {
+        canonicalTarget = "dark-live.dark.local-root.d2b";
+        providerId = "lkufv5rli2ulo7a2zgcq";
+        realmId = "x6oymc5vn56e3dhxriqa";
+        realmPath = [ "dark" "local-root" ];
+        runtimeKind = "qemu-media";
+        workloadId = "rx2jpwox2yeifudyjhwq";
+        workloadName = "dark-live";
       };
-      processNodes = {
-        qemu = {
-          id = "qemu-media";
-          role = "qemu-media-runner";
-        };
-        cloudHypervisor = {
-          id = "cloud-hypervisor";
-          role = "cloud-hypervisor-runner";
-        };
+      qemu = {
+        id = "e7zw2q5a7pjqkto7c5ma";
+        role = "qemu-media-runner";
+        startsPaused = true;
+        hasGtkDisplay = true;
+        runtimePath =
+          "/run/d2b/r/x6oymc5vn56e3dhxriqa/w/rx2jpwox2yeifudyjhwq/roles/e7zw2q5a7pjqkto7c5ma";
       };
     };
   };
 
   "requested-vm-config/opaque-physical-usb-refs" = {
     expr = {
-      boot = {
-        inherit (vm.qemuMedia.source) kind ref path format readOnly;
+      provider = {
+        inherit (runtimeProvider)
+          capabilityRefs configRef implementationId providerType;
       };
-      backup = {
-        inherit (vm.qemuMedia.removableSlots.backup.source) kind ref path format readOnly;
+      media = {
+        inherit (mediaResource) kind path resourceId workloadId;
       };
+      hostQemuMedia = hostJson.qemuMedia;
     };
     expected = {
-      boot = {
-        kind = "physical-usb";
-        ref = "boot";
-        path = null;
-        format = "raw";
-        readOnly = true;
+      provider = {
+        capabilityRefs = [ "qmp-media-attach" ];
+        configRef = "dark-live-media";
+        implementationId = "qemu-media";
+        providerType = "runtime";
       };
-      backup = {
-        kind = "physical-usb";
-        ref = "backup";
-        path = null;
-        format = "raw";
-        readOnly = true;
+      media = {
+        kind = "workload-media";
+        path =
+          "/var/lib/d2b/r/x6oymc5vn56e3dhxriqa/w/rx2jpwox2yeifudyjhwq/media";
+        resourceId = "workload/rx2jpwox2yeifudyjhwq/media";
+        workloadId = "rx2jpwox2yeifudyjhwq";
       };
+      hostQemuMedia = null;
     };
   };
 
   "requested-vm-config/host-json-has-only-opaque-media" = {
-    expr = hostJson.qemuMedia.sources;
-    expected = [
-      {
-        vm = "dark-live";
-        mediaRef = "backup";
-        slot = "backup";
-        sourceKind = "physical-usb";
-        format = "raw";
-        readOnly = true;
-        registryScope = "root-only-runtime-state";
-      }
-      {
-        vm = "dark-live";
-        mediaRef = "boot";
-        slot = "boot";
-        sourceKind = "physical-usb";
-        format = "raw";
-        readOnly = true;
-        registryScope = "root-only-runtime-state";
-        usbSelector = {
-          byIdName = "usb-Example_Dark_Live_0001-0:0";
-        };
-      }
-    ];
+    expr = {
+      inherit (hostJson) qemuMedia runtimeProviders vmRuntimes;
+      workloadIfName = lib.findFirst
+        (row: (row.vm or null) == workload.workloadId)
+        null
+        hostJson.ifNameMappings;
+    };
+    expected = {
+      qemuMedia = null;
+      runtimeProviders = [ ];
+      vmRuntimes = [ ];
+      workloadIfName = {
+        derivedIfname = "d2b-tAFA9B15C";
+        env = "x6oymc5vn56e3dhxriqa";
+        role = "workload-lan";
+        userVisibleName = "d2b-tAFA9B15C";
+        vm = "rx2jpwox2yeifudyjhwq";
+      };
+    };
   };
 
   "requested-vm-config/boot-selector-and-hotplug-source-coexist" = {
-    expr =
-      let
-        boot = lib.findFirst
-          (source: source.vm == "dark-live" && source.slot == "boot")
-          null
-          hostJson.qemuMedia.sources;
-        backup = lib.findFirst
-          (source: source.vm == "dark-live" && source.slot == "backup")
-          null
-          hostJson.qemuMedia.sources;
-      in {
-        bootHasStartSelector = boot.usbSelector.byIdName != null;
-        backupHotplugSourcePresent = backup != null && backup.sourceKind == "physical-usb";
-        qemuRuntimeUsbHotplug =
-          cfg.d2b.manifest."dark-live".runtime.operationCapabilities.media.usbHotplug;
+    expr = {
+      qmpMediaAttach =
+        builtins.elem "qmp-media-attach" runtimeProvider.capabilityRefs;
+      runtimeRegistry = {
+        inherit (runtimeRegistry.descriptor) implementationId;
+        inherit (runtimeRegistry.binding)
+          runnerIntentId vmStartIntentId workloadId;
       };
+      mediaSetId = storageRegistry.binding.mediaSetId;
+      mediaResourceId =
+        lib.replaceStrings [ "/" ] [ "-" ] mediaResource.resourceId;
+    };
     expected = {
-      bootHasStartSelector = true;
-      backupHotplugSourcePresent = true;
-      qemuRuntimeUsbHotplug = true;
+      qmpMediaAttach = true;
+      runtimeRegistry = {
+        implementationId = "qemu-media";
+        runnerIntentId =
+          "runner:workload:rx2jpwox2yeifudyjhwq:role:e7zw2q5a7pjqkto7c5ma";
+        vmStartIntentId =
+          "vm-start:workload:rx2jpwox2yeifudyjhwq:role:e7zw2q5a7pjqkto7c5ma";
+        workloadId = "rx2jpwox2yeifudyjhwq";
+      };
+      mediaSetId = "workload-rx2jpwox2yeifudyjhwq-media";
+      mediaResourceId = "workload-rx2jpwox2yeifudyjhwq-media";
     };
   };
 
@@ -174,6 +272,7 @@ in
     expr =
       !(lib.hasInfix "/dev/disk/by-id" rawArtifactText)
       && !(lib.hasInfix "/dev/bus/usb" rawArtifactText)
+      && !(lib.hasInfix "usbSelector" rawArtifactText)
       && !(lib.hasInfix "busid" rawArtifactText)
       && !(lib.hasInfix "busId" rawArtifactText)
       && !(lib.hasInfix "SecretSerial" rawArtifactText)
@@ -193,10 +292,45 @@ in
   };
 
   "requested-vm-config/purple-qemu-media-niri-border" = {
-    expr =
-      lib.hasInfix "// Borders for qemu-media VM host window: dark-live" niriNativeKdl
-      && lib.hasInfix ''match app-id=r#"^d2b\.dark-live\."#'' niriNativeKdl
-      && lib.hasInfix ''active-color "#301934"'' niriNativeKdl;
-    expected = true;
+    expr = {
+      displayProvider =
+        displayWorkload.providerBindings.display.implementationId;
+      mapping = {
+        inherit (displayMapping) realmId workloadId;
+      };
+      canonicalTarget =
+        lib.hasInfix
+          "// Borders for workload: ${workload.canonicalTarget}"
+          niriKdl;
+      workloadScopedAppId =
+        lib.hasInfix
+          ''match app-id=r#"^d2b\.${workload.workloadId}\."#''
+          niriKdl;
+      rawNameAbsent =
+        !(lib.hasInfix ''match app-id=r#"^d2b\.dark-live\."#'' niriKdl);
+      resolvedAccent =
+        lib.hasInfix ''active-color "${resolvedAccent}"'' niriKdl;
+      desktopIdentity = {
+        inherit (desktopWorkload)
+          canonicalTarget providerId realmId workloadId;
+      };
+    };
+    expected = {
+      displayProvider = "wayland";
+      mapping = {
+        realmId = "x6oymc5vn56e3dhxriqa";
+        workloadId = "rx2jpwox2yeifudyjhwq";
+      };
+      canonicalTarget = true;
+      workloadScopedAppId = true;
+      rawNameAbsent = true;
+      resolvedAccent = true;
+      desktopIdentity = {
+        canonicalTarget = "dark-live.dark.local-root.d2b";
+        providerId = "lkufv5rli2ulo7a2zgcq";
+        realmId = "x6oymc5vn56e3dhxriqa";
+        workloadId = "rx2jpwox2yeifudyjhwq";
+      };
+    };
   };
 }
