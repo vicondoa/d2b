@@ -11,15 +11,18 @@ license.workspace = true
 workspace = true
 
 [features]
-default = []
+default = ["secret-service"]
 secret-service = ["dep:oo7"]
 
 [dependencies]
 async-trait.workspace = true
 d2b-contracts = { workspace = true, features = ["guest", "v2-services"] }
 d2b-provider-credential-secret-service.workspace = true
+d2b-session.workspace = true
 d2b-session-unix = { workspace = true, features = ["host-socket"] }
 oo7 = { workspace = true, optional = true }
+rustix.workspace = true
 sha2.workspace = true
-tokio = { workspace = true, features = ["io-util", "process", "sync", "time"] }
+tokio = { workspace = true, features = ["io-util", "process", "rt-multi-thread", "signal", "sync", "time"] }
+ttrpc = { workspace = true, features = ["async"] }
 zeroize.workspace = true

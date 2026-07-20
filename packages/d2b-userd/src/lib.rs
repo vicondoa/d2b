@@ -6,6 +6,7 @@ use d2b_contracts::guest_wire::{
 };
 
 pub mod services;
+pub use services::user::runtime;
 
 pub use services::user::{
     AuthenticatedUser, ClosedOutcome, NoopSecretMetrics, OwnerBinding, SecretMetricEvent,

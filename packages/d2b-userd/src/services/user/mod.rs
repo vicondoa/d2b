@@ -2,6 +2,7 @@
 
 mod export;
 mod identity;
+pub mod runtime;
 mod secret_service;
 mod service;
 
@@ -18,7 +19,8 @@ pub use identity::{
 pub use secret_service::Oo7SecretStore;
 pub use secret_service::{
     EntropySource, OsEntropy, OwnedSecretMetadata, OwnedSecretSelector, SecretMaterial,
-    SecretStore, SecretStoreError, SystemUserdClock, UserdClock, UserdSecretServicePort,
+    SecretStore, SecretStoreError, SystemUserdClock, UserSecretEntropyError, UserdClock,
+    UserdSecretServicePort,
 };
 pub use service::{AdmittedUserRequest, UserSecretService};
 
