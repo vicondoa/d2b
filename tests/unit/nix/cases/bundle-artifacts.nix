@@ -32,7 +32,7 @@ let
         implementationId = "cloud-hypervisor";
       };
       workloads.app = {
-        provider = "runtime";
+        providerRefs.runtime = "runtime";
         config = { };
       };
     };
