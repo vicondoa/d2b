@@ -4308,7 +4308,7 @@ fn cmd_vm_exec_management_v2(
     args: &VmExecArgs,
     command: &VmExecManagementCommand,
 ) -> Result<i32, CliFailure> {
-    let daemon = match connect_daemon_for_command(context, "vm exec", args.json)? {
+    let daemon = match connect_daemon_for_command(context, "vm exec", exec_effective_json(args))? {
         DaemonCommandConnection::Connected(daemon) => daemon,
         DaemonCommandConnection::Unavailable(exit) => return Ok(exit),
     };
@@ -13274,9 +13274,9 @@ mod host_install_dispatch_tests {
             detach: false,
             interactive: false,
             tty: false,
-            json: true,
+            json: false,
             human: false,
-            management: Vec::new(),
+            management: vec![OsString::from("list"), OsString::from("--json")],
             command: Vec::new(),
         };
         let (result, stdout) = super::with_test_stdout_capture(|| {
