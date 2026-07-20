@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The d2b clipboard service process.
 //!
-//! Endpoint discovery and ComponentSession establishment are supplied by the
-//! parent control plane. Starting this binary without that inherited adapter
-//! must not recreate the removed pathname sockets or picker child protocol.
+//! The process accepts only the three inherited systemd SEQPACKET listeners.
+//! It never discovers ambient paths or recreates the retired newline protocol.
 
 fn main() {
-    eprintln!("d2b-clipd: clipboard-session-unavailable");
-    std::process::exit(78);
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    if let Err(error) = d2b_clipd::daemon::run() {
+        eprintln!("d2b-clipd: {error}");
+        std::process::exit(error.exit_code());
+    }
 }

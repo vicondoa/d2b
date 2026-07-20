@@ -15,6 +15,7 @@ use std::{
 };
 
 use crate::{
+    audit::{AuditEvent, MetricEvent, MetricName, MetricsQueue},
     fd::{
         AcceptedTransferFdKind, AuthenticatedTransferOwner, ComponentSessionFdClaim, FdCapModel,
         FdSafetyError, validate_component_session_transfer_fd, validate_fd_cap,
@@ -61,6 +62,7 @@ pub trait EstablishedClipboardSession {
 pub struct ClipboardServicesConfig {
     pub control: ClipboardControlConfig,
     pub transfer_fd_cap: FdCapModel,
+    pub metrics_capacity: usize,
 }
 
 impl Default for ClipboardServicesConfig {
@@ -73,6 +75,7 @@ impl Default for ClipboardServicesConfig {
                 base_reserved: 64,
                 max_fds_per_recvmsg: 1,
             },
+            metrics_capacity: 1_024,
         }
     }
 }
@@ -174,6 +177,7 @@ struct ActiveClipboardServices {
     picker_required_offers: BTreeSet<String>,
     picker_confirmed_offers: BTreeSet<String>,
     picker_selections: BTreeMap<OpaquePickerId, OpaquePickerId>,
+    metrics: MetricsQueue,
 }
 
 /// Control, bridge, and picker state bound to one session generation.
@@ -280,6 +284,9 @@ impl ClipboardServices {
         )
         .map_err(map_picker_startup)?;
 
+        if config.metrics_capacity == 0 {
+            return Err(ClipboardStartupError::InvalidConfig);
+        }
         let validated_cap = validate_fd_cap(config.transfer_fd_cap)
             .map_err(|_| ClipboardStartupError::InvalidConfig)?;
         let transfer_fd_cap =
@@ -307,6 +314,7 @@ impl ClipboardServices {
                 picker_required_offers: BTreeSet::new(),
                 picker_confirmed_offers: BTreeSet::new(),
                 picker_selections: BTreeMap::new(),
+                metrics: MetricsQueue::new(config.metrics_capacity),
             }),
             close_reason: None,
         })
@@ -353,7 +361,30 @@ impl ClipboardServices {
         let response = active
             .control
             .handle(session, call, input, now_unix_ms)
-            .map_err(ClipboardServiceError::from)?;
+            .map_err(|error| {
+                match error {
+                    ControlError::Policy(ReasonCode::AuditFailure) => {
+                        active.metrics.enqueue_droppable(MetricEvent {
+                            name: MetricName::AuditQueueOverflow,
+                            reason: Some(ReasonCode::AuditFailure),
+                        });
+                    }
+                    ControlError::Policy(reason) => {
+                        active.metrics.enqueue_droppable(MetricEvent {
+                            name: MetricName::PolicyDenied,
+                            reason: Some(reason),
+                        });
+                    }
+                    _ => {}
+                }
+                ClipboardServiceError::from(error)
+            })?;
+        if response.outcome == ControlOutcome::Denied {
+            active.metrics.enqueue_droppable(MetricEvent {
+                name: MetricName::PolicyDenied,
+                reason: Some(response.reason),
+            });
+        }
         if matches!(
             response.outcome,
             ControlOutcome::Succeeded | ControlOutcome::AlreadyApplied
@@ -376,15 +407,22 @@ impl ClipboardServices {
         offer: PickerOffer,
     ) -> Result<(), ClipboardServiceError> {
         let active = self.active_mut()?;
-        let byte_count = offer
-            .byte_count()
-            .ok_or(ClipboardServiceError::PickerOfferPolicy(
+        let Some(byte_count) = offer.byte_count() else {
+            active.metrics.enqueue_droppable(MetricEvent {
+                name: MetricName::PolicyDenied,
+                reason: Some(ReasonCode::MemoryCapExceeded),
+            });
+            return Err(ClipboardServiceError::PickerOfferPolicy(
                 ReasonCode::MemoryCapExceeded,
-            ))?;
-        active
-            .policy
-            .validate_offer(byte_count, offer.mime_type())
-            .map_err(ClipboardServiceError::PickerOfferPolicy)?;
+            ));
+        };
+        if let Err(reason) = active.policy.validate_offer(byte_count, offer.mime_type()) {
+            active.metrics.enqueue_droppable(MetricEvent {
+                name: MetricName::PolicyDenied,
+                reason: Some(reason),
+            });
+            return Err(ClipboardServiceError::PickerOfferPolicy(reason));
+        }
         let offer_id = offer.offer_id().as_str().to_owned();
         let confirmation_required = offer.confirmation_required();
         active.picker.publish_offer(offer)?;
@@ -434,6 +472,7 @@ impl ClipboardServices {
             PickerOperation::Cancel(selection_id) => Some(selection_id.clone()),
             _ => None,
         };
+        let picker_opened = matches!(operation, PickerOperation::List(_));
         let response = active
             .picker
             .invoke(
@@ -443,7 +482,21 @@ impl ClipboardServices {
                 operation,
                 now_unix_ms,
             )
-            .map_err(ClipboardServiceError::from)?;
+            .map_err(|error| {
+                if error == PickerServiceError::DeadlineExpired {
+                    active.metrics.enqueue_droppable(MetricEvent {
+                        name: MetricName::PickerTimeout,
+                        reason: Some(ReasonCode::PickerTimeout),
+                    });
+                }
+                ClipboardServiceError::from(error)
+            })?;
+        if picker_opened {
+            active.metrics.enqueue_droppable(MetricEvent {
+                name: MetricName::PickerOpened,
+                reason: None,
+            });
+        }
         if let PickerResponse::Selected(receipt) = &response {
             active
                 .picker_confirmed_offers
@@ -514,6 +567,22 @@ impl ClipboardServices {
 
     pub fn active_transfer_count(&self) -> Result<usize, ClipboardServiceError> {
         Ok(self.active()?.transfer_fds.len())
+    }
+
+    pub fn drain_audit(
+        &mut self,
+        max_events: usize,
+    ) -> Result<Vec<AuditEvent>, ClipboardServiceError> {
+        Ok(self.active_mut()?.control.drain_audit(max_events))
+    }
+
+    pub fn drain_metrics(
+        &mut self,
+        max_events: usize,
+    ) -> Result<(Vec<MetricEvent>, u64), ClipboardServiceError> {
+        let active = self.active_mut()?;
+        let dropped = active.metrics.take_dropped_count();
+        Ok((active.metrics.drain_bounded(max_events), dropped))
     }
 
     pub fn session_unavailable(&mut self) {
@@ -1066,5 +1135,114 @@ mod tests {
             format!("{services:?}"),
             "ClipboardServices { phase: Closed, close_reason: Some(Requested) }"
         );
+    }
+
+    #[test]
+    fn composition_exposes_bounded_audit_and_closed_metric_events() {
+        let mut config = ClipboardServicesConfig::default();
+        config.control.audit_per_realm_quota = 1;
+        let (control, bridge, picker) = sessions();
+        let mut services = ClipboardServices::start(&control, &bridge, &picker, config).unwrap();
+
+        for (id, request) in [(1, 21), (2, 22)] {
+            services
+                .handle_control(
+                    ControlPeer::ClipboardBridge,
+                    call(request),
+                    ControlInput::Offer(OfferIntent {
+                        offer_id: format!("offer-{id}"),
+                        operation_id: format!("operation-{id}"),
+                        source_realm: "work".to_owned(),
+                        destination_realm: "personal".to_owned(),
+                        mime_type: "text/plain".to_owned(),
+                        byte_count: 12,
+                        request_digest: [id; 32],
+                        expires_at_unix_ms: 9_000,
+                        explicit_cross_realm_allow: true,
+                        trusted_paste_intent: true,
+                    }),
+                    2_000,
+                )
+                .unwrap();
+        }
+        services
+            .handle_control(
+                ControlPeer::CommandClient,
+                call(23),
+                ControlInput::AcceptTransfer {
+                    offer_id: "offer-1".to_owned(),
+                },
+                2_000,
+            )
+            .unwrap();
+        assert_eq!(
+            services
+                .handle_control(
+                    ControlPeer::CommandClient,
+                    call(24),
+                    ControlInput::AcceptTransfer {
+                        offer_id: "offer-2".to_owned(),
+                    },
+                    2_000,
+                )
+                .unwrap_err(),
+            ClipboardServiceError::Control(ControlError::Policy(ReasonCode::AuditFailure))
+        );
+
+        assert_eq!(services.drain_audit(1).unwrap().len(), 1);
+        assert!(services.drain_audit(1).unwrap().is_empty());
+        assert_eq!(
+            services
+                .handle_control(
+                    ControlPeer::CommandClient,
+                    call(25),
+                    ControlInput::AcceptTransfer {
+                        offer_id: "offer-2".to_owned(),
+                    },
+                    2_000,
+                )
+                .unwrap()
+                .outcome,
+            ControlOutcome::Succeeded
+        );
+
+        services
+            .handle_picker(
+                &PickerCall::new([31; 16], None, 7, 1_000, 9_000).unwrap(),
+                projection(),
+                PickerOperation::List(OfferQuery::new(ClipboardTarget::Host, 1).unwrap()),
+                2_000,
+            )
+            .unwrap();
+        assert_eq!(
+            services
+                .handle_picker(
+                    &PickerCall::new([32; 16], None, 7, 1_000, 1_500).unwrap(),
+                    projection(),
+                    PickerOperation::List(OfferQuery::new(ClipboardTarget::Host, 1).unwrap()),
+                    2_000,
+                )
+                .unwrap_err(),
+            ClipboardServiceError::Picker(PickerServiceError::DeadlineExpired)
+        );
+        assert!(matches!(
+            services.publish_picker_offer(picker_offer(Some(9 * 1024 * 1024))),
+            Err(ClipboardServiceError::PickerOfferPolicy(_))
+        ));
+
+        let (first, dropped) = services.drain_metrics(2).unwrap();
+        assert_eq!(dropped, 0);
+        assert_eq!(first.len(), 2);
+        let (remaining, dropped) = services.drain_metrics(8).unwrap();
+        assert_eq!(dropped, 0);
+        let names = first
+            .into_iter()
+            .chain(remaining)
+            .map(|event| event.name)
+            .collect::<Vec<_>>();
+        assert!(names.contains(&MetricName::AuditQueueOverflow));
+        assert!(names.contains(&MetricName::PickerOpened));
+        assert!(names.contains(&MetricName::PickerTimeout));
+        assert!(names.contains(&MetricName::PolicyDenied));
     }
 }

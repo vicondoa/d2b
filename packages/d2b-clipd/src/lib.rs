@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 pub mod audit;
+pub mod daemon;
 pub mod fallback;
 pub mod fd;
 pub mod framing;

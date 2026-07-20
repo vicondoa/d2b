@@ -1,7 +1,7 @@
 use std::process::Command;
 
 #[test]
-fn standalone_startup_fails_closed_without_inherited_session_adapter() {
+fn standalone_startup_fails_closed_without_systemd_activation() {
     let output = Command::new(env!("CARGO_BIN_EXE_d2b-clipd"))
         .output()
         .expect("spawn d2b-clipd");
@@ -10,7 +10,7 @@ fn standalone_startup_fails_closed_without_inherited_session_adapter() {
     assert!(output.stdout.is_empty());
     assert_eq!(
         String::from_utf8_lossy(&output.stderr),
-        "d2b-clipd: clipboard-session-unavailable\n"
+        "d2b-clipd: clipboard-activation-invalid\n"
     );
 }
 
@@ -32,7 +32,7 @@ fn legacy_startup_arguments_cannot_reenable_removed_composition() {
     assert_eq!(output.status.code(), Some(78));
     assert_eq!(
         String::from_utf8_lossy(&output.stderr),
-        "d2b-clipd: clipboard-session-unavailable\n"
+        "d2b-clipd: clipboard-activation-invalid\n"
     );
 }
 
@@ -52,6 +52,30 @@ fn binary_has_no_legacy_socket_picker_or_wayland_composition() {
         assert!(
             !source.contains(forbidden),
             "legacy composition marker remains: {forbidden}"
+        );
+    }
+    assert!(source.contains("d2b_clipd::daemon::run()"));
+}
+
+#[test]
+fn daemon_composition_names_only_the_three_systemd_endpoints() {
+    let source = include_str!("../src/daemon.rs");
+    for required in [
+        "\"clipboard-control\"",
+        "\"clipboard-picker\"",
+        "\"clipboard-bridge\"",
+        "ActivatedSeqpacketListeners::from_systemd",
+        "serve_ttrpc_services",
+    ] {
+        assert!(
+            source.contains(required),
+            "missing daemon marker: {required}"
+        );
+    }
+    for forbidden in ["UnixListener", "bind(", "connect(", "read_line", "lines()"] {
+        assert!(
+            !source.contains(forbidden),
+            "ambient or newline transport marker remains: {forbidden}"
         );
     }
 }

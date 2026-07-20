@@ -12,9 +12,13 @@ description = "Authenticated bounded clipboard services for d2b"
 workspace = true
 
 [dependencies]
+async-trait.workspace = true
 command-fds = "0.3"
+d2b-contracts = { workspace = true, features = ["v2-services"] }
 d2b-core = { workspace = true }
 d2b-realm-core = { workspace = true }
+d2b-session.workspace = true
+d2b-session-unix = { workspace = true, features = ["host-socket"] }
 env_logger = "0.11"
 html2text = "0.15.3"
 log = "0.4"
@@ -25,6 +29,8 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror = "2"
+tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread", "signal", "sync", "time"] }
+ttrpc = { workspace = true, features = ["async"] }
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 wayland-protocols-misc = { version = "0.3", features = ["client"] }

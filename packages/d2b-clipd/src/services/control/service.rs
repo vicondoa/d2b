@@ -442,8 +442,8 @@ impl ClipboardControl {
         Ok(response)
     }
 
-    pub fn drain_audit(&mut self) -> Vec<AuditEvent> {
-        self.audit.drain_all()
+    pub fn drain_audit(&mut self, max_events: usize) -> Vec<AuditEvent> {
+        self.audit.drain_bounded(max_events)
     }
 
     pub fn observations(&self) -> impl ExactSizeIterator<Item = &ControlObservation> {
@@ -912,7 +912,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(accepted.state, Some(OfferState::Accepted));
-        let audit = service.drain_audit();
+        let audit = service.drain_audit(8);
         assert_eq!(audit.len(), 1);
         assert_eq!(audit[0].decision, AuditDecision::Allow);
 
@@ -955,7 +955,7 @@ mod tests {
             .unwrap();
         assert_eq!(denied.outcome, ControlOutcome::Denied);
         assert_eq!(denied.reason, ReasonCode::PolicyDenied);
-        assert_eq!(service.drain_audit()[0].decision, AuditDecision::Deny);
+        assert_eq!(service.drain_audit(8)[0].decision, AuditDecision::Deny);
     }
 
     #[test]
