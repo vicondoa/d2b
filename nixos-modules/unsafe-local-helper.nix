@@ -33,11 +33,19 @@ EOF
   };
   helperPackage = sourcePackage;
   unsafeLocalWorkloads = lib.filter
-    (workload:
-      workload.providerBindings.runtime.implementationId == "systemd-user")
+    (workload: (workload.spec.kind or null) == "unsafe-local")
     cfg._index.workloads.enabledList;
   unsafeLocalRealmIds =
-    lib.unique (map (workload: workload.realmId) unsafeLocalWorkloads);
+    lib.unique (map
+      (workload:
+        let
+          runtime = workload.providerBindings.runtime or null;
+        in
+        if runtime == null || runtime.implementationId != "systemd-user"
+        then throw
+          "unsafe-local workload ${workload.workloadId} requires a normalized systemd-user runtime binding"
+        else workload.realmId)
+      unsafeLocalWorkloads);
   unsafeLocalRealms =
     map (realmId: cfg._index.realms.enabledById.${realmId}) unsafeLocalRealmIds;
   eligibleUsers = lib.sort lib.lessThan
