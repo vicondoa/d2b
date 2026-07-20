@@ -12,37 +12,76 @@
 { self, lib }:
 
 let
-  # The minimal, hermetic d2b site/env/VM declaration every daemon-host
-  # node shares. Mirrors the consumer-style config the smoke evals use: one
-  # isolated env with RFC1918 / RFC5737 ranges and a single headless workload
-  # VM. No graphics / TPM / USBIP (those are device-bearing G-hw concerns).
+  # The minimal, hermetic d2b site/realm/workload declaration every
+  # daemon-host node shares. Mirrors the consumer-style config the smoke
+  # evals use (see examples/minimal/configuration.nix): one host-local realm
+  # with RFC1918 / RFC5737 ranges and a single headless cloud-hypervisor
+  # workload. No graphics / TPM / USBIP (those are device-bearing G-hw
+  # concerns).
   baseD2bConfig = {
+    d2b.acceptDestructiveV2Cutover = true;
     d2b.site = {
       waylandUser = "alice";
       launcherUsers = [ "alice" ];
       yubikey.enable = false;
       usePrebuiltHostTools = false;
     };
-    d2b.envs.work = {
-      lanSubnet = "10.20.0.0/24";
-      uplinkSubnet = "192.0.2.0/30";
-    };
-    d2b.vms.corp-vm = {
-      enable = true;
-      env = "work";
-      index = 10;
-      ssh.user = "alice";
-      config = { lib, ... }: {
-        networking.hostName = lib.mkDefault "corp-vm";
-        users.users.alice = {
-          isNormalUser = true;
-          uid = 1000;
+    d2b.realms.work = {
+      path = "work";
+      placement = "host-local";
+      allowedUsers = [ "alice" ];
+      broker = {
+        enable = true;
+        hostMutation = true;
+      };
+      network = {
+        mode = "declared";
+        lanSubnet = "10.20.0.0/24";
+        uplinkSubnet = "192.0.2.0/30";
+      };
+      providers.runtime = {
+        type = "runtime";
+        implementationId = "cloud-hypervisor";
+      };
+      workloads.corp-vm = {
+        providerRefs.runtime = "runtime";
+        config = { lib, ... }: {
+          networking.hostName = lib.mkDefault "corp-vm";
+          users.users.alice = {
+            isNormalUser = true;
+            uid = 1000;
+          };
         };
       };
     };
     # The full daemon + broker systemd surface under test.
     d2b.daemonExperimental.enable = true;
   };
+
+  # `corp-vm`'s realm/workload path, matching baseD2bConfig above. Kept as a
+  # single source of truth so tests can resolve the rendered `realmId` /
+  # `workloadId` (short, hashed storage identifiers — see
+  # nixos-modules/v2-identity.nix) instead of hardcoding the compatibility
+  # `/var/lib/d2b/vms/<name>` shape that no longer exists under the accepted
+  # realm/workload storage contract (`/var/lib/d2b/r/<realmId>/w/<workloadId>`).
+  # Host-local realms render with an implicit `.local-root` anchor segment
+  # (nixos-modules/index-realms.nix's `canonicalRealmPath`), so `work`'s
+  # rendered realm path is `work.local-root`, giving the full canonical
+  # target `corp-vm.work.local-root.d2b`.
+  corpVmCanonicalTarget = "corp-vm.work.local-root.d2b";
+
+  # Resolves the rendered realmId/workloadId + canonical state dir for
+  # `corp-vm` from a built node's `config`. Call as
+  # `d2bLib.corpVmWorkload config` from a test's `nodes.machine` module once
+  # `self.nixosModules.default` + `baseD2bConfig` are imported, so tests never
+  # hand-derive or guess the hashed storage path.
+  corpVmWorkload = config:
+    let
+      row = config.d2b._index.workloads.byCanonicalTarget.${corpVmCanonicalTarget};
+    in
+    row // {
+      stateDir = "/var/lib/d2b/r/${row.realmId}/w/${row.workloadId}";
+    };
 in
 {
   # A NixOS module for a runNixOSTest node that boots the d2b daemon host.
@@ -75,6 +114,14 @@ in
           };
 
           environment.variables.D2B_MANIFEST_PATH = config.d2b._manifestJsonPath;
+          # The `d2b` CLI's compiled-in defaults (`/run/d2b/public.sock`,
+          # `/run/d2b/priv.sock`) predate the local-root endpoint rename in
+          # nixos-modules/host-daemon.nix / host-broker.nix, which bind the
+          # rendered `daemon-config.json` paths below instead. Point the CLI
+          # at the real live sockets so `d2b list` / `d2b vm *` resolve
+          # against the actual daemon rather than a stale compiled-in guess.
+          environment.variables.D2B_PUBLIC_SOCKET = "/run/d2b/root.sock";
+          environment.variables.D2B_BROKER_SOCKET = "/run/d2b/broker.sock";
 
           # runNixOSTest runs first-boot activation before systemd-tmpfiles has
           # materialized the d2b state tree. Pre-create the key directory so
@@ -113,5 +160,5 @@ in
     };
 
   # Re-exported so tests can assert against the shared declaration.
-  inherit baseD2bConfig;
+  inherit baseD2bConfig corpVmCanonicalTarget corpVmWorkload;
 }
