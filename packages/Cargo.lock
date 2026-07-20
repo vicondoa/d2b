@@ -1043,9 +1043,13 @@ dependencies = [
 name = "d2b-clipd"
 version = "2.0.0"
 dependencies = [
+ "async-trait",
  "command-fds",
+ "d2b-contracts",
  "d2b-core",
  "d2b-realm-core",
+ "d2b-session",
+ "d2b-session-unix",
  "env_logger",
  "html2text",
  "log",
@@ -1056,6 +1060,8 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror 2.0.18",
+ "tokio",
+ "ttrpc",
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-misc",
@@ -1687,18 +1693,24 @@ dependencies = [
 name = "d2b-unsafe-local-helper"
 version = "2.0.0"
 dependencies = [
+ "async-trait",
  "clap",
  "d2b-contracts",
  "d2b-core",
  "d2b-realm-core",
+ "d2b-session",
+ "d2b-session-unix",
  "d2b-wayland-proxy",
  "getrandom 0.2.17",
  "nix 0.29.0",
+ "protobuf",
  "rustix 0.38.44",
  "serde",
  "serde_json",
  "sha2",
  "socket2 0.5.10",
+ "tokio",
+ "ttrpc",
  "uzers",
  "zbus",
 ]
@@ -1710,10 +1722,13 @@ dependencies = [
  "async-trait",
  "d2b-contracts",
  "d2b-provider-credential-secret-service",
+ "d2b-session",
  "d2b-session-unix",
  "oo7",
+ "rustix 0.38.44",
  "sha2",
  "tokio",
+ "ttrpc",
  "zeroize",
 ]
 
