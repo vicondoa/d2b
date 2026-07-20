@@ -241,6 +241,26 @@ let
     };
   };
   unsafeCfg = (mkEval [ unsafeLocalFixture ]).config;
+  unsafeIndexWithoutRealmWorkloads =
+    let
+      original = unsafeCfg.d2b._index;
+      stripWorkloads = lib.mapAttrs (_: realm: removeAttrs realm [ "workloads" ]);
+    in
+    original // {
+      realms = original.realms // {
+        enabledList = map
+          (realm: removeAttrs realm [ "workloads" ])
+          original.realms.enabledList;
+        enabledById = stripWorkloads original.realms.enabledById;
+        enabledByPath = stripWorkloads original.realms.enabledByPath;
+      };
+    };
+  normalizedUnsafeCfg = (mkEval [
+    unsafeLocalFixture
+    ({ lib, ... }: {
+      d2b._index = lib.mkForce unsafeIndexWithoutRealmWorkloads;
+    })
+  ]).config;
   unsafeRow = builtins.head unsafeCfg.d2b._index.realms.workloads.enabled;
 
   workloadNames = prefix: count:
@@ -1152,6 +1172,7 @@ in
         shellBrokerRequired = shellPrivilege.brokerRequired;
         unsafeLocalShellBrokerOps = unsafeLocalShellBrokerOps;
       };
+
     expected = {
       helperGroupDeclared = true;
       eligibleHasLifecycleGroup = true;
@@ -1186,6 +1207,25 @@ in
       unsafeLocalShellRootUnits = [ ];
       shellBrokerRequired = "no";
       unsafeLocalShellBrokerOps = [ ];
+    };
+  };
+
+  "realm-workloads/unsafe-local-helper-uses-canonical-workload-index" = {
+    expr = {
+      daemonAllowedUsers =
+        (builtins.fromJSON
+          normalizedUnsafeCfg.environment.etc."d2b/daemon-config.json".text
+        ).unsafeLocalHelperUsers;
+      eligibleUsers = builtins.filter
+        (user:
+          builtins.elem
+            "d2b-unsafe-local"
+            normalizedUnsafeCfg.users.users.${user}.extraGroups)
+        [ "alice" "bob" "charlie" ];
+    };
+    expected = {
+      daemonAllowedUsers = [ "alice" "bob" ];
+      eligibleUsers = [ "alice" "bob" ];
     };
   };
 

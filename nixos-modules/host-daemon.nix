@@ -88,12 +88,14 @@ EOF
     cfg.vms);
   hostLocalRealms =
     lib.filter (realm: realm.placement == "host-local") cfg._index.realms.enabledList;
-  unsafeLocalRealms = lib.filter
-    (realm:
-      lib.any
-        (workload: workload.enable && workload.kind == "unsafe-local")
-        realm.workloads)
-    cfg._index.realms.enabledList;
+  unsafeLocalRealmIds = lib.unique (map
+    (workload: workload.realmId)
+    (lib.filter
+      (workload: workload.kind == "unsafe-local")
+      cfg._index.realms.workloads.enabled));
+  unsafeLocalRealms = map
+    (realmId: cfg._index.realms.enabledById.${realmId})
+    unsafeLocalRealmIds;
   unsafeLocalHelperUsers = lib.sort lib.lessThan
     (lib.unique (lib.concatMap (realm: realm.allowedUsers) unsafeLocalRealms));
   brokerMaterializedFor = realm:
