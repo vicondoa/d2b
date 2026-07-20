@@ -955,7 +955,10 @@ fn picker_response(response: PickerResponse) -> ServiceResponse {
 }
 
 fn validate_cancel(request: &CancelRequest) -> ttrpc::Result<()> {
-    if request.session_generation == 0 || request.request_id.len() != 16 {
+    if request.session_generation == 0
+        || request.request_id.len() != 16
+        || request.request_id.iter().all(|byte| *byte == 0)
+    {
         Err(rpc_invalid())
     } else {
         Ok(())
@@ -1012,7 +1015,65 @@ fn unix_millis() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use d2b_contracts::v2_services::common::{IdentityScope, RequestMetadata};
+
     use super::*;
+    use crate::{
+        policy::ReasonCode,
+        protocol::MAX_OFFERS_PER_PAGE,
+        services::{
+            control::{ControlError, OfferState},
+            picker::PickerServiceError,
+        },
+    };
+
+    fn valid_request() -> ServiceRequest {
+        let mut metadata = RequestMetadata::new();
+        metadata.request_id = vec![7; 16];
+        metadata.idempotency_key = vec![8; 16];
+        metadata.session_generation = 9;
+        metadata.issued_at_unix_ms = 1_000;
+        metadata.expires_at_unix_ms = 2_000;
+
+        let mut request = ServiceRequest::new();
+        request.metadata = Some(metadata).into();
+        request
+    }
+
+    fn host_request() -> ServiceRequest {
+        let mut request = valid_request();
+        let mut scope = IdentityScope::new();
+        scope.realm_id = "host".to_owned();
+        request.scope = Some(scope).into();
+        request
+    }
+
+    fn assert_rpc_status<T>(
+        result: ttrpc::Result<T>,
+        expected_code: ttrpc::Code,
+        expected_message: &str,
+    ) {
+        match result {
+            Err(ttrpc::Error::RpcStatus(status)) => {
+                assert_eq!(status.code(), expected_code);
+                assert_eq!(status.message, expected_message);
+            }
+            Err(_) => panic!("expected typed rpc status"),
+            Ok(_) => panic!("expected rpc rejection"),
+        }
+    }
+
+    fn assert_error_status(
+        error: ClipboardServiceError,
+        expected_code: ttrpc::Code,
+        expected_message: &str,
+    ) {
+        assert_rpc_status::<()>(
+            Err(map_service_error(error)),
+            expected_code,
+            expected_message,
+        );
+    }
 
     #[test]
     fn activation_names_and_endpoint_contracts_are_exact() {
@@ -1050,13 +1111,244 @@ mod tests {
     }
 
     #[test]
-    fn wire_adapters_reject_payload_substitution_and_non_host_picker_scope() {
+    fn admitted_and_picker_calls_accept_only_bounded_metadata() {
+        let valid = valid_request();
+        assert!(admitted_call(&valid).is_ok());
+        assert!(picker_call(&valid).is_ok());
+
+        let mut no_idempotency = valid.clone();
+        no_idempotency
+            .metadata
+            .mut_or_insert_default()
+            .idempotency_key
+            .clear();
+        assert!(admitted_call(&no_idempotency).is_ok());
+        assert!(picker_call(&no_idempotency).is_ok());
+
+        let missing = ServiceRequest::new();
+        assert_rpc_status(
+            admitted_call(&missing),
+            ttrpc::Code::INVALID_ARGUMENT,
+            "invalid-request",
+        );
+        assert_rpc_status(
+            picker_call(&missing),
+            ttrpc::Code::INVALID_ARGUMENT,
+            "invalid-request",
+        );
+
+        let mut malformed = Vec::new();
+        for request_id in [vec![7; 15], vec![0; 16], vec![7; 17]] {
+            let mut request = valid.clone();
+            request.metadata.mut_or_insert_default().request_id = request_id;
+            malformed.push(request);
+        }
+
+        let mut generation_zero = valid.clone();
+        generation_zero
+            .metadata
+            .mut_or_insert_default()
+            .session_generation = 0;
+        malformed.push(generation_zero);
+
+        let mut issued_zero = valid.clone();
+        issued_zero
+            .metadata
+            .mut_or_insert_default()
+            .issued_at_unix_ms = 0;
+        malformed.push(issued_zero);
+
+        let mut reversed_deadline = valid.clone();
+        reversed_deadline
+            .metadata
+            .mut_or_insert_default()
+            .expires_at_unix_ms = 1_000;
+        malformed.push(reversed_deadline);
+
+        let mut excessive_deadline = valid.clone();
+        excessive_deadline
+            .metadata
+            .mut_or_insert_default()
+            .expires_at_unix_ms = 1_000 + 15 * 60 * 1_000 + 1;
+        malformed.push(excessive_deadline);
+
+        let mut excessive_key = valid;
+        excessive_key
+            .metadata
+            .mut_or_insert_default()
+            .idempotency_key = vec![9; 65];
+        malformed.push(excessive_key);
+
+        for request in malformed {
+            assert_rpc_status(
+                admitted_call(&request),
+                ttrpc::Code::INVALID_ARGUMENT,
+                "invalid-request",
+            );
+            assert_rpc_status(
+                picker_call(&request),
+                ttrpc::Code::INVALID_ARGUMENT,
+                "invalid-request",
+            );
+        }
+    }
+
+    #[test]
+    fn projection_clamps_empty_pages_and_preserves_fail_closed_bounds() {
         let mut request = ServiceRequest::new();
-        request.resource_id = "offer-1".to_owned();
-        assert_eq!(opaque_resource(&request), Ok("offer-1".to_owned()));
-        request.resource_id = "payload/value".to_owned();
-        assert_eq!(opaque_resource(&request), Err(()));
-        assert!(host_scope(&request).is_err());
+        let empty = projection(&request);
+        assert_eq!(
+            empty,
+            PickerProjectionBounds {
+                encoded_bytes: 1,
+                offer_count: 1,
+                thumbnail_bytes: 0,
+                attachment_count: 0,
+            }
+        );
+        empty.validate().unwrap();
+
+        request.page_size = u32::try_from(MAX_OFFERS_PER_PAGE).unwrap();
+        assert_eq!(projection(&request).offer_count, MAX_OFFERS_PER_PAGE);
+        projection(&request).validate().unwrap();
+
+        request.page_size = u32::try_from(MAX_OFFERS_PER_PAGE + 1).unwrap();
+        assert!(projection(&request).validate().is_err());
+
+        request.page_size = 1;
+        request.attachment_indexes = vec![0];
+        let attached = projection(&request);
+        assert_eq!(attached.attachment_count, 1);
+        assert!(attached.validate().is_err());
+    }
+
+    #[test]
+    fn control_response_maps_every_outcome_without_exposing_reason_data() {
+        for (outcome, expected) in [
+            (ControlOutcome::Succeeded, Outcome::OUTCOME_SUCCEEDED),
+            (ControlOutcome::AlreadyApplied, Outcome::OUTCOME_SUCCEEDED),
+            (ControlOutcome::Denied, Outcome::OUTCOME_DENIED),
+            (ControlOutcome::Cancelled, Outcome::OUTCOME_CANCELLED),
+            (ControlOutcome::DeadlineExpired, Outcome::OUTCOME_FAILED),
+            (ControlOutcome::Unavailable, Outcome::OUTCOME_FAILED),
+        ] {
+            let response = control_response(ControlResponse {
+                outcome,
+                offer_id: None,
+                state: Some(OfferState::Offered),
+                reason: ReasonCode::PolicyDenied,
+            });
+            assert_eq!(response.outcome.enum_value().unwrap(), expected);
+            assert!(response.resource_handle.is_empty());
+        }
+
+        let response = control_response(ControlResponse {
+            outcome: ControlOutcome::Succeeded,
+            offer_id: Some("opaque-1".to_owned()),
+            state: None,
+            reason: ReasonCode::Allowed,
+        });
+        assert_eq!(response.resource_handle, "opaque-1");
+    }
+
+    #[test]
+    fn cancel_validation_rejects_zero_generation_and_malformed_ids() {
+        let mut request = CancelRequest::new();
+        request.session_generation = 7;
+        request.request_id = vec![1; 16];
+        validate_cancel(&request).unwrap();
+
+        for request_id in [vec![], vec![1; 15], vec![0; 16], vec![1; 17]] {
+            let mut malformed = request.clone();
+            malformed.request_id = request_id;
+            assert_rpc_status(
+                validate_cancel(&malformed),
+                ttrpc::Code::INVALID_ARGUMENT,
+                "invalid-request",
+            );
+        }
+
+        request.session_generation = 0;
+        assert_rpc_status(
+            validate_cancel(&request),
+            ttrpc::Code::INVALID_ARGUMENT,
+            "invalid-request",
+        );
+    }
+
+    #[test]
+    fn opaque_resources_and_host_scope_reject_malformed_or_cross_scope_input() {
+        let mut request = host_request();
+        for valid in ["a", "offer-1", "OFFER_2", &"x".repeat(64)] {
+            request.resource_id = valid.to_owned();
+            assert_eq!(opaque_resource(&request), Ok(valid.to_owned()));
+        }
+        for invalid in ["", "payload/value", "offer.1", "é", &"x".repeat(65)] {
+            request.resource_id = invalid.to_owned();
+            assert_eq!(opaque_resource(&request), Err(()));
+        }
+        assert_eq!(host_scope(&request), Ok(ClipboardTarget::Host));
+
+        let missing = valid_request();
+        assert_rpc_status(
+            host_scope(&missing),
+            ttrpc::Code::INVALID_ARGUMENT,
+            "invalid-request",
+        );
+
+        for (realm, workload, provider, role) in [
+            ("work", "", "", ""),
+            ("host", "vm-a", "", ""),
+            ("host", "", "local-vm", ""),
+            ("host", "", "", "runner"),
+        ] {
+            let mut cross_scope = host_request();
+            let scope = cross_scope.scope.mut_or_insert_default();
+            scope.realm_id = realm.to_owned();
+            scope.workload_id = workload.to_owned();
+            scope.provider_id = provider.to_owned();
+            scope.role_id = role.to_owned();
+            assert_rpc_status(
+                host_scope(&cross_scope),
+                ttrpc::Code::INVALID_ARGUMENT,
+                "invalid-request",
+            );
+        }
+    }
+
+    #[test]
+    fn service_errors_map_to_closed_status_codes_and_messages() {
+        assert_error_status(
+            ClipboardServiceError::Unavailable,
+            ttrpc::Code::UNAVAILABLE,
+            "unavailable",
+        );
+        for error in [
+            ClipboardServiceError::TransferCapacityExhausted,
+            ClipboardServiceError::Picker(PickerServiceError::ResourceExhausted),
+        ] {
+            assert_error_status(error, ttrpc::Code::RESOURCE_EXHAUSTED, "resource-exhausted");
+        }
+        for error in [
+            ClipboardServiceError::TransferNotFound,
+            ClipboardServiceError::Picker(PickerServiceError::NotFound),
+        ] {
+            assert_error_status(error, ttrpc::Code::NOT_FOUND, "not-found");
+        }
+        for error in [
+            ClipboardServiceError::TransferNotAuthorized,
+            ClipboardServiceError::PickerConfirmationRequired,
+            ClipboardServiceError::PickerOfferPolicy(ReasonCode::PolicyDenied),
+            ClipboardServiceError::Control(ControlError::Policy(ReasonCode::AuditFailure)),
+            ClipboardServiceError::Control(ControlError::Unauthorized),
+        ] {
+            assert_error_status(error, ttrpc::Code::PERMISSION_DENIED, "policy-denied");
+        }
+        assert_error_status(
+            ClipboardServiceError::Control(ControlError::InvalidRequest),
+            ttrpc::Code::INVALID_ARGUMENT,
+            "invalid-request",
+        );
     }
 
     #[test]
