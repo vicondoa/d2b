@@ -231,7 +231,8 @@ fn bundle_tampered_to_envelope_round_trip() {
 #[test]
 fn daemon_refuses_a_tampered_bundle_during_provider_registry_startup() {
     let fixture = common::DaemonFixture::new("bundle-tampered-daemon.");
-    fixture.write_config(&["admin-user"], &["admin-user"]);
+    let username = common::current_username();
+    fixture.write_config(&[&username], &[&username]);
 
     let artifacts_dir = fixture.root().join("artifacts");
     fs::create_dir_all(&artifacts_dir).expect("create artifacts dir");
@@ -254,7 +255,7 @@ fn daemon_refuses_a_tampered_bundle_during_provider_registry_startup() {
     )
     .expect("rewrite daemon config with test artifact paths");
 
-    let server = common::spawn_d2bd_serve(&fixture, &common::TestPeer::admin(), true, None);
+    let server = common::spawn_d2bd_serve(&fixture, true, None);
     let status = server.wait();
 
     assert!(

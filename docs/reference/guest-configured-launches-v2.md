@@ -1,5 +1,7 @@
 # Guest configured-launch catalog
 
+**Diataxis category:** reference.
+
 `GuestConfiguredLaunchesV1` is the canonical broker-to-guest codec for one
 workload's configured launch items. The broker selects entries only from the
 integrity-verified private bundle and filters them to the exact bound realm and

@@ -12,6 +12,181 @@ use std::path::{Path, PathBuf};
 use clap::error::ErrorKind;
 use serde_json::Value;
 
+#[test]
+fn live_list_and_gateway_discovery_never_call_legacy_json_helpers() {
+    let source = include_str!("../src/lib.rs");
+    assert_eq!(
+        source.matches("try_list_via_socket(").count(),
+        1,
+        "legacy list helper may remain only as its dead compatibility definition"
+    );
+    for function in [
+        "fn cmd_vm_list_all",
+        "fn cmd_vm_list_local",
+        "fn gateway_lifecycle_state",
+        "fn gateway_lifecycle_states",
+    ] {
+        let start = source.find(function).expect("live command function");
+        let tail = &source[start..];
+        let end = tail
+            .find("\n}\n")
+            .map(|offset| offset + 3)
+            .expect("function terminator");
+        let body = &tail[..end];
+        assert!(
+            body.contains("service_v2::DaemonService::connect"),
+            "{function} must use authenticated daemon access"
+        );
+        assert!(
+            !body.contains("try_list_via_socket")
+                && !body.contains("try_public_socket_request")
+                && !body.contains("SeqpacketUnixSocket"),
+            "{function} must not call legacy JSON socket helpers"
+        );
+    }
+}
+
+#[test]
+fn launch_entrypoint_uses_typed_configured_launch_selection_only() {
+    let source = include_str!("../src/lib.rs");
+    let start = source.find("fn cmd_launch(").expect("launch entrypoint");
+    let tail = &source[start..];
+    let end = tail
+        .find("\n}\n")
+        .map(|offset| offset + 3)
+        .expect("function terminator");
+    let body = &tail[..end];
+    assert!(
+        body.contains("connect_daemon_for_command"),
+        "cmd_launch must use the shared authenticated daemon connection path"
+    );
+    let connect_start = source
+        .find("fn connect_daemon_for_command(")
+        .expect("typed daemon connection helper");
+    let connect_tail = &source[connect_start..];
+    let connect_end = connect_tail
+        .find("\n}\n")
+        .map(|offset| offset + 3)
+        .expect("typed daemon connection helper terminator");
+    assert!(
+        connect_tail[..connect_end].contains("service_v2::DaemonService::connect"),
+        "the shared command connection path must use authenticated ComponentSession v2"
+    );
+    assert!(
+        body.contains("ConfiguredLaunchSelection"),
+        "cmd_launch must select the frozen terminal.v2 ConfiguredLaunchSelection"
+    );
+    assert!(
+        body.contains("EXEC_AUTHORITY_CONFIGURED_LAUNCH"),
+        "cmd_launch must request the ExecAuthority::CONFIGURED_LAUNCH authority"
+    );
+    assert!(
+        body.contains(".open_terminal("),
+        "cmd_launch must open a typed v2 terminal stream"
+    );
+    for legacy_symbol in [
+        "daemon_hello_frame",
+        "parse_hello_reply",
+        "workload_socket_exchange",
+        "WorkloadOp",
+        "ConfiguredLaunchV1",
+        "SeqpacketUnixSocket",
+        "try_public_socket_request",
+    ] {
+        assert!(
+            !body.contains(legacy_symbol),
+            "cmd_launch must not retain the legacy hello/WorkloadOp handshake symbol `{legacy_symbol}`"
+        );
+    }
+}
+
+#[test]
+fn realm_exec_entrypoints_use_typed_component_session_only() {
+    let source = include_str!("../src/lib.rs");
+    for function in ["fn cmd_realm_enter", "fn cmd_realm_run", "fn cmd_vm_list"] {
+        let start = source.find(function).expect("realm exec entrypoint");
+        let tail = &source[start..];
+        let end = tail
+            .find("\n}\n")
+            .map(|offset| offset + 3)
+            .expect("function terminator");
+        let body = &tail[..end];
+        assert!(
+            body.contains("cmd_vm_exec_v2"),
+            "{function} must route through typed ComponentSession exec"
+        );
+        assert!(
+            !body.contains("cmd_vm_exec(context")
+                && !body.contains("OwnerSocketTransport")
+                && !body.contains("encode_exec_op_frame"),
+            "{function} must not route through the legacy JSON owner socket"
+        );
+    }
+}
+
+#[test]
+fn terminal_commands_preflight_signals_and_tty_before_runtime_and_open() {
+    let source = include_str!("../src/lib.rs");
+    for function in ["fn cmd_console_v2", "fn cmd_shell_v2", "fn cmd_vm_exec_v2"] {
+        let start = source.find(function).expect("terminal command function");
+        let tail = &source[start..];
+        let end = tail
+            .find("\n}\n")
+            .map(|offset| offset + 3)
+            .expect("function terminator");
+        let body = &tail[..end];
+        let preflight = body
+            .find("prepare_terminal_before_runtime")
+            .expect("terminal preflight");
+        let runtime = body
+            .find("connect_daemon_for_command")
+            .or_else(|| body.find("DaemonService::connect"))
+            .expect("daemon runtime construction");
+        let open = body.find(".open_terminal").expect("terminal open");
+        assert!(
+            preflight < runtime && runtime < open,
+            "{function} must block signals and validate TTY state before runtime/open"
+        );
+    }
+    let preflight_start = source
+        .find("fn prepare_terminal_before_runtime")
+        .expect("preflight helper");
+    let preflight = &source[preflight_start..];
+    let end = preflight.find("\n}\n").unwrap() + 3;
+    let preflight = &preflight[..end];
+    assert!(preflight.contains("stdin().is_terminal()"));
+    assert!(preflight.contains("stdout().is_terminal()"));
+    assert!(preflight.contains("current_window_size().ok_or_else"));
+    assert!(!preflight.contains("unwrap_or((24, 80))"));
+}
+
+#[test]
+fn console_and_shell_use_distinct_detach_scanners() {
+    let source = include_str!("../src/lib.rs");
+    for (function, mode, forbidden) in [
+        (
+            "fn cmd_console_v2",
+            "TerminalDetachMode::Console",
+            "TerminalDetachMode::Shell",
+        ),
+        (
+            "fn cmd_shell_v2",
+            "TerminalDetachMode::Shell",
+            "TerminalDetachMode::Console",
+        ),
+    ] {
+        let start = source.find(function).expect("terminal command");
+        let tail = &source[start..];
+        let end = tail.find("\n}\n").expect("function terminator");
+        let body = &tail[..end];
+        assert!(body.contains(mode), "{function} must use {mode}");
+        assert!(
+            !body.contains(forbidden),
+            "{function} must not use {forbidden}"
+        );
+    }
+}
+
 const EXPECTED_DISPOSITION: &[(&str, &str)] = &[
     ("list", "rust-native"),
     ("vm start", "rust-native"),
@@ -113,14 +288,6 @@ const FLAG_INVOCATIONS: &[CommandFlagMatrix] = &[
             ),
             ("-t", &["vm", "exec", "-t", "corp-vm", "--", "bash"]),
             ("--tty", &["vm", "exec", "--tty", "corp-vm", "--", "bash"]),
-            (
-                "--env",
-                &["vm", "exec", "--env", "KEY=VALUE", "corp-vm", "--", "env"],
-            ),
-            (
-                "--cwd",
-                &["vm", "exec", "--cwd", "/home/alice", "corp-vm", "--", "pwd"],
-            ),
             (
                 "--json",
                 &["vm", "exec", "corp-vm", "logs", "exec-1", "--json"],

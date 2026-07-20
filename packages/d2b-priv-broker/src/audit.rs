@@ -919,6 +919,22 @@ mod tests {
     }
 
     #[test]
+    fn audit_file_descriptor_is_append_only() {
+        let scratch = target_scratch_root("d2bd-broker-audit-append");
+        let path = scratch.join("broker.jsonl");
+        let file = open_append_cloexec(&path, Gid::current().as_raw(), true)
+            .expect("open append-only audit file");
+        let status = nix::fcntl::fcntl(file.as_raw_fd(), nix::fcntl::FcntlArg::F_GETFL)
+            .expect("read audit file status flags");
+        assert!(
+            nix::fcntl::OFlag::from_bits_truncate(status).contains(nix::fcntl::OFlag::O_APPEND),
+            "audit file descriptor must retain O_APPEND"
+        );
+        drop(file);
+        fs::remove_dir_all(scratch).expect("remove audit test scratch");
+    }
+
+    #[test]
     fn ymd_decodes_known_epoch() {
         assert_eq!(ymd_from_unix(0), (1970, 1, 1));
         // 2024-02-29 UTC = 1709164800

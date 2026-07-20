@@ -1255,24 +1255,6 @@
             "kind": {
               "type": "string",
               "enum": [
-                "GuestControlSign"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/GuestControlSignRequest"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
                 "InjectSecretById"
               ]
             },
@@ -2554,24 +2536,6 @@
             },
             "payload": {
               "$ref": "#/definitions/HelloResponse"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "GuestControlSign"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/GuestControlSignResponse"
             }
           }
         },
@@ -5795,133 +5759,6 @@
         "wayland-unavailable",
         "proxy-unavailable"
       ]
-    },
-    "GuestBootIdWire": {
-      "type": "string",
-      "maxLength": 128,
-      "minLength": 1
-    },
-    "GuestControlAuthPurpose": {
-      "type": "string",
-      "enum": [
-        "guest-control-auth-v1"
-      ]
-    },
-    "GuestControlDirection": {
-      "type": "string",
-      "enum": [
-        "host-to-guest"
-      ]
-    },
-    "GuestControlProofRole": {
-      "type": "string",
-      "enum": [
-        "host-proof",
-        "guest-proof"
-      ]
-    },
-    "GuestControlSignRequest": {
-      "type": "object",
-      "required": [
-        "direction",
-        "guestBootId",
-        "guestControlPort",
-        "guestNonce",
-        "hostNonce",
-        "protocolVersion",
-        "purpose",
-        "role",
-        "vmId"
-      ],
-      "properties": {
-        "capabilitiesHash": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "direction": {
-          "$ref": "#/definitions/GuestControlDirection"
-        },
-        "guestBootId": {
-          "$ref": "#/definitions/GuestBootIdWire"
-        },
-        "guestControlPort": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
-        },
-        "guestNonce": {
-          "type": "array",
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0.0
-          },
-          "maxItems": 32,
-          "minItems": 32
-        },
-        "hostNonce": {
-          "type": "array",
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0.0
-          },
-          "maxItems": 32,
-          "minItems": 32
-        },
-        "peerCid": {
-          "default": null,
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0.0
-        },
-        "protocolVersion": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
-        },
-        "purpose": {
-          "$ref": "#/definitions/GuestControlAuthPurpose"
-        },
-        "role": {
-          "$ref": "#/definitions/GuestControlProofRole"
-        },
-        "tracingSpanId": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "vmId": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
-    "GuestControlSignResponse": {
-      "type": "object",
-      "required": [
-        "tag"
-      ],
-      "properties": {
-        "tag": {
-          "type": "array",
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0.0
-          },
-          "maxItems": 32,
-          "minItems": 32
-        }
-      },
-      "additionalProperties": false
     },
     "Hello": {
       "type": "object",

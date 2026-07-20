@@ -98,6 +98,167 @@ pub enum LiveHandlerError {
     },
 }
 
+#[derive(Debug)]
+pub struct PreboundRealmListeners {
+    pub public: std::os::fd::OwnedFd,
+    pub broker: std::os::fd::OwnedFd,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RealmListenerOwnership {
+    pub uid: u32,
+    pub gid: u32,
+    pub mode: u32,
+}
+
+/// Pre-bind both realm listeners before either child exists. Existing entries
+/// are refused rather than unlinked, so a foreign or still-live listener can
+/// never be silently replaced.
+pub fn prebind_realm_listeners(
+    runtime_root: &Path,
+    realm_id: &str,
+) -> Result<PreboundRealmListeners, LiveHandlerError> {
+    prebind_realm_listeners_inner(runtime_root, realm_id, None)
+}
+
+pub fn prebind_realm_listeners_for_identities(
+    runtime_root: &Path,
+    realm_id: &str,
+    public: RealmListenerOwnership,
+    broker: RealmListenerOwnership,
+) -> Result<PreboundRealmListeners, LiveHandlerError> {
+    prebind_realm_listeners_inner(runtime_root, realm_id, Some((public, broker)))
+}
+
+fn prebind_realm_listeners_inner(
+    runtime_root: &Path,
+    realm_id: &str,
+    ownership: Option<(RealmListenerOwnership, RealmListenerOwnership)>,
+) -> Result<PreboundRealmListeners, LiveHandlerError> {
+    use nix::sys::socket::{
+        AddressFamily, Backlog, SockFlag, SockType, UnixAddr, bind, listen, socket,
+    };
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+
+    fn validate_owned_directory(path: &Path) -> Result<(), LiveHandlerError> {
+        let metadata = std::fs::symlink_metadata(path)
+            .map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
+        if !metadata.is_dir()
+            || metadata.file_type().is_symlink()
+            || metadata.uid() != rustix::process::geteuid().as_raw()
+            || metadata.mode() & 0o022 != 0
+        {
+            return Err(LiveHandlerError::Activation(
+                "realm runtime directory is not owned and write-protected".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    d2b_host::realm_children::validate_realm_id(realm_id)
+        .map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
+    if ownership.is_some_and(|(public, broker)| {
+        [public, broker].iter().any(|owner| {
+            owner.uid == 0
+                || owner.mode & !0o777 != 0
+                || owner.mode & 0o007 != 0
+                || owner.mode & 0o600 != 0o600
+        })
+    }) {
+        return Err(LiveHandlerError::Activation(
+            "realm listener ownership must be non-root and owner/group scoped".to_owned(),
+        ));
+    }
+    validate_owned_directory(runtime_root)?;
+    let realm_root = runtime_root.join(realm_id);
+    match std::fs::symlink_metadata(&realm_root) {
+        Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => {
+            return Err(LiveHandlerError::Activation(
+                "realm runtime root is not a safe directory".to_owned(),
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir(&realm_root)
+                .map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
+        }
+        Err(error) => return Err(LiveHandlerError::Activation(error.to_string())),
+    }
+    validate_owned_directory(&realm_root)?;
+
+    fn bind_one(path: &Path) -> Result<std::os::fd::OwnedFd, LiveHandlerError> {
+        let fd = socket(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+            None,
+        )
+        .map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
+        let address =
+            UnixAddr::new(path).map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
+        bind(fd.as_raw_fd(), &address)
+            .map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
+        let backlog =
+            Backlog::new(128).map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
+        if let Err(error) = listen(&fd, backlog) {
+            let _ = std::fs::remove_file(path);
+            return Err(LiveHandlerError::Activation(error.to_string()));
+        }
+        Ok(fd)
+    }
+
+    let public_path = realm_root.join("public.sock");
+    let public = bind_one(&public_path)?;
+    let broker_path = realm_root.join("broker.sock");
+    match bind_one(&broker_path) {
+        Ok(broker) => {
+            if let Some((public_owner, broker_owner)) = ownership {
+                let apply = |path: &Path, owner: RealmListenerOwnership| {
+                    let metadata = std::fs::symlink_metadata(path)
+                        .map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
+                    let path_fd = rustix::fs::open(
+                        path,
+                        rustix::fs::OFlags::PATH
+                            | rustix::fs::OFlags::NOFOLLOW
+                            | rustix::fs::OFlags::CLOEXEC,
+                        rustix::fs::Mode::empty(),
+                    )
+                    .map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
+                    let socket_stat = rustix::fs::fstat(&path_fd)
+                        .map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
+                    if !metadata.file_type().is_socket() || metadata.ino() != socket_stat.st_ino {
+                        return Err(LiveHandlerError::Activation(
+                            "realm listener path does not match its bound socket".to_owned(),
+                        ));
+                    }
+                    crate::sys::path_safe::fchownat_empty_path(
+                        path_fd.as_fd(),
+                        Some(owner.uid),
+                        Some(owner.gid),
+                    )
+                    .and_then(|()| {
+                        crate::sys::path_safe::fchmodat_empty_path(path_fd.as_fd(), owner.mode)
+                    })
+                    .map_err(|error| LiveHandlerError::Activation(error.to_string()))
+                };
+                if let Err(error) = apply(&public_path, public_owner)
+                    .and_then(|()| apply(&broker_path, broker_owner))
+                {
+                    let _ = std::fs::remove_file(&public_path);
+                    let _ = std::fs::remove_file(&broker_path);
+                    return Err(error);
+                }
+            }
+            Ok(PreboundRealmListeners { public, broker })
+        }
+        Err(error) => {
+            let _ = std::fs::remove_file(public_path);
+            Err(error)
+        }
+    }
+}
+
 impl std::fmt::Display for LiveHandlerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -1111,6 +1272,7 @@ pub fn live_usbip_unbind(
                 lock_path.display()
             )));
         }
+
         Some(_) => {}
         None => return Ok(()),
     }

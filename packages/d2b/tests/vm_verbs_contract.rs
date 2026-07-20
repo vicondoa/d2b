@@ -14,8 +14,8 @@
 //!   2. The `D2B_LEGACY_CLI_PATH` / `D2B_LEGACY_CLI` poison-pill is
 //!      NEVER invoked: it is wired to an executable sentinel that would
 //!      `exit 99` if ever exec'd, so any exit code of 99 fails the assertion.
-//!   3. `vm list` / `list` return the rust-native JSON envelopes without
-//!      touching bash.
+//!   3. `vm list` and top-level `list` fail closed when their authenticated
+//!      ComponentSession is unavailable.
 //!   4. `vm exec` reaches `cmd_vm_exec` through real clap parsing + dispatch.
 //!
 //! Layer 1: no live daemon, no microvm spawn, no D2B_FIXTURES. Self-contained —
@@ -243,7 +243,7 @@ fn legacy_bash_opt_in_is_a_no_op() {
 }
 
 #[test]
-fn vm_list_is_daemon_native_json() {
+fn vm_list_requires_authenticated_daemon_session() {
     let (_guard, paths) = scratch(VM_MANIFEST_JSON);
     let out = run_cli(&paths, &["vm", "list", "--json"]);
     assert_ne!(
@@ -252,24 +252,13 @@ fn vm_list_is_daemon_native_json() {
         "vm list exec'd the legacy bash poison-pill\nstderr:\n{}",
         stderr_of(&out),
     );
-    assert_eq!(
-        out.status.code(),
-        Some(0),
-        "vm list expected exit 0\nstderr:\n{}",
-        stderr_of(&out),
-    );
-    let envelope = stdout_json(&out, "vm list");
-    assert_eq!(
-        envelope.get("command").and_then(Value::as_str),
-        Some("vm list"),
-        "vm list did not emit the rust-native JSON envelope; got {envelope}",
-    );
+    assert_eq!(out.status.code(), Some(69));
+    assert!(out.stdout.is_empty());
+    assert!(stderr_of(&out).contains("client-connect-failed"));
 }
 
 #[test]
-fn top_level_list_is_daemon_native_json() {
-    // `d2b list` is the native manifest view; re-assert with the same
-    // poison-pill setup to keep the no-bash-fallback contract honest.
+fn top_level_list_emits_typed_daemon_down_without_static_fallback() {
     let (_guard, paths) = scratch(VM_MANIFEST_JSON);
     let out = run_cli(&paths, &["list", "--json"]);
     assert_ne!(
@@ -280,20 +269,21 @@ fn top_level_list_is_daemon_native_json() {
     );
     assert_eq!(
         out.status.code(),
-        Some(0),
-        "list expected exit 0\nstderr:\n{}",
+        Some(1),
+        "list expected typed daemon-down exit 1\nstderr:\n{}",
         stderr_of(&out),
     );
-    let inventory = stdout_json(&out, "list");
-    let items = inventory.as_array().unwrap_or_else(|| {
-        panic!("list --json must emit the native manifest array; got {inventory}")
-    });
-    assert!(
-        items
-            .iter()
-            .any(|i| i.get("name").and_then(Value::as_str) == Some("test-vm")),
-        "list --json must include the synthetic test-vm; got {inventory}",
+    let envelope: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("list daemon-down JSON");
+    assert_eq!(
+        envelope.get("code").and_then(serde_json::Value::as_str),
+        Some("daemon-down")
     );
+    assert_eq!(
+        envelope.get("exitCode").and_then(serde_json::Value::as_i64),
+        Some(1)
+    );
+    assert!(out.stderr.is_empty());
 }
 
 #[test]
@@ -321,10 +311,9 @@ fn vm_exec_missing_command_emits_cli_usage_envelope() {
 }
 
 #[test]
-fn vm_exec_no_daemon_emits_transport_unavailable_envelope() {
-    // With the daemon socket absent, `vm exec` surfaces the guest-control
-    // transport-unavailable envelope (proving it reaches cmd_vm_exec and never
-    // falls back to SSH/bash).
+fn vm_exec_no_daemon_emits_daemon_down_envelope() {
+    // With the daemon socket absent, `vm exec` surfaces the common daemon-down
+    // envelope and never falls back to SSH/bash.
     let (_guard, paths) = scratch(KONSOLE_MANIFEST_JSON);
     let out = run_cli(
         &paths,
@@ -342,19 +331,12 @@ fn vm_exec_no_daemon_emits_transport_unavailable_envelope() {
         "vm exec with no daemon should exit non-zero\nstderr:\n{}",
         stderr_of(&out),
     );
-    let envelope = stdout_json(&out, "vm exec transport");
+    let envelope = stdout_json(&out, "vm exec daemon-down");
     assert_eq!(
-        envelope.get("command").and_then(Value::as_str),
-        Some("vm exec")
+        envelope.get("code").and_then(Value::as_str),
+        Some("daemon-down")
     );
-    assert_eq!(
-        envelope.get("source").and_then(Value::as_str),
-        Some("transport"),
-    );
-    assert_eq!(
-        envelope.get("reason").and_then(Value::as_str),
-        Some("guest-control-transport-unavailable"),
-    );
+    assert_eq!(envelope.get("exitCode").and_then(Value::as_i64), Some(1),);
 }
 
 #[test]

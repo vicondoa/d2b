@@ -2,7 +2,6 @@
 //! the constellation [`ErrorKind`] (and thence to stable CLI error slugs).
 //! No stringly errors leak across the boundary.
 
-use crate::handshake::HandshakeError;
 use d2b_realm_core::{ConstellationError, ErrorKind};
 
 /// A gateway display-orchestration failure. Each variant maps to exactly one
@@ -28,8 +27,6 @@ pub enum GatewayError {
     ProviderAllocationFailed,
     /// The relay transport could not be reached / armed.
     RelayUnavailable,
-    /// The per-session display handshake failed (bytes never admitted).
-    DisplayAuthFailed(HandshakeError),
     /// The provider does not advertise window forwarding.
     MissingWindowForwarding,
     /// A lifecycle step exceeded its timeout.
@@ -53,7 +50,6 @@ impl GatewayError {
             GatewayError::QuotaExceeded => ErrorKind::Backpressure,
             GatewayError::ProviderAllocationFailed => ErrorKind::ProviderAllocationFailed,
             GatewayError::RelayUnavailable => ErrorKind::RelayUnavailable,
-            GatewayError::DisplayAuthFailed(_) => ErrorKind::AuthenticationFailed,
             GatewayError::MissingWindowForwarding => ErrorKind::UnsupportedFeature,
             GatewayError::Timeout => ErrorKind::Timeout,
             GatewayError::Cancelled => ErrorKind::Cancelled,
@@ -72,18 +68,11 @@ impl GatewayError {
             GatewayError::QuotaExceeded => "gateway-quota-exceeded",
             GatewayError::ProviderAllocationFailed => "provider-allocation-failed",
             GatewayError::RelayUnavailable => "relay-unavailable",
-            GatewayError::DisplayAuthFailed(_) => "display-auth-failed",
             GatewayError::MissingWindowForwarding => "missing-window-forwarding",
             GatewayError::Timeout => "gateway-timeout",
             GatewayError::Cancelled => "gateway-cancelled",
             GatewayError::AuditUnavailable => "audit-unavailable",
         }
-    }
-}
-
-impl From<HandshakeError> for GatewayError {
-    fn from(e: HandshakeError) -> Self {
-        GatewayError::DisplayAuthFailed(e)
     }
 }
 
@@ -105,15 +94,6 @@ impl std::error::Error for GatewayError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn handshake_error_maps_to_auth_failed() {
-        let e: GatewayError = HandshakeError::Replay.into();
-        assert_eq!(e.kind(), ErrorKind::AuthenticationFailed);
-        assert_eq!(e.slug(), "display-auth-failed");
-        let ce: ConstellationError = e.into();
-        assert_eq!(ce.kind(), ErrorKind::AuthenticationFailed);
-    }
 
     #[test]
     fn slugs_are_stable_and_distinct() {
@@ -171,11 +151,6 @@ mod tests {
                 GatewayError::RelayUnavailable,
                 "relay-unavailable",
                 ErrorKind::RelayUnavailable,
-            ),
-            (
-                GatewayError::DisplayAuthFailed(HandshakeError::BadMac),
-                "display-auth-failed",
-                ErrorKind::AuthenticationFailed,
             ),
             (
                 GatewayError::MissingWindowForwarding,

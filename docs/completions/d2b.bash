@@ -3768,7 +3768,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__vm__subcmd__exec)
-            opts="-d -i -t -h --detach --interactive --tty --env --cwd --json --human --help <VM> [MANAGEMENT]... [COMMAND]..."
+            opts="-d -i -t -h --detach --interactive --tty --json --human --help <VM> [MANAGEMENT]... [COMMAND]..."
             if [[ " ${COMP_WORDS[*]} " == *" logs "* ]] ; then
                 opts="${opts} --stdout-offset --stderr-offset --max-len"
             fi
@@ -3777,14 +3777,6 @@ _d2b() {
                 return 0
             fi
             case "${prev}" in
-                --env)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --cwd)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
                 --stdout-offset|--stderr-offset|--max-len)
                     COMPREPLY=()
                     return 0

@@ -9,9 +9,10 @@ fn launch_has_no_static_or_ssh_fallback_when_daemon_is_missing() {
         .env("D2B_BUNDLE_PATH", dir.path().join("missing-bundle.json"))
         .output()
         .expect("spawn d2b launch");
-    assert_eq!(output.status.code(), Some(69));
+    assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("no static or provider fallback"));
+    assert!(stderr.contains("(code: daemon-down, exit 1)"));
+    assert!(stderr.contains("daemon is the only operator surface"));
     assert!(!stderr.contains("ssh"));
     assert!(!stderr.contains("sudo"));
 }

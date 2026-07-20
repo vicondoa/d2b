@@ -17,11 +17,8 @@ Every row carries three policy flags:
 - **secret** — `yes` for operations whose implementation reads secret
   material or whose audit record may reference secret-material
   identifiers. `redacted-only` rows carry only derived/redacted metadata:
-  for example `GuestControlSign` records token-transcript metadata
-  (`transcript_len`, `peer_cid_present`, `capabilities_hash_present`),
-  and `UsbipBind` records normalized device identity plus serial HMAC
-  correlations, never the per-VM token, signature bytes, raw serial, raw
-  sysfs path, or device path.
+  `UsbipBind` records normalized device identity plus serial HMAC
+  correlations, never the raw serial, raw sysfs path, or device path.
 
 Unknown variants and unknown fields in security-sensitive artifacts
 are denied (`defaultForUnknown: deny`).
@@ -194,7 +191,6 @@ broker request is emitted.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `PrepareStoreView` | fs (store view) | per VM | live | yes | no | `d2b-launcher` + `d2b-admin` | yes | deny | `generation`, `hardlink_farm_path`, `target_view_path` |
 | `StoreSync` | fs (hardlink farm) | per VM | live | yes (atomic `current` symlink swap) | no | `d2b-launcher` + `d2b-admin` | yes | deny | `bundle_closure_ref`, `generation`, `closure_count`, `hardlink_farm_path` |
-| `GuestControlSign` | guest-control token | per VM | live | no | redacted-only | `d2bd` | yes | deny | `vm_id`, `role`, `purpose`, `transcript_len`, `peer_cid_present`, `capabilities_hash_present` |
 | `SetupMountNamespace` | mount ns | per VM / role | live | partial (mount-root prep + bind target) | no | `d2b-launcher` + `d2b-admin` | yes | deny | `role_id`, `mount_root`, `mount_view_path`, `source_view_path` |
 | `DeregisterRunnerPidfd` | process registry | per VM / role | live | no | no | `d2b-launcher` + `d2b-admin` | yes | deny | `vm_id`, `role_id`, `removed` |
 | `DiskInit` | disk image | per VM | live | yes (create/format declared images; repair safe declared posture drift) | no | `d2bd` | yes | deny | `vm_id`, `ops_total`, `ops_created`, `ops_skipped`, `ops_repaired`, `ops_posture_repaired`, `target_paths_hash` |

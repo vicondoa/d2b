@@ -4,4 +4,4 @@
 # system-state/daemon-state fixture and validate the JSON envelopes strictly
 # against the committed DTOs (deny_unknown_fields). One libtest path per line;
 # checked by tests/tools/assert-pinned-tests.sh.
-list_json_matches_smoke_inventory_and_schema
+list_json_missing_daemon_emits_typed_daemon_down

@@ -84,6 +84,11 @@ pub mod ssh_keygen;
 // the hardlink-farm carve-out so recursive ownership ops never leak into
 // /nix/store.
 pub mod ownership_matrix;
+// Host primitives for paired realm-controller and realm-broker children.
+pub mod guest_runtime;
+pub mod realm_broker_bootstrap;
+pub mod realm_children;
+pub mod realm_controller_bootstrap;
 // Typed host-prep DAG executed by the daemon on every VM start. Replaces
 // the per-VM `microvm-tap-interfaces@` + `microvm-setup@` systemd
 // templates.

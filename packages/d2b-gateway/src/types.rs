@@ -3,9 +3,92 @@
 //! argv and a socket path; their `Debug` is redacted so a stray
 //! `{:?}`/error/trace can never leak the command line or a filesystem path.
 
-use d2b_realm_core::{OperationId, PrincipalId, RealmPath};
+use d2b_realm_core::{OperationId, PrincipalId, RealmPath, WorkloadId};
 
-use crate::handshake::DisplaySessionId;
+/// Fixed width retained for the opaque display-session capability passed only
+/// inside the gateway guest.
+pub const SECRET_LEN: usize = 32;
+
+/// Opaque, non-secret display-session identifier.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct DisplaySessionId(String);
+
+impl DisplaySessionId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl core::fmt::Display for DisplaySessionId {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+/// Opaque gateway-guest capability material. It is never a host-side realm
+/// credential and is not itself a wire handshake.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SessionSecret([u8; SECRET_LEN]);
+
+impl SessionSecret {
+    pub fn from_bytes(bytes: [u8; SECRET_LEN]) -> Self {
+        Self(bytes)
+    }
+
+    pub fn expose(&self) -> &[u8; SECRET_LEN] {
+        &self.0
+    }
+}
+
+impl core::fmt::Debug for SessionSecret {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("SessionSecret(<redacted>)")
+    }
+}
+
+/// Non-authoritative correlation fields for a gateway display operation.
+/// ComponentSession state, not this value, supplies authentication.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionBinding {
+    pub realm: String,
+    pub generation: u64,
+    pub session_id: String,
+    pub epoch: u64,
+    pub operation_id: String,
+    pub principal: String,
+    pub workload: String,
+    pub not_after: u64,
+}
+
+impl SessionBinding {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        realm: &RealmPath,
+        generation: u64,
+        session_id: &DisplaySessionId,
+        epoch: u64,
+        operation_id: &OperationId,
+        principal: &PrincipalId,
+        workload: &WorkloadId,
+        not_after: u64,
+    ) -> Self {
+        Self {
+            realm: realm.target_form(),
+            generation,
+            session_id: session_id.as_str().to_owned(),
+            epoch,
+            operation_id: operation_id.as_str().to_owned(),
+            principal: principal.as_str().to_owned(),
+            workload: workload.as_str().to_owned(),
+            not_after,
+        }
+    }
+}
 
 /// The redacted, owned context for a display session. Carries only non-secret
 /// identifiers; the session secret never lives here.

@@ -1,11 +1,9 @@
 use crate::typed_error::{ErrorEnvelope, TypedError};
 use d2b_contracts::{
-    FeatureFlag, Hello, HelloOk, HelloRejected, HelloRejectedReason,
     broker_wire::ExportBrokerAuditResponse,
     public_wire::{self, AuthStatusResponse},
 };
-use d2b_core::{error::Version, host::IfName};
-use semver::{Version as SemverVersion, VersionReq};
+use d2b_core::host::IfName;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -160,25 +158,6 @@ impl Request {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct HelloOkFrame {
-    #[serde(rename = "type")]
-    pub type_name: &'static str,
-    #[serde(flatten)]
-    pub payload: HelloOk,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HelloRejectedFrame {
-    #[serde(rename = "type")]
-    pub type_name: &'static str,
-    #[serde(flatten)]
-    pub payload: HelloRejected,
-    pub error: ErrorEnvelope,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ErrorFrame {
     #[serde(rename = "type")]
     pub type_name: &'static str,
@@ -200,32 +179,6 @@ pub struct AuthStatusResponseFrame {
     #[serde(rename = "type")]
     pub type_name: &'static str,
     pub auth: AuthStatusResponse,
-}
-
-pub fn parse_hello(bytes: &[u8]) -> Result<Hello, TypedError> {
-    let mut value: Value =
-        serde_json::from_slice(bytes).map_err(|err| TypedError::WireBadHello {
-            detail: err.to_string(),
-        })?;
-    let kind =
-        value
-            .get("type")
-            .and_then(Value::as_str)
-            .ok_or_else(|| TypedError::WireBadHello {
-                detail: "missing type=hello discriminator".to_owned(),
-            })?;
-    if kind != "hello" {
-        return Err(TypedError::WireBadHello {
-            detail: format!("expected type=hello, got {kind}"),
-        });
-    }
-    value
-        .as_object_mut()
-        .ok_or_else(|| TypedError::WireBadHello {
-            detail: "hello frame must be a JSON object".to_owned(),
-        })?
-        .remove("type");
-    serde_json::from_value(value).map_err(map_parse_error)
 }
 
 pub fn parse_request(bytes: &[u8]) -> Result<Request, TypedError> {
@@ -469,67 +422,6 @@ pub fn parse_shell_op(bytes: &[u8]) -> Result<(u64, public_wire::ShellOp), Typed
     Ok((op_id, op))
 }
 
-pub fn negotiate_version(
-    client_range: &str,
-    accepted_range: &str,
-    server_version: &str,
-) -> Result<String, TypedError> {
-    let client_req =
-        VersionReq::parse(client_range).map_err(|err| TypedError::WireVersionMismatch {
-            client_range: client_range.to_owned(),
-            accepted_range: format!("{accepted_range} ({err})"),
-        })?;
-    let accepted_req =
-        VersionReq::parse(accepted_range).map_err(|err| TypedError::InternalConfig {
-            detail: format!("bad acceptedClientVersionRange {accepted_range}: {err}"),
-        })?;
-    let server =
-        SemverVersion::parse(server_version).map_err(|err| TypedError::InternalConfig {
-            detail: format!("bad serverVersion {server_version}: {err}"),
-        })?;
-    if client_req.matches(&server) && accepted_req.matches(&server) {
-        Ok(server.to_string())
-    } else {
-        Err(TypedError::WireVersionMismatch {
-            client_range: client_range.to_owned(),
-            accepted_range: accepted_range.to_owned(),
-        })
-    }
-}
-
-pub fn hello_ok(
-    server_version: &str,
-    selected_version: &str,
-    capabilities: &[FeatureFlag],
-) -> Result<HelloOkFrame, TypedError> {
-    Ok(HelloOkFrame {
-        type_name: "helloOk",
-        payload: HelloOk {
-            server_version: Version::new(server_version).map_err(|err| {
-                TypedError::InternalConfig {
-                    detail: format!("bad serverVersion {server_version}: {err}"),
-                }
-            })?,
-            selected_version: Version::new(selected_version).map_err(|err| {
-                TypedError::InternalConfig {
-                    detail: format!("bad selectedVersion {selected_version}: {err}"),
-                }
-            })?,
-            capabilities: capabilities.to_vec(),
-        },
-    })
-}
-
-pub fn hello_rejected(error: &TypedError) -> HelloRejectedFrame {
-    HelloRejectedFrame {
-        type_name: "helloRejected",
-        payload: HelloRejected {
-            reason: hello_rejected_reason(error),
-        },
-        error: error.to_envelope(),
-    }
-}
-
 pub fn error_frame(error: &TypedError) -> ErrorFrame {
     ErrorFrame {
         type_name: "error",
@@ -730,13 +622,6 @@ pub fn auth_status_response(payload: AuthStatusResponse) -> AuthStatusResponseFr
     AuthStatusResponseFrame {
         type_name: "authStatusResponse",
         auth: payload,
-    }
-}
-
-fn hello_rejected_reason(error: &TypedError) -> HelloRejectedReason {
-    match error {
-        TypedError::WireVersionMismatch { .. } => HelloRejectedReason::VersionMismatch,
-        _ => HelloRejectedReason::InternalError,
     }
 }
 

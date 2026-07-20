@@ -110,12 +110,10 @@ impl RealmEntrypointTable {
         Self::default()
     }
 
-    /// An empty table seeded with the reserved `local` realm as
-    /// host-resident — the common case for host-local substrates.
+    /// Compatibility constructor retained for callers migrating to explicit
+    /// entrypoint registration. It no longer installs a local fallback.
     pub fn with_local_default() -> Self {
-        let mut t = Self::new();
-        t.insert(RealmPath::local(), RealmEntrypoint::host_resident());
-        t
+        Self::new()
     }
 
     /// Insert or replace a realm's entrypoint binding.
@@ -180,7 +178,8 @@ mod tests {
 
     /// The realm-native example table.
     fn example_table() -> RealmEntrypointTable {
-        let mut t = RealmEntrypointTable::with_local_default();
+        let mut t = RealmEntrypointTable::new();
+        t.host_resident(RealmPath::local());
         t.host_resident(realm(&["personal"]));
         t.gateway_backed(realm(&["work"]), target("work-gateway.work.d2b"));
         t.gateway_backed(realm(&["ops"]), target("ops-gateway.ops.d2b"));

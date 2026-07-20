@@ -4,7 +4,7 @@
 //! unit-testable without live providers.
 
 use crate::error::GatewayError;
-use crate::handshake::DisplaySessionId;
+use crate::types::DisplaySessionId;
 use std::collections::HashMap;
 
 /// The display-session lifecycle states (design §3 state machine).
@@ -17,9 +17,9 @@ pub enum SessionState {
     AgentSpawning,
     /// Arming the host relay listener task.
     ListenerArming,
-    /// Listener up; awaiting the agent's verified handshake.
-    AwaitingHandshake,
-    /// Handshake verified; display bytes flowing.
+    /// Listener up; awaiting authenticated ComponentSession admission.
+    AwaitingAuthentication,
+    /// ComponentSession authentication verified; display bytes flowing.
     Running,
     /// Listener/relay dropped; eligible for reopen.
     Degraded,
@@ -40,15 +40,15 @@ impl SessionState {
             (self, next),
             (Minting, ListenerArming)
                 | (ListenerArming, AgentSpawning)
-                | (AgentSpawning, AwaitingHandshake)
-                | (AwaitingHandshake, Running)
+                | (AgentSpawning, AwaitingAuthentication)
+                | (AwaitingAuthentication, Running)
                 | (Running, Degraded)
                 | (Degraded, ListenerArming)
                 // close path from any non-terminal state
                 | (Minting, Stopping)
                 | (AgentSpawning, Stopping)
                 | (ListenerArming, Stopping)
-                | (AwaitingHandshake, Stopping)
+                | (AwaitingAuthentication, Stopping)
                 | (Running, Stopping)
                 | (Degraded, Stopping)
                 | (Stopping, Closed)
@@ -56,7 +56,7 @@ impl SessionState {
                 | (Minting, Failed)
                 | (AgentSpawning, Failed)
                 | (ListenerArming, Failed)
-                | (AwaitingHandshake, Failed)
+                | (AwaitingAuthentication, Failed)
         )
     }
 
@@ -412,27 +412,27 @@ mod tests {
         let legal = [
             (Minting, ListenerArming),
             (ListenerArming, AgentSpawning),
-            (AgentSpawning, AwaitingHandshake),
-            (AwaitingHandshake, Running),
+            (AgentSpawning, AwaitingAuthentication),
+            (AwaitingAuthentication, Running),
             (Running, Degraded),
             (Degraded, ListenerArming),
             (Minting, Stopping),
             (AgentSpawning, Stopping),
             (ListenerArming, Stopping),
-            (AwaitingHandshake, Stopping),
+            (AwaitingAuthentication, Stopping),
             (Running, Stopping),
             (Degraded, Stopping),
             (Stopping, Closed),
             (Minting, Failed),
             (AgentSpawning, Failed),
             (ListenerArming, Failed),
-            (AwaitingHandshake, Failed),
+            (AwaitingAuthentication, Failed),
         ];
         let all = [
             Minting,
             AgentSpawning,
             ListenerArming,
-            AwaitingHandshake,
+            AwaitingAuthentication,
             Running,
             Degraded,
             Stopping,
@@ -505,7 +505,7 @@ mod tests {
         for s in [
             SessionState::ListenerArming,
             SessionState::AgentSpawning,
-            SessionState::AwaitingHandshake,
+            SessionState::AwaitingAuthentication,
             SessionState::Running,
         ] {
             l.transition(&id("s1"), s).unwrap();
@@ -530,12 +530,12 @@ mod tests {
         for s in [
             SessionState::ListenerArming,
             SessionState::AgentSpawning,
-            SessionState::AwaitingHandshake,
+            SessionState::AwaitingAuthentication,
             SessionState::Running,
             SessionState::Degraded,
             SessionState::ListenerArming,
             SessionState::AgentSpawning,
-            SessionState::AwaitingHandshake,
+            SessionState::AwaitingAuthentication,
             SessionState::Running,
         ] {
             l.transition(&id("s1"), s).unwrap();

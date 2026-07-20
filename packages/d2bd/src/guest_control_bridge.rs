@@ -1,17 +1,14 @@
 //! Production guest-control transport bridge.
 //!
-//! Wires the host daemon's authenticated guest-control probe
-//! ([`crate::guest_control_health`]) to a real broker-backed signer and
-//! the per-VM vsock socket. An earlier layer shipped the probe, the ttRPC
-//! client, the vsock connector, and the broker's HMAC signing op, but no
-//! production [`GuestControlSigner`] and nothing that drives the probe.
-//! This module supplies both:
+//! Legacy guest-control authentication is retired from production. New guest
+//! calls use the injected ComponentSession connector and its typed
+//! guest-session credential material. The old probe implementation remains
+//! fail-closed while callers migrate to the typed service.
 //!
-//! * [`BrokerSigner`] — the production signer. It forwards the
-//!   probe-built [`GuestControlSignRequest`] verbatim to the privileged
-//!   broker and returns the broker-minted tag. It owns only the broker
-//!   socket path so it is `Send + Sync` and can move into the blocking
-//!   probe worker without borrowing `ServerState`.
+//! This module supplies:
+//!
+//! * [`UnavailableLegacyGuestProofSigner`] — a closed legacy signer that never
+//!   calls the privileged broker.
 //! * an orchestration seam ([`GuestControlProbe`]) plus its production
 //!   implementation ([`RealGuestControlProbe`]) that resolves the
 //!   connection, builds the ttRPC client, and runs the probe / config
@@ -26,25 +23,18 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use d2b_contracts::broker_wire::{
-    BrokerCallerRole, BrokerRequest, BrokerResponse, GuestControlSignRequest,
-    GuestControlSignResponse,
-};
 use d2b_contracts::guest_auth::AUTH_NONCE_LEN;
 
 use crate::guest_control_health::{
     AttemptBudget, GuestAudioChannelStatus, GuestAudioSetError, GuestAudioSetRequest,
-    GuestAudioStatus, GuestControlHealthError, GuestControlHealthEvidence, GuestControlSigner,
-    GuestFileReadError, GuestSystemActivationError, GuestSystemActivationStart,
-    GuestSystemActivationStatus, GuestUsbipAction, GuestUsbipImportCall, GuestUsbipImportError,
-    GuestUsbipImportResult, GuestUsbipStatusResult, TtrpcGuestControlClient,
-    activate_system_start_authenticated, activate_system_status_authenticated,
-    audio_set_authenticated, audio_status_authenticated, connected_stream_to_ttrpc_socket,
-    guest_control_health_ready, probe_guest_control_health, read_guest_config_authenticated,
-    usbip_import_authenticated, usbip_status_authenticated,
+    GuestAudioStatus, GuestControlHealthError, GuestControlHealthEvidence, GuestFileReadError,
+    GuestUsbipAction, GuestUsbipImportCall, GuestUsbipImportError, GuestUsbipImportResult,
+    GuestUsbipStatusResult, LegacyGuestProof, LegacyGuestProofRequest, LegacyGuestProofSigner,
+    TtrpcGuestControlClient, audio_set_authenticated, audio_status_authenticated,
+    connected_stream_to_ttrpc_socket, guest_control_health_ready, probe_guest_control_health,
+    read_guest_config_authenticated, usbip_import_authenticated, usbip_status_authenticated,
 };
 use crate::guest_control_vsock::{GuestControlTransportProbeResult, connect_guest_control_vsock};
-use crate::typed_error::TypedError;
 
 /// Well-known `VMADDR_CID_HOST`. The host side of an `AF_VSOCK` pair is
 /// always CID 2; the sign request binds the host proof to this CID so a
@@ -76,62 +66,15 @@ pub fn host_nonce() -> Result<[u8; AUTH_NONCE_LEN], getrandom::Error> {
     Ok(nonce)
 }
 
-/// Map a broker dispatch result for a `GuestControlSign` request to the
-/// signer's typed result. A round-trip deadline exhaustion
-/// ([`TypedError::InternalBrokerTimeout`]) maps to
-/// [`GuestControlHealthError::Timeout`] so a stalled/backlogged broker
-/// surfaces as the `guest-control-timeout` error end to end. Any other
-/// transport error (incl. refusal), a broker `Error` response, or any
-/// non-`GuestControlSign` response collapses to
-/// [`GuestControlHealthError::Signer`]. Extracted as a pure function so
-/// the mapping is unit-testable without a live broker.
-fn map_broker_sign_response(
-    result: Result<BrokerResponse, TypedError>,
-) -> Result<GuestControlSignResponse, GuestControlHealthError> {
-    match result {
-        Ok(BrokerResponse::GuestControlSign(response)) => Ok(response),
-        Err(TypedError::InternalBrokerTimeout { .. }) => Err(GuestControlHealthError::Timeout),
-        Ok(_) | Err(_) => Err(GuestControlHealthError::Signer),
-    }
-}
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UnavailableLegacyGuestProofSigner;
 
-/// Production [`GuestControlSigner`] backed by the privileged broker.
-///
-/// Holds only the broker socket path and the shared per-attempt budget so
-/// it is `Send + Sync` and movable into the blocking probe worker. `sign`
-/// forwards the probe-built request verbatim — it never mints nonces,
-/// roles, or boot ids; the broker remains the sole minter of the tag.
-/// Each `sign` draws `min(cap, remaining)` from the budget so the broker
-/// round-trip shares the same absolute deadline as connect / ttRPC; a
-/// passed deadline returns [`GuestControlHealthError::Timeout`].
-#[derive(Clone)]
-pub struct BrokerSigner {
-    broker_socket_path: PathBuf,
-    budget: AttemptBudget,
-}
-
-impl BrokerSigner {
-    pub fn new(broker_socket_path: PathBuf, budget: AttemptBudget) -> Self {
-        Self {
-            broker_socket_path,
-            budget,
-        }
-    }
-}
-
-impl GuestControlSigner for BrokerSigner {
+impl LegacyGuestProofSigner for UnavailableLegacyGuestProofSigner {
     fn sign(
         &self,
-        request: GuestControlSignRequest,
-    ) -> Result<GuestControlSignResponse, GuestControlHealthError> {
-        let timeout = self.budget.next().ok_or(GuestControlHealthError::Timeout)?;
-        let result = crate::dispatch_broker_request_to_socket(
-            &self.broker_socket_path,
-            BrokerRequest::GuestControlSign(request),
-            BrokerCallerRole::default(),
-            Some(timeout),
-        );
-        map_broker_sign_response(result)
+        _: LegacyGuestProofRequest,
+    ) -> Result<LegacyGuestProof, GuestControlHealthError> {
+        Err(GuestControlHealthError::Signer)
     }
 }
 
@@ -180,26 +123,6 @@ pub trait GuestControlProbe: Send + Sync {
         host: Option<&str>,
         bus_id: Option<&str>,
     ) -> Result<GuestUsbipStatusResult, GuestUsbipImportError>;
-
-    fn activate_system_start(
-        &self,
-        params: &ProbeParams,
-        attempt_timeout: Duration,
-        start: &GuestSystemActivationStart,
-    ) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
-        let _ = (params, attempt_timeout, start);
-        Err(GuestSystemActivationError::CapabilityUnavailable)
-    }
-
-    fn activate_system_status(
-        &self,
-        params: &ProbeParams,
-        attempt_timeout: Duration,
-        activation_id: &str,
-    ) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
-        let _ = (params, attempt_timeout, activation_id);
-        Err(GuestSystemActivationError::CapabilityUnavailable)
-    }
 
     /// Issue an authenticated AudioSet RPC. Default returns
     /// `CapabilityUnavailable` so existing probe impls do not need updating.
@@ -291,29 +214,6 @@ impl GuestControlProbe for RealGuestControlProbe {
             attempt_timeout,
             host,
             bus_id,
-        )
-    }
-
-    fn activate_system_start(
-        &self,
-        params: &ProbeParams,
-        attempt_timeout: Duration,
-        start: &GuestSystemActivationStart,
-    ) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
-        run_activation_start_once(params, &self.broker_socket_path, attempt_timeout, start)
-    }
-
-    fn activate_system_status(
-        &self,
-        params: &ProbeParams,
-        attempt_timeout: Duration,
-        activation_id: &str,
-    ) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
-        run_activation_status_once(
-            params,
-            &self.broker_socket_path,
-            attempt_timeout,
-            activation_id,
         )
     }
 
@@ -416,11 +316,11 @@ pub(crate) fn connect_and_build_client_for_tests(
 /// whole attempt is bounded by its absolute deadline.
 pub fn run_health_probe_once(
     params: &ProbeParams,
-    broker_socket_path: &Path,
+    _broker_socket_path: &Path,
     attempt_timeout: Duration,
 ) -> Result<GuestControlHealthEvidence, GuestControlHealthError> {
     let budget = AttemptBudget::from_now(attempt_timeout, GUEST_CONTROL_ATTEMPT_CAP);
-    let signer = BrokerSigner::new(broker_socket_path.to_path_buf(), budget);
+    let signer = UnavailableLegacyGuestProofSigner;
     let nonce = host_nonce().map_err(|_| GuestControlHealthError::Signer)?;
     let runtime = build_probe_runtime()?;
     runtime.block_on(async {
@@ -440,11 +340,11 @@ pub fn run_health_probe_once(
 /// a single absolute-deadline budget across connect / ttRPC / sign.
 pub fn run_config_read_once(
     params: &ProbeParams,
-    broker_socket_path: &Path,
+    _broker_socket_path: &Path,
     attempt_timeout: Duration,
 ) -> Result<Vec<u8>, GuestFileReadError> {
     let budget = AttemptBudget::from_now(attempt_timeout, GUEST_CONTROL_ATTEMPT_CAP);
-    let signer = BrokerSigner::new(broker_socket_path.to_path_buf(), budget);
+    let signer = UnavailableLegacyGuestProofSigner;
     let nonce =
         host_nonce().map_err(|_| GuestFileReadError::Probe(GuestControlHealthError::Signer))?;
     let runtime = build_probe_runtime().map_err(GuestFileReadError::Probe)?;
@@ -463,12 +363,12 @@ pub fn run_config_read_once(
 
 pub fn run_usbip_import_once(
     params: &ProbeParams,
-    broker_socket_path: &Path,
+    _broker_socket_path: &Path,
     attempt_timeout: Duration,
     call: GuestUsbipImportCall<'_>,
 ) -> Result<GuestUsbipImportResult, GuestUsbipImportError> {
     let budget = AttemptBudget::from_now(attempt_timeout, attempt_timeout);
-    let signer = BrokerSigner::new(broker_socket_path.to_path_buf(), budget);
+    let signer = UnavailableLegacyGuestProofSigner;
     let nonce =
         host_nonce().map_err(|_| GuestUsbipImportError::Probe(GuestControlHealthError::Signer))?;
     let runtime = build_probe_runtime().map_err(GuestUsbipImportError::Probe)?;
@@ -489,13 +389,13 @@ pub fn run_usbip_import_once(
 
 pub fn run_usbip_status_once(
     params: &ProbeParams,
-    broker_socket_path: &Path,
+    _broker_socket_path: &Path,
     attempt_timeout: Duration,
     host: Option<&str>,
     bus_id: Option<&str>,
 ) -> Result<GuestUsbipStatusResult, GuestUsbipImportError> {
     let budget = AttemptBudget::from_now(attempt_timeout, attempt_timeout);
-    let signer = BrokerSigner::new(broker_socket_path.to_path_buf(), budget);
+    let signer = UnavailableLegacyGuestProofSigner;
     let nonce =
         host_nonce().map_err(|_| GuestUsbipImportError::Probe(GuestControlHealthError::Signer))?;
     let runtime = build_probe_runtime().map_err(GuestUsbipImportError::Probe)?;
@@ -515,63 +415,11 @@ pub fn run_usbip_status_once(
     })
 }
 
-pub fn run_activation_start_once(
-    params: &ProbeParams,
-    broker_socket_path: &Path,
-    attempt_timeout: Duration,
-    start: &GuestSystemActivationStart,
-) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
-    let budget = AttemptBudget::from_now(attempt_timeout, attempt_timeout);
-    let signer = BrokerSigner::new(broker_socket_path.to_path_buf(), budget);
-    let nonce = host_nonce()
-        .map_err(|_| GuestSystemActivationError::Probe(GuestControlHealthError::Signer))?;
-    let runtime = build_probe_runtime().map_err(GuestSystemActivationError::Probe)?;
-    runtime.block_on(async {
-        let client =
-            connect_and_build_client(params, budget).map_err(GuestSystemActivationError::Probe)?;
-        activate_system_start_authenticated(
-            &params.vm_id,
-            Some(VMADDR_CID_HOST),
-            nonce,
-            &client,
-            &signer,
-            start,
-        )
-        .await
-    })
-}
-
-pub fn run_activation_status_once(
-    params: &ProbeParams,
-    broker_socket_path: &Path,
-    attempt_timeout: Duration,
-    activation_id: &str,
-) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
-    let budget = AttemptBudget::from_now(attempt_timeout, attempt_timeout);
-    let signer = BrokerSigner::new(broker_socket_path.to_path_buf(), budget);
-    let nonce = host_nonce()
-        .map_err(|_| GuestSystemActivationError::Probe(GuestControlHealthError::Signer))?;
-    let runtime = build_probe_runtime().map_err(GuestSystemActivationError::Probe)?;
-    runtime.block_on(async {
-        let client =
-            connect_and_build_client(params, budget).map_err(GuestSystemActivationError::Probe)?;
-        activate_system_status_authenticated(
-            &params.vm_id,
-            Some(VMADDR_CID_HOST),
-            nonce,
-            &client,
-            &signer,
-            activation_id,
-        )
-        .await
-    })
-}
-
 /// Issue a single authenticated AudioSet RPC attempt on the current thread's
 /// runtime. Callers MUST be inside a current-thread Tokio runtime.
 pub fn run_audio_set_once(
     params: &ProbeParams,
-    broker_socket_path: &Path,
+    _broker_socket_path: &Path,
     attempt_timeout: Duration,
     channel: d2b_contracts::guest_proto::AudioChannel,
     kind: d2b_contracts::guest_proto::AudioSetKind,
@@ -579,7 +427,7 @@ pub fn run_audio_set_once(
     level: u32,
 ) -> Result<GuestAudioChannelStatus, GuestAudioSetError> {
     let budget = AttemptBudget::from_now(attempt_timeout, attempt_timeout);
-    let signer = BrokerSigner::new(broker_socket_path.to_path_buf(), budget);
+    let signer = UnavailableLegacyGuestProofSigner;
     let nonce =
         host_nonce().map_err(|_| GuestAudioSetError::Probe(GuestControlHealthError::Signer))?;
     let runtime = build_probe_runtime().map_err(GuestAudioSetError::Probe)?;
@@ -604,11 +452,11 @@ pub fn run_audio_set_once(
 
 pub fn run_audio_status_once(
     params: &ProbeParams,
-    broker_socket_path: &Path,
+    _broker_socket_path: &Path,
     attempt_timeout: Duration,
 ) -> Result<GuestAudioStatus, GuestAudioSetError> {
     let budget = AttemptBudget::from_now(attempt_timeout, attempt_timeout);
-    let signer = BrokerSigner::new(broker_socket_path.to_path_buf(), budget);
+    let signer = UnavailableLegacyGuestProofSigner;
     let nonce =
         host_nonce().map_err(|_| GuestAudioSetError::Probe(GuestControlHealthError::Signer))?;
     let runtime = build_probe_runtime().map_err(GuestAudioSetError::Probe)?;
@@ -648,27 +496,6 @@ fn usbip_import_error_is_transient(error: &GuestUsbipImportError) -> bool {
             | GuestUsbipImportError::Probe(GuestControlHealthError::Ttrpc)
             | GuestUsbipImportError::Probe(GuestControlHealthError::Timeout)
     )
-}
-
-pub fn activation_error_is_transient(error: &GuestSystemActivationError) -> bool {
-    matches!(
-        error,
-        GuestSystemActivationError::Probe(GuestControlHealthError::TransportIo)
-            | GuestSystemActivationError::Probe(GuestControlHealthError::Ttrpc)
-            | GuestSystemActivationError::Probe(GuestControlHealthError::Timeout)
-    )
-}
-
-pub fn activation_status_error_is_transient(error: &GuestSystemActivationError) -> bool {
-    use d2b_contracts::guest_proto::GuestControlErrorKind as Kind;
-    activation_error_is_transient(error)
-        || matches!(
-            error,
-            GuestSystemActivationError::GuestRejected(
-                Kind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_NOT_FOUND
-                    | Kind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_STATUS_UNAVAILABLE
-            )
-        )
 }
 
 /// State-aware config-read loop, mirroring [`run_guest_control_readiness_loop`].
@@ -793,112 +620,6 @@ pub fn run_usbip_status_on_dedicated_thread(
     })
     .join()
     .map_err(|_| GuestUsbipImportError::Probe(GuestControlHealthError::TransportIo))?
-}
-
-pub fn run_activation_start_on_dedicated_thread(
-    params: ProbeParams,
-    broker_socket_path: PathBuf,
-    start: GuestSystemActivationStart,
-    deadline: Duration,
-) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
-    std::thread::spawn(move || {
-        let probe = RealGuestControlProbe::new(broker_socket_path);
-        let clock = RealProbeClock::new();
-        run_guest_control_activation_start_loop(
-            &probe,
-            &params,
-            &start,
-            deadline,
-            GUEST_CONTROL_RETRY_BACKOFF,
-            &clock,
-        )
-    })
-    .join()
-    .map_err(|_| GuestSystemActivationError::Probe(GuestControlHealthError::TransportIo))?
-}
-
-pub fn run_activation_status_on_dedicated_thread(
-    params: ProbeParams,
-    broker_socket_path: PathBuf,
-    activation_id: String,
-    deadline: Duration,
-) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
-    std::thread::spawn(move || {
-        let probe = RealGuestControlProbe::new(broker_socket_path);
-        let clock = RealProbeClock::new();
-        run_guest_control_activation_status_loop(
-            &probe,
-            &params,
-            &activation_id,
-            deadline,
-            GUEST_CONTROL_RETRY_BACKOFF,
-            &clock,
-        )
-    })
-    .join()
-    .map_err(|_| GuestSystemActivationError::Probe(GuestControlHealthError::TransportIo))?
-}
-
-pub fn run_guest_control_activation_start_loop(
-    probe: &dyn GuestControlProbe,
-    params: &ProbeParams,
-    start: &GuestSystemActivationStart,
-    deadline: Duration,
-    retry_backoff: Duration,
-    clock: &dyn ProbeClock,
-) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
-    loop {
-        let remaining = deadline.saturating_sub(clock.elapsed());
-        if remaining.is_zero() {
-            return Err(GuestSystemActivationError::Probe(
-                GuestControlHealthError::Timeout,
-            ));
-        }
-        let attempt_timeout = remaining.max(Duration::from_millis(1));
-        match probe.activate_system_start(params, attempt_timeout, start) {
-            Ok(status) => return Ok(status),
-            Err(err) => {
-                if !activation_error_is_transient(&err) {
-                    return Err(err);
-                }
-                if clock.elapsed().saturating_add(retry_backoff) >= deadline {
-                    return Err(err);
-                }
-                clock.sleep(retry_backoff);
-            }
-        }
-    }
-}
-
-pub fn run_guest_control_activation_status_loop(
-    probe: &dyn GuestControlProbe,
-    params: &ProbeParams,
-    activation_id: &str,
-    deadline: Duration,
-    retry_backoff: Duration,
-    clock: &dyn ProbeClock,
-) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
-    loop {
-        let remaining = deadline.saturating_sub(clock.elapsed());
-        if remaining.is_zero() {
-            return Err(GuestSystemActivationError::Probe(
-                GuestControlHealthError::Timeout,
-            ));
-        }
-        let attempt_timeout = remaining.max(Duration::from_millis(1));
-        match probe.activate_system_status(params, attempt_timeout, activation_id) {
-            Ok(status) => return Ok(status),
-            Err(err) => {
-                if !activation_status_error_is_transient(&err) {
-                    return Err(err);
-                }
-                if clock.elapsed().saturating_add(retry_backoff) >= deadline {
-                    return Err(err);
-                }
-                clock.sleep(retry_backoff);
-            }
-        }
-    }
 }
 
 /// Per-attempt timeout for audio set RPCs (single attempt, no readiness loop).
@@ -1231,18 +952,15 @@ pub fn health_reason_label(evidence: &GuestControlHealthEvidence) -> &'static st
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::broker_wire::{
-        BrokerErrorResponse, GuestControlProofRole, GuestControlSignRequest,
-    };
     use d2b_contracts::guest_auth::AUTH_TAG_LEN;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    /// Records every `GuestControlSignRequest` the probe forwards so the
+    /// Records every legacy proof request the probe forwards so the
     /// test can assert the host built it verbatim (correct CID, roles,
     /// nonces, boot id).
     struct RecordingSigner {
-        recorded: Mutex<Vec<GuestControlSignRequest>>,
+        recorded: Mutex<Vec<LegacyGuestProofRequest>>,
         fail: bool,
     }
 
@@ -1255,93 +973,42 @@ mod tests {
         }
     }
 
-    impl GuestControlSigner for RecordingSigner {
+    impl LegacyGuestProofSigner for RecordingSigner {
         fn sign(
             &self,
-            request: GuestControlSignRequest,
-        ) -> Result<GuestControlSignResponse, GuestControlHealthError> {
+            request: LegacyGuestProofRequest,
+        ) -> Result<LegacyGuestProof, GuestControlHealthError> {
             self.recorded.lock().unwrap().push(request.clone());
             if self.fail {
                 return Err(GuestControlHealthError::Signer);
             }
             let fill = match request.role {
-                GuestControlProofRole::HostProof => 0x55,
-                GuestControlProofRole::GuestProof => 0x77,
+                crate::guest_control_health::LegacyGuestProofRole::Host => 0x55,
+                crate::guest_control_health::LegacyGuestProofRole::Guest => 0x77,
             };
-            Ok(GuestControlSignResponse {
+            Ok(LegacyGuestProof {
                 tag: vec![fill; AUTH_TAG_LEN],
             })
         }
     }
 
     #[test]
-    fn broker_sign_response_mapping_is_fail_closed() {
-        // Happy path: a GuestControlSign response forwards through.
-        let ok = map_broker_sign_response(Ok(BrokerResponse::GuestControlSign(
-            GuestControlSignResponse {
-                tag: vec![0u8; AUTH_TAG_LEN],
-            },
-        )));
-        assert!(matches!(ok, Ok(resp) if resp.tag.len() == AUTH_TAG_LEN));
-
-        // Broker Error response -> Signer.
-        let broker_error =
-            map_broker_sign_response(Ok(BrokerResponse::Error(BrokerErrorResponse {
-                kind: "guest-control-auth".to_owned(),
-                operation: "GuestControlSign".to_owned(),
-                target_wave: None,
-                message: "refused".to_owned(),
-                action: "n/a".to_owned(),
-            })));
-        assert_eq!(broker_error, Err(GuestControlHealthError::Signer));
-
-        // Wrong (non-sign) response variant -> Signer.
-        let wrong = map_broker_sign_response(Ok(BrokerResponse::PollChildReaped(
-            d2b_contracts::broker_wire::PollChildReapedResponse {
-                notifications: vec![],
-            },
-        )));
-        assert_eq!(wrong, Err(GuestControlHealthError::Signer));
-
-        // Transport/IO error (non-deadline) -> Signer (fail closed).
-        let transport = map_broker_sign_response(Err(TypedError::InternalIo {
-            context: "recv seqpacket frame".to_owned(),
-            detail: "timed out".to_owned(),
-        }));
-        assert_eq!(transport, Err(GuestControlHealthError::Signer));
-
-        // Round-trip deadline exhaustion -> Timeout, so a stalled/backlogged
-        // broker surfaces as the guest-control-timeout error end to end
-        // rather than collapsing into a generic Signer failure.
-        let deadline = map_broker_sign_response(Err(TypedError::InternalBrokerTimeout {
-            path: std::path::PathBuf::from("/run/d2b/priv.sock"),
-        }));
-        assert_eq!(deadline, Err(GuestControlHealthError::Timeout));
-    }
-
-    #[test]
-    fn broker_signer_maps_missing_broker_to_signer_error() {
-        // A signer pointed at a non-existent broker socket fails the
-        // connect and must map to a Signer error (fail closed).
-        let signer = BrokerSigner::new(
-            PathBuf::from("/nonexistent-d2b-broker.sock"),
-            AttemptBudget::from_now(Duration::from_millis(50), GUEST_CONTROL_ATTEMPT_CAP),
-        );
-        let request = GuestControlSignRequest {
-            vm_id: d2b_contracts::types::VmId::new("corp-vm"),
-            role: GuestControlProofRole::HostProof,
+    fn legacy_guest_control_signer_is_always_unavailable() {
+        let signer = UnavailableLegacyGuestProofSigner;
+        let request = LegacyGuestProofRequest {
+            vm_id: "corp-vm".to_owned(),
+            role: crate::guest_control_health::LegacyGuestProofRole::Host,
             protocol_version: d2b_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
-            direction: d2b_contracts::broker_wire::GuestControlDirection::HostToGuest,
-            purpose: d2b_contracts::broker_wire::GuestControlAuthPurpose::GuestControlAuthV1,
-            guest_control_port: d2b_contracts::guest_auth::GUEST_CONTROL_AUTH_PORT,
             peer_cid: Some(VMADDR_CID_HOST),
-            host_nonce: vec![0x11; AUTH_NONCE_LEN],
-            guest_nonce: vec![0x22; AUTH_NONCE_LEN],
-            guest_boot_id: d2b_contracts::broker_wire::GuestBootIdWire::new("boot-1"),
+            host_nonce: [0x11; AUTH_NONCE_LEN],
+            guest_nonce: [0x22; AUTH_NONCE_LEN],
+            guest_boot_id: "boot-1".to_owned(),
             capabilities_hash: None,
-            tracing_span_id: None,
         };
-        assert_eq!(signer.sign(request), Err(GuestControlHealthError::Signer));
+        assert!(matches!(
+            signer.sign(request),
+            Err(GuestControlHealthError::Signer)
+        ));
     }
 
     #[test]
@@ -1753,78 +1420,6 @@ mod tests {
         }
     }
 
-    struct ScriptedActivationProbe {
-        status_outcomes:
-            Mutex<Vec<Result<GuestSystemActivationStatus, GuestSystemActivationError>>>,
-        attempt_timeouts: Mutex<Vec<Duration>>,
-    }
-
-    impl ScriptedActivationProbe {
-        fn new(
-            status_outcomes: Vec<Result<GuestSystemActivationStatus, GuestSystemActivationError>>,
-        ) -> Self {
-            Self {
-                status_outcomes: Mutex::new(status_outcomes),
-                attempt_timeouts: Mutex::new(Vec::new()),
-            }
-        }
-    }
-
-    impl GuestControlProbe for ScriptedActivationProbe {
-        fn probe_health(
-            &self,
-            _params: &ProbeParams,
-            _attempt_timeout: Duration,
-        ) -> Result<GuestControlHealthEvidence, GuestControlHealthError> {
-            unreachable!("activation status loop never probes health directly")
-        }
-
-        fn read_config(
-            &self,
-            _params: &ProbeParams,
-            _attempt_timeout: Duration,
-        ) -> Result<Vec<u8>, GuestFileReadError> {
-            unreachable!("activation status loop never reads config")
-        }
-
-        fn usbip_import(
-            &self,
-            _params: &ProbeParams,
-            _attempt_timeout: Duration,
-            _action: GuestUsbipAction,
-            _host: &str,
-            _bus_id: &str,
-        ) -> Result<GuestUsbipImportResult, GuestUsbipImportError> {
-            unreachable!("activation status loop never imports USBIP")
-        }
-
-        fn usbip_status(
-            &self,
-            _params: &ProbeParams,
-            _attempt_timeout: Duration,
-            _host: Option<&str>,
-            _bus_id: Option<&str>,
-        ) -> Result<GuestUsbipStatusResult, GuestUsbipImportError> {
-            unreachable!("activation status loop never reads USBIP status")
-        }
-
-        fn activate_system_status(
-            &self,
-            _params: &ProbeParams,
-            attempt_timeout: Duration,
-            _activation_id: &str,
-        ) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
-            self.attempt_timeouts.lock().unwrap().push(attempt_timeout);
-            let mut outcomes = self.status_outcomes.lock().unwrap();
-            if outcomes.is_empty() {
-                return Err(GuestSystemActivationError::Probe(
-                    GuestControlHealthError::TransportIo,
-                ));
-            }
-            outcomes.remove(0)
-        }
-    }
-
     impl GuestControlProbe for ScriptedUsbipProbe {
         fn probe_health(
             &self,
@@ -1948,39 +1543,6 @@ mod tests {
             ))
         ));
         assert!(probe.attempt_timeouts.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn activation_status_loop_rejoins_after_unknown_activation_id() {
-        use d2b_contracts::guest_proto::{GuestActivationState, GuestControlErrorKind};
-
-        let probe = ScriptedActivationProbe::new(vec![
-            Err(GuestSystemActivationError::GuestRejected(
-                GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_NOT_FOUND,
-            )),
-            Ok(GuestSystemActivationStatus {
-                state: GuestActivationState::GUEST_ACTIVATION_STATE_SUCCEEDED,
-                exit_code: Some(0),
-                signal: None,
-                status_code: Some(0),
-            }),
-        ]);
-        let clock = FakeClock::new();
-        let result = run_guest_control_activation_status_loop(
-            &probe,
-            &test_params(),
-            "activation-1",
-            Duration::from_secs(10),
-            GUEST_CONTROL_RETRY_BACKOFF,
-            &clock,
-        )
-        .expect("status rejoin succeeds");
-
-        assert_eq!(
-            result.state,
-            GuestActivationState::GUEST_ACTIVATION_STATE_SUCCEEDED
-        );
-        assert_eq!(probe.attempt_timeouts.lock().unwrap().len(), 2);
     }
 
     #[test]
@@ -2125,33 +1687,6 @@ mod tests {
     }
 
     #[test]
-    fn expired_attempt_budget_surfaces_timeout_through_broker_signer() {
-        // A genuinely expired per-attempt budget must surface as a
-        // Timeout from the PRODUCTION BrokerSigner WITHOUT even reaching
-        // the broker socket, so a real deadline/timeout reaches the
-        // documented guest-control-timeout error.
-        let signer = BrokerSigner::new(
-            PathBuf::from("/nonexistent-d2b-broker.sock"),
-            AttemptBudget::from_now(Duration::ZERO, GUEST_CONTROL_ATTEMPT_CAP),
-        );
-        let request = GuestControlSignRequest {
-            vm_id: d2b_contracts::types::VmId::new("corp-vm"),
-            role: GuestControlProofRole::HostProof,
-            protocol_version: d2b_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
-            direction: d2b_contracts::broker_wire::GuestControlDirection::HostToGuest,
-            purpose: d2b_contracts::broker_wire::GuestControlAuthPurpose::GuestControlAuthV1,
-            guest_control_port: d2b_contracts::guest_auth::GUEST_CONTROL_AUTH_PORT,
-            peer_cid: Some(VMADDR_CID_HOST),
-            host_nonce: vec![0x11; AUTH_NONCE_LEN],
-            guest_nonce: vec![0x22; AUTH_NONCE_LEN],
-            guest_boot_id: d2b_contracts::broker_wire::GuestBootIdWire::new("boot-1"),
-            capabilities_hash: None,
-            tracing_span_id: None,
-        };
-        assert_eq!(signer.sign(request), Err(GuestControlHealthError::Timeout));
-    }
-
-    #[test]
     fn config_read_timeout_maps_to_timeout_kind() {
         // A probe timeout flows through the read-error mapping as the
         // closed-enum Timeout kind (slug guest-control-timeout), not a
@@ -2169,11 +1704,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn probe_forwards_sign_requests_verbatim_with_host_cid() {
+    async fn probe_forwards_legacy_proof_requests_with_host_cid() {
         // Drive the real probe with a local happy fake client via a
-        // recording signer to assert the host built each
-        // GuestControlSignRequest verbatim (CID 2, HostProof then
-        // GuestProof, matching nonces + boot id).
+        // recording signer to assert the host built each proof request.
         use crate::guest_control_health::probe_guest_control_health;
 
         let signer = RecordingSigner::new(false);
@@ -2191,37 +1724,25 @@ mod tests {
 
         let recorded = signer.recorded.lock().unwrap();
         assert_eq!(recorded.len(), 2, "host + guest proof signed");
-        assert_eq!(recorded[0].role, GuestControlProofRole::HostProof);
-        assert_eq!(recorded[1].role, GuestControlProofRole::GuestProof);
-        // Assert EVERY field of EVERY forwarded request so a regression in
-        // any one (vm_id, direction, purpose, port, cid, nonces, boot id,
-        // protocol version, span id) is caught, not just a representative
-        // subset.
+        assert_eq!(
+            recorded[0].role,
+            crate::guest_control_health::LegacyGuestProofRole::Host
+        );
+        assert_eq!(
+            recorded[1].role,
+            crate::guest_control_health::LegacyGuestProofRole::Guest
+        );
         for request in recorded.iter() {
-            assert_eq!(request.vm_id.as_str(), "corp-vm");
+            assert_eq!(request.vm_id, "corp-vm");
             assert_eq!(
                 request.protocol_version,
                 d2b_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION
             );
-            assert_eq!(
-                request.direction,
-                d2b_contracts::broker_wire::GuestControlDirection::HostToGuest
-            );
-            assert_eq!(
-                request.purpose,
-                d2b_contracts::broker_wire::GuestControlAuthPurpose::GuestControlAuthV1
-            );
-            assert_eq!(
-                request.guest_control_port,
-                d2b_contracts::guest_auth::GUEST_CONTROL_AUTH_PORT
-            );
             assert_eq!(request.peer_cid, Some(VMADDR_CID_HOST));
-            assert_eq!(request.host_nonce, host_nonce.to_vec());
+            assert_eq!(request.host_nonce, host_nonce);
             // The guest nonce echoes the HappyFakeClient Hello reply.
-            assert_eq!(request.guest_nonce, vec![0x22; AUTH_NONCE_LEN]);
-            assert_eq!(request.guest_boot_id.as_str(), "boot-1");
-            // The host never forwards a tracing span id to the broker.
-            assert!(request.tracing_span_id.is_none());
+            assert_eq!(request.guest_nonce, [0x22; AUTH_NONCE_LEN]);
+            assert_eq!(request.guest_boot_id, "boot-1");
         }
         // The GuestProof carries the capabilities hash; the HostProof
         // does not.

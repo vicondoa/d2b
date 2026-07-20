@@ -9,8 +9,8 @@ use std::{
 
 use async_trait::async_trait;
 use d2b_contracts::v2_component_session::{
-    MAX_ACTIVE_NAMED_STREAMS, MAX_AGGREGATE_NAMED_STREAM_QUEUE_BYTES, MAX_LOGICAL_MESSAGE_BYTES,
-    MAX_NAMED_STREAM_QUEUE_BYTES,
+    LimitProfile, MAX_ACTIVE_NAMED_STREAMS, MAX_AGGREGATE_NAMED_STREAM_QUEUE_BYTES,
+    MAX_LOGICAL_MESSAGE_BYTES, MAX_NAMED_STREAM_QUEUE_BYTES,
 };
 use d2b_session::{ComponentSessionDriver, StreamEvent, StreamId, TransportPacket};
 use tokio::{
@@ -67,11 +67,12 @@ impl fmt::Debug for SessionReply {
 pub struct ConnectedSession {
     pub driver: SharedDriver,
     pub ttrpc_socket: Socket,
+    pub limits: LimitProfile,
 }
 
 impl fmt::Debug for ConnectedSession {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("ConnectedSession { driver: [redacted] }")
+        formatter.write_str("ConnectedSession { driver: [redacted], limits: [negotiated] }")
     }
 }
 

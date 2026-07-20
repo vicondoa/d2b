@@ -8,13 +8,8 @@
 //!   * a daemon `auditResponse` frame is relayed verbatim to stdout (driven by
 //!     an in-process SOCK_SEQPACKET mock daemon — replaces the bash gate's
 //!     python mock);
-//!   * a real, KVM-free `d2bd serve --once` rejects a launcher-role peer
-//!     with `authz-audit-requires-admin` (32) and NO bash fallback.
-//!
-//! The last case needs the daemon-spawn harness (D2B_TEST_D2BD_BIN);
-//! it skips cleanly when unavailable (plain `cargo test --workspace`).
-
-mod common;
+//!   * a daemon `authz-audit-requires-admin` error frame maps to exit 32
+//!     with NO bash fallback.
 
 use std::io::Write;
 use std::os::fd::AsRawFd;
@@ -23,8 +18,6 @@ use std::path::Path;
 use std::process::Command;
 
 use serde_json::Value;
-
-use common::{TestPeer, spawn_d2bd_once};
 
 /// Write a non-executable / `exit 99` poison-pill the CLI must never exec.
 fn write_poison_pill(dir: &Path) -> std::path::PathBuf {
@@ -131,7 +124,7 @@ fn audit_relays_daemon_auditresponse_frames() {
     // auditResponse{lines}. The CLI relays the lines to stdout verbatim.
     let tmp = tempfile::tempdir().expect("tempdir");
     let sock = tmp.path().join("mock.sock");
-    let handle = spawn_audit_mock_daemon(&sock);
+    let handle = spawn_audit_mock_daemon(&sock, AuditMockReply::Lines);
 
     let out = Command::new(env!("CARGO_BIN_EXE_d2b"))
         .args(["audit", "--human"])
@@ -158,26 +151,23 @@ fn audit_relays_daemon_auditresponse_frames() {
 }
 
 #[test]
-fn audit_admin_rejected_against_live_daemon_without_fallback() {
-    let Some(daemon) = spawn_d2bd_once(&TestPeer::launcher()) else {
-        eprintln!("SKIP: D2B_TEST_D2BD_BIN unset (daemon-spawn harness unavailable)");
-        return;
-    };
+fn audit_admin_rejection_frame_has_no_fallback() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let sock = tmp.path().join("mock-authz.sock");
+    let handle = spawn_audit_mock_daemon(&sock, AuditMockReply::AuthzDenied);
 
     let out = Command::new(env!("CARGO_BIN_EXE_d2b"))
         .args(["audit", "--json"])
-        .env("D2B_PUBLIC_SOCKET", &daemon.socket_path)
+        .env("D2B_PUBLIC_SOCKET", &sock)
         .output()
-        .expect("spawn d2b audit --json (live daemon)");
-
-    // --once daemon exits after serving this one request.
-    let _ = daemon.wait();
+        .expect("spawn d2b audit --json (authz mock)");
+    handle.join().expect("authz mock daemon thread");
 
     assert_eq!(
         out.status.code(),
         Some(32),
         "launcher peer is denied audit (admin-only) with exit 32; stderr:\n{}",
-        String::from_utf8_lossy(&out.stderr)
+        String::from_utf8_lossy(&out.stderr),
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
@@ -196,9 +186,15 @@ fn audit_admin_rejected_against_live_daemon_without_fallback() {
 
 // --- in-process SOCK_SEQPACKET mock daemon ---------------------------------
 
+#[derive(Clone, Copy)]
+enum AuditMockReply {
+    Lines,
+    AuthzDenied,
+}
+
 /// Spawn a one-shot mock daemon that performs the audit handshake and returns
-/// an `auditResponse` with two lines. Returns the joinable server thread.
-fn spawn_audit_mock_daemon(path: &Path) -> std::thread::JoinHandle<()> {
+/// the selected typed response. Returns the joinable server thread.
+fn spawn_audit_mock_daemon(path: &Path, reply: AuditMockReply) -> std::thread::JoinHandle<()> {
     use nix::sys::socket::{
         AddressFamily, Backlog, SockFlag, SockType, UnixAddr, accept, bind, listen, socket,
     };
@@ -232,13 +228,22 @@ fn spawn_audit_mock_daemon(path: &Path) -> std::thread::JoinHandle<()> {
         // audit -> auditResponse
         let req = recv_frame(conn);
         assert_eq!(req["type"], "audit", "expected audit frame, got {req}");
-        send_frame(
-            conn,
-            &serde_json::json!({
+        let response = match reply {
+            AuditMockReply::Lines => serde_json::json!({
                 "type": "auditResponse",
                 "lines": ["broker audit line 1", "broker audit line 2"],
             }),
-        );
+            AuditMockReply::AuthzDenied => serde_json::json!({
+                "type": "error",
+                "error": {
+                    "kind": "authz-audit-requires-admin",
+                    "exitCode": 32,
+                    "message": "audit requires an admin role",
+                    "remediation": "add the caller to d2b.site.adminUsers",
+                },
+            }),
+        };
+        send_frame(conn, &response);
         let _ = nix::unistd::close(conn);
     })
 }

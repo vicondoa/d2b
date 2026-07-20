@@ -23,30 +23,6 @@ use nix::sys::socket::{
 };
 use serde_json::{Value, json};
 
-const SYSTEM_STATE_JSON: &str = r#"{
-  "units": {
-    "d2bd.service": "inactive",
-    "d2b@corp-vm.service": "inactive",
-    "microvm@corp-vm.service": "inactive",
-    "d2b@sys-work-net.service": "active",
-    "microvm@sys-work-net.service": "active"
-  },
-  "bridges": {
-    "br-work-lan": {
-      "state": "UP",
-      "admin": "up",
-      "expectedCarrier": "NO-CARRIER",
-      "result": "ok"
-    },
-    "br-work-up": {
-      "state": "UP",
-      "admin": "up",
-      "expectedCarrier": "UP",
-      "result": "ok"
-    }
-  }
-}"#;
-
 const AUTH_LAUNCHER_JSON: &str = r#"{
   "publicReachable": true,
   "publicVersion": "0.4.0-test",
@@ -57,7 +33,6 @@ const AUTH_LAUNCHER_JSON: &str = r#"{
 struct FixtureEnv {
     _tmp: tempfile::TempDir,
     tree: PathBuf,
-    system_state: PathBuf,
     auth_status: PathBuf,
     home: PathBuf,
     runtime: PathBuf,
@@ -70,9 +45,6 @@ impl FixtureEnv {
         let tmp = target_tempdir("cli-json-output-contract");
         let tree = tmp.path().join("bundle-tree");
         build_hermetic_bundle_tree(&fixtures, &tree);
-
-        let system_state = tmp.path().join("system-state.json");
-        fs::write(&system_state, SYSTEM_STATE_JSON).expect("write system-state fixture");
 
         let auth_status = tmp.path().join("auth-launcher.json");
         fs::write(&auth_status, AUTH_LAUNCHER_JSON).expect("write auth-status fixture");
@@ -87,7 +59,6 @@ impl FixtureEnv {
         Some(Self {
             _tmp: tmp,
             tree,
-            system_state,
             auth_status,
             home,
             runtime,
@@ -325,28 +296,6 @@ fn json_value(bytes: &[u8], label: &str) -> Value {
     })
 }
 
-fn list_v04_subset(value: &Value) -> Value {
-    Value::Array(
-        value
-            .as_array()
-            .expect("list output is an array")
-            .iter()
-            .map(|item| {
-                json!({
-                    "name": item["name"].clone(),
-                    "env": item["env"].clone(),
-                    "graphics": item["graphics"].clone(),
-                    "tpm": item["tpm"].clone(),
-                    "usbip": item["usbip"].clone(),
-                    "staticIp": item["staticIp"].clone(),
-                    "status": item["status"].clone(),
-                    "isNetVm": item["isNetVm"].clone(),
-                })
-            })
-            .collect(),
-    )
-}
-
 fn status_v04_subset(value: &Value) -> Value {
     json!({
         "name": value["name"].clone(),
@@ -355,34 +304,6 @@ fn status_v04_subset(value: &Value) -> Value {
         "booted": value["booted"].clone(),
         "pendingRestart": value["pendingRestart"].clone(),
     })
-}
-
-#[test]
-fn list_output_matches_cli_json_drift_goldens() {
-    let Some(env) = FixtureEnv::new() else {
-        return;
-    };
-    let human = env.run(
-        &["list", "--human"],
-        &[("D2B_TEST_SYSTEM_STATE_JSON", &env.system_state)],
-    );
-    assert_matches_golden(&human, "list-human.golden", "list --human");
-
-    let json = env.run(
-        &["list", "--json"],
-        &[("D2B_TEST_SYSTEM_STATE_JSON", &env.system_state)],
-    );
-    assert_matches_golden(&json, "list-json.golden", "list --json");
-
-    let rust_subset = list_v04_subset(&json_value(&json.stdout, "list --json"));
-    let bash_subset = json_value(
-        golden("list.v04bash.golden").as_bytes(),
-        "list.v04bash.golden",
-    );
-    assert_eq!(
-        rust_subset, bash_subset,
-        "list rust JSON stays equivalent to the v0.4.0 bash subset"
-    );
 }
 
 #[test]

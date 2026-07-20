@@ -7,17 +7,18 @@ mod daemon_version_file {
     use serde_json::Value;
 
     use super::common::{
-        DaemonFixture, HELLO_FRAME, TestPeer, assert_contains, spawn_d2bd_serve, test_client,
+        DaemonFixture, complete_component_session_handshake, current_username, spawn_d2bd_serve,
         wait_for_file,
     };
 
     #[test]
     fn startup_writes_version_file_next_to_public_socket() {
         let fixture = DaemonFixture::new("daemon-version-file.");
-        fixture.write_config(&["launcher-user"], &["admin-user"]);
+        let username = current_username();
+        fixture.write_config(&[&username], &[&username]);
         let version_path = fixture.run_dir.join("version");
 
-        let server = spawn_d2bd_serve(&fixture, &TestPeer::launcher(), true, None);
+        let server = spawn_d2bd_serve(&fixture, true, None);
         wait_for_file(&version_path, Duration::from_secs(15));
 
         let version: Value = serde_json::from_slice(
@@ -46,10 +47,8 @@ mod daemon_version_file {
             Value::from(u64::from(d2b_contracts::PROTOCOL_VERSION))
         );
 
-        let (rc, output) = test_client(&fixture.socket_path, &[HELLO_FRAME]);
+        complete_component_session_handshake(&fixture.socket_path);
         let status = server.wait();
         assert!(status.success(), "d2bd serve exited with {status:?}");
-        assert_eq!(rc, 0, "hello client exit code; output:\n{output}");
-        assert_contains(&output, r#""type":"helloOk""#, "hello response");
     }
 }
