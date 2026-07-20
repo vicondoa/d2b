@@ -217,7 +217,6 @@
         "packages/d2b-contract-tests/tests/storage_sync_contracts.rs",
         "packages/d2b-contracts/src/provider_registry_v2.rs",
         "tests/migration-ledger.toml",
-        "tests/migration-state.d/polkit-allowlist-eval.toml",
         "tests/migration-state.d/vm-submodule-cutover-eval.toml",
         "tests/migration-state.d/vm-submodule-eval.toml"
       ]
@@ -284,7 +283,6 @@
     "tests/golden/pinned/daemon-version-negotiation.txt",
     "tests/golden/pinned/guest-control-token-materializer.txt",
     "tests/migration-ledger.toml",
-    "tests/migration-state.d/polkit-allowlist-eval.toml",
     "tests/migration-state.d/vm-submodule-cutover-eval.toml",
     "tests/migration-state.d/vm-submodule-eval.toml"
   ],
@@ -599,15 +597,16 @@
       "component": "desktop-metadata",
       "test_file": "packages/d2b-contract-tests/tests/realm_workload_schema_contract.rs",
       "test_names": [
-        "realm_workloads_launcher_artifact_wired_as_private_non_secret",
-        "realm_workloads_launcher_exposes_canonical_target_and_actions",
-        "realm_workloads_launcher_exposes_icon_grouping_fields",
-        "realm_workloads_launcher_exposes_workload_id_field",
-        "realm_workloads_launcher_icon_group_key_has_semantic_comment",
-        "realm_workloads_launcher_invariant_is_no_sensitive_command_payloads"
+        "desktop_metadata_artifact_is_public_non_secret",
+        "desktop_metadata_consumes_normalized_rows_without_rederiving_ids",
+        "desktop_metadata_is_bounded_and_non_authoritative",
+        "desktop_metadata_keeps_configured_argv_private",
+        "desktop_metadata_maps_systemd_user_to_unsafe_local_posture",
+        "desktop_metadata_preserves_presentation_without_legacy_group_aliases",
+        "normalized_index_owns_canonical_desktop_identity"
       ],
       "source_paths": [
-        "nixos-modules/realm-workloads-launcher-json.nix"
+        "nixos-modules/desktop-metadata-json.nix"
       ],
       "companion_paths": []
     },
@@ -618,7 +617,7 @@
         "host_daemon_broker_and_activation_do_not_store_realm_credentials"
       ],
       "source_paths": [
-        "nixos-modules/gateway-vm.nix"
+        "nixos-modules/options-gateway.nix"
       ],
       "companion_paths": []
     },
@@ -640,29 +639,15 @@
         "host_mutation_sources_are_registered_with_storage_or_sync_policy"
       ],
       "source_paths": [
-        "nixos-modules/gateway-vm.nix"
+        "nixos-modules/host-broker.nix"
       ],
       "companion_paths": []
-    },
-    {
-      "component": "realm-principals",
-      "test_file": "packages/d2b-contract-tests/tests/policy_misc.rs",
-      "test_names": [
-        "polkit_allowlist_daemon_only_singletons"
-      ],
-      "source_paths": [
-        "nixos-modules/host-polkit.nix"
-      ],
-      "companion_paths": [
-        "tests/migration-ledger.toml",
-        "tests/migration-state.d/polkit-allowlist-eval.toml"
-      ]
     },
     {
       "component": "workload-processes",
       "test_file": "packages/d2b-contract-tests/tests/policy_misc.rs",
       "test_names": [
-        "vm_submodule_compose_vm_shape"
+        "workload_composition_shape"
       ],
       "source_paths": [
         "nixos-modules/vm-submodule.nix"
