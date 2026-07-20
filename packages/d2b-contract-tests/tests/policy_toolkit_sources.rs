@@ -15,6 +15,10 @@ use serde_json::{Value, json};
 const INVENTORY_PATH: &str = "docs/reference/toolkit-source-contract.json";
 const COORDINATION_PATH: &str = "docs/adr/0045-toolkit-sibling-coordination.json";
 const FOUNDATION_SOURCE_REVISION: &str = "4018d9c9652bd826c2e6a9abccdcdcafb832d944";
+const CURRENT_SOURCE_SUPPLEMENTS: [&str; 2] = [
+    "docs/reference/toolkit-source-contract.md",
+    "docs/reference/v2-foundation-crates.md",
+];
 const CANONICAL_PACKAGE_GROUPS: [(&str, &str); 6] = [
     ("d2b-contracts", "contracts-package"),
     ("d2b-client", "client"),
@@ -179,7 +183,6 @@ fn hex_sha256(bytes: &[u8]) -> String {
 }
 
 fn bytes_fingerprint(domain: &str, id: &str, paths: &[String]) -> String {
-    let root = repo_root();
     let mut bytes = Vec::new();
     bytes.extend_from_slice(domain.as_bytes());
     bytes.push(0);
@@ -187,8 +190,7 @@ fn bytes_fingerprint(domain: &str, id: &str, paths: &[String]) -> String {
     bytes.push(0);
     for rel in paths {
         let path_bytes = rel.as_bytes();
-        let contents = fs::read(root.join(rel))
-            .unwrap_or_else(|error| panic!("failed to read {rel}: {error}"));
+        let contents = canonical_source_bytes(rel);
         bytes.extend_from_slice(&(path_bytes.len() as u64).to_be_bytes());
         bytes.extend_from_slice(path_bytes);
         bytes.extend_from_slice(&(contents.len() as u64).to_be_bytes());
@@ -198,9 +200,7 @@ fn bytes_fingerprint(domain: &str, id: &str, paths: &[String]) -> String {
 }
 
 fn file_sha256(rel: &str) -> String {
-    let contents = fs::read(repo_root().join(rel))
-        .unwrap_or_else(|error| panic!("failed to read {rel}: {error}"));
-    hex_sha256(&contents)
+    hex_sha256(&canonical_source_bytes(rel))
 }
 
 fn files_below(rel: &str) -> Vec<String> {
@@ -243,33 +243,50 @@ fn command_output(command: &mut Command, context: &str) -> Vec<u8> {
     output.stdout
 }
 
-fn cargo_metadata() -> Value {
+fn canonical_source_bytes(rel: &str) -> Vec<u8> {
     let root = repo_root();
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let bytes = command_output(
-        Command::new(cargo)
-            .current_dir(root.join("packages"))
-            .args(["metadata", "--locked", "--no-deps", "--format-version", "1"]),
-        "cargo metadata",
-    );
-    serde_json::from_slice(&bytes).expect("cargo metadata JSON")
+    if CURRENT_SOURCE_SUPPLEMENTS.contains(&rel) {
+        return fs::read(root.join(rel))
+            .unwrap_or_else(|error| panic!("failed to read source supplement {rel}: {error}"));
+    }
+    command_output(
+        Command::new("git")
+            .arg("--no-replace-objects")
+            .arg("-C")
+            .arg(&root)
+            .args([
+                "cat-file",
+                "blob",
+                &format!("{FOUNDATION_SOURCE_REVISION}:{rel}"),
+            ]),
+        &format!("read {rel} at canonical source revision"),
+    )
 }
 
-fn git_listed_files(rel: &str) -> Vec<String> {
+fn canonical_source_text(rel: &str) -> String {
+    String::from_utf8(canonical_source_bytes(rel))
+        .unwrap_or_else(|error| panic!("{rel} is not UTF-8: {error}"))
+}
+
+fn git_listed_files_at_source_revision(rel: &str) -> Vec<String> {
     let root = repo_root();
     let bytes = command_output(
-        Command::new("git").arg("-C").arg(&root).args([
-            "-c",
-            "core.quotePath=false",
-            "ls-files",
-            "-z",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-            "--",
-            rel,
-        ]),
-        "git ls-files",
+        Command::new("git")
+            .arg("--no-replace-objects")
+            .arg("-C")
+            .arg(&root)
+            .args([
+                "-c",
+                "core.quotePath=false",
+                "ls-tree",
+                "-r",
+                "-z",
+                "--name-only",
+                FOUNDATION_SOURCE_REVISION,
+                "--",
+                rel,
+            ]),
+        "git ls-tree at canonical source revision",
     );
     let mut files = bytes
         .split(|byte| *byte == 0)
@@ -281,43 +298,113 @@ fn git_listed_files(rel: &str) -> Vec<String> {
     files
 }
 
-fn canonical_package_groups(metadata: &Value) -> BTreeMap<String, Vec<String>> {
-    let root = repo_root();
-    let packages = metadata["packages"]
-        .as_array()
-        .expect("cargo metadata packages");
+fn pinned_cargo_targets(package: &str) -> &'static [(&'static str, &'static str, &'static str)] {
+    match package {
+        "d2b-contracts" => &[
+            ("d2b_contracts", "lib", "packages/d2b-contracts/src/lib.rs"),
+            (
+                "component_session_v2",
+                "test",
+                "packages/d2b-contracts/tests/component_session_v2.rs",
+            ),
+            (
+                "guest_proto_bindings",
+                "test",
+                "packages/d2b-contracts/tests/guest_proto_bindings.rs",
+            ),
+            (
+                "v2_identity_contract",
+                "test",
+                "packages/d2b-contracts/tests/v2_identity_contract.rs",
+            ),
+            (
+                "v2_provider_contract",
+                "test",
+                "packages/d2b-contracts/tests/v2_provider_contract.rs",
+            ),
+            (
+                "v2_services_contract",
+                "test",
+                "packages/d2b-contracts/tests/v2_services_contract.rs",
+            ),
+            (
+                "v2_state_contract",
+                "test",
+                "packages/d2b-contracts/tests/v2_state_contract.rs",
+            ),
+            (
+                "version_skew",
+                "test",
+                "packages/d2b-contracts/tests/version_skew.rs",
+            ),
+        ],
+        "d2b-client" => &[
+            ("d2b_client", "lib", "packages/d2b-client/src/lib.rs"),
+            ("client", "test", "packages/d2b-client/tests/client.rs"),
+        ],
+        "d2b-session" => &[
+            ("d2b_session", "lib", "packages/d2b-session/src/lib.rs"),
+            (
+                "component_session",
+                "test",
+                "packages/d2b-session/tests/component_session.rs",
+            ),
+            (
+                "noise_vectors",
+                "test",
+                "packages/d2b-session/tests/noise_vectors.rs",
+            ),
+        ],
+        "d2b-session-unix" => &[
+            (
+                "d2b_session_unix",
+                "lib",
+                "packages/d2b-session-unix/src/lib.rs",
+            ),
+            (
+                "unix_session",
+                "test",
+                "packages/d2b-session-unix/tests/unix_session.rs",
+            ),
+        ],
+        "d2b-provider" => &[
+            ("d2b_provider", "lib", "packages/d2b-provider/src/lib.rs"),
+            ("runtime", "test", "packages/d2b-provider/tests/runtime.rs"),
+        ],
+        "d2b-provider-toolkit" => &[
+            (
+                "d2b_provider_toolkit",
+                "lib",
+                "packages/d2b-provider-toolkit/src/lib.rs",
+            ),
+            (
+                "conformance",
+                "test",
+                "packages/d2b-provider-toolkit/tests/conformance.rs",
+            ),
+        ],
+        _ => panic!("unknown canonical package {package}"),
+    }
+}
+
+fn canonical_package_groups() -> BTreeMap<String, Vec<String>> {
     let mut groups = BTreeMap::new();
     for (package_name, group_id) in CANONICAL_PACKAGE_GROUPS {
-        let package = packages
-            .iter()
-            .find(|package| package["name"] == package_name)
-            .unwrap_or_else(|| panic!("cargo metadata is missing {package_name}"));
-        let manifest = Path::new(
-            package["manifest_path"]
-                .as_str()
-                .expect("package manifest_path"),
-        );
-        let package_root = manifest
-            .parent()
-            .expect("package manifest has a parent")
-            .strip_prefix(&root)
-            .expect("canonical package is inside the repository")
-            .to_string_lossy()
-            .into_owned();
-        let files = git_listed_files(&package_root);
+        let package_root = format!("packages/{package_name}");
+        let files = git_listed_files_at_source_revision(&package_root);
         assert!(
             !files.is_empty(),
             "{package_name} has no tracked source/build inputs"
         );
-        for target in package["targets"].as_array().expect("package targets") {
-            let source = Path::new(target["src_path"].as_str().expect("target src_path"))
-                .strip_prefix(&root)
-                .expect("Cargo target is inside the repository")
-                .to_string_lossy()
-                .into_owned();
+        let mut target_keys = BTreeSet::new();
+        for (target, kind, source) in pinned_cargo_targets(package_name) {
             assert!(
-                files.contains(&source),
-                "{package_name} Cargo target is absent from its complete Git inventory: {source}"
+                target_keys.insert((*target, *kind, *source)),
+                "{package_name} repeats Cargo target {target} ({kind})"
+            );
+            assert!(
+                files.iter().any(|path| path == source),
+                "{package_name} pinned Cargo target is absent from its complete Git inventory: {source}"
             );
         }
         assert!(
@@ -329,7 +416,7 @@ fn canonical_package_groups(metadata: &Value) -> BTreeMap<String, Vec<String>> {
 }
 
 fn exact_source_groups() -> BTreeMap<String, Vec<String>> {
-    let mut groups = canonical_package_groups(&cargo_metadata());
+    let mut groups = canonical_package_groups();
     groups.insert(
         "workspace-manifest".to_owned(),
         vec!["packages/Cargo.toml".to_owned()],
@@ -385,9 +472,8 @@ fn distribution_feature_profile(id: &str) -> Value {
 }
 
 fn refresh_inventory(inventory: &mut Value) {
-    let metadata = cargo_metadata();
     let groups = {
-        let mut groups = canonical_package_groups(&metadata);
+        let mut groups = canonical_package_groups();
         groups.insert(
             "workspace-manifest".to_owned(),
             vec!["packages/Cargo.toml".to_owned()],
@@ -406,24 +492,9 @@ fn refresh_inventory(inventory: &mut Value) {
         CANONICAL_PACKAGE_GROUPS
             .into_iter()
             .map(|(package_name, group_id)| {
-                let package = metadata["packages"]
-                    .as_array()
-                    .expect("cargo metadata packages")
-                    .iter()
-                    .find(|package| package["name"] == package_name)
-                    .expect("canonical package metadata");
-                let manifest = Path::new(
-                    package["manifest_path"]
-                        .as_str()
-                        .expect("package manifest_path"),
-                )
-                .strip_prefix(repo_root())
-                .expect("package manifest inside repository")
-                .to_string_lossy()
-                .into_owned();
                 json!({
                     "package": package_name,
-                    "manifest": manifest,
+                    "manifest": format!("packages/{package_name}/Cargo.toml"),
                     "sourceGroup": group_id
                 })
             })
@@ -853,7 +924,7 @@ fn toolkit_feature_and_generated_binding_inventory_matches_sources() {
     .map(|(name, values)| (name.clone(), string_array(values, name)))
     .collect::<BTreeMap<_, _>>();
     assert_eq!(
-        parse_features(&read_repo_file("packages/d2b-contracts/Cargo.toml")),
+        parse_features(&canonical_source_text("packages/d2b-contracts/Cargo.toml")),
         contract_features,
         "d2b-contracts feature inventory drifted"
     );
@@ -867,7 +938,7 @@ fn toolkit_feature_and_generated_binding_inventory_matches_sources() {
         let name = package["package"].as_str().expect("package name");
         let manifest = package["manifest"].as_str().expect("package manifest");
         assert!(packages.insert(name.to_owned()), "duplicate package {name}");
-        let source = read_repo_file(manifest);
+        let source = canonical_source_text(manifest);
         assert!(
             source.contains("publish = false"),
             "{name} must remain non-publishable"
@@ -898,8 +969,9 @@ fn toolkit_feature_and_generated_binding_inventory_matches_sources() {
         ])
     );
 
-    let proto_paths = files_below("packages/d2b-contracts/proto/v2");
-    let generated_paths = files_below("packages/d2b-contracts/src/generated_v2_services");
+    let proto_paths = git_listed_files_at_source_revision("packages/d2b-contracts/proto/v2");
+    let generated_paths =
+        git_listed_files_at_source_revision("packages/d2b-contracts/src/generated_v2_services");
     let mut inventory_proto = Vec::new();
     let mut inventory_generated = Vec::new();
     for binding in inventory["generatedBindings"]
@@ -1092,10 +1164,27 @@ fn sibling_coordination_graph_has_disjoint_repository_ownership() {
             .as_str()
             .expect("audited revision");
         assert!(
-            revision == "new-repository" || lowercase_hex(revision, 40),
-            "{id} auditedRevision must be a full Git object ID or new-repository"
+            lowercase_hex(revision, 40),
+            "{id} auditedRevision must be a full Git object ID"
+        );
+        assert!(
+            !component["auditedRef"]
+                .as_str()
+                .expect("audited ref")
+                .is_empty(),
+            "{id} auditedRef must name the reviewed branch"
+        );
+        assert!(
+            component["defaultBranchRevision"]
+                .as_str()
+                .is_some_and(|revision| lowercase_hex(revision, 40)),
+            "{id} defaultBranchRevision must be a full Git object ID"
         );
         let ownership = object(&component["ownership"], "component ownership");
+        assert_ne!(
+            ownership["mode"], "exclusive-new-repository",
+            "{id} still records a repository-creation placeholder"
+        );
         assert!(
             !string_array(&ownership["paths"], "ownership paths").is_empty(),
             "{id} must own an explicit path set"

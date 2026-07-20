@@ -52,8 +52,8 @@
       "id": "client-toolkit-distribution",
       "repository": "vicondoa/d2b-toolkit",
       "futureRepository": "vicondoa/d2b-client-toolkit",
-      "auditedRef": "main",
-      "auditedRevision": "fde6af8b842718e7150f5056d4eba73093d4ad77",
+      "auditedRef": "adr0045-w9-client-toolkit",
+      "auditedRevision": "800c2878533f600d8f085b3d2aafcddb970232b2",
       "defaultBranchRevision": "fde6af8b842718e7150f5056d4eba73093d4ad77",
       "protocolPolicy": "canonical-only",
       "ownership": {
@@ -66,10 +66,12 @@
           "Cargo.lock",
           "Cargo.toml",
           "README.md",
+          "canonical-source-artifacts/**",
           "crates/**",
           "docs/**",
           "flake.lock",
           "flake.nix",
+          "scripts/**",
           "rust-toolchain.toml"
         ]
       },
@@ -117,12 +119,12 @@
       "id": "provider-toolkit-distribution",
       "repository": "vicondoa/d2b-provider-toolkit",
       "futureRepository": null,
-      "auditedRef": null,
-      "auditedRevision": "new-repository",
-      "defaultBranchRevision": null,
+      "auditedRef": "adr0045-w9-provider-toolkit",
+      "auditedRevision": "5f9bada8edf7cf21c6985d72d8936e629149c71a",
+      "defaultBranchRevision": "d6c0b4b29d1a2c69902f6518a459d6c7591deb84",
       "protocolPolicy": "canonical-only",
       "ownership": {
-        "mode": "exclusive-new-repository",
+        "mode": "exclusive-repository",
         "paths": [
           "**"
         ]
@@ -146,16 +148,14 @@
         }
       ],
       "duplicateProtocolSourcesToDelete": [],
-      "deferredExternalActions": [
-        "GitHub repository creation"
-      ]
+      "deferredExternalActions": []
     },
     {
       "id": "wlterm",
       "repository": "vicondoa/d2b-wlterm",
       "futureRepository": null,
-      "auditedRef": "feature/transient-pinnable-panel",
-      "auditedRevision": "5c5e436ba424b563f1f0cf6448f46c6bef398edb",
+      "auditedRef": "adr0045-w9-wlterm",
+      "auditedRevision": "65ae04c448fc4861ba7d04df7330dde9421b84f5",
       "defaultBranchRevision": "80c077277797ff129bb040f0c1b748f0fe162dc0",
       "protocolPolicy": "canonical-only",
       "ownership": {
@@ -216,8 +216,8 @@
       "id": "wlcontrol",
       "repository": "vicondoa/d2b-wlcontrol",
       "futureRepository": null,
-      "auditedRef": "fix/panel-placement-drag",
-      "auditedRevision": "33dac78f5b9d3e550cdc7c4a5cfceab0a1a794dc",
+      "auditedRef": "adr0045-w9-wlcontrol",
+      "auditedRevision": "538f56e37d47a6099edeb0288709ad8c791b60bb",
       "defaultBranchRevision": "06010b953a9dd05f4be236ef5c7265d86c3c5812",
       "protocolPolicy": "canonical-only",
       "ownership": {
@@ -277,8 +277,8 @@
       "id": "weezterm",
       "repository": "vicondoa/weezterm",
       "futureRepository": null,
-      "auditedRef": "main",
-      "auditedRevision": "d461e3f92d9ff7faafc8e6c83a111ca0aa5ae9ca",
+      "auditedRef": "adr0045-w9-weezterm",
+      "auditedRevision": "ea9a9b6c025bc0e29d86a81198d8ab0ed29c0bfa",
       "defaultBranchRevision": "d461e3f92d9ff7faafc8e6c83a111ca0aa5ae9ca",
       "protocolPolicy": "canonical-only",
       "ownership": {

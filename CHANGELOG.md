@@ -327,8 +327,9 @@ deprecations ship one minor release before removal.
   explicit daemon fallback rejects newly declared bindings until an adapter is
   implemented.
 - Pinned both toolkit distributions and their shared foundation contract gate to
-  the landed canonical source revision, replacing the deleted feature-branch
-  commit while refreshing complete source inventories and fingerprints.
+  the landed canonical W4 source revision, kept historical Git and Cargo-target
+  inventory validation stable after the W5 rebase, and refreshed the exact open
+  sibling PR head, base, and ownership records.
 - Made dependency-ready wave launch and file-overlap-based component dispatch
   mandatory after shared contract prep, preventing one persistent agent from
   serializing unrelated implementation and review scopes, with shipped-package
