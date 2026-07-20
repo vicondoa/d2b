@@ -224,7 +224,7 @@ pub struct VmEntry {
     pub runtime: RuntimeMetadata,
     #[serde(default)]
     pub security_key: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub shell: Option<VmShellMetadata>,
     pub ssh_user: Option<String>,
     pub state_dir: String,
