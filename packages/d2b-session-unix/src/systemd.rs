@@ -118,19 +118,36 @@ async fn accept(listener: &AsyncFd<OwnedFd>) -> Result<SeqpacketSocket, SystemdA
 }
 
 fn validate_environments(expected_names: &[&str]) -> Result<Vec<String>, SystemdActivationError> {
+    let listen_pid = env::var("LISTEN_PID").ok();
+    let listen_fds = env::var("LISTEN_FDS").ok();
+    let listen_fdnames = env::var("LISTEN_FDNAMES").ok();
+    validate_environment_values(
+        expected_names,
+        listen_pid.as_deref(),
+        listen_fds.as_deref(),
+        listen_fdnames.as_deref(),
+        std::process::id(),
+    )
+}
+
+fn validate_environment_values(
+    expected_names: &[&str],
+    listen_pid: Option<&str>,
+    listen_fds: Option<&str>,
+    listen_fdnames: Option<&str>,
+    current_pid: u32,
+) -> Result<Vec<String>, SystemdActivationError> {
     let expected = expected_names.iter().copied().collect::<BTreeSet<_>>();
-    let names = env::var("LISTEN_FDNAMES")
-        .ok()
+    let names = listen_fdnames
         .map(|value| value.split(':').map(str::to_owned).collect::<Vec<_>>())
         .ok_or(SystemdActivationError::InvalidEnvironment)?;
+    let current_pid = current_pid.to_string();
     if expected_names.is_empty()
         || expected.len() != expected_names.len()
+        || names.len() != expected_names.len()
         || names.iter().map(String::as_str).collect::<BTreeSet<_>>() != expected
-        || env::var("LISTEN_PID").ok().as_deref() != Some(std::process::id().to_string().as_str())
-        || env::var("LISTEN_FDS")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            != Some(names.len())
+        || listen_pid != Some(current_pid.as_str())
+        || listen_fds.and_then(|value| value.parse::<usize>().ok()) != Some(names.len())
     {
         return Err(SystemdActivationError::InvalidEnvironment);
     }
@@ -138,24 +155,28 @@ fn validate_environments(expected_names: &[&str]) -> Result<Vec<String>, Systemd
 }
 
 fn validate_listener(fd: RawFd) -> Result<(), SystemdActivationError> {
-    let borrowed = borrow_raw_fd(fd);
-    if get_socket_domain(borrowed).ok() != Some(AddressFamily::UNIX)
-        || get_socket_type(borrowed).ok() != Some(SocketType::SEQPACKET)
-        || get_socket_acceptconn(borrowed).ok() != Some(true)
-        || !fcntl_getfd(borrowed)
-            .map(|flags| flags.contains(FdFlags::CLOEXEC))
-            .unwrap_or(false)
-    {
-        return Err(SystemdActivationError::InvalidDescriptor);
-    }
-    Ok(())
+    with_borrowed_fd(fd, |borrowed| {
+        if get_socket_domain(borrowed).ok() != Some(AddressFamily::UNIX)
+            || get_socket_type(borrowed).ok() != Some(SocketType::SEQPACKET)
+            || get_socket_acceptconn(borrowed).ok() != Some(true)
+            || !fcntl_getfd(borrowed)
+                .map(|flags| flags.contains(FdFlags::CLOEXEC))
+                .unwrap_or(false)
+        {
+            return Err(SystemdActivationError::InvalidDescriptor);
+        }
+        Ok(())
+    })
 }
 
 #[allow(unsafe_code)]
-fn borrow_raw_fd(fd: RawFd) -> std::os::fd::BorrowedFd<'static> {
+fn with_borrowed_fd<T>(
+    fd: RawFd,
+    inspect: impl for<'fd> FnOnce(std::os::fd::BorrowedFd<'fd>) -> T,
+) -> T {
     // The descriptor remains owned by systemd activation until `adopt_raw_fd`.
-    // Validation never stores this temporary borrow.
-    unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) }
+    // The higher-ranked closure prevents the temporary borrow from escaping.
+    unsafe { inspect(std::os::fd::BorrowedFd::borrow_raw(fd)) }
 }
 
 #[allow(unsafe_code)]
@@ -167,41 +188,109 @@ fn adopt_raw_fd(fd: RawFd) -> OwnedFd {
 }
 
 #[cfg(test)]
-#[allow(unsafe_code)]
 mod tests {
     use super::*;
+    use std::{
+        os::fd::AsRawFd,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    use rustix::{
+        io::fcntl_setfd,
+        net::{SocketAddrUnix, bind_unix, listen, socket_with},
+    };
+
+    static LISTENER_ID: AtomicU64 = AtomicU64::new(1);
+
+    fn unix_listener(kind: SocketType) -> OwnedFd {
+        let listener = socket_with(AddressFamily::UNIX, kind, SocketFlags::CLOEXEC, None)
+            .expect("create Unix listener");
+        let name = format!(
+            "d2b-session-unix-systemd-{}-{}",
+            std::process::id(),
+            LISTENER_ID.fetch_add(1, Ordering::Relaxed)
+        );
+        let address =
+            SocketAddrUnix::new_abstract_name(name.as_bytes()).expect("create abstract address");
+        bind_unix(&listener, &address).expect("bind Unix listener");
+        listen(&listener, 1).expect("listen on Unix socket");
+        listener
+    }
 
     #[test]
     fn activation_requires_exact_single_named_descriptor() {
         let expected = "component-session";
-        let prior = [
-            ("LISTEN_PID", env::var_os("LISTEN_PID")),
-            ("LISTEN_FDS", env::var_os("LISTEN_FDS")),
-            ("LISTEN_FDNAMES", env::var_os("LISTEN_FDNAMES")),
-        ];
-
-        unsafe {
-            env::set_var("LISTEN_PID", std::process::id().to_string());
-            env::set_var("LISTEN_FDS", "1");
-            env::set_var("LISTEN_FDNAMES", expected);
-        }
+        let pid = 42;
         assert_eq!(
-            validate_environments(&[expected]),
+            validate_environment_values(&[expected], Some("42"), Some("1"), Some(expected), pid),
             Ok(vec![expected.to_owned()])
         );
-        unsafe { env::set_var("LISTEN_FDS", "2") };
         assert_eq!(
-            validate_environments(&[expected]),
+            validate_environment_values(&[expected], Some("42"), Some("2"), Some(expected), pid),
             Err(SystemdActivationError::InvalidEnvironment)
         );
+        assert_eq!(
+            validate_environment_values(
+                &[expected],
+                Some("42"),
+                Some("2"),
+                Some("component-session:component-session"),
+                pid,
+            ),
+            Err(SystemdActivationError::InvalidEnvironment)
+        );
+    }
 
-        for (name, value) in prior {
-            unsafe {
-                match value {
-                    Some(value) => env::set_var(name, value),
-                    None => env::remove_var(name),
-                }
-            }
-        }
+    #[test]
+    fn validate_listener_accepts_only_unix_seqpacket_listener_with_cloexec() {
+        let listener = unix_listener(SocketType::SEQPACKET);
+        assert_eq!(validate_listener(listener.as_raw_fd()), Ok(()));
+    }
+
+    #[test]
+    fn validate_listener_rejects_non_unix_domain() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind TCP listener");
+        assert_ne!(
+            get_socket_domain(&listener).expect("read socket domain"),
+            AddressFamily::UNIX
+        );
+        assert_eq!(
+            validate_listener(listener.as_raw_fd()),
+            Err(SystemdActivationError::InvalidDescriptor)
+        );
+    }
+
+    #[test]
+    fn validate_listener_rejects_non_seqpacket_type() {
+        let listener = unix_listener(SocketType::STREAM);
+        assert_eq!(
+            validate_listener(listener.as_raw_fd()),
+            Err(SystemdActivationError::InvalidDescriptor)
+        );
+    }
+
+    #[test]
+    fn validate_listener_rejects_socket_without_acceptconn() {
+        let socket = socket_with(
+            AddressFamily::UNIX,
+            SocketType::SEQPACKET,
+            SocketFlags::CLOEXEC,
+            None,
+        )
+        .expect("create Unix seqpacket socket");
+        assert_eq!(
+            validate_listener(socket.as_raw_fd()),
+            Err(SystemdActivationError::InvalidDescriptor)
+        );
+    }
+
+    #[test]
+    fn validate_listener_rejects_descriptor_without_cloexec() {
+        let listener = unix_listener(SocketType::SEQPACKET);
+        fcntl_setfd(&listener, FdFlags::empty()).expect("clear close-on-exec");
+        assert_eq!(
+            validate_listener(listener.as_raw_fd()),
+            Err(SystemdActivationError::InvalidDescriptor)
+        );
     }
 }
