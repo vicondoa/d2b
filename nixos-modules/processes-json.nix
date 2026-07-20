@@ -29,6 +29,44 @@ let
       (row: row.kind == "role-runtime")
       (throw "role ${role.roleId} is missing normalized role-runtime")
       (cfg._index.resources.byRoleId.${role.roleId} or [ ])).path;
+  displayMappingFor = workloadId:
+    let
+      mappings = lib.filter
+        (mapping: mapping.workloadId == workloadId)
+        cfg._index.providerRegistryV2Mappings.display;
+    in
+    if builtins.length mappings == 1
+    then builtins.head mappings
+    else throw
+      "workload ${workloadId} must have exactly one normalized display mapping";
+  displayEndpointFor = workloadId: endpointKind:
+    let
+      mapping = displayMappingFor workloadId;
+      ownerRole = roleFor workloadId "wayland-proxy";
+      resourceId = mapping.endpointIds.${endpointKind};
+      endpoint = cfg._index.resources.byId.${resourceId}
+        or (throw
+          "workload ${workloadId} display mapping references an unknown ${endpointKind} endpoint");
+      expectedKind = "display-endpoint-${
+        if endpointKind == "crossDomain" then "cross-domain" else endpointKind
+      }";
+    in
+    if ownerRole == null
+      || ownerRole.roleId != mapping.ownerRoleId
+      || endpoint.kind != expectedKind
+      || endpoint.providerId != mapping.providerId
+      || endpoint.realmId != mapping.realmId
+      || endpoint.workloadId != mapping.workloadId
+      || endpoint.roleId != mapping.ownerRoleId
+    then throw
+      "workload ${workloadId} ${endpointKind} endpoint disagrees with normalized display authority"
+    else endpoint;
+  waylandSocketFor = workloadId:
+    let endpoint = displayEndpointFor workloadId "wayland";
+    in
+    if endpoint.path == null
+    then throw "workload ${workloadId} normalized Wayland endpoint has no socket path"
+    else endpoint.path;
   profile = nodeId:
     cfg._bundle.minijailProfiles."role-${nodeId}".roleProfile;
   audioFor = workloadId:
@@ -358,7 +396,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         else config.users.users.${cfg.site.waylandUser}.uid;
       wayland = roleFor workload.workloadId "wayland-proxy";
       waylandSocket =
-        if wayland == null then null else "${roleRuntime wayland}/wayland-0";
+        if wayland == null then null else waylandSocketFor workload.workloadId;
       gpuParams =
         ''{"context-types":"virgl:virgl2:cross-domain","displays":[{"hidden":true}],"egl":true,"vulkan":true}'';
       qemuMemoryMiB =
@@ -496,18 +534,19 @@ use devices::virtio::vhost_user_backend::run_video_device;'
     else if role.roleKind == "wayland-proxy" then mkNode {
       id = role.roleId;
       role = role.processRole;
-      ready = [ (socketListening "${runtime}/wayland-0") ];
+      ready = [ (socketListening waylandSocket) ];
       binaryPath = "${d2bWaylandProxy}/bin/d2b-wayland-proxy";
       argv = [
         "d2b-role-${role.roleId}"
-        "--listen" "${runtime}/wayland-0"
-        "--connect" "/run/user/${toString waylandUid}/${cfg.site.waylandSocket}"
+        "--session-generation" "1"
         "--target" workload.canonicalTarget
         "--provider-kind"
         (if workload.runtimeImplementation == "cloud-hypervisor"
          then "local-vm"
          else workload.runtimeImplementation)
-        "--realm-target" workload.canonicalTarget
+        "--realm-id" workload.realmId
+        "--workload-id" workload.workloadId
+        "--provider-id" (displayMappingFor workload.workloadId).providerId
         "--app-id-prefix" "d2b.${workload.workloadId}."
         "--title-prefix" "[${workload.canonicalTarget}] "
       ];

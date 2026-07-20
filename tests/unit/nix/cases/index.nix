@@ -446,6 +446,10 @@ in
           type = "runtime";
           implementationId = "cloud-hypervisor";
         };
+        providers.wayland = {
+          type = "display";
+          implementationId = "wayland";
+        };
         workloads.app = {
           provider = "runtime";
           launcher.items.app.graphical = true;
@@ -455,33 +459,58 @@ in
     expected = false;
   };
 
-  "index/display-provider-cannot-bind-multiple-workloads" = {
-    expr = attempt ((evalIndex {
-      dev = {
-        path = "dev.local-root";
-        providers = {
-          runtime = {
-            type = "runtime";
-            implementationId = "cloud-hypervisor";
-          };
-          wayland = {
-            type = "display";
-            implementationId = "wayland";
+  "index/display-provider-can-bind-multiple-workloads-explicitly" = {
+    expr =
+      let
+        shared = evalIndex {
+          dev = {
+            path = "dev.local-root";
+            providers = {
+              runtime = {
+                type = "runtime";
+                implementationId = "cloud-hypervisor";
+              };
+              wayland = {
+                type = "display";
+                implementationId = "wayland";
+              };
+            };
+            workloads = {
+              first = {
+                providerRefs = {
+                  runtime = "runtime";
+                  display = "wayland";
+                };
+                launcher.items.app.graphical = true;
+              };
+              second = {
+                providerRefs = {
+                  runtime = "runtime";
+                  display = "wayland";
+                };
+                launcher.items.app.graphical = true;
+              };
+            };
           };
         };
-        workloads = {
-          first = {
-            provider = "runtime";
-            launcher.items.app.graphical = true;
-          };
-          second = {
-            provider = "runtime";
-            launcher.items.app.graphical = true;
-          };
-        };
+        mappings = shared.providerRegistryV2Mappings.display;
+        configuredProviderIds = map
+          (workload: workload.providerBindings.display.providerId)
+          shared.workloads.enabledList;
+      in
+      {
+        count = builtins.length mappings;
+        adapterIdsUnique =
+          builtins.length (lib.unique (map (mapping: mapping.providerId) mappings))
+          == 2;
+        configuredAuthorityShared =
+          builtins.length (lib.unique configuredProviderIds) == 1;
       };
-    }).providerRegistryV2Mappings.display);
-    expected = false;
+    expected = {
+      count = 2;
+      adapterIdsUnique = true;
+      configuredAuthorityShared = true;
+    };
   };
 
   "index/duplicate-realm-paths-fail-closed" = {

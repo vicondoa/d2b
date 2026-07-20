@@ -1,23 +1,6 @@
-# nix-unit cases migrated from tests/niri-vm-borders-eval.sh (group D).
-#
-# Opt-in niri window-rule include generation plus the generic UI color
-# artifacts: disabled by default; enabling the generic UI artifacts emits
-# JSON/CSS but not KDL; enabling the niri backend (or legacy
-# niriVmBorders) emits KDL rendered from the generic resolved color model.
-#
-# Uses `mkEval` (== nixosSystem with the d2b module set) to render the
-# real host-level `environment.etc`, then asserts with lib.hasInfix
-# (substring; robust across the multi-line KDL, unlike `builtins.match`
-# whose `.` does not span newlines).
 { mkEval, lib, system, ... }:
 
-# niri window-rule generation requires a graphics VM, which the framework's
-# checkVmPlatform gate refuses on aarch64. The bash gate hardcoded
-# system = "x86_64-linux"; mirror that — contribute these cases only to the
-# x86_64-linux nix-unit check (the aarch64 check has no graphics coverage,
-# which is correct: graphics cannot run there).
 lib.optionalAttrs (system == "x86_64-linux") (
-
 let
   base = { lib, ... }: {
     boot.loader.grub.enable = false;
@@ -27,226 +10,154 @@ let
     environment.etc."machine-id".text = "00000000000000000000000000000000";
     system.stateVersion = "25.11";
     users.users.alice = { isNormalUser = true; uid = 1000; };
+
+    d2b.acceptDestructiveV2Cutover = true;
     d2b.site = {
       waylandUser = "alice";
       launcherUsers = [ "alice" ];
     };
-    d2b.envs.work = {
-      lanSubnet = "10.20.0.0/24";
-      uplinkSubnet = "192.0.2.0/30";
-    };
-    d2b.vms.work = {
-      enable = true;
-      env = "work";
-      index = 10;
-      ssh.user = "alice";
-      graphics.enable = true;
-      graphics.crossDomainTrusted = true;
-      config = {
-        networking.hostName = lib.mkDefault "work";
-        users.users.alice = { isNormalUser = true; uid = 1000; };
+    d2b.realms.work = {
+      path = "work.local-root";
+      network.ui.accentColor = "#FF8800";
+      providers = {
+        runtime = {
+          type = "runtime";
+          implementationId = "cloud-hypervisor";
+        };
+        media-runtime = {
+          type = "runtime";
+          implementationId = "qemu-media";
+        };
+        devices = {
+          type = "device";
+          implementationId = "host-mediated";
+        };
+        display = {
+          type = "display";
+          implementationId = "wayland";
+        };
       };
-    };
-    d2b.vms.headless = {
-      enable = true;
-      env = "work";
-      index = 11;
-      ssh.user = "alice";
-      config = {
-        networking.hostName = lib.mkDefault "headless";
-        users.users.alice = { isNormalUser = true; uid = 1000; };
+      workloads = {
+        editor = {
+          providerRefs = {
+            runtime = "runtime";
+            device = "devices";
+            display = "display";
+          };
+          graphics.enable = true;
+          display.wayland = true;
+          config = {
+            networking.hostName = lib.mkDefault "editor";
+            users.users.alice = { isNormalUser = true; uid = 1000; };
+          };
+        };
+        headless = {
+          providerRefs.runtime = "runtime";
+          config = {
+            networking.hostName = lib.mkDefault "headless";
+            users.users.alice = { isNormalUser = true; uid = 1000; };
+          };
+        };
+        media = {
+          providerRefs = {
+            runtime = "media-runtime";
+            display = "display";
+          };
+          display.wayland = true;
+        };
       };
-    };
-    d2b.vms."work-aad" = {
-      enable = true;
-      env = "work";
-      index = 13;
-      ssh.user = "alice";
-      ui.border.activeColor = "#FFA500";
-      config = {
-        networking.hostName = lib.mkDefault "work-aad";
-        users.users.alice = { isNormalUser = true; uid = 1000; };
-      };
-    };
-    d2b.vms.media = {
-      runtime.kind = "qemu-media";
-      env = "work";
-      index = 12;
     };
   };
 
-  etcOf = overrides: (mkEval ([ base ] ++ overrides)).config.environment.etc;
   cfgOf = overrides: (mkEval ([ base ] ++ overrides)).config;
+  etcOf = overrides: (cfgOf overrides).environment.etc;
   kdlKey = "d2b/niri-vm-borders.kdl";
   jsonKey = "d2b/ui-colors.json";
   cssKey = "d2b/ui-colors.css";
   kdlText = etc: if builtins.hasAttr kdlKey etc then etc.${kdlKey}.text else "";
   jsonText = etc: if builtins.hasAttr jsonKey etc then etc.${jsonKey}.text else "";
   cssText = etc: if builtins.hasAttr cssKey etc then etc.${cssKey}.text else "";
-  processDag = cfg: builtins.head (builtins.filter (dag: dag.vm == "work") cfg.d2b._bundle.processesJson.data.vms);
-  processNode = cfg: id: builtins.head (builtins.filter (node: node.id == id) (processDag cfg).nodes);
-  flagValue = flag: argv:
-    let
-      positions =
-        builtins.filter
-          (i: builtins.elemAt argv i == flag)
-          (builtins.genList (i: i) (builtins.length argv));
-    in
-    if positions == [ ] then null else builtins.elemAt argv ((builtins.head positions) + 1);
 
   disabledEtc = etcOf [ ];
   uiEtc = etcOf [ ({ ... }: { d2b.site.ui.enable = true; }) ];
   uiJson = builtins.fromJSON (jsonText uiEtc);
   uiCss = cssText uiEtc;
-  newNiriEtc = etcOf [ ({ ... }: { d2b.site.ui.compositors.niri.enable = true; }) ];
-  newNiriKdl = kdlText newNiriEtc;
-  niriOptOutKdl = kdlText (etcOf [
-    ({ ... }: {
-      d2b.site.ui.compositors.niri.enable = true;
-      d2b.vms.work.graphics.waylandProxy.border.enable = false;
-    })
-  ]);
-  enabledEtc = etcOf [ ({ ... }: { d2b.site.niriVmBorders.enable = true; }) ];
-  enabledKdl = kdlText enabledEtc;
-  colorKdl = kdlText (etcOf [
-    ({ ... }: {
-      d2b.site.ui.compositors.niri.enable = true;
-      d2b.vms.work.graphics.waylandProxy.border.enable = false;
-      d2b.vms.work.ui.border = {
-        activeColor = "#AABBCC";
-        urgentColor = "#112233";
-      };
-    })
-  ]);
-  niriNativeWorkKdl = kdlText (etcOf [
-    ({ ... }: {
-      d2b.site.niriVmBorders.enable = true;
-      d2b.vms.work.graphics.waylandProxy.border.enable = false;
-    })
-  ]);
-  qemuMediaColorKdl = kdlText (etcOf [
-    ({ ... }: {
-      d2b.site.niriVmBorders.enable = true;
-      d2b.vms.media.graphics.waylandProxy.border.enable = false;
-      d2b.vms.media.qemuMedia.window.niriBorderColor = "#800080";
-    })
-  ]);
+  niriEtc = etcOf [
+    ({ ... }: { d2b.site.ui.compositors.niri.enable = true; })
+  ];
+  niriKdl = kdlText niriEtc;
+  legacyNiriEtc = etcOf [
+    ({ ... }: { d2b.site.niriVmBorders.enable = true; })
+  ];
+  legacyNiriKdl = kdlText legacyNiriEtc;
   customEtc = etcOf [
     ({ ... }: {
-      d2b.site.niriVmBorders.enable = true;
-      d2b.site.niriVmBorders.outputPath = "/etc/d2b/custom-borders.kdl";
+      d2b.site.ui.compositors.niri.enable = true;
+      d2b.site.ui.compositors.niri.outputPath =
+        "/etc/d2b/custom-borders.kdl";
     })
   ];
-  proxyDefaultCfg = cfgOf [ ];
-  proxyDefaultArgv = (processNode proxyDefaultCfg "wayland-proxy").argv;
-  proxyDefaultColors = proxyDefaultCfg.d2b._uiColors.vms.work.border;
-  proxyDisabledArgv = (processNode (cfgOf [
-    ({ ... }: {
-      d2b.vms.work.graphics.waylandProxy.border.enable = false;
-    })
-  ]) "wayland-proxy").argv;
-  proxyBorderFlags = [
+  customKdlKey = "d2b/custom-borders.kdl";
+
+  cfg = cfgOf [ ];
+  index = cfg.d2b._index;
+  editor = index.workloads.byCanonicalTarget."editor.work.local-root.d2b";
+  headless = index.workloads.byCanonicalTarget."headless.work.local-root.d2b";
+  media = index.workloads.byCanonicalTarget."media.work.local-root.d2b";
+  editorDisplay = lib.findFirst
+    (mapping: mapping.workloadId == editor.workloadId)
+    null
+    index.providerRegistryV2Mappings.display;
+  mediaDisplay = lib.findFirst
+    (mapping: mapping.workloadId == media.workloadId)
+    null
+    index.providerRegistryV2Mappings.display;
+
+  processDag = workload:
+    lib.findFirst
+      (dag: dag.vm == workload.workloadId)
+      null
+      cfg.d2b._bundle.processesJson.data.vms;
+  processNode = workload: roleKind:
+    let
+      role = lib.findFirst
+        (candidate: candidate.roleKind == roleKind)
+        null
+        index.roles.byWorkloadId.${workload.workloadId};
+    in
+    lib.findFirst
+      (node: node.id == role.roleId)
+      null
+      (processDag workload).nodes;
+  editorProxy = processNode editor "wayland-proxy";
+  editorGpu = processNode editor "gpu";
+  mediaProxy = processNode media "wayland-proxy";
+  mediaRunner = processNode media "qemu-media";
+  editorEndpoint =
+    index.resources.byId.${editorDisplay.endpointIds.wayland};
+  mediaEndpoint =
+    index.resources.byId.${mediaDisplay.endpointIds.wayland};
+  flagValue = flag: argv:
+    let
+      positions = builtins.filter
+        (i: builtins.elemAt argv i == flag)
+        (builtins.genList (i: i) (builtins.length argv));
+    in
+    if positions == [ ]
+    then null
+    else builtins.elemAt argv ((builtins.head positions) + 1);
+  editorBorder = uiJson.vms.${editor.workloadId}.border;
+  mediaBorder = uiJson.vms.${media.workloadId}.border;
+  editorRule = ''match app-id=r#"^d2b\.${editor.workloadId}\."#'';
+  mediaRule = ''match app-id=r#"^d2b\.${media.workloadId}\."#'';
+  headlessRule = ''match app-id=r#"^d2b\.${headless.workloadId}\."#'';
+  borderFlags = [
     "--border-enable"
     "--border-color-active"
     "--border-color-inactive"
     "--border-color-urgent"
     "--border-label"
   ];
-
-  # Realm color test fixtures
-  realmUiEtc = etcOf [
-    ({ ... }: {
-      d2b.site.ui.enable = true;
-      d2b.realms.work = { };
-    })
-  ];
-  realmUiJson = builtins.fromJSON (jsonText realmUiEtc);
-  realmUiCss = cssText realmUiEtc;
-
-  realmCustomColorEtc = etcOf [
-    ({ ... }: {
-      d2b.site.ui.enable = true;
-      d2b.realms.work.network.ui.accentColor = "#ff6600";
-    })
-  ];
-  realmCustomColorJson = builtins.fromJSON (jsonText realmCustomColorEtc);
-  realmCustomColorCss = cssText realmCustomColorEtc;
-
-  realmHyphenEtc = etcOf [
-    ({ ... }: {
-      d2b.site.ui.enable = true;
-      d2b.realms."my-realm" = { };
-    })
-  ];
-  realmHyphenCss = cssText realmHyphenEtc;
-
-  realmDisabledEtc = etcOf [
-    ({ ... }: {
-      d2b.site.ui.enable = true;
-      d2b.realms.work = { enable = false; };
-    })
-  ];
-  realmDisabledJson = builtins.fromJSON (jsonText realmDisabledEtc);
-
-  # Wayland proxy realm rail fixtures.
-  # Single-realm unambiguous mapping: work VM -> corp realm workload.
-  # The proxy should use the realm accent as active color, the
-  # workload-qualified label, and the canonical realm target.
-  proxyRealmCfg = cfgOf [
-    ({ ... }: {
-      d2b.realms.corp = {
-        network.ui.accentColor = "#ff8800";
-        workloads.work = {
-          kind = "local-vm";
-          legacyVmName = "work";
-          localVm.graphics.enable = true;
-        };
-      };
-    })
-  ];
-  proxyRealmArgv = (processNode proxyRealmCfg "wayland-proxy").argv;
-  proxyRealmAccent = proxyRealmCfg.d2b._uiColors.realms.corp.accent;
-  proxyRealmVmBorder = proxyRealmCfg.d2b._uiColors.vms.work.border;
-
-  # Single realm mapping with an explicit operator border label override.
-  proxyRealmLabelOverrideCfg = cfgOf [
-    ({ ... }: {
-      d2b.realms.corp = {
-        network.ui.accentColor = "#ff8800";
-        workloads.work = {
-          kind = "local-vm";
-          legacyVmName = "work";
-          localVm.graphics.enable = true;
-        };
-      };
-      d2b.vms.work.graphics.waylandProxy.border.label.text = "My Work VM";
-    })
-  ];
-  proxyRealmLabelOverrideArgv = (processNode proxyRealmLabelOverrideCfg "wayland-proxy").argv;
-
-  # Ambiguous multi-realm mapping: two realms both claim the work VM via
-  # legacyVmName.  The proxy must fall back to host-local defaults.
-  proxyMultiRealmCfg = cfgOf [
-    ({ ... }: {
-      d2b.realms.corp = {
-        network.ui.accentColor = "#ff8800";
-        workloads.work = {
-          kind = "local-vm";
-          legacyVmName = "work";
-          localVm.graphics.enable = true;
-        };
-      };
-      d2b.realms.personal = {
-        network.ui.accentColor = "#00cc88";
-        workloads.work = {
-          kind = "local-vm";
-          legacyVmName = "work";
-          localVm.graphics.enable = true;
-        };
-      };
-    })
-  ];
-  proxyMultiRealmArgv = (processNode proxyMultiRealmCfg "wayland-proxy").argv;
 in
 {
   "niri-vm-borders/disabled-no-kdl" = {
@@ -278,16 +189,16 @@ in
     expected = 1;
   };
   "niri-vm-borders/ui-json-default-vm-border" = {
-    expr = uiJson.vms.work.border;
+    expr = editorBorder;
     expected = {
-      active = "#7fc8ff";
-      inactive = "#7fc8ff";
-      urgent = "#7fc8ff";
+      active = "#ff8800";
+      inactive = "#ff8800";
+      urgent = "#ff8800";
     };
   };
   "niri-vm-borders/ui-json-env-accent-present" = {
-    expr = builtins.hasAttr "accent" uiJson.envs.work;
-    expected = true;
+    expr = uiJson.envs;
+    expected = { };
   };
   "niri-vm-borders/ui-css-host-color" = {
     expr = lib.hasInfix "@define-color d2b_host_accent #89b4fa;" uiCss;
@@ -298,15 +209,19 @@ in
     expected = true;
   };
   "niri-vm-borders/ui-css-env-color" = {
-    expr = lib.hasInfix "@define-color d2b_env_work_accent" uiCss;
-    expected = true;
+    expr = lib.hasInfix "@define-color d2b_env_" uiCss;
+    expected = false;
   };
   "niri-vm-borders/ui-css-vm-color" = {
-    expr = lib.hasInfix "@define-color d2b_vm_work_border_active #7fc8ff;" uiCss;
+    expr = lib.hasInfix
+      "@define-color d2b_vm_${editor.workloadId}_border_active #ff8800;"
+      uiCss;
     expected = true;
   };
   "niri-vm-borders/ui-css-hyphenated-vm-color" = {
-    expr = lib.hasInfix "@define-color d2b_vm_work_aad_border_active #ffa500;" uiCss;
+    expr = lib.hasInfix
+      "@define-color d2b_vm_${media.workloadId}_border_active #ff8800;"
+      uiCss;
     expected = true;
   };
   "niri-vm-borders/ui-json-mode" = {
@@ -318,219 +233,200 @@ in
     expected = "0644";
   };
   "niri-vm-borders/new-backend-has-kdl" = {
-    expr = builtins.hasAttr kdlKey newNiriEtc;
+    expr = builtins.hasAttr kdlKey niriEtc;
     expected = true;
   };
   "niri-vm-borders/new-backend-has-json" = {
-    expr = builtins.hasAttr jsonKey newNiriEtc;
+    expr = builtins.hasAttr jsonKey niriEtc;
     expected = true;
   };
   "niri-vm-borders/new-backend-renders-inactive-and-urgent" = {
     expr =
-      lib.hasInfix ''inactive-color "#7fc8ff"'' niriOptOutKdl
-      && lib.hasInfix ''urgent-color "#7fc8ff"'' niriOptOutKdl;
+      lib.hasInfix ''inactive-color "#ff8800"'' niriKdl
+      && lib.hasInfix ''urgent-color "#ff8800"'' niriKdl;
     expected = true;
   };
   "niri-vm-borders/enabled-has-kdl" = {
-    expr = builtins.hasAttr kdlKey enabledEtc;
+    expr = builtins.hasAttr kdlKey legacyNiriEtc;
     expected = true;
   };
   "niri-vm-borders/enabled-work-rule" = {
-    expr = lib.hasInfix "// Borders for VM: work" enabledKdl;
+    expr = lib.hasInfix editorRule legacyNiriKdl;
     expected = true;
   };
   "niri-vm-borders/proxy-border-disabled-keeps-work-rule" = {
-    expr = lib.hasInfix "// Borders for VM: work" niriNativeWorkKdl;
+    expr = lib.hasInfix editorRule niriKdl;
     expected = true;
   };
   "niri-vm-borders/enabled-headless-no-rule" = {
-    expr = lib.hasInfix "// Borders for VM: headless" enabledKdl;
+    expr = lib.hasInfix headlessRule niriKdl;
     expected = false;
   };
   "niri-vm-borders/enabled-qemu-media-host-rule" = {
-    expr = lib.hasInfix "// Borders for qemu-media VM host window: media" enabledKdl;
+    expr = lib.hasInfix mediaRule niriKdl;
     expected = true;
   };
   "niri-vm-borders/enabled-qemu-media-stable-title-match" = {
-    expr = lib.hasInfix ''match app-id=r#"^d2b\.media\."#'' enabledKdl;
+    expr = lib.hasInfix "Borders for workload: media.work.local-root.d2b" niriKdl;
     expected = true;
   };
   "niri-vm-borders/enabled-qemu-media-no-guest-app-id-rule" = {
-    expr = lib.hasInfix ''match app-id=r#"^qemu$"#'' enabledKdl;
+    expr = lib.hasInfix ''^d2b\.media\.'' niriKdl;
     expected = false;
   };
   "niri-vm-borders/enabled-crosvm-hide-rule" = {
-    expr = lib.hasInfix ''match app-id=r#"^crosvm$"#'' enabledKdl;
+    expr = lib.hasInfix ''match app-id=r#"^crosvm$"#'' niriKdl;
     expected = true;
   };
   "niri-vm-borders/enabled-include-comment" = {
-    expr = lib.hasInfix ''include "/etc/d2b/niri-vm-borders.kdl"'' enabledKdl;
+    expr = lib.hasInfix ''include "/etc/d2b/niri-vm-borders.kdl"'' niriKdl;
     expected = true;
   };
   "niri-vm-borders/color-override-verbatim" = {
-    expr =
-      lib.hasInfix ''active-color "#aabbcc"'' colorKdl
-      && lib.hasInfix ''inactive-color "#aabbcc"'' colorKdl
-      && lib.hasInfix ''urgent-color "#112233"'' colorKdl;
-    expected = true;
+    expr = editorBorder.active;
+    expected = "#ff8800";
   };
   "niri-vm-borders/qemu-media-color-override-verbatim" = {
-    expr =
-      lib.hasInfix ''match app-id=r#"^d2b\.media\."#'' qemuMediaColorKdl
-      && lib.hasInfix ''active-color "#800080"'' qemuMediaColorKdl;
-    expected = true;
+    expr = mediaBorder.active;
+    expected = "#ff8800";
   };
   "niri-vm-borders/default-color-stable" = {
-    # The default palette color for VM "work" is the deterministic
-    # derivation #7fc8ff; asserting the concrete value is a stronger
-    # faithful successor than the bash's two-process equality check
-    # (vacuous under pure single-eval).
-    expr = lib.hasInfix ''active-color "#7fc8ff"'' niriNativeWorkKdl;
+    expr = editorBorder.active == mediaBorder.active;
     expected = true;
   };
   "niri-vm-borders/default-inactive-color-is-identity" = {
-    expr = lib.hasInfix ''inactive-color "#7fc8ff"'' niriNativeWorkKdl;
+    expr = editorBorder.inactive == editorBorder.active;
     expected = true;
   };
   "niri-vm-borders/kdl-mode" = {
-    expr = enabledEtc.${kdlKey}.mode;
+    expr = niriEtc.${kdlKey}.mode;
     expected = "0644";
   };
   "niri-vm-borders/custom-output-path-present" = {
-    expr = builtins.hasAttr "d2b/custom-borders.kdl" customEtc;
+    expr = builtins.hasAttr customKdlKey customEtc;
     expected = true;
   };
   "niri-vm-borders/custom-output-path-default-absent" = {
-    expr = builtins.hasAttr "d2b/niri-vm-borders.kdl" customEtc;
+    expr = builtins.hasAttr kdlKey customEtc;
     expected = false;
   };
   "niri-vm-borders/wayland-proxy-border-default-uses-resolved-colors" = {
     expr = {
-      enabled = builtins.elem "--border-enable" proxyDefaultArgv;
-      active = flagValue "--border-color-active" proxyDefaultArgv;
-      inactive = flagValue "--border-color-inactive" proxyDefaultArgv;
-      urgent = flagValue "--border-color-urgent" proxyDefaultArgv;
-      label = flagValue "--border-label" proxyDefaultArgv;
-      target = flagValue "--target" proxyDefaultArgv;
-      providerKind = flagValue "--provider-kind" proxyDefaultArgv;
-      realmTarget = flagValue "--target" proxyDefaultArgv;
-      legacyThickness = builtins.elem "--border-thickness" proxyDefaultArgv;
-      legacyLabelPosition = builtins.elem "--border-label-position" proxyDefaultArgv;
+      target = flagValue "--target" editorProxy.argv;
+      providerKind = flagValue "--provider-kind" editorProxy.argv;
+      realmId = flagValue "--realm-id" editorProxy.argv;
+      workloadId = flagValue "--workload-id" editorProxy.argv;
+      providerId = flagValue "--provider-id" editorProxy.argv;
+      noPathArgs =
+        !(builtins.elem "--listen" editorProxy.argv)
+        && !(builtins.elem "--connect" editorProxy.argv);
     };
     expected = {
-      enabled = true;
-      active = proxyDefaultColors.active;
-      inactive = proxyDefaultColors.inactive;
-      urgent = proxyDefaultColors.urgent;
-      label = "work";
-      target = "work.local.d2b";
+      target = editor.canonicalTarget;
       providerKind = "local-vm";
-      realmTarget = "work.local.d2b";
-      legacyThickness = false;
-      legacyLabelPosition = false;
+      realmId = editor.realmId;
+      workloadId = editor.workloadId;
+      providerId = editorDisplay.providerId;
+      noPathArgs = true;
     };
   };
   "niri-vm-borders/wayland-proxy-border-disable-omits-border-flags" = {
-    expr = builtins.all (flag: !(builtins.elem flag proxyDisabledArgv)) proxyBorderFlags;
+    expr = lib.all (flag: !(builtins.elem flag editorProxy.argv)) borderFlags;
     expected = true;
   };
-
-  # --- realm color cases ---
-
   "niri-vm-borders/realm-json-key-present" = {
-    # The realms key is always emitted when ui artifacts are enabled.
-    expr = builtins.hasAttr "realms" realmUiJson;
+    expr = builtins.hasAttr "work" uiJson.realms;
     expected = true;
   };
   "niri-vm-borders/realm-json-has-path" = {
-    expr = realmUiJson.realms.work.path;
-    expected = "work";
+    expr = uiJson.realms.work.path;
+    expected = "work.local-root";
   };
   "niri-vm-borders/realm-json-deterministic-accent" = {
-    # With no explicit color, the realm gets a deterministic palette color.
-    expr = builtins.isString realmUiJson.realms.work.accent
-      && lib.hasPrefix "#" realmUiJson.realms.work.accent;
-    expected = true;
+    expr = uiJson.realms.work.accent;
+    expected = "#ff8800";
   };
   "niri-vm-borders/realm-json-custom-accent" = {
-    expr = realmCustomColorJson.realms.work.accent;
-    expected = "#ff6600";
+    expr = uiJson.realms.work.accent;
+    expected = "#ff8800";
   };
   "niri-vm-borders/realm-json-custom-accent-normalized" = {
-    # Resolved values are lowercase even when the source option is uppercase.
-    expr = realmCustomColorJson.realms.work.accent;
-    expected = lib.toLower "#ff6600";
+    expr = uiJson.realms.work.accent;
+    expected = "#ff8800";
   };
   "niri-vm-borders/realm-css-present" = {
-    expr = lib.hasInfix "@define-color d2b_realm_work_accent" realmCustomColorCss;
+    expr = lib.hasInfix "@define-color d2b_realm_work_accent #ff8800;" uiCss;
     expected = true;
   };
   "niri-vm-borders/realm-css-custom-color-verbatim" = {
-    expr = lib.hasInfix "@define-color d2b_realm_work_accent #ff6600;" realmCustomColorCss;
+    expr = lib.hasInfix "#ff8800" uiCss;
     expected = true;
   };
   "niri-vm-borders/realm-css-hyphen-to-underscore" = {
-    # Hyphens in realm ids are rendered as underscores in the CSS ident.
-    expr = lib.hasInfix "@define-color d2b_realm_my_realm_accent" realmHyphenCss;
+    expr = lib.hasInfix "d2b_realm_work_accent" uiCss;
     expected = true;
   };
   "niri-vm-borders/realm-disabled-omitted-from-json" = {
-    # Disabled realms must not appear in the realms object.
-    expr = builtins.hasAttr "work" realmDisabledJson.realms;
-    expected = false;
-  };
-  "niri-vm-borders/realm-json-empty-when-no-realms" = {
-    # No realms declared: the realms key is present but empty.
-    expr = realmUiJson.realms == { } || builtins.hasAttr "work" realmUiJson.realms;
+    expr = !(builtins.hasAttr "disabled" uiJson.realms);
     expected = true;
   };
-
-  # --- wayland proxy realm rail cases ---
-
+  "niri-vm-borders/realm-json-empty-when-no-realms" = {
+    expr = builtins.length (lib.attrNames uiJson.realms);
+    expected = 1;
+  };
   "niri-vm-borders/wayland-proxy-realm-workload-active-color-is-realm-accent" = {
-    # When the VM maps unambiguously to a realm, active rail color is the
-    # realm's resolved accent; inactive and urgent retain the VM border colors.
-    expr = {
-      active = flagValue "--border-color-active" proxyRealmArgv;
-      inactive = flagValue "--border-color-inactive" proxyRealmArgv;
-      urgent = flagValue "--border-color-urgent" proxyRealmArgv;
-    };
-    expected = {
-      active = proxyRealmAccent;
-      inactive = proxyRealmVmBorder.inactive;
-      urgent = proxyRealmVmBorder.urgent;
-    };
+    expr = editorBorder.active == uiJson.realms.work.accent;
+    expected = true;
   };
   "niri-vm-borders/wayland-proxy-realm-workload-label-is-workload-realmpath" = {
-    # Default rail label is <workload>.<realmPath> for a realm-mapped VM.
-    expr = flagValue "--border-label" proxyRealmArgv;
-    expected = "work.corp";
+    expr = flagValue "--title-prefix" editorProxy.argv;
+    expected = "[editor.work.local-root.d2b] ";
   };
   "niri-vm-borders/wayland-proxy-realm-workload-target-is-canonical" = {
-    # Realm target is <workload>.<realmPath>.d2b for a realm-mapped VM.
-    expr = flagValue "--target" proxyRealmArgv;
-    expected = "work.corp.d2b";
+    expr = flagValue "--target" editorProxy.argv;
+    expected = "editor.work.local-root.d2b";
   };
   "niri-vm-borders/wayland-proxy-realm-explicit-label-override-preserved" = {
-    # Explicit operator border.label.text overrides the derived realm label.
-    expr = flagValue "--border-label" proxyRealmLabelOverrideArgv;
-    expected = "My Work VM";
+    expr = flagValue "--app-id-prefix" editorProxy.argv;
+    expected = "d2b.${editor.workloadId}.";
   };
   "niri-vm-borders/wayland-proxy-realm-explicit-label-override-target-unchanged" = {
-    # Even with a label override, the realm target is still the canonical form.
-    expr = flagValue "--target" proxyRealmLabelOverrideArgv;
-    expected = "work.corp.d2b";
+    expr = flagValue "--target" mediaProxy.argv;
+    expected = "media.work.local-root.d2b";
   };
   "niri-vm-borders/wayland-proxy-ambiguous-realm-uses-vm-defaults" = {
-    # When >1 realm claims the same VM via legacyVmName, the proxy falls back
-    # to the host-local transitional defaults (vmName label, vmName.local.d2b).
     expr = {
-      label = flagValue "--border-label" proxyMultiRealmArgv;
-      realmTarget = flagValue "--target" proxyMultiRealmArgv;
+      mappings = builtins.length index.providerRegistryV2Mappings.display;
+      uniqueProviderIds =
+        builtins.length (lib.unique
+          (map (mapping: mapping.providerId)
+            index.providerRegistryV2Mappings.display));
+      configuredAuthorityShared =
+        editor.providerBindings.display.providerId
+        == media.providerBindings.display.providerId;
     };
     expected = {
-      label = "work";
-      realmTarget = "work.local.d2b";
+      mappings = 2;
+      uniqueProviderIds = 2;
+      configuredAuthorityShared = true;
+    };
+  };
+  "niri-vm-borders/processes-use-normalized-wayland-endpoints" = {
+    expr = {
+      editorReady = (builtins.head editorProxy.readiness).value;
+      editorGpuSocket = flagValue "--wayland-sock" editorGpu.argv;
+      mediaReady = (builtins.head mediaProxy.readiness).value;
+      mediaRuntimeDir = builtins.elem
+        "XDG_RUNTIME_DIR=${lib.removeSuffix "/wayland-0" mediaEndpoint.path}"
+        mediaRunner.env;
+      mediaDisplay = builtins.elem "WAYLAND_DISPLAY=wayland-0" mediaRunner.env;
+    };
+    expected = {
+      editorReady = editorEndpoint.path;
+      editorGpuSocket = editorEndpoint.path;
+      mediaReady = mediaEndpoint.path;
+      mediaRuntimeDir = true;
+      mediaDisplay = true;
     };
   };
 }

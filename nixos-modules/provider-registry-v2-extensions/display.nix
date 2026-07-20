@@ -36,6 +36,10 @@ let
       realmId = identity.validateShortId mapping.realmId;
       workloadId = identity.validateShortId mapping.workloadId;
       ownerRoleId = identity.validateShortId mapping.ownerRoleId;
+      canonicalProviderId = identity.deriveProviderId
+        realmId "display" "wayland-${workloadId}";
+      canonicalOwnerRoleId = identity.deriveRoleId
+        realmId workloadId "wayland-proxy";
       implementationId =
         if mapping.implementationId == "wayland"
         then mapping.implementationId
@@ -60,7 +64,11 @@ let
         inherit providerId realmId implementationId controllerRole binding;
       });
     in
-    builtins.deepSeq
+    if providerId != canonicalProviderId then
+      throw "provider display mapping: provider id is not workload-scoped"
+    else if ownerRoleId != canonicalOwnerRoleId then
+      throw "provider display mapping: owner role is not the canonical Wayland role"
+    else builtins.deepSeq
       [ providerId realmId workloadId ownerRoleId implementationId controllerRole binding ]
       {
         descriptor = {

@@ -209,7 +209,7 @@ ifname-rendered-host-json/realm-ifname-prefix
 index/canonical-identities-and-lookups
 index/companion-builders-do-not-read-the-module-fixpoint
 index/display-mapping-requires-one-provider
-index/display-provider-cannot-bind-multiple-workloads
+index/display-provider-can-bind-multiple-workloads-explicitly
 index/duplicate-provider-identities-fail-closed
 index/duplicate-realm-paths-fail-closed
 index/enumerates-closed-role-set

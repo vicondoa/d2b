@@ -229,21 +229,40 @@ let
   displayMappings = map
     (role:
       let
-        candidates = lib.filter
-          (provider:
-            provider.enabled
+        workload = workloadIndex.byId.${role.workloadId};
+        binding =
+          providerBindingsByWorkloadId.${role.workloadId}.display or null;
+        provider =
+          if binding == null
+          then throw
+            "normalized index: workload ${role.workloadId} requires an explicit wayland display provider binding"
+          else providerById.${binding.providerId}
+            or (throw
+              "normalized index: workload ${role.workloadId} references an unknown display provider");
+        normalizedAuthorityError =
+          if binding == null then
+            "normalized index: workload ${role.workloadId} requires an explicit wayland display provider binding"
+          else if !(
+            workload.realmId == role.realmId
+            && binding.providerType == "display"
+            && binding.implementationId == "wayland"
+            && provider.enabled
             && provider.realmId == role.realmId
             && provider.providerType == "display"
-            && provider.implementationId == "wayland")
-          providerRows;
-        provider =
-          if builtins.length candidates == 1
-          then builtins.head candidates
-          else throw
-            "normalized index: workload ${role.workloadId} requires exactly one enabled same-realm wayland display provider";
+            && provider.implementationId == "wayland"
+            && provider.placement == "host-local"
+          ) then
+            "normalized index: workload ${role.workloadId} display binding disagrees with normalized authority"
+          else
+            null;
       in
+      if normalizedAuthorityError != null
+      then throw normalizedAuthorityError
+      else
       {
-        inherit (provider) implementationId providerId;
+        implementationId = binding.implementationId;
+        providerId = identity.deriveProviderId
+          role.realmId "display" "wayland-${role.workloadId}";
         inherit (role) realmId workloadId;
         ownerRoleId = role.roleId;
         controllerRole = controllerRoleFor role.realmId;
@@ -460,6 +479,11 @@ let
         mapping.transportBindingIds)
     transportMappings;
 
+  roleRuntimeResourceFor = roleId:
+    lib.findFirst
+      (resource: resource.roleId == roleId && resource.kind == "role-runtime")
+      (throw "normalized index: display owner role ${roleId} has no runtime resource")
+      roleResources;
   displayResources = lib.concatMap
     (mapping:
       lib.mapAttrsToList
@@ -470,6 +494,10 @@ let
           }";
           inherit (mapping) providerId realmId workloadId;
           roleId = mapping.ownerRoleId;
+          path =
+            if endpointKind == "wayland"
+            then "${(roleRuntimeResourceFor mapping.ownerRoleId).path}/wayland-0"
+            else null;
         })
         mapping.endpointIds)
     displayMappings;

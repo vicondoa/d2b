@@ -24,7 +24,7 @@ let
   nativeVsockProviderId = providerId "transport" "native-vsock";
   nixosProviderId = localRootProviderId "nixos";
   linuxProviderId = localRootProviderId "linux";
-  waylandProviderId = providerId "display" "wayland-editor";
+  waylandProviderId = providerId "display" "wayland-${workloadId}";
 
   transportEntries = transport.mkEntries [
     {
@@ -103,6 +103,7 @@ let
           workloads.editor = {
             enable = true;
             id = "editor";
+            providerRefs.display = "display";
             runtime = {
               provider = "runtime";
               implementation = "cloud-hypervisor";
