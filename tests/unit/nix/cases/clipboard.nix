@@ -134,7 +134,11 @@ let
             };
             workloads.tools = {
               id = "tools";
-              provider = "systemd-user";
+              providerRefs = {
+                runtime = "systemd-user";
+                display = "wayland";
+              };
+              display.wayland = true;
               launcher = {
                 enable = true;
                 label = "Tools";
@@ -180,8 +184,9 @@ let
   unsafeRuntimeProvider = unsafeWorkload.providerBindings.runtime;
   unsafeDisplayBinding =
     builtins.head unsafeEnabled.config.d2b._index.providerRegistryV2Mappings.display;
-  unsafeUserGroups = user:
-    unsafeEnabled.config.users.users.${user}.extraGroups;
+  unsafePrivateWorkload =
+    builtins.head
+      unsafeEnabled.config.d2b._bundle.unsafeLocalWorkloadsJson.data.workloads;
   unsafeEndpointRules = unsafeEnabled.config.systemd.tmpfiles.rules;
   hasUnsafeEndpoint = uid:
     lib.any
@@ -191,12 +196,20 @@ in
 {
   "unsafe-local/runtime-user-endpoints-follow-normalized-bindings" = {
     expr = {
-      aliceEligible =
-        lib.elem "d2b-unsafe-local" (unsafeUserGroups "alice");
-      bobEligible =
-        lib.elem "d2b-unsafe-local" (unsafeUserGroups "bob");
+      allowedUsers = unsafeEnabled.config.d2b.realms.host.allowedUsers;
+      allowUnsafeLocal =
+        unsafeEnabled.config.d2b.realms.host.policy.allowUnsafeLocal;
+      normalizedRowsExcludeAllowedUsers =
+        lib.all
+          (realm: !(realm ? allowedUsers))
+          unsafeEnabled.config.d2b._index.realms.enabledList;
       aliceEndpoint = hasUnsafeEndpoint 1000;
       bobEndpoint = hasUnsafeEndpoint 1001;
+      privateIdentity = {
+        inherit (unsafePrivateWorkload.identity)
+          canonicalTarget providerId realmId runtimeKind workloadId;
+      };
+      privateArgv = (builtins.head unsafePrivateWorkload.items).argv;
       runtimeSocket =
         unsafeEnabled.config.systemd.user.sockets.d2b-runtime-systemd-user
           .socketConfig.ListenSequentialPacket;
@@ -205,10 +218,17 @@ in
           .ListenSequentialPacket;
     };
     expected = {
-      aliceEligible = true;
-      bobEligible = false;
+      allowedUsers = [ "alice" ];
+      allowUnsafeLocal = true;
+      normalizedRowsExcludeAllowedUsers = true;
       aliceEndpoint = true;
       bobEndpoint = false;
+      privateIdentity = {
+        inherit (unsafeWorkload) canonicalTarget realmId workloadId;
+        providerId = unsafeRuntimeProvider.providerId;
+        runtimeKind = "systemd-user";
+      };
+      privateArgv = [ "firefox" ];
       runtimeSocket = "/run/d2b/u/%U/runtime-agent.sock";
       userServiceSocket = "/run/d2b/u/%U/userd.sock";
     };
