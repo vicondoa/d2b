@@ -1,5 +1,7 @@
 # Desktop action service
 
+**Diataxis category:** reference.
+
 Desktop actions use `NotifyService.InvokeAction` in the
 `d2b.notify.v2` service package. The service is available only through an
 authenticated `ComponentSession` whose endpoint purpose and role are both

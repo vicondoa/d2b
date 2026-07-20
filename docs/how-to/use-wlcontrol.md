@@ -1,5 +1,7 @@
 # Use desktop actions from wlcontrol
 
+**Diataxis category:** how-to.
+
 `d2b-wlcontrol` renders action offers supplied by the desktop observer
 composition. Each offer has a local label and an opaque capability.
 
