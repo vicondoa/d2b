@@ -529,14 +529,24 @@ in
         endpointRulesText =
           lib.concatStringsSep "\n" enabled.config.systemd.tmpfiles.rules;
       in
-      lib.hasInfix "${traverseRule}\n${endpointParentRule}" endpointRulesText
-      && lib.all
-        (rule: builtins.elem rule unsafeEnabled.config.systemd.tmpfiles.rules)
-        [
-          traverseRule
-          "a+ /run/d2b/clipd - - - - u:alice:--x"
-        ];
-    expected = true;
+      {
+        traversalRules =
+          lib.hasInfix "${traverseRule}\n${endpointParentRule}" endpointRulesText
+          && lib.all
+            (rule: builtins.elem rule unsafeEnabled.config.systemd.tmpfiles.rules)
+            [
+              traverseRule
+              "a+ /run/d2b/clipd - - - - u:alice:--x"
+            ];
+        normalizedRowsExcludeAllowedUsers =
+          lib.all
+            (realm: !(realm ? allowedUsers))
+            unsafeEnabled.config.d2b._index.realms.enabledList;
+      };
+    expected = {
+      traversalRules = true;
+      normalizedRowsExcludeAllowedUsers = true;
+    };
   };
 
   "clipboard/no-static-clipd-tmpfiles" = {

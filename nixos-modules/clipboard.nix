@@ -106,7 +106,9 @@ EOF
   userServiceEndpointUsers = lib.unique (
     site.adminUsers
     ++ site.launcherUsers
-    ++ lib.concatMap (realm: realm.allowedUsers) config.d2b._index.realms.enabledList
+    ++ lib.concatMap
+      (realm: config.d2b.realms.${realm.realmName}.allowedUsers)
+      config.d2b._index.realms.enabledList
   );
   waylandUserHasEndpointTraversal =
     config.d2b.daemonExperimental.enable
