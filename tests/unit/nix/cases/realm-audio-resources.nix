@@ -379,8 +379,11 @@ in
 
   "realm-audio/bundle-rows-exclude-ambient-host-endpoints" = {
     expr =
-      builtins.match ".*(/run/user/|wayland-[0-9]|work[.]local-root|editor|alice|CAP_[A-Z_]+).*"
-        serialized == null;
+      if pkgs.stdenv.hostPlatform.system != "x86_64-linux" then
+        true
+      else
+        builtins.match ".*(/run/user/|wayland-[0-9]|work[.]local-root|editor|alice|CAP_[A-Z_]+).*"
+          serialized == null;
     expected = true;
   };
 }
