@@ -1904,6 +1904,11 @@
       "path": "packages/d2b-clipd/src/services/control/mod.rs"
     },
     {
+      "name": "w6-clipboard-daemon-composition",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-clipd/src/daemon.rs"
+    },
+    {
       "name": "w6-clipboard-picker-composition",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2b-clipd/src/services/picker/mod.rs"
@@ -1939,6 +1944,11 @@
       "path": "packages/d2b-unsafe-local-helper/src/services/runtime_systemd_user/mod.rs"
     },
     {
+      "name": "w6-runtime-systemd-user-daemon",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-unsafe-local-helper/src/server.rs"
+    },
+    {
       "name": "w6-security-key-composition",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2b-sk-frontend/src/services/security_key/mod.rs"
@@ -1967,6 +1977,11 @@
       "name": "w6-user-agent-composition",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2b-userd/src/services/user/mod.rs"
+    },
+    {
+      "name": "w6-user-agent-daemon",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-userd/src/services/user/runtime.rs"
     },
     {
       "name": "w6-wayland-composition",
