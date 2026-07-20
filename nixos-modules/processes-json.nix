@@ -1147,20 +1147,6 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         id = "guest-control-health";
         role = "guest-control-health";
         readiness = [ (guestControlHealthReady name) ];
-      })
-      ++ lib.optional vm.usb.securityKey.enable (node name {
-        # The sk-frontend DAG node tracks the readiness of the host-side
-        # vsock socket endpoint that the guest frontend connects to. The
-        # socket is created by the host broker (security-key broker workstream)
-        # at the path <vsock_base>_14320. The node has no runner: the actual
-        # frontend process runs inside the guest VM supervised by the guest's
-        # systemd. The host daemon uses the readiness predicate to determine
-        # when the broker endpoint is available for guest connections.
-        id = "sk-frontend";
-        role = "security-key-frontend";
-        readiness = [
-          (unixSocketExists (vsockSocketForPort "${manifest.stateDir}/vsock.sock" d2bLib.securityKeyVsockPort))
-        ];
       });
       edges = [
         (edge "host-reconcile" "store-virtiofs-preflight" "Host reconciliation must complete before store and virtiofs preflight runs.")
@@ -1195,9 +1181,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       )
       ++ edgesFromNodes preVmmNodeIds "cloud-hypervisor" "Cloud Hypervisor starts only after every prerequisite sidecar is ready."
       ++ lib.optional guestControlEnabled
-        (edge "cloud-hypervisor" "guest-control-health" "Authenticated guest-control Health readiness is probed only after Cloud Hypervisor is running.")
-      ++ lib.optional vm.usb.securityKey.enable
-        (edge "cloud-hypervisor" "sk-frontend" "The sk-frontend vsock endpoint tracking starts only after Cloud Hypervisor creates the base vsock socket.");
+        (edge "cloud-hypervisor" "guest-control-health" "Authenticated guest-control Health readiness is probed only after Cloud Hypervisor is running.");
       invariants = {
         perVmAuditPipeline = true;
         swtpmPreStartFlush = true;

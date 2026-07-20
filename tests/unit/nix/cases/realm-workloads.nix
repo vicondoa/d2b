@@ -1139,6 +1139,13 @@ in
         conditionGroup = service.unitConfig.ConditionGroup;
         userdConditionGroup = userdService.unitConfig.ConditionGroup;
         restart = service.serviceConfig.Restart;
+        restartPreventExitStatus =
+          service.serviceConfig.RestartPreventExitStatus;
+        userdRestartPreventExitStatus =
+          userdService.serviceConfig.RestartPreventExitStatus;
+        configurationExitIsNotSuccessful =
+          !(service.serviceConfig ? SuccessExitStatus)
+          && !(userdService.serviceConfig ? SuccessExitStatus);
         execStartHasHelper =
           lib.hasInfix "/bin/d2b-unsafe-local-helper" service.serviceConfig.ExecStart;
         execStartHasLegacyProxyArg =
@@ -1184,6 +1191,9 @@ in
       conditionGroup = "d2b-unsafe-local";
       userdConditionGroup = "d2b-user-services";
       restart = "on-failure";
+      restartPreventExitStatus = "78";
+      userdRestartPreventExitStatus = "78";
+      configurationExitIsNotSuccessful = true;
       execStartHasHelper = true;
       execStartHasLegacyProxyArg = false;
       proxyPackageConfigured = true;

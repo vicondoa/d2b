@@ -3,8 +3,8 @@
 # Tests cover:
 #   1. Default-off: manifest.securityKey = false when option not set.
 #   2. Enabled: manifest.securityKey = true when option is true.
-#   3. DAG node sk-frontend appears in processes.json when enabled.
-#   4. DAG node sk-frontend absent when disabled.
+#   3. No host DAG node claims the uncomposed security-key controller.
+#   4. Guest frontend remains fail-closed without runtime session material.
 #   5. Assertion fires for security-key + qemu-media conflict.
 #   6. Assertion fires for security-key + usbip.yubikey conflict.
 { mkEval, lib, ... }:
@@ -95,19 +95,28 @@ in
     expected = true;
   };
 
-  "security-key-gating/enabled-dag-node-present" = {
+  "security-key-gating/enabled-host-dag-node-absent" = {
     expr = hasNodeId enabledEval "corp-vm" "sk-frontend";
-    expected = true;
+    expected = false;
   };
 
-  "security-key-gating/enabled-dag-node-role" = {
+  "security-key-gating/guest-frontend-awaits-runtime-session-material" = {
     expr =
       let
-        nodes = vmNodes enabledEval "corp-vm";
-        skNode = builtins.head (builtins.filter (n: n.id == "sk-frontend") nodes);
-      in
-      skNode.role;
-    expected = "security-key-frontend";
+        service =
+          (guestConfig enabledEval "corp-vm").systemd.services.d2b-sk-frontend;
+      in {
+        unitPresent = service.serviceConfig.ExecStart != null;
+        channelBindingAbsent =
+          !(service.environment ? D2B_SK_CHANNEL_BINDING_HEX);
+        reconnectGenerationAbsent =
+          !(service.environment ? D2B_SK_RECONNECT_GENERATION);
+      };
+    expected = {
+      unitPresent = true;
+      channelBindingAbsent = true;
+      reconnectGenerationAbsent = true;
+    };
   };
 
   "security-key-gating/guest-udev-uses-plugdev" = {

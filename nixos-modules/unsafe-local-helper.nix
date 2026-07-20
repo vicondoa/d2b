@@ -76,6 +76,7 @@ in
         Type = "simple";
         ExecStart = "${helperPackage}/bin/d2b-unsafe-local-helper";
         Restart = "on-failure";
+        RestartPreventExitStatus = "78";
         RestartSec = "5s";
         Slice = "app.slice";
         UMask = "0077";

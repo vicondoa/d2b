@@ -74,11 +74,29 @@ pkgs.testers.runNixOSTest {
         "'import socket; s=socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET); "
         f"s.connect(\"{endpoint}\")'"
     )
+    machine.succeed(
+        "runuser -u alice -- python3 -c "
+        "'import socket; s=socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET); "
+        f"s.connect(\"{userd_endpoint}\")'"
+    )
     machine.wait_until_succeeds(
         "journalctl _SYSTEMD_USER_UNIT=d2b-runtime-systemd-user.service "
         "_UID=1000 --no-pager "
         "| grep -q component-session-unavailable",
         timeout=60,
+    )
+    machine.wait_until_succeeds(
+        "journalctl _SYSTEMD_USER_UNIT=d2b-userd.service "
+        "_UID=1000 --no-pager "
+        "| grep -q 'service mode is not implemented'",
+        timeout=60,
+    )
+    machine.succeed(
+        alice_user
+        + " show -P NRestarts d2b-runtime-systemd-user.service | grep -qx 0"
+    )
+    machine.succeed(
+        alice_user + " show -P NRestarts d2b-userd.service | grep -qx 0"
     )
 
     machine.succeed("systemctl start user@1001.service")

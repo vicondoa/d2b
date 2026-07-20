@@ -81,6 +81,7 @@ in
         Type = "simple";
         ExecStart = "${userdPackage}/bin/d2b-userd";
         Restart = "on-failure";
+        RestartPreventExitStatus = "78";
         RestartSec = "5s";
         Slice = "app.slice";
         UMask = "0077";
