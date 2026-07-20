@@ -230,21 +230,15 @@
       "repository": "vicondoa/d2b-wlcontrol",
       "futureRepository": null,
       "auditedRef": "adr0045-w9-wlcontrol",
-      "auditedRevision": "538f56e37d47a6099edeb0288709ad8c791b60bb",
+      "auditedRevision": "6511a8cb45564e041b1a6331ad9609c269ed5b94",
       "defaultBranchRevision": "06010b953a9dd05f4be236ef5c7265d86c3c5812",
       "protocolPolicy": "canonical-only",
       "consumesDistribution": {
         "id": "d2b-client-toolkit",
         "repository": "vicondoa/d2b-toolkit",
-        "revision": "800c2878533f600d8f085b3d2aafcddb970232b2",
-        "sourceRevision": "4018d9c9652bd826c2e6a9abccdcdcafb832d944",
-        "fingerprint": "c2c99bdd77ba66948fce81161dcc3efde608eefefb96f28fa934c9f58d96d838"
-      },
-      "followup": {
-        "status": "running",
-        "targetRevision": "3d6b75d47c8df66c1722ea324d64334a127d43ec",
-        "targetSourceRevision": "9dc902243cdd7aba7ef269988b96f0aae6e037da",
-        "targetFingerprint": "5a20cef3a64281df819eeb76bdfe385999755479b467b559653011582fb9c043"
+        "revision": "3d6b75d47c8df66c1722ea324d64334a127d43ec",
+        "sourceRevision": "9dc902243cdd7aba7ef269988b96f0aae6e037da",
+        "fingerprint": "5a20cef3a64281df819eeb76bdfe385999755479b467b559653011582fb9c043"
       },
       "ownership": {
         "mode": "exclusive-repository",
@@ -275,18 +269,27 @@
       "readyFeatures": [
         "client-toolkit input rename and exact source pin",
         "presentation-model and reducer audit",
-        "release and Home Manager ownership update"
+        "release and Home Manager ownership update",
+        "authenticated daemon inspection with VM-only presentation projections",
+        "typed VM start, stop, and restart lifecycle mapping"
       ],
       "blockedFeatures": [
         {
-          "feature": "daemon inventory, auth, lifecycle, device, audio, and observability actions",
+          "feature": "authenticated caller-role projection for enabling admin lifecycle controls",
+          "owner": "W8",
+          "status": "fail-closed",
+          "reason": "The authenticated session proves launcher read posture but does not yet project the selected admin role.",
           "dependsOn": [
             "core-control-services"
           ]
         },
         {
-          "feature": "notify-driven status and desktop action flow",
+          "feature": "device, audio, desktop observer/action, and User/Shell/Notify/Wayland routes",
+          "owner": "W8",
+          "status": "fail-closed",
+          "reason": "Runtime-owned authenticated routes are not yet available and no legacy fallback is permitted.",
           "dependsOn": [
+            "core-control-services",
             "edge-user-desktop-services"
           ]
         }
@@ -396,7 +399,7 @@
     },
     {
       "id": "downstream-refresh",
-      "detail": "The wlcontrol and WeezTerm audited heads still consume the prior client-toolkit revision. Their follow-ups are running against the frozen W6 source and current distribution fingerprint; wlterm has completed its authenticated non-interactive shell management migration."
+      "detail": "The WeezTerm audited head still consumes the prior client-toolkit revision and its follow-up is running against the frozen W6 source and current distribution fingerprint; wlcontrol and wlterm have completed their authenticated W9 client migrations."
     }
   ]
 }

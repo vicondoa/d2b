@@ -22,6 +22,7 @@ const LEGACY_CLIENT_DISTRIBUTION_FINGERPRINT: &str =
 const LEGACY_PROVIDER_DISTRIBUTION_FINGERPRINT: &str =
     "89f76b9ab63515ecccf46c642676ac5d3c6b4e53bfc642d1dacb69818e3e8588";
 const PROVIDER_DISTRIBUTION_REVISION: &str = "202d1d64d2578a9198a26b300ded0332cce879d6";
+const WLCONTROL_REVISION: &str = "6511a8cb45564e041b1a6331ad9609c269ed5b94";
 const WLTERM_REVISION: &str = "0347f3aea0f84fb2f970f793fd8b9a6ea1e3e931";
 const CURRENT_SOURCE_SUPPLEMENTS: [&str; 2] = [
     "docs/reference/toolkit-source-contract.md",
@@ -1298,6 +1299,27 @@ fn sibling_coordination_graph_has_disjoint_repository_ownership() {
                     .is_some_and(|owner| !owner.is_empty()),
                 "wlterm interactive stream routing must retain an external owner"
             );
+        }
+        if id == "wlcontrol" {
+            assert_eq!(revision, WLCONTROL_REVISION, "wlcontrol audited revision");
+            assert!(
+                component["readyFeatures"]
+                    .as_array()
+                    .expect("wlcontrol readyFeatures array")
+                    .iter()
+                    .any(|feature| {
+                        feature
+                            == "authenticated daemon inspection with VM-only presentation projections"
+                    }),
+                "wlcontrol must record its VM-only authenticated inspection boundary"
+            );
+            for route in component["blockedFeatures"]
+                .as_array()
+                .expect("wlcontrol blockedFeatures array")
+            {
+                assert_eq!(route["owner"], "W8");
+                assert_eq!(route["status"], "fail-closed");
+            }
         }
         if ["wlcontrol", "wlterm", "weezterm"].contains(&id) {
             let pin = object(

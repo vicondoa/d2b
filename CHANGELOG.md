@@ -332,8 +332,9 @@ deprecations ship one minor release before removal.
   Git and Cargo-target inventories and fingerprints, kept live provider-agent
   bootstrap W8-owned and fail-closed, completed wlterm authenticated discovery
   plus shell list/detach/kill on the new client facade while keeping interactive
-  stream routing fail-closed, and recorded the remaining desktop-consumer
-  follow-ups.
+  stream routing fail-closed, completed wlcontrol authenticated inspection and
+  typed lifecycle mapping with VM-only projections while keeping runtime-owned
+  routes fail-closed, and recorded the remaining desktop-consumer follow-up.
 - Made dependency-ready wave launch and file-overlap-based component dispatch
   mandatory after shared contract prep, preventing one persistent agent from
   serializing unrelated implementation and review scopes, with shipped-package
