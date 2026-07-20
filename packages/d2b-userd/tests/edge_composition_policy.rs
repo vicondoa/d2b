@@ -299,6 +299,7 @@ const COMPONENTS: &[Component] = &[
         id: "clipboard-composition",
         owned_files: &[
             "packages/d2b-clipd/Cargo.toml",
+            "packages/d2b-clipd/src/daemon.rs",
             "packages/d2b-clipd/src/lib.rs",
             "packages/d2b-clipd/src/main.rs",
             "packages/d2b-clipd/src/services/mod.rs",
@@ -544,6 +545,7 @@ const COMPONENTS: &[Component] = &[
             "packages/d2b-unsafe-local-helper/Cargo.toml",
             "packages/d2b-unsafe-local-helper/src/lib.rs",
             "packages/d2b-unsafe-local-helper/src/main.rs",
+            "packages/d2b-unsafe-local-helper/src/server.rs",
             "packages/d2b-unsafe-local-helper/src/services/mod.rs",
         ],
         reserved_files: &[],
