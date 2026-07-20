@@ -139,6 +139,22 @@ fn prebind_realm_listeners_inner(
         AddressFamily, Backlog, SockFlag, SockType, UnixAddr, bind, listen, socket,
     };
     use std::os::fd::AsRawFd;
+    use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+
+    fn validate_owned_directory(path: &Path) -> Result<(), LiveHandlerError> {
+        let metadata = std::fs::symlink_metadata(path)
+            .map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
+        if !metadata.is_dir()
+            || metadata.file_type().is_symlink()
+            || metadata.uid() != rustix::process::geteuid().as_raw()
+            || metadata.mode() & 0o022 != 0
+        {
+            return Err(LiveHandlerError::Activation(
+                "realm runtime directory is not owned and write-protected".to_owned(),
+            ));
+        }
+        Ok(())
+    }
 
     d2b_host::realm_children::validate_realm_id(realm_id)
         .map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
@@ -154,6 +170,7 @@ fn prebind_realm_listeners_inner(
             "realm listener ownership must be non-root and owner/group scoped".to_owned(),
         ));
     }
+    validate_owned_directory(runtime_root)?;
     let realm_root = runtime_root.join(realm_id);
     match std::fs::symlink_metadata(&realm_root) {
         Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => {
@@ -168,6 +185,7 @@ fn prebind_realm_listeners_inner(
         }
         Err(error) => return Err(LiveHandlerError::Activation(error.to_string())),
     }
+    validate_owned_directory(&realm_root)?;
 
     fn bind_one(path: &Path) -> Result<std::os::fd::OwnedFd, LiveHandlerError> {
         let fd = socket(
@@ -196,12 +214,20 @@ fn prebind_realm_listeners_inner(
     match bind_one(&broker_path) {
         Ok(broker) => {
             if let Some((public_owner, broker_owner)) = ownership {
-                use std::os::unix::fs::PermissionsExt;
                 let apply = |path: &Path, owner: RealmListenerOwnership| {
-                    nix::unistd::chown(
+                    let metadata = std::fs::symlink_metadata(path)
+                        .map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
+                    if !metadata.file_type().is_socket() {
+                        return Err(LiveHandlerError::Activation(
+                            "realm listener path is not a socket".to_owned(),
+                        ));
+                    }
+                    nix::unistd::fchownat(
+                        None,
                         path,
                         Some(nix::unistd::Uid::from_raw(owner.uid)),
                         Some(nix::unistd::Gid::from_raw(owner.gid)),
+                        nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
                     )
                     .map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
                     std::fs::set_permissions(path, std::fs::Permissions::from_mode(owner.mode))

@@ -344,6 +344,10 @@ deprecations ship one minor release before removal.
 - Made shell and console use the same refused-socket `daemon-down` path,
   documented launch's internal failure exit, and supplied the explicit `serve`
   mode required by parent-spawned realm controllers.
+- Moved terminal bundle resolution and paired realm-child spawning off Tokio
+  executor threads, hardened listener ownership beneath broker-owned
+  write-protected directories, and documented daemon-down plus clipboard alias
+  behavior across the CLI contract.
 - Made broker tests honor disposable validation/Cargo targets and create
   private auto-cleaned socket directories instead of leaking crate-local
   targets or attempting to chmod a shared `/tmp`.

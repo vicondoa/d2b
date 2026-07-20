@@ -353,7 +353,7 @@ pub trait RealmLaunchRecordResolver {
     ) -> Result<RealmChildLaunchRecord, AllocatorServiceError>;
 }
 
-pub trait RealmChildSpawner {
+pub trait RealmChildSpawner: Send + Sync + 'static {
     fn spawn_pair(
         &self,
         record: &RealmChildLaunchRecord,
@@ -389,20 +389,20 @@ pub struct PendingSpawnedRealmPair {
     pub bootstrap: RealmChildBootstrapEndpoints,
 }
 
-struct PendingSpawnedRealmPairGuard<'a, S>
+struct PendingSpawnedRealmPairGuard<S>
 where
     S: RealmChildSpawner + ?Sized,
 {
-    spawner: &'a S,
+    spawner: Arc<S>,
     pair: PendingSpawnedRealmPair,
     armed: bool,
 }
 
-impl<'a, S> PendingSpawnedRealmPairGuard<'a, S>
+impl<S> PendingSpawnedRealmPairGuard<S>
 where
     S: RealmChildSpawner + ?Sized,
 {
-    fn new(spawner: &'a S, pair: PendingSpawnedRealmPair) -> Self {
+    fn new(spawner: Arc<S>, pair: PendingSpawnedRealmPair) -> Self {
         Self {
             spawner,
             pair,
@@ -419,7 +419,7 @@ where
     }
 }
 
-impl<S> Drop for PendingSpawnedRealmPairGuard<'_, S>
+impl<S> Drop for PendingSpawnedRealmPairGuard<S>
 where
     S: RealmChildSpawner + ?Sized,
 {
@@ -700,7 +700,7 @@ where
     engine: LocalRootAllocatorEngine<EL, EO, EV>,
     resources: R,
     launch_records: L,
-    spawner: S,
+    spawner: Arc<S>,
     credential_timeout: Duration,
 }
 
@@ -723,7 +723,7 @@ where
             engine,
             resources,
             launch_records,
-            spawner,
+            spawner: Arc::new(spawner),
             credential_timeout: Duration::from_secs(5),
         }
     }
@@ -845,11 +845,14 @@ where
         bootstrap
             .validate_child_descriptors(&controller_fds, &broker_fds)
             .map_err(AllocatorServiceError::Credential)?;
-        let pending = PendingSpawnedRealmPairGuard::new(
-            &self.spawner,
-            self.spawner
-                .spawn_pair(&record, controller_fds, broker_fds, bootstrap)?,
-        );
+        let spawner = Arc::clone(&self.spawner);
+        let spawn_record = record.clone();
+        let pending = tokio::task::spawn_blocking(move || {
+            let pair = spawner.spawn_pair(&spawn_record, controller_fds, broker_fds, bootstrap)?;
+            Ok::<_, AllocatorServiceError>(PendingSpawnedRealmPairGuard::new(spawner, pair))
+        })
+        .await
+        .map_err(|_| AllocatorServiceError::Invariant("realm child spawn worker failed"))??;
         validate_pending_spawn_correlation(pending.pair(), &record)?;
         let pair = authenticate_spawned_pair(pending.pair(), self.credential_timeout).await?;
         let mut response = broker::SpawnRealmChildrenResponse::new();

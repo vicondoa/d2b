@@ -5,7 +5,7 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
 };
 use std::time::Duration;
@@ -190,6 +190,8 @@ struct TestSpawner {
     spawned: Arc<AtomicUsize>,
     pids: Option<(u32, u32)>,
     corruption: Option<SpawnCorruption>,
+    spawn_thread: Option<Arc<Mutex<Option<std::thread::ThreadId>>>>,
+    spawn_delay: Option<Duration>,
 }
 
 #[derive(Clone, Copy)]
@@ -207,7 +209,13 @@ impl RealmChildSpawner for TestSpawner {
         broker_fds: RealmChildDescriptorSet,
         bootstrap: RealmChildBootstrapEndpoints,
     ) -> Result<PendingSpawnedRealmPair, AllocatorServiceError> {
+        if let Some(thread) = &self.spawn_thread {
+            *thread.lock().unwrap() = Some(std::thread::current().id());
+        }
         self.spawned.fetch_add(1, Ordering::SeqCst);
+        if let Some(delay) = self.spawn_delay {
+            std::thread::sleep(delay);
+        }
         assert_eq!(controller_fds.role(), RealmChildRole::Controller);
         assert_eq!(broker_fds.role(), RealmChildRole::Broker);
         let (controller_pid, broker_pid) = self.pids.unwrap_or_else(|| {
@@ -788,6 +796,8 @@ fn spawn_request(
 
 #[tokio::test(flavor = "current_thread")]
 async fn spawn_correlates_inputs_and_returns_fixed_pidfd_slots_after_credentials() {
+    let executor_thread = std::thread::current().id();
+    let spawn_thread = Arc::new(Mutex::new(None));
     let peers = bootstrap_processes("valid", "valid");
     let (request, attachments) = spawn_request("spawn-1", peers.sessions);
     let spawner = TestSpawner {
@@ -795,6 +805,8 @@ async fn spawn_correlates_inputs_and_returns_fixed_pidfd_slots_after_credentials
         spawned: Arc::new(AtomicUsize::new(0)),
         pids: Some(peers.pids),
         corruption: None,
+        spawn_thread: Some(Arc::clone(&spawn_thread)),
+        spawn_delay: None,
     };
     let reply = service_with_spawner(spawner)
         .spawn(&request, attachments, peers.endpoints)
@@ -825,6 +837,10 @@ async fn spawn_correlates_inputs_and_returns_fixed_pidfd_slots_after_credentials
     );
     assert_eq!(reply.message.children[0].pidfd_attachment_index, 0);
     assert_eq!(reply.message.children[1].pidfd_attachment_index, 1);
+    assert_ne!(
+        spawn_thread.lock().unwrap().expect("spawn thread recorded"),
+        executor_thread
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -944,6 +960,8 @@ async fn assert_credential_failure_cleans_pair(
         spawned: Arc::new(AtomicUsize::new(0)),
         pids: Some(peers.pids),
         corruption: None,
+        spawn_thread: None,
+        spawn_delay: None,
     };
     let error = service_with_spawner(spawner)
         .with_credential_timeout(timeout)
@@ -999,6 +1017,8 @@ async fn cancelling_spawn_during_credential_authentication_cleans_pair_once() {
         spawned: spawned.clone(),
         pids: Some(peers.pids),
         corruption: None,
+        spawn_thread: None,
+        spawn_delay: None,
     })
     .with_credential_timeout(Duration::from_secs(30));
 
@@ -1008,6 +1028,40 @@ async fn cancelling_spawn_during_credential_authentication_cleans_pair_once() {
     )
     .await
     .unwrap_err();
+
+    assert_eq!(spawned.load(Ordering::SeqCst), 1);
+    assert_eq!(terminated.load(Ordering::SeqCst), 1);
+    cleanup_helpers(peers.helpers, peers.roots);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cancelling_spawn_during_blocking_worker_cleans_pair_once() {
+    let peers = bootstrap_processes("valid", "valid");
+    let (request, attachments) = spawn_request("spawn-cancelled-worker", peers.sessions);
+    let terminated = Arc::new(AtomicUsize::new(0));
+    let spawned = Arc::new(AtomicUsize::new(0));
+    let service = service_with_spawner(TestSpawner {
+        terminated: Arc::clone(&terminated),
+        spawned: Arc::clone(&spawned),
+        pids: Some(peers.pids),
+        corruption: None,
+        spawn_thread: None,
+        spawn_delay: Some(Duration::from_millis(100)),
+    });
+
+    tokio::time::timeout(
+        Duration::from_millis(10),
+        service.spawn(&request, attachments, peers.endpoints),
+    )
+    .await
+    .unwrap_err();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while terminated.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
 
     assert_eq!(spawned.load(Ordering::SeqCst), 1);
     assert_eq!(terminated.load(Ordering::SeqCst), 1);
@@ -1025,6 +1079,8 @@ async fn spawn_rejects_mismatched_bootstrap_child_endpoints_before_clone() {
         spawned: spawned.clone(),
         pids: Some(peers.pids),
         corruption: None,
+        spawn_thread: None,
+        spawn_delay: None,
     };
     let error = service_with_spawner(spawner)
         .spawn(&request, attachments, peers.endpoints)
@@ -1093,5 +1149,16 @@ fn listeners_are_prebound_as_a_pair_and_never_replaced() {
         "a failed bind must not unlink or replace the existing listener"
     );
     drop(listeners);
+    root.close().expect("remove listener fixture");
+}
+
+#[test]
+fn listeners_refuse_a_group_or_world_writable_runtime_root() {
+    let root = socket_tempdir();
+    std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o777)).unwrap();
+
+    assert!(prebind_realm_listeners(root.path(), "work").is_err());
+
+    std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     root.close().expect("remove listener fixture");
 }

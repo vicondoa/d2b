@@ -254,6 +254,9 @@ d2b-owned host selection and triggers paste replay for the focused target.
 If the picker cannot be launched or its handshake fails, `d2b-clipd` reports a
 typed failure instead of silently writing clipboard data.
 
+`d2b clipboard picker` remains a deprecated alias for this command and emits a
+warning directing operators to `d2b clipboard arm`.
+
 **Flags**
 
 | Flag | Type | Default | Semantics |
@@ -1316,7 +1319,7 @@ until the daemon handler ships.
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Success. | — |
-| `1` | Console launch or output read failure. | [`generic`](./error-codes.md#generic) |
+| `1` | Daemon unavailable, console launch failure, or output read failure. | [`daemon-down`](./error-codes.md#daemon-down), [`generic`](./error-codes.md#generic) |
 | `2` | Unknown VM, missing argument, or graphics VM selected. | [`usage`](./error-codes.md#usage) |
 | `80` | `provider-misconfigured`: ACA sandbox without an active guestd-compatible console transport; see [ACA console — provider misconfiguration](./provider-capability-matrix.md#aca-console--provider-misconfiguration). | [`provider-misconfigured`](./error-codes.md#provider-misconfigured) |
 
@@ -3190,7 +3193,7 @@ configured canonical workload target.
 | Code | Meaning |
 | --- | --- |
 | `0` | Success, including idempotent detach/kill no-op results. |
-| `1` | Unexpected daemon reply or local protocol/serialization failure. |
+| `1` | Daemon unavailable, unexpected daemon reply, or local protocol/serialization failure. |
 | `2` | Usage error, invalid flag combination, missing required `--name` for kill, invalid shell name, or non-TTY attach. |
 | `42` | Internal scope/daemon failure. |
 | `69` | Daemon/helper/user-manager/terminal transport unavailable or timed out. |

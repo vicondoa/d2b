@@ -70,7 +70,12 @@ pub async fn prepare(
     }
     let route = match kind {
         terminal::TerminalKind::TERMINAL_KIND_EXEC if request.resource_id.ends_with(".d2b") => {
-            preflight_configured_launch(&state, &request.resource_id)?;
+            let blocking_state = Arc::clone(&state);
+            let resource_id = request.resource_id.clone();
+            run_blocking_terminal_resolution(move || {
+                preflight_configured_launch(&blocking_state, &resource_id)
+            })
+            .await?;
             PreparedRoute::ConfiguredLaunch
         }
         terminal::TerminalKind::TERMINAL_KIND_EXEC => {
@@ -86,8 +91,12 @@ pub async fn prepare(
             if !matches!(peer.role, PeerRole::Admin) {
                 return Err(TerminalFailure::Unauthorized);
             }
-            let resolved = crate::resolve_shell_target(&state, &request.resource_id)
-                .map_err(map_typed_error)?;
+            let blocking_state = Arc::clone(&state);
+            let resource_id = request.resource_id.clone();
+            let resolved = run_blocking_terminal_resolution(move || {
+                crate::resolve_shell_target(&blocking_state, &resource_id).map_err(map_typed_error)
+            })
+            .await?;
             match resolved.route {
                 WorkloadRoute::UnsafeLocal => {
                     match state.unsafe_local_helpers.availability(peer.uid) {
@@ -110,8 +119,13 @@ pub async fn prepare(
             }
         }
         terminal::TerminalKind::TERMINAL_KIND_CONSOLE => {
-            let provider = crate::resolve_console_provider_kind(&state, &request.resource_id)
-                .map_err(map_typed_error)?;
+            let blocking_state = Arc::clone(&state);
+            let resource_id = request.resource_id.clone();
+            let provider = run_blocking_terminal_resolution(move || {
+                crate::resolve_console_provider_kind(&blocking_state, &resource_id)
+                    .map_err(map_typed_error)
+            })
+            .await?;
             PreparedRoute::Console(provider)
         }
         _ => return Err(TerminalFailure::Protocol),
@@ -123,6 +137,16 @@ pub async fn prepare(
         route,
         kind,
     }))
+}
+
+async fn run_blocking_terminal_resolution<T, F>(operation: F) -> Result<T, TerminalFailure>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, TerminalFailure> + Send + 'static,
+{
+    tokio::task::spawn_blocking(operation)
+        .await
+        .map_err(|_| TerminalFailure::Internal)?
 }
 
 fn require_guest_scope(request: &terminal::TerminalOpenRequest) -> Result<(), TerminalFailure> {
@@ -872,6 +896,16 @@ mod tests {
         TerminalFrameDirection, TerminalStreamValidator,
         terminal::{terminal_outcome, terminal_stream_frame},
     };
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn terminal_resolution_uses_the_blocking_pool() {
+        let executor_thread = std::thread::current().id();
+        let worker_thread = run_blocking_terminal_resolution(|| Ok(std::thread::current().id()))
+            .await
+            .unwrap();
+
+        assert_ne!(worker_thread, executor_thread);
+    }
 
     #[test]
     fn shell_management_mapping_satisfies_bound_state_machine() {
