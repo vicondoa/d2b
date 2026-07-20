@@ -32,16 +32,18 @@ EOF
     '';
   };
   helperPackage = sourcePackage;
-  unsafeLocalRealmIds = lib.unique (map
-    (workload: workload.realmId)
-    (lib.filter
-      (workload: workload.kind == "unsafe-local")
-      cfg._index.realms.workloads.enabled));
-  unsafeLocalRealms = map
-    (realmId: cfg._index.realms.enabledById.${realmId})
-    unsafeLocalRealmIds;
+  unsafeLocalWorkloads = lib.filter
+    (workload:
+      workload.providerBindings.runtime.implementationId == "systemd-user")
+    cfg._index.workloads.enabledList;
+  unsafeLocalRealmIds =
+    lib.unique (map (workload: workload.realmId) unsafeLocalWorkloads);
+  unsafeLocalRealms =
+    map (realmId: cfg._index.realms.enabledById.${realmId}) unsafeLocalRealmIds;
   eligibleUsers = lib.sort lib.lessThan
-    (lib.unique (lib.concatMap (realm: realm.allowedUsers) unsafeLocalRealms));
+    (lib.unique (lib.concatMap
+      (realm: cfg.realms.${realm.realmName}.allowedUsers)
+      unsafeLocalRealms));
 in
 {
   config = lib.mkIf cfg.daemonExperimental.enable {

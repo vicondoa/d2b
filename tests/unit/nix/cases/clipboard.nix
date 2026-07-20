@@ -18,6 +18,11 @@ let
       uid = 1000;
       group = "desktop";
     };
+    users.users.bob = {
+      isNormalUser = true;
+      uid = 1001;
+      group = "desktop";
+    };
     d2b.site.waylandUser = "alice";
   };
 
@@ -70,7 +75,11 @@ let
           implementationId = "wayland";
         };
         workloads.tools = {
-          provider = "runtime";
+          providerRefs = {
+            runtime = "runtime";
+            display = "display";
+          };
+          display.wayland = true;
           launcher.items.browser = {
             type = "exec";
             name = "Browser";
@@ -171,8 +180,40 @@ let
   unsafeRuntimeProvider = unsafeWorkload.providerBindings.runtime;
   unsafeDisplayBinding =
     builtins.head unsafeEnabled.config.d2b._index.providerRegistryV2Mappings.display;
+  unsafeUserGroups = user:
+    unsafeEnabled.config.users.users.${user}.extraGroups;
+  unsafeEndpointRules = unsafeEnabled.config.systemd.tmpfiles.rules;
+  hasUnsafeEndpoint = uid:
+    lib.any
+      (rule: lib.hasInfix "/run/d2b/u/${toString uid} " rule)
+      unsafeEndpointRules;
 in
 {
+  "unsafe-local/runtime-user-endpoints-follow-normalized-bindings" = {
+    expr = {
+      aliceEligible =
+        lib.elem "d2b-unsafe-local" (unsafeUserGroups "alice");
+      bobEligible =
+        lib.elem "d2b-unsafe-local" (unsafeUserGroups "bob");
+      aliceEndpoint = hasUnsafeEndpoint 1000;
+      bobEndpoint = hasUnsafeEndpoint 1001;
+      runtimeSocket =
+        unsafeEnabled.config.systemd.user.sockets.d2b-runtime-systemd-user
+          .socketConfig.ListenSequentialPacket;
+      userServiceSocket =
+        unsafeEnabled.config.systemd.user.sockets.d2b-userd.socketConfig
+          .ListenSequentialPacket;
+    };
+    expected = {
+      aliceEligible = true;
+      bobEligible = false;
+      aliceEndpoint = true;
+      bobEndpoint = false;
+      runtimeSocket = "/run/d2b/u/%U/runtime-agent.sock";
+      userServiceSocket = "/run/d2b/u/%U/userd.sock";
+    };
+  };
+
   "desktop-metadata/artifact-contract" = {
     expr = {
       inherit (desktopArtifact) installFileName classification sensitivity;

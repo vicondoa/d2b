@@ -33,7 +33,9 @@ EOF
   endpointUsers = lib.sort lib.lessThan (lib.unique (
     cfg.site.adminUsers
     ++ cfg.site.launcherUsers
-    ++ lib.concatMap (realm: realm.allowedUsers) cfg._index.realms.enabledList
+    ++ lib.concatMap
+      (realm: cfg.realms.${realm.realmName}.allowedUsers)
+      cfg._index.realms.enabledList
   ));
   endpointTmpfiles = lib.concatMap (user:
     let
