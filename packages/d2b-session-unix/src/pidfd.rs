@@ -123,6 +123,10 @@ where
         if executable != evidence.executable_digest || cgroup != evidence.cgroup_digest {
             return Err(UnixSessionError::PidfdIdentityMismatch);
         }
+        let final_contents = self.source.read_fdinfo(pidfd)?;
+        if parse_pidfd_fdinfo(&final_contents)? != evidence.expected_pid {
+            return Err(UnixSessionError::PidfdIdentityMismatch);
+        }
         Ok(())
     }
 }

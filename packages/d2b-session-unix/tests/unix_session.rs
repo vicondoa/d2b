@@ -1082,6 +1082,41 @@ async fn pidfd_identity_requires_live_launch_evidence_and_rejects_unrelated_proc
         )
         .is_ok()
     );
+    let recycled_verifier = Arc::new(ProcPidfdIdentityVerifier::new(
+        SequencePidfdInfo {
+            contents: std::sync::Mutex::new(VecDeque::from([
+                format!("Pid:\t{}\n", expected_pid.as_raw_nonzero()),
+                "Pid:\t-1\n".to_owned(),
+            ])),
+        },
+        Arc::new(move |_| Ok(executable_digest)),
+        Arc::new(move |_| Ok(cgroup_digest)),
+    ));
+    assert!(matches!(
+        PidfdIdentityPolicy::new(
+            &own_pidfd,
+            AttachmentAccess::ReadWrite,
+            evidence,
+            recycled_verifier,
+        ),
+        Err(UnixSessionError::PidfdEvidenceUnavailable)
+    ));
+    let digest_mismatch_verifier = Arc::new(ProcPidfdIdentityVerifier::new(
+        FixedPidfdInfo {
+            contents: format!("Pid:\t{}\n", expected_pid.as_raw_nonzero()),
+        },
+        Arc::new(|_| Ok([0x99; 32])),
+        Arc::new(move |_| Ok(cgroup_digest)),
+    ));
+    assert!(matches!(
+        PidfdIdentityPolicy::new(
+            &own_pidfd,
+            AttachmentAccess::ReadWrite,
+            evidence,
+            digest_mismatch_verifier,
+        ),
+        Err(UnixSessionError::PidfdIdentityMismatch)
+    ));
     assert_eq!(
         ObjectIdentity::from_trusted(
             &own_pidfd,
@@ -1106,6 +1141,20 @@ struct FixedPidfdInfo {
 impl PidfdInfoSource for FixedPidfdInfo {
     fn read_fdinfo(&self, _pidfd: BorrowedFd<'_>) -> Result<String, UnixSessionError> {
         Ok(self.contents.clone())
+    }
+}
+
+struct SequencePidfdInfo {
+    contents: std::sync::Mutex<VecDeque<String>>,
+}
+
+impl PidfdInfoSource for SequencePidfdInfo {
+    fn read_fdinfo(&self, _pidfd: BorrowedFd<'_>) -> Result<String, UnixSessionError> {
+        self.contents
+            .lock()
+            .expect("pidfd sequence lock")
+            .pop_front()
+            .ok_or(UnixSessionError::PidfdEvidenceUnavailable)
     }
 }
 

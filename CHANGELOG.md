@@ -225,6 +225,8 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Rechecked pidfd kernel identity after executable/cgroup evidence collection so
+  a process exit and numeric PID reuse cannot authenticate a different process.
 - Retired CLI-contract daemon wrappers for the removed legacy `d2bd test-client`,
   keeping host-check coverage in hermetic CLI cases and audit role enforcement
   in daemon unit tests; performance readiness now uses socket/version artifacts,
