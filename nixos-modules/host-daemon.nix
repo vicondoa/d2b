@@ -111,9 +111,6 @@ let
     daemonUser = controllerPrincipal;
     daemonGroup = controllerPrincipal;
     publicSocketGroup = localRoot.publicGroup;
-    unsafeLocalHelperSocketPath = null;
-    unsafeLocalHelperSocketGroup = null;
-    unsafeLocalHelperUsers = [ ];
     launcherUsers = cfg.site.launcherUsers;
     adminUsers = cfg.site.adminUsers;
     serverVersion = "0.4.0";

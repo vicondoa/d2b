@@ -1395,8 +1395,29 @@ fn final_parent_composition_uses_authenticated_fixed_endpoints() {
     assert!(!clipboard.contains("clipd.sock"));
 
     let host_daemon = read("nixos-modules/host-daemon.nix");
-    assert!(!host_daemon.contains("unsafeLocalHelperSocketPath"));
-    assert!(!host_daemon.contains("unsafeLocalHelperSocketGroup"));
+    for retired_field in [
+        "unsafeLocalHelperSocketPath",
+        "unsafeLocalHelperSocketGroup",
+        "unsafeLocalHelperUsers",
+    ] {
+        assert!(
+            !host_daemon.contains(retired_field),
+            "host daemon still owns retired helper field {retired_field}"
+        );
+    }
+    let daemon = read("packages/d2bd/src/lib.rs");
+    for legacy_field in [
+        "unsafe_local_helper_socket_path",
+        "unsafe_local_helper_socket_group",
+        "unsafe_local_helper_users",
+    ] {
+        let declaration = format!("pub {legacy_field}:");
+        let defaulted_declaration = format!("#[serde(default)]\n    {declaration}");
+        assert!(
+            !daemon.contains(&declaration) || daemon.contains(&defaulted_declaration),
+            "daemon config field {legacy_field} must accept omission"
+        );
+    }
     let cli = read("packages/d2b/src/lib.rs");
     assert!(!cli.contains("d2b-clipd/clipd.sock"));
     assert!(!cli.contains(r#"{\"type\":\"arm\"}"#));
