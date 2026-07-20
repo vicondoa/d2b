@@ -56,7 +56,9 @@ in
     systemd.tmpfiles.rules = [
       "d /run/d2b/u 0711 root root -"
       "z /run/d2b/u 0711 root root -"
-    ] ++ endpointTmpfiles;
+    ] ++ endpointTmpfiles ++ [
+      "a+ /run/d2b - - - - m::rwx"
+    ];
 
     systemd.user.sockets.d2b-userd = {
       description = "d2b authenticated user service endpoint";
