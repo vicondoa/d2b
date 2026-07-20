@@ -12,6 +12,7 @@ let
   audioRows = import ./realm-audio-rows.nix {
     inherit config lib pkgs;
   };
+  d2bChVsockConnect = import ./d2b-ch-vsock-connect.nix { inherit pkgs; };
 
   clean = value: lib.strings.sanitizeDerivationName value;
   resource = workloadId: kind:
@@ -551,6 +552,21 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         "--title-prefix" "[${workload.canonicalTarget}] "
       ];
     }
+    else if role.processRole == "otel-host-bridge" then
+      let
+        endpoints = cfg._realmObservability.endpoints;
+      in mkNode {
+        id = role.roleId;
+        role = role.processRole;
+        ready = [ (socketListening endpoints.hostEgress.path) ];
+        binaryPath = "${cfg.observability.transport.relayPackage}/bin/socat";
+        argv = [
+          "d2b-role-${role.roleId}"
+          "-d" "-d"
+          "UNIX-LISTEN:${endpoints.hostEgress.path},fork,reuseaddr,mode=0660"
+          ''EXEC:"${d2bChVsockConnect}/bin/d2b-ch-vsock-connect ${endpoints.stackVsock.path} ${toString endpoints.stackVsock.port}"''
+        ];
+      }
     else if role.roleKind == "vsock-relay" then mkNode {
       id = role.roleId;
       role = role.processRole;

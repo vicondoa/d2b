@@ -128,6 +128,7 @@ let
     "gpu-render-node" = "w1-gpu-render-node";
     audio = "w1-audio";
     "vsock-relay" = "w1-vsock-relay";
+    "otel-host-bridge" = "w1-otel-host-bridge";
     "guest-control-health" = "w1-guest-control-health";
     usbip = "w1-usbip";
     "security-key-frontend" = "w1-security-key-frontend";
@@ -174,6 +175,11 @@ let
                 audio.storage).path
               "Use the allocator-delivered PipeWire endpoint lease.")
           ]
+        else if role.processRole == "otel-host-bridge"
+        then [
+          (writable roleRuntime "Create the host-egress OTel forwarding socket.")
+          (writable state "Connect to the observability workload's CH vsock endpoint.")
+        ]
         else [
           (writable roleRuntime "Create only this role's runtime endpoints.")
         ];
