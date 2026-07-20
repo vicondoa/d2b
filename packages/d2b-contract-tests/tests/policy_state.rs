@@ -110,6 +110,10 @@ fn fixed_storage_anchors_are_activation_only() {
             "\"z /var/cache/d2b 0750 root d2bd -\"",
         ],
     );
+    assert!(
+        activation.contains("\"a+ /run/d2b - - - - g:${row.readerPrincipal}:--x\""),
+        "the fixed runtime anchor must grant only generated guest-session traversal"
+    );
     for forbidden in ["/var/lib/d2b/r/", "/var/cache/d2b/r/", "/run/d2b/r/"] {
         assert!(
             !activation.contains(forbidden),
@@ -122,7 +126,7 @@ fn fixed_storage_anchors_are_activation_only() {
         "nixos-modules/realm-storage-rows.nix",
         &rows,
         &[
-            "creator = brokerActor realmId;",
+            "creator ? brokerActor realmId,",
             "recursive = false;",
             "repairPolicy ? \"broker-reconcile\"",
             "repairPolicy = \"broker-fail-closed\";",

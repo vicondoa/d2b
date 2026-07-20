@@ -4,6 +4,8 @@ use d2b_contract_tests::{read_repo_file, repo_path_exists, repo_root};
 
 const STORE_NIX: &str = "nixos-modules/store.nix";
 const STORAGE_ROWS_NIX: &str = "nixos-modules/realm-storage-rows.nix";
+const LEGACY_STORAGE_NIX: &str = "nixos-modules/storage-json.nix";
+const LEGACY_SYNC_NIX: &str = "nixos-modules/sync-json.nix";
 const OWNERSHIP_PREFLIGHT_RS: &str = "packages/d2bd/src/ownership_preflight.rs";
 
 fn source(path: &str) -> String {
@@ -48,7 +50,7 @@ fn store_view_rows_are_broker_owned() {
 
     let rows = source(STORAGE_ROWS_NIX);
     for needle in [
-        "creator = brokerActor realmId;",
+        "creator ? brokerActor realmId,",
         "writers ? [ (brokerActor realmId) ]",
         "repairPolicy ? \"broker-reconcile\"",
         "recursive = false;",
@@ -96,6 +98,32 @@ fn store_module_has_no_activation_repair() {
             !store.contains(forbidden),
             "{STORE_NIX} must not repair broker-owned store trees: {forbidden}"
         );
+    }
+}
+
+#[test]
+fn inactive_emitters_have_no_parallel_vm_repair_policy() {
+    for path in [LEGACY_STORAGE_NIX, LEGACY_SYNC_NIX] {
+        let content = source(path);
+        assert!(
+            content.contains("realmStorageRows = import ./realm-storage-rows.nix"),
+            "{path} must delegate to canonical realm storage rows"
+        );
+        for forbidden in [
+            "cfg.vms",
+            "cfg.envs",
+            "cfg.store.stateDir",
+            "scope = \"vm:",
+            "scope = \"env:",
+            "nix-activation",
+            "/run/d2b/vms/",
+            "/var/lib/d2b/vms/",
+        ] {
+            assert!(
+                !content.contains(forbidden),
+                "{path} retains a parallel legacy repair policy: {forbidden}"
+            );
+        }
     }
 }
 

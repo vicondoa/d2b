@@ -23,7 +23,7 @@ let
         implementationId = "cloud-hypervisor";
       };
       workloads.editor = {
-        provider = "runtime";
+        providerRefs.runtime = "runtime";
         config = {
           networking.hostName = "editor";
           users.users.alice = { isNormalUser = true; uid = 1000; };

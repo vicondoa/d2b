@@ -454,7 +454,7 @@ group = "D"
 make_target = "test-nix-unit"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["flake.checks.<system>.nix-unit (tests/unit/nix/cases/per-vm-state-ownership.nix — ownership matrix compatibility coverage via mkEval)", "packages/d2b-contract-tests/tests/policy_ownership_preflight.rs (realm/workload store-view rows remain broker-owned, non-recursive, and guarded by same-filesystem and hardlink-farm invariants; store.nix contains no activation repair or legacy root:kvm/2775 policy; daemon ownership preflight declares no store path at mode 0o2775)"]
+successor_ids = ["flake.checks.<system>.nix-unit (tests/unit/nix/cases/per-vm-state-ownership.nix — realm/workload short-ID ownership, broker-only repair, TPM role ownership, guest-session credential, and hardlink-farm carve-out coverage via mkEval)", "packages/d2b-contract-tests/tests/policy_ownership_preflight.rs (realm/workload store-view rows remain broker-owned and non-recursive; inactive storage emitters contain no parallel VM/env repair; store.nix and daemon ownership preflight retain no legacy root:kvm/2775 policy)"]
 exercised_today = "yes"
 
 [[script]]
@@ -1626,4 +1626,3 @@ tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
 successor_ids = ["tests/tools/tier0-first-pass.sh"]
 exercised_today = "manual"
-

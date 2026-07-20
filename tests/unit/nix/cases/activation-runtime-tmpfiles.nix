@@ -23,7 +23,7 @@ let
         implementationId = "cloud-hypervisor";
       };
       workloads.corp = {
-        provider = "runtime";
+        providerRefs.runtime = "runtime";
         launcher.enable = true;
         config = {
           networking.hostName = "corp";
@@ -71,6 +71,15 @@ let
   activationNames = lib.attrNames cfg.system.activationScripts;
   hasPathFragment = fragment:
     lib.any (row: lib.hasInfix fragment row.pathTemplate) realmPaths;
+  guestSessionPrincipal = {
+    kind = "group";
+    value = "d2b-gctlfs-${workloadId}";
+  };
+  hasGuestTraverseAcl = row:
+    builtins.elem {
+      principal = guestSessionPrincipal;
+      permissions = "x";
+    } row.accessAcl;
 in
 {
   "activation-runtime-tmpfiles/fixed-anchors-exist" = {
@@ -154,6 +163,63 @@ in
       realmKeys = (pathById "path:realm-controller-keys:${realmId}").sensitivity;
       workloadAudit = (pathById "path:workload-audit:${workloadId}").sensitivity;
       workloadKeys = (pathById "workload/${workloadId}/keys").sensitivity;
+    };
+
+    "activation-runtime-tmpfiles/guest-session-credential-storage" = {
+      expr =
+        let
+          directory =
+            pathById "path:workload-guest-session:${workloadId}";
+          credential =
+            pathById "path:workload-guest-session-credential:${workloadId}";
+        in {
+          directoryPath = directory.pathTemplate;
+          directoryMode = directory.mode;
+          credentialPath = credential.pathTemplate;
+          credentialMode = credential.mode;
+          credentialKind = credential.kind;
+          group = credential.group;
+          creator = credential.creator;
+          repairPolicy = credential.repairPolicy;
+        };
+      expected = {
+        directoryPath =
+          "/run/d2b/r/${realmId}/w/${workloadId}/guest-session";
+        directoryMode = "0750";
+        credentialPath =
+          "/run/d2b/r/${realmId}/w/${workloadId}/guest-session/d2b-guest-session-v2";
+        credentialMode = "0440";
+        credentialKind = "regular-file";
+        group = guestSessionPrincipal;
+        creator = {
+          kind = "broker";
+          value = "d2bbr-r-${realmId}";
+        };
+        repairPolicy = "broker-fail-closed";
+      };
+    };
+
+    "activation-runtime-tmpfiles/guest-session-ancestor-traversal" = {
+      expr = {
+        runtimeRoot =
+          hasGuestTraverseAcl (pathById "path:realm-runtime-root");
+        realmRoot =
+          hasGuestTraverseAcl (pathById "realm/${realmId}/runtime");
+        workloadRoot =
+          hasGuestTraverseAcl (pathById "workload/${workloadId}/runtime");
+        realmWorkloads =
+          hasGuestTraverseAcl (pathById "path:realm-run-w:${realmId}");
+        fixedRoot = builtins.elem
+          "a+ /run/d2b - - - - g:d2b-gctlfs-${workloadId}:--x"
+          tmpfiles;
+      };
+      expected = {
+        runtimeRoot = true;
+        realmRoot = true;
+        workloadRoot = true;
+        realmWorkloads = true;
+        fixedRoot = true;
+      };
     };
     expected = {
       realmAudit = "audit";

@@ -56,6 +56,44 @@ fn storage_and_sync_emitters_are_wired_into_private_bundle() {
 }
 
 #[test]
+fn legacy_storage_emitters_delegate_to_realm_rows_without_vm_repair() {
+    for (path, projection) in [
+        (
+            "nixos-modules/storage-json.nix",
+            "paths = realmStorageRows.paths;",
+        ),
+        (
+            "nixos-modules/sync-json.nix",
+            "locks = realmStorageRows.locks;",
+        ),
+    ] {
+        let source = read_repo_file(path);
+        for needle in [
+            "realmStorageRows = import ./realm-storage-rows.nix",
+            projection,
+            "schemaVersion = \"v2\";",
+        ] {
+            assert!(source.contains(needle), "{path} missing `{needle}`");
+        }
+        for forbidden in [
+            "cfg.vms",
+            "cfg.envs",
+            "scope = \"vm:",
+            "scope = \"env:",
+            "/run/d2b/vms/",
+            "cfg.store.stateDir",
+            "nix-activation",
+            "actor \"nix-module\" \"tmpfiles\"",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{path} retains legacy VM/env storage repair: {forbidden}"
+            );
+        }
+    }
+}
+
+#[test]
 fn allocator_artifact_is_wired_into_private_bundle() {
     let default_nix = read_repo_file("nixos-modules/default.nix");
     assert!(
@@ -417,6 +455,15 @@ fn rendered_storage_contract_covers_process_writable_paths_when_fixture_availabl
             "{fixture_name} realm/workload storage rows must be non-recursive and broker-owned"
         );
         assert!(
+            storage.paths.iter().all(|path| {
+                !path.scope.as_str().starts_with("vm:")
+                    && !path.scope.as_str().starts_with("env:")
+                    && !path.path_template.as_str().starts_with("/run/d2b/vms/")
+                    && !path.path_template.as_str().starts_with("/var/lib/d2b/vms/")
+            }),
+            "{fixture_name} storage.json must not retain legacy VM/env scopes or paths"
+        );
+        assert!(
             storage
                 .paths
                 .iter()
@@ -452,6 +499,34 @@ fn rendered_storage_contract_covers_process_writable_paths_when_fixture_availabl
                     path.id
                 );
             }
+        }
+
+        let guest_session_credentials: Vec<_> = storage
+            .paths
+            .iter()
+            .filter(|path| {
+                path.id
+                    .as_str()
+                    .starts_with("path:workload-guest-session-credential:")
+            })
+            .collect();
+        assert!(
+            !guest_session_credentials.is_empty(),
+            "{fixture_name} storage.json must preserve guest-session credential rows"
+        );
+        for path in guest_session_credentials {
+            assert_eq!(path.kind, StoragePathKind::RegularFile);
+            assert_eq!(path.mode, "0440");
+            assert_eq!(path.owner.kind, PrincipalKind::User);
+            assert_eq!(path.owner.value.as_str(), "root");
+            assert_eq!(path.group.kind, PrincipalKind::Group);
+            assert!(
+                path.group.value.as_str().starts_with("d2b-gctlfs-"),
+                "{fixture_name} guest-session credential group must be workload-scoped"
+            );
+            assert_eq!(path.creator.kind, ActorKind::Broker);
+            assert_eq!(path.repair_policy, RepairPolicy::BrokerFailClosed);
+            assert!(!path.recursive);
         }
     }
 }
