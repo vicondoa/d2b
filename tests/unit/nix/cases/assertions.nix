@@ -28,6 +28,7 @@ let
   };
 
   bucketB = [
+    "audio-requires-audio-provider-binding"
     "graphics-without-wayland-user"
     "realm-name-invalid"
     "wayland-requires-display-provider-binding"

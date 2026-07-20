@@ -72,12 +72,12 @@ let
   audioFor = workloadId:
     lib.findFirst
       (row: row.workloadId == workloadId)
-      null
+      (throw "workload ${workloadId} is missing its canonical audio process")
       audioRows.processes;
   audioEndpointFor = workloadId:
     lib.findFirst
       (row: row.workloadId == workloadId)
-      null
+      (throw "workload ${workloadId} is missing its canonical audio endpoint")
       audioRows.endpoints;
 
   readiness = kind: value: { inherit kind value; };
@@ -519,18 +519,18 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         "XDG_RUNTIME_DIR=/run/user/${toString waylandUid}"
       ];
     }
-    else if role.roleKind == "audio" then mkNode {
-      id = role.roleId;
-      role = role.processRole;
-      ready = [
-        (socketListening
-          (builtins.elemAt (audioFor workload.workloadId).process.argv 2))
-      ];
-      binaryPath =
-        (audioFor workload.workloadId).process.executable.runtimePath;
-      argv = (audioFor workload.workloadId).process.argv;
-      env = (audioFor workload.workloadId).process.environment;
-    }
+    else if role.roleKind == "audio" then
+      let audio = audioFor workload.workloadId;
+      in mkNode {
+        id = role.roleId;
+        role = role.processRole;
+        ready = [
+          (socketListening (builtins.elemAt audio.argv 2))
+        ];
+        binaryPath = audio.executable.runtimePath;
+        inherit (audio) argv;
+        env = audio.environment;
+      }
     else if role.roleKind == "wayland-proxy" then mkNode {
       id = role.roleId;
       role = role.processRole;

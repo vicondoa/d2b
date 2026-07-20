@@ -7,6 +7,7 @@ const DEVICE_ROWS: &str = "nixos-modules/realm-device-rows.nix";
 const DEVICE_PROVIDER: &str = "nixos-modules/provider-registry-v2-extensions/device.nix";
 const AUDIO_ROWS: &str = "nixos-modules/realm-audio-rows.nix";
 const AUDIO_PROVIDER: &str = "nixos-modules/provider-registry-v2-extensions/audio.nix";
+const PROCESSES: &str = "nixos-modules/processes-json.nix";
 
 fn assert_role_profile(dag: &VmProcessDag, node: &ProcessNode, seccomp: &str) {
     let identity = dag
@@ -35,6 +36,7 @@ fn audio_source_uses_canonical_role_resource_provider_rows() {
     let roles = read_repo_file(ROLE_ROWS);
     let profiles = read_repo_file(MINIJAIL_PROFILES);
     let provider = read_repo_file(AUDIO_PROVIDER);
+    let processes = read_repo_file(PROCESSES);
 
     for required in [
         r#"roleKind == "audio""#,
@@ -64,6 +66,23 @@ fn audio_source_uses_canonical_role_resource_provider_rows() {
         provider.contains(r#"axis = "local-audio";"#)
             && provider.contains(r#"implementationId = "pipewire-vhost-user";"#)
             && provider.contains("leaseId")
+    );
+    for required in [
+        r#"let audio = audioFor workload.workloadId;"#,
+        r#"binaryPath = audio.executable.runtimePath;"#,
+        r#"inherit (audio) argv;"#,
+        r#"env = audio.environment;"#,
+        r#"is missing its canonical audio process"#,
+        r#"is missing its canonical audio endpoint"#,
+    ] {
+        assert!(
+            processes.contains(required),
+            "canonical process composition missing {required:?} from {PROCESSES}"
+        );
+    }
+    assert!(
+        !processes.contains("(audioFor workload.workloadId).process"),
+        "{PROCESSES} must consume flat canonical audio process rows"
     );
 }
 
