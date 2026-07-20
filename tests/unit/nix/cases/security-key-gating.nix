@@ -30,13 +30,16 @@ let
 
   enabled = evalDevices {
     corp = {
-      provider = "runtime";
-      launcher.capabilities = [ "security-key" ];
+      providerRefs = {
+        runtime = "runtime";
+        device = "devices";
+      };
+      securityKey.enable = true;
     };
   };
   disabled = evalDevices {
     corp = {
-      provider = "runtime";
+      providerRefs.runtime = "runtime";
     };
   };
   row = builtins.head enabled.config.d2b._index.devices.list;
@@ -77,9 +80,17 @@ in
   };
 
   "security-key-gating/canonical-endpoint" = {
-    expr = row.endpointPath;
-    expected =
-      "/run/d2b/r/${row.realmId}/w/${row.workloadId}/roles/${row.roleId}/security-key.sock";
+    expr = {
+      inherit (row) endpointId;
+      isCanonicalToken =
+        lib.hasPrefix "device-endpoint-" row.endpointId
+        && !(lib.hasInfix "/" row.endpointId)
+        && !(lib.hasInfix ":" row.endpointId);
+    };
+    expected = {
+      endpointId = "device-endpoint-${row.roleId}-fido";
+      isCanonicalToken = true;
+    };
   };
 
   "security-key-gating/provider-fragment" = {
@@ -107,9 +118,13 @@ in
 
   "security-key-gating/no-physical-selector-in-path" = {
     expr =
-      !(lib.hasInfix "1050" row.endpointPath)
-      && !(lib.hasInfix "0407" row.endpointPath)
-      && !(lib.hasInfix "hidraw" row.endpointPath);
+      let serialized = builtins.toJSON row;
+      in
+      !(row ? selectorId)
+      && !(row ? endpointPath)
+      && !(lib.hasInfix "1050" serialized)
+      && !(lib.hasInfix "0407" serialized)
+      && !(lib.hasInfix "hidraw" serialized);
     expected = true;
   };
 }
