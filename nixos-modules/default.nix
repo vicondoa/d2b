@@ -32,6 +32,8 @@
     ./user-services.nix
     ./ui-colors.nix
     ./niri-vm-borders.nix
+    ./clipboard.nix
+    ./notifications.nix
     ./desktop-metadata-json.nix
     # Keep the workload evaluator portable to Nix releases without builtins.mod.
     ((builtins.scopedImport {
