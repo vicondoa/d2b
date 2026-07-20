@@ -71,11 +71,10 @@ default-item selection signal on the wire, so `--item` is required — the CLI
 never guesses `defaultItem` or a sole item on the caller's behalf. The
 resulting terminal request never carries argv, uid, environment, cwd, display
 paths, process ids, or unit names; the CLI opens it through the same
-authenticated `ComponentSession` v2 path used by `vm exec` and `shell`, and
-never negotiates the retired hello/`WorkloadOp` handshake. There is no
-host-shell or SSH fallback: what the selected item actually runs (an exec, a
-persistent shell, or another provider-defined action) is a daemon/provider
-decision, not a CLI-side branch.
+authenticated `ComponentSession` v2 path used by `vm exec` and `shell`. There
+is no host-shell or SSH fallback: what the selected item actually runs (an
+exec, a persistent shell, or another provider-defined action) is a
+daemon/provider decision, not a CLI-side branch.
 
 For local-VM exec items, d2bd derives an opaque guest exec id from the
 authenticated requester, operation id, target, and item id. Guestd persists that
@@ -271,11 +270,10 @@ warning directing operators to `d2b clipboard arm`.
 | `0` | Reserved for a completed authenticated picker request. | — |
 | `2` | Authenticated picker control is unavailable. | [`usage`](./error-codes.md#usage) |
 
-The legacy newline-JSON control socket is retired. Clipboard operations use the
-fixed per-user ComponentSession endpoints under
+Clipboard operations use the fixed per-user ComponentSession endpoints under
 `/run/d2b/u/<uid>/clipd/`. Until the authenticated picker request is available
-through the CLI client, `clipboard arm` fails closed without contacting a
-legacy endpoint.
+through the CLI client, `clipboard arm` fails closed without opening another
+control transport.
 
 **Human examples**
 

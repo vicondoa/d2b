@@ -17,9 +17,10 @@ The guest receives a virtual FIDO2 HID device at `/dev/hidraw*` created by the
 guest frontend via Linux `/dev/uhid`. Fixed 64-byte CTAPHID reports travel on a
 credit-bounded named stream inside an authenticated `security-key`
 ComponentSession over the allocator-provided AF_VSOCK endpoint. The frontend
-does not accept the former unauthenticated length-prefixed relay. Only one
-active CTAP ceremony runs per physical key at any time; concurrent requests
-from multiple VMs are serialized with a configurable queue timeout.
+session disables attachments: the broker-opened host device descriptor remains
+with the host controller and never crosses into the guest frontend. Only one
+active CTAP ceremony runs per physical key at any time; concurrent requests from
+multiple VMs are serialized with a configurable queue timeout.
 
 This component does **not** share, clone, or simultaneously forward USB
 ownership to multiple guests. It is a protocol-level CTAP proxy that enforces
@@ -102,9 +103,9 @@ the `d2bd`/`d2b-priv-broker` pipeline at runtime:
 | Resource | Owner | Path / name |
 |----------|-------|-------------|
 | Broker AF_UNIX socket | `d2bd` (via broker spawn) | `/run/d2b/usb-sk-broker.sock` |
-| Per-VM AF_VSOCK listener | `d2bd` DAG executor | CID mapped to VM index, port `14319` |
+| Per-VM AF_VSOCK listener | authenticated host controller | port `14320` |
 | udev rule for FIDO HID devices | broker op `UsbSecurityKeyUdevRule` | `/run/udev/rules.d/72-d2b-fido.rules` |
-| Per-device file descriptor | broker op `UsbSecurityKeyOpenDevice` | returned via SCM_RIGHTS to `d2bd` |
+| Per-device file descriptor | live broker op `OpenHidrawSecurityKey` | returned via SCM_RIGHTS to `d2bd` |
 | Lease state file | `d2bd` | `/run/d2b/usb-sk/lease.json` |
 | Event log | `d2bd` | `/run/d2b/usb-sk/events.jsonl` |
 
@@ -112,21 +113,31 @@ the `d2bd`/`d2b-priv-broker` pipeline at runtime:
 
 When `usb.securityKey.enable = true`, the guest NixOS config includes:
 
-- The `d2b-fido-front` binary (added to `environment.systemPackages` by the
+- The `d2b-sk-frontend` binary (added to `environment.systemPackages` by the
   component module).
 - `services.udev.packages = [ pkgs.libfido2 ]` (ensures `/dev/hidraw*` is
   accessible to the `plugdev` group in the guest).
 - The `plugdev` group is added to the guest's admin user.
 
-The DAG node lifecycle (start, retry/backoff on disconnect, stop on VM
-shutdown) is supervised entirely by `d2bd` on the host. No per-VM systemd
-unit is declared in the guest or host NixOS config for this component.
+The current guest module declares `d2b-sk-frontend.service`; no per-VM host
+systemd unit is declared. The frontend retries authenticated session loss with
+bounded backoff while keeping the UHID device alive.
 
 The allocator supplies a nonzero reconnect generation and a 32-byte channel
 binding to both ComponentSession peers. Missing or malformed session material
-fails the frontend closed; it never retries with the old raw relay. UHID
-remains active across authenticated session reconnects, but reports are queued
-only within the fixed ComponentSession credit window.
+fails the frontend closed. UHID remains active across authenticated session
+reconnects, but reports are queued only within the fixed ComponentSession credit
+window.
+
+The typed `SecurityKeyOpenDevice` and `SecurityKeyApplyUdevRules` broker
+requests remain explicitly unimplemented. They are not alternate routes around
+the live `OpenHidrawSecurityKey` operation, and the frontend never receives the
+host device descriptor.
+
+The guest module does not yet supply the required channel binding and reconnect
+generation to the frontend. It therefore fails closed until parent composition
+injects authenticated session material and provides the matching host
+controller.
 
 Before forwarding a complete browser request, the frontend buffers at most one
 bounded CTAPHID message per channel and applies the canonical host-mediated

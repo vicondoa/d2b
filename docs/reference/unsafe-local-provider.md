@@ -120,14 +120,18 @@ uses the first-class workload id as the backing VM name.
 Configured exec launch accepts only local launcher/admin peers on the direct
 host-local controller binding. The runtime session authenticates the Unix peer
 uid and admits it only when that uid equals the runtime process's non-root uid.
-Relay, remote, cross-uid, direct-compositor, root, SSH, arbitrary-command, old
-helper-protocol, and host-shell fallbacks are not available.
+Relay, remote, cross-uid, direct-compositor, root, SSH, arbitrary-command, and
+host-shell execution are not available.
 
 The user manager owns `d2b-runtime-systemd-user.socket`; unit provenance is part
 of its generated endpoint row. ComponentSession owns the local handshake,
 generation, record protection, deadlines, cancellation, and packet-atomic
-attachments. The runtime does not self-bind a substitute endpoint and does not
-accept helper protocol 3 hello, heartbeat, snapshot, JSON, or generation frames.
+attachments. The runtime does not self-bind a substitute endpoint or expose a
+parallel local IPC contract.
+
+The direct helper executable remains unavailable until its parent composes the
+authenticated session with the generated service adapters. Direct invocation
+exits with configuration status and performs no runtime operation.
 
 Shell policy remains private bundle data and is handled by the separate shell
 service. No public request can choose or raise it.
@@ -183,8 +187,7 @@ to the authenticated request id, session generation, and exact owner uid. The
 attachment must be one connected `AF_UNIX` `SOCK_STREAM` with `CLOEXEC`;
 listeners, datagram sockets, zero descriptors, extra descriptors, and
 cross-request reuse fail before dispatch. Terminal bytes use the negotiated
-named stream and do not share ttrpc control queues. There is no terminal
-protocol-v1 or helper-framing fallback.
+named stream and do not share ttrpc control queues.
 
 `d2bd` resolves canonical targets and unambiguous workload-id aliases before
 dispatch. Transition local-VM workloads keep `legacyVmName`; first-class local

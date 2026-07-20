@@ -23,18 +23,23 @@ warning.
 
 ## Authenticated per-user runtime
 
-The user manager owns the fixed `d2b-runtime-systemd-user.socket`. Its service
-accepts only the frozen `runtime-systemd-user` ComponentSession purpose and
-`d2b.runtime.systemd-user.v2` service package. The authenticated Unix peer uid,
-service-process uid, and current uid must be the same non-root uid. No request
-field can select an execution identity, and no host process impersonates a user
-or guesses a user D-Bus address.
+The user manager owns the fixed `d2b-runtime-systemd-user.socket`. The runtime
+adapter accepts only the frozen `runtime-systemd-user` ComponentSession purpose
+and `d2b.runtime.systemd-user.v2` service package. The authenticated Unix peer
+uid, service-process uid, and current uid must be the same non-root uid. No
+request field can select an execution identity, and no host process impersonates
+a user or guesses a user D-Bus address.
+
+The direct helper entrypoint remains fail-closed until parent composition
+supplies the authenticated session and generated service adapters. Starting it
+without that composition exits with configuration status; it does not open a
+different endpoint.
 
 Each operation is bound to the negotiated session generation, authenticated
 realm/workload scope, absolute deadline, idempotency key, and private
 configuration digest. Configured argv is resolved behind the service boundary;
-it is never supplied by a public request. The old helper generation hello,
-heartbeat, JSON frames, and helper socket are not compatibility paths.
+it is never supplied by a public request. The fixed authenticated endpoint is
+the only runtime service boundary.
 
 The runtime queries the current systemd user-manager environment for each
 operation and creates verified transient scopes. Malformed or oversized manager

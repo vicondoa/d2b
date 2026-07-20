@@ -4,7 +4,7 @@
 
 The picker uses the frozen `d2b.clipboard.picker.v2` service over an
 authenticated local ComponentSession. The generated protobuf service contract
-is the only public wire definition:
+is the authoritative private service definition:
 
 | Method | Mutating | Purpose |
 | --- | --- | --- |
@@ -27,11 +27,10 @@ descriptor. The descriptor is used only to establish ComponentSession with:
 - endpoint role `clipboard-picker`; and
 - the frozen local transport, limit, and attachment policy.
 
-The picker has no socket pathname, launch token, custom version negotiation, or
-newline-delimited framing fallback. ComponentSession owns packet framing,
-authentication, reconnect generation, deadlines, and request bounds. Clipboard
-picker requests carry no attachments; clipboard transfer descriptors are never
-sent to the picker.
+The picker has no socket pathname, launch token, or custom version negotiation.
+ComponentSession owns packet framing, authentication, reconnect generation,
+deadlines, and request bounds. Clipboard picker requests carry no attachments;
+clipboard transfer descriptors are never sent to the picker.
 
 ## Typed selections
 

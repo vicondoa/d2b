@@ -28,6 +28,14 @@ compositor. `d2bd` supervises the daemon-owned process DAG and asks
 runners. The GPU sidecar runs as the dedicated per-VM
 `d2b-<vm>-gpu` system user, not as the operator's Wayland user.
 
+The authenticated `d2b.wayland.v2` `OpenDisplay` operation supplies exactly two
+owned descriptors: attachment zero is the upstream compositor connection and
+attachment one is the proxy listener. Both claims are bound to the request,
+operation, method, session generation, package, descriptor purpose, and credit
+classes, and each carries a nonzero packet sequence. The executable adopts them
+on standard input and standard output; it does not receive compositor or
+listener path arguments.
+
 ## Options (host-side)
 
 | Option | Type | Default | Description |

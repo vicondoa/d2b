@@ -41,16 +41,16 @@ The daemon's control plane is `d2b.clipboard.v2` over an authenticated,
 host-local ComponentSession. Generated service requests provide deadlines,
 generation binding, idempotency, cancellation, and bounded opaque identifiers;
 the clipboard implementation does not define a second wire DTO. The command
-client and clipboard bridge have a closed per-method authority matrix. A raw
-newline-JSON control socket is not a compatibility fallback.
+client and clipboard bridge have a closed per-method authority matrix.
 
 ## Internal bridge endpoints
 
 The VM bridge endpoint is a pre-authorized, host-local transport binding. The
 local transport provider resolves its opaque endpoint and lease identifiers;
 `d2b-clipd` does not derive or self-bind a pathname. ComponentSession authenticates
-the bridge role and owns descriptor validation before the clipboard service sees
-an attachment. Transfer FDs never go to the picker.
+the bridge role and binds each descriptor claim to the request, method, session
+generation, and attachment credits before the clipboard service sees it.
+Transfer FDs remain owned by the service lifecycle and never go to the picker.
 The Wayland proxy keeps transfer FDs as owned descriptors while they are queued;
 short `sendmsg` results or `EAGAIN` keep the metadata frame and ancillary FD
 coupled until an atomic retry succeeds, and any truncated control-message
