@@ -103,6 +103,14 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Activated `d2b-userd`, `d2b-clipd`, and the unsafe-local user runtime on their
+  fixed systemd-user `SOCK_SEQPACKET` listeners with authenticated
+  ComponentSession services, bounded shutdown and cancellation, same-UID
+  authorization, clipboard audit/metric draining, and no legacy IPC fallback.
+- Hardened activated-service descriptor validation and inherited stdio remapping,
+  removed unsafe default ACL inheritance from `/run/d2b`, added explicit
+  per-user traversal, and prevented fail-closed service exit 78 from causing
+  restart loops.
 - Bounded broker guest-material audit append work by scanning retained segments
   only during startup validation and after rotation.
 - Migrated `d2b launch` off the legacy hello/`WorkloadOp` handshake onto the
