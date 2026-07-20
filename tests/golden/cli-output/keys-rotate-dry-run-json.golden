@@ -4,5 +4,5 @@
   "mode": "dry-run",
   "notes": "W8 keys rotate --dry-run: planned operation. --apply uses the daemon-first bridge and broker audit when the daemon handles the request.",
   "planned": [],
-  "vm": "corp-vm"
+  "vm": "bm6ccueaqlr7wd2cskza"
 }

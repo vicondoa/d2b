@@ -419,34 +419,52 @@ fn vm_lifecycle_dry_run_outputs_match_goldens() {
     };
     for (args, golden_name, label) in [
         (
-            &["vm", "start", "corp-vm", "--dry-run", "--human"][..],
+            &[
+                "vm",
+                "start",
+                "bm6ccueaqlr7wd2cskza",
+                "--dry-run",
+                "--human",
+            ][..],
             "vm-start-dry-run-human.golden",
-            "vm start corp-vm --dry-run --human",
+            "vm start bm6ccueaqlr7wd2cskza --dry-run --human",
         ),
         (
-            &["vm", "start", "corp-vm", "--dry-run", "--json"][..],
+            &["vm", "start", "bm6ccueaqlr7wd2cskza", "--dry-run", "--json"][..],
             "vm-start-dry-run-json.golden",
-            "vm start corp-vm --dry-run --json",
+            "vm start bm6ccueaqlr7wd2cskza --dry-run --json",
         ),
         (
-            &["vm", "stop", "corp-vm", "--dry-run", "--human"][..],
+            &["vm", "stop", "bm6ccueaqlr7wd2cskza", "--dry-run", "--human"][..],
             "vm-stop-dry-run-human.golden",
-            "vm stop corp-vm --dry-run --human",
+            "vm stop bm6ccueaqlr7wd2cskza --dry-run --human",
         ),
         (
-            &["vm", "stop", "corp-vm", "--dry-run", "--json"][..],
+            &["vm", "stop", "bm6ccueaqlr7wd2cskza", "--dry-run", "--json"][..],
             "vm-stop-dry-run-json.golden",
-            "vm stop corp-vm --dry-run --json",
+            "vm stop bm6ccueaqlr7wd2cskza --dry-run --json",
         ),
         (
-            &["vm", "restart", "corp-vm", "--dry-run", "--human"][..],
+            &[
+                "vm",
+                "restart",
+                "bm6ccueaqlr7wd2cskza",
+                "--dry-run",
+                "--human",
+            ][..],
             "vm-restart-dry-run-human.golden",
-            "vm restart corp-vm --dry-run --human",
+            "vm restart bm6ccueaqlr7wd2cskza --dry-run --human",
         ),
         (
-            &["vm", "restart", "corp-vm", "--dry-run", "--json"][..],
+            &[
+                "vm",
+                "restart",
+                "bm6ccueaqlr7wd2cskza",
+                "--dry-run",
+                "--json",
+            ][..],
             "vm-restart-dry-run-json.golden",
-            "vm restart corp-vm --dry-run --json",
+            "vm restart bm6ccueaqlr7wd2cskza --dry-run --json",
         ),
     ] {
         let out = env.run(args, &[]);
@@ -461,44 +479,44 @@ fn top_level_lifecycle_dry_run_outputs_match_goldens() {
     };
     for (args, golden_name, label) in [
         (
-            &["switch", "corp-vm", "--dry-run", "--human"][..],
+            &["switch", "bm6ccueaqlr7wd2cskza", "--dry-run", "--human"][..],
             "switch-dry-run-human.golden",
-            "switch corp-vm --dry-run --human",
+            "switch bm6ccueaqlr7wd2cskza --dry-run --human",
         ),
         (
-            &["switch", "corp-vm", "--dry-run", "--json"][..],
+            &["switch", "bm6ccueaqlr7wd2cskza", "--dry-run", "--json"][..],
             "switch-dry-run-json.golden",
-            "switch corp-vm --dry-run --json",
+            "switch bm6ccueaqlr7wd2cskza --dry-run --json",
         ),
         (
-            &["boot", "corp-vm", "--dry-run", "--human"][..],
+            &["boot", "bm6ccueaqlr7wd2cskza", "--dry-run", "--human"][..],
             "boot-dry-run-human.golden",
-            "boot corp-vm --dry-run --human",
+            "boot bm6ccueaqlr7wd2cskza --dry-run --human",
         ),
         (
-            &["boot", "corp-vm", "--dry-run", "--json"][..],
+            &["boot", "bm6ccueaqlr7wd2cskza", "--dry-run", "--json"][..],
             "boot-dry-run-json.golden",
-            "boot corp-vm --dry-run --json",
+            "boot bm6ccueaqlr7wd2cskza --dry-run --json",
         ),
         (
-            &["test", "corp-vm", "--dry-run", "--human"][..],
+            &["test", "bm6ccueaqlr7wd2cskza", "--dry-run", "--human"][..],
             "test-dry-run-human.golden",
-            "test corp-vm --dry-run --human",
+            "test bm6ccueaqlr7wd2cskza --dry-run --human",
         ),
         (
-            &["test", "corp-vm", "--dry-run", "--json"][..],
+            &["test", "bm6ccueaqlr7wd2cskza", "--dry-run", "--json"][..],
             "test-dry-run-json.golden",
-            "test corp-vm --dry-run --json",
+            "test bm6ccueaqlr7wd2cskza --dry-run --json",
         ),
         (
-            &["rollback", "corp-vm", "--dry-run", "--human"][..],
+            &["rollback", "bm6ccueaqlr7wd2cskza", "--dry-run", "--human"][..],
             "rollback-dry-run-human.golden",
-            "rollback corp-vm --dry-run --human",
+            "rollback bm6ccueaqlr7wd2cskza --dry-run --human",
         ),
         (
-            &["rollback", "corp-vm", "--dry-run", "--json"][..],
+            &["rollback", "bm6ccueaqlr7wd2cskza", "--dry-run", "--json"][..],
             "rollback-dry-run-json.golden",
-            "rollback corp-vm --dry-run --json",
+            "rollback bm6ccueaqlr7wd2cskza --dry-run --json",
         ),
         (
             &["gc", "--dry-run", "--human"][..],
@@ -511,34 +529,56 @@ fn top_level_lifecycle_dry_run_outputs_match_goldens() {
             "gc --dry-run --json",
         ),
         (
-            &["keys", "rotate", "corp-vm", "--dry-run", "--human"][..],
+            &[
+                "keys",
+                "rotate",
+                "bm6ccueaqlr7wd2cskza",
+                "--dry-run",
+                "--human",
+            ][..],
             "keys-rotate-dry-run-human.golden",
-            "keys rotate corp-vm --dry-run --human",
+            "keys rotate bm6ccueaqlr7wd2cskza --dry-run --human",
         ),
         (
-            &["keys", "rotate", "corp-vm", "--dry-run", "--json"][..],
+            &[
+                "keys",
+                "rotate",
+                "bm6ccueaqlr7wd2cskza",
+                "--dry-run",
+                "--json",
+            ][..],
             "keys-rotate-dry-run-json.golden",
-            "keys rotate corp-vm --dry-run --json",
+            "keys rotate bm6ccueaqlr7wd2cskza --dry-run --json",
         ),
         (
-            &["trust", "corp-vm", "--dry-run", "--human"][..],
+            &["trust", "bm6ccueaqlr7wd2cskza", "--dry-run", "--human"][..],
             "trust-dry-run-human.golden",
-            "trust corp-vm --dry-run --human",
+            "trust bm6ccueaqlr7wd2cskza --dry-run --human",
         ),
         (
-            &["trust", "corp-vm", "--dry-run", "--json"][..],
+            &["trust", "bm6ccueaqlr7wd2cskza", "--dry-run", "--json"][..],
             "trust-dry-run-json.golden",
-            "trust corp-vm --dry-run --json",
+            "trust bm6ccueaqlr7wd2cskza --dry-run --json",
         ),
         (
-            &["rotate-known-host", "corp-vm", "--dry-run", "--human"][..],
+            &[
+                "rotate-known-host",
+                "bm6ccueaqlr7wd2cskza",
+                "--dry-run",
+                "--human",
+            ][..],
             "rotate-known-host-dry-run-human.golden",
-            "rotate-known-host corp-vm --dry-run --human",
+            "rotate-known-host bm6ccueaqlr7wd2cskza --dry-run --human",
         ),
         (
-            &["rotate-known-host", "corp-vm", "--dry-run", "--json"][..],
+            &[
+                "rotate-known-host",
+                "bm6ccueaqlr7wd2cskza",
+                "--dry-run",
+                "--json",
+            ][..],
             "rotate-known-host-dry-run-json.golden",
-            "rotate-known-host corp-vm --dry-run --json",
+            "rotate-known-host bm6ccueaqlr7wd2cskza --dry-run --json",
         ),
     ] {
         let out = env.run(args, &[]);
@@ -709,24 +749,52 @@ fn usb_dry_run_outputs_match_goldens() {
     };
     for (args, golden_name, label) in [
         (
-            &["usb", "attach", "corp-vm", "1-2", "--dry-run", "--human"][..],
+            &[
+                "usb",
+                "attach",
+                "bm6ccueaqlr7wd2cskza",
+                "1-2",
+                "--dry-run",
+                "--human",
+            ][..],
             "usb-attach-dry-run-human.golden",
-            "usb attach corp-vm 1-2 --dry-run --human",
+            "usb attach bm6ccueaqlr7wd2cskza 1-2 --dry-run --human",
         ),
         (
-            &["usb", "attach", "corp-vm", "1-2", "--dry-run", "--json"][..],
+            &[
+                "usb",
+                "attach",
+                "bm6ccueaqlr7wd2cskza",
+                "1-2",
+                "--dry-run",
+                "--json",
+            ][..],
             "usb-attach-dry-run-json.golden",
-            "usb attach corp-vm 1-2 --dry-run --json",
+            "usb attach bm6ccueaqlr7wd2cskza 1-2 --dry-run --json",
         ),
         (
-            &["usb", "detach", "corp-vm", "1-2", "--dry-run", "--human"][..],
+            &[
+                "usb",
+                "detach",
+                "bm6ccueaqlr7wd2cskza",
+                "1-2",
+                "--dry-run",
+                "--human",
+            ][..],
             "usb-detach-dry-run-human.golden",
-            "usb detach corp-vm 1-2 --dry-run --human",
+            "usb detach bm6ccueaqlr7wd2cskza 1-2 --dry-run --human",
         ),
         (
-            &["usb", "detach", "corp-vm", "1-2", "--dry-run", "--json"][..],
+            &[
+                "usb",
+                "detach",
+                "bm6ccueaqlr7wd2cskza",
+                "1-2",
+                "--dry-run",
+                "--json",
+            ][..],
             "usb-detach-dry-run-json.golden",
-            "usb detach corp-vm 1-2 --dry-run --json",
+            "usb detach bm6ccueaqlr7wd2cskza 1-2 --dry-run --json",
         ),
     ] {
         let out = env.run(args, &[]);

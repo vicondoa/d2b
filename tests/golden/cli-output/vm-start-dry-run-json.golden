@@ -46,5 +46,5 @@
   "mode": "dry-run",
   "notes": "vm dry-run reports the DAG the supervisor would drive (start: topo order; stop: reverse topo). --apply routes through d2bd → broker (v1.0 daemon-only per ADR 0015).",
   "stopOrder": null,
-  "vm": "corp-vm"
+  "vm": "bm6ccueaqlr7wd2cskza"
 }

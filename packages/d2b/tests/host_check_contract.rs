@@ -159,29 +159,30 @@ fn write_fixture(dir: &Path, name: &str, value: &Value) -> PathBuf {
 }
 
 /// Build a test-owned, integrity-valid bundle tree. When `drift` is set,
-/// additionally rewrite `closures/corp-vm.json` to break runner parity
+/// additionally rewrite `closures/bm6ccueaqlr7wd2cskza.json` to break runner parity
 /// (mirrors `d2b_cli_smoke_bundle_tree_runner_drift`).
 fn build_hermetic_bundle_tree(fixtures: &str, dir: &Path, drift: bool) {
     common::build_hermetic_bundle_tree(Path::new(fixtures), dir);
 
     if drift {
-        let path = dir.join("closures").join("corp-vm.json");
-        let bytes = fs::read(&path).expect("read corp-vm closure");
-        let mut closure: Value = serde_json::from_slice(&bytes).expect("decode corp-vm closure");
+        let path = dir.join("closures").join("bm6ccueaqlr7wd2cskza.json");
+        let bytes = fs::read(&path).expect("read bm6ccueaqlr7wd2cskza closure");
+        let mut closure: Value =
+            serde_json::from_slice(&bytes).expect("decode bm6ccueaqlr7wd2cskza closure");
         let obj = closure.as_object_mut().expect("closure is a JSON object");
         obj.insert("runnerParityOk".to_owned(), json!(false));
         let drifted = obj
             .get("runnerParityPath")
             .and_then(Value::as_str)
             .map(|current| format!("{current}-drift"))
-            .expect("corp-vm closure declares runnerParityPath");
+            .expect("bm6ccueaqlr7wd2cskza closure declares runnerParityPath");
         obj.insert("runnerParityPath".to_owned(), json!(drifted));
         fs::write(
             &path,
             serde_json::to_vec_pretty(&closure).expect("serialize drift closure"),
         )
         .expect("write drift closure");
-        common::refresh_bundle_integrity(dir, &["closures/corp-vm.json"]);
+        common::refresh_bundle_integrity(dir, &["closures/bm6ccueaqlr7wd2cskza.json"]);
     }
 }
 
@@ -285,17 +286,17 @@ fn host_check_built_in_kernel_modules_pass() {
         eprintln!("SKIP: D2B_FIXTURES unset (not the gated CLI-contract step)");
         return;
     };
-    // Drop kvm_intel from loadedModules and mark it built-in instead.
+    // Drop kvm from loadedModules and mark it built-in instead.
     let scenario = Scenario::new(&fixtures, false, "host-builtin.json", |value| {
         let modules = value["loadedModules"]
             .as_array()
             .expect("loadedModules array")
             .iter()
-            .filter(|m| m.as_str() != Some("kvm_intel"))
+            .filter(|m| m.as_str() != Some("kvm"))
             .cloned()
             .collect::<Vec<_>>();
         value["loadedModules"] = Value::Array(modules);
-        value["builtInModules"] = json!(["kvm_intel"]);
+        value["builtInModules"] = json!(["kvm"]);
     });
     let out = scenario.run(&["--json"], &[]);
 
@@ -304,8 +305,8 @@ fn host_check_built_in_kernel_modules_pass() {
     let finding = output
         .findings
         .iter()
-        .find(|f| f.id == "kernel-module:kvm_intel")
-        .expect("kernel-module:kvm_intel finding present");
+        .find(|f| f.id == "kernel-module:kvm")
+        .expect("kernel-module:kvm finding present");
     assert_eq!(finding.severity, HostCheckSeverityV2::Pass);
     assert!(
         finding.message.contains("built into the running kernel"),
