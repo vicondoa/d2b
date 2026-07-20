@@ -108,6 +108,8 @@ D2b 2.0 has the following fixed decisions:
     validation and panel lanes, and a tree-bound mechanical seal. W0 bootstraps
     equivalent evidence before `xtask` exists and requires one panel on the
     Proposed tree plus a second full panel on the Accepted/index candidate.
+    Delivery ends with a streamline wave that converts friction recorded during
+    the preceding waves into tested tooling and process improvements.
 
 These are requirements, not options deferred to implementation. In particular,
 retaining d2b 1.x compatibility is not a reviewable alternative. Review may and
@@ -2553,6 +2555,7 @@ W8 + W9
   -> W10 v1 purge and destructive reset tooling
       -> W11 private integrated physical-host cutover and hardening
           -> W12 merge train, v2.0 release, toolkit releases, final host pin
+              -> W13 evidence-driven delivery streamlining
 ```
 
 `W4-F` is the exact W4 head after focused preflight passes, the PR is updated,
@@ -3025,6 +3028,57 @@ Before implementation PRs merge:
 - Move `/etc/nixos` from the private branch to final merged tags/releases.
 - Switch once more without resetting state and rerun focused host smoke.
 - Commit the host lock/config update separately.
+
+#### W13 - Evidence-driven delivery streamlining
+
+W13 is the final ADR 0045 wave. It does not invent a new architecture or reopen
+accepted product decisions. It turns delivery friction observed in W4-W12 into
+reviewed, tested improvements to the plan compiler, validation tooling, stack
+workflow, and agent/worktree hygiene. New friction remains eligible only when
+it cites a concrete wave, command or tool path, observed failure mode, and
+measurable cost. Add entries throughout delivery; do not wait until W13 to
+reconstruct them from memory.
+
+The initial W13 backlog is grounded in these observed failures:
+
+| Observed in | Friction | Required W13 outcome |
+| --- | --- | --- |
+| W4 | Superseded slice targets consumed about 70 GiB, the retained integrated cache reached about 117 GiB, and reviewer/slice worktrees left additional targets and untracked artifacts. | Give every component and immutable validator an external, bounded target allocation with ownership metadata, quota checks, automatic cleanup, stale-process reaping, and a final no-leak assertion. |
+| W4 | A cached `xtask` embedded `CARGO_MANIFEST_DIR` from a removed slice worktree, so integrated drift generation failed only after all component tests passed. | Bind generated-tool provenance to the current checkout, reject binaries rooted in another or missing worktree, and rebuild automatically before generation. |
+| W4 | Root corrections required repeated manual Git Town propagation through the shared root, W5/W6/W7, and W9; duplicated parent commits and recurring changelog conflicts were resolved by hand. | Add a graph-aware propagation command that reports invalidated descendants, drops byte-identical parent duplicates, queues conflict owners, verifies every PR base/head, and records ready/launched/blocked counts. |
+| W4 | Fresh command processes lost working-directory state, causing correctly chosen Cargo tests to run from the repository root and fail before testing code. | Make plan commands carry an explicit repository-relative cwd and have the runner reject a missing manifest before consuming a validation slot. |
+| W4 | Panel corrections arrived across multiple rounds and forced repeated candidate invalidation, worktree integration, focused preflight, restacking, resnapshotting, receipt generation, and cleanup. | Add one correction-round coordinator that builds the file-overlap graph, dispatches every ready component, invalidates old evidence, tracks finding-to-commit closure, and prepares the replacement candidate without manual bookkeeping. |
+| W4 | Panel signing and attestation depended on tools such as OpenSSL and Git Town being present through ad-hoc shell entry. | Make the delivery wrapper expose and self-check every required executable before a snapshot, panel import, seal, or merge begins. |
+| W5-W7 | Layer-1 and Rust scripts stopped at the first failing target, hiding dozens of independent stale fixtures and policy failures behind serial reruns. | Add a diagnostic mode that runs independent Layer-1 shards, Rust feature matrices, fixture contracts, CLI contracts, and both-system evals to completion, then emits one deduplicated root-failure report. |
+| W6-W7 | Validation output was retained in a framed binary payload that required manual offset decoding, while `validation-run` returned `"status":"ok"` even when the recorded validation result was `"failed"`. | Add a canonical evidence output decoder/tail command and make the command envelope surface the validation result unambiguously, with an explicit require-pass exit mode for interactive use. |
+| W6-W7 | A GitHub check could remain `in_progress` while carrying a success conclusion, and exact-head status required manual API inspection and a history-only retry commit. | Add exact-head CI diagnosis that distinguishes pending, contradictory, stale-head, and terminal states and supplies the permitted recovery path without content churn. |
+| W7 | The monolithic Lix flake evaluator repeatedly lost a `git+file` source path while every bounded shard passed. | Make the bounded manifest-driven shard runner the default local flake path and retain the monolith only as an explicit diagnostic compatibility mode. |
+| W7 | Nix-unit pins, the migration ledger, schema prose, manifest baselines, and contract fixtures drifted independently and were discovered only after earlier shards passed. | Add a preflight freshness command that regenerates into an isolated tree and reports every stale generated or pinned artifact together before long compilation starts. |
+| W7 | Plan ledgers were internally consistent while naming deleted files, missing tests, stale source paths, orphan modules, dead selection predicates, and a valid network guest module with no composition call site. | Extend plan policy to verify file existence/deletion, actual diff completeness, test selector existence, source-path reachability, module-graph imports or explicit retirement, and resource/process rows reaching final composition. |
+| W7 | Aggregate diagnostics created an 86 GiB temporary Cargo target before cleanup. | Reuse content-addressed external build caches across diagnostic lanes under a hard size budget; never multiply full workspace targets per feature lane. |
+| W7 | Implementation agents occasionally produced feature commits without the required trailing wave tag despite explicit prompts. | Enforce commit-subject traceability mechanically before integration or push instead of relying on prompt compliance. |
+
+W13 must deliver:
+
+1. a machine-readable, append-only friction ledger and `xtask` commands to add,
+   list, validate, assign, and close entries against concrete commits/tests;
+2. the plan and reachability checks named above, including a mandatory final
+   streamline wave in every new ADR-scale delivery graph;
+3. aggregate no-fail-fast diagnostics with concise root-cause grouping and
+   exact rerun commands;
+4. hermetic cwd/tool/target management with disk budgets and automatic cleanup;
+5. delivery evidence and exact-head CI diagnostics that cannot look successful
+   when the underlying validation failed;
+6. graph-aware correction/restack coordination and mechanical commit-tag checks;
+7. regression fixtures reproducing the W4-W7 failures in this table; and
+8. before/after measurements for elapsed operator steps, repeated compilation,
+   peak disk, hidden failures per rerun, and manual stack/evidence operations.
+
+W13 uses the normal immutable candidate, required validation, exact-head CI,
+ten-role panel, seal, and GitHub merge process. The ADR is not delivery-complete
+until W13 either closes each accepted friction entry with a tested improvement
+or records a concrete external blocker and owner. W13 cannot waive or defer a
+functional or security defect from an earlier wave.
 
 ### Worktrees, stacks, and immutable evidence
 

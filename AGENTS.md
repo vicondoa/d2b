@@ -255,6 +255,33 @@ Use this shape:
    merge order, branch deletion, and post-merge fast-forward of the primary
    clone.
 
+### Mandatory final streamline wave
+
+Every ADR-scale delivery plan MUST end with a streamline wave after its
+functional, release, and host-cutover waves. Throughout delivery, record only
+observed friction: each entry names the wave, concrete command/tool path,
+failure mode, measurable cost, and the tooling or process outcome that would
+prevent recurrence. Do not populate the wave with speculative cleanup or
+general preferences.
+
+The streamline wave:
+
+1. consumes the accumulated friction ledger and partitions improvements by
+   actual file overlap and stable dependencies;
+2. implements and tests accepted plan, validation, stack, evidence, cache,
+   worktree, and agent-hygiene improvements;
+3. adds regression fixtures for the observed failures and before/after
+   measurements for operator steps, elapsed time, peak disk, repeated
+   compilation, hidden failures, and manual coordination;
+4. runs the same immutable validation, exact-head CI, ten-role panel, seal, and
+   GitHub merge process as every other wave; and
+5. closes every accepted friction entry or records a concrete external blocker
+   and owner before the ADR is considered delivery-complete.
+
+During implementation, append newly observed friction to the final wave in the
+same coordination cycle. A streamline item never excuses, absorbs, or defers a
+functional or security defect from the wave that discovered it.
+
 ### Screenshot and visual artifact hygiene
 
 Screenshots used as validation evidence live in external evidence storage and
