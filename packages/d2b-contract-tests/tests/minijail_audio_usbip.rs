@@ -44,6 +44,9 @@ fn audio_source_uses_canonical_role_resource_provider_rows() {
         r#"supervision = "realm-controller-pidfd";"#,
         r#"seccompPolicyRef = "w1-audio";"#,
         r#"parentRuntimeVisible = false;"#,
+        r#"workload.providerBindings.runtime or null"#,
+        r#"workload.providerBindings.audio or null"#,
+        r#"provider bindings disagree with normalized authority"#,
     ] {
         assert!(
             audio.contains(required),

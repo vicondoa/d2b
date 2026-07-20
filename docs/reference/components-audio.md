@@ -17,6 +17,11 @@ For each enabled audio workload, `realm-audio-rows.nix` emits:
 - one boot-scoped OFD lock and one process-scoped mediation directory; and
 - one lease for the active host audio session's PipeWire endpoint.
 
+The workload must explicitly bind same-realm, host-local `runtime` and `audio`
+providers using the `cloud-hypervisor` and `pipewire-vhost-user`
+implementations. Emission fails closed when either normalized binding is
+missing or disagrees with its provider.
+
 Every realm, workload, and role path component is a canonical short ID.
 Human-configured realm and workload names do not enter these rows.
 

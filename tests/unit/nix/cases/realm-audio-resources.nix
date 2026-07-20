@@ -1,56 +1,65 @@
 { flakeRoot, lib, pkgs, ... }:
 
 let
+  realms = {
+    work = {
+      path = "work.local-root";
+      placement = "host-local";
+      providers.runtime = {
+        type = "runtime";
+        implementationId = "cloud-hypervisor";
+      };
+      providers.audio = {
+        type = "audio";
+        implementationId = "pipewire-vhost-user";
+      };
+      workloads = {
+        editor = {
+          providerRefs = {
+            runtime = "runtime";
+            audio = "audio";
+          };
+          audio = {
+            enable = true;
+            allowMicByDefault = false;
+            allowSpeakerByDefault = true;
+          };
+        };
+        quiet = {
+          enable = false;
+          audio.enable = false;
+        };
+      };
+    };
+  };
+  fixtureModule = configuredRealms: { lib, ... }: {
+    options = {
+      assertions = lib.mkOption {
+        type = lib.types.listOf lib.types.attrs;
+        default = [ ];
+      };
+      environment.etc = lib.mkOption {
+        type = lib.types.attrs;
+        default = { };
+      };
+      d2b = {
+        realms = lib.mkOption {
+          type = lib.types.attrs;
+          default = { };
+        };
+        _bundle.minijailProfiles = lib.mkOption {
+          type = lib.types.attrs;
+          default = { };
+        };
+      };
+    };
+    config.d2b.realms = configuredRealms;
+  };
   evaluation = lib.evalModules {
     modules = [
       (flakeRoot + "/nixos-modules/index.nix")
       (flakeRoot + "/nixos-modules/minijail-profiles.nix")
-      ({ lib, ... }: {
-        options = {
-          assertions = lib.mkOption {
-            type = lib.types.listOf lib.types.attrs;
-            default = [ ];
-          };
-          environment.etc = lib.mkOption {
-            type = lib.types.attrs;
-            default = { };
-          };
-          d2b = {
-            realms = lib.mkOption {
-              type = lib.types.attrs;
-              default = { };
-            };
-            _bundle.minijailProfiles = lib.mkOption {
-              type = lib.types.attrs;
-              default = { };
-            };
-          };
-        };
-        config.d2b.realms = {
-          work = {
-            path = "work.local-root";
-            placement = "host-local";
-            providers.runtime = {
-              primaryAuthority = "runtime";
-              implementation = "cloud-hypervisor";
-            };
-            workloads = {
-              editor = {
-                runtime.implementation = "cloud-hypervisor";
-                audio = {
-                  enable = true;
-                  allowMicByDefault = false;
-                  allowSpeakerByDefault = true;
-                };
-              };
-              quiet = {
-                runtime.implementation = "cloud-hypervisor";
-                audio.enable = false;
-              };
-            };
-          };
-        };
-      })
+      (fixtureModule realms)
     ];
   };
   config = evaluation.config;
@@ -68,6 +77,11 @@ let
     rows.storage;
   lease = builtins.head rows.leases;
   provider = builtins.head fragment.providers;
+  workload = config.d2b._index.workloads.byId.${process.workloadId};
+  runtimeBinding = workload.providerBindings.runtime;
+  audioBinding = workload.providerBindings.audio;
+  runtimeProvider = config.d2b._index.providers.byId.${runtimeBinding.providerId};
+  audioProvider = config.d2b._index.providers.byId.${audioBinding.providerId};
   roleProfile =
     config.d2b._bundle.minijailProfiles."role-${process.roleId}".roleProfile;
   canonicalArgvPrefix = "# canonical-argv: ";
@@ -85,8 +99,74 @@ let
     inherit (fragment) providers;
     inherit roleProfile;
   };
+  withoutBinding = authority:
+    realms // {
+      work = realms.work // {
+        workloads = realms.work.workloads // {
+          editor = realms.work.workloads.editor // {
+            providerRefs =
+              builtins.removeAttrs realms.work.workloads.editor.providerRefs
+                [ authority ];
+          };
+        };
+      };
+    };
+  rowsFor = configuredRealms:
+    let
+      isolatedConfig = (lib.evalModules {
+        modules = [
+          (flakeRoot + "/nixos-modules/index.nix")
+          (fixtureModule configuredRealms)
+        ];
+      }).config;
+    in
+    import "${flakeRoot}/nixos-modules/realm-audio-rows.nix" {
+      config = isolatedConfig;
+      inherit lib pkgs;
+    };
+  rowsEvaluate = configuredRealms:
+    (builtins.tryEval
+      (builtins.deepSeq (rowsFor configuredRealms).processes true)).success;
 in
 {
+  "realm-audio/requires-explicit-normalized-provider-bindings" = {
+    expr = {
+      runtime = {
+        authority = runtimeBinding.providerType;
+        implementation = runtimeProvider.implementationId;
+        sameProvider = runtimeBinding.providerId == runtimeProvider.providerId;
+        sameRealm = runtimeProvider.realmId == process.realmId;
+      };
+      audio = {
+        authority = audioBinding.providerType;
+        implementation = audioProvider.implementationId;
+        sameProvider = audioBinding.providerId == audioProvider.providerId;
+        sameRealm = audioProvider.realmId == process.realmId;
+      };
+      roleIndexed =
+        config.d2b._index.roles.byId.${process.roleId}.roleKind == "audio";
+      missingRuntimeRejected = !(rowsEvaluate (withoutBinding "runtime"));
+      missingAudioRejected = !(rowsEvaluate (withoutBinding "audio"));
+    };
+    expected = {
+      runtime = {
+        authority = "runtime";
+        implementation = "cloud-hypervisor";
+        sameProvider = true;
+        sameRealm = true;
+      };
+      audio = {
+        authority = "audio";
+        implementation = "pipewire-vhost-user";
+        sameProvider = true;
+        sameRealm = true;
+      };
+      roleIndexed = true;
+      missingRuntimeRejected = true;
+      missingAudioRejected = true;
+    };
+  };
+
   "realm-audio/resources-use-canonical-short-id-paths" = {
     expr = {
       count = {
@@ -184,7 +264,7 @@ in
         mode = "0660";
         lifecycle = "workload";
         ownerRoleId = "dfjudgner53qnwyowkja";
-        peerRoleIds = [ "asw7f5tc7jk6hki54ava" ];
+        peerRoleIds = [ "zrgdgverksaveqagovrq" ];
         listenerOwner = "audio-role";
       };
       state = {

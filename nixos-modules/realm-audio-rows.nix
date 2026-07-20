@@ -24,6 +24,20 @@ let
       workloadId = identity.validateShortId audioRole.workloadId;
       roleId = identity.validateShortId audioRole.roleId;
       workload = cfg._index.workloads.byId.${workloadId};
+      runtimeBinding = workload.providerBindings.runtime or null;
+      audioBinding = workload.providerBindings.audio or null;
+      runtimeProvider =
+        if runtimeBinding == null then
+          null
+        else
+          cfg._index.providers.byId.${runtimeBinding.providerId} or
+            (throw "realm audio workload ${workloadId} references an unknown runtime provider");
+      audioProvider =
+        if audioBinding == null then
+          null
+        else
+          cfg._index.providers.byId.${audioBinding.providerId} or
+            (throw "realm audio workload ${workloadId} references an unknown audio provider");
       workloadRoles = cfg._index.roles.byWorkloadId.${workloadId} or [ ];
       runtimeRole = lib.findFirst
         (role: role.enabled && role.roleKind == "cloud-hypervisor")
@@ -47,8 +61,34 @@ let
       lockStorageId = "audio-lock-${workloadId}";
       mediationStorageId = "audio-runtime-${roleId}";
       leaseId = "audio-pipewire-${workloadId}";
+      normalizedAuthorityError =
+        if runtimeBinding == null then
+          "realm audio workload ${workloadId} has no normalized runtime provider binding"
+        else if audioBinding == null then
+          "realm audio workload ${workloadId} has no normalized audio provider binding"
+        else if !(
+          runtimeBinding.providerType == "runtime"
+          && runtimeBinding.implementationId == "cloud-hypervisor"
+          && runtimeProvider.enabled
+          && runtimeProvider.providerType == "runtime"
+          && runtimeProvider.realmId == realmId
+          && runtimeProvider.implementationId == "cloud-hypervisor"
+          && runtimeProvider.placement == "host-local"
+          && audioBinding.providerType == "audio"
+          && audioBinding.implementationId == "pipewire-vhost-user"
+          && audioProvider.enabled
+          && audioProvider.providerType == "audio"
+          && audioProvider.realmId == realmId
+          && audioProvider.implementationId == "pipewire-vhost-user"
+          && audioProvider.placement == "host-local"
+        ) then
+          "realm audio workload ${workloadId} provider bindings disagree with normalized authority"
+        else
+          null;
     in
-    {
+    if normalizedAuthorityError != null then
+      throw normalizedAuthorityError
+    else {
       inherit
         realmId
         workloadId
