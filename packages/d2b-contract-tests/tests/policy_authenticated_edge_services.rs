@@ -85,14 +85,36 @@ fn fixed_user_manager_endpoints_use_component_session_activation() {
     assert_contains_all(
         &user_entrypoint,
         &[
-            "service mode is not implemented in this build",
-            "process::exit(78)",
+            "d2b_userd::runtime::run_production()",
+            "process::exit(error.exit_code())",
+            "Some(_) => process::exit(78)",
         ],
     );
+    let user_runtime = read("packages/d2b-userd/src/services/user/runtime.rs");
+    assert_contains_all(
+        &user_runtime,
+        &[
+            "pub async fn run_production() -> Result<(), UserdRuntimeError>",
+            "ActivatedSeqpacketListeners::from_systemd(&[LISTENER_NAME])",
+            "Self::Composition | Self::Activation => 78,",
+        ],
+    );
+
     let runtime_entrypoint = read("packages/d2b-unsafe-local-helper/src/main.rs");
     assert_contains_all(
         &runtime_entrypoint,
-        &["component-session-unavailable", "std::process::exit(78)"],
+        &[
+            "d2b_unsafe_local_helper::server::run().await",
+            "std::process::exit(1)",
+        ],
+    );
+    let runtime_server = read("packages/d2b-unsafe-local-helper/src/server.rs");
+    assert_contains_all(
+        &runtime_server,
+        &[
+            "pub async fn run() -> Result<(), ServerError>",
+            "ActivatedSeqpacketListeners::from_systemd(&[ACTIVATED_LISTENER_NAME])",
+        ],
     );
 }
 

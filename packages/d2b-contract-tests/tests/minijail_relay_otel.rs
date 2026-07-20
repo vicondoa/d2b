@@ -3,10 +3,14 @@
 use std::collections::BTreeSet;
 
 use d2b_contract_tests::{load_full_bundle_resolver_from_env, read_repo_file};
+use d2b_contracts::broker_wire::RunnerRole;
 use d2b_contracts::v2_identity::{RealmId, RealmPath, RoleId, RoleKind, WorkloadId, WorkloadName};
 use d2b_core::processes::ProcessRole;
+use d2b_host::otel_host_bridge_argv::{OtelHostBridgeArgvInputs, generate_otel_host_bridge_argv};
 
 const MINIJAIL_PROFILES_NIX: &str = "nixos-modules/minijail-profiles.nix";
+const PRIV_BROKER_RUNTIME_RS: &str = "packages/d2b-priv-broker/src/runtime.rs";
+const PRIV_BROKER_LIVE_HANDLERS_RS: &str = "packages/d2b-priv-broker/src/live_handlers.rs";
 
 fn observability_role_id() -> RoleId {
     let realm_id = RealmId::derive(&RealmPath::root());
@@ -145,5 +149,88 @@ fn rendered_relay_profiles_are_realm_scoped_and_declarative() {
     assert!(
         workload_ids.len() > 1,
         "the feature-rich fixture must cover relay roles without a singleton workload assumption"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// ProcessRole::OtelHostBridge runner/matrix coverage.
+//
+// Unlike VsockRelay, the host-bridge sidecar is never rendered as a
+// processes.json DAG node — it is a broker-internal role folded out of the
+// retired `d2b-otel-host-bridge.service` singleton (see
+// `d2b_host::runner_argv_regenerator`'s `otel_host_bridge_input` doc comment),
+// so there is no per-VM fixture node to assert against. Instead this proves
+// the closed-set contract end to end: the real argv generator emits the
+// pre-opened-fd-only socat shape the broker expects, and the broker's own
+// SpawnRunner dispatch/seccomp source classifies and gates that role exactly
+// like the sibling VsockRelay role it was folded from.
+// ---------------------------------------------------------------------------
+#[test]
+fn runner_process_roles_have_builder_and_matrix_contract_coverage_otel_host_bridge() {
+    // The generator is the actual `d2b-host` argv builder wired for
+    // ProcessRole::OtelHostBridge — exercise it with realistic canonical
+    // realm-role paths rather than asserting source text alone.
+    let inputs = OtelHostBridgeArgvInputs {
+        socat_path: "/run/current-system/sw/bin/socat".to_owned(),
+        host_egress_socket:
+            "/run/d2b/r/cvudgfqzh442wwtozs7q/w/jagsccyorsii4fm3u6vq/roles/chgqvca2e5gtb6vypzza/host-egress.sock"
+                .to_owned(),
+        obs_vsock_host_socket:
+            "/var/lib/d2b/r/cvudgfqzh442wwtozs7q/w/jagsccyorsii4fm3u6vq/vsock.sock".to_owned(),
+        obs_otlp_port: 14317,
+        ch_vsock_connect_path: "/run/current-system/sw/bin/d2b-ch-vsock-connect".to_owned(),
+    };
+    let argv = generate_otel_host_bridge_argv(&inputs)
+        .expect("closed-set OtelHostBridge inputs must produce argv");
+    assert_eq!(argv.first(), Some(&inputs.socat_path));
+    assert!(
+        argv.iter()
+            .any(|arg| arg.starts_with("UNIX-LISTEN:") && arg.contains(&inputs.host_egress_socket)),
+        "OtelHostBridge argv must listen on its canonical role-owned host-egress socket"
+    );
+    assert!(
+        argv.iter().any(|arg| arg.starts_with("EXEC:")
+            && arg.contains(&inputs.ch_vsock_connect_path)
+            && arg.contains(&inputs.obs_vsock_host_socket)
+            && arg.contains(&inputs.obs_otlp_port.to_string())),
+        "OtelHostBridge argv must bridge to the obs VM's vsock socket via the CH connect helper"
+    );
+    assert!(
+        !argv.iter().any(|arg| arg.contains("/dev")),
+        "OtelHostBridge argv must never reference a host device path (pre-opened fds only)"
+    );
+
+    // The broker's own SpawnRunner classification must route
+    // ProcessRole::OtelHostBridge to RunnerRole::OtelHostBridge — the same
+    // dispatch table entry the VsockRelay role above uses.
+    let runtime_src = read_repo_file(PRIV_BROKER_RUNTIME_RS);
+    assert!(
+        runtime_src.contains("ProcessRole::OtelHostBridge => Some(RunnerRole::OtelHostBridge)"),
+        "the broker must classify ProcessRole::OtelHostBridge as RunnerRole::OtelHostBridge for SpawnRunner dispatch"
+    );
+    assert!(
+        runtime_src.contains("d2b_contracts::broker_wire::RunnerRole::OtelHostBridge"),
+        "SpawnRunner dispatch must reference the wire RunnerRole::OtelHostBridge variant"
+    );
+    assert!(
+        runtime_src.contains("intent.vm_name != resolver.manifest.observability.vm_name"),
+        "SpawnRunner must refuse an OtelHostBridge intent whose VM disagrees with the bundle's observability VM"
+    );
+    assert!(
+        runtime_src.contains("OtelHostBridgeIntentInvalid"),
+        "an OtelHostBridge/obs-VM mismatch must surface the typed OtelHostBridgeIntentInvalid error"
+    );
+    assert_eq!(
+        RunnerRole::OtelHostBridge.as_str(),
+        "otel-host-bridge",
+        "RunnerRole::OtelHostBridge wire tag must stay stable for broker audit/dispatch"
+    );
+
+    // Seccomp posture: the folded-in bridge role must keep the same
+    // pre-opened-fd-only, device-ioctl-free BPF matrix as VsockRelay.
+    let live_handlers_src = read_repo_file(PRIV_BROKER_LIVE_HANDLERS_RS);
+    assert!(
+        live_handlers_src.contains(r#""w1-vsock-relay" | "w1-otel-host-bridge" => Some(&[])"#),
+        "w1-otel-host-bridge must keep the device-ioctl-free BPF matrix alongside w1-vsock-relay"
     );
 }

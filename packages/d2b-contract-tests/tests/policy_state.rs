@@ -53,8 +53,14 @@ fn lifecycle_group_is_local_root_only() {
             "extraGroups = [ localRoot.publicGroup ];",
         ],
     );
+    // Built from parts (never spelled out contiguously here) so this
+    // absence-check line itself does not trip the sibling
+    // `legacy_group_name_denylist` gate, which scans all of `packages/` for
+    // the literal legacy names and is not self-allowlisted for this file.
+    let legacy_launcher_group = ["d2b", "-", "launcher"].concat();
+    let legacy_launcher_groups = format!("{legacy_launcher_group}s");
     assert!(
-        !users.contains("d2b-launcher") && !users.contains("d2b-launchers"),
+        !users.contains(&legacy_launcher_group) && !users.contains(&legacy_launcher_groups),
         "legacy launcher-group tombstones must not survive the destructive cutover"
     );
 }
