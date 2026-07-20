@@ -444,7 +444,7 @@ let
           leaseClass = "process-pidfd";
         })
       ]
-      ++ map
+      ++ lib.concatMap
         (role:
           let
             resource = resourceFor "role ${role.roleId}" "role-runtime"
@@ -452,19 +452,37 @@ let
             roleIdentity = principal "role" role.roleId;
             roleProcess = actor "role" role.roleId;
           in
-          mkPath {
-            id = resource.resourceId;
-            inherit scope realmId;
-            path = resource.path;
-            lifecycle = "boot-scoped-readoptable";
-            persistence = "boot-scoped";
-            owner = roleIdentity;
-            group = roleIdentity;
-            writers = [ (brokerActor realmId) roleProcess ];
-            readers = [ (controllerActor realmId) (brokerActor realmId) roleProcess ];
-            cleanupPolicy = "process-exit-with-proof";
-            leaseClass = "process-pidfd";
-          })
+          [
+            (mkPath {
+              id = resource.resourceId;
+              inherit scope realmId;
+              path = resource.path;
+              lifecycle = "boot-scoped-readoptable";
+              persistence = "boot-scoped";
+              owner = roleIdentity;
+              group = roleIdentity;
+              writers = [ (brokerActor realmId) roleProcess ];
+              readers = [ (controllerActor realmId) (brokerActor realmId) roleProcess ];
+              cleanupPolicy = "process-exit-with-proof";
+              leaseClass = "process-pidfd";
+            })
+          ]
+          ++ lib.optionals (role.roleKind == "audio") [
+            (mkPath {
+              id = "path:workload-audio-mediation:${workloadId}";
+              inherit scope realmId;
+              path = "${resource.path}/pipewire";
+              mode = "0700";
+              lifecycle = "boot-scoped-readoptable";
+              persistence = "boot-scoped";
+              owner = roleIdentity;
+              group = roleIdentity;
+              writers = [ (brokerActor realmId) roleProcess ];
+              readers = [ (controllerActor realmId) (brokerActor realmId) roleProcess ];
+              cleanupPolicy = "process-exit-with-proof";
+              leaseClass = "process-pidfd";
+            })
+          ])
         workload.roles
       ++ guestSessionPaths;
       locks = [

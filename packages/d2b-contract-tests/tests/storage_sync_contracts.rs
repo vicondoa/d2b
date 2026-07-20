@@ -785,10 +785,6 @@ fn registered_host_mutation_sources() -> BTreeMap<&'static str, &'static str> {
             "fixed local-root runtime/state/config anchors",
         ),
         (
-            "nixos-modules/unsafe-local-helper.nix",
-            "storage root:path:run-root",
-        ),
-        (
             "nixos-modules/user-services.nix",
             "storage root:path:run-root",
         ),
