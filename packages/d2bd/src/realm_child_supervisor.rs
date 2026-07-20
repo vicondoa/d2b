@@ -2,7 +2,6 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::io::Read;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::path::{Path, PathBuf};
 
@@ -14,10 +13,17 @@ pub struct RealmChildHandle {
     pub process_id: String,
     pub pid: u32,
     pub pidfd: OwnedFd,
+    pub pidfd_identity: PidfdKernelIdentity,
     pub executable: PathBuf,
     pub executable_digest: [u8; 32],
     pub controller_generation_id: String,
     pub cgroup_leaf: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PidfdKernelIdentity {
+    pub device: u64,
+    pub inode: u64,
 }
 
 #[derive(Debug)]
@@ -39,6 +45,10 @@ impl RealmChildPair {
             || self.controller.controller_generation_id != self.broker.controller_generation_id
             || self.controller.executable_digest == [0; 32]
             || self.broker.executable_digest == [0; 32]
+            || self.controller.pidfd_identity.device == 0
+            || self.controller.pidfd_identity.inode == 0
+            || self.broker.pidfd_identity.device == 0
+            || self.broker.pidfd_identity.inode == 0
         {
             return Err(RealmChildSupervisorError::InvalidPair);
         }
@@ -50,6 +60,11 @@ impl RealmChildPair {
         }
         validate_pidfd(self.controller.pidfd.as_fd(), self.controller.pid)?;
         validate_pidfd(self.broker.pidfd.as_fd(), self.broker.pid)?;
+        if pidfd_kernel_identity(self.controller.pidfd.as_fd())? != self.controller.pidfd_identity
+            || pidfd_kernel_identity(self.broker.pidfd.as_fd())? != self.broker.pidfd_identity
+        {
+            return Err(RealmChildSupervisorError::PidfdIdentityMismatch);
+        }
         Ok(())
     }
 }
@@ -109,6 +124,7 @@ pub struct RealmChildAdoptionCandidate {
     pub role: RealmChildRole,
     pub process_id: String,
     pub pid: u32,
+    pub pidfd_identity: PidfdKernelIdentity,
     pub executable: PathBuf,
     pub executable_digest: [u8; 32],
     pub controller_generation_id: String,
@@ -122,6 +138,7 @@ impl RealmChildAdoptionCandidate {
             process_id: self.process_id,
             pid: self.pid,
             pidfd,
+            pidfd_identity: self.pidfd_identity,
             executable: self.executable,
             executable_digest: self.executable_digest,
             controller_generation_id: self.controller_generation_id,
@@ -142,7 +159,21 @@ impl RealmChildAdoptionPair {
         if self.controller.role != RealmChildRole::Controller
             || self.broker.role != RealmChildRole::Broker
             || self.controller.pid == self.broker.pid
+            || self.controller.pid == 0
+            || self.broker.pid == 0
+            || self.controller.process_id.is_empty()
+            || self.broker.process_id.is_empty()
+            || self.controller.process_id == self.broker.process_id
             || self.controller.controller_generation_id != self.broker.controller_generation_id
+            || self.controller.controller_generation_id.is_empty()
+            || !self.controller.executable.is_absolute()
+            || !self.broker.executable.is_absolute()
+            || self.controller.executable_digest == [0; 32]
+            || self.broker.executable_digest == [0; 32]
+            || self.controller.pidfd_identity.device == 0
+            || self.controller.pidfd_identity.inode == 0
+            || self.broker.pidfd_identity.device == 0
+            || self.broker.pidfd_identity.inode == 0
         {
             return Err(RealmChildSupervisorError::InvalidPair);
         }
@@ -168,30 +199,10 @@ impl RealmChildAdoptionVerifier for ProcRealmChildAdoptionVerifier {
         pidfd: BorrowedFd<'_>,
     ) -> Result<(), RealmChildSupervisorError> {
         validate_pidfd(pidfd, candidate.pid)?;
+        if pidfd_kernel_identity(pidfd)? != candidate.pidfd_identity {
+            return Err(RealmChildSupervisorError::PidfdIdentityMismatch);
+        }
         let proc_root = PathBuf::from("/proc").join(candidate.pid.to_string());
-        let executable = std::fs::read_link(proc_root.join("exe"))
-            .map_err(|_| RealmChildSupervisorError::ProcessMissing)?;
-        if executable != candidate.executable {
-            return Err(RealmChildSupervisorError::ExecutableMismatch);
-        }
-        let mut executable_file = std::fs::File::open(proc_root.join("exe"))
-            .map_err(|_| RealmChildSupervisorError::ProcessMissing)?;
-        let mut hasher = sha2::Sha256::default();
-        let mut buffer = [0u8; 16 * 1024];
-        loop {
-            let read = executable_file
-                .read(&mut buffer)
-                .map_err(|_| RealmChildSupervisorError::ProcessMissing)?;
-            if read == 0 {
-                break;
-            }
-            use sha2::Digest as _;
-            hasher.update(&buffer[..read]);
-        }
-        use sha2::Digest as _;
-        if hasher.finalize().as_slice() != candidate.executable_digest {
-            return Err(RealmChildSupervisorError::ExecutableDigestMismatch);
-        }
         let cgroups = std::fs::read_to_string(proc_root.join("cgroup"))
             .map_err(|_| RealmChildSupervisorError::ProcessMissing)?;
         let expected_cgroup = candidate
@@ -205,18 +216,7 @@ impl RealmChildAdoptionVerifier for ProcRealmChildAdoptionVerifier {
         {
             return Err(RealmChildSupervisorError::CgroupMismatch);
         }
-        let environment = std::fs::read(proc_root.join("environ"))
-            .map_err(|_| RealmChildSupervisorError::ProcessMissing)?;
-        let generation = format!(
-            "D2B_CONTROLLER_GENERATION={}",
-            candidate.controller_generation_id
-        );
-        let process = format!("D2B_PROCESS_ID={}", candidate.process_id);
-        if !nul_fields(&environment).any(|field| field == generation.as_bytes())
-            || !nul_fields(&environment).any(|field| field == process.as_bytes())
-        {
-            return Err(RealmChildSupervisorError::GenerationMismatch);
-        }
+        validate_pidfd(pidfd, candidate.pid)?;
         Ok(())
     }
 }
@@ -225,10 +225,18 @@ fn path_text(path: &Path) -> &str {
     path.to_str().unwrap_or("")
 }
 
-fn nul_fields(bytes: &[u8]) -> impl Iterator<Item = &[u8]> {
-    bytes
-        .split(|byte| *byte == 0)
-        .filter(|field| !field.is_empty())
+pub fn pidfd_kernel_identity(
+    pidfd: BorrowedFd<'_>,
+) -> Result<PidfdKernelIdentity, RealmChildSupervisorError> {
+    let stat = rustix::fs::fstat(pidfd).map_err(|_| RealmChildSupervisorError::ProcessMissing)?;
+    let identity = PidfdKernelIdentity {
+        device: stat.st_dev,
+        inode: stat.st_ino,
+    };
+    if identity.device == 0 || identity.inode == 0 {
+        return Err(RealmChildSupervisorError::PidfdIdentityMismatch);
+    }
+    Ok(identity)
 }
 
 fn open_pidfd(pid: u32) -> Result<OwnedFd, RealmChildSupervisorError> {
@@ -249,7 +257,9 @@ fn validate_pidfd(
         .find_map(|line| line.strip_prefix("Pid:"))
         .and_then(|value| value.trim().parse::<i64>().ok())
         .ok_or(RealmChildSupervisorError::InvalidPair)?;
-    if pid == i64::from(expected_pid) {
+    if pid < 0 {
+        Err(RealmChildSupervisorError::ProcessMissing)
+    } else if pid == i64::from(expected_pid) {
         Ok(())
     } else {
         Err(RealmChildSupervisorError::InvalidPair)
@@ -261,9 +271,7 @@ pub enum RealmChildSupervisorError {
     InvalidPair,
     DuplicateRealm,
     ProcessMissing,
-    ExecutableMismatch,
-    ExecutableDigestMismatch,
-    GenerationMismatch,
+    PidfdIdentityMismatch,
     CgroupMismatch,
 }
 
@@ -273,9 +281,7 @@ impl fmt::Display for RealmChildSupervisorError {
             Self::InvalidPair => "invalid realm-child pair",
             Self::DuplicateRealm => "realm-child pair already supervised",
             Self::ProcessMissing => "realm-child process is not live",
-            Self::ExecutableMismatch => "realm-child executable mismatch",
-            Self::ExecutableDigestMismatch => "realm-child executable digest mismatch",
-            Self::GenerationMismatch => "realm-child generation mismatch",
+            Self::PidfdIdentityMismatch => "realm-child pidfd identity mismatch",
             Self::CgroupMismatch => "realm-child cgroup mismatch",
         })
     }

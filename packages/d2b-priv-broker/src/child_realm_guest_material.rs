@@ -281,3 +281,99 @@ fn material_protocol(_: GuestMaterialError) -> RunError {
 fn protocol(message: &'static str) -> RunError {
     RunError::Protocol(message.to_owned())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use d2b_contracts::{
+        v2_guest_configured_launches::GuestConfiguredLaunchEntryV1,
+        v2_identity::{RealmId, WorkloadId},
+    };
+    use d2b_core::configured_argv::ConfiguredArgv;
+    use d2b_realm_core::ProtocolToken;
+    use sha2::{Digest as _, Sha256};
+
+    const REALM: &str = "aaaaaaaaaaaaaaaaaaaa";
+    const WORKLOAD: &str = "bbbbbbbbbbbbbbbbbbba";
+    const STORAGE: &str = "guest-session-bbbbbbbbbbbbbbbbbbba";
+
+    fn encoded_catalog() -> Vec<u8> {
+        let entry = GuestConfiguredLaunchEntryV1::new(
+            ProtocolToken::parse("editor").unwrap(),
+            ConfiguredArgv::new(vec!["editor".to_owned()]).unwrap(),
+            false,
+        )
+        .unwrap();
+        GuestConfiguredLaunchesV1::new(
+            RealmId::parse(REALM).unwrap(),
+            WorkloadId::parse(WORKLOAD).unwrap(),
+            Sha256::digest(b"inventory").into(),
+            vec![entry],
+        )
+        .unwrap()
+        .encode()
+        .unwrap()
+        .as_slice()
+        .to_vec()
+    }
+
+    fn bundle(bytes: Vec<u8>, digest: [u8; 32]) -> ChildGuestMaterialBundlePort {
+        ChildGuestMaterialBundlePort {
+            realm_id: REALM.to_owned(),
+            entries: BTreeMap::from([(
+                WORKLOAD.to_owned(),
+                ChildBundleEntry {
+                    session_target: GuestMaterialTarget {
+                        storage_ref: STORAGE.to_owned(),
+                        path: PathBuf::from("/run/d2b/session"),
+                        owner_uid: 1000,
+                        owner_gid: 1000,
+                        mode: 0o400,
+                    },
+                    configured_target: GuestMaterialTarget {
+                        storage_ref: "configured-launches-bbbbbbbbbbbbbbbbbbba".to_owned(),
+                        path: PathBuf::from("/run/d2b/configured"),
+                        owner_uid: 1000,
+                        owner_gid: 1000,
+                        mode: 0o400,
+                    },
+                    configured_launches: Zeroizing::new(bytes),
+                    configured_digest: digest,
+                },
+            )]),
+        }
+    }
+
+    #[test]
+    fn child_bundle_resolves_only_exact_authority_and_storage() {
+        let encoded = encoded_catalog();
+        let port = bundle(encoded.clone(), Sha256::digest(&encoded).into());
+
+        assert!(port.resolve(STORAGE, REALM, WORKLOAD).is_ok());
+        assert!(matches!(
+            port.resolve(STORAGE, "cccccccccccccccccccc", WORKLOAD),
+            Err(GuestMaterialError::AuthorityMismatch)
+        ));
+        assert!(matches!(
+            port.resolve("other-storage", REALM, WORKLOAD),
+            Err(GuestMaterialError::StorageRefUnknown)
+        ));
+        assert!(matches!(
+            port.resolve(STORAGE, REALM, "ccccccccccccccccccca"),
+            Err(GuestMaterialError::StorageRefUnknown)
+        ));
+    }
+
+    #[test]
+    fn child_bundle_rejects_invalid_inventory_and_digest() {
+        assert!(matches!(
+            bundle(vec![0xff], [1; 32]).resolve(STORAGE, REALM, WORKLOAD),
+            Err(GuestMaterialError::InventoryInvalid)
+        ));
+        let encoded = encoded_catalog();
+        assert!(matches!(
+            bundle(encoded, [2; 32]).resolve(STORAGE, REALM, WORKLOAD),
+            Err(GuestMaterialError::DigestMismatch)
+        ));
+    }
+}

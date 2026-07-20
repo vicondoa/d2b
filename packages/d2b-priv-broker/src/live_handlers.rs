@@ -170,11 +170,6 @@ fn prebind_realm_listeners_inner(
     }
 
     fn bind_one(path: &Path) -> Result<std::os::fd::OwnedFd, LiveHandlerError> {
-        if std::fs::symlink_metadata(path).is_ok() {
-            return Err(LiveHandlerError::Activation(
-                "realm listener path already exists".to_owned(),
-            ));
-        }
         let fd = socket(
             AddressFamily::Unix,
             SockType::SeqPacket,
@@ -184,9 +179,11 @@ fn prebind_realm_listeners_inner(
         .map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
         let address =
             UnixAddr::new(path).map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
-        if let Err(error) =
-            bind(fd.as_raw_fd(), &address).and_then(|()| listen(&fd, Backlog::new(128)?))
-        {
+        bind(fd.as_raw_fd(), &address)
+            .map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
+        let backlog =
+            Backlog::new(128).map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
+        if let Err(error) = listen(&fd, backlog) {
             let _ = std::fs::remove_file(path);
             return Err(LiveHandlerError::Activation(error.to_string()));
         }

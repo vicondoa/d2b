@@ -675,6 +675,62 @@ mod tests {
     }
 
     #[test]
+    fn realm_layout_creates_owned_process_free_leaves() {
+        let b = backend(1234);
+        let parent = Path::new(DEFAULT_DELEGATED_PARENT_SLICE);
+        let layout = prepare_realm_cgroup_layout(&b, parent, "work", 2000, 2001).unwrap();
+
+        assert_eq!(layout.root, parent.join("r-work"));
+        assert_eq!(layout.controller, layout.root.join("controller"));
+        assert_eq!(layout.broker, layout.root.join("broker"));
+        assert_eq!(layout.workloads, layout.root.join("workloads"));
+        for path in [
+            &layout.root,
+            &layout.controller,
+            &layout.broker,
+            &layout.workloads,
+        ] {
+            assert_eq!(b.owner(path), Some((2000, 2001)));
+        }
+    }
+
+    #[test]
+    fn realm_layout_rejects_invalid_realm_id() {
+        let b = backend(1234);
+        assert!(matches!(
+            prepare_realm_cgroup_layout(
+                &b,
+                Path::new(DEFAULT_DELEGATED_PARENT_SLICE),
+                "../work",
+                2000,
+                2001,
+            ),
+            Err(CgroupOpError::Host(CgroupError::Io { .. }))
+        ));
+    }
+
+    #[test]
+    fn realm_layout_refuses_processes_in_internal_ancestors() {
+        let b = backend(1234);
+        let root = Path::new(DEFAULT_DELEGATED_PARENT_SLICE).join("r-work");
+        host_cgroup::CgroupBackend::mkdir(&b, &root).unwrap();
+        b.inject_procs(&root, &[4242]);
+
+        assert!(matches!(
+            prepare_realm_cgroup_layout(
+                &b,
+                Path::new(DEFAULT_DELEGATED_PARENT_SLICE),
+                "work",
+                2000,
+                2001,
+            ),
+            Err(CgroupOpError::Host(
+                CgroupError::CgroupInternalProcessesPresent { .. }
+            ))
+        ));
+    }
+
+    #[test]
     fn delegate_happy_path() {
         let b = backend(1234);
         let ctx = context(&[]);

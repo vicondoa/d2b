@@ -5,9 +5,9 @@ use std::process::{Child, Command, Stdio};
 
 use d2b_host::realm_children::RealmChildRole;
 use d2bd::realm_child_supervisor::{
-    ProcRealmChildAdoptionVerifier, RealmChildAdoptionCandidate, RealmChildAdoptionPair,
-    RealmChildAdoptionVerifier, RealmChildHandle, RealmChildPair, RealmChildSupervisor,
-    RealmChildSupervisorError,
+    PidfdKernelIdentity, ProcRealmChildAdoptionVerifier, RealmChildAdoptionCandidate,
+    RealmChildAdoptionPair, RealmChildAdoptionVerifier, RealmChildHandle, RealmChildPair,
+    RealmChildSupervisor, RealmChildSupervisorError, pidfd_kernel_identity,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -30,6 +30,11 @@ fn pidfd(pid: u32) -> std::os::fd::OwnedFd {
     .unwrap()
 }
 
+fn kernel_identity(pid: u32) -> PidfdKernelIdentity {
+    let fd = pidfd(pid);
+    pidfd_kernel_identity(fd.as_fd()).unwrap()
+}
+
 fn spawn_pair() -> (Children, RealmChildPair) {
     let controller = Command::new("sleep").arg("30").spawn().unwrap();
     let broker = Command::new("sleep").arg("30").spawn().unwrap();
@@ -45,6 +50,7 @@ fn spawn_pair() -> (Children, RealmChildPair) {
                 process_id: "controller-1".into(),
                 pid: controller_pid,
                 pidfd: pidfd(controller_pid),
+                pidfd_identity: kernel_identity(controller_pid),
                 executable: PathBuf::from("/bin/sleep"),
                 executable_digest: [1; 32],
                 controller_generation_id: "generation-1".into(),
@@ -55,6 +61,7 @@ fn spawn_pair() -> (Children, RealmChildPair) {
                 process_id: "broker-1".into(),
                 pid: broker_pid,
                 pidfd: pidfd(broker_pid),
+                pidfd_identity: kernel_identity(broker_pid),
                 executable: PathBuf::from("/bin/sleep"),
                 executable_digest: [2; 32],
                 controller_generation_id: "generation-1".into(),
@@ -120,6 +127,7 @@ fn verified_adoption_pins_each_process_before_identity_verification() {
             role: RealmChildRole::Controller,
             process_id: "controller-1".into(),
             pid: controller_pid,
+            pidfd_identity: kernel_identity(controller_pid),
             executable: PathBuf::from("/bin/sleep"),
             executable_digest: [1; 32],
             controller_generation_id: "generation-1".into(),
@@ -129,6 +137,7 @@ fn verified_adoption_pins_each_process_before_identity_verification() {
             role: RealmChildRole::Broker,
             process_id: "broker-1".into(),
             pid: broker_pid,
+            pidfd_identity: kernel_identity(broker_pid),
             executable: PathBuf::from("/bin/sleep"),
             executable_digest: [2; 32],
             controller_generation_id: "generation-1".into(),
@@ -141,7 +150,7 @@ fn verified_adoption_pins_each_process_before_identity_verification() {
 }
 
 #[test]
-fn proc_verifier_fails_closed_on_executable_mismatch() {
+fn proc_verifier_fails_closed_on_pidfd_identity_mismatch() {
     let child = Command::new("sleep").arg("30").spawn().unwrap();
     let pid = child.id();
     let _children = Children(vec![child]);
@@ -149,6 +158,10 @@ fn proc_verifier_fails_closed_on_executable_mismatch() {
         role: RealmChildRole::Controller,
         process_id: "controller-1".into(),
         pid,
+        pidfd_identity: PidfdKernelIdentity {
+            device: kernel_identity(pid).device,
+            inode: kernel_identity(pid).inode ^ 1,
+        },
         executable: PathBuf::from("/bin/false"),
         executable_digest: [1; 32],
         controller_generation_id: "generation-1".into(),
@@ -159,7 +172,7 @@ fn proc_verifier_fails_closed_on_executable_mismatch() {
         ProcRealmChildAdoptionVerifier
             .verify(&candidate, process_pidfd.as_fd())
             .unwrap_err(),
-        RealmChildSupervisorError::ExecutableMismatch
+        RealmChildSupervisorError::PidfdIdentityMismatch
     );
 }
 
@@ -201,6 +214,7 @@ fn proc_verifier_accepts_the_pinned_process_identity() {
         role: RealmChildRole::Controller,
         process_id: "controller-1".into(),
         pid,
+        pidfd_identity: kernel_identity(pid),
         executable,
         executable_digest,
         controller_generation_id: "generation-1".into(),
@@ -211,4 +225,152 @@ fn proc_verifier_accepts_the_pinned_process_identity() {
     ProcRealmChildAdoptionVerifier
         .verify(&candidate, process_pidfd.as_fd())
         .unwrap();
+}
+
+#[test]
+fn proc_verifier_fails_closed_on_cgroup_mismatch() {
+    let child = Command::new("sleep").arg("30").spawn().unwrap();
+    let pid = child.id();
+    let _children = Children(vec![child]);
+    let candidate = RealmChildAdoptionCandidate {
+        role: RealmChildRole::Controller,
+        process_id: "controller-1".into(),
+        pid,
+        pidfd_identity: kernel_identity(pid),
+        executable: PathBuf::from("/bin/sleep"),
+        executable_digest: [1; 32],
+        controller_generation_id: "generation-1".into(),
+        cgroup_leaf: PathBuf::from("/sys/fs/cgroup/d2b.slice/r-other/controller"),
+    };
+    let process_pidfd = pidfd(pid);
+
+    assert_eq!(
+        ProcRealmChildAdoptionVerifier
+            .verify(&candidate, process_pidfd.as_fd())
+            .unwrap_err(),
+        RealmChildSupervisorError::CgroupMismatch
+    );
+}
+
+#[test]
+fn proc_verifier_rejects_an_exited_pidfd() {
+    let mut child = Command::new("sleep").arg("30").spawn().unwrap();
+    let pid = child.id();
+    let process_pidfd = pidfd(pid);
+    let identity = pidfd_kernel_identity(process_pidfd.as_fd()).unwrap();
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let candidate = RealmChildAdoptionCandidate {
+        role: RealmChildRole::Controller,
+        process_id: "controller-1".into(),
+        pid,
+        pidfd_identity: identity,
+        executable: PathBuf::from("/bin/sleep"),
+        executable_digest: [1; 32],
+        controller_generation_id: "generation-1".into(),
+        cgroup_leaf: PathBuf::from("/sys/fs/cgroup/d2b.slice/r-work/controller"),
+    };
+
+    assert_eq!(
+        ProcRealmChildAdoptionVerifier
+            .verify(&candidate, process_pidfd.as_fd())
+            .unwrap_err(),
+        RealmChildSupervisorError::ProcessMissing
+    );
+}
+
+struct RejectBrokerVerifier;
+
+impl RealmChildAdoptionVerifier for RejectBrokerVerifier {
+    fn verify(
+        &self,
+        candidate: &RealmChildAdoptionCandidate,
+        _: BorrowedFd<'_>,
+    ) -> Result<(), RealmChildSupervisorError> {
+        if candidate.role == RealmChildRole::Broker {
+            Err(RealmChildSupervisorError::PidfdIdentityMismatch)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[test]
+fn adoption_failure_never_registers_a_partial_pair() {
+    let (children, _) = spawn_pair();
+    let controller_pid = children.0[0].id();
+    let broker_pid = children.0[1].id();
+    let root = PathBuf::from("/sys/fs/cgroup/d2b.slice/r-work");
+    let candidate = RealmChildAdoptionPair {
+        realm_id: "work".into(),
+        controller: RealmChildAdoptionCandidate {
+            role: RealmChildRole::Controller,
+            process_id: "controller-1".into(),
+            pid: controller_pid,
+            pidfd_identity: kernel_identity(controller_pid),
+            executable: PathBuf::from("/bin/sleep"),
+            executable_digest: [1; 32],
+            controller_generation_id: "generation-1".into(),
+            cgroup_leaf: root.join("controller"),
+        },
+        broker: RealmChildAdoptionCandidate {
+            role: RealmChildRole::Broker,
+            process_id: "broker-1".into(),
+            pid: broker_pid,
+            pidfd_identity: kernel_identity(broker_pid),
+            executable: PathBuf::from("/bin/sleep"),
+            executable_digest: [2; 32],
+            controller_generation_id: "generation-1".into(),
+            cgroup_leaf: root.join("broker"),
+        },
+    };
+    let mut supervisor = RealmChildSupervisor::default();
+
+    assert_eq!(
+        supervisor
+            .adopt_pair(candidate, &RejectBrokerVerifier)
+            .unwrap_err(),
+        RealmChildSupervisorError::PidfdIdentityMismatch
+    );
+    assert!(supervisor.is_empty());
+}
+
+#[test]
+fn adoption_rejects_mismatched_controller_generation() {
+    let (children, _) = spawn_pair();
+    let controller_pid = children.0[0].id();
+    let broker_pid = children.0[1].id();
+    let root = PathBuf::from("/sys/fs/cgroup/d2b.slice/r-work");
+    let candidate = RealmChildAdoptionPair {
+        realm_id: "work".into(),
+        controller: RealmChildAdoptionCandidate {
+            role: RealmChildRole::Controller,
+            process_id: "controller-1".into(),
+            pid: controller_pid,
+            pidfd_identity: kernel_identity(controller_pid),
+            executable: PathBuf::from("/bin/sleep"),
+            executable_digest: [1; 32],
+            controller_generation_id: "generation-1".into(),
+            cgroup_leaf: root.join("controller"),
+        },
+        broker: RealmChildAdoptionCandidate {
+            role: RealmChildRole::Broker,
+            process_id: "broker-1".into(),
+            pid: broker_pid,
+            pidfd_identity: kernel_identity(broker_pid),
+            executable: PathBuf::from("/bin/sleep"),
+            executable_digest: [2; 32],
+            controller_generation_id: "generation-2".into(),
+            cgroup_leaf: root.join("broker"),
+        },
+    };
+    let mut supervisor = RealmChildSupervisor::default();
+
+    assert_eq!(
+        supervisor
+            .adopt_pair(candidate, &PidfdVerifier)
+            .unwrap_err(),
+        RealmChildSupervisorError::InvalidPair
+    );
+    assert!(supervisor.is_empty());
 }

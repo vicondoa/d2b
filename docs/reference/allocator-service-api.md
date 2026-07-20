@@ -59,14 +59,17 @@ and a cgroup-v2 leaf dirfd. Listener descriptors must be `AF_UNIX`
 `SOCK_SEQPACKET` sockets, namespace handles must be nsfs descriptors, storage
 roots must be directories, and every descriptor must be `CLOEXEC`.
 `prebind_realm_listeners_for_identities` creates both sockets before spawn,
-refuses existing entries, and applies separate non-root owner/group modes. The
-derived principals are `d2bd-r-<realm-id>` and `d2bbr-r-<realm-id>`; the shared
-cgroup group is `d2bcg-r-<realm-id>`, distinct from the
-`d2b-r-<realm-id>` public access group.
+refuses existing entries, never unlinks a socket when binding loses a creation
+race, and applies separate non-root owner/group modes. The derived principals
+are `d2bd-r-<realm-id>` and `d2bbr-r-<realm-id>`; the shared cgroup group is
+`d2bcg-r-<realm-id>`, distinct from the `d2b-r-<realm-id>` public access group.
 
 The broker creates each child through `clone3` with a pidfd, a dedicated user,
 mount, network, IPC, PID, and cgroup namespace, and
 `CLONE_INTO_CGROUP`. The two children use distinct non-root host identities.
+Both install a mandatory architecture-checked seccomp filter that denies
+process introspection and host-kernel mutation syscalls before `execve`; the
+filter is inherited by descendants.
 Declared descriptors are installed from fd 10 upward and named only through
 fixed environment keys. The child receives no `SD_LISTEN_FDS`, path lookup, or
 undeclared descriptor. Namespace or cgroup creation failure has no fork or
@@ -111,7 +114,12 @@ distinct PIDs and process IDs, one controller generation, and the canonical
 `d2b.slice/r-<realm-id>/{controller,broker}` leaves. Registration is atomic per
 realm.
 
-Restart adoption first verifies both candidates' executable, process ID,
-controller generation, and cgroup membership from `/proc`. Only after both
-verify does it open fresh pidfds and register the pair. Missing, ambiguous, or
-mismatched state is rejected; pidfds are never persisted.
+The authenticated initial handoff records each pidfd's stable pidfs
+device/inode identity with the launch-record executable digest, process ID, and
+controller generation. Restart adoption opens both fresh pidfds before reading
+numeric-PID state, requires each pidfs identity to match the recorded process,
+checks the canonical cgroup membership, and then rechecks the pidfd after the
+`/proc/<pid>/cgroup` read. It does not depend on cross-UID access to
+`/proc/<pid>/exe` or `/proc/<pid>/environ`. Only after both candidates verify
+does it atomically register the pair. Missing, exited, recycled, ambiguous, or
+mismatched state is rejected; pidfds themselves are never persisted.

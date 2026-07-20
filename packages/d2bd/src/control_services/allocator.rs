@@ -1,12 +1,12 @@
 use std::fmt;
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsFd, OwnedFd};
 
 use d2b_contracts::v2_services::{
     MethodSpec, ServiceSpec, broker, validate_spawn_response_for_request,
 };
 use d2b_host::realm_children::{RealmChildLaunchRecord, RealmChildRole};
 
-use crate::realm_child_supervisor::{RealmChildHandle, RealmChildPair};
+use crate::realm_child_supervisor::{RealmChildHandle, RealmChildPair, pidfd_kernel_identity};
 
 pub(super) fn owns(service: &ServiceSpec, method: &MethodSpec) -> bool {
     service.package == "d2b.broker.v2" && matches!(method.name, "Allocate" | "Spawn")
@@ -58,11 +58,14 @@ pub fn consume_spawn_handoff(
             .get_mut(child.pidfd_attachment_index as usize)
             .and_then(Option::take)
             .ok_or(AllocatorControlError::AttachmentCorrelation)?;
+        let pidfd_identity = pidfd_kernel_identity(pidfd.as_fd())
+            .map_err(|_| AllocatorControlError::AttachmentCorrelation)?;
         let handle = RealmChildHandle {
             role,
             process_id: child.process_id.clone(),
             pid: child.pid,
             pidfd,
+            pidfd_identity,
             executable: expected.executable.clone(),
             executable_digest: expected.executable_digest,
             controller_generation_id: request.controller_generation_id.clone(),

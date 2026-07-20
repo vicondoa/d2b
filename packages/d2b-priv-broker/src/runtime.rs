@@ -1049,16 +1049,23 @@ impl crate::service_v2::BrokerRuntimeDispatch for RuntimeBrokerOperations {
         let audit_context =
             DispatchAuditContext::from_request(&broker_request, self.peer_pid as i32, &caller_role)
                 .map_err(|_| crate::service_v2::BrokerServiceFailure::InvalidRequest)?;
-        let response = dispatch_request(
-            broker_request,
-            self.config.d2bd_uid,
-            self.config.d2bd_gid,
-            caller_role,
-            &audit_context,
-            &self.config,
-            &self.audit_log,
-            Some(resolver),
-        )
+        let config = self.config.clone();
+        let audit_log = Arc::clone(&self.audit_log);
+        let resolver = Arc::clone(resolver);
+        let response = tokio::task::spawn_blocking(move || {
+            dispatch_request(
+                broker_request,
+                config.d2bd_uid,
+                config.d2bd_gid,
+                caller_role,
+                &audit_context,
+                &config,
+                &audit_log,
+                Some(&resolver),
+            )
+        })
+        .await
+        .map_err(|_| crate::service_v2::BrokerServiceFailure::Backend)?
         .map_err(|_| crate::service_v2::BrokerServiceFailure::Backend)?;
         if !response.fds.is_empty() {
             return Err(crate::service_v2::BrokerServiceFailure::Backend);
@@ -1491,6 +1498,7 @@ impl crate::allocator_service::RealmLaunchRecordResolver for RuntimeLaunchRecord
     }
 }
 
+#[derive(Clone)]
 struct RuntimeAllocatorDispatch {
     state_dir: PathBuf,
     launch_records: RuntimeLaunchRecordResolver,
@@ -1653,8 +1661,19 @@ impl crate::service_v2::AllocatorServiceDispatch for RuntimeAllocatorDispatch {
         >,
         crate::allocator_service::AllocatorServiceError,
     > {
-        self.service(Self::owner_from_allocate(request)?)?
-            .allocate(request)
+        let owner = Self::owner_from_allocate(request)?;
+        let dispatch = self.clone();
+        let request = request.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut service = dispatch.service(owner)?;
+            service.allocate(&request)
+        })
+        .await
+        .map_err(|_| {
+            crate::allocator_service::AllocatorServiceError::Invariant(
+                "allocator blocking worker failed",
+            )
+        })?
     }
 
     async fn spawn(
@@ -1701,10 +1720,15 @@ impl crate::service_v2::AllocatorServiceDispatch for RuntimeAllocatorDispatch {
             })?,
             node: None,
         };
-        let reply = self
-            .service(owner)?
-            .spawn(request, attachments, bootstrap)
-            .await?;
+        let dispatch = self.clone();
+        let service = tokio::task::spawn_blocking(move || dispatch.service(owner))
+            .await
+            .map_err(|_| {
+                crate::allocator_service::AllocatorServiceError::Invariant(
+                    "allocator blocking worker failed",
+                )
+            })??;
+        let reply = service.spawn(request, attachments, bootstrap).await?;
         let attachments = reply.attachments.bind_policies(
             runtime_pidfd_verifier(&record, RealmChildRole::Controller),
             runtime_pidfd_verifier(&record, RealmChildRole::Broker),

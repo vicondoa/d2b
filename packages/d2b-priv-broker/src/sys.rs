@@ -2092,6 +2092,93 @@ pub mod pidfd_sys {
             SeccompProgram { filters }
         }
 
+        pub fn deny_syscalls(syscalls: &[u32]) -> Self {
+            const BPF_LD_W_ABS: u16 = 0x20;
+            const BPF_JMP_JEQ_K: u16 = 0x15;
+            #[cfg(target_arch = "x86_64")]
+            const BPF_JMP_JSET_K: u16 = 0x45;
+            const BPF_RET_K: u16 = 0x06;
+            const SECCOMP_RET_KILL_PROCESS: u32 = 0x8000_0000;
+            const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
+            const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
+            #[cfg(target_arch = "x86_64")]
+            const AUDIT_ARCH_CURRENT: u32 = 0xc000_003e;
+            #[cfg(target_arch = "aarch64")]
+            const AUDIT_ARCH_CURRENT: u32 = 0xc000_00b7;
+
+            let mut filters = Vec::with_capacity(6 + syscalls.len() * 2);
+            filters.push(libc::sock_filter {
+                code: BPF_LD_W_ABS,
+                jt: 0,
+                jf: 0,
+                k: 4,
+            });
+            filters.push(libc::sock_filter {
+                code: BPF_JMP_JEQ_K,
+                jt: 1,
+                jf: 0,
+                k: AUDIT_ARCH_CURRENT,
+            });
+            filters.push(libc::sock_filter {
+                code: BPF_RET_K,
+                jt: 0,
+                jf: 0,
+                k: SECCOMP_RET_KILL_PROCESS,
+            });
+            filters.push(libc::sock_filter {
+                code: BPF_LD_W_ABS,
+                jt: 0,
+                jf: 0,
+                k: 0,
+            });
+            #[cfg(target_arch = "x86_64")]
+            {
+                filters.push(libc::sock_filter {
+                    code: BPF_JMP_JSET_K,
+                    jt: 0,
+                    jf: 1,
+                    k: 0x4000_0000,
+                });
+                filters.push(libc::sock_filter {
+                    code: BPF_RET_K,
+                    jt: 0,
+                    jf: 0,
+                    k: SECCOMP_RET_KILL_PROCESS,
+                });
+            }
+            for syscall in syscalls {
+                filters.push(libc::sock_filter {
+                    code: BPF_JMP_JEQ_K,
+                    jt: 0,
+                    jf: 1,
+                    k: *syscall,
+                });
+                filters.push(libc::sock_filter {
+                    code: BPF_RET_K,
+                    jt: 0,
+                    jf: 0,
+                    k: SECCOMP_RET_ERRNO | libc::EPERM as u32,
+                });
+            }
+            filters.push(libc::sock_filter {
+                code: BPF_RET_K,
+                jt: 0,
+                jf: 0,
+                k: SECCOMP_RET_ALLOW,
+            });
+            Self { filters }
+        }
+
+        #[cfg(test)]
+        pub(super) fn rejects_syscall(&self, syscall: u32) -> bool {
+            self.filters.windows(2).any(|pair| {
+                pair[0].code == 0x15
+                    && pair[0].k == syscall
+                    && pair[1].code == 0x06
+                    && pair[1].k & 0xffff_0000 == 0x0005_0000
+            })
+        }
+
         /// Installs this BPF program in the calling process via
         /// `seccomp(SECCOMP_SET_MODE_FILTER)`.  Caller must have
         /// already set `PR_SET_NO_NEW_PRIVS`.  Used by the broker
@@ -2969,6 +3056,22 @@ pub mod pidfd_sys {
         cgroup_dir_fd: OwnedFd,
         inherited_fds: Vec<OwnedFd>,
     ) -> io::Result<SpawnOutcome> {
+        let seccomp_program = SeccompProgram::deny_syscalls(&[
+            libc::SYS_ptrace as u32,
+            libc::SYS_process_vm_readv as u32,
+            libc::SYS_process_vm_writev as u32,
+            libc::SYS_bpf as u32,
+            libc::SYS_perf_event_open as u32,
+            libc::SYS_userfaultfd as u32,
+            libc::SYS_reboot as u32,
+            libc::SYS_init_module as u32,
+            libc::SYS_finit_module as u32,
+            libc::SYS_delete_module as u32,
+            libc::SYS_swapon as u32,
+            libc::SYS_swapoff as u32,
+            libc::SYS_acct as u32,
+            libc::SYS_quotactl as u32,
+        ]);
         let isolation = RunnerIsolationSpec {
             capabilities: Vec::new(),
             namespaces: NamespaceSet {
@@ -2979,7 +3082,7 @@ pub mod pidfd_sys {
                 uts: false,
                 user: true,
             },
-            seccomp_program: None,
+            seccomp_program: Some(seccomp_program),
             mount_policy: MountPolicy {
                 read_only_paths: Vec::new(),
                 writable_paths: Vec::new(),
@@ -3668,6 +3771,21 @@ mod tests {
             !super::pidfd_sys::device_mask_required(&policy, &test_namespaces(false)),
             "device masking installs a private /proc and therefore requires the role to request a pid namespace"
         );
+    }
+
+    #[test]
+    fn realm_child_seccomp_denies_host_introspection_and_kernel_mutation() {
+        let program = super::pidfd_sys::SeccompProgram::deny_syscalls(&[
+            libc::SYS_ptrace as u32,
+            libc::SYS_bpf as u32,
+            libc::SYS_reboot as u32,
+        ]);
+
+        assert!(program.rejects_syscall(libc::SYS_ptrace as u32));
+        assert!(program.rejects_syscall(libc::SYS_bpf as u32));
+        assert!(program.rejects_syscall(libc::SYS_reboot as u32));
+        assert!(!program.rejects_syscall(libc::SYS_read as u32));
+        assert!(!program.rejects_syscall(libc::SYS_clone3 as u32));
     }
 
     #[test]

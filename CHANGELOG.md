@@ -330,8 +330,20 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
-- Rechecked pidfd kernel identity after executable/cgroup evidence collection so
-  a process exit and numeric PID reuse cannot authenticate a different process.
+- Closed pidfd identity races by rechecking the kernel pidfd after `/proc`
+  evidence collection and binding realm-child restart adoption to stable pidfs
+  device/inode identity captured during the authenticated handoff, without
+  cross-UID reads of `/proc/<pid>/exe` or `/proc/<pid>/environ`.
+- Confined parent-spawned realm controllers and brokers with mandatory seccomp
+  denial of host-introspection and host-kernel mutation syscalls, moved blocking
+  broker dispatch and allocator ledger work off Tokio executor threads, and
+  preserved foreign realm listener sockets when a bind loses a creation race.
+- Made launch, list, and status consistently emit the typed `daemon-down`
+  envelope for both missing and refused daemon sockets, with aligned CLI
+  reference tables and regression coverage for stale socket files.
+- Made broker tests honor disposable validation/Cargo targets and create
+  private auto-cleaned socket directories instead of leaking crate-local
+  targets or attempting to chmod a shared `/tmp`.
 - Retired CLI-contract daemon wrappers for the removed legacy `d2bd test-client`,
   keeping host-check coverage in hermetic CLI cases and audit role enforcement
   in daemon unit tests; performance readiness now uses socket/version artifacts,

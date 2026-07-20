@@ -49,27 +49,35 @@ pub(crate) fn test_tempdir(component: &str) -> tempfile::TempDir {
     let root = std::env::var_os("D2B_VALIDATION_OUTPUT_DIR")
         .map(std::path::PathBuf::from)
         .map(|root| root.join("rust-test-scratch/d2b-priv-broker"))
-        .unwrap_or_else(|| {
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/test-scratch")
-        })
-        .join(component);
-    std::fs::create_dir_all(&root).expect("create broker test output root");
-    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
-        .expect("harden broker test output root");
-    tempfile::tempdir_in(root).expect("create broker test tempdir")
+        .or_else(|| {
+            std::env::var_os("CARGO_TARGET_DIR")
+                .map(std::path::PathBuf::from)
+                .map(|root| root.join("test-scratch/d2b-priv-broker"))
+        });
+    if let Some(root) = root {
+        let root = root.join(component);
+        std::fs::create_dir_all(&root).expect("create broker test output root");
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
+            .expect("harden broker test output root");
+        tempfile::tempdir_in(root).expect("create broker test tempdir")
+    } else {
+        tempfile::Builder::new()
+            .prefix(&format!("d2bbr-{component}-"))
+            .tempdir()
+            .expect("create broker test tempdir")
+    }
 }
 
 #[cfg(test)]
 pub(crate) fn test_socket_tempdir() -> tempfile::TempDir {
-    use std::os::unix::fs::PermissionsExt;
-
     let root = std::env::var_os("D2B_VALIDATION_SOCKET_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
     std::fs::create_dir_all(&root).expect("create broker test socket root");
-    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
-        .expect("harden broker test socket root");
-    tempfile::tempdir_in(root).expect("create broker socket tempdir")
+    tempfile::Builder::new()
+        .prefix("d2bbr-")
+        .tempdir_in(root)
+        .expect("create private broker socket tempdir")
 }
 
 // Behavioral + regression seccomp BPF tests.

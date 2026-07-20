@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::{IoSliceMut, Seek, SeekFrom, Write};
 use std::os::fd::{AsRawFd, BorrowedFd, OwnedFd};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::sync::{
@@ -1082,9 +1082,16 @@ async fn spawn_rejects_attachment_metadata_mismatch_before_spawning() {
 fn listeners_are_prebound_as_a_pair_and_never_replaced() {
     let root = socket_tempdir();
     let listeners = prebind_realm_listeners(root.path(), "work").unwrap();
-    assert!(root.path().join("work/public.sock").exists());
+    let public_path = root.path().join("work/public.sock");
+    assert!(public_path.exists());
     assert!(root.path().join("work/broker.sock").exists());
+    let public_inode = std::fs::symlink_metadata(&public_path).unwrap().ino();
     assert!(prebind_realm_listeners(root.path(), "work").is_err());
+    assert_eq!(
+        std::fs::symlink_metadata(&public_path).unwrap().ino(),
+        public_inode,
+        "a failed bind must not unlink or replace the existing listener"
+    );
     drop(listeners);
     root.close().expect("remove listener fixture");
 }

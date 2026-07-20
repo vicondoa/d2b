@@ -2969,10 +2969,10 @@ fn cmd_launch(context: &Context, args: &LaunchArgs) -> Result<i32, CliFailure> {
     // ever lives behind the hash-verified private bundle that the daemon
     // resolves, so a missing daemon socket must fail closed here rather than
     // attempting any client-side re-implementation.
-    if !context.public_socket.exists() {
-        return emit_host_error(&daemon_down_envelope("launch"), args.json);
-    }
-    let daemon = service_v2::DaemonService::connect(&context.public_socket)?;
+    let daemon = match connect_daemon_for_command(context, "launch", args.json)? {
+        DaemonCommandConnection::Connected(daemon) => daemon,
+        DaemonCommandConnection::Unavailable(exit) => return Ok(exit),
+    };
     let canonical = resolve_launch_target(&daemon, &args.target)?;
     let target = d2b_core::workload_identity::WorkloadTarget::parse(&canonical)
         .map_err(|_| CliFailure::new(76, "daemon returned a non-canonical workload target"))?;
@@ -3045,10 +3045,10 @@ fn new_launch_operation_id() -> Result<d2b_realm_core::OperationId, CliFailure> 
 }
 
 fn cmd_list(context: &Context, args: &ListArgs) -> Result<i32, CliFailure> {
-    if !context.public_socket.exists() {
-        return emit_host_error(&daemon_down_envelope("list"), args.json);
-    }
-    let daemon = service_v2::DaemonService::connect(&context.public_socket)?;
+    let daemon = match connect_daemon_for_command(context, "list", args.json)? {
+        DaemonCommandConnection::Connected(daemon) => daemon,
+        DaemonCommandConnection::Unavailable(exit) => return Ok(exit),
+    };
     let workloads = daemon.list_workloads(None)?;
     let output = service_v2::list_output(&workloads)?;
 
@@ -3093,9 +3093,10 @@ fn cmd_status(context: &Context, args: &StatusArgs) -> Result<i32, CliFailure> {
         (_, Some(flagged)) => Some(flagged.clone()),
         (None, None) => None,
     };
-    if !context.public_socket.exists() {
-        return emit_host_error(&daemon_down_envelope("status"), args.json);
-    }
+    let daemon = match connect_daemon_for_command(context, "status", args.json)? {
+        DaemonCommandConnection::Connected(daemon) => daemon,
+        DaemonCommandConnection::Unavailable(exit) => return Ok(exit),
+    };
     if !args.json {
         match &selected_vm {
             // Single-VM status only warns about THAT VM's pending edit,
@@ -3104,7 +3105,6 @@ fn cmd_status(context: &Context, args: &StatusArgs) -> Result<i32, CliFailure> {
             None => warn_all_pending_staged_configs(),
         }
     }
-    let daemon = service_v2::DaemonService::connect(&context.public_socket)?;
     let (workloads, read_model) = daemon.inspect(selected_vm.as_deref())?;
     let (inventory, projections) = service_v2::status_output(&workloads, &read_model)?;
     if let Some(vm_name) = selected_vm {
@@ -5463,6 +5463,33 @@ fn daemon_down_envelope(verb: &str) -> HostErrorEnvelope {
         "Start d2bd (systemctl start d2bd d2b-priv-broker.socket) and re-run the same command. See docs/how-to/migrate-d2b-v1-0-to-v1-1.md#recovery-broker-bring-up-troubleshooting for the full bring-up checklist.",
         "docs/reference/error-codes.md#daemon-down",
     )
+}
+
+enum DaemonCommandConnection {
+    Connected(Box<service_v2::DaemonService>),
+    Unavailable(i32),
+}
+
+fn connect_daemon_for_command(
+    context: &Context,
+    verb: &str,
+    json: bool,
+) -> Result<DaemonCommandConnection, CliFailure> {
+    if !context.public_socket.exists() {
+        return emit_host_error(&daemon_down_envelope(verb), json)
+            .map(DaemonCommandConnection::Unavailable);
+    }
+    match service_v2::DaemonService::connect(&context.public_socket) {
+        Ok(daemon) => Ok(DaemonCommandConnection::Connected(Box::new(daemon))),
+        Err(error)
+            if error.exit_code == 69
+                && error.message == daemon_access::ClientError::ConnectFailed.to_string() =>
+        {
+            emit_host_error(&daemon_down_envelope(verb), json)
+                .map(DaemonCommandConnection::Unavailable)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// Typed `not-yet-implemented` envelope (exit 78) for verbs whose
@@ -13076,6 +13103,27 @@ mod host_install_dispatch_tests {
         assert_eq!(envelope.get("exitCode").and_then(Value::as_i64), Some(1));
     }
 
+    fn leave_stale_seqpacket_socket(path: &std::path::Path) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        let _ = std::fs::remove_file(path);
+        let fd = socket(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            SockFlag::SOCK_CLOEXEC,
+            None,
+        )
+        .unwrap();
+        bind(
+            fd.as_raw_fd(),
+            &UnixAddr::new(path).expect("stale socket address"),
+        )
+        .unwrap();
+        drop(fd);
+        assert!(path.exists());
+    }
+
     #[test]
     fn daemon_backed_v2_commands_emit_typed_daemon_down_envelopes() {
         let mut context = missing_daemon_context();
@@ -13141,6 +13189,52 @@ mod host_install_dispatch_tests {
             },
         );
         assert_eq!(result.expect("console daemon-down exit"), 1);
+    }
+
+    #[test]
+    fn daemon_backed_commands_treat_refused_stale_socket_as_daemon_down() {
+        let mut context = missing_daemon_context();
+        context.public_socket = test_socket_path("typed-daemon-refused", ".sock");
+        leave_stale_seqpacket_socket(&context.public_socket);
+
+        let (result, stdout) = super::with_test_stdout_capture(|| {
+            super::cmd_launch(
+                &context,
+                &super::LaunchArgs {
+                    target: "demo".to_owned(),
+                    item: "editor".to_owned(),
+                    json: true,
+                    human: false,
+                },
+            )
+        });
+        assert_daemon_down_json(result, stdout);
+
+        let (result, stdout) = super::with_test_stdout_capture(|| {
+            super::cmd_list(
+                &context,
+                &super::ListArgs {
+                    json: true,
+                    human: false,
+                },
+            )
+        });
+        assert_daemon_down_json(result, stdout);
+
+        let (result, stdout) = super::with_test_stdout_capture(|| {
+            super::cmd_status(
+                &context,
+                &super::StatusArgs {
+                    json: true,
+                    human: false,
+                    check_bridges: false,
+                    vm_flag: None,
+                    vm: None,
+                },
+            )
+        });
+        assert_daemon_down_json(result, stdout);
+        std::fs::remove_file(&context.public_socket).unwrap();
     }
 
     #[test]

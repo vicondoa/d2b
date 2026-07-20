@@ -93,9 +93,9 @@ and never fall back.
 | Code | Meaning |
 | --- | --- |
 | `0` | Launch committed (a detached outcome). |
-| `1` | Target not found at open-terminal time (a race after resolution). |
+| `1` | Daemon unavailable (`daemon-down`) or target not found at open-terminal time (a race after resolution). |
 | `2` | `--item` omitted, target/item not found, or the bare workload id is ambiguous. |
-| `69` | Daemon socket unreachable (no static or provider fallback), or the provider/transport is otherwise unavailable. |
+| `69` | The provider/transport fails after daemon connection. |
 | `75` | Resource exhausted (for example the operation is temporarily busy). |
 | `76` | Protocol response, non-canonical daemon target, or operation-id conflict. |
 | `77` | Caller lacks launcher/admin authority. |
@@ -126,9 +126,9 @@ and never fall back.
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Launch committed (a detached outcome). | — |
-| `1` | Target not found at open-terminal time (a race after resolution). | — |
+| `1` | Daemon unavailable, or target not found at open-terminal time (a race after resolution). | [`daemon-down`](./error-codes.md#daemon-down) |
 | `2` | `--item` omitted, target/item not found, or the bare workload id is ambiguous. | [`usage`](./error-codes.md#usage) |
-| `69` | Daemon socket unreachable (no static or provider fallback), or the provider/transport is otherwise unavailable. | workload launch error |
+| `69` | The provider/transport fails after daemon connection. | workload launch error |
 | `75` | Resource exhausted (for example the operation is temporarily busy). | workload launch error |
 | `76` | Protocol response, non-canonical daemon target, or operation-id conflict. | workload launch error |
 | `77` | Caller lacks launcher/admin authority. | workload launch error |
@@ -176,8 +176,9 @@ launched tools.host.d2b item browser (committed)
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Success. | — |
-| `1` | Unexpected daemon reply, local probe, or manifest-read failure. | [`generic`](./error-codes.md#generic) |
+| `1` | Daemon unavailable, unexpected daemon reply, local probe, or manifest-read failure. | [`daemon-down`](./error-codes.md#daemon-down), [`generic`](./error-codes.md#generic) |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
+| `69` | The daemon session or transport fails after connection. | `client-session-*`, `client-transport-failed` |
 
 **Human example**
 
@@ -728,8 +729,9 @@ daemon-side runtime-view contract and reads it from d2bd's public socket.
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Success. | — |
-| `1` | Unexpected probe failure. | [`generic`](./error-codes.md#generic) |
+| `1` | Daemon unavailable or unexpected probe failure. | [`daemon-down`](./error-codes.md#daemon-down), [`generic`](./error-codes.md#generic) |
 | `2` | Unknown flag, unsupported `--json` shape, or unknown VM. | [`usage`](./error-codes.md#usage) |
+| `69` | The daemon session or transport fails after connection. | `client-session-*`, `client-transport-failed` |
 
 **Human example**
 
