@@ -1944,6 +1944,16 @@
       "path": "packages/d2b-sk-frontend/src/services/security_key/mod.rs"
     },
     {
+      "name": "w6-session-server",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session/src/server.rs"
+    },
+    {
+      "name": "w6-session-unix-systemd",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session-unix/src/systemd.rs"
+    },
+    {
       "name": "w6-shell-supervisor-composition",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2b-unsafe-local-helper/src/services/shell/mod.rs"

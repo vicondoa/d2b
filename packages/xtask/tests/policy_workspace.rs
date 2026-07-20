@@ -1404,6 +1404,9 @@ fn v2_foundation_delivery_authorities_cover_every_tracked_file() {
     let service_migration: serde_json::Value =
         serde_json::from_str(&read_repo_file("delivery/manifests/w5.json"))
             .expect("service-migration delivery manifest");
+    let authenticated_edge: serde_json::Value =
+        serde_json::from_str(&read_repo_file("delivery/manifests/w6.json"))
+            .expect("authenticated-edge delivery manifest");
     let foundation_fingerprints = |manifest: &serde_json::Value| {
         manifest["contract_fingerprints"]
             .as_array()
@@ -1421,9 +1424,14 @@ fn v2_foundation_delivery_authorities_cover_every_tracked_file() {
     };
     let integrated_fingerprints = foundation_fingerprints(&integrated);
     let service_migration_fingerprints = foundation_fingerprints(&service_migration);
-    let actual = integrated_fingerprints
-        .union(&service_migration_fingerprints)
-        .cloned()
+    let authenticated_edge_fingerprints = foundation_fingerprints(&authenticated_edge);
+    let actual = [
+        &integrated_fingerprints,
+        &service_migration_fingerprints,
+        &authenticated_edge_fingerprints,
+    ]
+        .into_iter()
+        .flat_map(|fingerprints| fingerprints.iter().cloned())
         .collect::<BTreeSet<_>>();
 
     let mut expected = tracked
@@ -1443,8 +1451,8 @@ fn v2_foundation_delivery_authorities_cover_every_tracked_file() {
         "packages/d2b-session-unix/src/systemd.rs",
     ] {
         assert!(
-            integrated_fingerprints.contains(required),
-            "integrated delivery authority omits {required}"
+            authenticated_edge_fingerprints.contains(required),
+            "authenticated-edge delivery authority omits {required}"
         );
     }
     for required in [
