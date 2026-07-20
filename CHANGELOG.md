@@ -334,7 +334,8 @@ deprecations ship one minor release before removal.
   plus shell list/detach/kill on the new client facade while keeping interactive
   stream routing fail-closed, completed wlcontrol authenticated inspection and
   typed lifecycle mapping with VM-only projections while keeping runtime-owned
-  routes fail-closed, and recorded the remaining desktop-consumer follow-up.
+  routes fail-closed, and completed the WeezTerm migration so every audited
+  desktop consumer now pins the current client distribution.
 - Made dependency-ready wave launch and file-overlap-based component dispatch
   mandatory after shared contract prep, preventing one persistent agent from
   serializing unrelated implementation and review scopes, with shipped-package

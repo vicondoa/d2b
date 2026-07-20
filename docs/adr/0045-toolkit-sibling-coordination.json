@@ -307,21 +307,15 @@
       "repository": "vicondoa/weezterm",
       "futureRepository": null,
       "auditedRef": "adr0045-w9-weezterm",
-      "auditedRevision": "79897243053e2755e85a3c35f38e688e8b914e2c",
+      "auditedRevision": "0c91319f88e82c5a650b64155eec7708053d8670",
       "defaultBranchRevision": "d461e3f92d9ff7faafc8e6c83a111ca0aa5ae9ca",
       "protocolPolicy": "canonical-only",
       "consumesDistribution": {
         "id": "d2b-client-toolkit",
         "repository": "vicondoa/d2b-toolkit",
-        "revision": "800c2878533f600d8f085b3d2aafcddb970232b2",
-        "sourceRevision": "4018d9c9652bd826c2e6a9abccdcdcafb832d944",
-        "fingerprint": "c2c99bdd77ba66948fce81161dcc3efde608eefefb96f28fa934c9f58d96d838"
-      },
-      "followup": {
-        "status": "running",
-        "targetRevision": "3d6b75d47c8df66c1722ea324d64334a127d43ec",
-        "targetSourceRevision": "9dc902243cdd7aba7ef269988b96f0aae6e037da",
-        "targetFingerprint": "5a20cef3a64281df819eeb76bdfe385999755479b467b559653011582fb9c043"
+        "revision": "3d6b75d47c8df66c1722ea324d64334a127d43ec",
+        "sourceRevision": "9dc902243cdd7aba7ef269988b96f0aae6e037da",
+        "fingerprint": "5a20cef3a64281df819eeb76bdfe385999755479b467b559653011582fb9c043"
       },
       "ownership": {
         "mode": "exclusive-file-set",
@@ -399,7 +393,7 @@
     },
     {
       "id": "downstream-refresh",
-      "detail": "The WeezTerm audited head still consumes the prior client-toolkit revision and its follow-up is running against the frozen W6 source and current distribution fingerprint; wlcontrol and wlterm have completed their authenticated W9 client migrations."
+      "detail": "The audited wlcontrol, wlterm, and WeezTerm heads all consume the current client-toolkit distribution at the frozen W6 source and fingerprint; no desktop-consumer toolkit refresh remains."
     }
   ]
 }

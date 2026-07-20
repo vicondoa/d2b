@@ -24,6 +24,7 @@ const LEGACY_PROVIDER_DISTRIBUTION_FINGERPRINT: &str =
 const PROVIDER_DISTRIBUTION_REVISION: &str = "202d1d64d2578a9198a26b300ded0332cce879d6";
 const WLCONTROL_REVISION: &str = "6511a8cb45564e041b1a6331ad9609c269ed5b94";
 const WLTERM_REVISION: &str = "0347f3aea0f84fb2f970f793fd8b9a6ea1e3e931";
+const WEEZTERM_REVISION: &str = "0c91319f88e82c5a650b64155eec7708053d8670";
 const CURRENT_SOURCE_SUPPLEMENTS: [&str; 2] = [
     "docs/reference/toolkit-source-contract.md",
     "docs/reference/v2-foundation-crates.md",
@@ -1320,6 +1321,9 @@ fn sibling_coordination_graph_has_disjoint_repository_ownership() {
                 assert_eq!(route["owner"], "W8");
                 assert_eq!(route["status"], "fail-closed");
             }
+        }
+        if id == "weezterm" {
+            assert_eq!(revision, WEEZTERM_REVISION, "WeezTerm audited revision");
         }
         if ["wlcontrol", "wlterm", "weezterm"].contains(&id) {
             let pin = object(
