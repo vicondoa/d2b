@@ -569,10 +569,13 @@ fn realm_child_argv(
         }
     ))
     .map_err(|_| AllocatorServiceError::InvalidRequest("child process title contains NUL"))?;
-    let mut argv = vec![title];
-    if role == RealmChildRole::Broker {
-        argv.push(CString::new("serve-child-realm").expect("fixed child broker mode"));
-    }
+    let mode = match role {
+        RealmChildRole::Controller => "serve",
+        RealmChildRole::Broker => "serve-child-realm",
+    };
+    let mode = CString::new(mode)
+        .map_err(|_| AllocatorServiceError::InvalidRequest("child process mode contains NUL"))?;
+    let argv = vec![title, mode];
     Ok(argv)
 }
 
@@ -1288,11 +1291,12 @@ mod tests {
     fn allocator_uses_closed_role_titles_and_explicit_child_broker_mode() {
         let controller =
             realm_child_argv(RealmChildRole::Controller, "aaaaaaaaaaaaaaaaaaaa").unwrap();
-        assert_eq!(controller.len(), 1);
+        assert_eq!(controller.len(), 2);
         assert_eq!(
             controller[0].to_str().unwrap(),
             "d2bd-r-aaaaaaaaaaaaaaaaaaaa"
         );
+        assert_eq!(controller[1].to_str().unwrap(), "serve");
 
         let broker = realm_child_argv(RealmChildRole::Broker, "aaaaaaaaaaaaaaaaaaaa").unwrap();
         assert_eq!(broker.len(), 2);

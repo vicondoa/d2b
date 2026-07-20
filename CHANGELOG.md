@@ -341,6 +341,9 @@ deprecations ship one minor release before removal.
 - Made launch, list, and status consistently emit the typed `daemon-down`
   envelope for both missing and refused daemon sockets, with aligned CLI
   reference tables and regression coverage for stale socket files.
+- Made shell and console use the same refused-socket `daemon-down` path,
+  documented launch's internal failure exit, and supplied the explicit `serve`
+  mode required by parent-spawned realm controllers.
 - Made broker tests honor disposable validation/Cargo targets and create
   private auto-cleaned socket directories instead of leaking crate-local
   targets or attempting to chmod a shared `/tmp`.

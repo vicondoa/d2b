@@ -95,6 +95,7 @@ and never fall back.
 | `0` | Launch committed (a detached outcome). |
 | `1` | Daemon unavailable (`daemon-down`) or target not found at open-terminal time (a race after resolution). |
 | `2` | `--item` omitted, target/item not found, or the bare workload id is ambiguous. |
+| `42` | Daemon-internal or CLI-internal failure driving launch. |
 | `69` | The provider/transport fails after daemon connection. |
 | `75` | Resource exhausted (for example the operation is temporarily busy). |
 | `76` | Protocol response, non-canonical daemon target, or operation-id conflict. |
@@ -128,6 +129,7 @@ and never fall back.
 | `0` | Launch committed (a detached outcome). | — |
 | `1` | Daemon unavailable, or target not found at open-terminal time (a race after resolution). | [`daemon-down`](./error-codes.md#daemon-down) |
 | `2` | `--item` omitted, target/item not found, or the bare workload id is ambiguous. | [`usage`](./error-codes.md#usage) |
+| `42` | Daemon-internal or CLI-internal failure driving launch. | [`internal`](./error-codes.md#exec-internal) |
 | `69` | The provider/transport fails after daemon connection. | workload launch error |
 | `75` | Resource exhausted (for example the operation is temporarily busy). | workload launch error |
 | `76` | Protocol response, non-canonical daemon target, or operation-id conflict. | workload launch error |

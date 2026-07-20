@@ -139,7 +139,8 @@ fn terminal_commands_preflight_signals_and_tty_before_runtime_and_open() {
             .find("prepare_terminal_before_runtime")
             .expect("terminal preflight");
         let runtime = body
-            .find("DaemonService::connect")
+            .find("connect_daemon_for_command")
+            .or_else(|| body.find("DaemonService::connect"))
             .expect("daemon runtime construction");
         let open = body.find(".open_terminal").expect("terminal open");
         assert!(

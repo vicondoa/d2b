@@ -3952,7 +3952,10 @@ fn cmd_console_v2(context: &Context, args: &ConsoleArgs) -> Result<i32, CliFailu
     let (rows, columns) = preparation
         .initial_size
         .ok_or_else(|| CliFailure::new(2, "console requires a terminal size"))?;
-    let daemon = service_v2::DaemonService::connect(&context.public_socket)?;
+    let daemon = match connect_daemon_for_command(context, "console", false)? {
+        DaemonCommandConnection::Connected(daemon) => daemon,
+        DaemonCommandConnection::Unavailable(exit) => return Ok(exit),
+    };
     let operation_id = terminal_operation_id("console");
     let selection = terminal_v2::TerminalSelection {
         selection: Some(terminal_v2::terminal_selection::Selection::Console(
@@ -4008,7 +4011,10 @@ fn cmd_shell_v2(context: &Context, args: &ShellArgs) -> Result<i32, CliFailure> 
     } else {
         None
     };
-    let daemon = service_v2::DaemonService::connect(&context.public_socket)?;
+    let daemon = match connect_daemon_for_command(context, "shell", args.json)? {
+        DaemonCommandConnection::Connected(daemon) => daemon,
+        DaemonCommandConnection::Unavailable(exit) => return Ok(exit),
+    };
     let operation_id = terminal_operation_id("shell");
     let terminal = daemon.open_terminal(
         daemon_access::DaemonMethod::Shell,
@@ -13234,6 +13240,26 @@ mod host_install_dispatch_tests {
             )
         });
         assert_daemon_down_json(result, stdout);
+
+        let (result, stdout) = super::with_test_stdout_capture(|| {
+            super::cmd_shell_v2(
+                &context,
+                &super::ShellArgs {
+                    vm: "demo".to_owned(),
+                    action: Some(super::ShellAction::List),
+                    name: None,
+                    force: false,
+                    json: true,
+                    human: false,
+                },
+            )
+        });
+        assert_daemon_down_json(result, stdout);
+
+        assert!(matches!(
+            super::connect_daemon_for_command(&context, "console", false),
+            Ok(super::DaemonCommandConnection::Unavailable(1))
+        ));
         std::fs::remove_file(&context.public_socket).unwrap();
     }
 
