@@ -2264,7 +2264,9 @@ pub mod pidfd_sys {
         /// constant used by the first (and currently only) entry.
         pub pre_opened_device_fds: Vec<OwnedFd>,
         /// Optional controller-provided data-plane descriptors installed as
-        /// stdin and stdout before the runner executes.
+        /// stdin and stdout before the runner executes. The child duplicates
+        /// both sources to private CLOEXEC descriptors before replacing either
+        /// target, so sources that occupy fd 0 or 1 cannot be clobbered.
         pub inherited_stdio: Option<(OwnedFd, OwnedFd)>,
         /// Optional bounded RLIMIT_MEMLOCK installed in the child before
         /// dropping credentials. Used only for qemu-media runners whose
@@ -3047,6 +3049,71 @@ pub mod pidfd_sys {
     const CHILD_EXIT_REALM_CAPABILITY_DROP: libc::c_int = 78;
     const CHILD_EXIT_REALM_FD_CLOSE: libc::c_int = 79;
 
+    /// Install arbitrary source descriptors as stdin/stdout without allowing
+    /// either target replacement to clobber the other source.
+    ///
+    /// Both temporary descriptors are created before fd 0 or 1 is changed.
+    /// They are CLOEXEC as a fail-closed backstop and are closed on every path
+    /// after creation. On success, non-standard source descriptors are closed
+    /// too; the parent retains its independent `OwnedFd`s.
+    #[allow(unsafe_code)]
+    pub(super) unsafe fn remap_inherited_stdio(
+        stdin_fd: libc::c_int,
+        stdout_fd: libc::c_int,
+    ) -> bool {
+        // SAFETY: callers guarantee both raw source descriptors are valid.
+        let stdin_tmp = unsafe { libc::fcntl(stdin_fd, libc::F_DUPFD_CLOEXEC, 3) };
+        if stdin_tmp < 0 {
+            return false;
+        }
+        // SAFETY: same contract as above; the first fresh fd remains open.
+        let stdout_tmp = unsafe { libc::fcntl(stdout_fd, libc::F_DUPFD_CLOEXEC, 3) };
+        if stdout_tmp < 0 {
+            // SAFETY: stdin_tmp is a fresh descriptor owned by this function.
+            unsafe { libc::close(stdin_tmp) };
+            return false;
+        }
+
+        // SAFETY: the temporary descriptors are valid and targets 0/1 are the
+        // process's standard descriptor slots.
+        if unsafe { libc::dup2(stdin_tmp, 0) } < 0 {
+            // SAFETY: both temporaries are fresh and distinct.
+            unsafe {
+                libc::close(stdin_tmp);
+                libc::close(stdout_tmp);
+            }
+            return false;
+        }
+        // SAFETY: same reasoning as the stdin dup2 above.
+        if unsafe { libc::dup2(stdout_tmp, 1) } < 0 {
+            // SAFETY: both temporaries are fresh and distinct.
+            unsafe {
+                libc::close(stdin_tmp);
+                libc::close(stdout_tmp);
+            }
+            return false;
+        }
+
+        // Linux releases an fd even when close reports EINTR, so never retry.
+        // Attempt every cleanup and report any failure to the child caller.
+        // SAFETY: the temporaries are fresh and distinct.
+        let mut cleanup_ok = unsafe { libc::close(stdin_tmp) } == 0;
+        // SAFETY: stdout_tmp is the other fresh temporary descriptor.
+        cleanup_ok &= unsafe { libc::close(stdout_tmp) } == 0;
+
+        if stdin_fd > 2 {
+            // SAFETY: stdin_fd is caller-owned and no longer needed after both
+            // targets have been installed.
+            cleanup_ok &= unsafe { libc::close(stdin_fd) } == 0;
+        }
+        if stdout_fd > 2 && stdout_fd != stdin_fd {
+            // SAFETY: stdout_fd is caller-owned, distinct from stdin_fd, and
+            // no longer needed after both targets have been installed.
+            cleanup_ok &= unsafe { libc::close(stdout_fd) } == 0;
+        }
+        cleanup_ok
+    }
+
     /// Spawn a per-role runner with namespace / seccomp / capability
     /// setup plus `setgroups` + `setgid` + `setuid` + `execve` in a
     /// single `clone3_pidfd_or_fork_fallback` call.
@@ -3554,15 +3621,12 @@ pub mod pidfd_sys {
                     }
                     libc::umask(mask as libc::mode_t);
                 }
-                if let Some((stdin_fd, stdout_fd)) = inherited_stdio_raw {
-                    for (src_fd, dst_fd) in [(stdin_fd, 0), (stdout_fd, 1)] {
-                        if src_fd != dst_fd && libc::dup2(src_fd, dst_fd) < 0 {
-                            let m = b"DEBUG: dup2 inherited stdio fd failed\n";
-                            libc::write(2, m.as_ptr() as *const _, m.len());
-                            libc::_exit(CHILD_EXIT_PREOPEN_DUP2);
-                        }
-                        libc::fcntl(dst_fd, libc::F_SETFD, 0);
-                    }
+                if let Some((stdin_fd, stdout_fd)) = inherited_stdio_raw
+                    && !remap_inherited_stdio(stdin_fd, stdout_fd)
+                {
+                    let m = b"DEBUG: remap inherited stdio fd failed\n";
+                    libc::write(2, m.as_ptr() as *const _, m.len());
+                    libc::_exit(CHILD_EXIT_PREOPEN_DUP2);
                 }
                 // Install pre-opened device fds at their well-known numbers
                 // before seccomp is loaded (ADR 0021).
@@ -3778,6 +3842,7 @@ mod tests {
     use std::fs;
     use std::os::fd::{AsRawFd, OwnedFd};
     use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::os::unix::net::UnixStream;
 
     use d2b_core::minijail_profile::{MountPolicy, NamespaceSet};
     use nix::libc;
@@ -4041,6 +4106,158 @@ mod tests {
             !source.contains(spawn_marker),
             "broker child path must not emit a debug line for every spawn"
         );
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum StdioRemapCase {
+        StdoutAtZero,
+        StdinAtOne,
+        Swapped,
+        SameSource,
+        NonOverlapping,
+    }
+
+    #[allow(unsafe_code)]
+    fn assert_stdio_remap_case(case: StdioRemapCase) {
+        let (input_parent, input_child) = UnixStream::pair().expect("input socketpair");
+        let (output_parent, output_child) = UnixStream::pair().expect("output socketpair");
+        input_child
+            .set_nonblocking(true)
+            .expect("nonblocking input child");
+        output_child
+            .set_nonblocking(true)
+            .expect("nonblocking output child");
+        for fd in [
+            input_parent.as_raw_fd(),
+            input_child.as_raw_fd(),
+            output_parent.as_raw_fd(),
+            output_child.as_raw_fd(),
+        ] {
+            assert!(fd > 2, "test socket unexpectedly occupied stdio fd {fd}");
+        }
+
+        let token = [case as u8 + b'a'];
+        // SAFETY: input_parent is a valid connected stream descriptor.
+        assert_eq!(
+            unsafe { libc::write(input_parent.as_raw_fd(), token.as_ptr().cast(), token.len()) },
+            1,
+            "{case:?}: seed write failed"
+        );
+
+        // SAFETY: the child uses only raw async-signal-safe descriptor syscalls
+        // before _exit, matching the production post-fork constraints.
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "{case:?}: fork failed");
+        if pid == 0 {
+            unsafe {
+                libc::close(input_parent.as_raw_fd());
+                libc::close(output_parent.as_raw_fd());
+
+                let input_fd = input_child.as_raw_fd();
+                let output_fd = output_child.as_raw_fd();
+                let (stdin_source, stdout_source) = match case {
+                    StdioRemapCase::StdoutAtZero => {
+                        if libc::dup2(output_fd, 0) < 0 {
+                            libc::_exit(80);
+                        }
+                        libc::close(output_fd);
+                        (input_fd, 0)
+                    }
+                    StdioRemapCase::StdinAtOne => {
+                        if libc::dup2(input_fd, 1) < 0 {
+                            libc::_exit(80);
+                        }
+                        libc::close(input_fd);
+                        (1, output_fd)
+                    }
+                    StdioRemapCase::Swapped => {
+                        if libc::dup2(output_fd, 0) < 0 || libc::dup2(input_fd, 1) < 0 {
+                            libc::_exit(80);
+                        }
+                        libc::close(input_fd);
+                        libc::close(output_fd);
+                        (1, 0)
+                    }
+                    StdioRemapCase::SameSource => {
+                        libc::close(output_fd);
+                        (input_fd, input_fd)
+                    }
+                    StdioRemapCase::NonOverlapping => (input_fd, output_fd),
+                };
+
+                let mut expected_temps = [-1; 2];
+                let mut found = 0;
+                for fd in 3..4096 {
+                    if libc::fcntl(fd, libc::F_GETFD) < 0 {
+                        expected_temps[found] = fd;
+                        found += 1;
+                        if found == expected_temps.len() {
+                            break;
+                        }
+                    }
+                }
+                if found != expected_temps.len()
+                    || !super::pidfd_sys::remap_inherited_stdio(stdin_source, stdout_source)
+                {
+                    libc::_exit(81);
+                }
+
+                for fd in expected_temps {
+                    if libc::fcntl(fd, libc::F_GETFD) >= 0 {
+                        libc::_exit(82);
+                    }
+                }
+                if (stdin_source > 2 && libc::fcntl(stdin_source, libc::F_GETFD) >= 0)
+                    || (stdout_source > 2 && libc::fcntl(stdout_source, libc::F_GETFD) >= 0)
+                {
+                    libc::_exit(83);
+                }
+
+                let mut echoed = [0u8; 1];
+                if libc::read(0, echoed.as_mut_ptr().cast(), echoed.len()) != 1
+                    || libc::write(1, echoed.as_ptr().cast(), echoed.len()) != 1
+                {
+                    libc::_exit(84);
+                }
+                libc::_exit(0);
+            }
+        }
+
+        drop(input_child);
+        drop(output_child);
+        let status = nix::sys::wait::waitpid(nix::unistd::Pid::from_raw(pid), None)
+            .expect("waitpid succeeds");
+        assert_eq!(
+            status,
+            nix::sys::wait::WaitStatus::Exited(nix::unistd::Pid::from_raw(pid), 0),
+            "{case:?}: child remap failed"
+        );
+
+        let result_fd = match case {
+            StdioRemapCase::SameSource => input_parent.as_raw_fd(),
+            _ => output_parent.as_raw_fd(),
+        };
+        let mut echoed = [0u8; 1];
+        // SAFETY: result_fd remains owned by its UnixStream in the parent.
+        assert_eq!(
+            unsafe { libc::read(result_fd, echoed.as_mut_ptr().cast(), echoed.len()) },
+            1,
+            "{case:?}: echo read failed"
+        );
+        assert_eq!(echoed, token, "{case:?}: remap changed the data path");
+    }
+
+    #[test]
+    fn inherited_stdio_remap_is_collision_safe_and_leak_free() {
+        for case in [
+            StdioRemapCase::StdoutAtZero,
+            StdioRemapCase::StdinAtOne,
+            StdioRemapCase::Swapped,
+            StdioRemapCase::SameSource,
+            StdioRemapCase::NonOverlapping,
+        ] {
+            assert_stdio_remap_case(case);
+        }
     }
 
     fn owned_pipe_for_test() -> (OwnedFd, OwnedFd) {
