@@ -53,9 +53,10 @@ impl ScratchDir {
 }
 
 fn scratch_dir() -> ScratchDir {
-    let root = std::env::var_os("D2B_VALIDATION_SOCKET_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
+    let Some(root) = std::env::var_os("D2B_VALIDATION_SOCKET_DIR").map(std::path::PathBuf::from)
+    else {
+        return ScratchDir(tempfile::tempdir().expect("create socket activation test tempdir"));
+    };
     std::fs::create_dir_all(&root).expect("create socket activation test root");
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
         .expect("harden socket activation test root");
