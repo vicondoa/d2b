@@ -5,8 +5,28 @@ let
   identity = import ./v2-identity.nix;
   realmId = identity.deriveRealmId "local-root";
   workloadId = identity.deriveWorkloadId realmId cfg.observability.vmName;
-  runtimeProviderId =
-    identity.deriveProviderId realmId "runtime" "runtime-local";
+  normalizedWorkload =
+    cfg._index.workloads.byId.${workloadId}
+      or (throw
+        "realm observability requires the canonical normalized observability workload");
+  runtimeBinding =
+    normalizedWorkload.providerBindings.runtime
+      or (throw
+        "realm observability workload requires a normalized runtime provider binding");
+  observabilityBinding =
+    normalizedWorkload.providerBindings.observability
+      or (throw
+        "realm observability workload requires a normalized observability provider binding");
+  normalizedBindingsMatch =
+    normalizedWorkload.enabled
+    && normalizedWorkload.realmId == realmId
+    && normalizedWorkload.realmPath == "local-root"
+    && normalizedWorkload.configuredName == cfg.observability.vmName
+    && runtimeBinding.providerType == "runtime"
+    && runtimeBinding.implementationId == "cloud-hypervisor"
+    && observabilityBinding.providerType == "observability"
+    && observabilityBinding.implementationId == "local";
+  runtimeProviderId = runtimeBinding.providerId;
   bridgeRoleId =
     identity.deriveRoleId realmId workloadId "vsock-relay";
 
@@ -101,12 +121,23 @@ let
     (entry: (entry.binding.axis or null) == "local-observability")
     registryProviders;
   localObservabilityEntry =
-    if builtins.length localObservabilityEntries == 1
-    then builtins.head localObservabilityEntries
-    else throw
-      "realm observability requires exactly one frozen local-observability registry mapping";
+    if builtins.length localObservabilityEntries != 1
+    then throw
+      "realm observability requires exactly one frozen local-observability registry mapping"
+    else
+      let entry = builtins.head localObservabilityEntries;
+      in if entry.descriptor.providerId != observabilityBinding.providerId
+        || observabilityBinding.providerType != "observability"
+        || observabilityBinding.implementationId != "local"
+      then throw
+        "realm observability frozen mapping disagrees with its normalized provider binding"
+      else entry;
   frozenBinding = localObservabilityEntry.binding;
 in
+if !normalizedBindingsMatch
+then throw
+  "realm observability workload disagrees with its normalized provider bindings"
+else
 {
   schemaVersion = 1;
   enabled = cfg.observability.enable;

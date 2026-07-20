@@ -30,8 +30,15 @@ in
         type = "runtime";
         implementationId = "cloud-hypervisor";
       };
+      providers.observability-local = {
+        type = "observability";
+        implementationId = "local";
+      };
       workloads.${cfg.vmName} = {
-        provider = "runtime-local";
+        providerRefs = {
+          runtime = "runtime-local";
+          observability = "observability-local";
+        };
         autostart = true;
         config = {
           imports = [ ./stack.nix ];

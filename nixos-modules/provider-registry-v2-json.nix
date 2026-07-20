@@ -119,21 +119,58 @@ let
       };
     };
 
-  localRootRealm =
-    cfg._index.realms.enabledByPath."local-root" or null;
-  mappedObservabilityRealms = lib.optional
-    (localRootRealm != null && localRootRealm.placement == "host-local")
-    localRootRealm;
+  mappedObservabilityWorkloads =
+    if !cfg.observability.enable
+    then [ ]
+    else
+      let
+        localRootRealm =
+          cfg._index.realms.enabledByPath."local-root"
+            or (throw
+              "provider registry local-observability mapping requires the local-root realm");
+        workloadId = identity.deriveWorkloadId
+          localRootRealm.realmId cfg.observability.vmName;
+        workload =
+          cfg._index.workloads.byId.${workloadId}
+            or (throw
+              "provider registry local-observability mapping requires the canonical observability workload");
+      in
+      if workload.enabled
+        && workload.realmId == localRootRealm.realmId
+        && workload.realmPath == "local-root"
+        && workload.configuredName == cfg.observability.vmName
+      then [ workload ]
+      else throw
+        "provider registry local-observability mapping disagrees with the canonical observability workload";
 
-  observabilityEntry = realm:
+  observabilityEntry = workload:
     let
-      canonicalRealmId = realm.realmId;
-      canonicalProviderId = identity.deriveProviderId
-        canonicalRealmId "observability" "observability-local";
+      canonicalRealmId = workload.realmId;
+      observabilityBinding =
+        workload.providerBindings.observability
+          or (throw
+            "provider registry local-observability mapping has no normalized observability provider");
+      observabilityProvider =
+        cfg._index.providers.byId.${observabilityBinding.providerId}
+          or (throw
+            "provider registry local-observability mapping references an unknown provider");
+      canonicalProviderId = observabilityBinding.providerId;
+      normalizedAuthorityMatches =
+        observabilityBinding.providerType == "observability"
+        && observabilityBinding.implementationId == "local"
+        && observabilityProvider.enabled
+        && observabilityProvider.providerType == "observability"
+        && observabilityProvider.realmId == canonicalRealmId
+        && observabilityProvider.implementationId == "local"
+        && observabilityProvider.placement == "host-local";
       scopeDigest = builtins.hashString "sha256" (builtins.toJSON ({
         providerId = canonicalProviderId;
       } // observabilityLimits));
-    in {
+    in
+    if !normalizedAuthorityMatches
+    then throw
+      "provider registry local-observability mapping disagrees with normalized authority"
+    else {
       descriptor = {
         schemaVersion = 2;
         providerId = canonicalProviderId;
@@ -189,7 +226,7 @@ let
     (left: right:
       lib.lessThan left.descriptor.providerId right.descriptor.providerId)
     ((map runtimeEntry mappedRuntimeRows)
-      ++ (map observabilityEntry mappedObservabilityRealms)
+      ++ (map observabilityEntry mappedObservabilityWorkloads)
       ++ extensionProviders);
   configurationFingerprint = builtins.hashString "sha256" (builtins.toJSON {
     schemaVersion = "v2";

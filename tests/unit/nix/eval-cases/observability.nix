@@ -6,6 +6,30 @@ let
   identity = import (flakeRoot + "/nixos-modules/v2-identity.nix");
   realmId = identity.deriveRealmId "local-root";
   workloadId = identity.deriveWorkloadId realmId "sys-obs";
+  runtimeProviderId =
+    identity.deriveProviderId realmId "runtime" "runtime-local";
+  observabilityProviderId =
+    identity.deriveProviderId
+      realmId "observability" "observability-local";
+  workload = {
+    enabled = true;
+    configuredName = "sys-obs";
+    canonicalTarget = "sys-obs.local-root.d2b";
+    realmPath = "local-root";
+    inherit realmId workloadId;
+    providerBindings = {
+      runtime = {
+        providerType = "runtime";
+        implementationId = "cloud-hypervisor";
+        providerId = runtimeProviderId;
+      };
+      observability = {
+        providerType = "observability";
+        implementationId = "local";
+        providerId = observabilityProviderId;
+      };
+    };
+  };
   config.d2b = {
     observability = {
       enable = true;
@@ -22,20 +46,13 @@ let
         clickhousePasswordFile = null;
       };
     };
-    _index.workloads.enabledList = [
-      {
-        enabled = true;
-        configuredName = "sys-obs";
-        canonicalTarget = "sys-obs.local-root.d2b";
-        realmPath = "local-root";
-        inherit realmId workloadId;
-      }
-    ];
+    _index.workloads = {
+      enabledList = [ workload ];
+      byId.${workloadId} = workload;
+    };
     _bundle.providerRegistryV2Json.data.providers = [
       {
-        descriptor.providerId =
-          identity.deriveProviderId
-            realmId "observability" "observability-local";
+        descriptor.providerId = observabilityProviderId;
         binding = {
           axis = "local-observability";
           maxRecords = 64;

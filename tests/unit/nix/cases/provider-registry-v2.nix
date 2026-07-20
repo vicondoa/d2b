@@ -28,7 +28,10 @@ let
           };
           config.d2b = {
             realms = { };
-            observability.enable = false;
+            observability = {
+              enable = index.observabilityEnabled or false;
+              vmName = "sys-obs";
+            };
             _index = index;
           };
         })
@@ -134,7 +137,13 @@ let
     providers.byId.${configuredRuntimeProviderId}.enabled = false;
   };
   localRootRealmId = identity.deriveRealmId "local-root";
+  observabilityWorkloadId =
+    identity.deriveWorkloadId localRootRealmId "sys-obs";
+  configuredObservabilityProviderId =
+    identity.deriveProviderId
+      localRootRealmId "observability" "observability-local";
   observabilityIndex = emptyIndex // {
+    observabilityEnabled = true;
     realms = emptyIndex.realms // {
       enabledByPath.local-root = {
         realmId = localRootRealmId;
@@ -142,9 +151,43 @@ let
         placement = "host-local";
       };
     };
+    workloads = emptyIndex.workloads // {
+      byId.${observabilityWorkloadId} = {
+        enabled = true;
+        configuredName = "sys-obs";
+        realmId = localRootRealmId;
+        realmPath = "local-root";
+        workloadId = observabilityWorkloadId;
+        providerBindings.observability = {
+          implementationId = "local";
+          providerId = configuredObservabilityProviderId;
+          providerType = "observability";
+        };
+      };
+    };
+    providers = emptyIndex.providers // {
+      byId.${configuredObservabilityProviderId} = {
+        enabled = true;
+        realmId = localRootRealmId;
+        providerId = configuredObservabilityProviderId;
+        providerType = "observability";
+        implementationId = "local";
+        placement = "host-local";
+      };
+    };
   };
   composedObservabilityEntry =
     builtins.head (compose observabilityIndex);
+  missingObservabilityBindingIndex = observabilityIndex // {
+    workloads = observabilityIndex.workloads // {
+      byId = observabilityIndex.workloads.byId // {
+        ${observabilityWorkloadId} =
+          observabilityIndex.workloads.byId.${observabilityWorkloadId} // {
+            providerBindings = { };
+          };
+      };
+    };
+  };
   fragments = [
     "transport"
     "substrate"
@@ -289,6 +332,14 @@ in
         maxTimeWindowMs = 86400000;
       };
     };
+  };
+
+  "provider-registry-v2/rejects-missing-normalized-observability-authority" = {
+    expr = !(builtins.tryEval
+      (builtins.deepSeq
+        (compose missingObservabilityBindingIndex)
+        true)).success;
+    expected = true;
   };
 
   "provider-registry-v2/preserves-single-artifact-composition" = {
