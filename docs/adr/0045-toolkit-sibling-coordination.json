@@ -140,11 +140,15 @@
         "provider templates and fake-SDK examples",
         "conformance entrypoints",
         "provider-author reference",
-        "Nix source packaging and release automation"
+        "Nix source packaging and release automation",
+        "provider distribution dependency and protocol boundary hardening"
       ],
       "blockedFeatures": [
         {
-          "feature": "live provider-agent bootstrap example",
+          "feature": "live provider-agent bootstrap",
+          "owner": "W8",
+          "status": "fail-closed",
+          "reason": "The distribution exposes only the canonical bootstrap seam; live provider-agent startup and registration remain owned by the integrated runtime.",
           "dependsOn": [
             "core-control-services"
           ]

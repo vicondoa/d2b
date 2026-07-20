@@ -21,6 +21,7 @@ const LEGACY_CLIENT_DISTRIBUTION_FINGERPRINT: &str =
     "c2c99bdd77ba66948fce81161dcc3efde608eefefb96f28fa934c9f58d96d838";
 const LEGACY_PROVIDER_DISTRIBUTION_FINGERPRINT: &str =
     "89f76b9ab63515ecccf46c642676ac5d3c6b4e53bfc642d1dacb69818e3e8588";
+const PROVIDER_DISTRIBUTION_REVISION: &str = "202d1d64d2578a9198a26b300ded0332cce879d6";
 const CURRENT_SOURCE_SUPPLEMENTS: [&str; 2] = [
     "docs/reference/toolkit-source-contract.md",
     "docs/reference/v2-foundation-crates.md",
@@ -1259,6 +1260,25 @@ fn sibling_coordination_graph_has_disjoint_repository_ownership() {
             ownership["mode"], "exclusive-new-repository",
             "{id} still records a repository-creation placeholder"
         );
+        if id == "provider-toolkit-distribution" {
+            assert_eq!(
+                revision, PROVIDER_DISTRIBUTION_REVISION,
+                "provider distribution audited revision"
+            );
+            let bootstrap = component["blockedFeatures"]
+                .as_array()
+                .expect("provider blockedFeatures array")
+                .iter()
+                .find(|feature| feature["feature"] == "live provider-agent bootstrap")
+                .expect("live provider-agent bootstrap boundary");
+            assert!(
+                bootstrap["owner"]
+                    .as_str()
+                    .is_some_and(|owner| !owner.is_empty()),
+                "live provider-agent bootstrap must retain an external owner"
+            );
+            assert_eq!(bootstrap["status"], "fail-closed");
+        }
         if ["wlcontrol", "wlterm", "weezterm"].contains(&id) {
             let pin = object(
                 &component["consumesDistribution"],
