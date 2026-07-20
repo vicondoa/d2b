@@ -1,5 +1,5 @@
 # Realm-native schema, normalization, and fixed control-plane coverage.
-{ mkEval, lib, flakeRoot, ... }:
+{ mkEval, lib, flakeRoot, pkgs, ... }:
 
 let
   hostBase = {
@@ -196,7 +196,14 @@ in
   "realms/feature-rich-schema-evaluates" = {
     expr = map (assertion: assertion.message)
       (lib.filter (assertion: !assertion.assertion) cfg.assertions);
-    expected = [ ];
+    expected =
+      if pkgs.stdenv.hostPlatform.system == "x86_64-linux" then
+        [ ]
+      else
+        [
+          "realm workload graphics and audio roles require x86_64-linux"
+          "Workload desktop.work.local-root.d2b: graphics/audio components are supported only on x86_64-linux."
+        ];
   };
 
   "realms/typed-provider-bindings-normalize" = {
@@ -432,7 +439,7 @@ in
     expected = {
       minimalAssertions = true;
       multiAssertions = true;
-      graphicsAssertions = true;
+      graphicsAssertions = pkgs.stdenv.hostPlatform.system == "x86_64-linux";
       entraAssertions = true;
       graphicsRoles = [
         "audio"
