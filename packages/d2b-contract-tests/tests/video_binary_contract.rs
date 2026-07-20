@@ -114,6 +114,13 @@ fn patched_video_binaries_expose_required_command_surface() {
             video_node.id.0
         )
     );
+    assert!(video_node.profile.mount_policy.device_binds.is_empty());
+    assert!(
+        video_node
+            .env
+            .iter()
+            .any(|entry| entry == "LIBVA_DRM_DEVICE=/proc/self/fd/10")
+    );
     let video_bin = executable_binary_path(video_node, "video crosvm", test);
     let ch_bin = executable_binary_path(
         node_by_role(dag, ProcessRole::CloudHypervisorRunner, test),

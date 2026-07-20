@@ -27,11 +27,11 @@ fn security_key_source_uses_canonical_realm_rows() {
     for required in [
         r#"fido = "security-key-frontend";"#,
         r#"fido = "fido-ceremony";"#,
-        r#"resourceId = "device-security-key-global";"#,
+        r#"leaseId = "lease-device-security-key-global";"#,
         r#"share = "exclusive";"#,
         r#"attachment = "fd-only";"#,
         r#"broker = "realm-local";"#,
-        r#"else if kind == "fido" then "${roleRoot}/security-key.sock""#,
+        r#"then "device-endpoint-${roleId}-${kind}""#,
     ] {
         assert!(
             devices.contains(required),

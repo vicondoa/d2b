@@ -41,9 +41,10 @@ fn graphics_source_uses_canonical_role_resource_provider_rows() {
         r#""render-node" = "gpu-render-node";"#,
         r#"gpu = "gpu-cross-domain";"#,
         r#""render-node" = "mediated-device";"#,
-        r#"resourceId = "device-render-node-global";"#,
+        r#"leaseId = "lease-device-render-node-global";"#,
         r#"share = "shared-partition";"#,
         r#"attachment = "fd-only";"#,
+        r#"resourceId = "device-${roleId}-${kind}";"#,
     ] {
         assert!(
             devices.contains(required),
@@ -52,8 +53,7 @@ fn graphics_source_uses_canonical_role_resource_provider_rows() {
     }
     assert!(roles.contains("cfg._index.devices.byRoleId"));
     assert!(
-        profiles.contains(r#"else if processRole == "gpu""#)
-            && profiles.contains(r#"then [ "/dev/dri/renderD128" ]"#)
+        profiles.contains(r#"deviceBindsFor = processRole:"#)
             && profiles.contains(r#"role.processRole == "gpu-render-node""#)
             && profiles.contains("hostUidForZero = principalId")
     );
@@ -88,12 +88,10 @@ fn graphics_rendered_profiles_are_role_scoped() {
                 ProcessRole::Gpu => {
                     gpu_seen += 1;
                     assert_canonical_profile(dag, node, "w1-gpu");
-                    assert_eq!(
-                        node.profile.mount_policy.device_binds,
-                        vec!["/dev/dri/renderD128".to_owned()]
-                    );
+                    assert!(node.profile.mount_policy.device_binds.is_empty());
                     assert!(node.profile.user_namespace.is_none());
                     assert_eq!(node.profile.umask, Some(7));
+                    assert!(node.argv.iter().any(|arg| arg == "/proc/self/fd/10"));
                 }
                 ProcessRole::GpuRenderNode => {
                     render_seen += 1;

@@ -8,6 +8,7 @@ fn usbip_provider_binding_is_realm_and_resource_scoped() {
     for required in [
         r#"axis = "local-device";"#,
         r#"deviceResourceIds = lib.sort lib.lessThan"#,
+        r#"row.realmId == provider.realmId"#,
         r#"row.providerId == provider.providerId"#,
         r#"placement = {"#,
         r#"inherit realmId controllerRole;"#,

@@ -141,7 +141,7 @@ fn usbip_source_uses_canonical_role_resource_provider_rows() {
         r#"usbip = "usbip";"#,
         r#"usbip = "usbip-exclusive";"#,
         r#"[ "usbip" "fido" ]"#,
-        r#"resourceId = "device-security-key-global";"#,
+        r#"leaseId = "lease-device-security-key-global";"#,
         r#"share = "exclusive";"#,
         r#"attachment = "fd-only";"#,
         r#"broker = "realm-local";"#,

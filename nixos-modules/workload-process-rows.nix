@@ -89,14 +89,13 @@ let
             || lib.hasPrefix "net-${workload.realmId}-" request.resourceId
           ))
         networkRows.allocatorRequests;
-      deviceRequests = lib.filter
-        (request:
-          request.realmPath == workload.realmPath
-          && lib.hasPrefix "device-${workload.workloadId}-" request.resourceId)
-        (cfg._index.devices.allocatorLeaseRequests or [ ]);
+      deviceLeaseIds = map
+        (resource: resource.allocatorLeaseId)
+        (cfg._index.devices.byWorkloadId.${workload.workloadId} or [ ]);
     in
     map (request: request.resourceId)
-      (sortBy "resourceId" (realmRequests ++ networkRequests ++ deviceRequests));
+      (sortBy "resourceId" (realmRequests ++ networkRequests))
+    ++ lib.sort lib.lessThan (lib.unique deviceLeaseIds);
 
   rowFor = workload:
     let

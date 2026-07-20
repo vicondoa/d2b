@@ -8,7 +8,7 @@ fn usbip_uses_exclusive_realm_allocator_lease() {
 
     for required in [
         r#"[ "usbip" "fido" ]"#,
-        r#"resourceId = "device-security-key-global";"#,
+        r#"leaseId = "lease-device-security-key-global";"#,
         r#"share = "exclusive";"#,
         r#"phase = 50;"#,
         r#"kind = "realm-broker";"#,
@@ -21,8 +21,9 @@ fn usbip_uses_exclusive_realm_allocator_lease() {
     }
 
     assert!(
-        workloads.contains("cfg._index.devices.allocatorLeaseRequests")
-            && workloads.contains(r#"lib.hasPrefix "device-${workload.workloadId}-""#),
+        workloads.contains("cfg._index.devices.byWorkloadId.${workload.workloadId}")
+            && workloads.contains("resource.allocatorLeaseId")
+            && workloads.contains("lib.unique deviceLeaseIds"),
         "workload process rows must reference only allocator-declared device leases"
     );
 }
@@ -59,12 +60,11 @@ fn rendered_allocator_deduplicates_canonical_device_leases() {
             )
         })
         .collect();
-    assert!(rows.contains(&("device-render-node-global", "shared-partition")));
-    assert!(rows.contains(&("device-security-key-global", "exclusive")));
-    assert!(
-        rows.iter()
-            .any(|(resource, share)| resource.starts_with("device-tpm-") && *share == "exclusive")
-    );
+    assert!(rows.contains(&("lease-device-render-node-global", "shared-partition")));
+    assert!(rows.contains(&("lease-device-security-key-global", "exclusive")));
+    assert!(rows.iter().any(
+        |(resource, share)| resource.starts_with("lease-device-tpm-") && *share == "exclusive"
+    ));
     assert!(device_requests.iter().all(|request| {
         request["kind"] == "host-file-partition"
             && request["source"]["kind"] == "realm-broker"
@@ -80,13 +80,100 @@ fn rendered_allocator_deduplicates_canonical_device_leases() {
 }
 
 #[test]
+fn rendered_device_registry_matches_realm_role_resources() {
+    let Some(dir) = env::var_os("D2B_FIXTURES_FULL").map(PathBuf::from) else {
+        eprintln!("SKIP: D2B_FIXTURES_FULL unset; device registry fixture unavailable");
+        return;
+    };
+    let registry: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.join("provider-registry-v2.json"))
+            .expect("read provider registry fixture"),
+    )
+    .expect("parse provider registry fixture");
+    let processes: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.join("processes.json")).expect("read processes fixture"),
+    )
+    .expect("parse processes fixture");
+
+    let device_providers: Vec<_> = registry["providers"]
+        .as_array()
+        .expect("provider array")
+        .iter()
+        .filter(|provider| provider["binding"]["axis"] == "local-device")
+        .collect();
+    assert_eq!(
+        device_providers.len(),
+        1,
+        "feature fixture must render one realm-local device provider"
+    );
+    let provider = device_providers[0];
+    let realm_id = provider["descriptor"]["placement"]["realmId"]
+        .as_str()
+        .expect("device provider realm id");
+    let mut resource_ids: Vec<_> = provider["binding"]["deviceResourceIds"]
+        .as_array()
+        .expect("device resource ids")
+        .iter()
+        .map(|value| value.as_str().expect("device resource id").to_owned())
+        .collect();
+    resource_ids.sort();
+
+    let mut expected = Vec::new();
+    for dag in processes["vms"].as_array().expect("process DAG array") {
+        let identity = &dag["workloadIdentity"];
+        if identity["realmId"] != realm_id {
+            continue;
+        }
+        for node in dag["nodes"].as_array().expect("process node array") {
+            let kind = match node["role"].as_str().expect("process role") {
+                "swtpm" => Some("tpm"),
+                "gpu" => Some("gpu"),
+                "gpu-render-node" => Some("render-node"),
+                "video" => Some("video"),
+                "usbip" => Some("usbip"),
+                "security-key-frontend" => Some("fido"),
+                _ => None,
+            };
+            let Some(kind) = kind else {
+                continue;
+            };
+            let role_id = node["id"].as_str().expect("device role id");
+            expected.push(format!("device-{role_id}-{kind}"));
+            assert_eq!(
+                node["profile"]["mountPolicy"]["deviceBinds"],
+                serde_json::json!([]),
+                "device role {role_id} must consume allocator-delivered FDs"
+            );
+        }
+    }
+    expected.sort();
+    assert_eq!(resource_ids, expected);
+
+    let rendered = serde_json::to_string(provider).unwrap();
+    for forbidden in [
+        "selectorId",
+        "endpointPath",
+        "/dev/",
+        "busid",
+        "busId",
+        "hidraw",
+    ] {
+        assert!(
+            !rendered.contains(forbidden),
+            "device registry must not expose {forbidden:?}"
+        );
+    }
+}
+
+#[test]
 fn usbip_declarative_rows_do_not_expose_physical_or_network_selectors() {
     let devices = read_repo_file("nixos-modules/realm-device-rows.nix");
     let processes = read_repo_file("nixos-modules/processes-json.nix");
 
-    assert!(devices.contains(r#"selectorId = "selector-${workload.workloadId}-${kind}";"#));
+    assert!(devices.contains(r#"resourceId = "device-${roleId}-${kind}";"#));
+    assert!(devices.contains(r#"allocatorLeaseId = lease.leaseId;"#));
     assert!(devices.contains(r#"attachment = "fd-only";"#));
-    assert!(devices.contains(r#"endpointPath = endpointFor workload roleId kind;"#));
+    assert!(devices.contains(r#"endpointId = endpointIdFor roleId kind;"#));
     for forbidden in [
         "busid",
         "busId",

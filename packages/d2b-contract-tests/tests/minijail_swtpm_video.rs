@@ -47,7 +47,7 @@ fn tpm_source_uses_persistent_realm_resource_and_exclusive_lease() {
     for required in [
         r#"tpm = "swtpm";"#,
         r#"tpm = "tpm2-stateful";"#,
-        r#"resourceId = "device-tpm-${workload.workloadId}";"#,
+        r#"leaseId = "lease-device-tpm-${workload.workloadId}";"#,
         r#"share = "exclusive";"#,
         r#""workload/${workload.workloadId}/tpm""#,
         r#"attachment = "fd-only";"#,
@@ -140,9 +140,9 @@ fn video_source_uses_shared_render_lease_and_role_endpoint() {
     for required in [
         r#"video = "video";"#,
         r#"video = "video-decode";"#,
-        r#"resourceId = "device-render-node-global";"#,
+        r#"leaseId = "lease-device-render-node-global";"#,
         r#"share = "shared-partition";"#,
-        r#"else if kind == "video" then "${roleRoot}/video.sock""#,
+        r#"then "device-endpoint-${roleId}-${kind}""#,
         r#"attachment = "fd-only";"#,
     ] {
         assert!(
@@ -150,11 +150,7 @@ fn video_source_uses_shared_render_lease_and_role_endpoint() {
             "video realm resource policy missing {required:?} from {DEVICE_ROWS}"
         );
     }
-    assert!(
-        profiles.contains(r#"else if processRole == "video""#)
-            && profiles.contains(r#"then [ "/dev/dri/renderD128" ]"#)
-            && !profiles.contains("/dev/nvidia")
-    );
+    assert!(!profiles.contains("/dev/dri/renderD128") && !profiles.contains("/dev/nvidia"));
     assert!(
         processes.contains(r#"role.roleKind == "video""#)
             && processes.contains(r#""${runtime}/video.sock""#)
@@ -183,10 +179,7 @@ fn video_rendered_profile_is_role_scoped_and_gpu_distinct() {
             }
             seen += 1;
             assert_canonical_profile(dag, node, "w1-video");
-            assert_eq!(
-                node.profile.mount_policy.device_binds,
-                vec!["/dev/dri/renderD128".to_owned()]
-            );
+            assert!(node.profile.mount_policy.device_binds.is_empty());
             assert!(node.profile.user_namespace.is_none());
             assert_eq!(node.profile.umask, Some(7));
             assert!(!gpu_uids.contains(&node.profile.uid));
@@ -198,6 +191,11 @@ fn video_rendered_profile_is_role_scoped_and_gpu_distinct() {
                 node.id.0
             );
             assert!(node.argv.iter().any(|arg| arg == &endpoint));
+            assert!(
+                node.env
+                    .iter()
+                    .any(|entry| entry == "LIBVA_DRM_DEVICE=/proc/self/fd/10")
+            );
         }
     }
     assert_eq!(seen, 1, "fixture must render one mediated video role");

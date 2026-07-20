@@ -12,6 +12,7 @@
 //! crosvm device gpu \
 //!   --socket corp-desktop-gpu.sock \
 //!   --wayland-sock $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY \
+//!   --gpu-device-node /proc/self/fd/10 \
 //!   --params '{"context-types":"virgl:virgl2:cross-domain","displays":[{"hidden":true}],"egl":true,"vulkan":true}'
 //! ```
 //!
@@ -23,6 +24,8 @@
 //! Crate invariant `#![forbid(unsafe_code)]` is honoured.
 
 use serde::{Deserialize, Serialize};
+
+pub const GPU_DEVICE_FD_PATH: &str = "/proc/self/fd/10";
 
 /// Closed set of GPU context types crosvm supports. The audit shape
 /// is `virgl:virgl2:cross-domain`; the daemon caller composes the
@@ -179,6 +182,8 @@ pub fn generate_gpu_argv(input: &GpuArgvInput) -> Result<Vec<String>, GpuArgvErr
         input.socket_path.clone(),
         "--wayland-sock".to_owned(),
         input.wayland_sock.clone(),
+        "--gpu-device-node".to_owned(),
+        GPU_DEVICE_FD_PATH.to_owned(),
         "--params".to_owned(),
         params_json,
     ];
@@ -278,6 +283,7 @@ mod tests {
         assert!(joined.contains(
             "--wayland-sock /run/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/roles/z4kayxxlmcmxc4m3s4ga/wayland-0"
         ));
+        assert!(joined.contains("--gpu-device-node /proc/self/fd/10"));
         assert!(joined.contains(
             "--params {\"context-types\":\"virgl:virgl2:cross-domain\",\"displays\":[{\"hidden\":true}],\"egl\":true,\"vulkan\":true}"
         ));
@@ -292,6 +298,7 @@ mod tests {
         let joined = argv.join(" ");
         assert!(joined.contains("--socket corp-desktop-gpu.sock"));
         assert!(joined.contains("--wayland-sock /run/user/1000/wayland-0"));
+        assert!(joined.contains("--gpu-device-node /proc/self/fd/10"));
         assert!(joined.contains(
             "--params {\"context-types\":\"virgl:virgl2:cross-domain\",\"displays\":[{\"hidden\":true}],\"egl\":true,\"vulkan\":true}"
         ));

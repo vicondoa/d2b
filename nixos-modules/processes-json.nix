@@ -342,7 +342,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       "device" "gpu"
       "--socket" "${roleRuntime role}/gpu.sock"
       "--wayland-sock" waylandSocket
-      "--gpu-device-node" "/proc/self/fd/10"
+        "--gpu-device-node" "/proc/self/fd/10"
       "--params" gpuParams
     ];
     env = [ "LD_LIBRARY_PATH=${pkgs.vulkan-loader}/lib" ];
@@ -453,6 +453,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         "device" "gpu"
         "--socket" "${runtime}/gpu.sock"
         "--wayland-sock" waylandSocket
+         "--gpu-device-node" "/proc/self/fd/10"
         "--params" gpuParams
       ];
       env = [ "LD_LIBRARY_PATH=${pkgs.vulkan-loader}/lib" ];
@@ -475,7 +476,10 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         "--socket-path" "${runtime}/video.sock"
         "--backend" "vaapi"
       ];
-      env = [ "XDG_RUNTIME_DIR=/run/user/${toString waylandUid}" ];
+      env = [
+        "LIBVA_DRM_DEVICE=/proc/self/fd/10"
+        "XDG_RUNTIME_DIR=/run/user/${toString waylandUid}"
+      ];
     }
     else if role.roleKind == "audio" then mkNode {
       id = role.roleId;

@@ -167,9 +167,13 @@ fn graphics_video_and_usbip_shapes_are_mediated() {
     assert_eq!(video.len(), 1, "{test}: fixture must have one video role");
     assert_eq!(usbip.len(), 1, "{test}: fixture must have one USBIP role");
     for (_, node) in gpu.into_iter().chain(video) {
-        assert_eq!(
-            node.profile.mount_policy.device_binds,
-            vec!["/dev/dri/renderD128".to_owned()]
+        assert!(node.profile.mount_policy.device_binds.is_empty());
+        assert!(
+            node.argv.iter().any(|arg| arg == "/proc/self/fd/10")
+                || node
+                    .env
+                    .iter()
+                    .any(|entry| entry == "LIBVA_DRM_DEVICE=/proc/self/fd/10")
         );
         for forbidden in ["/dev/nvidia", "/dev/vfio", "/dev/udmabuf"] {
             assert!(!node.argv.iter().any(|arg| arg.contains(forbidden)));

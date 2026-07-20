@@ -104,7 +104,9 @@ let
         deviceResourceIds = map
           (row: row.resourceId)
           (lib.filter
-            (row: row.providerId == provider.providerId)
+            (row:
+              row.realmId == provider.realmId
+              && row.providerId == provider.providerId)
             deviceRows);
       })
     (lib.filter

@@ -138,10 +138,6 @@ let
     if builtins.elem processRole
       [ "cloud-hypervisor-runner" "qemu-media-runner" ]
     then [ "/dev/kvm" "/dev/vhost-net" ]
-    else if processRole == "gpu"
-    then [ "/dev/dri/renderD128" ]
-    else if processRole == "video"
-    then [ "/dev/dri/renderD128" ]
     else [ ];
 
   profileForRole = role:

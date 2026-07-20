@@ -50,6 +50,10 @@ let
         [ "graphics" "enable" ]
         [ "localVm" "graphics" "enable" ]
       ] spec || hasCapability "gpu" workload;
+      renderNodeOnly = enabledAt [
+        [ "graphics" "renderNodeOnly" ]
+        [ "localVm" "graphics" "renderNodeOnly" ]
+      ] spec;
       video = enabledAt [
         [ "graphics" "videoSidecar" ]
         [ "localVm" "graphics" "videoSidecar" ]
@@ -58,7 +62,8 @@ let
     lib.optionals tpm [ "tpm" ]
     ++ lib.optionals usbip [ "usbip" ]
     ++ lib.optionals fido [ "fido" ]
-    ++ lib.optionals graphics [ "gpu" "render-node" ]
+    ++ lib.optionals graphics
+      (if renderNodeOnly then [ "render-node" ] else [ "gpu" ])
     ++ lib.optionals video [ "video" ];
 
   roleKindFor = kind: {
@@ -81,24 +86,19 @@ let
 
   leaseFor = workload: kind:
     if kind == "tpm" then {
-      resourceId = "device-tpm-${workload.workloadId}";
+      leaseId = "lease-device-tpm-${workload.workloadId}";
       share = "exclusive";
     } else if builtins.elem kind [ "usbip" "fido" ] then {
-      resourceId = "device-security-key-global";
+      leaseId = "lease-device-security-key-global";
       share = "exclusive";
     } else {
-      resourceId = "device-render-node-global";
+      leaseId = "lease-device-render-node-global";
       share = "shared-partition";
     };
 
-  endpointFor = workload: roleId: kind:
-    let
-      roleRoot =
-        "/run/d2b/r/${workload.realmId}/w/${workload.workloadId}/roles/${roleId}";
-    in
-    if kind == "tpm" then "${roleRoot}/tpm.sock"
-    else if kind == "video" then "${roleRoot}/video.sock"
-    else if kind == "fido" then "${roleRoot}/security-key.sock"
+  endpointIdFor = roleId: kind:
+    if builtins.elem kind [ "tpm" "video" "fido" ]
+    then "device-endpoint-${roleId}-${kind}"
     else null;
 
   mkRow = workload: provider: kind:
@@ -110,8 +110,7 @@ let
     in
     {
       schemaVersion = 1;
-      resourceId = "device-${workload.workloadId}-${kind}";
-      selectorId = "selector-${workload.workloadId}-${kind}";
+      resourceId = "device-${roleId}-${kind}";
       resourceKind = kind;
       capability = capabilityFor kind;
       inherit (workload) realmId workloadId;
@@ -122,12 +121,13 @@ let
         attachment = "fd-only";
         broker = "realm-local";
       };
-      endpointPath = endpointFor workload roleId kind;
+      endpointId = endpointIdFor roleId kind;
       stateResourceId =
         if kind == "tpm"
         then "workload/${workload.workloadId}/tpm"
         else null;
-      allocatorLease = lease;
+      allocatorLeaseId = lease.leaseId;
+      allocatorShare = lease.share;
     };
 
   workloadRequests = map
@@ -164,12 +164,12 @@ let
   allocatorRequestRows = lib.attrValues (lib.listToAttrs (map
     (row: {
       name =
-        "${row.realmId}:${row.providerId}:${row.allocatorLease.resourceId}";
+        "${row.realmId}:${row.providerId}:${row.allocatorLeaseId}";
       value = {
         realmPath = realmById.${row.realmId}.realmPath;
-        resourceId = row.allocatorLease.resourceId;
+        resourceId = row.allocatorLeaseId;
         kind = "host-file-partition";
-        share = row.allocatorLease.share;
+        share = row.allocatorShare;
         source = {
           kind = "realm-broker";
           refName = row.providerId;
