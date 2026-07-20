@@ -147,7 +147,6 @@ let
       reservedPaths = [ ];
       deletes = [
         "nixos-modules/host-otel-relay-acl.nix"
-        "nixos-modules/unsafe-local-helper.nix"
       ];
       scope = [
         "Emit only d2bd.socket, d2bd.service, d2b-priv-broker.socket, and d2b-priv-broker.service at PID1."
@@ -610,6 +609,7 @@ let
         "nixos-modules/desktop-metadata-json.nix"
       ];
       deletes = [
+        "nixos-modules/manifest.nix"
         "nixos-modules/realm-workloads-launcher-json.nix"
       ];
       scope = [
