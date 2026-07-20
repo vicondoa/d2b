@@ -81,7 +81,7 @@
       implementationId = "cloud-hypervisor";
     };
     workloads.work-app = {
-      provider = "runtime-local";
+      providerRefs.runtime = "runtime-local";
       autostart = true;
       config = {
         imports = [

@@ -127,7 +127,7 @@ in
       implementationId = "cloud-hypervisor";
     };
     workloads.corp-vm = {
-      provider = "runtime";
+      providerRefs.runtime = "runtime";
       config = { ... }: {
         networking.hostName = "corp-vm";
 

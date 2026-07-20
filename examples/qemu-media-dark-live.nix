@@ -11,6 +11,7 @@
   };
   environment.etc."machine-id".text = "00000000000000000000000000000000";
   system.stateVersion = "25.11";
+  d2b.acceptDestructiveV2Cutover = true;
 
   users.users.alice = {
     isNormalUser = true;
@@ -38,19 +39,23 @@
     path = "dark.local-root";
     placement = "host-local";
     allowedUsers = [ "alice" ];
+    broker = {
+      enable = true;
+      hostMutation = true;
+    };
     network = {
       mode = "declared";
       lanSubnet = "10.60.0.0/24";
       uplinkSubnet = "203.0.113.0/30";
     };
-    providers.media = {
+    providers.qemu = {
       type = "runtime";
       implementationId = "qemu-media";
       configRef = "dark-live-media";
       capabilities = [ "qmp-media-attach" ];
     };
     workloads.dark-live = {
-      provider = "media";
+      providerRefs.runtime = "qemu";
       autostart = false;
       launcher = {
         enable = true;

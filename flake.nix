@@ -619,7 +619,7 @@
             };
             network.ui.accentColor = "#cc3344";
             workloads.tools = {
-              provider = "runtime";
+              providerRefs.runtime = "runtime";
               shell = {
                 enable = true;
                 defaultName = "host";
@@ -665,7 +665,7 @@
               implementationId = "cloud-hypervisor";
             };
             workloads.corp-runtime = {
-              provider = "runtime";
+              providerRefs.runtime = "runtime";
               launcher.enable = false;
               config = {
                 networking.hostName = lib.mkDefault "corp-runtime";

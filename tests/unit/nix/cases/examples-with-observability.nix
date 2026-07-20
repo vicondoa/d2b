@@ -34,12 +34,12 @@ in
 
   "examples-with-observability/workload-uses-guest-component" = {
     expr = {
-      provider = work.workloads.work-app.provider;
+      providerRefs = work.workloads.work-app.providerRefs;
       autostart = work.workloads.work-app.autostart;
       imports = map toString work.workloads.work-app.config.imports;
     };
     expected = {
-      provider = "runtime-local";
+      providerRefs.runtime = "runtime-local";
       autostart = true;
       imports = [
         (toString
