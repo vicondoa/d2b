@@ -49,11 +49,20 @@ pkgs.testers.runNixOSTest {
         alice_user + " is-active d2b-runtime-systemd-user.socket",
         timeout=60,
     )
+    machine.wait_until_succeeds(
+        alice_user + " is-active d2b-userd.socket",
+        timeout=60,
+    )
     endpoint = "/run/d2b/u/1000/runtime-agent.sock"
+    userd_endpoint = "/run/d2b/u/1000/userd.sock"
     machine.wait_for_file(endpoint)
+    machine.wait_for_file(userd_endpoint)
     machine.succeed(f"test -S {endpoint}")
+    machine.succeed(f"test -S {userd_endpoint}")
     machine.succeed(f"test \"$(stat -c %a {endpoint})\" = 600")
+    machine.succeed(f"test \"$(stat -c %a {userd_endpoint})\" = 600")
     machine.succeed(f"test \"$(stat -c %U {endpoint})\" = alice")
+    machine.succeed(f"test \"$(stat -c %U {userd_endpoint})\" = alice")
     machine.fail("test -e /run/d2b/u/1000/unsafe-local-helper.sock")
 
     machine.fail(
@@ -84,6 +93,8 @@ pkgs.testers.runNixOSTest {
         timeout=60,
     )
     machine.fail(bob_user + " is-active d2b-runtime-systemd-user.socket")
+    machine.fail(bob_user + " is-active d2b-userd.socket")
     machine.fail("test -e /run/d2b/u/1001/runtime-agent.sock")
+    machine.fail("test -e /run/d2b/u/1001/userd.sock")
   '';
 }

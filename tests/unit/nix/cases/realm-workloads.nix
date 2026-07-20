@@ -204,9 +204,10 @@ let
 
   unsafeLocalFixture = lib.recursiveUpdate hostBase {
     users.users.bob = { isNormalUser = true; uid = 1001; };
+    users.users.charlie = { isNormalUser = true; uid = 1002; };
     d2b.daemonExperimental.enable = true;
     d2b.realms.host = {
-      allowedUsers = [ "alice" ];
+      allowedUsers = [ "alice" "bob" ];
       policy.allowUnsafeLocal = true;
       network.ui.accentColor = "#cc3344";
       workloads.tools = {
@@ -1086,6 +1087,8 @@ in
       let
         service = unsafeCfg.systemd.user.services.d2b-runtime-systemd-user;
         socket = unsafeCfg.systemd.user.sockets.d2b-runtime-systemd-user;
+        userdService = unsafeCfg.systemd.user.services.d2b-userd;
+        userdSocket = unsafeCfg.systemd.user.sockets.d2b-userd;
         daemonConfig =
           builtins.fromJSON unsafeCfg.environment.etc."d2b/daemon-config.json".text;
         rootUnits =
@@ -1106,8 +1109,15 @@ in
           builtins.elem "d2b" unsafeCfg.users.users.alice.extraGroups;
         eligibleHasHelperGroup =
           builtins.elem "d2b-unsafe-local" unsafeCfg.users.users.alice.extraGroups;
-        ineligibleUserGroups = unsafeCfg.users.users.bob.extraGroups;
+        realmOnlyHasNoLifecycleGroup =
+          !(builtins.elem "d2b" unsafeCfg.users.users.bob.extraGroups);
+        realmOnlyHasHelperGroup =
+          builtins.elem "d2b-unsafe-local" unsafeCfg.users.users.bob.extraGroups;
+        realmOnlyHasUserServiceGroup =
+          builtins.elem "d2b-user-services" unsafeCfg.users.users.bob.extraGroups;
+        ineligibleUserGroups = unsafeCfg.users.users.charlie.extraGroups;
         conditionGroup = service.unitConfig.ConditionGroup;
+        userdConditionGroup = userdService.unitConfig.ConditionGroup;
         restart = service.serviceConfig.Restart;
         execStartHasHelper =
           lib.hasInfix "/bin/d2b-unsafe-local-helper" service.serviceConfig.ExecStart;
@@ -1119,11 +1129,22 @@ in
         daemonSocketPathAbsent = !(daemonConfig ? unsafeLocalHelperSocketPath);
         daemonSocketGroupAbsent = !(daemonConfig ? unsafeLocalHelperSocketGroup);
         daemonAllowedUsers = daemonConfig.unsafeLocalHelperUsers;
+        currentHelperPackage =
+          unsafeCfg.d2b._hostToolPackages.d2bUnsafeLocalHelper.name;
         userSocketPath = socket.socketConfig.ListenSequentialPacket;
         userSocketFdName = socket.socketConfig.FileDescriptorName;
         userSocketMode = socket.socketConfig.SocketMode;
+        userdSocketPath = userdSocket.socketConfig.ListenSequentialPacket;
+        userdSocketFdName = userdSocket.socketConfig.FileDescriptorName;
+        realmOnlyEndpointRules = builtins.filter
+          (rule: lib.hasInfix " /run/d2b/u/1001 " rule)
+          unsafeCfg.systemd.tmpfiles.rules;
+        realmOnlyTraverseAcl = builtins.elem
+          "a+ /run/d2b - - - - u:bob:--x"
+          unsafeCfg.systemd.tmpfiles.rules;
         helperRootUnitAbsent =
           !(builtins.elem "d2b-unsafe-local-helper" rootUnits);
+        userdRootUnitAbsent = !(builtins.elem "d2b-userd" rootUnits);
         noHelperBrokerSocketUnit =
           !(builtins.elem "d2b-unsafe-local-helper" (lib.attrNames unsafeCfg.systemd.sockets));
         unsafeLocalShellRootUnits =
@@ -1135,19 +1156,32 @@ in
       helperGroupDeclared = true;
       eligibleHasLifecycleGroup = true;
       eligibleHasHelperGroup = true;
+      realmOnlyHasNoLifecycleGroup = true;
+      realmOnlyHasHelperGroup = true;
+      realmOnlyHasUserServiceGroup = true;
       ineligibleUserGroups = [ ];
       conditionGroup = "d2b-unsafe-local";
+      userdConditionGroup = "d2b-user-services";
       restart = "on-failure";
       execStartHasHelper = true;
       execStartHasLegacyProxyArg = false;
       proxyPackageConfigured = true;
       daemonSocketPathAbsent = true;
       daemonSocketGroupAbsent = true;
-      daemonAllowedUsers = [ "alice" ];
+      daemonAllowedUsers = [ "alice" "bob" ];
+      currentHelperPackage = "d2b-unsafe-local-helper-2.0.0";
       userSocketPath = "/run/d2b/u/%U/runtime-agent.sock";
       userSocketFdName = "runtime-systemd-user";
       userSocketMode = "0600";
+      userdSocketPath = "/run/d2b/u/%U/userd.sock";
+      userdSocketFdName = "user-agent";
+      realmOnlyEndpointRules = [
+        "d /run/d2b/u/1001 0700 bob users -"
+        "z /run/d2b/u/1001 0700 bob users -"
+      ];
+      realmOnlyTraverseAcl = true;
       helperRootUnitAbsent = true;
+      userdRootUnitAbsent = true;
       noHelperBrokerSocketUnit = true;
       unsafeLocalShellRootUnits = [ ];
       shellBrokerRequired = "no";

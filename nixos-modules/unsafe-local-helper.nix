@@ -3,10 +3,6 @@
 let
   cfg = config.d2b;
   d2bLib = import ./lib.nix { inherit lib; };
-  prebuilt =
-    if cfg.site.usePrebuiltHostTools
-    then import ./prebuilt-packages.nix { inherit pkgs lib; }
-    else { };
   packagesSrc = d2bLib.cleanRustPackagesSource ../packages;
   sourcePackage = pkgs.rustPlatform.buildRustPackage {
     pname = "d2b-unsafe-local-helper";
@@ -35,10 +31,7 @@ EOF
       runHook postInstall
     '';
   };
-  helperPackage =
-    if prebuilt != null && prebuilt ? "d2b-unsafe-local-helper"
-    then prebuilt."d2b-unsafe-local-helper"
-    else sourcePackage;
+  helperPackage = sourcePackage;
   unsafeLocalRealms = lib.filter
     (realm:
       lib.any
@@ -47,14 +40,6 @@ EOF
     cfg._index.realms.enabledList;
   eligibleUsers = lib.sort lib.lessThan
     (lib.unique (lib.concatMap (realm: realm.allowedUsers) unsafeLocalRealms));
-  userEndpointTmpfiles = lib.concatMap (user:
-    let
-      uid = toString config.users.users.${user}.uid;
-      group = config.users.users.${user}.group;
-    in [
-      "d /run/d2b/u/${uid} 0700 ${user} ${group} -"
-      "z /run/d2b/u/${uid} 0700 ${user} ${group} -"
-    ]) eligibleUsers;
 in
 {
   config = lib.mkIf cfg.daemonExperimental.enable {
@@ -65,10 +50,6 @@ in
 
     d2b._hostToolPackages.d2bUnsafeLocalHelper = helperPackage;
     environment.systemPackages = [ helperPackage ];
-    systemd.tmpfiles.rules = [
-      "d /run/d2b/u 0711 root root -"
-      "z /run/d2b/u 0711 root root -"
-    ] ++ userEndpointTmpfiles;
 
     systemd.user.sockets.d2b-runtime-systemd-user = {
       description = "d2b authenticated systemd user runtime endpoint";

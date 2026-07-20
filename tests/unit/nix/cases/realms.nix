@@ -895,7 +895,11 @@ in
         socketGroup = "d2bra-${realmHash "home"}";
         daemonGroup = "d2br-${realmHash "home"}";
         socketGroupIsDistinct = true;
-        aliceExtraGroups = [ "d2b" "d2bra-${realmHash "home"}" ];
+        aliceExtraGroups = [
+          "d2b"
+          "d2b-user-services"
+          "d2bra-${realmHash "home"}"
+        ];
         aliceInD2bLifecycleGroup = true;
         aliceInRealmSocketGroup = true;
         daemonUserExists = true;

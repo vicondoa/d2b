@@ -91,6 +91,15 @@ in
       wantedBy = service.wantedBy;
       partOf = service.partOf;
       after = service.after;
+      conditionUser = unitConfig.ConditionUser;
+      socketConditionUsers = map
+        (name:
+          enabled.config.systemd.user.sockets.${name}.unitConfig.ConditionUser)
+        [
+          "d2b-clipd-control"
+          "d2b-clipd-picker"
+          "d2b-clipd-bridge"
+        ];
     };
     expected = {
       wantedBy = [ ];
@@ -101,6 +110,8 @@ in
         "d2b-clipd-picker.socket"
         "d2b-clipd-bridge.socket"
       ];
+      conditionUser = "alice";
+      socketConditionUsers = [ "alice" "alice" "alice" ];
     };
   };
 

@@ -593,6 +593,7 @@ in
       in {
         description = "d2b authenticated clipboard ${purpose} endpoint";
         wantedBy = [ "sockets.target" ];
+        unitConfig.ConditionUser = site.waylandUser;
         socketConfig = {
           ListenSequentialPacket = "/run/d2b/u/%U/clipd/${purpose}.sock";
           FileDescriptorName = "clipboard-${purpose}";
@@ -620,8 +621,11 @@ in
         "d2b-clipd-picker.socket"
         "d2b-clipd-bridge.socket"
       ];
-      unitConfig.AssertEnvironment = [ "WAYLAND_DISPLAY" ]
-        ++ lib.optional cfg.niri.enable "NIRI_SOCKET";
+      unitConfig = {
+        ConditionUser = site.waylandUser;
+        AssertEnvironment = [ "WAYLAND_DISPLAY" ]
+          ++ lib.optional cfg.niri.enable "NIRI_SOCKET";
+      };
       serviceConfig = {
         Type = "simple";
         ExecStart = systemdExecArgs [ clipdExec ];

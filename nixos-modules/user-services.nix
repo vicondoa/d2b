@@ -40,12 +40,18 @@ EOF
       uid = toString config.users.users.${user}.uid;
       group = config.users.users.${user}.group;
     in [
+      "a+ /run/d2b - - - - u:${user}:--x"
       "d /run/d2b/u/${uid} 0700 ${user} ${group} -"
       "z /run/d2b/u/${uid} 0700 ${user} ${group} -"
     ]) endpointUsers;
 in
 {
   config = lib.mkIf cfg.daemonExperimental.enable {
+    users.groups.d2b-user-services = { };
+    users.users = lib.genAttrs endpointUsers (_: {
+      extraGroups = [ "d2b-user-services" ];
+    });
+
     environment.systemPackages = [ userdPackage ];
     systemd.tmpfiles.rules = [
       "d /run/d2b/u 0711 root root -"
@@ -55,7 +61,7 @@ in
     systemd.user.sockets.d2b-userd = {
       description = "d2b authenticated user service endpoint";
       wantedBy = [ "sockets.target" ];
-      unitConfig.ConditionGroup = "d2b";
+      unitConfig.ConditionGroup = "d2b-user-services";
       socketConfig = {
         ListenSequentialPacket = "/run/d2b/u/%U/userd.sock";
         FileDescriptorName = "user-agent";
@@ -70,7 +76,7 @@ in
       description = "d2b authenticated user service";
       requires = [ "d2b-userd.socket" ];
       after = [ "d2b-userd.socket" ];
-      unitConfig.ConditionGroup = "d2b";
+      unitConfig.ConditionGroup = "d2b-user-services";
       serviceConfig = {
         Type = "simple";
         ExecStart = "${userdPackage}/bin/d2b-userd";
