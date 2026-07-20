@@ -158,6 +158,13 @@
       "auditedRevision": "65ae04c448fc4861ba7d04df7330dde9421b84f5",
       "defaultBranchRevision": "80c077277797ff129bb040f0c1b748f0fe162dc0",
       "protocolPolicy": "canonical-only",
+      "consumesDistribution": {
+        "id": "d2b-client-toolkit",
+        "repository": "vicondoa/d2b-toolkit",
+        "revision": "800c2878533f600d8f085b3d2aafcddb970232b2",
+        "sourceRevision": "4018d9c9652bd826c2e6a9abccdcdcafb832d944",
+        "fingerprint": "c2c99bdd77ba66948fce81161dcc3efde608eefefb96f28fa934c9f58d96d838"
+      },
       "ownership": {
         "mode": "exclusive-repository",
         "paths": [
@@ -220,6 +227,13 @@
       "auditedRevision": "538f56e37d47a6099edeb0288709ad8c791b60bb",
       "defaultBranchRevision": "06010b953a9dd05f4be236ef5c7265d86c3c5812",
       "protocolPolicy": "canonical-only",
+      "consumesDistribution": {
+        "id": "d2b-client-toolkit",
+        "repository": "vicondoa/d2b-toolkit",
+        "revision": "800c2878533f600d8f085b3d2aafcddb970232b2",
+        "sourceRevision": "4018d9c9652bd826c2e6a9abccdcdcafb832d944",
+        "fingerprint": "c2c99bdd77ba66948fce81161dcc3efde608eefefb96f28fa934c9f58d96d838"
+      },
       "ownership": {
         "mode": "exclusive-repository",
         "paths": [
@@ -278,9 +292,16 @@
       "repository": "vicondoa/weezterm",
       "futureRepository": null,
       "auditedRef": "adr0045-w9-weezterm",
-      "auditedRevision": "ea9a9b6c025bc0e29d86a81198d8ab0ed29c0bfa",
+      "auditedRevision": "79897243053e2755e85a3c35f38e688e8b914e2c",
       "defaultBranchRevision": "d461e3f92d9ff7faafc8e6c83a111ca0aa5ae9ca",
       "protocolPolicy": "canonical-only",
+      "consumesDistribution": {
+        "id": "d2b-client-toolkit",
+        "repository": "vicondoa/d2b-toolkit",
+        "revision": "800c2878533f600d8f085b3d2aafcddb970232b2",
+        "sourceRevision": "4018d9c9652bd826c2e6a9abccdcdcafb832d944",
+        "fingerprint": "c2c99bdd77ba66948fce81161dcc3efde608eefefb96f28fa934c9f58d96d838"
+      },
       "ownership": {
         "mode": "exclusive-file-set",
         "paths": [
@@ -316,8 +337,8 @@
         "edge-user-desktop-services"
       ],
       "readyFeatures": [
-        "client source pin migration",
-        "canonical target type migration",
+        "client toolkit facade and exact source pin migration",
+        "canonical workload and shell-service target type migration",
         "old repository and crate-name removal"
       ],
       "blockedFeatures": [
@@ -345,7 +366,7 @@
   "globalBlockers": [
     {
       "id": "client-endpoint-bootstrap",
-      "detail": "The canonical client accepts an owned route, endpoint policy, credentials, and transport; live public endpoint discovery and bootstrap remain owned by the core-control service API."
+      "detail": "The d2b-toolkit pull request 6 facade does not yet expose the W5/W6 DaemonClient APIs required by wlcontrol and wlterm. The canonical client accepts an owned route, endpoint policy, credentials, and transport; live public endpoint discovery and bootstrap remain owned by the core-control service API."
     },
     {
       "id": "runtime-adapter",

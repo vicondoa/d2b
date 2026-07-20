@@ -329,7 +329,8 @@ deprecations ship one minor release before removal.
 - Pinned both toolkit distributions and their shared foundation contract gate to
   the landed canonical W4 source revision, kept historical Git and Cargo-target
   inventory validation stable after the W5 rebase, and refreshed the exact open
-  sibling PR head, base, and ownership records.
+  sibling PR head, base, ownership, and consumer-distribution fingerprint
+  records, including WeezTerm's canonical client-toolkit facade migration.
 - Made dependency-ready wave launch and file-overlap-based component dispatch
   mandatory after shared contract prep, preventing one persistent agent from
   serializing unrelated implementation and review scopes, with shipped-package

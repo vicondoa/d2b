@@ -1136,6 +1136,20 @@ fn sibling_coordination_graph_has_disjoint_repository_ownership() {
         coordination_sources, inventory_fingerprints,
         "coordination distribution revisions must match the source inventory"
     );
+    let component_records = graph["components"].as_array().expect("components array");
+    let client_distribution = component_records
+        .iter()
+        .find(|component| component["id"] == "client-toolkit-distribution")
+        .expect("client toolkit distribution component");
+    let client_distribution_repository = client_distribution["repository"]
+        .as_str()
+        .expect("client toolkit repository");
+    let client_distribution_revision = client_distribution["auditedRevision"]
+        .as_str()
+        .expect("client toolkit audited revision");
+    let client_distribution_fingerprint = coordination_sources
+        .get("d2b-client-toolkit")
+        .expect("client toolkit distribution fingerprint");
 
     let expected = BTreeMap::from([
         ("client-toolkit-distribution", "vicondoa/d2b-toolkit"),
@@ -1149,7 +1163,7 @@ fn sibling_coordination_graph_has_disjoint_repository_ownership() {
     ]);
     let mut components = BTreeMap::new();
     let mut repositories = BTreeSet::new();
-    for component in graph["components"].as_array().expect("components array") {
+    for component in component_records {
         let component = object(component, "component");
         let id = component["id"].as_str().expect("component id");
         let repository = component["repository"]
@@ -1185,6 +1199,30 @@ fn sibling_coordination_graph_has_disjoint_repository_ownership() {
             ownership["mode"], "exclusive-new-repository",
             "{id} still records a repository-creation placeholder"
         );
+        if ["wlcontrol", "wlterm", "weezterm"].contains(&id) {
+            let pin = object(
+                &component["consumesDistribution"],
+                "consumer distribution pin",
+            );
+            assert_eq!(pin["id"], "d2b-client-toolkit", "{id} distribution id");
+            assert_eq!(
+                pin["repository"], client_distribution_repository,
+                "{id} distribution repository"
+            );
+            assert_eq!(
+                pin["revision"], client_distribution_revision,
+                "{id} distribution revision"
+            );
+            assert_eq!(
+                pin["sourceRevision"], source_revision,
+                "{id} canonical source revision"
+            );
+            assert_eq!(
+                pin["fingerprint"].as_str(),
+                Some(client_distribution_fingerprint.as_str()),
+                "{id} distribution fingerprint"
+            );
+        }
         assert!(
             !string_array(&ownership["paths"], "ownership paths").is_empty(),
             "{id} must own an explicit path set"
