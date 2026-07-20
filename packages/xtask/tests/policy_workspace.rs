@@ -1265,7 +1265,7 @@ fn adr_delivery_rules_require_dependency_ready_parallelism() {
         "before W6/W7 create final snapshots or run final panels",
         "`adr0045-w8-integration` as a Git Town child of the linearized W7 head",
         "Serial ownership stops at the smallest connected component",
-        "the gate child duplicates that same locked open-file description",
+        "duplicates that same locked open-file description",
     ] {
         assert!(
             adr.contains(required),
@@ -1382,8 +1382,17 @@ fn v2_foundation_crates_are_default_empty_and_not_publishable() {
 
 #[test]
 fn v2_foundation_delivery_fingerprints_cover_every_tracked_file() {
+    let tracked = git_tracked_files();
+    let authority = if tracked
+        .iter()
+        .any(|path| path == "packages/d2b-client/src/daemon_service.rs")
+    {
+        "delivery/manifests/w5.json"
+    } else {
+        "delivery/manifest.json"
+    };
     let manifest: serde_json::Value =
-        serde_json::from_str(&read_repo_file("delivery/manifest.json")).expect("delivery manifest");
+        serde_json::from_str(&read_repo_file(authority)).expect("delivery manifest");
     let actual = manifest["contract_fingerprints"]
         .as_array()
         .expect("contract fingerprints")
@@ -1398,7 +1407,7 @@ fn v2_foundation_delivery_fingerprints_cover_every_tracked_file() {
         })
         .collect::<BTreeSet<_>>();
 
-    let mut expected = git_tracked_files()
+    let mut expected = tracked
         .into_iter()
         .filter(|path| {
             V2_FOUNDATION_CRATES
@@ -1445,6 +1454,1103 @@ fn w4_provider_delivery_fingerprints_cover_every_reserved_file() {
         "W4 provider delivery fingerprints are missing:\n{}",
         missing.join("\n")
     );
+}
+
+#[test]
+fn shared_contract_policy_freezes_services_dependencies_and_ownership() {
+    let root = repo_root();
+    let policy = xtask::wave_policy::read_policy(&root).expect("shared-contract policy");
+    assert_eq!(policy.schema_version, 10);
+    assert_eq!(policy.authority_repository, "github.com/vicondoa/d2b");
+    let frozen = policy
+        .frozen_service_packages
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        frozen,
+        d2b_contracts::v2_services::SERVICE_PACKAGES
+            .into_iter()
+            .collect()
+    );
+    assert_eq!(
+        policy
+            .waves
+            .iter()
+            .map(|wave| (
+                wave.wave.as_str(),
+                (
+                    wave.branch_stem.as_str(),
+                    wave.allowed_parent_waves
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>(),
+                    wave.responsibility.as_str(),
+                ),
+            ))
+            .collect::<BTreeMap<_, _>>(),
+        BTreeMap::from([
+            (
+                "w5",
+                (
+                    "adr0045-w5",
+                    Vec::<&str>::new(),
+                    "runtime-service-and-dispatch-implementation",
+                ),
+            ),
+            (
+                "w6",
+                (
+                    "adr0045-w6",
+                    vec!["w5"],
+                    "user-desktop-device-service-implementation",
+                ),
+            ),
+            (
+                "w7",
+                (
+                    "adr0045-w7",
+                    vec!["w6"],
+                    "declarative-nix-process-and-resource-emission",
+                ),
+            ),
+        ])
+    );
+    for (wave, owned, foreign) in [
+        ("w5", "packages/d2bd/", "packages/d2b-userd/"),
+        ("w6", "packages/d2b-userd/", "nixos-modules/"),
+        ("w7", "tests/unit/nix/", "packages/d2bd/"),
+    ] {
+        let ownership = policy
+            .waves
+            .iter()
+            .find(|entry| entry.wave == wave)
+            .expect("wave ownership");
+        assert!(
+            ownership
+                .allowed_prefixes
+                .binary_search(&owned.to_owned())
+                .is_ok(),
+            "{wave} does not own {owned}"
+        );
+        assert!(
+            ownership
+                .foreign_prefixes
+                .binary_search(&foreign.to_owned())
+                .is_ok(),
+            "{wave} does not reject foreign prefix {foreign}"
+        );
+    }
+    let implementation_prefixes = policy
+        .waves
+        .iter()
+        .flat_map(|wave| wave.allowed_prefixes.iter())
+        .chain(policy.frozen_prefixes.iter())
+        .collect::<Vec<_>>();
+    for entry in std::fs::read_dir(root.join("packages")).expect("read package roots") {
+        let entry = entry.expect("package root entry");
+        if !entry.path().join("Cargo.toml").is_file() {
+            continue;
+        }
+        let prefix = format!("packages/{}/", entry.file_name().to_string_lossy());
+        let matches = implementation_prefixes
+            .iter()
+            .filter(|candidate| candidate.as_str() == prefix)
+            .count();
+        assert_eq!(
+            matches, 1,
+            "implementation package {prefix} must have exactly one canonical wave/frozen owner"
+        );
+    }
+    for frozen in [
+        "packages/d2b-provider-runtime-local/",
+        "packages/d2b-provider-toolkit/",
+        "packages/d2b-session/",
+    ] {
+        assert!(
+            policy
+                .frozen_prefixes
+                .binary_search(&frozen.to_owned())
+                .is_ok(),
+            "W4 implementation prefix {frozen} must stay frozen"
+        );
+    }
+    assert!(
+        policy
+            .documentation_paths
+            .binary_search(&"CHANGELOG.md".to_owned())
+            .is_ok()
+    );
+    assert!(
+        policy
+            .documentation_prefixes
+            .binary_search(&"docs/reference/".to_owned())
+            .is_ok()
+    );
+
+    let generated =
+        read_repo_file("packages/d2b-contracts/src/generated_v2_services/broker_ttrpc.rs");
+    for method in &policy.broker_typed_methods {
+        let method_name = method.method.to_ascii_lowercase();
+        assert!(
+            generated.contains(&format!(
+                "pub async fn {method_name}(&self, ctx: ttrpc::context::Context, req: &super::broker::{}) -> ::ttrpc::Result<super::broker::{}>",
+                method.request, method.response
+            )),
+            "generated broker binding does not freeze {} as {} -> {}",
+            method.method,
+            method.request,
+            method.response
+        );
+    }
+    let generated =
+        read_repo_file("packages/d2b-contracts/src/generated_v2_services/daemon_ttrpc.rs");
+    for method in &policy.daemon_typed_methods {
+        let method_name = match method.method.as_str() {
+            "ListRealms" => "list_realms",
+            "ListWorkloads" => "list_workloads",
+            "OpenConsole" => "open_console",
+            other => other,
+        }
+        .to_ascii_lowercase();
+        let request_module = match method.request.as_str() {
+            "ServiceRequest" => "common",
+            "TerminalOpenRequest" => "terminal",
+            _ => "daemon",
+        };
+        let response_module = if method.response == "TerminalOpenResponse" {
+            "terminal"
+        } else {
+            "daemon"
+        };
+        assert!(
+            generated.contains(&format!(
+                "pub async fn {method_name}(&self, ctx: ttrpc::context::Context, req: &super::{request_module}::{}) -> ::ttrpc::Result<super::{response_module}::{}>",
+                method.request, method.response
+            )),
+            "generated daemon binding does not freeze {} as {} -> {}",
+            method.method,
+            method.request,
+            method.response
+        );
+    }
+    let generated =
+        read_repo_file("packages/d2b-contracts/src/generated_v2_services/guest_ttrpc.rs");
+    for method in &policy.guest_typed_methods {
+        let method_name = match method.method.as_str() {
+            "CancelExec" => "cancel_exec",
+            "FileTransfer" => "file_transfer",
+            "InspectExec" => "inspect_exec",
+            "OpenExecRetainedLog" => "open_exec_retained_log",
+            "OpenShell" => "open_shell",
+            "SecurityKey" => "security_key",
+            other => other,
+        }
+        .to_ascii_lowercase();
+        let request_module = match method.request.as_str() {
+            "CancelRequest" => "common",
+            "TerminalOpenRequest" => "terminal",
+            _ => "guest",
+        };
+        let response_module = match method.response.as_str() {
+            "CancelResponse" => "common",
+            "TerminalOpenResponse" => "terminal",
+            _ => "guest",
+        };
+        assert!(
+            generated.contains(&format!(
+                "pub async fn {method_name}(&self, ctx: ttrpc::context::Context, req: &super::{request_module}::{}) -> ::ttrpc::Result<super::{response_module}::{}>",
+                method.request, method.response
+            )),
+            "generated guest binding does not freeze {} as {} -> {}",
+            method.method,
+            method.request,
+            method.response
+        );
+    }
+
+    let workspace = read_repo_file("packages/Cargo.toml");
+    for dependency in &policy.workspace_dependencies {
+        let line = workspace
+            .lines()
+            .find(|line| line.starts_with(&format!("{} = ", dependency.name)))
+            .unwrap_or_else(|| panic!("workspace dependency {} is absent", dependency.name));
+        assert!(
+            line.contains(&format!("\"{}\"", dependency.requirement)),
+            "workspace dependency {} does not retain requirement {}",
+            dependency.name,
+            dependency.requirement
+        );
+    }
+    let lock = read_repo_file("packages/Cargo.lock");
+    for (name, version) in [("command-fds", "0.3.3"), ("oo7", "0.6.0")] {
+        assert!(
+            lock.contains(&format!("name = \"{name}\"\nversion = \"{version}\"")),
+            "{name} {version} must be frozen in the workspace lock"
+        );
+    }
+
+    for required in [
+        "delivery/shared-contracts.json",
+        "packages/Cargo.lock",
+        "packages/Cargo.toml",
+        "packages/d2b-contracts/src/v2_services.rs",
+        "packages/d2b-realm-core/src/allocator.rs",
+        "packages/xtask/src/wave_policy.rs",
+    ] {
+        assert!(
+            policy
+                .protected_paths
+                .binary_search(&required.to_owned())
+                .is_ok(),
+            "shared contract policy does not protect {required}"
+        );
+    }
+}
+
+#[test]
+fn w5_service_dependency_edges_are_locked_and_directional() {
+    let policy =
+        xtask::wave_policy::read_policy(&repo_root()).expect("shared-contract dependency policy");
+    let metadata = workspace_metadata();
+    let packages = metadata["packages"].as_array().expect("metadata packages");
+
+    for edge in &policy.service_dependency_edges {
+        let package = packages
+            .iter()
+            .find(|package| package["name"] == edge.consumer)
+            .unwrap_or_else(|| panic!("missing consumer package {}", edge.consumer));
+        let dependencies = package["dependencies"]
+            .as_array()
+            .expect("package dependencies")
+            .iter()
+            .filter(|dependency| {
+                dependency["name"] == edge.dependency && dependency["kind"].is_null()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            dependencies.len(),
+            1,
+            "{} must have exactly one normal dependency on {}",
+            edge.consumer,
+            edge.dependency
+        );
+        let dependency = dependencies[0];
+        assert_eq!(
+            dependency["uses_default_features"],
+            serde_json::Value::Bool(edge.default_features),
+            "{} -> {} default-feature policy drifted",
+            edge.consumer,
+            edge.dependency
+        );
+        let actual_features = dependency["features"]
+            .as_array()
+            .expect("dependency features")
+            .iter()
+            .map(|feature| feature.as_str().expect("feature").to_owned())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            actual_features,
+            edge.features.iter().cloned().collect(),
+            "{} -> {} feature policy drifted",
+            edge.consumer,
+            edge.dependency
+        );
+        assert!(
+            transitive_package_names(&metadata, &edge.consumer).contains(&edge.dependency),
+            "locked resolve omits {} -> {}",
+            edge.consumer,
+            edge.dependency
+        );
+    }
+
+    let direct_dependencies = |consumer: &str| {
+        packages
+            .iter()
+            .find(|package| package["name"] == consumer)
+            .unwrap_or_else(|| panic!("missing consumer package {consumer}"))["dependencies"]
+            .as_array()
+            .expect("package dependencies")
+            .iter()
+            .filter(|dependency| dependency["kind"].is_null())
+            .filter_map(|dependency| dependency["name"].as_str().map(str::to_owned))
+            .collect::<BTreeSet<_>>()
+    };
+    let cli_dependencies = direct_dependencies("d2b");
+    assert!(cli_dependencies.contains("d2b-daemon-access"));
+    assert!(
+        !cli_dependencies.contains("d2b-client"),
+        "CLI must not duplicate daemon-access endpoint policy"
+    );
+    assert!(
+        direct_dependencies("d2b-daemon-access").contains("d2b-client"),
+        "daemon-access must own the typed host-socket client"
+    );
+
+    let mut host_socket_owners = Vec::new();
+    for package in packages {
+        let consumer = package["name"].as_str().expect("package name");
+        for dependency in package["dependencies"]
+            .as_array()
+            .expect("package dependencies")
+            .iter()
+            .filter(|dependency| dependency["kind"].is_null() && dependency["name"] == "d2b-client")
+        {
+            let features = dependency["features"]
+                .as_array()
+                .expect("dependency features")
+                .iter()
+                .map(|feature| feature.as_str().expect("feature").to_owned())
+                .collect::<BTreeSet<_>>();
+            if features.contains("host-socket") {
+                assert_eq!(
+                    consumer, "d2b-daemon-access",
+                    "{consumer} must not enable d2b-client/host-socket"
+                );
+                assert_eq!(
+                    dependency["uses_default_features"],
+                    serde_json::Value::Bool(false),
+                    "daemon-access host-socket edge must disable default features"
+                );
+                assert_eq!(
+                    features,
+                    BTreeSet::from(["host-socket".to_owned()]),
+                    "daemon-access host-socket edge must not amplify features"
+                );
+                host_socket_owners.push(consumer);
+            }
+        }
+    }
+    assert_eq!(host_socket_owners, ["d2b-daemon-access"]);
+    assert!(
+        !transitive_package_names(&metadata, "d2b-daemon-access").contains("d2b"),
+        "daemon-access dependency graph must remain acyclic"
+    );
+
+    let expected_component_session_consumers = BTreeMap::from([
+        (
+            "d2b-guestd",
+            BTreeSet::from([
+                "guest".to_owned(),
+                "v2-component-session".to_owned(),
+                "v2-guest-configured-launches".to_owned(),
+            ]),
+        ),
+        (
+            "d2b-priv-broker",
+            BTreeSet::from([
+                "broker".to_owned(),
+                "guest".to_owned(),
+                "v2-component-session".to_owned(),
+                "v2-guest-configured-launches".to_owned(),
+                "v2-services".to_owned(),
+            ]),
+        ),
+        (
+            "d2b-session",
+            BTreeSet::from(["v2-component-session".to_owned(), "v2-services".to_owned()]),
+        ),
+        (
+            "d2b-session-unix",
+            BTreeSet::from(["v2-component-session".to_owned()]),
+        ),
+    ]);
+    let expected_configured_launch_consumers = BTreeMap::from([
+        (
+            "d2bd",
+            BTreeSet::from([
+                "unsafe-local".to_owned(),
+                "v2-guest-configured-launches".to_owned(),
+                "v2-provider".to_owned(),
+            ]),
+        ),
+        (
+            "d2b-guestd",
+            expected_component_session_consumers["d2b-guestd"].clone(),
+        ),
+        (
+            "d2b-priv-broker",
+            expected_component_session_consumers["d2b-priv-broker"].clone(),
+        ),
+    ]);
+    let mut component_session_consumers = BTreeMap::new();
+    let mut configured_launch_consumers = BTreeMap::new();
+    for package in packages {
+        let consumer = package["name"].as_str().expect("package name");
+        for dependency in package["dependencies"]
+            .as_array()
+            .expect("package dependencies")
+            .iter()
+            .filter(|dependency| {
+                dependency["kind"].is_null() && dependency["name"] == "d2b-contracts"
+            })
+        {
+            let features = dependency["features"]
+                .as_array()
+                .expect("dependency features")
+                .iter()
+                .map(|feature| feature.as_str().expect("feature").to_owned())
+                .collect::<BTreeSet<_>>();
+            if features.contains("v2-guest-configured-launches") {
+                assert_eq!(
+                    dependency["uses_default_features"],
+                    serde_json::Value::Bool(false),
+                    "{consumer} configured-launch edge must disable default features"
+                );
+                assert_eq!(
+                    Some(&features),
+                    expected_configured_launch_consumers.get(consumer),
+                    "{consumer} has unauthorized configured-launch feature amplification"
+                );
+                assert!(
+                    configured_launch_consumers
+                        .insert(consumer, features.clone())
+                        .is_none(),
+                    "duplicate configured-launch dependency for {consumer}"
+                );
+            }
+            if features.contains("v2-component-session") {
+                assert_eq!(
+                    dependency["uses_default_features"],
+                    serde_json::Value::Bool(false),
+                    "{consumer} component-session edge must disable default features"
+                );
+                assert_eq!(
+                    Some(&features),
+                    expected_component_session_consumers.get(consumer),
+                    "{consumer} has unauthorized component-session feature amplification"
+                );
+                assert!(
+                    component_session_consumers
+                        .insert(consumer, features)
+                        .is_none(),
+                    "duplicate component-session dependency for {consumer}"
+                );
+            }
+        }
+    }
+    assert_eq!(
+        component_session_consumers,
+        expected_component_session_consumers
+    );
+    assert_eq!(
+        configured_launch_consumers,
+        expected_configured_launch_consumers
+    );
+
+    for (consumer, forbidden) in [
+        ("d2b-client", ["d2b", "d2b-guestd"]),
+        ("d2b-session", ["d2b-guestd", "d2b-gateway-runtime"]),
+        ("d2b-contracts", ["d2b-gateway-runtime", "d2b-guestd"]),
+    ] {
+        let transitive = transitive_package_names(&metadata, consumer);
+        for forbidden in forbidden {
+            assert!(
+                !transitive.contains(forbidden),
+                "dependency direction inverted: {consumer} reaches {forbidden}"
+            );
+        }
+    }
+}
+
+#[test]
+fn w5_guest_signing_retirement_seam_is_exact() {
+    let policy =
+        xtask::wave_policy::read_policy(&repo_root()).expect("shared-contract retirement policy");
+    assert_eq!(policy.w5_contract_retirements.len(), 1);
+    let retirement = &policy.w5_contract_retirements[0];
+    assert_eq!(retirement.component, "guest-signing");
+    assert_eq!(retirement.diff_policy, "guest-control-sign-v1");
+    assert_eq!(retirement.operation, "GuestControlSign");
+
+    let expected_sources = BTreeSet::from([
+        "packages/d2b-contracts/src/broker_wire.rs".to_owned(),
+        "packages/d2b-core/src/privileges.rs".to_owned(),
+        "packages/d2b-core/src/privileges_w3.rs".to_owned(),
+    ]);
+    let expected_companions = BTreeSet::from([
+        "docs/reference/broker-w2-dispositions.md".to_owned(),
+        "docs/reference/daemon-api.md".to_owned(),
+        "docs/reference/privileges.md".to_owned(),
+        "docs/reference/schemas/v2/privileges.json".to_owned(),
+        "docs/reference/schemas/v2/wire-protocol.json".to_owned(),
+        "packages/d2b-contract-tests/tests/privileges_parity.rs".to_owned(),
+    ]);
+    assert_eq!(
+        retirement
+            .source_paths
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        expected_sources
+    );
+    assert_eq!(
+        retirement
+            .companion_paths
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        expected_companions
+    );
+
+    let actual_selectors = retirement
+        .test_selectors
+        .iter()
+        .map(|selector| {
+            (
+                selector.test_file.as_str(),
+                selector
+                    .test_names
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert!(actual_selectors.is_empty());
+    for selector in &retirement.test_selectors {
+        let source = read_repo_file(&selector.test_file);
+        for test in &selector.test_names {
+            assert!(
+                source.contains(&format!("fn {test}(")),
+                "{} does not contain retirement selector {test}",
+                selector.test_file
+            );
+        }
+    }
+
+    let mut authorized = retirement
+        .source_paths
+        .iter()
+        .chain(
+            retirement
+                .test_selectors
+                .iter()
+                .map(|selector| &selector.test_file),
+        )
+        .chain(retirement.companion_paths.iter())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let expected_pins = BTreeSet::from([
+        "tests/golden/pinned/broker-export-audit.txt".to_owned(),
+        "tests/golden/pinned/broker-socket-acl.txt".to_owned(),
+        "tests/golden/pinned/cli-audit.txt".to_owned(),
+        "tests/golden/pinned/cli-contract.txt".to_owned(),
+        "tests/golden/pinned/cli-host-check.txt".to_owned(),
+        "tests/golden/pinned/cli-json.txt".to_owned(),
+        "tests/golden/pinned/cli-json-output-contract.txt".to_owned(),
+        "tests/golden/pinned/cli-status.txt".to_owned(),
+        "tests/golden/pinned/cli-vm-verbs.txt".to_owned(),
+        "tests/golden/pinned/daemon-socket-acl.txt".to_owned(),
+        "tests/golden/pinned/daemon-state-persistence.txt".to_owned(),
+        "tests/golden/pinned/daemon-version-negotiation.txt".to_owned(),
+        "tests/golden/pinned/guest-control-token-materializer.txt".to_owned(),
+    ]);
+    assert_eq!(
+        policy
+            .w5_successor_pin_paths
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        expected_pins
+    );
+    authorized.extend(expected_pins);
+    let w5 = policy
+        .waves
+        .iter()
+        .find(|wave| wave.wave == "w5")
+        .expect("W5 ownership");
+    assert_eq!(
+        w5.additional_protected_paths
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        authorized
+    );
+    assert_eq!(
+        w5.allowed_protected_paths
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        authorized
+    );
+    let authorized = authorized.into_iter().collect::<Vec<_>>();
+    xtask::wave_policy::check_changed_paths(&policy, "w5", &authorized)
+        .expect("exact W5 retirement and successor-pin paths");
+
+    for broader in [
+        "packages/d2b-contract-tests/tests/policy_broker_dispositions.rs",
+        "packages/d2b-contract-tests/tests/policy_source.rs",
+        "packages/d2b-contracts/src/public_wire.rs",
+        "packages/d2b-core/src/lib.rs",
+    ] {
+        assert!(
+            xtask::wave_policy::check_changed_paths(&policy, "w5", &[broader.to_owned()]).is_err(),
+            "W5 must not gain broader frozen authority: {broader}"
+        );
+    }
+    for wave in ["w6", "w7"] {
+        for source in &retirement.source_paths {
+            assert!(
+                xtask::wave_policy::check_changed_paths(
+                    &policy,
+                    wave,
+                    std::slice::from_ref(source),
+                )
+                .is_err(),
+                "{wave} must not own W5 GuestControlSign retirement source {source}"
+            );
+        }
+    }
+
+    let mut widened = policy.clone();
+    let widened_w5 = widened
+        .waves
+        .iter_mut()
+        .find(|wave| wave.wave == "w5")
+        .expect("W5 ownership");
+    widened_w5
+        .allowed_protected_paths
+        .push("packages/d2b-core/src/lib.rs".to_owned());
+    widened_w5.allowed_protected_paths.sort();
+    assert!(
+        widened.validate().is_err(),
+        "policy validation must reject extra W5 retirement authority"
+    );
+
+    let mut unbound = policy;
+    unbound.w5_contract_retirements[0].diff_policy = "path-only".to_owned();
+    assert!(
+        unbound.validate().is_err(),
+        "W5 retirement authority must remain bound to the canonical diff policy"
+    );
+}
+
+#[test]
+fn w7_legacy_contract_migration_seam_is_exact() {
+    let policy =
+        xtask::wave_policy::read_policy(&repo_root()).expect("shared-contract migration policy");
+    assert_eq!(policy.w7_contract_test_migrations.len(), 7);
+
+    let expected_files = BTreeSet::from([
+        "packages/d2b-contract-tests/tests/policy_host_realm_relay.rs".to_owned(),
+        "packages/d2b-contract-tests/tests/policy_misc.rs".to_owned(),
+        "packages/d2b-contract-tests/tests/policy_modules.rs".to_owned(),
+        "packages/d2b-contract-tests/tests/policy_source.rs".to_owned(),
+        "packages/d2b-contract-tests/tests/realm_workload_schema_contract.rs".to_owned(),
+        "packages/d2b-contract-tests/tests/storage_sync_contracts.rs".to_owned(),
+    ]);
+    let actual_files = policy
+        .w7_contract_test_migrations
+        .iter()
+        .map(|migration| migration.test_file.clone())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(actual_files, expected_files);
+
+    let expected_assignments = BTreeMap::from([
+        (
+            (
+                "desktop-metadata",
+                "packages/d2b-contract-tests/tests/realm_workload_schema_contract.rs",
+            ),
+            BTreeSet::from([
+                "realm_workloads_launcher_artifact_wired_as_private_non_secret",
+                "realm_workloads_launcher_exposes_canonical_target_and_actions",
+                "realm_workloads_launcher_exposes_icon_grouping_fields",
+                "realm_workloads_launcher_exposes_workload_id_field",
+                "realm_workloads_launcher_icon_group_key_has_semantic_comment",
+                "realm_workloads_launcher_invariant_is_no_sensitive_command_payloads",
+            ]),
+        ),
+        (
+            (
+                "realm-network",
+                "packages/d2b-contract-tests/tests/policy_host_realm_relay.rs",
+            ),
+            BTreeSet::from(["host_daemon_broker_and_activation_do_not_store_realm_credentials"]),
+        ),
+        (
+            (
+                "realm-network",
+                "packages/d2b-contract-tests/tests/policy_source.rs",
+            ),
+            BTreeSet::from(["nix_package_source_filters_are_path_segment_based"]),
+        ),
+        (
+            (
+                "realm-network",
+                "packages/d2b-contract-tests/tests/storage_sync_contracts.rs",
+            ),
+            BTreeSet::from(["host_mutation_sources_are_registered_with_storage_or_sync_policy"]),
+        ),
+        (
+            (
+                "realm-principals",
+                "packages/d2b-contract-tests/tests/policy_misc.rs",
+            ),
+            BTreeSet::from(["polkit_allowlist_daemon_only_singletons"]),
+        ),
+        (
+            (
+                "workload-processes",
+                "packages/d2b-contract-tests/tests/policy_misc.rs",
+            ),
+            BTreeSet::from(["vm_submodule_compose_vm_shape"]),
+        ),
+        (
+            (
+                "workload-processes",
+                "packages/d2b-contract-tests/tests/policy_modules.rs",
+            ),
+            BTreeSet::from(["vm_submodule_cutover"]),
+        ),
+    ]);
+    let actual_assignments = policy
+        .w7_contract_test_migrations
+        .iter()
+        .map(|migration| {
+            (
+                (migration.component.as_str(), migration.test_file.as_str()),
+                migration
+                    .test_names
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(actual_assignments, expected_assignments);
+
+    for migration in &policy.w7_contract_test_migrations {
+        let source = read_repo_file(&migration.test_file);
+        for test in &migration.test_names {
+            assert!(
+                source.contains(&format!("fn {test}(")),
+                "{} does not contain assigned test {test}",
+                migration.test_file
+            );
+        }
+        for path in &migration.source_paths {
+            assert!(
+                source.contains(path),
+                "{} does not bind assigned source path {path}",
+                migration.test_file
+            );
+        }
+        for path in &migration.companion_paths {
+            assert!(
+                repo_root().join(path).is_file(),
+                "missing companion pin {path}"
+            );
+            let companion = read_repo_file(path);
+            assert!(
+                migration
+                    .test_names
+                    .iter()
+                    .any(|test| companion.contains(test)),
+                "companion pin {path} does not reference its assigned test selector"
+            );
+        }
+    }
+
+    let w7 = policy
+        .waves
+        .iter()
+        .find(|wave| wave.wave == "w7")
+        .expect("W7 ownership");
+    let allowed_contract_tests = w7
+        .allowed_protected_paths
+        .iter()
+        .filter(|path| path.starts_with("packages/d2b-contract-tests/tests/"))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    assert_eq!(allowed_contract_tests, expected_files);
+    let fingerprint_paths = policy
+        .w7_contract_test_migrations
+        .iter()
+        .flat_map(|migration| {
+            std::iter::once(migration.test_file.as_str())
+                .chain(migration.companion_paths.iter().map(String::as_str))
+        })
+        .collect::<BTreeSet<_>>();
+    for wave in ["w5", "w6", "w7"] {
+        let manifest: serde_json::Value =
+            serde_json::from_str(&read_repo_file(&format!("delivery/manifests/{wave}.json")))
+                .expect("delivery manifest");
+        let fingerprinted = manifest["contract_fingerprints"]
+            .as_array()
+            .expect("contract fingerprints")
+            .iter()
+            .map(|row| row["path"].as_str().expect("fingerprint path"))
+            .collect::<BTreeSet<_>>();
+        assert!(
+            fingerprint_paths.is_subset(&fingerprinted),
+            "{wave} fingerprints do not cover every W7 contract-test migration surface"
+        );
+    }
+    let allowed_paths = w7
+        .allowed_protected_paths
+        .iter()
+        .filter(|path| {
+            path.starts_with("packages/d2b-contract-tests/tests/")
+                || path == &"tests/migration-ledger.toml"
+                || path.starts_with("tests/migration-state.d/")
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    xtask::wave_policy::check_changed_paths(&policy, "w7", &allowed_paths)
+        .expect("exact W7 migration surfaces");
+    for wave in ["w5", "w6"] {
+        assert!(
+            xtask::wave_policy::check_changed_paths(&policy, wave, &allowed_paths).is_err(),
+            "{wave} must not own W7 migration surfaces"
+        );
+    }
+    for broader in [
+        "packages/d2b-contract-tests/tests/policy_network.rs",
+        "packages/d2b-contract-tests/tests/v2_services_contract.rs",
+        "tests/migration-state.d/no-bash-exec-eval.toml",
+    ] {
+        assert!(
+            xtask::wave_policy::check_changed_paths(&policy, "w7", &[broader.to_owned()]).is_err(),
+            "W7 must not gain broader contract-test or migration-pin ownership: {broader}"
+        );
+    }
+}
+
+#[test]
+fn typed_allocator_wire_matches_canonical_allocator_inventory() {
+    use d2b_contracts::v2_services::broker;
+    use d2b_realm_core::allocator::{AllocatorReasonCode, HostResourceKind};
+
+    let canonical_kinds = [
+        HostResourceKind::Bridge,
+        HostResourceKind::Tap,
+        HostResourceKind::VethPair,
+        HostResourceKind::NftablesTable,
+        HostResourceKind::NftablesPartition,
+        HostResourceKind::CgroupSubtree,
+        HostResourceKind::HostFilePartition,
+        HostResourceKind::NamespaceBoundary,
+    ]
+    .map(HostResourceKind::as_metric_label);
+    let wire_kinds = [
+        broker::HostResourceKind::HOST_RESOURCE_KIND_BRIDGE,
+        broker::HostResourceKind::HOST_RESOURCE_KIND_TAP,
+        broker::HostResourceKind::HOST_RESOURCE_KIND_VETH_PAIR,
+        broker::HostResourceKind::HOST_RESOURCE_KIND_NFTABLES_TABLE,
+        broker::HostResourceKind::HOST_RESOURCE_KIND_NFTABLES_PARTITION,
+        broker::HostResourceKind::HOST_RESOURCE_KIND_CGROUP_SUBTREE,
+        broker::HostResourceKind::HOST_RESOURCE_KIND_HOST_FILE_PARTITION,
+        broker::HostResourceKind::HOST_RESOURCE_KIND_NAMESPACE_BOUNDARY,
+    ]
+    .map(|kind| match kind {
+        broker::HostResourceKind::HOST_RESOURCE_KIND_BRIDGE => "bridge",
+        broker::HostResourceKind::HOST_RESOURCE_KIND_TAP => "tap",
+        broker::HostResourceKind::HOST_RESOURCE_KIND_VETH_PAIR => "veth-pair",
+        broker::HostResourceKind::HOST_RESOURCE_KIND_NFTABLES_TABLE => "nftables-table",
+        broker::HostResourceKind::HOST_RESOURCE_KIND_NFTABLES_PARTITION => "nftables-partition",
+        broker::HostResourceKind::HOST_RESOURCE_KIND_CGROUP_SUBTREE => "cgroup-subtree",
+        broker::HostResourceKind::HOST_RESOURCE_KIND_HOST_FILE_PARTITION => "host-file-partition",
+        broker::HostResourceKind::HOST_RESOURCE_KIND_NAMESPACE_BOUNDARY => "namespace-boundary",
+        broker::HostResourceKind::HOST_RESOURCE_KIND_UNSPECIFIED => "unspecified",
+    });
+    assert_eq!(wire_kinds, canonical_kinds);
+
+    let canonical_reasons = [
+        AllocatorReasonCode::ResourceConflict,
+        AllocatorReasonCode::OwnershipConflict,
+        AllocatorReasonCode::AcquisitionOrderViolation,
+        AllocatorReasonCode::InvalidRequest,
+        AllocatorReasonCode::CapacityExhausted,
+        AllocatorReasonCode::DriftDetected,
+        AllocatorReasonCode::ReconcileMismatch,
+        AllocatorReasonCode::OwnerNotLive,
+        AllocatorReasonCode::PolicyDenied,
+        AllocatorReasonCode::UnsupportedKind,
+        AllocatorReasonCode::StorageContractViolation,
+        AllocatorReasonCode::KernelStateUnknown,
+    ]
+    .map(AllocatorReasonCode::as_metric_label);
+    let wire_reasons = [
+        broker::AllocatorReason::ALLOCATOR_REASON_RESOURCE_CONFLICT,
+        broker::AllocatorReason::ALLOCATOR_REASON_OWNERSHIP_CONFLICT,
+        broker::AllocatorReason::ALLOCATOR_REASON_ACQUISITION_ORDER_VIOLATION,
+        broker::AllocatorReason::ALLOCATOR_REASON_INVALID_REQUEST,
+        broker::AllocatorReason::ALLOCATOR_REASON_CAPACITY_EXHAUSTED,
+        broker::AllocatorReason::ALLOCATOR_REASON_DRIFT_DETECTED,
+        broker::AllocatorReason::ALLOCATOR_REASON_RECONCILE_MISMATCH,
+        broker::AllocatorReason::ALLOCATOR_REASON_OWNER_NOT_LIVE,
+        broker::AllocatorReason::ALLOCATOR_REASON_POLICY_DENIED,
+        broker::AllocatorReason::ALLOCATOR_REASON_UNSUPPORTED_KIND,
+        broker::AllocatorReason::ALLOCATOR_REASON_STORAGE_CONTRACT_VIOLATION,
+        broker::AllocatorReason::ALLOCATOR_REASON_KERNEL_STATE_UNKNOWN,
+    ]
+    .map(|reason| match reason {
+        broker::AllocatorReason::ALLOCATOR_REASON_RESOURCE_CONFLICT => "resource-conflict",
+        broker::AllocatorReason::ALLOCATOR_REASON_OWNERSHIP_CONFLICT => "ownership-conflict",
+        broker::AllocatorReason::ALLOCATOR_REASON_ACQUISITION_ORDER_VIOLATION => {
+            "acquisition-order-violation"
+        }
+        broker::AllocatorReason::ALLOCATOR_REASON_INVALID_REQUEST => "invalid-request",
+        broker::AllocatorReason::ALLOCATOR_REASON_CAPACITY_EXHAUSTED => "capacity-exhausted",
+        broker::AllocatorReason::ALLOCATOR_REASON_DRIFT_DETECTED => "drift-detected",
+        broker::AllocatorReason::ALLOCATOR_REASON_RECONCILE_MISMATCH => "reconcile-mismatch",
+        broker::AllocatorReason::ALLOCATOR_REASON_OWNER_NOT_LIVE => "owner-not-live",
+        broker::AllocatorReason::ALLOCATOR_REASON_POLICY_DENIED => "policy-denied",
+        broker::AllocatorReason::ALLOCATOR_REASON_UNSUPPORTED_KIND => "unsupported-kind",
+        broker::AllocatorReason::ALLOCATOR_REASON_STORAGE_CONTRACT_VIOLATION => {
+            "storage-contract-violation"
+        }
+        broker::AllocatorReason::ALLOCATOR_REASON_KERNEL_STATE_UNKNOWN => "kernel-state-unknown",
+        broker::AllocatorReason::ALLOCATOR_REASON_UNSPECIFIED => "unspecified",
+    });
+    assert_eq!(wire_reasons, canonical_reasons);
+    assert_eq!(
+        d2b_contracts::v2_services::MAX_ALLOCATOR_REQUEST_RESOURCES,
+        d2b_realm_core::allocator::MAX_ALLOCATOR_REQUEST_RESOURCES
+    );
+    assert_eq!(
+        d2b_contracts::v2_services::MAX_ALLOCATOR_CONFLICTS,
+        d2b_realm_core::allocator::MAX_ALLOCATOR_CONFLICTS
+    );
+}
+
+#[test]
+fn provider_registry_v2_has_one_canonical_artifact_family() {
+    let actual = git_tracked_files()
+        .into_iter()
+        .filter(|path| {
+            path.ends_with("/provider-registry-v2.json")
+                || path.ends_with("/provider-registry-v2.md")
+                || path.ends_with("/provider-registry-v2-json.nix")
+                || path.ends_with("/provider_registry_v2.rs")
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        actual,
+        BTreeSet::from([
+            "docs/reference/schemas/v2/provider-registry-v2.json".to_owned(),
+            "docs/reference/schemas/v2/provider-registry-v2.md".to_owned(),
+            "nixos-modules/provider-registry-v2-json.nix".to_owned(),
+            "packages/d2b-contracts/src/provider_registry_v2.rs".to_owned(),
+        ])
+    );
+}
+
+#[test]
+fn provider_binding_consumers_require_and_preserve_fail_closed_fallbacks() {
+    let compact = |source: &str| {
+        source
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>()
+    };
+    let contract = read_repo_file("packages/d2b-contracts/src/provider_registry_v2.rs");
+    let compact_contract = compact(&contract);
+    let non_exhaustive = compact_contract
+        .find("#[non_exhaustive]")
+        .expect("non-exhaustive attribute");
+    let binding_enum = compact_contract
+        .find("pubenumProviderBindingV2")
+        .expect("provider binding enum");
+    assert!(
+        non_exhaustive < binding_enum,
+        "provider binding must remain non-exhaustive for external consumers"
+    );
+    assert!(
+        compact_contract.contains(
+            "#[serde(tag=\"axis\",rename_all=\"kebab-case\",deny_unknown_fields)]pubenumProviderBindingV2"
+        ),
+        "compile-time extensibility must not relax strict wire decoding"
+    );
+    let schema: serde_json::Value = serde_json::from_str(&read_repo_file(
+        "docs/reference/schemas/v2/provider-registry-v2.json",
+    ))
+    .expect("provider registry schema");
+    let wire_axes = schema["definitions"]["ProviderBindingV2"]["oneOf"]
+        .as_array()
+        .expect("provider binding union")
+        .iter()
+        .map(|variant| {
+            variant["properties"]["axis"]["enum"][0]
+                .as_str()
+                .expect("binding axis")
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        wire_axes,
+        BTreeSet::from(["local-observability", "local-runtime"]),
+        "provider binding wire schema must remain closed to declared axes"
+    );
+    assert!(
+        contract.contains("```compile_fail")
+            && compact_contract.contains("pubconstfnconsumer_view(")
+            && compact_contract.contains("_=>Err(UnsupportedProviderBindingV2)"),
+        "the contract must prove fallback-required matching and retain its registration seam"
+    );
+
+    let effects = read_repo_file("packages/d2bd/src/provider_effects.rs");
+    let registry = read_repo_file("packages/d2bd/src/provider_registry.rs");
+    for (name, source) in [("effects", &effects), ("registry", &registry)] {
+        assert!(
+            !source.contains("ProviderBindingV2::"),
+            "d2bd {name} must dispatch only through the registered consumer view"
+        );
+        assert!(
+            source.contains("ProviderBindingV2ConsumerView")
+                && source.contains("UnsupportedBinding"),
+            "d2bd {name} lacks an explicit unsupported extension path"
+        );
+    }
+    assert!(
+        compact(&effects).contains("_=>returnErr(DaemonEffectAdapterError::UnsupportedBinding)"),
+        "effect adapter dispatch must fail closed on a registered future view"
+    );
+    assert!(
+        compact(&registry).contains("_=>Err(ProviderCompositionError::UnsupportedBinding)")
+            && compact(&registry)
+                .contains("_=>returnErr(ProviderCompositionError::UnsupportedBinding)"),
+        "registry composition and probing must fail closed on registered future views"
+    );
+
+    let policy = xtask::wave_policy::read_policy(&repo_root()).expect("shared-contract policy");
+    for path in [
+        "docs/reference/v2-provider-implementations.md",
+        "packages/d2bd/src/provider_effects.rs",
+        "packages/d2bd/src/provider_registry.rs",
+    ] {
+        assert!(
+            policy
+                .protected_paths
+                .binary_search(&path.to_owned())
+                .is_ok(),
+            "shared ownership inventory does not protect {path}"
+        );
+    }
+
+    let seam_paths = BTreeSet::from([
+        "docs/reference/v2-provider-implementations.md",
+        "packages/d2b-contracts/src/provider_registry_v2.rs",
+        "packages/d2bd/src/provider_effects.rs",
+        "packages/d2bd/src/provider_registry.rs",
+        "packages/xtask/tests/policy_workspace.rs",
+    ]);
+    for wave in ["w5", "w6", "w7"] {
+        let manifest: serde_json::Value =
+            serde_json::from_str(&read_repo_file(&format!("delivery/manifests/{wave}.json")))
+                .expect("delivery manifest");
+        let fingerprinted = manifest["contract_fingerprints"]
+            .as_array()
+            .expect("contract fingerprints")
+            .iter()
+            .map(|row| row["path"].as_str().expect("fingerprint path"))
+            .collect::<BTreeSet<_>>();
+        assert!(
+            seam_paths.is_subset(&fingerprinted),
+            "{wave} delivery fingerprints do not cover the provider consumer seam"
+        );
+    }
 }
 
 #[test]

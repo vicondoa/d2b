@@ -5,6 +5,8 @@
 
 #[cfg(all(feature = "host-socket", not(target_os = "linux")))]
 compile_error!("the host-socket feature requires Linux");
+#[cfg(all(feature = "native-vsock", not(target_os = "linux")))]
+compile_error!("the native-vsock feature requires Linux");
 
 #[cfg(feature = "host-socket")]
 mod adapter;
@@ -18,6 +20,8 @@ mod error;
 mod pidfd;
 #[cfg(feature = "host-socket")]
 mod socket;
+#[cfg(feature = "native-vsock")]
+mod vsock;
 
 #[cfg(feature = "host-socket")]
 pub use adapter::{
@@ -47,3 +51,5 @@ pub use socket::{
     AncillaryCapacity, OutboundPacket, PacketBurst, SendBurst, SentPacket, SeqpacketSocket,
     StreamRead, StreamSocket, prearmed_seqpacket_pair,
 };
+#[cfg(feature = "native-vsock")]
+pub use vsock::{FramedVsockTransport, NativeVsockListener, NativeVsockTransport};

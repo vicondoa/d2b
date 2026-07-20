@@ -23,6 +23,27 @@ fn assert_line_matches(haystack: &str, pattern: &str, ctx: &str) {
     assert!(re.is_match(haystack), "{ctx}: no line matched /{pattern}/");
 }
 
+fn assert_w5_owns_path(path: &str) {
+    let policy: serde_json::Value =
+        serde_json::from_str(&read_repo_file("delivery/shared-contracts.json"))
+            .expect("valid shared-contract policy");
+    let w5 = policy["waves"]
+        .as_array()
+        .expect("wave ownership rows")
+        .iter()
+        .find(|wave| wave["wave"] == "w5")
+        .expect("W5 ownership row");
+    assert!(
+        w5["allowed_prefixes"]
+            .as_array()
+            .expect("W5 allowed prefixes")
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .any(|prefix| path.starts_with(prefix)),
+        "shared contract policy must assign {path} to W5"
+    );
+}
+
 fn collect_markdown_files(dir: &Path, files: &mut Vec<PathBuf>) {
     let mut entries = std::fs::read_dir(dir)
         .unwrap_or_else(|err| panic!("failed to read {}: {err}", dir.display()))
@@ -1030,5 +1051,156 @@ fn generated_layer1_workflow_checks_out_every_exact_candidate_head() {
     assert_eq!(
         checkout_count, exact_ref_count,
         "every generated Layer-1 checkout must select the exact candidate head"
+    );
+}
+
+#[test]
+fn production_guest_runtime_is_concrete_and_installed_before_public_service() {
+    if !repo_path_exists("packages/d2bd/src/production_guest_terminal.rs") {
+        assert!(!repo_path_exists(
+            "packages/d2bd/src/production_guest_runtime.rs"
+        ));
+        assert_w5_owns_path("packages/d2bd/src/production_guest_terminal.rs");
+        return;
+    }
+    let daemon = read_repo_file("packages/d2bd/src/lib.rs");
+    let connector = read_repo_file("packages/d2bd/src/production_guest_terminal.rs");
+    let runtime = read_repo_file("packages/d2bd/src/production_guest_runtime.rs");
+    let manifest = read_repo_file("packages/d2bd/Cargo.toml");
+    let production_connector = connector
+        .split("\n#[cfg(test)]\nmod tests")
+        .next()
+        .expect("production connector prefix");
+
+    let install = daemon
+        .find("install_production_guest_runtime_ports(guest_runtime_ports)")
+        .expect("non-test daemon startup must install guest runtime ports");
+    let state = daemon
+        .find("let state = Arc::new(ServerState")
+        .expect("daemon state construction");
+    assert!(
+        install < state,
+        "guest runtime ports must be installed before the public server state is published"
+    );
+    assert!(
+        production_connector.contains("Arc<BrokerRealmGuestMaterialPort>")
+            && production_connector.contains("Arc<VsockDirectGuestSessionPort>")
+            && production_connector.contains("PRODUCTION_GUEST_RUNTIME_PORTS")
+            && !production_connector.contains("RegisteredRealmGuestMaterialPort")
+            && !production_connector.contains("RegisteredDirectGuestSessionPort")
+            && !production_connector.contains("UnavailableGuestTerminalConnector"),
+        "production must hold concrete broker/vsock ports without empty registered or unavailable wrappers"
+    );
+    assert!(
+        runtime.contains("struct BrokerRealmGuestMaterialPort")
+            && runtime.contains("struct VsockDirectGuestSessionPort")
+            && runtime.contains("NativeVsockRuntime")
+            && runtime.contains("SessionEngine::establish_responder")
+            && runtime.contains("SessionEngine::establish_initiator")
+            && !runtime.contains("d2b_priv_broker")
+            && !runtime.contains("d2b_guestd"),
+        "runtime ports must use cross-process ComponentSession clients, never broker/guest implementation imports"
+    );
+    assert!(
+        !manifest.contains("d2b-priv-broker =")
+            && !manifest.contains("d2b-guestd =")
+            && manifest.contains("features = [\"host-socket\", \"native-vsock\"]"),
+        "d2bd must use the maintained transport adapter without in-process broker or guest dependencies"
+    );
+}
+
+#[test]
+fn child_broker_enrollment_and_vsock_runtime_are_fail_closed() {
+    if !repo_path_exists("packages/d2b-priv-broker/src/allocator_service.rs") {
+        assert_w5_owns_path("packages/d2b-priv-broker/src/allocator_service.rs");
+        return;
+    }
+    let allocator = read_repo_file("packages/d2b-priv-broker/src/allocator_service.rs");
+    let broker_runtime = read_repo_file("packages/d2b-priv-broker/src/runtime.rs");
+    let child = read_repo_file("packages/d2b-priv-broker/src/child_realm_runtime.rs");
+    let child_material =
+        read_repo_file("packages/d2b-priv-broker/src/child_realm_guest_material.rs");
+    let controller = read_repo_file("packages/d2bd/src/controller_static_identity.rs");
+    let daemon_runtime = read_repo_file("packages/d2bd/src/production_guest_runtime.rs");
+    let material = read_repo_file("packages/d2b-priv-broker/src/guest_session_material.rs");
+    let authority = read_repo_file("packages/d2b-priv-broker/src/guest_material_authority.rs");
+    let audit = read_repo_file("packages/d2b-priv-broker/src/guest_material_audit.rs");
+    let store = read_repo_file("packages/d2b-priv-broker/src/guest_material_store.rs");
+    let vsock = read_repo_file("packages/d2b-session-unix/src/vsock.rs");
+
+    assert!(
+        allocator.contains("serve-child-realm")
+            && allocator.contains("RealmChildRole::Broker => \"d2bbr\"")
+            && allocator.contains("realm_broker_authority_fd(record, guest_runtime_digest)?")
+            && allocator.contains("realm_broker_guest_runtime_digest")
+            && child.contains("D2B_BROKER_LISTENER_FD")
+            && child.contains("env_fd(REALM_BROKER_AUTHORITY_FD_ENV)")
+            && child.contains("child realm broker rejects systemd activation")
+            && child.contains("rustix::process::geteuid().as_raw() != 0")
+            && child.contains("load_id_map(\"/proc/self/uid_map\")")
+            && child.contains("load_id_map(\"/proc/self/gid_map\")")
+            && child.contains("verify_namespace_root(authority.broker_uid)")
+            && child.contains("authority.guest_runtime_digest != guest_runtime_digest")
+            && child_material.contains("build_guest_material_handler")
+            && child_material.contains(".dispatch(method, request, attachments, context)"),
+        "the allocator-spawned broker must use its explicit argv mode and inherited realm authority"
+    );
+    assert!(
+        allocator.contains("realm_controller_authority_fd(record)?")
+            && allocator.contains("Some(&record.broker)")
+            && controller.contains("REALM_CONTROLLER_AUTHORITY_FD_ENV")
+            && controller.contains("authority.broker_namespace_uid")
+            && controller.contains("verify_broker_peer")
+            && controller.contains("namespace_id == OVERFLOW_ID")
+            && controller.contains("if self.child_realm")
+            && controller.contains("Ok((broker_uid, broker_gid))")
+            && daemon_runtime
+                .contains("controller.verify_broker_peer(peer, broker_uid, broker_gid)"),
+        "the controller namespace must map and authenticate the allocator-recorded broker principal"
+    );
+    assert!(
+        broker_runtime.contains("broker requires one socket-activated priv.sock listener")
+            && material.contains(".stage_pair(")
+            && material.contains(".stage_enrolled_credential(")
+            && material.contains("enrollment.apply_memory()")
+            && material.contains("enrollment.rollback()")
+            && authority.contains("file.sync_data()")
+            && authority.contains("restore_enrollment")
+            && store.contains("RECOVERY_PREPARED")
+            && store.contains("RECOVERY_PAIR_LEDGER_COMMITTED")
+            && store.contains("RECOVERY_AUDIT_COMMITTED")
+            && store.contains("EnrollmentSuccessAuditIdentity")
+            && store.contains("write_recovery_record")
+            && store.contains("recover_enrollment_pair")
+            && child_material.contains("audit.as_ref()")
+            && audit.contains("fn ensure_success")
+            && audit.contains("success_keys")
+            && audit.contains("D2BGMA3")
+            && !audit.contains("const V1_MAGIC")
+            && !audit.contains("const V2_MAGIC")
+            && audit.contains("V3_COMMIT_MAGIC")
+            && audit.contains("prepare_v3_path")
+            && audit.contains("SEGMENT_MAX_BYTES")
+            && audit.contains("MAX_RETAINED_SEGMENTS")
+            && audit.contains(".v3-segment-")
+            && audit.contains("unshipped_legacy_formats_are_rejected_without_mutation")
+            && material.contains("material.mark_audit_committed()")
+            && store.contains("unlink_recovery_file(parent_fd, RECOVERY_JOURNAL)")
+            && store.contains("if record.state == RECOVERY_AUDIT_COMMITTED")
+            && material
+                .find("enrollment.commit()")
+                .zip(material.find("material.mark_committed()"))
+                .zip(material.find("broker.audit.record(&success_audit)"))
+                .is_some_and(|((ledger, pair), audit)| ledger < pair && pair < audit)
+            && !authority.contains(".consume(&key)"),
+        "enrollment must replace material and commit replay/public identity durably before success"
+    );
+    assert!(
+        vsock.contains("loop {")
+            && vsock.contains("if cid == expected_cid && port != 0")
+            && vsock.contains("drop(stream)")
+            && vsock.contains("foreign_peer_does_not_reset_original_accept_deadline")
+            && vsock.contains("cancelling_accept_closes_foreign_peer_and_pending_listener"),
+        "native vsock acceptance must discard foreign peers under the original caller deadline"
     );
 }

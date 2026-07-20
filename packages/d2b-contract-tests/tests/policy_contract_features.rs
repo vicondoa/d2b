@@ -77,7 +77,7 @@ fn contracts_default_is_empty_and_feature_graph_is_acyclic() {
             "broker",
             BTreeSet::from(["common", "guest-auth", "security-key", "usbip"]),
         ),
-        ("public", BTreeSet::from(["broker", "guest"])),
+        ("public", BTreeSet::from(["broker", "guest", "v2-provider"])),
         ("cli-output", BTreeSet::from(["public"])),
         ("unsafe-local", BTreeSet::from(["public"])),
         (
@@ -86,6 +86,7 @@ fn contracts_default_is_empty_and_feature_graph_is_acyclic() {
                 "cli-output",
                 "unsafe-local",
                 "v2-component-session",
+                "v2-guest-configured-launches",
                 "v2-identity",
                 "v2-provider",
                 "v2-services",
@@ -94,6 +95,10 @@ fn contracts_default_is_empty_and_feature_graph_is_acyclic() {
         ),
         ("v2-identity", BTreeSet::new()),
         ("v2-component-session", BTreeSet::from(["v2-identity"])),
+        (
+            "v2-guest-configured-launches",
+            BTreeSet::from(["v2-identity"]),
+        ),
         (
             "v2-services",
             BTreeSet::from(["v2-component-session", "v2-provider", "v2-state"]),
@@ -212,6 +217,10 @@ fn v2_rails_are_independently_owned_without_current_aliases() {
     for (feature, module) in [
         ("v2-identity", "v2_identity"),
         ("v2-component-session", "v2_component_session"),
+        (
+            "v2-guest-configured-launches",
+            "v2_guest_configured_launches",
+        ),
         ("v2-services", "v2_services"),
         ("v2-provider", "v2_provider"),
         ("v2-state", "v2_state"),
@@ -256,6 +265,7 @@ fn v2_rails_are_independently_owned_without_current_aliases() {
     for rail in [
         "\"v2-identity\"",
         "\"v2-component-session\"",
+        "\"v2-guest-configured-launches\"",
         "\"v2-services\"",
         "\"v2-provider\"",
         "\"v2-state\"",

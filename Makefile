@@ -9,6 +9,9 @@
         test-lint test-rust test-proofs test-flake test-nix-unit \
         test-flake-list \
         test-drift test-policy test-integration test-host-integration test-hardware perf \
+        heavy-check heavy-test-integration heavy-test-host-integration \
+        heavy-test-hardware heavy-cargo-test heavy-flake-check \
+        wave-policy-check \
         layer1-workflow layer1-workflow-check \
         ledger-regen check-inventory pr-checklist-gate nix-unit-pin flake-matrix-pin
 
@@ -132,6 +135,31 @@ test-policy:
 ## test-integration — L2 podman container integration tests.
 test-integration:
 	bash tests/test-integration.sh
+
+# Host-wide, two-slot OFD gate for the expensive final-validation commands.
+# Existing targets stay unchanged; concurrent development uses these wrappers
+# when entering a heavy local lane.
+heavy-check:
+	cd packages && cargo xtask heavy-gate -- $(MAKE) -C .. check
+
+heavy-test-integration:
+	cd packages && cargo xtask heavy-gate -- $(MAKE) -C .. test-integration
+
+heavy-test-host-integration:
+	cd packages && cargo xtask heavy-gate -- $(MAKE) -C .. test-host-integration
+
+heavy-test-hardware:
+	cd packages && cargo xtask heavy-gate -- $(MAKE) -C .. test-hardware
+
+heavy-cargo-test:
+	cd packages && cargo xtask heavy-gate -- cargo test --workspace
+
+heavy-flake-check:
+	cd packages && cargo xtask heavy-gate -- nix flake check ..
+
+wave-policy-check:
+	@test -n "$(CANDIDATE_ROOT)" || { echo "usage: make -C <trusted-parent-worktree> wave-policy-check CANDIDATE_ROOT=<wave-worktree>" >&2; exit 2; }
+	cd packages && cargo xtask wave-policy check --candidate-root "$(abspath $(CANDIDATE_ROOT))"
 
 ## layer1-workflow — regenerate the Layer-1 PR workflow from tests/layer1-jobs.json.
 layer1-workflow:

@@ -293,6 +293,7 @@
       ]
     },
     "ProviderBindingV2": {
+      "description": "Closed wire binding with an extension-safe consumer surface.\n\nWire decoding remains strict: serde accepts only variants declared by the current schema. Downstream consumers must nevertheless retain a fallback so adding a declared variant does not silently activate behavior.",
       "oneOf": [
         {
           "type": "object",

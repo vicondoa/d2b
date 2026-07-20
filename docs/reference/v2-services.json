@@ -1,10 +1,10 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 8,
   "services": [
     {
       "package": "d2b.daemon.v2",
       "service": "DaemonService",
-      "schemaFingerprint": "07f6a8203c079d91cec358916be60a2e5f8dedd4ffa3a2e5ee81e441c7db6d84",
+      "schemaFingerprint": "4b2834c89162e5a2c17ea879052c066fd546cdc440d1473955a99e2d9521a54a",
       "methods": [
         {
           "name": "Resolve",
@@ -186,7 +186,7 @@
     {
       "package": "d2b.guest.v2",
       "service": "GuestService",
-      "schemaFingerprint": "d334371ef3e415f717f4d74df6b06b791105cafd7ccf348d4387cf6116640f4b",
+      "schemaFingerprint": "e6d2fd47db903deff84b5b9cb58a0aed17e2f6ef43010182925890878a15dd3d",
       "methods": [
         {
           "name": "Bootstrap",
@@ -225,6 +225,14 @@
           "methodId": 2415393647,
           "mutating": false,
           "requiresIdempotency": false,
+          "maxRequestBytes": 1048576,
+          "maxLifetimeMs": 900000
+        },
+        {
+          "name": "OpenExecRetainedLog",
+          "methodId": 1917754755,
+          "mutating": true,
+          "requiresIdempotency": true,
           "maxRequestBytes": 1048576,
           "maxLifetimeMs": 900000
         },
@@ -974,7 +982,7 @@
     {
       "package": "d2b.broker.v2",
       "service": "BrokerService",
-      "schemaFingerprint": "291bb77b8cd8eb4239fcd3fe116dc282db980ec09d7f1d2e0879c702c3697ba0",
+      "schemaFingerprint": "c2dc5cba9c5e3c3925138b869e1795c8e780c5c7a60b4b8f14e30263c540382b",
       "methods": [
         {
           "name": "ValidateLease",

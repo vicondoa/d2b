@@ -3,10 +3,12 @@ use std::{
     os::unix::fs::{MetadataExt, PermissionsExt, symlink},
     path::{Path, PathBuf},
     sync::{
-        Arc, Barrier,
+        Arc,
         atomic::{AtomicU64, Ordering},
+        mpsc,
     },
     thread,
+    time::{Duration, Instant},
 };
 
 use d2b_contracts::v2_state::{
@@ -20,10 +22,10 @@ use d2b_contracts::v2_state::{
 };
 use d2b_state::{
     AnchoredDir, AnchoredResource, AtomicFilesystem, AtomicWrite, AuditAppender, AuditRecordInput,
-    CanonicalJson, Error, ErrorCode, GenerationPolicy, LeafName, LockSet, MetadataExpectation,
-    NeverCancelled, QuarantineRecord, ReadPolicy, RealAtomicFilesystem, RelativePath,
-    SegmentBuilder, WritePolicy, checkpoint, decide_retention, detect_gap, grant_lease,
-    read_audit_segment, revoke_lease, validate_lease,
+    CanonicalJson, Clock, Error, ErrorCode, GenerationPolicy, LeafName, LockSet,
+    MetadataExpectation, NeverCancelled, QuarantineRecord, ReadPolicy, RealAtomicFilesystem,
+    RelativePath, SegmentBuilder, WritePolicy, checkpoint, decide_retention, detect_gap,
+    grant_lease, read_audit_segment, revoke_lease, validate_lease,
 };
 use rustix::io::fcntl_dupfd_cloexec;
 use serde::{Deserialize, Serialize};
@@ -909,7 +911,7 @@ fn two_generation_writers_serialize_and_only_one_can_commit_next_generation() {
         ContentionPolicy::BoundedWait,
         FdTransferPolicy::Never,
     );
-    spec.deadline_ms = 2_000;
+    spec.deadline_ms = 10_000;
     let lock_resource = AnchoredResource::new(
         resource("state"),
         &anchor,
@@ -936,51 +938,113 @@ fn two_generation_writers_serialize_and_only_one_can_commit_next_generation() {
         .unwrap();
     initial_lock.release_last().unwrap();
 
+    let winner_anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
+    let winner_lock_resource = AnchoredResource::new(
+        resource("state"),
+        &winner_anchor,
+        LeafName::parse("state.lock").unwrap(),
+    );
+    let mut winner_locks = LockSet::new();
+    winner_locks
+        .acquire(
+            &spec,
+            &winner_lock_resource,
+            metadata,
+            epoch(1),
+            &NeverCancelled,
+        )
+        .unwrap();
+
+    struct ContentionClock {
+        started: Instant,
+        contended: mpsc::SyncSender<()>,
+        release: mpsc::Receiver<()>,
+    }
+
+    impl Clock for ContentionClock {
+        fn now(&self) -> Instant {
+            self.started
+        }
+
+        fn sleep(&self, _duration: Duration) {
+            self.contended.send(()).unwrap();
+            self.release.recv().unwrap();
+        }
+    }
+
     let root = Arc::new(scratch.0.clone());
-    let barrier = Arc::new(Barrier::new(2));
-    let handles = [10_u64, 20_u64].map(|value| {
-        let root = Arc::clone(&root);
-        let barrier = Arc::clone(&barrier);
-        thread::spawn(move || {
-            let anchor = AnchoredDir::open_trusted(&root).unwrap();
-            let metadata = host_metadata(&root, 0o600);
-            let mut spec = lock_spec(
-                "state-lock",
-                "state",
-                1,
-                &[],
-                ContentionPolicy::BoundedWait,
-                FdTransferPolicy::Never,
-            );
-            spec.deadline_ms = 2_000;
-            let lock_resource = AnchoredResource::new(
-                resource("state"),
-                &anchor,
-                LeafName::parse("state.lock").unwrap(),
-            );
-            let mut locks = LockSet::new();
-            barrier.wait();
-            locks
-                .acquire(&spec, &lock_resource, metadata, epoch(1), &NeverCancelled)
-                .unwrap();
-            let state_resource = AnchoredResource::new(
-                resource("state"),
-                &anchor,
-                LeafName::parse("state.json").unwrap(),
-            );
-            let result = AtomicWrite::new(RealAtomicFilesystem::new(state_resource)).write(
-                &Payload { value },
-                &WritePolicy {
-                    metadata,
-                    ..write_policy(2, Some(1))
+    let (contended_tx, contended_rx) = mpsc::sync_channel(0);
+    let (release_tx, release_rx) = mpsc::sync_channel(0);
+    let losing_root = Arc::clone(&root);
+    let loser = thread::spawn(move || {
+        let anchor = AnchoredDir::open_trusted(&losing_root).unwrap();
+        let metadata = host_metadata(&losing_root, 0o600);
+        let mut spec = lock_spec(
+            "state-lock",
+            "state",
+            1,
+            &[],
+            ContentionPolicy::BoundedWait,
+            FdTransferPolicy::Never,
+        );
+        spec.deadline_ms = 2_000;
+        let lock_resource = AnchoredResource::new(
+            resource("state"),
+            &anchor,
+            LeafName::parse("state.lock").unwrap(),
+        );
+        let mut locks = LockSet::new();
+        locks
+            .acquire_with_clock(
+                &spec,
+                &lock_resource,
+                metadata,
+                epoch(1),
+                &NeverCancelled,
+                &ContentionClock {
+                    started: Instant::now(),
+                    contended: contended_tx,
+                    release: release_rx,
                 },
-                locks.last(),
-            );
-            locks.release_last().unwrap();
-            (value, result.map(|receipt| receipt.generation))
-        })
+            )
+            .unwrap();
+        let state_resource = AnchoredResource::new(
+            resource("state"),
+            &anchor,
+            LeafName::parse("state.json").unwrap(),
+        );
+        let result = AtomicWrite::new(RealAtomicFilesystem::new(state_resource)).write(
+            &Payload { value: 20 },
+            &WritePolicy {
+                metadata,
+                ..write_policy(2, Some(1))
+            },
+            locks.last(),
+        );
+        locks.release_last().unwrap();
+        (20, result.map(|receipt| receipt.generation))
     });
-    let results = handles.map(|handle| handle.join().unwrap());
+
+    contended_rx.recv().unwrap();
+    let winner_state_resource = AnchoredResource::new(
+        resource("state"),
+        &winner_anchor,
+        LeafName::parse("state.json").unwrap(),
+    );
+    let winner_result = AtomicWrite::new(RealAtomicFilesystem::new(winner_state_resource))
+        .write(
+            &Payload { value: 10 },
+            &WritePolicy {
+                metadata,
+                ..write_policy(2, Some(1))
+            },
+            winner_locks.last(),
+        )
+        .map(|receipt| receipt.generation);
+    winner_locks.release_last().unwrap();
+    release_tx.send(()).unwrap();
+
+    let results = [(10, winner_result), loser.join().unwrap()];
     assert_eq!(
         results.iter().filter(|(_, result)| result.is_ok()).count(),
         1

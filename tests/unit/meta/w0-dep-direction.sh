@@ -154,9 +154,11 @@ check_pure_crate() {
 check_pure_crate d2b-realm-core
 # d2b-realm-provider: only the core contract crate.
 check_pure_crate d2b-realm-provider d2b-realm-core
-# d2b-realm-router (s8): core + provider only, when it lands.
+# d2b-realm-router owns the authenticated generated realm service rail in
+# addition to pure routing, so its canonical contract and session edges are
+# intentional while transport implementations remain forbidden.
 check_pure_crate d2b-realm-router \
-  d2b-realm-core d2b-realm-provider
+  d2b-contracts d2b-realm-core d2b-realm-provider d2b-session
 # d2b-realm-transport (s5): trait/mock home; core + provider only.
 check_pure_crate d2b-realm-transport \
   d2b-realm-core d2b-realm-provider

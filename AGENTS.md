@@ -305,6 +305,59 @@ speculative until it lands. Contract changes require dependent branches to
 restack and lose any prior validation or panel seal; never land a prep commit
 directly on local `main`.
 
+The post-W4 shared root is the exclusive owner of the frozen ComponentSession
+service DTOs/bindings, allocator and child-realm spawn wire, workspace dependency
+table and `Cargo.lock`, delivery tooling, and `delivery/shared-contracts.json`.
+Its policy positively classifies implementation paths: W5 owns the core
+daemon/CLI/client, realm, guest, provider-agent, broker, host, and allocator
+crates; W6 owns userd, systemd-user/shell, clipboard, notify/wlcontrol, Wayland,
+security-key, activation, TTY, and one-shot helper crates; W7 owns
+`nixos-modules/`, `pkgs/`, `examples/`, `templates/`, and its Nix eval-test
+emission. Existing W4 implementation crates are frozen. Every wave lists the
+other two sets as foreign, and unclassified implementation, prefix-root
+symlink/gitlink, frozen, or foreign edits fail closed. Only the checked-in
+documentation paths/prefixes and the wave's own manifest are general
+exceptions. W7 extends the existing `provider-registry-v2` family through its
+narrow protected-path exceptions; no wave creates a second registry.
+`ProviderBindingV2` is non-exhaustive for Rust consumers but remains a strict
+closed serde union. New declared variants reach only the fail-closed consumer
+fallback until this shared root registers the matching daemon adapter.
+W7's frozen contract-test exception is likewise exact: only the test selectors
+and companion migration pins listed in `w7_contract_test_migrations` may move,
+owned by the declarative component deleting their legacy source. The rest of
+`d2b-contract-tests` remains frozen.
+
+W5, W6, and W7 each edit only their authority at
+`delivery/manifests/w<N>.json`; `delivery/manifest.json` remains the unchanged W4
+authority. Ownership verification is itself parent-authoritative. Run the target
+from a clean trusted worktree checked out at the candidate's exact immediate
+Git Town parent commit, never from the candidate:
+
+```bash
+make -C "$TRUSTED_PARENT_ROOT" wave-policy-check \
+  CANDIDATE_ROOT="$WAVE_WORKTREE"
+```
+
+The trusted checker derives the candidate branch and wave from the canonical
+`adr0045-w5`, `adr0045-w6`, or `adr0045-w7` branch stem. It obtains the immediate
+parent from Git Town, discovers the branch's unique open ordinary GitHub PR, and
+requires the policy-pinned repository and exact local/PR base and head OIDs. It
+walks every wave ancestor to the shared root and verifies each Git Town edge
+against that branch's unique ordinary PR. It accepts no caller-selected wave or
+base, rejects `HEAD` as its own base, and requires its own clean source worktree
+to be that exact immediate parent. Before linearization every wave may use the
+shared root; afterward only the complete W5 -> W6 -> W7 chain is valid. The
+checker disables Git replacement, graft, and shallow traversal for every object
+read and diff, and rejects repositories containing `refs/replace`,
+`info/grafts`, or `shallow` metadata. Ownership and canonical diffs plus
+cleanliness checks force submodule handling to `none`, overriding a local
+`diff.ignoreSubmodules=all` that could otherwise hide gitlink changes. The check
+rejects another wave's implementation, an unowned or frozen implementation, an
+implementation-prefix root, another wave's manifest, the workspace lock/shared
+dependency table, frozen cross-wave contracts, or shared delivery/policy
+tooling. A newly required shared contract returns to the shared-root PR and all
+consumers restack.
+
 #### Anti-serialization invariant
 
 Serial ownership ends at the smallest coherent shared contract boundary. A
@@ -345,6 +398,49 @@ Exception: a security-sensitive cross-cutting invariant may stay serial only
 when the plan names the exact files, invariant, and unblock commit. Dispatch all
 downstream components as soon as that commit lands; the exception cannot expand
 silently into the rest of the wave.
+
+#### Heavy local validation gate
+
+`cargo xtask heavy-gate -- <command> [args...]` is the sole host-wide heavy-lane
+semaphore. It owns two per-UID OFD-locked slots in
+`${XDG_RUNTIME_DIR}/d2b-heavy-gates`, or
+`${TMPDIR:-/tmp}/d2b-heavy-gates-$UID` when no runtime directory is available.
+The selected parent is pinned with a CLOEXEC directory FD and must be either an
+invoking-UID-owned non-symlink directory without group/other write or a
+root-owned sticky world-writable directory. The per-UID `0700` directory is
+created and opened relative to that FD with `mkdirat`/`openat` and
+`O_NOFOLLOW`. The persistent `slot-0.lock` and `slot-1.lock` files must be
+regular, invoking-UID-owned, single-link `0600` files opened relative to the
+pinned gate FD with `O_RDWR|O_CREAT|O_CLOEXEC|O_NOFOLLOW`. Parent, directory,
+and slot name-to-inode bindings are revalidated so rename or replacement cannot
+silently split the lock namespace.
+
+Acquisition tries slot 0 then slot 1 with nonblocking OFD write locks every
+250 ms for at most 30 minutes. Unsupported OFD locking, unsafe metadata, or
+timeout fails closed; there is no `flock` fallback. The parent retains its
+original CLOEXEC descriptor. The child receives a duplicate of the same locked
+open-file description at the numeric FD named by `D2B_HEAVY_GATE_FD`, with
+CLOEXEC cleared. Before spawning, the wrapper replaces inherited
+`SIGCHLD=SIG_IGN` or `SA_NOCLDWAIT` state with a caught handler; `exec` resets
+that handler to default, while the wrapper can retain a waitable leader. The
+child runs in its own process group; the wrapper forwards termination signals,
+normally waits for the complete group, then closes its original FD.
+`/proc/<pid>/stat` is parsed as bytes. Any pidfd wait, process-table, namespace,
+or process-group observation failure retains the parent permit while the
+wrapper kills the group and keeps its exited leader unreaped as the PID/PGID
+identity anchor while inspecting and terminating descendants. The leader is
+reaped only after the final group signal and membership check, so a reused PGID
+can never be targeted. Five consecutive process-table failures trigger one
+final anchored `SIGKILL` followed by leader reap and failure; descendants keep
+their inherited locked FD until that kill takes effect. Thus a wrapper crash
+does not release a permit while its child hierarchy lives. Slot files are never
+unlinked during acquisition.
+
+Use `make heavy-check`, `make heavy-test-integration`,
+`make heavy-test-host-integration`, `make heavy-test-hardware`,
+`make heavy-cargo-test`, or `make heavy-flake-check` for the expensive local
+lanes. Existing focused targets and CI do not consume a slot, and the ungated
+targets retain their prior semantics.
 
 ### Edit → commit → validate
 
@@ -876,6 +972,14 @@ feature branches; `main` itself is maintained as a by-release history.
 
 ## Disk hygiene contract
 
+- Delivery validators MUST keep cloned sources, Cargo targets, temporary homes,
+  caches, and other execution-only state under the private
+  `/tmp/d2b-validation-execution-<uid>/` root, with sockets under the short
+  `/tmp/d2b-vs-<uid>/` root, never under persistent delivery
+  state or a Copilot session directory. Normal completion must remove both run
+  trees before publishing evidence; each new run prunes trees whose recorded
+  owning process no longer exists. Candidate state retains only bounded
+  validation payloads and immutable evidence.
 - Test eval expressions MUST resolve the flake via `git+file://$ROOT`
   (use the `d2b_flake_ref` helper in `tests/lib.sh`), **never**
   `builtins.getFlake (toString $ROOT)`. A bare path makes Nix use the
@@ -1121,8 +1225,33 @@ contract:
   listener, state/audit root, cgroup partition, and process. The allocator
   pre-binds both listeners and parent-spawns both processes; neither is a PID1
   unit or receives `SD_LISTEN_FDS`.
+- The broker child runs only the fixed `serve-child-realm` argv mode, adopts the
+  allocator listener/bootstrap/cgroup/authority/runtime FDs, requires namespace
+  uid/gid 0, verifies `uid_map`/`gid_map` bind namespace root to its recorded
+  host principal, recovers any prepared guest-material transaction, and serves
+  only realm-scoped guest material before sending readiness. Allocator/global
+  operations remain denied. The unsuffixed local-root broker remains systemd
+  socket activated only.
+- The reciprocal child-controller namespace maps the allocator-recorded broker
+  principal as well as controller root. Its sealed bootstrap authority records
+  the translated broker uid/gid; startup verifies both id maps, rejects
+  overflow ids, and authenticates broker `SO_PEERCRED` with namespace ids.
+- Guest enrollment recovery journals bind prior/new pair digests and the
+  path-free success-audit outcome/dedup key. Startup must append a missing
+  committed success audit exactly once before journal cleanup or readiness.
+  Audit records use V3 payload/checksum plus a separately-fsynced commit
+  trailer; validated V1/V2 journals are archived byte-for-byte before
+  an integrity-bound import marker preserves archive query semantics. V3
+  active files rotate below 64 MiB into deterministic 20-digit segments with
+  bounded retention. Cleanup removes and fsyncs the main recovery journal
+  before sidecars, and journal-absent startup reaps orphan sidecars.
 - The local-root controller supervises and adopts child controller/broker
   pidfds. Each realm controller supervises only its workload DAGs.
+- A controller static private key is accepted only through the fixed
+  `d2b-controller-static-v2` systemd credential for local root or the
+  allocator-issued sealed `controller-static-identity-v2` inherited resource
+  for a child. It remains zeroizing process memory; there is no key path,
+  environment-secret, store generation, or on-demand fallback.
 - There are no per-realm child `.socket`/`.service` units.
 - There are no per-workload systemd templates or units. Unit count does not
   scale with realm or workload count.

@@ -14,6 +14,7 @@ workspace = true
 [dependencies]
 clap_complete = "4"
 clap_mangen = "0.2"
+command-fds.workspace = true
 d2b = { workspace = true }
 d2b-realm-core = { workspace = true }
 d2b-core = { workspace = true }
@@ -25,5 +26,5 @@ ttrpc-codegen.workspace = true
 schemars.workspace = true
 serde_json.workspace = true
 rustix = { workspace = true, features = ["event"] }
-nix = { version = "0.29", default-features = false, features = ["fs"] }
-signal-hook = "0.4"
+nix = { workspace = true, features = ["fs"] }
+signal-hook.workspace = true

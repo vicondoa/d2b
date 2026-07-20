@@ -32,18 +32,18 @@ impl DaemonServiceClient {
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.daemon.v2.DaemonService", "Resolve", cres);
     }
 
-    pub async fn list_realms(&self, ctx: ttrpc::context::Context, req: &super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
-        let mut cres = super::common::ServiceResponse::new();
+    pub async fn list_realms(&self, ctx: ttrpc::context::Context, req: &super::common::ServiceRequest) -> ::ttrpc::Result<super::daemon::ListRealmsResponse> {
+        let mut cres = super::daemon::ListRealmsResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.daemon.v2.DaemonService", "ListRealms", cres);
     }
 
-    pub async fn list_workloads(&self, ctx: ttrpc::context::Context, req: &super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
-        let mut cres = super::common::ServiceResponse::new();
+    pub async fn list_workloads(&self, ctx: ttrpc::context::Context, req: &super::common::ServiceRequest) -> ::ttrpc::Result<super::daemon::ListWorkloadsResponse> {
+        let mut cres = super::daemon::ListWorkloadsResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.daemon.v2.DaemonService", "ListWorkloads", cres);
     }
 
-    pub async fn inspect(&self, ctx: ttrpc::context::Context, req: &super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
-        let mut cres = super::common::ServiceResponse::new();
+    pub async fn inspect(&self, ctx: ttrpc::context::Context, req: &super::common::ServiceRequest) -> ::ttrpc::Result<super::daemon::InspectResponse> {
+        let mut cres = super::daemon::InspectResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.daemon.v2.DaemonService", "Inspect", cres);
     }
 
@@ -67,18 +67,18 @@ impl DaemonServiceClient {
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.daemon.v2.DaemonService", "Restart", cres);
     }
 
-    pub async fn exec(&self, ctx: ttrpc::context::Context, req: &super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
-        let mut cres = super::common::ServiceResponse::new();
+    pub async fn exec(&self, ctx: ttrpc::context::Context, req: &super::terminal::TerminalOpenRequest) -> ::ttrpc::Result<super::terminal::TerminalOpenResponse> {
+        let mut cres = super::terminal::TerminalOpenResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.daemon.v2.DaemonService", "Exec", cres);
     }
 
-    pub async fn shell(&self, ctx: ttrpc::context::Context, req: &super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
-        let mut cres = super::common::ServiceResponse::new();
+    pub async fn shell(&self, ctx: ttrpc::context::Context, req: &super::terminal::TerminalOpenRequest) -> ::ttrpc::Result<super::terminal::TerminalOpenResponse> {
+        let mut cres = super::terminal::TerminalOpenResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.daemon.v2.DaemonService", "Shell", cres);
     }
 
-    pub async fn open_console(&self, ctx: ttrpc::context::Context, req: &super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
-        let mut cres = super::common::ServiceResponse::new();
+    pub async fn open_console(&self, ctx: ttrpc::context::Context, req: &super::terminal::TerminalOpenRequest) -> ::ttrpc::Result<super::terminal::TerminalOpenResponse> {
+        let mut cres = super::terminal::TerminalOpenResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.daemon.v2.DaemonService", "OpenConsole", cres);
     }
 
@@ -188,7 +188,7 @@ struct ExecMethod {
 #[async_trait]
 impl ::ttrpc::r#async::MethodHandler for ExecMethod {
     async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
-        ::ttrpc::async_request_handler!(self, ctx, req, common, ServiceRequest, exec);
+        ::ttrpc::async_request_handler!(self, ctx, req, terminal, TerminalOpenRequest, exec);
     }
 }
 
@@ -199,7 +199,7 @@ struct ShellMethod {
 #[async_trait]
 impl ::ttrpc::r#async::MethodHandler for ShellMethod {
     async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
-        ::ttrpc::async_request_handler!(self, ctx, req, common, ServiceRequest, shell);
+        ::ttrpc::async_request_handler!(self, ctx, req, terminal, TerminalOpenRequest, shell);
     }
 }
 
@@ -210,7 +210,7 @@ struct OpenConsoleMethod {
 #[async_trait]
 impl ::ttrpc::r#async::MethodHandler for OpenConsoleMethod {
     async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
-        ::ttrpc::async_request_handler!(self, ctx, req, common, ServiceRequest, open_console);
+        ::ttrpc::async_request_handler!(self, ctx, req, terminal, TerminalOpenRequest, open_console);
     }
 }
 
@@ -241,13 +241,13 @@ pub trait DaemonService: Sync {
     async fn resolve(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.daemon.v2.DaemonService/Resolve is not supported".to_string())))
     }
-    async fn list_realms(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
+    async fn list_realms(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ServiceRequest) -> ::ttrpc::Result<super::daemon::ListRealmsResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.daemon.v2.DaemonService/ListRealms is not supported".to_string())))
     }
-    async fn list_workloads(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
+    async fn list_workloads(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ServiceRequest) -> ::ttrpc::Result<super::daemon::ListWorkloadsResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.daemon.v2.DaemonService/ListWorkloads is not supported".to_string())))
     }
-    async fn inspect(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
+    async fn inspect(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ServiceRequest) -> ::ttrpc::Result<super::daemon::InspectResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.daemon.v2.DaemonService/Inspect is not supported".to_string())))
     }
     async fn apply(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
@@ -262,13 +262,13 @@ pub trait DaemonService: Sync {
     async fn restart(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.daemon.v2.DaemonService/Restart is not supported".to_string())))
     }
-    async fn exec(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
+    async fn exec(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::terminal::TerminalOpenRequest) -> ::ttrpc::Result<super::terminal::TerminalOpenResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.daemon.v2.DaemonService/Exec is not supported".to_string())))
     }
-    async fn shell(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
+    async fn shell(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::terminal::TerminalOpenRequest) -> ::ttrpc::Result<super::terminal::TerminalOpenResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.daemon.v2.DaemonService/Shell is not supported".to_string())))
     }
-    async fn open_console(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
+    async fn open_console(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::terminal::TerminalOpenRequest) -> ::ttrpc::Result<super::terminal::TerminalOpenResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.daemon.v2.DaemonService/OpenConsole is not supported".to_string())))
     }
     async fn export_audit(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {

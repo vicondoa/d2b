@@ -41,11 +41,17 @@ fake-backends = ["d2b-host/fake-backends"]
 
 
 [dependencies]
-d2b-contracts = { workspace = true, features = ["broker", "guest"] }
+async-trait.workspace = true
+d2b-contracts = { workspace = true, features = ["broker", "guest", "v2-component-session", "v2-guest-configured-launches", "v2-services"] }
 d2b-core = { workspace = true }
 d2b-host = { workspace = true }
 d2b-realm-core = { workspace = true }
+d2b-session = { workspace = true, default-features = false }
+d2b-session-unix = { workspace = true, features = ["host-socket"] }
+d2b-state = { workspace = true, features = ["host-fs"] }
+futures = "0.3"
 hmac = "0.12"
+protobuf.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 nix = { version = "0.29", features = ["fs", "socket", "uio", "user", "signal", "process", "net"] }
@@ -58,8 +64,10 @@ nix = { version = "0.29", features = ["fs", "socket", "uio", "user", "signal", "
 rustix = { workspace = true, features = ["fs", "process", "net"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
-tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "signal", "sync"] }
+tokio = { workspace = true, features = ["io-util", "net", "rt", "rt-multi-thread", "macros", "signal", "sync", "time"] }
 sha2.workspace = true
+ttrpc = { workspace = true, default-features = false, features = ["async", "sync"] }
+zeroize.workspace = true
 
 [dev-dependencies]
 # Dev-only override to enable d2b-host's `fake-backends` feature

@@ -46,6 +46,14 @@ advanced local branch ref does not erase merge authority. The checked-in
 manifest remains the expected ordered graph. `xtask` never accepts a
 caller-authored graph, edits PR topology, or rewrites branches.
 
+The historical authority remains `delivery/manifest.json`. New independent
+delivery lines select a checked-in `delivery/manifests/w<N>.json` path. The file
+name must match its declared wave, its own path must appear in
+`contract_fingerprints`, and only one tracked authority may declare a given
+wave. Selecting a per-wave path does not relax graph checks: the ordered
+branches, ordinary PR numbers, active terminal integration ref, and every
+immediate Git Town parent must still match exactly.
+
 The capability probe verifies the supported Git Town major, noninteractive
 propose flags, GitHub authentication, repository read access, and the
 ordinary pull-request API:
@@ -78,6 +86,63 @@ exact-base-and-head compare-and-swap path or the GitHub merge queue.
 
 For the noninteractive setup, propose, update, and retarget procedure, see
 [Manage stacked wave pull requests with Git Town](../how-to/manage-stacked-wave-prs.md).
+
+## Wave ownership authority
+
+Implementation branches above the shared contract root are checked by tooling
+built from their trusted immediate parent, not by the candidate's copy of
+`xtask`. Keep a clean worktree at the exact parent commit corroborated by Git
+Town and the candidate's ordinary GitHub PR, then run:
+
+```console
+make -C "$TRUSTED_PARENT_ROOT" wave-policy-check \
+  CANDIDATE_ROOT="$WAVE_WORKTREE"
+```
+
+Do not run this target from the wave worktree. The trusted command accepts no
+`--wave` or `--base`: it derives the wave from the candidate's canonical branch
+stem, reads the immediate parent with `git-town config get-parent`, discovers
+the unique open ordinary PR in the policy-pinned repository, and requires its
+local and GitHub base/head refs and OIDs to match. It walks every configured
+implementation ancestor and corroborates each Git Town edge with that branch's
+ordinary PR through the shared root. Its own clean source worktree must be
+checked out at the candidate's exact immediate base commit. A base equal to its
+branch `HEAD` fails.
+
+The checker reads `delivery/shared-contracts.json` from the verified parent Git
+object, reads the selected per-wave manifest from the candidate `HEAD` object,
+and computes a no-rename parent-to-head path diff. Candidate edits to the
+checker, delivery implementation, Make target, or policy are therefore judged
+by the parent policy and cannot exempt themselves.
+
+Every authority Git command disables replacement objects and bypasses graft and
+shallow traversal. Verification also fails if either worktree's common Git
+directory contains `refs/replace`, `info/grafts`, or `shallow` metadata, so
+replacement commits cannot substitute the trusted policy, selected manifest,
+or parent-to-head diff. Ownership and canonical diffs and every authority
+cleanliness check force `diff.ignoreSubmodules=none` plus
+`--ignore-submodules=none`; local configuration cannot hide committed gitlink
+additions or type changes.
+
+The policy's implementation partition is fail-closed across waves:
+
+| Partition | Owned implementation |
+| --- | --- |
+| Core runtime | CLI/client/daemon, realm, guest, provider-agent, broker, host, and allocator crate prefixes |
+| User and desktop services | Userd, systemd-user/shell, clipboard, notify/wlcontrol, Wayland, security-key, activation, TTY, and retained-helper crate prefixes |
+| Declarative emission | `nixos-modules/`, `pkgs/`, `examples/`, `templates/`, and Nix eval-test emission |
+
+Allowed prefixes are positive authority, not documentation: a changed
+implementation path must classify to the current partition. Each partition
+records the exact union of the other partitions' prefixes as foreign, landed
+implementation prefixes are frozen, unowned paths fail closed, and the prefix
+root itself cannot become a symlink, gitlink, or file. Shared-root contracts and
+tooling stay protected; only explicit documentation paths/prefixes, the current
+manifest, and the declarative partition's narrow provider-registry/`flake.nix`
+exceptions are allowed. Before linearization all implementation branches use
+the shared root as parent. In the final dependency chain, each dependent
+partition uses its immediate predecessor as the exact trusted parent; partial
+linearization is rejected.
 
 ## External evidence and check summaries
 

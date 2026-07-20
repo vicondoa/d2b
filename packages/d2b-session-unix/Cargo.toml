@@ -13,16 +13,26 @@ host-socket = [
     "dep:async-trait",
     "dep:d2b-contracts",
     "dep:d2b-session",
+    "dep:libc",
     "dep:rustix",
     "dep:tokio",
+]
+native-vsock = [
+    "dep:async-trait",
+    "dep:d2b-contracts",
+    "dep:d2b-session",
+    "dep:tokio",
+    "dep:tokio-vsock",
 ]
 
 [dependencies]
 async-trait = { workspace = true, optional = true }
 d2b-contracts = { workspace = true, default-features = false, optional = true, features = ["v2-component-session"] }
 d2b-session = { workspace = true, default-features = false, optional = true }
+libc = { workspace = true, optional = true }
 rustix = { workspace = true, optional = true }
-tokio = { workspace = true, optional = true, features = ["net"] }
+tokio = { workspace = true, optional = true, features = ["io-util", "net"] }
+tokio-vsock = { version = "0.7.2", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }

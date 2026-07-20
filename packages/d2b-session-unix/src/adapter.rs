@@ -692,7 +692,9 @@ fn validate_value(
         (
             UnixAttachmentValue::File(fd),
             AttachmentKind::FileDescriptor,
-            DescriptorPolicy::File(_) | DescriptorPolicy::Pidfd(_),
+            DescriptorPolicy::File(_)
+            | DescriptorPolicy::SealedReadOnlyMemfd
+            | DescriptorPolicy::Pidfd(_),
         ) => validate_owned_file_identity(fd, descriptor, policy).map(Some),
         (UnixAttachmentValue::File(_), _, _) => Err(UnixSessionError::DescriptorMismatch),
     }
@@ -738,7 +740,6 @@ fn same_descriptor_binding(expected: &AttachmentDescriptor, actual: &AttachmentD
     let mut expected = expected.clone();
     expected.index = actual.index;
     expected.packet_sequence = actual.packet_sequence;
-    expected.reconnect_generation = actual.reconnect_generation;
     expected == *actual
 }
 

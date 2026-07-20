@@ -136,6 +136,111 @@ fn rust_workspace_is_single_and_versioned() {
     }
 }
 
+#[test]
+fn guest_session_credential_codec_has_one_shared_authority() {
+    const AUTHORITY: &str = "packages/d2b-contracts/src/v2_component_session.rs";
+    let authority = read_repo_file(AUTHORITY);
+    assert!(authority.contains("GuestSessionCredentialV1"));
+    assert!(authority.contains("pub struct GuestSessionCredentialBytes"));
+    assert!(authority.contains("pub struct GuestBootstrapPsk"));
+    assert!(authority.contains("GUEST_SESSION_CREDENTIAL_MAGIC"));
+    assert!(authority.contains(concat!("D2B", "GSV2")));
+    assert!(authority.contains("requires_clone::<GuestSessionCredentialBytes>()"));
+    assert!(authority.contains("requires_serialize::<GuestSessionCredentialBytes>()"));
+    assert!(authority.contains("pub struct GuestBootstrapPsk {\n    bytes: Zeroizing<Vec<u8>>"));
+    assert!(!authority.contains("Zeroizing<[u8; 32]>"));
+    assert!(authority.contains("let psk = decode_psk(&mut bootstrap_reader)?"));
+    for forbidden_impl in [
+        "impl Clone for GuestSessionCredentialBytes",
+        "impl Serialize for GuestSessionCredentialBytes",
+        "impl serde::Serialize for GuestSessionCredentialBytes",
+        "impl Deref for GuestSessionCredentialBytes",
+    ] {
+        assert!(
+            !authority.contains(forbidden_impl),
+            "opaque encoded credential bytes must not expose {forbidden_impl}"
+        );
+    }
+
+    let forbidden = [
+        concat!("D2B", "GSV2"),
+        concat!("SESSION_", "MATERIAL_MAGIC"),
+        concat!("fn decode_", "session_material"),
+        concat!("fn decode_", "guest_session_credential"),
+    ];
+    for path in git_listed_files(&["packages"]) {
+        if path == AUTHORITY || !path.ends_with(".rs") {
+            continue;
+        }
+        let Some(source) = read_repo_file_opt(&path) else {
+            continue;
+        };
+        for pattern in forbidden {
+            assert!(
+                !source.contains(pattern),
+                "independent guest session credential codec marker {pattern:?} in {path}"
+            );
+        }
+    }
+}
+
+#[test]
+fn guest_configured_launches_codec_has_one_shared_authority() {
+    const AUTHORITY: &str = "packages/d2b-contracts/src/v2_guest_configured_launches.rs";
+    let authority = read_repo_file(AUTHORITY);
+    for required in [
+        "GuestConfiguredLaunchesV1",
+        "GuestConfiguredLaunchEntryV1",
+        "GuestConfiguredLaunchesBytes",
+        concat!("GUEST_CONFIGURED_", "LAUNCHES_MAGIC"),
+        concat!("D2B", "CLV2"),
+    ] {
+        assert!(
+            authority.contains(required),
+            "configured-launch codec authority is missing {required}"
+        );
+    }
+    for forbidden_impl in [
+        "impl Clone for GuestConfiguredLaunchEntryV1",
+        "impl Serialize for GuestConfiguredLaunchEntryV1",
+        "impl serde::Serialize for GuestConfiguredLaunchEntryV1",
+        "impl Clone for GuestConfiguredLaunchesV1",
+        "impl Serialize for GuestConfiguredLaunchesV1",
+        "impl serde::Serialize for GuestConfiguredLaunchesV1",
+        "impl Clone for GuestConfiguredLaunchesBytes",
+        "impl Serialize for GuestConfiguredLaunchesBytes",
+        "impl serde::Serialize for GuestConfiguredLaunchesBytes",
+        "impl Deref for GuestConfiguredLaunchesBytes",
+    ] {
+        assert!(
+            !authority.contains(forbidden_impl),
+            "configured-launch catalog must not expose {forbidden_impl}"
+        );
+    }
+
+    let forbidden = [
+        concat!("D2B", "CLV2"),
+        concat!("const GUEST_CONFIGURED_", "LAUNCHES_MAGIC"),
+        concat!("const CONFIGURED_", "LAUNCHES_MAGIC"),
+        concat!("fn decode_", "configured_launches"),
+        concat!("fn decode_", "configured_launch_catalog"),
+    ];
+    for path in git_listed_files(&["packages"]) {
+        if path == AUTHORITY || !path.ends_with(".rs") {
+            continue;
+        }
+        let Some(source) = read_repo_file_opt(&path) else {
+            continue;
+        };
+        for pattern in forbidden {
+            assert!(
+                !source.contains(pattern),
+                "independent guest configured-launch codec marker {pattern:?} in {path}"
+            );
+        }
+    }
+}
+
 /// Whether `rel` lives under an excluded directory component, mirroring the
 /// bash gate's `rg -g '!**/target/**' -g '!**/tests/**' -g '!**/.git/**'`
 /// globs. A `**/X/**` glob excludes paths where `X` is a *directory* component

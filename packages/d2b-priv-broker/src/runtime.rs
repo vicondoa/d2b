@@ -4560,7 +4560,15 @@ fn handle_guest_control_sign(
         });
     }
     let transcript = guest_control_transcript(&req)?;
-    let mut token = read_guest_control_token(&config.state_dir, req.vm_id.as_str())?;
+    let token = read_guest_control_token(&config.state_dir, req.vm_id.as_str())?;
+    sign_guest_control_transcript(token, &transcript)
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn sign_guest_control_transcript(
+    mut token: Vec<u8>,
+    transcript: &[u8],
+) -> Result<d2b_contracts::broker_wire::GuestControlSignResponse, BrokerError> {
     let mut mac = GuestControlHmac::new_from_slice(&token).map_err(|_| {
         BrokerError::GuestControlSignRefused {
             reason: "token-unavailable",
@@ -10481,18 +10489,12 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn guest_control_sign_returns_only_fixed_tag() {
-        let root = crate::test_tempdir("guest-control-sign");
-        let bundle = build_test_bundle(root.path());
-        let config = test_server_config(root.path(), &bundle.bundle_path);
-        write_guest_control_token(&config.state_dir, "corp-vm", 0o440);
-        let response = handle_guest_control_sign(
-            guest_control_sign_request(
-                d2b_contracts::broker_wire::GuestControlProofRole::HostProof,
-            ),
-            &config,
-            Some(&bundle.resolver),
-        )
-        .expect("sign");
+        let request = guest_control_sign_request(
+            d2b_contracts::broker_wire::GuestControlProofRole::HostProof,
+        );
+        let transcript = guest_control_transcript(&request).expect("transcript");
+        let response = sign_guest_control_transcript(b"broker-test-token\n".to_vec(), &transcript)
+            .expect("sign");
         assert_eq!(response.tag.len(), d2b_contracts::guest_auth::AUTH_TAG_LEN);
     }
 

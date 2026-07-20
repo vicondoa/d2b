@@ -49,6 +49,24 @@ const EXIT_TERMINATED: i32 = -6;
 pub const GIT_TOWN_LOCKED_VERSION: &str = "23.0.1";
 pub const GIT_TOWN_SUPPORTED_MAJOR: u64 = 23;
 
+pub(crate) fn authority_git_environment() -> BTreeMap<OsString, OsString> {
+    BTreeMap::from([
+        (OsString::from("GIT_ADVICE"), OsString::from("0")),
+        (
+            OsString::from("GIT_GRAFT_FILE"),
+            OsString::from("/dev/null"),
+        ),
+        (
+            OsString::from("GIT_NO_REPLACE_OBJECTS"),
+            OsString::from("1"),
+        ),
+        (
+            OsString::from("GIT_SHALLOW_FILE"),
+            OsString::from("/dev/null"),
+        ),
+    ])
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CommandLimits {
     pub stdout_bytes: usize,
@@ -976,6 +994,7 @@ pub trait RepositoryProbe {
     fn tree_for_commit(&self, root: &Path, commit_oid: &str) -> Result<String>;
     fn is_dirty(&self, root: &Path) -> Result<bool>;
     fn is_ancestor(&self, root: &Path, ancestor: &str, descendant: &str) -> Result<bool>;
+    fn tracked_paths(&self, root: &Path, commit_oid: &str, prefix: &Path) -> Result<Vec<PathBuf>>;
     fn tracked_blob(&self, root: &Path, commit_oid: &str, path: &Path) -> Result<TrackedBlob>;
     fn canonical_diff(
         &self,
@@ -1007,9 +1026,21 @@ impl<A: CommandOutputAdapter> GitProbe<A> {
         limits: CommandLimits,
     ) -> Result<CommandOutput> {
         let root_string = path_string(root)?;
-        let mut args = vec!["-C".to_owned(), root_string];
+        let mut args = vec![
+            "--no-replace-objects".to_owned(),
+            "-c".to_owned(),
+            "diff.ignoreSubmodules=none".to_owned(),
+            "-C".to_owned(),
+            root_string,
+        ];
         args.extend_from_slice(arguments);
-        self.command.output_with_limits("git", &args, None, limits)
+        self.command.output_with_environment(
+            "git",
+            &args,
+            None,
+            &authority_git_environment(),
+            limits,
+        )
     }
 
     fn git_stdout(&self, root: &Path, arguments: &[String]) -> Result<String> {
@@ -1141,6 +1172,7 @@ impl<A: CommandOutputAdapter> RepositoryProbe for GitProbe<A> {
                     "status".to_owned(),
                     "--porcelain=v1".to_owned(),
                     "--untracked-files=normal".to_owned(),
+                    "--ignore-submodules=none".to_owned(),
                 ],
             )?
             .is_empty())
@@ -1167,6 +1199,46 @@ impl<A: CommandOutputAdapter> RepositoryProbe for GitProbe<A> {
                 &output,
             )),
         }
+    }
+
+    fn tracked_paths(&self, root: &Path, commit_oid: &str, prefix: &Path) -> Result<Vec<PathBuf>> {
+        validate_hash(commit_oid, "tree commit")?;
+        super::model::validate_repo_relative_path(prefix)?;
+        let prefix = path_string(prefix)?;
+        let listing = self.git_output(
+            root,
+            &[
+                "ls-tree".to_owned(),
+                "-r".to_owned(),
+                "-z".to_owned(),
+                "--name-only".to_owned(),
+                commit_oid.to_owned(),
+                "--".to_owned(),
+                format!(":(literal){prefix}"),
+            ],
+            CommandLimits {
+                stdout_bytes: MAX_GIT_BLOB_BYTES,
+                ..CommandLimits::default()
+            },
+        )?;
+        if !listing.success {
+            return Err(command_failed("git ls-tree failed", &listing));
+        }
+        let mut paths = listing
+            .stdout
+            .split(|byte| *byte == 0)
+            .filter(|entry| !entry.is_empty())
+            .map(|entry| {
+                let entry = std::str::from_utf8(entry)
+                    .map_err(|_| DeliveryError::new("git ls-tree path was not UTF-8"))?;
+                let path = PathBuf::from(entry);
+                super::model::validate_repo_relative_path(&path)?;
+                Ok(path)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        paths.sort();
+        paths.dedup();
+        Ok(paths)
     }
 
     fn tracked_blob(&self, root: &Path, commit_oid: &str, path: &Path) -> Result<TrackedBlob> {
@@ -1257,6 +1329,7 @@ impl<A: CommandOutputAdapter> RepositoryProbe for GitProbe<A> {
             "--binary".to_owned(),
             "--no-ext-diff".to_owned(),
             "--no-renames".to_owned(),
+            "--ignore-submodules=none".to_owned(),
             "--full-index".to_owned(),
             "--src-prefix=a/".to_owned(),
             "--dst-prefix=b/".to_owned(),
@@ -1817,20 +1890,7 @@ impl<A: CommandOutputAdapter> GitTownStackSource<'_, A> {
     }
 
     fn reject_ambiguous_worktree(&self, checkout_root: &Path) -> Result<()> {
-        let status = self.command.output(
-            "git",
-            &[
-                "status".to_owned(),
-                "--porcelain=v1".to_owned(),
-                "-z".to_owned(),
-                "--untracked-files=normal".to_owned(),
-            ],
-            Some(checkout_root),
-        )?;
-        if !status.success {
-            return Err(command_failed("cannot inspect stack worktree", &status));
-        }
-        if !status.stdout.is_empty() {
+        if GitProbe::new(&self.command).is_dirty(checkout_root)? {
             return Err(DeliveryError::new(
                 "Git Town stack worktree is dirty or ambiguous",
             ));

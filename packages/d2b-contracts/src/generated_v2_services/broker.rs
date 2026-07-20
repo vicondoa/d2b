@@ -28,22 +28,2930 @@
 /// of protobuf runtime.
 const _PROTOBUF_VERSION_CHECK: () = ::protobuf::VERSION_3_7_2;
 
+// @@protoc_insertion_point(message:d2b.broker.v2.LeaseOwner)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct LeaseOwner {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.broker.v2.LeaseOwner.realm_path)
+    pub realm_path: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.broker.v2.LeaseOwner.controller_generation_id)
+    pub controller_generation_id: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.broker.v2.LeaseOwner.node_id)
+    pub node_id: ::std::option::Option<::std::string::String>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.broker.v2.LeaseOwner.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a LeaseOwner {
+    fn default() -> &'a LeaseOwner {
+        <LeaseOwner as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl LeaseOwner {
+    pub fn new() -> LeaseOwner {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(3);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "realm_path",
+            |m: &LeaseOwner| { &m.realm_path },
+            |m: &mut LeaseOwner| { &mut m.realm_path },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "controller_generation_id",
+            |m: &LeaseOwner| { &m.controller_generation_id },
+            |m: &mut LeaseOwner| { &mut m.controller_generation_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_option_accessor::<_, _>(
+            "node_id",
+            |m: &LeaseOwner| { &m.node_id },
+            |m: &mut LeaseOwner| { &mut m.node_id },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<LeaseOwner>(
+            "LeaseOwner",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for LeaseOwner {
+    const NAME: &'static str = "LeaseOwner";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.realm_path = is.read_string()?;
+                },
+                18 => {
+                    self.controller_generation_id = is.read_string()?;
+                },
+                26 => {
+                    self.node_id = ::std::option::Option::Some(is.read_string()?);
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if !self.realm_path.is_empty() {
+            my_size += ::protobuf::rt::string_size(1, &self.realm_path);
+        }
+        if !self.controller_generation_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.controller_generation_id);
+        }
+        if let Some(v) = self.node_id.as_ref() {
+            my_size += ::protobuf::rt::string_size(3, &v);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if !self.realm_path.is_empty() {
+            os.write_string(1, &self.realm_path)?;
+        }
+        if !self.controller_generation_id.is_empty() {
+            os.write_string(2, &self.controller_generation_id)?;
+        }
+        if let Some(v) = self.node_id.as_ref() {
+            os.write_string(3, v)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> LeaseOwner {
+        LeaseOwner::new()
+    }
+
+    fn clear(&mut self) {
+        self.realm_path.clear();
+        self.controller_generation_id.clear();
+        self.node_id = ::std::option::Option::None;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static LeaseOwner {
+        static instance: LeaseOwner = LeaseOwner {
+            realm_path: ::std::string::String::new(),
+            controller_generation_id: ::std::string::String::new(),
+            node_id: ::std::option::Option::None,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for LeaseOwner {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("LeaseOwner").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for LeaseOwner {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for LeaseOwner {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.broker.v2.ResourceAcquisitionOrder)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ResourceAcquisitionOrder {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.broker.v2.ResourceAcquisitionOrder.phase)
+    pub phase: u32,
+    // @@protoc_insertion_point(field:d2b.broker.v2.ResourceAcquisitionOrder.ordinal)
+    pub ordinal: u32,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.broker.v2.ResourceAcquisitionOrder.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ResourceAcquisitionOrder {
+    fn default() -> &'a ResourceAcquisitionOrder {
+        <ResourceAcquisitionOrder as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ResourceAcquisitionOrder {
+    pub fn new() -> ResourceAcquisitionOrder {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(2);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "phase",
+            |m: &ResourceAcquisitionOrder| { &m.phase },
+            |m: &mut ResourceAcquisitionOrder| { &mut m.phase },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "ordinal",
+            |m: &ResourceAcquisitionOrder| { &m.ordinal },
+            |m: &mut ResourceAcquisitionOrder| { &mut m.ordinal },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ResourceAcquisitionOrder>(
+            "ResourceAcquisitionOrder",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ResourceAcquisitionOrder {
+    const NAME: &'static str = "ResourceAcquisitionOrder";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.phase = is.read_uint32()?;
+                },
+                16 => {
+                    self.ordinal = is.read_uint32()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.phase != 0 {
+            my_size += ::protobuf::rt::uint32_size(1, self.phase);
+        }
+        if self.ordinal != 0 {
+            my_size += ::protobuf::rt::uint32_size(2, self.ordinal);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.phase != 0 {
+            os.write_uint32(1, self.phase)?;
+        }
+        if self.ordinal != 0 {
+            os.write_uint32(2, self.ordinal)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ResourceAcquisitionOrder {
+        ResourceAcquisitionOrder::new()
+    }
+
+    fn clear(&mut self) {
+        self.phase = 0;
+        self.ordinal = 0;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ResourceAcquisitionOrder {
+        static instance: ResourceAcquisitionOrder = ResourceAcquisitionOrder {
+            phase: 0,
+            ordinal: 0,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ResourceAcquisitionOrder {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ResourceAcquisitionOrder").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ResourceAcquisitionOrder {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ResourceAcquisitionOrder {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.broker.v2.LeaseResourceRequest)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct LeaseResourceRequest {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.broker.v2.LeaseResourceRequest.resource_id)
+    pub resource_id: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.broker.v2.LeaseResourceRequest.kind)
+    pub kind: ::protobuf::EnumOrUnknown<HostResourceKind>,
+    // @@protoc_insertion_point(field:d2b.broker.v2.LeaseResourceRequest.share)
+    pub share: ::protobuf::EnumOrUnknown<ResourceShareMode>,
+    // @@protoc_insertion_point(field:d2b.broker.v2.LeaseResourceRequest.acquisition_order)
+    pub acquisition_order: ::protobuf::MessageField<ResourceAcquisitionOrder>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.broker.v2.LeaseResourceRequest.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a LeaseResourceRequest {
+    fn default() -> &'a LeaseResourceRequest {
+        <LeaseResourceRequest as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl LeaseResourceRequest {
+    pub fn new() -> LeaseResourceRequest {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(4);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "resource_id",
+            |m: &LeaseResourceRequest| { &m.resource_id },
+            |m: &mut LeaseResourceRequest| { &mut m.resource_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "kind",
+            |m: &LeaseResourceRequest| { &m.kind },
+            |m: &mut LeaseResourceRequest| { &mut m.kind },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "share",
+            |m: &LeaseResourceRequest| { &m.share },
+            |m: &mut LeaseResourceRequest| { &mut m.share },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, ResourceAcquisitionOrder>(
+            "acquisition_order",
+            |m: &LeaseResourceRequest| { &m.acquisition_order },
+            |m: &mut LeaseResourceRequest| { &mut m.acquisition_order },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<LeaseResourceRequest>(
+            "LeaseResourceRequest",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for LeaseResourceRequest {
+    const NAME: &'static str = "LeaseResourceRequest";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.resource_id = is.read_string()?;
+                },
+                16 => {
+                    self.kind = is.read_enum_or_unknown()?;
+                },
+                24 => {
+                    self.share = is.read_enum_or_unknown()?;
+                },
+                34 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.acquisition_order)?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if !self.resource_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(1, &self.resource_id);
+        }
+        if self.kind != ::protobuf::EnumOrUnknown::new(HostResourceKind::HOST_RESOURCE_KIND_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(2, self.kind.value());
+        }
+        if self.share != ::protobuf::EnumOrUnknown::new(ResourceShareMode::RESOURCE_SHARE_MODE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(3, self.share.value());
+        }
+        if let Some(v) = self.acquisition_order.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if !self.resource_id.is_empty() {
+            os.write_string(1, &self.resource_id)?;
+        }
+        if self.kind != ::protobuf::EnumOrUnknown::new(HostResourceKind::HOST_RESOURCE_KIND_UNSPECIFIED) {
+            os.write_enum(2, ::protobuf::EnumOrUnknown::value(&self.kind))?;
+        }
+        if self.share != ::protobuf::EnumOrUnknown::new(ResourceShareMode::RESOURCE_SHARE_MODE_UNSPECIFIED) {
+            os.write_enum(3, ::protobuf::EnumOrUnknown::value(&self.share))?;
+        }
+        if let Some(v) = self.acquisition_order.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(4, v, os)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> LeaseResourceRequest {
+        LeaseResourceRequest::new()
+    }
+
+    fn clear(&mut self) {
+        self.resource_id.clear();
+        self.kind = ::protobuf::EnumOrUnknown::new(HostResourceKind::HOST_RESOURCE_KIND_UNSPECIFIED);
+        self.share = ::protobuf::EnumOrUnknown::new(ResourceShareMode::RESOURCE_SHARE_MODE_UNSPECIFIED);
+        self.acquisition_order.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static LeaseResourceRequest {
+        static instance: LeaseResourceRequest = LeaseResourceRequest {
+            resource_id: ::std::string::String::new(),
+            kind: ::protobuf::EnumOrUnknown::from_i32(0),
+            share: ::protobuf::EnumOrUnknown::from_i32(0),
+            acquisition_order: ::protobuf::MessageField::none(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for LeaseResourceRequest {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("LeaseResourceRequest").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for LeaseResourceRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for LeaseResourceRequest {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.broker.v2.AllocateRequest)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct AllocateRequest {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.broker.v2.AllocateRequest.metadata)
+    pub metadata: ::protobuf::MessageField<super::common::RequestMetadata>,
+    // @@protoc_insertion_point(field:d2b.broker.v2.AllocateRequest.scope)
+    pub scope: ::protobuf::MessageField<super::common::IdentityScope>,
+    // @@protoc_insertion_point(field:d2b.broker.v2.AllocateRequest.operation_id)
+    pub operation_id: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.broker.v2.AllocateRequest.owner)
+    pub owner: ::protobuf::MessageField<LeaseOwner>,
+    // @@protoc_insertion_point(field:d2b.broker.v2.AllocateRequest.resources)
+    pub resources: ::std::vec::Vec<LeaseResourceRequest>,
+    // @@protoc_insertion_point(field:d2b.broker.v2.AllocateRequest.request_digest)
+    pub request_digest: ::std::vec::Vec<u8>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.broker.v2.AllocateRequest.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a AllocateRequest {
+    fn default() -> &'a AllocateRequest {
+        <AllocateRequest as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl AllocateRequest {
+    pub fn new() -> AllocateRequest {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(6);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, super::common::RequestMetadata>(
+            "metadata",
+            |m: &AllocateRequest| { &m.metadata },
+            |m: &mut AllocateRequest| { &mut m.metadata },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, super::common::IdentityScope>(
+            "scope",
+            |m: &AllocateRequest| { &m.scope },
+            |m: &mut AllocateRequest| { &mut m.scope },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "operation_id",
+            |m: &AllocateRequest| { &m.operation_id },
+            |m: &mut AllocateRequest| { &mut m.operation_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, LeaseOwner>(
+            "owner",
+            |m: &AllocateRequest| { &m.owner },
+            |m: &mut AllocateRequest| { &mut m.owner },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "resources",
+            |m: &AllocateRequest| { &m.resources },
+            |m: &mut AllocateRequest| { &mut m.resources },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "request_digest",
+            |m: &AllocateRequest| { &m.request_digest },
+            |m: &mut AllocateRequest| { &mut m.request_digest },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<AllocateRequest>(
+            "AllocateRequest",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for AllocateRequest {
+    const NAME: &'static str = "AllocateRequest";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.metadata)?;
+                },
+                18 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.scope)?;
+                },
+                26 => {
+                    self.operation_id = is.read_string()?;
+                },
+                34 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.owner)?;
+                },
+                42 => {
+                    self.resources.push(is.read_message()?);
+                },
+                50 => {
+                    self.request_digest = is.read_bytes()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.metadata.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if let Some(v) = self.scope.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if !self.operation_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(3, &self.operation_id);
+        }
+        if let Some(v) = self.owner.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        for value in &self.resources {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
+        if !self.request_digest.is_empty() {
+            my_size += ::protobuf::rt::bytes_size(6, &self.request_digest);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.metadata.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        }
+        if let Some(v) = self.scope.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(2, v, os)?;
+        }
+        if !self.operation_id.is_empty() {
+            os.write_string(3, &self.operation_id)?;
+        }
+        if let Some(v) = self.owner.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(4, v, os)?;
+        }
+        for v in &self.resources {
+            ::protobuf::rt::write_message_field_with_cached_size(5, v, os)?;
+        };
+        if !self.request_digest.is_empty() {
+            os.write_bytes(6, &self.request_digest)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> AllocateRequest {
+        AllocateRequest::new()
+    }
+
+    fn clear(&mut self) {
+        self.metadata.clear();
+        self.scope.clear();
+        self.operation_id.clear();
+        self.owner.clear();
+        self.resources.clear();
+        self.request_digest.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static AllocateRequest {
+        static instance: AllocateRequest = AllocateRequest {
+            metadata: ::protobuf::MessageField::none(),
+            scope: ::protobuf::MessageField::none(),
+            operation_id: ::std::string::String::new(),
+            owner: ::protobuf::MessageField::none(),
+            resources: ::std::vec::Vec::new(),
+            request_digest: ::std::vec::Vec::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for AllocateRequest {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("AllocateRequest").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for AllocateRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for AllocateRequest {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.broker.v2.GrantedHostResource)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct GrantedHostResource {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.broker.v2.GrantedHostResource.resource_id)
+    pub resource_id: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.broker.v2.GrantedHostResource.kind)
+    pub kind: ::protobuf::EnumOrUnknown<HostResourceKind>,
+    // @@protoc_insertion_point(field:d2b.broker.v2.GrantedHostResource.share)
+    pub share: ::protobuf::EnumOrUnknown<ResourceShareMode>,
+    // @@protoc_insertion_point(field:d2b.broker.v2.GrantedHostResource.delegation)
+    pub delegation: ::protobuf::EnumOrUnknown<ResourceDelegationKind>,
+    // @@protoc_insertion_point(field:d2b.broker.v2.GrantedHostResource.delegation_id)
+    pub delegation_id: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.broker.v2.GrantedHostResource.acquisition_order)
+    pub acquisition_order: ::protobuf::MessageField<ResourceAcquisitionOrder>,
+    // @@protoc_insertion_point(field:d2b.broker.v2.GrantedHostResource.attachment_index)
+    pub attachment_index: ::std::option::Option<u32>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.broker.v2.GrantedHostResource.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a GrantedHostResource {
+    fn default() -> &'a GrantedHostResource {
+        <GrantedHostResource as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl GrantedHostResource {
+    pub fn new() -> GrantedHostResource {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(7);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "resource_id",
+            |m: &GrantedHostResource| { &m.resource_id },
+            |m: &mut GrantedHostResource| { &mut m.resource_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "kind",
+            |m: &GrantedHostResource| { &m.kind },
+            |m: &mut GrantedHostResource| { &mut m.kind },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "share",
+            |m: &GrantedHostResource| { &m.share },
+            |m: &mut GrantedHostResource| { &mut m.share },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "delegation",
+            |m: &GrantedHostResource| { &m.delegation },
+            |m: &mut GrantedHostResource| { &mut m.delegation },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "delegation_id",
+            |m: &GrantedHostResource| { &m.delegation_id },
+            |m: &mut GrantedHostResource| { &mut m.delegation_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, ResourceAcquisitionOrder>(
+            "acquisition_order",
+            |m: &GrantedHostResource| { &m.acquisition_order },
+            |m: &mut GrantedHostResource| { &mut m.acquisition_order },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_option_accessor::<_, _>(
+            "attachment_index",
+            |m: &GrantedHostResource| { &m.attachment_index },
+            |m: &mut GrantedHostResource| { &mut m.attachment_index },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<GrantedHostResource>(
+            "GrantedHostResource",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for GrantedHostResource {
+    const NAME: &'static str = "GrantedHostResource";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.resource_id = is.read_string()?;
+                },
+                16 => {
+                    self.kind = is.read_enum_or_unknown()?;
+                },
+                24 => {
+                    self.share = is.read_enum_or_unknown()?;
+                },
+                32 => {
+                    self.delegation = is.read_enum_or_unknown()?;
+                },
+                42 => {
+                    self.delegation_id = is.read_string()?;
+                },
+                50 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.acquisition_order)?;
+                },
+                56 => {
+                    self.attachment_index = ::std::option::Option::Some(is.read_uint32()?);
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if !self.resource_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(1, &self.resource_id);
+        }
+        if self.kind != ::protobuf::EnumOrUnknown::new(HostResourceKind::HOST_RESOURCE_KIND_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(2, self.kind.value());
+        }
+        if self.share != ::protobuf::EnumOrUnknown::new(ResourceShareMode::RESOURCE_SHARE_MODE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(3, self.share.value());
+        }
+        if self.delegation != ::protobuf::EnumOrUnknown::new(ResourceDelegationKind::RESOURCE_DELEGATION_KIND_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(4, self.delegation.value());
+        }
+        if !self.delegation_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(5, &self.delegation_id);
+        }
+        if let Some(v) = self.acquisition_order.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if let Some(v) = self.attachment_index {
+            my_size += ::protobuf::rt::uint32_size(7, v);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if !self.resource_id.is_empty() {
+            os.write_string(1, &self.resource_id)?;
+        }
+        if self.kind != ::protobuf::EnumOrUnknown::new(HostResourceKind::HOST_RESOURCE_KIND_UNSPECIFIED) {
+            os.write_enum(2, ::protobuf::EnumOrUnknown::value(&self.kind))?;
+        }
+        if self.share != ::protobuf::EnumOrUnknown::new(ResourceShareMode::RESOURCE_SHARE_MODE_UNSPECIFIED) {
+            os.write_enum(3, ::protobuf::EnumOrUnknown::value(&self.share))?;
+        }
+        if self.delegation != ::protobuf::EnumOrUnknown::new(ResourceDelegationKind::RESOURCE_DELEGATION_KIND_UNSPECIFIED) {
+            os.write_enum(4, ::protobuf::EnumOrUnknown::value(&self.delegation))?;
+        }
+        if !self.delegation_id.is_empty() {
+            os.write_string(5, &self.delegation_id)?;
+        }
+        if let Some(v) = self.acquisition_order.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(6, v, os)?;
+        }
+        if let Some(v) = self.attachment_index {
+            os.write_uint32(7, v)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> GrantedHostResource {
+        GrantedHostResource::new()
+    }
+
+    fn clear(&mut self) {
+        self.resource_id.clear();
+        self.kind = ::protobuf::EnumOrUnknown::new(HostResourceKind::HOST_RESOURCE_KIND_UNSPECIFIED);
+        self.share = ::protobuf::EnumOrUnknown::new(ResourceShareMode::RESOURCE_SHARE_MODE_UNSPECIFIED);
+        self.delegation = ::protobuf::EnumOrUnknown::new(ResourceDelegationKind::RESOURCE_DELEGATION_KIND_UNSPECIFIED);
+        self.delegation_id.clear();
+        self.acquisition_order.clear();
+        self.attachment_index = ::std::option::Option::None;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static GrantedHostResource {
+        static instance: GrantedHostResource = GrantedHostResource {
+            resource_id: ::std::string::String::new(),
+            kind: ::protobuf::EnumOrUnknown::from_i32(0),
+            share: ::protobuf::EnumOrUnknown::from_i32(0),
+            delegation: ::protobuf::EnumOrUnknown::from_i32(0),
+            delegation_id: ::std::string::String::new(),
+            acquisition_order: ::protobuf::MessageField::none(),
+            attachment_index: ::std::option::Option::None,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for GrantedHostResource {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("GrantedHostResource").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for GrantedHostResource {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for GrantedHostResource {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.broker.v2.AllocatorConflict)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct AllocatorConflict {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.broker.v2.AllocatorConflict.resource_id)
+    pub resource_id: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.broker.v2.AllocatorConflict.kind)
+    pub kind: ::protobuf::EnumOrUnknown<HostResourceKind>,
+    // @@protoc_insertion_point(field:d2b.broker.v2.AllocatorConflict.reason)
+    pub reason: ::protobuf::EnumOrUnknown<AllocatorReason>,
+    // @@protoc_insertion_point(field:d2b.broker.v2.AllocatorConflict.existing_lease_id)
+    pub existing_lease_id: ::std::option::Option<::std::string::String>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.broker.v2.AllocatorConflict.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a AllocatorConflict {
+    fn default() -> &'a AllocatorConflict {
+        <AllocatorConflict as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl AllocatorConflict {
+    pub fn new() -> AllocatorConflict {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(4);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "resource_id",
+            |m: &AllocatorConflict| { &m.resource_id },
+            |m: &mut AllocatorConflict| { &mut m.resource_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "kind",
+            |m: &AllocatorConflict| { &m.kind },
+            |m: &mut AllocatorConflict| { &mut m.kind },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "reason",
+            |m: &AllocatorConflict| { &m.reason },
+            |m: &mut AllocatorConflict| { &mut m.reason },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_option_accessor::<_, _>(
+            "existing_lease_id",
+            |m: &AllocatorConflict| { &m.existing_lease_id },
+            |m: &mut AllocatorConflict| { &mut m.existing_lease_id },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<AllocatorConflict>(
+            "AllocatorConflict",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for AllocatorConflict {
+    const NAME: &'static str = "AllocatorConflict";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.resource_id = is.read_string()?;
+                },
+                16 => {
+                    self.kind = is.read_enum_or_unknown()?;
+                },
+                24 => {
+                    self.reason = is.read_enum_or_unknown()?;
+                },
+                34 => {
+                    self.existing_lease_id = ::std::option::Option::Some(is.read_string()?);
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if !self.resource_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(1, &self.resource_id);
+        }
+        if self.kind != ::protobuf::EnumOrUnknown::new(HostResourceKind::HOST_RESOURCE_KIND_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(2, self.kind.value());
+        }
+        if self.reason != ::protobuf::EnumOrUnknown::new(AllocatorReason::ALLOCATOR_REASON_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(3, self.reason.value());
+        }
+        if let Some(v) = self.existing_lease_id.as_ref() {
+            my_size += ::protobuf::rt::string_size(4, &v);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if !self.resource_id.is_empty() {
+            os.write_string(1, &self.resource_id)?;
+        }
+        if self.kind != ::protobuf::EnumOrUnknown::new(HostResourceKind::HOST_RESOURCE_KIND_UNSPECIFIED) {
+            os.write_enum(2, ::protobuf::EnumOrUnknown::value(&self.kind))?;
+        }
+        if self.reason != ::protobuf::EnumOrUnknown::new(AllocatorReason::ALLOCATOR_REASON_UNSPECIFIED) {
+            os.write_enum(3, ::protobuf::EnumOrUnknown::value(&self.reason))?;
+        }
+        if let Some(v) = self.existing_lease_id.as_ref() {
+            os.write_string(4, v)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> AllocatorConflict {
+        AllocatorConflict::new()
+    }
+
+    fn clear(&mut self) {
+        self.resource_id.clear();
+        self.kind = ::protobuf::EnumOrUnknown::new(HostResourceKind::HOST_RESOURCE_KIND_UNSPECIFIED);
+        self.reason = ::protobuf::EnumOrUnknown::new(AllocatorReason::ALLOCATOR_REASON_UNSPECIFIED);
+        self.existing_lease_id = ::std::option::Option::None;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static AllocatorConflict {
+        static instance: AllocatorConflict = AllocatorConflict {
+            resource_id: ::std::string::String::new(),
+            kind: ::protobuf::EnumOrUnknown::from_i32(0),
+            reason: ::protobuf::EnumOrUnknown::from_i32(0),
+            existing_lease_id: ::std::option::Option::None,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for AllocatorConflict {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("AllocatorConflict").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for AllocatorConflict {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for AllocatorConflict {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.broker.v2.AllocateResponse)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct AllocateResponse {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.broker.v2.AllocateResponse.outcome)
+    pub outcome: ::protobuf::EnumOrUnknown<super::common::Outcome>,
+    // @@protoc_insertion_point(field:d2b.broker.v2.AllocateResponse.operation_id)
+    pub operation_id: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.broker.v2.AllocateResponse.status)
+    pub status: ::protobuf::EnumOrUnknown<AllocationStatus>,
+    // @@protoc_insertion_point(field:d2b.broker.v2.AllocateResponse.lease_id)
+    pub lease_id: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.broker.v2.AllocateResponse.resources)
+    pub resources: ::std::vec::Vec<GrantedHostResource>,
+    // @@protoc_insertion_point(field:d2b.broker.v2.AllocateResponse.reason)
+    pub reason: ::protobuf::EnumOrUnknown<AllocatorReason>,
+    // @@protoc_insertion_point(field:d2b.broker.v2.AllocateResponse.conflicts)
+    pub conflicts: ::std::vec::Vec<AllocatorConflict>,
+    // @@protoc_insertion_point(field:d2b.broker.v2.AllocateResponse.error)
+    pub error: ::protobuf::MessageField<super::common::ErrorEnvelope>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.broker.v2.AllocateResponse.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a AllocateResponse {
+    fn default() -> &'a AllocateResponse {
+        <AllocateResponse as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl AllocateResponse {
+    pub fn new() -> AllocateResponse {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(8);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "outcome",
+            |m: &AllocateResponse| { &m.outcome },
+            |m: &mut AllocateResponse| { &mut m.outcome },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "operation_id",
+            |m: &AllocateResponse| { &m.operation_id },
+            |m: &mut AllocateResponse| { &mut m.operation_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "status",
+            |m: &AllocateResponse| { &m.status },
+            |m: &mut AllocateResponse| { &mut m.status },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "lease_id",
+            |m: &AllocateResponse| { &m.lease_id },
+            |m: &mut AllocateResponse| { &mut m.lease_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "resources",
+            |m: &AllocateResponse| { &m.resources },
+            |m: &mut AllocateResponse| { &mut m.resources },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "reason",
+            |m: &AllocateResponse| { &m.reason },
+            |m: &mut AllocateResponse| { &mut m.reason },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "conflicts",
+            |m: &AllocateResponse| { &m.conflicts },
+            |m: &mut AllocateResponse| { &mut m.conflicts },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, super::common::ErrorEnvelope>(
+            "error",
+            |m: &AllocateResponse| { &m.error },
+            |m: &mut AllocateResponse| { &mut m.error },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<AllocateResponse>(
+            "AllocateResponse",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for AllocateResponse {
+    const NAME: &'static str = "AllocateResponse";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.outcome = is.read_enum_or_unknown()?;
+                },
+                18 => {
+                    self.operation_id = is.read_string()?;
+                },
+                24 => {
+                    self.status = is.read_enum_or_unknown()?;
+                },
+                34 => {
+                    self.lease_id = is.read_string()?;
+                },
+                42 => {
+                    self.resources.push(is.read_message()?);
+                },
+                48 => {
+                    self.reason = is.read_enum_or_unknown()?;
+                },
+                58 => {
+                    self.conflicts.push(is.read_message()?);
+                },
+                66 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.error)?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.outcome != ::protobuf::EnumOrUnknown::new(super::common::Outcome::OUTCOME_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(1, self.outcome.value());
+        }
+        if !self.operation_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.operation_id);
+        }
+        if self.status != ::protobuf::EnumOrUnknown::new(AllocationStatus::ALLOCATION_STATUS_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(3, self.status.value());
+        }
+        if !self.lease_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(4, &self.lease_id);
+        }
+        for value in &self.resources {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
+        if self.reason != ::protobuf::EnumOrUnknown::new(AllocatorReason::ALLOCATOR_REASON_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(6, self.reason.value());
+        }
+        for value in &self.conflicts {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
+        if let Some(v) = self.error.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.outcome != ::protobuf::EnumOrUnknown::new(super::common::Outcome::OUTCOME_UNSPECIFIED) {
+            os.write_enum(1, ::protobuf::EnumOrUnknown::value(&self.outcome))?;
+        }
+        if !self.operation_id.is_empty() {
+            os.write_string(2, &self.operation_id)?;
+        }
+        if self.status != ::protobuf::EnumOrUnknown::new(AllocationStatus::ALLOCATION_STATUS_UNSPECIFIED) {
+            os.write_enum(3, ::protobuf::EnumOrUnknown::value(&self.status))?;
+        }
+        if !self.lease_id.is_empty() {
+            os.write_string(4, &self.lease_id)?;
+        }
+        for v in &self.resources {
+            ::protobuf::rt::write_message_field_with_cached_size(5, v, os)?;
+        };
+        if self.reason != ::protobuf::EnumOrUnknown::new(AllocatorReason::ALLOCATOR_REASON_UNSPECIFIED) {
+            os.write_enum(6, ::protobuf::EnumOrUnknown::value(&self.reason))?;
+        }
+        for v in &self.conflicts {
+            ::protobuf::rt::write_message_field_with_cached_size(7, v, os)?;
+        };
+        if let Some(v) = self.error.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(8, v, os)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> AllocateResponse {
+        AllocateResponse::new()
+    }
+
+    fn clear(&mut self) {
+        self.outcome = ::protobuf::EnumOrUnknown::new(super::common::Outcome::OUTCOME_UNSPECIFIED);
+        self.operation_id.clear();
+        self.status = ::protobuf::EnumOrUnknown::new(AllocationStatus::ALLOCATION_STATUS_UNSPECIFIED);
+        self.lease_id.clear();
+        self.resources.clear();
+        self.reason = ::protobuf::EnumOrUnknown::new(AllocatorReason::ALLOCATOR_REASON_UNSPECIFIED);
+        self.conflicts.clear();
+        self.error.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static AllocateResponse {
+        static instance: AllocateResponse = AllocateResponse {
+            outcome: ::protobuf::EnumOrUnknown::from_i32(0),
+            operation_id: ::std::string::String::new(),
+            status: ::protobuf::EnumOrUnknown::from_i32(0),
+            lease_id: ::std::string::String::new(),
+            resources: ::std::vec::Vec::new(),
+            reason: ::protobuf::EnumOrUnknown::from_i32(0),
+            conflicts: ::std::vec::Vec::new(),
+            error: ::protobuf::MessageField::none(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for AllocateResponse {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("AllocateResponse").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for AllocateResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for AllocateResponse {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.broker.v2.RealmChildFd)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct RealmChildFd {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.broker.v2.RealmChildFd.role)
+    pub role: ::protobuf::EnumOrUnknown<RealmChildRole>,
+    // @@protoc_insertion_point(field:d2b.broker.v2.RealmChildFd.kind)
+    pub kind: ::protobuf::EnumOrUnknown<RealmChildFdKind>,
+    // @@protoc_insertion_point(field:d2b.broker.v2.RealmChildFd.attachment_index)
+    pub attachment_index: u32,
+    // @@protoc_insertion_point(field:d2b.broker.v2.RealmChildFd.resource_id)
+    pub resource_id: ::std::option::Option<::std::string::String>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.broker.v2.RealmChildFd.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a RealmChildFd {
+    fn default() -> &'a RealmChildFd {
+        <RealmChildFd as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl RealmChildFd {
+    pub fn new() -> RealmChildFd {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(4);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "role",
+            |m: &RealmChildFd| { &m.role },
+            |m: &mut RealmChildFd| { &mut m.role },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "kind",
+            |m: &RealmChildFd| { &m.kind },
+            |m: &mut RealmChildFd| { &mut m.kind },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "attachment_index",
+            |m: &RealmChildFd| { &m.attachment_index },
+            |m: &mut RealmChildFd| { &mut m.attachment_index },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_option_accessor::<_, _>(
+            "resource_id",
+            |m: &RealmChildFd| { &m.resource_id },
+            |m: &mut RealmChildFd| { &mut m.resource_id },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<RealmChildFd>(
+            "RealmChildFd",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for RealmChildFd {
+    const NAME: &'static str = "RealmChildFd";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.role = is.read_enum_or_unknown()?;
+                },
+                16 => {
+                    self.kind = is.read_enum_or_unknown()?;
+                },
+                24 => {
+                    self.attachment_index = is.read_uint32()?;
+                },
+                34 => {
+                    self.resource_id = ::std::option::Option::Some(is.read_string()?);
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.role != ::protobuf::EnumOrUnknown::new(RealmChildRole::REALM_CHILD_ROLE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(1, self.role.value());
+        }
+        if self.kind != ::protobuf::EnumOrUnknown::new(RealmChildFdKind::REALM_CHILD_FD_KIND_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(2, self.kind.value());
+        }
+        if self.attachment_index != 0 {
+            my_size += ::protobuf::rt::uint32_size(3, self.attachment_index);
+        }
+        if let Some(v) = self.resource_id.as_ref() {
+            my_size += ::protobuf::rt::string_size(4, &v);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.role != ::protobuf::EnumOrUnknown::new(RealmChildRole::REALM_CHILD_ROLE_UNSPECIFIED) {
+            os.write_enum(1, ::protobuf::EnumOrUnknown::value(&self.role))?;
+        }
+        if self.kind != ::protobuf::EnumOrUnknown::new(RealmChildFdKind::REALM_CHILD_FD_KIND_UNSPECIFIED) {
+            os.write_enum(2, ::protobuf::EnumOrUnknown::value(&self.kind))?;
+        }
+        if self.attachment_index != 0 {
+            os.write_uint32(3, self.attachment_index)?;
+        }
+        if let Some(v) = self.resource_id.as_ref() {
+            os.write_string(4, v)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> RealmChildFd {
+        RealmChildFd::new()
+    }
+
+    fn clear(&mut self) {
+        self.role = ::protobuf::EnumOrUnknown::new(RealmChildRole::REALM_CHILD_ROLE_UNSPECIFIED);
+        self.kind = ::protobuf::EnumOrUnknown::new(RealmChildFdKind::REALM_CHILD_FD_KIND_UNSPECIFIED);
+        self.attachment_index = 0;
+        self.resource_id = ::std::option::Option::None;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static RealmChildFd {
+        static instance: RealmChildFd = RealmChildFd {
+            role: ::protobuf::EnumOrUnknown::from_i32(0),
+            kind: ::protobuf::EnumOrUnknown::from_i32(0),
+            attachment_index: 0,
+            resource_id: ::std::option::Option::None,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for RealmChildFd {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("RealmChildFd").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for RealmChildFd {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for RealmChildFd {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.broker.v2.SpawnRealmChildrenRequest)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct SpawnRealmChildrenRequest {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.broker.v2.SpawnRealmChildrenRequest.metadata)
+    pub metadata: ::protobuf::MessageField<super::common::RequestMetadata>,
+    // @@protoc_insertion_point(field:d2b.broker.v2.SpawnRealmChildrenRequest.scope)
+    pub scope: ::protobuf::MessageField<super::common::IdentityScope>,
+    // @@protoc_insertion_point(field:d2b.broker.v2.SpawnRealmChildrenRequest.operation_id)
+    pub operation_id: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.broker.v2.SpawnRealmChildrenRequest.realm_id)
+    pub realm_id: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.broker.v2.SpawnRealmChildrenRequest.controller_generation_id)
+    pub controller_generation_id: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.broker.v2.SpawnRealmChildrenRequest.controller_process_id)
+    pub controller_process_id: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.broker.v2.SpawnRealmChildrenRequest.broker_process_id)
+    pub broker_process_id: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.broker.v2.SpawnRealmChildrenRequest.launch_record_digest)
+    pub launch_record_digest: ::std::vec::Vec<u8>,
+    // @@protoc_insertion_point(field:d2b.broker.v2.SpawnRealmChildrenRequest.fds)
+    pub fds: ::std::vec::Vec<RealmChildFd>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.broker.v2.SpawnRealmChildrenRequest.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a SpawnRealmChildrenRequest {
+    fn default() -> &'a SpawnRealmChildrenRequest {
+        <SpawnRealmChildrenRequest as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl SpawnRealmChildrenRequest {
+    pub fn new() -> SpawnRealmChildrenRequest {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(9);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, super::common::RequestMetadata>(
+            "metadata",
+            |m: &SpawnRealmChildrenRequest| { &m.metadata },
+            |m: &mut SpawnRealmChildrenRequest| { &mut m.metadata },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, super::common::IdentityScope>(
+            "scope",
+            |m: &SpawnRealmChildrenRequest| { &m.scope },
+            |m: &mut SpawnRealmChildrenRequest| { &mut m.scope },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "operation_id",
+            |m: &SpawnRealmChildrenRequest| { &m.operation_id },
+            |m: &mut SpawnRealmChildrenRequest| { &mut m.operation_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "realm_id",
+            |m: &SpawnRealmChildrenRequest| { &m.realm_id },
+            |m: &mut SpawnRealmChildrenRequest| { &mut m.realm_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "controller_generation_id",
+            |m: &SpawnRealmChildrenRequest| { &m.controller_generation_id },
+            |m: &mut SpawnRealmChildrenRequest| { &mut m.controller_generation_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "controller_process_id",
+            |m: &SpawnRealmChildrenRequest| { &m.controller_process_id },
+            |m: &mut SpawnRealmChildrenRequest| { &mut m.controller_process_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "broker_process_id",
+            |m: &SpawnRealmChildrenRequest| { &m.broker_process_id },
+            |m: &mut SpawnRealmChildrenRequest| { &mut m.broker_process_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "launch_record_digest",
+            |m: &SpawnRealmChildrenRequest| { &m.launch_record_digest },
+            |m: &mut SpawnRealmChildrenRequest| { &mut m.launch_record_digest },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "fds",
+            |m: &SpawnRealmChildrenRequest| { &m.fds },
+            |m: &mut SpawnRealmChildrenRequest| { &mut m.fds },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<SpawnRealmChildrenRequest>(
+            "SpawnRealmChildrenRequest",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for SpawnRealmChildrenRequest {
+    const NAME: &'static str = "SpawnRealmChildrenRequest";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.metadata)?;
+                },
+                18 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.scope)?;
+                },
+                26 => {
+                    self.operation_id = is.read_string()?;
+                },
+                34 => {
+                    self.realm_id = is.read_string()?;
+                },
+                42 => {
+                    self.controller_generation_id = is.read_string()?;
+                },
+                50 => {
+                    self.controller_process_id = is.read_string()?;
+                },
+                58 => {
+                    self.broker_process_id = is.read_string()?;
+                },
+                66 => {
+                    self.launch_record_digest = is.read_bytes()?;
+                },
+                74 => {
+                    self.fds.push(is.read_message()?);
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.metadata.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if let Some(v) = self.scope.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if !self.operation_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(3, &self.operation_id);
+        }
+        if !self.realm_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(4, &self.realm_id);
+        }
+        if !self.controller_generation_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(5, &self.controller_generation_id);
+        }
+        if !self.controller_process_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(6, &self.controller_process_id);
+        }
+        if !self.broker_process_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(7, &self.broker_process_id);
+        }
+        if !self.launch_record_digest.is_empty() {
+            my_size += ::protobuf::rt::bytes_size(8, &self.launch_record_digest);
+        }
+        for value in &self.fds {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.metadata.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        }
+        if let Some(v) = self.scope.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(2, v, os)?;
+        }
+        if !self.operation_id.is_empty() {
+            os.write_string(3, &self.operation_id)?;
+        }
+        if !self.realm_id.is_empty() {
+            os.write_string(4, &self.realm_id)?;
+        }
+        if !self.controller_generation_id.is_empty() {
+            os.write_string(5, &self.controller_generation_id)?;
+        }
+        if !self.controller_process_id.is_empty() {
+            os.write_string(6, &self.controller_process_id)?;
+        }
+        if !self.broker_process_id.is_empty() {
+            os.write_string(7, &self.broker_process_id)?;
+        }
+        if !self.launch_record_digest.is_empty() {
+            os.write_bytes(8, &self.launch_record_digest)?;
+        }
+        for v in &self.fds {
+            ::protobuf::rt::write_message_field_with_cached_size(9, v, os)?;
+        };
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> SpawnRealmChildrenRequest {
+        SpawnRealmChildrenRequest::new()
+    }
+
+    fn clear(&mut self) {
+        self.metadata.clear();
+        self.scope.clear();
+        self.operation_id.clear();
+        self.realm_id.clear();
+        self.controller_generation_id.clear();
+        self.controller_process_id.clear();
+        self.broker_process_id.clear();
+        self.launch_record_digest.clear();
+        self.fds.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static SpawnRealmChildrenRequest {
+        static instance: SpawnRealmChildrenRequest = SpawnRealmChildrenRequest {
+            metadata: ::protobuf::MessageField::none(),
+            scope: ::protobuf::MessageField::none(),
+            operation_id: ::std::string::String::new(),
+            realm_id: ::std::string::String::new(),
+            controller_generation_id: ::std::string::String::new(),
+            controller_process_id: ::std::string::String::new(),
+            broker_process_id: ::std::string::String::new(),
+            launch_record_digest: ::std::vec::Vec::new(),
+            fds: ::std::vec::Vec::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for SpawnRealmChildrenRequest {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("SpawnRealmChildrenRequest").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for SpawnRealmChildrenRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for SpawnRealmChildrenRequest {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.broker.v2.SpawnedRealmChild)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct SpawnedRealmChild {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.broker.v2.SpawnedRealmChild.role)
+    pub role: ::protobuf::EnumOrUnknown<RealmChildRole>,
+    // @@protoc_insertion_point(field:d2b.broker.v2.SpawnedRealmChild.process_id)
+    pub process_id: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.broker.v2.SpawnedRealmChild.pidfd_attachment_index)
+    pub pidfd_attachment_index: u32,
+    // @@protoc_insertion_point(field:d2b.broker.v2.SpawnedRealmChild.executable_digest)
+    pub executable_digest: ::std::vec::Vec<u8>,
+    // @@protoc_insertion_point(field:d2b.broker.v2.SpawnedRealmChild.pid)
+    pub pid: u32,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.broker.v2.SpawnedRealmChild.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a SpawnedRealmChild {
+    fn default() -> &'a SpawnedRealmChild {
+        <SpawnedRealmChild as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl SpawnedRealmChild {
+    pub fn new() -> SpawnedRealmChild {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(5);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "role",
+            |m: &SpawnedRealmChild| { &m.role },
+            |m: &mut SpawnedRealmChild| { &mut m.role },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "process_id",
+            |m: &SpawnedRealmChild| { &m.process_id },
+            |m: &mut SpawnedRealmChild| { &mut m.process_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "pidfd_attachment_index",
+            |m: &SpawnedRealmChild| { &m.pidfd_attachment_index },
+            |m: &mut SpawnedRealmChild| { &mut m.pidfd_attachment_index },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "executable_digest",
+            |m: &SpawnedRealmChild| { &m.executable_digest },
+            |m: &mut SpawnedRealmChild| { &mut m.executable_digest },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "pid",
+            |m: &SpawnedRealmChild| { &m.pid },
+            |m: &mut SpawnedRealmChild| { &mut m.pid },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<SpawnedRealmChild>(
+            "SpawnedRealmChild",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for SpawnedRealmChild {
+    const NAME: &'static str = "SpawnedRealmChild";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.role = is.read_enum_or_unknown()?;
+                },
+                18 => {
+                    self.process_id = is.read_string()?;
+                },
+                24 => {
+                    self.pidfd_attachment_index = is.read_uint32()?;
+                },
+                34 => {
+                    self.executable_digest = is.read_bytes()?;
+                },
+                40 => {
+                    self.pid = is.read_uint32()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.role != ::protobuf::EnumOrUnknown::new(RealmChildRole::REALM_CHILD_ROLE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(1, self.role.value());
+        }
+        if !self.process_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.process_id);
+        }
+        if self.pidfd_attachment_index != 0 {
+            my_size += ::protobuf::rt::uint32_size(3, self.pidfd_attachment_index);
+        }
+        if !self.executable_digest.is_empty() {
+            my_size += ::protobuf::rt::bytes_size(4, &self.executable_digest);
+        }
+        if self.pid != 0 {
+            my_size += ::protobuf::rt::uint32_size(5, self.pid);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.role != ::protobuf::EnumOrUnknown::new(RealmChildRole::REALM_CHILD_ROLE_UNSPECIFIED) {
+            os.write_enum(1, ::protobuf::EnumOrUnknown::value(&self.role))?;
+        }
+        if !self.process_id.is_empty() {
+            os.write_string(2, &self.process_id)?;
+        }
+        if self.pidfd_attachment_index != 0 {
+            os.write_uint32(3, self.pidfd_attachment_index)?;
+        }
+        if !self.executable_digest.is_empty() {
+            os.write_bytes(4, &self.executable_digest)?;
+        }
+        if self.pid != 0 {
+            os.write_uint32(5, self.pid)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> SpawnedRealmChild {
+        SpawnedRealmChild::new()
+    }
+
+    fn clear(&mut self) {
+        self.role = ::protobuf::EnumOrUnknown::new(RealmChildRole::REALM_CHILD_ROLE_UNSPECIFIED);
+        self.process_id.clear();
+        self.pidfd_attachment_index = 0;
+        self.executable_digest.clear();
+        self.pid = 0;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static SpawnedRealmChild {
+        static instance: SpawnedRealmChild = SpawnedRealmChild {
+            role: ::protobuf::EnumOrUnknown::from_i32(0),
+            process_id: ::std::string::String::new(),
+            pidfd_attachment_index: 0,
+            executable_digest: ::std::vec::Vec::new(),
+            pid: 0,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for SpawnedRealmChild {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("SpawnedRealmChild").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for SpawnedRealmChild {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for SpawnedRealmChild {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.broker.v2.SpawnRealmChildrenResponse)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct SpawnRealmChildrenResponse {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.broker.v2.SpawnRealmChildrenResponse.outcome)
+    pub outcome: ::protobuf::EnumOrUnknown<super::common::Outcome>,
+    // @@protoc_insertion_point(field:d2b.broker.v2.SpawnRealmChildrenResponse.operation_id)
+    pub operation_id: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.broker.v2.SpawnRealmChildrenResponse.launch_record_digest)
+    pub launch_record_digest: ::std::vec::Vec<u8>,
+    // @@protoc_insertion_point(field:d2b.broker.v2.SpawnRealmChildrenResponse.children)
+    pub children: ::std::vec::Vec<SpawnedRealmChild>,
+    // @@protoc_insertion_point(field:d2b.broker.v2.SpawnRealmChildrenResponse.error)
+    pub error: ::protobuf::MessageField<super::common::ErrorEnvelope>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.broker.v2.SpawnRealmChildrenResponse.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a SpawnRealmChildrenResponse {
+    fn default() -> &'a SpawnRealmChildrenResponse {
+        <SpawnRealmChildrenResponse as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl SpawnRealmChildrenResponse {
+    pub fn new() -> SpawnRealmChildrenResponse {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(5);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "outcome",
+            |m: &SpawnRealmChildrenResponse| { &m.outcome },
+            |m: &mut SpawnRealmChildrenResponse| { &mut m.outcome },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "operation_id",
+            |m: &SpawnRealmChildrenResponse| { &m.operation_id },
+            |m: &mut SpawnRealmChildrenResponse| { &mut m.operation_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "launch_record_digest",
+            |m: &SpawnRealmChildrenResponse| { &m.launch_record_digest },
+            |m: &mut SpawnRealmChildrenResponse| { &mut m.launch_record_digest },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "children",
+            |m: &SpawnRealmChildrenResponse| { &m.children },
+            |m: &mut SpawnRealmChildrenResponse| { &mut m.children },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, super::common::ErrorEnvelope>(
+            "error",
+            |m: &SpawnRealmChildrenResponse| { &m.error },
+            |m: &mut SpawnRealmChildrenResponse| { &mut m.error },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<SpawnRealmChildrenResponse>(
+            "SpawnRealmChildrenResponse",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for SpawnRealmChildrenResponse {
+    const NAME: &'static str = "SpawnRealmChildrenResponse";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.outcome = is.read_enum_or_unknown()?;
+                },
+                18 => {
+                    self.operation_id = is.read_string()?;
+                },
+                26 => {
+                    self.launch_record_digest = is.read_bytes()?;
+                },
+                34 => {
+                    self.children.push(is.read_message()?);
+                },
+                42 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.error)?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.outcome != ::protobuf::EnumOrUnknown::new(super::common::Outcome::OUTCOME_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(1, self.outcome.value());
+        }
+        if !self.operation_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.operation_id);
+        }
+        if !self.launch_record_digest.is_empty() {
+            my_size += ::protobuf::rt::bytes_size(3, &self.launch_record_digest);
+        }
+        for value in &self.children {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
+        if let Some(v) = self.error.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.outcome != ::protobuf::EnumOrUnknown::new(super::common::Outcome::OUTCOME_UNSPECIFIED) {
+            os.write_enum(1, ::protobuf::EnumOrUnknown::value(&self.outcome))?;
+        }
+        if !self.operation_id.is_empty() {
+            os.write_string(2, &self.operation_id)?;
+        }
+        if !self.launch_record_digest.is_empty() {
+            os.write_bytes(3, &self.launch_record_digest)?;
+        }
+        for v in &self.children {
+            ::protobuf::rt::write_message_field_with_cached_size(4, v, os)?;
+        };
+        if let Some(v) = self.error.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(5, v, os)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> SpawnRealmChildrenResponse {
+        SpawnRealmChildrenResponse::new()
+    }
+
+    fn clear(&mut self) {
+        self.outcome = ::protobuf::EnumOrUnknown::new(super::common::Outcome::OUTCOME_UNSPECIFIED);
+        self.operation_id.clear();
+        self.launch_record_digest.clear();
+        self.children.clear();
+        self.error.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static SpawnRealmChildrenResponse {
+        static instance: SpawnRealmChildrenResponse = SpawnRealmChildrenResponse {
+            outcome: ::protobuf::EnumOrUnknown::from_i32(0),
+            operation_id: ::std::string::String::new(),
+            launch_record_digest: ::std::vec::Vec::new(),
+            children: ::std::vec::Vec::new(),
+            error: ::protobuf::MessageField::none(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for SpawnRealmChildrenResponse {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("SpawnRealmChildrenResponse").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for SpawnRealmChildrenResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for SpawnRealmChildrenResponse {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.broker.v2.HostResourceKind)
+pub enum HostResourceKind {
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.HostResourceKind.HOST_RESOURCE_KIND_UNSPECIFIED)
+    HOST_RESOURCE_KIND_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.HostResourceKind.HOST_RESOURCE_KIND_BRIDGE)
+    HOST_RESOURCE_KIND_BRIDGE = 1,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.HostResourceKind.HOST_RESOURCE_KIND_TAP)
+    HOST_RESOURCE_KIND_TAP = 2,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.HostResourceKind.HOST_RESOURCE_KIND_VETH_PAIR)
+    HOST_RESOURCE_KIND_VETH_PAIR = 3,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.HostResourceKind.HOST_RESOURCE_KIND_NFTABLES_TABLE)
+    HOST_RESOURCE_KIND_NFTABLES_TABLE = 4,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.HostResourceKind.HOST_RESOURCE_KIND_NFTABLES_PARTITION)
+    HOST_RESOURCE_KIND_NFTABLES_PARTITION = 5,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.HostResourceKind.HOST_RESOURCE_KIND_CGROUP_SUBTREE)
+    HOST_RESOURCE_KIND_CGROUP_SUBTREE = 6,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.HostResourceKind.HOST_RESOURCE_KIND_HOST_FILE_PARTITION)
+    HOST_RESOURCE_KIND_HOST_FILE_PARTITION = 7,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.HostResourceKind.HOST_RESOURCE_KIND_NAMESPACE_BOUNDARY)
+    HOST_RESOURCE_KIND_NAMESPACE_BOUNDARY = 8,
+}
+
+impl ::protobuf::Enum for HostResourceKind {
+    const NAME: &'static str = "HostResourceKind";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<HostResourceKind> {
+        match value {
+            0 => ::std::option::Option::Some(HostResourceKind::HOST_RESOURCE_KIND_UNSPECIFIED),
+            1 => ::std::option::Option::Some(HostResourceKind::HOST_RESOURCE_KIND_BRIDGE),
+            2 => ::std::option::Option::Some(HostResourceKind::HOST_RESOURCE_KIND_TAP),
+            3 => ::std::option::Option::Some(HostResourceKind::HOST_RESOURCE_KIND_VETH_PAIR),
+            4 => ::std::option::Option::Some(HostResourceKind::HOST_RESOURCE_KIND_NFTABLES_TABLE),
+            5 => ::std::option::Option::Some(HostResourceKind::HOST_RESOURCE_KIND_NFTABLES_PARTITION),
+            6 => ::std::option::Option::Some(HostResourceKind::HOST_RESOURCE_KIND_CGROUP_SUBTREE),
+            7 => ::std::option::Option::Some(HostResourceKind::HOST_RESOURCE_KIND_HOST_FILE_PARTITION),
+            8 => ::std::option::Option::Some(HostResourceKind::HOST_RESOURCE_KIND_NAMESPACE_BOUNDARY),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<HostResourceKind> {
+        match str {
+            "HOST_RESOURCE_KIND_UNSPECIFIED" => ::std::option::Option::Some(HostResourceKind::HOST_RESOURCE_KIND_UNSPECIFIED),
+            "HOST_RESOURCE_KIND_BRIDGE" => ::std::option::Option::Some(HostResourceKind::HOST_RESOURCE_KIND_BRIDGE),
+            "HOST_RESOURCE_KIND_TAP" => ::std::option::Option::Some(HostResourceKind::HOST_RESOURCE_KIND_TAP),
+            "HOST_RESOURCE_KIND_VETH_PAIR" => ::std::option::Option::Some(HostResourceKind::HOST_RESOURCE_KIND_VETH_PAIR),
+            "HOST_RESOURCE_KIND_NFTABLES_TABLE" => ::std::option::Option::Some(HostResourceKind::HOST_RESOURCE_KIND_NFTABLES_TABLE),
+            "HOST_RESOURCE_KIND_NFTABLES_PARTITION" => ::std::option::Option::Some(HostResourceKind::HOST_RESOURCE_KIND_NFTABLES_PARTITION),
+            "HOST_RESOURCE_KIND_CGROUP_SUBTREE" => ::std::option::Option::Some(HostResourceKind::HOST_RESOURCE_KIND_CGROUP_SUBTREE),
+            "HOST_RESOURCE_KIND_HOST_FILE_PARTITION" => ::std::option::Option::Some(HostResourceKind::HOST_RESOURCE_KIND_HOST_FILE_PARTITION),
+            "HOST_RESOURCE_KIND_NAMESPACE_BOUNDARY" => ::std::option::Option::Some(HostResourceKind::HOST_RESOURCE_KIND_NAMESPACE_BOUNDARY),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [HostResourceKind] = &[
+        HostResourceKind::HOST_RESOURCE_KIND_UNSPECIFIED,
+        HostResourceKind::HOST_RESOURCE_KIND_BRIDGE,
+        HostResourceKind::HOST_RESOURCE_KIND_TAP,
+        HostResourceKind::HOST_RESOURCE_KIND_VETH_PAIR,
+        HostResourceKind::HOST_RESOURCE_KIND_NFTABLES_TABLE,
+        HostResourceKind::HOST_RESOURCE_KIND_NFTABLES_PARTITION,
+        HostResourceKind::HOST_RESOURCE_KIND_CGROUP_SUBTREE,
+        HostResourceKind::HOST_RESOURCE_KIND_HOST_FILE_PARTITION,
+        HostResourceKind::HOST_RESOURCE_KIND_NAMESPACE_BOUNDARY,
+    ];
+}
+
+impl ::protobuf::EnumFull for HostResourceKind {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("HostResourceKind").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for HostResourceKind {
+    fn default() -> Self {
+        HostResourceKind::HOST_RESOURCE_KIND_UNSPECIFIED
+    }
+}
+
+impl HostResourceKind {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<HostResourceKind>("HostResourceKind")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.broker.v2.ResourceShareMode)
+pub enum ResourceShareMode {
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.ResourceShareMode.RESOURCE_SHARE_MODE_UNSPECIFIED)
+    RESOURCE_SHARE_MODE_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.ResourceShareMode.RESOURCE_SHARE_MODE_EXCLUSIVE)
+    RESOURCE_SHARE_MODE_EXCLUSIVE = 1,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.ResourceShareMode.RESOURCE_SHARE_MODE_SHARED_PARTITION)
+    RESOURCE_SHARE_MODE_SHARED_PARTITION = 2,
+}
+
+impl ::protobuf::Enum for ResourceShareMode {
+    const NAME: &'static str = "ResourceShareMode";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ResourceShareMode> {
+        match value {
+            0 => ::std::option::Option::Some(ResourceShareMode::RESOURCE_SHARE_MODE_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ResourceShareMode::RESOURCE_SHARE_MODE_EXCLUSIVE),
+            2 => ::std::option::Option::Some(ResourceShareMode::RESOURCE_SHARE_MODE_SHARED_PARTITION),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ResourceShareMode> {
+        match str {
+            "RESOURCE_SHARE_MODE_UNSPECIFIED" => ::std::option::Option::Some(ResourceShareMode::RESOURCE_SHARE_MODE_UNSPECIFIED),
+            "RESOURCE_SHARE_MODE_EXCLUSIVE" => ::std::option::Option::Some(ResourceShareMode::RESOURCE_SHARE_MODE_EXCLUSIVE),
+            "RESOURCE_SHARE_MODE_SHARED_PARTITION" => ::std::option::Option::Some(ResourceShareMode::RESOURCE_SHARE_MODE_SHARED_PARTITION),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ResourceShareMode] = &[
+        ResourceShareMode::RESOURCE_SHARE_MODE_UNSPECIFIED,
+        ResourceShareMode::RESOURCE_SHARE_MODE_EXCLUSIVE,
+        ResourceShareMode::RESOURCE_SHARE_MODE_SHARED_PARTITION,
+    ];
+}
+
+impl ::protobuf::EnumFull for ResourceShareMode {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ResourceShareMode").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ResourceShareMode {
+    fn default() -> Self {
+        ResourceShareMode::RESOURCE_SHARE_MODE_UNSPECIFIED
+    }
+}
+
+impl ResourceShareMode {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ResourceShareMode>("ResourceShareMode")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.broker.v2.ResourceDelegationKind)
+pub enum ResourceDelegationKind {
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.ResourceDelegationKind.RESOURCE_DELEGATION_KIND_UNSPECIFIED)
+    RESOURCE_DELEGATION_KIND_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.ResourceDelegationKind.RESOURCE_DELEGATION_KIND_OPAQUE_NAME)
+    RESOURCE_DELEGATION_KIND_OPAQUE_NAME = 1,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.ResourceDelegationKind.RESOURCE_DELEGATION_KIND_FILE_DESCRIPTOR)
+    RESOURCE_DELEGATION_KIND_FILE_DESCRIPTOR = 2,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.ResourceDelegationKind.RESOURCE_DELEGATION_KIND_PARTITION_ID)
+    RESOURCE_DELEGATION_KIND_PARTITION_ID = 3,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.ResourceDelegationKind.RESOURCE_DELEGATION_KIND_NAMESPACE_HANDLE)
+    RESOURCE_DELEGATION_KIND_NAMESPACE_HANDLE = 4,
+}
+
+impl ::protobuf::Enum for ResourceDelegationKind {
+    const NAME: &'static str = "ResourceDelegationKind";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ResourceDelegationKind> {
+        match value {
+            0 => ::std::option::Option::Some(ResourceDelegationKind::RESOURCE_DELEGATION_KIND_UNSPECIFIED),
+            1 => ::std::option::Option::Some(ResourceDelegationKind::RESOURCE_DELEGATION_KIND_OPAQUE_NAME),
+            2 => ::std::option::Option::Some(ResourceDelegationKind::RESOURCE_DELEGATION_KIND_FILE_DESCRIPTOR),
+            3 => ::std::option::Option::Some(ResourceDelegationKind::RESOURCE_DELEGATION_KIND_PARTITION_ID),
+            4 => ::std::option::Option::Some(ResourceDelegationKind::RESOURCE_DELEGATION_KIND_NAMESPACE_HANDLE),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<ResourceDelegationKind> {
+        match str {
+            "RESOURCE_DELEGATION_KIND_UNSPECIFIED" => ::std::option::Option::Some(ResourceDelegationKind::RESOURCE_DELEGATION_KIND_UNSPECIFIED),
+            "RESOURCE_DELEGATION_KIND_OPAQUE_NAME" => ::std::option::Option::Some(ResourceDelegationKind::RESOURCE_DELEGATION_KIND_OPAQUE_NAME),
+            "RESOURCE_DELEGATION_KIND_FILE_DESCRIPTOR" => ::std::option::Option::Some(ResourceDelegationKind::RESOURCE_DELEGATION_KIND_FILE_DESCRIPTOR),
+            "RESOURCE_DELEGATION_KIND_PARTITION_ID" => ::std::option::Option::Some(ResourceDelegationKind::RESOURCE_DELEGATION_KIND_PARTITION_ID),
+            "RESOURCE_DELEGATION_KIND_NAMESPACE_HANDLE" => ::std::option::Option::Some(ResourceDelegationKind::RESOURCE_DELEGATION_KIND_NAMESPACE_HANDLE),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [ResourceDelegationKind] = &[
+        ResourceDelegationKind::RESOURCE_DELEGATION_KIND_UNSPECIFIED,
+        ResourceDelegationKind::RESOURCE_DELEGATION_KIND_OPAQUE_NAME,
+        ResourceDelegationKind::RESOURCE_DELEGATION_KIND_FILE_DESCRIPTOR,
+        ResourceDelegationKind::RESOURCE_DELEGATION_KIND_PARTITION_ID,
+        ResourceDelegationKind::RESOURCE_DELEGATION_KIND_NAMESPACE_HANDLE,
+    ];
+}
+
+impl ::protobuf::EnumFull for ResourceDelegationKind {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("ResourceDelegationKind").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for ResourceDelegationKind {
+    fn default() -> Self {
+        ResourceDelegationKind::RESOURCE_DELEGATION_KIND_UNSPECIFIED
+    }
+}
+
+impl ResourceDelegationKind {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<ResourceDelegationKind>("ResourceDelegationKind")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.broker.v2.AllocatorReason)
+pub enum AllocatorReason {
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.AllocatorReason.ALLOCATOR_REASON_UNSPECIFIED)
+    ALLOCATOR_REASON_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.AllocatorReason.ALLOCATOR_REASON_RESOURCE_CONFLICT)
+    ALLOCATOR_REASON_RESOURCE_CONFLICT = 1,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.AllocatorReason.ALLOCATOR_REASON_OWNERSHIP_CONFLICT)
+    ALLOCATOR_REASON_OWNERSHIP_CONFLICT = 2,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.AllocatorReason.ALLOCATOR_REASON_ACQUISITION_ORDER_VIOLATION)
+    ALLOCATOR_REASON_ACQUISITION_ORDER_VIOLATION = 3,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.AllocatorReason.ALLOCATOR_REASON_INVALID_REQUEST)
+    ALLOCATOR_REASON_INVALID_REQUEST = 4,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.AllocatorReason.ALLOCATOR_REASON_CAPACITY_EXHAUSTED)
+    ALLOCATOR_REASON_CAPACITY_EXHAUSTED = 5,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.AllocatorReason.ALLOCATOR_REASON_DRIFT_DETECTED)
+    ALLOCATOR_REASON_DRIFT_DETECTED = 6,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.AllocatorReason.ALLOCATOR_REASON_RECONCILE_MISMATCH)
+    ALLOCATOR_REASON_RECONCILE_MISMATCH = 7,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.AllocatorReason.ALLOCATOR_REASON_OWNER_NOT_LIVE)
+    ALLOCATOR_REASON_OWNER_NOT_LIVE = 8,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.AllocatorReason.ALLOCATOR_REASON_POLICY_DENIED)
+    ALLOCATOR_REASON_POLICY_DENIED = 9,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.AllocatorReason.ALLOCATOR_REASON_UNSUPPORTED_KIND)
+    ALLOCATOR_REASON_UNSUPPORTED_KIND = 10,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.AllocatorReason.ALLOCATOR_REASON_STORAGE_CONTRACT_VIOLATION)
+    ALLOCATOR_REASON_STORAGE_CONTRACT_VIOLATION = 11,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.AllocatorReason.ALLOCATOR_REASON_KERNEL_STATE_UNKNOWN)
+    ALLOCATOR_REASON_KERNEL_STATE_UNKNOWN = 12,
+}
+
+impl ::protobuf::Enum for AllocatorReason {
+    const NAME: &'static str = "AllocatorReason";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<AllocatorReason> {
+        match value {
+            0 => ::std::option::Option::Some(AllocatorReason::ALLOCATOR_REASON_UNSPECIFIED),
+            1 => ::std::option::Option::Some(AllocatorReason::ALLOCATOR_REASON_RESOURCE_CONFLICT),
+            2 => ::std::option::Option::Some(AllocatorReason::ALLOCATOR_REASON_OWNERSHIP_CONFLICT),
+            3 => ::std::option::Option::Some(AllocatorReason::ALLOCATOR_REASON_ACQUISITION_ORDER_VIOLATION),
+            4 => ::std::option::Option::Some(AllocatorReason::ALLOCATOR_REASON_INVALID_REQUEST),
+            5 => ::std::option::Option::Some(AllocatorReason::ALLOCATOR_REASON_CAPACITY_EXHAUSTED),
+            6 => ::std::option::Option::Some(AllocatorReason::ALLOCATOR_REASON_DRIFT_DETECTED),
+            7 => ::std::option::Option::Some(AllocatorReason::ALLOCATOR_REASON_RECONCILE_MISMATCH),
+            8 => ::std::option::Option::Some(AllocatorReason::ALLOCATOR_REASON_OWNER_NOT_LIVE),
+            9 => ::std::option::Option::Some(AllocatorReason::ALLOCATOR_REASON_POLICY_DENIED),
+            10 => ::std::option::Option::Some(AllocatorReason::ALLOCATOR_REASON_UNSUPPORTED_KIND),
+            11 => ::std::option::Option::Some(AllocatorReason::ALLOCATOR_REASON_STORAGE_CONTRACT_VIOLATION),
+            12 => ::std::option::Option::Some(AllocatorReason::ALLOCATOR_REASON_KERNEL_STATE_UNKNOWN),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<AllocatorReason> {
+        match str {
+            "ALLOCATOR_REASON_UNSPECIFIED" => ::std::option::Option::Some(AllocatorReason::ALLOCATOR_REASON_UNSPECIFIED),
+            "ALLOCATOR_REASON_RESOURCE_CONFLICT" => ::std::option::Option::Some(AllocatorReason::ALLOCATOR_REASON_RESOURCE_CONFLICT),
+            "ALLOCATOR_REASON_OWNERSHIP_CONFLICT" => ::std::option::Option::Some(AllocatorReason::ALLOCATOR_REASON_OWNERSHIP_CONFLICT),
+            "ALLOCATOR_REASON_ACQUISITION_ORDER_VIOLATION" => ::std::option::Option::Some(AllocatorReason::ALLOCATOR_REASON_ACQUISITION_ORDER_VIOLATION),
+            "ALLOCATOR_REASON_INVALID_REQUEST" => ::std::option::Option::Some(AllocatorReason::ALLOCATOR_REASON_INVALID_REQUEST),
+            "ALLOCATOR_REASON_CAPACITY_EXHAUSTED" => ::std::option::Option::Some(AllocatorReason::ALLOCATOR_REASON_CAPACITY_EXHAUSTED),
+            "ALLOCATOR_REASON_DRIFT_DETECTED" => ::std::option::Option::Some(AllocatorReason::ALLOCATOR_REASON_DRIFT_DETECTED),
+            "ALLOCATOR_REASON_RECONCILE_MISMATCH" => ::std::option::Option::Some(AllocatorReason::ALLOCATOR_REASON_RECONCILE_MISMATCH),
+            "ALLOCATOR_REASON_OWNER_NOT_LIVE" => ::std::option::Option::Some(AllocatorReason::ALLOCATOR_REASON_OWNER_NOT_LIVE),
+            "ALLOCATOR_REASON_POLICY_DENIED" => ::std::option::Option::Some(AllocatorReason::ALLOCATOR_REASON_POLICY_DENIED),
+            "ALLOCATOR_REASON_UNSUPPORTED_KIND" => ::std::option::Option::Some(AllocatorReason::ALLOCATOR_REASON_UNSUPPORTED_KIND),
+            "ALLOCATOR_REASON_STORAGE_CONTRACT_VIOLATION" => ::std::option::Option::Some(AllocatorReason::ALLOCATOR_REASON_STORAGE_CONTRACT_VIOLATION),
+            "ALLOCATOR_REASON_KERNEL_STATE_UNKNOWN" => ::std::option::Option::Some(AllocatorReason::ALLOCATOR_REASON_KERNEL_STATE_UNKNOWN),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [AllocatorReason] = &[
+        AllocatorReason::ALLOCATOR_REASON_UNSPECIFIED,
+        AllocatorReason::ALLOCATOR_REASON_RESOURCE_CONFLICT,
+        AllocatorReason::ALLOCATOR_REASON_OWNERSHIP_CONFLICT,
+        AllocatorReason::ALLOCATOR_REASON_ACQUISITION_ORDER_VIOLATION,
+        AllocatorReason::ALLOCATOR_REASON_INVALID_REQUEST,
+        AllocatorReason::ALLOCATOR_REASON_CAPACITY_EXHAUSTED,
+        AllocatorReason::ALLOCATOR_REASON_DRIFT_DETECTED,
+        AllocatorReason::ALLOCATOR_REASON_RECONCILE_MISMATCH,
+        AllocatorReason::ALLOCATOR_REASON_OWNER_NOT_LIVE,
+        AllocatorReason::ALLOCATOR_REASON_POLICY_DENIED,
+        AllocatorReason::ALLOCATOR_REASON_UNSUPPORTED_KIND,
+        AllocatorReason::ALLOCATOR_REASON_STORAGE_CONTRACT_VIOLATION,
+        AllocatorReason::ALLOCATOR_REASON_KERNEL_STATE_UNKNOWN,
+    ];
+}
+
+impl ::protobuf::EnumFull for AllocatorReason {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("AllocatorReason").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for AllocatorReason {
+    fn default() -> Self {
+        AllocatorReason::ALLOCATOR_REASON_UNSPECIFIED
+    }
+}
+
+impl AllocatorReason {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<AllocatorReason>("AllocatorReason")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.broker.v2.AllocationStatus)
+pub enum AllocationStatus {
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.AllocationStatus.ALLOCATION_STATUS_UNSPECIFIED)
+    ALLOCATION_STATUS_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.AllocationStatus.ALLOCATION_STATUS_GRANTED)
+    ALLOCATION_STATUS_GRANTED = 1,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.AllocationStatus.ALLOCATION_STATUS_DENIED)
+    ALLOCATION_STATUS_DENIED = 2,
+}
+
+impl ::protobuf::Enum for AllocationStatus {
+    const NAME: &'static str = "AllocationStatus";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<AllocationStatus> {
+        match value {
+            0 => ::std::option::Option::Some(AllocationStatus::ALLOCATION_STATUS_UNSPECIFIED),
+            1 => ::std::option::Option::Some(AllocationStatus::ALLOCATION_STATUS_GRANTED),
+            2 => ::std::option::Option::Some(AllocationStatus::ALLOCATION_STATUS_DENIED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<AllocationStatus> {
+        match str {
+            "ALLOCATION_STATUS_UNSPECIFIED" => ::std::option::Option::Some(AllocationStatus::ALLOCATION_STATUS_UNSPECIFIED),
+            "ALLOCATION_STATUS_GRANTED" => ::std::option::Option::Some(AllocationStatus::ALLOCATION_STATUS_GRANTED),
+            "ALLOCATION_STATUS_DENIED" => ::std::option::Option::Some(AllocationStatus::ALLOCATION_STATUS_DENIED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [AllocationStatus] = &[
+        AllocationStatus::ALLOCATION_STATUS_UNSPECIFIED,
+        AllocationStatus::ALLOCATION_STATUS_GRANTED,
+        AllocationStatus::ALLOCATION_STATUS_DENIED,
+    ];
+}
+
+impl ::protobuf::EnumFull for AllocationStatus {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("AllocationStatus").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for AllocationStatus {
+    fn default() -> Self {
+        AllocationStatus::ALLOCATION_STATUS_UNSPECIFIED
+    }
+}
+
+impl AllocationStatus {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<AllocationStatus>("AllocationStatus")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.broker.v2.RealmChildRole)
+pub enum RealmChildRole {
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.RealmChildRole.REALM_CHILD_ROLE_UNSPECIFIED)
+    REALM_CHILD_ROLE_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.RealmChildRole.REALM_CHILD_ROLE_CONTROLLER)
+    REALM_CHILD_ROLE_CONTROLLER = 1,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.RealmChildRole.REALM_CHILD_ROLE_BROKER)
+    REALM_CHILD_ROLE_BROKER = 2,
+}
+
+impl ::protobuf::Enum for RealmChildRole {
+    const NAME: &'static str = "RealmChildRole";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<RealmChildRole> {
+        match value {
+            0 => ::std::option::Option::Some(RealmChildRole::REALM_CHILD_ROLE_UNSPECIFIED),
+            1 => ::std::option::Option::Some(RealmChildRole::REALM_CHILD_ROLE_CONTROLLER),
+            2 => ::std::option::Option::Some(RealmChildRole::REALM_CHILD_ROLE_BROKER),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<RealmChildRole> {
+        match str {
+            "REALM_CHILD_ROLE_UNSPECIFIED" => ::std::option::Option::Some(RealmChildRole::REALM_CHILD_ROLE_UNSPECIFIED),
+            "REALM_CHILD_ROLE_CONTROLLER" => ::std::option::Option::Some(RealmChildRole::REALM_CHILD_ROLE_CONTROLLER),
+            "REALM_CHILD_ROLE_BROKER" => ::std::option::Option::Some(RealmChildRole::REALM_CHILD_ROLE_BROKER),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [RealmChildRole] = &[
+        RealmChildRole::REALM_CHILD_ROLE_UNSPECIFIED,
+        RealmChildRole::REALM_CHILD_ROLE_CONTROLLER,
+        RealmChildRole::REALM_CHILD_ROLE_BROKER,
+    ];
+}
+
+impl ::protobuf::EnumFull for RealmChildRole {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("RealmChildRole").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for RealmChildRole {
+    fn default() -> Self {
+        RealmChildRole::REALM_CHILD_ROLE_UNSPECIFIED
+    }
+}
+
+impl RealmChildRole {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<RealmChildRole>("RealmChildRole")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.broker.v2.RealmChildFdKind)
+pub enum RealmChildFdKind {
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.RealmChildFdKind.REALM_CHILD_FD_KIND_UNSPECIFIED)
+    REALM_CHILD_FD_KIND_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.RealmChildFdKind.REALM_CHILD_FD_KIND_PUBLIC_LISTENER)
+    REALM_CHILD_FD_KIND_PUBLIC_LISTENER = 1,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.RealmChildFdKind.REALM_CHILD_FD_KIND_BROKER_LISTENER)
+    REALM_CHILD_FD_KIND_BROKER_LISTENER = 2,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.RealmChildFdKind.REALM_CHILD_FD_KIND_USER_NAMESPACE)
+    REALM_CHILD_FD_KIND_USER_NAMESPACE = 3,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.RealmChildFdKind.REALM_CHILD_FD_KIND_MOUNT_NAMESPACE)
+    REALM_CHILD_FD_KIND_MOUNT_NAMESPACE = 4,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.RealmChildFdKind.REALM_CHILD_FD_KIND_NETWORK_NAMESPACE)
+    REALM_CHILD_FD_KIND_NETWORK_NAMESPACE = 5,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.RealmChildFdKind.REALM_CHILD_FD_KIND_IPC_NAMESPACE)
+    REALM_CHILD_FD_KIND_IPC_NAMESPACE = 6,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.RealmChildFdKind.REALM_CHILD_FD_KIND_PID_NAMESPACE)
+    REALM_CHILD_FD_KIND_PID_NAMESPACE = 7,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.RealmChildFdKind.REALM_CHILD_FD_KIND_CGROUP_NAMESPACE)
+    REALM_CHILD_FD_KIND_CGROUP_NAMESPACE = 8,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.RealmChildFdKind.REALM_CHILD_FD_KIND_CGROUP_LEAF)
+    REALM_CHILD_FD_KIND_CGROUP_LEAF = 9,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.RealmChildFdKind.REALM_CHILD_FD_KIND_STATE_ROOT)
+    REALM_CHILD_FD_KIND_STATE_ROOT = 10,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.RealmChildFdKind.REALM_CHILD_FD_KIND_AUDIT_ROOT)
+    REALM_CHILD_FD_KIND_AUDIT_ROOT = 11,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.RealmChildFdKind.REALM_CHILD_FD_KIND_RESOURCE)
+    REALM_CHILD_FD_KIND_RESOURCE = 12,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.RealmChildFdKind.REALM_CHILD_FD_KIND_LEASE)
+    REALM_CHILD_FD_KIND_LEASE = 13,
+    // @@protoc_insertion_point(enum_value:d2b.broker.v2.RealmChildFdKind.REALM_CHILD_FD_KIND_BOOTSTRAP_SESSION)
+    REALM_CHILD_FD_KIND_BOOTSTRAP_SESSION = 14,
+}
+
+impl ::protobuf::Enum for RealmChildFdKind {
+    const NAME: &'static str = "RealmChildFdKind";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<RealmChildFdKind> {
+        match value {
+            0 => ::std::option::Option::Some(RealmChildFdKind::REALM_CHILD_FD_KIND_UNSPECIFIED),
+            1 => ::std::option::Option::Some(RealmChildFdKind::REALM_CHILD_FD_KIND_PUBLIC_LISTENER),
+            2 => ::std::option::Option::Some(RealmChildFdKind::REALM_CHILD_FD_KIND_BROKER_LISTENER),
+            3 => ::std::option::Option::Some(RealmChildFdKind::REALM_CHILD_FD_KIND_USER_NAMESPACE),
+            4 => ::std::option::Option::Some(RealmChildFdKind::REALM_CHILD_FD_KIND_MOUNT_NAMESPACE),
+            5 => ::std::option::Option::Some(RealmChildFdKind::REALM_CHILD_FD_KIND_NETWORK_NAMESPACE),
+            6 => ::std::option::Option::Some(RealmChildFdKind::REALM_CHILD_FD_KIND_IPC_NAMESPACE),
+            7 => ::std::option::Option::Some(RealmChildFdKind::REALM_CHILD_FD_KIND_PID_NAMESPACE),
+            8 => ::std::option::Option::Some(RealmChildFdKind::REALM_CHILD_FD_KIND_CGROUP_NAMESPACE),
+            9 => ::std::option::Option::Some(RealmChildFdKind::REALM_CHILD_FD_KIND_CGROUP_LEAF),
+            10 => ::std::option::Option::Some(RealmChildFdKind::REALM_CHILD_FD_KIND_STATE_ROOT),
+            11 => ::std::option::Option::Some(RealmChildFdKind::REALM_CHILD_FD_KIND_AUDIT_ROOT),
+            12 => ::std::option::Option::Some(RealmChildFdKind::REALM_CHILD_FD_KIND_RESOURCE),
+            13 => ::std::option::Option::Some(RealmChildFdKind::REALM_CHILD_FD_KIND_LEASE),
+            14 => ::std::option::Option::Some(RealmChildFdKind::REALM_CHILD_FD_KIND_BOOTSTRAP_SESSION),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<RealmChildFdKind> {
+        match str {
+            "REALM_CHILD_FD_KIND_UNSPECIFIED" => ::std::option::Option::Some(RealmChildFdKind::REALM_CHILD_FD_KIND_UNSPECIFIED),
+            "REALM_CHILD_FD_KIND_PUBLIC_LISTENER" => ::std::option::Option::Some(RealmChildFdKind::REALM_CHILD_FD_KIND_PUBLIC_LISTENER),
+            "REALM_CHILD_FD_KIND_BROKER_LISTENER" => ::std::option::Option::Some(RealmChildFdKind::REALM_CHILD_FD_KIND_BROKER_LISTENER),
+            "REALM_CHILD_FD_KIND_USER_NAMESPACE" => ::std::option::Option::Some(RealmChildFdKind::REALM_CHILD_FD_KIND_USER_NAMESPACE),
+            "REALM_CHILD_FD_KIND_MOUNT_NAMESPACE" => ::std::option::Option::Some(RealmChildFdKind::REALM_CHILD_FD_KIND_MOUNT_NAMESPACE),
+            "REALM_CHILD_FD_KIND_NETWORK_NAMESPACE" => ::std::option::Option::Some(RealmChildFdKind::REALM_CHILD_FD_KIND_NETWORK_NAMESPACE),
+            "REALM_CHILD_FD_KIND_IPC_NAMESPACE" => ::std::option::Option::Some(RealmChildFdKind::REALM_CHILD_FD_KIND_IPC_NAMESPACE),
+            "REALM_CHILD_FD_KIND_PID_NAMESPACE" => ::std::option::Option::Some(RealmChildFdKind::REALM_CHILD_FD_KIND_PID_NAMESPACE),
+            "REALM_CHILD_FD_KIND_CGROUP_NAMESPACE" => ::std::option::Option::Some(RealmChildFdKind::REALM_CHILD_FD_KIND_CGROUP_NAMESPACE),
+            "REALM_CHILD_FD_KIND_CGROUP_LEAF" => ::std::option::Option::Some(RealmChildFdKind::REALM_CHILD_FD_KIND_CGROUP_LEAF),
+            "REALM_CHILD_FD_KIND_STATE_ROOT" => ::std::option::Option::Some(RealmChildFdKind::REALM_CHILD_FD_KIND_STATE_ROOT),
+            "REALM_CHILD_FD_KIND_AUDIT_ROOT" => ::std::option::Option::Some(RealmChildFdKind::REALM_CHILD_FD_KIND_AUDIT_ROOT),
+            "REALM_CHILD_FD_KIND_RESOURCE" => ::std::option::Option::Some(RealmChildFdKind::REALM_CHILD_FD_KIND_RESOURCE),
+            "REALM_CHILD_FD_KIND_LEASE" => ::std::option::Option::Some(RealmChildFdKind::REALM_CHILD_FD_KIND_LEASE),
+            "REALM_CHILD_FD_KIND_BOOTSTRAP_SESSION" => ::std::option::Option::Some(RealmChildFdKind::REALM_CHILD_FD_KIND_BOOTSTRAP_SESSION),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [RealmChildFdKind] = &[
+        RealmChildFdKind::REALM_CHILD_FD_KIND_UNSPECIFIED,
+        RealmChildFdKind::REALM_CHILD_FD_KIND_PUBLIC_LISTENER,
+        RealmChildFdKind::REALM_CHILD_FD_KIND_BROKER_LISTENER,
+        RealmChildFdKind::REALM_CHILD_FD_KIND_USER_NAMESPACE,
+        RealmChildFdKind::REALM_CHILD_FD_KIND_MOUNT_NAMESPACE,
+        RealmChildFdKind::REALM_CHILD_FD_KIND_NETWORK_NAMESPACE,
+        RealmChildFdKind::REALM_CHILD_FD_KIND_IPC_NAMESPACE,
+        RealmChildFdKind::REALM_CHILD_FD_KIND_PID_NAMESPACE,
+        RealmChildFdKind::REALM_CHILD_FD_KIND_CGROUP_NAMESPACE,
+        RealmChildFdKind::REALM_CHILD_FD_KIND_CGROUP_LEAF,
+        RealmChildFdKind::REALM_CHILD_FD_KIND_STATE_ROOT,
+        RealmChildFdKind::REALM_CHILD_FD_KIND_AUDIT_ROOT,
+        RealmChildFdKind::REALM_CHILD_FD_KIND_RESOURCE,
+        RealmChildFdKind::REALM_CHILD_FD_KIND_LEASE,
+        RealmChildFdKind::REALM_CHILD_FD_KIND_BOOTSTRAP_SESSION,
+    ];
+}
+
+impl ::protobuf::EnumFull for RealmChildFdKind {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("RealmChildFdKind").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for RealmChildFdKind {
+    fn default() -> Self {
+        RealmChildFdKind::REALM_CHILD_FD_KIND_UNSPECIFIED
+    }
+}
+
+impl RealmChildFdKind {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<RealmChildFdKind>("RealmChildFdKind")
+    }
+}
+
 static file_descriptor_proto_data: &'static [u8] = b"\
-    \n\x0cbroker.proto\x12\rd2b.broker.v2\x1a\x0ccommon.proto2\x81\x06\n\rBr\
-    okerService\x12N\n\rValidateLease\x12\x1d.d2b.common.v2.ServiceRequest\
-    \x1a\x1e.d2b.common.v2.ServiceResponse\x12I\n\x08Allocate\x12\x1d.d2b.co\
-    mmon.v2.ServiceRequest\x1a\x1e.d2b.common.v2.ServiceResponse\x12I\n\x08D\
-    elegate\x12\x1d.d2b.common.v2.ServiceRequest\x1a\x1e.d2b.common.v2.Servi\
-    ceResponse\x12F\n\x05Spawn\x12\x1d.d2b.common.v2.ServiceRequest\x1a\x1e.\
-    d2b.common.v2.ServiceResponse\x12M\n\x0cOpenResource\x12\x1d.d2b.common.\
-    v2.ServiceRequest\x1a\x1e.d2b.common.v2.ServiceResponse\x12F\n\x05Apply\
-    \x12\x1d.d2b.common.v2.ServiceRequest\x1a\x1e.d2b.common.v2.ServiceRespo\
-    nse\x12H\n\x07Observe\x12\x1d.d2b.common.v2.ServiceRequest\x1a\x1e.d2b.c\
-    ommon.v2.ServiceResponse\x12L\n\x0bRevokeLease\x12\x1d.d2b.common.v2.Ser\
-    viceRequest\x1a\x1e.d2b.common.v2.ServiceResponse\x12L\n\x0bExportAudit\
-    \x12\x1d.d2b.common.v2.ServiceRequest\x1a\x1e.d2b.common.v2.ServiceRespo\
-    nse\x12E\n\x06Cancel\x12\x1c.d2b.common.v2.CancelRequest\x1a\x1d.d2b.com\
-    mon.v2.CancelResponseb\x06proto3\
+    \n\x0cbroker.proto\x12\rd2b.broker.v2\x1a\x0ccommon.proto\"\x8f\x01\n\nL\
+    easeOwner\x12\x1d\n\nrealm_path\x18\x01\x20\x01(\tR\trealmPath\x128\n\
+    \x18controller_generation_id\x18\x02\x20\x01(\tR\x16controllerGeneration\
+    Id\x12\x1c\n\x07node_id\x18\x03\x20\x01(\tH\0R\x06nodeId\x88\x01\x01B\n\
+    \n\x08_node_id\"J\n\x18ResourceAcquisitionOrder\x12\x14\n\x05phase\x18\
+    \x01\x20\x01(\rR\x05phase\x12\x18\n\x07ordinal\x18\x02\x20\x01(\rR\x07or\
+    dinal\"\xfa\x01\n\x14LeaseResourceRequest\x12\x1f\n\x0bresource_id\x18\
+    \x01\x20\x01(\tR\nresourceId\x123\n\x04kind\x18\x02\x20\x01(\x0e2\x1f.d2\
+    b.broker.v2.HostResourceKindR\x04kind\x126\n\x05share\x18\x03\x20\x01(\
+    \x0e2\x20.d2b.broker.v2.ResourceShareModeR\x05share\x12T\n\x11acquisitio\
+    n_order\x18\x04\x20\x01(\x0b2'.d2b.broker.v2.ResourceAcquisitionOrderR\
+    \x10acquisitionOrder\"\xbf\x02\n\x0fAllocateRequest\x12:\n\x08metadata\
+    \x18\x01\x20\x01(\x0b2\x1e.d2b.common.v2.RequestMetadataR\x08metadata\
+    \x122\n\x05scope\x18\x02\x20\x01(\x0b2\x1c.d2b.common.v2.IdentityScopeR\
+    \x05scope\x12!\n\x0coperation_id\x18\x03\x20\x01(\tR\x0boperationId\x12/\
+    \n\x05owner\x18\x04\x20\x01(\x0b2\x19.d2b.broker.v2.LeaseOwnerR\x05owner\
+    \x12A\n\tresources\x18\x05\x20\x03(\x0b2#.d2b.broker.v2.LeaseResourceReq\
+    uestR\tresources\x12%\n\x0erequest_digest\x18\x06\x20\x01(\x0cR\rrequest\
+    Digest\"\xaa\x03\n\x13GrantedHostResource\x12\x1f\n\x0bresource_id\x18\
+    \x01\x20\x01(\tR\nresourceId\x123\n\x04kind\x18\x02\x20\x01(\x0e2\x1f.d2\
+    b.broker.v2.HostResourceKindR\x04kind\x126\n\x05share\x18\x03\x20\x01(\
+    \x0e2\x20.d2b.broker.v2.ResourceShareModeR\x05share\x12E\n\ndelegation\
+    \x18\x04\x20\x01(\x0e2%.d2b.broker.v2.ResourceDelegationKindR\ndelegatio\
+    n\x12#\n\rdelegation_id\x18\x05\x20\x01(\tR\x0cdelegationId\x12T\n\x11ac\
+    quisition_order\x18\x06\x20\x01(\x0b2'.d2b.broker.v2.ResourceAcquisition\
+    OrderR\x10acquisitionOrder\x12.\n\x10attachment_index\x18\x07\x20\x01(\r\
+    H\0R\x0fattachmentIndex\x88\x01\x01B\x13\n\x11_attachment_index\"\xe8\
+    \x01\n\x11AllocatorConflict\x12\x1f\n\x0bresource_id\x18\x01\x20\x01(\tR\
+    \nresourceId\x123\n\x04kind\x18\x02\x20\x01(\x0e2\x1f.d2b.broker.v2.Host\
+    ResourceKindR\x04kind\x126\n\x06reason\x18\x03\x20\x01(\x0e2\x1e.d2b.bro\
+    ker.v2.AllocatorReasonR\x06reason\x12/\n\x11existing_lease_id\x18\x04\
+    \x20\x01(\tH\0R\x0fexistingLeaseId\x88\x01\x01B\x14\n\x12_existing_lease\
+    _id\"\xa9\x03\n\x10AllocateResponse\x120\n\x07outcome\x18\x01\x20\x01(\
+    \x0e2\x16.d2b.common.v2.OutcomeR\x07outcome\x12!\n\x0coperation_id\x18\
+    \x02\x20\x01(\tR\x0boperationId\x127\n\x06status\x18\x03\x20\x01(\x0e2\
+    \x1f.d2b.broker.v2.AllocationStatusR\x06status\x12\x19\n\x08lease_id\x18\
+    \x04\x20\x01(\tR\x07leaseId\x12@\n\tresources\x18\x05\x20\x03(\x0b2\".d2\
+    b.broker.v2.GrantedHostResourceR\tresources\x126\n\x06reason\x18\x06\x20\
+    \x01(\x0e2\x1e.d2b.broker.v2.AllocatorReasonR\x06reason\x12>\n\tconflict\
+    s\x18\x07\x20\x03(\x0b2\x20.d2b.broker.v2.AllocatorConflictR\tconflicts\
+    \x122\n\x05error\x18\x08\x20\x01(\x0b2\x1c.d2b.common.v2.ErrorEnvelopeR\
+    \x05error\"\xd7\x01\n\x0cRealmChildFd\x121\n\x04role\x18\x01\x20\x01(\
+    \x0e2\x1d.d2b.broker.v2.RealmChildRoleR\x04role\x123\n\x04kind\x18\x02\
+    \x20\x01(\x0e2\x1f.d2b.broker.v2.RealmChildFdKindR\x04kind\x12)\n\x10att\
+    achment_index\x18\x03\x20\x01(\rR\x0fattachmentIndex\x12$\n\x0bresource_\
+    id\x18\x04\x20\x01(\tH\0R\nresourceId\x88\x01\x01B\x0e\n\x0c_resource_id\
+    \"\xc4\x03\n\x19SpawnRealmChildrenRequest\x12:\n\x08metadata\x18\x01\x20\
+    \x01(\x0b2\x1e.d2b.common.v2.RequestMetadataR\x08metadata\x122\n\x05scop\
+    e\x18\x02\x20\x01(\x0b2\x1c.d2b.common.v2.IdentityScopeR\x05scope\x12!\n\
+    \x0coperation_id\x18\x03\x20\x01(\tR\x0boperationId\x12\x19\n\x08realm_i\
+    d\x18\x04\x20\x01(\tR\x07realmId\x128\n\x18controller_generation_id\x18\
+    \x05\x20\x01(\tR\x16controllerGenerationId\x122\n\x15controller_process_\
+    id\x18\x06\x20\x01(\tR\x13controllerProcessId\x12*\n\x11broker_process_i\
+    d\x18\x07\x20\x01(\tR\x0fbrokerProcessId\x120\n\x14launch_record_digest\
+    \x18\x08\x20\x01(\x0cR\x12launchRecordDigest\x12-\n\x03fds\x18\t\x20\x03\
+    (\x0b2\x1b.d2b.broker.v2.RealmChildFdR\x03fds\"\xda\x01\n\x11SpawnedReal\
+    mChild\x121\n\x04role\x18\x01\x20\x01(\x0e2\x1d.d2b.broker.v2.RealmChild\
+    RoleR\x04role\x12\x1d\n\nprocess_id\x18\x02\x20\x01(\tR\tprocessId\x124\
+    \n\x16pidfd_attachment_index\x18\x03\x20\x01(\rR\x14pidfdAttachmentIndex\
+    \x12+\n\x11executable_digest\x18\x04\x20\x01(\x0cR\x10executableDigest\
+    \x12\x10\n\x03pid\x18\x05\x20\x01(\rR\x03pid\"\x95\x02\n\x1aSpawnRealmCh\
+    ildrenResponse\x120\n\x07outcome\x18\x01\x20\x01(\x0e2\x16.d2b.common.v2\
+    .OutcomeR\x07outcome\x12!\n\x0coperation_id\x18\x02\x20\x01(\tR\x0bopera\
+    tionId\x120\n\x14launch_record_digest\x18\x03\x20\x01(\x0cR\x12launchRec\
+    ordDigest\x12<\n\x08children\x18\x04\x20\x03(\x0b2\x20.d2b.broker.v2.Spa\
+    wnedRealmChildR\x08children\x122\n\x05error\x18\x05\x20\x01(\x0b2\x1c.d2\
+    b.common.v2.ErrorEnvelopeR\x05error*\xe3\x02\n\x10HostResourceKind\x12\"\
+    \n\x1eHOST_RESOURCE_KIND_UNSPECIFIED\x10\0\x12\x1d\n\x19HOST_RESOURCE_KI\
+    ND_BRIDGE\x10\x01\x12\x1a\n\x16HOST_RESOURCE_KIND_TAP\x10\x02\x12\x20\n\
+    \x1cHOST_RESOURCE_KIND_VETH_PAIR\x10\x03\x12%\n!HOST_RESOURCE_KIND_NFTAB\
+    LES_TABLE\x10\x04\x12)\n%HOST_RESOURCE_KIND_NFTABLES_PARTITION\x10\x05\
+    \x12%\n!HOST_RESOURCE_KIND_CGROUP_SUBTREE\x10\x06\x12*\n&HOST_RESOURCE_K\
+    IND_HOST_FILE_PARTITION\x10\x07\x12)\n%HOST_RESOURCE_KIND_NAMESPACE_BOUN\
+    DARY\x10\x08*\x85\x01\n\x11ResourceShareMode\x12#\n\x1fRESOURCE_SHARE_MO\
+    DE_UNSPECIFIED\x10\0\x12!\n\x1dRESOURCE_SHARE_MODE_EXCLUSIVE\x10\x01\x12\
+    (\n$RESOURCE_SHARE_MODE_SHARED_PARTITION\x10\x02*\xf4\x01\n\x16ResourceD\
+    elegationKind\x12(\n$RESOURCE_DELEGATION_KIND_UNSPECIFIED\x10\0\x12(\n$R\
+    ESOURCE_DELEGATION_KIND_OPAQUE_NAME\x10\x01\x12,\n(RESOURCE_DELEGATION_K\
+    IND_FILE_DESCRIPTOR\x10\x02\x12)\n%RESOURCE_DELEGATION_KIND_PARTITION_ID\
+    \x10\x03\x12-\n)RESOURCE_DELEGATION_KIND_NAMESPACE_HANDLE\x10\x04*\x9f\
+    \x04\n\x0fAllocatorReason\x12\x20\n\x1cALLOCATOR_REASON_UNSPECIFIED\x10\
+    \0\x12&\n\"ALLOCATOR_REASON_RESOURCE_CONFLICT\x10\x01\x12'\n#ALLOCATOR_R\
+    EASON_OWNERSHIP_CONFLICT\x10\x02\x120\n,ALLOCATOR_REASON_ACQUISITION_ORD\
+    ER_VIOLATION\x10\x03\x12$\n\x20ALLOCATOR_REASON_INVALID_REQUEST\x10\x04\
+    \x12'\n#ALLOCATOR_REASON_CAPACITY_EXHAUSTED\x10\x05\x12#\n\x1fALLOCATOR_\
+    REASON_DRIFT_DETECTED\x10\x06\x12'\n#ALLOCATOR_REASON_RECONCILE_MISMATCH\
+    \x10\x07\x12#\n\x1fALLOCATOR_REASON_OWNER_NOT_LIVE\x10\x08\x12\"\n\x1eAL\
+    LOCATOR_REASON_POLICY_DENIED\x10\t\x12%\n!ALLOCATOR_REASON_UNSUPPORTED_K\
+    IND\x10\n\x12/\n+ALLOCATOR_REASON_STORAGE_CONTRACT_VIOLATION\x10\x0b\x12\
+    )\n%ALLOCATOR_REASON_KERNEL_STATE_UNKNOWN\x10\x0c*r\n\x10AllocationStatu\
+    s\x12!\n\x1dALLOCATION_STATUS_UNSPECIFIED\x10\0\x12\x1d\n\x19ALLOCATION_\
+    STATUS_GRANTED\x10\x01\x12\x1c\n\x18ALLOCATION_STATUS_DENIED\x10\x02*p\n\
+    \x0eRealmChildRole\x12\x20\n\x1cREALM_CHILD_ROLE_UNSPECIFIED\x10\0\x12\
+    \x1f\n\x1bREALM_CHILD_ROLE_CONTROLLER\x10\x01\x12\x1b\n\x17REALM_CHILD_R\
+    OLE_BROKER\x10\x02*\xd6\x04\n\x10RealmChildFdKind\x12#\n\x1fREALM_CHILD_\
+    FD_KIND_UNSPECIFIED\x10\0\x12'\n#REALM_CHILD_FD_KIND_PUBLIC_LISTENER\x10\
+    \x01\x12'\n#REALM_CHILD_FD_KIND_BROKER_LISTENER\x10\x02\x12&\n\"REALM_CH\
+    ILD_FD_KIND_USER_NAMESPACE\x10\x03\x12'\n#REALM_CHILD_FD_KIND_MOUNT_NAME\
+    SPACE\x10\x04\x12)\n%REALM_CHILD_FD_KIND_NETWORK_NAMESPACE\x10\x05\x12%\
+    \n!REALM_CHILD_FD_KIND_IPC_NAMESPACE\x10\x06\x12%\n!REALM_CHILD_FD_KIND_\
+    PID_NAMESPACE\x10\x07\x12(\n$REALM_CHILD_FD_KIND_CGROUP_NAMESPACE\x10\
+    \x08\x12#\n\x1fREALM_CHILD_FD_KIND_CGROUP_LEAF\x10\t\x12\"\n\x1eREALM_CH\
+    ILD_FD_KIND_STATE_ROOT\x10\n\x12\"\n\x1eREALM_CHILD_FD_KIND_AUDIT_ROOT\
+    \x10\x0b\x12\x20\n\x1cREALM_CHILD_FD_KIND_RESOURCE\x10\x0c\x12\x1d\n\x19\
+    REALM_CHILD_FD_KIND_LEASE\x10\r\x12)\n%REALM_CHILD_FD_KIND_BOOTSTRAP_SES\
+    SION\x10\x0e2\x99\x06\n\rBrokerService\x12N\n\rValidateLease\x12\x1d.d2b\
+    .common.v2.ServiceRequest\x1a\x1e.d2b.common.v2.ServiceResponse\x12K\n\
+    \x08Allocate\x12\x1e.d2b.broker.v2.AllocateRequest\x1a\x1f.d2b.broker.v2\
+    .AllocateResponse\x12I\n\x08Delegate\x12\x1d.d2b.common.v2.ServiceReques\
+    t\x1a\x1e.d2b.common.v2.ServiceResponse\x12\\\n\x05Spawn\x12(.d2b.broker\
+    .v2.SpawnRealmChildrenRequest\x1a).d2b.broker.v2.SpawnRealmChildrenRespo\
+    nse\x12M\n\x0cOpenResource\x12\x1d.d2b.common.v2.ServiceRequest\x1a\x1e.\
+    d2b.common.v2.ServiceResponse\x12F\n\x05Apply\x12\x1d.d2b.common.v2.Serv\
+    iceRequest\x1a\x1e.d2b.common.v2.ServiceResponse\x12H\n\x07Observe\x12\
+    \x1d.d2b.common.v2.ServiceRequest\x1a\x1e.d2b.common.v2.ServiceResponse\
+    \x12L\n\x0bRevokeLease\x12\x1d.d2b.common.v2.ServiceRequest\x1a\x1e.d2b.\
+    common.v2.ServiceResponse\x12L\n\x0bExportAudit\x12\x1d.d2b.common.v2.Se\
+    rviceRequest\x1a\x1e.d2b.common.v2.ServiceResponse\x12E\n\x06Cancel\x12\
+    \x1c.d2b.common.v2.CancelRequest\x1a\x1d.d2b.common.v2.CancelResponseb\
+    \x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file
@@ -62,8 +2970,26 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
         let generated_file_descriptor = generated_file_descriptor_lazy.get(|| {
             let mut deps = ::std::vec::Vec::with_capacity(1);
             deps.push(super::common::file_descriptor().clone());
-            let mut messages = ::std::vec::Vec::with_capacity(0);
-            let mut enums = ::std::vec::Vec::with_capacity(0);
+            let mut messages = ::std::vec::Vec::with_capacity(11);
+            messages.push(LeaseOwner::generated_message_descriptor_data());
+            messages.push(ResourceAcquisitionOrder::generated_message_descriptor_data());
+            messages.push(LeaseResourceRequest::generated_message_descriptor_data());
+            messages.push(AllocateRequest::generated_message_descriptor_data());
+            messages.push(GrantedHostResource::generated_message_descriptor_data());
+            messages.push(AllocatorConflict::generated_message_descriptor_data());
+            messages.push(AllocateResponse::generated_message_descriptor_data());
+            messages.push(RealmChildFd::generated_message_descriptor_data());
+            messages.push(SpawnRealmChildrenRequest::generated_message_descriptor_data());
+            messages.push(SpawnedRealmChild::generated_message_descriptor_data());
+            messages.push(SpawnRealmChildrenResponse::generated_message_descriptor_data());
+            let mut enums = ::std::vec::Vec::with_capacity(7);
+            enums.push(HostResourceKind::generated_enum_descriptor_data());
+            enums.push(ResourceShareMode::generated_enum_descriptor_data());
+            enums.push(ResourceDelegationKind::generated_enum_descriptor_data());
+            enums.push(AllocatorReason::generated_enum_descriptor_data());
+            enums.push(AllocationStatus::generated_enum_descriptor_data());
+            enums.push(RealmChildRole::generated_enum_descriptor_data());
+            enums.push(RealmChildFdKind::generated_enum_descriptor_data());
             ::protobuf::reflect::GeneratedFileDescriptor::new_generated(
                 file_descriptor_proto(),
                 deps,

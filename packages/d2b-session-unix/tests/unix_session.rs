@@ -1,9 +1,9 @@
 use d2b_contracts::v2_component_session::{
     AttachmentAccess, AttachmentCreditClass, AttachmentDescriptor, AttachmentKind,
     AttachmentPacket, AttachmentPolicy, AttachmentPolicyKind, AttachmentPurpose, BoundedVec,
-    EndpointPolicy, EndpointPurpose, EndpointRole, IdentityEvidenceRequirement, KernelObjectType,
-    LimitProfile, Locality, NoiseProfile, PurposeClass, RequestId, ServicePackage,
-    TransportBinding, TransportClass,
+    EndpointPolicy, EndpointPolicyIdentity, EndpointPurpose, EndpointRole,
+    IdentityEvidenceRequirement, KernelObjectType, LimitProfile, Locality, NoiseProfile,
+    PurposeClass, RequestId, ServicePackage, TransportBinding, TransportClass,
 };
 use d2b_session::{
     AttachmentPayload, AttachmentValidationError, HandshakeCredentials, OwnedAttachment,
@@ -465,6 +465,16 @@ async fn owned_transport_adapters_transfer_packets_and_owned_files_end_to_end() 
     let attachment =
         OwnedUnixAttachment::file(metadata.clone(), read_end, DescriptorPolicy::File(identity))
             .unwrap();
+    let unix_payload = attachment
+        .payload()
+        .and_then(|payload| payload.downcast_ref::<UnixAttachmentPayload>())
+        .unwrap();
+    let mut wrong_generation = metadata.clone();
+    wrong_generation.reconnect_generation += 1;
+    assert_eq!(
+        AttachmentPayload::validate_descriptor(unix_payload, &wrong_generation),
+        Err(AttachmentValidationError::Other)
+    );
     sender
         .send(TransportPacket::with_attachments(
             b"protected-record".to_vec(),
@@ -924,8 +934,14 @@ async fn session_engine_transfers_and_binds_seqpacket_attachments_end_to_end() {
         attachment_policy,
     };
     let now = Instant::now();
+    let endpoint_identity = EndpointPolicyIdentity::from(&endpoint);
     let (initiator, responder) = tokio::join!(
-        SessionEngine::establish_initiator(sender, endpoint.clone(), HandshakeCredentials::Nn, now,),
+        SessionEngine::establish_initiator_with_generation_discovery(
+            sender,
+            endpoint_identity,
+            HandshakeCredentials::Nn,
+            now,
+        ),
         SessionEngine::establish_responder(receiver, endpoint, HandshakeCredentials::Nn, now,),
     );
     let mut initiator = initiator.unwrap();
@@ -937,6 +953,7 @@ async fn session_engine_transfers_and_binds_seqpacket_attachments_end_to_end() {
         false,
     );
     metadata.service = ServicePackage::BrokerV2;
+    metadata.reconnect_generation = 7;
     let attachment =
         OwnedUnixAttachment::file(metadata, read_end, DescriptorPolicy::File(identity)).unwrap();
     initiator.send_attachments(vec![attachment]).await.unwrap();
@@ -1065,6 +1082,41 @@ async fn pidfd_identity_requires_live_launch_evidence_and_rejects_unrelated_proc
         )
         .is_ok()
     );
+    let recycled_verifier = Arc::new(ProcPidfdIdentityVerifier::new(
+        SequencePidfdInfo {
+            contents: std::sync::Mutex::new(VecDeque::from([
+                format!("Pid:\t{}\n", expected_pid.as_raw_nonzero()),
+                "Pid:\t-1\n".to_owned(),
+            ])),
+        },
+        Arc::new(move |_| Ok(executable_digest)),
+        Arc::new(move |_| Ok(cgroup_digest)),
+    ));
+    assert!(matches!(
+        PidfdIdentityPolicy::new(
+            &own_pidfd,
+            AttachmentAccess::ReadWrite,
+            evidence,
+            recycled_verifier,
+        ),
+        Err(UnixSessionError::PidfdEvidenceUnavailable)
+    ));
+    let digest_mismatch_verifier = Arc::new(ProcPidfdIdentityVerifier::new(
+        FixedPidfdInfo {
+            contents: format!("Pid:\t{}\n", expected_pid.as_raw_nonzero()),
+        },
+        Arc::new(|_| Ok([0x99; 32])),
+        Arc::new(move |_| Ok(cgroup_digest)),
+    ));
+    assert!(matches!(
+        PidfdIdentityPolicy::new(
+            &own_pidfd,
+            AttachmentAccess::ReadWrite,
+            evidence,
+            digest_mismatch_verifier,
+        ),
+        Err(UnixSessionError::PidfdIdentityMismatch)
+    ));
     assert_eq!(
         ObjectIdentity::from_trusted(
             &own_pidfd,
@@ -1089,6 +1141,20 @@ struct FixedPidfdInfo {
 impl PidfdInfoSource for FixedPidfdInfo {
     fn read_fdinfo(&self, _pidfd: BorrowedFd<'_>) -> Result<String, UnixSessionError> {
         Ok(self.contents.clone())
+    }
+}
+
+struct SequencePidfdInfo {
+    contents: std::sync::Mutex<VecDeque<String>>,
+}
+
+impl PidfdInfoSource for SequencePidfdInfo {
+    fn read_fdinfo(&self, _pidfd: BorrowedFd<'_>) -> Result<String, UnixSessionError> {
+        self.contents
+            .lock()
+            .expect("pidfd sequence lock")
+            .pop_front()
+            .ok_or(UnixSessionError::PidfdEvidenceUnavailable)
     }
 }
 

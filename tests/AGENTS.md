@@ -131,6 +131,12 @@ tests/
 Types 2–5 (unit/integration/contract/policy-lint) are Rust and live under
 `packages/`, not here.
 
+The destructive realm-host cutover may update frozen Rust policy tests only
+through the exact `w7_contract_test_migrations` rows in
+`delivery/shared-contracts.json`. Each selector and companion migration pin is
+owned by the declarative component deleting its legacy source; there is no
+general W7 exception for `packages/d2b-contract-tests/`.
+
 ## Layer-1 orchestration manifest
 
 `tests/layer1-jobs.json` is the declarative source of truth for the Layer-1
@@ -167,6 +173,23 @@ eligibility. Run `cargo xtask delivery wave help` from `packages/` for its
 machine-readable command/option index. Those payloads live outside the
 repository; never add evidence or panel output to this manifest or another
 tracked test artifact.
+
+Snapshot authority may be the historical `delivery/manifest.json` or one
+selected `delivery/manifests/w<N>.json`. The selected tracked path must match
+and fingerprint its declared wave. Delivery rejects a second checked-in
+authority for the same wave and still requires the exact ordered Git Town
+branch, PR, and parent graph.
+
+Wave ownership checks are parent-authoritative: validators invoke
+`make -C <trusted-parent-worktree> wave-policy-check
+CANDIDATE_ROOT=<wave-worktree>`. The checker and policy therefore come from the
+exact clean Git Town parent commit corroborated by the candidate's ordinary
+GitHub PR, not from the tree under review. It also walks and corroborates every
+wave ancestor back to the shared root. Tests for this surface must cover
+candidate checker/policy replacement, fake, partial, or self parent graphs,
+Git replacement/graft/shallow metadata, positive owner classification, prefix
+root symlink/gitlink changes hidden by local submodule-ignore configuration,
+frozen implementation, and cross-wave paths.
 
 ### Unified Rust workspace
 

@@ -19,20 +19,25 @@ workspace = true
 # codec-neutral contract crates (core + provider); MUST NOT depend on
 # prost/codec, a transport impl, or host-only internals (dep-direction gate).
 [dependencies]
+d2b-contracts = { workspace = true, features = ["v2-services"] }
 d2b-realm-core = { workspace = true }
 d2b-realm-provider = { workspace = true }
+d2b-session = { workspace = true }
+async-trait.workspace = true
 # The peer-session boundary reads/writes length-delimited frames over a
 # transport ByteStream (AsyncRead + AsyncWrite). Only the io traits are
 # needed here; no runtime/network features (the dep-direction gate still
 # forbids a codec/transport-impl dependency).
-tokio = { workspace = true, default-features = false, features = ["io-util"] }
+tokio = { workspace = true, default-features = false, features = ["io-util", "rt", "sync", "time"] }
 chacha20poly1305 = "0.10"
 hmac = "0.12"
+protobuf.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2.workspace = true
 subtle = "2"
 tracing = "0.1"
+ttrpc.workspace = true
 
 [dev-dependencies]
 d2b-realm-transport = { workspace = true }

@@ -7,18 +7,20 @@ use std::{
 use d2b_contracts::v2_component_session::{
     AttachmentAccess, AttachmentCreditClass, AttachmentDescriptor, AttachmentKind,
     AttachmentPacket, AttachmentPolicyKind, BoundedVec, CancelAck, CancelRequest, CancelResult,
-    ChannelId, CloseReason, CloseRecord, EndpointPolicy, FRAGMENT_HEADER_LEN, FragmentHeader,
-    HandshakeOffer, KeepaliveRecord, KernelObjectType, LimitProfile, MAX_PACKET_ATTACHMENTS,
-    OperationId, PREFACE_LEN, RecordHeader, RecordKind, Remediation, RequestId, ServicePackage,
-    SessionErrorCode,
+    ChannelId, CloseReason, CloseRecord, EndpointPolicy, EndpointPolicyIdentity,
+    FRAGMENT_HEADER_LEN, FragmentHeader, HandshakeOffer, KeepaliveRecord, KernelObjectType,
+    LimitProfile, MAX_PACKET_ATTACHMENTS, OperationId, PREFACE_LEN, RecordHeader, RecordKind,
+    Remediation, RequestId, ServicePackage, SessionErrorCode,
 };
 
 use crate::{
     Cancellation, FairScheduler, Fragment, Fragmenter, HandshakeCredentials, HandshakeRole,
     KeepaliveAction, NamedStreamMux, NoiseHandshake, OutboundFrame, OwnedAttachment,
     OwnedTransport, QueueClass, Reassembler, RecordProtector, Result, SessionError,
-    SessionLifecycle, StreamEvent, StreamId, StreamPhase, TransportPacket, encode_offer,
-    negotiate_offer,
+    SessionLifecycle, StreamEvent, StreamId, StreamPhase, TransportPacket,
+    accept_generation_discovery_request, decode_generation_discovery_response,
+    encode_generation_discovery_request, encode_generation_discovery_response, encode_offer,
+    is_generation_discovery_request, negotiate_offer,
 };
 
 const ATTACHMENT_BATCH: u8 = 1;
@@ -97,6 +99,52 @@ struct WithheldStreamCredit {
 }
 
 impl<T: OwnedTransport> SessionEngine<T> {
+    pub async fn establish_initiator_with_generation_discovery(
+        transport: T,
+        identity: EndpointPolicyIdentity,
+        credentials: HandshakeCredentials,
+        now: Instant,
+    ) -> Result<Self> {
+        identity
+            .validate_local_generation_discovery()
+            .map_err(SessionError::from)?;
+        let timeout = Duration::from_millis(u64::from(identity.limits.handshake_deadline_ms));
+        tokio::time::timeout(
+            timeout,
+            Self::establish_initiator_with_generation_discovery_inner(
+                transport,
+                identity,
+                credentials,
+                now,
+            ),
+        )
+        .await
+        .map_err(|_| SessionError::new(SessionErrorCode::HandshakeTimeout))?
+    }
+
+    async fn establish_initiator_with_generation_discovery_inner(
+        mut transport: T,
+        identity: EndpointPolicyIdentity,
+        credentials: HandshakeCredentials,
+        now: Instant,
+    ) -> Result<Self> {
+        validate_discovery_transport(&transport, &identity)?;
+        let request = encode_generation_discovery_request(&identity)?;
+        transport
+            .send(TransportPacket::new(request.clone()))
+            .await?;
+        let response = receive_clean(
+            &mut transport,
+            crate::GENERATION_DISCOVERY_RESPONSE_LEN as u32,
+        )
+        .await?;
+        let generation = decode_generation_discovery_response(&response, &request)?;
+        let policy = identity
+            .with_generation(generation)
+            .map_err(SessionError::from)?;
+        Self::establish_initiator_inner(transport, policy, credentials, now).await
+    }
+
     pub async fn establish_initiator(
         transport: T,
         policy: EndpointPolicy,
@@ -159,14 +207,27 @@ impl<T: OwnedTransport> SessionEngine<T> {
         now: Instant,
     ) -> Result<Self> {
         validate_transport(&transport, &policy)?;
-        let first = receive_clean(
+        let mut first = receive_clean(
             &mut transport,
             (PREFACE_LEN + d2b_contracts::v2_component_session::MAX_HANDSHAKE_OFFER_BYTES) as u32,
         )
         .await?;
+        if is_generation_discovery_request(&first) {
+            let request_binding = accept_generation_discovery_request(&first, &policy)?;
+            let response =
+                encode_generation_discovery_response(request_binding, policy.reconnect_generation)?;
+            transport.send(TransportPacket::new(response)).await?;
+            first = receive_clean(
+                &mut transport,
+                (PREFACE_LEN + d2b_contracts::v2_component_session::MAX_HANDSHAKE_OFFER_BYTES)
+                    as u32,
+            )
+            .await?;
+        }
         if first.len() < PREFACE_LEN {
             return Err(SessionError::new(SessionErrorCode::MalformedPreface));
         }
+
         let negotiated = negotiate_offer(&first[..PREFACE_LEN], &first[PREFACE_LEN..], &policy)?;
         let mut noise = NoiseHandshake::new(HandshakeRole::Responder, &negotiated, credentials)?;
         let request =
@@ -954,6 +1015,22 @@ fn validate_transport<T: OwnedTransport>(transport: &T, policy: &EndpointPolicy)
     let attachment_enabled = policy.attachment_policy.kind == AttachmentPolicyKind::PacketAtomic;
     if descriptor.class != policy.transport_binding.transport
         || descriptor.locality != policy.transport_binding.locality
+        || descriptor.supports_attachments != attachment_enabled
+        || (attachment_enabled && !descriptor.packet_atomic)
+    {
+        return Err(SessionError::new(SessionErrorCode::ChannelBindingMismatch));
+    }
+    Ok(())
+}
+
+fn validate_discovery_transport(
+    transport: &impl OwnedTransport,
+    identity: &EndpointPolicyIdentity,
+) -> Result<()> {
+    let descriptor = transport.descriptor();
+    let attachment_enabled = identity.attachment_policy.kind == AttachmentPolicyKind::PacketAtomic;
+    if descriptor.class != identity.transport_binding.transport
+        || descriptor.locality != identity.transport_binding.locality
         || descriptor.supports_attachments != attachment_enabled
         || (attachment_enabled && !descriptor.packet_atomic)
     {

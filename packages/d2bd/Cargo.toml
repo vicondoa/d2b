@@ -22,7 +22,7 @@ parking_lot = { version = "0.12", features = ["arc_lock"] }
 rustix = { workspace = true }
 d2b-core = { workspace = true }
 d2b-host = { workspace = true }
-d2b-contracts = { workspace = true, features = ["unsafe-local", "v2-provider"] }
+d2b-contracts = { workspace = true, features = ["unsafe-local", "v2-guest-configured-launches", "v2-provider"] }
 d2b-provider = { workspace = true, default-features = false }
 d2b-provider-audio-pipewire-vhost-user = { workspace = true, default-features = false }
 d2b-provider-device-host-mediated = { workspace = true, default-features = false }
@@ -41,6 +41,8 @@ d2b-provider-transport-local = { workspace = true, default-features = false }
 d2b-realm-core = { workspace = true }
 d2b-realm-provider = { workspace = true }
 d2b-realm-router = { workspace = true }
+d2b-session = { workspace = true }
+d2b-session-unix = { workspace = true, features = ["host-socket", "native-vsock"] }
 d2b-gateway = { workspace = true }
 d2b-gateway-runtime = { workspace = true }
 # Retained until the v1 ACA and Relay call paths are routed through the
@@ -48,6 +50,7 @@ d2b-gateway-runtime = { workspace = true }
 d2b-provider-aca = { workspace = true }
 d2b-provider-relay = { workspace = true }
 protobuf.workspace = true
+futures.workspace = true
 semver = "1"
 serde.workspace = true
 sha2.workspace = true
@@ -61,6 +64,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 serde_json.workspace = true
 socket2 = "0.5"
 subtle = "2.6"
+zeroize.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net"] }
 ttrpc = { workspace = true, default-features = false, features = ["async", "sync"] }
 uzers = "0.12"

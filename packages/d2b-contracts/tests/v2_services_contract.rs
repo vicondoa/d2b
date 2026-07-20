@@ -16,13 +16,19 @@ use d2b_contracts::v2_provider::{
     ProviderOperationRequest, ProviderRemediation, ProviderTarget,
 };
 use d2b_contracts::v2_services::{
-    SERVICE_INVENTORY, SERVICE_PACKAGES, ServiceContractError, ServiceInventoryDocument,
-    StrictWireMessage, common, decode_strict, encode_strict,
+    BROKER_PIDFD_ATTACHMENT_INDEX, CONTROLLER_PIDFD_ATTACHMENT_INDEX, MAX_REALM_CHILD_FDS,
+    MAX_SERVICE_STRING_BYTES, MAX_TERMINAL_CHUNK_BYTES, RedactedTerminalFrame, SERVICE_INVENTORY,
+    SERVICE_PACKAGES, ServerStreamLease, ServiceContractError, ServiceInventoryDocument,
+    StrictWireMessage, TerminalFrameDirection, TerminalStreamValidator, broker, common, daemon,
+    decode_spawn_response_for_request, decode_strict, encode_strict,
     observability_query_response_from_wire, observability_query_result_to_wire,
-    provider_method_for_capability, provider_operation_input, service_inventory_document,
-    validate_provider_response_for_method,
+    provider_method_for_capability, provider_operation_input, public_daemon_schema_fingerprint,
+    service_inventory_document, service_schema_fingerprint, terminal,
+    validate_provider_response_for_method, validate_spawn_response_for_request,
+    validate_terminal_open_response_for_request,
 };
-use protobuf::{Enum, EnumOrUnknown, MessageField};
+use protobuf::{Enum, EnumOrUnknown, Message, MessageField};
+use sha2::{Digest, Sha256};
 
 const TTRPC_SOURCES: &[(&str, &str, &str)] = &[
     (
@@ -176,6 +182,7 @@ const PROTO_SOURCES: &[&str] = &[
     include_str!("../proto/v2/runtime_systemd_user.proto"),
     include_str!("../proto/v2/security_key.proto"),
     include_str!("../proto/v2/shell.proto"),
+    include_str!("../proto/v2/terminal.proto"),
     include_str!("../proto/v2/tty.proto"),
     include_str!("../proto/v2/user.proto"),
     include_str!("../proto/v2/wayland.proto"),
@@ -328,6 +335,140 @@ fn valid_provider_request() -> common::ProviderRequest {
     }
 }
 
+fn valid_allocate_request() -> broker::AllocateRequest {
+    let request = valid_request();
+    let mut owner = broker::LeaseOwner::new();
+    owner.realm_path = "work".to_owned();
+    owner.controller_generation_id = "controller-generation-1".to_owned();
+    let mut order = broker::ResourceAcquisitionOrder::new();
+    order.phase = 1;
+    order.ordinal = 2;
+    let mut resource = broker::LeaseResourceRequest::new();
+    resource.resource_id = "resource-bridge-1".to_owned();
+    resource.kind = broker::HostResourceKind::HOST_RESOURCE_KIND_BRIDGE.into();
+    resource.share = broker::ResourceShareMode::RESOURCE_SHARE_MODE_EXCLUSIVE.into();
+    resource.acquisition_order = MessageField::some(order);
+    broker::AllocateRequest {
+        metadata: request.metadata,
+        scope: request.scope,
+        operation_id: "operation-allocate-1".to_owned(),
+        owner: MessageField::some(owner),
+        resources: vec![resource],
+        request_digest: vec![0x66; 32],
+        ..Default::default()
+    }
+}
+
+fn valid_allocate_response() -> broker::AllocateResponse {
+    let mut order = broker::ResourceAcquisitionOrder::new();
+    order.phase = 1;
+    order.ordinal = 2;
+    let mut resource = broker::GrantedHostResource::new();
+    resource.resource_id = "resource-bridge-1".to_owned();
+    resource.kind = broker::HostResourceKind::HOST_RESOURCE_KIND_BRIDGE.into();
+    resource.share = broker::ResourceShareMode::RESOURCE_SHARE_MODE_EXCLUSIVE.into();
+    resource.delegation =
+        broker::ResourceDelegationKind::RESOURCE_DELEGATION_KIND_FILE_DESCRIPTOR.into();
+    resource.delegation_id = "delegation-bridge-1".to_owned();
+    resource.acquisition_order = MessageField::some(order);
+    resource.attachment_index = Some(0);
+    broker::AllocateResponse {
+        outcome: common::Outcome::OUTCOME_SUCCEEDED.into(),
+        operation_id: "operation-allocate-1".to_owned(),
+        status: broker::AllocationStatus::ALLOCATION_STATUS_GRANTED.into(),
+        lease_id: "lease-1".to_owned(),
+        resources: vec![resource],
+        ..Default::default()
+    }
+}
+
+fn child_fd(
+    role: broker::RealmChildRole,
+    kind: broker::RealmChildFdKind,
+    attachment_index: u32,
+) -> broker::RealmChildFd {
+    broker::RealmChildFd {
+        role: role.into(),
+        kind: kind.into(),
+        attachment_index,
+        ..Default::default()
+    }
+}
+
+fn valid_spawn_request() -> broker::SpawnRealmChildrenRequest {
+    let request = valid_request();
+    broker::SpawnRealmChildrenRequest {
+        metadata: request.metadata,
+        scope: request.scope,
+        operation_id: "operation-spawn-1".to_owned(),
+        realm_id: "aaaaaaaaaaaaaaaaaaaa".to_owned(),
+        controller_generation_id: "controller-generation-1".to_owned(),
+        controller_process_id: "process-controller-1".to_owned(),
+        broker_process_id: "process-broker-1".to_owned(),
+        launch_record_digest: vec![0x77; 32],
+        fds: vec![
+            child_fd(
+                broker::RealmChildRole::REALM_CHILD_ROLE_CONTROLLER,
+                broker::RealmChildFdKind::REALM_CHILD_FD_KIND_PUBLIC_LISTENER,
+                0,
+            ),
+            child_fd(
+                broker::RealmChildRole::REALM_CHILD_ROLE_BROKER,
+                broker::RealmChildFdKind::REALM_CHILD_FD_KIND_BROKER_LISTENER,
+                1,
+            ),
+            child_fd(
+                broker::RealmChildRole::REALM_CHILD_ROLE_CONTROLLER,
+                broker::RealmChildFdKind::REALM_CHILD_FD_KIND_BOOTSTRAP_SESSION,
+                2,
+            ),
+            child_fd(
+                broker::RealmChildRole::REALM_CHILD_ROLE_BROKER,
+                broker::RealmChildFdKind::REALM_CHILD_FD_KIND_BOOTSTRAP_SESSION,
+                3,
+            ),
+        ],
+        ..Default::default()
+    }
+}
+
+fn valid_spawn_response() -> broker::SpawnRealmChildrenResponse {
+    let child = |role: broker::RealmChildRole,
+                 process_id: &str,
+                 attachment: u32,
+                 pid: u32|
+     -> broker::SpawnedRealmChild {
+        broker::SpawnedRealmChild {
+            role: role.into(),
+            process_id: process_id.to_owned(),
+            pidfd_attachment_index: attachment,
+            executable_digest: vec![0x88; 32],
+            pid,
+            ..Default::default()
+        }
+    };
+    broker::SpawnRealmChildrenResponse {
+        outcome: common::Outcome::OUTCOME_SUCCEEDED.into(),
+        operation_id: "operation-spawn-1".to_owned(),
+        launch_record_digest: vec![0x77; 32],
+        children: vec![
+            child(
+                broker::RealmChildRole::REALM_CHILD_ROLE_CONTROLLER,
+                "process-controller-1",
+                CONTROLLER_PIDFD_ATTACHMENT_INDEX,
+                1001,
+            ),
+            child(
+                broker::RealmChildRole::REALM_CHILD_ROLE_BROKER,
+                "process-broker-1",
+                BROKER_PIDFD_ATTACHMENT_INDEX,
+                1002,
+            ),
+        ],
+        ..Default::default()
+    }
+}
+
 fn canonical_observability_request() -> ProviderOperationRequest {
     let realm_id = RealmId::parse("aaaaaaaaaaaaaaaaaaaa").unwrap();
     let workload_id = WorkloadId::parse("bbbbbbbbbbbbbbbbbbba").unwrap();
@@ -450,6 +591,291 @@ fn strict_wire_rejects_unknown_over_limit_and_missing_idempotency() {
     assert_eq!(
         decode_strict::<common::ServiceRequest>(&oversized, true),
         Err(ServiceContractError::MessageTooLarge)
+    );
+}
+
+#[test]
+fn allocator_and_realm_child_contracts_round_trip_strictly() {
+    let allocate = valid_allocate_request();
+    let encoded = encode_strict(&allocate, true).expect("allocate request");
+    assert_eq!(
+        decode_strict::<broker::AllocateRequest>(&encoded, true).expect("allocate decode"),
+        allocate
+    );
+
+    let allocation = valid_allocate_response();
+    let encoded = encode_strict(&allocation, false).expect("allocate response");
+    assert_eq!(
+        decode_strict::<broker::AllocateResponse>(&encoded, false).expect("response decode"),
+        allocation
+    );
+
+    let spawn = valid_spawn_request();
+    let encoded = encode_strict(&spawn, true).expect("spawn request");
+    assert_eq!(
+        decode_strict::<broker::SpawnRealmChildrenRequest>(&encoded, true).expect("spawn decode"),
+        spawn
+    );
+
+    let spawned = valid_spawn_response();
+    let encoded = encode_strict(&spawned, false).expect("spawn response");
+    assert_eq!(
+        decode_strict::<broker::SpawnRealmChildrenResponse>(&encoded, false)
+            .expect("spawn response decode"),
+        spawned
+    );
+    assert_eq!(
+        decode_spawn_response_for_request(&spawn, &encoded).expect("bound spawn response"),
+        spawned
+    );
+}
+
+#[test]
+fn allocator_and_realm_child_contracts_fail_closed() {
+    let mut duplicate_resource = valid_allocate_request();
+    duplicate_resource
+        .resources
+        .push(duplicate_resource.resources[0].clone());
+    assert_eq!(
+        duplicate_resource.validate_wire(true),
+        Err(ServiceContractError::InvalidId)
+    );
+
+    let mut wrong_delegation = valid_allocate_response();
+    wrong_delegation.resources[0].attachment_index = None;
+    assert_eq!(
+        wrong_delegation.validate_wire(false),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+
+    let mut missing_bootstrap = valid_spawn_request();
+    missing_bootstrap.fds.pop();
+    missing_bootstrap.fds.push(child_fd(
+        broker::RealmChildRole::REALM_CHILD_ROLE_BROKER,
+        broker::RealmChildFdKind::REALM_CHILD_FD_KIND_STATE_ROOT,
+        3,
+    ));
+    assert_eq!(
+        missing_bootstrap.validate_wire(true),
+        Err(ServiceContractError::MissingOperationInput)
+    );
+
+    let mut wrong_listener_owner = valid_spawn_request();
+    wrong_listener_owner.fds[0].role = broker::RealmChildRole::REALM_CHILD_ROLE_BROKER.into();
+    assert_eq!(
+        wrong_listener_owner.validate_wire(true),
+        Err(ServiceContractError::InvalidOperationInput)
+    );
+
+    let mut duplicate_process_id = valid_spawn_request();
+    duplicate_process_id.broker_process_id = duplicate_process_id.controller_process_id.clone();
+    assert_eq!(
+        duplicate_process_id.validate_wire(true),
+        Err(ServiceContractError::InvalidId)
+    );
+
+    let mut duplicate_pidfd = valid_spawn_response();
+    duplicate_pidfd.children[1].pidfd_attachment_index =
+        duplicate_pidfd.children[0].pidfd_attachment_index;
+    assert_eq!(
+        duplicate_pidfd.validate_wire(false),
+        Err(ServiceContractError::DuplicateAttachment)
+    );
+}
+
+#[test]
+fn realm_child_fd_resource_ids_cannot_expand_singleton_authority() {
+    let mut singleton_with_resource = valid_spawn_request();
+    singleton_with_resource.fds[0].resource_id = Some("resource-listener-alias".to_owned());
+    assert_eq!(
+        singleton_with_resource.validate_wire(true),
+        Err(ServiceContractError::InvalidOperationInput)
+    );
+
+    let mut duplicate_singleton = valid_spawn_request();
+    let mut duplicate = duplicate_singleton.fds[0].clone();
+    duplicate.attachment_index = 4;
+    duplicate_singleton.fds.push(duplicate);
+    assert_eq!(
+        duplicate_singleton.validate_wire(true),
+        Err(ServiceContractError::InvalidOperationInput)
+    );
+
+    for (kind, resource_id) in [
+        (
+            broker::RealmChildFdKind::REALM_CHILD_FD_KIND_RESOURCE,
+            "resource-a",
+        ),
+        (
+            broker::RealmChildFdKind::REALM_CHILD_FD_KIND_LEASE,
+            "lease-a",
+        ),
+    ] {
+        let mut missing_resource_id = valid_spawn_request();
+        missing_resource_id.fds.push(child_fd(
+            broker::RealmChildRole::REALM_CHILD_ROLE_CONTROLLER,
+            kind,
+            4,
+        ));
+        assert_eq!(
+            missing_resource_id.validate_wire(true),
+            Err(ServiceContractError::MissingOperationInput)
+        );
+
+        missing_resource_id.fds.last_mut().unwrap().resource_id = Some(resource_id.to_owned());
+        missing_resource_id.validate_wire(true).unwrap();
+    }
+
+    for (kind, prefix) in [
+        (
+            broker::RealmChildFdKind::REALM_CHILD_FD_KIND_RESOURCE,
+            "resource",
+        ),
+        (broker::RealmChildFdKind::REALM_CHILD_FD_KIND_LEASE, "lease"),
+    ] {
+        let mut distinct_resources = valid_spawn_request();
+        for (attachment, suffix) in [(4, "a"), (5, "b")] {
+            let mut resource = child_fd(
+                broker::RealmChildRole::REALM_CHILD_ROLE_CONTROLLER,
+                kind,
+                attachment,
+            );
+            resource.resource_id = Some(format!("{prefix}-{suffix}"));
+            distinct_resources.fds.push(resource);
+        }
+        let raw = distinct_resources
+            .write_to_bytes()
+            .expect("distinct delegated resources");
+        assert_eq!(
+            decode_strict::<broker::SpawnRealmChildrenRequest>(&raw, true)
+                .expect("distinct resource IDs are valid"),
+            distinct_resources
+        );
+
+        let mut duplicate_resource = distinct_resources;
+        duplicate_resource.fds.last_mut().unwrap().resource_id = Some(format!("{prefix}-a"));
+        let raw = duplicate_resource
+            .write_to_bytes()
+            .expect("adversarial duplicate resource");
+        assert_eq!(
+            decode_strict::<broker::SpawnRealmChildrenRequest>(&raw, true),
+            Err(ServiceContractError::InvalidOperationInput)
+        );
+    }
+
+    let mut resource_id_bound = valid_spawn_request();
+    let mut resource = child_fd(
+        broker::RealmChildRole::REALM_CHILD_ROLE_CONTROLLER,
+        broker::RealmChildFdKind::REALM_CHILD_FD_KIND_RESOURCE,
+        4,
+    );
+    resource.resource_id = Some("r".repeat(MAX_SERVICE_STRING_BYTES));
+    resource_id_bound.fds.push(resource);
+    resource_id_bound.validate_wire(true).unwrap();
+    resource_id_bound.fds.last_mut().unwrap().resource_id =
+        Some("r".repeat(MAX_SERVICE_STRING_BYTES + 1));
+    assert_eq!(
+        resource_id_bound.validate_wire(true),
+        Err(ServiceContractError::InvalidId)
+    );
+
+    let mut max_fds = valid_spawn_request();
+    for attachment in max_fds.fds.len()..MAX_REALM_CHILD_FDS {
+        let mut resource = child_fd(
+            broker::RealmChildRole::REALM_CHILD_ROLE_CONTROLLER,
+            broker::RealmChildFdKind::REALM_CHILD_FD_KIND_RESOURCE,
+            attachment as u32,
+        );
+        resource.resource_id = Some(format!("resource-{attachment}"));
+        max_fds.fds.push(resource);
+    }
+    assert_eq!(max_fds.fds.len(), MAX_REALM_CHILD_FDS);
+    max_fds.validate_wire(true).unwrap();
+
+    let mut over_bound = child_fd(
+        broker::RealmChildRole::REALM_CHILD_ROLE_CONTROLLER,
+        broker::RealmChildFdKind::REALM_CHILD_FD_KIND_RESOURCE,
+        MAX_REALM_CHILD_FDS as u32,
+    );
+    over_bound.resource_id = Some("resource-over-bound".to_owned());
+    max_fds.fds.push(over_bound);
+    assert_eq!(
+        max_fds.validate_wire(true),
+        Err(ServiceContractError::BoundExceeded)
+    );
+}
+
+#[test]
+fn realm_child_spawn_response_rejects_pid_and_pidfd_aliases() {
+    let mut zero_pid = valid_spawn_response();
+    zero_pid.children[0].pid = 0;
+    assert_eq!(
+        zero_pid.validate_wire(false),
+        Err(ServiceContractError::InvalidId)
+    );
+
+    let mut same_pid = valid_spawn_response();
+    same_pid.children[1].pid = same_pid.children[0].pid;
+    let raw = same_pid.write_to_bytes().expect("adversarial protobuf");
+    assert_eq!(
+        decode_strict::<broker::SpawnRealmChildrenResponse>(&raw, false),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+
+    let mut same_process_id = valid_spawn_response();
+    same_process_id.children[1].process_id = same_process_id.children[0].process_id.clone();
+    assert_eq!(
+        same_process_id.validate_wire(false),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+
+    let mut swapped_roles = valid_spawn_response();
+    swapped_roles.children[0].role = broker::RealmChildRole::REALM_CHILD_ROLE_BROKER.into();
+    swapped_roles.children[1].role = broker::RealmChildRole::REALM_CHILD_ROLE_CONTROLLER.into();
+    assert_eq!(
+        swapped_roles.validate_wire(false),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+
+    let mut swapped_pidfds = valid_spawn_response();
+    swapped_pidfds.children.swap(0, 1);
+    swapped_pidfds.children[0].pidfd_attachment_index = CONTROLLER_PIDFD_ATTACHMENT_INDEX;
+    swapped_pidfds.children[1].pidfd_attachment_index = BROKER_PIDFD_ATTACHMENT_INDEX;
+    assert_eq!(
+        swapped_pidfds.validate_wire(false),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+}
+
+#[test]
+fn realm_child_spawn_response_is_bound_to_the_exact_request() {
+    let request = valid_spawn_request();
+    let response = valid_spawn_response();
+    validate_spawn_response_for_request(&request, &response).expect("valid pair");
+
+    let mut swapped_process_ids = response.clone();
+    swapped_process_ids.children[0].process_id = request.broker_process_id.clone();
+    swapped_process_ids.children[1].process_id = request.controller_process_id.clone();
+    let raw = swapped_process_ids
+        .write_to_bytes()
+        .expect("adversarial protobuf");
+    assert_eq!(
+        decode_spawn_response_for_request(&request, &raw),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+
+    let mut wrong_operation = response.clone();
+    wrong_operation.operation_id = "operation-spawn-other".to_owned();
+    assert_eq!(
+        validate_spawn_response_for_request(&request, &wrong_operation),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+
+    let mut wrong_launch_record = response;
+    wrong_launch_record.launch_record_digest = vec![0x99; 32];
+    assert_eq!(
+        validate_spawn_response_for_request(&request, &wrong_launch_record),
+        Err(ServiceContractError::InconsistentResponse)
     );
 }
 
@@ -977,6 +1403,99 @@ fn inventory_fixture_and_schema_are_local_and_strict() {
         .unwrap()
         .insert("legacy".to_owned(), serde_json::Value::Bool(true));
     assert!(serde_json::from_value::<ServiceInventoryDocument>(value).is_err());
+
+    let mut nested = serde_json::to_value(&fixture).unwrap();
+    nested["services"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|service| service["service"] == "BrokerService")
+        .unwrap()["methods"][0]
+        .as_object_mut()
+        .unwrap()
+        .insert("legacyAuthority".to_owned(), serde_json::Value::Bool(true));
+    assert!(serde_json::from_value::<ServiceInventoryDocument>(nested).is_err());
+    assert_eq!(
+        schema["definitions"]["ServiceDocument"]["additionalProperties"],
+        false
+    );
+    assert_eq!(
+        schema["definitions"]["MethodDocument"]["additionalProperties"],
+        false
+    );
+}
+
+#[test]
+fn daemon_guest_activation_fingerprints_are_fixed_and_distinct() {
+    fn hex(bytes: [u8; 32]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    let daemon = SERVICE_INVENTORY
+        .iter()
+        .find(|service| service.package == "d2b.daemon.v2")
+        .unwrap();
+    let guest = SERVICE_INVENTORY
+        .iter()
+        .find(|service| service.package == "d2b.guest.v2")
+        .unwrap();
+    let activation = SERVICE_INVENTORY
+        .iter()
+        .find(|service| service.package == "d2b.activation.v2")
+        .unwrap();
+    assert_eq!(
+        hex(public_daemon_schema_fingerprint()),
+        "4b2834c89162e5a2c17ea879052c066fd546cdc440d1473955a99e2d9521a54a"
+    );
+    assert_eq!(
+        hex(service_schema_fingerprint(guest)),
+        "e6d2fd47db903deff84b5b9cb58a0aed17e2f6ef43010182925890878a15dd3d"
+    );
+    assert_eq!(
+        hex(service_schema_fingerprint(activation)),
+        "ca29e72948be3be0e19feead1ae7399d61dad1e67ff04cabf67d7510df025e4b"
+    );
+    assert_eq!(
+        service_schema_fingerprint(daemon),
+        public_daemon_schema_fingerprint()
+    );
+    assert_ne!(
+        service_schema_fingerprint(daemon),
+        service_schema_fingerprint(guest)
+    );
+    assert_eq!(service_inventory_document().schema_version, 8);
+}
+
+#[test]
+fn guest_and_activation_generated_bindings_are_byte_stable() {
+    for (name, bytes, expected) in [
+        (
+            "guest.rs",
+            include_bytes!("../src/generated_v2_services/guest.rs").as_slice(),
+            "88c9d5610f7726bdcfa69ffe50bbb554b9603ffa74990a56ad029a1e54aaa175",
+        ),
+        (
+            "guest_ttrpc.rs",
+            include_bytes!("../src/generated_v2_services/guest_ttrpc.rs").as_slice(),
+            "a395ded5b13c11687695f6cd7111224a940c25d24d3fb76bc6c6c32437a0e3ad",
+        ),
+        (
+            "activation.rs",
+            include_bytes!("../src/generated_v2_services/activation.rs").as_slice(),
+            "c95ef1c1e9cd52a75204fd36c73e695a1f12ef9b08ff4d8fe9cf3896c7164131",
+        ),
+        (
+            "activation_ttrpc.rs",
+            include_bytes!("../src/generated_v2_services/activation_ttrpc.rs").as_slice(),
+            "e4ab08650b8e41619aca5a851b7529a4fb0925608064764e6d9ee17bb0901b02",
+        ),
+    ] {
+        let actual = Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        assert_eq!(actual, expected, "{name}");
+    }
 }
 
 #[test]
@@ -999,13 +1518,19 @@ fn method_ids_are_stable_and_collision_free() {
 
 #[test]
 fn payload_surface_has_no_secret_path_or_execution_authority_fields() {
-    let combined = PROTO_SOURCES.join("\n");
+    let combined = PROTO_SOURCES
+        .iter()
+        .copied()
+        .filter(|source| {
+            !source.contains("package d2b.daemon.v2") && !source.contains("package d2b.terminal.v2")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     for forbidden in [
         "secret_bytes",
         "credential_bytes",
         "raw_path",
         "host_path",
-        "argv",
         "command",
         "environment",
         "principal_id",
@@ -1017,6 +1542,21 @@ fn payload_surface_has_no_secret_path_or_execution_authority_fields() {
             "forbidden protobuf field: {forbidden}"
         );
     }
+    assert!(!combined.contains("repeated bytes argv"));
+    let daemon = include_str!("../proto/v2/daemon.proto");
+    let guest = include_str!("../proto/v2/guest.proto");
+    let terminal = include_str!("../proto/v2/terminal.proto");
+    assert_eq!(terminal.matches("repeated bytes argv").count(), 1);
+    assert!(!terminal.contains("string cwd"));
+    assert!(!terminal.contains("ExecEnv"));
+    assert!(!terminal.contains("stream_id = 6"));
+    assert!(!daemon.contains("message Terminal"));
+    assert!(!guest.contains("message Terminal"));
+    assert!(daemon.contains("d2b.terminal.v2.TerminalOpenRequest"));
+    assert!(guest.contains("d2b.terminal.v2.TerminalOpenRequest"));
+    assert!(!guest.contains("OpenConsole"));
+    assert!(!guest.contains(" path "));
+    assert!(!guest.contains("credentials"));
     assert!(!combined.contains(".v1"));
     for (_, _, generated) in TTRPC_SOURCES {
         assert!(!generated.contains(".v1"));
@@ -1039,4 +1579,606 @@ fn request_debug_wrapper_redacts_values() {
     assert!(!rendered.contains("correlation-1"));
     assert!(!rendered.contains("aaaaaaaaaaaaaaaaaaaa"));
     assert!(!rendered.contains("11, 11"));
+}
+
+fn valid_workload_projection() -> daemon::WorkloadProjection {
+    let identity = daemon::WorkloadIdentityProjection {
+        realm_id: "aaaaaaaaaaaaaaaaaaaa".to_owned(),
+        workload_id: "bbbbbbbbbbbbbbbbbbba".to_owned(),
+        realm_path: "local-root".to_owned(),
+        workload_name: "workload".to_owned(),
+        canonical_target: "workload.local-root.d2b".to_owned(),
+        ..Default::default()
+    };
+    let lifecycle = daemon::WorkloadLifecycleProjection {
+        state: daemon::WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_RUNNING.into(),
+        pending_restart: true,
+        generation: 7,
+        ..Default::default()
+    };
+    let runtime = daemon::RuntimeProjection {
+        kind: daemon::RuntimeKind::RUNTIME_KIND_NIXOS.into(),
+        detail: "running".to_owned(),
+        supported_capabilities: vec![
+            daemon::RuntimeCapability::RUNTIME_CAPABILITY_LIFECYCLE.into(),
+            daemon::RuntimeCapability::RUNTIME_CAPABILITY_EXEC.into(),
+        ],
+        ..Default::default()
+    };
+    let service = daemon::ServiceProjection {
+        kind: daemon::ServiceKind::SERVICE_KIND_DAEMON.into(),
+        role_id: "daemon".to_owned(),
+        state: daemon::ServiceState::SERVICE_STATE_ACTIVE.into(),
+        ..Default::default()
+    };
+    daemon::WorkloadProjection {
+        identity: MessageField::some(identity),
+        name: "workload".to_owned(),
+        environment: "work".to_owned(),
+        graphics: true,
+        tpm: true,
+        usbip: true,
+        static_ip: vec![10, 42, 0, 2],
+        ssh_configured: true,
+        lifecycle: MessageField::some(lifecycle),
+        runtime: MessageField::some(runtime),
+        services: vec![service],
+        api_ready: daemon::ApiReadyState::API_READY_STATE_READY.into(),
+        ..Default::default()
+    }
+}
+
+fn page(returned: u32) -> daemon::PageInfo {
+    daemon::PageInfo {
+        returned_items: returned,
+        total_items_known: true,
+        total_items: returned,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn typed_daemon_list_and_inspect_results_round_trip_nonempty() {
+    let workload = valid_workload_projection();
+    let list = daemon::ListWorkloadsResponse {
+        outcome: common::Outcome::OUTCOME_SUCCEEDED.into(),
+        workloads: vec![workload.clone()],
+        page: MessageField::some(page(1)),
+        ..Default::default()
+    };
+    let encoded = encode_strict(&list, false).expect("typed workload list encodes");
+    assert_eq!(
+        decode_strict::<daemon::ListWorkloadsResponse>(&encoded, false).unwrap(),
+        list
+    );
+
+    let inspect = daemon::InspectResponse {
+        outcome: common::Outcome::OUTCOME_SUCCEEDED.into(),
+        workloads: vec![workload],
+        page: MessageField::some(page(1)),
+        read_model: "realm-controller".to_owned(),
+        ..Default::default()
+    };
+    let encoded = encode_strict(&inspect, false).expect("typed inspect encodes");
+    assert_eq!(
+        decode_strict::<daemon::InspectResponse>(&encoded, false).unwrap(),
+        inspect
+    );
+
+    let realm = daemon::RealmProjection {
+        realm_id: "aaaaaaaaaaaaaaaaaaaa".to_owned(),
+        realm_path: "local-root".to_owned(),
+        realm_label: "local-root".to_owned(),
+        mode: daemon::RealmMode::REALM_MODE_HOST_LOCAL.into(),
+        state: daemon::RealmState::REALM_STATE_READY.into(),
+        cross_realm_policy: daemon::CrossRealmPolicy::CROSS_REALM_POLICY_DEFAULT_DENY.into(),
+        credential_boundary: daemon::CredentialBoundary::CREDENTIAL_BOUNDARY_HOST_LOCAL.into(),
+        generation: 7,
+        ..Default::default()
+    };
+    let realms = daemon::ListRealmsResponse {
+        outcome: common::Outcome::OUTCOME_SUCCEEDED.into(),
+        realms: vec![realm],
+        page: MessageField::some(page(1)),
+        ..Default::default()
+    };
+    let encoded = encode_strict(&realms, false).expect("typed realms encode");
+    assert_eq!(
+        decode_strict::<daemon::ListRealmsResponse>(&encoded, false).unwrap(),
+        realms
+    );
+}
+
+#[test]
+fn typed_daemon_results_enforce_bounds_and_pagination() {
+    let mut workload = valid_workload_projection();
+    workload.runtime.as_mut().unwrap().supported_capabilities = vec![
+            daemon::RuntimeCapability::RUNTIME_CAPABILITY_EXEC.into();
+            d2b_contracts::v2_services::MAX_DAEMON_CAPABILITIES + 1
+        ];
+    let response = daemon::ListWorkloadsResponse {
+        outcome: common::Outcome::OUTCOME_SUCCEEDED.into(),
+        workloads: vec![workload],
+        page: MessageField::some(page(1)),
+        ..Default::default()
+    };
+    assert_eq!(
+        response.validate_wire(false),
+        Err(ServiceContractError::BoundExceeded)
+    );
+
+    let mut inconsistent = daemon::ListWorkloadsResponse {
+        outcome: common::Outcome::OUTCOME_SUCCEEDED.into(),
+        workloads: vec![valid_workload_projection()],
+        page: MessageField::some(page(1)),
+        ..Default::default()
+    };
+    inconsistent.page.as_mut().unwrap().truncated = true;
+    assert_eq!(
+        inconsistent.validate_wire(false),
+        Err(ServiceContractError::BoundExceeded)
+    );
+    inconsistent.page.as_mut().unwrap().next_page_cursor = "cursor-1".to_owned();
+    inconsistent.validate_wire(false).unwrap();
+}
+
+fn valid_terminal_open_request() -> terminal::TerminalOpenRequest {
+    let request = valid_request();
+    terminal::TerminalOpenRequest {
+        metadata: request.metadata,
+        scope: request.scope,
+        resource_id: "workload-1".to_owned(),
+        operation_id: "operation-1".to_owned(),
+        request_digest: vec![0x44; 32],
+        ..Default::default()
+    }
+}
+
+fn arbitrary_exec_selection() -> terminal::TerminalSelection {
+    let mut exec = terminal::ExecSelection {
+        authority: terminal::ExecAuthority::EXEC_AUTHORITY_ADMIN_ARBITRARY.into(),
+        tty: true,
+        initial_size: MessageField::some(terminal::TerminalSize {
+            rows: 24,
+            columns: 80,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    exec.set_arbitrary(terminal::ArbitraryExecSelection {
+        argv: vec![b"printf".to_vec(), b"private-argument".to_vec()],
+        ..Default::default()
+    });
+    let mut selection = terminal::TerminalSelection::new();
+    selection.set_exec(exec);
+    selection
+}
+
+fn terminal_frame(
+    sequence: u64,
+    frame: terminal::terminal_stream_frame::Frame,
+) -> terminal::TerminalStreamFrame {
+    terminal::TerminalStreamFrame {
+        session_generation: 7,
+        request_id: vec![0x11; 16],
+        sequence,
+        operation_id: "operation-1".to_owned(),
+        resource_handle: "exec-1".to_owned(),
+        frame: Some(frame),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn terminal_opener_has_only_server_selected_stream_authority() {
+    let request = valid_terminal_open_request();
+    request.validate_wire(true).unwrap();
+    let mut encoded = request.write_to_bytes().unwrap();
+    encoded.extend_from_slice(&[0x3a, 0x0a]);
+    encoded.extend_from_slice(b"stream-256");
+    assert_eq!(
+        decode_strict::<terminal::TerminalOpenRequest>(&encoded, true),
+        Err(ServiceContractError::UnknownField)
+    );
+
+    let response = terminal::TerminalOpenResponse {
+        outcome: common::Outcome::OUTCOME_ACCEPTED.into(),
+        operation_id: "operation-1".to_owned(),
+        stream_id: "stream-256".to_owned(),
+        session_generation: 1,
+        request_id: vec![0x11; 16],
+        resource_handle: "exec-1".to_owned(),
+        ..Default::default()
+    };
+    validate_terminal_open_response_for_request(&request, &response).unwrap();
+    let mut lease = ServerStreamLease::reserve(256).unwrap();
+    assert_eq!(lease.name(), "stream-256");
+    assert_eq!(lease.open_by_client(&response.stream_id).unwrap(), 256);
+    assert_eq!(
+        lease.open_by_client(&response.stream_id),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+
+    let mut mismatch = response;
+    mismatch.session_generation = 2;
+    assert_eq!(
+        validate_terminal_open_response_for_request(&request, &mismatch),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+    mismatch.session_generation = 1;
+    mismatch.resource_handle.clear();
+    assert_eq!(
+        mismatch.validate_wire(false),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+}
+
+#[test]
+fn every_terminal_frame_variant_is_strict_and_bounded() {
+    use terminal::terminal_stream_frame::Frame;
+    let variants = vec![
+        Frame::Select(arbitrary_exec_selection()),
+        Frame::Started(terminal::TerminalStarted {
+            kind: terminal::TerminalKind::TERMINAL_KIND_EXEC.into(),
+            tty: true,
+            ..Default::default()
+        }),
+        Frame::Stdin(terminal::TerminalStdin {
+            data: b"input".to_vec(),
+            ..Default::default()
+        }),
+        Frame::Stdout(terminal::TerminalOutput {
+            data: b"output".to_vec(),
+            ..Default::default()
+        }),
+        Frame::Stderr(terminal::TerminalOutput {
+            data: b"error".to_vec(),
+            ..Default::default()
+        }),
+        Frame::Resize(terminal::TerminalResize {
+            operation_sequence: 1,
+            size: MessageField::some(terminal::TerminalSize {
+                rows: 25,
+                columns: 81,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        Frame::Signal(terminal::TerminalSignal {
+            operation_sequence: 2,
+            signal: terminal::TerminalSignalKind::TERMINAL_SIGNAL_KIND_INTERRUPT.into(),
+            ..Default::default()
+        }),
+        Frame::CloseStdin(terminal::TerminalCloseStdin::new()),
+        Frame::Detach(terminal::TerminalDetach::new()),
+        Frame::Close(terminal::TerminalClose::new()),
+        Frame::Cancel(terminal::TerminalCancel::new()),
+        Frame::Status(terminal::TerminalStatus {
+            status: terminal::TerminalStatusKind::TERMINAL_STATUS_KIND_RUNNING.into(),
+            ..Default::default()
+        }),
+        Frame::Outcome({
+            let mut outcome = terminal::TerminalOutcome::new();
+            outcome.set_exited(terminal::TerminalExited {
+                exit_code: 0,
+                ..Default::default()
+            });
+            outcome
+        }),
+        Frame::ShellResult(terminal::ShellManagementResult {
+            action: terminal::ShellAction::SHELL_ACTION_LIST.into(),
+            sessions: vec![terminal::ShellSession {
+                shell_handle: "shell-1".to_owned(),
+                state: terminal::ShellSessionState::SHELL_SESSION_STATE_DETACHED.into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+    ];
+    for (sequence, variant) in variants.into_iter().enumerate() {
+        let frame = terminal_frame(sequence as u64, variant);
+        let encoded = encode_strict(&frame, false).expect("terminal frame encodes");
+        assert_eq!(
+            decode_strict::<terminal::TerminalStreamFrame>(&encoded, false).unwrap(),
+            frame
+        );
+    }
+
+    let mut oversized = terminal_frame(
+        0,
+        Frame::Stdin(terminal::TerminalStdin {
+            data: vec![0x55; MAX_TERMINAL_CHUNK_BYTES + 1],
+            ..Default::default()
+        }),
+    );
+    assert_eq!(
+        oversized.validate_wire(false),
+        Err(ServiceContractError::BoundExceeded)
+    );
+    oversized.frame = None;
+    assert_eq!(
+        oversized.validate_wire(false),
+        Err(ServiceContractError::MissingOperationInput)
+    );
+}
+
+#[test]
+fn terminal_quit_signal_is_distinct_strict_and_redacted() {
+    assert_eq!(
+        terminal::TerminalSignalKind::TERMINAL_SIGNAL_KIND_QUIT.value(),
+        5
+    );
+    let signal = terminal::TerminalSignal {
+        operation_sequence: 1,
+        signal: terminal::TerminalSignalKind::TERMINAL_SIGNAL_KIND_QUIT.into(),
+        ..Default::default()
+    };
+    assert_eq!(format!("{signal:?}"), "TerminalSignal(REDACTED)");
+    terminal_frame(0, terminal::terminal_stream_frame::Frame::Signal(signal))
+        .validate_wire(false)
+        .unwrap();
+
+    let unknown = terminal_frame(
+        0,
+        terminal::terminal_stream_frame::Frame::Signal(terminal::TerminalSignal {
+            operation_sequence: 1,
+            signal: EnumOrUnknown::from_i32(999),
+            ..Default::default()
+        }),
+    );
+    assert_eq!(
+        unknown.validate_wire(false),
+        Err(ServiceContractError::InvalidEnum)
+    );
+}
+
+#[test]
+fn terminal_state_machine_binds_direction_generation_and_one_outcome() {
+    use terminal::terminal_stream_frame::Frame;
+    let mut validator = TerminalStreamValidator::new(
+        terminal::TerminalKind::TERMINAL_KIND_EXEC,
+        7,
+        [0x11; 16],
+        "operation-1",
+        "exec-1",
+    )
+    .unwrap();
+    validator.accept_transport_credit(1024).unwrap();
+    validator
+        .accept(
+            TerminalFrameDirection::ClientToServer,
+            &terminal_frame(0, Frame::Select(arbitrary_exec_selection())),
+        )
+        .unwrap();
+    validator
+        .accept(
+            TerminalFrameDirection::ServerToClient,
+            &terminal_frame(
+                0,
+                Frame::Started(terminal::TerminalStarted {
+                    kind: terminal::TerminalKind::TERMINAL_KIND_EXEC.into(),
+                    tty: true,
+                    ..Default::default()
+                }),
+            ),
+        )
+        .unwrap();
+    validator
+        .accept(
+            TerminalFrameDirection::ClientToServer,
+            &terminal_frame(
+                1,
+                Frame::Stdin(terminal::TerminalStdin {
+                    data: b"private-input".to_vec(),
+                    ..Default::default()
+                }),
+            ),
+        )
+        .unwrap();
+    validator
+        .accept(
+            TerminalFrameDirection::ServerToClient,
+            &terminal_frame(
+                1,
+                Frame::Stdout(terminal::TerminalOutput {
+                    data: b"private-output".to_vec(),
+                    ..Default::default()
+                }),
+            ),
+        )
+        .unwrap();
+    validator
+        .accept(
+            TerminalFrameDirection::ClientToServer,
+            &terminal_frame(
+                2,
+                Frame::Signal(terminal::TerminalSignal {
+                    operation_sequence: 1,
+                    signal: terminal::TerminalSignalKind::TERMINAL_SIGNAL_KIND_QUIT.into(),
+                    ..Default::default()
+                }),
+            ),
+        )
+        .unwrap();
+    validator
+        .accept(
+            TerminalFrameDirection::ClientToServer,
+            &terminal_frame(3, Frame::Cancel(terminal::TerminalCancel::new())),
+        )
+        .unwrap();
+    let mut outcome = terminal::TerminalOutcome::new();
+    outcome.set_cancelled(terminal::TerminalCancelled::new());
+    validator
+        .accept(
+            TerminalFrameDirection::ServerToClient,
+            &terminal_frame(2, Frame::Outcome(outcome.clone())),
+        )
+        .unwrap();
+    assert!(validator.is_terminal());
+    validator.accept_transport_close().unwrap();
+    validator.accept_transport_reset().unwrap();
+    assert_eq!(
+        validator.accept(
+            TerminalFrameDirection::ServerToClient,
+            &terminal_frame(3, Frame::Outcome(outcome))
+        ),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+
+    let mut mismatch = TerminalStreamValidator::new(
+        terminal::TerminalKind::TERMINAL_KIND_EXEC,
+        7,
+        [0x11; 16],
+        "operation-1",
+        "exec-1",
+    )
+    .unwrap();
+    let mut frame = terminal_frame(0, Frame::Select(arbitrary_exec_selection()));
+    frame.session_generation = 8;
+    assert_eq!(
+        mismatch.accept(TerminalFrameDirection::ClientToServer, &frame),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+    frame.session_generation = 7;
+    frame.operation_id = "operation-2".to_owned();
+    assert_eq!(
+        mismatch.accept(TerminalFrameDirection::ClientToServer, &frame),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+}
+
+#[test]
+fn detached_exec_and_shell_management_have_closed_stream_semantics() {
+    use terminal::terminal_stream_frame::Frame;
+    let mut detached_exec = terminal::ExecSelection {
+        authority: terminal::ExecAuthority::EXEC_AUTHORITY_ADMIN_ARBITRARY.into(),
+        detached: true,
+        ..Default::default()
+    };
+    detached_exec.set_arbitrary(terminal::ArbitraryExecSelection {
+        argv: vec![b"true".to_vec()],
+        ..Default::default()
+    });
+    let mut detached_selection = terminal::TerminalSelection::new();
+    detached_selection.set_exec(detached_exec);
+    let mut detached = TerminalStreamValidator::new(
+        terminal::TerminalKind::TERMINAL_KIND_EXEC,
+        7,
+        [0x11; 16],
+        "operation-1",
+        "exec-1",
+    )
+    .unwrap();
+    detached
+        .accept(
+            TerminalFrameDirection::ClientToServer,
+            &terminal_frame(0, Frame::Select(detached_selection)),
+        )
+        .unwrap();
+    detached
+        .accept(
+            TerminalFrameDirection::ServerToClient,
+            &terminal_frame(
+                0,
+                Frame::Started(terminal::TerminalStarted {
+                    kind: terminal::TerminalKind::TERMINAL_KIND_EXEC.into(),
+                    ..Default::default()
+                }),
+            ),
+        )
+        .unwrap();
+    assert_eq!(
+        detached.accept(
+            TerminalFrameDirection::ServerToClient,
+            &terminal_frame(
+                1,
+                Frame::Stdout(terminal::TerminalOutput {
+                    data: b"forbidden".to_vec(),
+                    ..Default::default()
+                })
+            )
+        ),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+    let mut detached_outcome = terminal::TerminalOutcome::new();
+    detached_outcome.set_detached(terminal::TerminalDetached::new());
+    detached
+        .accept(
+            TerminalFrameDirection::ServerToClient,
+            &terminal_frame(1, Frame::Outcome(detached_outcome)),
+        )
+        .unwrap();
+    assert!(detached.is_terminal());
+
+    let mut shell_selection = terminal::TerminalSelection::new();
+    shell_selection.set_shell(terminal::ShellSelection {
+        action: terminal::ShellAction::SHELL_ACTION_LIST.into(),
+        ..Default::default()
+    });
+    let mut shell = TerminalStreamValidator::new(
+        terminal::TerminalKind::TERMINAL_KIND_SHELL,
+        7,
+        [0x11; 16],
+        "operation-1",
+        "exec-1",
+    )
+    .unwrap();
+    shell
+        .accept(
+            TerminalFrameDirection::ClientToServer,
+            &terminal_frame(0, Frame::Select(shell_selection)),
+        )
+        .unwrap();
+    shell
+        .accept(
+            TerminalFrameDirection::ServerToClient,
+            &terminal_frame(
+                0,
+                Frame::ShellResult(terminal::ShellManagementResult {
+                    action: terminal::ShellAction::SHELL_ACTION_LIST.into(),
+                    sessions: vec![terminal::ShellSession {
+                        shell_handle: "shell-1".to_owned(),
+                        state: terminal::ShellSessionState::SHELL_SESSION_STATE_DETACHED.into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            ),
+        )
+        .unwrap();
+    let mut closed = terminal::TerminalOutcome::new();
+    closed.set_closed(terminal::TerminalClosed::new());
+    shell
+        .accept(
+            TerminalFrameDirection::ServerToClient,
+            &terminal_frame(1, Frame::Outcome(closed)),
+        )
+        .unwrap();
+    assert!(shell.is_terminal());
+}
+
+#[test]
+fn terminal_debug_and_errors_do_not_expose_argv_or_bytes() {
+    use terminal::terminal_stream_frame::Frame;
+    let frame = terminal_frame(0, Frame::Select(arbitrary_exec_selection()));
+    let rendered = format!("{:?}", RedactedTerminalFrame(&frame));
+    assert!(!rendered.contains("private-argument"));
+    assert!(!rendered.contains("11, 11"));
+    assert!(rendered.contains("select"));
+    let generated_debug = format!("{frame:?}");
+    assert_eq!(generated_debug, "TerminalStreamFrame(REDACTED)");
+    assert!(!format!("{:?}", frame.frame).contains("private-argument"));
+
+    let error = terminal_frame(
+        0,
+        Frame::Stdin(terminal::TerminalStdin {
+            data: vec![0x61; MAX_TERMINAL_CHUNK_BYTES + 1],
+            ..Default::default()
+        }),
+    )
+    .validate_wire(false)
+    .unwrap_err()
+    .to_string();
+    assert_eq!(error, "v2-service-bound-exceeded");
+    assert!(!error.contains("private"));
 }

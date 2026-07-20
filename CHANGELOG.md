@@ -12,6 +12,31 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added one bounded, redacted binary configured-launch catalog shared by the
+  broker and guest, bound to one workload identity and integrity digest.
+- Added one canonical, redacted, zeroizing binary guest-session credential
+  codec for broker encoding and guestd decoding, including optional
+  replay-bound bootstrap PSK material.
+- Added a distinct transport-neutral terminal quit signal so SIGQUIT remains
+  separate from interrupt, terminate, suspend, and hangup.
+- Added transport-neutral terminal contracts and complete typed guest bootstrap,
+  reconnect, exec inspection/cancellation, persistent shell, file transfer,
+  security-key, and shutdown protocols with server-owned streams and bounded,
+  generation-bound frames.
+- Added bounded typed daemon realm/workload/inspect projections, server-allocated
+  terminal named-stream framing, and authenticated local session-generation
+  discovery without JSON payloads, caller-selected stream IDs, or generation
+  wildcards.
+- Added integrity-bound, typed `allocator.json` authority for bounded paired
+  child-realm controller/broker launches, with strict exact lookup, canonical
+  content digests, opaque references, redacted diagnostics, and no ambient
+  spawn fallback.
+- Added the post-W4 shared contract/tooling root: separate W5/W6/W7 delivery
+  authorities, typed allocator and child-realm broker DTOs, frozen service and
+  dependency inventories, parent-commit-trusted ownership checks with explicit
+  positive cross-wave/frozen implementation partitions and replacement-safe Git
+  object traversal, submodule-ignore-resistant gitlink detection, and a
+  crash-safe two-slot OFD heavy-validation gate.
 - Added default-empty, non-publishable first-party provider implementation
   crate reservations, an in-process Azure VM fake SDK boundary, and a
   fail-closed workspace policy inventory for their naming and dependencies.
@@ -53,6 +78,68 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Bound the authenticated direct guest handshake fingerprint to ordered guest
+  and system-activation service descriptors while keeping the public daemon
+  proxy surface unchanged.
+- Authorized d2bd's exact private configured-launch codec feature alongside its
+  existing unsafe-local and provider contract features.
+- Authorized the broker's direct generated-service dependency feature alongside
+  its credential and broker contract features.
+- Bound the public daemon handshake fingerprint to ordered, domain-separated
+  daemon and proxied guest package descriptors while retaining a separate direct
+  guest fingerprint.
+- Added a selector-bound retirement seam for the exact legacy guest-control
+  signing contracts and generated references, without opening their frozen
+  crate prefixes to general changes.
+- Routed the CLI dependency authority through `d2b-daemon-access`, the sole
+  owner of the exact no-default-features `d2b-client/host-socket` edge, instead
+  of permitting duplicate endpoint and channel-binding policy.
+- Made the pure local-root allocator engine generic over narrow, thread-safe
+  ledger, observed-state, and controller-liveness adapters while restricting
+  in-memory fake adapters to explicit test support.
+- Replaced split allocator lease-id, lease, and idempotency writes with one
+  fallible generation-bound transaction, closed detail-free state errors, and
+  fail-closed replay semantics for commit and acknowledgement failures.
+- Reserved exact W7 ownership for the frozen contract assertions and migration
+  pins that must be rewritten or retired atomically with legacy declarative
+  source deletion, without opening the rest of the contract-test crate.
+- Predeclared the CLI-to-client, guestd-to-session, and provider-agent
+  service/session dependency edges with least-privilege contract and Tokio
+  features in the shared workspace lock.
+- Made the shared workspace manifests a compatible dependency union for the
+  root and W5 trees, including the provider-agent binary scaffold, so one
+  authoritative lockfile remains valid across the stack.
+- Made CLI completion generation patch `vm exec logs` structurally instead of
+  depending on unrelated `--env` and `--cwd` flags, preserving reproducibility
+  across the frozen parent and its W5 consumer.
+- Completed the shared Unix/vsock ComponentSession adapters and descriptor
+  validation needed by runtime service implementations.
+- Updated the shared broker disposition reference for generated service methods
+  and typed descriptor attachments while leaving the W5 signing retirement as
+  a single canonical row deletion.
+- Moved the general daemon API v2 rewrite and broker-wire link updates into
+  shared-root, leaving W5 only the canonical signing rows and variants removal.
+- Moved general privilege reference updates into shared-root, leaving W5 only
+  the canonical signing metadata paragraph and matrix-row retirement.
+- Moved immutable validator execution, sockets, caches, and test scratch into
+  bounded process-owned temporary roots with cleanup required before evidence
+  publication.
+- Kept the W4 foundation fingerprint inventory limited to files present in the
+  root tree while W5's own manifest fingerprints its runtime client services.
+- Made guest ttrpc generation preserve the checked-in v1 binding while the root
+  service imports it and emit the explicit retirement marker once W5 switches
+  to generated v2 service bindings.
+- Predeclared exact W5 ownership for fail-closed successor pins and synchronized
+  their shared migration ledgers with the ComponentSession v2 test inventory,
+  separately from the closed `GuestControlSign` retirement.
+- Kept the already-updated privilege parity test frozen in shared-root while
+  limiting the W5 signing-retirement proof to paths that actually differ.
+- Normalized blank runs left by canonical Rust item retirement so the policy
+  proof matches formatter-stable W5 broker and W3 privilege sources.
+- Made provider-registry bindings non-exhaustive for Rust consumers while
+  preserving strict wire variants, and added a registered consumer view whose
+  explicit daemon fallback rejects newly declared bindings until an adapter is
+  implemented.
 - Made dependency-ready wave launch and file-overlap-based component dispatch
   mandatory after shared contract prep, preventing one persistent agent from
   serializing unrelated implementation and review scopes, with shipped-package
@@ -138,6 +225,64 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Rechecked pidfd kernel identity after executable/cgroup evidence collection so
+  a process exit and numeric PID reuse cannot authenticate a different process.
+- Retired CLI-contract daemon wrappers for the removed legacy `d2bd test-client`,
+  keeping host-check coverage in hermetic CLI cases and audit role enforcement
+  in daemon unit tests; performance readiness now uses socket/version artifacts,
+  while top-level list pins typed daemon-down and pending-restart projection
+  remains covered by typed service tests; status keeps only its local
+  check-bridges contract, and static list output goldens no longer gate a
+  daemon-owned projection.
+- Included the privileges parity test in the exact W5 guest-signing retirement
+  and protected-path inventories so it can account for the intentionally later
+  declarative removal, with matching canonical synthetic fixtures and workspace
+  policy assertions.
+- Made the competing state-generation writer regression coordinate lock
+  contention explicitly instead of depending on scheduler time.
+- Made observability export tests use the configured bounded time window rather
+  than a one-second wall-clock race under concurrent Rust gates.
+- Classified the shared ComponentSession, service, provider, allocator, and
+  provider-registry contract pages explicitly as Diataxis references.
+- Documented the provider-binding consumer fallback required when the strict
+  wire schema gains a newly declared variant.
+- Kept the legacy guest credential-path test strict under immutable `/tmp`
+  scratch without treating a sticky world-writable ancestor as production-safe.
+- Tested legacy guest signing through its in-memory HMAC boundary while keeping
+  production bundle and token-path validation unchanged.
+- Made W5 implementation lints verify shared-root ownership before their source
+  files exist, then enforce full source shape in the W5 tree.
+- Kept guest-exec policy checks bound to capability and TTY mappings after
+  those responsibilities move into focused runtime modules.
+- Stabilized guest-signing retirement policy tests with canonical synthetic
+  parent fixtures that remain valid before and after the retirement lands.
+- Preserved the stable broker request wire shape after retiring legacy signing
+  without allowing the resulting variant-size lint to break strict builds.
+- Allowed initial guest bootstrap to establish and return a new guest identity
+  while requiring enrolled reconnects to match the pinned identity and public key.
+- Bound the guest-control signing retirement exception to a parent-authoritative,
+  exact content transformation so same-file unrelated edits, renames, mixed
+  hunks, and generated-schema decoys fail closed.
+- Made encoded guest-session credentials opaque and non-cloneable, and moved
+  decoded bootstrap PSKs directly into stable heap-backed zeroizing ownership
+  before validation.
+- Bounded bootstrap credentials to an explicit issue/expiry window, rejected
+  future or effectively non-expiring PSKs, and moved PSK plus encoded credential
+  storage to zeroizing buffers on success and error paths.
+- Isolated CLI daemon integration tests from deployed host realm, provider, and
+  bundle artifacts by binding every runtime input to test-owned paths.
+- Kept guest-service validators inside their versioned service rail and updated
+  the least-privilege feature matrix for the public provider types it consumes.
+- Preserved typed retained-log denial/cancellation/failure responses while
+  restricting live stream construction to accepted ranges, and made explicit
+  security-key denial reject further ceremony traffic and contradictory
+  outcomes.
+- Tightened guest protocol validation for workload-only terminal scope,
+  credit/digest-continuous file transfer, mandatory security-key approval,
+  correlated exec cancellation/status/wait results, and range-bound retained
+  logs opened through a separate idempotent RPC.
+- Kept the allocator ledger generation helper available only with its
+  test-support consumers so strict production builds remain warning-free.
 - Parsed the evaluated delivery wrapper with the maintained Tree-sitter Bash
   grammar, requiring an exact AST shape and rejecting quote, escape,
   concatenation, substitution, array, inactive-command, and wrong-target decoys.
@@ -174,6 +319,17 @@ deprecations ship one minor release before removal.
   attempts.
 - Aligned the v2 bundle and provider-registry schema references with every
   canonical top-level field.
+- Bound child-realm singleton spawn authority to one attachment per role and
+  kind, keyed multiple resource and lease descriptors by opaque resource ID, and
+  made successful responses prove distinct nonzero controller/broker PIDs plus
+  exact request-to-response process, role, digest, and pidfd attachment
+  correlation.
+- Hardened the shared heavy-validation gate against unsafe or replaced parent
+  directories and renamed gate/slot entries, and retained permits through
+  byte-safe process-group observation, forced cleanup, and leader reaping on
+  supervision errors while keeping the leader unreaped until every bare process
+  group operation is complete, normalizing inherited no-wait `SIGCHLD` state,
+  and bounding persistent process-table failures with a final anchored kill.
 - Persist bounded local-observability exports as atomically renamed private
   artifacts keyed by opaque operation ID. JSON Lines and OTLP protobuf now honor
   the requested format and exact streaming record/byte limits; storage failures

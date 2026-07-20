@@ -27,48 +27,53 @@ impl GuestServiceClient {
         }
     }
 
-    pub async fn bootstrap(&self, ctx: ttrpc::context::Context, req: &super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
-        let mut cres = super::common::ServiceResponse::new();
+    pub async fn bootstrap(&self, ctx: ttrpc::context::Context, req: &super::guest::GuestBootstrapRequest) -> ::ttrpc::Result<super::guest::GuestSessionResponse> {
+        let mut cres = super::guest::GuestSessionResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.guest.v2.GuestService", "Bootstrap", cres);
     }
 
-    pub async fn reconnect(&self, ctx: ttrpc::context::Context, req: &super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
-        let mut cres = super::common::ServiceResponse::new();
+    pub async fn reconnect(&self, ctx: ttrpc::context::Context, req: &super::guest::GuestReconnectRequest) -> ::ttrpc::Result<super::guest::GuestSessionResponse> {
+        let mut cres = super::guest::GuestSessionResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.guest.v2.GuestService", "Reconnect", cres);
     }
 
-    pub async fn exec(&self, ctx: ttrpc::context::Context, req: &super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
-        let mut cres = super::common::ServiceResponse::new();
+    pub async fn exec(&self, ctx: ttrpc::context::Context, req: &super::guest::GuestExecRequest) -> ::ttrpc::Result<super::terminal::TerminalOpenResponse> {
+        let mut cres = super::terminal::TerminalOpenResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.guest.v2.GuestService", "Exec", cres);
     }
 
-    pub async fn cancel_exec(&self, ctx: ttrpc::context::Context, req: &super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
-        let mut cres = super::common::ServiceResponse::new();
+    pub async fn cancel_exec(&self, ctx: ttrpc::context::Context, req: &super::guest::GuestCancelExecRequest) -> ::ttrpc::Result<super::guest::GuestCancelExecResponse> {
+        let mut cres = super::guest::GuestCancelExecResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.guest.v2.GuestService", "CancelExec", cres);
     }
 
-    pub async fn inspect_exec(&self, ctx: ttrpc::context::Context, req: &super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
-        let mut cres = super::common::ServiceResponse::new();
+    pub async fn inspect_exec(&self, ctx: ttrpc::context::Context, req: &super::guest::GuestInspectExecRequest) -> ::ttrpc::Result<super::guest::GuestInspectExecResponse> {
+        let mut cres = super::guest::GuestInspectExecResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.guest.v2.GuestService", "InspectExec", cres);
     }
 
-    pub async fn open_shell(&self, ctx: ttrpc::context::Context, req: &super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
-        let mut cres = super::common::ServiceResponse::new();
+    pub async fn open_exec_retained_log(&self, ctx: ttrpc::context::Context, req: &super::guest::GuestOpenExecRetainedLogRequest) -> ::ttrpc::Result<super::terminal::TerminalOpenResponse> {
+        let mut cres = super::terminal::TerminalOpenResponse::new();
+        ::ttrpc::async_client_request!(self, ctx, req, "d2b.guest.v2.GuestService", "OpenExecRetainedLog", cres);
+    }
+
+    pub async fn open_shell(&self, ctx: ttrpc::context::Context, req: &super::guest::GuestOpenShellRequest) -> ::ttrpc::Result<super::terminal::TerminalOpenResponse> {
+        let mut cres = super::terminal::TerminalOpenResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.guest.v2.GuestService", "OpenShell", cres);
     }
 
-    pub async fn file_transfer(&self, ctx: ttrpc::context::Context, req: &super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
-        let mut cres = super::common::ServiceResponse::new();
+    pub async fn file_transfer(&self, ctx: ttrpc::context::Context, req: &super::guest::GuestFileTransferRequest) -> ::ttrpc::Result<super::terminal::TerminalOpenResponse> {
+        let mut cres = super::terminal::TerminalOpenResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.guest.v2.GuestService", "FileTransfer", cres);
     }
 
-    pub async fn security_key(&self, ctx: ttrpc::context::Context, req: &super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
-        let mut cres = super::common::ServiceResponse::new();
+    pub async fn security_key(&self, ctx: ttrpc::context::Context, req: &super::guest::GuestSecurityKeyRequest) -> ::ttrpc::Result<super::terminal::TerminalOpenResponse> {
+        let mut cres = super::terminal::TerminalOpenResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.guest.v2.GuestService", "SecurityKey", cres);
     }
 
-    pub async fn shutdown(&self, ctx: ttrpc::context::Context, req: &super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
-        let mut cres = super::common::ServiceResponse::new();
+    pub async fn shutdown(&self, ctx: ttrpc::context::Context, req: &super::guest::GuestShutdownRequest) -> ::ttrpc::Result<super::guest::GuestShutdownResponse> {
+        let mut cres = super::guest::GuestShutdownResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.guest.v2.GuestService", "Shutdown", cres);
     }
 
@@ -85,7 +90,7 @@ struct BootstrapMethod {
 #[async_trait]
 impl ::ttrpc::r#async::MethodHandler for BootstrapMethod {
     async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
-        ::ttrpc::async_request_handler!(self, ctx, req, common, ServiceRequest, bootstrap);
+        ::ttrpc::async_request_handler!(self, ctx, req, guest, GuestBootstrapRequest, bootstrap);
     }
 }
 
@@ -96,7 +101,7 @@ struct ReconnectMethod {
 #[async_trait]
 impl ::ttrpc::r#async::MethodHandler for ReconnectMethod {
     async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
-        ::ttrpc::async_request_handler!(self, ctx, req, common, ServiceRequest, reconnect);
+        ::ttrpc::async_request_handler!(self, ctx, req, guest, GuestReconnectRequest, reconnect);
     }
 }
 
@@ -107,7 +112,18 @@ struct ExecMethod {
 #[async_trait]
 impl ::ttrpc::r#async::MethodHandler for ExecMethod {
     async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
-        ::ttrpc::async_request_handler!(self, ctx, req, common, ServiceRequest, exec);
+        let decoded = <super::guest::GuestExecRequest as ::protobuf::Message>::parse_from_bytes(&req.payload)
+    .map_err(|_| ::ttrpc::Error::RpcStatus(::ttrpc::get_status(
+        ::ttrpc::Code::INVALID_ARGUMENT,
+        "v2-service-decode-failed".to_owned(),
+    )))?;
+super::StrictWireMessage::validate_wire(&decoded, true).map_err(|error| {
+    ::ttrpc::Error::RpcStatus(::ttrpc::get_status(
+        ::ttrpc::Code::INVALID_ARGUMENT,
+        error.to_string(),
+    ))
+})?;
+::ttrpc::async_request_handler!(self, ctx, req, guest, GuestExecRequest, exec);
     }
 }
 
@@ -118,7 +134,7 @@ struct CancelExecMethod {
 #[async_trait]
 impl ::ttrpc::r#async::MethodHandler for CancelExecMethod {
     async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
-        ::ttrpc::async_request_handler!(self, ctx, req, common, ServiceRequest, cancel_exec);
+        ::ttrpc::async_request_handler!(self, ctx, req, guest, GuestCancelExecRequest, cancel_exec);
     }
 }
 
@@ -129,7 +145,18 @@ struct InspectExecMethod {
 #[async_trait]
 impl ::ttrpc::r#async::MethodHandler for InspectExecMethod {
     async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
-        ::ttrpc::async_request_handler!(self, ctx, req, common, ServiceRequest, inspect_exec);
+        ::ttrpc::async_request_handler!(self, ctx, req, guest, GuestInspectExecRequest, inspect_exec);
+    }
+}
+
+struct OpenExecRetainedLogMethod {
+    service: Arc<dyn GuestService + Send + Sync>,
+}
+
+#[async_trait]
+impl ::ttrpc::r#async::MethodHandler for OpenExecRetainedLogMethod {
+    async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
+        ::ttrpc::async_request_handler!(self, ctx, req, guest, GuestOpenExecRetainedLogRequest, open_exec_retained_log);
     }
 }
 
@@ -140,7 +167,18 @@ struct OpenShellMethod {
 #[async_trait]
 impl ::ttrpc::r#async::MethodHandler for OpenShellMethod {
     async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
-        ::ttrpc::async_request_handler!(self, ctx, req, common, ServiceRequest, open_shell);
+        let decoded = <super::guest::GuestOpenShellRequest as ::protobuf::Message>::parse_from_bytes(&req.payload)
+    .map_err(|_| ::ttrpc::Error::RpcStatus(::ttrpc::get_status(
+        ::ttrpc::Code::INVALID_ARGUMENT,
+        "v2-service-decode-failed".to_owned(),
+    )))?;
+super::StrictWireMessage::validate_wire(&decoded, true).map_err(|error| {
+    ::ttrpc::Error::RpcStatus(::ttrpc::get_status(
+        ::ttrpc::Code::INVALID_ARGUMENT,
+        error.to_string(),
+    ))
+})?;
+::ttrpc::async_request_handler!(self, ctx, req, guest, GuestOpenShellRequest, open_shell);
     }
 }
 
@@ -151,7 +189,7 @@ struct FileTransferMethod {
 #[async_trait]
 impl ::ttrpc::r#async::MethodHandler for FileTransferMethod {
     async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
-        ::ttrpc::async_request_handler!(self, ctx, req, common, ServiceRequest, file_transfer);
+        ::ttrpc::async_request_handler!(self, ctx, req, guest, GuestFileTransferRequest, file_transfer);
     }
 }
 
@@ -162,7 +200,7 @@ struct SecurityKeyMethod {
 #[async_trait]
 impl ::ttrpc::r#async::MethodHandler for SecurityKeyMethod {
     async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
-        ::ttrpc::async_request_handler!(self, ctx, req, common, ServiceRequest, security_key);
+        ::ttrpc::async_request_handler!(self, ctx, req, guest, GuestSecurityKeyRequest, security_key);
     }
 }
 
@@ -173,7 +211,7 @@ struct ShutdownMethod {
 #[async_trait]
 impl ::ttrpc::r#async::MethodHandler for ShutdownMethod {
     async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
-        ::ttrpc::async_request_handler!(self, ctx, req, common, ServiceRequest, shutdown);
+        ::ttrpc::async_request_handler!(self, ctx, req, guest, GuestShutdownRequest, shutdown);
     }
 }
 
@@ -190,31 +228,34 @@ impl ::ttrpc::r#async::MethodHandler for CancelMethod {
 
 #[async_trait]
 pub trait GuestService: Sync {
-    async fn bootstrap(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
+    async fn bootstrap(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest::GuestBootstrapRequest) -> ::ttrpc::Result<super::guest::GuestSessionResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.guest.v2.GuestService/Bootstrap is not supported".to_string())))
     }
-    async fn reconnect(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
+    async fn reconnect(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest::GuestReconnectRequest) -> ::ttrpc::Result<super::guest::GuestSessionResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.guest.v2.GuestService/Reconnect is not supported".to_string())))
     }
-    async fn exec(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
+    async fn exec(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest::GuestExecRequest) -> ::ttrpc::Result<super::terminal::TerminalOpenResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.guest.v2.GuestService/Exec is not supported".to_string())))
     }
-    async fn cancel_exec(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
+    async fn cancel_exec(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest::GuestCancelExecRequest) -> ::ttrpc::Result<super::guest::GuestCancelExecResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.guest.v2.GuestService/CancelExec is not supported".to_string())))
     }
-    async fn inspect_exec(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
+    async fn inspect_exec(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest::GuestInspectExecRequest) -> ::ttrpc::Result<super::guest::GuestInspectExecResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.guest.v2.GuestService/InspectExec is not supported".to_string())))
     }
-    async fn open_shell(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
+    async fn open_exec_retained_log(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest::GuestOpenExecRetainedLogRequest) -> ::ttrpc::Result<super::terminal::TerminalOpenResponse> {
+        Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.guest.v2.GuestService/OpenExecRetainedLog is not supported".to_string())))
+    }
+    async fn open_shell(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest::GuestOpenShellRequest) -> ::ttrpc::Result<super::terminal::TerminalOpenResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.guest.v2.GuestService/OpenShell is not supported".to_string())))
     }
-    async fn file_transfer(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
+    async fn file_transfer(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest::GuestFileTransferRequest) -> ::ttrpc::Result<super::terminal::TerminalOpenResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.guest.v2.GuestService/FileTransfer is not supported".to_string())))
     }
-    async fn security_key(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
+    async fn security_key(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest::GuestSecurityKeyRequest) -> ::ttrpc::Result<super::terminal::TerminalOpenResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.guest.v2.GuestService/SecurityKey is not supported".to_string())))
     }
-    async fn shutdown(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ServiceRequest) -> ::ttrpc::Result<super::common::ServiceResponse> {
+    async fn shutdown(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest::GuestShutdownRequest) -> ::ttrpc::Result<super::guest::GuestShutdownResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.guest.v2.GuestService/Shutdown is not supported".to_string())))
     }
     async fn cancel(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::CancelRequest) -> ::ttrpc::Result<super::common::CancelResponse> {
@@ -241,6 +282,9 @@ pub fn create_guest_service(service: Arc<dyn GuestService + Send + Sync>) -> Has
 
     methods.insert("InspectExec".to_string(),
                     Box::new(InspectExecMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);
+
+    methods.insert("OpenExecRetainedLog".to_string(),
+                    Box::new(OpenExecRetainedLogMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);
 
     methods.insert("OpenShell".to_string(),
                     Box::new(OpenShellMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);

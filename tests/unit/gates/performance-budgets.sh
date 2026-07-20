@@ -138,8 +138,8 @@ measure_daemon_cold_start_ms() {
   "daemonUser": "root",
   "daemonGroup": "root",
   "publicSocketGroup": "$(id -gn)",
-  "launcherUsers": ["launcher-user"],
-  "adminUsers": ["admin-user"],
+  "launcherUsers": ["$(id -un)"],
+  "adminUsers": [],
   "serverVersion": "0.4.0",
   "acceptedClientVersionRange": ">=0.4.0, <0.5.0"
 }
@@ -150,27 +150,23 @@ EOF
     rm -f "$socket_path" "$state_lock"
     mkdir -p "$locks_dir"
     start_ms=$(d2b_now_ms)
-    (
-      export D2BD_TEST_PEER_UID=60003
-      export D2BD_TEST_PEER_GID=60003
-      export D2BD_TEST_PEER_USERNAME=launcher-user
-      export D2BD_TEST_PEER_GROUPS=wheel
-      "$daemon_bin" serve \
-        --config "$config_json" \
-        --test-listen-on "$socket_path" \
-        --state-lock "$state_lock" \
-        --locks-dir "$locks_dir" \
-        --once \
-        --allow-unprivileged-runtime-dir \
-        --no-drop-privileges
-    ) >"$scratch/daemon/serve.log" 2>&1 &
+    "$daemon_bin" serve \
+      --config "$config_json" \
+      --test-listen-on "$socket_path" \
+      --state-lock "$state_lock" \
+      --locks-dir "$locks_dir" \
+      --once \
+      --allow-unprivileged-runtime-dir \
+      --no-drop-privileges \
+      >"$scratch/daemon/serve.log" 2>&1 &
     daemon_pid=$!
     add_cleanup "kill $daemon_pid >/dev/null 2>&1 || true"
     attempts=0
     while [ "$attempts" -lt 300 ]; do
-      if "$daemon_bin" test-client --socket "$socket_path" --frame-json '{"type":"hello","clientVersion":">=0.4.0, <0.5.0","supportedFeatures":[]}' >/dev/null 2>&1; then
+      if [ -S "$socket_path" ] && [ -f "$scratch/daemon/version" ]; then
         end_ms=$(d2b_now_ms)
-        wait "$daemon_pid"
+        kill "$daemon_pid"
+        wait "$daemon_pid" 2>/dev/null || true
         printf '%s\n' $((end_ms - start_ms))
         return 0
       fi

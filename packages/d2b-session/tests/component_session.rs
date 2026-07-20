@@ -12,11 +12,16 @@ use async_trait::async_trait;
 use d2b_contracts::v2_component_session::{
     AttachmentAccess, AttachmentCreditClass, AttachmentDescriptor, AttachmentKind,
     AttachmentPolicy, AttachmentPurpose, BootstrapPskBinding, BoundedVec, CancelAck, CancelRequest,
-    CancelResult, ChannelId, CloseReason, EndpointPolicy, EndpointPurpose, EndpointRole,
-    HandshakeOffer, IdentityEvidenceRequirement, KernelObjectType, LimitProfile, Locality,
-    MAX_LOGICAL_MESSAGE_BYTES, MAX_REQUEST_LIFETIME_MS, MetricLabels, MetricReason, MetricResult,
-    NoiseProfile, OperationId, ProviderTypeLabel, PurposeClass, RecordKind, Remediation,
-    RequestEnvelope, RequestId, ServicePackage, SessionErrorCode, TransportBinding, TransportClass,
+    CancelResult, ChannelId, CloseReason, EndpointPolicy, EndpointPolicyIdentity, EndpointPurpose,
+    EndpointRole, HandshakeOffer, IdentityEvidenceRequirement, KernelObjectType, LimitProfile,
+    Locality, MAX_LOGICAL_MESSAGE_BYTES, MAX_REQUEST_LIFETIME_MS, MetricLabels, MetricReason,
+    MetricResult, NoiseProfile, OperationId, ProviderTypeLabel, PurposeClass, RecordKind,
+    Remediation, RequestEnvelope, RequestId, ServicePackage, SessionErrorCode, TransportBinding,
+    TransportClass,
+};
+use d2b_contracts::v2_services::{
+    SERVICE_INVENTORY, direct_guest_schema_fingerprint, public_daemon_schema_fingerprint,
+    service_schema_fingerprint,
 };
 use d2b_session::{
     AttachmentPayload, AttachmentValidationError, BootstrapAdmission, BootstrapPsk,
@@ -24,7 +29,9 @@ use d2b_session::{
     HandshakeRole, KeepaliveAction, MetricEvent, MetricsSink, NamedStreamMux, NoiseHandshake,
     OutboundFrame, OwnedAttachment, OwnedTransport, QueueClass, Reassembler, RecordProtector,
     Secret32, SessionEngine, SessionEvent, SessionLifecycle, StreamEvent, StreamId, StreamPhase,
-    TransportDescriptor, TransportError, TransportPacket, negotiate_offer,
+    TransportDescriptor, TransportError, TransportPacket, accept_generation_discovery_request,
+    decode_generation_discovery_response, encode_generation_discovery_request,
+    encode_generation_discovery_response, encode_offer, negotiate_offer,
 };
 use snow::{
     params::DHChoice,
@@ -125,6 +132,15 @@ fn public(private: &[u8; 32]) -> [u8; 32] {
     let mut dh = DefaultResolver.resolve_dh(&DHChoice::Curve25519).unwrap();
     dh.set(private);
     dh.pubkey().try_into().unwrap()
+}
+
+fn schema_fingerprint(hex: &str) -> [u8; 32] {
+    assert_eq!(hex.len(), 64);
+    let mut fingerprint = [0; 32];
+    for (index, byte) in fingerprint.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&hex[index * 2..index * 2 + 2], 16).unwrap();
+    }
+    fingerprint
 }
 
 fn credentials(profile: NoiseProfile) -> (HandshakeCredentials, HandshakeCredentials) {
@@ -256,6 +272,55 @@ fn fixed_negotiation_and_all_noise_profiles_are_strict() {
     assert_eq!(
         initiator.read_next(&second).unwrap_err().code(),
         SessionErrorCode::AuthenticationFailed
+    );
+}
+
+#[test]
+fn public_daemon_handshake_rejects_a_guest_only_schema_peer() {
+    let mut public_offer = offer(NoiseProfile::Nn25519ChaChaPolySha256);
+    public_offer.purpose = EndpointPurpose::DaemonLocal;
+    public_offer.initiator_role = EndpointRole::CommandClient;
+    public_offer.responder_role = EndpointRole::LocalRootController;
+    public_offer.service = ServicePackage::DaemonV2;
+    public_offer.schema_fingerprint = public_daemon_schema_fingerprint();
+    negotiated(&public_offer);
+
+    let guest = SERVICE_INVENTORY
+        .iter()
+        .find(|service| service.package == "d2b.guest.v2")
+        .unwrap();
+    let mut guest_only_peer = policy(&public_offer);
+    guest_only_peer.schema_fingerprint = service_schema_fingerprint(guest);
+    let encoded = public_offer.encode_canonical().unwrap();
+    let preface = d2b_session::contract::ComponentSessionPreface::new(encoded.len())
+        .unwrap()
+        .encode();
+    assert_eq!(
+        negotiate_offer(&preface, &encoded, &guest_only_peer)
+            .unwrap_err()
+            .code(),
+        SessionErrorCode::SchemaMismatch
+    );
+}
+
+#[test]
+fn direct_guest_handshake_rejects_a_guest_service_only_schema_peer() {
+    let mut direct_guest_offer = offer(NoiseProfile::Ikpsk2_25519ChaChaPolySha256);
+    direct_guest_offer.schema_fingerprint = direct_guest_schema_fingerprint();
+    negotiated(&direct_guest_offer);
+
+    let mut guest_service_only_peer = policy(&direct_guest_offer);
+    guest_service_only_peer.schema_fingerprint =
+        schema_fingerprint("9358614db1a1384cc9cd7ec21b916d3ce5e6042f1eb006fde537399c39079694");
+    let encoded = direct_guest_offer.encode_canonical().unwrap();
+    let preface = d2b_session::contract::ComponentSessionPreface::new(encoded.len())
+        .unwrap()
+        .encode();
+    assert_eq!(
+        negotiate_offer(&preface, &encoded, &guest_service_only_peer)
+            .unwrap_err()
+            .code(),
+        SessionErrorCode::SchemaMismatch
     );
 }
 
@@ -871,6 +936,77 @@ async fn engine_pair() -> (
         )
     );
     (initiator.unwrap(), responder.unwrap(), handles)
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn local_generation_discovery_establishes_the_authenticated_generation() {
+    let (initiator_transport, responder_transport, _) = fake_transport_pair();
+    let mut responder_policy = policy(&offer(NoiseProfile::Nn25519ChaChaPolySha256));
+    responder_policy.reconnect_generation = 41;
+    let identity = EndpointPolicyIdentity::from(&responder_policy);
+    let now = Instant::now();
+    let (initiator, responder) = tokio::join!(
+        SessionEngine::establish_initiator_with_generation_discovery(
+            initiator_transport,
+            identity,
+            HandshakeCredentials::Nn,
+            now,
+        ),
+        SessionEngine::establish_responder(
+            responder_transport,
+            responder_policy,
+            HandshakeCredentials::Nn,
+            now,
+        ),
+    );
+    assert_eq!(initiator.unwrap().generation(), 41);
+    assert_eq!(responder.unwrap().generation(), 41);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn local_generation_discovery_rejects_endpoint_identity_mismatch() {
+    let (initiator_transport, responder_transport, _) = fake_transport_pair();
+    let responder_policy = policy(&offer(NoiseProfile::Nn25519ChaChaPolySha256));
+    let mut identity = EndpointPolicyIdentity::from(&responder_policy);
+    identity.schema_fingerprint[0] ^= 1;
+    let now = Instant::now();
+    let (initiator, responder) = tokio::join!(
+        SessionEngine::establish_initiator_with_generation_discovery(
+            initiator_transport,
+            identity,
+            HandshakeCredentials::Nn,
+            now,
+        ),
+        SessionEngine::establish_responder(
+            responder_transport,
+            responder_policy,
+            HandshakeCredentials::Nn,
+            now,
+        ),
+    );
+    assert!(initiator.is_err());
+    assert_eq!(
+        responder.unwrap_err().code(),
+        SessionErrorCode::SchemaMismatch
+    );
+}
+
+#[test]
+fn discovered_generation_is_still_exactly_checked_by_the_authenticated_offer() {
+    let server_policy = policy(&offer(NoiseProfile::Nn25519ChaChaPolySha256));
+    let identity = EndpointPolicyIdentity::from(&server_policy);
+    let request = encode_generation_discovery_request(&identity).unwrap();
+    let binding = accept_generation_discovery_request(&request, &server_policy).unwrap();
+    let response = encode_generation_discovery_response(binding, 99).unwrap();
+    let discovered = decode_generation_discovery_response(&response, &request).unwrap();
+    let client_policy = identity.with_generation(discovered).unwrap();
+    let (preface, offer) = encode_offer(&client_policy).unwrap();
+    assert_eq!(
+        negotiate_offer(&preface, &offer, &server_policy)
+            .unwrap_err()
+            .code(),
+        SessionErrorCode::GenerationMismatch
+    );
 }
 
 async fn receive_ttrpc(engine: &mut SessionEngine<FakeTransport>) -> Vec<u8> {

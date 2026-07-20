@@ -22,6 +22,11 @@ use d2b_contracts::{
         VmExecLogsOutputV1, VmExecStatusOutputV1,
     },
     provider_registry_v2::ProviderRegistryV2,
+    v2_component_session::{
+        AttachmentPacket, BootstrapPskBinding, CancelAck, CancelRequest, CloseRecord,
+        EndpointPolicyIdentity, FragmentHeader, HandshakeAccept, HandshakeOffer, HandshakeReject,
+        KeepaliveRecord, MetricLabels, RecordHeader, RequestEnvelope,
+    },
     v2_services::{ServiceInventoryDocument, service_inventory_document},
     v2_state::StateStorageSyncAuditContract,
 };
@@ -342,6 +347,8 @@ fn main() -> std::process::ExitCode {
     match args.as_slice() {
         [command, rest @ ..] if command == "layer1" => xtask::layer1::run_cli(rest),
         [command, rest @ ..] if command == "delivery" => xtask::delivery::run_cli(rest),
+        [command, rest @ ..] if command == "heavy-gate" => xtask::heavy_gate::run_cli(rest),
+        [command, rest @ ..] if command == "wave-policy" => xtask::wave_policy::run_cli(rest),
         [command, ..]
             if ["stack", "wave", "evidence", "panel", "merge"].contains(&command.as_str()) =>
         {
@@ -373,7 +380,7 @@ fn main() -> std::process::ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: cargo xtask <layer1 ...|delivery ...|gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-ttrpc-api-fit-spike|gen-v2-services|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]>"
+                "usage: cargo xtask <layer1 ...|delivery ...|heavy-gate -- <command> [args...]|wave-policy check --candidate-root <wave-worktree-path>|gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-ttrpc-api-fit-spike|gen-v2-services|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]>"
             );
             std::process::ExitCode::FAILURE
         }
@@ -392,24 +399,25 @@ fn run_inventory(output_path: Option<PathBuf>) -> std::process::ExitCode {
 
 fn gen_guest_ttrpc() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let repo_root = repo_root()?;
-    let proto_dir = repo_root.join("packages/d2b-contracts/proto");
-    let proto = proto_dir.join("guest_control.proto");
     let out_dir = repo_root.join("packages/d2b-guestd/src/generated");
     fs::create_dir_all(&out_dir)?;
-
-    ttrpc_codegen::Codegen::new()
-        .out_dir(&out_dir)
-        .input(&proto)
-        .include(&proto_dir)
-        .customize(ttrpc_codegen::Customize {
-            async_server: true,
-            ..Default::default()
-        })
-        .run()?;
-
     let out_file = out_dir.join("guest_control_ttrpc.rs");
-    sanitize_generated_rust(&out_file)?;
+    let service_source = fs::read_to_string(repo_root.join("packages/d2b-guestd/src/service.rs"))?;
+    if guest_ttrpc_legacy_binding_required(&service_source) {
+        if !out_file.is_file() {
+            return Err("legacy guest service requires its checked-in ttrpc binding".into());
+        }
+        return Ok(vec![out_file]);
+    }
+    fs::write(
+        &out_file,
+        "//! Retired: guest service bindings are provided by\n//! `d2b_contracts::v2_services::guest_ttrpc`.\n",
+    )?;
     Ok(vec![out_file])
+}
+
+fn guest_ttrpc_legacy_binding_required(service_source: &str) -> bool {
+    service_source.contains("generated::guest_control_ttrpc::{GuestControl, create_guest_control}")
 }
 
 fn gen_ttrpc_api_fit_spike() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
@@ -509,6 +517,7 @@ fn gen_v2_services() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         "runtime_systemd_user",
         "security_key",
         "shell",
+        "terminal",
         "tty",
         "user",
         "wayland",
@@ -547,6 +556,33 @@ fn gen_v2_services() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
                 return Err("v2 service codegen emitted an unexpected output".into());
             }
             sanitize_generated_rust(&entry.path())?;
+            if entry.file_name() == "terminal.rs" {
+                redact_generated_message_debug(
+                    &entry.path(),
+                    "d2b.terminal.v2",
+                    &[
+                        ("exec_selection", "Selection"),
+                        ("terminal_selection", "Selection"),
+                        ("terminal_outcome", "Outcome"),
+                        ("terminal_stream_frame", "Frame"),
+                    ],
+                )?;
+            }
+            if entry.file_name() == "guest.rs" {
+                redact_generated_message_debug(
+                    &entry.path(),
+                    "d2b.guest.v2",
+                    &[
+                        ("guest_inspect_exec_query", "Query"),
+                        ("guest_inspect_exec_response", "Result"),
+                        ("guest_file_transfer_frame", "Frame"),
+                        ("guest_security_key_frame", "Frame"),
+                    ],
+                )?;
+            }
+            if entry.file_name() == "guest_ttrpc.rs" {
+                harden_guest_terminal_adapters(&entry.path())?;
+            }
             if entry.file_name() == "runtime_systemd_user_ttrpc.rs" {
                 let source = fs::read_to_string(entry.path())?;
                 let rewritten =
@@ -567,11 +603,11 @@ fn gen_v2_services() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
             outputs.push(entry.path());
         }
         outputs.sort();
-        if outputs.len() != stems.len() * 2 - 1 {
+        if outputs.len() != stems.len() * 2 - 2 {
             return Err(format!(
                 "v2 service codegen emitted {} files, expected {}",
                 outputs.len(),
-                stems.len() * 2 - 1
+                stems.len() * 2 - 2
             )
             .into());
         }
@@ -594,6 +630,7 @@ fn gen_v2_services() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         let reference_dir = repo_root.join("docs/reference");
         let inventory_path = reference_dir.join("v2-services.json");
         let schema_path = reference_dir.join("v2-services-schema.json");
+        let component_session_schema_path = reference_dir.join("component-session-v2-schema.json");
         let inventory = service_inventory_document();
         fs::write(
             &inventory_path,
@@ -604,8 +641,36 @@ fn gen_v2_services() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
             &schema_path,
             format!("{}\n", serde_json::to_string_pretty(&schema)?),
         )?;
+        let component_session_schema = serde_json::json!({
+            "contract": "d2b-component-session-v2",
+            "formatVersion": 1,
+            "schemas": {
+                "attachmentPacket": schemars::schema_for!(AttachmentPacket),
+                "bootstrapPskBinding": schemars::schema_for!(BootstrapPskBinding),
+                "cancelAck": schemars::schema_for!(CancelAck),
+                "cancelRequest": schemars::schema_for!(CancelRequest),
+                "closeRecord": schemars::schema_for!(CloseRecord),
+                "endpointPolicyIdentity": schemars::schema_for!(EndpointPolicyIdentity),
+                "fragmentHeader": schemars::schema_for!(FragmentHeader),
+                "handshakeAccept": schemars::schema_for!(HandshakeAccept),
+                "handshakeOffer": schemars::schema_for!(HandshakeOffer),
+                "handshakeReject": schemars::schema_for!(HandshakeReject),
+                "keepaliveRecord": schemars::schema_for!(KeepaliveRecord),
+                "metricLabels": schemars::schema_for!(MetricLabels),
+                "recordHeader": schemars::schema_for!(RecordHeader),
+                "requestEnvelope": schemars::schema_for!(RequestEnvelope),
+            }
+        });
+        fs::write(
+            &component_session_schema_path,
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&component_session_schema)?
+            ),
+        )?;
         installed.push(inventory_path);
         installed.push(schema_path);
+        installed.push(component_session_schema_path);
         Ok(installed)
     })();
 
@@ -616,6 +681,108 @@ fn gen_v2_services() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         return Err(error.into());
     }
     generation
+}
+
+fn redact_generated_message_debug(
+    path: &Path,
+    package: &str,
+    oneofs: &[(&str, &str)],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut source = fs::read_to_string(path)?;
+    let prefix = format!("// @@protoc_insertion_point(message:{package}.");
+    let mut messages = Vec::new();
+    let mut remaining = source.as_str();
+    while let Some(start) = remaining.find(&prefix) {
+        let after = &remaining[start + prefix.len()..];
+        let end = after
+            .find(')')
+            .ok_or("generated message insertion point is malformed")?;
+        messages.push(after[..end].to_owned());
+        remaining = &after[end + 1..];
+    }
+
+    if messages.is_empty() {
+        return Err(format!("generated package {package} has no messages").into());
+    }
+    messages.sort();
+    messages.dedup();
+    for message in &messages {
+        let marker = format!(
+            "// @@protoc_insertion_point(message:{package}.{message})\n\
+             #[derive(PartialEq,Clone,Default,Debug)]\n\
+             pub struct {message}"
+        );
+        let replacement = format!(
+            "// @@protoc_insertion_point(message:{package}.{message})\n\
+             #[derive(PartialEq,Clone,Default)]\n\
+             pub struct {message}"
+        );
+        if !source.contains(&marker) {
+            return Err(
+                format!("generated {package} message {message} has an unknown shape").into(),
+            );
+        }
+        source = source.replacen(&marker, &replacement, 1);
+        source.push_str(&format!(
+            "\nimpl ::std::fmt::Debug for {message} {{\n\
+             \x20   fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {{\n\
+             \x20       formatter.write_str(\"{message}(REDACTED)\")\n\
+             \x20   }}\n\
+             }}\n"
+        ));
+    }
+    for (module, oneof) in oneofs {
+        let module_marker = format!("pub mod {module} {{");
+        let module_start = source
+            .find(&module_marker)
+            .ok_or_else(|| format!("generated {package} module {module} is absent"))?;
+        let derive = "#[derive(Clone,PartialEq,Debug)]";
+        let relative = source[module_start..].find(derive).ok_or_else(|| {
+            format!("generated {package} oneof {module}::{oneof} has an unknown shape")
+        })?;
+        let start = module_start + relative;
+        source.replace_range(start..start + derive.len(), "#[derive(Clone,PartialEq)]");
+        source.push_str(&format!(
+            "\nimpl ::std::fmt::Debug for {module}::{oneof} {{\n\
+             \x20   fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {{\n\
+             \x20       formatter.write_str(\"{oneof}(REDACTED)\")\n\
+             \x20   }}\n\
+             }}\n"
+        ));
+    }
+    fs::write(path, source)?;
+    Ok(())
+}
+
+fn harden_guest_terminal_adapters(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let mut source = fs::read_to_string(path)?;
+    for (message, method) in [
+        ("GuestExecRequest", "exec"),
+        ("GuestOpenShellRequest", "open_shell"),
+    ] {
+        let dispatch =
+            format!("::ttrpc::async_request_handler!(self, ctx, req, guest, {message}, {method});");
+        let hardened = format!(
+            "let decoded = <super::guest::{message} as ::protobuf::Message>::parse_from_bytes(&req.payload)\n\
+             \x20   .map_err(|_| ::ttrpc::Error::RpcStatus(::ttrpc::get_status(\n\
+             \x20       ::ttrpc::Code::INVALID_ARGUMENT,\n\
+             \x20       \"v2-service-decode-failed\".to_owned(),\n\
+             \x20   )))?;\n\
+             super::StrictWireMessage::validate_wire(&decoded, true).map_err(|error| {{\n\
+             \x20   ::ttrpc::Error::RpcStatus(::ttrpc::get_status(\n\
+             \x20       ::ttrpc::Code::INVALID_ARGUMENT,\n\
+             \x20       error.to_string(),\n\
+             \x20   ))\n\
+             }})?;\n\
+             {dispatch}"
+        );
+        if !source.contains(&dispatch) {
+            return Err(format!("generated guest adapter {method} has an unknown shape").into());
+        }
+        source = source.replacen(&dispatch, &hardened, 1);
+    }
+    fs::write(path, source)?;
+    Ok(())
 }
 
 fn gen_guest_proto() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
@@ -1035,46 +1202,71 @@ fn write_manpage(path: &Path, rendered: Vec<u8>) -> Result<(), Box<dyn std::erro
 }
 
 fn patch_vm_exec_logs_bash_completion(
-    generated: String,
+    mut generated: String,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let generated = replace_once(
-        generated,
-        r#"            opts="-d -i -t -h --detach --interactive --tty --env --cwd --json --human --help <VM> [MANAGEMENT]... [COMMAND]..."
-"#,
-        r#"            opts="-d -i -t -h --detach --interactive --tty --env --cwd --json --human --help <VM> [MANAGEMENT]... [COMMAND]..."
-            if [[ " ${COMP_WORDS[*]} " == *" logs "* ]] ; then
+    const COMMAND_MARKER: &str = "        d2b__subcmd__vm__subcmd__exec)\n";
+    const COMMAND_END: &str = "\n            ;;\n";
+    const OPTS_PREFIX: &str = "            opts=\"";
+    const WILDCARD_ARM: &str = "                *)\n";
+    const LOGS_OPTS: &str = r#"            if [[ " ${COMP_WORDS[*]} " == *" logs "* ]] ; then
                 opts="${opts} --stdout-offset --stderr-offset --max-len"
             fi
-"#,
-        "bash vm exec opts",
-    )?;
-    replace_once(
-        generated,
-        r#"                --cwd)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-"#,
-        r#"                --cwd)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --stdout-offset|--stderr-offset|--max-len)
+"#;
+    const LOGS_VALUE_ARM: &str = r#"                --stdout-offset|--stderr-offset|--max-len)
                     COMPREPLY=()
                     return 0
                     ;;
-"#,
-        "bash vm exec logs flag values",
-    )
+"#;
+
+    let start = generated
+        .find(COMMAND_MARKER)
+        .ok_or("could not patch generated completion: missing bash vm exec command")?;
+    let end = generated[start..]
+        .find(COMMAND_END)
+        .map(|offset| start + offset)
+        .ok_or("could not patch generated completion: unterminated bash vm exec command")?;
+    let mut command = generated[start..end].to_owned();
+
+    let opts_start = command
+        .find(OPTS_PREFIX)
+        .ok_or("could not patch generated completion: missing bash vm exec opts")?;
+    let opts_end = command[opts_start..]
+        .find('\n')
+        .map(|offset| opts_start + offset + 1)
+        .ok_or("could not patch generated completion: unterminated bash vm exec opts")?;
+    command.insert_str(opts_end, LOGS_OPTS);
+
+    if command.matches(WILDCARD_ARM).count() != 1 {
+        return Err(
+            "could not patch generated completion: ambiguous bash vm exec wildcard arm".into(),
+        );
+    }
+    let wildcard = command
+        .find(WILDCARD_ARM)
+        .expect("exactly one wildcard arm checked above");
+    command.insert_str(wildcard, LOGS_VALUE_ARM);
+
+    generated.replace_range(start..end, &command);
+    Ok(generated)
 }
 
 fn patch_vm_exec_logs_fish_completion(
     generated: String,
 ) -> Result<String, Box<dyn std::error::Error>> {
+    const CWD: &str = "complete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec\" -l cwd -d 'Working directory for the guest command' -r\n";
+    const HUMAN: &str = "complete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec\" -l human -d 'Force human output'\n";
+    const LOGS: &str = "complete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs\" -l stdout-offset -d 'Resume stdout from this byte offset. The daemon clamps stale offsets' -r\ncomplete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs\" -l stderr-offset -d 'Resume stderr from this byte offset. The daemon clamps stale offsets' -r\ncomplete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs\" -l max-len -d 'Maximum retained bytes to request per stream' -r\n";
+    let anchor = if generated.contains(CWD) {
+        CWD
+    } else if generated.contains(HUMAN) {
+        HUMAN
+    } else {
+        return Err("could not patch generated completion: missing fish vm exec anchor".into());
+    };
     replace_once(
         generated,
-        "complete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec\" -l cwd -d 'Working directory for the guest command' -r\n",
-        "complete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec\" -l cwd -d 'Working directory for the guest command' -r\ncomplete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs\" -l stdout-offset -d 'Resume stdout from this byte offset. The daemon clamps stale offsets' -r\ncomplete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs\" -l stderr-offset -d 'Resume stderr from this byte offset. The daemon clamps stale offsets' -r\ncomplete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs\" -l max-len -d 'Maximum retained bytes to request per stream' -r\n",
+        anchor,
+        &format!("{anchor}{LOGS}"),
         "fish vm exec logs flags",
     )
 }
@@ -1735,4 +1927,60 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
     (y, m, d)
+}
+
+#[cfg(test)]
+mod completion_patch_tests {
+    use super::{
+        guest_ttrpc_legacy_binding_required, patch_vm_exec_logs_bash_completion,
+        patch_vm_exec_logs_fish_completion,
+    };
+
+    const LOGS_VALUE_ARM: &str = "                --stdout-offset|--stderr-offset|--max-len)\n";
+
+    fn bash_completion(opts: &str, value_arms: &str) -> String {
+        format!(
+            "prefix\n        d2b__subcmd__vm__subcmd__exec)\n            opts=\"{opts}\"\n            if [[ ${{cur}} == -* || ${{COMP_CWORD}} -eq 3 ]] ; then\n                return 0\n            fi\n            case \"${{prev}}\" in\n{value_arms}                *)\n                    COMPREPLY=()\n                    ;;\n            esac\n            return 0\n            ;;\nsuffix\n"
+        )
+    }
+
+    #[test]
+    fn bash_vm_exec_logs_patch_accepts_exec_flags_with_or_without_env_and_cwd() {
+        for (opts, value_arms) in [
+            (
+                "-d --env --cwd --json <VM>",
+                "                --cwd)\n                    return 0\n                    ;;\n",
+            ),
+            ("-d --json <VM>", ""),
+        ] {
+            let patched = patch_vm_exec_logs_bash_completion(bash_completion(opts, value_arms))
+                .expect("patch bash completion");
+            assert!(patched.contains(&format!("opts=\"{opts}\"")));
+            assert!(patched.contains("opts=\"${opts} --stdout-offset --stderr-offset --max-len\""));
+            assert_eq!(patched.matches(LOGS_VALUE_ARM).count(), 1);
+        }
+    }
+
+    #[test]
+    fn fish_vm_exec_logs_patch_accepts_exec_flags_with_or_without_cwd() {
+        let cwd = "complete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec\" -l cwd -d 'Working directory for the guest command' -r\n";
+        let human = "complete -c d2b -n \"__fish_d2b_using_subcommand vm; and __fish_seen_subcommand_from exec\" -l human -d 'Force human output'\n";
+        for generated in [format!("{cwd}{human}"), human.to_owned()] {
+            let patched =
+                patch_vm_exec_logs_fish_completion(generated).expect("patch fish completion");
+            assert_eq!(patched.matches("-l stdout-offset").count(), 1);
+            assert_eq!(patched.matches("-l stderr-offset").count(), 1);
+            assert_eq!(patched.matches("-l max-len").count(), 1);
+        }
+    }
+
+    #[test]
+    fn guest_ttrpc_generation_tracks_the_service_binding_generation() {
+        assert!(guest_ttrpc_legacy_binding_required(
+            "generated::guest_control_ttrpc::{GuestControl, create_guest_control}"
+        ));
+        assert!(!guest_ttrpc_legacy_binding_required(
+            "d2b_contracts::v2_services::guest_ttrpc"
+        ));
+    }
 }

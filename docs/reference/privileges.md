@@ -1,10 +1,10 @@
 # Reference: broker privileged operation matrix
 
-> Diataxis: reference. Stable catalog of every closed-enum operation
-> the privileged broker (`d2b-priv-broker`) is allowed to perform
-> on behalf of the unprivileged `d2bd` daemon. The wire-level
-> source of truth is `d2b_contracts::BrokerRequest`; this page is the
-> human-readable index keyed by operation name.
+> Diataxis: reference. Stable catalog of the bundle-resolved privileged
+> intents that `d2b-priv-broker` may perform for an authenticated realm
+> controller. The wire source of truth is the generated
+> `d2b.broker.v2.BrokerService`; this page indexes the internal operation
+> names selected after request admission and intent resolution.
 
 Every row carries three policy flags:
 
@@ -54,12 +54,13 @@ are denied (`defaultForUnknown: deny`).
 >
 > 2. **Broker private socket** at `/run/d2b/priv.sock` (owned
 >    `root:d2bd` mode `0660` per `nixos-modules/host-broker.nix`).
->    Only the `d2bd` uid can `connect(2)` here. The broker accepts
->    ONLY the `d2bd` peer; it does NOT directly classify launcher /
->    admin users. The daemon forwards the upstream authz-class
->    identifier to the broker with each per-op request; the broker
->    trusts the daemon's upstream classification and uses it as the
->    authz-class input to its per-op deny matrix in the table below.
+>    PID1 or the local-root allocator pre-binds this listener; the broker
+>    has no fallback bind path. The broker verifies the exact Unix peer
+>    credentials before completing a Noise NN ComponentSession handshake.
+>    The authenticated offer is fixed to `privileged-broker`,
+>    `d2b.broker.v2`, host-local Unix seqpacket, directional Unix identity
+>    evidence, and the appropriate controller/broker roles. The broker
+>    does not directly classify launcher or admin users.
 >
 > The authz classes named in the **Allowed groups** column
 > (`d2b-launcher`, `d2b-admin`) are DISTINCT from the Linux
@@ -104,7 +105,26 @@ are denied (`defaultForUnknown: deny`).
 > `PrivilegesJson.publicOperations` and the generated
 > `OperationAuthz.operation` enum, but not in the broker-only catalog below.
 
-## Operation catalog (PROTOCOL_VERSION = 2)
+## Broker service transport
+
+Requests and responses use only the strict generated protobuf types. Unknown
+fields, invalid enums, stale session generations, expired deadlines, duplicate
+request IDs, and missing idempotency keys on mutating methods fail before
+backend dispatch. `Cancel` is generation-bound and signals only the matching
+active request.
+
+File descriptors are authenticated ComponentSession attachment packets, not an
+untyped JSON response side channel. Descriptor indexes must exactly match the
+typed request or response table and bind the service, method, request,
+generation, purpose, object type, and access. Unix transport validation
+requires `FD_CLOEXEC`, rejects unexpected or duplicate kernel objects, and
+retains one close owner through success, refusal, cancellation, and timeout.
+
+`Allocate` and `Spawn` are local-root allocator methods. Child realm
+controllers cannot invoke them; all other methods remain confined to the
+authenticated realm broker and its bundle-resolved authority.
+
+## Operation catalog
 
 The currently implemented broker operation catalog. Every row carries
 `audit: yes` and `defaultForUnknown: deny`.

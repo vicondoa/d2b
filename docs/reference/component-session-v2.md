@@ -1,5 +1,7 @@
 # ComponentSession v2 contract
 
+**Diataxis category:** reference.
+
 ComponentSession is the authenticated record boundary for d2b-owned live IPC.
 This document describes the wire contract. It does not define transport I/O,
 Noise state-machine execution, scheduling, or descriptor ownership.
@@ -25,6 +27,79 @@ Short input, long input, bad magic, unsupported major, unsupported minor,
 empty offer, and over-limit offer are distinct errors. No version range,
 preference list, feature intersection, legacy preface, or fallback exists.
 
+## Guest session credential
+
+`GuestSessionCredentialV1` is the single broker-to-guestd credential codec. It
+is a secret-bearing canonical binary contract and is intentionally excluded
+from JSON Schema and serde. All integers and length fields are big-endian.
+
+The base credential is exactly 156 bytes:
+
+| Offset | Size | Value |
+| ---: | ---: | --- |
+| 0 | 8 | `D2BGSV2\0` magic |
+| 8 | 2 | schema version `1` |
+| 10 | 2 | codec version `1` |
+| 12 | 2 | flags; bit 0 means bootstrap is present, bit 1 means guest identity is unbound |
+| 14 | 2 | reserved, zero |
+| 16 | 4 | total credential byte length |
+| 20 | 8 | nonzero ComponentSession generation |
+| 28 | 32 | parent X25519 static public key |
+| 60 | 32 | channel binding |
+| 92 | 32 | guest identity digest, or zero only for unbound bootstrap |
+| 124 | 32 | guest X25519 static public key, or zero only for unbound bootstrap |
+
+When bootstrap is present, a two-byte block length follows the base credential.
+The canonical current block is 98 bytes:
+
+| Offset | Size | Value |
+| ---: | ---: | --- |
+| 156 | 2 | bootstrap block length, `98` |
+| 158 | 2 | operation-ID length, `16` |
+| 160 | 16 | operation ID |
+| 176 | 32 | replay nonce |
+| 208 | 8 | nonzero issue time in Unix milliseconds |
+| 216 | 8 | expiry time in Unix milliseconds |
+| 224 | 32 | bootstrap PSK |
+
+The decoder applies the shared 64-byte operation-ID ceiling before constructing
+the stricter current `OperationId`. The canonical total is therefore 256 bytes;
+the absolute defensive maximum is 304 bytes. Expiry must be later than issue
+time and the checked lifetime is capped at five minutes. Admission before issue
+time or at/after expiry fails closed without timestamp arithmetic.
+
+An enrolled credential carries an exact nonzero guest identity digest and guest
+X25519 static public key. Initial enrollment instead sets both fields to zero,
+sets the unbound flag, and must carry a valid bootstrap block. Partial absence,
+an unbound credential without bootstrap, or zero identity fields without the
+unbound flag are invalid. Reconnect therefore always uses an enrolled
+credential; bootstrap is the only transition that may begin without a pinned
+guest identity.
+
+Decode rejects truncation at every byte, trailing bytes, unknown schema or
+codec versions, unknown flags, nonzero reserved fields, inconsistent or
+over-limit lengths, generation zero, zero bindings/digests/public keys/nonces/
+issue time/expiry/PSK, invalid or overflowing lifetimes, and malformed operation
+IDs. Unknown flags, partial identity binding, and unbound reconnect-shaped
+credentials are also rejected. No legacy magic or alternate layout is accepted.
+Secret Debug output is fully redacted. PSKs are copied directly from the decoder
+input into stable heap-backed zeroizing storage and only the owning pointer moves
+afterward.
+`GuestBootstrapPsk::generate_with` lets a broker fill that storage directly;
+callers that generate material in any other source or scratch buffer remain
+responsible for wiping those copies. Encoded credentials are returned as opaque,
+non-cloneable `GuestSessionCredentialBytes` with redacted Debug, bounded
+`as_slice`/`write_to` access, and guaranteed backing-buffer wipe on release.
+
+On successful `GuestService.Bootstrap`, `GuestSessionResponse` returns the
+newly established nonsecret guest identity digest, exact guest static public
+key, and SHA-256 public-key digest. The response validator recomputes that
+digest. Successful `Reconnect` returns the same values and must match all three
+credential-pinned values from the request; substitution or an unbound reconnect
+fails closed. Only public identity material crosses this response. The guest
+private key remains guest-generated and sealed; it is never loaded from an
+ambient host file or derived from the bootstrap PSK.
+
 ## Handshake contract
 
 The offer's canonical binary encoding starts with encoding version `1`, then
@@ -49,6 +124,26 @@ both the global 16 KiB ceiling and its own selected
 `limits.handshakeOfferBytes`; a self-declared smaller profile is invalid on
 encode and decode. An endpoint compares every offer field for equality with its
 policy; it never selects a weaker value.
+
+### Local generation discovery
+
+A local command client may know the daemon endpoint identity while not knowing
+the daemon's restart generation. For `unix-stream` and `unix-seqpacket`
+endpoints using directional Unix identity evidence, it may begin with the
+bounded generation-discovery exchange. The query carries the canonical
+140-byte `EndpointPolicyIdentity`: every offer field except generation. The
+responder compares every field with its endpoint policy before returning a
+nonzero generation and a SHA-256 binding to the exact query.
+
+The Unix transport authenticates peer credentials and endpoint provenance
+before this exchange. The client treats the returned generation as negotiated
+only after completing the normal Noise handshake whose exact offer contains
+that generation. A modified reply therefore causes either exact-offer
+generation rejection or transcript failure. Generation discovery is not
+available to enrolled, bootstrap, vsock, provider-stream, or direct-configured
+endpoints. It does not make generation zero valid, does not weaken
+`EndpointPolicy` equality, and is not a separate discovery socket or legacy
+fallback.
 
 ### Service packages
 

@@ -1,0 +1,272 @@
+syntax = "proto3";
+package d2b.terminal.v2;
+
+import "common.proto";
+
+// An opener never carries a stream identifier. The authenticated server
+// reserves a nonzero named-stream channel and returns its canonical `stream-N`
+// name in TerminalOpenResponse.
+message TerminalOpenRequest {
+  reserved 6, 7;
+  reserved "stream_id";
+  d2b.common.v2.RequestMetadata metadata = 1;
+  d2b.common.v2.IdentityScope scope = 2;
+  string resource_id = 3;
+  string operation_id = 4;
+  bytes request_digest = 5;
+}
+
+message TerminalOpenResponse {
+  d2b.common.v2.Outcome outcome = 1;
+  string operation_id = 2;
+  string stream_id = 3;
+  uint64 session_generation = 4;
+  bytes request_id = 5;
+  d2b.common.v2.ErrorEnvelope error = 6;
+  string resource_handle = 7;
+  TerminalRetainedLogRange retained_log = 8;
+}
+
+message TerminalRetainedLogRange {
+  OutputStream output = 1;
+  uint64 requested_offset = 2;
+  uint64 start_offset = 3;
+  uint64 end_offset = 4;
+  uint32 max_bytes = 5;
+  bool eof = 6;
+}
+
+enum TerminalKind {
+  TERMINAL_KIND_UNSPECIFIED = 0;
+  TERMINAL_KIND_EXEC = 1;
+  TERMINAL_KIND_SHELL = 2;
+  TERMINAL_KIND_CONSOLE = 3;
+  TERMINAL_KIND_RETAINED_LOG = 4;
+}
+
+enum OutputStream {
+  OUTPUT_STREAM_UNSPECIFIED = 0;
+  OUTPUT_STREAM_STDOUT = 1;
+  OUTPUT_STREAM_STDERR = 2;
+}
+
+message TerminalSize {
+  uint32 rows = 1;
+  uint32 columns = 2;
+}
+
+enum ExecAuthority {
+  EXEC_AUTHORITY_UNSPECIFIED = 0;
+  EXEC_AUTHORITY_ADMIN_ARBITRARY = 1;
+  EXEC_AUTHORITY_CONFIGURED_LAUNCH = 2;
+}
+
+message ArbitraryExecSelection {
+  repeated bytes argv = 1;
+}
+
+message ConfiguredLaunchSelection {
+  string configured_item_id = 1;
+}
+
+message ExecSelection {
+  ExecAuthority authority = 1;
+  oneof selection {
+    ArbitraryExecSelection arbitrary = 2;
+    ConfiguredLaunchSelection configured_launch = 3;
+  }
+  bool tty = 4;
+  bool detached = 5;
+  TerminalSize initial_size = 6;
+}
+
+enum ShellAction {
+  SHELL_ACTION_UNSPECIFIED = 0;
+  SHELL_ACTION_ATTACH_DEFAULT = 1;
+  SHELL_ACTION_ATTACH_CONFIGURED = 2;
+  SHELL_ACTION_LIST = 3;
+  SHELL_ACTION_DETACH = 4;
+  SHELL_ACTION_KILL = 5;
+}
+
+message ShellSelection {
+  ShellAction action = 1;
+  string shell_handle = 2;
+  string configured_shell_id = 3;
+  bool force = 4;
+  TerminalSize initial_size = 5;
+}
+
+message ConsoleSelection {
+  TerminalSize initial_size = 1;
+}
+
+message RetainedLogSelection {
+  string exec_handle = 1;
+  OutputStream output = 2;
+  uint64 offset = 3;
+  uint32 max_bytes = 4;
+}
+
+message TerminalSelection {
+  oneof selection {
+    ExecSelection exec = 1;
+    ShellSelection shell = 2;
+    ConsoleSelection console = 3;
+    RetainedLogSelection retained_log = 4;
+  }
+}
+
+enum ConsoleProviderKind {
+  CONSOLE_PROVIDER_KIND_UNSPECIFIED = 0;
+  CONSOLE_PROVIDER_KIND_LOCAL_HYPERVISOR = 1;
+  CONSOLE_PROVIDER_KIND_QEMU_MEDIA = 2;
+  CONSOLE_PROVIDER_KIND_ACA_SANDBOX = 3;
+}
+
+message TerminalStarted {
+  TerminalKind kind = 1;
+  bool tty = 2;
+  uint64 stdout_offset = 3;
+  uint64 stderr_offset = 4;
+  ConsoleProviderKind console_provider = 5;
+}
+
+message TerminalStdin {
+  uint64 offset = 1;
+  bytes data = 2;
+  bool eof = 3;
+}
+
+message TerminalOutput {
+  uint64 offset = 1;
+  bytes data = 2;
+  bool eof = 3;
+  uint64 dropped_bytes = 4;
+  bool truncated = 5;
+}
+
+message TerminalResize {
+  uint64 operation_sequence = 1;
+  TerminalSize size = 2;
+}
+
+enum TerminalSignalKind {
+  TERMINAL_SIGNAL_KIND_UNSPECIFIED = 0;
+  TERMINAL_SIGNAL_KIND_INTERRUPT = 1;
+  TERMINAL_SIGNAL_KIND_TERMINATE = 2;
+  TERMINAL_SIGNAL_KIND_SUSPEND = 3;
+  TERMINAL_SIGNAL_KIND_HANGUP = 4;
+  TERMINAL_SIGNAL_KIND_QUIT = 5;
+}
+
+message TerminalSignal {
+  uint64 operation_sequence = 1;
+  TerminalSignalKind signal = 2;
+}
+
+message TerminalCloseStdin {}
+message TerminalDetach {}
+message TerminalClose {}
+message TerminalCancel {}
+
+enum TerminalStatusKind {
+  TERMINAL_STATUS_KIND_UNSPECIFIED = 0;
+  TERMINAL_STATUS_KIND_RUNNING = 1;
+  TERMINAL_STATUS_KIND_STDIN_ACCEPTED = 2;
+  TERMINAL_STATUS_KIND_STDIN_BACKPRESSURED = 3;
+  TERMINAL_STATUS_KIND_STDIN_CLOSED = 4;
+  TERMINAL_STATUS_KIND_CONTROL_APPLIED = 5;
+}
+
+message TerminalStatus {
+  TerminalStatusKind status = 1;
+  uint64 next_stdin_offset = 2;
+}
+
+enum ShellSessionState {
+  SHELL_SESSION_STATE_UNSPECIFIED = 0;
+  SHELL_SESSION_STATE_ATTACHED = 1;
+  SHELL_SESSION_STATE_DETACHED = 2;
+  SHELL_SESSION_STATE_KILLED = 3;
+  SHELL_SESSION_STATE_UNAVAILABLE = 4;
+}
+
+message ShellSession {
+  string shell_handle = 1;
+  ShellSessionState state = 2;
+  bool is_default = 3;
+}
+
+message ShellManagementResult {
+  ShellAction action = 1;
+  repeated ShellSession sessions = 2;
+  string affected_shell_handle = 3;
+  bool applied = 4;
+  bool truncated = 5;
+}
+
+enum TerminalErrorKind {
+  TERMINAL_ERROR_KIND_UNSPECIFIED = 0;
+  TERMINAL_ERROR_KIND_INVALID_SELECTION = 1;
+  TERMINAL_ERROR_KIND_UNAUTHORIZED = 2;
+  TERMINAL_ERROR_KIND_NOT_FOUND = 3;
+  TERMINAL_ERROR_KIND_CONFLICT = 4;
+  TERMINAL_ERROR_KIND_UNAVAILABLE = 5;
+  TERMINAL_ERROR_KIND_RESOURCE_EXHAUSTED = 6;
+  TERMINAL_ERROR_KIND_GENERATION_MISMATCH = 7;
+  TERMINAL_ERROR_KIND_PROTOCOL = 8;
+  TERMINAL_ERROR_KIND_INTERNAL = 9;
+}
+
+message TerminalExited {
+  int32 exit_code = 1;
+}
+
+message TerminalSignaled {
+  uint32 signal = 1;
+}
+
+message TerminalCancelled {}
+message TerminalDetached {}
+message TerminalClosed {}
+
+message TerminalFailed {
+  TerminalErrorKind error = 1;
+  d2b.common.v2.RetryClass retry = 2;
+}
+
+message TerminalOutcome {
+  oneof outcome {
+    TerminalExited exited = 1;
+    TerminalSignaled signaled = 2;
+    TerminalCancelled cancelled = 3;
+    TerminalDetached detached = 4;
+    TerminalClosed closed = 5;
+    TerminalFailed failed = 6;
+  }
+}
+
+message TerminalStreamFrame {
+  uint64 session_generation = 1;
+  bytes request_id = 2;
+  uint64 sequence = 3;
+  string operation_id = 4;
+  string resource_handle = 5;
+  oneof frame {
+    TerminalSelection select = 10;
+    TerminalStarted started = 11;
+    TerminalStdin stdin = 12;
+    TerminalOutput stdout = 13;
+    TerminalOutput stderr = 14;
+    TerminalResize resize = 15;
+    TerminalSignal signal = 16;
+    TerminalCloseStdin close_stdin = 17;
+    TerminalDetach detach = 18;
+    TerminalClose close = 19;
+    TerminalCancel cancel = 20;
+    TerminalStatus status = 21;
+    TerminalOutcome outcome = 22;
+    ShellManagementResult shell_result = 23;
+  }
+}
