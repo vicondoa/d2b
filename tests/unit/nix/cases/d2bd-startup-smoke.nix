@@ -83,6 +83,8 @@ in
       daemonWriteAcl = builtins.elem "a+ /run/d2b - - - - u:d2bd:rwx" tmpfiles;
       userTraverseAcl = builtins.elem "a+ /run/d2b - - - - u:alice:--x" tmpfiles;
       writeCapableMask = builtins.elem "a+ /run/d2b - - - - m::rwx" tmpfiles;
+      noDefaultAclMask =
+        !(builtins.elem "a+ /run/d2b - - - - default:m::rwx" tmpfiles);
       finalRunD2bRules = lib.take 2 (lib.reverseList
         (builtins.filter (rule: lib.hasPrefix "a+ /run/d2b - - - - " rule) tmpfiles));
     };
@@ -93,6 +95,7 @@ in
       daemonWriteAcl = true;
       userTraverseAcl = true;
       writeCapableMask = true;
+      noDefaultAclMask = true;
       finalRunD2bRules = [
         "a+ /run/d2b - - - - m::rwx"
         "a+ /run/d2b - - - - u:alice:--x"

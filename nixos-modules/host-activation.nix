@@ -275,7 +275,7 @@ in
     perQemuMediaPostureTmpfiles
     # Reassert last: later named-user ACL grants on /run/d2b can otherwise
     # recompute the ACL mask down to r-x and clip d2bd's rwx access.
-    (runtimeAclMask "/run/d2b")
+    (tmpfilesAcl "/run/d2b" "m::rwx")
   ];
 
   system.activationScripts.d2bGroupMigration =

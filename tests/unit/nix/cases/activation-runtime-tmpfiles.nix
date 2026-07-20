@@ -153,6 +153,7 @@ in
       builtins.elem "a+ /run/d2b - - - - g::r-x" runD2bRules
       && builtins.elem "a+ /run/d2b - - - - u:d2bd:rwx" runD2bRules
       && builtins.elem "a+ /run/d2b - - - - u:alice:--x" runD2bRules
+      && !(builtins.elem "a+ /run/d2b - - - - default:m::rwx" runD2bRules)
       && (!x86 || builtins.elem "a+ /run/d2b - - - - u:d2b-corp-vm-snd:--x" runD2bRules)
       && builtins.elemAt runD2bRules ((builtins.length runD2bRules) - 2)
         == "a+ /run/d2b - - - - u:alice:--x"
