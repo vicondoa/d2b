@@ -23,10 +23,12 @@ let
               implementationId = "host-mediated";
             };
             workloads.corp = {
-              provider = "runtime";
-              launcher.capabilities =
-                lib.optional (kinds.fido or false) "security-key"
-                ++ lib.optional (kinds.usbip or false) "usbip";
+              providerRefs = {
+                runtime = "runtime";
+                device = "devices";
+              };
+              securityKey.enable = kinds.fido or false;
+              usbip.enable = kinds.usbip or false;
             };
           };
         })
@@ -62,17 +64,21 @@ in
 
   "usb-security-key/modes-share-exclusive-global-lease" = {
     expr = {
-      fido = fidoRow.allocatorLease;
-      usbip = usbipRow.allocatorLease;
+      fido = {
+        inherit (fidoRow) allocatorLeaseId allocatorShare;
+      };
+      usbip = {
+        inherit (usbipRow) allocatorLeaseId allocatorShare;
+      };
     };
     expected = {
       fido = {
-        resourceId = "device-security-key-global";
-        share = "exclusive";
+        allocatorLeaseId = "lease-device-security-key-global";
+        allocatorShare = "exclusive";
       };
       usbip = {
-        resourceId = "device-security-key-global";
-        share = "exclusive";
+        allocatorLeaseId = "lease-device-security-key-global";
+        allocatorShare = "exclusive";
       };
     };
   };
@@ -86,11 +92,14 @@ in
 
   "usb-security-key/selectors-are-canonical-not-physical" = {
     expr = lib.all
-      (selector:
-        lib.hasPrefix "selector-" selector
-        && !(lib.hasInfix "/" selector)
-        && !(lib.hasInfix ":" selector))
-      [ fidoRow.selectorId usbipRow.selectorId ];
+      (row:
+        !(row ? selectorId)
+        && !(row ? endpointPath)
+        && (row.endpointId == null
+          || (lib.hasPrefix "device-endpoint-" row.endpointId
+            && !(lib.hasInfix "/" row.endpointId)
+            && !(lib.hasInfix ":" row.endpointId))))
+      [ fidoRow usbipRow ];
     expected = true;
   };
 }

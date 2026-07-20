@@ -23,8 +23,11 @@ let
               implementationId = "host-mediated";
             };
             workloads.app = {
-              provider = "runtime";
-              launcher.capabilities = lib.optional enable "usbip";
+              providerRefs = {
+                runtime = "runtime";
+                device = "devices";
+              };
+              usbip.enable = enable;
             };
           };
         })
@@ -64,7 +67,7 @@ in
       sourceUsesProviderId = request.source.refName == row.providerId;
     };
     expected = {
-      resourceId = "device-security-key-global";
+      resourceId = "lease-device-security-key-global";
       kind = "host-file-partition";
       share = "exclusive";
       phase = 50;
@@ -75,9 +78,9 @@ in
 
   "usbip-gating/no-bus-id-path" = {
     expr =
-      row.endpointPath == null
-      && !(lib.hasInfix "/" row.selectorId)
-      && !(lib.hasInfix ":" row.selectorId);
+      row.endpointId == null
+      && !(row ? endpointPath)
+      && !(row ? selectorId);
     expected = true;
   };
 }

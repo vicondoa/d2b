@@ -286,7 +286,7 @@ in
       fido = resourceKinds "fido";
     };
     expected = {
-      desktop = [ "gpu" "render-node" "tpm" "usbip" "video" ];
+      desktop = [ "gpu" "tpm" "usbip" "video" ];
       entra = [ "tpm" ];
       fido = [ "fido" ];
     };
@@ -449,7 +449,7 @@ in
         "vsock-relay"
         "wayland-proxy"
       ];
-      graphicsDevices = [ "gpu" "render-node" "tpm" "usbip" "video" ];
+      graphicsDevices = [ "tpm" "gpu" "video" "usbip" ];
       entraRoles = [
         "cloud-hypervisor"
         "guest-control-health"
