@@ -330,8 +330,10 @@ deprecations ship one minor release before removal.
   daemon/user/desktop service clients while retaining the provider toolkit's W4
   source at its validated distribution-boundary-hardening head, refreshed exact
   Git and Cargo-target inventories and fingerprints, kept live provider-agent
-  bootstrap W8-owned and fail-closed, and recorded running desktop-consumer
-  follow-ups against the new client facade.
+  bootstrap W8-owned and fail-closed, completed wlterm authenticated discovery
+  plus shell list/detach/kill on the new client facade while keeping interactive
+  stream routing fail-closed, and recorded the remaining desktop-consumer
+  follow-ups.
 - Made dependency-ready wave launch and file-overlap-based component dispatch
   mandatory after shared contract prep, preventing one persistent agent from
   serializing unrelated implementation and review scopes, with shipped-package

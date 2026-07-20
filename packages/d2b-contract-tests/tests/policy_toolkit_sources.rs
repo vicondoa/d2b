@@ -22,6 +22,7 @@ const LEGACY_CLIENT_DISTRIBUTION_FINGERPRINT: &str =
 const LEGACY_PROVIDER_DISTRIBUTION_FINGERPRINT: &str =
     "89f76b9ab63515ecccf46c642676ac5d3c6b4e53bfc642d1dacb69818e3e8588";
 const PROVIDER_DISTRIBUTION_REVISION: &str = "202d1d64d2578a9198a26b300ded0332cce879d6";
+const WLTERM_REVISION: &str = "0347f3aea0f84fb2f970f793fd8b9a6ea1e3e931";
 const CURRENT_SOURCE_SUPPLEMENTS: [&str; 2] = [
     "docs/reference/toolkit-source-contract.md",
     "docs/reference/v2-foundation-crates.md",
@@ -1279,6 +1280,25 @@ fn sibling_coordination_graph_has_disjoint_repository_ownership() {
             );
             assert_eq!(bootstrap["status"], "fail-closed");
         }
+        if id == "wlterm" {
+            assert_eq!(revision, WLTERM_REVISION, "wlterm audited revision");
+            let interactive = component["blockedFeatures"]
+                .as_array()
+                .expect("wlterm blockedFeatures array")
+                .iter()
+                .find(|feature| {
+                    feature["feature"]
+                        == "interactive shell create, open, attach, and terminal stream routing"
+                })
+                .expect("wlterm interactive stream boundary");
+            assert_eq!(interactive["status"], "fail-closed");
+            assert!(
+                interactive["owner"]
+                    .as_str()
+                    .is_some_and(|owner| !owner.is_empty()),
+                "wlterm interactive stream routing must retain an external owner"
+            );
+        }
         if ["wlcontrol", "wlterm", "weezterm"].contains(&id) {
             let pin = object(
                 &component["consumesDistribution"],
@@ -1291,6 +1311,10 @@ fn sibling_coordination_graph_has_disjoint_repository_ownership() {
             );
             let pin_revision = pin["revision"].as_str().expect("consumer revision");
             if pin_revision == client_distribution_revision {
+                assert!(
+                    component.get("followup").is_none_or(Value::is_null),
+                    "{id} completed distribution migration retains stale follow-up state"
+                );
                 assert_eq!(
                     pin["sourceRevision"], CLIENT_SOURCE_REVISION,
                     "{id} canonical source revision"
