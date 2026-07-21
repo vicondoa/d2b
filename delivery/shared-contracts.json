@@ -277,7 +277,8 @@
         "packages/Cargo.lock",
         "packages/Cargo.toml",
         "packages/xtask/tests/delivery_cli.rs",
-        "packages/xtask/tests/delivery_w8.rs"
+        "packages/xtask/tests/delivery_w8.rs",
+        "packages/xtask/tests/policy_workspace.rs"
       ],
       "inherits_prefixes_from": [
         "w5",
