@@ -73,7 +73,10 @@ fn rendered_relay_profiles_are_realm_scoped_and_declarative() {
 
     for dag in &resolver.processes.vms {
         for node in &dag.nodes {
-            if node.role != ProcessRole::VsockRelay {
+            if !matches!(
+                node.role,
+                ProcessRole::VsockRelay | ProcessRole::OtelHostBridge
+            ) {
                 continue;
             }
 
@@ -97,7 +100,11 @@ fn rendered_relay_profiles_are_realm_scoped_and_declarative() {
             );
             assert_eq!(
                 profile.seccomp_policy_ref.as_deref(),
-                Some("w1-vsock-relay"),
+                Some(match node.role {
+                    ProcessRole::OtelHostBridge => "w1-otel-host-bridge",
+                    ProcessRole::VsockRelay => "w1-vsock-relay",
+                    _ => unreachable!("filtered relay role"),
+                }),
                 "realm relay {} seccomp policy drift",
                 node.id.0
             );
@@ -115,6 +122,14 @@ fn rendered_relay_profiles_are_realm_scoped_and_declarative() {
             let realm_id =
                 realm_id_from_subtree(&profile.cgroup_placement.subtree, &dag.vm, &node.id.0);
             let role_runtime = format!("/run/d2b/r/{realm_id}/w/{}/roles/{}", dag.vm, node.id.0);
+            let workload_state = format!("/var/lib/d2b/r/{realm_id}/w/{}", dag.vm);
+            let expected_writable_paths = match node.role {
+                ProcessRole::OtelHostBridge => {
+                    vec![role_runtime.as_str(), workload_state.as_str()]
+                }
+                ProcessRole::VsockRelay => vec![role_runtime.as_str()],
+                _ => unreachable!("filtered relay role"),
+            };
             assert_eq!(
                 profile
                     .mount_policy
@@ -122,7 +137,7 @@ fn rendered_relay_profiles_are_realm_scoped_and_declarative() {
                     .iter()
                     .map(|row| row.path.as_str())
                     .collect::<Vec<_>>(),
-                vec![role_runtime.as_str()],
+                expected_writable_paths,
                 "realm relay {} must write only its canonical role runtime",
                 node.id.0
             );
@@ -134,11 +149,19 @@ fn rendered_relay_profiles_are_realm_scoped_and_declarative() {
                 "realm relay {} namespace posture drift",
                 node.id.0
             );
-            assert!(
-                node.binary_path.is_none() && node.argv.is_empty() && node.unit.is_none(),
-                "realm relay {} must remain a declarative controller-owned role row",
-                node.id.0
-            );
+            match node.role {
+                ProcessRole::OtelHostBridge => assert!(
+                    node.binary_path.is_some() && !node.argv.is_empty() && node.unit.is_none(),
+                    "OTel host bridge {} must be a controller-owned process node",
+                    node.id.0
+                ),
+                ProcessRole::VsockRelay => assert!(
+                    node.binary_path.is_none() && node.argv.is_empty() && node.unit.is_none(),
+                    "realm relay {} must remain a declarative controller-owned role row",
+                    node.id.0
+                ),
+                _ => unreachable!("filtered relay role"),
+            }
         }
     }
 
@@ -155,15 +178,11 @@ fn rendered_relay_profiles_are_realm_scoped_and_declarative() {
 // ---------------------------------------------------------------------------
 // ProcessRole::OtelHostBridge runner/matrix coverage.
 //
-// Unlike VsockRelay, the host-bridge sidecar is never rendered as a
-// processes.json DAG node — it is a broker-internal role folded out of the
-// retired `d2b-otel-host-bridge.service` singleton (see
-// `d2b_host::runner_argv_regenerator`'s `otel_host_bridge_input` doc comment),
-// so there is no per-VM fixture node to assert against. Instead this proves
-// the closed-set contract end to end: the real argv generator emits the
-// pre-opened-fd-only socat shape the broker expects, and the broker's own
-// SpawnRunner dispatch/seccomp source classifies and gates that role exactly
-// like the sibling VsockRelay role it was folded from.
+// The host-bridge sidecar is rendered as the observability workload's
+// controller-owned process node. This complementary test proves the closed-set
+// Rust contract end to end: the real argv generator emits the pre-opened-fd-only
+// socat shape the broker expects, and the broker's SpawnRunner dispatch/seccomp
+// source classifies and gates that role exactly.
 // ---------------------------------------------------------------------------
 #[test]
 fn runner_process_roles_have_builder_and_matrix_contract_coverage_otel_host_bridge() {
