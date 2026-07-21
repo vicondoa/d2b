@@ -44,17 +44,28 @@ let
   };
 
   cfg = (mkEval [ host ]).config;
-  workload = builtins.head cfg.d2b._index.workloads.enabledList;
+  workload = lib.findFirst
+    (row: row.workloadName == "corp")
+    (throw "normalized corp workload missing")
+    cfg.d2b._index.workloads.enabledList;
   workloadRows = import (flakeRoot + "/nixos-modules/workload-process-rows.nix") {
     config = cfg;
     inherit lib pkgs;
   };
-  workloadRow = builtins.head workloadRows;
-  roleRows = import (flakeRoot + "/nixos-modules/role-process-rows.nix") {
-    config = cfg;
-    inherit lib pkgs;
-  };
-  processDag = builtins.head cfg.d2b._bundle.processesJson.data.vms;
+  workloadRow = lib.findFirst
+    (row: row.workloadId == workload.workloadId)
+    (throw "rendered corp workload row missing")
+    workloadRows;
+  roleRows = builtins.filter
+    (row: row.workloadId == workload.workloadId)
+    (import (flakeRoot + "/nixos-modules/role-process-rows.nix") {
+      config = cfg;
+      inherit lib pkgs;
+    });
+  processDag = lib.findFirst
+    (row: row.vm == workload.workloadId)
+    (throw "rendered corp process DAG missing")
+    cfg.d2b._bundle.processesJson.data.vms;
   computed = cfg.d2b._computedWorkloads.${workload.workloadId}.config;
   storeShare = builtins.head
     (builtins.filter (share: share.tag == "ro-store") workloadRow.shares);

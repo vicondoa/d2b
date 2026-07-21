@@ -128,7 +128,10 @@ let
     (mkHost { providerExtra = { implementationId = "bhyve"; }; })
   ];
   unsupportedCfg = unsupportedRuntime.config;
-  unsupportedWorkload = builtins.head unsupportedCfg.d2b._index.workloads.enabledList;
+  unsupportedWorkload = lib.findFirst
+    (row: row.workloadName == "player")
+    (throw "normalized unsupported player workload missing")
+    unsupportedCfg.d2b._index.workloads.enabledList;
   unsupportedRoles = map
     (row: row.roleKind)
     unsupportedCfg.d2b._index.roles.byWorkloadId.${unsupportedWorkload.workloadId};
