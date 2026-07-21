@@ -26,13 +26,18 @@ warning.
 The user manager owns the fixed `d2b-runtime-systemd-user.socket`. The runtime
 adapter accepts only the frozen `runtime-systemd-user` ComponentSession purpose
 and `d2b.runtime.systemd-user.v2` service package. The authenticated Unix peer
-uid, service-process uid, and current uid must be the same non-root uid. No
-request field can select an execution identity, and no host process impersonates
-a user or guesses a user D-Bus address.
+uid must be either the service's non-root uid or an exact controller uid from
+the immutable per-user allowlist. The latter contains only controllers for
+host-local realms that both declare a `systemd-user` workload and allow that
+user; matching inode ACLs grant only those controller uids access to the
+otherwise `0700`/`0600` endpoint. The service-process uid and current uid remain
+the same non-root user in every case. No request field can select an execution
+identity, and no host process impersonates a user or guesses a user D-Bus
+address.
 
-The direct helper entrypoint remains fail-closed until parent composition
-supplies the authenticated session and generated service adapters. Starting it
-without that composition exits with configuration status; it does not open a
+The helper entrypoint remains fail-closed without its socket-activated
+ComponentSession listener and generated service adapters. Starting it without
+that activation exits with configuration status; it does not open a
 different endpoint.
 
 Each operation is bound to the negotiated session generation, authenticated
