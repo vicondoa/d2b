@@ -561,8 +561,7 @@ fn tempo_security_observability_and_retired_backends() {
 // ---------------------------------------------------------------------------
 #[test]
 fn observability_has_no_second_registration_path() {
-    let fragment_rel =
-        "nixos-modules/provider-registry-v2-extensions/observability.nix";
+    let fragment_rel = "nixos-modules/provider-registry-v2-extensions/observability.nix";
     assert!(
         !repo_path_exists(fragment_rel),
         "observability provider registration must not gain a second path via {fragment_rel}"

@@ -1513,24 +1513,32 @@ mod tests {
         let peer = socket.acceptor_peer_credentials().unwrap();
         assert_eq!(peer.uid().as_raw(), geteuid().as_raw());
         assert_eq!(
-            peer_is_authorized(peer.uid().as_raw(), geteuid().as_raw(), &ControllerAllowlist::empty()),
+            peer_is_authorized(
+                peer.uid().as_raw(),
+                geteuid().as_raw(),
+                &ControllerAllowlist::empty()
+            ),
             geteuid().as_raw() != 0
         );
     }
 
     #[test]
     fn peer_admission_accepts_the_exact_allowlisted_controller() {
-        let allowlist =
-            ControllerAllowlist::resolve(controller_allowlist_document(&[("alice", &[1234])]), "alice")
-                .unwrap();
+        let allowlist = ControllerAllowlist::resolve(
+            controller_allowlist_document(&[("alice", &[1234])]),
+            "alice",
+        )
+        .unwrap();
         assert!(peer_is_authorized(1234, 1000, &allowlist));
     }
 
     #[test]
     fn peer_admission_denies_an_unrelated_controller() {
-        let allowlist =
-            ControllerAllowlist::resolve(controller_allowlist_document(&[("alice", &[1234])]), "alice")
-                .unwrap();
+        let allowlist = ControllerAllowlist::resolve(
+            controller_allowlist_document(&[("alice", &[1234])]),
+            "alice",
+        )
+        .unwrap();
         // 1300 is a real, distinct controller uid but was never granted to
         // this requester.
         assert!(!peer_is_authorized(1300, 1000, &allowlist));
@@ -1539,9 +1547,11 @@ mod tests {
     #[test]
     fn peer_admission_denies_an_unrelated_users_controller() {
         // The document authorizes 1234 only for bob, not for alice.
-        let allowlist =
-            ControllerAllowlist::resolve(controller_allowlist_document(&[("bob", &[1234])]), "alice")
-                .unwrap();
+        let allowlist = ControllerAllowlist::resolve(
+            controller_allowlist_document(&[("bob", &[1234])]),
+            "alice",
+        )
+        .unwrap();
         assert!(!peer_is_authorized(1234, 1000, &allowlist));
     }
 
@@ -1581,9 +1591,11 @@ mod tests {
         // requests as -- that identity is fixed once, in `run`, from the
         // process's own real/effective uid, before any peer is ever
         // accepted.
-        let allowlist =
-            ControllerAllowlist::resolve(controller_allowlist_document(&[("alice", &[1234])]), "alice")
-                .unwrap();
+        let allowlist = ControllerAllowlist::resolve(
+            controller_allowlist_document(&[("alice", &[1234])]),
+            "alice",
+        )
+        .unwrap();
         assert!(peer_is_authorized(1234, 1000, &allowlist));
         // Swapping which side is "own" vs "peer" must not also authorize --
         // authorization is not symmetric execution-identity selection.
@@ -1595,9 +1607,7 @@ mod tests {
         // small boxed buffer keeps call sites terse without unsafe code.
         let entries: Vec<serde_json::Value> = entries
             .iter()
-            .map(|(user, uids)| {
-                serde_json::json!({ "user": user, "controllerUids": uids })
-            })
+            .map(|(user, uids)| serde_json::json!({ "user": user, "controllerUids": uids }))
             .collect();
         let document = serde_json::to_vec(&serde_json::json!({
             "schemaVersion": 1,
