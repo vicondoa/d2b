@@ -370,6 +370,21 @@
       "path": "packages/d2b-guestd/Cargo.toml"
     },
     {
+      "name": "cargo-package-d2b-runtime-systemd-user",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-runtime-systemd-user/Cargo.toml"
+    },
+    {
+      "name": "cargo-package-d2b-shell-supervisor",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-shell-supervisor/Cargo.toml"
+    },
+    {
+      "name": "cargo-package-d2b-systemd-user-agent",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-systemd-user-agent/Cargo.toml"
+    },
+    {
       "name": "cargo-workspace",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/Cargo.toml"
@@ -1872,9 +1887,24 @@
       "path": "packages/d2b-realm-transport/src/local_tcp.rs"
     },
     {
+      "name": "w8-runtime-systemd-user-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-runtime-systemd-user/src/lib.rs"
+    },
+    {
       "name": "w8-shell-backend",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2bd/src/shell_backend.rs"
+    },
+    {
+      "name": "w8-shell-supervisor-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-shell-supervisor/src/lib.rs"
+    },
+    {
+      "name": "w8-systemd-user-agent-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-systemd-user-agent/src/lib.rs"
     },
     {
       "name": "w8-unsafe-local-terminal",
