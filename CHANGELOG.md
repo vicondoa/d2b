@@ -51,6 +51,8 @@ deprecations ship one minor release before removal.
   weezterm ownership exclusive-file-set was missing paths its own sibling
   commit had already modified (closed this round, with an open backlog item
   to add an automated ownership-diff check).
+- Anchored W8 component dispatch to the landed `5ba02876` trusted policy root
+  before manifest creation and parallel implementation launch.
 - Added the W8 shared prep phase A: extended the shared-contract policy and
   its Rust ownership checker to recognize `w8` as the integrated W5/W6/W7
   successor wave (canonical branch `adr0045-w8-integration`, exact `w7`
