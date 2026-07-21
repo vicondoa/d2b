@@ -124,7 +124,16 @@ fn validate_abs_path(path: &str) -> Result<(), SpecError> {
     Ok(())
 }
 
-fn validate_workload_unit_name(unit: &str) -> Result<(), SpecError> {
+/// Validates the shape of a slot-derived workload unit name.
+///
+/// This does not derive the name (that stays owned by `d2b-guestd`'s
+/// `workload_unit_name(slot)`, which is the single writer of this string);
+/// it only bounds-checks the shape any writer must produce:
+/// `d2b-exec-<slot>-w.service`, ASCII alphanumeric/`-`/`.` only, no path
+/// separators, within `MAX_ARG_LEN`. It is `pub` so other in-crate or
+/// future same-repo callers can reuse the identical shape contract instead
+/// of hand-rolling a second, possibly-diverging check.
+pub fn validate_workload_unit_name(unit: &str) -> Result<(), SpecError> {
     if unit.is_empty()
         || unit.len() > MAX_ARG_LEN
         || contains_nul(unit)
@@ -377,5 +386,48 @@ mod tests {
         assert!(!rendered.contains("/run/current-system"));
         assert!(!rendered.contains("alice"));
         assert!(!rendered.contains("d2b-exec"));
+    }
+
+    #[test]
+    fn validate_workload_unit_name_accepts_guestd_canonical_shape() {
+        // These strings mirror d2b-guestd's `workload_unit_name(slot)`
+        // exactly (`d2b-exec-{slot:02}-w.service`); this crate does not
+        // depend on d2b-guestd, so the shape is pinned here as a literal
+        // fixture rather than a shared import.
+        for unit in [
+            "d2b-exec-00-w.service",
+            "d2b-exec-07-w.service",
+            "d2b-exec-99-w.service",
+        ] {
+            assert_eq!(validate_workload_unit_name(unit), Ok(()));
+        }
+    }
+
+    #[test]
+    fn validate_workload_unit_name_rejects_malformed_shapes() {
+        let bad = [
+            "",
+            "d2b-exec-07.service",          // missing "-w" suffix
+            "exec-07-w.service",            // missing "d2b-" prefix
+            "d2b-exec-07-w.service/../etc", // path separator
+            "d2b-exec-07-w.service\0",      // embedded NUL
+            "d2b-exec-07-w.service; rm",    // disallowed characters (space/;)
+        ];
+        for unit in bad {
+            assert_eq!(
+                validate_workload_unit_name(unit),
+                Err(SpecError::BadWorkloadUnitName),
+                "expected {unit:?} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_workload_unit_name_rejects_oversize_name() {
+        let oversized = format!("d2b-exec-{}-w.service", "0".repeat(MAX_ARG_LEN));
+        assert_eq!(
+            validate_workload_unit_name(&oversized),
+            Err(SpecError::BadWorkloadUnitName)
+        );
     }
 }

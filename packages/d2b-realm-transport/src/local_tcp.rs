@@ -13,6 +13,12 @@ use tokio::sync::{Mutex, Notify};
 
 const LOCAL_TCP_SCHEME: &str = "tcp+local://";
 
+/// The `tcp+local` scheme literal (without the `://` delimiter). Exposed so
+/// a scheme-keyed composition (e.g. a transport fabric) can register this
+/// transport under its canonical scheme without duplicating the literal.
+#[allow(dead_code)]
+pub const LOCAL_TCP_SCHEME_NAME: &str = "tcp+local";
+
 /// A loopback-only TCP transport adapter used to prove the transport
 /// abstraction is not Azure-specific. It is intentionally local, plaintext,
 /// credential-free, and safe for hermetic tests.
@@ -313,6 +319,14 @@ mod tests {
             .unwrap()
             .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::RelayUnavailable);
+    }
+
+    #[test]
+    fn scheme_name_constant_agrees_with_full_scheme_prefix() {
+        // Drift guard: `fabric.rs` registers this transport under
+        // `LOCAL_TCP_SCHEME_NAME` alone; keep it in lockstep with the
+        // `"://"`-delimited literal this module parses targets against.
+        assert_eq!(format!("{LOCAL_TCP_SCHEME_NAME}://"), LOCAL_TCP_SCHEME);
     }
 
     #[tokio::test]
