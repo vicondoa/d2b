@@ -28,8 +28,12 @@ deprecations ship one minor release before removal.
   (`packages/d2bd/src/lib.rs`, `packages/d2b-priv-broker/src/runtime.rs`)
   reserved to the integrator, explicit external blockers (new-crate workspace
   registration; the not-yet-opened wave manifest), and ready/blocked/pending
-  launch counts. Deliberately excludes `delivery/manifests/w8.json` (created
-  once the draft PR number is known) and any Cargo workspace/lockfile change.
+  launch counts. The component gate now requires the manifest globally, binds
+  internal dependencies to commits already present in the trusted W8 head,
+  and grants only the W8 integrator exact `packages/Cargo.toml` and
+  `packages/Cargo.lock` authority for workspace registration. The predecessor
+  prep still excludes `delivery/manifests/w8.json` and any Cargo workspace or
+  lockfile content change.
 - Added bundle version 13 discovery for private observability
   secret-generation metadata, allowing the integrated runtime wave to consume
   the contract without a hardcoded path.

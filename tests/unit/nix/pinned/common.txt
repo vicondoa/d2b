@@ -405,3 +405,7 @@ volume-mounts/issues-unsafe-equals
 volume-mounts/serial-null-defaults
 volume-mounts/serial-sanitizes-delimiters
 volume-mounts/size-bytes
+w8-integration-component-policy/internal-dependency-must-land
+w8-integration-component-policy/landed-dependency-releases-component
+w8-integration-component-policy/manifest-is-a-global-blocker
+w8-integration-component-policy/workspace-seam-remains-independent

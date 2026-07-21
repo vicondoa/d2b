@@ -149,9 +149,24 @@ if [ "$(jq -r '.valid' <<<"$result")" != "true" ]; then
     + "\n  forbidden edits: " + (.forbiddenViolations | join(", "))
     + "\n  blocked dependencies: "
     + (.blockedExternalDependencies | join(", "))
+    + "\n  unmet component dependencies: "
+    + (.unmetDependencies | join(", "))
+    + "\n  invalid landed dependencies: "
+    + (.invalidLandedDependencies | map(.dependency) | join(", "))
   ' <<<"$result" >&2
   exit 1
 fi
+
+while IFS=$'\t' read -r dependency commit; do
+  git_safe -C "$trusted_root" cat-file -e "${commit}^{commit}" 2>/dev/null || {
+    echo "component ownership: dependency $dependency names a missing commit" >&2
+    exit 1
+  }
+  git_safe -C "$trusted_root" merge-base --is-ancestor "$commit" "$base" || {
+    echo "component ownership: dependency $dependency is not in trusted W8 HEAD" >&2
+    exit 1
+  }
+done < <(jq -r '.landedDependencyCommits[] | [.dependency, .commit] | @tsv' <<<"$result")
 
 jq -r '
   "component ownership: ok ("

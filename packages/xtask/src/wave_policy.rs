@@ -3240,6 +3240,13 @@ mod tests {
             ownership.inherits_prefixes_from,
             vec!["w5".to_owned(), "w6".to_owned(), "w7".to_owned()]
         );
+        assert_eq!(
+            ownership.allowed_protected_paths,
+            vec![
+                "packages/Cargo.lock".to_owned(),
+                "packages/Cargo.toml".to_owned()
+            ]
+        );
         assert_eq!(ownership.landed_predecessor_ref.as_deref(), Some("main"));
     }
 
@@ -3320,7 +3327,6 @@ mod tests {
         let paths = [
             "packages/xtask/src/wave_policy.rs".to_owned(),
             "packages/d2b-core/src/privileges.rs".to_owned(),
-            "packages/Cargo.lock".to_owned(),
             "scripts/wave-escape.sh".to_owned(),
         ];
         let error =
@@ -3333,8 +3339,24 @@ mod tests {
             error.contains("packages/d2b-core/src/privileges.rs"),
             "{error}"
         );
-        assert!(error.contains("packages/Cargo.lock"), "{error}");
         assert!(error.contains("scripts/wave-escape.sh"), "{error}");
+    }
+
+    #[test]
+    fn w8_alone_may_update_the_workspace_registration_seam() {
+        let policy = policy();
+        let paths = [
+            "packages/Cargo.lock".to_owned(),
+            "packages/Cargo.toml".to_owned(),
+        ];
+        check_changed_paths(&policy, "w8", &paths).expect("W8 workspace registration seam");
+        for wave in ["w5", "w6", "w7"] {
+            let error = check_changed_paths(&policy, wave, &paths)
+                .expect_err("predecessor wave workspace registration");
+            for path in &paths {
+                assert!(error.contains(path), "{error}");
+            }
+        }
     }
 
     #[test]

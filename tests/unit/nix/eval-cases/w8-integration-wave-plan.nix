@@ -240,6 +240,11 @@ let
     "restart-observability-audit"
   ];
 
+  landedComponents = { };
+  globalExternalDependencies = [
+    "shared-root-w8-manifest-seam"
+  ];
+
   externalDependencies = {
     workspace-crate-registration-seam = {
       owner = "adr0045-w8-integration";
@@ -283,13 +288,13 @@ let
       components.${name}.dependsOn == [ ]
       && builtins.all
         (dependency: externalDependencies.${dependency}.status == "ready")
-        components.${name}.externalDependsOn)
+        (globalExternalDependencies ++ components.${name}.externalDependsOn))
     componentOrder;
   blockedComponents = builtins.filter
     (name:
       builtins.any
         (dependency: externalDependencies.${dependency}.status != "ready")
-        components.${name}.externalDependsOn)
+        (globalExternalDependencies ++ components.${name}.externalDependsOn))
     componentOrder;
   pendingComponents = builtins.filter
     (name:
@@ -352,7 +357,12 @@ in
     ];
   };
 
-  inherit externalDependencies pathExternalDependencies;
+  inherit
+    externalDependencies
+    globalExternalDependencies
+    landedComponents
+    pathExternalDependencies
+    ;
 
   futureSharedContractPrepNeeds = {
     note = ''
@@ -367,8 +377,9 @@ in
            existing base-first sorted position.
         2. Scaffold each crate's own Cargo.toml + src/lib.rs stub.
         3. Regenerate packages/Cargo.lock for the new members.
-        4. Flip workspace-crate-registration-seam to status = "ready" with a
-           landedCommit, then have the component rebase onto it.
+        4. Flip workspace-crate-registration-seam to status = "ready" after the
+           registration commit lands on the trusted W8 root, then have the
+           component rebase onto it.
     '';
     notYetCreatedCrates = [
       "packages/d2b-activation-helper/"

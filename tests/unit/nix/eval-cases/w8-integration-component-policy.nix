@@ -1,7 +1,9 @@
-{ branch, pathsJson }:
+{ branch
+, pathsJson
+, plan ? import ./w8-integration-wave-plan.nix
+}:
 
 let
-  plan = import ./w8-integration-wave-plan.nix;
   componentNames = builtins.attrNames plan.components;
   matchingComponents = builtins.filter
     (name: plan.components.${name}.branch == branch)
@@ -55,7 +57,10 @@ let
       else [ ])
     plan.pathExternalDependencies);
   externalDependencies =
-    unique (componentExternalDependencies ++ pathExternalDependencies);
+    unique
+      (plan.globalExternalDependencies
+        ++ componentExternalDependencies
+        ++ pathExternalDependencies);
   blockedExternalDependencies = builtins.filter
     (dependency:
       !(builtins.hasAttr dependency plan.externalDependencies)
@@ -65,7 +70,24 @@ let
   unmetDependencies =
     if component == null
     then [ ]
-    else plan.components.${component}.dependsOn;
+    else builtins.filter
+      (dependency: !(builtins.hasAttr dependency plan.landedComponents))
+      plan.components.${component}.dependsOn;
+  landedDependencyCommits = builtins.map
+    (dependency: {
+      inherit dependency;
+      commit = plan.landedComponents.${dependency};
+    })
+    (if component == null
+     then [ ]
+     else builtins.filter
+       (dependency: builtins.hasAttr dependency plan.landedComponents)
+       plan.components.${component}.dependsOn);
+  invalidLandedDependencies = builtins.filter
+    (row:
+      !(builtins.isString row.commit)
+      || builtins.match "[0-9a-f]{40}" row.commit == null)
+    landedDependencyCommits;
 
   hasPrefix = prefix: value:
     builtins.stringLength value >= builtins.stringLength prefix
@@ -90,6 +112,8 @@ in
     component
     externalDependencies
     forbiddenViolations
+    invalidLandedDependencies
+    landedDependencyCommits
     ownedFiles
     paths
     unmetDependencies
@@ -100,5 +124,7 @@ in
     && validPathList
     && violations == [ ]
     && forbiddenViolations == [ ]
-    && blockedExternalDependencies == [ ];
+    && blockedExternalDependencies == [ ]
+    && invalidLandedDependencies == [ ]
+    && unmetDependencies == [ ];
 }
