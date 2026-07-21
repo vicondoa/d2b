@@ -969,11 +969,25 @@ fn collect_live_prs<S: PullRequestStatusSource>(
     Ok(statuses)
 }
 
+/// Diagnostic prefix identifying exactly which stack node/repository/PR a
+/// `verify_required_checks` failure belongs to. A W9 wave snapshot spans six
+/// independent repositories with their own open PRs, so every error out of
+/// this function must be self-locating: an operator (or an automated
+/// follow-up) must never have to cross-reference the failure against the
+/// manifest to figure out which sibling PR it names.
+fn required_check_diagnostic_context(node: &super::model::StackNode) -> String {
+    format!(
+        "stack node {} ({}#{})",
+        node.id, node.repository, node.pr_number
+    )
+}
+
 pub(crate) fn verify_required_checks(
     snapshot: &WaveSnapshot,
     node: &super::model::StackNode,
     status: &PullRequestStatus,
 ) -> Result<()> {
+    let context = required_check_diagnostic_context(node);
     let required = snapshot
         .required_checks
         .iter()
@@ -981,14 +995,13 @@ pub(crate) fn verify_required_checks(
         .collect::<Vec<_>>();
     if required.is_empty() {
         return Err(DeliveryError::new(format!(
-            "stack node {} has no authoritative required checks",
-            node.id
+            "{context} has no authoritative required checks",
         )));
     }
     if status.checks.len() > MAX_CHECKS {
-        return Err(DeliveryError::new(
-            "live PR check set exceeds the supported bound",
-        ));
+        return Err(DeliveryError::new(format!(
+            "{context} live PR check set exceeds the supported bound",
+        )));
     }
     validate_bounded_string(&status.merge_state, "PR merge state")?;
     let mut names = BTreeSet::new();
@@ -1000,13 +1013,13 @@ pub(crate) fn verify_required_checks(
         validate_observed_check_authority(check)?;
         if !names.insert(check.name.as_str()) {
             return Err(DeliveryError::new(format!(
-                "duplicate same-name publisher for check {}",
+                "{context} has a duplicate same-name publisher for check {}",
                 check.name
             )));
         }
         if check.commit_oid != node.head_oid {
             return Err(DeliveryError::new(format!(
-                "check {} is associated with a different commit",
+                "{context} check {} is associated with a different commit",
                 check.name
             )));
         }
@@ -1018,7 +1031,7 @@ pub(crate) fn verify_required_checks(
             && check.state != ObservedCheckState::Skipped
         {
             return Err(DeliveryError::new(format!(
-                "unknown or unlisted check {} is failing or pending",
+                "{context} unknown or unlisted check {} is failing or pending",
                 check.name
             )));
         }
@@ -1036,13 +1049,13 @@ pub(crate) fn verify_required_checks(
                     && check.commit_oid == node.head_oid => {}
             [] => {
                 return Err(DeliveryError::new(format!(
-                    "required check {} is missing",
+                    "{context} required check {} is missing",
                     required.name
                 )));
             }
             [check] if check.publisher != required.publisher => {
                 return Err(DeliveryError::new(format!(
-                    "required check {} has the wrong app/workflow publisher",
+                    "{context} required check {} has the wrong app/workflow publisher",
                     required.name
                 )));
             }
@@ -1053,19 +1066,25 @@ pub(crate) fn verify_required_checks(
             // required gate apart from a genuinely failing one.
             [check] if check.state == ObservedCheckState::Skipped => {
                 return Err(DeliveryError::new(format!(
-                    "required check {} is skipped",
+                    "{context} required check {} is skipped",
                     required.name
                 )));
             }
             [_] => {
                 return Err(DeliveryError::new(format!(
-                    "required check {} is not successful",
+                    "{context} required check {} is not successful",
                     required.name
                 )));
             }
+            // Defense-in-depth: the per-name uniqueness check earlier in
+            // this function already rejects any two observed checks sharing
+            // a name before this loop runs, so `observed` can never hold two
+            // or more entries here today. Context is still attached so this
+            // arm fails closed with a self-locating message if that upstream
+            // invariant is ever loosened.
             _ => {
                 return Err(DeliveryError::new(format!(
-                    "required check {} is ambiguous",
+                    "{context} required check {} is ambiguous",
                     required.name
                 )));
             }
@@ -1533,5 +1552,207 @@ mod tests {
         let error =
             verify_required_checks(&snapshot, &node, &status).expect_err("required skipped");
         assert!(error.to_string().contains("is skipped"));
+    }
+
+    /// A two-node snapshot standing in for a W9-shaped multi-repository wave:
+    /// each stack node has a distinct id/repository/PR and its own single
+    /// required check. Callers build a per-node `PullRequestStatus` from
+    /// `second_node_status`, then assert on the node they intentionally
+    /// broke.
+    fn two_node_snapshot() -> (WaveSnapshot, StackNode, StackNode) {
+        let (mut snapshot, first_node, _) = check_snapshot();
+        let second_node = StackNode {
+            id: "second-node".to_owned(),
+            repository: "github.com/example/weezterm".to_owned(),
+            pr_number: 48,
+            expected_base_ref: "main".to_owned(),
+            expected_base_oid: "a".repeat(40),
+            observed_base_oid: "a".repeat(40),
+            head_ref: "feature-two".to_owned(),
+            head_oid: "1".repeat(40),
+            head_tree_oid: "2".repeat(40),
+            merge_commit_oid: None,
+            merge_commit_tree_oid: None,
+            prospective_merge_tree_oid: "2".repeat(40),
+            prospective_content_id: "3".repeat(64),
+            snapshot_state: PullRequestState::Open,
+            depends_on: vec![],
+        };
+        let second_publisher = CheckPublisher {
+            kind: CheckPublisherKind::CheckRun,
+            app_slug: "github-actions".to_owned(),
+            app_id: 15368,
+            workflow: "CI".to_owned(),
+            workflow_id: 654,
+        };
+        snapshot.stack.push(second_node.clone());
+        snapshot.required_checks.push(RequiredCheck {
+            node: "second-node".to_owned(),
+            name: "second-check".to_owned(),
+            publisher: second_publisher,
+        });
+        (snapshot, first_node, second_node)
+    }
+
+    fn second_node_status(
+        node: &StackNode,
+        check: super::super::command::ObservedCheck,
+    ) -> PullRequestStatus {
+        PullRequestStatus {
+            repository: node.repository.clone(),
+            number: node.pr_number,
+            state: PullRequestState::Open,
+            merge_state: "CLEAN".to_owned(),
+            base_ref: node.expected_base_ref.clone(),
+            base_oid: node.expected_base_oid.clone(),
+            head_repository: node.repository.clone(),
+            head_ref: node.head_ref.clone(),
+            head_oid: node.head_oid.clone(),
+            merge_commit_oid: None,
+            merge_commit_tree_oid: None,
+            merge_base_oid: None,
+            is_in_merge_queue: false,
+            is_merge_queue_enabled: false,
+            merge_queue_entry: None,
+            checks: vec![check],
+        }
+    }
+
+    /// Every diagnostic out of `verify_required_checks` must self-identify
+    /// its exact stack node, repository, and PR number: a W9-shaped wave
+    /// snapshot spans six independent repositories, so a bare check name is
+    /// not enough for an operator (or an automated triage step) to know
+    /// which sibling PR failed. This proves the second node's failure names
+    /// the second node — never the first.
+    #[test]
+    fn multi_node_diagnostics_identify_the_exact_failing_stack_node() {
+        let (snapshot, _first_node, second_node) = two_node_snapshot();
+        let missing_status = second_node_status(
+            &second_node,
+            super::super::command::ObservedCheck {
+                name: "unrelated".to_owned(),
+                publisher: CheckPublisher {
+                    kind: CheckPublisherKind::CheckRun,
+                    app_slug: "other".to_owned(),
+                    app_id: 42,
+                    workflow: "Other".to_owned(),
+                    workflow_id: 99,
+                },
+                check_run_id: Some(9),
+                workflow_run_id: Some(10),
+                status: "COMPLETED".to_owned(),
+                conclusion: "SUCCESS".to_owned(),
+                state: ObservedCheckState::Successful,
+                commit_oid: second_node.head_oid.clone(),
+                started_at_unix_seconds: 1,
+                completed_at_unix_seconds: Some(2),
+                workflow_created_at_unix_seconds: Some(1),
+                workflow_updated_at_unix_seconds: Some(2),
+            },
+        );
+        let error = verify_required_checks(&snapshot, &second_node, &missing_status)
+            .expect_err("second node required check is missing");
+        let message = error.to_string();
+        assert!(message.contains("second-node"), "{message}");
+        assert!(message.contains("github.com/example/weezterm"), "{message}");
+        assert!(message.contains("#48"), "{message}");
+        assert!(
+            message.contains("required check second-check is missing"),
+            "{message}"
+        );
+        assert!(
+            !message.contains("stack node node "),
+            "must not misattribute the failure to the first node: {message}"
+        );
+    }
+
+    /// The wrong-publisher, duplicate-name, and cross-commit diagnostics
+    /// must all carry the same second-node context, proving the context
+    /// prefix is applied uniformly and not only on the "missing" path
+    /// exercised above. (The "ambiguous" arm is defense-in-depth dead code
+    /// today: the duplicate-name check below always fires first for any two
+    /// same-named observed checks, so it cannot be exercised through this
+    /// public entry point — see the comment on that match arm.)
+    #[test]
+    fn multi_node_diagnostics_cover_wrong_publisher_duplicate_and_cross_commit() {
+        let wrong_publisher_check = super::super::command::ObservedCheck {
+            name: "second-check".to_owned(),
+            publisher: CheckPublisher {
+                kind: CheckPublisherKind::CheckRun,
+                app_slug: "wrong-app".to_owned(),
+                app_id: 1,
+                workflow: "CI".to_owned(),
+                workflow_id: 654,
+            },
+            check_run_id: Some(1),
+            workflow_run_id: Some(2),
+            status: "COMPLETED".to_owned(),
+            conclusion: "SUCCESS".to_owned(),
+            state: ObservedCheckState::Successful,
+            commit_oid: "".to_owned(),
+            started_at_unix_seconds: 1,
+            completed_at_unix_seconds: Some(2),
+            workflow_created_at_unix_seconds: Some(1),
+            workflow_updated_at_unix_seconds: Some(2),
+        };
+        {
+            let (snapshot, _first_node, second_node) = two_node_snapshot();
+            let mut check = wrong_publisher_check.clone();
+            check.commit_oid = second_node.head_oid.clone();
+            let status = second_node_status(&second_node, check);
+            let error = verify_required_checks(&snapshot, &second_node, &status)
+                .expect_err("wrong publisher on second node");
+            let message = error.to_string();
+            assert!(
+                message.contains("second-node") && message.contains("#48"),
+                "{message}"
+            );
+            assert!(
+                message.contains("wrong app/workflow publisher"),
+                "{message}"
+            );
+        }
+        {
+            // Duplicate same-name publisher among *observed* checks (caught
+            // before the required-check pass even runs).
+            let (snapshot, _first_node, second_node) = two_node_snapshot();
+            let mut check = wrong_publisher_check.clone();
+            check.name = "duplicate-name".to_owned();
+            check.commit_oid = second_node.head_oid.clone();
+            let mut status = second_node_status(&second_node, check.clone());
+            let mut duplicate_observed = check;
+            duplicate_observed.check_run_id = Some(21);
+            status.checks.push(duplicate_observed);
+            let error = verify_required_checks(&snapshot, &second_node, &status)
+                .expect_err("duplicate same-name observed check on second node");
+            let message = error.to_string();
+            assert!(
+                message.contains("second-node") && message.contains("#48"),
+                "{message}"
+            );
+            assert!(
+                message.contains("duplicate same-name publisher"),
+                "{message}"
+            );
+        }
+        {
+            // Cross-commit: the observed check names a commit other than the
+            // second node's head.
+            let (snapshot, _first_node, second_node) = two_node_snapshot();
+            let mut check = wrong_publisher_check.clone();
+            check.commit_oid = "9".repeat(40);
+            let status = second_node_status(&second_node, check);
+            let error = verify_required_checks(&snapshot, &second_node, &status)
+                .expect_err("cross-commit check on second node");
+            let message = error.to_string();
+            assert!(
+                message.contains("second-node") && message.contains("#48"),
+                "{message}"
+            );
+            assert!(
+                message.contains("is associated with a different commit"),
+                "{message}"
+            );
+        }
     }
 }
