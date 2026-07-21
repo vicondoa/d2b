@@ -316,7 +316,7 @@ in
 {
   schemaVersion = 1;
   wave = "w8";
-  sharedRoot = "97082e5d";
+  sharedRoot = "5ba02876";
   branch = "adr0045-w8-integration";
   pullRequestBase = "main";
   inherit componentOrder components;
