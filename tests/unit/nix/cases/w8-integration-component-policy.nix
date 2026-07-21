@@ -12,22 +12,22 @@ let
       inherit branch plan;
       pathsJson = builtins.toJSON paths;
     };
-  manifestReadyDependencies = basePlan.externalDependencies // {
+  manifestBlockedDependencies = basePlan.externalDependencies // {
     shared-root-w8-manifest-seam =
       basePlan.externalDependencies.shared-root-w8-manifest-seam
-      // { status = "ready"; };
+      // { status = "blocked"; };
   };
-  manifestReadyPlan = planFor {
-    externalDependenciesOverride = manifestReadyDependencies;
+  manifestBlockedPlan = planFor {
+    externalDependenciesOverride = manifestBlockedDependencies;
   };
+  manifestReadyPlan = basePlan;
   routingCommit = "0123456789abcdef0123456789abcdef01234567";
   routingLandedPlan = planFor {
-    externalDependenciesOverride = manifestReadyDependencies;
     landedComponents = {
       realm-routing-work-executor-fabric = routingCommit;
     };
   };
-  secrets = evaluate basePlan
+  secrets = evaluate manifestBlockedPlan
     "adr0045-w8-integration-secrets-lifecycle"
     [ "packages/d2b-priv-broker/src/ops/secrets_lifecycle.rs" ];
   gatewayBlocked = evaluate manifestReadyPlan
@@ -43,7 +43,7 @@ in
 {
   "w8-integration-component-policy/manifest-is-a-global-blocker" = {
     expr = {
-      inherit (basePlan.launchSummary) blocked blockedCount ready readyCount;
+      inherit (manifestBlockedPlan.launchSummary) blocked blockedCount ready readyCount;
       inherit (secrets) blockedExternalDependencies valid;
     };
     expected = {
@@ -53,6 +53,27 @@ in
       readyCount = 0;
       blockedExternalDependencies = [ "shared-root-w8-manifest-seam" ];
       valid = false;
+    };
+  };
+
+  "w8-integration-component-policy/current-manifest-releases-independent-components" = {
+    expr = basePlan.launchSummary;
+    expected = {
+      blocked = [ "systemd-user-shell-routing" ];
+      blockedCount = 1;
+      note = basePlan.launchSummary.note;
+      pendingOnDependency = [
+        "gateway-replacement"
+        "provider-parity-fallback-removal"
+      ];
+      pendingOnDependencyCount = 2;
+      ready = [
+        "secrets-lifecycle"
+        "realm-routing-work-executor-fabric"
+        "restart-observability-audit"
+      ];
+      readyCount = 3;
+      totalComponents = 6;
     };
   };
 
