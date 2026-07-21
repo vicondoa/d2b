@@ -1013,7 +1013,10 @@ pub(crate) fn verify_required_checks(
         let listed = required
             .iter()
             .any(|required| required.name == check.name && required.publisher == check.publisher);
-        if !listed && check.state != ObservedCheckState::Successful {
+        if !listed
+            && check.state != ObservedCheckState::Successful
+            && check.state != ObservedCheckState::Skipped
+        {
             return Err(DeliveryError::new(format!(
                 "unknown or unlisted check {} is failing or pending",
                 check.name
@@ -1040,6 +1043,17 @@ pub(crate) fn verify_required_checks(
             [check] if check.publisher != required.publisher => {
                 return Err(DeliveryError::new(format!(
                     "required check {} has the wrong app/workflow publisher",
+                    required.name
+                )));
+            }
+            // A required check that GitHub reports as SKIPPED is never
+            // treated as satisfied: only unlisted (optional) skipped checks
+            // are accepted. Report this distinctly from a generic
+            // not-successful failure so operators can tell a skipped
+            // required gate apart from a genuinely failing one.
+            [check] if check.state == ObservedCheckState::Skipped => {
+                return Err(DeliveryError::new(format!(
+                    "required check {} is skipped",
                     required.name
                 )));
             }
@@ -1405,5 +1419,119 @@ mod tests {
         });
         let error = verify_required_checks(&snapshot, &node, &status).expect_err("extra failed");
         assert!(error.to_string().contains("unknown or unlisted"));
+    }
+
+    /// An unlisted (optional) check that GitHub reports SKIPPED — for example
+    /// WeezTerm's optional `release`/`dev-release` jobs — must not block
+    /// snapshot/seal: it is retained in the evidence but does not fail
+    /// `verify_required_checks`.
+    #[test]
+    fn unlisted_skipped_check_is_accepted() {
+        let (snapshot, node, mut status) = check_snapshot();
+        status.checks.push(super::super::command::ObservedCheck {
+            name: "release".to_owned(),
+            publisher: CheckPublisher {
+                kind: CheckPublisherKind::CheckRun,
+                app_slug: "other".to_owned(),
+                app_id: 42,
+                workflow: "Other".to_owned(),
+                workflow_id: 99,
+            },
+            check_run_id: Some(5),
+            workflow_run_id: Some(6),
+            status: "COMPLETED".to_owned(),
+            conclusion: "SKIPPED".to_owned(),
+            state: ObservedCheckState::Skipped,
+            commit_oid: node.head_oid.clone(),
+            started_at_unix_seconds: 1,
+            completed_at_unix_seconds: Some(2),
+            workflow_created_at_unix_seconds: Some(1),
+            workflow_updated_at_unix_seconds: Some(2),
+        });
+        verify_required_checks(&snapshot, &node, &status)
+            .expect("unlisted skipped check must not fail closed");
+        // The skipped check is still present (retained) in the evidence.
+        assert!(
+            status
+                .checks
+                .iter()
+                .any(|check| check.name == "release" && check.state == ObservedCheckState::Skipped)
+        );
+    }
+
+    /// Unlisted checks that are pending, failing, neutral, or cancelled must
+    /// still fail closed; only SKIPPED gets the lenient optional-check
+    /// treatment.
+    #[test]
+    fn unlisted_non_skipped_non_success_checks_still_fail_closed() {
+        for conclusion in ["NEUTRAL", "CANCELLED"] {
+            let (snapshot, node, mut status) = check_snapshot();
+            status.checks.push(super::super::command::ObservedCheck {
+                name: "extra".to_owned(),
+                publisher: CheckPublisher {
+                    kind: CheckPublisherKind::CheckRun,
+                    app_slug: "other".to_owned(),
+                    app_id: 42,
+                    workflow: "Other".to_owned(),
+                    workflow_id: 99,
+                },
+                check_run_id: Some(3),
+                workflow_run_id: Some(4),
+                status: "COMPLETED".to_owned(),
+                conclusion: conclusion.to_owned(),
+                state: ObservedCheckState::Failed,
+                commit_oid: node.head_oid.clone(),
+                started_at_unix_seconds: 1,
+                completed_at_unix_seconds: Some(2),
+                workflow_created_at_unix_seconds: Some(1),
+                workflow_updated_at_unix_seconds: Some(2),
+            });
+            let error = verify_required_checks(&snapshot, &node, &status)
+                .expect_err(&format!("unlisted {conclusion} must fail closed"));
+            assert!(error.to_string().contains("unknown or unlisted"));
+        }
+
+        // An unlisted pending (not yet completed) check must also fail closed.
+        let (snapshot, node, mut status) = check_snapshot();
+        status.checks.push(super::super::command::ObservedCheck {
+            name: "extra-pending".to_owned(),
+            publisher: CheckPublisher {
+                kind: CheckPublisherKind::CheckRun,
+                app_slug: "other".to_owned(),
+                app_id: 42,
+                workflow: "Other".to_owned(),
+                workflow_id: 99,
+            },
+            check_run_id: Some(7),
+            workflow_run_id: Some(8),
+            status: "IN_PROGRESS".to_owned(),
+            conclusion: "NONE".to_owned(),
+            state: ObservedCheckState::Pending,
+            commit_oid: node.head_oid.clone(),
+            started_at_unix_seconds: 1,
+            // `verify_required_checks` alone (not the full GitHub parser) is
+            // under test here, so a completion timestamp is supplied to
+            // isolate the pending-state invariant from the unrelated
+            // check-run-authority timestamp requirement exercised elsewhere.
+            completed_at_unix_seconds: Some(2),
+            workflow_created_at_unix_seconds: Some(1),
+            workflow_updated_at_unix_seconds: Some(2),
+        });
+        let error =
+            verify_required_checks(&snapshot, &node, &status).expect_err("unlisted pending");
+        assert!(error.to_string().contains("unknown or unlisted"));
+    }
+
+    /// A *required* check that GitHub reports SKIPPED must still fail: only
+    /// unlisted/optional skipped checks are accepted.
+    #[test]
+    fn required_check_skipped_still_fails_closed() {
+        let (snapshot, node, mut status) = check_snapshot();
+        status.checks[0].status = "COMPLETED".to_owned();
+        status.checks[0].conclusion = "SKIPPED".to_owned();
+        status.checks[0].state = ObservedCheckState::Skipped;
+        let error =
+            verify_required_checks(&snapshot, &node, &status).expect_err("required skipped");
+        assert!(error.to_string().contains("is skipped"));
     }
 }

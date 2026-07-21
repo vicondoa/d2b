@@ -435,7 +435,7 @@
         "kind": "check_run",
         "app_slug": "github-actions",
         "app_id": 15368,
-        "workflow": "ci.yml",
+        "workflow": "ci",
         "workflow_id": 307600819
       }
     },
@@ -446,7 +446,7 @@
         "kind": "check_run",
         "app_slug": "github-actions",
         "app_id": 15368,
-        "workflow": "ci.yml",
+        "workflow": "ci",
         "workflow_id": 307600819
       }
     },
@@ -457,7 +457,7 @@
         "kind": "check_run",
         "app_slug": "github-actions",
         "app_id": 15368,
-        "workflow": "ci.yml",
+        "workflow": "CI",
         "workflow_id": 314261598
       }
     },
@@ -468,7 +468,7 @@
         "kind": "check_run",
         "app_slug": "github-actions",
         "app_id": 15368,
-        "workflow": "ci.yml",
+        "workflow": "CI",
         "workflow_id": 314261598
       }
     },
@@ -479,7 +479,7 @@
         "kind": "check_run",
         "app_slug": "github-actions",
         "app_id": 15368,
-        "workflow": "ci.yml",
+        "workflow": "CI",
         "workflow_id": 296720226
       }
     },
@@ -490,7 +490,7 @@
         "kind": "check_run",
         "app_slug": "github-actions",
         "app_id": 15368,
-        "workflow": "ci.yml",
+        "workflow": "CI",
         "workflow_id": 296720226
       }
     },
@@ -501,7 +501,7 @@
         "kind": "check_run",
         "app_slug": "github-actions",
         "app_id": 15368,
-        "workflow": "check.yml",
+        "workflow": "check",
         "workflow_id": 307600733
       }
     },
@@ -512,7 +512,7 @@
         "kind": "check_run",
         "app_slug": "github-actions",
         "app_id": 15368,
-        "workflow": "check.yml",
+        "workflow": "check",
         "workflow_id": 307600733
       }
     },

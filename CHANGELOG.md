@@ -44,6 +44,12 @@ deprecations ship one minor release before removal.
   registration. Suffixed component branches remain denied. The predecessor
   prep still excludes `delivery/manifests/w8.json` and any Cargo workspace or
   lockfile content change.
+- Added three W9 friction entries to ADR 0045's W13 evidence-driven delivery
+  streamlining backlog: the required-check workflow-name/filename mismatch,
+  duplicate same-name push+PR check runs from a single workflow, and optional
+  `SKIPPED` GitHub checks being treated as delivery-blocking failures, with
+  their concrete streamline outcomes (two already delivered in this change,
+  one recorded as an open backlog item).
 - Added `delivery/manifests/w9.json`, the checked-in W9 (toolkit and sibling
   cutover) delivery authority spanning all six ordinary open pull requests
   across `d2b`, `d2b-toolkit`, `d2b-provider-toolkit`, `d2b-wlcontrol`,
@@ -436,6 +442,22 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Corrected `delivery/manifests/w9.json`'s required-check publishers for the
+  client-toolkit, provider-toolkit, wlcontrol, and wlterm sibling nodes: they
+  named the workflow *filename* (`ci.yml`, `check.yml`), but the delivery
+  command layer matches a required check's publisher against the live GitHub
+  check suite's `workflowRun.workflow.name` (display name), so every one of
+  those checks was permanently unmatchable. The manifest now names the exact
+  live workflow names (`ci`, `CI`, `CI`, `check`) while preserving each
+  workflow's audited `workflow_id`.
+- Added a typed `ObservedCheckState::Skipped` to the delivery seal check
+  parser/verifier, distinct from `Failed`: an unlisted (optional) GitHub check
+  run reporting conclusion `SKIPPED` — for example WeezTerm PR #48's optional
+  `release`/`dev-release` jobs on an ordinary PR — is now accepted and
+  retained in evidence instead of blocking snapshot/seal, while a *required*
+  check that is skipped still fails closed with an explicit "is skipped"
+  message. Unlisted pending, failing, neutral, and cancelled checks continue
+  to fail closed.
 - Closed pidfd identity races by rechecking the kernel pidfd after `/proc`
   evidence collection and binding realm-child restart adoption to stable pidfs
   device/inode identity captured during the authenticated handoff, without

@@ -354,3 +354,72 @@ fn w9_toolkit_source_contract_has_no_duplicate_dto_ownership() {
         );
     }
 }
+
+/// Proves the four sibling toolkit/consumer nodes' `required_checks`
+/// publishers name the exact live GitHub Workflow `name` field, not the
+/// workflow *filename*. The delivery command layer's `optional_workflow_run`
+/// binds `RequiredCheck::publisher.workflow` against the live check suite's
+/// `workflowRun.workflow.name`, which is the workflow's display name (for
+/// example `ci`, `CI`, `check`) and can differ in case and form from its
+/// `.github/workflows/<file>.yml` filename. Regressing this field back to a
+/// filename silently makes every one of that sibling's required checks
+/// permanently unmatchable, since the live workflow never reports a `.yml`
+/// suffix as its name.
+#[test]
+fn w9_required_check_publishers_name_exact_live_workflow_names_not_filenames() {
+    let manifest = w9_manifest();
+    let expected_workflow_names: BTreeMap<&str, &str> = [
+        ("client-toolkit", "ci"),
+        ("provider-toolkit", "CI"),
+        ("wlcontrol", "CI"),
+        ("wlterm", "check"),
+    ]
+    .into_iter()
+    .collect();
+    // The live workflow `databaseId` for each of these four nodes must be
+    // preserved exactly across the filename-to-name correction: only the
+    // human-readable `name` was wrong, not the workflow identity.
+    let expected_workflow_ids: BTreeMap<&str, u64> = [
+        ("client-toolkit", 307600819),
+        ("provider-toolkit", 314261598),
+        ("wlcontrol", 296720226),
+        ("wlterm", 307600733),
+    ]
+    .into_iter()
+    .collect();
+
+    let mut seen_nodes = BTreeSet::new();
+    for check in &manifest.required_checks {
+        let Some(expected) = expected_workflow_names.get(check.node.as_str()) else {
+            continue;
+        };
+        seen_nodes.insert(check.node.as_str());
+        assert_eq!(
+            check.publisher.workflow, *expected,
+            "node {} check {} publisher.workflow must be the live workflow name",
+            check.node, check.name
+        );
+        assert_eq!(
+            check.publisher.workflow_id,
+            expected_workflow_ids[check.node.as_str()],
+            "node {} check {} publisher.workflow_id must be preserved",
+            check.node,
+            check.name
+        );
+        assert!(
+            !check.publisher.workflow.ends_with(".yml")
+                && !check.publisher.workflow.ends_with(".yaml"),
+            "node {} check {} publisher.workflow must not be a workflow filename",
+            check.node,
+            check.name
+        );
+    }
+    assert_eq!(
+        seen_nodes,
+        expected_workflow_names
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>(),
+        "every sibling toolkit/consumer node must have at least one required check"
+    );
+}

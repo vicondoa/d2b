@@ -1934,6 +1934,12 @@ pub enum ObservedCheckState {
     Successful,
     Failed,
     Pending,
+    /// The GitHub check run completed with conclusion `SKIPPED`. This is
+    /// distinct from `Failed`: an unlisted (optional) check that is skipped
+    /// is not a CI failure and must not block a snapshot or seal, while a
+    /// required check that is skipped is still not `Successful` and must
+    /// still fail the required-check gate.
+    Skipped,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -2460,8 +2466,9 @@ fn check_run_state(status: &str, conclusion: &str) -> Result<ObservedCheckState>
         }
         "COMPLETED" => match conclusion {
             "SUCCESS" => Ok(ObservedCheckState::Successful),
-            "ACTION_REQUIRED" | "CANCELLED" | "FAILURE" | "NEUTRAL" | "SKIPPED" | "STALE"
-            | "TIMED_OUT" | "STARTUP_FAILURE" => Ok(ObservedCheckState::Failed),
+            "SKIPPED" => Ok(ObservedCheckState::Skipped),
+            "ACTION_REQUIRED" | "CANCELLED" | "FAILURE" | "NEUTRAL" | "STALE" | "TIMED_OUT"
+            | "STARTUP_FAILURE" => Ok(ObservedCheckState::Failed),
             "NONE" | "" => Ok(ObservedCheckState::Pending),
             other => Err(DeliveryError::new(format!(
                 "unknown GitHub check conclusion {other}"
@@ -3048,6 +3055,47 @@ mod tests {
             status.checks[0].completed_at_unix_seconds,
             Some(1_783_936_860)
         );
+    }
+
+    #[test]
+    fn check_run_state_maps_skipped_conclusion_to_a_distinct_skipped_state() {
+        assert_eq!(
+            check_run_state("COMPLETED", "SKIPPED").expect("skipped"),
+            ObservedCheckState::Skipped
+        );
+        // Every other terminal non-success conclusion still maps to Failed;
+        // only SKIPPED gets the lenient typed state.
+        for conclusion in [
+            "ACTION_REQUIRED",
+            "CANCELLED",
+            "FAILURE",
+            "NEUTRAL",
+            "STALE",
+            "TIMED_OUT",
+            "STARTUP_FAILURE",
+        ] {
+            assert_eq!(
+                check_run_state("COMPLETED", conclusion).expect("failed conclusion"),
+                ObservedCheckState::Failed,
+                "conclusion {conclusion}"
+            );
+        }
+    }
+
+    #[test]
+    fn parses_skipped_check_run_conclusion_as_skipped_state() {
+        let status = parse_gh_status(
+            "github.com/example/d2b",
+            42,
+            &graphql(serde_json::json!([check(
+                "release",
+                "github-actions",
+                "COMPLETED",
+                "SKIPPED"
+            )])),
+        )
+        .expect("status");
+        assert_eq!(status.checks[0].state, ObservedCheckState::Skipped);
     }
 
     #[test]
