@@ -51,6 +51,10 @@ deprecations ship one minor release before removal.
   weezterm ownership exclusive-file-set was missing paths its own sibling
   commit had already modified (closed this round, with an open backlog item
   to add an automated ownership-diff check).
+- Integrated W8's authenticated host/gateway work executor and bounded
+  multi-transport fabric, preserving original operation identity,
+  authorization and idempotency, gateway boundaries, session capacity, and
+  recoverable listener backoff.
 - Added the W8 `workspace-crate-registration-seam` shared-root prep:
   registered `d2b-runtime-systemd-user`, `d2b-shell-supervisor`, and
   `d2b-systemd-user-agent` as additive `packages/Cargo.toml` workspace

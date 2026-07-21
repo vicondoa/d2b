@@ -265,22 +265,6 @@ fn io_reason(kind: std::io::ErrorKind) -> &'static str {
     }
 }
 
-// `fabric.rs` builds the multi-transport `TransportFabric` / `FabricListener`
-// surface on top of the transports declared in this crate (including this
-// module). Like `work_executor.rs` in `d2b-realm-router`, it is a fully
-// self-contained, `crate::`-qualified module that exercises real production
-// code paths, but the crate's `lib.rs` is integrator-owned and out of scope
-// for this component: it does not yet declare `mod fabric;`. Nesting it here
-// under a `#[cfg(test)]` gate keeps the committed tree compiling unconditionally
-// (this declaration disappears entirely from non-test builds) while still
-// letting `cargo test` for this crate actually compile and exercise
-// `fabric.rs`'s own unit tests. See `docs/reference/realm-work-executor.md`
-// for the exact production wiring an integrator should add to `lib.rs`
-// (`pub mod fabric;`, unconditionally, alongside `mod local_tcp;`).
-#[cfg(test)]
-#[path = "fabric.rs"]
-mod fabric;
-
 #[cfg(test)]
 mod tests {
     use super::*;
