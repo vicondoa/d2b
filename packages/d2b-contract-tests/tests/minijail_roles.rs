@@ -379,8 +379,8 @@ fn qemu_media_profile_source_is_fd_backed_and_device_closed() {
     );
 }
 
-/// W7fu17 H8: a generic-profile regression briefly let qemu-media-runner
-/// inherit cloud-hypervisor's full device-bind list (including
+/// A generic-profile regression briefly let qemu-media-runner inherit
+/// cloud-hypervisor's full device-bind list (including
 /// /dev/vhost-net, which qemu-media must never expose as a path — vhost-net
 /// stays inherited-fd only per docs/reference/privileges.md) and dropped the
 /// private pid namespace both qemu-media-runner and video need to contain
@@ -413,7 +413,7 @@ fn qemu_media_profile_is_selected_by_canonical_role_kind() {
     let src = read_repo_file("nixos-modules/role-process-rows.nix");
     assert!(
         src.contains(r#""qemu-media" = "qemu-media-runner";"#)
-            && src.contains("processRole = roleName role.roleKind;")
+            && src.contains("else roleName role.roleKind;")
             && src.contains("nodeId = roleId;"),
         "qemu-media confinement must be selected from a normalized canonical role row"
     );

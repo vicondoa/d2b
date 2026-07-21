@@ -182,9 +182,7 @@ fn video_rendered_profile_is_role_scoped_and_gpu_distinct() {
             assert!(node.profile.mount_policy.device_binds.is_empty());
             assert!(node.profile.user_namespace.is_none());
             // crosvm's video-decoder backend forks/reaps subprocesses; the
-            // role must keep a private pid namespace to contain them (base
-            // main precedent, restored W7fu17 H8 after a generic-profile
-            // regression dropped it).
+            // role must keep a private pid namespace to contain them.
             assert!(node.profile.namespaces.pid);
             assert!(node.profile.namespaces.ipc && node.profile.namespaces.mount);
             assert!(!node.profile.namespaces.net);
