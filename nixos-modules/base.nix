@@ -17,10 +17,10 @@ in
     default = null;
     description = ''
       SSH user to populate with the framework-managed pubkey + the
-      operator-supplied userAuthorizedKeys at guest boot. Populated
-      by host.nix from the host-side `d2b.vms.<name>.ssh.user`
-      option; for net VMs it stays null (host.nix instead points the
-      service at `root`).
+      operator-supplied userAuthorizedKeys at guest boot. Set directly
+      by the workload's own guest module (the `config` deferredModule
+      under `d2b.realms.<realm>.workloads.<workload>.config`); for net
+      VMs it stays null (host.nix instead points the service at `root`).
     '';
   };
 
@@ -135,7 +135,8 @@ in
   };
 
   # Path trigger: re-run d2b-load-store-db whenever `current`
-  # changes (host fired `d2b-<vm>-store-sync` → bumped current).
+  # changes (the daemon-owned StoreSync broker operation bumped it —
+  # there is no per-VM store-sync systemd unit).
   # PathChanged fires on rename/replace of the symlink target.
   systemd.paths.d2b-load-store-db = {
     description = "Watch d2b store-meta/current for closure updates";
@@ -152,9 +153,10 @@ in
   #
   # The host-keys/ share (/run/d2b-host-keys/) is staged by the
   # host's d2bGenerateKeys activation script and refreshed on
-  # every host switch. We dedupe at write time so adding the same
-  # operator pubkey under both d2b.site.userAuthorizedKeys and
-  # d2b.vms.<vm>.userAuthorizedKeys doesn't bloat the file.
+  # every host switch. We dedupe at write time (`sort -u`) so an
+  # operator pubkey already covered by d2b.site.userAuthorizedKeys
+  # doesn't duplicate the framework-managed per-VM pubkey and bloat
+  # the file.
   # ---------------------------------------------------------------------------
   systemd.services.d2b-load-host-keys = {
     description = "Inject d2b-managed pubkey + user-authorized-keys for ssh-user";

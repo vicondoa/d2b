@@ -12,8 +12,14 @@ source of truth is [`manifest-schema.json`](./manifest-schema.json).
 ## Realm-native projection
 
 The two reserved keys remain `_manifest` and `_observability`. Every other key
-is a canonical 20-character workload ID and maps to the frozen version-7 entry
-shape. The `name` field equals that key.
+is populated with a canonical workload ID — the 20-character
+`^[a-z2-7]{20}$` short ID that `nixos-modules/v2-identity.nix` derives for
+every workload — and maps to the frozen version-7 entry shape. The `name`
+field equals that key. The frozen v7 schema's `patternProperties` key regex
+(`^[a-z][a-z0-9-]*$`, see [`manifest-schema.json`](./manifest-schema.json)) is
+the broader compatibility pattern the locked schema accepts; it is not
+retightened to the narrower canonical short-ID shape because doing so would
+be a breaking change to a version-locked contract.
 
 The compatibility entry projects realm-native data:
 

@@ -46,12 +46,14 @@ in
       description = ''
         Absolute in-guest path of the operator-editable guest config
         working copy that `d2b config sync` reads back over the
-        authenticated guest-control channel. Host-owned, derived from
-        `d2b.vms.<vm>.guestConfigFile` independently of any SSH
-        metadata. When non-null, guestd advertises the `ReadGuestFile`
-        capability and serves a bounded read of exactly this path; when
-        null there is nothing to sync and the capability stays absent
-        (config sync fails closed).
+        authenticated guest-control channel. Host-owned, independently
+        of any SSH metadata. The realm workload composer currently
+        forces this to null for every workload it composes, so config
+        sync stays unwired until a realm-owned guest config path is
+        threaded through. When non-null, guestd advertises the
+        `ReadGuestFile` capability and serves a bounded read of exactly
+        this path; when null there is nothing to sync and the
+        capability stays absent (config sync fails closed).
       '';
     };
 
@@ -112,9 +114,10 @@ in
         readOnly = true;
         description = ''
           Host-fixed workload user every guest exec runs as (never root).
-          Derived from the per-VM workload user (`ssh.user`). When non-null,
-          guestd is launched with `--exec-user <name>` and every exec runs the
-          requested command as this user in a real PAM login session
+          Derived from the workload's own guest module setting for
+          `d2b.sshUser`. When non-null, guestd is launched with
+          `--exec-user <name>` and every exec runs the requested command
+          as this user in a real PAM login session
           (`systemd-run --property=PAMName=login --uid=<name>`).
         '';
       };
@@ -179,17 +182,21 @@ in
           || cfg.enable;
         message = ''
           d2b.guestControl.exec.enable requires d2b.guestControl.enable.
-          Set d2b.vms.<vm>.guest.control.enable = true on the host-side VM
-          option before enabling guest exec policy.
+          The realm workload composer always forces guest-control.enable
+          for every workload it composes; set d2b.guestControl.enable = true
+          directly on the guest config before enabling guest exec policy
+          outside that composition.
         '';
       }
       {
         # Exec runs as the workload user; a workload user MUST be configured.
         assertion = !cfg.exec.enable || cfg.exec.execUser != null;
         message = ''
-          d2b.vms.<vm>.guest.exec.enable is true, but no workload user is
-          configured. Guest exec always runs as the VM's workload user; set
-          d2b.vms.<vm>.ssh.user to the in-guest user exec should run as.
+          d2b.guestControl.exec.enable is true, but no workload user is
+          configured. Guest exec always runs as the workload's user; set
+          d2b.sshUser in the workload's own guest config
+          (d2b.realms.<realm>.workloads.<workload>.config) to the in-guest
+          user exec should run as.
         '';
       }
       {
@@ -199,8 +206,8 @@ in
           || cfg.exec.execUser == null
           || (usernameValid cfg.exec.execUser && cfg.exec.execUser != "root");
         message = ''
-          d2b.vms.<vm>.ssh.user (used as the guest exec workload user) must
-          match ${usernamePattern} and must not be root. Guest exec never runs
+          d2b.sshUser (used as the guest exec workload user) must match
+          ${usernamePattern} and must not be root. Guest exec never runs
           as root; users elevate with sudo inside the session.
         '';
       }
@@ -211,9 +218,9 @@ in
           || cfg.exec.execUser == null
           || userExists cfg.exec.execUser;
         message = ''
-          d2b.vms.<vm>.ssh.user (the guest exec workload user) is not
-          declared as a normal or system user inside the guest. Declare it (or
-          enable the desktop/home-manager user) before enabling guest exec.
+          d2b.sshUser (the guest exec workload user) is not declared as a
+          normal or system user inside the guest. Declare it (or enable the
+          desktop/home-manager user) before enabling guest exec.
         '';
       }
       {
@@ -229,8 +236,8 @@ in
           || !(builtins.hasAttr cfg.exec.execUser config.users.users)
           || (config.users.users.${cfg.exec.execUser}.uid or null) != 0;
         message = ''
-          d2b.vms.<vm>.ssh.user (the guest exec workload user) is configured
-          with uid = 0. Guest exec never runs as root; assign the workload user
+          d2b.sshUser (the guest exec workload user) is configured with
+          uid = 0. Guest exec never runs as root; assign the workload user
           a non-zero uid.
         '';
       }
@@ -238,8 +245,10 @@ in
         assertion = !cfg.shell.enable || cfg.enable;
         message = ''
           d2b.guestControl.shell.enable requires d2b.guestControl.enable.
-          Set d2b.vms.<vm>.guest.control.enable = true on the host-side VM
-          option before enabling persistent shell policy.
+          The realm workload composer always forces guest-control.enable
+          for every workload it composes; set d2b.guestControl.enable = true
+          directly on the guest config before enabling persistent shell
+          policy outside that composition.
         '';
       }
       {

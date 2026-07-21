@@ -43,7 +43,8 @@ ComponentSession stream. The guest frontend accepts no descriptor attachments:
 the broker-opened host device remains with the host controller and never enters
 the guest. The guest module does not yet receive the channel binding and
 reconnect generation required to establish that session, so the frontend fails
-closed until W8 composes the matching controller and session material.
+closed until the guest module gains the matching controller and session
+material.
 
 The typed `SecurityKeyOpenDevice` and `SecurityKeyApplyUdevRules` requests
 remain explicitly unimplemented. They are not alternate routes around the live
