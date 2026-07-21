@@ -21,6 +21,9 @@ let
     externalDependenciesOverride = manifestBlockedDependencies;
   };
   manifestReadyPlan = basePlan;
+  routingPendingPlan = planFor {
+    landedComponents = { };
+  };
   routingCommit = "0123456789abcdef0123456789abcdef01234567";
   routingLandedPlan = planFor {
     landedComponents = {
@@ -30,7 +33,7 @@ let
   secrets = evaluate manifestBlockedPlan
     "adr0045-w8-integration-secrets-lifecycle"
     [ "packages/d2b-priv-broker/src/ops/secrets_lifecycle.rs" ];
-  gatewayBlocked = evaluate manifestReadyPlan
+  gatewayBlocked = evaluate routingPendingPlan
     "adr0045-w8-integration-gateway-replacement"
     [ "packages/d2b-gateway/src/replacement.rs" ];
   gatewayReady = evaluate routingLandedPlan
@@ -47,8 +50,14 @@ in
       inherit (secrets) blockedExternalDependencies valid;
     };
     expected = {
-      blocked = basePlan.componentOrder;
-      blockedCount = 6;
+      blocked = [
+        "secrets-lifecycle"
+        "systemd-user-shell-routing"
+        "gateway-replacement"
+        "provider-parity-fallback-removal"
+        "restart-observability-audit"
+      ];
+      blockedCount = 5;
       ready = [ ];
       readyCount = 0;
       blockedExternalDependencies = [ "shared-root-w8-manifest-seam" ];
