@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use d2b_realm_core::{
     Capability, CapabilitySet, CorrelationId, ErrorKind, ExecutionGeneration, NodeId, NodeKind,
     NodeSummary, OperationKind, OperationRequest, PrincipalId, ProtocolToken, ProviderId,
-    RealmPath, ShellGeneration, TraceContext,
+    RealmPath, RealmTarget, ShellGeneration, TraceContext,
 };
 
 /// Default maximum number of remote full-host nodes retained by one registry.
@@ -897,6 +897,100 @@ pub fn ensure_remote_shell_generation(
         Ok(())
     } else {
         Err(RemoteNodeError::new(RemoteNodeErrorKind::StaleGeneration))
+    }
+}
+
+/// Authorized boundary a gateway-backed dispatch crosses (ADR 0032). The
+/// host process never owns gateway-side remote-node registry/router state
+/// directly: it recognizes the realm entrypoint table's resolved canonical
+/// `gateway` [`RealmTarget`] and hands the unmodified semantic
+/// [`OperationRequest`] to whatever already-authorized port fronts that
+/// gateway guest. This trait is the contract
+/// [`crate::work_executor::WorkExecutor`] requires from that port; it is
+/// defined here (alongside the gateway-side adapter it naturally wraps) so
+/// the trait is reachable from any always-compiled module without depending
+/// on `work_executor`'s own (integrator-wired) module path.
+pub trait GatewayPort: Send {
+    /// Deliver `req` to the gateway guest addressed by the canonical
+    /// `gateway` [`RealmTarget`] the realm entrypoint table resolved.
+    /// Implementations MUST refuse (fail closed) a `gateway` that does not
+    /// match whatever boundary they were constructed to front.
+    fn dispatch_via_gateway(
+        &mut self,
+        gateway: &RealmTarget,
+        req: &OperationRequest,
+        generation: &ProtocolToken,
+        client: &mut dyn RemotePeerClient,
+    ) -> Result<RemoteDispatchOutcome, RemoteNodeError>;
+}
+
+/// The reference [`GatewayPort`] implementation: wraps exactly one
+/// gateway-side [`RemoteFullHostAdapter`] and refuses (fail closed,
+/// [`RemoteNodeErrorKind::UnauthorizedGateway`]) to dispatch through it for
+/// any resolved `gateway` other than the boundary this instance was
+/// constructed for.
+///
+/// This type is meant to run **inside the gateway guest process it
+/// fronts** -- never embedded directly inside a host-resident
+/// `WorkExecutor`, or the host ends up holding gateway-owned remote-node
+/// registry state (ADR 0032). A production integrator wires one
+/// `SingleGatewayPort` per gateway relationship on the gateway side, and
+/// passes a reference to it (or a multi-gateway composition keyed by
+/// `RealmTarget`) into `WorkExecutor::dispatch` on the host side, across
+/// whatever session/transport boundary already exists between the host and
+/// that gateway guest.
+pub struct SingleGatewayPort<C = super::SystemClock>
+where
+    C: super::Clock,
+{
+    boundary: RealmTarget,
+    adapter: RemoteFullHostAdapter<C>,
+}
+
+impl<C> SingleGatewayPort<C>
+where
+    C: super::Clock,
+{
+    /// Wrap `adapter`, refusing any dispatch not addressed at `boundary`.
+    pub fn new(boundary: RealmTarget, adapter: RemoteFullHostAdapter<C>) -> Self {
+        Self { boundary, adapter }
+    }
+
+    /// The gateway boundary this port fronts.
+    pub fn boundary(&self) -> &RealmTarget {
+        &self.boundary
+    }
+
+    /// Borrow the wrapped gateway-side adapter (e.g. to register remote
+    /// nodes before serving traffic).
+    pub fn adapter(&self) -> &RemoteFullHostAdapter<C> {
+        &self.adapter
+    }
+
+    /// Borrow the wrapped gateway-side adapter mutably.
+    pub fn adapter_mut(&mut self) -> &mut RemoteFullHostAdapter<C> {
+        &mut self.adapter
+    }
+}
+
+impl<C> GatewayPort for SingleGatewayPort<C>
+where
+    C: super::Clock,
+{
+    fn dispatch_via_gateway(
+        &mut self,
+        gateway: &RealmTarget,
+        req: &OperationRequest,
+        generation: &ProtocolToken,
+        client: &mut dyn RemotePeerClient,
+    ) -> Result<RemoteDispatchOutcome, RemoteNodeError> {
+        if gateway != &self.boundary {
+            return Err(
+                RemoteNodeError::new(RemoteNodeErrorKind::UnauthorizedGateway)
+                    .with_correlation_id(req.correlation_id.clone()),
+            );
+        }
+        self.adapter.dispatch(req, generation, client)
     }
 }
 

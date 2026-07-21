@@ -1,50 +1,64 @@
 //! Work executor: the single typed dispatch surface that ties the realm
-//! entrypoint resolver, the host-resident durable execution table, the
-//! gateway-side remote full-host adapter, and the gateway session lifecycle
-//! together behind one [`WorkExecutor::dispatch`] entry point (ADR 0032).
+//! entrypoint resolver, the host-resident authorization/idempotency router,
+//! the host-resident durable execution table, and the bounded gateway
+//! session lifecycle together behind one [`WorkExecutor::dispatch`] entry
+//! point (ADR 0032/0045).
 //!
-//! [`WorkExecutor`] adds no new state machine of its own: it is pure
-//! composition/glue over the router's already-owned, already-tested state
-//! (`RealmEntrypointTable`, `DurableExecTable`, `RemoteFullHostAdapter`,
-//! `SessionLifecycle`). Its job is exactly the routing decision an
-//! integrator would otherwise have to hand-wire at every call site:
+//! [`WorkExecutor`] is host-side: it runs where the realm entrypoint table
+//! decides whether a target is [`DispatchTarget::HostResident`] or
+//! [`DispatchTarget::GatewayBacked`]. It holds no realm relay/session/
+//! provider credential and no remote-node registry itself -- that state is
+//! gateway-owned per ADR 0032. Concretely:
 //!
 //! 1. Resolve the request's realm target with the entrypoint table.
-//! 2. `HostResident` → decode the operation's exec-family body and drive the
-//!    local durable execution table directly. This table is host-resident
-//!    metadata only; a gateway-backed dispatch never touches it.
-//! 3. `GatewayBacked` → hand the request to the remote full-host adapter
-//!    (codec/transport neutral: the caller supplies a
-//!    [`d2b_realm_router::RemotePeerClient`] object). For a
-//!    `DisplaySessionOpen` operation specifically, also drive a
-//!    [`SessionLifecycle`] for that operation id, bounded by
-//!    [`DEFAULT_MAX_GATEWAY_SESSIONS`] tracked sessions, so the
-//!    gateway-owned display session state machine advances/fails in lockstep
-//!    with the remote dispatch outcome. Every other gateway-backed operation
-//!    kind is dispatched without session-lifecycle tracking (the phases
-//!    model workload/display session establishment, not generic exec).
+//! 2. `HostResident` → validate the addressed node against this executor's
+//!    own local node identity, then authorize + dedup the request through
+//!    this executor's *own* [`crate::OperationRouter`] (the host's
+//!    authorization/idempotency owner for its scope) before ever touching
+//!    the durable execution table. A capability-denied, missing-idempotency,
+//!    principal-mismatch, or other refusal never reaches the table.
+//! 3. `GatewayBacked` → the realm entrypoint table resolves a canonical
+//!    `gateway` [`RealmTarget`] (the gateway guest boundary) and a canonical
+//!    `target` [`RealmTarget`]. `WorkExecutor` hands both, unmodified, to an
+//!    *injected* [`GatewayPort`] -- an already-authorized port the caller
+//!    supplies per dispatch. `WorkExecutor` never constructs or owns a
+//!    [`crate::remote_node::RemoteFullHostAdapter`] itself: that adapter
+//!    (and the remote-node registry it wraps) remains gateway-side; see
+//!    [`crate::remote_node::SingleGatewayPort`] for the reference port meant
+//!    to run *inside* the gateway guest process it fronts, never embedded in
+//!    a host-resident `WorkExecutor`. For a `DisplaySessionOpen` operation
+//!    specifically, `WorkExecutor` also drives a
+//!    [`crate::session_lifecycle::SessionLifecycle`] for that operation id,
+//!    bounded by [`DEFAULT_MAX_GATEWAY_SESSIONS`] tracked sessions --
+//!    lifecycle state is allocated only *after* the gateway port reports a
+//!    successful dispatch, and a failed/rejected attempt evicts any
+//!    lingering entry rather than consuming bounded capacity for an
+//!    operation id that never actually succeeded.
 //!
 //! This module depends only on the router's own already-public types
-//! (`crate::{...}`) plus `d2b_realm_core`/`serde_json` (both already direct
-//! dependencies of this crate). It never depends on a transport or codec
-//! impl in production code — the dependency-direction gate still applies —
-//! and it holds no realm relay/session/provider credential and no remote
-//! node registry: routing and dedup state live entirely in the existing
-//! router tables it composes.
+//! (`crate::{...}`) plus `d2b_realm_core`/`serde`/`serde_json` (already
+//! direct dependencies of this crate). It never depends on a transport or
+//! codec impl in production code -- the dependency-direction gate still
+//! applies -- and it holds no realm relay/session/provider credential and no
+//! remote node registry: routing and dedup state for the host-resident scope
+//! live in this executor's own embedded [`crate::OperationRouter`]; routing
+//! and dedup state for the gateway-backed scope live entirely behind the
+//! injected [`GatewayPort`], never inside this type.
 
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 use d2b_realm_core::{
-    ConstellationError, ExecAttachRequest, ExecCancelRequest, ExecLogsRequest, ExecStartRequest,
-    ExecutionSummary, OperationId, OperationKind, OperationRequest, ProtocolToken, RealmTarget,
+    CapabilitySet, ConstellationError, ExecAttachRequest, ExecCancelRequest, ExecLogsRequest,
+    ExecStartRequest, ExecutionId, ExecutionSummary, NodeId, OpaquePayload, OperationId,
+    OperationKind, OperationRequest, PrincipalId, ProtocolToken, RealmTarget,
 };
 
-use crate::remote_node::{
-    RemoteDispatchOutcome, RemoteFullHostAdapter, RemoteNodeError, RemotePeerClient,
-};
+use crate::remote_node::{GatewayPort, RemoteDispatchOutcome, RemoteNodeError, RemotePeerClient};
 use crate::session_lifecycle::{SessionLifecycle, SessionPhase};
 use crate::target_resolver::{DispatchTarget, RealmEntrypointTable, ResolveError};
-use crate::{Clock, SystemClock};
+use crate::{Clock, OperationRouter, RouteDecision, SystemClock, route_decision_error};
 
 /// Default bound on the number of gateway-backed display sessions one
 /// `WorkExecutor` tracks concurrently. Bounded so a stream of
@@ -53,8 +67,9 @@ use crate::{Clock, SystemClock};
 pub const DEFAULT_MAX_GATEWAY_SESSIONS: usize = 4096;
 
 /// The natural outcome of a host-resident exec-family dispatch, one variant
-/// per [`OperationKind`] the durable execution table understands.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// per [`OperationKind`] the durable execution table understands. Encoded to
+/// an [`OpaquePayload`] for the host router's own dedup replay cache.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HostResidentOutcome {
     /// `ExecStart` was accepted and a new durable execution is tracked.
     Started(ExecutionSummary),
@@ -71,12 +86,13 @@ pub enum HostResidentOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkDispatchOutcome {
     /// The realm entrypoint resolved host-resident; the durable execution
-    /// table handled the request directly.
+    /// table handled the request directly, after this executor's own
+    /// authorization/idempotency gate accepted it.
     HostResident(HostResidentOutcome),
-    /// The realm entrypoint resolved gateway-backed; the remote full-host
-    /// adapter handled the request. `session_phase` is set only for a
-    /// `DisplaySessionOpen` operation (the lifecycle this executor tracks);
-    /// every other gateway-backed kind carries `None`.
+    /// The realm entrypoint resolved gateway-backed; the injected
+    /// [`GatewayPort`] handled the request. `session_phase` is set only for
+    /// a `DisplaySessionOpen` operation (the lifecycle this executor
+    /// tracks); every other gateway-backed kind carries `None`.
     GatewayBacked {
         session_phase: Option<SessionPhase>,
         remote: RemoteDispatchOutcome,
@@ -99,10 +115,24 @@ pub enum WorkExecutorError {
     UnsupportedHostResidentOperation(OperationKind),
     /// The host-resident durable execution table rejected the request.
     Durable(ConstellationError),
-    /// The gateway-backed remote full-host adapter rejected the request.
+    /// The injected gateway port rejected the request.
     Remote(RemoteNodeError),
     /// The bounded gateway session table is at capacity.
     GatewaySessionCapacityExceeded,
+    /// A host-resident request addressed a node other than this executor's
+    /// own local node identity.
+    WrongNode,
+    /// An exec-family operation's body/envelope workload did not match the
+    /// workload already recorded for that execution (or the envelope's own
+    /// declared workload, for `ExecStart`).
+    WorkloadMismatch,
+    /// This executor's own authorization/idempotency router refused the
+    /// host-resident request (capability denial, principal mismatch,
+    /// missing/conflicting/expired idempotency key, or dedup capacity).
+    Router(ConstellationError),
+    /// A same-key host-resident mutation is still in progress at the host;
+    /// the caller must retry later rather than treat this as a failure.
+    HostOperationInProgress,
 }
 
 impl std::fmt::Display for WorkExecutorError {
@@ -122,9 +152,20 @@ impl std::fmt::Display for WorkExecutorError {
                 kind.code()
             ),
             WorkExecutorError::Durable(err) => write!(f, "durable execution table: {err}"),
-            WorkExecutorError::Remote(err) => write!(f, "remote full-host dispatch: {err}"),
+            WorkExecutorError::Remote(err) => write!(f, "gateway port dispatch: {err}"),
             WorkExecutorError::GatewaySessionCapacityExceeded => {
                 write!(f, "gateway session table is at capacity")
+            }
+            WorkExecutorError::WrongNode => {
+                write!(f, "operation addressed a node other than this host")
+            }
+            WorkExecutorError::WorkloadMismatch => write!(
+                f,
+                "operation body/envelope workload did not match the execution's recorded workload"
+            ),
+            WorkExecutorError::Router(err) => write!(f, "host authorization router: {err}"),
+            WorkExecutorError::HostOperationInProgress => {
+                write!(f, "a same-key host-resident operation is still in progress")
             }
         }
     }
@@ -146,31 +187,70 @@ fn decode_body<T: serde::de::DeserializeOwned>(
     serde_json::from_slice(req.body.as_bytes()).map_err(|_| WorkExecutorError::MalformedBody)
 }
 
+fn encode_host_resident_outcome(
+    outcome: &HostResidentOutcome,
+) -> Result<OpaquePayload, WorkExecutorError> {
+    let bytes = serde_json::to_vec(outcome).map_err(|_| WorkExecutorError::MalformedBody)?;
+    OpaquePayload::new(bytes).map_err(|_| WorkExecutorError::MalformedBody)
+}
+
+fn decode_host_resident_outcome(
+    payload: &OpaquePayload,
+) -> Result<HostResidentOutcome, WorkExecutorError> {
+    serde_json::from_slice(payload.as_bytes()).map_err(|_| WorkExecutorError::MalformedBody)
+}
+
+/// Convert a host-router refusal for `req` into a [`WorkExecutorError`].
+/// Every non-`Accept`/`Replay`/`InProgress` decision maps to `Some` from
+/// [`route_decision_error`]; the fallback only guards a future decision
+/// variant this module has not been updated for.
+fn host_router_error(req: &OperationRequest, decision: &RouteDecision) -> WorkExecutorError {
+    match route_decision_error(req, decision) {
+        Some(err) => WorkExecutorError::Router(err),
+        None => WorkExecutorError::UnsupportedHostResidentOperation(req.kind),
+    }
+}
+
 /// The one typed dispatch surface tying realm resolution, host-resident
-/// durable execution, gateway-backed remote dispatch, and gateway session
-/// lifecycle tracking together. See the module documentation for the
-/// dispatch contract.
+/// authorization + durable execution, and gateway session lifecycle
+/// tracking together. See the module documentation for the dispatch
+/// contract.
 pub struct WorkExecutor<C = SystemClock>
 where
     C: Clock,
 {
     entrypoints: RealmEntrypointTable,
     durable: crate::execution::DurableExecTable,
-    remote: RemoteFullHostAdapter<C>,
+    router: OperationRouter<C>,
+    local_node: NodeId,
+    session_principal: PrincipalId,
+    capabilities: CapabilitySet,
     sessions: HashMap<OperationId, SessionLifecycle>,
     max_gateway_sessions: usize,
 }
 
 impl WorkExecutor<SystemClock> {
     /// Build with default-bounded tables and the default clock.
+    ///
+    /// `local_node` is the node identity this host answers to for
+    /// host-resident dispatch (a host-resident request addressed to any
+    /// other node fails closed with [`WorkExecutorError::WrongNode`]).
+    /// `session_principal`/`capabilities` are the negotiated identity this
+    /// executor authorizes host-resident requests against, mirroring
+    /// [`crate::remote_node::RemoteFullHostAdapter::new`]'s own
+    /// `gateway_principal`/`negotiated_capabilities` construction.
     pub fn new(
-        gateway_principal: d2b_realm_core::PrincipalId,
-        negotiated_capabilities: d2b_realm_core::CapabilitySet,
+        local_node: NodeId,
+        session_principal: PrincipalId,
+        capabilities: CapabilitySet,
     ) -> Self {
         Self::with_parts(
             RealmEntrypointTable::new(),
             crate::execution::DurableExecTable::new(),
-            RemoteFullHostAdapter::new(gateway_principal, negotiated_capabilities),
+            OperationRouter::new(),
+            local_node,
+            session_principal,
+            capabilities,
         )
     }
 }
@@ -179,17 +259,23 @@ impl<C> WorkExecutor<C>
 where
     C: Clock,
 {
-    /// Build from already-constructed parts (tests, or a gateway wiring
+    /// Build from already-constructed parts (tests, or a host wiring
     /// injecting a manual clock / pre-populated entrypoint table).
     pub fn with_parts(
         entrypoints: RealmEntrypointTable,
         durable: crate::execution::DurableExecTable,
-        remote: RemoteFullHostAdapter<C>,
+        router: OperationRouter<C>,
+        local_node: NodeId,
+        session_principal: PrincipalId,
+        capabilities: CapabilitySet,
     ) -> Self {
         Self {
             entrypoints,
             durable,
-            remote,
+            router,
+            local_node,
+            session_principal,
+            capabilities,
             sessions: HashMap::new(),
             max_gateway_sessions: DEFAULT_MAX_GATEWAY_SESSIONS,
         }
@@ -208,6 +294,13 @@ where
     }
 
     /// Borrow the realm entrypoint table.
+    ///
+    /// Along with the other unused-in-this-crate's-own-tests accessors
+    /// below (`durable_mut`, `router`, `router_mut`, `local_node`), this is
+    /// real integrator-facing API for the production wiring documented in
+    /// `docs/reference/realm-work-executor.md` (this module only compiles
+    /// under this crate's own `#[cfg(test)]` today), not dead code.
+    #[allow(dead_code)]
     pub fn entrypoints(&self) -> &RealmEntrypointTable {
         &self.entrypoints
     }
@@ -218,19 +311,29 @@ where
     }
 
     /// Borrow the host-resident durable execution table mutably.
+    #[allow(dead_code)]
     pub fn durable_mut(&mut self) -> &mut crate::execution::DurableExecTable {
         &mut self.durable
     }
 
-    /// Borrow the gateway-side remote full-host adapter (e.g. to register
-    /// remote nodes before serving traffic).
-    pub fn remote_mut(&mut self) -> &mut RemoteFullHostAdapter<C> {
-        &mut self.remote
+    /// Borrow this executor's own host-resident authorization/idempotency
+    /// router.
+    #[allow(dead_code)]
+    pub fn router(&self) -> &OperationRouter<C> {
+        &self.router
     }
 
-    /// Borrow the gateway-side remote full-host adapter.
-    pub fn remote(&self) -> &RemoteFullHostAdapter<C> {
-        &self.remote
+    /// Borrow this executor's own host-resident authorization/idempotency
+    /// router mutably (e.g. to `gc()` on a maintenance tick).
+    #[allow(dead_code)]
+    pub fn router_mut(&mut self) -> &mut OperationRouter<C> {
+        &mut self.router
+    }
+
+    /// This executor's own local node identity.
+    #[allow(dead_code)]
+    pub fn local_node(&self) -> &NodeId {
+        &self.local_node
     }
 
     /// Number of gateway-backed sessions currently tracked.
@@ -265,6 +368,7 @@ where
         req: &OperationRequest,
         generation: &ProtocolToken,
         client: &mut dyn RemotePeerClient,
+        gateway_port: &mut dyn GatewayPort,
     ) -> Result<WorkDispatchOutcome, WorkExecutorError> {
         let target = realm_target_from_request(req)?;
         match self
@@ -275,9 +379,14 @@ where
             DispatchTarget::HostResident { .. } => Ok(WorkDispatchOutcome::HostResident(
                 self.dispatch_host_resident(req)?,
             )),
-            DispatchTarget::GatewayBacked { .. } => {
-                self.dispatch_gateway_backed(req, generation, client)
-            }
+            DispatchTarget::GatewayBacked { gateway, target } => self.dispatch_gateway_backed(
+                &gateway,
+                &target,
+                req,
+                generation,
+                client,
+                gateway_port,
+            ),
         }
     }
 
@@ -285,9 +394,70 @@ where
         &mut self,
         req: &OperationRequest,
     ) -> Result<HostResidentOutcome, WorkExecutorError> {
+        // Cheap, side-effect-free node validation first -- mirrors
+        // `RemoteFullHostAdapter::dispatch`'s own "resolve/validate the
+        // target before ever touching router/dedup state" ordering.
+        if req.node != self.local_node {
+            return Err(WorkExecutorError::WrongNode);
+        }
+
+        match self
+            .router
+            .route_with_capabilities(req, &self.session_principal, &self.capabilities)
+        {
+            RouteDecision::Accept { .. } => {
+                let outcome = self.perform_host_resident(req);
+                if req.kind.is_mutating() {
+                    match &outcome {
+                        Ok(value) => match encode_host_resident_outcome(value) {
+                            Ok(payload) => {
+                                self.router.mark_completed(req, payload);
+                            }
+                            Err(_) => {
+                                self.router.mark_failed(req);
+                            }
+                        },
+                        Err(_) => {
+                            self.router.mark_failed(req);
+                        }
+                    }
+                }
+                outcome
+            }
+            RouteDecision::Replay { result, .. } => decode_host_resident_outcome(&result),
+            RouteDecision::InProgress { .. } => Err(WorkExecutorError::HostOperationInProgress),
+            decision => Err(host_router_error(req, &decision)),
+        }
+    }
+
+    /// The exec-family body's own workload (`ExecStart`) or the workload
+    /// already recorded for an existing execution (`ExecAttach`/`ExecLogs`/
+    /// `ExecCancel`) must equal the envelope's `req.workload`. No existing
+    /// record is not itself a mismatch -- the table's own not-found error
+    /// surfaces naturally once the table call is attempted.
+    fn check_execution_workload(
+        &self,
+        req: &OperationRequest,
+        execution_id: &ExecutionId,
+    ) -> Result<(), WorkExecutorError> {
+        if let Some(existing) = self.durable.summary(execution_id)
+            && Some(&existing.workload) != req.workload.as_ref()
+        {
+            return Err(WorkExecutorError::WorkloadMismatch);
+        }
+        Ok(())
+    }
+
+    fn perform_host_resident(
+        &mut self,
+        req: &OperationRequest,
+    ) -> Result<HostResidentOutcome, WorkExecutorError> {
         match req.kind {
             OperationKind::ExecStart => {
                 let decoded: ExecStartRequest = decode_body(req)?;
+                if Some(&decoded.workload) != req.workload.as_ref() {
+                    return Err(WorkExecutorError::WorkloadMismatch);
+                }
                 let summary = self
                     .durable
                     .start(decoded)
@@ -296,6 +466,7 @@ where
             }
             OperationKind::ExecAttach => {
                 let decoded: ExecAttachRequest = decode_body(req)?;
+                self.check_execution_workload(req, &decoded.execution_id)?;
                 let summary = self
                     .durable
                     .attach(&decoded)
@@ -304,6 +475,7 @@ where
             }
             OperationKind::ExecLogs => {
                 let decoded: ExecLogsRequest = decode_body(req)?;
+                self.check_execution_workload(req, &decoded.execution_id)?;
                 let summary = self
                     .durable
                     .logs(&decoded)
@@ -312,6 +484,7 @@ where
             }
             OperationKind::ExecCancel => {
                 let decoded: ExecCancelRequest = decode_body(req)?;
+                self.check_execution_workload(req, &decoded.execution_id)?;
                 let cancelled = self
                     .durable
                     .cancel(&decoded)
@@ -324,41 +497,52 @@ where
 
     fn dispatch_gateway_backed(
         &mut self,
+        gateway: &RealmTarget,
+        _target: &RealmTarget,
         req: &OperationRequest,
         generation: &ProtocolToken,
         client: &mut dyn RemotePeerClient,
+        gateway_port: &mut dyn GatewayPort,
     ) -> Result<WorkDispatchOutcome, WorkExecutorError> {
         let tracks_session = req.kind == OperationKind::DisplaySessionOpen;
-        if tracks_session && !self.sessions.contains_key(&req.operation_id) {
-            if self.sessions.len() >= self.max_gateway_sessions {
-                return Err(WorkExecutorError::GatewaySessionCapacityExceeded);
-            }
-            self.sessions
-                .insert(req.operation_id.clone(), SessionLifecycle::new());
-        }
 
-        let result = self.remote.dispatch(req, generation, client);
+        // Do NOT allocate bounded lifecycle state before the port reports a
+        // successful, already-authorized dispatch outcome: a stream of
+        // requests that never gets past the gateway's own auth/preflight
+        // must not be able to exhaust the bounded session table.
+        let result = gateway_port.dispatch_via_gateway(gateway, req, generation, client);
 
         let session_phase = if tracks_session {
-            let lifecycle = self
-                .sessions
-                .get_mut(&req.operation_id)
-                .expect("inserted above when absent");
             match &result {
                 Ok(RemoteDispatchOutcome::Sent { .. })
                 | Ok(RemoteDispatchOutcome::Replayed { .. }) => {
-                    // Drive the session all the way to `Running`: dispatch
-                    // succeeding means the remote peer accepted/replayed the
-                    // display-session-open operation.
+                    // Only now -- after a successful auth/preflight-gated
+                    // dispatch outcome -- allocate (or reuse) bounded
+                    // lifecycle state.
+                    if !self.sessions.contains_key(&req.operation_id)
+                        && self.sessions.len() >= self.max_gateway_sessions
+                    {
+                        return Err(WorkExecutorError::GatewaySessionCapacityExceeded);
+                    }
+                    let lifecycle = self.sessions.entry(req.operation_id.clone()).or_default();
                     while lifecycle.advance().is_ok() {}
+                    Some(lifecycle.phase())
                 }
                 Ok(RemoteDispatchOutcome::QueryRemoteState { .. }) => {
-                    // Ambiguous outcome: leave the phase where it is until
-                    // the caller resolves the query.
+                    // Ambiguous outcome: never allocate new bounded state for
+                    // it -- only report an already-tracked session's phase.
+                    self.sessions
+                        .get(&req.operation_id)
+                        .map(SessionLifecycle::phase)
                 }
-                Err(_) => lifecycle.fail(),
+                Err(_) => {
+                    // Evict/reset rather than leaving a lingering entry that
+                    // would count against the bounded capacity for a
+                    // request that never actually succeeded.
+                    self.sessions.remove(&req.operation_id);
+                    None
+                }
             }
-            Some(lifecycle.phase())
         } else {
             None
         };
@@ -381,12 +565,17 @@ mod tests {
     };
 
     use crate::remote_node::{
-        RemoteNodeError, RemoteNodeErrorKind, RemoteNodeRegistration, RemotePeerStatus, RemoteRoute,
+        RemoteFullHostAdapter, RemoteNodeError, RemoteNodeErrorKind, RemoteNodeRegistration,
+        RemotePeerStatus, RemoteRoute, SingleGatewayPort,
     };
 
     /// The gateway-backed test realm (`work`).
     fn work_realm() -> RealmPath {
         RealmPath::new(vec![RealmId::parse("work").unwrap()]).unwrap()
+    }
+
+    fn local_node() -> NodeId {
+        NodeId::parse("this-host").unwrap()
     }
 
     fn principal() -> PrincipalId {
@@ -395,6 +584,10 @@ mod tests {
 
     fn gateway_node() -> NodeId {
         NodeId::parse("gateway").unwrap()
+    }
+
+    fn gateway_target() -> RealmTarget {
+        RealmTarget::new(WorkloadId::parse("gateway-vm").unwrap(), RealmPath::local())
     }
 
     fn remote_registration(generation: &str, caps: CapabilitySet) -> RemoteNodeRegistration {
@@ -432,7 +625,7 @@ mod tests {
             correlation_id: CorrelationId::parse("corr-1").unwrap(),
             idempotency_key: key.map(|raw| IdempotencyKey::parse(raw).unwrap()),
             realm: RealmPath::local(),
-            node: NodeId::parse("this-host").unwrap(),
+            node: local_node(),
             workload: Some(WorkloadId::parse("vm-a").unwrap()),
             principal: principal(),
             kind,
@@ -490,48 +683,70 @@ mod tests {
         }
     }
 
-    fn host_resident_executor() -> WorkExecutor<SystemClock> {
-        let mut executor = WorkExecutor::new(principal(), CapabilitySet::empty());
+    /// A `WorkExecutor` for host-resident tests, authorized with
+    /// `capabilities` for `session_principal = principal()`.
+    fn host_resident_executor(capabilities: CapabilitySet) -> WorkExecutor<SystemClock> {
+        let mut executor = WorkExecutor::new(local_node(), principal(), capabilities);
         executor.entrypoints_mut().host_resident(RealmPath::local());
         executor
     }
 
-    fn gateway_backed_executor(caps: CapabilitySet) -> WorkExecutor<SystemClock> {
+    /// A fully-authorized host-resident executor (the common case for tests
+    /// that are not specifically exercising the authorization gate).
+    fn authorized_host_resident_executor() -> WorkExecutor<SystemClock> {
+        host_resident_executor(
+            CapabilitySet::empty()
+                .with(Capability::Exec)
+                .with(Capability::Logs),
+        )
+    }
+
+    fn gateway_backed_executor(
+        caps: CapabilitySet,
+    ) -> (WorkExecutor<SystemClock>, SingleGatewayPort<SystemClock>) {
         let gateway_realm = work_realm();
-        let remote = RemoteFullHostAdapter::with_router(
+        let boundary = gateway_target();
+        let adapter = RemoteFullHostAdapter::with_router(
             crate::remote_node::RemoteNodeRegistry::for_realm(gateway_realm.clone()),
             crate::OperationRouter::new(),
             principal(),
             caps.clone(),
         );
-        let mut entrypoints = RealmEntrypointTable::new();
-        entrypoints.gateway_backed(
-            gateway_realm,
-            RealmTarget::new(WorkloadId::parse("gateway-vm").unwrap(), RealmPath::local()),
-        );
-        let mut executor = WorkExecutor::with_parts(
-            entrypoints,
-            crate::execution::DurableExecTable::new(),
-            remote,
-        );
-        executor
-            .remote_mut()
+        let mut port = SingleGatewayPort::new(boundary.clone(), adapter);
+        port.adapter_mut()
             .registry_mut()
             .register(
                 remote_registration("gen-1", caps),
                 std::time::Instant::now(),
             )
             .unwrap();
+
+        // Gateway-backed dispatch is authorized entirely by the injected
+        // `GatewayPort` (here, the gateway-side adapter's own embedded
+        // router, seeded with `caps` above) -- `WorkExecutor`'s own
+        // `session_principal`/`capabilities` only gate the host-resident
+        // path, so an empty set here is deliberate and does not affect
+        // these gateway-backed tests.
+        let mut executor = WorkExecutor::new(local_node(), principal(), CapabilitySet::empty());
         executor
+            .entrypoints_mut()
+            .gateway_backed(gateway_realm, boundary);
+        (executor, port)
     }
 
     #[test]
     fn host_resident_exec_start_reaches_the_durable_table() {
-        let mut executor = host_resident_executor();
-        let req = exec_start_request(OperationKind::ExecStart, "exec-1", None);
+        let mut executor = authorized_host_resident_executor();
+        let req = exec_start_request(OperationKind::ExecStart, "exec-1", Some("idem-1"));
         let mut peer = FakePeer::default();
+        let mut port = NoopGatewayPort;
         let outcome = executor
-            .dispatch(&req, &ProtocolToken::parse("boot-1").unwrap(), &mut peer)
+            .dispatch(
+                &req,
+                &ProtocolToken::parse("boot-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
             .unwrap();
         match outcome {
             WorkDispatchOutcome::HostResident(HostResidentOutcome::Started(summary)) => {
@@ -548,65 +763,310 @@ mod tests {
 
     #[test]
     fn missing_workload_fails_closed() {
-        let mut executor = host_resident_executor();
-        let mut req = exec_start_request(OperationKind::ExecStart, "exec-1", None);
+        let mut executor = authorized_host_resident_executor();
+        let mut req = exec_start_request(OperationKind::ExecStart, "exec-1", Some("idem-1"));
         req.workload = None;
         let mut peer = FakePeer::default();
+        let mut port = NoopGatewayPort;
         let err = executor
-            .dispatch(&req, &ProtocolToken::parse("boot-1").unwrap(), &mut peer)
+            .dispatch(
+                &req,
+                &ProtocolToken::parse("boot-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
             .unwrap_err();
         assert_eq!(err, WorkExecutorError::MissingWorkload);
     }
 
     #[test]
     fn unresolved_realm_fails_closed() {
-        let mut executor = WorkExecutor::new(principal(), CapabilitySet::empty());
-        let req = exec_start_request(OperationKind::ExecStart, "exec-1", None);
+        let mut executor = WorkExecutor::new(local_node(), principal(), CapabilitySet::empty());
+        let req = exec_start_request(OperationKind::ExecStart, "exec-1", Some("idem-1"));
         let mut peer = FakePeer::default();
+        let mut port = NoopGatewayPort;
         let err = executor
-            .dispatch(&req, &ProtocolToken::parse("boot-1").unwrap(), &mut peer)
+            .dispatch(
+                &req,
+                &ProtocolToken::parse("boot-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
             .unwrap_err();
         assert!(matches!(err, WorkExecutorError::Resolve(_)));
     }
 
     #[test]
+    fn wrong_node_fails_closed_before_touching_the_durable_table() {
+        let mut executor = authorized_host_resident_executor();
+        let mut req = exec_start_request(OperationKind::ExecStart, "exec-1", Some("idem-1"));
+        req.node = NodeId::parse("some-other-host").unwrap();
+        let mut peer = FakePeer::default();
+        let mut port = NoopGatewayPort;
+        let err = executor
+            .dispatch(
+                &req,
+                &ProtocolToken::parse("boot-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
+            .unwrap_err();
+        assert_eq!(err, WorkExecutorError::WrongNode);
+        assert!(executor.durable().is_empty());
+    }
+
+    #[test]
+    fn empty_capabilities_reject_a_mutating_host_resident_operation() {
+        // ExecStart is mutating and requires `Capability::Exec`; an executor
+        // authorized with no capabilities must refuse it before the durable
+        // table is ever touched (finding: reject empty capabilities for
+        // mutations).
+        let mut executor = host_resident_executor(CapabilitySet::empty());
+        let req = exec_start_request(OperationKind::ExecStart, "exec-1", Some("idem-1"));
+        let mut peer = FakePeer::default();
+        let mut port = NoopGatewayPort;
+        let err = executor
+            .dispatch(
+                &req,
+                &ProtocolToken::parse("boot-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
+            .unwrap_err();
+        assert!(
+            matches!(err, WorkExecutorError::Router(_)),
+            "expected a router capability refusal, got {err:?}"
+        );
+        assert!(executor.durable().is_empty());
+    }
+
+    #[test]
+    fn missing_idempotency_key_rejects_a_mutating_host_resident_operation() {
+        // ExecStart is mutating; an idempotency key is mandatory even when
+        // fully authorized by capability (finding: reject missing
+        // idempotency for mutations).
+        let mut executor = authorized_host_resident_executor();
+        let req = exec_start_request(OperationKind::ExecStart, "exec-1", None);
+        let mut peer = FakePeer::default();
+        let mut port = NoopGatewayPort;
+        let err = executor
+            .dispatch(
+                &req,
+                &ProtocolToken::parse("boot-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
+            .unwrap_err();
+        assert!(
+            matches!(err, WorkExecutorError::Router(_)),
+            "expected a router idempotency refusal, got {err:?}"
+        );
+        assert!(executor.durable().is_empty());
+    }
+
+    #[test]
+    fn non_mutating_exec_logs_does_not_require_an_idempotency_key() {
+        let mut executor = authorized_host_resident_executor();
+        let start_req = exec_start_request(OperationKind::ExecStart, "exec-1", Some("idem-1"));
+        let mut peer = FakePeer::default();
+        let mut port = NoopGatewayPort;
+        executor
+            .dispatch(
+                &start_req,
+                &ProtocolToken::parse("boot-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
+            .unwrap();
+
+        let logs = ExecLogsRequest {
+            execution_id: ExecutionId::parse("exec-1").unwrap(),
+            generation: ExecutionGeneration {
+                guest_boot_id: ProtocolToken::parse("boot-1").unwrap(),
+                workload_generation: ProtocolToken::parse("workload-gen-1").unwrap(),
+            },
+            cursor: None,
+            max_bytes: std::num::NonZero::new(4096).unwrap(),
+        };
+        let mut req = start_req.clone();
+        req.kind = OperationKind::ExecLogs;
+        req.idempotency_key = None;
+        req.body = OpaquePayload::new(serde_json::to_vec(&logs).unwrap()).unwrap();
+
+        let outcome = executor
+            .dispatch(
+                &req,
+                &ProtocolToken::parse("boot-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
+            .unwrap();
+        assert!(matches!(
+            outcome,
+            WorkDispatchOutcome::HostResident(HostResidentOutcome::Logs(_))
+        ));
+    }
+
+    #[test]
+    fn duplicate_idempotency_key_replays_instead_of_restarting() {
+        let mut executor = authorized_host_resident_executor();
+        let req = exec_start_request(OperationKind::ExecStart, "exec-1", Some("idem-1"));
+        let mut peer = FakePeer::default();
+        let mut port = NoopGatewayPort;
+        let first = executor
+            .dispatch(
+                &req,
+                &ProtocolToken::parse("boot-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
+            .unwrap();
+        let second = executor
+            .dispatch(
+                &req,
+                &ProtocolToken::parse("boot-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
+            .unwrap();
+        assert_eq!(first, second);
+        assert_eq!(
+            executor.durable().len(),
+            1,
+            "a replayed retry must never re-run the durable start"
+        );
+    }
+
+    #[test]
     fn malformed_body_is_rejected_before_touching_the_durable_table() {
-        let mut executor = host_resident_executor();
-        let mut req = exec_start_request(OperationKind::ExecStart, "exec-1", None);
+        let mut executor = authorized_host_resident_executor();
+        let mut req = exec_start_request(OperationKind::ExecStart, "exec-1", Some("idem-1"));
         req.body = OpaquePayload::new(b"not-json".to_vec()).unwrap();
         let mut peer = FakePeer::default();
+        let mut port = NoopGatewayPort;
         let err = executor
-            .dispatch(&req, &ProtocolToken::parse("boot-1").unwrap(), &mut peer)
+            .dispatch(
+                &req,
+                &ProtocolToken::parse("boot-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
             .unwrap_err();
         assert_eq!(err, WorkExecutorError::MalformedBody);
         assert!(executor.durable().is_empty());
     }
 
     #[test]
+    fn body_workload_mismatch_is_rejected_before_touching_the_durable_table() {
+        let mut executor = authorized_host_resident_executor();
+        let mut req = exec_start_request(OperationKind::ExecStart, "exec-1", Some("idem-1"));
+        // The envelope addresses `vm-a`, but rewrite the body to start a
+        // different workload -- the envelope/body workload must agree.
+        let mismatched = ExecStartRequest {
+            execution_id: ExecutionId::parse("exec-1").unwrap(),
+            workload: WorkloadId::parse("vm-b").unwrap(),
+            generation: ExecutionGeneration {
+                guest_boot_id: ProtocolToken::parse("boot-1").unwrap(),
+                workload_generation: ProtocolToken::parse("workload-gen-1").unwrap(),
+            },
+            attach_mode: ExecAttachMode::Detached,
+            tty: false,
+        };
+        req.body = OpaquePayload::new(serde_json::to_vec(&mismatched).unwrap()).unwrap();
+        let mut peer = FakePeer::default();
+        let mut port = NoopGatewayPort;
+        let err = executor
+            .dispatch(
+                &req,
+                &ProtocolToken::parse("boot-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
+            .unwrap_err();
+        assert_eq!(err, WorkExecutorError::WorkloadMismatch);
+        assert!(executor.durable().is_empty());
+    }
+
+    #[test]
+    fn existing_execution_workload_mismatch_is_rejected_for_attach() {
+        let mut executor = authorized_host_resident_executor();
+        let start_req = exec_start_request(OperationKind::ExecStart, "exec-1", Some("idem-1"));
+        let mut peer = FakePeer::default();
+        let mut port = NoopGatewayPort;
+        executor
+            .dispatch(
+                &start_req,
+                &ProtocolToken::parse("boot-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
+            .unwrap();
+
+        let attach = ExecAttachRequest {
+            execution_id: ExecutionId::parse("exec-1").unwrap(),
+            generation: ExecutionGeneration {
+                guest_boot_id: ProtocolToken::parse("boot-1").unwrap(),
+                workload_generation: ProtocolToken::parse("workload-gen-1").unwrap(),
+            },
+            stdout_cursor: None,
+            stderr_cursor: None,
+        };
+        let mut req = start_req.clone();
+        req.kind = OperationKind::ExecAttach;
+        req.idempotency_key = Some(IdempotencyKey::parse("idem-2").unwrap());
+        // Envelope now claims a different workload than the one recorded at
+        // start time.
+        req.workload = Some(WorkloadId::parse("vm-b").unwrap());
+        req.body = OpaquePayload::new(serde_json::to_vec(&attach).unwrap()).unwrap();
+
+        let err = executor
+            .dispatch(
+                &req,
+                &ProtocolToken::parse("boot-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
+            .unwrap_err();
+        assert_eq!(err, WorkExecutorError::WorkloadMismatch);
+    }
+
+    #[test]
     fn unsupported_host_resident_kind_is_rejected() {
-        let mut executor = host_resident_executor();
-        let mut req = exec_start_request(OperationKind::ExecStart, "exec-1", None);
+        let mut executor = authorized_host_resident_executor();
+        let mut req = exec_start_request(OperationKind::ExecStart, "exec-1", Some("idem-1"));
         req.kind = OperationKind::WorkloadStart;
         let mut peer = FakePeer::default();
+        let mut port = NoopGatewayPort;
         let err = executor
-            .dispatch(&req, &ProtocolToken::parse("boot-1").unwrap(), &mut peer)
+            .dispatch(
+                &req,
+                &ProtocolToken::parse("boot-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
             .unwrap_err();
-        assert_eq!(
-            err,
-            WorkExecutorError::UnsupportedHostResidentOperation(OperationKind::WorkloadStart)
-        );
+        // `WorkloadStart` is a supported, capability-gated, mutating kind;
+        // without a `Capability::Lifecycle` grant the router refuses it
+        // before the durable table's own "unsupported kind" branch would
+        // ever run.
+        assert!(matches!(err, WorkExecutorError::Router(_)));
     }
 
     #[test]
     fn gateway_backed_display_session_advances_to_running_on_success() {
         let caps = CapabilitySet::empty().with(Capability::WindowForwarding);
-        let mut executor = gateway_backed_executor(caps);
+        let (mut executor, mut port) = gateway_backed_executor(caps);
         let realm = work_realm();
         let req = display_open_request(realm, Some("idem-1"));
         let mut peer = FakePeer::default();
 
         let outcome = executor
-            .dispatch(&req, &ProtocolToken::parse("gen-1").unwrap(), &mut peer)
+            .dispatch(
+                &req,
+                &ProtocolToken::parse("gen-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
             .unwrap();
         match outcome {
             WorkDispatchOutcome::GatewayBacked {
@@ -627,9 +1087,9 @@ mod tests {
     }
 
     #[test]
-    fn gateway_backed_display_session_fails_the_lifecycle_on_remote_error() {
+    fn gateway_backed_display_session_never_allocates_lifecycle_on_remote_error() {
         let caps = CapabilitySet::empty().with(Capability::WindowForwarding);
-        let mut executor = gateway_backed_executor(caps);
+        let (mut executor, mut port) = gateway_backed_executor(caps);
         let realm = work_realm();
         let req = display_open_request(realm, Some("idem-1"));
         let mut peer = FakePeer {
@@ -638,26 +1098,85 @@ mod tests {
         };
 
         let err = executor
-            .dispatch(&req, &ProtocolToken::parse("gen-1").unwrap(), &mut peer)
+            .dispatch(
+                &req,
+                &ProtocolToken::parse("gen-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
             .unwrap_err();
         assert!(matches!(err, WorkExecutorError::Remote(_)));
-        // The lifecycle is still tracked, rolled into teardown by the
-        // failure (never silently dropped).
+        // Lifecycle state is only allocated after a successful
+        // auth/preflight-gated dispatch outcome: a failed attempt must
+        // never leave a lingering entry that counts against the bounded
+        // capacity.
+        assert_eq!(executor.gateway_session_phase(&req.operation_id), None);
+        assert_eq!(executor.gateway_session_count(), 0);
+    }
+
+    #[test]
+    fn rejected_gateway_attempts_cannot_exhaust_bounded_session_capacity() {
+        // A gateway port that always refuses (e.g. the request never
+        // clears the gateway's own auth/preflight) must never be able to
+        // fill the bounded session table with entries for ids that never
+        // actually succeeded.
+        let caps = CapabilitySet::empty().with(Capability::WindowForwarding);
+        let (mut executor, mut port) = gateway_backed_executor(caps);
+        executor = executor.with_max_gateway_sessions(2);
+        let realm = work_realm();
+        let mut peer = FakePeer {
+            fail_send: true,
+            ..Default::default()
+        };
+
+        for i in 0..8 {
+            let mut req = display_open_request(realm.clone(), Some("idem-1"));
+            req.operation_id = OperationId::parse(format!("op-display-{i}")).unwrap();
+            let err = executor
+                .dispatch(
+                    &req,
+                    &ProtocolToken::parse("gen-1").unwrap(),
+                    &mut peer,
+                    &mut port,
+                )
+                .unwrap_err();
+            assert!(matches!(err, WorkExecutorError::Remote(_)));
+        }
         assert_eq!(
-            executor.gateway_session_phase(&req.operation_id),
-            Some(SessionPhase::Stopping)
+            executor.gateway_session_count(),
+            0,
+            "repeatedly-rejected attempts must never consume bounded capacity"
         );
+
+        // A subsequent legitimately-succeeding attempt must still fit.
+        peer.fail_send = false;
+        let ok_req = display_open_request(realm, Some("idem-1"));
+        let outcome = executor
+            .dispatch(
+                &ok_req,
+                &ProtocolToken::parse("gen-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
+            .unwrap();
+        assert!(matches!(outcome, WorkDispatchOutcome::GatewayBacked { .. }));
+        assert_eq!(executor.gateway_session_count(), 1);
     }
 
     #[test]
     fn stop_gateway_session_evicts_once_stopped() {
         let caps = CapabilitySet::empty().with(Capability::WindowForwarding);
-        let mut executor = gateway_backed_executor(caps);
+        let (mut executor, mut port) = gateway_backed_executor(caps);
         let realm = work_realm();
         let req = display_open_request(realm, Some("idem-1"));
         let mut peer = FakePeer::default();
         executor
-            .dispatch(&req, &ProtocolToken::parse("gen-1").unwrap(), &mut peer)
+            .dispatch(
+                &req,
+                &ProtocolToken::parse("gen-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
             .unwrap();
 
         let phase = executor.stop_gateway_session(&req.operation_id).unwrap();
@@ -670,7 +1189,7 @@ mod tests {
     #[test]
     fn non_display_gateway_operation_does_not_track_a_session() {
         let caps = CapabilitySet::empty().with(Capability::Lifecycle);
-        let mut executor = gateway_backed_executor(caps);
+        let (mut executor, mut port) = gateway_backed_executor(caps);
         let realm = work_realm();
         let req = OperationRequest {
             operation_id: OperationId::parse("op-workload-1").unwrap(),
@@ -686,7 +1205,12 @@ mod tests {
         };
         let mut peer = FakePeer::default();
         let outcome = executor
-            .dispatch(&req, &ProtocolToken::parse("gen-1").unwrap(), &mut peer)
+            .dispatch(
+                &req,
+                &ProtocolToken::parse("gen-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
             .unwrap();
         match outcome {
             WorkDispatchOutcome::GatewayBacked { session_phase, .. } => {
@@ -698,21 +1222,83 @@ mod tests {
     }
 
     #[test]
-    fn gateway_session_capacity_is_enforced() {
+    fn gateway_session_capacity_is_enforced_for_legitimate_sessions() {
         let caps = CapabilitySet::empty().with(Capability::WindowForwarding);
-        let mut executor = gateway_backed_executor(caps).with_max_gateway_sessions(1);
+        let (mut executor, mut port) = gateway_backed_executor(caps);
+        executor = executor.with_max_gateway_sessions(1);
         let realm = work_realm();
         let first = display_open_request(realm.clone(), Some("idem-1"));
         let mut peer = FakePeer::default();
         executor
-            .dispatch(&first, &ProtocolToken::parse("gen-1").unwrap(), &mut peer)
+            .dispatch(
+                &first,
+                &ProtocolToken::parse("gen-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
             .unwrap();
 
         let mut second = display_open_request(realm, Some("idem-2"));
         second.operation_id = OperationId::parse("op-display-2").unwrap();
         let err = executor
-            .dispatch(&second, &ProtocolToken::parse("gen-1").unwrap(), &mut peer)
+            .dispatch(
+                &second,
+                &ProtocolToken::parse("gen-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
             .unwrap_err();
         assert_eq!(err, WorkExecutorError::GatewaySessionCapacityExceeded);
+    }
+
+    #[test]
+    fn gateway_port_boundary_mismatch_fails_closed() {
+        // A port constructed for one gateway boundary must refuse a
+        // dispatch resolved against a different one -- the injected port
+        // is the sole authority for "does this gateway match the boundary
+        // I front", never re-derived independently by `WorkExecutor`.
+        let caps = CapabilitySet::empty().with(Capability::WindowForwarding);
+        let (mut executor, mut port) = gateway_backed_executor(caps);
+        // Rewire the entrypoint table so the resolved gateway target no
+        // longer matches the port's own boundary.
+        let realm = work_realm();
+        let mut entrypoints = RealmEntrypointTable::new();
+        entrypoints.gateway_backed(
+            realm.clone(),
+            RealmTarget::new(
+                WorkloadId::parse("different-gateway-vm").unwrap(),
+                RealmPath::local(),
+            ),
+        );
+        *executor.entrypoints_mut() = entrypoints;
+
+        let req = display_open_request(realm, Some("idem-1"));
+        let mut peer = FakePeer::default();
+        let err = executor
+            .dispatch(
+                &req,
+                &ProtocolToken::parse("gen-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
+            .unwrap_err();
+        assert!(matches!(err, WorkExecutorError::Remote(_)));
+        assert_eq!(executor.gateway_session_count(), 0);
+    }
+
+    /// A [`GatewayPort`] that should never be invoked (host-resident tests
+    /// must never cross the gateway boundary).
+    struct NoopGatewayPort;
+
+    impl GatewayPort for NoopGatewayPort {
+        fn dispatch_via_gateway(
+            &mut self,
+            _gateway: &RealmTarget,
+            _req: &OperationRequest,
+            _generation: &ProtocolToken,
+            _client: &mut dyn RemotePeerClient,
+        ) -> Result<RemoteDispatchOutcome, RemoteNodeError> {
+            panic!("host-resident dispatch must never reach the gateway port");
+        }
     }
 }

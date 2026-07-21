@@ -278,6 +278,26 @@ pub fn state_code(state: ExecState) -> &'static str {
     }
 }
 
+// `work_executor` composes this module's `DurableExecTable` (plus
+// `target_resolver`/`session_lifecycle`/`remote_node`, all already declared
+// in `lib.rs`) into the crate's single typed dispatch surface (ADR 0032).
+// `lib.rs` is integrator-owned, so this crate cannot add the production
+// `pub mod work_executor;` declaration there itself; without *some*
+// inclusion, `work_executor.rs` would never be compiled or exercised by
+// `cargo test` on this committed tree, silently hiding it from every
+// verification run. This `#[cfg(test)]`-gated `#[path]` module is a
+// conditional, test-only reference (never present in a production build of
+// this crate) that lets this crate's own `cargo test` compile and run
+// `work_executor.rs`'s test suite exactly as committed, with no manual
+// patch step. The integrator's real production wiring is a direct
+// `pub mod work_executor;` in `lib.rs` (see
+// `docs/reference/realm-work-executor.md` for the exact instructions) --
+// mutually exclusive with this test-only inclusion, since the two are never
+// compiled in the same build.
+#[cfg(test)]
+#[path = "work_executor.rs"]
+mod work_executor;
+
 #[cfg(test)]
 mod tests {
     use super::*;
