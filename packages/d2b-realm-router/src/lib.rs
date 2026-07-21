@@ -46,6 +46,7 @@ pub mod remote_node;
 pub mod service_v2;
 pub mod session_lifecycle;
 pub mod target_resolver;
+pub mod work_executor;
 
 pub use execution::{DEFAULT_MAX_EXECUTIONS, DurableExecTable};
 pub use remote_node::{
@@ -58,6 +59,10 @@ pub use remote_node::{
 };
 pub use session_lifecycle::{LifecycleError, SessionLifecycle, SessionPhase};
 pub use target_resolver::{DispatchTarget, RealmEntrypoint, RealmEntrypointTable, ResolveError};
+pub use work_executor::{
+    DEFAULT_MAX_GATEWAY_SESSIONS, HostResidentOutcome, WorkDispatchOutcome, WorkExecutor,
+    WorkExecutorError,
+};
 
 /// Default dedup retention window. While a completed key is within this
 /// window a same-request retry resolves to `Replay`; past it the key is

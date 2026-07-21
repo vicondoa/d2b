@@ -1,4 +1,7 @@
-{ landedComponents ? { }
+{ landedComponents ? {
+    realm-routing-work-executor-fabric =
+      "afd519cfb6aaaa9f8d77d6f4d5002dcbde457fab";
+  }
 , externalDependenciesOverride ? null
 }:
 
@@ -292,7 +295,8 @@ let
 
   readyComponents = builtins.filter
     (name:
-      builtins.all
+      !(builtins.hasAttr name landedComponents)
+      && builtins.all
         (dependency: builtins.hasAttr dependency landedComponents)
         components.${name}.dependsOn
       && builtins.all
@@ -301,13 +305,15 @@ let
     componentOrder;
   blockedComponents = builtins.filter
     (name:
-      builtins.any
+      !(builtins.hasAttr name landedComponents)
+      && builtins.any
         (dependency: externalDependencies.${dependency}.status != "ready")
         (globalExternalDependencies ++ components.${name}.externalDependsOn))
     componentOrder;
   pendingComponents = builtins.filter
     (name:
-      builtins.any
+      !(builtins.hasAttr name landedComponents)
+      && builtins.any
         (dependency: !(builtins.hasAttr dependency landedComponents))
         components.${name}.dependsOn
       && !(builtins.elem name blockedComponents))

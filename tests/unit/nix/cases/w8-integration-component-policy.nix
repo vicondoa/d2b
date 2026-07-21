@@ -63,13 +63,12 @@ in
       blockedCount = 1;
       note = basePlan.launchSummary.note;
       pendingOnDependency = [
-        "gateway-replacement"
         "provider-parity-fallback-removal"
       ];
-      pendingOnDependencyCount = 2;
+      pendingOnDependencyCount = 1;
       ready = [
         "secrets-lifecycle"
-        "realm-routing-work-executor-fabric"
+        "gateway-replacement"
         "restart-observability-audit"
       ];
       readyCount = 3;
@@ -119,7 +118,6 @@ in
       valid = true;
       launchReady = [
         "secrets-lifecycle"
-        "realm-routing-work-executor-fabric"
         "gateway-replacement"
         "restart-observability-audit"
       ];

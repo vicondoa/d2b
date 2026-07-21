@@ -10,6 +10,7 @@
 //! broker/daemon internals (enforced by the constellation
 //! dependency-direction CI gate).
 
+pub mod fabric;
 mod local_tcp;
 
 use async_trait::async_trait;
@@ -24,6 +25,10 @@ use std::sync::{
 };
 use tokio::sync::{Mutex, mpsc, mpsc::error::TrySendError};
 
+pub use fabric::{
+    FABRIC_ACCEPT_QUEUE_CAPACITY, FabricError, FabricScheme, MAX_FABRIC_SCHEME_LEN,
+    MAX_FABRIC_TRANSPORTS, TransportFabric,
+};
 pub use local_tcp::LocalTcpTransport;
 
 /// Default in-memory duplex buffer size for a loopback session.

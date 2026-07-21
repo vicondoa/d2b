@@ -1862,6 +1862,11 @@
       "path": "packages/d2b-realm-router/src/execution.rs"
     },
     {
+      "name": "w8-realm-router-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-realm-router/src/lib.rs"
+    },
+    {
       "name": "w8-realm-router-remote-node",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2b-realm-router/src/remote_node.rs"
@@ -1877,14 +1882,34 @@
       "path": "packages/d2b-realm-router/src/target_resolver.rs"
     },
     {
+      "name": "w8-realm-router-work-executor",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-realm-router/src/work_executor.rs"
+    },
+    {
       "name": "w8-realm-stubs",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2bd/src/realm_stubs.rs"
     },
     {
+      "name": "w8-realm-transport-fabric",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-realm-transport/src/fabric.rs"
+    },
+    {
+      "name": "w8-realm-transport-lib",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-realm-transport/src/lib.rs"
+    },
+    {
       "name": "w8-realm-transport-local-tcp",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2b-realm-transport/src/local_tcp.rs"
+    },
+    {
+      "name": "w8-realm-work-executor-doc",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "docs/reference/realm-work-executor.md"
     },
     {
       "name": "w8-runtime-systemd-user-lib",
