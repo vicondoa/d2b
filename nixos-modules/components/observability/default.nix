@@ -40,6 +40,10 @@ in
           observability = "observability-local";
         };
         autostart = true;
+        # Attests to the options-realms.nix reserved-`sys-`-prefix assertion
+        # that this exact workload name is the framework's own auto-declared
+        # observability stack, not an operator collision.
+        _frameworkReservedName = true;
         config = {
           imports = [ ./stack.nix ];
           d2b.observability = {

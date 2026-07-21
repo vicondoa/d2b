@@ -290,6 +290,8 @@ realm-audio/bundle-rows-exclude-ambient-host-endpoints
 realm-audio/provider-fragment-is-closed
 realm-audio/requires-explicit-normalized-provider-bindings
 realm-audio/resources-use-canonical-short-id-paths
+realms/allows-framework-auto-declared-network-workload
+realms/allows-systemd-user-with-allow-unsafe-local-true
 realms/canonical-artifacts-reference-realm-control-plane
 realms/child-controller-and-broker-are-parent-spawned
 realms/device-resources-cover-feature-schema
@@ -300,6 +302,11 @@ realms/fixed-local-root-units-only
 realms/legacy-options-are-unknown-with-no-tombstones
 realms/rejects-device-conflicts
 realms/rejects-missing-runtime-binding
+realms/rejects-operator-declared-network-workload-without-auto-declare
+realms/rejects-reserved-launcher-workload-name
+realms/rejects-reserved-sys-prefixed-workload-name
+realms/rejects-systemd-user-with-allow-unsafe-local-false
+realms/rejects-systemd-user-without-allow-unsafe-local
 realms/rejects-unknown-provider-binding
 realms/rejects-unsafe-east-west-without-ack
 realms/resources-use-derived-identities

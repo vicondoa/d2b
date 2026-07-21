@@ -149,6 +149,38 @@ let
   hasMessage = needle: messages:
     lib.any (message: lib.hasInfix needle message) messages;
 
+  # Fixture for the reserved-workload-name assertions: a bare realm with a
+  # single cloud-hypervisor runtime provider, so each case only needs to
+  # override the workload name/config under test.
+  reservedNameFixture = workloads: lib.recursiveUpdate hostBase {
+    d2b.realms.reserved = {
+      path = "reserved";
+      providers.runtime = {
+        type = "runtime";
+        implementationId = "cloud-hypervisor";
+      };
+      inherit workloads;
+    };
+  };
+
+  # Fixture for the systemd-user / policy.allowUnsafeLocal default-deny
+  # assertion. `policyOverride` is `null` to omit `policy.allowUnsafeLocal`
+  # entirely (exercising the schema default of `false`).
+  unsafeLocalFixture = policyOverride: lib.recursiveUpdate hostBase {
+    d2b.realms.unsaferealm =
+      {
+        path = "unsaferealm";
+        providers.runtime = {
+          type = "runtime";
+          implementationId = "systemd-user";
+        };
+        workloads.tools.providerRefs.runtime = "runtime";
+      }
+      // lib.optionalAttrs (policyOverride != null) {
+        policy.allowUnsafeLocal = policyOverride;
+      };
+  };
+
   schemaAssertionsModule = { lib, ... }: {
     options.assertions = lib.mkOption {
       type = lib.types.listOf (lib.types.submodule {
@@ -524,6 +556,70 @@ in
         })
       ]);
     expected = true;
+  };
+
+  "realms/rejects-reserved-launcher-workload-name" = {
+    expr = hasMessage
+      "'launcher' is reserved for the polkit-launcher group"
+      (failureMessages [
+        (reservedNameFixture {
+          launcher.providerRefs.runtime = "runtime";
+        })
+      ]);
+    expected = true;
+  };
+
+  "realms/rejects-reserved-sys-prefixed-workload-name" = {
+    expr = hasMessage
+      "names starting with 'sys-' and the exact name 'network' are reserved"
+      (failureMessages [
+        (reservedNameFixture {
+          "sys-random".providerRefs.runtime = "runtime";
+        })
+      ]);
+    expected = true;
+  };
+
+  "realms/rejects-operator-declared-network-workload-without-auto-declare" = {
+    expr = hasMessage
+      "names starting with 'sys-' and the exact name 'network' are reserved"
+      (failureMessages [
+        (reservedNameFixture {
+          network.providerRefs.runtime = "runtime";
+        })
+      ]);
+    expected = true;
+  };
+
+  "realms/allows-framework-auto-declared-network-workload" = {
+    # realmFixture's "work" realm sets network.mode = "declared", so the
+    # auto-declared "network" workload (options-realms-workloads.nix) is
+    # present and must NOT trip the reserved-name assertion.
+    expr = hasMessage
+      "names starting with 'sys-' and the exact name 'network' are reserved"
+      (failureMessages [ realmFixture ]);
+    expected = false;
+  };
+
+  "realms/rejects-systemd-user-without-allow-unsafe-local" = {
+    expr = hasMessage
+      "systemd-user unsafe-local runtime implementation"
+      (failureMessages [ (unsafeLocalFixture null) ]);
+    expected = true;
+  };
+
+  "realms/rejects-systemd-user-with-allow-unsafe-local-false" = {
+    expr = hasMessage
+      "systemd-user unsafe-local runtime implementation"
+      (failureMessages [ (unsafeLocalFixture false) ]);
+    expected = true;
+  };
+
+  "realms/allows-systemd-user-with-allow-unsafe-local-true" = {
+    expr = hasMessage
+      "systemd-user unsafe-local runtime implementation"
+      (failureMessages [ (unsafeLocalFixture true) ]);
+    expected = false;
   };
 
   "realms/legacy-options-are-unknown-with-no-tombstones" = {

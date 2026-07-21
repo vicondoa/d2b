@@ -161,6 +161,22 @@ let
         };
       };
 
+      _frameworkReservedName = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        internal = true;
+        visible = false;
+        description = ''
+          Internal attestation, set only by a framework module (this file's
+          own auto-declared `network` workload, or components/observability
+          via its auto-declared `sys-*` stack workload), that this workload's
+          otherwise-reserved name is legitimately framework-owned. Operator
+          configuration must never set this option: it exists solely so the
+          reserved-name assertions in options-realms.nix can distinguish a
+          framework auto-declaration from an operator name collision.
+        '';
+      };
+
       launcher = {
         enable = lib.mkEnableOption "desktop launcher metadata for this workload";
 
@@ -237,6 +253,7 @@ in
       providerRefs.runtime = "network-vm-runtime";
       autostart = true;
       config.imports = [ ./net.nix ];
+      _frameworkReservedName = true;
     };
   };
 }

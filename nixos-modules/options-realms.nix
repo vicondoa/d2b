@@ -43,6 +43,24 @@ let
     builtins.isString value
     && builtins.stringLength value <= 128
     && builtins.match "^[a-z][a-z0-9-]*$" value != null;
+
+  # `launcher` is reserved for the polkit-launcher group (`d2b`) singleton;
+  # no framework module ever auto-declares a workload with this exact name,
+  # so it is unconditionally rejected.
+  reservedWorkloadExactName = name: name == "launcher";
+
+  # `sys-` is reserved for d2b's own auto-declared stack workloads (e.g. the
+  # observability sink named by `d2b.observability.vmName`, default
+  # `sys-obs`). `network` is reserved for the auto-declared net VM workload
+  # created by options-realms-workloads.nix when `network.mode == "declared"`.
+  # A workload only clears these reservations when the owning framework
+  # module attests to it via the internal `_frameworkReservedName` marker
+  # (see options-realms-workloads.nix and components/observability/default.nix);
+  # an operator-declared workload can never set that marker itself, so any
+  # collision on these names fails closed instead of silently merging.
+  reservedWorkloadPrefixOrName = name:
+    lib.hasPrefix "sys-" name || name == "network";
+
   realmByPath = lib.listToAttrs
     (map (realm: {
       name = realm.path;
@@ -429,7 +447,7 @@ in
               + "exactly for provider-specific placement.";
           }
         ]
-        ++ lib.mapAttrsToList
+        ++ lib.concatLists (lib.mapAttrsToList
           (workloadName: workload:
             let
               runtimeRef = workload.providerRefs.runtime or null;
@@ -437,17 +455,54 @@ in
                 if runtimeRef == null
                 then null
                 else realm.providers.${runtimeRef} or null;
+              frameworkOwnsReservedName =
+                workload._frameworkReservedName or false;
             in
-            {
-              assertion =
-                !workload.enable
-                || (provider != null
-                  && provider.enable
-                  && provider.type == "runtime");
-              message =
-                "d2b.realms.${realmName}.workloads.${workloadName}.providerRefs.runtime "
-                + "must name an enabled runtime provider in the same realm.";
-            })
-          realm.workloads)
+            [
+              {
+                assertion =
+                  !workload.enable
+                  || (provider != null
+                    && provider.enable
+                    && provider.type == "runtime");
+                message =
+                  "d2b.realms.${realmName}.workloads.${workloadName}.providerRefs.runtime "
+                  + "must name an enabled runtime provider in the same realm.";
+              }
+              {
+                assertion = !(reservedWorkloadExactName workloadName);
+                message =
+                  "d2b.realms.${realmName}.workloads.${workloadName}: "
+                  + "'launcher' is reserved for the polkit-launcher group "
+                  + "(d2b); pick another workload name.";
+              }
+              {
+                assertion =
+                  !(reservedWorkloadPrefixOrName workloadName)
+                  || frameworkOwnsReservedName;
+                message =
+                  "d2b.realms.${realmName}.workloads.${workloadName}: names "
+                  + "starting with 'sys-' and the exact name 'network' are "
+                  + "reserved for d2b's own auto-declared workloads (the "
+                  + "net VM workload created when network.mode = "
+                  + "\"declared\", and stack workloads such as "
+                  + "d2b.observability.vmName's sys-obs). Rename this "
+                  + "workload; it is not the framework's own auto-declared "
+                  + "entry.";
+              }
+              {
+                assertion =
+                  !workload.enable
+                  || provider == null
+                  || provider.implementationId != "systemd-user"
+                  || realm.policy.allowUnsafeLocal;
+                message =
+                  "d2b.realms.${realmName}.workloads.${workloadName} selects "
+                  + "the systemd-user unsafe-local runtime implementation; "
+                  + "set d2b.realms.${realmName}.policy.allowUnsafeLocal = "
+                  + "true to opt in explicitly.";
+              }
+            ])
+          realm.workloads))
       (builtins.attrNames enabledRealms);
 }
