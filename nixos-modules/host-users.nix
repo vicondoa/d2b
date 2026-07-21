@@ -3,11 +3,88 @@
 let
   cfg = config.d2b;
   d2bLib = import ./lib.nix { inherit lib; };
+  identity = import ./v2-identity.nix;
   inherit (d2bLib) stablePrincipalId;
-  declaredVms = cfg.vms or { };
-  normalNixosVms = d2bLib.normalNixosVms declaredVms;
-  qemuMediaVms = d2bLib.qemuMediaVms declaredVms;
-  waylandProxyVms = (lib.filterAttrs (_: vm: vm.graphics.enable) normalNixosVms) // qemuMediaVms;
+
+  # Reuse the exact same enabled/host-local-scoped role rows that
+  # minijail-profiles.nix / processes-json.nix build their sandbox
+  # principals from (role-process-rows.nix, itself built over
+  # workload-process-rows.nix's host-local/runtime-eligible workload
+  # rows), so the accounts created here can never drift from the
+  # numeric uid/gid the sandbox profile independently derives for the
+  # identical principal string.
+  roleRows = import ./role-process-rows.nix { inherit config lib; };
+
+  # roleKinds that run with a REAL host uid/gid (see
+  # minijail-profiles.nix's `profileForRole`: every processRole gets
+  # `userNamespace = null` except "gpu-render-node", which fake-roots
+  # inside a private user namespace and therefore needs no distinct
+  # host account). These seven are the exact distinct sidecar/runner
+  # categories the framework's process and ownership contracts name.
+  hostPrincipalRoleKinds = [
+    "gpu"
+    "video"
+    "wayland-proxy"
+    "audio"
+    "swtpm"
+    "cloud-hypervisor"
+    "qemu-media"
+  ];
+
+  hostPrincipalRoles = lib.filter
+    (role: builtins.elem role.roleKind hostPrincipalRoleKinds)
+    roleRows;
+
+  rolePrincipal = role: "d2b-role-${identity.validateShortId role.roleId}";
+
+  # The narrow guest-control fs principal (minijail-profiles.nix
+  # `shareProfilesFor`, guest-control-host.nix, realm-storage-rows.nix)
+  # exists only for workloads with a "virtiofsd" role — i.e. only
+  # cloud-hypervisor-runtime workloads (qemu-media has no virtiofsd
+  # role at all; see index-resources.nix's `rolesFor`). guest-control-host.nix
+  # already declares this principal's *group* for its credential
+  # directory; the matching user account is declared here alongside
+  # every other role principal so the identity is complete and
+  # symmetric with the other seven categories.
+  gctlfsWorkloadIds = lib.unique (map
+    (role: role.workloadId)
+    (lib.filter (role: role.roleKind == "virtiofsd") roleRows));
+
+  gctlfsPrincipal = workloadId:
+    "d2b-gctlfs-${identity.validateShortId workloadId}";
+
+  # Sibling runtime-role principal for a workload, so the historical
+  # GPU sidecar <-> hypervisor runner cross-membership (needed for the
+  # shared virtio-gpu vsock/eventfd wiring) survives the move from
+  # per-VM-named groups to per-roleId principals.
+  runtimeRoleFor = workloadId:
+    lib.findFirst
+      (role: role.workloadId == workloadId
+        && builtins.elem role.roleKind [ "cloud-hypervisor" "qemu-media" ])
+      null
+      roleRows;
+
+  extraGroupsFor = role:
+    if role.roleKind == "gpu"
+    then
+      let runtimeRole = runtimeRoleFor role.workloadId;
+      in [ "kvm" ] ++ lib.optional (runtimeRole != null) (rolePrincipal runtimeRole)
+    else if role.roleKind == "audio"
+    then [ "audio" ]
+    else [ ];
+
+  roleGroupRows = map
+    (role: { name = rolePrincipal role; id = stablePrincipalId (rolePrincipal role); })
+    hostPrincipalRoles;
+  gctlfsGroupRows = map
+    (workloadId: {
+      name = gctlfsPrincipal workloadId;
+      id = stablePrincipalId (gctlfsPrincipal workloadId);
+    })
+    gctlfsWorkloadIds;
+  allPrincipalRows = roleGroupRows ++ gctlfsGroupRows;
+  principalNames = map (row: row.name) allPrincipalRows;
+  principalIds = map (row: row.id) allPrincipalRows;
 in
 {
   imports = [
@@ -19,93 +96,54 @@ in
     # This remains the sole local-root lifecycle admission group.
     d2b = { };
   }
-  # Workload principals remain after the realm principals so a later workload
-  # process cutover can remove this suffix without disturbing realm admission.
-  // (lib.mapAttrs' (
-    name: _: lib.nameValuePair "d2b-${name}-gpu" { gid = stablePrincipalId "d2b-${name}-gpu"; }
-  ) (lib.filterAttrs (_: vm: vm.graphics.enable) normalNixosVms))
-  // (lib.mapAttrs' (
-    name: _: lib.nameValuePair "d2b-${name}-video" { gid = stablePrincipalId "d2b-${name}-video"; }
-  ) (lib.filterAttrs (_: vm: vm.graphics.enable && vm.graphics.videoSidecar) normalNixosVms))
-  // (lib.mapAttrs' (
-    name: _: lib.nameValuePair "d2b-${name}-wlproxy" { gid = stablePrincipalId "d2b-${name}-wlproxy"; }
-  ) waylandProxyVms)
-  // (lib.mapAttrs' (
-    name: _: lib.nameValuePair "d2b-${name}-snd" { gid = stablePrincipalId "d2b-${name}-snd"; }
-  ) (lib.filterAttrs (_: vm: vm.audio.enable) normalNixosVms))
-  // (lib.mapAttrs' (
-    name: _: lib.nameValuePair "d2b-${name}-swtpm" { gid = stablePrincipalId "d2b-${name}-swtpm"; }
-  ) (lib.filterAttrs (_: vm: vm.tpm.enable) normalNixosVms))
-  // (lib.mapAttrs' (
-    name: _: lib.nameValuePair "d2b-${name}-runner" { gid = stablePrincipalId "d2b-${name}-runner"; }
-  ) normalNixosVms)
-  // (lib.mapAttrs' (
-    name: _:
-    lib.nameValuePair "d2b-${name}-qemu-media" { gid = stablePrincipalId "d2b-${name}-qemu-media"; }
-  ) qemuMediaVms);
+  // (lib.listToAttrs (map
+    (role: lib.nameValuePair (rolePrincipal role) { gid = stablePrincipalId (rolePrincipal role); })
+    hostPrincipalRoles))
+  // (lib.listToAttrs (map
+    (workloadId: lib.nameValuePair (gctlfsPrincipal workloadId) {
+      gid = stablePrincipalId (gctlfsPrincipal workloadId);
+    })
+    gctlfsWorkloadIds));
 
   users.users = lib.mkMerge [
     (lib.genAttrs (cfg.site.launcherUsers or [ ]) (_: {
       extraGroups = [ "d2b" ];
     }))
-    (lib.mapAttrs' (
-      name: _:
-      lib.nameValuePair "d2b-${name}-gpu" {
-        isSystemUser = true;
-        uid = stablePrincipalId "d2b-${name}-gpu";
-        group = "d2b-${name}-gpu";
-        extraGroups = [
-          "kvm"
-          "d2b-${name}-runner"
-        ];
-        description = "d2b GPU+hypervisor sidecar for VM ${name}";
-      }
-    ) (lib.filterAttrs (_: vm: vm.graphics.enable) normalNixosVms))
-    (lib.mapAttrs' (
-      name: _:
-      lib.nameValuePair "d2b-${name}-video" {
-        isSystemUser = true;
-        uid = stablePrincipalId "d2b-${name}-video";
-        group = "d2b-${name}-video";
-        description = "d2b video decode sidecar for VM ${name}";
-      }
-    ) (lib.filterAttrs (_: vm: vm.graphics.enable && vm.graphics.videoSidecar) normalNixosVms))
-    (lib.mapAttrs' (
-      name: _:
-      lib.nameValuePair "d2b-${name}-wlproxy" {
-        isSystemUser = true;
-        uid = stablePrincipalId "d2b-${name}-wlproxy";
-        group = "d2b-${name}-wlproxy";
-        description = "d2b Wayland proxy sidecar for VM ${name}";
-      }
-    ) waylandProxyVms)
-    (lib.mapAttrs' (
-      name: _:
-      lib.nameValuePair "d2b-${name}-snd" {
-        isSystemUser = true;
-        uid = stablePrincipalId "d2b-${name}-snd";
-        group = "d2b-${name}-snd";
-        extraGroups = [ "audio" ];
-        description = "d2b audio sidecar for VM ${name}";
-      }
-    ) (lib.filterAttrs (_: vm: vm.audio.enable) normalNixosVms))
-    (lib.mapAttrs' (
-      name: _:
-      lib.nameValuePair "d2b-${name}-swtpm" {
-        isSystemUser = true;
-        uid = stablePrincipalId "d2b-${name}-swtpm";
-        group = "d2b-${name}-swtpm";
-        description = "d2b swtpm emulator for VM ${name}";
-      }
-    ) (lib.filterAttrs (_: vm: vm.tpm.enable) normalNixosVms))
-    (lib.mapAttrs' (
-      name: _:
-      lib.nameValuePair "d2b-${name}-qemu-media" {
-        isSystemUser = true;
-        uid = stablePrincipalId "d2b-${name}-qemu-media";
-        group = "d2b-${name}-qemu-media";
-        description = "d2b QEMU media runner for VM ${name}";
-      }
-    ) qemuMediaVms)
+    (lib.listToAttrs (map
+      (role:
+        let principal = rolePrincipal role;
+        in
+        lib.nameValuePair principal {
+          isSystemUser = true;
+          uid = stablePrincipalId principal;
+          group = principal;
+          extraGroups = extraGroupsFor role;
+          description =
+            "d2b ${role.roleKind} sidecar for workload ${role.workloadId} role ${role.roleId}";
+        })
+      hostPrincipalRoles))
+    (lib.listToAttrs (map
+      (workloadId:
+        let principal = gctlfsPrincipal workloadId;
+        in
+        lib.nameValuePair principal {
+          isSystemUser = true;
+          uid = stablePrincipalId principal;
+          group = principal;
+          description =
+            "d2b narrow guest-control fs principal for workload ${workloadId}";
+        })
+      gctlfsWorkloadIds))
+  ];
+
+  assertions = [
+    {
+      assertion = builtins.length principalNames == builtins.length (lib.unique principalNames);
+      message = "d2b workload principal collision: canonical role/workload principal names must be unique";
+    }
+    {
+      assertion = builtins.length principalIds == builtins.length (lib.unique principalIds);
+      message = "d2b workload principal collision: stable UID/GID allocation must be unique";
+    }
   ];
 }

@@ -272,6 +272,14 @@ principal-uid-collision/no-out-of-range
 principal-uid-collision/no-uid-collision
 principal-uid-collision/no-user-uid-collision
 principal-uid-collision/principal-count
+principal-workload-roles/disabled-workload-has-zero-principals
+principal-workload-roles/distinct-principal-count
+principal-workload-roles/eight-categories-present-for-enabled-workloads
+principal-workload-roles/gpu-and-audio-extra-groups
+principal-workload-roles/module-assertions-hold
+principal-workload-roles/non-principal-role-kinds-produce-no-account
+principal-workload-roles/principal-ids-are-stable-and-symmetric-uid-gid
+principal-workload-roles/qemu-media-workload-has-no-narrow-guest-control
 provider-registry-v2/closed-binding-axis-set
 provider-registry-v2/composes-all-owned-fragments
 provider-registry-v2/every-binding-variant-is-closed

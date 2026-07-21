@@ -1010,6 +1010,7 @@
           nix-unit-state = [
             "per-vm-state-ownership.nix"
             "principal-uid-collision.nix"
+            "principal-workload-roles.nix"
             "store-overlay-emit.nix"
             "umask-roundtrip.nix"
             "volume-mounts.nix"
