@@ -985,6 +985,7 @@
             "usb-security-key.nix"
             "v2-identity.nix"
             "vm-eval-overlays.nix"
+            "w8-integration-component-policy.nix"
           ];
           nix-unit-network = [
             "bridge-ipv6-boot-sysctl.nix"

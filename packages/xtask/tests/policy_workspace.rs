@@ -1506,7 +1506,7 @@ fn w4_provider_delivery_fingerprints_cover_every_reserved_file() {
 fn shared_contract_policy_freezes_services_dependencies_and_ownership() {
     let root = repo_root();
     let policy = xtask::wave_policy::read_policy(&root).expect("shared-contract policy");
-    assert_eq!(policy.schema_version, 10);
+    assert_eq!(policy.schema_version, 11);
     assert_eq!(policy.authority_repository, "github.com/vicondoa/d2b");
     let frozen = policy
         .frozen_service_packages
@@ -1558,6 +1558,14 @@ fn shared_contract_policy_freezes_services_dependencies_and_ownership() {
                     "adr0045-w7",
                     vec!["w6"],
                     "declarative-nix-process-and-resource-emission",
+                ),
+            ),
+            (
+                "w8",
+                (
+                    "adr0045-w8-integration",
+                    vec!["w7"],
+                    "integrated-w5-w6-w7-successor-realm-local-control-plane-cutover",
                 ),
             ),
         ])

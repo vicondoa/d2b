@@ -97,6 +97,20 @@ pub struct WaveOwnership {
     pub additional_protected_paths: Vec<String>,
     #[serde(default)]
     pub allowed_protected_paths: Vec<String>,
+    #[serde(default)]
+    pub integration_only_protected_paths: Vec<String>,
+    /// Waves whose already-landed implementation prefixes this wave is
+    /// authorized to continue editing (a "successor" grant). Empty for a
+    /// peer/parallel wave; populated only for an integration wave that
+    /// picks up already-merged predecessor territory.
+    #[serde(default)]
+    pub inherits_prefixes_from: Vec<String>,
+    /// A landed trunk ref (e.g. "main") that stands in for the shared root
+    /// once this wave's predecessors have already merged and their branches
+    /// are gone. `None` for peer waves that still branch off the live
+    /// `shared_root_branch`.
+    #[serde(default)]
+    pub landed_predecessor_ref: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
@@ -153,7 +167,7 @@ pub struct W7ContractTestMigration {
 
 impl SharedContractPolicy {
     pub fn validate(&self) -> Result<(), String> {
-        if self.schema_version != 10 {
+        if self.schema_version != 11 {
             return Err("unsupported shared-contract policy schema".to_owned());
         }
         if self.authority_repository != "github.com/vicondoa/d2b" {
@@ -168,13 +182,14 @@ impl SharedContractPolicy {
             .iter()
             .map(|wave| wave.wave.as_str())
             .collect::<BTreeSet<_>>();
-        if waves != BTreeSet::from(["w5", "w6", "w7"]) || waves.len() != self.waves.len() {
-            return Err("shared-contract policy must define exactly w5, w6, and w7".to_owned());
+        if waves != BTreeSet::from(["w5", "w6", "w7", "w8"]) || waves.len() != self.waves.len() {
+            return Err("shared-contract policy must define exactly w5, w6, w7, and w8".to_owned());
         }
         let expected_branch_stems = BTreeMap::from([
             ("w5", "adr0045-w5"),
             ("w6", "adr0045-w6"),
             ("w7", "adr0045-w7"),
+            ("w8", "adr0045-w8-integration"),
         ]);
         let mut prefix_owners = BTreeMap::new();
         for wave in &self.waves {
@@ -190,10 +205,16 @@ impl SharedContractPolicy {
                 &wave.allowed_parent_waves,
                 "allowed parent waves",
             )?;
+            // W8 is the integrated W5/W6/W7 successor: its single immediate
+            // ownership parent-wave is W7 (mirroring the W6->W5 and W7->W6
+            // single-link convention), while `inherits_prefixes_from` below
+            // separately grants it the full transitive W5+W6+W7 implementation
+            // territory those waves already landed.
             let expected_parent_waves: &[&str] = match wave.wave.as_str() {
                 "w5" => &[],
                 "w6" => &["w5"],
                 "w7" => &["w6"],
+                "w8" => &["w7"],
                 _ => unreachable!("wave set was validated"),
             };
             if !wave
@@ -207,6 +228,41 @@ impl SharedContractPolicy {
                     wave.wave
                 ));
             }
+            let expected_prefix_inheritance: &[&str] = match wave.wave.as_str() {
+                "w5" | "w6" | "w7" => &[],
+                "w8" => &["w5", "w6", "w7"],
+                _ => unreachable!("wave set was validated"),
+            };
+            validate_sorted_strings_allow_empty(
+                &wave.inherits_prefixes_from,
+                "prefix inheritance",
+            )?;
+            if !wave
+                .inherits_prefixes_from
+                .iter()
+                .map(String::as_str)
+                .eq(expected_prefix_inheritance.iter().copied())
+            {
+                return Err(format!(
+                    "{} prefix inheritance does not match the delivery graph",
+                    wave.wave
+                ));
+            }
+            let expected_landed_predecessor_ref: Option<&str> = match wave.wave.as_str() {
+                "w5" | "w6" | "w7" => None,
+                "w8" => Some("main"),
+                _ => unreachable!("wave set was validated"),
+            };
+            if wave.landed_predecessor_ref.as_deref() != expected_landed_predecessor_ref {
+                return Err(format!(
+                    "{} landed-predecessor ref does not match the delivery graph",
+                    wave.wave
+                ));
+            }
+            if let Some(landed_predecessor_ref) = &wave.landed_predecessor_ref {
+                validate_git_ref(landed_predecessor_ref, "landed-predecessor ref")
+                    .map_err(|error| error.to_string())?;
+            }
             let expected =
                 expected_wave_manifest_path(&wave.wave).map_err(|error| error.to_string())?;
             if Path::new(&wave.manifest_path) != expected {
@@ -219,10 +275,27 @@ impl SharedContractPolicy {
             if wave.responsibility.trim().is_empty() {
                 return Err(format!("{} responsibility is empty", wave.wave));
             }
-            validate_sorted_directory_prefixes(
-                &wave.allowed_prefixes,
-                "allowed implementation prefixes",
-            )?;
+            // A pure integration/successor wave may own zero *new* prefixes of
+            // its own (its positive ownership comes entirely from
+            // `inherits_prefixes_from`); every other wave must own at least
+            // one prefix outright.
+            if wave.allowed_prefixes.is_empty() {
+                if wave.inherits_prefixes_from.is_empty() {
+                    return Err(format!(
+                        "{} owns no implementation prefixes and inherits none",
+                        wave.wave
+                    ));
+                }
+                validate_sorted_strings_allow_empty(
+                    &wave.allowed_prefixes,
+                    "allowed implementation prefixes",
+                )?;
+            } else {
+                validate_sorted_directory_prefixes(
+                    &wave.allowed_prefixes,
+                    "allowed implementation prefixes",
+                )?;
+            }
             validate_sorted_directory_prefixes(
                 &wave.foreign_prefixes,
                 "foreign implementation prefixes",
@@ -240,6 +313,38 @@ impl SharedContractPolicy {
             }
             if !wave.allowed_protected_paths.is_empty() {
                 validate_sorted_paths(&wave.allowed_protected_paths)?;
+            }
+            if !wave.integration_only_protected_paths.is_empty() {
+                validate_sorted_paths(&wave.integration_only_protected_paths)?;
+            }
+            let expected_integration_only: &[&str] = match wave.wave.as_str() {
+                "w5" | "w6" | "w7" => &[],
+                "w8" => &["packages/Cargo.lock", "packages/Cargo.toml"],
+                _ => unreachable!("wave set was validated"),
+            };
+            if !wave
+                .integration_only_protected_paths
+                .iter()
+                .map(String::as_str)
+                .eq(expected_integration_only.iter().copied())
+            {
+                return Err(format!(
+                    "{} integration-only protected paths do not match the delivery graph",
+                    wave.wave
+                ));
+            }
+        }
+        for wave in &self.waves {
+            for inherited in &wave.inherits_prefixes_from {
+                if !waves.contains(inherited.as_str()) {
+                    return Err(format!(
+                        "{} inherits prefixes from unknown wave {inherited}",
+                        wave.wave
+                    ));
+                }
+                if inherited == &wave.wave {
+                    return Err(format!("{} cannot inherit prefixes from itself", wave.wave));
+                }
             }
         }
         validate_sorted_paths(&self.protected_paths)?;
@@ -522,7 +627,11 @@ impl SharedContractPolicy {
             }
         }
         for wave in &self.waves {
-            for path in &wave.allowed_protected_paths {
+            for path in wave
+                .allowed_protected_paths
+                .iter()
+                .chain(&wave.integration_only_protected_paths)
+            {
                 let globally_protected = self.protected_paths.binary_search(path).is_ok()
                     || self
                         .protected_prefixes
@@ -594,7 +703,7 @@ impl SharedContractPolicy {
         match matches.as_slice() {
             [wave] => Ok(*wave),
             [] => Err(format!(
-                "branch {branch} does not identify a governed w5, w6, or w7 wave"
+                "branch {branch} does not identify a governed w5, w6, w7, or w8 wave"
             )),
             _ => Err(format!("branch {branch} ambiguously identifies a wave")),
         }
@@ -602,6 +711,9 @@ impl SharedContractPolicy {
 
     fn parent_is_allowed(&self, ownership: &WaveOwnership, parent: &str) -> bool {
         if parent == self.shared_root_branch {
+            return ownership.landed_predecessor_ref.is_none();
+        }
+        if ownership.landed_predecessor_ref.as_deref() == Some(parent) {
             return true;
         }
         self.wave_for_branch(parent).is_ok_and(|parent_wave| {
@@ -610,6 +722,16 @@ impl SharedContractPolicy {
                 .binary_search(&parent_wave.wave)
                 .is_ok()
         })
+    }
+
+    /// Whether `wave` may edit a prefix whose founding owner is `owner`,
+    /// either because it is the founding owner itself or because it is an
+    /// authorized successor that inherited that owner's prefixes.
+    fn wave_may_edit_owned_prefix(&self, wave: &str, owner: &str) -> bool {
+        owner == wave
+            || self
+                .wave(wave)
+                .is_ok_and(|ownership| ownership.inherits_prefixes_from.iter().any(|p| p == owner))
     }
 }
 
@@ -1078,7 +1200,7 @@ fn verify_ownership<P: OwnershipProbe>(
     let manifest = probe.tracked_blob(&candidate_root, &head_oid, &ownership.manifest_path)?;
     verify_checked_in_manifest(&manifest, ownership)?;
     let paths = probe.changed_paths(&candidate_root, &base_oid, &head_oid)?;
-    check_changed_paths(&policy, &ownership.wave, &paths)?;
+    check_changed_paths_for_branch(&policy, &ownership.wave, Some(&branch), &paths)?;
     verify_w5_contract_retirement(
         probe,
         &candidate_root,
@@ -1150,7 +1272,9 @@ fn verify_parent_graph<P: OwnershipProbe>(
     let mut head_oid = immediate_base_oid.to_owned();
     let mut waves = Vec::new();
     let mut seen = BTreeSet::new();
-    while branch != policy.shared_root_branch {
+    while branch != policy.shared_root_branch
+        && ownership.landed_predecessor_ref.as_deref() != Some(branch.as_str())
+    {
         if !seen.insert(branch.clone()) {
             return Err("Git Town ownership parent graph contains a cycle".to_owned());
         }
@@ -1201,6 +1325,7 @@ fn verify_parent_graph<P: OwnershipProbe>(
         "w5" => waves.is_empty(),
         "w6" => waves.is_empty() || waves == ["w5"],
         "w7" => waves.is_empty() || waves == ["w6", "w5"],
+        "w8" => waves.is_empty() || waves == ["w7", "w6", "w5"],
         _ => false,
     };
     if !allowed {
@@ -1230,6 +1355,15 @@ pub fn check_changed_paths(
     wave: &str,
     paths: &[String],
 ) -> Result<(), String> {
+    check_changed_paths_for_branch(policy, wave, None, paths)
+}
+
+fn check_changed_paths_for_branch(
+    policy: &SharedContractPolicy,
+    wave: &str,
+    branch: Option<&str>,
+    paths: &[String],
+) -> Result<(), String> {
     let ownership = policy.wave(wave)?;
     let mut violations = Vec::new();
     for path in paths {
@@ -1241,6 +1375,14 @@ pub fn check_changed_paths(
             .allowed_protected_paths
             .binary_search(path)
             .is_ok()
+        {
+            continue;
+        }
+        if branch == Some(ownership.branch_stem.as_str())
+            && ownership
+                .integration_only_protected_paths
+                .binary_search(path)
+                .is_ok()
         {
             continue;
         }
@@ -1271,6 +1413,11 @@ pub fn check_changed_paths(
             }
             match implementation.owner {
                 ImplementationOwner::Wave(owner) if owner == wave => continue,
+                ImplementationOwner::Wave(owner)
+                    if policy.wave_may_edit_owned_prefix(wave, owner) =>
+                {
+                    continue;
+                }
                 ImplementationOwner::Wave(owner) => {
                     violations.push(format!("{path} (owned by {owner})"));
                 }
@@ -3121,6 +3268,167 @@ mod tests {
             error.contains("fully linearized authority chain"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn w8_wave_is_governed_with_canonical_branch_and_successor_grants() {
+        let policy = policy();
+        let ownership = policy.wave("w8").expect("w8 is governed");
+        assert_eq!(ownership.branch_stem, "adr0045-w8-integration");
+        assert_eq!(ownership.manifest_path, "delivery/manifests/w8.json");
+        assert_eq!(ownership.allowed_parent_waves, vec!["w7".to_owned()]);
+        assert!(ownership.allowed_prefixes.is_empty());
+        assert_eq!(
+            ownership.inherits_prefixes_from,
+            vec!["w5".to_owned(), "w6".to_owned(), "w7".to_owned()]
+        );
+        assert_eq!(
+            ownership.integration_only_protected_paths,
+            vec![
+                "packages/Cargo.lock".to_owned(),
+                "packages/Cargo.toml".to_owned()
+            ]
+        );
+        assert!(ownership.allowed_protected_paths.is_empty());
+        assert_eq!(ownership.landed_predecessor_ref.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn w8_direct_to_main_parent_graph_terminates_without_resurrecting_branches() {
+        let policy = policy();
+        let ownership = policy.wave("w8").expect("w8 is governed");
+        let probe = FakeProbe::valid();
+        verify_parent_graph(
+            &probe,
+            Path::new(CANDIDATE_ROOT),
+            REPOSITORY,
+            &policy,
+            ownership,
+            "main",
+            BASE_OID,
+        )
+        .expect("w8 may terminate its parent graph directly at the landed main trunk");
+    }
+
+    #[test]
+    fn w8_rejects_a_forged_resurrected_w7_parent_chain() {
+        let policy = policy();
+        let ownership = policy.wave("w8").expect("w8 is governed");
+        let mut probe = FakeProbe::valid();
+        // A forged branch claiming the w7 stem, whose own Git Town parent is
+        // forged straight to `main` -- skipping w6/w5 -- must not be accepted
+        // as authority for w8, even though w8 itself may terminate at `main`.
+        probe
+            .ancestor_refs
+            .insert("adr0045-w7-fake".to_owned(), OTHER_OID.to_owned());
+        probe
+            .ancestor_parents
+            .insert("adr0045-w7-fake".to_owned(), "main".to_owned());
+        let error = verify_parent_graph(
+            &probe,
+            Path::new(CANDIDATE_ROOT),
+            REPOSITORY,
+            &policy,
+            ownership,
+            "adr0045-w7-fake",
+            OTHER_OID,
+        )
+        .expect_err("forged resurrected w7 parent chain");
+        assert!(
+            error.contains("w7 cannot use Git Town parent main as ownership authority"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn w8_rejects_wrong_parent_base_and_branch() {
+        let policy = policy();
+        let ownership = policy.wave("w8").expect("w8 is governed");
+
+        // Wrong parent: w8 may only chain from w7, not from w6 directly.
+        assert!(!policy.parent_is_allowed(ownership, "adr0045-w6-user-services"));
+        // Wrong base: an unrelated, non-governed branch is not an authority root.
+        assert!(!policy.parent_is_allowed(ownership, "some-unrelated-branch"));
+        // W8 must start from the landed predecessor, not bypass W5-W7 by
+        // returning to their historical shared root.
+        assert!(!policy.parent_is_allowed(ownership, &policy.shared_root_branch));
+        // Wrong branch: a near-miss branch name must not match the exact
+        // canonical `adr0045-w8-integration` stem.
+        assert!(policy.wave_for_branch("adr0045-w8-other").is_err());
+        assert!(policy.wave_for_branch("adr0045-w8-integratio").is_err());
+        assert!(policy.wave_for_branch("adr0045-w8-integration").is_ok());
+        assert!(
+            policy
+                .wave_for_branch("adr0045-w8-integration-secrets-lifecycle")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn w8_rejects_unclassified_and_frozen_edits() {
+        let policy = policy();
+        let paths = [
+            "packages/xtask/src/wave_policy.rs".to_owned(),
+            "packages/d2b-core/src/privileges.rs".to_owned(),
+            "scripts/wave-escape.sh".to_owned(),
+        ];
+        let error =
+            check_changed_paths(&policy, "w8", &paths).expect_err("frozen and unowned paths");
+        assert!(
+            error.contains("packages/xtask/src/wave_policy.rs"),
+            "{error}"
+        );
+        assert!(
+            error.contains("packages/d2b-core/src/privileges.rs"),
+            "{error}"
+        );
+        assert!(error.contains("scripts/wave-escape.sh"), "{error}");
+    }
+
+    #[test]
+    fn w8_alone_may_update_the_workspace_registration_seam() {
+        let policy = policy();
+        let paths = [
+            "packages/Cargo.lock".to_owned(),
+            "packages/Cargo.toml".to_owned(),
+        ];
+        check_changed_paths_for_branch(&policy, "w8", Some("adr0045-w8-integration"), &paths)
+            .expect("W8 integration workspace registration seam");
+        for branch in [
+            None,
+            Some("adr0045-w8-integration-systemd-user-shell-routing"),
+        ] {
+            let error = check_changed_paths_for_branch(&policy, "w8", branch, &paths)
+                .expect_err("W8 component workspace registration");
+            for path in &paths {
+                assert!(error.contains(path), "{error}");
+            }
+        }
+        for wave in ["w5", "w6", "w7"] {
+            let error = check_changed_paths(&policy, wave, &paths)
+                .expect_err("predecessor wave workspace registration");
+            for path in &paths {
+                assert!(error.contains(path), "{error}");
+            }
+        }
+    }
+
+    #[test]
+    fn w8_inherits_every_w5_w6_w7_implementation_prefix() {
+        let policy = policy();
+        for source_wave in ["w5", "w6", "w7"] {
+            let ownership = policy.wave(source_wave).expect("governed source wave");
+            for prefix in &ownership.allowed_prefixes {
+                let path = format!("{prefix}w8-integration-probe.rs");
+                check_changed_paths(&policy, "w8", std::slice::from_ref(&path)).unwrap_or_else(
+                    |error| {
+                        panic!(
+                            "w8 must inherit {source_wave}-owned prefix {prefix}: {path}: {error}"
+                        )
+                    },
+                );
+            }
+        }
     }
 
     #[test]
