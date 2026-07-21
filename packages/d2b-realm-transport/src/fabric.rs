@@ -16,16 +16,28 @@
 //!   unregistered scheme fails closed with
 //!   [`d2b_realm_core::ErrorKind::InvalidTarget`] — there is no default
 //!   transport.
-//! - `listen()` fans out to every registered transport and returns one
-//!   [`TransportListener`] whose `accept()` races every sub-listener's
-//!   `accept()` (via a bounded [`tokio::task::JoinSet`], the "rt" tokio
-//!   feature already enabled by this crate — no new dependency) and
-//!   resolves to the first session accepted on ANY of them. A sub-listener
-//!   that errors does not fail the whole fan-out: the race keeps waiting on
-//!   the remaining listeners and only surfaces an error once every
-//!   registered transport has failed. On success every other in-flight
-//!   accept task is aborted (bounded, explicit cancellation — no leaked
-//!   background accept loops).
+//! - `listen()` fans out to every registered transport. An individual
+//!   transport's `listen()` call failing does not fail the whole fan-out:
+//!   the healthy subset is kept and only surfaced to the caller once **no**
+//!   registered transport was able to start listening (finding: partial
+//!   provider `listen()` failures must not sacrifice the healthy
+//!   listeners).
+//! - The returned [`TransportListener`] fans **in** every healthy
+//!   sub-listener via a persistent per-listener background task that loops
+//!   calling that sub-listener's own `accept()` and forwards every result —
+//!   success or terminal error alike — into one shared, bounded
+//!   [`tokio::sync::mpsc`] channel (capacity [`FABRIC_ACCEPT_QUEUE_CAPACITY`]).
+//!   `FabricListener::accept()` pulls from that channel, skipping over (but
+//!   remembering) terminal sub-listener errors so it keeps waiting on
+//!   whichever sub-listeners are still healthy, and only returns an error
+//!   once every sub-listener has gone terminal and the channel has drained
+//!   and closed. Unlike a one-shot race that `abort()`s every other
+//!   in-flight accept on the first success, this design never discards an
+//!   already-accepted session: every simultaneously accepted connection is
+//!   queued (bounded, applying backpressure to a producer once the queue is
+//!   full — never dropped) and delivered on a subsequent `accept()` call.
+//!   Dropping the [`FabricListener`] aborts every background task (bounded,
+//!   explicit cancellation — no leaked accept loops).
 //!
 //! Registration (`register`) is bounded ([`MAX_FABRIC_TRANSPORTS`]) and
 //! rejects a duplicate scheme or a malformed scheme literal, so the fabric's
@@ -44,11 +56,17 @@ use d2b_realm_core::{ErrorKind, NodeId, ProviderId};
 use d2b_realm_provider::error::{ProviderError, ProviderResult};
 use d2b_realm_provider::provider::{TransportListener, TransportProvider};
 use d2b_realm_provider::types::{NodeRegistration, TransportSession, TransportTarget};
-use tokio::task::JoinSet;
+use tokio::sync::{Mutex, mpsc};
+use tokio::task::JoinHandle;
 
 /// Maximum number of distinct schemes one fabric may register. Bounds the
 /// scheme table and the per-`listen()` fan-out width.
 pub const MAX_FABRIC_TRANSPORTS: usize = 16;
+
+/// Bounded capacity of a [`FabricListener`]'s shared accept fan-in channel.
+/// Once full, a producer background task's `send` blocks (backpressure) —
+/// it never drops an already-accepted session.
+pub const FABRIC_ACCEPT_QUEUE_CAPACITY: usize = 64;
 
 /// Maximum length of a [`FabricScheme`] literal.
 pub const MAX_FABRIC_SCHEME_LEN: usize = 32;
@@ -178,6 +196,15 @@ impl TransportFabric {
     }
 
     /// The registered scheme literals, in no particular order.
+    ///
+    /// Only reachable from this crate's own tests today: `fabric.rs` is
+    /// nested under a `#[cfg(test)]`-gated declaration (see
+    /// `local_tcp.rs`) until an integrator adds the production
+    /// `pub mod fabric;` to `lib.rs` (see
+    /// `docs/reference/realm-work-executor.md`). Kept `pub` and exempted
+    /// from the dead-code lint because it is real, integrator-facing API,
+    /// not dead in the production wiring this module is designed for.
+    #[allow(dead_code)]
     pub fn schemes(&self) -> impl Iterator<Item = &str> {
         self.transports.keys().map(FabricScheme::as_str)
     }
@@ -223,23 +250,89 @@ impl TransportProvider for TransportFabric {
         let mut entries: Vec<_> = self.transports.iter().collect();
         entries.sort_by_key(|(scheme, _)| (*scheme).clone());
         let mut listeners = Vec::with_capacity(entries.len());
+        // A single transport's `listen()` failing (for example, a
+        // single-use provider whose listener was already taken by an
+        // earlier `listen()` call) does not fail the whole fan-out: keep
+        // every listener that started successfully and only fail once
+        // *none* of them did.
+        let mut last_err = None;
         for (_, transport) in entries {
-            let listener: Arc<dyn TransportListener> =
-                Arc::from(transport.listen(registration.clone()).await?);
-            listeners.push(listener);
+            match transport.listen(registration.clone()).await {
+                Ok(listener) => listeners.push(Arc::from(listener) as Arc<dyn TransportListener>),
+                Err(err) => last_err = Some(err),
+            }
         }
-        Ok(Box::new(FabricListener {
-            node: registration.node,
-            listeners,
-        }))
+        if listeners.is_empty() {
+            return Err(last_err.unwrap_or_else(|| {
+                ProviderError::new(ErrorKind::InvalidTarget, "fabric-no-listeners-started")
+            }));
+        }
+        Ok(Box::new(FabricListener::new(registration.node, listeners)))
     }
 }
 
 /// The accept side of a [`TransportFabric`]: fans in every registered
-/// transport's listener behind one `accept()` race.
+/// transport's listener behind one bounded, persistent channel.
+///
+/// Each healthy sub-listener gets its own background task that loops
+/// calling that sub-listener's `accept()` and forwards every outcome into a
+/// shared bounded [`mpsc`] channel. A task stops looping (and drops its
+/// sender) once its sub-listener returns a terminal error, so the channel
+/// closes only after every sub-listener has gone terminal. This means an
+/// `accept()` call never has to choose between two simultaneously accepted
+/// sessions and silently drop one: both are queued (bounded, backpressured)
+/// and returned across successive `accept()` calls.
 struct FabricListener {
     node: NodeId,
-    listeners: Vec<Arc<dyn TransportListener>>,
+    rx: Mutex<mpsc::Receiver<ProviderResult<TransportSession>>>,
+    tasks: Vec<JoinHandle<()>>,
+}
+
+impl FabricListener {
+    fn new(node: NodeId, listeners: Vec<Arc<dyn TransportListener>>) -> Self {
+        let (tx, rx) = mpsc::channel(FABRIC_ACCEPT_QUEUE_CAPACITY);
+        let mut tasks = Vec::with_capacity(listeners.len());
+        for listener in listeners {
+            let tx = tx.clone();
+            tasks.push(tokio::spawn(async move {
+                loop {
+                    let outcome = listener.accept().await;
+                    let is_err = outcome.is_err();
+                    // `send` (not `try_send`): a full queue applies
+                    // backpressure to this producer rather than dropping
+                    // an already-accepted session.
+                    if tx.send(outcome).await.is_err() {
+                        // No `FabricListener` is left to receive; stop.
+                        break;
+                    }
+                    if is_err {
+                        // Terminal for this sub-listener: stop looping so a
+                        // permanently dead transport cannot spin, flooding
+                        // the shared queue with repeated errors.
+                        break;
+                    }
+                }
+            }));
+        }
+        // Drop our own sender clone so the channel closes once every
+        // spawned task's sender is gone (all sub-listeners terminal).
+        drop(tx);
+        Self {
+            node,
+            rx: Mutex::new(rx),
+            tasks,
+        }
+    }
+}
+
+impl Drop for FabricListener {
+    fn drop(&mut self) {
+        // Bounded, explicit cancellation: no background accept loop outlives
+        // the listener that owns it.
+        for task in &self.tasks {
+            task.abort();
+        }
+    }
 }
 
 #[async_trait]
@@ -249,38 +342,23 @@ impl TransportListener for FabricListener {
     }
 
     async fn accept(&self) -> ProviderResult<TransportSession> {
-        if self.listeners.len() == 1 {
-            return self.listeners[0].accept().await;
-        }
-        let mut set: JoinSet<ProviderResult<TransportSession>> = JoinSet::new();
-        for listener in &self.listeners {
-            let listener = Arc::clone(listener);
-            set.spawn(async move { listener.accept().await });
-        }
-        // Race every sub-listener's accept. A sub-listener erroring does not
-        // fail the fan-out: keep waiting on the rest and only surface an
-        // error once every registered transport has failed. On the first
-        // success, abort the remaining in-flight tasks (bounded, explicit
-        // cancellation).
+        let mut rx = self.rx.lock().await;
+        // Skip over (but remember) terminal errors from individual
+        // sub-listeners so a dead sibling never fails an otherwise-healthy
+        // fan-in; only report an error once the channel has drained and
+        // closed, i.e. every sub-listener has gone terminal.
         let mut last_err = None;
-        while let Some(joined) = set.join_next().await {
-            match joined {
-                Ok(Ok(session)) => {
-                    set.abort_all();
-                    return Ok(session);
-                }
-                Ok(Err(err)) => last_err = Some(err),
-                Err(join_err) => {
-                    last_err = Some(ProviderError::new(
-                        ErrorKind::RelayUnavailable,
-                        format!("fabric-accept-task-failed:{join_err}"),
-                    ));
+        loop {
+            match rx.recv().await {
+                Some(Ok(session)) => return Ok(session),
+                Some(Err(err)) => last_err = Some(err),
+                None => {
+                    return Err(last_err.unwrap_or_else(|| {
+                        ProviderError::new(ErrorKind::RelayUnavailable, "fabric-listener-closed")
+                    }));
                 }
             }
         }
-        Err(last_err.unwrap_or_else(|| {
-            ProviderError::new(ErrorKind::RelayUnavailable, "fabric-listener-closed")
-        }))
     }
 }
 
@@ -479,5 +557,141 @@ mod tests {
         let listener = fabric.listen(registration()).await.unwrap();
         let err = listener.accept().await.unwrap_err();
         assert_eq!(err.kind(), ErrorKind::RelayUnavailable);
+    }
+
+    /// Finding #5 regression: the old one-shot `JoinSet` race called
+    /// `abort_all()` on the first accepted session, silently dropping any
+    /// *other* session that was accepted on a sibling listener around the
+    /// same time. The persistent bounded fan-in must queue and deliver
+    /// every simultaneously accepted session across successive `accept()`
+    /// calls instead.
+    #[tokio::test]
+    async fn fan_in_preserves_every_simultaneously_accepted_session() {
+        let mut fabric = TransportFabric::new();
+        fabric
+            .register("alpha", Arc::new(LoopbackTransport::new()))
+            .unwrap();
+        fabric
+            .register("beta", Arc::new(LoopbackTransport::new()))
+            .unwrap();
+        let listener = fabric.listen(registration()).await.unwrap();
+
+        // Establish both sessions before any `accept()` call runs, so a
+        // race-and-abort design would only ever surface one of them.
+        let (mut alpha_sender, mut beta_sender) = tokio::try_join!(
+            fabric.connect(TransportTarget {
+                endpoint: "alpha".to_owned(),
+            }),
+            fabric.connect(TransportTarget {
+                endpoint: "beta".to_owned(),
+            })
+        )
+        .unwrap();
+        alpha_sender
+            .stream_mut()
+            .write_all(b"alpha-bytes")
+            .await
+            .unwrap();
+        beta_sender
+            .stream_mut()
+            .write_all(b"beta--bytes")
+            .await
+            .unwrap();
+
+        let mut first = listener.accept().await.unwrap();
+        let mut second = listener.accept().await.unwrap();
+        let mut first_buf = [0_u8; 11];
+        let mut second_buf = [0_u8; 11];
+        first.stream_mut().read_exact(&mut first_buf).await.unwrap();
+        second
+            .stream_mut()
+            .read_exact(&mut second_buf)
+            .await
+            .unwrap();
+        let mut seen: Vec<&[u8]> = vec![&first_buf, &second_buf];
+        seen.sort();
+        assert_eq!(seen, vec![b"alpha-bytes".as_slice(), b"beta--bytes"]);
+    }
+
+    /// Finding #6 regression: a single-use provider (here, a
+    /// [`LoopbackTransport`] whose listener side was already taken by an
+    /// earlier `listen()` call) failing its `listen()` call must not
+    /// sacrifice a healthy sibling transport.
+    #[tokio::test]
+    async fn partial_listen_failure_from_a_single_use_provider_still_yields_a_working_listener() {
+        let already_listening = LoopbackTransport::new();
+        let _first_listener = already_listening.listen(registration()).await.unwrap();
+        let healthy = LoopbackTransport::new();
+
+        let mut fabric = TransportFabric::new();
+        fabric
+            .register("used-up", Arc::new(already_listening))
+            .unwrap();
+        fabric.register("healthy", Arc::new(healthy)).unwrap();
+
+        let listener = fabric
+            .listen(registration())
+            .await
+            .expect("healthy transport must still produce a listener");
+        let (_sender, _accepted) = tokio::try_join!(
+            fabric.connect(TransportTarget {
+                endpoint: "healthy".to_owned(),
+            }),
+            listener.accept()
+        )
+        .expect("healthy transport still accepts despite the single-use sibling failing to listen");
+    }
+
+    /// Finding #6 regression (all-fail branch): when every registered
+    /// transport's own `listen()` call fails (not merely its `accept()`),
+    /// the fabric must still fail closed instead of returning an unusable
+    /// listener.
+    #[tokio::test]
+    async fn listen_fails_closed_when_every_provider_listen_call_fails() {
+        let used_up_a = LoopbackTransport::new();
+        let _consumed_a = used_up_a.listen(registration()).await.unwrap();
+        let used_up_b = LoopbackTransport::new();
+        let _consumed_b = used_up_b.listen(registration()).await.unwrap();
+
+        let mut fabric = TransportFabric::new();
+        fabric.register("used-up-a", Arc::new(used_up_a)).unwrap();
+        fabric.register("used-up-b", Arc::new(used_up_b)).unwrap();
+
+        let err = match fabric.listen(registration()).await {
+            Ok(_) => panic!("a fabric whose every transport failed to listen must not succeed"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind(), ErrorKind::RelayUnavailable);
+    }
+
+    /// Finding #7 regression: `TransportFabric` normalizes registered/parsed
+    /// scheme literals case-insensitively (`FabricScheme::parse`
+    /// lowercases), and the downstream `LocalTcpTransport::parse_target`
+    /// must accept the same mixed-case endpoint rather than failing on a
+    /// case-sensitive prefix strip once the fabric has already routed it
+    /// there.
+    #[tokio::test]
+    async fn mixed_case_scheme_endpoint_round_trips_through_fabric_and_local_tcp() {
+        let local_tcp = LocalTcpTransport::bind_loopback_v4().await.unwrap();
+        let target = local_tcp.target();
+        let mut fabric = TransportFabric::new();
+        fabric
+            .register(crate::local_tcp::LOCAL_TCP_SCHEME_NAME, Arc::new(local_tcp))
+            .unwrap();
+
+        let mixed_case_endpoint = target.endpoint.replacen("tcp+local", "TcP+LoCaL", 1);
+        assert_ne!(mixed_case_endpoint, target.endpoint);
+        let mixed_case_target = TransportTarget {
+            endpoint: mixed_case_endpoint,
+        };
+
+        let listener = fabric.listen(registration()).await.unwrap();
+        let (mut sender, mut accepted) =
+            tokio::try_join!(fabric.connect(mixed_case_target), listener.accept())
+                .expect("a mixed-case scheme endpoint must still route and parse successfully");
+        sender.stream_mut().write_all(b"mixedcase").await.unwrap();
+        let mut buf = [0_u8; 9];
+        accepted.stream_mut().read_exact(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"mixedcase");
     }
 }

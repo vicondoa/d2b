@@ -171,9 +171,28 @@ fn validate_bind_addr(addr: SocketAddr) -> ProviderResult<()> {
 }
 
 fn parse_target(endpoint: &str) -> ProviderResult<SocketAddr> {
-    let raw = endpoint
-        .strip_prefix(LOCAL_TCP_SCHEME)
-        .ok_or_else(|| ProviderError::new(ErrorKind::InvalidTarget, "local-tcp-target-invalid"))?;
+    // Strip the scheme prefix case-insensitively: `TransportFabric` (see
+    // `packages/d2b-realm-transport/src/fabric.rs`) normalizes a
+    // registered/resolved scheme to lowercase before matching, so an
+    // endpoint the fabric already routed to this transport may carry a
+    // mixed-case scheme prefix (e.g. `TCP+Local://...`). Matching here
+    // case-sensitively would silently reject an endpoint the fabric just
+    // proved was registered for this exact transport -- normalize
+    // consistently end-to-end instead of failing closed on casing alone.
+    let prefix_len = LOCAL_TCP_SCHEME.len();
+    if endpoint.len() < prefix_len || !endpoint.is_char_boundary(prefix_len) {
+        return Err(ProviderError::new(
+            ErrorKind::InvalidTarget,
+            "local-tcp-target-invalid",
+        ));
+    }
+    let (prefix, raw) = endpoint.split_at(prefix_len);
+    if !prefix.eq_ignore_ascii_case(LOCAL_TCP_SCHEME) {
+        return Err(ProviderError::new(
+            ErrorKind::InvalidTarget,
+            "local-tcp-target-invalid",
+        ));
+    }
     let addr = raw
         .parse::<SocketAddr>()
         .map_err(|_| ProviderError::new(ErrorKind::InvalidTarget, "local-tcp-target-invalid"))?;
@@ -212,6 +231,22 @@ fn io_reason(kind: std::io::ErrorKind) -> &'static str {
         _ => "io-error",
     }
 }
+
+// `fabric.rs` builds the multi-transport `TransportFabric` / `FabricListener`
+// surface on top of the transports declared in this crate (including this
+// module). Like `work_executor.rs` in `d2b-realm-router`, it is a fully
+// self-contained, `crate::`-qualified module that exercises real production
+// code paths, but the crate's `lib.rs` is integrator-owned and out of scope
+// for this component: it does not yet declare `mod fabric;`. Nesting it here
+// under a `#[cfg(test)]` gate keeps the committed tree compiling unconditionally
+// (this declaration disappears entirely from non-test builds) while still
+// letting `cargo test` for this crate actually compile and exercise
+// `fabric.rs`'s own unit tests. See `docs/reference/realm-work-executor.md`
+// for the exact production wiring an integrator should add to `lib.rs`
+// (`pub mod fabric;`, unconditionally, alongside `mod local_tcp;`).
+#[cfg(test)]
+#[path = "fabric.rs"]
+mod fabric;
 
 #[cfg(test)]
 mod tests {
