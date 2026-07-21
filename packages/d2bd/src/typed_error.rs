@@ -539,7 +539,7 @@ impl UnsafeLocalShellErrorKind {
     fn human_message(self) -> &'static str {
         match self {
             Self::FeatureUnavailable => {
-                "the client and daemon did not negotiate unsafe-local-shell-v1"
+                "the unsafe-local shell service is not available on this daemon build"
             }
             Self::HelperUnavailable => "no same-UID unsafe-local helper is connected",
             Self::HelperStale => "the same-UID unsafe-local helper generation is stale",

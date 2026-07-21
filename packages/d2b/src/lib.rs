@@ -1571,9 +1571,6 @@ fn daemon_supported_features() -> Vec<d2b_contracts::FeatureFlag> {
         KnownFeatureFlag::TypedErrors.wire_value(),
         KnownFeatureFlag::StatusCheckBridges.wire_value(),
         KnownFeatureFlag::ExportBrokerAudit.wire_value(),
-        KnownFeatureFlag::ConfiguredLaunchV1.wire_value(),
-        KnownFeatureFlag::UnsafeLocalProviderV1.wire_value(),
-        KnownFeatureFlag::UnsafeLocalShellV1.wire_value(),
     ]
 }
 

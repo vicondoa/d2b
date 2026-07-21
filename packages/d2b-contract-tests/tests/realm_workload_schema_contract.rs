@@ -665,6 +665,7 @@ fn rendered_private_launcher_intent_resolves_argv_without_debug_leakage() {
         read_fixture_json(&dir, "provider-registry-v2.json");
     let bundle: Bundle = read_fixture_json(&dir, "bundle.json");
 
+    private.validate().expect("private artifact validates");
     provider_registry
         .validate()
         .expect("provider registry artifact validates");
