@@ -170,6 +170,8 @@ let
   corpVmWorkloadId = identity.deriveWorkloadId workRealmId "corp-vm";
   netVmCloudHypervisorRoleId =
     identity.deriveRoleId workRealmId netVmWorkloadId "cloud-hypervisor";
+  reachabilityManifest =
+    builtins.fromJSON reachability.d2b._manifestPkg.text;
 
   reachability = (mkEval [
     {
@@ -223,10 +225,15 @@ let
     }
   ]).config;
 
-  reachabilityNetGuest = (lib.findFirst
+  reachabilityNetwork = lib.findFirst
     (realm: realm.canonicalRealmId == workRealmId)
     (throw "reachability: realm work.local-root has no network rows")
-    reachability.d2b._realmNetwork.realms).guest;
+    reachability.d2b._realmNetwork.realms;
+  reachabilityNetGuest = reachabilityNetwork.guest;
+  corpVmNetwork = lib.findFirst
+    (row: row.canonicalWorkloadId == corpVmWorkloadId)
+    (throw "reachability: corp-vm has no network row")
+    reachabilityNetwork.addressing.workloadRows;
 
   netVmDag = builtins.head (builtins.filter
     (row: row.workloadIdentity.canonicalTarget == "network.work.local-root.d2b")
@@ -536,6 +543,47 @@ in
     expr = reachability.d2b._computedWorkloads.${netVmWorkloadId}
       .config.systemd.network.networks."10-eth-dhcp".matchConfig.MACAddress;
     expected = "00:00:00:00:00:00";
+  };
+
+  "net-vm-network/public-manifest-identifies-network-workload" = {
+    expr = {
+      netVm = {
+        inherit (reachabilityManifest.${netVmWorkloadId})
+          bridge
+          isNetVm
+          netVm
+          staticIp
+          tap
+          ;
+      };
+      workload = {
+        inherit (reachabilityManifest.${corpVmWorkloadId})
+          bridge
+          isNetVm
+          netVm
+          staticIp
+          tap
+          usbipdHostIp
+          ;
+      };
+    };
+    expected = {
+      netVm = {
+        bridge = reachabilityNetwork.resources.bridges.uplink.ifName;
+        isNetVm = true;
+        netVm = null;
+        staticIp = reachabilityNetwork.addressing.uplink.netVm;
+        tap = reachabilityNetwork.resources.taps.netVm.uplink.ifName;
+      };
+      workload = {
+        bridge = reachabilityNetwork.resources.bridges.lan.ifName;
+        isNetVm = false;
+        netVm = netVmWorkloadId;
+        staticIp = corpVmNetwork.ip;
+        tap = corpVmNetwork.tap.ifName;
+        usbipdHostIp = reachabilityNetwork.addressing.uplink.host;
+      };
+    };
   };
 
   "net-vm-network/minijail-profile-present-for-net-vm-runtime-role" = {

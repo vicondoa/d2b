@@ -29,6 +29,11 @@ let
           (row: row // { bridge = realm.resources.bridges.lan.ifName; })
           realm.addressing.workloadRows)
         networkPlan.realms));
+  networkPlanFor = workload:
+    lib.findFirst
+      (realm: realm.canonicalRealmId == workload.realmId)
+      null
+      networkPlan.realms;
   roleFor = workload: kind:
     lib.findFirst
       (role: role.roleKind == kind)
@@ -47,6 +52,8 @@ let
         workload.providerBindings.runtime.implementationId;
       nixos = implementation == "cloud-hypervisor";
       network = networkRowFor workload;
+      realmNetwork = networkPlanFor workload;
+      isNetVm = workload.workloadName == "network";
       stateDir =
         "/var/lib/d2b/r/${workload.realmId}/w/${workload.workloadId}";
       roleKinds = map (role: role.roleKind) workload.roles;
@@ -66,12 +73,15 @@ let
       audioService = null;
       audioStateFile =
         if hasRole "audio" then "${stateDir}/audio/audio-state.json" else null;
-      bridge = if network == null then null else network.bridge;
+      bridge =
+        if isNetVm then realmNetwork.resources.bridges.uplink.ifName
+        else if network == null then null
+        else network.bridge;
       env = workload.realmId;
       gpuSocket =
         if gpuRole != null then "${roleRuntime gpuRole}/gpu.sock" else null;
       graphics = hasRole "gpu";
-      isNetVm = false;
+      inherit isNetVm;
       lifecycle = {
         gracefulShutdown = {
           enable = true;
@@ -79,7 +89,10 @@ let
         };
         liveActivation.timeoutSeconds = null;
       };
-      netVm = null;
+      netVm =
+        if isNetVm || network == null
+        then null
+        else realmNetwork.netVmWorkloadId;
       observability = {
         enabled = hasRole "observability-agent";
         vsockCid = null;
@@ -131,13 +144,22 @@ let
         } else null;
       sshUser = null;
       inherit stateDir;
-      staticIp = if network == null then null else network.ip;
-      tap = if network == null then "none" else network.tap.ifName;
+      staticIp =
+        if isNetVm then realmNetwork.addressing.uplink.netVm
+        else if network == null then null
+        else network.ip;
+      tap =
+        if isNetVm then realmNetwork.resources.taps.netVm.uplink.ifName
+        else if network == null then "none"
+        else network.tap.ifName;
       tpm = hasRole "swtpm";
       tpmSocket =
         if tpmRole != null then "${roleRuntime tpmRole}/tpm.sock" else null;
       usbipYubikey = hasRole "usbip";
-      usbipdHostIp = null;
+      usbipdHostIp =
+        if isNetVm || network == null
+        then null
+        else realmNetwork.addressing.uplink.host;
     };
 
   publicManifest = {
