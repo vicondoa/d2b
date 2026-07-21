@@ -1,0 +1,12 @@
+[package]
+name = "d2b-shell-supervisor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Additive workspace scaffold reserved for the W8 systemd-user-shell-routing persistent-shell supervisor"
+
+[lints]
+workspace = true

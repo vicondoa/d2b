@@ -51,6 +51,22 @@ deprecations ship one minor release before removal.
   weezterm ownership exclusive-file-set was missing paths its own sibling
   commit had already modified (closed this round, with an open backlog item
   to add an automated ownership-diff check).
+- Added the W8 `workspace-crate-registration-seam` shared-root prep:
+  registered `d2b-runtime-systemd-user`, `d2b-shell-supervisor`, and
+  `d2b-systemd-user-agent` as additive `packages/Cargo.toml` workspace
+  members in base-first/alphanumeric sorted order, scaffolded each crate's
+  own dependency-free `Cargo.toml` and a minimal, behavior-free,
+  `#![forbid(unsafe_code)]` `src/lib.rs`, and regenerated the single
+  `packages/Cargo.lock` for exactly those three new packages. Added focused
+  `packages/xtask/tests/policy_workspace.rs` coverage
+  (`w8_systemd_user_shell_routing_scaffold_crates_are_additive_and_dependency_free`)
+  proving the crates are registered, dependency-free, and not yet consumed
+  by any shipped production package. This is shared-root/integrator prep
+  only: it implements no runtime behavior, does not edit `d2bd`, and does
+  not flip `workspace-crate-registration-seam` to `status = "ready"` in
+  `tests/unit/nix/eval-cases/w8-integration-wave-plan.nix` — that remains
+  the integrator's call once the `systemd-user-shell-routing` component is
+  ready to rebase onto this commit.
 - Added the checked-in W8 delivery authority (`delivery/manifests/w8.json`),
   binding one repository and the single current stack node
   (`adr0045-w8-integration` / PR #324) against `main`, a candidate-pinned
