@@ -1021,26 +1021,66 @@ mod tests {
     use d2b_exec_runner::RunnerEnv;
     use d2b_exec_runner::filering::FileRingReader;
 
-    static SCRATCH_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    /// Bounded attempts to allocate a unique scratch dir before failing
+    /// closed. A collision is expected to be rare (only ever on an exact
+    /// nanosecond-timestamp tie within the same process), so this is a
+    /// generous ceiling, not a normal-path retry budget.
+    const SCRATCH_SLOT_MAX_ATTEMPTS: u32 = 4096;
 
+    /// Allocates a fresh, uniquely-named scratch dir for one test's runner
+    /// slot.
+    ///
+    /// Regression: this previously named the dir `runner-svc-<pid>-<nanos>`
+    /// (process id + `SystemTime::now()` nanoseconds) and created it with
+    /// `create_dir_all`, which succeeds silently on an already-existing
+    /// directory. Under parallel CI, two test threads in the *same process*
+    /// (same pid) can observe the same nanosecond tick on a coarse clock, so
+    /// both calls raced to reuse one physical directory; whichever test's
+    /// `write_status`/log writes ran second could stomp the first test's
+    /// files mid-run, and `cancel_sentinel_terminates_and_records_cancelled`
+    /// intermittently found its own status file missing or overwritten.
+    ///
+    /// The fix adds a per-process monotonic sequence number
+    /// (`fetch_add`, `Ordering::Relaxed` is sufficient: only uniqueness of
+    /// the returned value matters, not any ordering relationship with other
+    /// memory operations) to the timestamp, and allocates the directory with
+    /// `create_dir` (not `create_dir_all`) so an accidental collision is
+    /// observable (`ErrorKind::AlreadyExists`) rather than silently
+    /// tolerated. On collision the loop draws a fresh sequence number and
+    /// retries; the atomic counter guarantees every retry within one process
+    /// produces a name no earlier attempt could have used, so the loop is
+    /// guaranteed to make progress and is not a busy-spin on a fixed
+    /// candidate. A bounded attempt ceiling keeps the fallback fail-closed
+    /// (a hard panic identifying the runaway condition) instead of hanging
+    /// forever if the temp dir is somehow unwritable/adversarial.
     fn scratch_slot() -> (PathBuf, RunnerPaths) {
         // Always place test scratch under the system temp dir (respects TMPDIR,
         // falls back to /tmp) — never the repo-relative "." which leaks
         // runner-svc-* dirs into the worktree.
+        static SEQ: AtomicU64 = AtomicU64::new(0);
         let base = std::env::temp_dir();
-        let dir = base.join(format!(
-            "runner-svc-{}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
+        let pid = std::process::id();
+        for _ in 0..SCRATCH_SLOT_MAX_ATTEMPTS {
+            let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+            let nanos = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos(),
-            SCRATCH_SEQUENCE.fetch_add(1, Ordering::Relaxed),
-        ));
-        let paths = RunnerPaths::new(&dir, 3);
-        std::fs::create_dir(&dir).unwrap();
-        std::fs::create_dir_all(paths.slot_dir()).unwrap();
-        (dir, paths)
+                .as_nanos();
+            let dir = base.join(format!("runner-svc-{pid}-{nanos}-{seq}"));
+            match std::fs::create_dir(&dir) {
+                Ok(()) => {
+                    let paths = RunnerPaths::new(&dir, 3);
+                    std::fs::create_dir_all(paths.slot_dir()).unwrap();
+                    return (dir, paths);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => panic!("scratch_slot: failed to create {dir:?}: {e}"),
+            }
+        }
+        panic!(
+            "scratch_slot: failed to allocate a unique scratch dir under {} after {SCRATCH_SLOT_MAX_ATTEMPTS} attempts",
+            base.display()
+        );
     }
 
     fn spec(argv0: &str, max_runtime_sec: u64) -> ExecSpec {
@@ -1864,6 +1904,40 @@ ControlGroup=/d2b.slice/d2b-exec.slice/d2b-exec-03.service
         // Releasing the write end lets the detached drain thread finish cleanly.
         drop(write_fd);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn scratch_slot_is_unique_under_concurrent_same_process_allocation() {
+        // Regression test for the pid+nanos scratch-dir race: spawn many
+        // threads (same process, so same pid) allocating scratch slots as
+        // close to simultaneously as possible, which is exactly the
+        // condition that used to let two threads observe the same
+        // nanosecond timestamp and silently share one `create_dir_all`
+        // directory. Every returned dir must be distinct and must actually
+        // exist as its own directory.
+        const THREADS: usize = 64;
+        let barrier = Arc::new(std::sync::Barrier::new(THREADS));
+        let handles: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    scratch_slot()
+                })
+            })
+            .collect();
+        let mut dirs = std::collections::HashSet::new();
+        for handle in handles {
+            let (dir, _paths) = handle.join().expect("scratch_slot thread panicked");
+            assert!(dir.is_dir(), "{dir:?} was not created as a directory");
+            assert!(
+                dirs.insert(dir.clone()),
+                "duplicate scratch dir allocated: {dir:?}"
+            );
+        }
+        for dir in dirs {
+            std::fs::remove_dir_all(&dir).ok();
+        }
     }
 
     #[test]
