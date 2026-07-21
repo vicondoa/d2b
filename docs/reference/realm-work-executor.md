@@ -29,11 +29,11 @@ existing type's shape changes.
 | File | Role |
 | --- | --- |
 | `packages/d2b-realm-router/src/work_executor.rs` (new) | `WorkExecutor`: the single typed dispatch entry point tying realm resolution, host-resident authorization/idempotency + durable execution, and an *injected* gateway-backed dispatch port together. |
-| `packages/d2b-realm-router/src/execution.rs` (touched) | Adds `state_code(ExecState) -> &'static str` (stable observability vocabulary). Also carries the test-only conditional module declaration that brings `work_executor.rs` into this crate's own `cargo test` — see [Why a `#[cfg(test)]` module declaration](#why-a-cfgtest-module-declaration). |
-| `packages/d2b-realm-router/src/remote_node.rs` (touched) | Adds the `GatewayPort` trait and its reference implementer `SingleGatewayPort`, the boundary-checked wrapper a gateway guest process uses to front exactly one `RemoteFullHostAdapter`. This file is unconditionally compiled (already `pub mod remote_node;` in `lib.rs`), so it is where `WorkExecutor`'s gateway-crossing contract has to live. |
+| `packages/d2b-realm-router/src/execution.rs` (touched) | Adds `state_code(ExecState) -> &'static str` (stable observability vocabulary). Also carries the test-only conditional module declaration that brings `work_executor.rs` into this crate's own `cargo test` — see [Test-only `#[cfg(test)]` module declarations](#test-only-cfgtest-module-declarations--not-production-wiring). |
+| `packages/d2b-realm-router/src/remote_node.rs` (touched) | Adds the `GatewayPort` trait, its reference implementer `SingleGatewayPort`, and an `original_operation_id` field/helper on `RemoteDispatchOutcome` so a retry's own id is never confused with the router's first-attempt id. This file is unconditionally compiled (already `pub mod remote_node;` in `lib.rs`), so it is where `WorkExecutor`'s gateway-crossing contract has to live. |
 | `packages/d2b-realm-router/src/target_resolver.rs`, `session_lifecycle.rs` | Consumed as-is by `WorkExecutor`; not modified in this pass. Owned only because they define the composed types. |
 | `packages/d2b-realm-transport/src/fabric.rs` (new) | `TransportFabric`: a scheme-keyed composition of `TransportProvider` impls (e.g. `LoopbackTransport`, `LocalTcpTransport`) behind one `TransportProvider` facade, with a persistent bounded fan-in `FabricListener`. |
-| `packages/d2b-realm-transport/src/local_tcp.rs` (touched) | Adds `LOCAL_TCP_SCHEME_NAME`, fixes `parse_target()` to strip its scheme prefix case-insensitively (matching `TransportFabric`'s own case-insensitive scheme normalization), and carries the test-only conditional module declaration that brings `fabric.rs` into this crate's own `cargo test`. |
+| `packages/d2b-realm-transport/src/local_tcp.rs` (touched) | Adds `LOCAL_TCP_SCHEME_NAME`, fixes `parse_target()` to strip its scheme prefix case-insensitively, classifies recoverable `accept`-stage io errors and attaches a bounded retry hint (`is_recoverable_accept_error`), and carries the test-only conditional module declaration that brings `fabric.rs` into this crate's own `cargo test`. |
 | `packages/d2b-exec-runner/src/service_mode.rs` (touched) | Adds `ExecutionOutcomeCode` + `outcome_code_for_phase(StatusPhase)`. Also fixes a pre-existing parallel-test scratch-dir race in this file's own `#[cfg(test)]` helper (see [Regression: unique scratch allocation](#regression-unique-scratch-allocation-in-service_moders-tests)). |
 | `packages/d2b-exec-runner/src/spec.rs` (touched) | Makes `validate_workload_unit_name` `pub`: a reusable shape-validator for the slot-derived workload unit name `d2b-guestd` writes, without duplicating its derivation. |
 
@@ -76,32 +76,83 @@ port as an explicit per-call argument instead:
      `workload` field against `req.workload` the same way.
    - Route through `self.router.route_with_capabilities(req, session_principal,
      capabilities)`. `Accept` runs the durable-table action and (for mutating
-     kinds) `mark_completed`/`mark_failed`s the router record; `Replay`
+     kinds) `mark_completed`/`mark_failed`s the router record, keyed by
+     `req.operation_id` (the first attempt *is* the original); `Replay`
      decodes the previously-recorded `HostResidentOutcome` from the router's
-     `OpaquePayload` cache without re-running the action; `InProgress`
-     returns `WorkExecutorError::HostOperationInProgress`; every other
-     refusal (capability denied, missing/conflicting idempotency key,
-     principal mismatch, unsupported kind, dedup capacity exceeded, …)
-     becomes a typed `WorkExecutorError::Router(ConstellationError)` via
-     `route_decision_error`. **Empty capabilities and a missing idempotency
-     key on a mutating operation are therefore rejected by construction**,
-     before the durable table is ever touched.
-   - Returns `WorkDispatchOutcome::HostResident(HostResidentOutcome)`.
+     `OpaquePayload` cache without re-running the action, keyed by the
+     router-supplied `original_operation_id` (the *first* attempt's id, which
+     may differ from this call's own `req.operation_id` — see
+     [Original-operation-id propagation](#original-operation-id-propagation)
+     below); `InProgress` returns
+     `WorkExecutorError::HostOperationInProgress { original_operation_id }`
+     carrying that same original id; every other refusal (capability denied,
+     missing/conflicting idempotency key, principal mismatch, unsupported
+     kind, dedup capacity exceeded, …) becomes a typed
+     `WorkExecutorError::Router(ConstellationError)` via `route_decision_error`.
+     **Empty capabilities and a missing idempotency key on a mutating
+     operation are therefore rejected by construction**, before the durable
+     table is ever touched.
+   - Returns `WorkDispatchOutcome::HostResident { original_operation_id,
+     outcome: HostResidentOutcome }`. Callers that need to correlate a
+     status query, a replay, or a session-lifecycle key with *this* logical
+     operation must use `original_operation_id`, never `req.operation_id` —
+     the two are only guaranteed equal on the very first (accepted) attempt.
 3. **`GatewayBacked { gateway, target }`**: hand the *unmodified* canonical
    `gateway`/`req` to the injected `gateway_port.dispatch_via_gateway(gateway,
    req, generation, client)`. `WorkExecutor` performs no authorization of its
    own here — that lives entirely inside whatever already-authorized
    `GatewayPort` implementation the caller injected (see
    [`GatewayPort` / `SingleGatewayPort`](#gatewayport--singlegatewayport-remote_noders)
-   below). On `Ok(Sent | Replayed)`, and only then, `WorkExecutor` advances a
-   tracked `SessionLifecycle` for `DisplaySessionOpen` operations (bounded by
-   `max_gateway_sessions`); `Ok(QueryRemoteState { .. })` is ambiguous and
-   only *reports* an existing tracked phase, never allocates one; any `Err`
-   evicts (`self.sessions.remove(&req.operation_id)`) rather than leaving a
-   lingering entry — a request that never actually succeeded cannot consume
-   bounded session-table capacity. `stop_gateway_session` drives orderly
-   teardown (`stop()` + `finish_stop()`), evicting the session once it
-   reaches `Stopped`.
+   below). Session-lifecycle tracking (bounded by `max_gateway_sessions`) is
+   **reservation-before-dispatch**, not allocate-after-success:
+   - If `req.operation_id` is not yet tracked and `DisplaySessionOpen` tracks
+     sessions for this kind, capacity is checked and a *provisional*
+     `SessionLifecycle::new()` entry is inserted **before**
+     `gateway_port.dispatch_via_gateway` is ever called. At capacity, this
+     returns `WorkExecutorError::GatewaySessionCapacityExceeded` immediately —
+     proving the peer is never contacted for a request that cannot be
+     tracked. If `req.operation_id` is *already* tracked (a retry reusing the
+     same id), no new reservation is made and no capacity check runs.
+   - After the call, the outcome's `original_operation_id` (see below) is
+     resolved. On `Ok(Sent | Replayed)`: if the original id differs from
+     `req.operation_id` and this call made the provisional reservation, that
+     now-superfluous reservation is removed and the lifecycle is instead
+     finalized/advanced under the *original* id (best-effort — if capacity is
+     exhausted at that point the remote dispatch has already succeeded, so
+     tracking is skipped rather than erroring). `Ok(QueryRemoteState { .. })`
+     releases any provisional reservation this call made and only *reports*
+     an existing tracked phase for the original id, never allocating one. On
+     `Err(_)`, **only** a reservation this exact call created is removed —
+     a pre-existing entry under the same id (for example a legitimately
+     running session from an earlier successful attempt) is never touched by
+     a failed/conflicting retry. `stop_gateway_session` drives orderly
+     teardown (`stop()` + `finish_stop()`), evicting the session once it
+     reaches `Stopped`.
+   - Returns `WorkDispatchOutcome::GatewayBacked { original_operation_id,
+     session_phase, remote }`.
+
+### Original-operation-id propagation
+
+`OperationRouter`'s dedup key (`DedupKey::for_request`) is
+`(realm, principal, node, kind, idempotency_key)` — it deliberately excludes
+`operation_id`, matching `OperationRequest::dedup_fingerprint_input()`'s own
+exclusion of `operation_id`/`correlation_id`/`idempotency_key`/`trace`. Two
+requests sharing the same idempotency key but carrying *different*
+`operation_id`s are the same logical operation to the router: the *first*
+attempt's `operation_id` is what the router remembers and replays under
+(`RouteDecision::Replay`/`InProgress`'s own `original_operation_id` field), and
+a retry's own freshly-generated `operation_id` is never the right key for
+status queries, replay lookups, or session-lifecycle tracking.
+
+`RemoteDispatchOutcome::original_operation_id(&self, current: &OperationId) ->
+&OperationId` (added to `remote_node.rs`) resolves this uniformly: `Sent`
+returns `current` (the caller's own id, since that request is what established
+the lease), while `Replayed`/`QueryRemoteState` return their carried field.
+`work_executor.rs`'s `dispatch_host_resident`/`dispatch_gateway_backed` both
+use this to compute the id they key session/status state by, and both expose
+it on their respective `WorkDispatchOutcome` variants so external callers
+(status endpoints, audit correlation) key their own state the same way —
+**never under a retry's own `operation_id`**.
 
 Dependency direction is preserved: `work_executor.rs` imports only
 `crate::{...}` (router's own re-exports, including `crate::remote_node`'s
@@ -126,6 +177,14 @@ entirely and introduces:
   trait lives in `remote_node.rs` (unconditionally compiled) rather than
   `work_executor.rs` (test-gated today), so it is reachable regardless of
   which crate declares which `mod`.
+- **`RemoteDispatchOutcome::Replayed`/`::QueryRemoteState` now carry an
+  `original_operation_id: OperationId` field**, and the enum gained
+  `original_operation_id(&self, current: &OperationId) -> &OperationId` (see
+  [Original-operation-id propagation](#original-operation-id-propagation)).
+  `RemoteFullHostAdapter::dispatch()` populates this field from the router's
+  own `RouteDecision::Replay`/`InProgress` — it is not independently derived,
+  so it is exactly the router's notion of "the first attempt", never this
+  attempt's own id.
 - **`SingleGatewayPort<C = SystemClock>`** — the reference implementer:
   wraps exactly one gateway-side `RemoteFullHostAdapter<C>` plus a
   `boundary: RealmTarget`. `dispatch_via_gateway` refuses
@@ -171,9 +230,20 @@ scheme-keyed composition of already-existing transports
   to start listening.
 - **`FabricListener::accept()`**: fans **in** every healthy sub-listener via
   a persistent per-listener background task (one `tokio::spawn` per
-  sub-listener) that loops calling that sub-listener's own `accept()` and
-  forwards every outcome — success or terminal error — into one shared,
-  bounded `tokio::sync::mpsc` channel (`FABRIC_ACCEPT_QUEUE_CAPACITY`, 64).
+  sub-listener) that loops calling that sub-listener's own `accept()`.
+  Each `Err` outcome is classified via
+  `d2b_realm_provider::error::ProviderError::retry_hint()`: when a hint is
+  present, the error is a known-recoverable accept-stage condition (see
+  [Recoverable accept-error classification](#recoverable-accept-error-classification-local_tcprs)
+  below) and the task sleeps for the hint's bounded `applied_backoff()`
+  (floored at `FABRIC_ACCEPT_MIN_BACKOFF`) and retries in place — the
+  transient error is *never* forwarded into the channel — up to
+  `FABRIC_ACCEPT_MAX_CONSECUTIVE_RECOVERABLE_ERRORS` (32) consecutive
+  recoverable errors, after which the run falls back to terminal handling so
+  a sub-listener that is recoverable-but-never-actually-recovers cannot spin
+  its background task forever. A terminal error (no hint, or the bound
+  exhausted) and every `Ok` outcome are forwarded into one shared, bounded
+  `tokio::sync::mpsc` channel (`FABRIC_ACCEPT_QUEUE_CAPACITY`, 64).
   `accept()` pulls from that channel, skipping over (but remembering)
   terminal sub-listener errors so it keeps waiting on whichever sub-listeners
   are still healthy, and only returns an error once every sub-listener has
@@ -181,7 +251,8 @@ scheme-keyed composition of already-existing transports
   stops looping (dropping its sender) once its own sub-listener goes
   terminal, so a permanently dead transport cannot spin forever flooding the
   queue. Dropping the `FabricListener` `abort()`s every spawned task —
-  bounded, explicit cancellation, no leaked accept loops.
+  bounded, explicit cancellation, no leaked accept loops, including one
+  currently asleep in a retry backoff.
 
 This replaces the previous one-shot `tokio::task::JoinSet` race, which called
 `abort_all()` on the first accepted session — silently discarding any *other*
@@ -192,6 +263,22 @@ simultaneously accepted session so a later `accept()` call still delivers it.
 `TransportFabric` holds no realm relay/session/provider credential and no
 remote node registry: it is strictly a byte-transport composition. It carries
 no free-form path/argv construction.
+
+### Recoverable accept-error classification (`local_tcp.rs`)
+
+`LocalTcpListener::accept()`'s io errors are mapped to a typed
+`ProviderError` by `local_tcp_io_error(stage, kind)`. For the `"accept"`
+stage specifically, `is_recoverable_accept_error(kind)` classifies
+`Interrupted`/`ConnectionAborted`/`WouldBlock`/`TimedOut` as recoverable —
+well-known transient accept conditions that do not indicate the listening
+socket itself has failed — and attaches a bounded
+`RetryHint::bounded(ACCEPT_RETRY_BASE, Duration::ZERO, ACCEPT_RETRY_MAX)`
+(5ms base, 50ms cap). Every other io error kind, and every non-`"accept"`
+stage (e.g. `"bind"`), carries no retry hint and is therefore always
+terminal. This keeps the recoverable/terminal decision entirely inside the
+structural, transport-agnostic `retry_hint()` signal `fabric.rs` already
+consumes, rather than leaking `std::io::ErrorKind` matching into the
+fan-in's own classification logic.
 
 ### Scheme case normalization
 
@@ -244,7 +331,7 @@ hand-rolling a second, possibly-diverging one. It intentionally does **not**
 add a second name-deriving function: the derivation stays single-owned in
 `d2b-guestd`, only the validation contract is shared.
 
-## Why a `#[cfg(test)]` module declaration
+## Test-only `#[cfg(test)]` module declarations — not production wiring
 
 `lib.rs` is a shared integration sink outside this component's owned files,
 so this change cannot add `pub mod work_executor;` to
@@ -255,9 +342,11 @@ all, `work_executor.rs`/`fabric.rs` would be dead files: never compiled by
 silently rest on a temporarily-patched `lib.rs` instead of the committed
 tree.
 
-To make the committed tree self-verifying without touching `lib.rs`, each new
-file is nested, **conditionally**, inside a sibling file that `lib.rs`
-already declares unconditionally:
+**This is a test-harness convenience, not a substitute for production
+integration, and it must not be read as such.** To make the committed tree
+self-verifying under `cargo test` without touching `lib.rs`, each new file is
+nested, **conditionally, and only when compiling this crate's own tests**,
+inside a sibling file that `lib.rs` already declares unconditionally:
 
 - `packages/d2b-realm-router/src/execution.rs` (already `pub mod execution;`
   in `lib.rs`) adds:
@@ -280,7 +369,10 @@ already declares unconditionally:
 Both declarations disappear entirely from a non-test build (`#[cfg(test)]`),
 so the production compiled surface of either crate is byte-for-byte
 unaffected by this change; `cargo build` for either crate does not compile
-`work_executor.rs`/`fabric.rs` at all today. `cargo test`, however, does
+`work_executor.rs`/`fabric.rs` at all today, and **neither type is reachable
+from any production code path in this tree** — there is no running control
+plane, daemon, or CLI surface that exercises `WorkExecutor`/`TransportFabric`
+until an integrator performs the wiring below. `cargo test`, however, does
 compile and run their own `#[cfg(test)] mod tests` — this is what makes every
 test result reported in [Validation performed](#validation-performed) a real
 exercise of the committed tree, not of a temporarily-patched one. Both files
@@ -291,8 +383,17 @@ test builds changes nothing about their own logic.
 This is a conditional, test-only reference from an already-declared module to
 an otherwise-undeclared one — it satisfies "avoid unconditional references
 from declared modules to undeclared modules" while still letting the owned
-files compile and their tests run today. The production reference an
-integrator adds is a plain, unconditional `pub mod`, documented next.
+files compile and their tests run today. It is deliberately narrow scaffolding
+scoped to `#[cfg(test)]` alone, expected to be short-lived: **the integration
+commit that adds the real, unconditional `pub mod work_executor;`/`pub mod
+fabric;` lines to each crate's `lib.rs` (documented next, in
+[Integrator wiring](#integrator-wiring)) MUST also delete these two
+`#[cfg(test)]` blocks from `execution.rs`/`local_tcp.rs` in the same commit.**
+Once the production `pub mod` line exists, the conditional test-only path
+declaration is redundant (the file is already reachable unconditionally) and
+leaving it in place would needlessly compile `work_executor.rs`/`fabric.rs`
+twice under two different module paths for `cargo test`, which is exactly
+the kind of stale test-only scaffolding this note exists to prevent.
 
 ## Regression: unique scratch allocation in `service_mode.rs` tests
 
@@ -347,7 +448,12 @@ field-by-field.
 None of the new modules are declared in their crate's `lib.rs` by this
 change (`lib.rs` is a shared integration sink outside this component's owned
 files). To bring them into the compiled production surface, an integrator
-adds exactly the following, and nothing else:
+adds exactly the following, **and, in the same commit, deletes the two
+`#[cfg(test)]` test-only path-module declarations described in
+[Test-only `#[cfg(test)]` module declarations](#test-only-cfgtest-module-declarations--not-production-wiring)
+from `execution.rs`/`local_tcp.rs`** — once the unconditional `pub mod` lines
+below exist, those conditional test-only declarations are redundant
+duplicate-compilation scaffolding, not additional production wiring:
 
 `packages/d2b-realm-transport/src/lib.rs`:
 
@@ -413,15 +519,20 @@ warnings` / `cargo fmt --check` are clean **against the committed tree as
 it stands** — no `lib.rs` patch was needed or used to produce these results,
 because `work_executor.rs`/`fabric.rs` are reached through the test-only
 `#[cfg(test)]` module declarations described above. Test counts observed:
-`d2b-realm-router` 98 lib tests (including 21 in
+`d2b-realm-router` 102 lib tests (including 23 in
 `execution::work_executor::tests` covering wrong-node fail-closed, empty
 capabilities/missing idempotency rejection, workload-mismatch rejection,
-replay-vs-restart, gateway-port boundary-mismatch fail-closed, and
-session-lifecycle allocate-after-success/evict-on-failure/capacity
-exhaustion resistance); `d2b-realm-transport` 33 lib tests (including new
-persistent-fan-in, partial-listen-failure, all-listen-failure, and
-mixed-case-scheme regressions); `d2b-exec-runner` 34 lib + 22 bin + 2 + 4
-integration tests. `d2b-exec-runner`'s test suite (including
+replay-vs-restart, gateway-port boundary-mismatch fail-closed,
+original-operation-id propagation through replay/in-progress, reserve-before-
+dispatch capacity enforcement (proving the peer is never called when at
+capacity), and non-destructive eviction of a legitimately running session
+under a failed/conflicting retry); `d2b-realm-transport` 38 lib tests
+(including persistent-fan-in, partial-listen-failure, all-listen-failure,
+mixed-case-scheme, recoverable-accept-error classification/retry-hint
+attachment, scripted-transient-error retry-without-terminating, bounded
+recoverable-error-exhaustion-goes-terminal, and drop-aborts-a-task-asleep-in-
+backoff regressions); `d2b-exec-runner` 34 lib + 22 bin + 2 + 4 integration
+tests. `d2b-exec-runner`'s test suite (including
 `scratch_slot_is_unique_under_concurrent_same_process_allocation` and
 `cancel_sentinel_terminates_and_records_cancelled`) was additionally run
 five consecutive times with `--test-threads=16` with no failures.

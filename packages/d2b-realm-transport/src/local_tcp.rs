@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use d2b_realm_core::{ErrorKind, NodeId, ProviderId};
-use d2b_realm_provider::error::{ProviderError, ProviderResult};
+use d2b_realm_provider::error::{ProviderError, ProviderResult, RetryHint};
 use d2b_realm_provider::provider::{TransportListener, TransportProvider};
 use d2b_realm_provider::types::{NodeRegistration, SafeLabel, TransportSession, TransportTarget};
 use std::net::{Ipv4Addr, SocketAddr};
@@ -8,6 +8,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, Notify};
 
@@ -210,11 +211,43 @@ fn validate_connect_addr(addr: SocketAddr) -> ProviderResult<()> {
     Ok(())
 }
 
+/// Bounded retry delay attached to a recoverable `accept`-stage io error.
+/// Kept tiny: the accept loop is expected to retry many times per second
+/// under real transient conditions (an interrupted syscall, a momentarily
+/// aborted incoming connection), so the fan-in (see `fabric.rs`) should not
+/// stall noticeably before the next attempt.
+const ACCEPT_RETRY_BASE: Duration = Duration::from_millis(5);
+const ACCEPT_RETRY_MAX: Duration = Duration::from_millis(50);
+
+/// Whether an `accept`-stage io error is a transient condition worth
+/// retrying in place, as opposed to a terminal listener failure. This is
+/// deliberately narrow: only error kinds that are well-known to be
+/// recoverable-without-listener-restart are included. Anything else (for
+/// example a broken pipe on the listening socket itself) stays terminal.
+fn is_recoverable_accept_error(kind: std::io::ErrorKind) -> bool {
+    matches!(
+        kind,
+        std::io::ErrorKind::Interrupted
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::WouldBlock
+            | std::io::ErrorKind::TimedOut
+    )
+}
+
 fn local_tcp_io_error(stage: &'static str, kind: std::io::ErrorKind) -> ProviderError {
-    ProviderError::new(
+    let err = ProviderError::new(
         ErrorKind::RelayUnavailable,
         format!("local-tcp-{stage}-failed:{}", io_reason(kind)),
-    )
+    );
+    if stage == "accept" && is_recoverable_accept_error(kind) {
+        err.with_retry_hint(RetryHint::bounded(
+            ACCEPT_RETRY_BASE,
+            Duration::ZERO,
+            ACCEPT_RETRY_MAX,
+        ))
+    } else {
+        err
+    }
 }
 
 fn io_reason(kind: std::io::ErrorKind) -> &'static str {
@@ -379,5 +412,46 @@ mod tests {
         let mut stream = client.into_stream();
         let mut buf = [0_u8; 1];
         assert_eq!(stream.read(&mut buf).await.unwrap(), 0);
+    }
+
+    // Finding #4 regression: an `accept`-stage io error that is a
+    // well-known-recoverable kind must carry a bounded retry hint so a
+    // fan-in composition (see `fabric.rs`) can retry it in place instead of
+    // tearing the whole sub-listener down as terminal.
+    #[test]
+    fn recoverable_accept_errors_are_classified_and_carry_a_bounded_retry_hint() {
+        for kind in [
+            std::io::ErrorKind::Interrupted,
+            std::io::ErrorKind::ConnectionAborted,
+            std::io::ErrorKind::WouldBlock,
+            std::io::ErrorKind::TimedOut,
+        ] {
+            assert!(
+                is_recoverable_accept_error(kind),
+                "{kind:?} must be recoverable"
+            );
+            let err = local_tcp_io_error("accept", kind);
+            let hint = err
+                .retry_hint()
+                .unwrap_or_else(|| panic!("{kind:?} accept error must carry a retry hint"));
+            assert!(hint.applied_backoff() <= ACCEPT_RETRY_MAX);
+        }
+    }
+
+    // Non-recoverable accept errors (and non-accept stages entirely) must
+    // never carry a retry hint: they are terminal and the fan-in must not
+    // spin retrying them.
+    #[test]
+    fn non_recoverable_accept_errors_and_other_stages_carry_no_retry_hint() {
+        assert!(!is_recoverable_accept_error(std::io::ErrorKind::BrokenPipe));
+        let accept_err = local_tcp_io_error("accept", std::io::ErrorKind::BrokenPipe);
+        assert!(accept_err.retry_hint().is_none());
+
+        // Even a kind that would be recoverable at the accept stage must
+        // not get a hint attached for a different stage (e.g. `bind`),
+        // since a hint there would misleadingly suggest retrying a bind
+        // failure rather than treating it as terminal setup failure.
+        let bind_err = local_tcp_io_error("bind", std::io::ErrorKind::ConnectionAborted);
+        assert!(bind_err.retry_hint().is_none());
     }
 }

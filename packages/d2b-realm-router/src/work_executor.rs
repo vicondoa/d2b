@@ -87,13 +87,26 @@ pub enum HostResidentOutcome {
 pub enum WorkDispatchOutcome {
     /// The realm entrypoint resolved host-resident; the durable execution
     /// table handled the request directly, after this executor's own
-    /// authorization/idempotency gate accepted it.
-    HostResident(HostResidentOutcome),
+    /// authorization/idempotency gate accepted it. `original_operation_id`
+    /// is this executor's own [`crate::OperationRouter`]'s dedup-lease
+    /// owner: `req.operation_id` itself for a fresh `Accept`, or the
+    /// first-attempt id for a `Replay` -- never a retry's own id. Callers
+    /// MUST use it for any further in-progress status query keyed to the
+    /// same logical operation.
+    HostResident {
+        original_operation_id: OperationId,
+        outcome: HostResidentOutcome,
+    },
     /// The realm entrypoint resolved gateway-backed; the injected
-    /// [`GatewayPort`] handled the request. `session_phase` is set only for
-    /// a `DisplaySessionOpen` operation (the lifecycle this executor
-    /// tracks); every other gateway-backed kind carries `None`.
+    /// [`GatewayPort`] handled the request. `original_operation_id` is
+    /// [`RemoteDispatchOutcome::original_operation_id`] for `remote` --
+    /// the gateway-side dedup lease owner, never a retry's own id.
+    /// `session_phase` is set only for a `DisplaySessionOpen` operation
+    /// (the lifecycle this executor tracks, keyed by
+    /// `original_operation_id`); every other gateway-backed kind carries
+    /// `None`.
     GatewayBacked {
+        original_operation_id: OperationId,
         session_phase: Option<SessionPhase>,
         remote: RemoteDispatchOutcome,
     },
@@ -117,7 +130,9 @@ pub enum WorkExecutorError {
     Durable(ConstellationError),
     /// The injected gateway port rejected the request.
     Remote(RemoteNodeError),
-    /// The bounded gateway session table is at capacity.
+    /// The bounded gateway session table is at capacity. Reserved/checked
+    /// *before* the gateway port is ever called, so the peer is never
+    /// reached for a request this bound refuses.
     GatewaySessionCapacityExceeded,
     /// A host-resident request addressed a node other than this executor's
     /// own local node identity.
@@ -132,7 +147,10 @@ pub enum WorkExecutorError {
     Router(ConstellationError),
     /// A same-key host-resident mutation is still in progress at the host;
     /// the caller must retry later rather than treat this as a failure.
-    HostOperationInProgress,
+    /// Carries the [`OperationId`] of the attempt that actually owns the
+    /// in-progress dedup lease -- the caller's own retry `operation_id` may
+    /// differ and must never be used for a subsequent status query.
+    HostOperationInProgress { original_operation_id: OperationId },
 }
 
 impl std::fmt::Display for WorkExecutorError {
@@ -164,9 +182,13 @@ impl std::fmt::Display for WorkExecutorError {
                 "operation body/envelope workload did not match the execution's recorded workload"
             ),
             WorkExecutorError::Router(err) => write!(f, "host authorization router: {err}"),
-            WorkExecutorError::HostOperationInProgress => {
-                write!(f, "a same-key host-resident operation is still in progress")
-            }
+            WorkExecutorError::HostOperationInProgress {
+                original_operation_id,
+            } => write!(
+                f,
+                "a same-key host-resident operation is still in progress under operation id `{}`",
+                original_operation_id.as_str()
+            ),
         }
     }
 }
@@ -376,9 +398,13 @@ where
             .resolve(&target)
             .map_err(WorkExecutorError::Resolve)?
         {
-            DispatchTarget::HostResident { .. } => Ok(WorkDispatchOutcome::HostResident(
-                self.dispatch_host_resident(req)?,
-            )),
+            DispatchTarget::HostResident { .. } => {
+                let (original_operation_id, outcome) = self.dispatch_host_resident(req)?;
+                Ok(WorkDispatchOutcome::HostResident {
+                    original_operation_id,
+                    outcome,
+                })
+            }
             DispatchTarget::GatewayBacked { gateway, target } => self.dispatch_gateway_backed(
                 &gateway,
                 &target,
@@ -393,7 +419,7 @@ where
     fn dispatch_host_resident(
         &mut self,
         req: &OperationRequest,
-    ) -> Result<HostResidentOutcome, WorkExecutorError> {
+    ) -> Result<(OperationId, HostResidentOutcome), WorkExecutorError> {
         // Cheap, side-effect-free node validation first -- mirrors
         // `RemoteFullHostAdapter::dispatch`'s own "resolve/validate the
         // target before ever touching router/dedup state" ordering.
@@ -422,10 +448,19 @@ where
                         }
                     }
                 }
-                outcome
+                // This attempt's own `operation_id` established the dedup
+                // lease (a fresh `Accept`), so it *is* the original id.
+                outcome.map(|value| (req.operation_id.clone(), value))
             }
-            RouteDecision::Replay { result, .. } => decode_host_resident_outcome(&result),
-            RouteDecision::InProgress { .. } => Err(WorkExecutorError::HostOperationInProgress),
+            RouteDecision::Replay {
+                original_operation_id,
+                result,
+            } => decode_host_resident_outcome(&result).map(|value| (original_operation_id, value)),
+            RouteDecision::InProgress {
+                original_operation_id,
+            } => Err(WorkExecutorError::HostOperationInProgress {
+                original_operation_id,
+            }),
             decision => Err(host_router_error(req, &decision)),
         }
     }
@@ -506,49 +541,99 @@ where
     ) -> Result<WorkDispatchOutcome, WorkExecutorError> {
         let tracks_session = req.kind == OperationKind::DisplaySessionOpen;
 
-        // Do NOT allocate bounded lifecycle state before the port reports a
-        // successful, already-authorized dispatch outcome: a stream of
-        // requests that never gets past the gateway's own auth/preflight
-        // must not be able to exhaust the bounded session table.
+        // Reserve bounded capacity *before* the gateway port is ever
+        // called, keyed provisionally by this attempt's own
+        // `req.operation_id`: an at-capacity refusal must be provable as
+        // "the peer was never contacted for this request", not merely
+        // "the outcome was not tracked". The reservation is rolled back
+        // (this exact entry only, see below) if the attempt fails, turns
+        // out to be a replay of a different pre-existing session, or
+        // resolves ambiguously. `reserved_new_slot` remembers whether this
+        // call itself created the entry -- never true for an id that was
+        // already tracked before this call -- so a failed/conflicting
+        // retry can never evict a running session it does not own.
+        let reserved_new_slot = if tracks_session && !self.sessions.contains_key(&req.operation_id)
+        {
+            if self.sessions.len() >= self.max_gateway_sessions {
+                return Err(WorkExecutorError::GatewaySessionCapacityExceeded);
+            }
+            self.sessions
+                .insert(req.operation_id.clone(), SessionLifecycle::new());
+            true
+        } else {
+            false
+        };
+
         let result = gateway_port.dispatch_via_gateway(gateway, req, generation, client);
 
-        let session_phase = if tracks_session {
+        let (original_operation_id, session_phase) = if tracks_session {
             match &result {
-                Ok(RemoteDispatchOutcome::Sent { .. })
-                | Ok(RemoteDispatchOutcome::Replayed { .. }) => {
-                    // Only now -- after a successful auth/preflight-gated
-                    // dispatch outcome -- allocate (or reuse) bounded
-                    // lifecycle state.
-                    if !self.sessions.contains_key(&req.operation_id)
-                        && self.sessions.len() >= self.max_gateway_sessions
-                    {
-                        return Err(WorkExecutorError::GatewaySessionCapacityExceeded);
+                Ok(outcome) => match outcome {
+                    RemoteDispatchOutcome::Sent { .. } | RemoteDispatchOutcome::Replayed { .. } => {
+                        let original_id = outcome.original_operation_id(&req.operation_id).clone();
+                        if original_id != req.operation_id && reserved_new_slot {
+                            // This attempt's own provisional reservation
+                            // turned out to be unnecessary -- the gateway
+                            // resolved it as a replay of a different,
+                            // already-canonical id. Release only the
+                            // reservation this call itself just created,
+                            // never any pre-existing entry.
+                            self.sessions.remove(&req.operation_id);
+                        }
+                        if self.sessions.contains_key(&original_id) {
+                            let lifecycle = self
+                                .sessions
+                                .get_mut(&original_id)
+                                .expect("just checked contains_key");
+                            while lifecycle.advance().is_ok() {}
+                            (original_id.clone(), Some(lifecycle.phase()))
+                        } else if self.sessions.len() < self.max_gateway_sessions {
+                            let lifecycle = self.sessions.entry(original_id.clone()).or_default();
+                            while lifecycle.advance().is_ok() {}
+                            (original_id.clone(), Some(lifecycle.phase()))
+                        } else {
+                            // The gateway dispatch already succeeded (the
+                            // peer was legitimately contacted or the dedup
+                            // lease already existed there); a purely local
+                            // tracking gap under bounded capacity must not
+                            // be reported as an error for an operation that
+                            // already succeeded remotely.
+                            (original_id, None)
+                        }
                     }
-                    let lifecycle = self.sessions.entry(req.operation_id.clone()).or_default();
-                    while lifecycle.advance().is_ok() {}
-                    Some(lifecycle.phase())
-                }
-                Ok(RemoteDispatchOutcome::QueryRemoteState { .. }) => {
-                    // Ambiguous outcome: never allocate new bounded state for
-                    // it -- only report an already-tracked session's phase.
-                    self.sessions
-                        .get(&req.operation_id)
-                        .map(SessionLifecycle::phase)
-                }
+                    RemoteDispatchOutcome::QueryRemoteState { .. } => {
+                        let original_id = outcome.original_operation_id(&req.operation_id).clone();
+                        // Ambiguous outcome: never finalize new bounded
+                        // state for it. Release only this attempt's own
+                        // provisional reservation; report an
+                        // already-tracked session's phase, if any, without
+                        // advancing it.
+                        if reserved_new_slot {
+                            self.sessions.remove(&req.operation_id);
+                        }
+                        let phase = self.sessions.get(&original_id).map(SessionLifecycle::phase);
+                        (original_id, phase)
+                    }
+                },
                 Err(_) => {
-                    // Evict/reset rather than leaving a lingering entry that
-                    // would count against the bounded capacity for a
-                    // request that never actually succeeded.
-                    self.sessions.remove(&req.operation_id);
-                    None
+                    // Release ONLY the reservation this exact call created.
+                    // A pre-existing entry for `req.operation_id` (e.g. a
+                    // conflicting retry of an already-running session) is
+                    // never touched here -- only an explicit stop/teardown
+                    // removes it.
+                    if reserved_new_slot {
+                        self.sessions.remove(&req.operation_id);
+                    }
+                    (req.operation_id.clone(), None)
                 }
             }
         } else {
-            None
+            (req.operation_id.clone(), None)
         };
 
         let remote = result.map_err(WorkExecutorError::Remote)?;
         Ok(WorkDispatchOutcome::GatewayBacked {
+            original_operation_id,
             session_phase,
             remote,
         })
@@ -749,8 +834,12 @@ mod tests {
             )
             .unwrap();
         match outcome {
-            WorkDispatchOutcome::HostResident(HostResidentOutcome::Started(summary)) => {
+            WorkDispatchOutcome::HostResident {
+                original_operation_id,
+                outcome: HostResidentOutcome::Started(summary),
+            } => {
                 assert_eq!(summary.id, ExecutionId::parse("exec-1").unwrap());
+                assert_eq!(original_operation_id, req.operation_id);
             }
             other => panic!("expected host-resident start outcome, got {other:?}"),
         }
@@ -841,6 +930,36 @@ mod tests {
     }
 
     #[test]
+    fn host_operation_in_progress_error_exposes_the_original_operation_id() {
+        // `RouteDecision::InProgress` carries the id of the attempt that
+        // actually owns the in-progress dedup lease -- which can genuinely
+        // differ from a later concurrent caller's own retry id (dedup keys
+        // deliberately exclude `operation_id`; see
+        // `d2b_realm_core::OperationRequest::dedup_fingerprint_input`).
+        // `WorkExecutor` must plumb it through unchanged rather than
+        // substituting the caller's own operation id.
+        let original = OperationId::parse("op-original").unwrap();
+        let err = WorkExecutorError::HostOperationInProgress {
+            original_operation_id: original.clone(),
+        };
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "a same-key host-resident operation is still in progress under operation id `{}`",
+                original.as_str()
+            )
+        );
+        match err {
+            WorkExecutorError::HostOperationInProgress {
+                original_operation_id,
+            } => {
+                assert_eq!(original_operation_id, original);
+            }
+            other => panic!("expected HostOperationInProgress, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn missing_idempotency_key_rejects_a_mutating_host_resident_operation() {
         // ExecStart is mutating; an idempotency key is mandatory even when
         // fully authorized by capability (finding: reject missing
@@ -903,7 +1022,10 @@ mod tests {
             .unwrap();
         assert!(matches!(
             outcome,
-            WorkDispatchOutcome::HostResident(HostResidentOutcome::Logs(_))
+            WorkDispatchOutcome::HostResident {
+                outcome: HostResidentOutcome::Logs(_),
+                ..
+            }
         ));
     }
 
@@ -1070,11 +1192,13 @@ mod tests {
             .unwrap();
         match outcome {
             WorkDispatchOutcome::GatewayBacked {
+                original_operation_id,
                 session_phase,
                 remote,
             } => {
                 assert_eq!(session_phase, Some(SessionPhase::Running));
                 assert!(matches!(remote, RemoteDispatchOutcome::Sent { .. }));
+                assert_eq!(original_operation_id, req.operation_id);
             }
             other => panic!("expected gateway-backed outcome, got {other:?}"),
         }
@@ -1249,6 +1373,172 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(err, WorkExecutorError::GatewaySessionCapacityExceeded);
+        // The at-capacity refusal must be provable as "the peer was never
+        // reached for this request": exactly the first request's send, and
+        // none from the refused second attempt.
+        assert_eq!(
+            peer.sends, 1,
+            "an at-capacity refusal must never reach the gateway peer"
+        );
+    }
+
+    #[test]
+    fn replay_under_a_different_operation_id_keys_the_session_by_the_original_id() {
+        // A retry commonly carries a fresh per-attempt `operation_id` while
+        // reusing the same idempotency key -- the dedup fingerprint
+        // deliberately excludes `operation_id` (see
+        // `d2b_realm_core::OperationRequest::dedup_fingerprint_input`), so
+        // the gateway's own router resolves this as a same-key replay
+        // carrying the *first* attempt's id, never the retry's own.
+        let caps = CapabilitySet::empty().with(Capability::WindowForwarding);
+        let (mut executor, mut port) = gateway_backed_executor(caps);
+        let realm = work_realm();
+        let first = display_open_request(realm, Some("idem-1"));
+        let mut peer = FakePeer::default();
+        let outcome = executor
+            .dispatch(
+                &first,
+                &ProtocolToken::parse("gen-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
+            .unwrap();
+        let original_id = match outcome {
+            WorkDispatchOutcome::GatewayBacked {
+                original_operation_id,
+                ..
+            } => original_operation_id,
+            other => panic!("expected gateway-backed outcome, got {other:?}"),
+        };
+        assert_eq!(original_id, first.operation_id);
+
+        let mut retry = first.clone();
+        retry.operation_id = OperationId::parse("op-display-retry").unwrap();
+        let outcome = executor
+            .dispatch(
+                &retry,
+                &ProtocolToken::parse("gen-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
+            .unwrap();
+        match outcome {
+            WorkDispatchOutcome::GatewayBacked {
+                original_operation_id,
+                session_phase,
+                remote,
+            } => {
+                assert_eq!(
+                    original_operation_id, original_id,
+                    "session lifecycle must be keyed/exposed by the original id, never the retry's own"
+                );
+                assert_eq!(session_phase, Some(SessionPhase::Running));
+                assert!(matches!(remote, RemoteDispatchOutcome::Replayed { .. }));
+            }
+            other => panic!("expected gateway-backed outcome, got {other:?}"),
+        }
+        // No new entry is created under the retry's own operation id -- the
+        // bounded session table must never grow for a same-key replay.
+        assert_eq!(executor.gateway_session_count(), 1);
+        assert_eq!(
+            executor.gateway_session_phase(&retry.operation_id),
+            None,
+            "a replay must never be tracked under the retry's own operation id"
+        );
+        assert_eq!(
+            peer.sends, 1,
+            "a dedup replay must never re-send to the gateway peer"
+        );
+    }
+
+    #[test]
+    fn failed_conflicting_retry_reusing_operation_id_never_evicts_a_running_session() {
+        // Reusing the same literal `operation_id` with a *different*
+        // idempotency key is, from the dedup owner's perspective, an
+        // entirely separate logical operation (dedup keys are scoped by
+        // idempotency key, never by operation id) -- not a legitimate
+        // replay of the first. If that second, conflicting attempt fails
+        // at the gateway, the failure must never evict the first
+        // request's already-running, successfully-established session.
+        let caps = CapabilitySet::empty().with(Capability::WindowForwarding);
+        let (mut executor, mut port) = gateway_backed_executor(caps);
+        let realm = work_realm();
+        let first = display_open_request(realm, Some("idem-1"));
+        let mut peer = FakePeer::default();
+        executor
+            .dispatch(
+                &first,
+                &ProtocolToken::parse("gen-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
+            .unwrap();
+        assert_eq!(
+            executor.gateway_session_phase(&first.operation_id),
+            Some(SessionPhase::Running)
+        );
+
+        let mut second = first.clone();
+        second.idempotency_key = Some(IdempotencyKey::parse("idem-2").unwrap());
+        peer.fail_send = true;
+        let err = executor
+            .dispatch(
+                &second,
+                &ProtocolToken::parse("gen-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
+            .unwrap_err();
+        assert!(matches!(err, WorkExecutorError::Remote(_)));
+        assert_eq!(
+            executor.gateway_session_phase(&first.operation_id),
+            Some(SessionPhase::Running),
+            "a failed conflicting retry must never evict a prior successfully-established session"
+        );
+        assert_eq!(executor.gateway_session_count(), 1);
+    }
+
+    #[test]
+    fn a_failed_new_reservation_never_disturbs_other_tracked_sessions() {
+        let caps = CapabilitySet::empty().with(Capability::WindowForwarding);
+        let (mut executor, mut port) = gateway_backed_executor(caps);
+        let realm = work_realm();
+        let established = display_open_request(realm.clone(), Some("idem-1"));
+        let mut peer = FakePeer::default();
+        executor
+            .dispatch(
+                &established,
+                &ProtocolToken::parse("gen-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
+            .unwrap();
+        assert_eq!(executor.gateway_session_count(), 1);
+
+        let mut failing = display_open_request(realm, Some("idem-2"));
+        failing.operation_id = OperationId::parse("op-display-failing").unwrap();
+        peer.fail_send = true;
+        let err = executor
+            .dispatch(
+                &failing,
+                &ProtocolToken::parse("gen-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
+            .unwrap_err();
+        assert!(matches!(err, WorkExecutorError::Remote(_)));
+
+        assert_eq!(
+            executor.gateway_session_phase(&established.operation_id),
+            Some(SessionPhase::Running),
+            "a failed, unrelated new reservation must never disturb an already-established session"
+        );
+        assert_eq!(executor.gateway_session_count(), 1);
+        assert_eq!(
+            executor.gateway_session_phase(&failing.operation_id),
+            None,
+            "the failed reservation itself must be released"
+        );
     }
 
     #[test]
