@@ -12,6 +12,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Included the W8 workspace-registration regression in the exact integration
+  branch's protected xtask test authority; suffixed component branches remain
+  denied.
 - Granted only the exact `adr0045-w8-integration` branch the protected delivery
   README and xtask manifest-test paths required to introduce W8's checked-in
   manifest authority; suffixed component branches remain denied.

@@ -325,6 +325,7 @@ impl SharedContractPolicy {
                     "packages/Cargo.toml",
                     "packages/xtask/tests/delivery_cli.rs",
                     "packages/xtask/tests/delivery_w8.rs",
+                    "packages/xtask/tests/policy_workspace.rs",
                 ],
                 _ => unreachable!("wave set was validated"),
             };
@@ -3296,6 +3297,7 @@ mod tests {
                 "packages/Cargo.toml".to_owned(),
                 "packages/xtask/tests/delivery_cli.rs".to_owned(),
                 "packages/xtask/tests/delivery_w8.rs".to_owned(),
+                "packages/xtask/tests/policy_workspace.rs".to_owned(),
             ]
         );
         assert!(ownership.allowed_protected_paths.is_empty());
@@ -3403,6 +3405,7 @@ mod tests {
             "packages/Cargo.toml".to_owned(),
             "packages/xtask/tests/delivery_cli.rs".to_owned(),
             "packages/xtask/tests/delivery_w8.rs".to_owned(),
+            "packages/xtask/tests/policy_workspace.rs".to_owned(),
         ];
         check_changed_paths_for_branch(&policy, "w8", Some("adr0045-w8-integration"), &paths)
             .expect("W8 integration shared seams");
