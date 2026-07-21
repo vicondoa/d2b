@@ -24,10 +24,16 @@
 //!   listeners).
 //! - The returned [`TransportListener`] fans **in** every healthy
 //!   sub-listener via a persistent per-listener background task that loops
-//!   calling that sub-listener's own `accept()` and forwards every result —
-//!   success or terminal error alike — into one shared, bounded
-//!   [`tokio::sync::mpsc`] channel (capacity [`FABRIC_ACCEPT_QUEUE_CAPACITY`]).
-//!   `FabricListener::accept()` pulls from that channel, skipping over (but
+//!   calling that sub-listener's own `accept()`. Each outcome is forwarded
+//!   into one shared, bounded [`tokio::sync::mpsc`] channel (capacity
+//!   [`FABRIC_ACCEPT_QUEUE_CAPACITY`]) — **except** an `Err` whose
+//!   [`d2b_realm_provider::error::ProviderError::retry_hint`] is present:
+//!   that is a known-recoverable accept-stage condition (see
+//!   `local_tcp.rs`'s `is_recoverable_accept_error`) and the task instead
+//!   sleeps for the hint's bounded backoff and retries in place, up to
+//!   [`FABRIC_ACCEPT_MAX_CONSECUTIVE_RECOVERABLE_ERRORS`] consecutive
+//!   recoverable errors before falling back to terminal handling.
+//!   `FabricListener::accept()` pulls from the channel, skipping over (but
 //!   remembering) terminal sub-listener errors so it keeps waiting on
 //!   whichever sub-listeners are still healthy, and only returns an error
 //!   once every sub-listener has gone terminal and the channel has drained
@@ -37,7 +43,8 @@
 //!   queued (bounded, applying backpressure to a producer once the queue is
 //!   full — never dropped) and delivered on a subsequent `accept()` call.
 //!   Dropping the [`FabricListener`] aborts every background task (bounded,
-//!   explicit cancellation — no leaked accept loops).
+//!   explicit cancellation — no leaked accept loops, including one
+//!   currently asleep in a retry backoff).
 //!
 //! Registration (`register`) is bounded ([`MAX_FABRIC_TRANSPORTS`]) and
 //! rejects a duplicate scheme or a malformed scheme literal, so the fabric's
@@ -271,13 +278,34 @@ impl TransportProvider for TransportFabric {
     }
 }
 
+/// Maximum consecutive recoverable (retry-hinted) accept errors one
+/// sub-listener's background task will retry in place before treating the
+/// run as terminal. Bounds worst-case retry spin for a sub-listener stuck
+/// permanently returning "recoverable" errors — without this bound a
+/// pathological transport could keep the fan-in task retrying forever
+/// without ever forwarding a terminal error or a session.
+const FABRIC_ACCEPT_MAX_CONSECUTIVE_RECOVERABLE_ERRORS: u32 = 32;
+
+/// Defensive minimum backoff applied even if a retry hint reports a zero
+/// delay, so a sub-listener that returns recoverable errors in a tight
+/// loop cannot busy-spin the background task.
+const FABRIC_ACCEPT_MIN_BACKOFF: std::time::Duration = std::time::Duration::from_micros(500);
+
 /// The accept side of a [`TransportFabric`]: fans in every registered
 /// transport's listener behind one bounded, persistent channel.
 ///
 /// Each healthy sub-listener gets its own background task that loops
 /// calling that sub-listener's `accept()` and forwards every outcome into a
-/// shared bounded [`mpsc`] channel. A task stops looping (and drops its
-/// sender) once its sub-listener returns a terminal error, so the channel
+/// shared bounded [`mpsc`] channel. An `Err` outcome is classified via
+/// [`ProviderError::retry_hint`]: when present, the error is a known
+/// transient condition (see `local_tcp.rs`'s `is_recoverable_accept_error`)
+/// and the task retries in place after a bounded backoff sleep, without
+/// ever forwarding the transient error into the channel — up to
+/// [`FABRIC_ACCEPT_MAX_CONSECUTIVE_RECOVERABLE_ERRORS`] consecutive
+/// recoverable errors, after which the run is treated as terminal so a
+/// permanently-failing sub-listener cannot spin forever. When no retry
+/// hint is present (or the bound is exhausted), the error is terminal: it
+/// is forwarded exactly once and the task stops looping, so the channel
 /// closes only after every sub-listener has gone terminal. This means an
 /// `accept()` call never has to choose between two simultaneously accepted
 /// sessions and silently drop one: both are queued (bounded, backpressured)
@@ -295,8 +323,33 @@ impl FabricListener {
         for listener in listeners {
             let tx = tx.clone();
             tasks.push(tokio::spawn(async move {
+                let mut consecutive_recoverable: u32 = 0;
                 loop {
                     let outcome = listener.accept().await;
+                    if let Err(err) = &outcome {
+                        if let Some(hint) = err.retry_hint() {
+                            consecutive_recoverable += 1;
+                            if consecutive_recoverable
+                                <= FABRIC_ACCEPT_MAX_CONSECUTIVE_RECOVERABLE_ERRORS
+                            {
+                                // Recoverable: retry in place after a
+                                // bounded backoff. Never forwarded into the
+                                // channel — a transient accept hiccup must
+                                // not be mistaken for this sub-listener
+                                // going terminal.
+                                tokio::time::sleep(
+                                    hint.applied_backoff().max(FABRIC_ACCEPT_MIN_BACKOFF),
+                                )
+                                .await;
+                                continue;
+                            }
+                            // Bound exhausted: fall through and treat this
+                            // as terminal so a permanently "recoverable"
+                            // sub-listener cannot spin forever.
+                        }
+                    } else {
+                        consecutive_recoverable = 0;
+                    }
                     let is_err = outcome.is_err();
                     // `send` (not `try_send`): a full queue applies
                     // backpressure to this producer rather than dropping
@@ -693,5 +746,179 @@ mod tests {
         let mut buf = [0_u8; 9];
         accepted.stream_mut().read_exact(&mut buf).await.unwrap();
         assert_eq!(&buf, b"mixedcase");
+    }
+
+    /// A [`TransportListener`] that scripts a fixed number of recoverable
+    /// (retry-hint-carrying) accept errors before delegating every
+    /// subsequent call to a real inner listener. Also counts every call so
+    /// tests can prove whether the fan-in task made another attempt.
+    struct ScriptedTransientListener {
+        node: NodeId,
+        remaining_transient: std::sync::atomic::AtomicU32,
+        backoff: std::time::Duration,
+        calls: Arc<std::sync::atomic::AtomicU32>,
+        inner: Arc<dyn TransportListener>,
+    }
+
+    #[async_trait]
+    impl TransportListener for ScriptedTransientListener {
+        fn node(&self) -> NodeId {
+            self.node.clone()
+        }
+
+        async fn accept(&self) -> ProviderResult<TransportSession> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            loop {
+                let remaining = self
+                    .remaining_transient
+                    .load(std::sync::atomic::Ordering::Acquire);
+                if remaining == 0 {
+                    return self.inner.accept().await;
+                }
+                if self
+                    .remaining_transient
+                    .compare_exchange(
+                        remaining,
+                        remaining - 1,
+                        std::sync::atomic::Ordering::AcqRel,
+                        std::sync::atomic::Ordering::Acquire,
+                    )
+                    .is_ok()
+                {
+                    return Err(ProviderError::new(
+                        ErrorKind::RelayUnavailable,
+                        "scripted-transient-accept-error",
+                    )
+                    .with_retry_hint(
+                        d2b_realm_provider::error::RetryHint::bounded(
+                            self.backoff,
+                            std::time::Duration::ZERO,
+                            self.backoff,
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Finding #4 regression: a sub-listener that returns a bounded number
+    /// of recoverable (retry-hint-carrying) accept errors must be retried
+    /// in place by the fan-in background task — never surfaced to
+    /// `FabricListener::accept()` callers as if the sub-listener had gone
+    /// terminal.
+    #[tokio::test]
+    async fn recoverable_accept_errors_are_retried_in_place_instead_of_terminating() {
+        let inner_transport = LoopbackTransport::new();
+        let inner_listener: Arc<dyn TransportListener> =
+            Arc::from(inner_transport.listen(registration()).await.unwrap());
+        let calls = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let scripted: Arc<dyn TransportListener> = Arc::new(ScriptedTransientListener {
+            node: NodeId::parse("gw").unwrap(),
+            remaining_transient: std::sync::atomic::AtomicU32::new(3),
+            backoff: std::time::Duration::from_millis(1),
+            calls: Arc::clone(&calls),
+            inner: inner_listener,
+        });
+        let listener = FabricListener::new(NodeId::parse("gw").unwrap(), vec![scripted]);
+
+        let (mut sender, mut accepted) = tokio::try_join!(
+            inner_transport.connect(TransportTarget {
+                endpoint: "loopback".to_owned(),
+            }),
+            listener.accept()
+        )
+        .expect("transient accept errors must be retried, not treated as terminal");
+        sender.stream_mut().write_all(b"ok").await.unwrap();
+        let mut buf = [0_u8; 2];
+        accepted.stream_mut().read_exact(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"ok");
+        // 3 transient attempts + the successful accept. The fan-in task is
+        // persistent, so it immediately starts a further `accept()` call
+        // afterwards (correctly listening for the *next* connection); that
+        // extra in-flight call may also have incremented the counter by
+        // the time this assertion runs, so assert a lower bound rather
+        // than an exact count.
+        assert!(calls.load(std::sync::atomic::Ordering::Acquire) >= 4);
+    }
+
+    /// Finding #4 regression (bound): a sub-listener returning recoverable
+    /// errors *forever* must not let its background task retry forever —
+    /// once [`FABRIC_ACCEPT_MAX_CONSECUTIVE_RECOVERABLE_ERRORS`] is
+    /// exhausted, the run must fall back to terminal handling so the
+    /// channel still closes and `accept()` still returns an error instead
+    /// of hanging.
+    #[tokio::test]
+    async fn permanently_recoverable_accept_errors_eventually_go_terminal() {
+        let calls = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let scripted: Arc<dyn TransportListener> = Arc::new(ScriptedTransientListener {
+            node: NodeId::parse("gw").unwrap(),
+            remaining_transient: std::sync::atomic::AtomicU32::new(u32::MAX),
+            backoff: std::time::Duration::from_micros(1),
+            calls: Arc::clone(&calls),
+            // Never actually reached: every call is transient.
+            inner: Arc::new(ScriptedTransientListener {
+                node: NodeId::parse("gw").unwrap(),
+                remaining_transient: std::sync::atomic::AtomicU32::new(0),
+                backoff: std::time::Duration::from_micros(1),
+                calls: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+                inner: Arc::from(
+                    LoopbackTransport::new()
+                        .listen(registration())
+                        .await
+                        .unwrap(),
+                ),
+            }),
+        });
+        let listener = FabricListener::new(NodeId::parse("gw").unwrap(), vec![scripted]);
+
+        let err = tokio::time::timeout(std::time::Duration::from_secs(5), listener.accept())
+            .await
+            .expect("bound exhaustion must make the run terminal, not hang forever")
+            .expect_err("a permanently recoverable sub-listener must eventually report an error");
+        assert_eq!(err.kind(), ErrorKind::RelayUnavailable);
+        assert!(
+            calls.load(std::sync::atomic::Ordering::Acquire)
+                > FABRIC_ACCEPT_MAX_CONSECUTIVE_RECOVERABLE_ERRORS
+        );
+    }
+
+    /// Finding #4 regression (cancellation/task-leak): dropping a
+    /// [`FabricListener`] while a background task is mid-backoff-sleep
+    /// after a recoverable error must actually abort that task — it must
+    /// never wake up and make another `accept()` call after the owning
+    /// listener is gone.
+    #[tokio::test]
+    async fn dropping_the_listener_aborts_a_task_asleep_in_backoff() {
+        let calls = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let scripted: Arc<dyn TransportListener> = Arc::new(ScriptedTransientListener {
+            node: NodeId::parse("gw").unwrap(),
+            remaining_transient: std::sync::atomic::AtomicU32::new(u32::MAX),
+            // Long enough that the test can reliably drop mid-sleep.
+            backoff: std::time::Duration::from_millis(200),
+            calls: Arc::clone(&calls),
+            inner: Arc::from(
+                LoopbackTransport::new()
+                    .listen(registration())
+                    .await
+                    .unwrap(),
+            ),
+        });
+        let listener = FabricListener::new(NodeId::parse("gw").unwrap(), vec![scripted]);
+
+        // Give the background task time to make its first (transient)
+        // accept call and enter the backoff sleep.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Acquire), 1);
+
+        drop(listener);
+
+        // Wait past the backoff window. If the task were not truly
+        // aborted, it would wake up and make a second `accept()` call.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::Acquire),
+            1,
+            "a task asleep in backoff must be aborted on drop, not left to wake up and retry"
+        );
     }
 }

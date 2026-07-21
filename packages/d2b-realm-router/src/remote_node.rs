@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 
 use d2b_realm_core::{
     Capability, CapabilitySet, CorrelationId, ErrorKind, ExecutionGeneration, NodeId, NodeKind,
-    NodeSummary, OperationKind, OperationRequest, PrincipalId, ProtocolToken, ProviderId,
-    RealmPath, RealmTarget, ShellGeneration, TraceContext,
+    NodeSummary, OperationId, OperationKind, OperationRequest, PrincipalId, ProtocolToken,
+    ProviderId, RealmPath, RealmTarget, ShellGeneration, TraceContext,
 };
 
 /// Default maximum number of remote full-host nodes retained by one registry.
@@ -625,18 +625,60 @@ pub trait RemotePeerClient: Send {
 /// Outcome of gateway-side remote full-host dispatch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RemoteDispatchOutcome {
-    /// A semantic operation was sent and completed.
+    /// A semantic operation was sent and completed. The caller's own
+    /// `req.operation_id` *is* the original id here -- this is the attempt
+    /// that established the dedup lease -- so no separate field is carried;
+    /// see [`RemoteDispatchOutcome::original_operation_id`].
     Sent {
         route: RemoteRoute,
         result: d2b_realm_core::OpaquePayload,
     },
     /// A same-request retry was satisfied from gateway-side dedup state.
+    /// `original_operation_id` is the [`OperationId`] of the attempt that
+    /// first established the dedup lease this retry replayed -- the
+    /// gateway's own [`super::OperationRouter`] tracks this independently of
+    /// whatever `operation_id` a given retry attempt carries (dedup keys
+    /// deliberately exclude `operation_id`; see
+    /// [`d2b_realm_core::OperationRequest::dedup_fingerprint_input`]).
+    /// Callers MUST use this id -- never the retry's own `req.operation_id`
+    /// -- for any in-progress status query, replay lookup, or session
+    /// lifecycle keying tied to the same logical operation.
     Replayed {
+        original_operation_id: OperationId,
         result: d2b_realm_core::OpaquePayload,
     },
     /// The operation may have reached the remote host; query remote state
-    /// before retrying.
-    QueryRemoteState { route: RemoteRoute },
+    /// before retrying. `original_operation_id` carries the same
+    /// first-attempt id as [`RemoteDispatchOutcome::Replayed`], for the same
+    /// reason.
+    QueryRemoteState {
+        original_operation_id: OperationId,
+        route: RemoteRoute,
+    },
+}
+
+impl RemoteDispatchOutcome {
+    /// The [`OperationId`] of the attempt that established this outcome's
+    /// dedup lease. For [`RemoteDispatchOutcome::Sent`] that is `current`
+    /// itself (the caller's own request established the lease); for
+    /// [`RemoteDispatchOutcome::Replayed`]/[`RemoteDispatchOutcome::QueryRemoteState`]
+    /// it is the carried `original_operation_id`, which may differ from
+    /// `current` when a retry used a fresh per-attempt id. Callers must use
+    /// this -- never a retry's own `req.operation_id` -- to track/query the
+    /// same logical operation across retries.
+    pub fn original_operation_id<'a>(&'a self, current: &'a OperationId) -> &'a OperationId {
+        match self {
+            RemoteDispatchOutcome::Sent { .. } => current,
+            RemoteDispatchOutcome::Replayed {
+                original_operation_id,
+                ..
+            }
+            | RemoteDispatchOutcome::QueryRemoteState {
+                original_operation_id,
+                ..
+            } => original_operation_id,
+        }
+    }
 }
 
 /// Gateway-side remote full-host adapter. It gates through the shared router
@@ -760,10 +802,16 @@ where
                 }
                 Ok(RemoteDispatchOutcome::Sent { route, result })
             }
-            super::RouteDecision::Replay { result, .. } => {
-                Ok(RemoteDispatchOutcome::Replayed { result })
-            }
-            super::RouteDecision::InProgress { .. } => match client.query_operation(&route, req) {
+            super::RouteDecision::Replay {
+                original_operation_id,
+                result,
+            } => Ok(RemoteDispatchOutcome::Replayed {
+                original_operation_id,
+                result,
+            }),
+            super::RouteDecision::InProgress {
+                original_operation_id,
+            } => match client.query_operation(&route, req) {
                 Err(err) => {
                     if req.kind.is_mutating() {
                         self.router.mark_failed(req);
@@ -773,7 +821,10 @@ where
                 Ok(status) => match status {
                     RemotePeerStatus::Completed(result) => {
                         self.router.mark_completed(req, result.clone());
-                        Ok(RemoteDispatchOutcome::Replayed { result })
+                        Ok(RemoteDispatchOutcome::Replayed {
+                            original_operation_id,
+                            result,
+                        })
                     }
                     RemotePeerStatus::InProgress => {
                         let labels = route.audit_labels("query-remote-state");
@@ -791,7 +842,10 @@ where
                             outcome = labels.outcome,
                             "remote full-host operation requires remote state query"
                         );
-                        Ok(RemoteDispatchOutcome::QueryRemoteState { route })
+                        Ok(RemoteDispatchOutcome::QueryRemoteState {
+                            original_operation_id,
+                            route,
+                        })
                     }
                     RemotePeerStatus::Unknown => {
                         if req.kind.is_mutating() {
