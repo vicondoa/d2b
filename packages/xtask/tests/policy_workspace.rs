@@ -2476,6 +2476,48 @@ fn provider_registry_v2_has_one_canonical_artifact_family() {
             "packages/d2b-contracts/src/provider_registry_v2.rs".to_owned(),
         ])
     );
+
+    let composer = read_repo_file("nixos-modules/provider-registry-v2-json.nix");
+    for fragment in [
+        "transport",
+        "substrate",
+        "display",
+        "network",
+        "storage",
+        "device",
+        "audio",
+    ] {
+        assert!(
+            composer.contains(&format!("./provider-registry-v2-extensions/{fragment}.nix")),
+            "provider registry composer must import the {fragment} fragment"
+        );
+    }
+    for required in [
+        "config.d2b._bundle.providerRegistryV2Json",
+        "left.descriptor.providerId",
+        "inherit providers;",
+        "builtins.isList fragment.providers",
+        "import ./workload-process-rows.nix",
+        "inherit (row) workloadId vmStartIntentId runnerIntentId;",
+    ] {
+        assert!(
+            composer.contains(required),
+            "provider registry composer is missing required contract {required:?}"
+        );
+    }
+    for forbidden in [
+        "builtins.pathExists",
+        "_index.realms.workloads",
+        "_index.enabledVms",
+        "_index.runtime.byVm",
+        "builtins.isList fragment then fragment",
+        "providerRegistryV3",
+    ] {
+        assert!(
+            !composer.contains(forbidden),
+            "provider registry composer retained forbidden contract {forbidden:?}"
+        );
+    }
 }
 
 #[test]

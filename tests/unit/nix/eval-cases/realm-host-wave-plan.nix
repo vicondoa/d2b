@@ -247,6 +247,7 @@ let
       ];
       deletes = [
         "nixos-modules/gateway-vm.nix"
+        "tests/unit/nix/cases/gateway-vm.nix"
       ];
       scope = [
         "Emit realm-scoped bridge, veth, TAP, nftables partition, namespace, and network-provider rows."

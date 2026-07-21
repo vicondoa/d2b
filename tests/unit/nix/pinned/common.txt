@@ -126,9 +126,6 @@ external-vm-kind/rejects-legacy-guest-config-fields
 external-vm-kind/rejects-undeclared-runtime-provider-ref
 external-vm-kind/rejects-unsupported-runtime-implementation-by-omission
 external-vm-kind/runtime-provider-binding-is-opaque
-gateway-vm/credential-policy-has-no-deleted-file-allowance
-gateway-vm/legacy-synthesizer-deleted
-gateway-vm/network-emitter-does-not-synthesize-gateways
 guest-config-containment/canonical-target
 guest-config-containment/direct-role-leaves
 guest-config-containment/guest-control-share-canonical
@@ -212,7 +209,6 @@ net-vm-network/composed-dag-has-expected-role-set
 net-vm-network/composed-dag-net-argv-matches-guest-metadata
 net-vm-network/consumes-normalized-identities
 net-vm-network/default-workload-isolation
-net-vm-network/eth-dhcp-match-mac-sentinel
 net-vm-network/eth-dhcp-neutralizer-survives-real-composition
 net-vm-network/generated-external-mac-used-for-guest
 net-vm-network/host-drops-cover-forward-and-input-chains
@@ -231,7 +227,6 @@ net-vm-network/network-manager-marked-block
 net-vm-network/nft-foreign-state-fails-closed
 net-vm-network/nft-rows-carry-ownership-marker
 net-vm-network/no-dead-bridge-forward-rules
-net-vm-network/no-env-host-materialization
 net-vm-network/non-network-workload-unaffected
 net-vm-network/port-forward-target
 net-vm-network/provider-fragment-axis
@@ -287,11 +282,9 @@ principal-workload-roles/non-principal-role-kinds-produce-no-account
 principal-workload-roles/principal-ids-are-stable-and-symmetric-uid-gid
 principal-workload-roles/qemu-media-workload-has-no-narrow-guest-control
 provider-registry-v2/closed-binding-axis-set
-provider-registry-v2/composes-all-owned-fragments
 provider-registry-v2/every-binding-variant-is-closed
 provider-registry-v2/integrated-fragment-fields-are-frozen
 provider-registry-v2/loads-direct-fragments-into-one-artifact
-provider-registry-v2/preserves-single-artifact-composition
 provider-registry-v2/projects-authoritative-runtime-process-intents
 provider-registry-v2/rejects-disabled-normalized-runtime-authority
 provider-registry-v2/rejects-missing-normalized-observability-authority

@@ -16,8 +16,6 @@ let
       value = variant;
     })
     bindingVariants);
-  composer = builtins.readFile
-    "${flakeRoot}/nixos-modules/provider-registry-v2-json.nix";
   compose = index: (lib.evalModules {
       specialArgs.pkgs = { };
       modules = [
@@ -188,15 +186,6 @@ let
       };
     };
   };
-  fragments = [
-    "transport"
-    "substrate"
-    "display"
-    "network"
-    "storage"
-    "device"
-    "audio"
-  ];
 in
 {
   "provider-registry-v2/closed-binding-axis-set" = {
@@ -261,16 +250,6 @@ in
       ];
       deviceResourceMax = 64;
     };
-  };
-
-  "provider-registry-v2/composes-all-owned-fragments" = {
-    expr = lib.all
-      (fragment:
-        lib.hasInfix
-          "./provider-registry-v2-extensions/${fragment}.nix"
-          composer)
-      fragments;
-    expected = true;
   };
 
   "provider-registry-v2/loads-direct-fragments-into-one-artifact" = {
@@ -342,47 +321,4 @@ in
     expected = true;
   };
 
-  "provider-registry-v2/preserves-single-artifact-composition" = {
-    expr = {
-      oneArtifact =
-        lib.hasInfix "config.d2b._bundle.providerRegistryV2Json" composer;
-      sorted = lib.hasInfix "left.descriptor.providerId" composer;
-      fingerprintCoversProviders =
-        lib.hasInfix "inherit providers;" composer;
-      fragmentsRequired =
-        !(lib.hasInfix "builtins.pathExists" composer);
-      directProvidersRequired =
-        lib.hasInfix "builtins.isList fragment.providers" composer;
-      currentRuntimeSeam =
-        lib.hasInfix "import ./workload-process-rows.nix" composer;
-      noRemovedRuntimeIndexReaders =
-        lib.all
-          (removed: !(lib.hasInfix removed composer))
-          [
-            "_index.realms.workloads"
-            "_index.enabledVms"
-            "_index.runtime.byVm"
-          ];
-      opaqueRuntimeIntentsProjected =
-        lib.hasInfix
-          "inherit (row) workloadId vmStartIntentId runnerIntentId;"
-          composer;
-      noLegacyListFragment =
-        !(lib.hasInfix "builtins.isList fragment then fragment" composer);
-      noParallelRegistry =
-        !(lib.hasInfix "providerRegistryV3" composer);
-    };
-    expected = {
-      oneArtifact = true;
-      sorted = true;
-      fingerprintCoversProviders = true;
-      fragmentsRequired = true;
-      directProvidersRequired = true;
-      currentRuntimeSeam = true;
-      noRemovedRuntimeIndexReaders = true;
-      opaqueRuntimeIntentsProjected = true;
-      noLegacyListFragment = true;
-      noParallelRegistry = true;
-    };
-  };
 }

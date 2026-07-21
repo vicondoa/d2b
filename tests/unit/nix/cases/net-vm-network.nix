@@ -152,8 +152,6 @@ let
     };
   eastWestRealm = builtins.head eastWestPlan.realms;
   eastWestWorkloadTap = builtins.head eastWestRealm.resources.taps.workloads;
-  netSource = builtins.readFile (flakeRoot + "/nixos-modules/net.nix");
-  hostSource = builtins.readFile (flakeRoot + "/nixos-modules/network.nix");
   allRulesMarked =
     lib.all
       (rule: rule.comment == realm.ownershipMarker)
@@ -589,24 +587,6 @@ in
         "network.release"
       ];
     };
-  };
-
-  "net-vm-network/eth-dhcp-match-mac-sentinel" = {
-    expr =
-      lib.hasInfix ''"10-eth-dhcp" = lib.mkForce'' netSource
-      && lib.hasInfix ''matchConfig.MACAddress = "00:00:00:00:00:00";''
-        netSource
-      && lib.hasInfix "enable = false;" netSource;
-    expected = true;
-  };
-
-  "net-vm-network/no-env-host-materialization" = {
-    expr =
-      !lib.hasInfix "cfg.envs" hostSource
-      && !lib.hasInfix "d2b.vms" hostSource
-      && !lib.hasInfix "systemd.network" hostSource
-      && !lib.hasInfix "networking.nat" hostSource;
-    expected = true;
   };
 
   "net-vm-network/auto-declared-from-realm-network-mode" = {

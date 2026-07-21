@@ -286,6 +286,39 @@ fn nix_package_source_filters_are_path_segment_based() {
         !repo_path_exists("nixos-modules/gateway-vm.nix"),
         "the legacy gateway VM synthesizer must remain deleted"
     );
+
+    let network = read_repo_file("nixos-modules/network.nix");
+    for forbidden in [
+        "cfg.gateways",
+        "gatewayVm",
+        "cfg.envs",
+        "d2b.vms",
+        "systemd.network",
+        "networking.nat",
+    ] {
+        assert!(
+            !network.contains(forbidden),
+            "realm network emitter retained legacy host materialization {forbidden:?}"
+        );
+    }
+    let relay_policy =
+        read_repo_file("packages/d2b-contract-tests/tests/policy_host_realm_relay.rs");
+    assert!(
+        !relay_policy.contains("\"nixos-modules/gateway-vm.nix\""),
+        "credential policy must not allow the deleted gateway VM synthesizer"
+    );
+
+    let net_guest = read_repo_file("nixos-modules/net.nix");
+    for required in [
+        "\"10-eth-dhcp\" = lib.mkForce",
+        "matchConfig.MACAddress = \"00:00:00:00:00:00\";",
+        "enable = false;",
+    ] {
+        assert!(
+            net_guest.contains(required),
+            "net VM DHCP neutralizer is missing source contract {required:?}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
