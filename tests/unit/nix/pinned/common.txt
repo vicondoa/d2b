@@ -204,6 +204,7 @@ multi-env-daemon/overlapping-realms-fail-closed
 multi-env-daemon/resource-ids-unique
 multi-env-daemon/two-realm-network-rows
 net-vm-network/allocator-resource-kinds
+net-vm-network/allow-east-west-true-unisolates-workload-tap
 net-vm-network/auto-declared-from-realm-network-mode
 net-vm-network/canonical-resource-ids
 net-vm-network/child-broker-lease-authority
@@ -213,10 +214,14 @@ net-vm-network/consumes-normalized-identities
 net-vm-network/default-workload-isolation
 net-vm-network/eth-dhcp-match-mac-sentinel
 net-vm-network/eth-dhcp-neutralizer-survives-real-composition
+net-vm-network/generated-external-mac-used-for-guest
+net-vm-network/host-drops-cover-forward-and-input-chains
 net-vm-network/host-drops-precede-internet-accept
 net-vm-network/interface-names-bounded
+net-vm-network/internet-forward-matches-uplink-input-role
 net-vm-network/invalid-host-cidr-fails-closed
 net-vm-network/link-attachment-references
+net-vm-network/masquerade-matches-uplink-input-role
 net-vm-network/minijail-profile-present-for-net-vm-runtime-role
 net-vm-network/mss-clamp
 net-vm-network/mtu-propagates-to-bridges
@@ -225,6 +230,7 @@ net-vm-network/networkd-detect-only
 net-vm-network/network-manager-marked-block
 net-vm-network/nft-foreign-state-fails-closed
 net-vm-network/nft-rows-carry-ownership-marker
+net-vm-network/no-dead-bridge-forward-rules
 net-vm-network/no-env-host-materialization
 net-vm-network/non-network-workload-unaffected
 net-vm-network/port-forward-target
