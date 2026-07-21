@@ -319,7 +319,13 @@ impl SharedContractPolicy {
             }
             let expected_integration_only: &[&str] = match wave.wave.as_str() {
                 "w5" | "w6" | "w7" => &[],
-                "w8" => &["packages/Cargo.lock", "packages/Cargo.toml"],
+                "w8" => &[
+                    "delivery/README.md",
+                    "packages/Cargo.lock",
+                    "packages/Cargo.toml",
+                    "packages/xtask/tests/delivery_cli.rs",
+                    "packages/xtask/tests/delivery_w8.rs",
+                ],
                 _ => unreachable!("wave set was validated"),
             };
             if !wave
@@ -3285,8 +3291,11 @@ mod tests {
         assert_eq!(
             ownership.integration_only_protected_paths,
             vec![
+                "delivery/README.md".to_owned(),
                 "packages/Cargo.lock".to_owned(),
-                "packages/Cargo.toml".to_owned()
+                "packages/Cargo.toml".to_owned(),
+                "packages/xtask/tests/delivery_cli.rs".to_owned(),
+                "packages/xtask/tests/delivery_w8.rs".to_owned(),
             ]
         );
         assert!(ownership.allowed_protected_paths.is_empty());
@@ -3386,14 +3395,17 @@ mod tests {
     }
 
     #[test]
-    fn w8_alone_may_update_the_workspace_registration_seam() {
+    fn w8_exact_integration_branch_owns_narrow_shared_seams() {
         let policy = policy();
         let paths = [
+            "delivery/README.md".to_owned(),
             "packages/Cargo.lock".to_owned(),
             "packages/Cargo.toml".to_owned(),
+            "packages/xtask/tests/delivery_cli.rs".to_owned(),
+            "packages/xtask/tests/delivery_w8.rs".to_owned(),
         ];
         check_changed_paths_for_branch(&policy, "w8", Some("adr0045-w8-integration"), &paths)
-            .expect("W8 integration workspace registration seam");
+            .expect("W8 integration shared seams");
         for branch in [
             None,
             Some("adr0045-w8-integration-systemd-user-shell-routing"),

@@ -10,6 +10,12 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+### Fixed
+
+- Granted only the exact `adr0045-w8-integration` branch the protected delivery
+  README and xtask manifest-test paths required to introduce W8's checked-in
+  manifest authority; suffixed component branches remain denied.
+
 ### Added
 
 - Added the W8 shared prep phase A: extended the shared-contract policy and

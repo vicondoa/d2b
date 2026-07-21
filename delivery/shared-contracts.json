@@ -273,8 +273,11 @@
       "additional_protected_paths": [],
       "allowed_protected_paths": [],
       "integration_only_protected_paths": [
+        "delivery/README.md",
         "packages/Cargo.lock",
-        "packages/Cargo.toml"
+        "packages/Cargo.toml",
+        "packages/xtask/tests/delivery_cli.rs",
+        "packages/xtask/tests/delivery_w8.rs"
       ],
       "inherits_prefixes_from": [
         "w5",
