@@ -181,6 +181,15 @@ fn video_rendered_profile_is_role_scoped_and_gpu_distinct() {
             assert_canonical_profile(dag, node, "w1-video");
             assert!(node.profile.mount_policy.device_binds.is_empty());
             assert!(node.profile.user_namespace.is_none());
+            // crosvm's video-decoder backend forks/reaps subprocesses; the
+            // role must keep a private pid namespace to contain them (base
+            // main precedent, restored W7fu17 H8 after a generic-profile
+            // regression dropped it).
+            assert!(node.profile.namespaces.pid);
+            assert!(node.profile.namespaces.ipc && node.profile.namespaces.mount);
+            assert!(!node.profile.namespaces.net);
+            assert!(!node.profile.namespaces.user);
+            assert!(!node.profile.namespaces.uts);
             assert_eq!(node.profile.umask, Some(7));
             assert!(!gpu_uids.contains(&node.profile.uid));
             let identity = dag.workload_identity.as_ref().unwrap();

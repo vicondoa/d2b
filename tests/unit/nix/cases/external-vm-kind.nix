@@ -292,8 +292,18 @@ in
     expr = {
       inherit (minijailProfile) capabilities principal profileId role seccompPolicyRef;
       hasKvmBind = builtins.elem "/dev/kvm" minijailProfile.mountPolicy.deviceBinds;
+      # Negative device-bind check: qemu-media must never gain
+      # /dev/vhost-net (that vhost-net fd stays inherited-fd only per
+      # docs/reference/privileges.md; a generic-profile regression
+      # incorrectly shared cloud-hypervisor's device list). Assert the
+      # exact set rather than only absence, so an unrelated future addition
+      # is also caught.
+      deviceBinds = minijailProfile.mountPolicy.deviceBinds;
       noUserNamespace = minijailProfile.userNamespace == null && !minijailProfile.namespaces.user;
       noNetNamespace = !minijailProfile.namespaces.net;
+      # qemu-media forks/reaps the qemu subprocess it launches; restore the
+      # private pid namespace base main always granted this role (W7fu17 H8).
+      hasPidNamespace = minijailProfile.namespaces.pid;
     };
     expected = {
       capabilities = [ ];
@@ -302,8 +312,10 @@ in
       role = "qemu-media-runner";
       seccompPolicyRef = "w1-qemu-media";
       hasKvmBind = true;
+      deviceBinds = [ "/dev/kvm" ];
       noUserNamespace = true;
       noNetNamespace = true;
+      hasPidNamespace = true;
     };
   };
 

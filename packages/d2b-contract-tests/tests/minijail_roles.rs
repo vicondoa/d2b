@@ -379,6 +379,35 @@ fn qemu_media_profile_source_is_fd_backed_and_device_closed() {
     );
 }
 
+/// W7fu17 H8: a generic-profile regression briefly let qemu-media-runner
+/// inherit cloud-hypervisor's full device-bind list (including
+/// /dev/vhost-net, which qemu-media must never expose as a path — vhost-net
+/// stays inherited-fd only per docs/reference/privileges.md) and dropped the
+/// private pid namespace both qemu-media-runner and video need to contain
+/// their forked/reaped child processes. Pin the source shape so both stay
+/// role-scoped rather than defaulting to a single shared list/flag.
+#[test]
+fn qemu_media_device_binds_and_pid_namespace_are_role_scoped() {
+    assert!(
+        repo_path_exists(MINIJAIL_PROFILES_NIX),
+        "missing {MINIJAIL_PROFILES_NIX}"
+    );
+    let src = read_repo_file(MINIJAIL_PROFILES_NIX);
+    assert!(
+        src.contains(r#"then [ "/dev/kvm" "/dev/vhost-net" ]"#)
+            && src.contains(r#"else if processRole == "qemu-media-runner""#)
+            && src.contains(r#"then [ "/dev/kvm" ]"#),
+        "deviceBindsFor must give qemu-media-runner ONLY /dev/kvm; \
+         /dev/vhost-net must remain cloud-hypervisor-runner-exclusive"
+    );
+    assert!(
+        src.contains("pidNamespace = builtins.elem role.processRole")
+            && src.contains(r#"[ "video" "qemu-media-runner" ]"#),
+        "video and qemu-media-runner must each get a private pid namespace to \
+         contain/reap forked child processes"
+    );
+}
+
 #[test]
 fn qemu_media_profile_is_selected_by_canonical_role_kind() {
     let src = read_repo_file("nixos-modules/role-process-rows.nix");

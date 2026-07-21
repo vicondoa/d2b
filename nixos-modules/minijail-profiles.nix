@@ -65,6 +65,14 @@ let
       seccompPolicyRef ? null,
       userNamespace ? null,
       umask ? null,
+      # Roles whose runner forks/reaps its own child processes (qemu-media's
+      # QEMU process model, video's crosvm device video-decoder backend) get
+      # a private PID namespace so those children are contained and reaped
+      # inside the role's own namespace rather than leaking into the host
+      # process tree. Restored from the accepted pre-W7 role matrix; see
+      # docs/reference/privileges.md's qemu-media row ("private PID/mount
+      # namespaces").
+      pidNamespace ? false,
     }:
     let
       uid = d2bLib.stablePrincipalId principal;
@@ -87,6 +95,7 @@ let
       adr_carve_out = null;
       namespaces = defaultNamespaces // {
         user = userNamespace != null;
+        pid = pidNamespace;
       };
       mountPolicy = {
         inherit readOnlyPaths writablePaths deviceBinds bindMounts;
@@ -135,10 +144,16 @@ let
     "wayland-proxy" = "w1-wayland-proxy";
   }.${processRole} or null;
 
+  # cloud-hypervisor opens /dev/vhost-net directly for accelerated virtio
+  # networking; qemu-media is fd-backed for its network path and must NOT
+  # gain a /dev/vhost-net path exposure (vhost-net stays inherited-fd only —
+  # see docs/reference/privileges.md's qemu-media row). Restored from the
+  # accepted pre-W7 role matrix.
   deviceBindsFor = processRole:
-    if builtins.elem processRole
-      [ "cloud-hypervisor-runner" "qemu-media-runner" ]
+    if processRole == "cloud-hypervisor-runner"
     then [ "/dev/kvm" "/dev/vhost-net" ]
+    else if processRole == "qemu-media-runner"
+    then [ "/dev/kvm" ]
     else [ ];
 
   profileForRole = role:
@@ -200,6 +215,11 @@ let
           hostGidForZero = principalId;
         }
         else null;
+      # video (crosvm device video-decoder) and qemu-media-runner (QEMU's own
+      # process model) each fork/reap child processes; a private PID
+      # namespace contains that process tree to the role's own sandbox.
+      pidNamespace = builtins.elem role.processRole
+        [ "video" "qemu-media-runner" ];
       umask =
         if builtins.elem role.processRole
           [ "swtpm" "gpu" "gpu-render-node" "video" "audio" "wayland-proxy" ]
