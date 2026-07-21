@@ -349,6 +349,11 @@ store-overlay-emit/ready-marker-is-read-only
 store-overlay-emit/short-id-store-view-path
 store-overlay-emit/virtiofs-live-view-is-read-only
 store-overlay-emit/virtiofs-serves-live-view
+unsafe-local/acl-sync-script-shape-grants-exact-controller-uid-only
+unsafe-local/base-socket-and-directory-mode-and-endpoint-role-are-unchanged
+unsafe-local/controller-allowlist-document-is-bounded-sorted-and-deduplicated
+unsafe-local/controller-allowlist-excludes-unrelated-controller-and-user
+unsafe-local/controller-allowlist-grants-exact-controller-to-allowed-user
 unsafe-local/group-membership-fails-closed-on-non-systemd-user-runtime
 unsafe-local/runtime-user-endpoints-follow-normalized-bindings
 usbip-gating/allocator-lease-request

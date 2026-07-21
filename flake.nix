@@ -1004,6 +1004,7 @@
             "realm-audio-resources.nix"
             "requested-vm-config.nix"
             "security-key-gating.nix"
+            "unsafe-local-controller-allowlist.nix"
             "video-contract.nix"
           ];
           nix-unit-state = [

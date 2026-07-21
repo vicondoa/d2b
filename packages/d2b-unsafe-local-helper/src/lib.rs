@@ -1,3 +1,4 @@
+pub mod controller_allowlist;
 pub mod environment;
 mod output_ring;
 // The runtime component still type-checks its frozen migration shim, but the
