@@ -1,8 +1,10 @@
 { flakeRoot, ... }:
 
 let
-  basePlan = import
-    (flakeRoot + "/tests/unit/nix/eval-cases/w8-integration-wave-plan.nix");
+  planFor = args: import
+    (flakeRoot + "/tests/unit/nix/eval-cases/w8-integration-wave-plan.nix")
+    args;
+  basePlan = planFor { };
   componentPolicy = import
     (flakeRoot + "/tests/unit/nix/eval-cases/w8-integration-component-policy.nix");
   evaluate = plan: branch: paths:
@@ -10,15 +12,17 @@ let
       inherit branch plan;
       pathsJson = builtins.toJSON paths;
     };
-  manifestReadyPlan = basePlan // {
-    externalDependencies = basePlan.externalDependencies // {
-      shared-root-w8-manifest-seam =
-        basePlan.externalDependencies.shared-root-w8-manifest-seam
-        // { status = "ready"; };
-    };
+  manifestReadyDependencies = basePlan.externalDependencies // {
+    shared-root-w8-manifest-seam =
+      basePlan.externalDependencies.shared-root-w8-manifest-seam
+      // { status = "ready"; };
+  };
+  manifestReadyPlan = planFor {
+    externalDependenciesOverride = manifestReadyDependencies;
   };
   routingCommit = "0123456789abcdef0123456789abcdef01234567";
-  routingLandedPlan = manifestReadyPlan // {
+  routingLandedPlan = planFor {
+    externalDependenciesOverride = manifestReadyDependencies;
     landedComponents = {
       realm-routing-work-executor-fabric = routingCommit;
     };
@@ -78,6 +82,8 @@ in
         unmetDependencies
         valid
         ;
+      launchReady = routingLandedPlan.launchSummary.ready;
+      launchPending = routingLandedPlan.launchSummary.pendingOnDependency;
     };
     expected = {
       blockedExternalDependencies = [ ];
@@ -90,6 +96,13 @@ in
       ];
       unmetDependencies = [ ];
       valid = true;
+      launchReady = [
+        "secrets-lifecycle"
+        "realm-routing-work-executor-fabric"
+        "gateway-replacement"
+        "restart-observability-audit"
+      ];
+      launchPending = [ "provider-parity-fallback-removal" ];
     };
   };
 

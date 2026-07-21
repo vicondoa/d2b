@@ -1,3 +1,7 @@
+{ landedComponents ? { }
+, externalDependenciesOverride ? null
+}:
+
 let
   components = {
     "secrets-lifecycle" = {
@@ -240,12 +244,11 @@ let
     "restart-observability-audit"
   ];
 
-  landedComponents = { };
   globalExternalDependencies = [
     "shared-root-w8-manifest-seam"
   ];
 
-  externalDependencies = {
+  baseExternalDependencies = {
     workspace-crate-registration-seam = {
       owner = "adr0045-w8-integration";
       status = "blocked";
@@ -271,6 +274,10 @@ let
       ];
     };
   };
+  externalDependencies =
+    if externalDependenciesOverride == null
+    then baseExternalDependencies
+    else externalDependenciesOverride;
 
   pathExternalDependencies = [
     {
@@ -285,7 +292,9 @@ let
 
   readyComponents = builtins.filter
     (name:
-      components.${name}.dependsOn == [ ]
+      builtins.all
+        (dependency: builtins.hasAttr dependency landedComponents)
+        components.${name}.dependsOn
       && builtins.all
         (dependency: externalDependencies.${dependency}.status == "ready")
         (globalExternalDependencies ++ components.${name}.externalDependsOn))
@@ -298,7 +307,9 @@ let
     componentOrder;
   pendingComponents = builtins.filter
     (name:
-      components.${name}.dependsOn != [ ]
+      builtins.any
+        (dependency: !(builtins.hasAttr dependency landedComponents))
+        components.${name}.dependsOn
       && !(builtins.elem name blockedComponents))
     componentOrder;
 in

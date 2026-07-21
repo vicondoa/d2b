@@ -271,7 +271,8 @@
         "tests/unit/smoke/"
       ],
       "additional_protected_paths": [],
-      "allowed_protected_paths": [
+      "allowed_protected_paths": [],
+      "integration_only_protected_paths": [
         "packages/Cargo.lock",
         "packages/Cargo.toml"
       ],

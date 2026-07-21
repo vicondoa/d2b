@@ -30,8 +30,9 @@ deprecations ship one minor release before removal.
   registration; the not-yet-opened wave manifest), and ready/blocked/pending
   launch counts. The component gate now requires the manifest globally, binds
   internal dependencies to commits already present in the trusted W8 head,
-  and grants only the W8 integrator exact `packages/Cargo.toml` and
-  `packages/Cargo.lock` authority for workspace registration. The predecessor
+  and grants only the exact `adr0045-w8-integration` branch
+  `packages/Cargo.toml` and `packages/Cargo.lock` authority for workspace
+  registration. Suffixed component branches remain denied. The predecessor
   prep still excludes `delivery/manifests/w8.json` and any Cargo workspace or
   lockfile content change.
 - Added bundle version 13 discovery for private observability

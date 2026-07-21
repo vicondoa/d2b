@@ -1,6 +1,6 @@
 { branch
 , pathsJson
-, plan ? import ./w8-integration-wave-plan.nix
+, plan ? import ./w8-integration-wave-plan.nix { }
 }:
 
 let

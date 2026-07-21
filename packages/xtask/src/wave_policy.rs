@@ -97,6 +97,8 @@ pub struct WaveOwnership {
     pub additional_protected_paths: Vec<String>,
     #[serde(default)]
     pub allowed_protected_paths: Vec<String>,
+    #[serde(default)]
+    pub integration_only_protected_paths: Vec<String>,
     /// Waves whose already-landed implementation prefixes this wave is
     /// authorized to continue editing (a "successor" grant). Empty for a
     /// peer/parallel wave; populated only for an integration wave that
@@ -311,6 +313,25 @@ impl SharedContractPolicy {
             }
             if !wave.allowed_protected_paths.is_empty() {
                 validate_sorted_paths(&wave.allowed_protected_paths)?;
+            }
+            if !wave.integration_only_protected_paths.is_empty() {
+                validate_sorted_paths(&wave.integration_only_protected_paths)?;
+            }
+            let expected_integration_only: &[&str] = match wave.wave.as_str() {
+                "w5" | "w6" | "w7" => &[],
+                "w8" => &["packages/Cargo.lock", "packages/Cargo.toml"],
+                _ => unreachable!("wave set was validated"),
+            };
+            if !wave
+                .integration_only_protected_paths
+                .iter()
+                .map(String::as_str)
+                .eq(expected_integration_only.iter().copied())
+            {
+                return Err(format!(
+                    "{} integration-only protected paths do not match the delivery graph",
+                    wave.wave
+                ));
             }
         }
         for wave in &self.waves {
@@ -606,7 +627,11 @@ impl SharedContractPolicy {
             }
         }
         for wave in &self.waves {
-            for path in &wave.allowed_protected_paths {
+            for path in wave
+                .allowed_protected_paths
+                .iter()
+                .chain(&wave.integration_only_protected_paths)
+            {
                 let globally_protected = self.protected_paths.binary_search(path).is_ok()
                     || self
                         .protected_prefixes
@@ -1175,7 +1200,7 @@ fn verify_ownership<P: OwnershipProbe>(
     let manifest = probe.tracked_blob(&candidate_root, &head_oid, &ownership.manifest_path)?;
     verify_checked_in_manifest(&manifest, ownership)?;
     let paths = probe.changed_paths(&candidate_root, &base_oid, &head_oid)?;
-    check_changed_paths(&policy, &ownership.wave, &paths)?;
+    check_changed_paths_for_branch(&policy, &ownership.wave, Some(&branch), &paths)?;
     verify_w5_contract_retirement(
         probe,
         &candidate_root,
@@ -1330,6 +1355,15 @@ pub fn check_changed_paths(
     wave: &str,
     paths: &[String],
 ) -> Result<(), String> {
+    check_changed_paths_for_branch(policy, wave, None, paths)
+}
+
+fn check_changed_paths_for_branch(
+    policy: &SharedContractPolicy,
+    wave: &str,
+    branch: Option<&str>,
+    paths: &[String],
+) -> Result<(), String> {
     let ownership = policy.wave(wave)?;
     let mut violations = Vec::new();
     for path in paths {
@@ -1341,6 +1375,14 @@ pub fn check_changed_paths(
             .allowed_protected_paths
             .binary_search(path)
             .is_ok()
+        {
+            continue;
+        }
+        if branch == Some(ownership.branch_stem.as_str())
+            && ownership
+                .integration_only_protected_paths
+                .binary_search(path)
+                .is_ok()
         {
             continue;
         }
@@ -3241,12 +3283,13 @@ mod tests {
             vec!["w5".to_owned(), "w6".to_owned(), "w7".to_owned()]
         );
         assert_eq!(
-            ownership.allowed_protected_paths,
+            ownership.integration_only_protected_paths,
             vec![
                 "packages/Cargo.lock".to_owned(),
                 "packages/Cargo.toml".to_owned()
             ]
         );
+        assert!(ownership.allowed_protected_paths.is_empty());
         assert_eq!(ownership.landed_predecessor_ref.as_deref(), Some("main"));
     }
 
@@ -3349,7 +3392,18 @@ mod tests {
             "packages/Cargo.lock".to_owned(),
             "packages/Cargo.toml".to_owned(),
         ];
-        check_changed_paths(&policy, "w8", &paths).expect("W8 workspace registration seam");
+        check_changed_paths_for_branch(&policy, "w8", Some("adr0045-w8-integration"), &paths)
+            .expect("W8 integration workspace registration seam");
+        for branch in [
+            None,
+            Some("adr0045-w8-integration-systemd-user-shell-routing"),
+        ] {
+            let error = check_changed_paths_for_branch(&policy, "w8", branch, &paths)
+                .expect_err("W8 component workspace registration");
+            for path in &paths {
+                assert!(error.contains(path), "{error}");
+            }
+        }
         for wave in ["w5", "w6", "w7"] {
             let error = check_changed_paths(&policy, wave, &paths)
                 .expect_err("predecessor wave workspace registration");
