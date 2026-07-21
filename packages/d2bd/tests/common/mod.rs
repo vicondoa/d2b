@@ -322,6 +322,19 @@ pub fn spawn_d2bd_serve(
     once: bool,
     state_restore_report: Option<&Path>,
 ) -> SpawnedProcess {
+    spawn_d2bd_serve_inner(fixture, once, state_restore_report, true)
+}
+
+pub fn spawn_d2bd_serve_expect_startup_failure(fixture: &DaemonFixture) -> SpawnedProcess {
+    spawn_d2bd_serve_inner(fixture, true, None, false)
+}
+
+fn spawn_d2bd_serve_inner(
+    fixture: &DaemonFixture,
+    once: bool,
+    state_restore_report: Option<&Path>,
+    wait_until_ready: bool,
+) -> SpawnedProcess {
     fixture.reset_runtime_endpoints();
     let mut command = Command::new(d2bd_bin());
     command
@@ -346,23 +359,28 @@ pub fn spawn_d2bd_serve(
         .env("RUST_LOG", "off")
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    let notify_path = fixture.run_dir.join("notify.sock");
-    remove_file_if_present(&notify_path);
-    let notify_listener = UnixDatagram::bind(&notify_path).expect("bind test notify socket");
-    notify_listener
-        .set_nonblocking(true)
-        .expect("set test notify socket nonblocking");
-    command.env("NOTIFY_SOCKET", &notify_path);
+    let readiness = wait_until_ready.then(|| {
+        let notify_path = fixture.run_dir.join("notify.sock");
+        remove_file_if_present(&notify_path);
+        let listener = UnixDatagram::bind(&notify_path).expect("bind test notify socket");
+        listener
+            .set_nonblocking(true)
+            .expect("set test notify socket nonblocking");
+        command.env("NOTIFY_SOCKET", &notify_path);
+        (listener, notify_path)
+    });
     if let Some(report) = state_restore_report {
         command.arg("--test-state-restore-report").arg(report);
     }
     let mut child = command.spawn().expect("spawn d2bd serve");
-    wait_for_daemon_ready(
-        &mut child,
-        &notify_listener,
-        &notify_path,
-        Duration::from_secs(45),
-    );
+    if let Some((notify_listener, notify_path)) = readiness {
+        wait_for_daemon_ready(
+            &mut child,
+            &notify_listener,
+            &notify_path,
+            Duration::from_secs(45),
+        );
+    }
     SpawnedProcess::from_child(child)
 }
 
