@@ -686,7 +686,7 @@ impl SharedContractPolicy {
 
     fn parent_is_allowed(&self, ownership: &WaveOwnership, parent: &str) -> bool {
         if parent == self.shared_root_branch {
-            return true;
+            return ownership.landed_predecessor_ref.is_none();
         }
         if ownership.landed_predecessor_ref.as_deref() == Some(parent) {
             return true;
@@ -3299,6 +3299,9 @@ mod tests {
         assert!(!policy.parent_is_allowed(ownership, "adr0045-w6-user-services"));
         // Wrong base: an unrelated, non-governed branch is not an authority root.
         assert!(!policy.parent_is_allowed(ownership, "some-unrelated-branch"));
+        // W8 must start from the landed predecessor, not bypass W5-W7 by
+        // returning to their historical shared root.
+        assert!(!policy.parent_is_allowed(ownership, &policy.shared_root_branch));
         // Wrong branch: a near-miss branch name must not match the exact
         // canonical `adr0045-w8-integration` stem.
         assert!(policy.wave_for_branch("adr0045-w8-other").is_err());
