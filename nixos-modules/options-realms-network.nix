@@ -106,6 +106,16 @@ in
 
     mssClamp = lib.mkEnableOption "TCP MSS clamping on the net VM's nftables forward chain (recommended over tunneled uplinks)";
 
+    netVmName = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "corp-net";
+      description = ''
+        Override the guest hostname for the realm's auto-declared net VM.
+        Null derives `sys-<configuredId>-net` from the realm's configured id.
+      '';
+    };
+
     lan = {
       allowEastWest = lib.mkEnableOption "east-west traffic between workloads inside this realm (also requires d2b.site.allowUnsafeEastWest = true)";
     };

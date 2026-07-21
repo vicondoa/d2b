@@ -1,5 +1,5 @@
 # d2b.realms.<realm>.workloads.<workload> — provider-bound workloads.
-{ lib, ... }:
+{ config, lib, ... }:
 
 let
   labelType = lib.types.strMatching "^[a-z][a-z0-9-]{0,127}$";
@@ -214,5 +214,29 @@ in
       typed provider bindings. Legacy VM kinds, aliases, state mappings, and
       provider placeholders are not part of this schema.
     '';
+  };
+
+  # A realm that owns its network declaration (network.mode == "declared")
+  # auto-declares its own net VM as an ordinary provider-bound workload
+  # named "network", bound to the reserved cloud-hypervisor runtime
+  # provider "network-vm-runtime". This is a self-referential sibling
+  # default (config.network.mode -> config.workloads/providers) resolved
+  # entirely within this realm instance's own submodule fixed point; it
+  # never reads the fully-merged `d2b.realms` and so cannot recurse. The
+  # guest module import (./net.nix) is deferred here; the realm-derived
+  # network guest arguments (`realmNetwork`) are threaded in later from
+  # host.nix, which is free to read the already-computed realm-network
+  # rows without creating a cycle.
+  config = lib.mkIf (config.network.mode == "declared") {
+    providers.network-vm-runtime = {
+      type = "runtime";
+      implementationId = "cloud-hypervisor";
+    };
+
+    workloads.network = {
+      providerRefs.runtime = "network-vm-runtime";
+      autostart = true;
+      config.imports = [ ./net.nix ];
+    };
   };
 }

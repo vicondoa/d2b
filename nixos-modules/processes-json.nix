@@ -161,9 +161,24 @@ let
           in
           "tag=${share.tag},socket=${socket}")
         workload.shares;
-      netParams = lib.optionals (workload.networkInterface != null) [
-        "tap=${workload.networkInterface.id},mac=${workload.networkInterface.mac}"
-      ];
+      # Non-macvtap ("tap") interfaces plug straight into `--net tap=...`.
+      # macvtap interfaces are broker-provisioned: the broker resolves each
+      # macvtap-typed entry in `network_interfaces` (in list order) to an
+      # inherited fd starting at 10 (see `resolve_macvtap_intents` /
+      # `RENDER_NODE_INHERITED_FD` in d2b-priv-broker) and hands the runner
+      # that fd already opened, so the argv side only needs to name it.
+      netInterfaceArg =
+        let
+          nextMacvtapFd = index:
+            10 + builtins.length
+              (lib.filter (iface: iface.type == "macvtap")
+                (lib.sublist 0 index workload.networkInterfaces));
+        in
+        index: iface:
+          if iface.type == "macvtap"
+          then "fd=${toString (nextMacvtapFd index)},mac=${iface.mac}"
+          else "tap=${iface.id},mac=${iface.mac}";
+      netParams = lib.imap0 netInterfaceArg workload.networkInterfaces;
       tpm = roleFor workload.workloadId "swtpm";
       gpu = roleFor workload.workloadId "gpu";
       gpuRender = roleFor workload.workloadId "gpu-render-node";
@@ -431,9 +446,9 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         "-netdev" "tap,id=nl0,fd=10,vhost=off"
         "-device"
         "virtio-net-pci,netdev=nl0,mac=${
-          if workload.networkInterface == null
+          if workload.networkInterfaces == [ ]
           then throw "qemu-media workload ${workload.workloadId} has no allocator-declared network interface"
-          else workload.networkInterface.mac
+          else (builtins.head workload.networkInterfaces).mac
         }"
         "-qmp" "unix:${runtime}/qmp.sock,server=on,wait=off"
         "-monitor" "none"
@@ -447,9 +462,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         "WAYLAND_DISPLAY=wayland-0"
         "XDG_RUNTIME_DIR=${roleRuntime wayland}"
       ];
-      networkInterfaces = lib.optional (workload.networkInterface != null) {
-        inherit (workload.networkInterface) type id mac;
-      };
+      networkInterfaces = workload.networkInterfaces;
     }
     else if role.roleKind == "store-virtiofs-preflight" then mkNode {
       id = role.roleId;
@@ -598,9 +611,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       binaryPath = "${microvm.cloud-hypervisor.package}/bin/cloud-hypervisor";
       argv = cloudHypervisorArgv workload microvm;
       env = [ "PATH=${pkgs.coreutils}/bin:${pkgs.gnused}/bin" ];
-      networkInterfaces = lib.optional (workload.networkInterface != null) {
-        inherit (workload.networkInterface) type id mac;
-      };
+      networkInterfaces = workload.networkInterfaces;
     }
     else null;
 

@@ -1,4 +1,4 @@
-{ lib, flakeRoot, ... }:
+{ lib, flakeRoot, mkEval, ... }:
 
 let
   identity = import (flakeRoot + "/nixos-modules/v2-identity.nix");
@@ -153,6 +153,107 @@ let
       (rule: lib.hasSuffix "-internet" rule.id)
       resources.nftables.rules;
   resourceKinds = map (request: request.kind) plan.allocatorRequests;
+
+  # Real end-to-end reachability proof, on top of the hand-rolled `plan`
+  # fixture above (which only proves realm-network-rows.nix's own pure
+  # output shape). This builds an ordinary consumer-shaped realm through
+  # the actual module system: a realm with `network.mode = "declared"`
+  # and one regular declared workload ("corp-vm"). It then asserts the
+  # auto-declared "network" workload (a) is actually reachable from that
+  # realm's own `d2b.realms.<realm>` config (not merely a pure-function
+  # row), (b) flows through the ordinary workload/role/resource index into
+  # the composed processes.json / minijail-profiles / `_computedWorkloads`
+  # bundle artifacts alongside its declared sibling, and (c) that sibling's
+  # own composed DAG/argv are unaffected by the net VM's presence.
+  workRealmId = identity.deriveRealmId "work.local-root";
+  netVmWorkloadId = identity.deriveWorkloadId workRealmId "network";
+  corpVmWorkloadId = identity.deriveWorkloadId workRealmId "corp-vm";
+  netVmCloudHypervisorRoleId =
+    identity.deriveRoleId workRealmId netVmWorkloadId "cloud-hypervisor";
+
+  reachability = (mkEval [
+    {
+      boot.loader.grub.enable = false;
+      boot.loader.systemd-boot.enable = false;
+      boot.initrd.includeDefaultModules = false;
+      fileSystems."/" = {
+        device = "tmpfs";
+        fsType = "tmpfs";
+      };
+      environment.etc."machine-id".text =
+        "00000000000000000000000000000000";
+      system.stateVersion = "25.11";
+      users.users.alice = {
+        isNormalUser = true;
+        uid = 1000;
+      };
+      d2b.acceptDestructiveV2Cutover = true;
+      d2b.site = {
+        waylandUser = "alice";
+        launcherUsers = [ "alice" ];
+        yubikey.enable = false;
+      };
+      d2b.realms.work = {
+        path = "work";
+        placement = "host-local";
+        broker = {
+          enable = true;
+          hostMutation = true;
+        };
+        network = {
+          mode = "declared";
+          lanSubnet = "10.90.0.0/24";
+          uplinkSubnet = "192.0.2.40/30";
+        };
+        providers.runtime = {
+          type = "runtime";
+          implementationId = "cloud-hypervisor";
+        };
+        workloads.corp-vm = {
+          providerRefs.runtime = "runtime";
+          config = {
+            networking.hostName = lib.mkDefault "corp-vm";
+            users.users.alice = {
+              isNormalUser = true;
+              uid = 1000;
+            };
+          };
+        };
+      };
+    }
+  ]).config;
+
+  reachabilityNetGuest = (lib.findFirst
+    (realm: realm.canonicalRealmId == workRealmId)
+    (throw "reachability: realm work.local-root has no network rows")
+    reachability.d2b._realmNetwork.realms).guest;
+
+  netVmDag = builtins.head (builtins.filter
+    (row: row.workloadIdentity.canonicalTarget == "network.work.local-root.d2b")
+    reachability.d2b._bundle.processesJson.data.vms);
+  corpVmDag = builtins.head (builtins.filter
+    (row: row.workloadIdentity.canonicalTarget == "corp-vm.work.local-root.d2b")
+    reachability.d2b._bundle.processesJson.data.vms);
+  netVmRolesByKind = lib.sort lib.lessThan
+    (map (node: node.role) netVmDag.nodes);
+  corpVmRolesByKind = lib.sort lib.lessThan
+    (map (node: node.role) corpVmDag.nodes);
+  netVmHypervisor = lib.findFirst
+    (node: node.role == "cloud-hypervisor-runner")
+    (throw "missing net VM cloud-hypervisor-runner node")
+    netVmDag.nodes;
+  corpVmHypervisor = lib.findFirst
+    (node: node.role == "cloud-hypervisor-runner")
+    (throw "missing corp-vm cloud-hypervisor-runner node")
+    corpVmDag.nodes;
+  netFlagIndex = argv:
+    findIndex (arg: arg == "--net") argv;
+  netVmNetArgs =
+    let idx = netFlagIndex netVmHypervisor.argv;
+    in lib.sublist (idx + 1) 2 netVmHypervisor.argv;
+  corpVmNetArgs =
+    let idx = netFlagIndex corpVmHypervisor.argv;
+    in lib.sublist (idx + 1) 1 corpVmHypervisor.argv;
 in
 {
   "net-vm-network/realm-plan-assertions-pass" = {
@@ -372,5 +473,106 @@ in
       && !lib.hasInfix "systemd.network" hostSource
       && !lib.hasInfix "networking.nat" hostSource;
     expected = true;
+  };
+
+  "net-vm-network/auto-declared-from-realm-network-mode" = {
+    expr = {
+      workload = {
+        inherit (reachability.d2b.realms.work.workloads.network)
+          providerRefs autostart;
+      };
+      provider = {
+        inherit (reachability.d2b.realms.work.providers.network-vm-runtime)
+          type implementationId;
+      };
+    };
+    expected = {
+      workload = {
+        providerRefs.runtime = "network-vm-runtime";
+        autostart = true;
+      };
+      provider = {
+        type = "runtime";
+        implementationId = "cloud-hypervisor";
+      };
+    };
+  };
+
+  "net-vm-network/reachable-through-generic-workload-index" = {
+    expr = {
+      indexed = reachability.d2b._index.workloads.byId ? ${netVmWorkloadId};
+      runtimeImplementation =
+        reachability.d2b._index.workloads.byId.${netVmWorkloadId}
+          .providerBindings.runtime.implementationId;
+      computed = reachability.d2b._computedWorkloads ? ${netVmWorkloadId};
+    };
+    expected = {
+      indexed = true;
+      runtimeImplementation = "cloud-hypervisor";
+      computed = true;
+    };
+  };
+
+  "net-vm-network/composed-dag-has-expected-role-set" = {
+    expr = lib.unique netVmRolesByKind;
+    expected = lib.sort lib.lessThan [
+      "cloud-hypervisor-runner"
+      "guest-control-health"
+      "store-virtiofs-preflight"
+      "vsock-relay"
+      "virtiofsd"
+    ];
+  };
+
+  "net-vm-network/composed-dag-net-argv-matches-guest-metadata" = {
+    expr = netVmNetArgs;
+    expected = [
+      "tap=${reachabilityNetGuest.interfaces.netVmUplink},mac=${reachabilityNetGuest.netUplinkMac}"
+      "tap=${reachabilityNetGuest.interfaces.netVmLan},mac=${reachabilityNetGuest.netLanMac}"
+    ];
+  };
+
+  "net-vm-network/eth-dhcp-neutralizer-survives-real-composition" = {
+    expr = reachability.d2b._computedWorkloads.${netVmWorkloadId}
+      .config.systemd.network.networks."10-eth-dhcp".matchConfig.MACAddress;
+    expected = "00:00:00:00:00:00";
+  };
+
+  "net-vm-network/minijail-profile-present-for-net-vm-runtime-role" = {
+    expr =
+      let
+        profile = reachability.d2b._bundle.minijailProfiles
+          ."role-${netVmCloudHypervisorRoleId}".data;
+      in {
+        profileId = profile.profileId;
+        cgroupSubtree = profile.cgroupPlacement.subtree;
+      };
+    expected = {
+      profileId = "role-${netVmCloudHypervisorRoleId}";
+      cgroupSubtree =
+        "d2b.slice/r-${workRealmId}/workloads/w-${netVmWorkloadId}/${netVmCloudHypervisorRoleId}";
+    };
+  };
+
+  "net-vm-network/non-network-workload-unaffected" = {
+    expr = {
+      roles = lib.unique corpVmRolesByKind;
+      netArgsCount = builtins.length corpVmNetArgs;
+      workloadCount =
+        builtins.length reachability.d2b._bundle.processesJson.data.vms;
+    };
+    expected = {
+      roles = lib.sort lib.lessThan [
+        "cloud-hypervisor-runner"
+        "guest-control-health"
+        "store-virtiofs-preflight"
+        "vsock-relay"
+        "virtiofsd"
+      ];
+      netArgsCount = 1;
+      # Exactly the auto-declared net VM plus the one consumer-declared
+      # workload — no extra workloads leak in from the auto-declaration.
+      workloadCount = 2;
+    };
   };
 }

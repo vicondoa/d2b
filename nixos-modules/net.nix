@@ -38,11 +38,10 @@ let
   homeForwardRules = lib.concatMapStringsSep "\n          "
     (pf: ''iifname "${homeIf}" oifname "eth1" ${homeSourceMatch pf}ip daddr ${pf.targetIp} ${pf.protocol} dport ${toString pf.targetPort} ct state new accept'')
     homePortForwards;
-  # The net VM has./base.nix layered in by host.nix (see
-  # nixos-modules/host.nix's `microvm.vms = lib.mapAttrs` block, which
-  # unconditionally imports ./base.nix). Everything here builds on top
-  # of that. One consequence: base.nix's catch-all DHCP fallback
-  # network `10-eth-dhcp` (matchConfig.Type = "ether") is materialized
+  # The net VM has ./base.nix layered in by host.nix's `composedModules`
+  # (unconditional for every workload row, network included). Everything
+  # here builds on top of that. One consequence: base.nix's catch-all DHCP
+  # fallback network `10-eth-dhcp` (matchConfig.Type = "ether") is materialized
   # in the net VM too, where it would sort lex-first against the
   # per-MAC `10-uplink`/`10-lan` definitions below and DHCP both NICs
   # — breaking the static addressing. The `lib.mkForce` override at

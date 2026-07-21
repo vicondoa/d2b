@@ -418,8 +418,14 @@ in
     expr =
       let
         graphics = builtins.head graphicsCfg.d2b._index.workloads.enabledList;
-        entraExample =
-          builtins.head entraCfg.d2b._index.workloads.enabledList;
+        # The realm sets `network.mode = "declared"`, so the auto-declared
+        # net VM workload is also present in `enabledList` alongside
+        # `work-entra`; select the example's own workload by name rather
+        # than assuming it's the only (or first) entry.
+        entraExample = lib.findFirst
+          (row: row.workloadName == "work-entra")
+          (throw "with-entra-id example: work-entra workload missing from enabledList")
+          entraCfg.d2b._index.workloads.enabledList;
       in {
         minimalAssertions =
           lib.all (assertion: assertion.assertion) minimalCfg.assertions;

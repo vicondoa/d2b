@@ -16,6 +16,31 @@ let
     (row: row.runtimeImplementation == "cloud-hypervisor")
     workloadRows;
 
+  # Auto-declare the realm-local net VM as a real workload for every realm
+  # that declared a network (`d2b.realms.<realm>.network.mode = "declared"`).
+  # The auto-declaration itself lives in options-realms-workloads.nix as a
+  # self-referential sibling default resolved inside each realm instance's
+  # own submodule fixed point (config.network.mode -> config.workloads /
+  # config.providers); that keeps it from reading the fully-merged
+  # `d2b.realms` from outside, which would recurse. Because the workload
+  # is literally named "network", `identity.deriveWorkloadId realmId
+  # "network"` lines up exactly with the `netVmWorkloadId`/`netVmRoleId`
+  # realm-network-rows.nix independently derives, and it flows through the
+  # ordinary `cfg._index.workloads` / `.roles` / `.resources` pipeline like
+  # any other cloud-hypervisor workload (workload-process-rows.nix already
+  # special-cases only its `networkInterfaces` shape via `isNetVm`). The
+  # one thing options-realms-workloads.nix cannot supply from inside the
+  # realm submodule is the realm-derived network guest metadata
+  # (`realm.guest`, computed by realm-network-rows.nix from data outside
+  # that one realm instance), so it is threaded in here as an extra
+  # `_module.args.realmNetwork` override alongside the workload's own
+  # `guestModule` (./net.nix) in `composedModules`.
+  netVmGuestFor = realmId:
+    (lib.findFirst
+      (realm: realm.canonicalRealmId == realmId)
+      (throw "workload composition: realm ${realmId} has no network rows for its auto-declared net VM")
+      (cfg._realmNetwork.realms or [ ])).guest;
+
   hasRole = row: roleKind:
     lib.any (role: role.roleKind == roleKind) row.roles;
   hasCapability = row: capability:
@@ -56,9 +81,10 @@ let
           socket = lib.mkForce "${state.path}/vsock.sock";
         };
         interfaces = lib.mkForce
-          (lib.optional (row.networkInterface != null) {
-            inherit (row.networkInterface) type id mac;
-          });
+          (map
+            (iface: { inherit (iface) type id mac; }
+              // lib.optionalAttrs (iface ? macvtap) { inherit (iface) macvtap; })
+            row.networkInterfaces);
         shares = lib.mkForce row.shares;
         graphics.enable =
           hasRole row "gpu" || hasRole row "gpu-render-node";
@@ -101,7 +127,9 @@ let
     ++ [
       row.guestModule
       (guestPolicyModule row)
-    ];
+    ]
+    ++ lib.optional (row.workloadName == "network")
+      { _module.args.realmNetwork = netVmGuestFor row.realmId; };
 in
 {
   imports = [

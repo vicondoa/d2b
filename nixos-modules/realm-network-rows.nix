@@ -52,6 +52,14 @@ let
   subnetIp = cidr: index:
     if !validIpv4Cidr cidr then null else d2bLib.subnetIp cidr index;
 
+  # "network" is the reserved workload name for the auto-declared net VM
+  # (see options-realms-workloads.nix, which self-declares
+  # `workloads.network` + `providers.network-vm-runtime` for every realm
+  # with `network.mode == "declared"`). It must never be treated as one of
+  # the realm's own LAN-participant workloads: it has no per-workload LAN
+  # tap/DHCP reservation of its own (it terminates the uplink+LAN taps
+  # computed below instead), and workload-process-rows.nix gives it the
+  # realm's netVm interfaces directly.
   realmWorkloads = realmRow:
     lib.filter
       (workload:
@@ -63,6 +71,7 @@ let
               workload;
         in
         workload.enabled
+        && workload.workloadName != "network"
         && builtins.elem runtime [ "cloud-hypervisor" "qemu-media" ])
       (cfg._index.workloads.enabledByRealmId.${realmRow.realmId} or [ ]);
 
@@ -300,6 +309,8 @@ let
         ownershipId
         ownershipMarker
         allocatorRequests
+        netVmWorkloadId
+        netVmRoleId
         ;
       configuredRealmId = realmIndexRow.metadata.configuredId;
       realmPath = realmIndexRow.realmPath;

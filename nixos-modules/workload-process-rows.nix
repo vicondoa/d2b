@@ -69,6 +69,40 @@ let
       inherit (guest) ip mac;
     };
 
+  # The realm's auto-declared "network" workload (see host.nix) is the net
+  # VM itself: it terminates the realm's uplink+LAN taps rather than
+  # consuming one of them, plus an optional macvtap-attached external NIC.
+  # This mirrors net.nix's own `microvm.interfaces` assignment exactly, so
+  # host.nix's generic guest-policy override stays consistent with what the
+  # guest module composes internally.
+  netVmInterfacesFor = realmId:
+    let
+      realm = realmNetworkFor realmId;
+      guest = realm.guest;
+      attachment = guest.externalNetwork.attachment;
+    in
+    [
+      {
+        type = "tap";
+        id = guest.interfaces.netVmUplink;
+        mac = guest.netUplinkMac;
+      }
+      {
+        type = "tap";
+        id = guest.interfaces.netVmLan;
+        mac = guest.netLanMac;
+      }
+    ] ++ lib.optional attachment.enable ({
+      type = attachment.mode;
+      id = attachment.hostIfName;
+      mac = attachment.macAddress;
+    } // lib.optionalAttrs (attachment.mode == "macvtap") {
+      macvtap = {
+        link = attachment.interface;
+        mode = attachment.macvtapMode;
+      };
+    });
+
   storageRefsFor = workload:
     map
       (row: row.id)
@@ -120,6 +154,7 @@ let
       runtimeRoleId = runtimeRole.roleId;
       cgroupRoot =
         "/sys/fs/cgroup/d2b.slice/r-${realmId}/workloads/w-${workloadId}";
+      isNetVm = workload.workloadName == "network";
       network = workloadNetworkFor workload;
       normalized = kind:
         lib.findFirst
@@ -153,14 +188,13 @@ let
         "runner:workload:${workloadId}:role:${runtimeRoleId}";
       autostart = workload.spec.autostart or false;
       guestModule = workload.spec.config or { };
-      networkInterface =
-        if network == null
-        then null
-        else {
+      networkInterfaces =
+        if isNetVm
+        then netVmInterfacesFor realmId
+        else lib.optional (network != null) {
           type = "tap";
           id = network.tap.ifName;
           mac = network.mac;
-          resourceRef = network.tap.resourceId;
         };
       shares = [
         {
