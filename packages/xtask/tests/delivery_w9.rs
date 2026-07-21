@@ -463,6 +463,15 @@ fn w9_validations_use_detached_checkout_hermetic_toolchains() {
             "weezterm-source-build",
             &["nix", "build", ".#source", "--no-link"][..],
         ),
+        // `weezterm-source-build` only builds `packages.source`; it never
+        // evaluates `checks.<system>.*`, so it does not run WeezTerm's
+        // `cargo-fmt`/`cargo-clippy` flake checks. `weezterm-flake-check`
+        // closes that gap the same way `provider-toolkit-flake`,
+        // `wlcontrol-flake`, and `wlterm-flake` already cover fmt+clippy for
+        // their repositories: `nix flake check` builds every entry under
+        // `checks.<system>`, which for WeezTerm is exactly
+        // `{cargo-fmt, cargo-clippy}` (see `nix/flake.nix`).
+        ("weezterm-flake-check", &["nix", "flake", "check"][..]),
     ] {
         assert_eq!(
             validations.get(id).map(Vec::as_slice),

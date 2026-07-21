@@ -290,6 +290,22 @@
       "ci_publisher": null,
       "ci_signer_workflow": null,
       "timeout_seconds": 7200
+    },
+    {
+      "id": "weezterm-flake-check",
+      "argv": [
+        "nix",
+        "flake",
+        "check"
+      ],
+      "cwd": {
+        "repository": "github.com/vicondoa/weezterm",
+        "path": "."
+      },
+      "authority": "local_runner",
+      "ci_publisher": null,
+      "ci_signer_workflow": null,
+      "timeout_seconds": 7200
     }
   ],
   "required_checks": [
