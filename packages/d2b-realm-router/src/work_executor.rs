@@ -55,7 +55,10 @@ use d2b_realm_core::{
     OperationKind, OperationRequest, PrincipalId, ProtocolToken, RealmTarget,
 };
 
-use crate::remote_node::{GatewayPort, RemoteDispatchOutcome, RemoteNodeError, RemotePeerClient};
+use crate::remote_node::{
+    GatewayDispatchClassification, GatewayPort, RemoteDispatchOutcome, RemoteNodeError,
+    RemotePeerClient,
+};
 use crate::session_lifecycle::{SessionLifecycle, SessionPhase};
 use crate::target_resolver::{DispatchTarget, RealmEntrypointTable, ResolveError};
 use crate::{Clock, OperationRouter, RouteDecision, SystemClock, route_decision_error};
@@ -541,32 +544,55 @@ where
     ) -> Result<WorkDispatchOutcome, WorkExecutorError> {
         let tracks_session = req.kind == OperationKind::DisplaySessionOpen;
 
+        // Classify BEFORE ever checking/reserving local bounded capacity.
+        // Classification is a pure peek (see `GatewayPort::classify_dispatch`):
+        // it never mutates gateway dedup/session state and never contacts
+        // the remote peer, so a capacity refusal computed from it is always
+        // provable as "no remote side effect occurred". A retry that will
+        // resolve against an ALREADY-tracked session (a fresh
+        // `req.operation_id` reusing the same idempotency key) must never
+        // be rejected by a capacity bound that was never actually needed --
+        // only a genuinely new, side-effecting session consumes a
+        // reservation.
+        let classification = if tracks_session {
+            Some(gateway_port.classify_dispatch(gateway, req))
+        } else {
+            None
+        };
+
         // Reserve bounded capacity *before* the gateway port is ever
         // called, keyed provisionally by this attempt's own
-        // `req.operation_id`: an at-capacity refusal must be provable as
-        // "the peer was never contacted for this request", not merely
-        // "the outcome was not tracked". The reservation is rolled back
-        // (this exact entry only, see below) if the attempt fails, turns
-        // out to be a replay of a different pre-existing session, or
+        // `req.operation_id` -- but only for a classification that resolves
+        // to a genuinely new lease. An at-capacity refusal here must be
+        // provable as "the peer was never contacted for this request", not
+        // merely "the outcome was not tracked". The reservation is rolled
+        // back (this exact entry only, see below) if the attempt fails,
+        // turns out to be a replay of a different pre-existing session, or
         // resolves ambiguously. `reserved_new_slot` remembers whether this
         // call itself created the entry -- never true for an id that was
-        // already tracked before this call -- so a failed/conflicting
-        // retry can never evict a running session it does not own.
-        let reserved_new_slot = if tracks_session && !self.sessions.contains_key(&req.operation_id)
-        {
-            if self.sessions.len() >= self.max_gateway_sessions {
-                return Err(WorkExecutorError::GatewaySessionCapacityExceeded);
-            }
+        // already tracked before this call, and never true for a
+        // classification that already resolved to an existing session --
+        // so a failed/conflicting retry can never evict a running session
+        // it does not own.
+        let needs_new_reservation = tracks_session
+            && !matches!(
+                classification,
+                Some(GatewayDispatchClassification::Existing { .. })
+            )
+            && !self.sessions.contains_key(&req.operation_id);
+        let reserved_new_slot = if !needs_new_reservation {
+            false
+        } else if self.sessions.len() >= self.max_gateway_sessions {
+            return Err(WorkExecutorError::GatewaySessionCapacityExceeded);
+        } else {
             self.sessions
                 .insert(req.operation_id.clone(), SessionLifecycle::new());
             true
-        } else {
-            false
         };
 
         let result = gateway_port.dispatch_via_gateway(gateway, req, generation, client);
 
-        let (original_operation_id, session_phase) = if tracks_session {
+        let session_phase = if tracks_session {
             match &result {
                 Ok(outcome) => match outcome {
                     RemoteDispatchOutcome::Sent { .. } | RemoteDispatchOutcome::Replayed { .. } => {
@@ -586,11 +612,11 @@ where
                                 .get_mut(&original_id)
                                 .expect("just checked contains_key");
                             while lifecycle.advance().is_ok() {}
-                            (original_id.clone(), Some(lifecycle.phase()))
+                            Some(lifecycle.phase())
                         } else if self.sessions.len() < self.max_gateway_sessions {
                             let lifecycle = self.sessions.entry(original_id.clone()).or_default();
                             while lifecycle.advance().is_ok() {}
-                            (original_id.clone(), Some(lifecycle.phase()))
+                            Some(lifecycle.phase())
                         } else {
                             // The gateway dispatch already succeeded (the
                             // peer was legitimately contacted or the dedup
@@ -598,7 +624,7 @@ where
                             // tracking gap under bounded capacity must not
                             // be reported as an error for an operation that
                             // already succeeded remotely.
-                            (original_id, None)
+                            None
                         }
                     }
                     RemoteDispatchOutcome::QueryRemoteState { .. } => {
@@ -611,8 +637,7 @@ where
                         if reserved_new_slot {
                             self.sessions.remove(&req.operation_id);
                         }
-                        let phase = self.sessions.get(&original_id).map(SessionLifecycle::phase);
-                        (original_id, phase)
+                        self.sessions.get(&original_id).map(SessionLifecycle::phase)
                     }
                 },
                 Err(_) => {
@@ -624,14 +649,18 @@ where
                     if reserved_new_slot {
                         self.sessions.remove(&req.operation_id);
                     }
-                    (req.operation_id.clone(), None)
+                    None
                 }
             }
         } else {
-            (req.operation_id.clone(), None)
+            None
         };
 
         let remote = result.map_err(WorkExecutorError::Remote)?;
+        // Every successful outcome exposes its dedup-lease owner id --
+        // never a retry's own `req.operation_id` -- regardless of whether
+        // this operation kind tracks local session-lifecycle state.
+        let original_operation_id = remote.original_operation_id(&req.operation_id).clone();
         Ok(WorkDispatchOutcome::GatewayBacked {
             original_operation_id,
             session_phase,
@@ -1383,6 +1412,100 @@ mod tests {
     }
 
     #[test]
+    fn a_fresh_id_replay_of_an_existing_session_succeeds_even_at_capacity_one() {
+        // The bounded session table is exhausted by one legitimate session.
+        // A retry that carries a fresh `operation_id` but the SAME
+        // idempotency key must resolve against that already-tracked
+        // session -- it must never be rejected by the capacity bound,
+        // because it never needs a NEW reservation in the first place.
+        let caps = CapabilitySet::empty().with(Capability::WindowForwarding);
+        let (mut executor, mut port) = gateway_backed_executor(caps);
+        executor = executor.with_max_gateway_sessions(1);
+        let realm = work_realm();
+        let first = display_open_request(realm, Some("idem-1"));
+        let mut peer = FakePeer::default();
+        executor
+            .dispatch(
+                &first,
+                &ProtocolToken::parse("gen-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
+            .unwrap();
+        assert_eq!(executor.gateway_session_count(), 1);
+
+        let mut retry = first.clone();
+        retry.operation_id = OperationId::parse("op-display-retry").unwrap();
+        let outcome = executor
+            .dispatch(
+                &retry,
+                &ProtocolToken::parse("gen-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
+            .expect("a same-key replay must never be rejected by session capacity");
+        match outcome {
+            WorkDispatchOutcome::GatewayBacked {
+                original_operation_id,
+                session_phase,
+                remote,
+            } => {
+                assert_eq!(original_operation_id, first.operation_id);
+                assert_eq!(session_phase, Some(SessionPhase::Running));
+                assert!(matches!(remote, RemoteDispatchOutcome::Replayed { .. }));
+            }
+            other => panic!("expected gateway-backed outcome, got {other:?}"),
+        }
+        // Still exactly one tracked session -- the retry's own id never
+        // consumed a second slot.
+        assert_eq!(executor.gateway_session_count(), 1);
+        assert_eq!(
+            peer.sends, 1,
+            "a same-key replay must never re-send to the gateway peer"
+        );
+    }
+
+    #[test]
+    fn at_capacity_new_operation_is_rejected_with_no_gateway_side_effect() {
+        // A genuinely new session (a distinct idempotency key) at capacity
+        // must still be refused -- and, critically, must never reach the
+        // gateway peer: classification distinguishing it from an existing
+        // session's replay must never itself cause a remote side effect.
+        let caps = CapabilitySet::empty().with(Capability::WindowForwarding);
+        let (mut executor, mut port) = gateway_backed_executor(caps);
+        executor = executor.with_max_gateway_sessions(1);
+        let realm = work_realm();
+        let first = display_open_request(realm.clone(), Some("idem-1"));
+        let mut peer = FakePeer::default();
+        executor
+            .dispatch(
+                &first,
+                &ProtocolToken::parse("gen-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
+            .unwrap();
+        assert_eq!(peer.sends, 1);
+
+        let mut new_op = display_open_request(realm, Some("idem-brand-new"));
+        new_op.operation_id = OperationId::parse("op-display-new").unwrap();
+        let err = executor
+            .dispatch(
+                &new_op,
+                &ProtocolToken::parse("gen-1").unwrap(),
+                &mut peer,
+                &mut port,
+            )
+            .unwrap_err();
+        assert_eq!(err, WorkExecutorError::GatewaySessionCapacityExceeded);
+        assert_eq!(
+            peer.sends, 1,
+            "a genuinely new operation refused for capacity must never reach the gateway peer"
+        );
+        assert_eq!(executor.gateway_session_count(), 1);
+    }
+
+    #[test]
     fn replay_under_a_different_operation_id_keys_the_session_by_the_original_id() {
         // A retry commonly carries a fresh per-attempt `operation_id` while
         // reusing the same idempotency key -- the dedup fingerprint
@@ -1588,6 +1711,14 @@ mod tests {
             _generation: &ProtocolToken,
             _client: &mut dyn RemotePeerClient,
         ) -> Result<RemoteDispatchOutcome, RemoteNodeError> {
+            panic!("host-resident dispatch must never reach the gateway port");
+        }
+
+        fn classify_dispatch(
+            &self,
+            _gateway: &RealmTarget,
+            _req: &OperationRequest,
+        ) -> GatewayDispatchClassification {
             panic!("host-resident dispatch must never reach the gateway port");
         }
     }
