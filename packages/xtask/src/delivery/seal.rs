@@ -1003,14 +1003,20 @@ pub(crate) fn verify_required_checks(
             "{context} live PR check set exceeds the supported bound",
         )));
     }
-    validate_bounded_string(&status.merge_state, "PR merge state")?;
+    // Every delegated `?` below (bounded-string checks, publisher shape, and
+    // observed-check authority) must fail closed with the same self-locating
+    // stack node/repository/PR prefix as the rest of this function; none of
+    // those helpers know which node they were called for.
+    let with_context = |err: DeliveryError| DeliveryError::new(format!("{context} {err}"));
+    validate_bounded_string(&status.merge_state, "PR merge state").map_err(with_context)?;
     let mut names = BTreeSet::new();
     for check in &status.checks {
-        validate_bounded_string(&check.name, "observed check name")?;
-        validate_bounded_string(&check.status, "observed check status")?;
-        validate_bounded_string(&check.conclusion, "observed check conclusion")?;
-        check.publisher.validate()?;
-        validate_observed_check_authority(check)?;
+        validate_bounded_string(&check.name, "observed check name").map_err(with_context)?;
+        validate_bounded_string(&check.status, "observed check status").map_err(with_context)?;
+        validate_bounded_string(&check.conclusion, "observed check conclusion")
+            .map_err(with_context)?;
+        check.publisher.validate().map_err(with_context)?;
+        validate_observed_check_authority(check).map_err(with_context)?;
         if !names.insert(check.name.as_str()) {
             return Err(DeliveryError::new(format!(
                 "{context} has a duplicate same-name publisher for check {}",
@@ -1752,6 +1758,132 @@ mod tests {
             assert!(
                 message.contains("is associated with a different commit"),
                 "{message}"
+            );
+        }
+    }
+
+    /// A valid observed check for `two_node_snapshot`'s second required
+    /// check ("second-check" on the "second-node" stack node), matching the
+    /// required publisher exactly. Tests mutate a single field to trigger
+    /// one delegated helper's failure while everything else stays valid.
+    fn valid_second_check(second_node: &StackNode) -> super::super::command::ObservedCheck {
+        super::super::command::ObservedCheck {
+            name: "second-check".to_owned(),
+            publisher: CheckPublisher {
+                kind: CheckPublisherKind::CheckRun,
+                app_slug: "github-actions".to_owned(),
+                app_id: 15368,
+                workflow: "CI".to_owned(),
+                workflow_id: 654,
+            },
+            check_run_id: Some(1),
+            workflow_run_id: Some(2),
+            status: "COMPLETED".to_owned(),
+            conclusion: "SUCCESS".to_owned(),
+            state: ObservedCheckState::Successful,
+            commit_oid: second_node.head_oid.clone(),
+            started_at_unix_seconds: 1,
+            completed_at_unix_seconds: Some(2),
+            workflow_created_at_unix_seconds: Some(1),
+            workflow_updated_at_unix_seconds: Some(2),
+        }
+    }
+
+    /// Every helper `verify_required_checks` delegates to via `?`
+    /// (`validate_bounded_string`, `CheckPublisher::validate`,
+    /// `validate_observed_check_authority`) raises its own bare error with
+    /// no knowledge of which stack node called it. Prove each delegated
+    /// failure is still wrapped with the same self-locating
+    /// "stack node second-node (...#48)" prefix as the errors raised
+    /// directly inside `verify_required_checks`, and that the first node's
+    /// context never leaks into a second-node failure.
+    #[test]
+    fn multi_node_diagnostics_cover_delegated_helper_failures() {
+        // validate_observed_check_authority: missing completion timestamp.
+        {
+            let (snapshot, _first_node, second_node) = two_node_snapshot();
+            let mut check = valid_second_check(&second_node);
+            check.completed_at_unix_seconds = None;
+            let status = second_node_status(&second_node, check);
+            let error = verify_required_checks(&snapshot, &second_node, &status)
+                .expect_err("missing completion timestamp on second node");
+            let message = error.to_string();
+            assert!(
+                message.contains("second-node") && message.contains("#48"),
+                "{message}"
+            );
+            assert!(message.contains("has no completion timestamp"), "{message}");
+            assert!(
+                !message.contains("stack node node "),
+                "must not misattribute the failure to the first node: {message}"
+            );
+        }
+        // validate_observed_check_authority: incomplete workflow-run
+        // authority (workflow_run_id present but workflow_created_at is not).
+        {
+            let (snapshot, _first_node, second_node) = two_node_snapshot();
+            let mut check = valid_second_check(&second_node);
+            check.workflow_created_at_unix_seconds = None;
+            let status = second_node_status(&second_node, check);
+            let error = verify_required_checks(&snapshot, &second_node, &status)
+                .expect_err("incomplete workflow-run authority on second node");
+            let message = error.to_string();
+            assert!(
+                message.contains("second-node") && message.contains("#48"),
+                "{message}"
+            );
+            assert!(
+                message.contains("has incomplete workflow-run authority"),
+                "{message}"
+            );
+            assert!(
+                !message.contains("stack node node "),
+                "must not misattribute the failure to the first node: {message}"
+            );
+        }
+        // CheckPublisher::validate: invalid publisher (check-run app_id
+        // must be non-zero).
+        {
+            let (snapshot, _first_node, second_node) = two_node_snapshot();
+            let mut check = valid_second_check(&second_node);
+            check.publisher.app_id = 0;
+            let status = second_node_status(&second_node, check);
+            let error = verify_required_checks(&snapshot, &second_node, &status)
+                .expect_err("invalid publisher on second node");
+            let message = error.to_string();
+            assert!(
+                message.contains("second-node") && message.contains("#48"),
+                "{message}"
+            );
+            assert!(
+                message.contains("check-run publisher app_id must be non-zero"),
+                "{message}"
+            );
+            assert!(
+                !message.contains("stack node node "),
+                "must not misattribute the failure to the first node: {message}"
+            );
+        }
+        // validate_bounded_string: invalid (empty) observed check status.
+        {
+            let (snapshot, _first_node, second_node) = two_node_snapshot();
+            let mut check = valid_second_check(&second_node);
+            check.status = String::new();
+            let status = second_node_status(&second_node, check);
+            let error = verify_required_checks(&snapshot, &second_node, &status)
+                .expect_err("invalid observed check status on second node");
+            let message = error.to_string();
+            assert!(
+                message.contains("second-node") && message.contains("#48"),
+                "{message}"
+            );
+            assert!(
+                message.contains("observed check status must be non-empty"),
+                "{message}"
+            );
+            assert!(
+                !message.contains("stack node node "),
+                "must not misattribute the failure to the first node: {message}"
             );
         }
     }
