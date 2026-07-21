@@ -265,7 +265,7 @@ let
     };
     shared-root-w8-manifest-seam = {
       owner = "adr0045-w8-integration";
-      status = "blocked";
+      status = "ready";
       requiredRebase = false;
       acceptance = [
         "delivery/manifests/w8.json exists, fingerprints itself, and declares wave = \"w8\" once the draft PR number is known."
