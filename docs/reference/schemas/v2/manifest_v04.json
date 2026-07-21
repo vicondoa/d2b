@@ -545,6 +545,7 @@
           "type": "boolean"
         },
         "shell": {
+          "default": null,
           "anyOf": [
             {
               "$ref": "#/definitions/VmShellMetadata"
