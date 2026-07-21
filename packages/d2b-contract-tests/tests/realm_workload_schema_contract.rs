@@ -670,13 +670,17 @@ fn rendered_private_launcher_intent_resolves_argv_without_debug_leakage() {
         .validate()
         .expect("provider registry artifact validates");
     assert_eq!(private.workloads.len(), 1);
-    assert_eq!(
-        provider_registry
-            .providers
-            .iter()
-            .filter(|entry| matches!(&entry.binding, ProviderBindingV2::LocalRuntime(_)))
-            .count(),
-        1
+    let local_runtime_providers = provider_registry
+        .providers
+        .iter()
+        .filter(|entry| matches!(&entry.binding, ProviderBindingV2::LocalRuntime(_)))
+        .collect::<Vec<_>>();
+    assert!(
+        !local_runtime_providers.is_empty()
+            && local_runtime_providers
+                .iter()
+                .all(|entry| entry.descriptor.implementation_id.as_str() == "cloud-hypervisor"),
+        "every rendered local runtime provider must use the canonical cloud-hypervisor implementation"
     );
     let private_debug = format!("{private:?}");
     assert!(!private_debug.contains("rendered-private-argv-canary"));
@@ -725,11 +729,7 @@ fn rendered_private_launcher_intent_resolves_argv_without_debug_leakage() {
         bundle.provider_registry_v2_path.as_deref(),
         Some("/etc/d2b/provider-registry-v2.json")
     );
-    let provider_entry = provider_registry
-        .providers
-        .iter()
-        .find(|entry| matches!(&entry.binding, ProviderBindingV2::LocalRuntime(_)))
-        .expect("rendered local runtime provider");
+    let provider_entry = local_runtime_providers[0];
     assert_eq!(
         provider_entry.descriptor.implementation_id.as_str(),
         "cloud-hypervisor"
