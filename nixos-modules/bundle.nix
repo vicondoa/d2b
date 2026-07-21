@@ -64,6 +64,12 @@ let
         path = config.d2b._bundle.providerRegistryV2Json.path;
       }
     ]
+    ++ lib.optional
+      (config.d2b._bundle.extraArtifacts ? observabilitySecretsJson)
+      {
+        key = "/etc/d2b/observability-secrets.json";
+        path = config.d2b._bundle.extraArtifacts.observabilitySecretsJson.path;
+      }
     ++ map (ref: {
       key = ref.path;
       path = config.d2b._bundle.closures.${ref.vm}.path;
