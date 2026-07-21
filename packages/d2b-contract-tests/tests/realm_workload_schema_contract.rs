@@ -677,9 +677,11 @@ fn rendered_private_launcher_intent_resolves_argv_without_debug_leakage() {
         .collect::<Vec<_>>();
     assert!(
         !local_runtime_providers.is_empty()
-            && local_runtime_providers
-                .iter()
-                .all(|entry| entry.descriptor.implementation_id.as_str() == "cloud-hypervisor"),
+            && local_runtime_providers.iter().all(|entry| entry
+                .descriptor
+                .implementation_id
+                .as_str()
+                == "cloud-hypervisor"),
         "every rendered local runtime provider must use the canonical cloud-hypervisor implementation"
     );
     let private_debug = format!("{private:?}");
