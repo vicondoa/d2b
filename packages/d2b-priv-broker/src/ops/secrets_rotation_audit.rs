@@ -354,7 +354,13 @@ pub struct SecretsLifecycleAuditFields {
     /// proceeding with the requested action. Always `false` on the
     /// common, no-crash path; surfaced so an operator can distinguish
     /// "this rotate ran cleanly" from "this rotate first had to finish
-    /// or unwind a prior crashed rotate".
+    /// or unwind a prior crashed rotate". Threaded through every
+    /// terminal constructor below, including `verified_clean`,
+    /// `denied`, and `failed` — a business-level denial or a
+    /// mid-transaction failure can both happen *after* a successful
+    /// recovery, and that fact must remain observable on the audit
+    /// surface rather than being silently dropped for any result
+    /// other than the four successful-mutation outcomes.
     #[serde(default)]
     pub recovered_prior_transaction: bool,
 }
@@ -776,28 +782,55 @@ impl SecretsLifecycleAuditFields {
 
     /// The action was already satisfied; no mutation occurred. Only
     /// reachable for `retire` (never-provisioned or already-retired).
-    pub fn verified_clean(ctx: &SecretsLifecycleAuditContext, high_water_epoch: u64) -> Self {
+    /// `recovered_prior_transaction` is still meaningful here: a
+    /// `retire` can drain a leftover crashed transaction during
+    /// `open_and_recover` and *then* observe the physical tree is
+    /// already empty, in which case this is `verified_clean` with
+    /// `recovered_prior_transaction: true`.
+    pub fn verified_clean(
+        ctx: &SecretsLifecycleAuditContext,
+        recovered_prior_transaction: bool,
+        high_water_epoch: u64,
+    ) -> Self {
         Self {
             result: LifecycleResult::VerifiedClean,
             marker_result: MarkerResult::Verified,
             high_water_epoch: Some(high_water_epoch),
+            recovered_prior_transaction,
             ..Self::base(ctx)
         }
     }
 
     /// The action was refused before any filesystem mutation.
-    pub fn denied(ctx: &SecretsLifecycleAuditContext, reason: FailReason) -> Self {
+    /// `recovered_prior_transaction` reflects whether a leftover
+    /// crashed transaction was already successfully drained by
+    /// `open_and_recover` earlier in the same call before this
+    /// business-level denial was reached (e.g. `rotate` recovering a
+    /// stale transaction and *then* finding no active marker to
+    /// rotate). It is always `false` when the denial happens before
+    /// recovery could have run or succeeded (path derivation, dir
+    /// open, lock acquisition, or recovery itself failing).
+    pub fn denied(
+        ctx: &SecretsLifecycleAuditContext,
+        recovered_prior_transaction: bool,
+        reason: FailReason,
+    ) -> Self {
         Self {
             result: LifecycleResult::Denied,
             marker_result: MarkerResult::Unchanged,
             fail_reason: Some(reason),
+            recovered_prior_transaction,
             ..Self::base(ctx)
         }
     }
 
     /// The action aborted partway and failed closed.
+    /// `recovered_prior_transaction` carries the same meaning as in
+    /// [`Self::denied`]: whether a leftover crashed transaction was
+    /// already successfully drained before this failure was reached.
     pub fn failed(
         ctx: &SecretsLifecycleAuditContext,
+        recovered_prior_transaction: bool,
         marker_result: MarkerResult,
         reason: FailReason,
     ) -> Self {
@@ -805,6 +838,7 @@ impl SecretsLifecycleAuditFields {
             result: LifecycleResult::FailedClosed,
             marker_result,
             fail_reason: Some(reason),
+            recovered_prior_transaction,
             ..Self::base(ctx)
         }
     }
@@ -1001,6 +1035,7 @@ mod tests {
     fn denied_requires_fail_reason_and_unchanged_marker() {
         let record = SecretsLifecycleAuditFields::denied(
             &ctx(LifecycleAction::Rotate),
+            false,
             FailReason::NotProvisioned,
         );
         record.validate().expect("denied record must validate");
@@ -1024,6 +1059,7 @@ mod tests {
     fn failed_closed_requires_fail_reason() {
         let record = SecretsLifecycleAuditFields::failed(
             &ctx(LifecycleAction::Rotate),
+            false,
             MarkerResult::FailedClosed,
             FailReason::MarkerTamperedOrMissingMaterial,
         );
@@ -1041,6 +1077,7 @@ mod tests {
     fn failed_closed_rejects_non_failed_closed_marker_result() {
         let mut record = SecretsLifecycleAuditFields::failed(
             &ctx(LifecycleAction::Retire),
+            false,
             MarkerResult::FailedClosed,
             FailReason::RetirementTreeAnomaly,
         );
@@ -1059,6 +1096,7 @@ mod tests {
     fn failed_closed_rejects_leftover_epoch_or_retained_state() {
         let base = SecretsLifecycleAuditFields::failed(
             &ctx(LifecycleAction::Rotate),
+            false,
             MarkerResult::FailedClosed,
             FailReason::HighWaterRegressed,
         );
@@ -1094,6 +1132,7 @@ mod tests {
     fn retire_denied_is_a_reachable_and_valid_pair() {
         let record = SecretsLifecycleAuditFields::denied(
             &ctx(LifecycleAction::Retire),
+            false,
             FailReason::InvalidVmId,
         );
         record
@@ -1293,7 +1332,7 @@ mod tests {
         // `Rollback` can never produce `VerifiedClean` (only `Retire`
         // reaches that result).
         let mut impossible2 =
-            SecretsLifecycleAuditFields::verified_clean(&ctx(LifecycleAction::Retire), 3);
+            SecretsLifecycleAuditFields::verified_clean(&ctx(LifecycleAction::Retire), false, 3);
         impossible2.action = LifecycleAction::Rollback;
         assert_eq!(
             impossible2.validate(),
@@ -1331,11 +1370,47 @@ mod tests {
 
     #[test]
     fn verified_clean_never_carries_lineage_epoch() {
-        let record = SecretsLifecycleAuditFields::verified_clean(&ctx(LifecycleAction::Retire), 7);
+        let record =
+            SecretsLifecycleAuditFields::verified_clean(&ctx(LifecycleAction::Retire), false, 7);
         record
             .validate()
             .expect("verified clean record must validate");
         assert_eq!(record.lineage_epoch, None);
         assert_eq!(record.high_water_epoch, Some(7));
+    }
+
+    /// `recovered_prior_transaction: true` must be reachable and valid
+    /// for every terminal outcome that can follow a successful
+    /// mid-call recovery, not just the four successful-mutation
+    /// results. A `retire` can drain a crashed transaction and then
+    /// find the tree already empty (`verified_clean`); a `rotate` can
+    /// drain a crashed transaction and then hit a business-level
+    /// denial (`denied`); and a fresh action can drain a crashed
+    /// transaction and then itself fail closed (`failed`).
+    #[test]
+    fn recovered_prior_transaction_true_is_valid_on_every_non_mutation_result() {
+        let clean =
+            SecretsLifecycleAuditFields::verified_clean(&ctx(LifecycleAction::Retire), true, 9);
+        clean
+            .validate()
+            .expect("recovered verified_clean must validate");
+        assert!(clean.recovered_prior_transaction);
+
+        let denied = SecretsLifecycleAuditFields::denied(
+            &ctx(LifecycleAction::Rotate),
+            true,
+            FailReason::NotProvisioned,
+        );
+        denied.validate().expect("recovered denied must validate");
+        assert!(denied.recovered_prior_transaction);
+
+        let failed = SecretsLifecycleAuditFields::failed(
+            &ctx(LifecycleAction::Rotate),
+            true,
+            MarkerResult::FailedClosed,
+            FailReason::MarkerTamperedOrMissingMaterial,
+        );
+        failed.validate().expect("recovered failed must validate");
+        assert!(failed.recovered_prior_transaction);
     }
 }

@@ -139,11 +139,24 @@ the txlog passes semantic validation:
   re-stages a target epoch that a prior crashed attempt already
   renamed into place: if `generations/<to_epoch>` already exists with
   content whose digest matches the intent's `expected_digest_hex`, the
-  engine treats it as already-materialised and continues forward
-  without needing the original material again; if content already
-  occupies that epoch number with a **different** digest, recovery
-  fails closed (`RecoveryContentMismatch`) rather than ever adopting or
-  overwriting a stale, foreign, or previously-aborted generation;
+  engine treats it as already-materialised, **retries the
+  `generations_fd` durability barrier** (the prior attempt's own
+  trailing fsync may be exactly what crashed it) before advancing, and
+  continues forward without needing the original material again; if
+  content already occupies that epoch number with a **different**
+  digest, recovery fails closed (`RecoveryContentMismatch`) rather than
+  ever adopting or overwriting a stale, foreign, or previously-aborted
+  generation;
+- a `Planned`-phase abort with no leftover material to complete the
+  transaction (`PromoteOutcome::AbortedNoMaterial`) never leaves an
+  orphan wedge: `discard_partial_stage_if_present` validates and
+  deletes any partial `.stage-*` directory the crashed attempt left
+  behind (propagating any deletion error) before the txlog is cleared;
+  if that partial stage cannot be safely validated (an unrecognised
+  on-disk shape), the abort fails closed and **retains** the txlog
+  instead, so a future recovery attempt still has the record needed to
+  reason about it — the transaction is never silently dropped over
+  unrecognised on-disk state;
 - if the phase recorded is at or after the commit point
   (`CurrentPromoted`/`MarkerCommitted` for promote,
   `CurrentRemoved`/`EpochsRemoved`/`ProvenEmpty` for retire), recovery
@@ -167,12 +180,36 @@ an immediate, anchored, nofollow re-stat/re-validate of that exact
 generation directory right before it is removed, so a tamper injected
 between the original enumeration and the delete (not merely between
 process restarts) is still caught rather than trusted from a stale
-snapshot.
+snapshot. Both `execute_promote`'s post-commit stage cleanup and
+`execute_retire`'s `CurrentRemoved` phase likewise call
+`revalidate_stage_before_delete` on each `.stage-*` directory
+immediately before its own deletion. `CurrentPromoted` and
+`MarkerCommitted` recovery/completion each re-verify, before any
+further mutation or txlog removal, that `current` still resolves by
+exact literal symlink text to the intended target epoch
+(`current_resolves_exactly_to`) — and `MarkerCommitted` additionally
+re-reads and checks the marker's `active` fields against the intent —
+so a phase is never advanced, and the txlog never cleared, over a
+`current`/marker state that does not match what that phase's own
+identity contract requires. A missing generation or stage directory
+encountered while `retire` is retried still retries the
+`generations_fd` durability barrier before the retirement phase
+advances, so an unsynced prior deletion can never reappear (e.g. via a
+crash-induced write-back) after the marker has already been
+tombstoned.
 
 Staging directory names use `random_stage_name`: a collision-resistant
 name mixing the process id, a per-process atomic monotonic counter,
 wall-clock nanoseconds, and a `RandomState`-seeded hash folded through
-SHA-256. Staged entries are **real secret-tree contents**, never a
+SHA-256, always exactly `STAGE_PREFIX` (`.stage-`) followed by 32
+lowercase-hex characters. `is_well_formed_stage_name` closes the
+syntax to exactly that shape — no path separator, no `..`, no
+alternate length or alphabet — and every stage name recorded in a
+txlog intent is checked against it (`validate_promote_intent_semantics`/
+`validate_retire_intent_semantics`) before that intent is ever written
+or acted on, in addition to `enumerate_and_validate_generation_tree`'s
+own defense-in-depth check over whatever names are physically present
+on disk. Staged entries are **real secret-tree contents**, never a
 separately-swept, best-effort concern: `enumerate_and_validate_generation_tree`
 collects `.stage-*` directories exactly like generation epochs
 (`validate_stage_dir_contents` refuses anything but at most one
@@ -180,9 +217,20 @@ regular, single-hard-link entry inside), and every deletion path
 (`remove_stage_dir`, used by promote's post-commit leftover sweep and
 by retire's `CurrentRemoved` phase) fully enumerates, deletes,
 positively proves empty, and fsyncs — propagating every failure rather
-than ignoring it. A stage directory is included in the final
-provably-empty proof retirement requires before tombstoning the
-marker.
+than ignoring it, including a `fsync` that must run even when the
+directory to remove already appears absent (`remove_generation`'s and
+`remove_stage_dir`'s own `NotFound` fast paths still retry the
+containing directory's durability barrier rather than skipping it, so
+a deletion whose fsync had not yet landed cannot silently resurface
+after the transaction is considered complete). A stage directory is
+included in the final provably-empty proof retirement requires before
+tombstoning the marker. The transient `current`-swap staging entry
+(`CURRENT_SWAP_STAGE_NAME`) is never removed via the generic
+symlink-refusing `remove_path_safe` helper — `atomic_swap_current`
+verifies by anchored `nofollow` stat that it is exactly a symlink
+before an anchored `unlinkat`, and fails closed
+(`FailReason::CurrentSwapFailed`) without deleting anything if it ever
+finds something else occupying that name.
 
 ### Marker identity (v2)
 
@@ -229,6 +277,17 @@ ACL drift (`IdentityAclMismatch`), or a content drift
 (`IdentityDigestMismatch`) are independently distinguishable on the
 audit surface rather than collapsed into one generic "tampered"
 reason.
+
+Beyond that live-state check, every freshly constructed intent is also
+run through `validate_promote_intent_semantics`/
+`validate_retire_intent_semantics` immediately before it is durably
+logged (`write_txlog`) in `provision`/`rotate`/`rollback`/`retire` —
+not only when a leftover txlog is re-read during recovery. In
+particular, a `rollback`'s intent must satisfy
+`expected_digest_hex == expected_identity.digest_hex` before it is
+ever acted on: the rollback target's claimed content digest and its
+claimed full on-disk identity must agree with each other at
+construction time, not merely be independently plausible.
 
 ### Fail-closed on drift, not just on error
 

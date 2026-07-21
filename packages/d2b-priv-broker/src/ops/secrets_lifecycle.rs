@@ -493,21 +493,33 @@ impl std::fmt::Display for SecretsLifecycleError {
 
 impl std::error::Error for SecretsLifecycleError {}
 
-fn denied(ctx: &SecretsLifecycleAuditContext, reason: FailReason) -> SecretsLifecycleError {
+/// `recovered` must reflect whether this call already successfully
+/// drained a leftover crashed transaction (via [`open_and_recover`])
+/// before reaching this denial — see
+/// [`SecretsLifecycleAuditFields::denied`].
+fn denied(
+    ctx: &SecretsLifecycleAuditContext,
+    recovered: bool,
+    reason: FailReason,
+) -> SecretsLifecycleError {
     SecretsLifecycleError {
         reason,
-        audit: SecretsLifecycleAuditFields::denied(ctx, reason),
+        audit: SecretsLifecycleAuditFields::denied(ctx, recovered, reason),
     }
 }
 
+/// `recovered` must reflect whether this call already successfully
+/// drained a leftover crashed transaction before this failure — see
+/// [`SecretsLifecycleAuditFields::failed`].
 fn failed_closed(
     ctx: &SecretsLifecycleAuditContext,
+    recovered: bool,
     marker_result: MarkerResult,
     reason: FailReason,
 ) -> SecretsLifecycleError {
     SecretsLifecycleError {
         reason,
-        audit: SecretsLifecycleAuditFields::failed(ctx, marker_result, reason),
+        audit: SecretsLifecycleAuditFields::failed(ctx, recovered, marker_result, reason),
     }
 }
 
@@ -663,7 +675,7 @@ fn validate_promote_intent_semantics(
         return Err(FailReason::IntentCorrupt);
     }
     if intent.create_epoch {
-        if intent.stage_name.is_empty() || !intent.stage_name.starts_with(STAGE_PREFIX) {
+        if intent.stage_name.is_empty() || !is_well_formed_stage_name(&intent.stage_name) {
             return Err(FailReason::IntentCorrupt);
         }
         if intent.expected_identity.is_some() {
@@ -674,7 +686,9 @@ fn validate_promote_intent_semantics(
             return Err(FailReason::IntentCorrupt);
         }
         match &intent.expected_identity {
-            Some(identity) if identity.epoch == intent.to_epoch => {}
+            Some(identity)
+                if identity.epoch == intent.to_epoch
+                    && identity.digest_hex == intent.expected_digest_hex => {}
             _ => return Err(FailReason::IntentCorrupt),
         }
     }
@@ -726,7 +740,7 @@ fn validate_retire_intent_semantics(
         || intent
             .stage_names
             .iter()
-            .any(|s| !s.starts_with(STAGE_PREFIX))
+            .any(|s| !is_well_formed_stage_name(s))
     {
         return Err(FailReason::IntentCorrupt);
     }
@@ -977,6 +991,27 @@ fn random_stage_name() -> String {
     format!("{STAGE_PREFIX}{}", hex_encode(&digest[..16]))
 }
 
+/// The exact closed syntax [`random_stage_name`] always produces:
+/// `STAGE_PREFIX` followed by exactly 32 lowercase-hex characters, as
+/// one single path component with no separator or parent-reference
+/// syntax. Used to validate every stage name that originates from a
+/// txlog (fresh construction *and* recovery reload) before it is ever
+/// used as an anchored path component -- a corrupted or hand-edited
+/// txlog containing `/`, `..`, or any other value must never reach an
+/// `openat`-family call.
+fn is_well_formed_stage_name(name: &str) -> bool {
+    if name.contains('/') || name.contains("..") {
+        return false;
+    }
+    let Some(suffix) = name.strip_prefix(STAGE_PREFIX) else {
+        return false;
+    };
+    suffix.len() == 32
+        && suffix
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b.is_ascii_lowercase() && b.is_ascii_hexdigit()))
+}
+
 fn parse_strict_epoch(name: &str) -> Option<u64> {
     if name.is_empty() || !name.bytes().all(|b| b.is_ascii_digit()) {
         return None;
@@ -1035,6 +1070,52 @@ fn validate_stage_dir_contents(generations_fd: &OwnedFd, name: &str) -> Result<(
     Ok(())
 }
 
+/// Immediately before deleting a `.stage-*` directory, re-stat it
+/// (nofollow, anchored) and confirm it is still exactly a validated
+/// stage directory. Mirrors [`revalidate_generation_before_delete`]
+/// for stage directories: a missing entry is tolerated (another pass,
+/// or this same pass on retry, already removed it); any other anomaly
+/// injected between enumeration and deletion -- an extra entry, a
+/// subdirectory, a hard-linked file -- fails closed rather than
+/// deleting a directory that no longer matches what was originally
+/// validated.
+fn revalidate_stage_before_delete(
+    generations_fd: BorrowedFd<'_>,
+    name: &str,
+) -> Result<(), FailReason> {
+    let generations_owned = borrowed_to_owned(generations_fd)?;
+    match path_safe::fstatat_nofollow(&generations_owned, name) {
+        Ok(Some(_)) => validate_stage_dir_contents(&generations_owned, name),
+        Ok(None) => Ok(()),
+        Err(_) => Err(FailReason::RetirementTreeAnomaly),
+    }
+}
+
+/// Discard a partially-staged `.stage-*` directory left behind by a
+/// crashed attempt that never reached a fully-staged, digest-matching
+/// state (so [`ensure_staged`] returned `Ok(false)` on recovery
+/// re-entry and there is no material to promote). No-ops if the stage
+/// directory is absent (the common, no-crash path, or a retry that
+/// already discarded it). If present, validates its contents are
+/// consistent with a partial/superseded staging attempt and deletes
+/// it -- propagating any validation or deletion failure so the caller
+/// never abandons the txlog record while leaving an orphaned,
+/// unvalidated stage directory on disk.
+fn discard_partial_stage_if_present(
+    generations_fd: BorrowedFd<'_>,
+    stage_name: &str,
+) -> Result<(), FailReason> {
+    let generations_owned = borrowed_to_owned(generations_fd)?;
+    match path_safe::fstatat_nofollow(&generations_owned, stage_name) {
+        Ok(Some(_)) => {
+            validate_stage_dir_contents(&generations_owned, stage_name)?;
+            remove_stage_dir(generations_fd, stage_name)
+        }
+        Ok(None) => Ok(()),
+        Err(_) => Err(FailReason::RetirementTreeAnomaly),
+    }
+}
+
 /// Fully delete one `.stage-*` directory: enumerate every child,
 /// delete each one (propagating any failure other than the child
 /// already being absent), prove the directory is observably empty,
@@ -1051,7 +1132,18 @@ fn remove_stage_dir(generations_fd: BorrowedFd<'_>, name: &str) -> Result<(), Fa
         OFlags::RDONLY | OFlags::DIRECTORY,
     ) {
         Ok(fd) => fd,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            // Already gone. This may be a durable retry re-observing
+            // a completed deletion, or it may be a retry re-observing
+            // a deletion whose *own* trailing
+            // `fsync_fd(generations_fd)` failed before the caller
+            // could advance the phase. Retry that durability barrier
+            // now rather than assuming the earlier attempt's fsync
+            // (which we cannot distinguish from "never happened")
+            // actually completed.
+            fsync_fd(generations_fd)?;
+            return Ok(());
+        }
         Err(_) => return Err(FailReason::RetirementTreeAnomaly),
     };
     let dir_owned = borrowed_to_owned(dir_fd.as_fd())?;
@@ -1337,9 +1429,36 @@ fn atomic_swap_current(secrets_fd: BorrowedFd<'_>, epoch: u64) -> Result<(), Fai
     }
     let owned = borrowed_to_owned(secrets_fd)?;
     let target = expected_current_target(epoch);
-    // Best-effort cleanup of a leftover stage symlink from a previous
-    // crash between symlink-creation and rename.
-    let _ = path_safe::remove_path_safe(&owned, CURRENT_SWAP_STAGE_NAME);
+    // Clean up a leftover swap-stage entry from a previous crash
+    // between symlink-creation and rename. `CURRENT_SWAP_STAGE_NAME`
+    // is only ever created via `symlinkat`, so
+    // `path_safe::remove_path_safe` (which refuses to operate on
+    // symlinks by design) can never actually remove it -- using it
+    // here would silently leave the stale symlink in place and the
+    // following `symlinkat` would then fail closed with `EEXIST`
+    // every retry. Instead: nofollow-stat the slot; if absent, there
+    // is nothing to clean up; if present and exactly a symlink,
+    // `unlinkat` it; if present but *not* a symlink (an anomaly no
+    // legitimate code path produces), fail closed rather than
+    // deleting an unexpected entry.
+    match path_safe::fstatat_nofollow(&owned, CURRENT_SWAP_STAGE_NAME)
+        .map_err(|_| FailReason::CurrentSwapFailed)?
+    {
+        None => {}
+        Some(stat) => {
+            if (stat.st_mode & nix::libc::S_IFMT) != nix::libc::S_IFLNK {
+                return Err(FailReason::CurrentSwapFailed);
+            }
+            match rustix::fs::unlinkat(
+                secrets_fd,
+                Path::new(CURRENT_SWAP_STAGE_NAME),
+                rustix::fs::AtFlags::empty(),
+            ) {
+                Ok(()) | Err(rustix::io::Errno::NOENT) => {}
+                Err(_) => return Err(FailReason::CurrentSwapFailed),
+            }
+        }
+    }
     rustix::fs::symlinkat(&target, secrets_fd, Path::new(CURRENT_SWAP_STAGE_NAME))
         .map_err(|_| FailReason::CurrentSwapFailed)?;
     rustix::fs::renameat(
@@ -1386,7 +1505,16 @@ fn remove_generation(generations_fd: BorrowedFd<'_>, epoch: u64) -> Result<(), F
         OFlags::RDONLY | OFlags::DIRECTORY,
     ) {
         Ok(fd) => fd,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            // Already gone -- but retry the trailing durability
+            // barrier in case a prior attempt deleted this entry and
+            // then failed its own `fsync_fd(generations_fd)` before
+            // the caller could advance the phase or commit a
+            // tombstone. Never assume that fsync happened just
+            // because the entry is absent.
+            fsync_fd(generations_fd)?;
+            return Ok(());
+        }
         Err(_) => return Err(FailReason::RetirementTreeAnomaly),
     };
     let dir_owned = borrowed_to_owned(dir_fd.as_fd())?;
@@ -1438,7 +1566,17 @@ fn enumerate_and_validate_generation_tree(
             // separately-swept concern: validate their shape now and
             // carry them in the plan so retirement/pruning enumerates,
             // validates, and deletes them under the same accounting as
-            // generation epochs.
+            // generation epochs. Defense-in-depth: a live directory
+            // name matching the prefix but not the full closed
+            // `is_well_formed_stage_name` syntax (e.g. containing `/`
+            // or `..`, which the kernel would never actually produce
+            // as a single directory-entry name, or an unexpected
+            // length/charset) is treated as an anomaly rather than a
+            // stage directory this code will ever construct a path
+            // from.
+            if !is_well_formed_stage_name(&name) {
+                return Err(FailReason::RetirementTreeAnomaly);
+            }
             validate_stage_dir_contents(&generations_owned, &name)?;
             stage_names.push(name);
             continue;
@@ -1620,11 +1758,18 @@ fn execute_promote(
                         Some(digest) if digest == intent.expected_digest_hex => {
                             // The rename to the final epoch name
                             // already completed in a previous crashed
-                            // attempt (the phase-advance write itself
-                            // did not commit before the crash). The
-                            // epoch is fully materialized with exactly
-                            // the expected content: never abandon or
-                            // re-stage it, just continue forward.
+                            // attempt. The epoch is fully materialized
+                            // with exactly the expected content: never
+                            // abandon or re-stage it, just continue
+                            // forward. The crashed attempt's own
+                            // trailing `fsync_fd(generations_fd)`
+                            // inside `promote_stage_to_generation` may
+                            // be exactly what failed and caused the
+                            // crash before the phase could advance --
+                            // retry that durability barrier now rather
+                            // than trusting it silently already
+                            // happened.
+                            fsync_fd(generations_fd)?;
                         }
                         Some(_) => {
                             // Some directory already occupies this
@@ -1645,6 +1790,24 @@ fn execute_promote(
                                 material,
                             )?;
                             if !staged {
+                                // No fully-staged, digest-matching
+                                // material exists (this is either the
+                                // very first attempt with material
+                                // absent -- should not happen given
+                                // the public entry points always pass
+                                // material, but defensively handled --
+                                // or a recovery re-entry finding a
+                                // stage dir left in a partial state by
+                                // a crash between `mkdir_at_exclusive`
+                                // and the material write completing).
+                                // Never abandon a partial stage
+                                // directory silently: validate and
+                                // delete it (or fail closed) before
+                                // discarding the txlog record of it.
+                                discard_partial_stage_if_present(
+                                    generations_fd,
+                                    &intent.stage_name,
+                                )?;
                                 remove_txlog(secrets_fd)?;
                                 return Ok(PromoteOutcome::AbortedNoMaterial);
                             }
@@ -1673,6 +1836,15 @@ fn execute_promote(
                 write_txlog(secrets_fd, &TxLog::Promote(intent.clone()))?;
             }
             PromotePhase::CurrentPromoted => {
+                // Never write a marker claiming an active generation
+                // the live `current` symlink does not actually
+                // corroborate. A hand-edited/corrupted txlog claiming
+                // this phase over a `current` that does not resolve
+                // to `to_epoch` must fail closed here, before any
+                // marker mutation.
+                if !current_resolves_exactly_to(secrets_fd, intent.to_epoch) {
+                    return Err(FailReason::IdentityCurrentTargetMismatch);
+                }
                 let identity = capture_identity(generations_fd, intent.to_epoch)?;
                 if identity.digest_hex != intent.expected_digest_hex {
                     // `current` already points at this epoch; we must
@@ -1700,13 +1872,35 @@ fn execute_promote(
                 write_txlog(secrets_fd, &TxLog::Promote(intent.clone()))?;
             }
             PromotePhase::MarkerCommitted => {
+                // Phase-specific validation must occur before any
+                // recovery mutation (pruning, stage cleanup) or txlog
+                // removal: re-read and verify the marker actually
+                // reflects this transaction's intended active
+                // generation, and that `current` still corroborates
+                // it, before proceeding. A hand-edited/corrupted
+                // txlog claiming `MarkerCommitted` over a marker/
+                // current that disagree must fail closed here rather
+                // than pruning or discarding state based on an
+                // unverified assumption.
+                if !current_resolves_exactly_to(secrets_fd, intent.to_epoch) {
+                    return Err(FailReason::IdentityCurrentTargetMismatch);
+                }
+                let marker = read_marker(secrets_fd)?.ok_or(FailReason::MarkerWriteFailed)?;
+                let active_matches = marker.active.as_ref().is_some_and(|a| {
+                    a.epoch == intent.to_epoch && a.digest_hex == intent.expected_digest_hex
+                });
+                if !active_matches {
+                    return Err(FailReason::RecoveryAmbiguous);
+                }
                 if let Some(prune) = intent.prune_epoch {
                     // Best-effort: pruning failure does not fail the
                     // action (the marker already durably reflects the
                     // correct active/previous state); it only leaves
                     // an orphaned generation directory for a future
                     // retire() to clean up via its full-tree
-                    // enumeration.
+                    // enumeration. Pruning only ever happens after the
+                    // marker commit that no longer references the
+                    // pruned epoch has been durably written above.
                     let _ = remove_generation(generations_fd, prune);
                 }
                 // Any leftover `.stage-*` directory at this point is a
@@ -1715,13 +1909,15 @@ fn execute_promote(
                 // promoted -- that one was already renamed away).
                 // Enumerate, validate, and delete it, propagating any
                 // failure: a stage directory is never swept on a
-                // best-effort basis.
+                // best-effort basis. Revalidate each immediately
+                // before deletion in case something changed between
+                // enumeration and delete.
                 let leftover = enumerate_and_validate_generation_tree(generations_fd)?;
                 for stage_name in leftover.stage_names {
+                    revalidate_stage_before_delete(generations_fd, &stage_name)?;
                     remove_stage_dir(generations_fd, &stage_name)?;
                 }
                 remove_txlog(secrets_fd)?;
-                let marker = read_marker(secrets_fd)?.ok_or(FailReason::MarkerWriteFailed)?;
                 return Ok(PromoteOutcome::Completed(marker));
             }
         }
@@ -1762,6 +1958,10 @@ fn execute_retire(
                     // Staged entries are real secret-tree contents:
                     // enumerate/validate/delete them exactly like
                     // generation epochs, propagating every failure.
+                    // Revalidate immediately before deletion in case
+                    // something changed between enumeration and
+                    // delete.
+                    revalidate_stage_before_delete(generations_fd, stage_name)?;
                     remove_stage_dir(generations_fd, stage_name)?;
                 }
                 intent.phase = RetirePhase::EpochsRemoved;
@@ -1859,17 +2059,18 @@ pub fn recover_in_flight_transaction(
                 action: LifecycleAction::Provision,
                 base_dir_hash: String::new(),
             },
+            false,
             reason,
         ),
     })?;
     let (secrets_fd, generations_fd) =
         open_or_create_secrets_dir(&paths, cfg).map_err(|reason| {
             let ctx = context(vm_id, kind, LifecycleAction::Provision, &paths);
-            denied(&ctx, reason)
+            denied(&ctx, false, reason)
         })?;
     let _lock = acquire_lock(secrets_fd.as_fd(), cfg).map_err(|reason| {
         let ctx = context(vm_id, kind, LifecycleAction::Provision, &paths);
-        denied(&ctx, reason)
+        denied(&ctx, false, reason)
     })?;
     match recover_if_needed(secrets_fd.as_fd(), generations_fd.as_fd(), vm_id, kind, cfg) {
         Ok(recovered) => Ok(recovered),
@@ -1880,7 +2081,12 @@ pub fn recover_in_flight_transaction(
                 err.action.unwrap_or(LifecycleAction::Provision),
                 &paths,
             );
-            Err(failed_closed(&ctx, MarkerResult::FailedClosed, err.reason))
+            Err(failed_closed(
+                &ctx,
+                false,
+                MarkerResult::FailedClosed,
+                err.reason,
+            ))
         }
     }
 }
@@ -1912,12 +2118,13 @@ fn open_and_recover(
             action,
             base_dir_hash: String::new(),
         };
-        denied(&ctx, reason)
+        denied(&ctx, false, reason)
     })?;
     let ctx = context(vm_id, kind, action, &paths);
     let (secrets_fd, generations_fd) =
-        open_or_create_secrets_dir(&paths, cfg).map_err(|reason| denied(&ctx, reason))?;
-    let lock = acquire_lock(secrets_fd.as_fd(), cfg).map_err(|reason| denied(&ctx, reason))?;
+        open_or_create_secrets_dir(&paths, cfg).map_err(|reason| denied(&ctx, false, reason))?;
+    let lock =
+        acquire_lock(secrets_fd.as_fd(), cfg).map_err(|reason| denied(&ctx, false, reason))?;
     let recovered =
         match recover_if_needed(secrets_fd.as_fd(), generations_fd.as_fd(), vm_id, kind, cfg) {
             Ok(recovered) => recovered,
@@ -1925,12 +2132,14 @@ fn open_and_recover(
                 let recovered_ctx = context(vm_id, kind, err.action.unwrap_or(action), &paths);
                 return Err(failed_closed(
                     &recovered_ctx,
+                    false,
                     MarkerResult::FailedClosed,
                     err.reason,
                 ));
             }
         };
-    let marker = read_marker(secrets_fd.as_fd()).map_err(|reason| denied(&ctx, reason))?;
+    let marker =
+        read_marker(secrets_fd.as_fd()).map_err(|reason| denied(&ctx, recovered, reason))?;
     if let Some(marker) = &marker {
         verify_marker_against_live_state(
             secrets_fd.as_fd(),
@@ -1939,7 +2148,7 @@ fn open_and_recover(
             kind,
             marker,
         )
-        .map_err(|reason| failed_closed(&ctx, MarkerResult::FailedClosed, reason))?;
+        .map_err(|reason| failed_closed(&ctx, recovered, MarkerResult::FailedClosed, reason))?;
     }
     Ok((paths, secrets_fd, generations_fd, lock, recovered, marker))
 }
@@ -1964,13 +2173,14 @@ pub fn provision(
         && marker.active.is_some()
         && !marker.retired
     {
-        return Err(denied(&ctx, FailReason::AlreadyProvisioned));
+        return Err(denied(&ctx, recovered, FailReason::AlreadyProvisioned));
     }
     let existing = enumerate_and_validate_generation_tree(generations_fd.as_fd())
-        .map_err(|reason| failed_closed(&ctx, MarkerResult::FailedClosed, reason))?;
+        .map_err(|reason| failed_closed(&ctx, recovered, MarkerResult::FailedClosed, reason))?;
     if !existing.epochs.is_empty() || !existing.stage_names.is_empty() {
         return Err(failed_closed(
             &ctx,
+            recovered,
             MarkerResult::FailedClosed,
             FailReason::GenerationConflict,
         ));
@@ -1992,8 +2202,10 @@ pub fn provision(
         first_provisioned_ms: now_ms(),
         phase: PromotePhase::Planned,
     };
+    validate_promote_intent_semantics(&intent, vm_id, kind)
+        .map_err(|reason| failed_closed(&ctx, recovered, MarkerResult::FailedClosed, reason))?;
     write_txlog(secrets_fd.as_fd(), &TxLog::Promote(intent.clone()))
-        .map_err(|reason| failed_closed(&ctx, MarkerResult::FailedClosed, reason))?;
+        .map_err(|reason| failed_closed(&ctx, recovered, MarkerResult::FailedClosed, reason))?;
     match execute_promote(
         secrets_fd.as_fd(),
         generations_fd.as_fd(),
@@ -2009,10 +2221,16 @@ pub fn provision(
         )),
         Ok(PromoteOutcome::AbortedNoMaterial) => Err(failed_closed(
             &ctx,
+            recovered,
             MarkerResult::FailedClosed,
             FailReason::MaterialWriteFailed,
         )),
-        Err(reason) => Err(failed_closed(&ctx, MarkerResult::FailedClosed, reason)),
+        Err(reason) => Err(failed_closed(
+            &ctx,
+            recovered,
+            MarkerResult::FailedClosed,
+            reason,
+        )),
     }
 }
 
@@ -2040,7 +2258,7 @@ pub fn rotate(
 
     let marker = match marker {
         Some(marker) if marker.active.is_some() && !marker.retired => marker,
-        _ => return Err(denied(&ctx, FailReason::NotProvisioned)),
+        _ => return Err(denied(&ctx, recovered, FailReason::NotProvisioned)),
     };
     let active = marker.active.clone().expect("checked above");
     let to_epoch = marker.high_water_epoch + 1;
@@ -2060,8 +2278,10 @@ pub fn rotate(
         first_provisioned_ms: marker.first_provisioned_ms,
         phase: PromotePhase::Planned,
     };
+    validate_promote_intent_semantics(&intent, vm_id, kind)
+        .map_err(|reason| failed_closed(&ctx, recovered, MarkerResult::FailedClosed, reason))?;
     write_txlog(secrets_fd.as_fd(), &TxLog::Promote(intent.clone()))
-        .map_err(|reason| failed_closed(&ctx, MarkerResult::FailedClosed, reason))?;
+        .map_err(|reason| failed_closed(&ctx, recovered, MarkerResult::FailedClosed, reason))?;
     match execute_promote(
         secrets_fd.as_fd(),
         generations_fd.as_fd(),
@@ -2079,10 +2299,16 @@ pub fn rotate(
         )),
         Ok(PromoteOutcome::AbortedNoMaterial) => Err(failed_closed(
             &ctx,
+            recovered,
             MarkerResult::FailedClosed,
             FailReason::MaterialWriteFailed,
         )),
-        Err(reason) => Err(failed_closed(&ctx, MarkerResult::FailedClosed, reason)),
+        Err(reason) => Err(failed_closed(
+            &ctx,
+            recovered,
+            MarkerResult::FailedClosed,
+            reason,
+        )),
     }
 }
 
@@ -2104,10 +2330,10 @@ pub fn rollback(
 
     let marker = match marker {
         Some(marker) if marker.active.is_some() && !marker.retired => marker,
-        _ => return Err(denied(&ctx, FailReason::NotProvisioned)),
+        _ => return Err(denied(&ctx, recovered, FailReason::NotProvisioned)),
     };
     let Some(previous) = marker.previous.clone() else {
-        return Err(denied(&ctx, FailReason::NoRollbackTarget));
+        return Err(denied(&ctx, recovered, FailReason::NoRollbackTarget));
     };
     let active = marker.active.clone().expect("checked above");
     let intent = PromoteIntent {
@@ -2125,8 +2351,10 @@ pub fn rollback(
         first_provisioned_ms: marker.first_provisioned_ms,
         phase: PromotePhase::Planned,
     };
+    validate_promote_intent_semantics(&intent, vm_id, kind)
+        .map_err(|reason| failed_closed(&ctx, recovered, MarkerResult::FailedClosed, reason))?;
     write_txlog(secrets_fd.as_fd(), &TxLog::Promote(intent.clone()))
-        .map_err(|reason| failed_closed(&ctx, MarkerResult::FailedClosed, reason))?;
+        .map_err(|reason| failed_closed(&ctx, recovered, MarkerResult::FailedClosed, reason))?;
     match execute_promote(
         secrets_fd.as_fd(),
         generations_fd.as_fd(),
@@ -2143,10 +2371,16 @@ pub fn rollback(
         )),
         Ok(PromoteOutcome::AbortedNoMaterial) => Err(failed_closed(
             &ctx,
+            recovered,
             MarkerResult::FailedClosed,
             FailReason::RecoveryAmbiguous,
         )),
-        Err(reason) => Err(failed_closed(&ctx, MarkerResult::FailedClosed, reason)),
+        Err(reason) => Err(failed_closed(
+            &ctx,
+            recovered,
+            MarkerResult::FailedClosed,
+            reason,
+        )),
     }
 }
 
@@ -2168,7 +2402,7 @@ pub fn retire(
     let ctx = context(vm_id, kind, LifecycleAction::Retire, &paths);
 
     let existing = enumerate_and_validate_generation_tree(generations_fd.as_fd())
-        .map_err(|reason| failed_closed(&ctx, MarkerResult::FailedClosed, reason))?;
+        .map_err(|reason| failed_closed(&ctx, recovered, MarkerResult::FailedClosed, reason))?;
 
     let recorded_high_water = marker.as_ref().map(|m| m.high_water_epoch).unwrap_or(0);
     let marker_claims_active = marker
@@ -2183,12 +2417,14 @@ pub fn retire(
             // "clean" over an unexplained discrepancy.
             return Err(failed_closed(
                 &ctx,
+                recovered,
                 MarkerResult::FailedClosed,
                 FailReason::PreviouslyProvisionedMaterialMissing,
             ));
         }
         return Ok(SecretsLifecycleAuditFields::verified_clean(
             &ctx,
+            recovered,
             recorded_high_water,
         ));
     }
@@ -2203,15 +2439,22 @@ pub fn retire(
         high_water_epoch,
         phase: RetirePhase::Enumerated,
     };
+    validate_retire_intent_semantics(&intent, vm_id, kind)
+        .map_err(|reason| failed_closed(&ctx, recovered, MarkerResult::FailedClosed, reason))?;
     write_txlog(secrets_fd.as_fd(), &TxLog::Retire(intent.clone()))
-        .map_err(|reason| failed_closed(&ctx, MarkerResult::FailedClosed, reason))?;
+        .map_err(|reason| failed_closed(&ctx, recovered, MarkerResult::FailedClosed, reason))?;
     match execute_retire(secrets_fd.as_fd(), generations_fd.as_fd(), intent) {
         Ok(()) => Ok(SecretsLifecycleAuditFields::retired(
             &ctx,
             high_water_epoch,
             recovered,
         )),
-        Err(reason) => Err(failed_closed(&ctx, MarkerResult::FailedClosed, reason)),
+        Err(reason) => Err(failed_closed(
+            &ctx,
+            recovered,
+            MarkerResult::FailedClosed,
+            reason,
+        )),
     }
 }
 
@@ -3616,5 +3859,788 @@ mod tests {
                 "action {action} did not reach the central validation choke point"
             );
         }
+    }
+
+    // -------------------------------------------------------------
+    // Round-4 finding 1: Planned-phase partial-stage discard on abort
+    // -------------------------------------------------------------
+
+    #[test]
+    fn planned_recovery_discards_a_partial_stage_before_aborting_no_material() {
+        // Simulate a crash between `mkdir_at_exclusive` succeeding and
+        // the material write ever completing: an empty `.stage-*`
+        // directory exists on disk, but `ensure_staged` (given no
+        // in-memory `material`, as on a real recovery re-entry) can
+        // neither find a fully-staged digest-matching directory nor
+        // write fresh material. The stage directory must be validated
+        // and deleted -- never abandoned -- before the txlog record is
+        // discarded.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let paths = derive_paths("orphan-stage", SecretKind::GuestSigningKey, &cfg).unwrap();
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let stage_name = random_stage_name();
+        // An empty stage directory: `mkdir_at_exclusive` succeeded,
+        // nothing was ever written into it.
+        path_safe::mkdir_at_exclusive(generations_fd.as_fd(), Path::new(&stage_name), cfg.dir_mode)
+            .unwrap();
+
+        let intent = PromoteIntent {
+            vm: "orphan-stage".to_owned(),
+            kind: SecretKind::GuestSigningKey.as_slug().to_owned(),
+            action: LifecycleAction::Provision,
+            to_epoch: 1,
+            create_epoch: true,
+            stage_name: stage_name.clone(),
+            expected_digest_hex: material(b"never-written").digest_hex(),
+            expected_identity: None,
+            carry_previous: None,
+            prune_epoch: None,
+            new_high_water_epoch: 1,
+            first_provisioned_ms: now_ms(),
+            phase: PromotePhase::Planned,
+        };
+        let outcome = execute_promote(
+            secrets_fd.as_fd(),
+            generations_fd.as_fd(),
+            &cfg,
+            intent,
+            None,
+        )
+        .unwrap();
+        assert!(matches!(outcome, PromoteOutcome::AbortedNoMaterial));
+        // The partial stage directory must be gone, not orphaned.
+        assert!(
+            path_safe::fstatat_nofollow(
+                &borrowed_to_owned(generations_fd.as_fd()).unwrap(),
+                &stage_name
+            )
+            .unwrap()
+            .is_none()
+        );
+        // The txlog must also be gone (the abort was fully committed,
+        // not left wedged).
+        assert!(
+            read_txlog(
+                secrets_fd.as_fd(),
+                "orphan-stage",
+                SecretKind::GuestSigningKey
+            )
+            .unwrap()
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn planned_recovery_fails_closed_on_an_unvalidatable_partial_stage_and_retains_txlog() {
+        // The inverse: the leftover stage directory is not a
+        // recognizable partial-write shape (e.g. a stray subdirectory
+        // was injected into it) -- `discard_partial_stage_if_present`
+        // must propagate that anomaly rather than silently discarding
+        // it, and the txlog record must survive so a future recovery
+        // attempt can still reason about it. No orphan wedge: the
+        // transaction fails closed instead of being silently dropped
+        // over unrecognized on-disk state.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let paths = derive_paths("bad-stage", SecretKind::GuestSigningKey, &cfg).unwrap();
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let stage_name = random_stage_name();
+        path_safe::mkdir_at_exclusive(generations_fd.as_fd(), Path::new(&stage_name), cfg.dir_mode)
+            .unwrap();
+        let stage_dir_fd = path_safe::open_at(
+            generations_fd.as_fd(),
+            Path::new(&stage_name),
+            OFlags::RDONLY | OFlags::DIRECTORY,
+        )
+        .unwrap();
+        let stage_dir_owned = borrowed_to_owned(stage_dir_fd.as_fd()).unwrap();
+        // A subdirectory is never a valid stage-dir entry shape.
+        path_safe::mkdir_at(stage_dir_owned.as_fd(), Path::new("anomaly"), 0o700).unwrap();
+
+        let intent = PromoteIntent {
+            vm: "bad-stage".to_owned(),
+            kind: SecretKind::GuestSigningKey.as_slug().to_owned(),
+            action: LifecycleAction::Provision,
+            to_epoch: 1,
+            create_epoch: true,
+            stage_name: stage_name.clone(),
+            expected_digest_hex: material(b"never-written").digest_hex(),
+            expected_identity: None,
+            carry_previous: None,
+            prune_epoch: None,
+            new_high_water_epoch: 1,
+            first_provisioned_ms: now_ms(),
+            phase: PromotePhase::Planned,
+        };
+        write_txlog(secrets_fd.as_fd(), &TxLog::Promote(intent.clone())).unwrap();
+        let err = execute_promote(
+            secrets_fd.as_fd(),
+            generations_fd.as_fd(),
+            &cfg,
+            intent,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(err, FailReason::RetirementTreeAnomaly);
+        // Never silently activated: the stage dir is untouched and the
+        // txlog record still exists for a future recovery attempt to
+        // reason about.
+        assert!(
+            path_safe::fstatat_nofollow(
+                &borrowed_to_owned(generations_fd.as_fd()).unwrap(),
+                &stage_name
+            )
+            .unwrap()
+            .is_some()
+        );
+        assert!(
+            read_txlog(secrets_fd.as_fd(), "bad-stage", SecretKind::GuestSigningKey)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    // -------------------------------------------------------------
+    // Round-4 finding 2: `current`-swap leftover stage-symlink cleanup
+    // -------------------------------------------------------------
+
+    #[test]
+    fn atomic_swap_current_removes_a_leftover_swap_stage_symlink_from_a_prior_crash() {
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let paths = derive_paths("swap-retry", SecretKind::GuestSigningKey, &cfg).unwrap();
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let mat = material(b"e1");
+        let stage_name = random_stage_name();
+        ensure_staged(
+            generations_fd.as_fd(),
+            &cfg,
+            &stage_name,
+            &mat.digest_hex(),
+            Some(&mat),
+        )
+        .unwrap();
+        promote_stage_to_generation(generations_fd.as_fd(), &stage_name, 1, &mat.digest_hex())
+            .unwrap();
+        // Leave a leftover swap-stage symlink behind, as if a prior
+        // crash landed between `symlinkat` and `renameat`.
+        rustix::fs::symlinkat(
+            expected_current_target(1),
+            secrets_fd.as_fd(),
+            Path::new(CURRENT_SWAP_STAGE_NAME),
+        )
+        .unwrap();
+        // Must not fail with EEXIST on retry: the leftover symlink is
+        // actually removed (not left in place by a no-op
+        // `remove_path_safe` call), so the fresh `symlinkat` below it
+        // succeeds.
+        atomic_swap_current(secrets_fd.as_fd(), 1).unwrap();
+        assert!(current_resolves_exactly_to(secrets_fd.as_fd(), 1));
+        assert!(
+            path_safe::fstatat_nofollow(
+                &borrowed_to_owned(secrets_fd.as_fd()).unwrap(),
+                CURRENT_SWAP_STAGE_NAME
+            )
+            .unwrap()
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn atomic_swap_current_fails_closed_on_a_non_symlink_swap_stage_entry() {
+        // An anomaly no legitimate code path produces: something
+        // other than a symlink occupies the swap-stage slot. Must
+        // fail closed rather than deleting an unexpected entry.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let paths = derive_paths("swap-anomaly", SecretKind::GuestSigningKey, &cfg).unwrap();
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let mat = material(b"e1");
+        let stage_name = random_stage_name();
+        ensure_staged(
+            generations_fd.as_fd(),
+            &cfg,
+            &stage_name,
+            &mat.digest_hex(),
+            Some(&mat),
+        )
+        .unwrap();
+        promote_stage_to_generation(generations_fd.as_fd(), &stage_name, 1, &mat.digest_hex())
+            .unwrap();
+        let secrets_owned = borrowed_to_owned(secrets_fd.as_fd()).unwrap();
+        path_safe::create_file_at_safe(
+            &secrets_owned,
+            CURRENT_SWAP_STAGE_NAME,
+            nix::libc::O_RDWR | nix::libc::O_CREAT,
+            FILE_MODE_DEFAULT,
+        )
+        .unwrap();
+
+        let err = atomic_swap_current(secrets_fd.as_fd(), 1).unwrap_err();
+        assert_eq!(err, FailReason::CurrentSwapFailed);
+        // The anomalous entry must be left untouched, not deleted.
+        let stat = path_safe::fstatat_nofollow(&secrets_owned, CURRENT_SWAP_STAGE_NAME)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stat.st_mode & nix::libc::S_IFMT, nix::libc::S_IFREG);
+    }
+
+    // -------------------------------------------------------------
+    // Round-4 finding 3: existing-digest-match `Planned` branch retries
+    // its own durability barrier
+    // -------------------------------------------------------------
+
+    #[test]
+    fn planned_recovery_existing_digest_match_retries_generations_fsync() {
+        // The rename to the final epoch name already completed (a
+        // prior crashed attempt got as far as
+        // `promote_stage_to_generation`, whose own trailing
+        // `fsync_fd(generations_fd)` may be exactly what failed and
+        // crashed the attempt before the phase could advance). Recovery
+        // re-entry finding a digest match must retry that durability
+        // barrier, not silently assume it already happened.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let paths = derive_paths("digest-match-fsync", SecretKind::GuestSigningKey, &cfg).unwrap();
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let mat = material(b"e1");
+        let stage_name = random_stage_name();
+        ensure_staged(
+            generations_fd.as_fd(),
+            &cfg,
+            &stage_name,
+            &mat.digest_hex(),
+            Some(&mat),
+        )
+        .unwrap();
+        promote_stage_to_generation(generations_fd.as_fd(), &stage_name, 1, &mat.digest_hex())
+            .unwrap();
+        let intent = PromoteIntent {
+            vm: "digest-match-fsync".to_owned(),
+            kind: SecretKind::GuestSigningKey.as_slug().to_owned(),
+            action: LifecycleAction::Provision,
+            to_epoch: 1,
+            create_epoch: true,
+            stage_name,
+            expected_digest_hex: mat.digest_hex(),
+            expected_identity: None,
+            carry_previous: None,
+            prune_epoch: None,
+            new_high_water_epoch: 1,
+            first_provisioned_ms: now_ms(),
+            phase: PromotePhase::Planned,
+        };
+        {
+            let _fault = FsyncFaultGuard::enable();
+            let err = execute_promote(
+                secrets_fd.as_fd(),
+                generations_fd.as_fd(),
+                &cfg,
+                intent.clone(),
+                None,
+            )
+            .unwrap_err();
+            assert_eq!(err, FailReason::FsyncFailed);
+        }
+        // Retry without the fault must succeed and complete the whole
+        // transaction.
+        let outcome = execute_promote(
+            secrets_fd.as_fd(),
+            generations_fd.as_fd(),
+            &cfg,
+            intent,
+            None,
+        )
+        .unwrap();
+        assert!(matches!(outcome, PromoteOutcome::Completed(_)));
+    }
+
+    // -------------------------------------------------------------
+    // Round-4 finding 4: `NotFound` fast paths still retry the
+    // generations-dir fsync durability barrier
+    // -------------------------------------------------------------
+
+    #[test]
+    fn remove_generation_notfound_fast_path_still_retries_fsync() {
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let paths = derive_paths("gen-notfound-fsync", SecretKind::GuestSigningKey, &cfg).unwrap();
+        let (_secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        // Epoch 7 was never created: the `NotFound` fast path is hit
+        // immediately.
+        {
+            let _fault = FsyncFaultGuard::enable();
+            let err = remove_generation(generations_fd.as_fd(), 7).unwrap_err();
+            assert_eq!(err, FailReason::FsyncFailed);
+        }
+        remove_generation(generations_fd.as_fd(), 7).unwrap();
+    }
+
+    #[test]
+    fn remove_stage_dir_notfound_fast_path_still_retries_fsync() {
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let paths =
+            derive_paths("stage-notfound-fsync", SecretKind::GuestSigningKey, &cfg).unwrap();
+        let (_secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let stage_name = random_stage_name();
+        {
+            let _fault = FsyncFaultGuard::enable();
+            let err = remove_stage_dir(generations_fd.as_fd(), &stage_name).unwrap_err();
+            assert_eq!(err, FailReason::FsyncFailed);
+        }
+        remove_stage_dir(generations_fd.as_fd(), &stage_name).unwrap();
+    }
+
+    // -------------------------------------------------------------
+    // Round-4 finding 5: phase-specific current/marker identity
+    // validation before recovery mutation or txlog removal
+    // -------------------------------------------------------------
+
+    #[test]
+    fn current_promoted_recovery_rejects_current_not_pointing_at_to_epoch() {
+        // A hand-edited/corrupted txlog claims `CurrentPromoted` over
+        // a `current` that does not actually resolve to `to_epoch`.
+        // Must fail closed before any marker mutation, never write a
+        // marker claiming an active generation `current` does not
+        // corroborate.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let paths = derive_paths("cp-mismatch", SecretKind::GuestSigningKey, &cfg).unwrap();
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let mat = material(b"e1");
+        let stage_name = random_stage_name();
+        ensure_staged(
+            generations_fd.as_fd(),
+            &cfg,
+            &stage_name,
+            &mat.digest_hex(),
+            Some(&mat),
+        )
+        .unwrap();
+        promote_stage_to_generation(generations_fd.as_fd(), &stage_name, 1, &mat.digest_hex())
+            .unwrap();
+        // `current` is left absent/unset -- never swapped to epoch 1 --
+        // yet the txlog claims `CurrentPromoted`.
+        let intent = PromoteIntent {
+            vm: "cp-mismatch".to_owned(),
+            kind: SecretKind::GuestSigningKey.as_slug().to_owned(),
+            action: LifecycleAction::Provision,
+            to_epoch: 1,
+            create_epoch: true,
+            stage_name,
+            expected_digest_hex: mat.digest_hex(),
+            expected_identity: None,
+            carry_previous: None,
+            prune_epoch: None,
+            new_high_water_epoch: 1,
+            first_provisioned_ms: now_ms(),
+            phase: PromotePhase::CurrentPromoted,
+        };
+        let err = execute_promote(
+            secrets_fd.as_fd(),
+            generations_fd.as_fd(),
+            &cfg,
+            intent,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(err, FailReason::IdentityCurrentTargetMismatch);
+        // No marker must have been written.
+        assert!(read_marker(secrets_fd.as_fd()).unwrap().is_none());
+    }
+
+    #[test]
+    fn marker_committed_recovery_rejects_current_not_pointing_at_to_epoch() {
+        // `MarkerCommitted` recovery must independently re-verify
+        // `current` before pruning/cleanup/txlog-removal, not just
+        // trust the phase label.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let paths = derive_paths("mc-current-mismatch", SecretKind::GuestSigningKey, &cfg).unwrap();
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let mat = material(b"e1");
+        let stage_name = random_stage_name();
+        ensure_staged(
+            generations_fd.as_fd(),
+            &cfg,
+            &stage_name,
+            &mat.digest_hex(),
+            Some(&mat),
+        )
+        .unwrap();
+        promote_stage_to_generation(generations_fd.as_fd(), &stage_name, 1, &mat.digest_hex())
+            .unwrap();
+        // Note: `current` is never swapped here.
+        let intent = PromoteIntent {
+            vm: "mc-current-mismatch".to_owned(),
+            kind: SecretKind::GuestSigningKey.as_slug().to_owned(),
+            action: LifecycleAction::Provision,
+            to_epoch: 1,
+            create_epoch: true,
+            stage_name,
+            expected_digest_hex: mat.digest_hex(),
+            expected_identity: None,
+            carry_previous: None,
+            prune_epoch: None,
+            new_high_water_epoch: 1,
+            first_provisioned_ms: now_ms(),
+            phase: PromotePhase::MarkerCommitted,
+        };
+        let err = execute_promote(
+            secrets_fd.as_fd(),
+            generations_fd.as_fd(),
+            &cfg,
+            intent,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(err, FailReason::IdentityCurrentTargetMismatch);
+    }
+
+    #[test]
+    fn marker_committed_recovery_rejects_a_marker_disagreeing_with_the_intent() {
+        // `current` correctly resolves to `to_epoch`, but the marker
+        // on disk does not reflect this transaction's intended active
+        // epoch/digest (e.g. a stale marker from before this
+        // transaction, or one hand-edited independently of the
+        // txlog). `MarkerCommitted` recovery must reject this rather
+        // than proceeding with pruning/cleanup based on an unverified
+        // assumption.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let paths = derive_paths("mc-marker-mismatch", SecretKind::GuestSigningKey, &cfg).unwrap();
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let mat = material(b"e1");
+        let stage_name = random_stage_name();
+        ensure_staged(
+            generations_fd.as_fd(),
+            &cfg,
+            &stage_name,
+            &mat.digest_hex(),
+            Some(&mat),
+        )
+        .unwrap();
+        promote_stage_to_generation(generations_fd.as_fd(), &stage_name, 1, &mat.digest_hex())
+            .unwrap();
+        atomic_swap_current(secrets_fd.as_fd(), 1).unwrap();
+        // Write a marker that does not correspond to this transaction
+        // (wrong high-water/active state -- e.g. still reflecting
+        // "nothing provisioned yet").
+        let stale_marker = MarkerData {
+            v: MARKER_SCHEMA_VERSION,
+            vm: "mc-marker-mismatch".to_owned(),
+            kind: SecretKind::GuestSigningKey.as_slug().to_owned(),
+            retired: false,
+            high_water_epoch: 0,
+            active: None,
+            previous: None,
+            first_provisioned_ms: 0,
+            updated_ms: now_ms(),
+        };
+        write_marker(secrets_fd.as_fd(), &stale_marker).unwrap();
+
+        let intent = PromoteIntent {
+            vm: "mc-marker-mismatch".to_owned(),
+            kind: SecretKind::GuestSigningKey.as_slug().to_owned(),
+            action: LifecycleAction::Provision,
+            to_epoch: 1,
+            create_epoch: true,
+            stage_name,
+            expected_digest_hex: mat.digest_hex(),
+            expected_identity: None,
+            carry_previous: None,
+            prune_epoch: None,
+            new_high_water_epoch: 1,
+            first_provisioned_ms: now_ms(),
+            phase: PromotePhase::MarkerCommitted,
+        };
+        let err = execute_promote(
+            secrets_fd.as_fd(),
+            generations_fd.as_fd(),
+            &cfg,
+            intent,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(err, FailReason::RecoveryAmbiguous);
+    }
+
+    // -------------------------------------------------------------
+    // Round-4 finding 6: closed stage-name syntax + immediate
+    // pre-delete revalidation
+    // -------------------------------------------------------------
+
+    #[test]
+    fn is_well_formed_stage_name_accepts_only_the_exact_random_stage_name_syntax() {
+        assert!(is_well_formed_stage_name(&random_stage_name()));
+        assert!(is_well_formed_stage_name(&random_stage_name()));
+        for bad in [
+            "",
+            ".stage-",
+            ".stage-too-short",
+            &format!("{STAGE_PREFIX}{}", "a".repeat(31)),
+            &format!("{STAGE_PREFIX}{}", "a".repeat(33)),
+            &format!("{STAGE_PREFIX}{}", "A".repeat(32)),
+            &format!("{STAGE_PREFIX}{}", "g".repeat(32)),
+            &format!("{STAGE_PREFIX}../{}", "a".repeat(29)),
+            &format!("{STAGE_PREFIX}{}/etc", "a".repeat(28)),
+            "not-a-stage-name",
+        ] {
+            assert!(
+                !is_well_formed_stage_name(bad),
+                "expected {bad:?} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_promote_intent_semantics_rejects_a_path_traversal_stage_name() {
+        // A corrupted/hand-edited txlog must never reach an anchored
+        // path-safe call with an attacker-controlled path component.
+        let intent = PromoteIntent {
+            vm: "traversal".to_owned(),
+            kind: SecretKind::GuestSigningKey.as_slug().to_owned(),
+            action: LifecycleAction::Provision,
+            to_epoch: 1,
+            create_epoch: true,
+            stage_name: format!("{STAGE_PREFIX}../../etc/passwd"),
+            expected_digest_hex: material(b"x").digest_hex(),
+            expected_identity: None,
+            carry_previous: None,
+            prune_epoch: None,
+            new_high_water_epoch: 1,
+            first_provisioned_ms: now_ms(),
+            phase: PromotePhase::Planned,
+        };
+        let err =
+            validate_promote_intent_semantics(&intent, "traversal", SecretKind::GuestSigningKey)
+                .unwrap_err();
+        assert_eq!(err, FailReason::IntentCorrupt);
+    }
+
+    #[test]
+    fn validate_retire_intent_semantics_rejects_a_path_traversal_stage_name() {
+        let intent = RetireIntent {
+            vm: "traversal2".to_owned(),
+            kind: SecretKind::GuestSigningKey.as_slug().to_owned(),
+            epochs: vec![],
+            stage_names: vec![format!("{STAGE_PREFIX}/etc/passwd")],
+            high_water_epoch: 1,
+            phase: RetirePhase::Enumerated,
+        };
+        let err =
+            validate_retire_intent_semantics(&intent, "traversal2", SecretKind::GuestSigningKey)
+                .unwrap_err();
+        assert_eq!(err, FailReason::IntentCorrupt);
+    }
+
+    #[test]
+    fn revalidate_stage_before_delete_catches_a_tamper_injected_just_before_delete() {
+        // Mirrors `revalidate_generation_before_delete_catches_a_tamper_
+        // immediately_before_delete` for stage directories: a stage
+        // dir enumerated and validated earlier is tampered with (an
+        // extra entry injected) between enumeration and the delete
+        // call. The immediate pre-delete revalidation must catch it.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let paths = derive_paths("stage-tamper", SecretKind::GuestSigningKey, &cfg).unwrap();
+        let (_secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let mat = material(b"pending");
+        let stage_name = random_stage_name();
+        ensure_staged(
+            generations_fd.as_fd(),
+            &cfg,
+            &stage_name,
+            &mat.digest_hex(),
+            Some(&mat),
+        )
+        .unwrap();
+        // Originally validates cleanly.
+        revalidate_stage_before_delete(generations_fd.as_fd(), &stage_name).unwrap();
+
+        // Tamper: inject a second entry into the stage dir.
+        let generations_owned = borrowed_to_owned(generations_fd.as_fd()).unwrap();
+        let stage_dir_fd = path_safe::open_at(
+            generations_owned.as_fd(),
+            Path::new(&stage_name),
+            OFlags::RDONLY | OFlags::DIRECTORY,
+        )
+        .unwrap();
+        let stage_dir_owned = borrowed_to_owned(stage_dir_fd.as_fd()).unwrap();
+        path_safe::mkdir_at(stage_dir_owned.as_fd(), Path::new("tamper"), 0o700).unwrap();
+
+        let err = revalidate_stage_before_delete(generations_fd.as_fd(), &stage_name).unwrap_err();
+        assert_eq!(err, FailReason::RetirementTreeAnomaly);
+    }
+
+    #[test]
+    fn revalidate_stage_before_delete_tolerates_absence() {
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let paths = derive_paths("stage-absent", SecretKind::GuestSigningKey, &cfg).unwrap();
+        let (_secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        revalidate_stage_before_delete(generations_fd.as_fd(), &random_stage_name()).unwrap();
+    }
+
+    // -------------------------------------------------------------
+    // Round-4 finding 7: rollback intent digest/identity consistency
+    // -------------------------------------------------------------
+
+    #[test]
+    fn validate_promote_intent_semantics_rejects_rollback_digest_identity_mismatch() {
+        let identity = MaterialIdentity {
+            epoch: 1,
+            dev: 1,
+            ino: 1,
+            uid: 0,
+            gid: 0,
+            mode: 0o600,
+            nlink: 1,
+            has_acl: false,
+            digest_hex: material(b"actual").digest_hex(),
+        };
+        let intent = PromoteIntent {
+            vm: "rollback-mismatch".to_owned(),
+            kind: SecretKind::GuestSigningKey.as_slug().to_owned(),
+            action: LifecycleAction::Rollback,
+            to_epoch: 1,
+            create_epoch: false,
+            stage_name: String::new(),
+            // Deliberately inconsistent with `identity.digest_hex`.
+            expected_digest_hex: material(b"different").digest_hex(),
+            expected_identity: Some(identity),
+            carry_previous: None,
+            prune_epoch: None,
+            new_high_water_epoch: 2,
+            first_provisioned_ms: now_ms(),
+            phase: PromotePhase::Planned,
+        };
+        let err = validate_promote_intent_semantics(
+            &intent,
+            "rollback-mismatch",
+            SecretKind::GuestSigningKey,
+        )
+        .unwrap_err();
+        assert_eq!(err, FailReason::IntentCorrupt);
+    }
+
+    #[test]
+    fn validate_promote_intent_semantics_accepts_consistent_rollback_digest_identity() {
+        let identity = MaterialIdentity {
+            epoch: 1,
+            dev: 1,
+            ino: 1,
+            uid: 0,
+            gid: 0,
+            mode: 0o600,
+            nlink: 1,
+            has_acl: false,
+            digest_hex: material(b"actual").digest_hex(),
+        };
+        let intent = PromoteIntent {
+            vm: "rollback-consistent".to_owned(),
+            kind: SecretKind::GuestSigningKey.as_slug().to_owned(),
+            action: LifecycleAction::Rollback,
+            to_epoch: 1,
+            create_epoch: false,
+            stage_name: String::new(),
+            expected_digest_hex: identity.digest_hex.clone(),
+            expected_identity: Some(identity),
+            carry_previous: None,
+            prune_epoch: None,
+            new_high_water_epoch: 2,
+            first_provisioned_ms: now_ms(),
+            phase: PromotePhase::Planned,
+        };
+        validate_promote_intent_semantics(
+            &intent,
+            "rollback-consistent",
+            SecretKind::GuestSigningKey,
+        )
+        .unwrap();
+    }
+
+    // -------------------------------------------------------------
+    // Round-4 finding 8: `recovered_prior_transaction` threading
+    // -------------------------------------------------------------
+
+    #[test]
+    fn recovered_prior_transaction_is_true_on_a_denial_reached_after_successful_recovery() {
+        // `provision` first drains a leftover crashed `rotate`
+        // transaction (recoverable: the rename to epoch 2 already
+        // completed with a matching digest, so recovery can run it
+        // all the way to completion), then hits `AlreadyProvisioned`
+        // because the marker is now active. The denial must carry
+        // `recovered_prior_transaction: true`.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "recovered-denied";
+        let kind = SecretKind::GuestSigningKey;
+        provision(vm, kind, material(b"e1"), &cfg).unwrap();
+
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let mat2 = material(b"e2");
+        let stage_name = random_stage_name();
+        ensure_staged(
+            generations_fd.as_fd(),
+            &cfg,
+            &stage_name,
+            &mat2.digest_hex(),
+            Some(&mat2),
+        )
+        .unwrap();
+        promote_stage_to_generation(generations_fd.as_fd(), &stage_name, 2, &mat2.digest_hex())
+            .unwrap();
+        let marker_before = read_marker(secrets_fd.as_fd()).unwrap().unwrap();
+        let intent = PromoteIntent {
+            vm: vm.to_owned(),
+            kind: kind.as_slug().to_owned(),
+            action: LifecycleAction::Rotate,
+            to_epoch: 2,
+            create_epoch: true,
+            stage_name,
+            expected_digest_hex: mat2.digest_hex(),
+            expected_identity: None,
+            carry_previous: marker_before.active.clone(),
+            prune_epoch: None,
+            new_high_water_epoch: 2,
+            first_provisioned_ms: marker_before.first_provisioned_ms,
+            phase: PromotePhase::Planned,
+        };
+        write_txlog(secrets_fd.as_fd(), &TxLog::Promote(intent)).unwrap();
+        drop(secrets_fd);
+        drop(generations_fd);
+
+        let err = provision(vm, kind, material(b"e3"), &cfg).unwrap_err();
+        assert_eq!(err.reason, FailReason::AlreadyProvisioned);
+        assert!(
+            err.audit.recovered_prior_transaction,
+            "denial reached after a successful mid-call recovery must record it"
+        );
+
+        // Sanity: recovery genuinely ran (the crashed rotate is fully
+        // completed, epoch 2 is now active).
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (secrets_fd, _generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let marker = read_marker(secrets_fd.as_fd()).unwrap().unwrap();
+        assert_eq!(marker.active.unwrap().epoch, 2);
+    }
+
+    #[test]
+    fn recovered_prior_transaction_is_false_on_the_common_no_crash_denial_path() {
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let err = rotate(
+            "never-provisioned",
+            SecretKind::GuestSigningKey,
+            material(b"e1"),
+            &cfg,
+        )
+        .unwrap_err();
+        assert_eq!(err.reason, FailReason::NotProvisioned);
+        assert!(!err.audit.recovered_prior_transaction);
     }
 }
