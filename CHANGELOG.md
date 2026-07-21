@@ -60,15 +60,17 @@ deprecations ship one minor release before removal.
   (`adr0045-w8-integration` / PR #324) against `main`, a candidate-pinned
   `nix develop --command make check` local validation for hermeticity in a
   controlled detached checkout, the three live branch-protection required
-  checks (`check`, `eval`, `eval-shell-tests`), and a comprehensive
+  checks (`check`, `eval`, `eval-shell-tests`), and a
   generated/dependency/contract fingerprint matrix covering every planned
   integration surface named in
-  `tests/unit/nix/eval-cases/w8-integration-wave-plan.nix` plus the manifest's
-  own self-fingerprint. Added focused `packages/xtask/tests/delivery_w8.rs`
+  `tests/unit/nix/eval-cases/w8-integration-wave-plan.nix` that is already a
+  tracked blob at the current integration HEAD, plus the manifest's own
+  self-fingerprint. Added focused `packages/xtask/tests/delivery_w8.rs`
   coverage for unique authority, stack-graph topology, required-command
-  hermeticity, and critical reserved-path fingerprint coverage, and extended
-  the checked-in per-wave manifest list assertion in `delivery_cli.rs` to
-  `w8`. This is integrator-owned manifest prep only: it does not flip
+  hermeticity, critical reserved-path fingerprint coverage, and that every
+  fingerprint path resolves to a tracked blob at HEAD, and extended the
+  checked-in per-wave manifest list assertion in `delivery_cli.rs` to `w8`.
+  This is integrator-owned manifest prep only: it does not flip
   `shared-root-w8-manifest-seam` or edit the W8 wave plan.
 - Anchored W8 component dispatch to the landed `5ba02876` trusted policy root
   before manifest creation and parallel implementation launch.
@@ -542,6 +544,19 @@ deprecations ship one minor release before removal.
   check that is skipped still fails closed with an explicit "is skipped"
   message. Unlisted pending, failing, neutral, and cancelled checks continue
   to fail closed.
+- Removed 19 `delivery/manifests/w8.json` `contract_fingerprints` entries that
+  named component files not yet integrated (each component's not-yet-created
+  final integration seam per
+  `tests/unit/nix/eval-cases/w8-integration-wave-plan.nix`), which is a
+  snapshot-blocking defect: a fingerprint must attest to a real tracked blob
+  at HEAD, never a speculative future path. Added
+  `w8_all_fingerprint_paths_are_tracked_blobs_at_head` to
+  `packages/xtask/tests/delivery_w8.rs` to enforce this for every
+  `generated_artifacts`/`dependency_fingerprints`/`contract_fingerprints`
+  entry, narrowed the reserved-path coverage test to the 5 seams that are
+  already tracked, and documented the fingerprint-lifecycle process (how the
+  integrator adds a path once its creating commit actually lands) in
+  `delivery/README.md`.
 - Closed pidfd identity races by rechecking the kernel pidfd after `/proc`
   evidence collection and binding realm-child restart adoption to stable pidfs
   device/inode identity captured during the authenticated handoff, without

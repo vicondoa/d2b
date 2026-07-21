@@ -8,6 +8,7 @@ W5, W6, and W7 own only:
 | W5 | `delivery/manifests/w5.json` | Runtime service and dispatch implementation, consuming the frozen service/allocator contracts. |
 | W6 | `delivery/manifests/w6.json` | User, desktop, and device service implementation, consuming the frozen placement and service contracts. |
 | W7 | `delivery/manifests/w7.json` | Declarative Nix, process, and resource emission against the frozen allocator API; extension of the existing provider registry only. |
+| W8 | `delivery/manifests/w8.json` | Secrets lifecycle, systemd-user shell routing, realm-routing work-executor fabric, gateway replacement, provider-parity fallback removal, and restart-observability audit, per `tests/unit/nix/eval-cases/w8-integration-wave-plan.nix`. |
 
 `shared-contracts.json` is machine-enforced root authority. It protects the
 cross-wave protobuf/generated service contracts, allocator model, workspace
@@ -59,3 +60,31 @@ source deletion; every other contract-test and pin remains frozen.
   mutation registration assertions.
 - `workload-processes`: the VM-submodule shape/cutover assertions and pins.
 - `desktop-metadata`: the six legacy launcher-emitter assertions.
+
+## Fingerprint lifecycle
+
+Every entry in a wave manifest's `generated_artifacts`,
+`dependency_fingerprints`, and `contract_fingerprints` arrays must name a path
+that is already a tracked blob at the manifest's own integration HEAD. A
+fingerprint attests to real, already-integrated content; it is never a
+placeholder for a file a component merely plans to add.
+
+Wave-plan documents such as `tests/unit/nix/eval-cases/w8-integration-wave-plan.nix`
+declare each component's `ownedFiles`/`reservedPaths` ahead of the component's
+own commits landing, including files that do not exist yet (most commonly a
+component's final integration seam). A wave's manifest prep does not
+fingerprint those not-yet-created paths, and does not create speculative stub
+files just to make them exist early — doing either would let the manifest
+attest to content that isn't actually there.
+
+When a component's commits land on the trusted wave integration branch and
+create or modify one of its owned files, the integrator adds a new entry for
+that path to the relevant fingerprint array in the same commit (or
+immediately after) that lands the change, keeping the array sorted and
+duplicate-free by `(name, repository, path)` as the delivery schema requires.
+The component branch itself never edits the wave manifest directly; per each
+wave plan's shared-root manifest seam, `delivery/manifests/` stays
+integrator/shared-root territory. `packages/xtask/tests/delivery_w8.rs`
+enforces this invariant for W8 by asserting every fingerprint path resolves to
+a tracked blob at HEAD.
+
