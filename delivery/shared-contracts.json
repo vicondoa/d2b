@@ -1,5 +1,5 @@
 {
-  "schema_version": 10,
+  "schema_version": 11,
   "authority_repository": "github.com/vicondoa/d2b",
   "shared_root_branch": "adr0045-post-w4-contracts",
   "waves": [
@@ -220,6 +220,64 @@
         "tests/migration-state.d/vm-submodule-cutover-eval.toml",
         "tests/migration-state.d/vm-submodule-eval.toml"
       ]
+    },
+    {
+      "wave": "w8",
+      "branch_stem": "adr0045-w8-integration",
+      "manifest_path": "delivery/manifests/w8.json",
+      "responsibility": "integrated-w5-w6-w7-successor-realm-local-control-plane-cutover",
+      "allowed_parent_waves": [
+        "w7"
+      ],
+      "allowed_prefixes": [],
+      "foreign_prefixes": [
+        "examples/",
+        "nixos-modules/",
+        "packages/d2b-activation-helper/",
+        "packages/d2b-client/",
+        "packages/d2b-clipd/",
+        "packages/d2b-daemon-access/",
+        "packages/d2b-exec-runner/",
+        "packages/d2b-gateway-runtime/",
+        "packages/d2b-gateway/",
+        "packages/d2b-guest-shell-runner/",
+        "packages/d2b-guestd/",
+        "packages/d2b-host-activation-helper/",
+        "packages/d2b-host/",
+        "packages/d2b-notify/",
+        "packages/d2b-one-shot-helper/",
+        "packages/d2b-priv-broker/",
+        "packages/d2b-provider-agent/",
+        "packages/d2b-realm-codec-protobuf/",
+        "packages/d2b-realm-core/",
+        "packages/d2b-realm-provider/",
+        "packages/d2b-realm-router/",
+        "packages/d2b-realm-transport/",
+        "packages/d2b-runtime-systemd-user/",
+        "packages/d2b-security-key-helper/",
+        "packages/d2b-shell-supervisor/",
+        "packages/d2b-sk-frontend/",
+        "packages/d2b-systemd-user-agent/",
+        "packages/d2b-tty-helper/",
+        "packages/d2b-unsafe-local-helper/",
+        "packages/d2b-userd/",
+        "packages/d2b-wayland-proxy/",
+        "packages/d2b-wlcontrol/",
+        "packages/d2b/",
+        "packages/d2bd/",
+        "pkgs/",
+        "templates/",
+        "tests/unit/nix/",
+        "tests/unit/smoke/"
+      ],
+      "additional_protected_paths": [],
+      "allowed_protected_paths": [],
+      "inherits_prefixes_from": [
+        "w5",
+        "w6",
+        "w7"
+      ],
+      "landed_predecessor_ref": "main"
     }
   ],
   "protected_paths": [

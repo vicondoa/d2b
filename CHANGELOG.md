@@ -12,6 +12,24 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added the W8 shared prep phase A: extended the shared-contract policy and
+  its Rust ownership checker to recognize `w8` as the integrated W5/W6/W7
+  successor wave (canonical branch `adr0045-w8-integration`, exact `w7`
+  parent, and a landed-predecessor `main` termination so the parent graph
+  check accepts already-merged W7/main state instead of requiring resurrected
+  wave branches), with a positive-but-inherited prefix grant
+  (`inherits_prefixes_from`) that authorizes W8 to continue every W5/W6/W7
+  implementation prefix while adding no new literal territory and retaining
+  every W4 frozen/provider/shared-contract protection. Added a six-component
+  W8 ownership/overlap plan (secrets lifecycle; systemd-user shell routing;
+  realm routing/work executor/shared fabric; gateway replacement; provider
+  parity/fallback removal; restart/observability/audit) with a disjoint
+  file-overlap graph, shared integration sinks
+  (`packages/d2bd/src/lib.rs`, `packages/d2b-priv-broker/src/runtime.rs`)
+  reserved to the integrator, explicit external blockers (new-crate workspace
+  registration; the not-yet-opened wave manifest), and ready/blocked/pending
+  launch counts. Deliberately excludes `delivery/manifests/w8.json` (created
+  once the draft PR number is known) and any Cargo workspace/lockfile change.
 - Added bundle version 13 discovery for private observability
   secret-generation metadata, allowing the integrated runtime wave to consume
   the contract without a hardcoded path.
