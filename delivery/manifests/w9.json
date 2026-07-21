@@ -193,6 +193,9 @@
     {
       "id": "client-toolkit-source-fingerprint",
       "argv": [
+        "nix",
+        "develop",
+        "--command",
         "python3",
         "scripts/check-source-fingerprint.py"
       ],

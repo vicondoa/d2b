@@ -50,6 +50,9 @@ deprecations ship one minor release before removal.
   `SKIPPED` GitHub checks being treated as delivery-blocking failures, with
   their concrete streamline outcomes (two already delivered in this change,
   one recorded as an open backlog item).
+- Added the W9 controlled-runner executable-resolution failure to the W13
+  backlog, requiring validation commands to prove their candidate-pinned tool
+  closure before snapshot creation.
 - Added `delivery/manifests/w9.json`, the checked-in W9 (toolkit and sibling
   cutover) delivery authority spanning all six ordinary open pull requests
   across `d2b`, `d2b-toolkit`, `d2b-provider-toolkit`, `d2b-wlcontrol`,
@@ -442,6 +445,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Made the W9 client-toolkit source-fingerprint validation obtain Python from
+  the candidate's pinned Nix development shell instead of assuming ambient
+  `python3` exists in the delivery runner's intentionally controlled PATH.
 - Advanced `docs/adr/0045-toolkit-sibling-coordination.json`'s
   `client-toolkit-distribution` `auditedRevision` and the `wlterm`,
   `wlcontrol`, and `weezterm` `consumesDistribution.revision` pins from the

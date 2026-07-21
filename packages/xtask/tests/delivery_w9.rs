@@ -414,6 +414,7 @@ fn w9_required_check_publishers_name_exact_live_workflow_names_not_filenames() {
             check.name
         );
     }
+
     assert_eq!(
         seen_nodes,
         expected_workflow_names
@@ -421,5 +422,25 @@ fn w9_required_check_publishers_name_exact_live_workflow_names_not_filenames() {
             .copied()
             .collect::<BTreeSet<_>>(),
         "every sibling toolkit/consumer node must have at least one required check"
+    );
+}
+
+#[test]
+fn w9_source_fingerprint_uses_candidate_pinned_python() {
+    let manifest = w9_manifest();
+    let validation = manifest
+        .required_validations
+        .iter()
+        .find(|validation| validation.id == "client-toolkit-source-fingerprint")
+        .expect("client-toolkit source-fingerprint validation");
+    assert_eq!(
+        validation.argv,
+        [
+            "nix",
+            "develop",
+            "--command",
+            "python3",
+            "scripts/check-source-fingerprint.py"
+        ]
     );
 }
