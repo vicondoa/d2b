@@ -31,7 +31,7 @@ existing type's shape changes.
 | `packages/d2b-realm-router/src/target_resolver.rs`, `remote_node.rs`, `session_lifecycle.rs` | Consumed as-is by `WorkExecutor`; not modified. Owned only because they define the composed types. |
 | `packages/d2b-realm-transport/src/fabric.rs` (new) | `TransportFabric`: a scheme-keyed composition of `TransportProvider` impls (e.g. `LoopbackTransport`, `LocalTcpTransport`) behind one `TransportProvider` facade. |
 | `packages/d2b-realm-transport/src/local_tcp.rs` (touched) | Adds `LOCAL_TCP_SCHEME_NAME`: the public scheme literal a fabric registers `LocalTcpTransport` under, avoiding a duplicated string literal at the call site. |
-| `packages/d2b-exec-runner/src/service_mode.rs` (touched) | Adds `ExecutionOutcomeCode` + `outcome_code_for_phase(StatusPhase)`: the guest-runner-side half of the same stable-vocabulary contract as `execution::state_code`. |
+| `packages/d2b-exec-runner/src/service_mode.rs` (touched) | Adds `ExecutionOutcomeCode` + `outcome_code_for_phase(StatusPhase)`: the guest-runner-side half of the same stable-vocabulary contract as `execution::state_code`. Also fixes a pre-existing parallel-test scratch-dir race in this file's own `#[cfg(test)]` helper (see [Regression: unique scratch allocation](#regression-unique-scratch-allocation)). |
 | `packages/d2b-exec-runner/src/spec.rs` (touched) | Makes `validate_workload_unit_name` `pub`: a reusable shape-validator for the slot-derived workload unit name `d2b-guestd` writes, without duplicating its derivation. |
 
 ## `WorkExecutor` (router)
@@ -147,6 +147,55 @@ scheme-keyed composition of already-existing transports
 remote node registry: it is strictly a byte-transport composition. It carries
 no free-form path/argv construction.
 
+## Regression: unique scratch allocation in `service_mode.rs` tests
+
+Exact-head W9 CI exposed a pre-existing parallel-test race in this owned
+file's `#[cfg(test)]` helper `scratch_slot()`, unrelated to the new
+`ExecutionOutcomeCode`/`outcome_code_for_phase` additions above but fixed as
+part of this component's ownership of `service_mode.rs`.
+
+**Symptom:** `cancel_sentinel_terminates_and_records_cancelled` intermittently
+failed under parallel CI test execution with a missing/unexpected status
+file.
+
+**Root cause:** `scratch_slot()` named each test's scratch dir
+`runner-svc-<pid>-<nanos>` (process id + `SystemTime::now()` nanoseconds) and
+created it with `create_dir_all`, which succeeds silently when the directory
+already exists. Two test threads running in the *same test binary process*
+(same pid) can observe the same nanosecond tick on a coarse clock, especially
+under parallel scheduling pressure — so both calls could resolve to the same
+physical directory, race to write their own `status`/log files into it, and
+stomp on each other. The failure was purely a test-harness-scratch-allocation
+bug: no production `RunnerPaths`/`service_mode` behavior was at fault.
+
+**Fix:** `scratch_slot()` now combines a per-process, monotonically
+incrementing `AtomicU64` sequence number with the timestamp, and allocates
+the top-level scratch dir with `create_dir` (not `create_dir_all`), so a
+collision is observable (`ErrorKind::AlreadyExists`) instead of silently
+tolerated. On collision the loop draws a fresh sequence number and retries;
+because the counter only ever increases, every retry is guaranteed to produce
+a name no earlier attempt (in this process) could already hold, so the loop
+always makes forward progress. A bounded attempt ceiling
+(`SCRATCH_SLOT_MAX_ATTEMPTS`) keeps the fallback fail-closed — a hard panic
+naming the runaway condition — instead of spinning forever if the temp dir
+is unwritable or otherwise adversarial.
+
+A new regression test,
+`scratch_slot_is_unique_under_concurrent_same_process_allocation`, spawns 64
+threads behind a `std::sync::Barrier` so they all call `scratch_slot()` as
+close to simultaneously as possible (reproducing the same-process,
+same-tick contention that caused the original race) and asserts every
+returned directory is both created and pairwise distinct.
+
+This fix is test-only (confined to the `#[cfg(test)]` module of an owned
+file); it changes no production type, trait, or public API surface of
+`d2b-exec-runner`. W9's integration wave is expected to carry an identical
+narrow fix to the same helper independently before its own panel; when
+reconciling the two branches, the fix is idempotent to re-apply (a
+byte-identical `scratch_slot()` body from either branch satisfies both), so
+whichever version lands first should be kept as-is rather than merged
+field-by-field.
+
 ## Integrator wiring
 
 None of the new modules are declared in their crate's `lib.rs` by this
@@ -188,3 +237,9 @@ All three crates build, and `cargo test` / `cargo clippy --all-targets` /
 applied only transiently in a local working copy to prove the modules compile
 and their tests pass end to end; the committed tree does not include that
 `lib.rs` change (per the owned-files boundary for this component).
+`d2b-exec-runner`'s test suite (including the new
+`scratch_slot_is_unique_under_concurrent_same_process_allocation` regression
+test and the previously-flaky `cancel_sentinel_terminates_and_records_cancelled`)
+was additionally run five consecutive times with `--test-threads=16` with no
+failures, to directly exercise the parallel-scheduling condition the scratch-dir
+race depended on.
