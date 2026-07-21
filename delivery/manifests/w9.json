@@ -571,6 +571,26 @@
       "path": "Cargo.toml"
     },
     {
+      "name": "weezterm-flake-lock",
+      "repository": "github.com/vicondoa/weezterm",
+      "path": "flake.lock"
+    },
+    {
+      "name": "weezterm-flake-manifest",
+      "repository": "github.com/vicondoa/weezterm",
+      "path": "flake.nix"
+    },
+    {
+      "name": "weezterm-nix-flake-lock",
+      "repository": "github.com/vicondoa/weezterm",
+      "path": "nix/flake.lock"
+    },
+    {
+      "name": "weezterm-nix-flake-manifest",
+      "repository": "github.com/vicondoa/weezterm",
+      "path": "nix/flake.nix"
+    },
+    {
       "name": "wlcontrol-cargo-manifest",
       "repository": "github.com/vicondoa/d2b-wlcontrol",
       "path": "Cargo.toml"
@@ -681,6 +701,16 @@
       "name": "weezterm-agents",
       "repository": "github.com/vicondoa/weezterm",
       "path": "AGENTS.md"
+    },
+    {
+      "name": "weezterm-clippy-scope-filter",
+      "repository": "github.com/vicondoa/weezterm",
+      "path": "nix/clippy-scope-filter.sh"
+    },
+    {
+      "name": "weezterm-makefile",
+      "repository": "github.com/vicondoa/weezterm",
+      "path": "Makefile"
     },
     {
       "name": "weezterm-provider-doc",

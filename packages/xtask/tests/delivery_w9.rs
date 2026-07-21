@@ -479,6 +479,7 @@ fn w9_validations_use_detached_checkout_hermetic_toolchains() {
             "validation {id} must use its candidate-pinned toolchain"
         );
     }
+
     for removed in [
         "provider-toolkit-make-check",
         "wlcontrol-clippy",
@@ -492,6 +493,31 @@ fn w9_validations_use_detached_checkout_hermetic_toolchains() {
         assert!(
             !validations.contains_key(removed),
             "detached-invalid validation {removed} must stay retired"
+        );
+    }
+}
+
+#[test]
+fn w9_weezterm_panel_fix_paths_are_fingerprinted() {
+    let manifest = w9_manifest();
+    let paths = manifest
+        .dependency_fingerprints
+        .iter()
+        .chain(&manifest.contract_fingerprints)
+        .filter(|fingerprint| fingerprint.repository == "github.com/vicondoa/weezterm")
+        .map(|fingerprint| fingerprint.path.as_str())
+        .collect::<BTreeSet<_>>();
+    for required in [
+        "Makefile",
+        "flake.lock",
+        "flake.nix",
+        "nix/clippy-scope-filter.sh",
+        "nix/flake.lock",
+        "nix/flake.nix",
+    ] {
+        assert!(
+            paths.contains(required),
+            "W9 manifest must fingerprint WeezTerm panel-fix path {required}"
         );
     }
 }

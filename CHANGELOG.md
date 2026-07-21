@@ -476,6 +476,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Advanced W9's provider-toolkit, wlcontrol, wlterm, and WeezTerm coordination
+  authority to the exact final panel-correction heads and completed WeezTerm's
+  exclusive ownership set with both flake locks, root flake, and clippy filter.
 - Made exec-runner service tests allocate collision-proof scratch roots under
   parallel CI instead of silently reusing a pid/timestamp directory.
 - Advanced the W9 wlcontrol, wlterm, and WeezTerm audited revisions to their
