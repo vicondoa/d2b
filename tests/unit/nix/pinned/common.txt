@@ -228,6 +228,7 @@ net-vm-network/no-env-host-materialization
 net-vm-network/non-network-workload-unaffected
 net-vm-network/port-forward-target
 net-vm-network/provider-fragment-axis
+net-vm-network/public-manifest-identifies-network-workload
 net-vm-network/reachable-through-generic-workload-index
 net-vm-network/realm-plan-assertions-pass
 net-vm-network/workload-address
