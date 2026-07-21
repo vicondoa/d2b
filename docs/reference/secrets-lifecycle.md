@@ -66,56 +66,123 @@ Every mutating action first opens (or creates)
 `SecretsLifecycleConfig::lock_max_wait`/`lock_poll_interval`, failing
 closed with `FailReason::LockUnavailable` on timeout — this is the
 cross-process, per-`(vm, kind)` exclusive lock finding (1) asked for).
+Before trusting the lock, `acquire_lock` verifies: the anchored parent
+(`kind_root`) is a trusted-broker-owned directory of the expected mode
+(`verify_broker_owned`); the lock file itself is a trusted-broker-owned
+regular file of the expected mode with exactly one hard link (never a
+hard-link plant); and, immediately after `flock` succeeds, that the
+`lock` directory entry still resolves — by `(dev, ino)` — to the exact
+file this call opened and locked, closing the classic
+unlink-and-recreate-between-open-and-flock race. Any mismatch is
+`FailReason::BrokerOwnershipViolation`. "Broker-owned" here means
+"owned by this process's own effective uid/gid" (`broker_identity`):
+metadata directories (`kind_root`, `generations/`) and the lock file
+are never `cfg.owner_uid`/`cfg.owner_gid`-owned — that consumer-facing
+identity applies only to the `material` file leaf a generation
+directory contains.
+
 While holding that lock, every promote-shaped action
 (`provision`/`rotate`/`rollback`) and `retire` runs through one of two
 shared phase-machine engines:
 
-- **Promote** ([`PromotePhase`]): `Planned` → material staged and
-  fsynced → `CurrentPromoted` → `current` atomically repointed at the
-  new generation → marker durably rewritten (fsynced) →
-  `MarkerCommitted` → old generation pruned on a best-effort basis →
-  transaction log removed.
-- **Retire** ([`RetirePhase`]): `Planned` → generation tree
-  enumerated/validated → entries deleted one at a time → phase advances
-  to `CurrentRemoved` once the tree is provably empty → marker
-  tombstoned → transaction log removed.
+- **Promote** ([`PromotePhase`]): `Planned` (material staged into a
+  fresh `.stage-*` directory, or a rollback's already-existing target
+  generation tamper-verified) → `EpochReady` (the target generation is
+  materialised at its final `generations/<epoch>` name, fsynced) →
+  `CurrentPromoted` (`current` atomically repointed at the new
+  generation, fsynced) → `MarkerCommitted` (marker durably rewritten,
+  fsynced; superseded generation pruned best-effort; any leftover
+  `.stage-*` directory enumerated/validated/deleted with every failure
+  propagated) → transaction log removed.
+- **Retire** ([`RetirePhase`]): `Enumerated` (the physical
+  `generations/` tree anchored-enumerated and validated) →
+  `CurrentRemoved` (`current` unlinked, then every recorded generation
+  *and* every recorded `.stage-*` directory deleted, each re-validated
+  immediately before its own deletion) → `EpochsRemoved` (a fresh
+  re-enumeration must observe the tree fully empty) → `ProvenEmpty`
+  (marker tombstoned) → transaction log removed.
 
-Before each phase transition that cannot be trivially undone, the
-*current phase* is written to `<kind_root>/txlog` (JSON, fsynced) —
-this is the durable transaction/recovery state machine finding (1)
-asked for. [`recover_if_needed`] is called at the start of every
-action (and by the standalone [`recover_in_flight_transaction`] entry
-point) and, if a leftover `txlog` is found:
+Before each phase transition, the *current phase* is written to
+`<kind_root>/txlog` (JSON, fsynced) — this is the durable
+transaction/recovery state machine finding (1) asked for. Every fsync
+in this module (`fsync_fd`) returns `Result<(), FailReason::FsyncFailed>`;
+a failed sync at any phase transition — material write, staging
+directory, epoch rename, `current` swap, marker write, txlog write,
+generation/stage deletion — propagates immediately and blocks that
+phase from ever being recorded as advanced. No phase transition is
+ever considered committed on an unsynced write, so a crash immediately
+after a failed sync is always safely re-driveable by a later recovery
+pass; nothing is ever left activated with only a *possible* failure to
+persist it durably.
+
+Immediately on read, before any recovery attempt acts on it, a leftover
+`txlog` undergoes full semantic validation
+(`validate_txlog_semantics`/`validate_promote_intent_semantics`/
+`validate_retire_intent_semantics`) bound to the exact `(vm_id, kind)`
+directory it was found in: the recorded `vm`/`kind` must match the
+directory; the action/`create_epoch`/`stage_name`/`expected_identity`
+combination must be one this module can legally have written;
+epoch/high-water/prune-epoch/carry-previous relationships must be
+internally consistent; `RetireIntent.epochs`/`stage_names` must be
+sorted, deduplicated, in-bounds, and correctly prefixed. Any violation
+is `FailReason::IntentCorrupt` — a hand-edited or otherwise corrupted
+txlog is never handed to the recovery engine to interpret.
+[`recover_if_needed`] is called at the start of every action (and by
+the standalone [`recover_in_flight_transaction`] entry point) and, once
+the txlog passes semantic validation:
 
 - if the phase recorded is at or before the point where an external
-  observer could see any change (`Planned` for promote; `Planned` or
-  mid-enumeration for retire), the leftover state is safely discarded
-  — nothing was ever activated, so there is nothing to complete;
+  observer could see any change (`Planned` for promote; `Enumerated`
+  for retire), the leftover state is safely discarded or completed —
+  nothing was ever activated, so a fresh re-drive is always safe;
+- `Planned`-phase promote recovery never abandons or silently
+  re-stages a target epoch that a prior crashed attempt already
+  renamed into place: if `generations/<to_epoch>` already exists with
+  content whose digest matches the intent's `expected_digest_hex`, the
+  engine treats it as already-materialised and continues forward
+  without needing the original material again; if content already
+  occupies that epoch number with a **different** digest, recovery
+  fails closed (`RecoveryContentMismatch`) rather than ever adopting or
+  overwriting a stale, foreign, or previously-aborted generation;
 - if the phase recorded is at or after the commit point
   (`CurrentPromoted`/`MarkerCommitted` for promote,
-  `CurrentRemoved` for retire), recovery **only ever moves forward** —
-  it re-verifies the already-activated content against what the log
-  recorded and completes the remaining steps (marker write, pruning,
-  tombstoning); it never reverts an already-swapped `current` or
-  resurrects an already-deleted generation. A verification mismatch at
-  this stage fails closed (`RecoveryContentMismatch`/
-  `RecoveryAmbiguous`) without touching anything further — it does not
-  silently re-diverge storage, and it does not clear the txlog (so a
-  subsequent recovery attempt, e.g. after fixing the anomaly by hand,
-  gets another chance).
+  `CurrentRemoved`/`EpochsRemoved`/`ProvenEmpty` for retire), recovery
+  **only ever moves forward** — it re-verifies the already-activated
+  content against what the log recorded and completes the remaining
+  steps; it never reverts an already-swapped `current` or resurrects an
+  already-deleted generation. A verification mismatch at this stage
+  fails closed (`RecoveryContentMismatch`/`RecoveryAmbiguous`) without
+  touching anything further — it does not silently re-diverge storage,
+  and it does not clear the txlog (so a subsequent recovery attempt,
+  e.g. after fixing the anomaly by hand, gets another chance).
 
 `provision`, `rotate`, and `rollback` share the same
 [`execute_promote`] codepath (parameterized by a [`PromoteIntent`]) for
 both a fresh call and for completing a leftover recovery — there is no
 separate "recovery-only" branch that could drift out of sync with the
 normal path. `retire` and its own recovery both run through
-[`execute_retire`] the same way.
+[`execute_retire`] the same way. Every generation deletion inside
+`execute_retire` is preceded by `revalidate_generation_before_delete`:
+an immediate, anchored, nofollow re-stat/re-validate of that exact
+generation directory right before it is removed, so a tamper injected
+between the original enumeration and the delete (not merely between
+process restarts) is still caught rather than trusted from a stale
+snapshot.
 
-Staging directory/file names use [`allocate_staging_name`]: a
-collision-resistant name mixing the process id, a per-process atomic
-monotonic counter, wall-clock nanoseconds, and a `RandomState`-seeded
-hash, retried up to `MAX_STAGE_NAME_ATTEMPTS` times before failing
-closed with `FailReason::StagingNameExhausted`.
+Staging directory names use `random_stage_name`: a collision-resistant
+name mixing the process id, a per-process atomic monotonic counter,
+wall-clock nanoseconds, and a `RandomState`-seeded hash folded through
+SHA-256. Staged entries are **real secret-tree contents**, never a
+separately-swept, best-effort concern: `enumerate_and_validate_generation_tree`
+collects `.stage-*` directories exactly like generation epochs
+(`validate_stage_dir_contents` refuses anything but at most one
+regular, single-hard-link entry inside), and every deletion path
+(`remove_stage_dir`, used by promote's post-commit leftover sweep and
+by retire's `CurrentRemoved` phase) fully enumerates, deletes,
+positively proves empty, and fsyncs — propagating every failure rather
+than ignoring it. A stage directory is included in the final
+provably-empty proof retirement requires before tombstoning the
+marker.
 
 ### Marker identity (v2)
 
@@ -131,17 +198,28 @@ A dedicated marker file per `(vm, kind)` at `<kind_root>/marker.json`
   - owner `uid`/`gid`, permission `mode` bits, hard-link count, and
     whether an extended POSIX ACL is present;
   - a SHA-256 content digest.
-- `previous_epoch`: the immediately-prior retained generation's epoch,
-  if any (used by `rollback`).
+- `previous`: the immediately-prior retained generation's full identity,
+  if any (used by `rollback`). `previous.epoch` need not be numerically
+  less than `active.epoch` — a `rollback` swaps the pair, so `previous`
+  can legitimately be the *larger* epoch just rolled back away from;
+  what always holds is that it is a distinct, real, never-exceeding-
+  high-water epoch.
 
-`rotate`, `rollback`, and `retire` all re-derive this same identity
-tuple from the **live** filesystem state and compare it field-by-field
-against the marker before mutating anything, and separately verify
-that `current` **literally resolves by name** to the epoch the marker
-claims is active (`FailReason::IdentityCurrentTargetMismatch`) — a
-coincidentally-matching `stat()` result on some other path is not
-accepted as proof. Each mismatch axis has its own closed
-[`FailReason`] variant so a hard-link plant
+Every public action (`provision`/`rotate`/`rollback`/`retire`) routes
+through the single shared `open_and_recover` entry point, which — right
+after loading the marker and whenever it records an active generation —
+runs one central pre-mutation check, `verify_marker_against_live_state`,
+rather than four separately-maintained call sites. This is the one
+reachable trigger for `FailReason::IdentityCurrentTargetMismatch`: it
+confirms that `current` resolves, by **exact literal symlink text**, to
+`generations/<active.epoch>` — a path that merely *ends* in the right
+epoch number (an absolute path, a foreign-rooted relative path, or any
+text other than that precise relative form) is never accepted as a
+match, even when a naive `stat()`-based comparison would otherwise
+agree. It then re-derives the active (and, if present, previous)
+generation's identity tuple from the **live** filesystem state and
+compares it field-by-field against the marker. Each mismatch axis has
+its own closed [`FailReason`] variant so a hard-link plant
 (`IdentityLinkCountMismatch`, or `IdentityInodeMismatch` when the
 digest happens to match but the physical inode does not — the case
 byte-content comparison alone cannot see), a digest-preserving
@@ -162,9 +240,12 @@ Mirroring the `swtpm_dir.rs` philosophy:
   the marker says active but the generation vanished;
 - `provision` fails closed (`GenerationConflict`) if material exists on
   disk with **no** matching active marker — never silently adopted;
-- `rotate`/`rollback` fail closed on any [`MaterialIdentity`] mismatch
-  axis (above) rather than proceeding against a live generation that
-  does not match what the marker recorded.
+- `rotate`/`rollback`/`retire` all fail closed on any
+  [`MaterialIdentity`] mismatch axis (above), on any
+  `IdentityCurrentTargetMismatch`, and on any internally-inconsistent
+  marker (mutually exclusive `retired`/`active`, out-of-bounds epoch)
+  via the shared central validation — rather than proceeding against a
+  live generation that does not match what the marker recorded.
 
 ### Retirement never trusts the marker's word alone
 
@@ -176,15 +257,19 @@ before looking at what the marker says, regardless of marker state:
   already empty is a hard-fail anomaly
   (`PreviouslyProvisionedMaterialMissing`) — a missing marker, or an
   empty tree, never by itself implies "already cleanly retired";
-- a tree with any unrecognised entry name, unexpected file type, or a
-  `material` file whose link count is not exactly `1` aborts the
-  entire retirement with **zero deletions**
-  (`FailReason::RetirementTreeAnomaly`);
-- otherwise every validated entry is deleted one at a time, each
-  containing directory is fsynced after its deletions, and the tree is
-  positively re-verified empty
-  (`FailReason::RetirementNotProvablyEmpty` if not) before the marker
-  is tombstoned;
+- a tree with any unrecognised entry name, unexpected file type, a
+  `material` file whose link count is not exactly `1`, or a `.stage-*`
+  directory containing anything other than at most one regular,
+  single-hard-link entry aborts the entire retirement with **zero
+  deletions** (`FailReason::RetirementTreeAnomaly`);
+- otherwise every validated generation *and* every validated stage
+  directory is deleted, each re-validated immediately before its own
+  deletion (`revalidate_generation_before_delete`) so a tamper injected
+  after enumeration is still caught; each containing directory is
+  fsynced after its deletions (with any sync failure blocking further
+  progress, never silently ignored); the tree is then positively
+  re-verified empty (`FailReason::RetirementNotProvablyEmpty` if not)
+  before the marker is tombstoned;
 - retiring an already-retired or never-provisioned kind (empty tree,
   no active marker) is idempotent and reports `verified_clean`, not an
   error.
@@ -200,7 +285,7 @@ the newer epoch's generation directory is left physically in place
 (pruned only after the new marker is durably committed) but its epoch
 number is never reissued. `rollback` itself never grows
 `high_water_epoch` and prunes nothing (it just re-points `current` at
-the retained `previous_epoch`, subject to the same identity-tamper
+the retained `previous`, subject to the same identity-tamper
 verification as any other promote). `provision` always allocates epoch
 `1` and resets `high_water_epoch` to `1` for a fresh lineage — this is
 sound (not a numbering collision risk) specifically because `retire()`

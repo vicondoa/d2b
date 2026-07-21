@@ -230,6 +230,19 @@ pub enum FailReason {
     /// than the marker's previously committed high-water epoch — a
     /// monotonicity invariant violation this module refuses to persist.
     HighWaterRegressed,
+    /// An `fsync`/parent-directory-sync of a file or directory this
+    /// module just durably wrote returned an error. Every phase
+    /// advancement in the transaction/recovery state machine is
+    /// blocked on this succeeding — a silently-ignored fsync failure
+    /// would let a "durable" phase transition be lost on crash.
+    FsyncFailed,
+    /// The lock file, its containing directory, or another broker-
+    /// trusted metadata path (never a `material` leaf) was found with
+    /// an owner, group, mode, type, or link count that does not match
+    /// this process's own (trusted broker) identity — i.e. it was not
+    /// created/managed by this code path and must not be trusted for
+    /// mutual exclusion or transaction bookkeeping.
+    BrokerOwnershipViolation,
 }
 
 impl FailReason {
@@ -268,6 +281,8 @@ impl FailReason {
             Self::IdentityInodeMismatch => "identity_inode_mismatch",
             Self::IdentityCurrentTargetMismatch => "identity_current_target_mismatch",
             Self::HighWaterRegressed => "high_water_regressed",
+            Self::FsyncFailed => "fsync_failed",
+            Self::BrokerOwnershipViolation => "broker_ownership_violation",
         }
     }
 }
@@ -360,6 +375,7 @@ pub enum SecretsLifecycleAuditError {
     RetainedGenerationsTooLarge { len: usize },
     RetainedGenerationsNotUnique,
     RetainedGenerationsIncludeActive,
+    RetainedGenerationsContainZero,
     RetainedGenerationsMustBeNonEmpty,
     RetainedGenerationsMustBeEmpty,
     MissingFailReason,
@@ -396,6 +412,9 @@ impl std::fmt::Display for SecretsLifecycleAuditError {
             Self::RetainedGenerationsNotUnique => write!(f, "retained_generations has duplicates"),
             Self::RetainedGenerationsIncludeActive => {
                 write!(f, "retained_generations must exclude the active generation")
+            }
+            Self::RetainedGenerationsContainZero => {
+                write!(f, "retained_generations must not contain epoch 0")
             }
             Self::RetainedGenerationsMustBeNonEmpty => write!(
                 f,
@@ -476,6 +495,9 @@ impl SecretsLifecycleAuditFields {
                 }
             }
         }
+        if self.retained_generations.contains(&0) {
+            return Err(SecretsLifecycleAuditError::RetainedGenerationsContainZero);
+        }
         if let Some(epoch) = self.lineage_epoch
             && self.retained_generations.contains(&epoch)
         {
@@ -504,6 +526,7 @@ impl SecretsLifecycleAuditFields {
                 | (LifecycleAction::Rollback, LifecycleResult::FailedClosed)
                 | (LifecycleAction::Retire, LifecycleResult::Retired)
                 | (LifecycleAction::Retire, LifecycleResult::VerifiedClean)
+                | (LifecycleAction::Retire, LifecycleResult::Denied)
                 | (LifecycleAction::Retire, LifecycleResult::FailedClosed)
         );
         if !action_result_ok {
@@ -624,6 +647,25 @@ impl SecretsLifecycleAuditFields {
             LifecycleResult::FailedClosed => {
                 if self.fail_reason.is_none() {
                     return Err(SecretsLifecycleAuditError::MissingFailReason);
+                }
+                // A failed-closed action never durably activated
+                // anything (finding: "never return an error after
+                // silently activating unrecoverable state"), so it
+                // must never carry epoch/retained-generation state —
+                // and its marker disposition is always exactly
+                // `FailedClosed`, never `Verified`/`Created`/
+                // `Tombstoned`/`Unchanged`.
+                if self.marker_result != MarkerResult::FailedClosed {
+                    return Err(SecretsLifecycleAuditError::MarkerResultInconsistentWithResult);
+                }
+                if self.lineage_epoch.is_some() {
+                    return Err(SecretsLifecycleAuditError::UnexpectedLineageEpoch);
+                }
+                if self.high_water_epoch.is_some() {
+                    return Err(SecretsLifecycleAuditError::UnexpectedHighWaterEpoch);
+                }
+                if !self.retained_generations.is_empty() {
+                    return Err(SecretsLifecycleAuditError::RetainedGenerationsMustBeEmpty);
                 }
                 if self.material_digest_hex.is_some() {
                     return Err(SecretsLifecycleAuditError::UnexpectedMaterialDigest);
@@ -838,6 +880,8 @@ mod tests {
             FailReason::IdentityInodeMismatch,
             FailReason::IdentityCurrentTargetMismatch,
             FailReason::HighWaterRegressed,
+            FailReason::FsyncFailed,
+            FailReason::BrokerOwnershipViolation,
         ];
         let slugs: Vec<&str> = variants.iter().map(|v| v.as_slug()).collect();
         let unique: std::collections::HashSet<_> = slugs.iter().collect();
@@ -991,6 +1035,92 @@ mod tests {
             broken.validate(),
             Err(SecretsLifecycleAuditError::MissingFailReason)
         );
+    }
+
+    #[test]
+    fn failed_closed_rejects_non_failed_closed_marker_result() {
+        let mut record = SecretsLifecycleAuditFields::failed(
+            &ctx(LifecycleAction::Retire),
+            MarkerResult::FailedClosed,
+            FailReason::RetirementTreeAnomaly,
+        );
+        record
+            .validate()
+            .expect("baseline failed record must validate");
+
+        record.marker_result = MarkerResult::Verified;
+        assert_eq!(
+            record.validate(),
+            Err(SecretsLifecycleAuditError::MarkerResultInconsistentWithResult)
+        );
+    }
+
+    #[test]
+    fn failed_closed_rejects_leftover_epoch_or_retained_state() {
+        let base = SecretsLifecycleAuditFields::failed(
+            &ctx(LifecycleAction::Rotate),
+            MarkerResult::FailedClosed,
+            FailReason::HighWaterRegressed,
+        );
+
+        let mut with_lineage = base.clone();
+        with_lineage.lineage_epoch = Some(1);
+        assert_eq!(
+            with_lineage.validate(),
+            Err(SecretsLifecycleAuditError::UnexpectedLineageEpoch)
+        );
+
+        let mut with_high_water = base.clone();
+        with_high_water.high_water_epoch = Some(1);
+        assert_eq!(
+            with_high_water.validate(),
+            Err(SecretsLifecycleAuditError::UnexpectedHighWaterEpoch)
+        );
+
+        let mut with_retained = base;
+        with_retained.retained_generations = vec![1];
+        assert_eq!(
+            with_retained.validate(),
+            Err(SecretsLifecycleAuditError::RetainedGenerationsMustBeEmpty)
+        );
+    }
+
+    /// `retire` + `Denied` is a genuinely reachable pair (an invalid
+    /// `vm_id`, or a lock-acquisition failure, denies a retire attempt
+    /// exactly like every other action) — the action/result matrix
+    /// above must accept it, not just the three previously-listed
+    /// retire outcomes.
+    #[test]
+    fn retire_denied_is_a_reachable_and_valid_pair() {
+        let record = SecretsLifecycleAuditFields::denied(
+            &ctx(LifecycleAction::Retire),
+            FailReason::InvalidVmId,
+        );
+        record
+            .validate()
+            .expect("retire+Denied must be a valid, reachable action/result pair");
+        assert_eq!(record.result, LifecycleResult::Denied);
+        assert_eq!(record.action, LifecycleAction::Retire);
+    }
+
+    #[test]
+    fn retained_generations_zero_is_rejected() {
+        let mut record = SecretsLifecycleAuditFields::rotated(
+            &ctx(LifecycleAction::Rotate),
+            2,
+            2,
+            vec![0],
+            digest(),
+            false,
+        );
+        assert_eq!(
+            record.validate(),
+            Err(SecretsLifecycleAuditError::RetainedGenerationsContainZero)
+        );
+        record.retained_generations = vec![1];
+        record
+            .validate()
+            .expect("nonzero retained generation is valid");
     }
 
     #[test]

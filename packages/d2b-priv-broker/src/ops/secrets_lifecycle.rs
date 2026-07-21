@@ -457,6 +457,13 @@ pub struct RetireIntent {
     /// this transaction. Recovery re-enumerates fresh and requires the
     /// fresh result to be a subset of this plan.
     pub epochs: Vec<u64>,
+    /// Every `.stage-*` staging directory found in the same
+    /// enumeration. Staged entries are real secret-tree contents (a
+    /// stage dir contains, or is about to contain, a copy of
+    /// caller-supplied material bytes): they are deleted exactly like
+    /// `epochs`, with every failure propagated, never as a
+    /// best-effort sweep.
+    pub stage_names: Vec<String>,
     pub high_water_epoch: u64,
     pub phase: RetirePhase,
 }
@@ -536,12 +543,30 @@ fn open_or_create_secrets_dir(
         .parent()
         .ok_or(FailReason::SecretsDirOpenFailed)?;
     path_safe::open_dir_path_safe(&cfg.state_root).map_err(|_| FailReason::SecretsDirOpenFailed)?;
-    path_safe::ensure_dir(vm_dir, cfg.dir_mode, cfg.owner_uid, cfg.owner_gid)
+    // Metadata directories (the per-VM directory, the per-kind
+    // secrets root, and `generations/`) are trusted-broker-owned
+    // bookkeeping, never a consumer-owned material leaf: `cfg.
+    // owner_uid`/`owner_gid` apply only to the `material` file
+    // written by `ensure_staged`. `ensure_dir` only reasserts mode on
+    // every call (it does not re-`chown` when passed `None, None`),
+    // so ownership drift is independently verified here rather than
+    // trusted from construction alone.
+    path_safe::ensure_dir(vm_dir, cfg.dir_mode, None, None)
         .map_err(|_| FailReason::SecretsDirOpenFailed)?;
-    path_safe::ensure_dir(&paths.kind_root, cfg.dir_mode, cfg.owner_uid, cfg.owner_gid)
+    let vm_dir_fd =
+        path_safe::open_dir_path_safe(vm_dir).map_err(|_| FailReason::SecretsDirOpenFailed)?;
+    let vm_dir_stat =
+        path_safe::fstat_fd(vm_dir_fd.as_fd()).map_err(|_| FailReason::BrokerOwnershipViolation)?;
+    verify_broker_owned(&vm_dir_stat, nix::libc::S_IFDIR, cfg.dir_mode)?;
+    drop(vm_dir_fd);
+
+    path_safe::ensure_dir(&paths.kind_root, cfg.dir_mode, None, None)
         .map_err(|_| FailReason::SecretsDirOpenFailed)?;
     let secrets_fd = path_safe::open_dir_path_safe(&paths.kind_root)
         .map_err(|_| FailReason::SecretsDirOpenFailed)?;
+    let secrets_stat = path_safe::fstat_fd(secrets_fd.as_fd())
+        .map_err(|_| FailReason::BrokerOwnershipViolation)?;
+    verify_broker_owned(&secrets_stat, nix::libc::S_IFDIR, cfg.dir_mode)?;
     path_safe::mkdir_at(
         secrets_fd.as_fd(),
         Path::new(GENERATIONS_DIR_NAME),
@@ -554,6 +579,9 @@ fn open_or_create_secrets_dir(
         OFlags::RDONLY | OFlags::DIRECTORY,
     )
     .map_err(|_| FailReason::MarkerTreeOpenFailed)?;
+    let generations_stat = path_safe::fstat_fd(generations_fd.as_fd())
+        .map_err(|_| FailReason::BrokerOwnershipViolation)?;
+    verify_broker_owned(&generations_stat, nix::libc::S_IFDIR, cfg.dir_mode)?;
     Ok((secrets_fd, generations_fd))
 }
 
@@ -597,11 +625,119 @@ fn write_marker(secrets_fd: BorrowedFd<'_>, marker: &MarkerData) -> Result<(), F
         None,
     )
     .map_err(|_| FailReason::MarkerWriteFailed)?;
-    fsync_fd(secrets_fd);
+    fsync_fd(secrets_fd)?;
     Ok(())
 }
 
-fn read_txlog(secrets_fd: BorrowedFd<'_>) -> Result<Option<TxLog>, FailReason> {
+/// Cross-field semantic validation of a leftover `txlog`, bound to the
+/// exact `(vm, kind)` directory it was found in. Run immediately on
+/// read, *before* any recovery attempt: a txlog naming a different
+/// `(vm, kind)`, an internally inconsistent phase/epoch/stage/
+/// high-water combination, or an action a `PromoteIntent` cannot
+/// legally carry is [`FailReason::IntentCorrupt`] rather than
+/// something recovery tries to interpret.
+fn validate_txlog_semantics(log: &TxLog, vm_id: &str, kind: SecretKind) -> Result<(), FailReason> {
+    match log {
+        TxLog::Promote(intent) => validate_promote_intent_semantics(intent, vm_id, kind),
+        TxLog::Retire(intent) => validate_retire_intent_semantics(intent, vm_id, kind),
+    }
+}
+
+fn validate_promote_intent_semantics(
+    intent: &PromoteIntent,
+    vm_id: &str,
+    kind: SecretKind,
+) -> Result<(), FailReason> {
+    if intent.vm != vm_id || intent.kind != kind.as_slug() {
+        return Err(FailReason::IntentCorrupt);
+    }
+    if intent.to_epoch == 0 {
+        return Err(FailReason::IntentCorrupt);
+    }
+    let action_wants_create = match intent.action {
+        LifecycleAction::Provision | LifecycleAction::Rotate => true,
+        LifecycleAction::Rollback => false,
+        LifecycleAction::Retire => return Err(FailReason::IntentCorrupt),
+    };
+    if intent.create_epoch != action_wants_create {
+        return Err(FailReason::IntentCorrupt);
+    }
+    if intent.create_epoch {
+        if intent.stage_name.is_empty() || !intent.stage_name.starts_with(STAGE_PREFIX) {
+            return Err(FailReason::IntentCorrupt);
+        }
+        if intent.expected_identity.is_some() {
+            return Err(FailReason::IntentCorrupt);
+        }
+    } else {
+        if !intent.stage_name.is_empty() {
+            return Err(FailReason::IntentCorrupt);
+        }
+        match &intent.expected_identity {
+            Some(identity) if identity.epoch == intent.to_epoch => {}
+            _ => return Err(FailReason::IntentCorrupt),
+        }
+    }
+    if intent.new_high_water_epoch < intent.to_epoch {
+        return Err(FailReason::IntentCorrupt);
+    }
+    if let Some(previous) = &intent.carry_previous
+        && previous.epoch == intent.to_epoch
+    {
+        return Err(FailReason::IntentCorrupt);
+    }
+    if let Some(prune) = intent.prune_epoch
+        && (prune == intent.to_epoch
+            || intent
+                .carry_previous
+                .as_ref()
+                .is_some_and(|p| p.epoch == prune))
+    {
+        return Err(FailReason::IntentCorrupt);
+    }
+    Ok(())
+}
+
+fn validate_retire_intent_semantics(
+    intent: &RetireIntent,
+    vm_id: &str,
+    kind: SecretKind,
+) -> Result<(), FailReason> {
+    if intent.vm != vm_id || intent.kind != kind.as_slug() {
+        return Err(FailReason::IntentCorrupt);
+    }
+    let mut sorted_epochs = intent.epochs.clone();
+    sorted_epochs.sort_unstable();
+    sorted_epochs.dedup();
+    if sorted_epochs != intent.epochs {
+        return Err(FailReason::IntentCorrupt);
+    }
+    if intent
+        .epochs
+        .iter()
+        .any(|&e| e == 0 || e > intent.high_water_epoch)
+    {
+        return Err(FailReason::IntentCorrupt);
+    }
+    let mut sorted_stage_names = intent.stage_names.clone();
+    sorted_stage_names.sort();
+    sorted_stage_names.dedup();
+    if sorted_stage_names != intent.stage_names
+        || intent
+            .stage_names
+            .iter()
+            .any(|s| !s.starts_with(STAGE_PREFIX))
+    {
+        return Err(FailReason::IntentCorrupt);
+    }
+    Ok(())
+}
+
+fn read_txlog(
+    secrets_fd: BorrowedFd<'_>,
+    vm_id: &str,
+    kind: SecretKind,
+) -> Result<Option<TxLog>, FailReason> {
     let owned = borrowed_to_owned(secrets_fd)?;
     let fd = match path_safe::open_file_at_safe(&owned, TXLOG_FILE_NAME, nix::libc::O_RDONLY) {
         Ok(fd) => fd,
@@ -610,6 +746,7 @@ fn read_txlog(secrets_fd: BorrowedFd<'_>) -> Result<Option<TxLog>, FailReason> {
     };
     let bytes = read_fd_to_end(fd.as_fd()).map_err(|_| FailReason::IntentCorrupt)?;
     let log: TxLog = serde_json::from_slice(&bytes).map_err(|_| FailReason::IntentCorrupt)?;
+    validate_txlog_semantics(&log, vm_id, kind)?;
     Ok(Some(log))
 }
 
@@ -625,7 +762,7 @@ fn write_txlog(secrets_fd: BorrowedFd<'_>, log: &TxLog) -> Result<(), FailReason
         None,
     )
     .map_err(|_| FailReason::IntentWriteFailed)?;
-    fsync_fd(secrets_fd);
+    fsync_fd(secrets_fd)?;
     Ok(())
 }
 
@@ -636,7 +773,7 @@ fn remove_txlog(secrets_fd: BorrowedFd<'_>) -> Result<(), FailReason> {
         Err(err) if err.kind() == io::ErrorKind::NotFound => {}
         Err(_) => return Err(FailReason::IntentWriteFailed),
     }
-    fsync_fd(secrets_fd);
+    fsync_fd(secrets_fd)?;
     Ok(())
 }
 
@@ -666,8 +803,23 @@ fn read_fd_to_end(fd: BorrowedFd<'_>) -> io::Result<Vec<u8>> {
     Ok(buf)
 }
 
-fn fsync_fd(fd: BorrowedFd<'_>) {
-    let _ = rustix::fs::fsync(fd);
+// Test-only fault injection seam: when enabled (see
+// `tests::FsyncFaultGuard`), every `fsync_fd` call fails with
+// `FailReason::FsyncFailed` instead of touching the filesystem, so
+// tests can prove each phase-advancement point genuinely blocks on a
+// durable sync rather than merely calling `fsync` and ignoring the
+// result.
+#[cfg(test)]
+thread_local! {
+    static FSYNC_SHOULD_FAIL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn fsync_fd(fd: BorrowedFd<'_>) -> Result<(), FailReason> {
+    #[cfg(test)]
+    if FSYNC_SHOULD_FAIL.with(|c| c.get()) {
+        return Err(FailReason::FsyncFailed);
+    }
+    rustix::fs::fsync(fd).map_err(|_| FailReason::FsyncFailed)
 }
 
 fn io_from_rustix(err: rustix::io::Errno) -> io::Error {
@@ -675,18 +827,86 @@ fn io_from_rustix(err: rustix::io::Errno) -> io::Error {
 }
 
 // ---------------------------------------------------------------------
+// Broker-trusted ownership (metadata dirs, lock file)
+// ---------------------------------------------------------------------
+
+/// The trusted "broker owner" identity for every path this module
+/// manages *except* a `material` file leaf: metadata directories
+/// (`kind_root`, `generations/`), the marker, the txlog, and the lock
+/// file. Since this module only ever runs inside the broker process,
+/// "owned by the broker" and "owned by this process's effective
+/// uid/gid" are the same statement — a path this module is about to
+/// trust for locking or transaction bookkeeping that reports some
+/// *other* owner was not created by this code path and must never be
+/// trusted, regardless of what `cfg.owner_uid`/`cfg.owner_gid` (the
+/// separate, *consumer*-facing identity applied only to material file
+/// leaves — see [`ensure_staged`]) say.
+fn broker_identity() -> (u32, u32) {
+    (
+        rustix::process::geteuid().as_raw(),
+        rustix::process::getegid().as_raw(),
+    )
+}
+
+/// Verify `stat` is exactly `expected_type` (`S_IFDIR`/`S_IFREG`),
+/// owned by the trusted broker identity, has exactly `expected_mode`
+/// permission bits, and (for a regular file) exactly one hard link.
+/// Any mismatch is [`FailReason::BrokerOwnershipViolation`] — this is
+/// the check that makes broker-owned metadata/lock paths
+/// "non-replaceable": a foreign-owned or hard-linked stand-in is
+/// refused rather than silently trusted.
+fn verify_broker_owned(
+    stat: &nix::libc::stat,
+    expected_type: nix::libc::mode_t,
+    expected_mode: u32,
+) -> Result<(), FailReason> {
+    let (uid, gid) = broker_identity();
+    if (stat.st_mode & nix::libc::S_IFMT) != expected_type {
+        return Err(FailReason::BrokerOwnershipViolation);
+    }
+    if stat.st_uid != uid || stat.st_gid != gid {
+        return Err(FailReason::BrokerOwnershipViolation);
+    }
+    if (stat.st_mode & 0o7777) != expected_mode {
+        return Err(FailReason::BrokerOwnershipViolation);
+    }
+    if expected_type == nix::libc::S_IFREG && stat.st_nlink != 1 {
+        return Err(FailReason::BrokerOwnershipViolation);
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------
 // Cross-process lock
 // ---------------------------------------------------------------------
 
+#[derive(Debug)]
 pub struct LockGuard {
     _file: std::fs::File,
 }
 
+/// Acquire the cross-process exclusive lock for one `(vm, kind)`
+/// directory. Before trusting the `flock`, this verifies: the
+/// anchored parent (`secrets_fd`, i.e. `kind_root`) is a trusted-
+/// broker-owned directory with the expected mode; the lock file
+/// itself is a trusted-broker-owned regular file with the expected
+/// mode and exactly one hard link (never a hard-link plant); and,
+/// immediately after the `flock` succeeds, that the directory entry
+/// named `lock` still resolves (by `(dev, ino)`) to the exact file
+/// this call opened and locked — guarding against the classic
+/// flock-via-path race where another actor unlinks-and-recreates the
+/// lock file between this call's `open` and its `flock`, which would
+/// let two callers each hold an uncontended lock on two different,
+/// now-unlinked-vs-live inodes of the same name.
 fn acquire_lock(
     secrets_fd: BorrowedFd<'_>,
     cfg: &SecretsLifecycleConfig,
 ) -> Result<LockGuard, FailReason> {
     let owned = borrowed_to_owned(secrets_fd)?;
+    let parent_stat =
+        path_safe::fstat_fd(secrets_fd).map_err(|_| FailReason::BrokerOwnershipViolation)?;
+    verify_broker_owned(&parent_stat, nix::libc::S_IFDIR, cfg.dir_mode)?;
+
     let fd = path_safe::create_file_at_safe(
         &owned,
         LOCK_FILE_NAME,
@@ -694,11 +914,31 @@ fn acquire_lock(
         FILE_MODE_DEFAULT,
     )
     .map_err(|_| FailReason::LockUnavailable)?;
+    let lock_stat =
+        path_safe::fstat_fd(fd.as_fd()).map_err(|_| FailReason::BrokerOwnershipViolation)?;
+    verify_broker_owned(&lock_stat, nix::libc::S_IFREG, FILE_MODE_DEFAULT)?;
+
     let file: std::fs::File = fd.into();
     let deadline = Instant::now() + cfg.lock_max_wait;
     loop {
         match flock(file.as_raw_fd(), FlockArg::LockExclusiveNonblock) {
-            Ok(()) => return Ok(LockGuard { _file: file }),
+            Ok(()) => {
+                // Re-stat by name (anchored beneath the already-
+                // verified `secrets_fd` parent) and compare `(dev,
+                // ino)` against the fd we just locked: if another
+                // actor swapped the `lock` entry between our open and
+                // our successful flock, the identity will differ and
+                // we must not trust this lock.
+                let by_name = path_safe::fstatat_nofollow(&owned, LOCK_FILE_NAME)
+                    .map_err(|_| FailReason::BrokerOwnershipViolation)?
+                    .ok_or(FailReason::BrokerOwnershipViolation)?;
+                let by_fd = path_safe::fstat_fd(file.as_fd())
+                    .map_err(|_| FailReason::BrokerOwnershipViolation)?;
+                if by_name.st_dev != by_fd.st_dev || by_name.st_ino != by_fd.st_ino {
+                    return Err(FailReason::BrokerOwnershipViolation);
+                }
+                return Ok(LockGuard { _file: file });
+            }
             Err(nix::errno::Errno::EWOULDBLOCK) => {
                 if Instant::now() >= deadline {
                     return Err(FailReason::LockUnavailable);
@@ -747,57 +987,120 @@ fn parse_strict_epoch(name: &str) -> Option<u64> {
     name.parse::<u64>().ok()
 }
 
-/// Sweep any leftover `.stage-*` directories (from a crash before a
-/// stage was ever recorded in a txlog, or one already superseded).
-/// Best-effort: failures are ignored, since a stray stage dir has no
-/// bearing on correctness (it is never referenced by `current` or the
-/// marker).
-fn sweep_stale_stage_dirs(generations_fd: BorrowedFd<'_>, keep: Option<&str>) {
-    let owned = match borrowed_to_owned(generations_fd) {
-        Ok(fd) => fd,
-        Err(_) => return,
-    };
-    let Ok(dir) = rustix::fs::Dir::read_from(generations_fd) else {
-        return;
-    };
-    for entry in dir.flatten() {
-        let Ok(name) = entry.file_name().to_str() else {
-            continue;
-        };
-        if name == "." || name == ".." {
-            continue;
-        }
-        if !name.starts_with(STAGE_PREFIX) {
-            continue;
-        }
-        if keep == Some(name) {
-            continue;
-        }
-        let _ = remove_dir_tree_one_level(&owned, name);
-    }
-}
-
-/// Remove a one-level directory (a stage dir contains at most one
-/// `material` file) via `remove_path_safe` on each child then the
-/// directory itself.
-fn remove_dir_tree_one_level(parent_fd: &OwnedFd, name: &str) -> io::Result<()> {
-    if let Ok(child_fd) = path_safe::open_at(
-        parent_fd.as_fd(),
+/// Validate a `.stage-*` directory's contents are consistent with an
+/// in-progress or superseded staging attempt: at most one entry,
+/// which (if present) must be a regular file with exactly one hard
+/// link (either the final `material` name, or a stray hidden
+/// temp-file name a crash left behind mid-write via
+/// `path_safe::atomic_replace_fd_with_owner`'s named-stage fallback).
+/// Anything else (a subdirectory, a symlink, more than one entry, or
+/// a hard-linked file) is an anomaly this refuses to silently delete.
+fn validate_stage_dir_contents(generations_fd: &OwnedFd, name: &str) -> Result<(), FailReason> {
+    let dir_fd = path_safe::open_at(
+        generations_fd.as_fd(),
         Path::new(name),
         OFlags::RDONLY | OFlags::DIRECTORY,
-    ) && let Ok(dir) = rustix::fs::Dir::read_from(child_fd.as_fd())
-    {
-        let child_owned = borrowed_to_owned_io(child_fd.as_fd())?;
-        for entry in dir.flatten() {
-            if let Ok(cname) = entry.file_name().to_str()
-                && cname != "."
-                && cname != ".."
-            {
-                let _ = path_safe::remove_path_safe(&child_owned, cname);
-            }
+    )
+    .map_err(|_| FailReason::RetirementTreeAnomaly)?;
+    let dir_owned = borrowed_to_owned(dir_fd.as_fd())?;
+    let inner = rustix::fs::Dir::read_from(dir_fd.as_fd())
+        .map_err(|_| FailReason::RetirementTreeAnomaly)?;
+    let mut seen: Option<String> = None;
+    for entry in inner {
+        let entry = entry.map_err(|_| FailReason::RetirementTreeAnomaly)?;
+        let ename = entry
+            .file_name()
+            .to_str()
+            .map_err(|_| FailReason::RetirementTreeAnomaly)?
+            .to_owned();
+        if ename == "." || ename == ".." {
+            continue;
+        }
+        if seen.is_some() {
+            return Err(FailReason::RetirementTreeAnomaly);
+        }
+        seen = Some(ename);
+    }
+    if let Some(ename) = seen {
+        let stat = path_safe::fstatat_nofollow(&dir_owned, &ename)
+            .map_err(|_| FailReason::RetirementTreeAnomaly)?
+            .ok_or(FailReason::RetirementTreeAnomaly)?;
+        if (stat.st_mode & nix::libc::S_IFMT) != nix::libc::S_IFREG {
+            return Err(FailReason::RetirementTreeAnomaly);
+        }
+        if stat.st_nlink != 1 {
+            return Err(FailReason::RetirementTreeAnomaly);
         }
     }
-    path_safe::remove_path_safe(parent_fd, name)
+    Ok(())
+}
+
+/// Fully delete one `.stage-*` directory: enumerate every child,
+/// delete each one (propagating any failure other than the child
+/// already being absent), prove the directory is observably empty,
+/// fsync it, then remove the directory itself and fsync its parent.
+/// Staged entries are real secret-tree contents — this is never a
+/// best-effort sweep, unlike the old `36d9dcf8`/`dab583f1` design's
+/// `sweep_stale_stage_dirs`: every failure here is propagated and
+/// blocks the caller from advancing.
+fn remove_stage_dir(generations_fd: BorrowedFd<'_>, name: &str) -> Result<(), FailReason> {
+    let generations_owned = borrowed_to_owned(generations_fd)?;
+    let dir_fd = match path_safe::open_at(
+        generations_fd,
+        Path::new(name),
+        OFlags::RDONLY | OFlags::DIRECTORY,
+    ) {
+        Ok(fd) => fd,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err(FailReason::RetirementTreeAnomaly),
+    };
+    let dir_owned = borrowed_to_owned(dir_fd.as_fd())?;
+    let entries = rustix::fs::Dir::read_from(dir_fd.as_fd())
+        .map_err(|_| FailReason::RetirementTreeAnomaly)?;
+    let mut names = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|_| FailReason::RetirementTreeAnomaly)?;
+        let ename = entry
+            .file_name()
+            .to_str()
+            .map_err(|_| FailReason::RetirementTreeAnomaly)?
+            .to_owned();
+        if ename != "." && ename != ".." {
+            names.push(ename);
+        }
+    }
+    drop(dir_fd);
+    for ename in &names {
+        match path_safe::remove_path_safe(&dir_owned, ename) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(_) => return Err(FailReason::RetirementTreeAnomaly),
+        }
+    }
+    // Prove empty before removing: a deletion that silently left a
+    // child behind must never result in the parent being removed
+    // anyway.
+    let remaining = rustix::fs::Dir::read_from(dir_owned.as_fd())
+        .map_err(|_| FailReason::RetirementTreeAnomaly)?;
+    for entry in remaining {
+        let entry = entry.map_err(|_| FailReason::RetirementTreeAnomaly)?;
+        let ename = entry
+            .file_name()
+            .to_str()
+            .map_err(|_| FailReason::RetirementTreeAnomaly)?
+            .to_owned();
+        if ename != "." && ename != ".." {
+            return Err(FailReason::RetirementNotProvablyEmpty);
+        }
+    }
+    fsync_fd(dir_owned.as_fd())?;
+    match path_safe::remove_path_safe(&generations_owned, name) {
+        Ok(()) => {}
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(_) => return Err(FailReason::RetirementTreeAnomaly),
+    }
+    fsync_fd(generations_fd)?;
+    Ok(())
 }
 
 fn borrowed_to_owned_io(fd: BorrowedFd<'_>) -> io::Result<OwnedFd> {
@@ -823,8 +1126,11 @@ fn ensure_staged(
         }
         // Tampered/partial stage from a previous crash: nothing has
         // been activated yet (we are still pre-EpochReady), so it is
-        // safe to discard and let the caller decide (abort/retry).
-        let _ = remove_dir_tree_one_level(&generations_owned, stage_name);
+        // safe to discard and let the caller decide (abort/retry). The
+        // deletion itself must fully succeed and propagate any error;
+        // a stage directory is real secret material and is never
+        // swept on a best-effort basis.
+        remove_stage_dir(generations_owned.as_fd(), stage_name)?;
         return Err(FailReason::RecoveryContentMismatch);
     }
 
@@ -850,8 +1156,8 @@ fn ensure_staged(
         cfg.owner_gid,
     )
     .map_err(|_| FailReason::MaterialWriteFailed)?;
-    fsync_fd(stage_fd.as_fd());
-    fsync_fd(generations_fd);
+    fsync_fd(stage_fd.as_fd())?;
+    fsync_fd(generations_fd)?;
     Ok(true)
 }
 
@@ -880,11 +1186,22 @@ fn promote_stage_to_generation(
     generations_fd: BorrowedFd<'_>,
     stage_name: &str,
     to_epoch: u64,
+    expected_digest_hex: &str,
 ) -> Result<(), FailReason> {
     let epoch_name = to_epoch.to_string();
     let generations_owned = borrowed_to_owned(generations_fd)?;
-    if digest_of_material_dir(&generations_owned, &epoch_name).is_ok() {
-        return Ok(());
+    if let Ok(existing_digest) = digest_of_material_dir(&generations_owned, &epoch_name) {
+        // A directory already occupies this epoch number (e.g. a
+        // recovery re-entry after the rename completed but the phase
+        // advance did not commit). It is only safe to treat this as
+        // "already promoted" if its content is exactly the content we
+        // intended to promote; any other content -- stale, foreign,
+        // or from an aborted/rolled-back attempt -- must never be
+        // silently accepted or overwritten.
+        if existing_digest == expected_digest_hex {
+            return Ok(());
+        }
+        return Err(FailReason::GenerationConflict);
     }
     rustix::fs::renameat(
         generations_fd,
@@ -893,7 +1210,7 @@ fn promote_stage_to_generation(
         Path::new(&epoch_name),
     )
     .map_err(|_| FailReason::GenerationConflict)?;
-    fsync_fd(generations_fd);
+    fsync_fd(generations_fd)?;
     Ok(())
 }
 
@@ -967,27 +1284,59 @@ fn verify_existing_generation_identity(
     Ok(())
 }
 
-/// Read the literal name `current` resolves to (its symlink target's
-/// final component), without following the link past that.
-fn read_current_target(secrets_fd: BorrowedFd<'_>) -> Option<u64> {
-    let target = rustix::fs::readlinkat(secrets_fd, Path::new(CURRENT_LINK_NAME), Vec::new())
+/// The exact literal symlink target text `atomic_swap_current` writes
+/// for a given epoch: `generations/<epoch>`. This is a relative path
+/// anchored at the per-(vm,kind) secrets directory; any other literal
+/// text -- an absolute path, a path with extra segments, or a
+/// differently-rooted relative path -- must never be treated as
+/// resolving to that epoch, even if its final component happens to
+/// match the epoch number.
+fn expected_current_target(epoch: u64) -> String {
+    format!("{GENERATIONS_DIR_NAME}/{epoch}")
+}
+
+/// Read the exact literal text `current` resolves to, without any
+/// component-wise parsing. Returns `None` if the link is absent,
+/// unreadable, or not valid UTF-8.
+fn current_target_text(secrets_fd: BorrowedFd<'_>) -> Option<String> {
+    rustix::fs::readlinkat(secrets_fd, Path::new(CURRENT_LINK_NAME), Vec::new())
         .ok()?
         .into_string()
-        .ok()?;
-    let name = Path::new(&target).file_name()?.to_str()?;
-    parse_strict_epoch(name)
+        .ok()
+}
+
+/// Read the literal name `current` resolves to (its symlink target's
+/// exact literal text), parsed only if it is *exactly*
+/// `generations/<epoch>` and nothing else.
+fn read_current_target(secrets_fd: BorrowedFd<'_>) -> Option<u64> {
+    let target = current_target_text(secrets_fd)?;
+    let (dir, epoch_str) = target.split_once('/')?;
+    if dir != GENERATIONS_DIR_NAME {
+        return None;
+    }
+    parse_strict_epoch(epoch_str)
+}
+
+/// Verify that `current` resolves, by exact literal text, to
+/// `generations/<epoch>` -- not merely to a path whose final
+/// component happens to be that epoch number.
+fn current_resolves_exactly_to(secrets_fd: BorrowedFd<'_>, epoch: u64) -> bool {
+    match current_target_text(secrets_fd) {
+        Some(target) => target == expected_current_target(epoch),
+        None => false,
+    }
 }
 
 /// Atomically swap `current` to point at `generations/<epoch>` using a
 /// hidden-name-then-rename swap so there is never a moment `current`
-/// is absent. Idempotent: if `current` already resolves to `epoch`,
-/// this is a no-op.
+/// is absent. Idempotent: if `current` already resolves, by exact
+/// literal text, to `epoch`, this is a no-op.
 fn atomic_swap_current(secrets_fd: BorrowedFd<'_>, epoch: u64) -> Result<(), FailReason> {
-    if read_current_target(secrets_fd) == Some(epoch) {
+    if current_resolves_exactly_to(secrets_fd, epoch) {
         return Ok(());
     }
     let owned = borrowed_to_owned(secrets_fd)?;
-    let target = PathBuf::from(GENERATIONS_DIR_NAME).join(epoch.to_string());
+    let target = expected_current_target(epoch);
     // Best-effort cleanup of a leftover stage symlink from a previous
     // crash between symlink-creation and rename.
     let _ = path_safe::remove_path_safe(&owned, CURRENT_SWAP_STAGE_NAME);
@@ -1000,7 +1349,7 @@ fn atomic_swap_current(secrets_fd: BorrowedFd<'_>, epoch: u64) -> Result<(), Fai
         Path::new(CURRENT_LINK_NAME),
     )
     .map_err(|_| FailReason::CurrentSwapFailed)?;
-    fsync_fd(secrets_fd);
+    fsync_fd(secrets_fd)?;
     Ok(())
 }
 
@@ -1014,7 +1363,7 @@ fn remove_current_symlink(secrets_fd: BorrowedFd<'_>) -> Result<(), FailReason> 
         rustix::fs::AtFlags::empty(),
     ) {
         Ok(()) => {
-            fsync_fd(secrets_fd);
+            fsync_fd(secrets_fd)?;
             Ok(())
         }
         Err(rustix::io::Errno::NOENT) => Ok(()),
@@ -1049,20 +1398,31 @@ fn remove_generation(generations_fd: BorrowedFd<'_>, epoch: u64) -> Result<(), F
     drop(dir_fd);
     path_safe::remove_path_safe(&generations_owned, &epoch_name)
         .map_err(|_| FailReason::RetirementTreeAnomaly)?;
-    fsync_fd(generations_fd);
+    fsync_fd(generations_fd)?;
     Ok(())
+}
+
+/// The fully-enumerated, validated contents of `generations/`: real
+/// generation epochs and real stage directories. Both halves are
+/// "real secret tree contents" for retirement purposes -- a stage
+/// directory is never swept separately or treated as ignorable.
+struct GenerationTreeContents {
+    epochs: Vec<u64>,
+    stage_names: Vec<String>,
 }
 
 /// Anchored enumeration of `generations/`, failing closed on any
 /// entry this cannot fully account for. Deletes nothing; a caller
-/// invokes this to *plan* retirement, never as part of deleting.
+/// invokes this to *plan* retirement (or to detect drift before
+/// recovery/deletion), never as part of deleting.
 fn enumerate_and_validate_generation_tree(
     generations_fd: BorrowedFd<'_>,
-) -> Result<Vec<u64>, FailReason> {
+) -> Result<GenerationTreeContents, FailReason> {
     let generations_owned = borrowed_to_owned(generations_fd)?;
     let dir = rustix::fs::Dir::read_from(generations_fd)
         .map_err(|_| FailReason::RetirementTreeAnomaly)?;
     let mut epochs = Vec::new();
+    let mut stage_names = Vec::new();
     for entry in dir {
         let entry = entry.map_err(|_| FailReason::RetirementTreeAnomaly)?;
         let name = entry
@@ -1074,10 +1434,13 @@ fn enumerate_and_validate_generation_tree(
             continue;
         }
         if name.starts_with(STAGE_PREFIX) {
-            // Stage dirs are swept separately, never part of the
-            // retirement plan; their presence does not block
-            // retirement, but they must not be miscounted as a
-            // generation either.
+            // Stage directories are real secret-tree contents, not a
+            // separately-swept concern: validate their shape now and
+            // carry them in the plan so retirement/pruning enumerates,
+            // validates, and deletes them under the same accounting as
+            // generation epochs.
+            validate_stage_dir_contents(&generations_owned, &name)?;
+            stage_names.push(name);
             continue;
         }
         let Some(epoch) = parse_strict_epoch(&name) else {
@@ -1087,7 +1450,11 @@ fn enumerate_and_validate_generation_tree(
         epochs.push(epoch);
     }
     epochs.sort_unstable();
-    Ok(epochs)
+    stage_names.sort();
+    Ok(GenerationTreeContents {
+        epochs,
+        stage_names,
+    })
 }
 
 fn verify_generation_dir_is_exactly_material(
@@ -1141,9 +1508,91 @@ fn verify_generation_dir_is_exactly_material(
 }
 
 // ---------------------------------------------------------------------
+// Central pre-mutation validation
+// ---------------------------------------------------------------------
+
+/// Invoked by every public lifecycle action (provision/rotate/
+/// rollback/retire) immediately after loading the on-disk marker,
+/// whenever that marker records an active generation. Refuses to
+/// proceed if the marker's own semantics are internally inconsistent,
+/// or if it does not match the caller's own `(vm_id, kind)`, or if the
+/// live on-disk state has drifted from what the marker claims -- most
+/// importantly, whether `current` resolves, by *exact literal text*,
+/// to the marker's recorded active epoch. A symlink retargeted to any
+/// other path -- absolute, foreign-rooted, or merely ending in the
+/// right epoch number -- is never accepted as a match. This is the
+/// single reachable trigger for
+/// [`FailReason::IdentityCurrentTargetMismatch`].
+fn verify_marker_against_live_state(
+    secrets_fd: BorrowedFd<'_>,
+    generations_fd: BorrowedFd<'_>,
+    vm_id: &str,
+    kind: SecretKind,
+    marker: &MarkerData,
+) -> Result<(), FailReason> {
+    if marker.vm != vm_id || marker.kind != kind.as_slug() {
+        return Err(FailReason::MarkerTamperedOrMissingMaterial);
+    }
+    if marker.retired && marker.active.is_some() {
+        // A tombstoned marker must never also claim an active
+        // generation -- these two fields are mutually exclusive by
+        // construction in every write path this module performs.
+        return Err(FailReason::MarkerTamperedOrMissingMaterial);
+    }
+    let Some(active) = marker.active.as_ref() else {
+        return Ok(());
+    };
+    if active.epoch == 0 || active.epoch > marker.high_water_epoch {
+        return Err(FailReason::MarkerTamperedOrMissingMaterial);
+    }
+    if let Some(previous) = marker.previous.as_ref()
+        && (previous.epoch == 0
+            || previous.epoch == active.epoch
+            || previous.epoch > marker.high_water_epoch)
+    {
+        // `previous` need not be numerically less than `active`: a
+        // rollback swaps the pair, so `previous` can legitimately be
+        // the *larger* epoch that was just rolled back away from.
+        // What must always hold is that it is a distinct, real,
+        // never-exceeding-high-water epoch.
+        return Err(FailReason::MarkerTamperedOrMissingMaterial);
+    }
+    if !current_resolves_exactly_to(secrets_fd, active.epoch) {
+        return Err(FailReason::IdentityCurrentTargetMismatch);
+    }
+    verify_existing_generation_identity(generations_fd, active)?;
+    if let Some(previous) = marker.previous.as_ref() {
+        verify_existing_generation_identity(generations_fd, previous)?;
+    }
+    Ok(())
+}
+
+/// Immediately before deleting a generation directory as part of
+/// retirement, re-stat it (nofollow, anchored) and confirm it is
+/// still exactly a validated material directory. A missing entry is
+/// tolerated (another recovery pass, or this same pass on retry,
+/// already removed it); any other anomaly -- wrong type, extra
+/// entries, a hard-linked material file -- fails closed rather than
+/// deleting a directory that no longer matches what enumeration
+/// originally validated.
+fn revalidate_generation_before_delete(
+    generations_fd: BorrowedFd<'_>,
+    epoch: u64,
+) -> Result<(), FailReason> {
+    let epoch_name = epoch.to_string();
+    let generations_owned = borrowed_to_owned(generations_fd)?;
+    match path_safe::fstatat_nofollow(&generations_owned, &epoch_name) {
+        Ok(Some(_)) => verify_generation_dir_is_exactly_material(&generations_owned, &epoch_name),
+        Ok(None) => Ok(()),
+        Err(_) => Err(FailReason::RetirementTreeAnomaly),
+    }
+}
+
+// ---------------------------------------------------------------------
 // Unified promote engine (fresh action + crash recovery)
 // ---------------------------------------------------------------------
 
+#[derive(Debug)]
 enum PromoteOutcome {
     Completed(MarkerData),
     /// Only reachable when recovering a crash that occurred before
@@ -1163,22 +1612,50 @@ fn execute_promote(
         match intent.phase {
             PromotePhase::Planned => {
                 if intent.create_epoch {
-                    let staged = ensure_staged(
-                        generations_fd,
-                        cfg,
-                        &intent.stage_name,
-                        &intent.expected_digest_hex,
-                        material,
-                    )?;
-                    if !staged {
-                        remove_txlog(secrets_fd)?;
-                        return Ok(PromoteOutcome::AbortedNoMaterial);
+                    let epoch_name = intent.to_epoch.to_string();
+                    let generations_owned = borrowed_to_owned(generations_fd)?;
+                    let existing_digest =
+                        digest_of_material_dir(&generations_owned, &epoch_name).ok();
+                    match existing_digest {
+                        Some(digest) if digest == intent.expected_digest_hex => {
+                            // The rename to the final epoch name
+                            // already completed in a previous crashed
+                            // attempt (the phase-advance write itself
+                            // did not commit before the crash). The
+                            // epoch is fully materialized with exactly
+                            // the expected content: never abandon or
+                            // re-stage it, just continue forward.
+                        }
+                        Some(_) => {
+                            // Some directory already occupies this
+                            // epoch number, but its content does not
+                            // match what this transaction intended to
+                            // promote. This can only be a stale,
+                            // foreign, or previously-aborted
+                            // generation; never silently adopt or
+                            // overwrite it -- fail closed.
+                            return Err(FailReason::RecoveryContentMismatch);
+                        }
+                        None => {
+                            let staged = ensure_staged(
+                                generations_fd,
+                                cfg,
+                                &intent.stage_name,
+                                &intent.expected_digest_hex,
+                                material,
+                            )?;
+                            if !staged {
+                                remove_txlog(secrets_fd)?;
+                                return Ok(PromoteOutcome::AbortedNoMaterial);
+                            }
+                            promote_stage_to_generation(
+                                generations_fd,
+                                &intent.stage_name,
+                                intent.to_epoch,
+                                &intent.expected_digest_hex,
+                            )?;
+                        }
                     }
-                    promote_stage_to_generation(
-                        generations_fd,
-                        &intent.stage_name,
-                        intent.to_epoch,
-                    )?;
                 } else {
                     let expected = intent
                         .expected_identity
@@ -1232,7 +1709,17 @@ fn execute_promote(
                     // enumeration.
                     let _ = remove_generation(generations_fd, prune);
                 }
-                sweep_stale_stage_dirs(generations_fd, None);
+                // Any leftover `.stage-*` directory at this point is a
+                // real secret-tree entry from this or a prior crashed
+                // attempt (never the one this transaction just
+                // promoted -- that one was already renamed away).
+                // Enumerate, validate, and delete it, propagating any
+                // failure: a stage directory is never swept on a
+                // best-effort basis.
+                let leftover = enumerate_and_validate_generation_tree(generations_fd)?;
+                for stage_name in leftover.stage_names {
+                    remove_stage_dir(generations_fd, &stage_name)?;
+                }
                 remove_txlog(secrets_fd)?;
                 let marker = read_marker(secrets_fd)?.ok_or(FailReason::MarkerWriteFailed)?;
                 return Ok(PromoteOutcome::Completed(marker));
@@ -1254,7 +1741,12 @@ fn execute_retire(
         match intent.phase {
             RetirePhase::Enumerated => {
                 let fresh = enumerate_and_validate_generation_tree(generations_fd)?;
-                if !fresh.iter().all(|e| intent.epochs.contains(e)) {
+                if !fresh.epochs.iter().all(|e| intent.epochs.contains(e))
+                    || !fresh
+                        .stage_names
+                        .iter()
+                        .all(|s| intent.stage_names.contains(s))
+                {
                     return Err(FailReason::RecoveryAmbiguous);
                 }
                 remove_current_symlink(secrets_fd)?;
@@ -1263,21 +1755,27 @@ fn execute_retire(
             }
             RetirePhase::CurrentRemoved => {
                 for &epoch in &intent.epochs {
+                    revalidate_generation_before_delete(generations_fd, epoch)?;
                     remove_generation(generations_fd, epoch)?;
+                }
+                for stage_name in &intent.stage_names {
+                    // Staged entries are real secret-tree contents:
+                    // enumerate/validate/delete them exactly like
+                    // generation epochs, propagating every failure.
+                    remove_stage_dir(generations_fd, stage_name)?;
                 }
                 intent.phase = RetirePhase::EpochsRemoved;
                 write_txlog(secrets_fd, &TxLog::Retire(intent.clone()))?;
             }
             RetirePhase::EpochsRemoved => {
                 let remaining = enumerate_and_validate_generation_tree(generations_fd)?;
-                if !remaining.is_empty() {
+                if !remaining.epochs.is_empty() || !remaining.stage_names.is_empty() {
                     return Err(FailReason::RetirementNotProvablyEmpty);
                 }
                 intent.phase = RetirePhase::ProvenEmpty;
                 write_txlog(secrets_fd, &TxLog::Retire(intent.clone()))?;
             }
             RetirePhase::ProvenEmpty => {
-                sweep_stale_stage_dirs(generations_fd, None);
                 let marker = MarkerData {
                     v: MARKER_SCHEMA_VERSION,
                     vm: intent.vm.clone(),
@@ -1310,9 +1808,11 @@ pub struct RecoveryError {
 fn recover_if_needed(
     secrets_fd: BorrowedFd<'_>,
     generations_fd: BorrowedFd<'_>,
+    vm_id: &str,
+    kind: SecretKind,
     cfg: &SecretsLifecycleConfig,
 ) -> Result<bool, RecoveryError> {
-    let txlog = read_txlog(secrets_fd).map_err(|reason| RecoveryError {
+    let txlog = read_txlog(secrets_fd, vm_id, kind).map_err(|reason| RecoveryError {
         action: None,
         reason,
     })?;
@@ -1371,7 +1871,7 @@ pub fn recover_in_flight_transaction(
         let ctx = context(vm_id, kind, LifecycleAction::Provision, &paths);
         denied(&ctx, reason)
     })?;
-    match recover_if_needed(secrets_fd.as_fd(), generations_fd.as_fd(), cfg) {
+    match recover_if_needed(secrets_fd.as_fd(), generations_fd.as_fd(), vm_id, kind, cfg) {
         Ok(recovered) => Ok(recovered),
         Err(err) => {
             let ctx = context(
@@ -1418,18 +1918,29 @@ fn open_and_recover(
     let (secrets_fd, generations_fd) =
         open_or_create_secrets_dir(&paths, cfg).map_err(|reason| denied(&ctx, reason))?;
     let lock = acquire_lock(secrets_fd.as_fd(), cfg).map_err(|reason| denied(&ctx, reason))?;
-    let recovered = match recover_if_needed(secrets_fd.as_fd(), generations_fd.as_fd(), cfg) {
-        Ok(recovered) => recovered,
-        Err(err) => {
-            let recovered_ctx = context(vm_id, kind, err.action.unwrap_or(action), &paths);
-            return Err(failed_closed(
-                &recovered_ctx,
-                MarkerResult::FailedClosed,
-                err.reason,
-            ));
-        }
-    };
+    let recovered =
+        match recover_if_needed(secrets_fd.as_fd(), generations_fd.as_fd(), vm_id, kind, cfg) {
+            Ok(recovered) => recovered,
+            Err(err) => {
+                let recovered_ctx = context(vm_id, kind, err.action.unwrap_or(action), &paths);
+                return Err(failed_closed(
+                    &recovered_ctx,
+                    MarkerResult::FailedClosed,
+                    err.reason,
+                ));
+            }
+        };
     let marker = read_marker(secrets_fd.as_fd()).map_err(|reason| denied(&ctx, reason))?;
+    if let Some(marker) = &marker {
+        verify_marker_against_live_state(
+            secrets_fd.as_fd(),
+            generations_fd.as_fd(),
+            vm_id,
+            kind,
+            marker,
+        )
+        .map_err(|reason| failed_closed(&ctx, MarkerResult::FailedClosed, reason))?;
+    }
     Ok((paths, secrets_fd, generations_fd, lock, recovered, marker))
 }
 
@@ -1457,7 +1968,7 @@ pub fn provision(
     }
     let existing = enumerate_and_validate_generation_tree(generations_fd.as_fd())
         .map_err(|reason| failed_closed(&ctx, MarkerResult::FailedClosed, reason))?;
-    if !existing.is_empty() {
+    if !existing.epochs.is_empty() || !existing.stage_names.is_empty() {
         return Err(failed_closed(
             &ctx,
             MarkerResult::FailedClosed,
@@ -1656,7 +2167,6 @@ pub fn retire(
         open_and_recover(vm_id, kind, LifecycleAction::Retire, cfg)?;
     let ctx = context(vm_id, kind, LifecycleAction::Retire, &paths);
 
-    sweep_stale_stage_dirs(generations_fd.as_fd(), None);
     let existing = enumerate_and_validate_generation_tree(generations_fd.as_fd())
         .map_err(|reason| failed_closed(&ctx, MarkerResult::FailedClosed, reason))?;
 
@@ -1666,7 +2176,7 @@ pub fn retire(
         .map(|m| m.active.is_some() && !m.retired)
         .unwrap_or(false);
 
-    if existing.is_empty() {
+    if existing.epochs.is_empty() && existing.stage_names.is_empty() {
         if marker_claims_active {
             // Marker says material should exist; the physical tree
             // disagrees. Fail closed rather than silently accepting
@@ -1683,11 +2193,13 @@ pub fn retire(
         ));
     }
 
-    let high_water_epoch = recorded_high_water.max(existing.iter().copied().max().unwrap_or(0));
+    let high_water_epoch =
+        recorded_high_water.max(existing.epochs.iter().copied().max().unwrap_or(0));
     let intent = RetireIntent {
         vm: vm_id.to_owned(),
         kind: kind.as_slug().to_owned(),
-        epochs: existing,
+        epochs: existing.epochs,
+        stage_names: existing.stage_names,
         high_water_epoch,
         phase: RetirePhase::Enumerated,
     };
@@ -1733,6 +2245,24 @@ mod tests {
         fields.validate().unwrap_or_else(|err| {
             panic!("audit fields failed validation: {err}\nfields: {fields:?}")
         });
+    }
+
+    /// RAII guard that makes every `fsync_fd` call in this thread fail
+    /// with [`FailReason::FsyncFailed`] for as long as it is held,
+    /// restoring normal behavior on drop (including via early
+    /// return/panic unwinding) so one test's fault injection can never
+    /// leak into another.
+    struct FsyncFaultGuard;
+    impl FsyncFaultGuard {
+        fn enable() -> Self {
+            FSYNC_SHOULD_FAIL.with(|c| c.set(true));
+            FsyncFaultGuard
+        }
+    }
+    impl Drop for FsyncFaultGuard {
+        fn drop(&mut self) {
+            FSYNC_SHOULD_FAIL.with(|c| c.set(false));
+        }
     }
 
     // -------------------------------------------------------------
@@ -1913,7 +2443,8 @@ mod tests {
             )
             .unwrap()
         );
-        promote_stage_to_generation(generations_fd.as_fd(), &stage_name, 2).unwrap();
+        promote_stage_to_generation(generations_fd.as_fd(), &stage_name, 2, &mat.digest_hex())
+            .unwrap();
         atomic_swap_current(secrets_fd.as_fd(), 2).unwrap();
         let prior_active = read_marker(secrets_fd.as_fd())
             .unwrap()
@@ -1944,7 +2475,7 @@ mod tests {
         let (secrets_fd, _generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
         let marker = read_marker(secrets_fd.as_fd()).unwrap().unwrap();
         assert_eq!(marker.active.unwrap().epoch, 2);
-        assert!(read_txlog(secrets_fd.as_fd()).unwrap().is_none());
+        assert!(read_txlog(secrets_fd.as_fd(), vm, kind).unwrap().is_none());
     }
 
     #[test]
@@ -1962,6 +2493,7 @@ mod tests {
             vm: vm.to_owned(),
             kind: kind.as_slug().to_owned(),
             epochs: vec![1],
+            stage_names: Vec::new(),
             high_water_epoch: 1,
             phase: RetirePhase::CurrentRemoved,
         };
@@ -2002,7 +2534,8 @@ mod tests {
             Some(&mat),
         )
         .unwrap();
-        promote_stage_to_generation(generations_fd.as_fd(), &stage_name, 2).unwrap();
+        promote_stage_to_generation(generations_fd.as_fd(), &stage_name, 2, &mat.digest_hex())
+            .unwrap();
         atomic_swap_current(secrets_fd.as_fd(), 2).unwrap();
         // Corrupt the recorded digest so `CurrentPromoted`'s identity
         // check cannot match — this must fail closed, not silently
@@ -2130,8 +2663,14 @@ mod tests {
         )
         .unwrap();
 
+        // The hard-linked generation is still the marker's recorded
+        // *active* generation, so the central pre-mutation identity
+        // check (`verify_marker_against_live_state`, run before
+        // retire's own tree enumeration) catches the link-count drift
+        // first, with a more specific reason than the generic
+        // tree-anomaly enumeration would have produced.
         let err = retire(vm, kind, &cfg).unwrap_err();
-        assert_eq!(err.reason, FailReason::RetirementTreeAnomaly);
+        assert_eq!(err.reason, FailReason::IdentityLinkCountMismatch);
     }
 
     #[test]
@@ -2241,5 +2780,841 @@ mod tests {
         assert_eq!(err.reason, FailReason::InvalidVmId);
         // Nothing was created under the state root.
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    // -------------------------------------------------------------
+    // Finding-round-3 adversarial coverage: fsync-failure injection
+    // -------------------------------------------------------------
+
+    #[test]
+    fn fsync_failure_in_ensure_staged_blocks_and_is_retryable() {
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let paths = derive_paths("mia", SecretKind::GuestSigningKey, &cfg).unwrap();
+        let (_secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let mat = material(b"fresh");
+        let stage_name = random_stage_name();
+
+        {
+            let _fault = FsyncFaultGuard::enable();
+            let err = ensure_staged(
+                generations_fd.as_fd(),
+                &cfg,
+                &stage_name,
+                &mat.digest_hex(),
+                Some(&mat),
+            )
+            .unwrap_err();
+            assert_eq!(err, FailReason::FsyncFailed);
+        }
+        // The material bytes were durably written to disk by the time
+        // `fsync_fd` was reached (only the sync itself failed), so a
+        // retry with fsync working again must observe the same digest
+        // and complete idempotently rather than double-writing or
+        // erroring.
+        assert!(
+            ensure_staged(
+                generations_fd.as_fd(),
+                &cfg,
+                &stage_name,
+                &mat.digest_hex(),
+                Some(&mat),
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn fsync_failure_in_promote_stage_to_generation_blocks_and_is_retryable() {
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let paths = derive_paths("nadia", SecretKind::GuestSigningKey, &cfg).unwrap();
+        let (_secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let mat = material(b"fresh");
+        let stage_name = random_stage_name();
+        ensure_staged(
+            generations_fd.as_fd(),
+            &cfg,
+            &stage_name,
+            &mat.digest_hex(),
+            Some(&mat),
+        )
+        .unwrap();
+
+        {
+            let _fault = FsyncFaultGuard::enable();
+            let err = promote_stage_to_generation(
+                generations_fd.as_fd(),
+                &stage_name,
+                7,
+                &mat.digest_hex(),
+            )
+            .unwrap_err();
+            assert_eq!(err, FailReason::FsyncFailed);
+        }
+        // The rename already landed on disk before the failed fsync;
+        // retrying must see the matching digest at the final name and
+        // treat it as already-promoted (never re-rename, never error).
+        promote_stage_to_generation(generations_fd.as_fd(), &stage_name, 7, &mat.digest_hex())
+            .unwrap();
+    }
+
+    #[test]
+    fn fsync_failure_in_atomic_swap_current_blocks_and_is_retryable() {
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "oscar";
+        let kind = SecretKind::GuestSigningKey;
+        provision(vm, kind, material(b"e1"), &cfg).unwrap();
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        // Materialise a second generation directly (bypassing the
+        // marker/txlog machinery) so swapping `current` to it is a
+        // genuine change of target, not a same-epoch no-op that would
+        // short-circuit before ever reaching `fsync_fd`.
+        let mat2 = material(b"e2");
+        let stage_name = random_stage_name();
+        ensure_staged(
+            generations_fd.as_fd(),
+            &cfg,
+            &stage_name,
+            &mat2.digest_hex(),
+            Some(&mat2),
+        )
+        .unwrap();
+        promote_stage_to_generation(generations_fd.as_fd(), &stage_name, 2, &mat2.digest_hex())
+            .unwrap();
+
+        {
+            let _fault = FsyncFaultGuard::enable();
+            let err = atomic_swap_current(secrets_fd.as_fd(), 2).unwrap_err();
+            assert_eq!(err, FailReason::FsyncFailed);
+        }
+        // `current` still resolves correctly afterward: either the
+        // rename never completed (still epoch 1, unchanged) or it did
+        // and only the sync failed -- both are safe, and a retry with
+        // fsync restored must succeed.
+        atomic_swap_current(secrets_fd.as_fd(), 2).unwrap();
+        assert!(current_resolves_exactly_to(secrets_fd.as_fd(), 2));
+    }
+
+    #[test]
+    fn fsync_failure_in_write_marker_blocks_marker_commit_phase() {
+        // Drive `execute_promote` up to `CurrentPromoted` normally
+        // (fsync working), then inject a failure exactly at the
+        // `write_marker` call inside the `CurrentPromoted` phase and
+        // confirm: (a) the call fails with `FsyncFailed`; (b) the
+        // txlog still records `CurrentPromoted` (the phase advance to
+        // `MarkerCommitted` never durably landed, so a crash here is
+        // still recoverable rather than mistaken for "finished"); and
+        // (c) a subsequent recovery pass with fsync restored
+        // completes the promotion and removes the txlog.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "priya";
+        let kind = SecretKind::GuestSigningKey;
+        provision(vm, kind, material(b"e1"), &cfg).unwrap();
+
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let mat = material(b"e2");
+        let stage_name = random_stage_name();
+        ensure_staged(
+            generations_fd.as_fd(),
+            &cfg,
+            &stage_name,
+            &mat.digest_hex(),
+            Some(&mat),
+        )
+        .unwrap();
+        promote_stage_to_generation(generations_fd.as_fd(), &stage_name, 2, &mat.digest_hex())
+            .unwrap();
+        atomic_swap_current(secrets_fd.as_fd(), 2).unwrap();
+        let intent = PromoteIntent {
+            vm: vm.to_owned(),
+            kind: kind.as_slug().to_owned(),
+            action: LifecycleAction::Rotate,
+            to_epoch: 2,
+            create_epoch: true,
+            stage_name,
+            expected_digest_hex: mat.digest_hex(),
+            expected_identity: None,
+            carry_previous: None,
+            prune_epoch: None,
+            new_high_water_epoch: 2,
+            first_provisioned_ms: now_ms(),
+            phase: PromotePhase::CurrentPromoted,
+        };
+        write_txlog(secrets_fd.as_fd(), &TxLog::Promote(intent.clone())).unwrap();
+
+        {
+            let _fault = FsyncFaultGuard::enable();
+            let err = execute_promote(
+                secrets_fd.as_fd(),
+                generations_fd.as_fd(),
+                &cfg,
+                intent,
+                None,
+            )
+            .unwrap_err();
+            assert_eq!(err, FailReason::FsyncFailed);
+        }
+        // The marker rename+write already landed (fsync only
+        // failed to make it durable, it did not block visibility),
+        // so this process's own next read already observes epoch 2;
+        // what fsync failing must guarantee is that the phase was
+        // never advanced past `CurrentPromoted` -- the txlog still
+        // records that phase, so a crash here is safely recoverable
+        // rather than being treated as already-finished.
+        let marker = read_marker(secrets_fd.as_fd()).unwrap().unwrap();
+        assert_eq!(marker.active.as_ref().unwrap().epoch, 2);
+        let txlog = read_txlog(secrets_fd.as_fd(), vm, kind).unwrap().unwrap();
+        match txlog {
+            TxLog::Promote(intent) => assert_eq!(intent.phase, PromotePhase::CurrentPromoted),
+            TxLog::Retire(_) => panic!("expected a leftover Promote txlog"),
+        }
+
+        // With fsync restored, recovery completes forward: the
+        // txlog is durably removed and the marker remains at epoch 2.
+        let recovered = recover_in_flight_transaction(vm, kind, &cfg).unwrap();
+        assert!(recovered);
+        let marker = read_marker(secrets_fd.as_fd()).unwrap().unwrap();
+        assert_eq!(marker.active.as_ref().unwrap().epoch, 2);
+        assert!(read_txlog(secrets_fd.as_fd(), vm, kind).unwrap().is_none());
+    }
+
+    #[test]
+    fn fsync_failure_in_remove_generation_blocks_and_is_retryable() {
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let paths = derive_paths("quinn", SecretKind::GuestSigningKey, &cfg).unwrap();
+        let (_secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let mat = material(b"e1");
+        let stage_name = random_stage_name();
+        ensure_staged(
+            generations_fd.as_fd(),
+            &cfg,
+            &stage_name,
+            &mat.digest_hex(),
+            Some(&mat),
+        )
+        .unwrap();
+        promote_stage_to_generation(generations_fd.as_fd(), &stage_name, 1, &mat.digest_hex())
+            .unwrap();
+
+        {
+            let _fault = FsyncFaultGuard::enable();
+            let err = remove_generation(generations_fd.as_fd(), 1).unwrap_err();
+            assert_eq!(err, FailReason::FsyncFailed);
+        }
+        // Idempotent retry (whether or not the delete itself already
+        // landed) must succeed once fsync works again.
+        remove_generation(generations_fd.as_fd(), 1).unwrap();
+    }
+
+    #[test]
+    fn fsync_failure_in_remove_stage_dir_blocks_and_is_retryable() {
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let paths = derive_paths("rex", SecretKind::GuestSigningKey, &cfg).unwrap();
+        let (_secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let mat = material(b"stray");
+        let stage_name = random_stage_name();
+        ensure_staged(
+            generations_fd.as_fd(),
+            &cfg,
+            &stage_name,
+            &mat.digest_hex(),
+            Some(&mat),
+        )
+        .unwrap();
+
+        {
+            let _fault = FsyncFaultGuard::enable();
+            let err = remove_stage_dir(generations_fd.as_fd(), &stage_name).unwrap_err();
+            assert_eq!(err, FailReason::FsyncFailed);
+        }
+        remove_stage_dir(generations_fd.as_fd(), &stage_name).unwrap();
+    }
+
+    // -------------------------------------------------------------
+    // Finding 2: orphan-epoch / pre-existing-digest scenarios
+    // -------------------------------------------------------------
+
+    #[test]
+    fn promote_stage_to_generation_rejects_foreign_content_at_target_epoch() {
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let paths = derive_paths("sasha", SecretKind::GuestSigningKey, &cfg).unwrap();
+        let (_secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+
+        // A foreign directory already occupies the target epoch
+        // number with content that does not match what we intend to
+        // promote.
+        let foreign = material(b"foreign-content");
+        let foreign_stage = random_stage_name();
+        ensure_staged(
+            generations_fd.as_fd(),
+            &cfg,
+            &foreign_stage,
+            &foreign.digest_hex(),
+            Some(&foreign),
+        )
+        .unwrap();
+        promote_stage_to_generation(
+            generations_fd.as_fd(),
+            &foreign_stage,
+            5,
+            &foreign.digest_hex(),
+        )
+        .unwrap();
+
+        let intended = material(b"intended-content");
+        let stage_name = random_stage_name();
+        ensure_staged(
+            generations_fd.as_fd(),
+            &cfg,
+            &stage_name,
+            &intended.digest_hex(),
+            Some(&intended),
+        )
+        .unwrap();
+        let err = promote_stage_to_generation(
+            generations_fd.as_fd(),
+            &stage_name,
+            5,
+            &intended.digest_hex(),
+        )
+        .unwrap_err();
+        assert_eq!(err, FailReason::GenerationConflict);
+        // The foreign directory must be untouched -- never silently
+        // overwritten or adopted.
+        assert_eq!(
+            digest_of_material_dir(&borrowed_to_owned(generations_fd.as_fd()).unwrap(), "5")
+                .unwrap(),
+            foreign.digest_hex()
+        );
+    }
+
+    #[test]
+    fn planned_phase_recovery_detects_already_renamed_orphan_epoch_and_continues() {
+        // Regression guard for "never abandon/reuse an orphan epoch":
+        // simulate a crash where the stage-to-epoch rename already
+        // completed but the phase-advance write from `Planned` to
+        // `EpochReady` never committed. Recovery must detect the
+        // already-renamed epoch by exact digest match and continue
+        // forward, never abandon the transaction nor silently adopt a
+        // mismatched directory.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "tariq";
+        let kind = SecretKind::GuestSigningKey;
+        provision(vm, kind, material(b"e1"), &cfg).unwrap();
+
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let mat = material(b"e2");
+        let stage_name = random_stage_name();
+        ensure_staged(
+            generations_fd.as_fd(),
+            &cfg,
+            &stage_name,
+            &mat.digest_hex(),
+            Some(&mat),
+        )
+        .unwrap();
+        // Simulate the rename having already happened, but the txlog
+        // still recording `Planned` (as if the crash landed between
+        // the rename and the phase-advance write).
+        promote_stage_to_generation(generations_fd.as_fd(), &stage_name, 2, &mat.digest_hex())
+            .unwrap();
+        let intent = PromoteIntent {
+            vm: vm.to_owned(),
+            kind: kind.as_slug().to_owned(),
+            action: LifecycleAction::Rotate,
+            to_epoch: 2,
+            create_epoch: true,
+            stage_name,
+            expected_digest_hex: mat.digest_hex(),
+            expected_identity: None,
+            carry_previous: None,
+            prune_epoch: None,
+            new_high_water_epoch: 2,
+            first_provisioned_ms: now_ms(),
+            phase: PromotePhase::Planned,
+        };
+        write_txlog(secrets_fd.as_fd(), &TxLog::Promote(intent)).unwrap();
+        drop(secrets_fd);
+        drop(generations_fd);
+
+        let recovered = recover_in_flight_transaction(vm, kind, &cfg).unwrap();
+        assert!(recovered);
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (secrets_fd, _generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let marker = read_marker(secrets_fd.as_fd()).unwrap().unwrap();
+        assert_eq!(marker.active.unwrap().epoch, 2);
+    }
+
+    #[test]
+    fn planned_phase_recovery_rejects_mismatched_content_at_orphan_epoch() {
+        // The inverse of the above: the pre-existing directory at the
+        // target epoch number has content that does NOT match the
+        // recorded transaction's expected digest. This must never be
+        // silently adopted -- fail closed instead.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "umberto";
+        let kind = SecretKind::GuestSigningKey;
+        provision(vm, kind, material(b"e1"), &cfg).unwrap();
+
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let foreign = material(b"unexpected-content");
+        let foreign_stage = random_stage_name();
+        ensure_staged(
+            generations_fd.as_fd(),
+            &cfg,
+            &foreign_stage,
+            &foreign.digest_hex(),
+            Some(&foreign),
+        )
+        .unwrap();
+        promote_stage_to_generation(
+            generations_fd.as_fd(),
+            &foreign_stage,
+            2,
+            &foreign.digest_hex(),
+        )
+        .unwrap();
+
+        let intent = PromoteIntent {
+            vm: vm.to_owned(),
+            kind: kind.as_slug().to_owned(),
+            action: LifecycleAction::Rotate,
+            to_epoch: 2,
+            create_epoch: true,
+            stage_name: random_stage_name(),
+            expected_digest_hex: material(b"e2").digest_hex(),
+            expected_identity: None,
+            carry_previous: None,
+            prune_epoch: None,
+            new_high_water_epoch: 2,
+            first_provisioned_ms: now_ms(),
+            phase: PromotePhase::Planned,
+        };
+        write_txlog(secrets_fd.as_fd(), &TxLog::Promote(intent)).unwrap();
+        drop(secrets_fd);
+        drop(generations_fd);
+
+        let err = recover_in_flight_transaction(vm, kind, &cfg).unwrap_err();
+        assert_eq!(err.reason, FailReason::RecoveryContentMismatch);
+        // Epoch 1 (the real active generation) must be entirely
+        // untouched.
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (secrets_fd, _generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        assert_eq!(read_current_target(secrets_fd.as_fd()), Some(1));
+    }
+
+    // -------------------------------------------------------------
+    // Finding 1: literal-`current`-target tamper
+    // -------------------------------------------------------------
+
+    #[test]
+    fn current_resolves_exactly_to_rejects_foreign_path_with_matching_final_component() {
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let paths = derive_paths("vera", SecretKind::GuestSigningKey, &cfg).unwrap();
+        let (secrets_fd, _generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+
+        // A symlink whose target merely *ends* in the right epoch
+        // number, but is not the exact literal `generations/<epoch>`
+        // text, must never be treated as resolving to that epoch.
+        let _ = rustix::fs::unlinkat(
+            secrets_fd.as_fd(),
+            Path::new(CURRENT_LINK_NAME),
+            rustix::fs::AtFlags::empty(),
+        );
+        rustix::fs::symlinkat(
+            "/some/foreign/absolute/path/7",
+            secrets_fd.as_fd(),
+            Path::new(CURRENT_LINK_NAME),
+        )
+        .unwrap();
+        assert!(!current_resolves_exactly_to(secrets_fd.as_fd(), 7));
+        assert_eq!(read_current_target(secrets_fd.as_fd()), None);
+
+        let _ = rustix::fs::unlinkat(
+            secrets_fd.as_fd(),
+            Path::new(CURRENT_LINK_NAME),
+            rustix::fs::AtFlags::empty(),
+        );
+        rustix::fs::symlinkat(
+            "../../foreign/7",
+            secrets_fd.as_fd(),
+            Path::new(CURRENT_LINK_NAME),
+        )
+        .unwrap();
+        assert!(!current_resolves_exactly_to(secrets_fd.as_fd(), 7));
+        assert_eq!(read_current_target(secrets_fd.as_fd()), None);
+
+        let _ = rustix::fs::unlinkat(
+            secrets_fd.as_fd(),
+            Path::new(CURRENT_LINK_NAME),
+            rustix::fs::AtFlags::empty(),
+        );
+        rustix::fs::symlinkat(
+            expected_current_target(7),
+            secrets_fd.as_fd(),
+            Path::new(CURRENT_LINK_NAME),
+        )
+        .unwrap();
+        assert!(current_resolves_exactly_to(secrets_fd.as_fd(), 7));
+        assert_eq!(read_current_target(secrets_fd.as_fd()), Some(7));
+    }
+
+    #[test]
+    fn tampered_current_symlink_is_reachable_and_fails_closed_on_rotate() {
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "wendy";
+        let kind = SecretKind::GuestSigningKey;
+        provision(vm, kind, material(b"e1"), &cfg).unwrap();
+
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (secrets_fd, _generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let _ = rustix::fs::unlinkat(
+            secrets_fd.as_fd(),
+            Path::new(CURRENT_LINK_NAME),
+            rustix::fs::AtFlags::empty(),
+        );
+        // Retarget `current` to an absolute path whose final
+        // component happens to be "1" (the real active epoch's
+        // number) but which is not the literal `generations/1` text
+        // this module ever writes.
+        rustix::fs::symlinkat(
+            "/etc/passwd/../1",
+            secrets_fd.as_fd(),
+            Path::new(CURRENT_LINK_NAME),
+        )
+        .unwrap();
+        drop(secrets_fd);
+
+        let err = rotate(vm, kind, material(b"e2"), &cfg).unwrap_err();
+        assert_eq!(err.reason, FailReason::IdentityCurrentTargetMismatch);
+    }
+
+    // -------------------------------------------------------------
+    // Finding 3: staged entries are real, propagated deletions
+    // -------------------------------------------------------------
+
+    #[test]
+    fn validate_stage_dir_contents_rejects_extra_entries_and_subdirectories() {
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let paths = derive_paths("xander", SecretKind::GuestSigningKey, &cfg).unwrap();
+        let (_secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let mat = material(b"e1");
+        let stage_name = random_stage_name();
+        ensure_staged(
+            generations_fd.as_fd(),
+            &cfg,
+            &stage_name,
+            &mat.digest_hex(),
+            Some(&mat),
+        )
+        .unwrap();
+
+        let owned = borrowed_to_owned(generations_fd.as_fd()).unwrap();
+        let stage_dir_fd = path_safe::open_at(
+            owned.as_fd(),
+            Path::new(&stage_name),
+            OFlags::RDONLY | OFlags::DIRECTORY,
+        )
+        .unwrap();
+        let stage_dir_owned = borrowed_to_owned(stage_dir_fd.as_fd()).unwrap();
+        path_safe::mkdir_at(stage_dir_owned.as_fd(), Path::new("extra-subdir"), 0o700).unwrap();
+
+        let err = validate_stage_dir_contents(&owned, &stage_name).unwrap_err();
+        assert_eq!(err, FailReason::RetirementTreeAnomaly);
+    }
+
+    #[test]
+    fn stage_dir_deletion_failure_propagates_and_blocks_retire() {
+        // A stage directory that cannot be fully enumerated/deleted
+        // (here: it contains an anomalous subdirectory rather than at
+        // most one regular-file entry) must block retirement entirely
+        // -- never a best-effort, ignored sweep.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "yara";
+        let kind = SecretKind::GuestSigningKey;
+        provision(vm, kind, material(b"e1"), &cfg).unwrap();
+
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (_secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let stray = random_stage_name();
+        path_safe::mkdir_at_exclusive(generations_fd.as_fd(), Path::new(&stray), 0o700).unwrap();
+        let stray_owned = borrowed_to_owned(generations_fd.as_fd()).unwrap();
+        let stray_fd = path_safe::open_at(
+            stray_owned.as_fd(),
+            Path::new(&stray),
+            OFlags::RDONLY | OFlags::DIRECTORY,
+        )
+        .unwrap();
+        let stray_dir_owned = borrowed_to_owned(stray_fd.as_fd()).unwrap();
+        path_safe::mkdir_at(stray_dir_owned.as_fd(), Path::new("nested"), 0o700).unwrap();
+
+        let err = retire(vm, kind, &cfg).unwrap_err();
+        assert_eq!(err.reason, FailReason::RetirementTreeAnomaly);
+        // Nothing was deleted: the legitimate generation and the
+        // anomalous stray directory are both still present.
+        let generations_dir = paths.kind_root.join(GENERATIONS_DIR_NAME);
+        assert!(generations_dir.join("1").join(MATERIAL_FILE_NAME).is_file());
+        assert!(generations_dir.join(&stray).is_dir());
+    }
+
+    #[test]
+    fn retire_deletes_stray_stage_directories_as_real_content() {
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "zane";
+        let kind = SecretKind::GuestSigningKey;
+        provision(vm, kind, material(b"e1"), &cfg).unwrap();
+
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (_secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let stray_mat = material(b"stray-stage-content");
+        let stray_stage = random_stage_name();
+        ensure_staged(
+            generations_fd.as_fd(),
+            &cfg,
+            &stray_stage,
+            &stray_mat.digest_hex(),
+            Some(&stray_mat),
+        )
+        .unwrap();
+
+        let fields = retire(vm, kind, &cfg).unwrap();
+        assert_valid(&fields);
+        let generations_dir = paths.kind_root.join(GENERATIONS_DIR_NAME);
+        assert_eq!(std::fs::read_dir(&generations_dir).unwrap().count(), 0);
+    }
+
+    // -------------------------------------------------------------
+    // Finding 5: txlog semantic validation / pre-delete revalidation
+    // -------------------------------------------------------------
+
+    #[test]
+    fn txlog_with_wrong_vm_is_rejected_before_recovery_acts() {
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "amara";
+        let kind = SecretKind::GuestSigningKey;
+        provision(vm, kind, material(b"e1"), &cfg).unwrap();
+
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (secrets_fd, _generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let intent = RetireIntent {
+            vm: "someone-else".to_owned(),
+            kind: kind.as_slug().to_owned(),
+            epochs: vec![1],
+            stage_names: Vec::new(),
+            high_water_epoch: 1,
+            phase: RetirePhase::CurrentRemoved,
+        };
+        write_txlog(secrets_fd.as_fd(), &TxLog::Retire(intent)).unwrap();
+        drop(secrets_fd);
+
+        let err = recover_in_flight_transaction(vm, kind, &cfg).unwrap_err();
+        assert_eq!(err.reason, FailReason::IntentCorrupt);
+        // Nothing was touched: the active generation is intact.
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (secrets_fd, _generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        assert_eq!(read_current_target(secrets_fd.as_fd()), Some(1));
+    }
+
+    #[test]
+    fn txlog_with_non_monotonic_epochs_is_rejected() {
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let paths = derive_paths("boaz", SecretKind::GuestSigningKey, &cfg).unwrap();
+        let (secrets_fd, _generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let intent = RetireIntent {
+            vm: "boaz".to_owned(),
+            kind: SecretKind::GuestSigningKey.as_slug().to_owned(),
+            epochs: vec![3, 1],
+            stage_names: Vec::new(),
+            high_water_epoch: 3,
+            phase: RetirePhase::Enumerated,
+        };
+        let err = validate_retire_intent_semantics(&intent, "boaz", SecretKind::GuestSigningKey)
+            .unwrap_err();
+        assert_eq!(err, FailReason::IntentCorrupt);
+        drop(secrets_fd);
+    }
+
+    #[test]
+    fn revalidate_generation_before_delete_catches_a_tamper_immediately_before_delete() {
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let paths = derive_paths("carys", SecretKind::GuestSigningKey, &cfg).unwrap();
+        let (_secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let mat = material(b"e1");
+        let stage_name = random_stage_name();
+        ensure_staged(
+            generations_fd.as_fd(),
+            &cfg,
+            &stage_name,
+            &mat.digest_hex(),
+            Some(&mat),
+        )
+        .unwrap();
+        promote_stage_to_generation(generations_fd.as_fd(), &stage_name, 1, &mat.digest_hex())
+            .unwrap();
+
+        // Absent generation is tolerated (idempotent replay).
+        revalidate_generation_before_delete(generations_fd.as_fd(), 2).unwrap();
+
+        // Tamper: hard-link a second name into the generation just
+        // before deletion would occur.
+        let gen_dir = paths.kind_root.join(GENERATIONS_DIR_NAME).join("1");
+        std::fs::hard_link(gen_dir.join(MATERIAL_FILE_NAME), gen_dir.join("planted")).unwrap();
+        let err = revalidate_generation_before_delete(generations_fd.as_fd(), 1).unwrap_err();
+        assert_eq!(err, FailReason::RetirementTreeAnomaly);
+    }
+
+    // -------------------------------------------------------------
+    // Finding 6: broker-owned metadata / lock-file verification
+    // -------------------------------------------------------------
+
+    #[test]
+    fn acquire_lock_rejects_a_wrong_mode_lock_file() {
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let paths = derive_paths("dov", SecretKind::GuestSigningKey, &cfg).unwrap();
+        let (secrets_fd, _generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        drop(_generations_fd);
+        drop(secrets_fd);
+
+        let lock_path = paths.kind_root.join(LOCK_FILE_NAME);
+        std::fs::write(&lock_path, b"").unwrap();
+        std::fs::set_permissions(&lock_path, std::fs::Permissions::from_mode(0o666)).unwrap();
+
+        let (secrets_fd, _generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let err = acquire_lock(secrets_fd.as_fd(), &cfg).unwrap_err();
+        assert_eq!(err, FailReason::BrokerOwnershipViolation);
+    }
+
+    #[test]
+    fn acquire_lock_rejects_a_hardlinked_lock_file() {
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let paths = derive_paths("elan", SecretKind::GuestSigningKey, &cfg).unwrap();
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        drop(generations_fd);
+        drop(secrets_fd);
+
+        let lock_path = paths.kind_root.join(LOCK_FILE_NAME);
+        std::fs::write(&lock_path, b"").unwrap();
+        std::fs::set_permissions(
+            &lock_path,
+            std::fs::Permissions::from_mode(FILE_MODE_DEFAULT),
+        )
+        .unwrap();
+        std::fs::hard_link(&lock_path, paths.kind_root.join("lock-plant")).unwrap();
+
+        let (secrets_fd, _generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let err = acquire_lock(secrets_fd.as_fd(), &cfg).unwrap_err();
+        assert_eq!(err, FailReason::BrokerOwnershipViolation);
+    }
+
+    #[test]
+    fn acquire_lock_rejects_a_wrong_mode_parent_directory() {
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let paths = derive_paths("farid", SecretKind::GuestSigningKey, &cfg).unwrap();
+        let (secrets_fd, _generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+
+        // Tamper the mode on the already-open `kind_root` directory
+        // (the lock file's anchored parent) via its live inode --
+        // re-opening through `open_or_create_secrets_dir` would
+        // silently reassert the correct mode via `ensure_dir` before
+        // `acquire_lock` ever ran, masking the drift this test must
+        // prove is caught. Using the still-open fd's `fstat` view
+        // instead observes the tamper exactly like a concurrent
+        // actor's `chmod` on the live directory would.
+        std::fs::set_permissions(&paths.kind_root, std::fs::Permissions::from_mode(0o777)).unwrap();
+
+        let err = acquire_lock(secrets_fd.as_fd(), &cfg).unwrap_err();
+        assert_eq!(err, FailReason::BrokerOwnershipViolation);
+    }
+
+    #[test]
+    fn open_or_create_secrets_dir_reasserts_mode_drift_on_metadata_dirs() {
+        // `ensure_dir` only reasserts *mode*, not owner, when passed
+        // `None, None`; confirm the mode side of that contract is
+        // actually exercised end to end (a drifted mode on the
+        // metadata directories is corrected on the next open) rather
+        // than merely assumed from construction.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let paths = derive_paths("gilad", SecretKind::GuestSigningKey, &cfg).unwrap();
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        drop(generations_fd);
+        drop(secrets_fd);
+
+        std::fs::set_permissions(&paths.kind_root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let (secrets_fd, _generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let stat = path_safe::fstat_fd(secrets_fd.as_fd()).unwrap();
+        assert_eq!((stat.st_mode as u32) & 0o7777, cfg.dir_mode);
+    }
+
+    // -------------------------------------------------------------
+    // Finding 1: central validation catches marker/live drift on
+    // every action, not only the one that caused it
+    // -------------------------------------------------------------
+
+    #[test]
+    fn central_validation_runs_identically_for_every_public_action() {
+        // A single tamper (retargeting `current` away from the
+        // marker's recorded active epoch) must be caught by
+        // `provision`, `rotate`, `rollback`, and `retire` alike, since
+        // all four route through the same `open_and_recover` choke
+        // point rather than four separately-maintained checks.
+        for action in ["rotate", "rollback", "retire"] {
+            let dir = tempdir().unwrap();
+            let cfg = cfg_at(dir.path());
+            let vm = "hana";
+            let kind = SecretKind::GuestSigningKey;
+            provision(vm, kind, material(b"e1"), &cfg).unwrap();
+            rotate(vm, kind, material(b"e2"), &cfg).unwrap();
+
+            let paths = derive_paths(vm, kind, &cfg).unwrap();
+            let (secrets_fd, _generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+            let _ = rustix::fs::unlinkat(
+                secrets_fd.as_fd(),
+                Path::new(CURRENT_LINK_NAME),
+                rustix::fs::AtFlags::empty(),
+            );
+            rustix::fs::symlinkat(
+                "/nonexistent/tamper/2",
+                secrets_fd.as_fd(),
+                Path::new(CURRENT_LINK_NAME),
+            )
+            .unwrap();
+            drop(secrets_fd);
+
+            let err = match action {
+                "rotate" => rotate(vm, kind, material(b"e3"), &cfg).unwrap_err(),
+                "rollback" => rollback(vm, kind, &cfg).unwrap_err(),
+                "retire" => retire(vm, kind, &cfg).unwrap_err(),
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                err.reason,
+                FailReason::IdentityCurrentTargetMismatch,
+                "action {action} did not reach the central validation choke point"
+            );
+        }
     }
 }
