@@ -152,6 +152,8 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Aligned the wlterm CI and Home Manager client-toolkit revision with its
+  audited W9 source and updated the coordination pin.
 - Activated `d2b-userd`, `d2b-clipd`, and the unsafe-local user runtime on their
   fixed systemd-user `SOCK_SEQPACKET` listeners with authenticated
   ComponentSession services, bounded shutdown and cancellation, same-UID
