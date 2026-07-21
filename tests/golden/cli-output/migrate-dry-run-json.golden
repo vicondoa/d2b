@@ -13,12 +13,17 @@
     "Verify each migrated VM via `d2b status <vm>` and `d2b vm list` after d2bd is running.",
     "After all VMs migrate cleanly, keep the default-switch readiness gates aligned with the rollout evidence."
   ],
-  "totalVms": 1,
+  "totalVms": 2,
   "vms": [
     {
       "classification": "unknown-not-in-public-manifest",
       "env": "tft6a4n527flrfmxjwna",
       "name": "bm6ccueaqlr7wd2cskza"
+    },
+    {
+      "classification": "unknown-not-in-public-manifest",
+      "env": "tft6a4n527flrfmxjwna",
+      "name": "rhfkq6uvovmfprzdkuxq"
     }
   ]
 }
