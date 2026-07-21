@@ -12,6 +12,26 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Added stack node/repository/PR context to every `verify_required_checks`
+  error message (duplicate publisher, cross-commit, unlisted failing/pending,
+  missing, wrong publisher, skipped, unsuccessful, no-authoritative-checks,
+  exceeds-supported-bound) so a multi-node W9 seal failure names the exact
+  failing stack node instead of an ambiguous check name; added two multi-node
+  regression tests proving the correct node is identified and the wrong one is
+  not.
+- Added the WeezTerm `Makefile` and `nix/flake.nix` paths to
+  `docs/adr/0045-toolkit-sibling-coordination.json`'s weezterm
+  `ownership.paths` exclusive-file-set; the sibling's own most recent W9
+  commit had modified both files, but the coordination doc's ownership record
+  did not yet include them.
+- Added a `weezterm-flake-check` (`nix flake check`) required validation to
+  `delivery/manifests/w9.json` immediately after `weezterm-source-build`:
+  the existing `weezterm-source-build` (`nix build .#source --no-link`)
+  builds only `packages.source` and never evaluates `checks.<system>`, so
+  WeezTerm's `cargo-fmt`/`cargo-clippy` flake checks were never exercised even
+  though the other three toolkit siblings' sole validation (`nix flake check`)
+  does exercise theirs; pinned the new argv in
+  `w9_validations_use_detached_checkout_hermetic_toolchains`.
 - Included the W8 workspace-registration regression in the exact integration
   branch's protected xtask test authority; suffixed component branches remain
   denied.
@@ -21,6 +41,16 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added three more W9 friction entries to ADR 0045's W13 evidence-driven
+  delivery streamlining backlog: verifying the CI-dedup-only toolkit pin
+  advance required manual per-round `grep` across sibling `Cargo.lock`s
+  because no owned check cross-verifies the coordination doc's recorded
+  revision against each consumer's actual Cargo dependency pin (open
+  backlog item); WeezTerm's sole validation never exercised its fmt/clippy
+  flake checks (closed this round via `weezterm-flake-check`); and the
+  weezterm ownership exclusive-file-set was missing paths its own sibling
+  commit had already modified (closed this round, with an open backlog item
+  to add an automated ownership-diff check).
 - Added the W8 shared prep phase A: extended the shared-contract policy and
   its Rust ownership checker to recognize `w8` as the integrated W5/W6/W7
   successor wave (canonical branch `adr0045-w8-integration`, exact `w7`
