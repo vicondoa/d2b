@@ -543,6 +543,7 @@ const COMPONENTS: &[Component] = &[
         id: "runtime-composition",
         owned_files: &[
             "packages/d2b-unsafe-local-helper/Cargo.toml",
+            "packages/d2b-unsafe-local-helper/src/controller_allowlist.rs",
             "packages/d2b-unsafe-local-helper/src/lib.rs",
             "packages/d2b-unsafe-local-helper/src/main.rs",
             "packages/d2b-unsafe-local-helper/src/server.rs",
