@@ -173,7 +173,6 @@ ifname-rendered-host-json/bridge-tap-veth-role-tags
 ifname-rendered-host-json/realm-ifname-hash-width
 ifname-rendered-host-json/realm-ifname-prefix
 index/canonical-identities-and-lookups
-index/companion-builders-do-not-read-the-module-fixpoint
 index/display-mapping-requires-one-provider
 index/display-provider-can-bind-multiple-workloads-explicitly
 index/duplicate-provider-identities-fail-closed
@@ -235,7 +234,6 @@ net-vm-network/workload-address
 observability/canonical-resources
 observability/frozen-provider-mapping-is-consumed
 observability/module-declares-canonical-providers-and-refs
-observability/no-second-registration-path
 observability/projections-stay-bounded-and-redacted
 observability/realm-workload-identity
 observability/registry-consumes-normalized-binding

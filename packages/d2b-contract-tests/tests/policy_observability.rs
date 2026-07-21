@@ -13,6 +13,10 @@
 //!   * tests/tempo-budget-eval.sh -> tempo_stack_signoz_backend_and_collector +
 //!     tempo_guest_collector_shape + tempo_security_observability_and_retired_backends
 //!   * tests/wave-evidence-schema-eval.sh -> wave_evidence_schema_cross_check
+//!   * tests/unit/nix/cases/observability.nix
+//!     "observability/no-second-registration-path" ->
+//!     observability_has_no_second_registration_path (relocated from a Nix
+//!     source-text/path scan to this Rust policy lint)
 
 use std::collections::BTreeSet;
 
@@ -539,6 +543,41 @@ fn tempo_security_observability_and_retired_backends() {
     assert!(
         adr.contains("Spec corrections") && adr.contains("manifestVersion"),
         "tempo-budget-eval: ADR must record manifestVersion Spec corrections"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Relocated from tests/unit/nix/cases/observability.nix
+// "observability/no-second-registration-path".
+//
+// The realm-observability rows module is the sole registration path for the
+// native SigNoz observability provider: there must be no companion
+// `provider-registry-v2-extensions/observability.nix` fragment duplicating
+// that registration (unlike the other provider axes, which each declare
+// their own `providers = ...` fragment), and the rows module must still cite
+// the frozen-registry rationale for why it does not. A missing/duplicate
+// companion file is a repo-tree/source-shape invariant, not an evaluable
+// module value, so it belongs here rather than as a Nix eval case.
+// ---------------------------------------------------------------------------
+#[test]
+fn observability_has_no_second_registration_path() {
+    let fragment_rel =
+        "nixos-modules/provider-registry-v2-extensions/observability.nix";
+    assert!(
+        !repo_path_exists(fragment_rel),
+        "observability provider registration must not gain a second path via {fragment_rel}"
+    );
+
+    let rows_rel = "nixos-modules/realm-observability-rows.nix";
+    let rows = read_repo_file(rows_rel);
+    assert!(
+        !rows.contains("providers ="),
+        "{rows_rel}: realm-observability-rows.nix must not grow its own \
+         `providers = ...` registration fragment"
+    );
+    assert!(
+        rows.contains("frozen-provider-registry-v2"),
+        "{rows_rel}: realm-observability-rows.nix must cite the frozen-provider-registry-v2 rationale"
     );
 }
 

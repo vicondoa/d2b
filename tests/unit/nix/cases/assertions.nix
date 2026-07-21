@@ -14,11 +14,13 @@
 #     This PRESERVES the message-substring check (unlike a throw-only
 #     `expectedError` migration).
 #   * Bucket B (eval THROWS before config.assertions is computable — e.g.
-#     platform or structural provider checks): `tryEval`
+#     structural provider/identity checks): `tryEval`
 #     cannot capture the throw message, so assert only THAT eval is rejected
 #     (`evalSucceeded == false`). The expected message is retained in
-#     tests/unit/nix/eval-cases/assertions.nix for traceability. This bucket
-#     includes the aarch64 platform-rejection coverage.
+#     tests/unit/nix/eval-cases/assertions.nix for traceability. Platform
+#     gates (`platform-gate-graphics-aarch64`, `platform-gate-audio-aarch64`)
+#     are ordinary `config.assertions` entries and fall through to Bucket A
+#     below, not this bucket.
 { lib, nixpkgsFlake, d2bModule, ... }:
 
 let

@@ -1,4 +1,4 @@
-{ flakeRoot, lib, system, ... }:
+{ flakeRoot, lib, pkgs, system, ... }:
 
 # Coverage owned by this file:
 #   * device-kinds / canonical-role-kinds — gpu, gpu-render-node ("render-node"),
@@ -9,9 +9,10 @@
 #   * shared-render-node-leases — gpu/render-node/video device rows all
 #     acquire the same shared render-node allocator lease (never exclusive).
 #   * canonical-video-socket / guest-uses-canonical-video-socket — the video
-#     role's runtime resource path plus `/video.sock` matches exactly what the
-#     guest module template renders, so a drift here is fail-visible from
-#     both sides of the Nix/guest boundary.
+#     role's runtime resource path plus `/video.sock` matches exactly the
+#     socket path the real guest wiring module (`components/video/guest.nix`)
+#     computes when evaluated with the same realm/workload/role ids, so a
+#     drift here is fail-visible from both sides of the Nix/guest boundary.
 #   * fd-only-mediation — every device row stays fd-only (no path-based device
 #     handoff to the guest).
 #   * video-requires-gpu — requesting the video sidecar without GPU mediation
@@ -89,8 +90,25 @@ let
   video = byKind.video;
   videoRoleResource =
     evaluated.config.d2b._index.resources.byId."role/${video.roleId}/runtime";
-  videoSource = builtins.readFile
-    (flakeRoot + "/nixos-modules/components/video/guest.nix");
+  # Evaluate the real guest wiring module with the exact realm/workload/role
+  # ids the runtime side derived above, instead of scanning guest.nix's
+  # source text: this proves the guest module's own computed socket path
+  # actually matches the role resource, not merely that some string in the
+  # file happens to look right.
+  videoGuestModule = import (flakeRoot + "/nixos-modules/components/video/guest.nix") {
+    # The video kernel module package is irrelevant to the socket-path
+    # contract under test and is never forced below, so a stub avoids
+    # pulling in a real kernel package build during eval.
+    config.boot.kernelPackages.callPackage = _pkg: _args: null;
+    inherit lib pkgs;
+    d2bRealmId = video.realmId;
+    d2bWorkloadId = video.workloadId;
+    d2bRoleIds = { video = video.roleId; };
+  };
+  videoGuestArgs =
+    videoGuestModule.microvm.cloud-hypervisor.extraArgs.content;
+  videoGuestSocket =
+    lib.removePrefix "socket=" (lib.last videoGuestArgs);
 in
 {
   "video-contract/device-kinds" = {
@@ -133,11 +151,8 @@ in
   };
 
   "video-contract/guest-uses-canonical-video-socket" = {
-    expr =
-      lib.hasInfix "/run/d2b/r/\${d2bRealmId}/w/\${d2bWorkloadId}/roles/\${d2bRoleIds.video}/video.sock"
-        videoSource
-      && !(lib.hasInfix "/run/d2b-video/" videoSource);
-    expected = true;
+    expr = videoGuestSocket;
+    expected = videoRoleResource.path + "/video.sock";
   };
 
   "video-contract/fd-only-mediation" = {

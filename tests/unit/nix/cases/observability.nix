@@ -348,24 +348,4 @@ in
       modes = [ "0400" ];
     };
   };
-
-  "observability/no-second-registration-path" = {
-    expr =
-      let
-        moduleText = builtins.readFile
-          (flakeRoot + "/nixos-modules/realm-observability-rows.nix");
-      in {
-        fragmentAbsent = !(builtins.pathExists
-          (flakeRoot
-            + "/nixos-modules/provider-registry-v2-extensions/observability.nix"));
-        emitsProviders = lib.hasInfix "providers =" moduleText;
-        referencesFrozenRegistration =
-          lib.hasInfix "frozen-provider-registry-v2" moduleText;
-      };
-    expected = {
-      fragmentAbsent = true;
-      emitsProviders = false;
-      referencesFrozenRegistration = true;
-    };
-  };
 }

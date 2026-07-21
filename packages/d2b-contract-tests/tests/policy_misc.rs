@@ -10,6 +10,11 @@
 //!   * tests/vm-submodule-eval.sh -> workload_composition_shape
 //!   * tests/minijail-version-check.sh -> minijail_version_comparison_canary,
 //!     minijail_version_parser_canary
+//!   * tests/unit/nix/cases/index.nix
+//!     "index/companion-builders-do-not-read-the-module-fixpoint" ->
+//!     index_companion_builders_avoid_module_fixpoint (relocated from a Nix
+//!     source-text scan to this Rust policy lint, since the invariant is a
+//!     repo-wide source-shape rule, not an evaluable module value)
 
 use d2b_contract_tests::{read_repo_file, repo_path_exists};
 use regex::Regex;
@@ -44,6 +49,35 @@ fn workload_composition_shape() {
         any_line_matches(&evaluator, r"_composeWorkload\s*="),
         "workload composition entry point not found in {rel}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Relocated from tests/unit/nix/cases/index.nix
+// "index/companion-builders-do-not-read-the-module-fixpoint".
+//
+// The three index companion builders (index-realms.nix, index-workloads.nix,
+// index-resources.nix) are recursion-safe precisely because they only ever
+// consume the raw `d2b.realms` attrs and each other's outputs — never the
+// fully-merged `config.d2b._index` module fixpoint they themselves feed. That
+// invariant is a source-shape rule (no reference to the module system's own
+// output may appear in the files that produce it), not a value nix-unit can
+// evaluate, so it belongs here as a source scan rather than as a Nix eval
+// case.
+// ---------------------------------------------------------------------------
+#[test]
+fn index_companion_builders_avoid_module_fixpoint() {
+    for rel in [
+        "nixos-modules/index-realms.nix",
+        "nixos-modules/index-workloads.nix",
+        "nixos-modules/index-resources.nix",
+    ] {
+        let source = read_repo_file(rel);
+        assert!(
+            !source.contains("config.d2b._index"),
+            "{rel}: index companion builders must not read the module fixpoint \
+             (config.d2b._index) they themselves feed"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

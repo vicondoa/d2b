@@ -542,19 +542,6 @@ in
     expected = false;
   };
 
-  "index/companion-builders-do-not-read-the-module-fixpoint" = {
-    expr = builtins.all
-      (path:
-        !(lib.hasInfix "config.d2b._index"
-          (builtins.readFile (flakeRoot + "/nixos-modules/${path}"))))
-      [
-        "index-realms.nix"
-        "index-workloads.nix"
-        "index-resources.nix"
-      ];
-    expected = true;
-  };
-
   "index/realm-only-assertions-accept-normalized-fixture" = {
     expr = builtins.all (assertion: assertion.assertion)
       (evalAssertions fixture);
