@@ -67,6 +67,8 @@ bundle-artifacts/extra-artifact-install-path-collision-conflicts
 bundle-artifacts/extra-artifact-reserved-name-collision-asserts
 bundle-artifacts/nested-table-field-name-collisions-are-not-rows
 bundle-artifacts/nested-tables-are-not-artifact-rows
+bundle-artifacts/observability-vsock-path-derived-when-disabled
+bundle-artifacts/observability-vsock-path-matches-canonical-row-when-enabled
 bundle-artifacts/realm-private-central-etc
 bundle-artifacts/realm-private-classifications
 bundle-artifacts/root-group-compat
@@ -240,6 +242,9 @@ observability/registry-consumes-normalized-binding
 observability/rows-reject-mismatched-normalized-binding
 observability/same-name-sources-use-canonical-ids
 observability/secrets-are-declarative-workload-resources
+observability/secrets-bundle-artifact-carries-no-secret-values
+observability/storage-rows-canonically-registered
+observability/store-sync-projection-keeps-host-collector-reader
 per-vm-state-ownership/all-realm-rows-broker-created
 per-vm-state-ownership/all-realm-rows-non-recursive
 per-vm-state-ownership/guest-session-credential-preserved

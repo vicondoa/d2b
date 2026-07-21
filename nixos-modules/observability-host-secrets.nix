@@ -24,5 +24,21 @@ in
           + "workload resources under the canonical short-ID state root.";
       }
     ];
+
+    # Register the observability secret-generation rows in the private
+    # bundle so the realm broker has a canonical, non-secret-value
+    # authority to provision them from — mirroring storage.json/sync.json's
+    # "typed row + single repair owner" contract. Only metadata (source
+    # path, generated size, minimum size, mode) crosses into the bundle;
+    # no secret bytes are ever materialised here.
+    d2b._bundle.extraArtifacts.observabilitySecretsJson = {
+      data = {
+        schemaVersion = "v1";
+        secrets = rows.secrets;
+      };
+      installFileName = "observability-secrets.json";
+      classification = "contractPrivateNonSecret";
+      sensitivity = "nonSecret";
+    };
   };
 }

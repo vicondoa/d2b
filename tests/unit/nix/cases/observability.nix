@@ -137,6 +137,12 @@ let
   ]).config;
   evaluatedWorkload =
     evaluated.d2b._index.workloads.byId.${stackWorkloadId};
+  storageObservabilityPaths = lib.filter
+    (path: lib.hasSuffix ":${stackWorkloadId}" path.id
+      && lib.hasPrefix "path:observability-" path.id)
+    evaluated.d2b._bundle.storageJson.data.paths;
+  observabilitySecretsArtifact =
+    evaluated.d2b._bundle.extraArtifacts.observabilitySecretsJson;
   evaluatedObservabilityEntry = lib.findFirst
     (entry: entry.binding.axis == "local-observability")
     (throw "missing evaluated local-observability registry entry")
@@ -348,4 +354,93 @@ in
       modes = [ "0400" ];
     };
   };
+  "observability/storage-rows-canonically-registered" = {
+    expr = {
+      count = builtins.length storageObservabilityPaths;
+      ids = lib.sort lib.lessThan
+        (map (path: path.id) storageObservabilityPaths);
+      kinds = lib.unique (map (path: path.kind) storageObservabilityPaths);
+      sensitivities = lib.sort lib.lessThan
+        (lib.unique (map (path: path.sensitivity) storageObservabilityPaths));
+      brokerOwned = lib.all
+        (path:
+          path.owner == { kind = "user"; value = "d2bbr-r-${realmId}"; }
+          && path.creator == { kind = "broker"; value = "d2bbr-r-${realmId}"; })
+        storageObservabilityPaths;
+      noFollow = lib.all (path: path.noFollow) storageObservabilityPaths;
+    };
+    expected = {
+      count = 5;
+      ids = lib.sort lib.lessThan [
+        "path:observability-config:${stackWorkloadId}"
+        "path:observability-state:${stackWorkloadId}"
+        "path:observability-secrets:${stackWorkloadId}"
+        "path:observability-runtime:${stackWorkloadId}"
+        "path:observability-store-sync-projection:${stackWorkloadId}"
+      ];
+      kinds = [ "directory" ];
+      sensitivities = lib.sort lib.lessThan [
+        "audit"
+        "private"
+        "realm-scoped"
+        "secret-adjacent"
+      ];
+      brokerOwned = true;
+      noFollow = true;
+    };
+  };
+
+  "observability/store-sync-projection-keeps-host-collector-reader" = {
+    expr =
+      let
+        row = lib.findFirst
+          (path:
+            path.id
+            == "path:observability-store-sync-projection:${stackWorkloadId}")
+          (throw "missing observability store-sync projection storage row")
+          storageObservabilityPaths;
+      in row.readers;
+    expected = [
+      { kind = "daemon"; value = "d2bd-r-${realmId}"; }
+      { kind = "broker"; value = "d2bbr-r-${realmId}"; }
+      { kind = "external"; value = "d2b-host-otel-collector"; }
+    ];
+  };
+
+  "observability/secrets-bundle-artifact-carries-no-secret-values" = {
+    expr = {
+      installFileName = observabilitySecretsArtifact.installFileName;
+      classification = observabilitySecretsArtifact.classification;
+      sensitivity = observabilitySecretsArtifact.sensitivity;
+      schemaVersion = observabilitySecretsArtifact.data.schemaVersion;
+      secretCount = builtins.length observabilitySecretsArtifact.data.secrets;
+      fields = lib.sort lib.lessThan
+        (lib.unique
+          (lib.concatMap (secret: lib.attrNames secret)
+            observabilitySecretsArtifact.data.secrets));
+      modes = lib.unique
+        (map (secret: secret.mode) observabilitySecretsArtifact.data.secrets);
+    };
+    expected = {
+      installFileName = "observability-secrets.json";
+      classification = "contractPrivateNonSecret";
+      sensitivity = "nonSecret";
+      schemaVersion = "v1";
+      secretCount = 3;
+      fields = lib.sort lib.lessThan [
+        "id"
+        "fileName"
+        "source"
+        "generatedBytes"
+        "minimumBytes"
+        "mode"
+        "realmId"
+        "workloadId"
+        "path"
+        "owner"
+      ];
+      modes = [ "0400" ];
+    };
+  };
+
 }

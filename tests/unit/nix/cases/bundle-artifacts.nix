@@ -1,6 +1,11 @@
-{ mkEval, lib, ... }:
+{ mkEval, lib, flakeRoot, ... }:
 
 let
+  identity = import (flakeRoot + "/nixos-modules/v2-identity.nix");
+  observabilityRealmId = identity.deriveRealmId "local-root";
+  observabilityWorkloadId =
+    identity.deriveWorkloadId observabilityRealmId "sys-obs";
+
   base = { lib, ... }: {
     boot.loader.grub.enable = false;
     boot.loader.systemd-boot.enable = false;
@@ -234,5 +239,40 @@ in
         }) ]).config;
       in cfg.environment.etc."d2b/defaulted.json";
     expectedError = { };
+  };
+
+  "bundle-artifacts/observability-vsock-path-derived-when-disabled" = {
+    expr = {
+      enabled = cfgDaemon.d2b._manifestData._observability.enabled;
+      obsVsockHostSocket =
+        cfgDaemon.d2b._manifestData._observability.obsVsockHostSocket;
+    };
+    expected = {
+      enabled = false;
+      obsVsockHostSocket =
+        "/var/lib/d2b/r/${observabilityRealmId}/w/${observabilityWorkloadId}/vsock.sock";
+    };
+  };
+
+  "bundle-artifacts/observability-vsock-path-matches-canonical-row-when-enabled" = {
+    expr =
+      let
+        cfgObservability = (mkEval [ base defaultedArtifact ({ ... }: {
+          d2b.observability.enable = true;
+        }) ]).config;
+      in {
+        enabled = cfgObservability.d2b._manifestData._observability.enabled;
+        obsVsockHostSocket =
+          cfgObservability.d2b._manifestData._observability.obsVsockHostSocket;
+        canonicalRowPath =
+          cfgObservability.d2b._realmObservability.endpoints.stackVsock.path;
+      };
+    expected = {
+      enabled = true;
+      obsVsockHostSocket =
+        "/var/lib/d2b/r/${observabilityRealmId}/w/${observabilityWorkloadId}/vsock.sock";
+      canonicalRowPath =
+        "/var/lib/d2b/r/${observabilityRealmId}/w/${observabilityWorkloadId}/vsock.sock";
+    };
   };
 }

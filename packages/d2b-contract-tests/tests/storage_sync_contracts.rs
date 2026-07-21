@@ -528,6 +528,60 @@ fn rendered_storage_contract_covers_process_writable_paths_when_fixture_availabl
             assert_eq!(path.repair_policy, RepairPolicy::BrokerFailClosed);
             assert!(!path.recursive);
         }
+
+        // realm-observability-rows.nix's path rows (config/state/secret-source/
+        // runtime/store-sync projection) must be re-emitted through the same
+        // canonical, broker-owned storage.json authority as every other
+        // workload path, not left dangling for workload-process-rows.nix's
+        // `resourceRefs.observability` ids to reference nothing.
+        let observability_paths: Vec<_> = storage
+            .paths
+            .iter()
+            .filter(|path| path.id.as_str().starts_with("path:observability-"))
+            .collect();
+        if !observability_paths.is_empty() {
+            let expected_prefixes = [
+                "path:observability-config:",
+                "path:observability-runtime:",
+                "path:observability-secrets:",
+                "path:observability-state:",
+                "path:observability-store-sync-projection:",
+            ];
+            assert_eq!(
+                observability_paths.len(),
+                expected_prefixes.len(),
+                "{fixture_name} observability storage rows must register exactly the canonical path set"
+            );
+            for prefix in expected_prefixes {
+                assert!(
+                    observability_paths
+                        .iter()
+                        .any(|path| path.id.as_str().starts_with(prefix)),
+                    "{fixture_name} storage.json missing observability path {prefix}"
+                );
+            }
+            for path in &observability_paths {
+                assert_eq!(
+                    path.creator.kind,
+                    ActorKind::Broker,
+                    "{fixture_name} observability storage rows must be broker-created"
+                );
+                assert_eq!(path.owner.kind, PrincipalKind::User);
+                assert!(
+                    path.owner.value.as_str().starts_with("d2bbr-r-"),
+                    "{fixture_name} observability storage rows must be broker-owned"
+                );
+                assert!(!path.recursive);
+                assert!(path.no_follow);
+                assert!(
+                    matches!(
+                        path.repair_policy,
+                        RepairPolicy::BrokerReconcile | RepairPolicy::BrokerFailClosed
+                    ),
+                    "{fixture_name} observability storage rows must use a broker repair policy"
+                );
+            }
+        }
     }
 }
 

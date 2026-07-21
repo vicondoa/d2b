@@ -4,6 +4,16 @@ let
   cfg = config.d2b;
   identity = import ./v2-identity.nix;
 
+  # realm-observability-rows.nix emits its own path/secret rows using an
+  # ad-hoc shape that predates the canonical StoragePathSpec contract.
+  # Guard the import exactly like workload-process-rows.nix does so a
+  # disabled observability stack never forces evaluation of the
+  # normalized workload it requires.
+  observabilityRows =
+    if cfg.observability.enable or false
+    then import ./realm-observability-rows.nix { inherit config lib; }
+    else { workload.workloadId = null; paths = [ ]; };
+
   actor = kind: value: { inherit kind value; };
   principal = kind: value: { inherit kind value; };
   sortRows = field: lib.sort (left: right: lib.lessThan left.${field} right.${field});
@@ -130,6 +140,43 @@ let
       degradeScope = "realm";
       releaseAuthority = owner;
       cloexecRequired = true;
+    };
+
+  # realm-observability-rows.nix's `kind` is a purpose classification
+  # ("config"/"state"/"secret-source"/"runtime"/"bounded-projection"),
+  # not a StoragePathKind; map each purpose to a schema-valid kind +
+  # sensitivity so the row can be re-emitted through the single
+  # canonical mkPath authority instead of a second ad-hoc contract.
+  observabilityKindMap = {
+    config = { kind = "directory"; sensitivity = "private"; };
+    state = { kind = "directory"; sensitivity = "secret-adjacent"; };
+    "secret-source" = { kind = "directory"; sensitivity = "secret-adjacent"; };
+    runtime = { kind = "directory"; sensitivity = "realm-scoped"; };
+    "bounded-projection" = { kind = "directory"; sensitivity = "audit"; };
+  };
+
+  observabilityPathFor = row:
+    let
+      mapped =
+        observabilityKindMap.${row.kind}
+          or (throw
+            "realm storage: unrecognized observability path kind '${row.kind}'");
+      extraReaders = map (value: actor "external" value) (row.readers or [ ]);
+    in
+    mkPath {
+      id = row.id;
+      scope = row.scope;
+      path = row.path;
+      realmId = row.realmId;
+      kind = mapped.kind;
+      sensitivity = mapped.sensitivity;
+      owner = brokerUser row.realmId;
+      creator = brokerActor row.realmId;
+      writers = [ (brokerActor row.realmId) ];
+      readers = [ (controllerActor row.realmId) (brokerActor row.realmId) ]
+        ++ extraReaders;
+      mode = if mapped.kind == "regular-file" then "0640" else "0750";
+      noFollow = row.noFollow or true;
     };
 
   storageIdsFor = workload: {
@@ -484,7 +531,9 @@ let
             })
           ])
         workload.roles
-      ++ guestSessionPaths;
+      ++ guestSessionPaths
+      ++ lib.optionals (workloadId == observabilityRows.workload.workloadId)
+        (map observabilityPathFor observabilityRows.paths);
       locks = [
         (mkOfdLock {
           id = "lock:workload-state:${workloadId}";

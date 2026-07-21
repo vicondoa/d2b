@@ -3,12 +3,27 @@
 let
   topConfig = config;
   types = lib.types;
+  identity = import ./v2-identity.nix;
   realmStorageRows = import ./realm-storage-rows.nix {
     inherit config lib;
   };
   networkPlan = import ./realm-network-rows.nix {
     inherit config lib;
   };
+
+  # The observability stack workload's realm/workload identity is
+  # deterministic from its configured VM name alone, so it can be
+  # recomputed here even when `d2b._realmObservability` is empty
+  # (observability disabled). When observability is enabled, prefer the
+  # already-derived canonical row so there is a single source of truth
+  # for the vsock socket path.
+  observabilityRealmId = identity.deriveRealmId "local-root";
+  observabilityWorkloadId =
+    identity.deriveWorkloadId observabilityRealmId
+      topConfig.d2b.observability.vmName;
+  observabilityVsockHostSocket =
+    topConfig.d2b._realmObservability.endpoints.stackVsock.path
+      or "/var/lib/d2b/r/${observabilityRealmId}/w/${observabilityWorkloadId}/vsock.sock";
 
   runtimeWorkloads = lib.filter
     (workload:
@@ -168,8 +183,7 @@ let
       enabled = topConfig.d2b.observability.enable;
       vmName = topConfig.d2b.observability.vmName;
       obsVsockCid = 1000;
-      obsVsockHostSocket =
-        "/var/lib/d2b/r/local-root/observability/vsock.sock";
+      obsVsockHostSocket = observabilityVsockHostSocket;
       signozUrl = "http://127.0.0.1:8080";
       signozOtlpGrpcPort = topConfig.d2b.observability.signoz.otlpGrpcPort;
       signozOtlpHttpPort = topConfig.d2b.observability.signoz.otlpHttpPort;
@@ -640,10 +654,23 @@ in
     readOnly = true;
   };
 
+  options.d2b._manifestData = lib.mkOption {
+    type = types.attrsOf types.anything;
+    internal = true;
+    visible = false;
+    readOnly = true;
+    description = ''
+      Internal pre-serialization view of the public realm-workloads
+      manifest, for contract-test introspection without requiring a
+      derivation build/IFD to read the rendered vms.json.
+    '';
+  };
+
   config = {
     d2b._manifestJsonPath =
       "${publicManifestPkg}/share/d2b/vms.json";
     d2b._manifestPkg = publicManifestPkg;
+    d2b._manifestData = publicManifest;
     environment.systemPackages = [ publicManifestPkg ];
 
     d2b._bundle.storageJson = {
