@@ -681,6 +681,43 @@ impl RemoteDispatchOutcome {
     }
 }
 
+/// The pure, read-only preflight result [`GatewayPort::classify_dispatch`]
+/// (and [`RemoteFullHostAdapter::classify_dispatch`]) resolves `req` to.
+///
+/// A caller that tracks bounded per-operation-kind local state (e.g. a
+/// session-lifecycle capacity table) must reserve that state only for a
+/// genuinely NEW side-effecting dispatch -- never for a retry that will
+/// resolve against an already-established dedup lease. Computing this
+/// classification is a pure peek: it never mutates dedup/session state and
+/// never contacts a remote peer, so a caller can safely call it before
+/// deciding whether to reserve capacity, then dispatch for real.
+///
+/// This intentionally does NOT replicate every refusal
+/// [`super::OperationRouter::route_with_capabilities`] can return (principal
+/// mismatch, missing capability, missing workload, unsupported kind, a
+/// same-key/different-request conflict, or a post-retention expiry): none of
+/// those need a *new* capacity reservation either way (a refusal never
+/// establishes a lease), so they all classify as `Fresh` and the caller
+/// learns the exact refusal from the real dispatch call, which remains the
+/// single source of truth for authorization/idempotency decisions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GatewayDispatchClassification {
+    /// No dedup lease currently covers `req`'s full namespace + idempotency
+    /// key with a matching fingerprint. Dispatching `req` would either
+    /// establish a brand-new lease (`Accept`) or fail an auth/idempotency
+    /// check that needs no capacity reservation regardless.
+    Fresh,
+    /// A dedup lease already exists for the exact request `req` describes
+    /// (matching fingerprint), currently in progress or completed within its
+    /// retention window. Dispatching would resolve against it -- an
+    /// `InProgress` query or a `Replay` -- under `original_operation_id`,
+    /// never allocate a fresh reservation.
+    Existing {
+        /// The original accepted attempt's operation id.
+        original_operation_id: OperationId,
+    },
+}
+
 /// Gateway-side remote full-host adapter. It gates through the shared router
 /// and registry before a semantic peer client can see an operation.
 pub struct RemoteFullHostAdapter<C = super::SystemClock>
@@ -811,54 +848,111 @@ where
             }),
             super::RouteDecision::InProgress {
                 original_operation_id,
-            } => match client.query_operation(&route, req) {
-                Err(err) => {
-                    if req.kind.is_mutating() {
-                        self.router.mark_failed(req);
-                    }
-                    Err(err)
-                }
-                Ok(status) => match status {
-                    RemotePeerStatus::Completed(result) => {
-                        self.router.mark_completed(req, result.clone());
-                        Ok(RemoteDispatchOutcome::Replayed {
-                            original_operation_id,
-                            result,
-                        })
-                    }
-                    RemotePeerStatus::InProgress => {
-                        let labels = route.audit_labels("query-remote-state");
-                        tracing::info!(
-                            event = "remote-node-dispatch",
-                            realm = %labels.realm,
-                            node = %labels.node,
-                            operation_id = %req.operation_id.as_str(),
-                            operation_kind = %labels.operation.code(),
-                            correlation_id = %labels.correlation_id,
-                            principal = %labels.principal,
-                            capability_fingerprint = %labels.capability_fingerprint,
-                            trace_id = labels.trace_id,
-                            span_id = labels.span_id,
-                            outcome = labels.outcome,
-                            "remote full-host operation requires remote state query"
-                        );
-                        Ok(RemoteDispatchOutcome::QueryRemoteState {
-                            original_operation_id,
-                            route,
-                        })
-                    }
-                    RemotePeerStatus::Unknown => {
+            } => {
+                // The peer never saw this attempt (an `InProgress` decision
+                // means the FIRST accepted attempt is still outstanding at
+                // this dedup key): a retry's own `operation_id` names an
+                // attempt the peer has no record of. Query under the
+                // ORIGINAL accepted id, not the retry's, or a peer that
+                // indexes in-flight state by operation id would report
+                // `Unknown` for a request it never received.
+                let mut original_req = req.clone();
+                original_req.operation_id = original_operation_id.clone();
+                match client.query_operation(&route, &original_req) {
+                    Err(err) => {
                         if req.kind.is_mutating() {
                             self.router.mark_failed(req);
                         }
-                        Err(
-                            RemoteNodeError::new(RemoteNodeErrorKind::RemoteOperationUnknown)
-                                .with_correlation_id(req.correlation_id.clone()),
-                        )
+                        Err(err)
                     }
-                },
-            },
+                    Ok(status) => match status {
+                        RemotePeerStatus::Completed(result) => {
+                            self.router.mark_completed(req, result.clone());
+                            Ok(RemoteDispatchOutcome::Replayed {
+                                original_operation_id,
+                                result,
+                            })
+                        }
+                        RemotePeerStatus::InProgress => {
+                            let labels = route.audit_labels("query-remote-state");
+                            tracing::info!(
+                                event = "remote-node-dispatch",
+                                realm = %labels.realm,
+                                node = %labels.node,
+                                operation_id = %req.operation_id.as_str(),
+                                operation_kind = %labels.operation.code(),
+                                correlation_id = %labels.correlation_id,
+                                principal = %labels.principal,
+                                capability_fingerprint = %labels.capability_fingerprint,
+                                trace_id = labels.trace_id,
+                                span_id = labels.span_id,
+                                outcome = labels.outcome,
+                                "remote full-host operation requires remote state query"
+                            );
+                            Ok(RemoteDispatchOutcome::QueryRemoteState {
+                                original_operation_id,
+                                route,
+                            })
+                        }
+                        RemotePeerStatus::Unknown => {
+                            if req.kind.is_mutating() {
+                                self.router.mark_failed(req);
+                            }
+                            Err(
+                                RemoteNodeError::new(RemoteNodeErrorKind::RemoteOperationUnknown)
+                                    .with_correlation_id(req.correlation_id.clone()),
+                            )
+                        }
+                    },
+                }
+            }
             decision => Err(remote_error_from_route_decision(req, decision)),
+        }
+    }
+
+    /// Side-effect-free classification of what [`Self::dispatch`] would
+    /// resolve `req` to right now: see [`GatewayDispatchClassification`].
+    /// Never mutates dedup state and never contacts a remote peer -- it only
+    /// reads the same router-owned dedup record `dispatch` would consult.
+    pub fn classify_dispatch(&self, req: &OperationRequest) -> GatewayDispatchClassification {
+        let Some(plan) = super::operation_route_plan(req.kind) else {
+            return GatewayDispatchClassification::Fresh;
+        };
+        if !plan.mutating {
+            return GatewayDispatchClassification::Fresh;
+        }
+        let Some(key) = &req.idempotency_key else {
+            return GatewayDispatchClassification::Fresh;
+        };
+        let dedup_key = super::DedupKey::for_request(req, key);
+        let Some(entry) = self.router.dedup.get(&dedup_key) else {
+            return GatewayDispatchClassification::Fresh;
+        };
+        if entry.fingerprint != req.dedup_fingerprint_input() {
+            // Same namespace + key, different request: the real dispatch
+            // will refuse this as a conflict, not extend the existing
+            // lease. No existing session applies to THIS request.
+            return GatewayDispatchClassification::Fresh;
+        }
+        match &entry.state {
+            super::DedupState::InProgress { .. } => GatewayDispatchClassification::Existing {
+                original_operation_id: entry.original_operation_id.clone(),
+            },
+            super::DedupState::Completed { since, .. } => {
+                if self.router.clock.now().duration_since(*since) > self.router.retention {
+                    // Retention elapsed: the real dispatch will lazily
+                    // tombstone this and refuse it as expired, not replay
+                    // it, so there is no existing session to reuse.
+                    GatewayDispatchClassification::Fresh
+                } else {
+                    GatewayDispatchClassification::Existing {
+                        original_operation_id: entry.original_operation_id.clone(),
+                    }
+                }
+            }
+            // Already tombstoned: reuse always fails closed, never resolves
+            // against a live session.
+            super::DedupState::Expired { .. } => GatewayDispatchClassification::Fresh,
         }
     }
 }
@@ -976,6 +1070,22 @@ pub trait GatewayPort: Send {
         generation: &ProtocolToken,
         client: &mut dyn RemotePeerClient,
     ) -> Result<RemoteDispatchOutcome, RemoteNodeError>;
+
+    /// Side-effect-free preflight: what would
+    /// `dispatch_via_gateway(gateway, req, ..)` resolve to right now? See
+    /// [`GatewayDispatchClassification`]. Implementations MUST NOT mutate
+    /// dedup/session state or contact a remote peer to answer this -- a
+    /// caller relies on that to decide whether local bounded state (e.g. a
+    /// session-lifecycle capacity reservation) is needed *before* the real
+    /// dispatch, without ever causing a side effect for a query alone. A
+    /// `gateway` that does not match this port's boundary classifies as
+    /// [`GatewayDispatchClassification::Fresh`] (safe fallback: the real
+    /// dispatch will refuse it, and `Fresh` never skips that refusal).
+    fn classify_dispatch(
+        &self,
+        gateway: &RealmTarget,
+        req: &OperationRequest,
+    ) -> GatewayDispatchClassification;
 }
 
 /// The reference [`GatewayPort`] implementation: wraps exactly one
@@ -1045,6 +1155,17 @@ where
             );
         }
         self.adapter.dispatch(req, generation, client)
+    }
+
+    fn classify_dispatch(
+        &self,
+        gateway: &RealmTarget,
+        req: &OperationRequest,
+    ) -> GatewayDispatchClassification {
+        if gateway != &self.boundary {
+            return GatewayDispatchClassification::Fresh;
+        }
+        self.adapter.classify_dispatch(req)
     }
 }
 
@@ -1624,6 +1745,7 @@ mod tests {
         query_status: Option<RemotePeerStatus>,
         fail_send: bool,
         fail_query: bool,
+        last_query_operation_id: Option<OperationId>,
     }
 
     impl RemotePeerClient for FakePeer {
@@ -1642,9 +1764,10 @@ mod tests {
         fn query_operation(
             &mut self,
             _route: &RemoteRoute,
-            _req: &OperationRequest,
+            req: &OperationRequest,
         ) -> Result<RemotePeerStatus, RemoteNodeError> {
             self.queries += 1;
+            self.last_query_operation_id = Some(req.operation_id.clone());
             if self.fail_query {
                 return Err(RemoteNodeError::new(RemoteNodeErrorKind::NodeUnavailable));
             }
@@ -1824,6 +1947,161 @@ mod tests {
         ));
         assert_eq!(peer.sends, 0);
         assert_eq!(peer.queries, 1);
+    }
+
+    #[test]
+    fn in_progress_retry_with_distinct_operation_id_queries_the_original_id() {
+        // A retry commonly carries a fresh per-attempt `operation_id` while
+        // reusing the same idempotency key. When the router reports
+        // `InProgress`, the peer has only ever seen the FIRST accepted
+        // attempt -- querying under the retry's own id would ask the peer
+        // about an attempt it never received.
+        let caps = CapabilitySet::empty().with(Capability::Lifecycle);
+        let mut adapter = RemoteFullHostAdapter::with_router(
+            RemoteNodeRegistry::new(),
+            super::super::OperationRouter::new(),
+            principal(),
+            caps.clone(),
+        );
+        adapter
+            .registry_mut()
+            .register(registration("gen-1", caps), instant(0))
+            .unwrap();
+        let original = req(
+            OperationKind::WorkloadStart,
+            Capability::Lifecycle,
+            Some("idem-1"),
+        );
+        // Establish the in-progress lease directly, exactly as
+        // `unacknowledged_mutation_queries_remote_state_before_retry` does,
+        // so it can be retried under a distinct `operation_id` below.
+        assert!(matches!(
+            adapter.router.route_with_capabilities(
+                &original,
+                &principal(),
+                &adapter.negotiated_capabilities
+            ),
+            super::super::RouteDecision::Accept { .. }
+        ));
+
+        let mut retry = original.clone();
+        retry.operation_id = OperationId::parse("op-retry-2").unwrap();
+        assert_ne!(retry.operation_id, original.operation_id);
+
+        let mut peer = FakePeer::default();
+        let outcome = adapter
+            .dispatch(&retry, &ProtocolToken::parse("gen-1").unwrap(), &mut peer)
+            .unwrap();
+        match outcome {
+            RemoteDispatchOutcome::QueryRemoteState {
+                original_operation_id,
+                ..
+            } => {
+                assert_eq!(original_operation_id, original.operation_id);
+            }
+            other => panic!("expected QueryRemoteState, got {other:?}"),
+        }
+        assert_eq!(peer.sends, 0);
+        assert_eq!(peer.queries, 1);
+        assert_eq!(
+            peer.last_query_operation_id,
+            Some(original.operation_id.clone()),
+            "the peer query must key on the ORIGINAL accepted id, never the retry's own"
+        );
+    }
+
+    #[test]
+    fn classify_dispatch_reports_existing_for_an_in_progress_lease() {
+        let caps = CapabilitySet::empty().with(Capability::Lifecycle);
+        let mut adapter = RemoteFullHostAdapter::with_router(
+            RemoteNodeRegistry::new(),
+            super::super::OperationRouter::new(),
+            principal(),
+            caps.clone(),
+        );
+        adapter
+            .registry_mut()
+            .register(registration("gen-1", caps), instant(0))
+            .unwrap();
+        let original = req(
+            OperationKind::WorkloadStart,
+            Capability::Lifecycle,
+            Some("idem-1"),
+        );
+        // Before any lease exists, a fresh request classifies as `Fresh`.
+        assert_eq!(
+            adapter.classify_dispatch(&original),
+            GatewayDispatchClassification::Fresh
+        );
+
+        assert!(matches!(
+            adapter.router.route_with_capabilities(
+                &original,
+                &principal(),
+                &adapter.negotiated_capabilities
+            ),
+            super::super::RouteDecision::Accept { .. }
+        ));
+
+        let mut retry = original.clone();
+        retry.operation_id = OperationId::parse("op-retry-classify").unwrap();
+        // Classification is a pure peek: calling it repeatedly must never
+        // mutate the dedup lease it reports on.
+        for _ in 0..3 {
+            assert_eq!(
+                adapter.classify_dispatch(&retry),
+                GatewayDispatchClassification::Existing {
+                    original_operation_id: original.operation_id.clone()
+                }
+            );
+        }
+
+        // A same-key, different-fingerprint request (a conflict) must
+        // never be reported as `Existing` -- the real dispatch will refuse
+        // it, not extend the existing lease.
+        let mut conflicting = original.clone();
+        conflicting.operation_id = OperationId::parse("op-conflict").unwrap();
+        conflicting.body = OpaquePayload::new(b"different-body".to_vec()).unwrap();
+        assert_eq!(
+            adapter.classify_dispatch(&conflicting),
+            GatewayDispatchClassification::Fresh
+        );
+    }
+
+    #[test]
+    fn classify_dispatch_reports_existing_for_a_completed_replay_within_retention() {
+        let caps = CapabilitySet::empty().with(Capability::Lifecycle);
+        let mut adapter = adapter(caps);
+        let mut peer = FakePeer::default();
+        let original = req(
+            OperationKind::WorkloadStart,
+            Capability::Lifecycle,
+            Some("idem-1"),
+        );
+        adapter
+            .dispatch(
+                &original,
+                &ProtocolToken::parse("gen-1").unwrap(),
+                &mut peer,
+            )
+            .unwrap();
+
+        let mut retry = original.clone();
+        retry.operation_id = OperationId::parse("op-retry-completed").unwrap();
+        assert_eq!(
+            adapter.classify_dispatch(&retry),
+            GatewayDispatchClassification::Existing {
+                original_operation_id: original.operation_id.clone()
+            }
+        );
+        // Non-mutating and boundary-mismatched dispatch classify as
+        // `Fresh` -- neither ever needs a new session reservation, and
+        // the real dispatch remains the authority on any refusal.
+        let list = req(OperationKind::ShellList, Capability::Lifecycle, None);
+        assert_eq!(
+            adapter.classify_dispatch(&list),
+            GatewayDispatchClassification::Fresh
+        );
     }
 
     #[test]

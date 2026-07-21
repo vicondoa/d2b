@@ -104,15 +104,26 @@ port as an explicit per-call argument instead:
    `GatewayPort` implementation the caller injected (see
    [`GatewayPort` / `SingleGatewayPort`](#gatewayport--singlegatewayport-remote_noders)
    below). Session-lifecycle tracking (bounded by `max_gateway_sessions`) is
-   **reservation-before-dispatch**, not allocate-after-success:
-   - If `req.operation_id` is not yet tracked and `DisplaySessionOpen` tracks
-     sessions for this kind, capacity is checked and a *provisional*
-     `SessionLifecycle::new()` entry is inserted **before**
-     `gateway_port.dispatch_via_gateway` is ever called. At capacity, this
-     returns `WorkExecutorError::GatewaySessionCapacityExceeded` immediately —
-     proving the peer is never contacted for a request that cannot be
-     tracked. If `req.operation_id` is *already* tracked (a retry reusing the
-     same id), no new reservation is made and no capacity check runs.
+   **reservation-before-dispatch**, not allocate-after-success, and the
+   reservation decision itself is **classify-before-reserve**:
+   - For a `DisplaySessionOpen` request, `gateway_port.classify_dispatch(gateway,
+     req)` (see [Gateway dispatch classification](#gateway-dispatch-classification-remote_noders))
+     is called *first* — a pure peek that never mutates gateway dedup/session
+     state and never contacts the remote peer. If it reports
+     `GatewayDispatchClassification::Existing { .. }` (this request's
+     idempotency key already covers a live dedup lease elsewhere), **no new
+     reservation is attempted and no capacity check runs at all** — a
+     fresh-`operation_id` retry of an already-tracked session can never be
+     rejected by a capacity bound it was never going to consume. Only when
+     classification reports `Fresh` (or the id is already tracked locally,
+     e.g. a plain repeat of the exact same attempt) does the existing
+     reservation path run: if `req.operation_id` is not yet tracked, capacity
+     is checked and a *provisional* `SessionLifecycle::new()` entry is
+     inserted **before** `gateway_port.dispatch_via_gateway` is ever called.
+     At capacity, this returns `WorkExecutorError::GatewaySessionCapacityExceeded`
+     immediately — proving the peer is never contacted for a request that
+     cannot be tracked, including for a genuinely new operation that would
+     have needed a fresh lease.
    - After the call, the outcome's `original_operation_id` (see below) is
      resolved. On `Ok(Sent | Replayed)`: if the original id differs from
      `req.operation_id` and this call made the provisional reservation, that
@@ -129,7 +140,14 @@ port as an explicit per-call argument instead:
      teardown (`stop()` + `finish_stop()`), evicting the session once it
      reaches `Stopped`.
    - Returns `WorkDispatchOutcome::GatewayBacked { original_operation_id,
-     session_phase, remote }`.
+     session_phase, remote }`. `original_operation_id` is resolved from
+     `remote.original_operation_id(&req.operation_id)` **unconditionally, for
+     every gateway-backed operation kind** — only whether local
+     session-lifecycle *state is allocated/tracked* (`session_phase`) is
+     gated on `tracks_session` (`kind == DisplaySessionOpen`). A non-session
+     kind (e.g. `WorkloadStart`, `ShellAttach`) still reports its true
+     gateway-side dedup-lease owner id; it simply carries `session_phase:
+     None` because this executor tracks no bounded lifecycle for it.
 
 ### Original-operation-id propagation
 
@@ -150,9 +168,21 @@ returns `current` (the caller's own id, since that request is what established
 the lease), while `Replayed`/`QueryRemoteState` return their carried field.
 `work_executor.rs`'s `dispatch_host_resident`/`dispatch_gateway_backed` both
 use this to compute the id they key session/status state by, and both expose
-it on their respective `WorkDispatchOutcome` variants so external callers
-(status endpoints, audit correlation) key their own state the same way —
-**never under a retry's own `operation_id`**.
+it on their respective `WorkDispatchOutcome` variants **for every successful
+outcome, regardless of operation kind** — never gated on whether the kind
+tracks a local session — so external callers (status endpoints, audit
+correlation) key their own state the same way — **never under a retry's own
+`operation_id`**.
+
+`RemoteFullHostAdapter::dispatch()`'s own `RouteDecision::InProgress` arm
+queries the peer under the router's `original_operation_id`, not the retry's
+own `req.operation_id`: a still-running lease means the peer has only ever
+seen the *first* accepted attempt, so a status query keyed by a later retry's
+id would ask about an attempt the peer never received. The query request is a
+clone of `req` with `operation_id` overwritten to the original id before
+`client.query_operation` is called; every other field (and every other use of
+`req`, e.g. `mark_completed`/`mark_failed`, which key off the
+`operation_id`-independent dedup namespace) is unaffected.
 
 Dependency direction is preserved: `work_executor.rs` imports only
 `crate::{...}` (router's own re-exports, including `crate::remote_node`'s
@@ -172,9 +202,13 @@ entirely and introduces:
 - **`pub trait GatewayPort: Send`** — `fn dispatch_via_gateway(&mut self,
   gateway: &RealmTarget, req: &OperationRequest, generation: &ProtocolToken,
   client: &mut dyn RemotePeerClient) -> Result<RemoteDispatchOutcome,
-  RemoteNodeError>`. Implementations MUST refuse (fail closed) a `gateway`
-  that does not match whatever boundary they were constructed to front. This
-  trait lives in `remote_node.rs` (unconditionally compiled) rather than
+  RemoteNodeError>`, plus `fn classify_dispatch(&self, gateway: &RealmTarget,
+  req: &OperationRequest) -> GatewayDispatchClassification` (see
+  [Gateway dispatch classification](#gateway-dispatch-classification-remote_noders)).
+  Implementations MUST refuse (fail closed) a `gateway` that does not match
+  whatever boundary they were constructed to front, and MUST NOT mutate
+  dedup/session state or contact a remote peer to answer `classify_dispatch`.
+  This trait lives in `remote_node.rs` (unconditionally compiled) rather than
   `work_executor.rs` (test-gated today), so it is reachable regardless of
   which crate declares which `mod`.
 - **`RemoteDispatchOutcome::Replayed`/`::QueryRemoteState` now carry an
@@ -190,10 +224,14 @@ entirely and introduces:
   `boundary: RealmTarget`. `dispatch_via_gateway` refuses
   (`RemoteNodeErrorKind::UnauthorizedGateway`, fail-closed) any `gateway` that
   does not equal `boundary`, and otherwise delegates unchanged to
-  `adapter.dispatch(...)`. This type is documented, and meant, to run
-  **inside the gateway guest process** it fronts — never embedded in a
-  host-resident `WorkExecutor` — so `RemoteFullHostAdapter` (and the
-  `RemoteNodeRegistry` it wraps) stays exactly where ADR 0032 requires it.
+  `adapter.dispatch(...)`. `classify_dispatch` similarly refuses (reporting
+  `Fresh` as the safe fallback — never `Existing`, so a boundary mismatch can
+  never suppress the real dispatch's refusal) any `gateway` that does not
+  equal `boundary`, and otherwise delegates to `adapter.classify_dispatch(req)`.
+  This type is documented, and meant, to run **inside the gateway guest
+  process** it fronts — never embedded in a host-resident `WorkExecutor` — so
+  `RemoteFullHostAdapter` (and the `RemoteNodeRegistry` it wraps) stays
+  exactly where ADR 0032 requires it.
 
 The host process passes only the realm entrypoint table's already-resolved
 canonical `gateway`/`target` `RealmTarget`s across this boundary; it never
@@ -202,7 +240,62 @@ directly. See [Integrator wiring](#integrator-wiring) for how a real
 constellation daemon is expected to place the two halves in separate
 processes.
 
-## `TransportFabric` (transport)
+### Gateway dispatch classification (`remote_node.rs`)
+
+Local bounded session-lifecycle capacity (`WorkExecutor::max_gateway_sessions`)
+must be reserved **only** for a genuinely new, side-effecting
+`DisplaySessionOpen` dispatch — never for a retry that carries a fresh
+`operation_id` but will resolve against an already-tracked session (the same
+idempotency key, a different attempt id; see
+[Original-operation-id propagation](#original-operation-id-propagation)).
+Checking local capacity purely from `self.sessions.contains_key(&req.operation_id)`
+cannot distinguish these two cases, because the session table is keyed by the
+*original* id while a retry's own id is, by definition, not yet present in it —
+so without classification a fresh-id replay of an at-capacity gateway would be
+wrongly rejected before ever asking the gateway whether it is actually new.
+
+`GatewayDispatchClassification` (`remote_node.rs`) is the fix:
+
+```rust
+pub enum GatewayDispatchClassification {
+    /// No dedup lease currently covers `req`'s namespace + idempotency key
+    /// with a matching fingerprint.
+    Fresh,
+    /// A dedup lease already exists (matching fingerprint), in progress or
+    /// completed within retention: dispatch would resolve against it.
+    Existing { original_operation_id: OperationId },
+}
+```
+
+`RemoteFullHostAdapter::classify_dispatch(&self, req)` computes this as a
+**pure, read-only peek**: it recomputes the same `DedupKey`/fingerprint the
+real `route_with_capabilities` call would use and reads (never inserts or
+mutates) the router's own dedup record for that key. It never calls
+`client.send_operation`/`client.query_operation`. It intentionally does not
+replicate every refusal `route_with_capabilities` can return (principal
+mismatch, missing capability, missing workload, unsupported kind, a
+same-key/different-request conflict, or a post-retention expiry): none of
+those ever need a *new* capacity reservation either way (a refusal never
+establishes a lease), so they all classify as `Fresh` and the caller learns
+the exact refusal from the real `dispatch_via_gateway` call, which remains
+the single authority for authorization/idempotency decisions — classification
+never substitutes for it, it only decides *when* to reserve.
+
+`WorkExecutor::dispatch_gateway_backed` calls `classify_dispatch` before ever
+touching `self.sessions` for a `DisplaySessionOpen` request:
+
+- `Existing { .. }` → no capacity check, no reservation; dispatch proceeds
+  directly (auth/idempotency is still fully re-checked by the real
+  `dispatch_via_gateway` call — classification never bypasses it).
+- `Fresh` (or an id already tracked locally) → the existing
+  reserve-before-dispatch/evict-on-failure path runs unchanged.
+
+This composes with, and does not replace, the existing invariant that a
+capacity-exceeded refusal for a genuinely new operation must prove the peer
+was never reached: classification adds no remote call of its own, so a
+`GatewaySessionCapacityExceeded` refusal is still provably side-effect-free.
+
+
 
 `TransportFabric` is itself just another `TransportProvider` impl: a
 scheme-keyed composition of already-existing transports
@@ -495,12 +588,15 @@ running host-side never constructs a `SingleGatewayPort` (or any
    GatewayPort` handle to the host-side `WorkExecutor::dispatch` call —
    either by running the call itself inside the gateway process against its
    local `SingleGatewayPort`, or by wrapping that session boundary in a small
-   adapter type (not part of this component) that forwards
-   `dispatch_via_gateway` calls across it and implements `GatewayPort` on the
-   host side. This component defines the trait and one reference
-   implementer; it deliberately does not prescribe or implement that
-   session-crossing adapter, since doing so would require touching the
-   realm session/transport wiring outside this component's owned files.
+   adapter type (not part of this component) that forwards **both**
+   `dispatch_via_gateway` **and** `classify_dispatch` calls across it and
+   implements `GatewayPort` on the host side — `classify_dispatch` must reach
+   the same gateway-side dedup state `dispatch_via_gateway` would consult, so
+   a forwarding adapter cannot answer it locally without a round trip. This
+   component defines the trait and one reference implementer; it deliberately
+   does not prescribe or implement that session-crossing adapter, since doing
+   so would require touching the realm session/transport wiring outside this
+   component's owned files.
 
 No `Cargo.toml`/`Cargo.lock`/workspace manifest change is required for either
 crate: both new modules use only dependencies already declared
@@ -519,14 +615,22 @@ warnings` / `cargo fmt --check` are clean **against the committed tree as
 it stands** — no `lib.rs` patch was needed or used to produce these results,
 because `work_executor.rs`/`fabric.rs` are reached through the test-only
 `#[cfg(test)]` module declarations described above. Test counts observed:
-`d2b-realm-router` 102 lib tests (including 23 in
-`execution::work_executor::tests` covering wrong-node fail-closed, empty
-capabilities/missing idempotency rejection, workload-mismatch rejection,
-replay-vs-restart, gateway-port boundary-mismatch fail-closed,
-original-operation-id propagation through replay/in-progress, reserve-before-
-dispatch capacity enforcement (proving the peer is never called when at
-capacity), and non-destructive eviction of a legitimately running session
-under a failed/conflicting retry); `d2b-realm-transport` 38 lib tests
+`d2b-realm-router` 107 lib tests (including 25 in `work_executor::tests`
+covering wrong-node fail-closed, empty capabilities/missing idempotency
+rejection, workload-mismatch rejection, replay-vs-restart, gateway-port
+boundary-mismatch fail-closed, original-operation-id propagation through
+replay/in-progress, reserve-before-dispatch capacity enforcement (proving the
+peer is never called when at capacity), non-destructive eviction of a
+legitimately running session under a failed/conflicting retry, a fresh-
+`operation_id` replay of an existing session succeeding even at
+`max_gateway_sessions(1)`, and an at-capacity genuinely-new operation being
+rejected with zero gateway sends; plus 34 in `remote_node::tests`, three of
+them new this round, covering the `InProgress` peer query keyed by
+`original_operation_id` rather than a retry's own id, and `classify_dispatch`
+reporting `Existing`/`Fresh` correctly for an in-progress lease, a
+same-key/different-fingerprint conflict, a within-retention completed replay,
+and a non-mutating query kind — each asserted as a pure peek (repeatable, no
+state change)); `d2b-realm-transport` 38 lib tests
 (including persistent-fan-in, partial-listen-failure, all-listen-failure,
 mixed-case-scheme, recoverable-accept-error classification/retry-hint
 attachment, scripted-transient-error retry-without-terminating, bounded
