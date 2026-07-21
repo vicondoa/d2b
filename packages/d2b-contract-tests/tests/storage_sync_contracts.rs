@@ -418,6 +418,7 @@ fn rendered_storage_contract_covers_process_writable_paths_when_fixture_availabl
         let storage: StorageJson = read_json(&dir, "storage.json");
         let sync: SyncJson = read_json(&dir, "sync.json");
         let processes: ProcessesJson = read_json(&dir, "processes.json");
+        let bundle: Bundle = read_json(&dir, "bundle.json");
 
         storage
             .validate_unique_ids()
@@ -540,6 +541,17 @@ fn rendered_storage_contract_covers_process_writable_paths_when_fixture_availabl
             .filter(|path| path.id.as_str().starts_with("path:observability-"))
             .collect();
         if !observability_paths.is_empty() {
+            assert_eq!(
+                bundle.observability_secrets_path.as_deref(),
+                Some("/etc/d2b/observability-secrets.json"),
+                "{fixture_name} bundle must expose observability secret metadata"
+            );
+            assert!(
+                bundle.artifact_hashes.as_ref().is_some_and(|hashes| {
+                    hashes.contains_key("/etc/d2b/observability-secrets.json")
+                }),
+                "{fixture_name} bundle must integrity-pin observability secret metadata"
+            );
             let expected_prefixes = [
                 "path:observability-config:",
                 "path:observability-runtime:",

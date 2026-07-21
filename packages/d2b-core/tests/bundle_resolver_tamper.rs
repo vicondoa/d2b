@@ -354,7 +354,7 @@ fn write_allocator_bundle(dir: &Path, allocator: &[u8]) -> std::path::PathBuf {
     let processes = minimal_processes_json();
     let pre_hash = serde_json::to_vec(&serde_json::json!({
         "artifactHashes": null,
-        "bundleVersion": 12,
+        "bundleVersion": 13,
         "schemaVersion": "v2",
         "publicManifestPath": "vms.json",
         "hostPath": "host.json",

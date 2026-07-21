@@ -3230,6 +3230,7 @@ mod tests {
                 realm_workloads_launcher_v2_path: None,
                 unsafe_local_workloads_path: None,
                 provider_registry_v2_path: None,
+                observability_secrets_path: None,
                 closures: Vec::new(),
                 minijail_profiles: Vec::new(),
                 managed_keys: Default::default(),
@@ -3577,6 +3578,7 @@ mod tests {
             realm_workloads_launcher_v2_path: None,
             unsafe_local_workloads_path: None,
             provider_registry_v2_path: None,
+            observability_secrets_path: None,
             closures: vec![BundleClosureRef {
                 vm: "personal-dev".to_owned(),
                 path: "closures/personal-dev.json".to_owned(),

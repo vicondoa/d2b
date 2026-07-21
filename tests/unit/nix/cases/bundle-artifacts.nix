@@ -128,7 +128,7 @@ in
       };
     };
     expected = {
-      bundleVersion = 12;
+      bundleVersion = 13;
       schemaVersion = "v2";
       bundle = {
         classification = "contractPrivateNonSecret";

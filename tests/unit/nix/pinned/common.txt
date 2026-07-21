@@ -234,6 +234,7 @@ net-vm-network/public-manifest-identifies-network-workload
 net-vm-network/reachable-through-generic-workload-index
 net-vm-network/realm-plan-assertions-pass
 net-vm-network/workload-address
+observability/bundle-index-discovers-secret-metadata
 observability/canonical-resources
 observability/frozen-provider-mapping-is-consumed
 observability/module-declares-canonical-providers-and-refs

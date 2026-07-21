@@ -443,4 +443,8 @@ in
     };
   };
 
+  "observability/bundle-index-discovers-secret-metadata" = {
+    expr = evaluated.d2b._bundle.bundle.data.observabilitySecretsPath;
+    expected = "/etc/d2b/observability-secrets.json";
+  };
 }

@@ -81,7 +81,7 @@ let
   # presence of this field; the resolver nullifies it before comparing.
   dataWithoutHash = {
     artifactHashes = null;
-    bundleVersion = 12;
+    bundleVersion = 13;
     schemaVersion = "v2";
     publicManifestPath = "/run/current-system/sw/share/d2b/vms.json";
     hostPath = "/etc/d2b/host.json";
@@ -95,6 +95,10 @@ let
     realmWorkloadsLauncherV2Path = "/etc/d2b/realm-workloads-launcher-v2.json";
     unsafeLocalWorkloadsPath = "/etc/d2b/unsafe-local-workloads.json";
     providerRegistryV2Path = "/etc/d2b/provider-registry-v2.json";
+    observabilitySecretsPath =
+      if config.d2b._bundle.extraArtifacts ? observabilitySecretsJson
+      then "/etc/d2b/${config.d2b._bundle.extraArtifacts.observabilitySecretsJson.installFileName}"
+      else null;
     closures = closureRefs;
     minijailProfiles = profileRefs;
     managedKeys = {

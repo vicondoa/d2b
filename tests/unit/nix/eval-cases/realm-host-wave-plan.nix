@@ -308,7 +308,7 @@ let
         emission in exactly the owned files. Use short-ID paths and broker-owned
         opaque repair rows; remove activation/tmpfiles repair below fixed
         anchors. Add only the storage provider-registry fragment. Do not change
-        bundle v12, storage DTOs, broker runtime, or allocator runtime.
+        central bundle contract, storage DTOs, broker runtime, or allocator runtime.
       '';
     };
 
@@ -743,13 +743,13 @@ let
       ];
       deletes = [ ];
       scope = [
-        "Wire all file-disjoint modules into one complete bundle-v12 realm-only configuration."
+        "Wire all file-disjoint modules into one complete bundle-v13 realm-only configuration."
         "Delete remaining VM, env, gateway, relay, placeholder, and host-singleton wiring from examples, templates, bundle, host, and privilege artifacts."
         "Keep delivery authority and cross-component validation integrator-owned."
       ];
       prompt = ''
         Integrate the completed components in exactly the owned files. Preserve
-        bundleVersion 12 and schemaVersion v2, wire every required private
+        bundleVersion 13 and schemaVersion v2, wire every required private
         artifact, finish old-surface deletion in examples/templates, and run
         cross-component eval/drift/policy validation. Do not absorb component
         implementation, edit frozen contracts, Cargo.lock, workspace

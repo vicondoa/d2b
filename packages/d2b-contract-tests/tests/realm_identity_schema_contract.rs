@@ -176,7 +176,7 @@ fn rendered_realm_identity_and_controller_contracts_are_integrity_pinned_when_fi
         bundle.realm_controllers_path.as_deref(),
         Some("/etc/d2b/realm-controllers.json")
     );
-    assert_eq!(bundle.bundle_version, 12);
+    assert_eq!(bundle.bundle_version, 13);
     assert_eq!(bundle.schema_version, "v2");
     assert_eq!(controllers.schema_version, "v2");
     assert_eq!(
@@ -193,7 +193,7 @@ fn rendered_realm_identity_and_controller_contracts_are_integrity_pinned_when_fi
     ] {
         assert!(
             hashes.contains_key(path),
-            "bundle v12 must integrity-pin private realm artifact {path}"
+            "bundle v13 must integrity-pin private realm artifact {path}"
         );
     }
 }

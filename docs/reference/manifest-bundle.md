@@ -50,8 +50,9 @@ The policy is defined by
 schema directory is `docs/reference/schemas/v2/`; the bundle and
 per-artifact schemas were bumped from `v1` to `v2` to land the
 host-prepare additions; the current emitted
-bundle keeps `schemaVersion = "v2"` and uses `bundleVersion = 12`
-for generated provider registry composition.
+bundle keeps `schemaVersion = "v2"` and uses `bundleVersion = 13`;
+version 12 added generated provider-registry composition and version 13 adds
+discovery of the observability secret-generation metadata contract.
 Each artifact now carries a
 matching v2 markdown companion beside the committed JSON schema.
 `cargo xtask gen-schemas` regenerates the JSON files under
@@ -85,6 +86,9 @@ The public boundary is intentionally narrow:
 - `provider-registry-v2.json` is private, argv-free composition metadata. Its
   IDs authorize nothing by themselves; `d2bd` resolves its opaque intent IDs
   only through the integrity-verified current bundle.
+- `observability-secrets.json` is private, non-secret metadata describing
+  broker-owned credential destinations and generation bounds. Secret bytes are
+  never embedded in the artifact.
 - Private artifacts may contain command argv, broker-only paths,
   cgroup/device/fd requirements, sandbox profile internals, closure
   paths, qemu-media direct image-file paths authored in Nix config, and

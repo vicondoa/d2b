@@ -12,6 +12,9 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added bundle version 13 discovery for private observability
+  secret-generation metadata, allowing the integrated runtime wave to consume
+  the contract without a hardcoded path.
 - Added a mandatory final streamline wave to ADR-scale delivery plans, seeded
   from observed W4-W7 stack, validation, test-discovery, evidence, and
   build-output friction and required to ship tested process/tooling improvements.

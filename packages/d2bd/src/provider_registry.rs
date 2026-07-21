@@ -91,7 +91,7 @@ use crate::{
 };
 
 const AZURE_VM_IMPLEMENTATION_ID: &str = "azure-vm";
-const PROVIDER_BUNDLE_VERSION: u32 = 12;
+const PROVIDER_BUNDLE_VERSION: u32 = 13;
 const PROVIDER_BUNDLE_SCHEMA_VERSION: &str = "v2";
 static NEXT_LIFECYCLE_OPERATION_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -168,7 +168,7 @@ impl fmt::Display for ProviderCompositionError {
             Self::Registry(error) => return error.fmt(formatter),
             Self::StartupProbeFailed => "provider registry startup health/inspect probe failed",
             Self::BundleContractMismatch => {
-                "provider registry requires an integrity-complete bundle v12/v2 contract"
+                "provider registry requires an integrity-complete bundle v13/v2 contract"
             }
             Self::ProcessIdentityMismatch => {
                 "provider runtime binding does not match the explicit process workload identity"
