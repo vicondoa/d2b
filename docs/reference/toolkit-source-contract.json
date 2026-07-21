@@ -1,0 +1,1383 @@
+{
+  "apiSurfaces": [
+    {
+      "id": "client-resolution-and-services",
+      "owner": "d2b-client",
+      "paths": [
+        "packages/d2b-client/src/target.rs",
+        "packages/d2b-client/src/service.rs",
+        "packages/d2b-client/src/client.rs",
+        "packages/d2b-client/src/daemon_service.rs",
+        "packages/d2b-client/src/guest_service.rs"
+      ]
+    },
+    {
+      "id": "client-session-and-streams",
+      "owner": "d2b-client",
+      "paths": [
+        "packages/d2b-client/src/session.rs",
+        "packages/d2b-client/src/host_socket.rs"
+      ]
+    },
+    {
+      "id": "component-session-runtime",
+      "owner": "d2b-session",
+      "paths": [
+        "packages/d2b-session/src/lib.rs",
+        "packages/d2b-session/src/driver.rs",
+        "packages/d2b-session/src/engine.rs",
+        "packages/d2b-session/src/server.rs",
+        "packages/d2b-session/src/transport.rs",
+        "packages/d2b-session/src/attachment.rs"
+      ]
+    },
+    {
+      "id": "unix-session-transport",
+      "owner": "d2b-session-unix",
+      "paths": [
+        "packages/d2b-session-unix/src/lib.rs",
+        "packages/d2b-session-unix/src/adapter.rs",
+        "packages/d2b-session-unix/src/socket.rs",
+        "packages/d2b-session-unix/src/descriptor.rs",
+        "packages/d2b-session-unix/src/credit.rs",
+        "packages/d2b-session-unix/src/pidfd.rs",
+        "packages/d2b-session-unix/src/systemd.rs",
+        "packages/d2b-session-unix/src/vsock.rs"
+      ]
+    },
+    {
+      "id": "provider-runtime",
+      "owner": "d2b-provider",
+      "paths": [
+        "packages/d2b-provider/src/lib.rs",
+        "packages/d2b-provider/src/instance.rs",
+        "packages/d2b-provider/src/registry.rs",
+        "packages/d2b-provider/src/rpc.rs"
+      ]
+    },
+    {
+      "id": "provider-agent-and-conformance",
+      "owner": "d2b-provider-toolkit",
+      "paths": [
+        "packages/d2b-provider-toolkit/src/lib.rs",
+        "packages/d2b-provider-toolkit/src/adapter.rs",
+        "packages/d2b-provider-toolkit/src/server.rs",
+        "packages/d2b-provider-toolkit/src/registration.rs",
+        "packages/d2b-provider-toolkit/src/conformance.rs",
+        "packages/d2b-provider-toolkit/src/fixture.rs",
+        "packages/d2b-provider-toolkit/src/values.rs"
+      ]
+    },
+    {
+      "id": "redaction",
+      "owner": "d2b-client,d2b-session,d2b-provider-toolkit",
+      "paths": [
+        "packages/d2b-client/src/error.rs",
+        "packages/d2b-client/src/session.rs",
+        "packages/d2b-client/src/target.rs",
+        "packages/d2b-client/src/daemon_service.rs",
+        "packages/d2b-client/src/guest_service.rs",
+        "packages/d2b-client/src/host_socket.rs",
+        "packages/d2b-session/src/bootstrap.rs",
+        "packages/d2b-provider-toolkit/src/redaction.rs"
+      ]
+    },
+    {
+      "id": "public-contract-artifacts",
+      "owner": "d2b",
+      "paths": [
+        "docs/reference/component-session-v2-schema.json",
+        "docs/reference/component-session-v2-vectors.json",
+        "docs/reference/component-session-v2.md",
+        "docs/reference/d2b-contracts-features.md",
+        "docs/reference/provider-contract-v2-fixture.json",
+        "docs/reference/provider-contract-v2.md",
+        "docs/reference/provider-contract-v2.schema.json",
+        "docs/reference/toolkit-source-contract.md",
+        "docs/reference/v2-foundation-crates.md",
+        "docs/reference/v2-identity-vectors.json",
+        "docs/reference/v2-identity.md",
+        "docs/reference/v2-services-schema.json",
+        "docs/reference/v2-services.json",
+        "docs/reference/v2-services.md"
+      ]
+    }
+  ],
+  "canonicalPackages": [
+    {
+      "manifest": "packages/d2b-contracts/Cargo.toml",
+      "package": "d2b-contracts",
+      "sourceGroup": "contracts-package"
+    },
+    {
+      "manifest": "packages/d2b-client/Cargo.toml",
+      "package": "d2b-client",
+      "sourceGroup": "client"
+    },
+    {
+      "manifest": "packages/d2b-session/Cargo.toml",
+      "package": "d2b-session",
+      "sourceGroup": "session-runtime"
+    },
+    {
+      "manifest": "packages/d2b-session-unix/Cargo.toml",
+      "package": "d2b-session-unix",
+      "sourceGroup": "unix-session"
+    },
+    {
+      "manifest": "packages/d2b-provider/Cargo.toml",
+      "package": "d2b-provider",
+      "sourceGroup": "provider-runtime"
+    },
+    {
+      "manifest": "packages/d2b-provider-toolkit/Cargo.toml",
+      "package": "d2b-provider-toolkit",
+      "sourceGroup": "provider-toolkit"
+    }
+  ],
+  "contract": "d2b-toolkit-source-contract",
+  "contractFeatureFamilies": {
+    "broker": [
+      "common",
+      "guest-auth",
+      "security-key",
+      "usbip"
+    ],
+    "cli-output": [
+      "public"
+    ],
+    "common": [
+      "dep:d2b-core",
+      "dep:schemars",
+      "dep:serde",
+      "dep:serde_json"
+    ],
+    "default": [],
+    "guest": [
+      "common",
+      "guest-auth",
+      "usbip",
+      "dep:protobuf"
+    ],
+    "guest-auth": [],
+    "public": [
+      "broker",
+      "guest",
+      "dep:d2b-realm-core",
+      "v2-provider"
+    ],
+    "schema": [
+      "cli-output",
+      "unsafe-local",
+      "v2-identity",
+      "v2-component-session",
+      "v2-guest-configured-launches",
+      "v2-services",
+      "v2-provider",
+      "v2-state"
+    ],
+    "security-key": [
+      "dep:schemars",
+      "dep:serde"
+    ],
+    "unsafe-local": [
+      "public"
+    ],
+    "usbip": [
+      "dep:serde"
+    ],
+    "v2-component-session": [
+      "v2-identity",
+      "dep:schemars",
+      "dep:serde",
+      "dep:zeroize"
+    ],
+    "v2-guest-configured-launches": [
+      "v2-identity",
+      "dep:d2b-core",
+      "dep:d2b-realm-core",
+      "dep:sha2",
+      "dep:zeroize"
+    ],
+    "v2-identity": [
+      "dep:schemars",
+      "dep:serde",
+      "dep:sha2"
+    ],
+    "v2-provider": [
+      "v2-component-session",
+      "dep:schemars",
+      "dep:serde"
+    ],
+    "v2-services": [
+      "v2-component-session",
+      "v2-provider",
+      "v2-state",
+      "dep:async-trait",
+      "dep:protobuf",
+      "dep:schemars",
+      "dep:serde",
+      "dep:ttrpc"
+    ],
+    "v2-state": [
+      "v2-identity",
+      "dep:schemars",
+      "dep:serde"
+    ]
+  },
+  "distributions": [
+    {
+      "featureProfile": {
+        "d2b-client": [
+          "host-socket"
+        ],
+        "d2b-contracts": [
+          "v2-services"
+        ],
+        "d2b-session": [],
+        "d2b-session-unix": [
+          "host-socket"
+        ]
+      },
+      "fileCount": 168,
+      "fingerprint": "5a20cef3a64281df819eeb76bdfe385999755479b467b559653011582fb9c043",
+      "id": "d2b-client-toolkit",
+      "sourceGroups": [
+        "workspace-manifest",
+        "contracts-package",
+        "session-runtime",
+        "unix-session",
+        "client",
+        "public-contract-artifacts"
+      ]
+    },
+    {
+      "featureProfile": {
+        "d2b-contracts": [
+          "v2-services"
+        ],
+        "d2b-provider": [],
+        "d2b-provider-toolkit": [],
+        "d2b-session": []
+      },
+      "fileCount": 164,
+      "fingerprint": "a1fb1a1c135d033fa3fb5cd1d0a11599dc48203fa44f96e3b152844d8745c86a",
+      "id": "d2b-provider-toolkit",
+      "sourceGroups": [
+        "workspace-manifest",
+        "contracts-package",
+        "session-runtime",
+        "provider-runtime",
+        "provider-toolkit",
+        "public-contract-artifacts"
+      ]
+    }
+  ],
+  "excludedPaths": [
+    {
+      "path": "packages/Cargo.lock",
+      "reason": "each distribution owns its lockfile; the d2b lockfile is not copied"
+    }
+  ],
+  "fingerprintPolicy": {
+    "algorithm": "sha256",
+    "digestEncoding": "lowercase-hex",
+    "distributionDomain": "d2b-toolkit-distribution-v1",
+    "lengthEncoding": "u64-big-endian",
+    "pathEncoding": "utf-8",
+    "sourceGroupDomain": "d2b-toolkit-source-group-v1"
+  },
+  "generatedBindings": [
+    {
+      "proto": "packages/d2b-contracts/proto/v2/activation.proto",
+      "rust": [
+        "packages/d2b-contracts/src/generated_v2_services/activation.rs",
+        "packages/d2b-contracts/src/generated_v2_services/activation_ttrpc.rs"
+      ],
+      "stem": "activation"
+    },
+    {
+      "proto": "packages/d2b-contracts/proto/v2/broker.proto",
+      "rust": [
+        "packages/d2b-contracts/src/generated_v2_services/broker.rs",
+        "packages/d2b-contracts/src/generated_v2_services/broker_ttrpc.rs"
+      ],
+      "stem": "broker"
+    },
+    {
+      "proto": "packages/d2b-contracts/proto/v2/clipboard.proto",
+      "rust": [
+        "packages/d2b-contracts/src/generated_v2_services/clipboard.rs",
+        "packages/d2b-contracts/src/generated_v2_services/clipboard_ttrpc.rs"
+      ],
+      "stem": "clipboard"
+    },
+    {
+      "proto": "packages/d2b-contracts/proto/v2/clipboard_picker.proto",
+      "rust": [
+        "packages/d2b-contracts/src/generated_v2_services/clipboard_picker.rs",
+        "packages/d2b-contracts/src/generated_v2_services/clipboard_picker_ttrpc.rs"
+      ],
+      "stem": "clipboard_picker"
+    },
+    {
+      "proto": "packages/d2b-contracts/proto/v2/common.proto",
+      "rust": [
+        "packages/d2b-contracts/src/generated_v2_services/common.rs"
+      ],
+      "stem": "common"
+    },
+    {
+      "proto": "packages/d2b-contracts/proto/v2/daemon.proto",
+      "rust": [
+        "packages/d2b-contracts/src/generated_v2_services/daemon.rs",
+        "packages/d2b-contracts/src/generated_v2_services/daemon_ttrpc.rs"
+      ],
+      "stem": "daemon"
+    },
+    {
+      "proto": "packages/d2b-contracts/proto/v2/guest.proto",
+      "rust": [
+        "packages/d2b-contracts/src/generated_v2_services/guest.rs",
+        "packages/d2b-contracts/src/generated_v2_services/guest_ttrpc.rs"
+      ],
+      "stem": "guest"
+    },
+    {
+      "proto": "packages/d2b-contracts/proto/v2/notify.proto",
+      "rust": [
+        "packages/d2b-contracts/src/generated_v2_services/notify.rs",
+        "packages/d2b-contracts/src/generated_v2_services/notify_ttrpc.rs"
+      ],
+      "stem": "notify"
+    },
+    {
+      "proto": "packages/d2b-contracts/proto/v2/provider_audio.proto",
+      "rust": [
+        "packages/d2b-contracts/src/generated_v2_services/provider_audio.rs",
+        "packages/d2b-contracts/src/generated_v2_services/provider_audio_ttrpc.rs"
+      ],
+      "stem": "provider_audio"
+    },
+    {
+      "proto": "packages/d2b-contracts/proto/v2/provider_credential.proto",
+      "rust": [
+        "packages/d2b-contracts/src/generated_v2_services/provider_credential.rs",
+        "packages/d2b-contracts/src/generated_v2_services/provider_credential_ttrpc.rs"
+      ],
+      "stem": "provider_credential"
+    },
+    {
+      "proto": "packages/d2b-contracts/proto/v2/provider_device.proto",
+      "rust": [
+        "packages/d2b-contracts/src/generated_v2_services/provider_device.rs",
+        "packages/d2b-contracts/src/generated_v2_services/provider_device_ttrpc.rs"
+      ],
+      "stem": "provider_device"
+    },
+    {
+      "proto": "packages/d2b-contracts/proto/v2/provider_display.proto",
+      "rust": [
+        "packages/d2b-contracts/src/generated_v2_services/provider_display.rs",
+        "packages/d2b-contracts/src/generated_v2_services/provider_display_ttrpc.rs"
+      ],
+      "stem": "provider_display"
+    },
+    {
+      "proto": "packages/d2b-contracts/proto/v2/provider_infrastructure.proto",
+      "rust": [
+        "packages/d2b-contracts/src/generated_v2_services/provider_infrastructure.rs",
+        "packages/d2b-contracts/src/generated_v2_services/provider_infrastructure_ttrpc.rs"
+      ],
+      "stem": "provider_infrastructure"
+    },
+    {
+      "proto": "packages/d2b-contracts/proto/v2/provider_network.proto",
+      "rust": [
+        "packages/d2b-contracts/src/generated_v2_services/provider_network.rs",
+        "packages/d2b-contracts/src/generated_v2_services/provider_network_ttrpc.rs"
+      ],
+      "stem": "provider_network"
+    },
+    {
+      "proto": "packages/d2b-contracts/proto/v2/provider_observability.proto",
+      "rust": [
+        "packages/d2b-contracts/src/generated_v2_services/provider_observability.rs",
+        "packages/d2b-contracts/src/generated_v2_services/provider_observability_ttrpc.rs"
+      ],
+      "stem": "provider_observability"
+    },
+    {
+      "proto": "packages/d2b-contracts/proto/v2/provider_runtime.proto",
+      "rust": [
+        "packages/d2b-contracts/src/generated_v2_services/provider_runtime.rs",
+        "packages/d2b-contracts/src/generated_v2_services/provider_runtime_ttrpc.rs"
+      ],
+      "stem": "provider_runtime"
+    },
+    {
+      "proto": "packages/d2b-contracts/proto/v2/provider_storage.proto",
+      "rust": [
+        "packages/d2b-contracts/src/generated_v2_services/provider_storage.rs",
+        "packages/d2b-contracts/src/generated_v2_services/provider_storage_ttrpc.rs"
+      ],
+      "stem": "provider_storage"
+    },
+    {
+      "proto": "packages/d2b-contracts/proto/v2/provider_substrate.proto",
+      "rust": [
+        "packages/d2b-contracts/src/generated_v2_services/provider_substrate.rs",
+        "packages/d2b-contracts/src/generated_v2_services/provider_substrate_ttrpc.rs"
+      ],
+      "stem": "provider_substrate"
+    },
+    {
+      "proto": "packages/d2b-contracts/proto/v2/provider_transport.proto",
+      "rust": [
+        "packages/d2b-contracts/src/generated_v2_services/provider_transport.rs",
+        "packages/d2b-contracts/src/generated_v2_services/provider_transport_ttrpc.rs"
+      ],
+      "stem": "provider_transport"
+    },
+    {
+      "proto": "packages/d2b-contracts/proto/v2/realm.proto",
+      "rust": [
+        "packages/d2b-contracts/src/generated_v2_services/realm.rs",
+        "packages/d2b-contracts/src/generated_v2_services/realm_ttrpc.rs"
+      ],
+      "stem": "realm"
+    },
+    {
+      "proto": "packages/d2b-contracts/proto/v2/runtime_systemd_user.proto",
+      "rust": [
+        "packages/d2b-contracts/src/generated_v2_services/runtime_systemd_user.rs",
+        "packages/d2b-contracts/src/generated_v2_services/runtime_systemd_user_ttrpc.rs"
+      ],
+      "stem": "runtime_systemd_user"
+    },
+    {
+      "proto": "packages/d2b-contracts/proto/v2/security_key.proto",
+      "rust": [
+        "packages/d2b-contracts/src/generated_v2_services/security_key.rs",
+        "packages/d2b-contracts/src/generated_v2_services/security_key_ttrpc.rs"
+      ],
+      "stem": "security_key"
+    },
+    {
+      "proto": "packages/d2b-contracts/proto/v2/shell.proto",
+      "rust": [
+        "packages/d2b-contracts/src/generated_v2_services/shell.rs",
+        "packages/d2b-contracts/src/generated_v2_services/shell_ttrpc.rs"
+      ],
+      "stem": "shell"
+    },
+    {
+      "proto": "packages/d2b-contracts/proto/v2/terminal.proto",
+      "rust": [
+        "packages/d2b-contracts/src/generated_v2_services/terminal.rs"
+      ],
+      "stem": "terminal"
+    },
+    {
+      "proto": "packages/d2b-contracts/proto/v2/tty.proto",
+      "rust": [
+        "packages/d2b-contracts/src/generated_v2_services/tty.rs",
+        "packages/d2b-contracts/src/generated_v2_services/tty_ttrpc.rs"
+      ],
+      "stem": "tty"
+    },
+    {
+      "proto": "packages/d2b-contracts/proto/v2/user.proto",
+      "rust": [
+        "packages/d2b-contracts/src/generated_v2_services/user.rs",
+        "packages/d2b-contracts/src/generated_v2_services/user_ttrpc.rs"
+      ],
+      "stem": "user"
+    },
+    {
+      "proto": "packages/d2b-contracts/proto/v2/wayland.proto",
+      "rust": [
+        "packages/d2b-contracts/src/generated_v2_services/wayland.rs",
+        "packages/d2b-contracts/src/generated_v2_services/wayland_ttrpc.rs"
+      ],
+      "stem": "wayland"
+    }
+  ],
+  "packageFeatures": [
+    {
+      "contractFeatures": [
+        "v2-services"
+      ],
+      "features": {
+        "default": [],
+        "host-socket": [
+          "dep:d2b-session-unix",
+          "d2b-session-unix/host-socket",
+          "dep:nix",
+          "tokio/net"
+        ]
+      },
+      "manifest": "packages/d2b-client/Cargo.toml",
+      "package": "d2b-client"
+    },
+    {
+      "contractFeatures": [
+        "v2-services"
+      ],
+      "features": {
+        "default": []
+      },
+      "manifest": "packages/d2b-provider/Cargo.toml",
+      "package": "d2b-provider"
+    },
+    {
+      "contractFeatures": [
+        "v2-services"
+      ],
+      "features": {
+        "default": []
+      },
+      "manifest": "packages/d2b-provider-toolkit/Cargo.toml",
+      "package": "d2b-provider-toolkit"
+    },
+    {
+      "contractFeatures": [
+        "v2-component-session",
+        "v2-services"
+      ],
+      "features": {
+        "default": []
+      },
+      "manifest": "packages/d2b-session/Cargo.toml",
+      "package": "d2b-session"
+    },
+    {
+      "contractFeatures": [
+        "v2-component-session"
+      ],
+      "features": {
+        "default": [],
+        "host-socket": [
+          "dep:async-trait",
+          "dep:d2b-contracts",
+          "dep:d2b-session",
+          "dep:libc",
+          "dep:rustix",
+          "dep:tokio"
+        ],
+        "native-vsock": [
+          "dep:async-trait",
+          "dep:d2b-contracts",
+          "dep:d2b-session",
+          "dep:tokio",
+          "dep:tokio-vsock"
+        ]
+      },
+      "manifest": "packages/d2b-session-unix/Cargo.toml",
+      "package": "d2b-session-unix"
+    }
+  ],
+  "schemaVersion": 1,
+  "sourceGroups": [
+    {
+      "fileCount": 1,
+      "files": [
+        {
+          "path": "packages/Cargo.toml",
+          "sha256": "f2f9571d8ba1e5f6068ead744b9e8f7802ef6cd6c8e01bf9e3ed121a0dbc0301"
+        }
+      ],
+      "fingerprint": "7cff164deff5b221f775ecc8e7e75a73c1e2e8e2ff863bfe9dde3250dbc35b5a",
+      "id": "workspace-manifest"
+    },
+    {
+      "fileCount": 111,
+      "files": [
+        {
+          "path": "packages/d2b-contracts/Cargo.toml",
+          "sha256": "ea0544c4fb5c72545f3f15543b71828f8fe848b795cd48282cb5b20e3448579e"
+        },
+        {
+          "path": "packages/d2b-contracts/proto/guest_control.proto",
+          "sha256": "19b9250dbc98c44f4f4c2aeba02cd94fc8c8a809a8b0ddfb0629ec9e4fb1db50"
+        },
+        {
+          "path": "packages/d2b-contracts/proto/v2/activation.proto",
+          "sha256": "4d8da04b3bcffdde87f64291526ad07f32412f0a22d1d477b445a90352719afa"
+        },
+        {
+          "path": "packages/d2b-contracts/proto/v2/broker.proto",
+          "sha256": "d4d8d01a63e1da6687240dbd8562aed44693eb6cb97e03a92af10aa9f5f85869"
+        },
+        {
+          "path": "packages/d2b-contracts/proto/v2/clipboard.proto",
+          "sha256": "b47ac5344d72696fa2c275917d559fb597ddb22149b027a8d50c95e61932056d"
+        },
+        {
+          "path": "packages/d2b-contracts/proto/v2/clipboard_picker.proto",
+          "sha256": "45f8ad42aacf4e75cf56053001fa257c608c8de61aa20b291b8506e805522698"
+        },
+        {
+          "path": "packages/d2b-contracts/proto/v2/common.proto",
+          "sha256": "4f9ea4310acf34a37a5c2609761f87da0a9f174611894558842133ceae6a2803"
+        },
+        {
+          "path": "packages/d2b-contracts/proto/v2/daemon.proto",
+          "sha256": "76a4febb81402f8f4f296ccdb93d59bebb93fac365f65fcc8170d5be86428f8f"
+        },
+        {
+          "path": "packages/d2b-contracts/proto/v2/guest.proto",
+          "sha256": "0786f246b42c86bd4047a233aa83a31b3bc9615dae1e09f2275be867b35e7fe8"
+        },
+        {
+          "path": "packages/d2b-contracts/proto/v2/notify.proto",
+          "sha256": "766c23d0e692b274b324d497f1bb86510c8f57dc309079d1c2de93d7a3ee2c84"
+        },
+        {
+          "path": "packages/d2b-contracts/proto/v2/provider_audio.proto",
+          "sha256": "9a99f530209bb9cc0d8cd803cc066b7ee6aff744429e77c095a9de9877a127e2"
+        },
+        {
+          "path": "packages/d2b-contracts/proto/v2/provider_credential.proto",
+          "sha256": "76a125d18b4d405c5092c98770498f4c393e4c01cb8902fff0a4871b8c80342d"
+        },
+        {
+          "path": "packages/d2b-contracts/proto/v2/provider_device.proto",
+          "sha256": "9057ee77e4ad7454ff81acdcb7479603979c3787c7e70f34459685bb0eed5007"
+        },
+        {
+          "path": "packages/d2b-contracts/proto/v2/provider_display.proto",
+          "sha256": "1e33e8717e8e369ac5078f73f73e7708a29584ba1bccfd8ac52982874016e295"
+        },
+        {
+          "path": "packages/d2b-contracts/proto/v2/provider_infrastructure.proto",
+          "sha256": "bb66e7f905b54f3fb14fccd40b24ba5fb65b0eb8693d082518947c98c4cf7974"
+        },
+        {
+          "path": "packages/d2b-contracts/proto/v2/provider_network.proto",
+          "sha256": "327a2c44387684de2e00cfe0b19fa87e3098955ef81f1fbd9e53cff73f93fff6"
+        },
+        {
+          "path": "packages/d2b-contracts/proto/v2/provider_observability.proto",
+          "sha256": "5d4428b1c409943f2ede7d697cae3fdc5dde396380bb239db5c28cbad83ee4a2"
+        },
+        {
+          "path": "packages/d2b-contracts/proto/v2/provider_runtime.proto",
+          "sha256": "f5626d92e18adbdc3b281cb8a6a5efe23bf21d79eb8b54e6f213c2f148b141bf"
+        },
+        {
+          "path": "packages/d2b-contracts/proto/v2/provider_storage.proto",
+          "sha256": "0b60e4349eccec614646364c33f233d5b8e4dea3e076ba74f4048e555cbfd3aa"
+        },
+        {
+          "path": "packages/d2b-contracts/proto/v2/provider_substrate.proto",
+          "sha256": "5014eb1a98529c6b7cda0390491ddcb321599941c0f3ba059e6ebf1f1257296e"
+        },
+        {
+          "path": "packages/d2b-contracts/proto/v2/provider_transport.proto",
+          "sha256": "23c847f8986b0ebe79ffb555c6c0c6294ed5d3c4f54e1490c01aaa12b7697ed8"
+        },
+        {
+          "path": "packages/d2b-contracts/proto/v2/realm.proto",
+          "sha256": "df1d55b62665756ebe7f4d7014dcb7a31a027c6a4c292540e7d7ca9e6a340fd8"
+        },
+        {
+          "path": "packages/d2b-contracts/proto/v2/runtime_systemd_user.proto",
+          "sha256": "eaf8a26ab344c900e57064ef9b010b6e9850e26b958c697dd00f2f57bf8e3c13"
+        },
+        {
+          "path": "packages/d2b-contracts/proto/v2/security_key.proto",
+          "sha256": "15099755ab88c4b1352ccc0f5437a6bab4106a2969dc85f7f10c0964167b120b"
+        },
+        {
+          "path": "packages/d2b-contracts/proto/v2/shell.proto",
+          "sha256": "2e0aed27c2137e3a877071cf44665688f19cf1af613217faf389e2ba544465cc"
+        },
+        {
+          "path": "packages/d2b-contracts/proto/v2/terminal.proto",
+          "sha256": "7cd037209839f37e5d8187e563168cb9d9c9f8da42b8f45463feea9e45154e01"
+        },
+        {
+          "path": "packages/d2b-contracts/proto/v2/tty.proto",
+          "sha256": "92f21885ba28c9ccd7c429b692ea8635b60c743befda5ceecfdbf79eda61e66a"
+        },
+        {
+          "path": "packages/d2b-contracts/proto/v2/user.proto",
+          "sha256": "6da0e9062837c857a84e66a4a8d6322bc574227551b60e54b8c315da84b421b8"
+        },
+        {
+          "path": "packages/d2b-contracts/proto/v2/wayland.proto",
+          "sha256": "b240c2447141c5e5880c073e814559b4898544040ee4a5bf12b2f1851d763781"
+        },
+        {
+          "path": "packages/d2b-contracts/src/broker_wire.rs",
+          "sha256": "6d3a872a08975f00236560ec030fdb14a770ae924ce80c3f5021ce7d5d1a9f27"
+        },
+        {
+          "path": "packages/d2b-contracts/src/cli_output.rs",
+          "sha256": "e9863f742f15359e7432c95ca0f67452136e8cc4853aeb9ca5b395f1a475c568"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated/guest_control.rs",
+          "sha256": "8ed25966d7def1430022f096d85fa3a0376850cf64dd0924f775a29adce6df49"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated/mod.rs",
+          "sha256": "636d65ac03b7e32a07b690a1c8fef6085cc7c18c020d9c347d48b96415017d3e"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/activation.rs",
+          "sha256": "c95ef1c1e9cd52a75204fd36c73e695a1f12ef9b08ff4d8fe9cf3896c7164131"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/activation_ttrpc.rs",
+          "sha256": "e4ab08650b8e41619aca5a851b7529a4fb0925608064764e6d9ee17bb0901b02"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/broker.rs",
+          "sha256": "b604cfd3aa513dbdfb1380b9e52c7c571b26d9474653a19144bf4c7aa57c88e4"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/broker_ttrpc.rs",
+          "sha256": "c44cfc87fc802bded7c3c83a195c378a3d27df332de5df60b3fec7f460e10961"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/clipboard.rs",
+          "sha256": "9e196e5cbfb1cf5191c3e188535fae06cfb84dfe7786b07814c90451675a53f5"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/clipboard_picker.rs",
+          "sha256": "79569cf197c8092c263fb95e707444071184a961c7b8fcd81273f75ca7e42200"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/clipboard_picker_ttrpc.rs",
+          "sha256": "ad77d02ed0d89570ec6238dbd3c9aef5dae7f2041c1d4f2d75637ee141f7cfee"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/clipboard_ttrpc.rs",
+          "sha256": "7876367ef78091bf989752886a3a72f7b77e96290c114bde614e934683de0fa7"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/common.rs",
+          "sha256": "6b6fd55749faa3dd768356fcdd3801f1076301cfb4b066c5268766d61b8b07bc"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/daemon.rs",
+          "sha256": "884138fb84b086824cc648f25222f04682854dda38dcba1251550c054439971a"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/daemon_ttrpc.rs",
+          "sha256": "cad24382d72a5a79578ad89ce89fd4556c4a958b3488a51058872fa0ce9791fb"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/guest.rs",
+          "sha256": "88c9d5610f7726bdcfa69ffe50bbb554b9603ffa74990a56ad029a1e54aaa175"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/guest_ttrpc.rs",
+          "sha256": "a395ded5b13c11687695f6cd7111224a940c25d24d3fb76bc6c6c32437a0e3ad"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/notify.rs",
+          "sha256": "4f163c883c15d154b80f36331de881f6ee407112275bf1bfb729aa8ef3de59a5"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/notify_ttrpc.rs",
+          "sha256": "d15ec24ad80f9d1263f01d259e5dcd9089487b55c3c1fab78d415a553760e296"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/provider_audio.rs",
+          "sha256": "dee31aac49003658fb3803c97e54a3e8361805c4613742784ee701439b2f7525"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/provider_audio_ttrpc.rs",
+          "sha256": "de969ea798dade403fa2cc8de1ad5c95aeb8acf8a3c7cbc547231af68ea32869"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/provider_credential.rs",
+          "sha256": "bfb3b09b5d718bbe0a6334046238c6b8140664a03985bb06dd6d2a63291f50d3"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/provider_credential_ttrpc.rs",
+          "sha256": "14b2710913f8bf3860c08ffe246a64921eda7efca94ea6804a0bf072e7af4d82"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/provider_device.rs",
+          "sha256": "76e9f04f498e87d6b4e2655e92c52bc8470314e9ce5de926379a3b5ca44dc66d"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/provider_device_ttrpc.rs",
+          "sha256": "4d5e4617c045cab57935328af9933c512eba54ec06e362c449b454340aebb7b8"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/provider_display.rs",
+          "sha256": "587a360fc08daa626f2dd6985fafc6a8d14471886670d94dc306afd2818f6ab0"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/provider_display_ttrpc.rs",
+          "sha256": "f369ae741f60be5bcd15dcae5870166f2440315514d43ce0f263cdf5471ac511"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/provider_infrastructure.rs",
+          "sha256": "455192d4644ac2a4b615e7a465da884ff903b5e165dd87aa6abd101a0cf554a9"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/provider_infrastructure_ttrpc.rs",
+          "sha256": "34cde037340817e71e293aa1e3b058ecbc76019e04beda8614edff6b6a373f2d"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/provider_network.rs",
+          "sha256": "48ac9e5443b546e623ad7460a287026c86f1a96525824d4248a16da8f3e3b2c4"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/provider_network_ttrpc.rs",
+          "sha256": "4928052e2bb3cf3174a8bfa5898b5957a852e31a91b312008dd6c3f398a0db91"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/provider_observability.rs",
+          "sha256": "ca58b087f876cb4f8b718aa006d72a4ea295536b944e4675ab04fdf9789c94bd"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/provider_observability_ttrpc.rs",
+          "sha256": "d1b4d4ecfaf8c31731bdab55c40b395267462e357f89a920f11612f141caffb0"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/provider_runtime.rs",
+          "sha256": "26906a72644d89826fd106e64a3933a69598966312ad6829d320b8900874377c"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/provider_runtime_ttrpc.rs",
+          "sha256": "3eda87939ec86d338011b3c9bac2dedd0876d58e9e583eca40db968da53fee2e"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/provider_storage.rs",
+          "sha256": "63ac41805c0fbe85bd20d388c89365d728681eb7d18d5ea13868b98ccbda2fcb"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/provider_storage_ttrpc.rs",
+          "sha256": "a52c9391852e2da0284d075165c8f93158ccf8733fab2da469fb84e5626679da"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/provider_substrate.rs",
+          "sha256": "3471ea98f609945848109d3cacd6e52bb553ab5a9bee71ae1b8e77571c4af5cf"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/provider_substrate_ttrpc.rs",
+          "sha256": "52cb03eb8b8fe911587db10b866f3bcab76e75b23eb567e33821a6253f4e4852"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/provider_transport.rs",
+          "sha256": "20e449ad91e5664703dd7bdbeeb5b571f764cade3c7f8560e877d4b240bb9db2"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/provider_transport_ttrpc.rs",
+          "sha256": "0b737eb477a94e102d4258de1f72c3d672a8d4c660ce023eaf224ed63dc1882e"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/realm.rs",
+          "sha256": "5466c35d9cad1c211e27145c75d257fe37b4e66c5d2812526afc4e7d49c73750"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/realm_ttrpc.rs",
+          "sha256": "2b2bc315a978e18365a718282ae80ee14b0acabf31e0352920b6380e1988329a"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/runtime_systemd_user.rs",
+          "sha256": "3496b3bb625feb097be188c0c5bf7491187755d68de46fe608e517dc498e2769"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/runtime_systemd_user_ttrpc.rs",
+          "sha256": "d812885be7428370b00f42e19524100d38ed898ba9fdce81439074c72a662da2"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/security_key.rs",
+          "sha256": "e11beebed1e379d02228d2f70e8b98c55911839e870c0c3ff4e9faea40b07421"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/security_key_ttrpc.rs",
+          "sha256": "85a0fe1c76c78f19a0e7bd2d9b443ec6409927f5f107caaa4ecbe77a77460530"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/shell.rs",
+          "sha256": "f79cb6f04ec04c54ebf16b4681ae0db822e2f067b6b850456b5b7eebe8c8906a"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/shell_ttrpc.rs",
+          "sha256": "fb325f0fc8f549f1778f5f1d9428cfd84480965dfbb8dd42c87aec44c493a396"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/terminal.rs",
+          "sha256": "573212ac20417a68ceaa463b579488d0b2a9b83e5a5141c92ac476bf034d036b"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/tty.rs",
+          "sha256": "a2effa0cd93a765a46e6c36571289f9382206c4bb68e817914322ef1529d242d"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/tty_ttrpc.rs",
+          "sha256": "b958516090187e7e409ee3ab299bf66f92f9ab4615ed15af580c52f1813a34c0"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/user.rs",
+          "sha256": "8b7b1e2ba4849e096355e05bfeceab49c0852a113fd2abde27955d7042b5d2e7"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/user_ttrpc.rs",
+          "sha256": "9cef6b8b5beb74fbed203593271a10abfd4f43f98f10f434b84d6c38c9eb5f10"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/wayland.rs",
+          "sha256": "6d508ebf0684cc60bc0e1a54bdf5affa4df5b5b4001410bf41675b0baa5cd721"
+        },
+        {
+          "path": "packages/d2b-contracts/src/generated_v2_services/wayland_ttrpc.rs",
+          "sha256": "6e85b9deb327c4a47f3b9afc6e9b2b450c786d58eb0b695c8d29e421b4e3285d"
+        },
+        {
+          "path": "packages/d2b-contracts/src/guest_auth.rs",
+          "sha256": "2f9840701a73cf641f8636987afd7a8449893bfd56d86b8f080e42c62a92e90c"
+        },
+        {
+          "path": "packages/d2b-contracts/src/guest_wire.rs",
+          "sha256": "83694b07652ff8e00d4b06582ed6346bc1919ab02df1b04eff3e929833e92313"
+        },
+        {
+          "path": "packages/d2b-contracts/src/lib.rs",
+          "sha256": "eb68278a9cdabd5003b6d49b572cfeaa90decc01e04854ed13d47d5e29fd90f8"
+        },
+        {
+          "path": "packages/d2b-contracts/src/provider_registry_v2.rs",
+          "sha256": "53277fa369350f61c0f2ecf2e4ecf9c91f8b842f8b53aaa29695c9f6792253e5"
+        },
+        {
+          "path": "packages/d2b-contracts/src/public_wire.rs",
+          "sha256": "e751d0efb0d0fcd330bd9a4352ec9dd72827da64a9886b66d484e836c1ddc330"
+        },
+        {
+          "path": "packages/d2b-contracts/src/security_key.rs",
+          "sha256": "f8430536b49e887bb5e7efdb74aaf388ebbf3de187f79a8c33a17b3a7c496411"
+        },
+        {
+          "path": "packages/d2b-contracts/src/terminal_wire.rs",
+          "sha256": "a3cf07787b95f705fefcf1faaa76f146dc16933c8556efabf437b532fcdb8a2a"
+        },
+        {
+          "path": "packages/d2b-contracts/src/types.rs",
+          "sha256": "5d6d2eb1a095a7cb2bb0c89f8d96dcb3a4eab9e5a0eebdd148008aa86e9d5019"
+        },
+        {
+          "path": "packages/d2b-contracts/src/unsafe_local_wire.rs",
+          "sha256": "33280e22c12c6e5f4b0f9487e149ee654a296ff81e46fb10422ee3af3d678c26"
+        },
+        {
+          "path": "packages/d2b-contracts/src/usbip.rs",
+          "sha256": "cf72b82496e5e024e40d351698f581c11319d81895d57476d82f6bad7157558b"
+        },
+        {
+          "path": "packages/d2b-contracts/src/v2_component_session.rs",
+          "sha256": "6c068d30db70b39f86180ab06ad6b99ffafa4679ee1d43c46c495f16b65722d9"
+        },
+        {
+          "path": "packages/d2b-contracts/src/v2_guest_configured_launches.rs",
+          "sha256": "66e141c7ddd77fd5cbe76ffdd7ed806d6e1477bd04f0e4f0e7d9ceb63749de71"
+        },
+        {
+          "path": "packages/d2b-contracts/src/v2_guest_services.rs",
+          "sha256": "aff13753f2e080b56c74821ee5179d14e407d04109f89f1633ff6331c7394c6a"
+        },
+        {
+          "path": "packages/d2b-contracts/src/v2_identity.rs",
+          "sha256": "c01ced223eeb27f34123b466ac6dbb0ed19156b6b0c9d6bd1cb31fd1b59bce33"
+        },
+        {
+          "path": "packages/d2b-contracts/src/v2_provider.rs",
+          "sha256": "a99c0c7912c1f34e9dfb8456d9ab431134aafcbf4b3ad397433e82852f6b0f25"
+        },
+        {
+          "path": "packages/d2b-contracts/src/v2_services.rs",
+          "sha256": "297fd4d0f1b87a799c8551671b33a003cb8f3ea44ca39e09b5f4e8c10ef469e1"
+        },
+        {
+          "path": "packages/d2b-contracts/src/v2_state.rs",
+          "sha256": "b01d17c004f01c164387797190a8a73f8261398fffda0f1d919ec0dec1efa025"
+        },
+        {
+          "path": "packages/d2b-contracts/tests/component_session_v2.rs",
+          "sha256": "0aaa45c652fa36869d7ee7cc9276939aaa24f55d267bb5ed0faf524f43feddab"
+        },
+        {
+          "path": "packages/d2b-contracts/tests/guest_configured_launches_v2.rs",
+          "sha256": "0598f28c810326c4afa06e96055e348143de134d55b5b07f8995f9d6f1137d12"
+        },
+        {
+          "path": "packages/d2b-contracts/tests/guest_proto_bindings.rs",
+          "sha256": "6209bf7083dcfd240a80806e311df671bc932bb0356ad382632d7aa0e24b56d0"
+        },
+        {
+          "path": "packages/d2b-contracts/tests/v2_guest_services_contract.rs",
+          "sha256": "2c07f11999c674bf6169f98660398985dca4b9d0ee3ffe1deb36e9a9e2eb4bc3"
+        },
+        {
+          "path": "packages/d2b-contracts/tests/v2_identity_contract.rs",
+          "sha256": "1cd5f17b4539c6f9c2e1ed4afa3c18e37b6e7cfc05ad76b07fc7d1d1f4523f98"
+        },
+        {
+          "path": "packages/d2b-contracts/tests/v2_provider_contract.rs",
+          "sha256": "bc153003eb795289cf9c92b28660f9e87cfa08d1a95193c7cfdaa0b6addff4a6"
+        },
+        {
+          "path": "packages/d2b-contracts/tests/v2_services_contract.rs",
+          "sha256": "8faef744909701618a7ed0ac161b9a9ca531b3c5180ba65a0fe5cb365f5d17a3"
+        },
+        {
+          "path": "packages/d2b-contracts/tests/v2_state_contract.rs",
+          "sha256": "50427642ac84014b8dcfd96c1c302f32f54f690c425fc237deade00aa2e3c8af"
+        },
+        {
+          "path": "packages/d2b-contracts/tests/version_skew.rs",
+          "sha256": "00114766366ca4f3db9157057b256b3b8c35f98d782c6c79259c7dd6d1d7d41d"
+        }
+      ],
+      "fingerprint": "f9fe0276b02f27e172684d266b7d5e0c182f0d3fa960d98d9a7a4083f42fe471",
+      "id": "contracts-package"
+    },
+    {
+      "fileCount": 11,
+      "files": [
+        {
+          "path": "packages/d2b-client/Cargo.toml",
+          "sha256": "1c59bafb6e4bc81c8aebd768f6e4fe20e0c750bacee92e8696c89b1e8636cf39"
+        },
+        {
+          "path": "packages/d2b-client/src/client.rs",
+          "sha256": "65b5097e66a8f08836ab485163e883851d20668f0891621ef58a42358022d0a6"
+        },
+        {
+          "path": "packages/d2b-client/src/daemon_service.rs",
+          "sha256": "45ed21f9ad56f1ade97f692661992f6fb40aae6bd98f51b85e612e40e0b6db06"
+        },
+        {
+          "path": "packages/d2b-client/src/error.rs",
+          "sha256": "b08bd914325b3760557c76bad9146477e8c2eae17fbebcf0011b8a173183f84b"
+        },
+        {
+          "path": "packages/d2b-client/src/guest_service.rs",
+          "sha256": "25363a5b7aad49afd6ff7efc3e386f3ea16da34e8b20e972fc2e4919e4fb2e9a"
+        },
+        {
+          "path": "packages/d2b-client/src/host_socket.rs",
+          "sha256": "b997991b71e7d0b8165f60ef179517fda3747f16a8f0cc93f0eb10dcf68ca6d2"
+        },
+        {
+          "path": "packages/d2b-client/src/lib.rs",
+          "sha256": "c319fab779acaae2374590759e7e8cc72123c74f91e8539fa8615af990a5ad0c"
+        },
+        {
+          "path": "packages/d2b-client/src/service.rs",
+          "sha256": "298ad7655fe63cd7d18926bdd319ac9cdc340435ec81aa0dc986556c2dc6ac8d"
+        },
+        {
+          "path": "packages/d2b-client/src/session.rs",
+          "sha256": "1a0dd9fe44af955852ea82c268c8a895c3d6b7e35c423cf5e42f2507fa5215aa"
+        },
+        {
+          "path": "packages/d2b-client/src/target.rs",
+          "sha256": "fd7d0f88d03a9853a75878a29dec6e5847d244a149525f96fde96350b59290bc"
+        },
+        {
+          "path": "packages/d2b-client/tests/client.rs",
+          "sha256": "14c31d4c75c9f8afbbc1b1e9fba2e65026df10f0b098714188a86e319ee01777"
+        }
+      ],
+      "fingerprint": "8dfdfdda74a920d6d26c01fd5c014ff4f6cf5e3b4aa7520185efaccfc087f57e",
+      "id": "client"
+    },
+    {
+      "fileCount": 20,
+      "files": [
+        {
+          "path": "packages/d2b-session/Cargo.toml",
+          "sha256": "a84ad6f77840180278ddda88c8e233eb31b9ce5f221b6c9ed6ea655b4441c30f"
+        },
+        {
+          "path": "packages/d2b-session/src/attachment.rs",
+          "sha256": "41716d27a8daef757eb000f189ae85516a6f7251ac01e6b8979ca5fe9fe545d2"
+        },
+        {
+          "path": "packages/d2b-session/src/bootstrap.rs",
+          "sha256": "ad5c47b6bcd157550475fb670d60b06e4a59d8c831e33f2cbe42a7a0501dbca0"
+        },
+        {
+          "path": "packages/d2b-session/src/cancellation.rs",
+          "sha256": "fdd933eb36c7a474b5ea2559e014129817d6917ffb300b9bfff655dbf05b464f"
+        },
+        {
+          "path": "packages/d2b-session/src/deadline.rs",
+          "sha256": "e0570517d68af87b984a12246a5b6b48f21f27cfb340d6579004d9fba63770e8"
+        },
+        {
+          "path": "packages/d2b-session/src/driver.rs",
+          "sha256": "3ad2ca3fb6f5e22c334ea7af62f6f9d0dcbcca5e5a9448518603be2949509c4c"
+        },
+        {
+          "path": "packages/d2b-session/src/engine.rs",
+          "sha256": "c702b409ab1fa60260052df212a2838917abb870cd25d022eaac018903b82483"
+        },
+        {
+          "path": "packages/d2b-session/src/error.rs",
+          "sha256": "5013a245c32b38c8c4f13ed22e5feb02f6c2f14967a26bcc3acaeef51d098b5b"
+        },
+        {
+          "path": "packages/d2b-session/src/fragmentation.rs",
+          "sha256": "137c44f2055bbcf7211a679394a6990584d00206cd5c5b15588dbaff14360f49"
+        },
+        {
+          "path": "packages/d2b-session/src/handshake.rs",
+          "sha256": "79f48757aa6ae1a7640b57a18a761e40e41ef9dee2b37a9a17d867b6b6019f59"
+        },
+        {
+          "path": "packages/d2b-session/src/lib.rs",
+          "sha256": "39dcd9b535aa026f50a88d9bf12efee03ac6e83d5a69e037053d48ecab0b35cc"
+        },
+        {
+          "path": "packages/d2b-session/src/lifecycle.rs",
+          "sha256": "0e0cf1b8ea88dd86dfe6763893e15168f34d6469fa0170499e1b24b656cd80be"
+        },
+        {
+          "path": "packages/d2b-session/src/metrics.rs",
+          "sha256": "8fd82de8e601adafddad32e65c8c141c9e7de55be2c815f8fdea0916917ca0fe"
+        },
+        {
+          "path": "packages/d2b-session/src/record.rs",
+          "sha256": "e7165477958657835f1c2c386185e5f89f1601dfa3ebd814090b5f1bd70d1426"
+        },
+        {
+          "path": "packages/d2b-session/src/scheduler.rs",
+          "sha256": "7767ec38e43ba274b7f588093f8bb03b67c20ceada90ec5045e82b5a0dcdda7c"
+        },
+        {
+          "path": "packages/d2b-session/src/server.rs",
+          "sha256": "bf351de6ab9c17525b6261f5b4adc359b885e98cc28d14c8c8ab85d1dc297050"
+        },
+        {
+          "path": "packages/d2b-session/src/streams.rs",
+          "sha256": "d0703910e6cf5cf2a14f0585d4198016b463834702c5405ee850277d76a537b9"
+        },
+        {
+          "path": "packages/d2b-session/src/transport.rs",
+          "sha256": "ddb6c94a1dd1ae3c3eb7fa886e0e5a886d1e2666fadda7879b3126ccb89a33e3"
+        },
+        {
+          "path": "packages/d2b-session/tests/component_session.rs",
+          "sha256": "6114fc57c06ec6952c06bcef44acb1f33e176f36583e8efe94e4f6c17984c37a"
+        },
+        {
+          "path": "packages/d2b-session/tests/noise_vectors.rs",
+          "sha256": "116f48044b80d2a1dbdbe72738a5440f558fede1f1fc0ff9630aed5d89550e84"
+        }
+      ],
+      "fingerprint": "f732a64c9944e040b69b95ed3c92e28847febd9ab34bfe13fec1da3aba523a39",
+      "id": "session-runtime"
+    },
+    {
+      "fileCount": 11,
+      "files": [
+        {
+          "path": "packages/d2b-session-unix/Cargo.toml",
+          "sha256": "378a35edc86be309956bec3983fcd2a2663829e8a217036dddf909520fd53423"
+        },
+        {
+          "path": "packages/d2b-session-unix/src/adapter.rs",
+          "sha256": "e69a785070e40a0243d641ff26e6bc5a227021f14c0bd0cbeabe02413bb87d0c"
+        },
+        {
+          "path": "packages/d2b-session-unix/src/credit.rs",
+          "sha256": "a3adf69e346a2eb5cf61c9765359dfe6b34fa785f567589415d0b6c381c0952b"
+        },
+        {
+          "path": "packages/d2b-session-unix/src/descriptor.rs",
+          "sha256": "bc2fffadfc99c8c308d9532b3c9aebe3a77f06967610297aee8f60bdaea389b6"
+        },
+        {
+          "path": "packages/d2b-session-unix/src/error.rs",
+          "sha256": "09a4f584567a4ef3e912f0155806adf1351780ed19a37ab191f30907349a0b8f"
+        },
+        {
+          "path": "packages/d2b-session-unix/src/lib.rs",
+          "sha256": "077c2ad9818a6f73d88b4c3d72b3b00780870276b875a6f237f348039fa1611d"
+        },
+        {
+          "path": "packages/d2b-session-unix/src/pidfd.rs",
+          "sha256": "3d33e8f8e0d27cbeee79577e4f91c4442eb4e15a7ca3a1d08230b800fd2769b8"
+        },
+        {
+          "path": "packages/d2b-session-unix/src/socket.rs",
+          "sha256": "1651f38da9e063bb391f237843f96b133f3eca93a13faba9704505b02a43dfef"
+        },
+        {
+          "path": "packages/d2b-session-unix/src/systemd.rs",
+          "sha256": "f50e99c0ab0a212b61ff3c653244d2fa3cd34b822580fe002b052b13c52c14ec"
+        },
+        {
+          "path": "packages/d2b-session-unix/src/vsock.rs",
+          "sha256": "3f91bfbaf5899cd7d77a196e964b3857140d03a94270e4648f12c4e9141e541c"
+        },
+        {
+          "path": "packages/d2b-session-unix/tests/unix_session.rs",
+          "sha256": "cd4fa292681dca975b40c93110c36fe5df820aa8de0d85866e41819b9b4c9595"
+        }
+      ],
+      "fingerprint": "58afc178aa2fb742a78cac702c02e9178e523c1d645ed9c7e65b0944a2891b8c",
+      "id": "unix-session"
+    },
+    {
+      "fileCount": 8,
+      "files": [
+        {
+          "path": "packages/d2b-provider/Cargo.toml",
+          "sha256": "49c21c70b186c2fda5c0cd16d65fb9f1947b38665ca219b0fb765da9da648f8e"
+        },
+        {
+          "path": "packages/d2b-provider/src/context.rs",
+          "sha256": "342281b1c3a2e8ba17571931f968a56df2def8c49751ed9cbc1e2ce76bdbae93"
+        },
+        {
+          "path": "packages/d2b-provider/src/error.rs",
+          "sha256": "6de3a6d4170324d35bc03269508d030c1cb5e32480a2a30328c75751b97d733d"
+        },
+        {
+          "path": "packages/d2b-provider/src/instance.rs",
+          "sha256": "eaa6260a1acccee8719265f5243e9e664a8f51c9cd6ddcaa2a6313342c4347a4"
+        },
+        {
+          "path": "packages/d2b-provider/src/lib.rs",
+          "sha256": "bf4f934a39cdf8ad178750e98bb819c7a270de4c00540c1de01e6c89ead43c0a"
+        },
+        {
+          "path": "packages/d2b-provider/src/registry.rs",
+          "sha256": "01f9ca2239ff56299cea74f227921b2f5fb6e45c8020e2f02311431f57109f48"
+        },
+        {
+          "path": "packages/d2b-provider/src/rpc.rs",
+          "sha256": "29063e9d5a22716975744ee716a97e2907b01f18aa1cc8d25bde46c647aadfc6"
+        },
+        {
+          "path": "packages/d2b-provider/tests/runtime.rs",
+          "sha256": "fd22108a1c49adb2c4feb28d28c11c96a662d40c6b8ea9e9fc55cd056e59d240"
+        }
+      ],
+      "fingerprint": "1da6e77b92462d041e1bf4da34d09cd5d1cfdffb823c220a183c162b60ae6758",
+      "id": "provider-runtime"
+    },
+    {
+      "fileCount": 10,
+      "files": [
+        {
+          "path": "packages/d2b-provider-toolkit/Cargo.toml",
+          "sha256": "61d4d9d01db5717b43ff9664fe3a977de43d93416d9f8f72bfec993ac3e874fe"
+        },
+        {
+          "path": "packages/d2b-provider-toolkit/src/adapter.rs",
+          "sha256": "813a96ad338c4d65bbe792b101ea9e2b041313955f8dfaf1dfb262613dbd709a"
+        },
+        {
+          "path": "packages/d2b-provider-toolkit/src/conformance.rs",
+          "sha256": "e8cf45d9fc93eb7e1c9dee665fb19d711a4a8a2e6993ff463107618a7aa99a0b"
+        },
+        {
+          "path": "packages/d2b-provider-toolkit/src/fixture.rs",
+          "sha256": "b281dda6e892c7c334125cb97831e61c361be6aa046353a44d067c7a7cb02219"
+        },
+        {
+          "path": "packages/d2b-provider-toolkit/src/lib.rs",
+          "sha256": "79698871d52cc0f2c12022693f43445b9b655d720667b91aceb70cdbde54662e"
+        },
+        {
+          "path": "packages/d2b-provider-toolkit/src/redaction.rs",
+          "sha256": "3b62089abb23ebb80c7f67aa219f0131a083127d7d9bf4327891f6b1dd6bd173"
+        },
+        {
+          "path": "packages/d2b-provider-toolkit/src/registration.rs",
+          "sha256": "15865f07233eea44c4e698cecc3b93291464b0663d8cbcb0ba3a59b4ca825d2c"
+        },
+        {
+          "path": "packages/d2b-provider-toolkit/src/server.rs",
+          "sha256": "5ee263701188138dbea2ac00dc8c7bf26c9b73b2d012ff59120e017b3b3f7851"
+        },
+        {
+          "path": "packages/d2b-provider-toolkit/src/values.rs",
+          "sha256": "5493c2b1acde0959782941c4844ad7e4095181af7348c34f8a2e2dc0020fe89c"
+        },
+        {
+          "path": "packages/d2b-provider-toolkit/tests/conformance.rs",
+          "sha256": "f4d52191750a3099fdd7da1e90c3ec6a323f33ffe67525be3d5d242fbecbf390"
+        }
+      ],
+      "fingerprint": "98ae6229a5b07056f52d64d1c03b3fa0b19ce4f0618795b8b2a32793a0ac810e",
+      "id": "provider-toolkit"
+    },
+    {
+      "fileCount": 14,
+      "files": [
+        {
+          "path": "docs/reference/component-session-v2-schema.json",
+          "sha256": "81aadddd474b8d2bc584aab679f1784c37471ce9894bb4cb38a2bd1b1c158c01"
+        },
+        {
+          "path": "docs/reference/component-session-v2-vectors.json",
+          "sha256": "dc934e9d47e8dfec7ee1730a7020e17efe339e072e5d3bef435a3d8dd598e367"
+        },
+        {
+          "path": "docs/reference/component-session-v2.md",
+          "sha256": "0c519cd92c0bfaff200037965fd85028d4fe1487b0b63b18690341f96ef3f753"
+        },
+        {
+          "path": "docs/reference/d2b-contracts-features.md",
+          "sha256": "52d13e997b9d708e55e1d900e7ba9217dc758047372d3de73d448e2179d13dcd"
+        },
+        {
+          "path": "docs/reference/provider-contract-v2-fixture.json",
+          "sha256": "7b6735e21f6ad2009129855d836656b4ffc55ab9f030794bd1867d0ff8cf75dc"
+        },
+        {
+          "path": "docs/reference/provider-contract-v2.md",
+          "sha256": "3ce74fa09b8b81214e277e2076f68413dd00bf61719916045c5f8b1db43e064c"
+        },
+        {
+          "path": "docs/reference/provider-contract-v2.schema.json",
+          "sha256": "4d9bd004daf5ad6f6acf31ae197f2e7a3ffc09b23f0d6ed6a3052a34f175852d"
+        },
+        {
+          "path": "docs/reference/toolkit-source-contract.md",
+          "sha256": "0227f7d19a170fe915a44606594591fbd136c593e7ab26a552a5af9f97ad9f95"
+        },
+        {
+          "path": "docs/reference/v2-foundation-crates.md",
+          "sha256": "e164386a53399cb09eee33da42ee21ec882193b8b2883461e5e2cb4983ea5f97"
+        },
+        {
+          "path": "docs/reference/v2-identity-vectors.json",
+          "sha256": "270554d84d6baa5d8d9449224478974c42b4eb41f6c9e983a9c4ec6abc06c17d"
+        },
+        {
+          "path": "docs/reference/v2-identity.md",
+          "sha256": "7e70409c08f1bfce13ccaaebac0a5644b0742b44fd02994534a0a7bd558c6557"
+        },
+        {
+          "path": "docs/reference/v2-services-schema.json",
+          "sha256": "ff8c03ba0bbfa1422e88458221cea4961aea6f202fd17542b4a11657f767c818"
+        },
+        {
+          "path": "docs/reference/v2-services.json",
+          "sha256": "384ae0c5ea88fc11b5e65e1c2b9f89fba1d85e9cd562601441daa422c08f08b0"
+        },
+        {
+          "path": "docs/reference/v2-services.md",
+          "sha256": "6f03db16d95276edf716c6bc9aa6ee30455fe43d8f4b68a0204314a2a6f104d2"
+        }
+      ],
+      "fingerprint": "5a5a7818e9133d6097cb2d0488e212bbbab9a0bc74b40bf519ae6c4e4d1dcafb",
+      "id": "public-contract-artifacts"
+    }
+  ]
+}

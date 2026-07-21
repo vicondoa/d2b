@@ -255,7 +255,7 @@ fn daemon_refuses_a_tampered_bundle_during_provider_registry_startup() {
     )
     .expect("rewrite daemon config with test artifact paths");
 
-    let server = common::spawn_d2bd_serve(&fixture, true, None);
+    let server = common::spawn_d2bd_serve_expect_startup_failure(&fixture);
     let status = server.wait();
 
     assert!(

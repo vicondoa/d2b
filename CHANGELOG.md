@@ -12,6 +12,26 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Added stack node/repository/PR context to every `verify_required_checks`
+  error message (duplicate publisher, cross-commit, unlisted failing/pending,
+  missing, wrong publisher, skipped, unsuccessful, no-authoritative-checks,
+  exceeds-supported-bound) so a multi-node W9 seal failure names the exact
+  failing stack node instead of an ambiguous check name; added two multi-node
+  regression tests proving the correct node is identified and the wrong one is
+  not.
+- Added the WeezTerm `Makefile` and `nix/flake.nix` paths to
+  `docs/adr/0045-toolkit-sibling-coordination.json`'s weezterm
+  `ownership.paths` exclusive-file-set; the sibling's own most recent W9
+  commit had modified both files, but the coordination doc's ownership record
+  did not yet include them.
+- Added a `weezterm-flake-check` (`nix flake check`) required validation to
+  `delivery/manifests/w9.json` immediately after `weezterm-source-build`:
+  the existing `weezterm-source-build` (`nix build .#source --no-link`)
+  builds only `packages.source` and never evaluates `checks.<system>`, so
+  WeezTerm's `cargo-fmt`/`cargo-clippy` flake checks were never exercised even
+  though the other three toolkit siblings' sole validation (`nix flake check`)
+  does exercise theirs; pinned the new argv in
+  `w9_validations_use_detached_checkout_hermetic_toolchains`.
 - Included the W8 workspace-registration regression in the exact integration
   branch's protected xtask test authority; suffixed component branches remain
   denied.
@@ -21,6 +41,16 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added three more W9 friction entries to ADR 0045's W13 evidence-driven
+  delivery streamlining backlog: verifying the CI-dedup-only toolkit pin
+  advance required manual per-round `grep` across sibling `Cargo.lock`s
+  because no owned check cross-verifies the coordination doc's recorded
+  revision against each consumer's actual Cargo dependency pin (open
+  backlog item); WeezTerm's sole validation never exercised its fmt/clippy
+  flake checks (closed this round via `weezterm-flake-check`); and the
+  weezterm ownership exclusive-file-set was missing paths its own sibling
+  commit had already modified (closed this round, with an open backlog item
+  to add an automated ownership-diff check).
 - Added the W8 shared prep phase A: extended the shared-contract policy and
   its Rust ownership checker to recognize `w8` as the integrated W5/W6/W7
   successor wave (canonical branch `adr0045-w8-integration`, exact `w7`
@@ -44,12 +74,38 @@ deprecations ship one minor release before removal.
   registration. Suffixed component branches remain denied. The predecessor
   prep still excludes `delivery/manifests/w8.json` and any Cargo workspace or
   lockfile content change.
+- Added three W9 friction entries to ADR 0045's W13 evidence-driven delivery
+  streamlining backlog: the required-check workflow-name/filename mismatch,
+  duplicate same-name push+PR check runs from a single workflow, and optional
+  `SKIPPED` GitHub checks being treated as delivery-blocking failures, with
+  their concrete streamline outcomes (two already delivered in this change,
+  one recorded as an open backlog item).
+- Added the W9 detached-runner preflight failure to the W13 backlog after the
+  first complete sweep found 10 of 17 commands depended on ambient tools,
+  initialized submodules, or adjacent checkouts. Future plan compilation must
+  prove the entire candidate-pinned command closure before snapshot creation.
+- Added `delivery/manifests/w9.json`, the checked-in W9 (toolkit and sibling
+  cutover) delivery authority spanning all six ordinary open pull requests
+  across `d2b`, `d2b-toolkit`, `d2b-provider-toolkit`, `d2b-wlcontrol`,
+  `d2b-wlterm`, and `weezterm`: their exact trunk/integration refs, stack
+  node/dependency topology, required GitHub check authorities, focused
+  per-repository local validations, and generated-artifact/dependency/contract
+  fingerprint inventories. W9 remains independent of W8 except the
+  coordination doc's explicitly blocked live-routing features.
+- Added focused xtask tests proving the W9 manifest's exact six-repository
+  membership, PR/ref/dependency graph (including acyclicity), unique wave
+  selection, and the absence of duplicate toolkit DTO ownership between the
+  canonical protocol-source contract and each sibling's legacy duplicate
+  sources slated for deletion.
 - Added bundle version 13 discovery for private observability
   secret-generation metadata, allowing the integrated runtime wave to consume
   the contract without a hardcoded path.
 - Added a mandatory final streamline wave to ADR-scale delivery plans, seeded
   from observed W4-W7 stack, validation, test-discovery, evidence, and
   build-output friction and required to ship tested process/tooling improvements.
+- Added exact client and provider toolkit source fingerprints, feature and
+  generated-binding inventories, and disjoint sibling migration ownership with
+  policy coverage that rejects copied protocol DTOs.
 - Restored live guest system activation as the generated
   `d2b.activation.v2.ActivationService` on the authenticated direct GuestV2
   session, with integrity-bound configured intents, root-private restart-safe
@@ -149,6 +205,8 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Aligned the wlterm CI and Home Manager client-toolkit revision with its
+  audited W9 source and updated the coordination pin.
 - Activated `d2b-userd`, `d2b-clipd`, and the unsafe-local user runtime on their
   fixed systemd-user `SOCK_SEQPACKET` listeners with authenticated
   ComponentSession services, bounded shutdown and cancellation, same-UID
@@ -323,6 +381,16 @@ deprecations ship one minor release before removal.
   preserving strict wire variants, and added a registered consumer view whose
   explicit daemon fallback rejects newly declared bindings until an adapter is
   implemented.
+- Pinned the client toolkit distribution to the frozen W6 source and its
+  daemon/user/desktop service clients while retaining the provider toolkit's W4
+  source at its validated distribution-boundary-hardening head, refreshed exact
+  Git and Cargo-target inventories and fingerprints, kept live provider-agent
+  bootstrap W8-owned and fail-closed, completed wlterm authenticated discovery
+  plus shell list/detach/kill on the new client facade while keeping interactive
+  stream routing fail-closed, completed wlcontrol authenticated inspection and
+  typed lifecycle mapping with VM-only projections while keeping runtime-owned
+  routes fail-closed, and completed the WeezTerm migration so every audited
+  desktop consumer now pins the current client distribution.
 - Made dependency-ready wave launch and file-overlap-based component dispatch
   mandatory after shared contract prep, preventing one persistent agent from
   serializing unrelated implementation and review scopes, with shipped-package
@@ -408,6 +476,51 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Advanced W9's provider-toolkit, wlcontrol, wlterm, and WeezTerm coordination
+  authority to the exact final panel-correction heads and completed WeezTerm's
+  exclusive ownership set with both flake locks, root flake, and clippy filter.
+- Made exec-runner service tests allocate collision-proof scratch roots under
+  parallel CI instead of silently reusing a pid/timestamp directory.
+- Advanced the W9 wlcontrol, wlterm, and WeezTerm audited revisions to their
+  final toolkit-pin and hermetic-toolchain follow-up heads, keeping the
+  coordination authority aligned with the exact open sibling PRs.
+- Made daemon integration fixtures wait for the real `READY=1` notification
+  before opening ComponentSession handshakes instead of treating an early-bound
+  socket path as readiness, eliminating startup races under parallel Layer-1
+  load without changing production handshake deadlines.
+- Replaced W9 validator commands that depended on ambient tools, initialized
+  submodules, or adjacent toolkit path dependencies with candidate-pinned Nix
+  checks and the WeezTerm flake's explicit source build, all runnable from the
+  delivery runner's detached, read-only checkout.
+- Advanced `docs/adr/0045-toolkit-sibling-coordination.json`'s
+  `client-toolkit-distribution` `auditedRevision` and the `wlterm`,
+  `wlcontrol`, and `weezterm` `consumesDistribution.revision` pins from the
+  stale `3d6b75d` PR head to the toolkit's current `926de54e` head (a
+  CI-workflow-dedup-only commit touching solely `.github/workflows/ci.yml`
+  and `CHANGELOG.md`). The distribution `sourceRevision`/`fingerprint` pins
+  are unchanged: `policy_toolkit_sources.rs` computes that fingerprint from
+  this repo's own canonical source tree at a fixed `CLIENT_SOURCE_REVISION`,
+  independent of which toolkit commit is referenced, and `926de54e` touches
+  no path in the fingerprinted/ownership inventory, so the audited content is
+  byte-identical to `3d6b75d`. All four bindings are advanced together to
+  keep the policy's revision/fingerprint lockstep invariant satisfied without
+  a follow-up migration entry.
+- Corrected `delivery/manifests/w9.json`'s required-check publishers for the
+  client-toolkit, provider-toolkit, wlcontrol, and wlterm sibling nodes: they
+  named the workflow *filename* (`ci.yml`, `check.yml`), but the delivery
+  command layer matches a required check's publisher against the live GitHub
+  check suite's `workflowRun.workflow.name` (display name), so every one of
+  those checks was permanently unmatchable. The manifest now names the exact
+  live workflow names (`ci`, `CI`, `CI`, `check`) while preserving each
+  workflow's audited `workflow_id`.
+- Added a typed `ObservedCheckState::Skipped` to the delivery seal check
+  parser/verifier, distinct from `Failed`: an unlisted (optional) GitHub check
+  run reporting conclusion `SKIPPED` — for example WeezTerm PR #48's optional
+  `release`/`dev-release` jobs on an ordinary PR — is now accepted and
+  retained in evidence instead of blocking snapshot/seal, while a *required*
+  check that is skipped still fails closed with an explicit "is skipped"
+  message. Unlisted pending, failing, neutral, and cancelled checks continue
+  to fail closed.
 - Closed pidfd identity races by rechecking the kernel pidfd after `/proc`
   evidence collection and binding realm-child restart adoption to stable pidfs
   device/inode identity captured during the authenticated handoff, without
@@ -594,6 +707,9 @@ deprecations ship one minor release before removal.
   attempts.
 - Aligned the v2 bundle and provider-registry schema references with every
   canonical top-level field.
+- Made toolkit source fingerprints cover every Git-listed file in each
+  canonical package and every Cargo metadata target, preventing feature-gated
+  Rust modules or build inputs from being omitted by a handpicked inventory.
 - Bound child-realm singleton spawn authority to one attachment per role and
   kind, keyed multiple resource and lease descriptors by opaque resource ID, and
   made successful responses prove distinct nonzero controller/broker PIDs plus

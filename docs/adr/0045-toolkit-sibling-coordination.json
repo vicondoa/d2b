@@ -1,0 +1,405 @@
+{
+  "schemaVersion": 1,
+  "protocolSource": "docs/reference/toolkit-source-contract.json",
+  "distributionSources": [
+    {
+      "id": "d2b-client-toolkit",
+      "sourceRevision": "9dc902243cdd7aba7ef269988b96f0aae6e037da",
+      "fingerprint": "5a20cef3a64281df819eeb76bdfe385999755479b467b559653011582fb9c043"
+    },
+    {
+      "id": "d2b-provider-toolkit",
+      "sourceRevision": "4018d9c9652bd826c2e6a9abccdcdcafb832d944",
+      "fingerprint": "89f76b9ab63515ecccf46c642676ac5d3c6b4e53bfc642d1dacb69818e3e8588"
+    }
+  ],
+  "contractGates": [
+    {
+      "id": "client-provider-foundation",
+      "planMilestone": "W4-F",
+      "status": "available",
+      "sourceRevision": "4018d9c9652bd826c2e6a9abccdcdcafb832d944",
+      "provides": [
+        "canonical client and provider toolkit crates",
+        "provider and session contracts",
+        "generated service clients and servers",
+        "local Unix ComponentSession substrate"
+      ]
+    },
+    {
+      "id": "core-control-services",
+      "planMilestone": "W5 content freeze",
+      "status": "available",
+      "sourceRevision": "9dc902243cdd7aba7ef269988b96f0aae6e037da",
+      "provides": [
+        "daemon target resolution and lifecycle service",
+        "provider-agent endpoint bootstrap and registration",
+        "public client endpoint and route acquisition"
+      ]
+    },
+    {
+      "id": "edge-user-desktop-services",
+      "planMilestone": "W6 content freeze",
+      "status": "available",
+      "sourceRevision": "9dc902243cdd7aba7ef269988b96f0aae6e037da",
+      "provides": [
+        "persistent shell and systemd-user service behavior",
+        "notify and desktop action streams",
+        "Wayland control and attachment behavior"
+      ]
+    }
+  ],
+  "components": [
+    {
+      "id": "client-toolkit-distribution",
+      "repository": "vicondoa/d2b-toolkit",
+      "futureRepository": "vicondoa/d2b-client-toolkit",
+      "auditedRef": "adr0045-w9-client-toolkit",
+      "auditedRevision": "926de54e7320599c373524a10b65aaf13b6ff422",
+      "defaultBranchRevision": "fde6af8b842718e7150f5056d4eba73093d4ad77",
+      "protocolPolicy": "canonical-only",
+      "ownership": {
+        "mode": "exclusive-repository",
+        "paths": [
+          ".github/workflows/**",
+          ".gitignore",
+          "AGENTS.md",
+          "CHANGELOG.md",
+          "Cargo.lock",
+          "Cargo.toml",
+          "README.md",
+          "canonical-source-artifacts/**",
+          "crates/**",
+          "docs/**",
+          "flake.lock",
+          "flake.nix",
+          "scripts/**",
+          "rust-toolchain.toml"
+        ]
+      },
+      "dependsOn": [
+        "client-provider-foundation"
+      ],
+      "readyFeatures": [
+        "repository, crate, package, flake-output, and share-path rename",
+        "canonical d2b-client source pin and re-export",
+        "removal of copied public framing, hello, error, shell, and workload DTOs",
+        "presentation-only color and Waybar helpers",
+        "source fingerprint and release packaging",
+        "content-frozen daemon, guest, user, runtime, shell, notify, Wayland, activation, security-key, clipboard, and TTY service clients"
+      ],
+      "blockedFeatures": [
+        {
+          "feature": "live daemon endpoint and route examples",
+          "dependsOn": [
+            "core-control-services"
+          ]
+        },
+        {
+          "feature": "authenticated Wayland control helper",
+          "dependsOn": [
+            "edge-user-desktop-services"
+          ]
+        }
+      ],
+      "duplicateProtocolSourcesToDelete": [
+        "crates/d2b-client/src/frame.rs",
+        "crates/d2b-client/src/hello.rs",
+        "crates/d2b-client/src/shell_owner.rs",
+        "crates/d2b-client/src/workload.rs",
+        "crates/d2b-toolkit-core/src/hello.rs",
+        "crates/d2b-toolkit-core/src/public.rs",
+        "crates/d2b-toolkit-core/src/shell.rs",
+        "crates/d2b-toolkit-core/src/workload.rs",
+        "crates/d2b-toolkit-core/tests/fixtures/**",
+        "crates/d2b-toolkit-core/tests/workload_contract.rs"
+      ],
+      "deferredExternalActions": [
+        "GitHub repository rename"
+      ]
+    },
+    {
+      "id": "provider-toolkit-distribution",
+      "repository": "vicondoa/d2b-provider-toolkit",
+      "futureRepository": null,
+      "auditedRef": "adr0045-w9-provider-toolkit",
+      "auditedRevision": "1addd14f0458d6f07449550f763b60b6b72aa4d3",
+      "defaultBranchRevision": "d6c0b4b29d1a2c69902f6518a459d6c7591deb84",
+      "protocolPolicy": "canonical-only",
+      "ownership": {
+        "mode": "exclusive-repository",
+        "paths": [
+          "**"
+        ]
+      },
+      "dependsOn": [
+        "client-provider-foundation"
+      ],
+      "readyFeatures": [
+        "canonical d2b-provider-toolkit source pin and re-export",
+        "provider templates and fake-SDK examples",
+        "conformance entrypoints",
+        "provider-author reference",
+        "Nix source packaging and release automation",
+        "provider distribution dependency and protocol boundary hardening"
+      ],
+      "blockedFeatures": [
+        {
+          "feature": "live provider-agent bootstrap",
+          "owner": "W8",
+          "status": "fail-closed",
+          "reason": "The distribution exposes only the canonical bootstrap seam; live provider-agent startup and registration remain owned by the integrated runtime.",
+          "dependsOn": [
+            "core-control-services"
+          ]
+        }
+      ],
+      "duplicateProtocolSourcesToDelete": [],
+      "deferredExternalActions": []
+    },
+    {
+      "id": "wlterm",
+      "repository": "vicondoa/d2b-wlterm",
+      "futureRepository": null,
+      "auditedRef": "adr0045-w9-wlterm",
+      "auditedRevision": "b33a3ba03c88ffcd0b381a120629132318535f1f",
+      "defaultBranchRevision": "80c077277797ff129bb040f0c1b748f0fe162dc0",
+      "protocolPolicy": "canonical-only",
+      "consumesDistribution": {
+        "id": "d2b-client-toolkit",
+        "repository": "vicondoa/d2b-toolkit",
+        "revision": "926de54e7320599c373524a10b65aaf13b6ff422",
+        "sourceRevision": "9dc902243cdd7aba7ef269988b96f0aae6e037da",
+        "fingerprint": "5a20cef3a64281df819eeb76bdfe385999755479b467b559653011582fb9c043"
+      },
+      "ownership": {
+        "mode": "exclusive-repository",
+        "paths": [
+          ".github/workflows/**",
+          ".gitignore",
+          "AGENTS.md",
+          "CHANGELOG.md",
+          "Cargo.lock",
+          "Cargo.toml",
+          "README.md",
+          "crates/**",
+          "docs/**",
+          "flake.lock",
+          "flake.nix",
+          "nix/**",
+          "rust-toolchain.toml"
+        ]
+      },
+      "dependsOn": [
+        "client-provider-foundation",
+        "core-control-services",
+        "edge-user-desktop-services"
+      ],
+      "readyFeatures": [
+        "client-toolkit input rename and exact source pin",
+        "presentation-model audit",
+        "release and Home Manager ownership update",
+        "authenticated workload discovery and daemon session setup",
+        "persistent shell list, detach, and kill management"
+      ],
+      "blockedFeatures": [
+        {
+          "feature": "interactive shell create, open, attach, and terminal stream routing",
+          "owner": "W8",
+          "status": "fail-closed",
+          "reason": "The authenticated desktop route does not yet carry the canonical terminal stream.",
+          "dependsOn": [
+            "core-control-services",
+            "edge-user-desktop-services"
+          ]
+        },
+        {
+          "feature": "Wayland proxy readiness and control",
+          "dependsOn": [
+            "edge-user-desktop-services"
+          ]
+        }
+      ],
+      "duplicateProtocolSourcesToDelete": [
+        "crates/wlterm-d2b/tests/fixtures/toolkit-v0.2.0/**"
+      ],
+      "deferredExternalActions": []
+    },
+    {
+      "id": "wlcontrol",
+      "repository": "vicondoa/d2b-wlcontrol",
+      "futureRepository": null,
+      "auditedRef": "adr0045-w9-wlcontrol",
+      "auditedRevision": "5000f595143008aecef589d012f8b8a188b27d20",
+      "defaultBranchRevision": "06010b953a9dd05f4be236ef5c7265d86c3c5812",
+      "protocolPolicy": "canonical-only",
+      "consumesDistribution": {
+        "id": "d2b-client-toolkit",
+        "repository": "vicondoa/d2b-toolkit",
+        "revision": "926de54e7320599c373524a10b65aaf13b6ff422",
+        "sourceRevision": "9dc902243cdd7aba7ef269988b96f0aae6e037da",
+        "fingerprint": "5a20cef3a64281df819eeb76bdfe385999755479b467b559653011582fb9c043"
+      },
+      "ownership": {
+        "mode": "exclusive-repository",
+        "paths": [
+          ".github/workflows/**",
+          ".gitignore",
+          "AGENTS.md",
+          "CHANGELOG.md",
+          "Cargo.lock",
+          "Cargo.toml",
+          "LICENSE",
+          "README.md",
+          "crates/**",
+          "data/**",
+          "docs/**",
+          "flake.lock",
+          "flake.nix",
+          "nix/**",
+          "rust-toolchain.toml",
+          "tests/**"
+        ]
+      },
+      "dependsOn": [
+        "client-provider-foundation",
+        "core-control-services",
+        "edge-user-desktop-services"
+      ],
+      "readyFeatures": [
+        "client-toolkit input rename and exact source pin",
+        "presentation-model and reducer audit",
+        "release and Home Manager ownership update",
+        "authenticated daemon inspection with VM-only presentation projections",
+        "typed VM start, stop, and restart lifecycle mapping"
+      ],
+      "blockedFeatures": [
+        {
+          "feature": "authenticated caller-role projection for enabling admin lifecycle controls",
+          "owner": "W8",
+          "status": "fail-closed",
+          "reason": "The authenticated session proves launcher read posture but does not yet project the selected admin role.",
+          "dependsOn": [
+            "core-control-services"
+          ]
+        },
+        {
+          "feature": "device, audio, desktop observer/action, and User/Shell/Notify/Wayland routes",
+          "owner": "W8",
+          "status": "fail-closed",
+          "reason": "Runtime-owned authenticated routes are not yet available and no legacy fallback is permitted.",
+          "dependsOn": [
+            "core-control-services",
+            "edge-user-desktop-services"
+          ]
+        }
+      ],
+      "duplicateProtocolSourcesToDelete": [
+        "crates/wlcontrol-d2b/src/transport.rs",
+        "crates/wlcontrol-d2b/src/wire.rs",
+        "crates/wlcontrol-d2b/tests/public_socket.rs",
+        "tests/fixtures/public-workload-v3-v1/**"
+      ],
+      "deferredExternalActions": []
+    },
+    {
+      "id": "weezterm",
+      "repository": "vicondoa/weezterm",
+      "futureRepository": null,
+      "auditedRef": "adr0045-w9-weezterm",
+      "auditedRevision": "1abba49cc593f3922345d3ca29d2fa4fe7151949",
+      "defaultBranchRevision": "d461e3f92d9ff7faafc8e6c83a111ca0aa5ae9ca",
+      "protocolPolicy": "canonical-only",
+      "consumesDistribution": {
+        "id": "d2b-client-toolkit",
+        "repository": "vicondoa/d2b-toolkit",
+        "revision": "926de54e7320599c373524a10b65aaf13b6ff422",
+        "sourceRevision": "9dc902243cdd7aba7ef269988b96f0aae6e037da",
+        "fingerprint": "5a20cef3a64281df819eeb76bdfe385999755479b467b559653011582fb9c043"
+      },
+      "ownership": {
+        "mode": "exclusive-file-set",
+        "paths": [
+          "AGENTS.md",
+          "Cargo.lock",
+          "Cargo.toml",
+          "CHANGELOG.md",
+          "Makefile",
+          "README.md",
+          "config/Cargo.toml",
+          "config/src/config.rs",
+          "config/src/d2b.rs",
+          "config/src/keyassignment.rs",
+          "config/src/lib.rs",
+          "docs/changelog.md",
+          "docs/adr/0010-provider-neutral-d2b-target-domains.md",
+          "docs/adr/README.md",
+          "docs/d2b-provider.md",
+          "flake.lock",
+          "flake.nix",
+          "mux/Cargo.toml",
+          "mux/src/d2b.rs",
+          "mux/src/lib.rs",
+          "mux/src/pane.rs",
+          "nix/clippy-scope-filter.sh",
+          "nix/flake.lock",
+          "nix/flake.nix",
+          "wezterm-gui/src/commands.rs",
+          "wezterm-gui/src/main.rs",
+          "wezterm-gui/src/overlay/d2b_launcher.rs",
+          "wezterm-gui/src/overlay/mod.rs",
+          "wezterm-gui/src/termwindow/mod.rs",
+          "wezterm-mux-server-impl/src/lib.rs"
+        ]
+      },
+      "dependsOn": [
+        "client-provider-foundation",
+        "core-control-services",
+        "edge-user-desktop-services"
+      ],
+      "readyFeatures": [
+        "client toolkit facade and exact source pin migration",
+        "canonical workload and shell-service target type migration",
+        "old repository and crate-name removal"
+      ],
+      "blockedFeatures": [
+        {
+          "feature": "daemon target discovery and session setup",
+          "dependsOn": [
+            "core-control-services"
+          ]
+        },
+        {
+          "feature": "native persistent-shell domain and terminal stream bridge",
+          "dependsOn": [
+            "core-control-services",
+            "edge-user-desktop-services"
+          ]
+        }
+      ],
+      "duplicateProtocolSourcesToDelete": [
+        "config/src/d2b.rs compatibility target parser",
+        "mux/src/d2b.rs public hello, shell DTO, and framing integration"
+      ],
+      "deferredExternalActions": []
+    }
+  ],
+  "globalBlockers": [
+    {
+      "id": "client-endpoint-bootstrap",
+      "detail": "The client toolkit exposes the frozen daemon and user/desktop service clients. It still accepts an owned route, endpoint policy, credentials, and transport; live endpoint and credential acquisition remain integrated runtime behavior rather than distribution-owned discovery."
+    },
+    {
+      "id": "runtime-adapter",
+      "detail": "The canonical client and session crates use Tokio while existing wlterm and WeezTerm integrations use async-io or smol; consumers must use an explicit adapter or runtime boundary without copying protocol code."
+    },
+    {
+      "id": "client-redaction-wrapper",
+      "detail": "No canonical general-purpose client wire-redaction wrapper exists. Consumers may keep presentation-only models but cannot carry forward the old wire-serializable wrapper."
+    },
+    {
+      "id": "downstream-refresh",
+      "detail": "The audited wlcontrol, wlterm, and WeezTerm heads all consume the current client-toolkit distribution at the frozen W6 source and fingerprint; no desktop-consumer toolkit refresh remains."
+    }
+  ]
+}

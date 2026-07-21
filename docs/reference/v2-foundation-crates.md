@@ -6,12 +6,12 @@ six are versioned with the workspace, use the workspace lockfile, set
 
 | Crate | Role | Optional host feature |
 | --- | --- | --- |
-| `d2b-session-unix` | Linux Unix stream/seqpacket, peer identity, ancillary data, descriptor validation, and attachment credits | `host-socket` |
+| `d2b-session-unix` | Linux Unix stream/seqpacket and native-vsock transports, peer identity, ancillary data, descriptor validation, and attachment credits | `host-socket`, `native-vsock` |
 | `d2b-session` | Portable authenticated ComponentSession handshake, record, lifecycle, cancellation, and named-stream runtime | none |
 | `d2b-provider` | Provider traits, registry generations, operation admission, lifecycle, and authenticated RPC proxy | none |
 | `d2b-provider-toolkit` | Provider-agent adapter, exact registration, fixtures, redaction, and shared conformance | none |
 | `d2b-state` | Atomic JSON, quarantine, generations, anchored paths, locks, leases, and audit segments | `host-fs` (Linux), `tokio` |
-| `d2b-client` | Typed target resolution, session connection, generated service clients, retries, cancellation, attachments, and named streams | `host-socket` (Linux) |
+| `d2b-client` | Typed target resolution, session connection, daemon/guest and generated service clients, terminal streams, retries, cancellation, attachments, and named streams | `host-socket` (Linux) |
 
 ## Dependency and authority boundaries
 
@@ -36,6 +36,10 @@ Provider toolkit conformance runs against the same `ProviderInstance` surface
 used by in-process adapters and authenticated RPC proxies. It does not load
 dynamic libraries, access ambient credentials, or publish a second provider
 contract.
+
+The exact source groups, feature selections, generated bindings, public
+artifacts, and distribution fingerprints are defined by the
+[toolkit source contract](./toolkit-source-contract.md).
 
 ## Session and descriptor invariants
 
@@ -114,6 +118,10 @@ The client exposes async Tokio-compatible connect, invoke, cancellation,
 attachment, and named-stream APIs. It resolves a typed target through an
 explicit route table, selects one declared transport, and never retries through
 another transport. Mutating retries reuse one bounded idempotency identity.
+The content-frozen control surface includes typed daemon lifecycle, inspection,
+terminal, and proxied guest operations. Generated clients expose the
+content-frozen user, runtime, shell, clipboard, notification, security-key,
+Wayland, activation, and TTY services without sibling DTOs.
 Response outcomes, remote errors, attachment indexes, cancellation, and
 named-stream transitions are validated before being exposed to a caller. The
 local ttrpc bridge multiplexes registered invocations, continues admitting
@@ -123,6 +131,7 @@ unrelated calls. Debug and error output omits target values, endpoints,
 payloads, credentials, and attachment contents while retaining closed contract,
 session, remote-kind/retry, and errno diagnostics.
 
-These crates provide foundations, not compatibility adapters. Concrete
-first-party providers and control-plane service migration are separate runtime
-integration work.
+These crates provide foundations, not compatibility adapters. The local
+connector consumes caller-supplied authenticated endpoint state and an owned
+transport; endpoint/credential acquisition and integrated first-party routing
+remain runtime integration work.

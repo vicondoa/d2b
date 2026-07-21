@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write as _;
 use std::os::unix::fs::{FileTypeExt as _, PermissionsExt as _};
+use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
@@ -321,6 +322,19 @@ pub fn spawn_d2bd_serve(
     once: bool,
     state_restore_report: Option<&Path>,
 ) -> SpawnedProcess {
+    spawn_d2bd_serve_inner(fixture, once, state_restore_report, true)
+}
+
+pub fn spawn_d2bd_serve_expect_startup_failure(fixture: &DaemonFixture) -> SpawnedProcess {
+    spawn_d2bd_serve_inner(fixture, true, None, false)
+}
+
+fn spawn_d2bd_serve_inner(
+    fixture: &DaemonFixture,
+    once: bool,
+    state_restore_report: Option<&Path>,
+    wait_until_ready: bool,
+) -> SpawnedProcess {
     fixture.reset_runtime_endpoints();
     let mut command = Command::new(d2bd_bin());
     command
@@ -345,12 +359,63 @@ pub fn spawn_d2bd_serve(
         .env("RUST_LOG", "off")
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    let readiness = wait_until_ready.then(|| {
+        let notify_path = fixture.run_dir.join("notify.sock");
+        remove_file_if_present(&notify_path);
+        let listener = UnixDatagram::bind(&notify_path).expect("bind test notify socket");
+        listener
+            .set_nonblocking(true)
+            .expect("set test notify socket nonblocking");
+        command.env("NOTIFY_SOCKET", &notify_path);
+        (listener, notify_path)
+    });
     if let Some(report) = state_restore_report {
         command.arg("--test-state-restore-report").arg(report);
     }
-    let child = command.spawn().expect("spawn d2bd serve");
-    wait_for_socket(&fixture.socket_path, Duration::from_secs(15));
+    let mut child = command.spawn().expect("spawn d2bd serve");
+    if let Some((notify_listener, notify_path)) = readiness {
+        wait_for_daemon_ready(
+            &mut child,
+            &notify_listener,
+            &notify_path,
+            Duration::from_secs(45),
+        );
+    }
     SpawnedProcess::from_child(child)
+}
+
+fn wait_for_daemon_ready(
+    child: &mut Child,
+    listener: &UnixDatagram,
+    notify_path: &Path,
+    timeout: Duration,
+) {
+    let deadline = Instant::now() + timeout;
+    let mut buffer = [0_u8; 512];
+    while Instant::now() < deadline {
+        match listener.recv(&mut buffer) {
+            Ok(len)
+                if buffer[..len]
+                    .split(|byte| *byte == b'\n')
+                    .any(|line| line == b"READY=1") =>
+            {
+                return;
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(error) => panic!("receive daemon readiness notification: {error}"),
+        }
+        if let Some(status) = child.try_wait().expect("inspect d2bd serve status") {
+            panic!("d2bd serve exited before readiness with {status:?}");
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    panic!(
+        "timed out waiting for daemon readiness notification: {}",
+        notify_path.display()
+    );
 }
 
 pub fn spawn_lock_only(config: &Path, state_lock: &Path, hold_seconds: u64) -> SpawnedProcess {
