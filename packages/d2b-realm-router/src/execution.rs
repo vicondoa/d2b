@@ -257,6 +257,27 @@ fn ensure_generation(
     }
 }
 
+/// Stable, short observability/audit vocabulary for an [`ExecState`].
+///
+/// This is a router-side naming contract only: a fixed, lowercase, ASCII
+/// code per state, safe to place in metric labels, audit records, or CLI
+/// status output without leaking argv/env/paths. The guest-runner side
+/// (`d2b-exec-runner`) mirrors the identical string set for its own
+/// terminal-outcome vocabulary (see
+/// `d2b_exec_runner::service_mode::ExecutionOutcomeCode`) so that a router
+/// execution state and a guest runner outcome can be correlated by an
+/// external observer without either crate depending on the other. Keep the
+/// two vocabularies in lockstep if either changes.
+pub fn state_code(state: ExecState) -> &'static str {
+    match state {
+        ExecState::Pending => "pending",
+        ExecState::Running => "running",
+        ExecState::Exited => "exited",
+        ExecState::Cancelled => "cancelled",
+        ExecState::Failed => "failed",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -479,5 +500,37 @@ mod tests {
             table.mark_running(&id).unwrap_err().kind(),
             ErrorKind::Cancelled
         );
+    }
+
+    #[test]
+    fn state_code_is_stable_lowercase_ascii_and_covers_every_state() {
+        let cases = [
+            (ExecState::Pending, "pending"),
+            (ExecState::Running, "running"),
+            (ExecState::Exited, "exited"),
+            (ExecState::Cancelled, "cancelled"),
+            (ExecState::Failed, "failed"),
+        ];
+        for (state, expected) in cases {
+            let code = state_code(state);
+            assert_eq!(code, expected);
+            assert!(code.chars().all(|c| c.is_ascii_lowercase()));
+        }
+    }
+
+    #[test]
+    fn state_code_values_are_pairwise_distinct() {
+        let all = [
+            ExecState::Pending,
+            ExecState::Running,
+            ExecState::Exited,
+            ExecState::Cancelled,
+            ExecState::Failed,
+        ];
+        for (i, a) in all.iter().enumerate() {
+            for b in &all[i + 1..] {
+                assert_ne!(state_code(*a), state_code(*b));
+            }
+        }
     }
 }

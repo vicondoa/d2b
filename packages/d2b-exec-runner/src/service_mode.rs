@@ -117,6 +117,63 @@ pub enum RunnerResult {
     StatusUnwritable,
 }
 
+/// Stable, short observability/audit vocabulary for a written [`StatusPhase`].
+///
+/// This is the guest-runner-side half of a naming contract with the
+/// router-side `d2b_realm_router::execution::state_code` vocabulary: both
+/// crates expose an identical small set of lowercase ASCII codes so an
+/// external observer (audit, metrics, CLI status) can correlate a guest
+/// runner's terminal outcome with the router's durable execution state
+/// without either crate depending on the other. Only the terminal-relevant
+/// subset is shared (a runner has no "pending" phase of its own); keep the
+/// two vocabularies in lockstep if either changes.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionOutcomeCode {
+    /// Supervisor resident, child spawned and not yet terminal.
+    Running,
+    /// Child exited (with or without a delivered signal); see the
+    /// execution's own `exit_code` metadata for the numeric detail.
+    Exited,
+    /// Cancel/stop path completed.
+    Cancelled,
+    /// Spawn or runner-infra failure; terminal, no exit code available.
+    Failed,
+}
+
+impl ExecutionOutcomeCode {
+    /// The stable lowercase ASCII code, identical to the matching
+    /// `d2b_realm_router::execution::state_code` string where the router
+    /// has an equivalent state.
+    #[allow(dead_code)]
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Exited => "exited",
+            Self::Cancelled => "cancelled",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// Maps a written [`StatusPhase`] to its stable [`ExecutionOutcomeCode`].
+///
+/// `Signaled` collapses into `Exited` (a signal-terminated child is still an
+/// "exited" execution from the durable-execution-summary point of view; the
+/// signal detail is carried in the numeric status, not the outcome code).
+/// `SpawnFailed` and `InfraFailed` both collapse into `Failed`: the router's
+/// `ExecState` has one terminal failure state, so the runner's more granular
+/// local distinction does not need its own router-facing code.
+#[allow(dead_code)]
+pub fn outcome_code_for_phase(phase: StatusPhase) -> ExecutionOutcomeCode {
+    match phase {
+        StatusPhase::Started => ExecutionOutcomeCode::Running,
+        StatusPhase::Exited(_) | StatusPhase::Signaled(_) => ExecutionOutcomeCode::Exited,
+        StatusPhase::Cancelled => ExecutionOutcomeCode::Cancelled,
+        StatusPhase::SpawnFailed | StatusPhase::InfraFailed => ExecutionOutcomeCode::Failed,
+    }
+}
+
 fn write_status(paths: &RunnerPaths, phase: StatusPhase) -> Result<(), ()> {
     atomic_write(&paths.status(), &StatusRecord::new(phase).encode()).map_err(|_| ())
 }
@@ -1807,5 +1864,45 @@ ControlGroup=/d2b.slice/d2b-exec.slice/d2b-exec-03.service
         // Releasing the write end lets the detached drain thread finish cleanly.
         drop(write_fd);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn outcome_code_covers_every_status_phase_with_stable_lowercase_codes() {
+        let cases = [
+            (StatusPhase::Started, ExecutionOutcomeCode::Running),
+            (StatusPhase::Exited(0), ExecutionOutcomeCode::Exited),
+            (StatusPhase::Exited(1), ExecutionOutcomeCode::Exited),
+            (StatusPhase::Signaled(9), ExecutionOutcomeCode::Exited),
+            (StatusPhase::Cancelled, ExecutionOutcomeCode::Cancelled),
+            (StatusPhase::SpawnFailed, ExecutionOutcomeCode::Failed),
+            (StatusPhase::InfraFailed, ExecutionOutcomeCode::Failed),
+        ];
+        for (phase, expected) in cases {
+            let outcome = outcome_code_for_phase(phase);
+            assert_eq!(outcome, expected);
+            assert!(outcome.code().chars().all(|c| c.is_ascii_lowercase()));
+        }
+    }
+
+    #[test]
+    fn outcome_code_vocabulary_matches_router_state_code_strings() {
+        // Every code this crate emits must be a member of the router's
+        // stable ExecState vocabulary so cross-crate correlation by string
+        // stays valid without a shared dependency. Kept as an inline literal
+        // set (not an import) because d2b-exec-runner must stay
+        // dependency-pure with respect to d2b-realm-router.
+        const ROUTER_STATE_CODES: &[&str] =
+            &["pending", "running", "exited", "cancelled", "failed"];
+        for code in [
+            ExecutionOutcomeCode::Running.code(),
+            ExecutionOutcomeCode::Exited.code(),
+            ExecutionOutcomeCode::Cancelled.code(),
+            ExecutionOutcomeCode::Failed.code(),
+        ] {
+            assert!(
+                ROUTER_STATE_CODES.contains(&code),
+                "outcome code {code:?} is not a member of the router state-code vocabulary"
+            );
+        }
     }
 }
