@@ -1,85 +1,77 @@
-# Private configured argv and shell policy for unsafe-local workloads.
+# Private configured launcher intents keyed by canonical workload/provider identity.
 { config, lib, ... }:
 
 let
   cfg = config.d2b;
-  unsafeLocalWorkloads = lib.filter
-    (workload: workload.kind == "unsafe-local")
-    cfg._index.realms.workloads.enabled;
-  hasConfiguredLocalVmLaunch = workload:
-    let
-      declared =
-        cfg.realms.${workload.realmName}.workloads.${workload.workloadName};
-    in
-    workload.kind == "local-vm"
-    && workload.launcherEnabled
-    && (declared.launcher.items != { }
-      || declared.launcher.defaultItem != null
-      || declared.shell.enable);
-  localVmWorkloads = lib.filter
-    hasConfiguredLocalVmLaunch
-    cfg._index.realms.workloads.enabled;
+  workloads = cfg._index.workloads.enabledList;
 
-  privateItem = item:
+  runtimeBinding = workload:
+    workload.providerBindings.runtime or
+      (throw "private launcher intent: workload ${workload.canonicalTarget} has no runtime provider binding");
+
+  hasConfiguredLaunch = workload:
+    workload.launcher.enabled
+    && (workload.launcher.items != { }
+      || workload.launcher.defaultItem != null
+      || (workload.spec.shell.enable or false));
+
+  configuredWorkloads = lib.filter hasConfiguredLaunch workloads;
+  unsafeLocalWorkloads = lib.filter
+    (workload: (runtimeBinding workload).implementationId == "systemd-user")
+    configuredWorkloads;
+  localVmWorkloads = lib.filter
+    (workload:
+      builtins.elem (runtimeBinding workload).implementationId
+        [ "cloud-hypervisor" "qemu-media" ])
+    configuredWorkloads;
+
+  privateItem = itemId: item:
     if item.type == "exec"
     then {
       type = "exec";
-      inherit (item) id name argv graphical;
+      id = itemId;
+      inherit (item) name argv graphical;
       icon = lib.filterAttrs (_: value: value != null) item.icon;
     }
     else if item.type == "shell"
     then {
       type = "shell";
-      inherit (item) id name;
+      id = itemId;
+      inherit (item) name;
       icon = lib.filterAttrs (_: value: value != null) item.icon;
     }
     else null;
 
   privateItems = items:
-    lib.filter (item: item != null) (map privateItem items);
+    lib.filter (item: item != null) (lib.mapAttrsToList privateItem items);
+
+  privateIdentity = workload:
+    let runtime = runtimeBinding workload;
+    in {
+      inherit (workload) workloadId realmId canonicalTarget;
+      realmPath = lib.splitString "." workload.realmPath;
+      runtimeKind = runtime.implementationId;
+      providerId = runtime.providerId;
+    };
 
   privateWorkload = workload:
     lib.filterAttrs (_: value: value != null) {
-      identity = lib.filterAttrs (_: value: value != null) {
-        workloadId = workload.workloadId;
-        workloadName =
-          if workload.label == workload.workloadId
-          then null
-          else workload.label;
-        realmId = workload.realmId;
-        realmPath = lib.splitString "." workload.realmPath;
-        canonicalTarget = workload.canonicalTarget;
-        legacyVmName = null;
-        runtimeKind = "unsafe-local";
-        providerId = "unsafe-local";
-      };
-      defaultItemId = workload.defaultItemId;
-      items = privateItems workload.launcherItems;
+      identity = privateIdentity workload;
+      defaultItemId = workload.launcher.defaultItem;
+      items = privateItems workload.launcher.items;
       shell =
-        if workload.shell.enable
+        if workload.spec.shell.enable or false
         then {
-          inherit (workload.shell) defaultName maxSessions;
+          inherit (workload.spec.shell) defaultName maxSessions;
         }
         else null;
     };
 
   privateLocalVmWorkload = workload:
     lib.filterAttrs (_: value: value != null) {
-      identity = lib.filterAttrs (_: value: value != null) {
-        workloadId = workload.workloadId;
-        workloadName =
-          if workload.label == workload.workloadId
-          then null
-          else workload.label;
-        realmId = workload.realmId;
-        realmPath = lib.splitString "." workload.realmPath;
-        canonicalTarget = workload.canonicalTarget;
-        legacyVmName = workload.legacyVmName;
-        runtimeKind = workload.runtimeKind;
-        providerId = workload.runtimeProviderId;
-      };
-      defaultItemId = workload.defaultItemId;
-      items = privateItems workload.launcherItems;
+      identity = privateIdentity workload;
+      defaultItemId = workload.launcher.defaultItem;
+      items = privateItems workload.launcher.items;
     };
 
   data = {

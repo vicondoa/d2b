@@ -54,43 +54,45 @@ let
           extraSpecialArgs = { sentinel = "ok"; };
         };
 
-        d2b.envs.work = {
-          lanSubnet    = "10.20.0.0/24";
-          uplinkSubnet = "192.0.2.0/30";
-        };
-
-        d2b.vms.corp-vm = {
-          enable = true;
-          env = "work";
-          index = 10;
-          ssh.user = "alice";
-          # Consume `sentinel` positionally and pin its value with
-          # an inline `throw` (cheaper to force than threading an
-          # assertion through NixOS's normal assertion machinery,
-          # which would also force unrelated lazy assertions like
-          # the fileSystems-cycle one that don't apply to a microvm
-          # guest's tmpfs root). If extraSpecialArgs didn't flow
-          # through, NixOS's module system fails the eval with
-          # "called without required argument 'sentinel'" before
-          # the throw is even reached. The throw catches the case
-          # where the framework somehow defaulted `sentinel` to
-          # null or shadowed it.
-          config = { lib, sentinel, ... }: {
-            networking.hostName = lib.mkDefault "corp-vm";
-            users.users.alice = {
-              isNormalUser = true;
-              uid = 1000;
+        d2b.acceptDestructiveV2Cutover = true;
+        d2b.realms.work = {
+          path = "work";
+          placement = "host-local";
+          broker = {
+            enable = true;
+            hostMutation = true;
+          };
+          network = {
+            mode = "declared";
+            lanSubnet = "10.20.0.0/24";
+            uplinkSubnet = "192.0.2.0/30";
+          };
+          providers.runtime = {
+            type = "runtime";
+            implementationId = "cloud-hypervisor";
+          };
+          workloads.corp-vm = {
+            providerRefs.runtime = "runtime";
+            config = { lib, sentinel, ... }: {
+              networking.hostName = lib.mkDefault "corp-vm";
+              users.users.alice = {
+                isNormalUser = true;
+                uid = 1000;
+              };
+              environment.etc."d2b-extraspecialargs-sentinel".text =
+                if sentinel == "ok"
+                then "ok"
+                else throw "d2b.site.extraSpecialArgs did not flow to per-VM specialArgs (got sentinel=${toString sentinel})";
             };
-            # Forces a strict comparison; eval fails noisily on mismatch.
-            environment.etc."d2b-extraspecialargs-sentinel".text =
-              if sentinel == "ok"
-              then "ok"
-              else throw "d2b.site.extraSpecialArgs did not flow to per-VM specialArgs (got sentinel=${toString sentinel})";
           };
         };
       })
     ];
   };
+  workload = lib.findFirst
+    (row: row.workloadName == "corp-vm")
+    (throw "corp-vm workload missing from normalized index")
+    nixos.config.d2b._index.workloads.enabledList;
 in
   # Force the per-VM d2b-owned evaluator so the specialArgs
   # merge path is actually evaluated. Reading the per-VM
@@ -99,5 +101,6 @@ in
   # propagated) AND the inline throw above (proves the *value*
   # is the expected one).
   builtins.deepSeq
-    nixos.config.d2b._computed.corp-vm.config.environment.etc."d2b-extraspecialargs-sentinel".text
+    nixos.config.d2b._computedWorkloads.${workload.workloadId}
+      .config.environment.etc."d2b-extraspecialargs-sentinel".text
     nixos.config.system.build.toplevel

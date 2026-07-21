@@ -12,6 +12,12 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added bundle version 13 discovery for private observability
+  secret-generation metadata, allowing the integrated runtime wave to consume
+  the contract without a hardcoded path.
+- Added a mandatory final streamline wave to ADR-scale delivery plans, seeded
+  from observed W4-W7 stack, validation, test-discovery, evidence, and
+  build-output friction and required to ship tested process/tooling improvements.
 - Restored live guest system activation as the generated
   `d2b.activation.v2.ActivationService` on the authenticated direct GuestV2
   session, with integrity-bound configured intents, root-private restart-safe
@@ -44,6 +50,14 @@ deprecations ship one minor release before removal.
   child-realm controller/broker launches, with strict exact lookup, canonical
   content digests, opaque references, redacted diagnostics, and no ambient
   spawn fallback.
+- Added the W7 realm-host prep inventory and Nix policy skeleton: fifteen
+  file-disjoint declarative components, explicit allocator runtime exclusion,
+  complete example/documentation/fixture/test ownership, a parent-trusted
+  component diff gate with sanitized Git/rewrite metadata handling, cross-wave
+  documentation reservations, exact deletion-coupled contract-test and
+  retirement-ledger ownership through a narrow shared-root seam, the landed
+  provider-registry-v2 consumer seam, old-surface deletion inventory, and
+  dispatch-ready component prompts.
 - Added authenticated fixed user-manager service contracts for user secrets and
   same-UID runtime operations, descriptor-bound Wayland, clipboard, terminal,
   and helper flows, authenticated activation and notification adapters, plus an
@@ -192,7 +206,13 @@ deprecations ship one minor release before removal.
   requires that exact nonzero binding for enrolled reconnects.
 - Rejected enrolled guest credentials and reconnect correlation when the guest
   identity digest is not SHA-256 of the pinned static public key.
-
+- Passed the canonical workload identity to guestd and removed the retired
+  `GuestControlSign` operation from the declarative privilege inventory.
+- Replaced the long-lived guest-control token and privileged signing row with a
+  realm-confined runtime `GuestSessionCredentialV1` handoff that binds the exact
+  generation, parent and guest public identities, channel, and optional
+  operation PSK; credentials are root-owned, delivered without an ambient
+  fallback, rotated before publication, and excluded from bundle artifacts.
 - Routed the CLI dependency authority through `d2b-daemon-access`, the sole
   owner of the exact no-default-features `d2b-client/host-socket` edge, instead
   of permitting duplicate endpoint and channel-binding policy.
@@ -217,6 +237,16 @@ deprecations ship one minor release before removal.
 - Replaced split allocator lease-id, lease, and idempotency writes with one
   fallible generation-bound transaction, closed detail-free state errors, and
   fail-closed replay semantics for commit and acknowledgement failures.
+- Aligned observability relay profiles, endpoints, source keys, and contract
+  coverage with canonical realm/workload/role identities while retaining the
+  frozen bounded local-observability provider mapping.
+- Aligned rendered device runner contracts and golden fixtures with canonical
+  realm/workload/role paths, allocator leases, and FD-only device mediation.
+- Replaced the legacy environment and VM declaration graph with realm-owned
+  providers and workloads, canonical-ID network/storage/process artifacts,
+  fixed local-root endpoints, and parent-spawned child realm controllers and
+  brokers while preserving bundle version 12 and the public manifest version 7
+  compatibility contract.
 - Composed fixed user-manager endpoints for user, runtime, and clipboard
   services over authenticated component sessions; migrated Wayland bootstrap
   to pre-bound descriptors and retired the daemon-owned unsafe-local helper and
@@ -494,6 +524,8 @@ deprecations ship one minor release before removal.
   logs opened through a separate idempotent RPC.
 - Kept the allocator ledger generation helper available only with its
   test-support consumers so strict production builds remain warning-free.
+- Aligned guest, confinement, process-identity, and runner contract coverage
+  with canonical realm/workload/role rows and realm-controller supervision.
 - Parsed the evaluated delivery wrapper with the maintained Tree-sitter Bash
   grammar, requiring an exact AST shape and rejecting quote, escape,
   concatenation, substitution, array, inactive-command, and wrong-target decoys.

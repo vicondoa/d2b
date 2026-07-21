@@ -14,6 +14,16 @@ pub const MAX_PRIVATE_CONFIGURED_WORKLOADS: usize =
 pub const MAX_LAUNCHER_ITEMS_PER_WORKLOAD: usize = 64;
 pub const MAX_UNSAFE_LOCAL_SHELL_SESSIONS: u16 = 64;
 
+/// Canonical `runtimeKind` emitted by `nixos-modules/unsafe-local-workloads-json.nix`
+/// for a same-uid systemd-user workload. This is the actual v2 runtime
+/// implementation id (`runtime.implementationId`), not the (never emitted)
+/// legacy `unsafe-local` placeholder.
+pub const UNSAFE_LOCAL_RUNTIME_KIND: &str = "systemd-user";
+/// Canonical `runtimeKind` values emitted for a local-VM configured
+/// workload: `runtime.implementationId` is either the cloud-hypervisor or
+/// qemu-media local runtime, never the legacy `nixos` placeholder.
+pub const LOCAL_VM_RUNTIME_KINDS: &[&str] = &["cloud-hypervisor", "qemu-media"];
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UnsafeLocalWorkloadsJson {
@@ -81,8 +91,14 @@ pub struct LocalVmConfiguredWorkload {
 
 impl LocalVmConfiguredWorkload {
     pub fn validate(&self) -> Result<(), String> {
-        if self.identity.runtime_kind.as_ref().map(|id| id.as_str()) != Some("nixos") {
-            return Err("local-vm configured workload must use nixos runtimeKind".to_owned());
+        let runtime_kind = self.identity.runtime_kind.as_ref().map(|id| id.as_str());
+        if !runtime_kind.is_some_and(|kind| LOCAL_VM_RUNTIME_KINDS.contains(&kind)) {
+            return Err(format!(
+                "local-vm configured workload must use one of {LOCAL_VM_RUNTIME_KINDS:?} runtimeKind"
+            ));
+        }
+        if self.identity.provider_id.is_none() {
+            return Err("local-vm configured workload identity must carry a providerId".to_owned());
         }
         validate_items(&self.items, self.default_item_id.as_ref(), true)
     }
@@ -105,13 +121,15 @@ impl UnsafeLocalWorkload {
         if self.identity.legacy_vm_name.is_some() {
             return Err("unsafe-local workload must not carry legacyVmName".to_owned());
         }
-        if self.identity.runtime_kind.as_ref().map(|id| id.as_str()) != Some("unsafe-local")
-            || self.identity.provider_id.as_ref().map(|id| id.as_str()) != Some("unsafe-local")
+        if self.identity.runtime_kind.as_ref().map(|id| id.as_str())
+            != Some(UNSAFE_LOCAL_RUNTIME_KIND)
         {
-            return Err(
-                "unsafe-local workload identity must use unsafe-local runtimeKind and providerId"
-                    .to_owned(),
-            );
+            return Err(format!(
+                "unsafe-local workload identity must use {UNSAFE_LOCAL_RUNTIME_KIND} runtimeKind"
+            ));
+        }
+        if self.identity.provider_id.is_none() {
+            return Err("unsafe-local workload identity must carry a providerId".to_owned());
         }
         validate_items(
             &self.items,
@@ -252,8 +270,9 @@ mod tests {
             crate::workload_identity::WorkloadTarget::parse("tools.host.d2b").unwrap(),
         );
         identity.runtime_kind =
-            Some(crate::contract_id::ContractId::parse("unsafe-local").unwrap());
-        identity.provider_id = Some(crate::contract_id::ContractId::parse("unsafe-local").unwrap());
+            Some(crate::contract_id::ContractId::parse(UNSAFE_LOCAL_RUNTIME_KIND).unwrap());
+        identity.provider_id =
+            Some(crate::contract_id::ContractId::parse("wrk-tools-systemd-user").unwrap());
         identity
     }
 
@@ -278,9 +297,10 @@ mod tests {
 
     fn valid_local_vm_workload() -> LocalVmConfiguredWorkload {
         let mut identity = identity();
-        identity.runtime_kind = Some(crate::contract_id::ContractId::parse("nixos").unwrap());
+        identity.runtime_kind =
+            Some(crate::contract_id::ContractId::parse("cloud-hypervisor").unwrap());
         identity.provider_id =
-            Some(crate::contract_id::ContractId::parse("local-cloud-hypervisor").unwrap());
+            Some(crate::contract_id::ContractId::parse("wrk-corp-vm-cloud-hypervisor").unwrap());
         LocalVmConfiguredWorkload {
             identity,
             default_item_id: Some(ProtocolToken::parse("browser").unwrap()),
@@ -422,13 +442,31 @@ mod tests {
     fn artifact_rejects_mismatched_runtime_identity() {
         let mut workload = valid_workload();
         workload.identity.runtime_kind =
-            Some(crate::contract_id::ContractId::parse("nixos").unwrap());
+            Some(crate::contract_id::ContractId::parse("cloud-hypervisor").unwrap());
         assert!(workload.validate().is_err());
 
         let mut workload = valid_workload();
-        workload.identity.provider_id =
-            Some(crate::contract_id::ContractId::parse("local-cloud-hypervisor").unwrap());
+        workload.identity.provider_id = None;
         assert!(workload.validate().is_err());
+    }
+
+    #[test]
+    fn local_vm_workload_rejects_mismatched_runtime_identity() {
+        let mut workload = valid_local_vm_workload();
+        workload.identity.runtime_kind =
+            Some(crate::contract_id::ContractId::parse(UNSAFE_LOCAL_RUNTIME_KIND).unwrap());
+        assert!(workload.validate().is_err());
+
+        let mut workload = valid_local_vm_workload();
+        workload.identity.provider_id = None;
+        assert!(workload.validate().is_err());
+
+        let mut workload = valid_local_vm_workload();
+        workload.identity.runtime_kind =
+            Some(crate::contract_id::ContractId::parse("qemu-media").unwrap());
+        workload
+            .validate()
+            .expect("qemu-media is an accepted local-vm runtimeKind");
     }
 
     #[test]
@@ -443,9 +481,10 @@ mod tests {
         let mut local_identity = identity();
         local_identity.legacy_vm_name =
             Some(crate::contract_id::ContractId::parse("corp-vm").unwrap());
-        local_identity.runtime_kind = Some(crate::contract_id::ContractId::parse("nixos").unwrap());
+        local_identity.runtime_kind =
+            Some(crate::contract_id::ContractId::parse("cloud-hypervisor").unwrap());
         local_identity.provider_id =
-            Some(crate::contract_id::ContractId::parse("local-cloud-hypervisor").unwrap());
+            Some(crate::contract_id::ContractId::parse("wrk-corp-vm-cloud-hypervisor").unwrap());
         let artifact = UnsafeLocalWorkloadsJson {
             schema_version: "v2".to_owned(),
             workloads: Vec::new(),

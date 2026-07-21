@@ -1,13 +1,16 @@
 # Type-G runNixOSTest: d2b daemon-only surface smoke.
 #
 # Boots a real NixOS VM with `d2b.daemonExperimental.enable = true` and
-# asserts the daemon-only end-state on a live system (ADR 0015): exactly the
-# three root-visible units start, the broker socket is socket-activated with the
-# declared ACL, and the unprivileged public daemon comes up and binds
-# `/run/d2b/public.sock`. This is the live successor of the eval-only +
-# `D2B_LIVE` portions of `tests/d2bd-startup-smoke.sh` — it exercises real
-# systemd activation ordering and socket binding that the pure-eval unit-surface
-# gate cannot.
+# asserts the accepted local-root end-state (ADR 0045, superseding ADR 0015's
+# exactly-three-unit invariant): the fixed four root-visible local-root units
+# start — `d2bd.socket`, `d2bd.service`, `d2b-priv-broker.socket`,
+# `d2b-priv-broker.service` — the broker socket is socket-activated with the
+# declared ACL, and the unprivileged public daemon comes up and binds its
+# local-root public socket (`/run/d2b/root.sock`, `FileDescriptorName =
+# "public.sock"` for activation matching only). This is the live successor of
+# the eval-only + `D2B_LIVE` portions of `tests/d2bd-startup-smoke.sh` — it
+# exercises real systemd activation ordering and socket binding that the
+# pure-eval unit-surface gate cannot.
 { pkgs, self }:
 
 let
@@ -25,18 +28,23 @@ pkgs.testers.runNixOSTest {
     };
   };
 
-  # The daemon-only end-state contract (ADR 0015): the framework declares
-  # EXACTLY three root-visible units. The broker socket is socket-activated, so
-  # `d2bd` keeps serving while the broker is idle; we assert the socket and
-  # the daemon, then the live public socket.
+  # The fixed local-root end-state (ADR 0045): the framework declares EXACTLY
+  # four root-visible units. The broker socket is socket-activated, so
+  # `d2bd` keeps serving while the broker is idle; we assert the public
+  # socket unit, the daemon, then the live public socket.
   testScript = ''
     start_all()
 
-    # 1. Broker socket is created + listening before its service (socket
+    # 1. The local-root public socket is created + listening before its
+    #    service (socket activation): systemd binds/ACLs the AF_UNIX socket
+    #    up front. `d2bd.service` Requires= it.
+    machine.wait_for_unit("d2bd.socket")
+
+    # 2. Broker socket is created + listening before its service (socket
     #    activation): systemd binds/ACLs the AF_UNIX socket up front.
     machine.wait_for_unit("d2b-priv-broker.socket")
 
-    # 2. The unprivileged public daemon comes up. It Wants= (not Requires=) the
+    # 3. The unprivileged public daemon comes up. It Wants= (not Requires=) the
     #    broker socket, so it serves while the broker stays idle.
     machine.wait_for_unit("d2bd.service")
     machine.succeed("test \"$(systemctl show -P Type d2bd.service)\" = notify")
@@ -46,9 +54,11 @@ pkgs.testers.runNixOSTest {
         "systemctl show -P ExecStop d2bd.service | grep -q d2b-host-shutdown-hook"
     )
 
-    # 3. The live public wire surface: d2bd binds its AF_UNIX socket.
-    machine.wait_for_file("/run/d2b/public.sock")
-    machine.succeed("test -S /run/d2b/public.sock")
+    # 4. The live public wire surface: d2bd binds its AF_UNIX socket at the
+    #    real local-root path (`/run/d2b/root.sock`; `public.sock` is only the
+    #    systemd `FileDescriptorName` used for activation matching).
+    machine.wait_for_file("/run/d2b/root.sock")
+    machine.succeed("test -S /run/d2b/root.sock")
     machine.succeed(
         "tmp=$(mktemp) && "
         "jq --arg path \"$D2B_MANIFEST_PATH\" "
@@ -59,10 +69,10 @@ pkgs.testers.runNixOSTest {
         "systemctl restart d2bd.service"
     )
     machine.wait_for_unit("d2bd.service")
-    machine.succeed("test -S /run/d2b/public.sock")
+    machine.succeed("test -S /run/d2b/root.sock")
     machine.succeed("runuser -u alice -- d2b list --json >/dev/null")
 
-    # 3b. Service restart readiness + cgroup survival. The synthetic process is
+    # 4b. Service restart readiness + cgroup survival. The synthetic process is
     # moved into d2bd.service's cgroup so this verifies systemd KillMode
     # behavior directly without requiring a nested Cloud Hypervisor guest in this
     # fast smoke test. The actual VM runner-survival test lives in
@@ -83,18 +93,19 @@ pkgs.testers.runNixOSTest {
     ).strip()
     machine.succeed("systemctl restart d2bd.service")
     machine.wait_for_unit("d2bd.service")
-    machine.succeed("test -S /run/d2b/public.sock")
+    machine.succeed("test -S /run/d2b/root.sock")
     machine.succeed("runuser -u alice -- d2b list --json >/dev/null")
     machine.succeed(f"test -d /proc/{survivor_pid}")
     machine.succeed(f"kill {survivor_pid}")
 
-    # 4. Daemon-only end-state (ADR 0015 "Verification gates"): the framework's
-    #    root-visible SERVICE/SOCKET surface is exactly the public daemon, the
-    #    broker socket, and the broker service. No per-VM systemd template, no
-    #    host-singleton framework service, no microvms.target. d2b.slice is
-    #    the broker's systemd-delegated cgroup slice (systemd.slices.d2b) —
-    #    cgroup organization, not a framework service — so it is permitted to
-    #    appear; everything else under the d2b/microvm prefix is forbidden.
+    # 5. Fixed local-root end-state (ADR 0045 "Verification gates"): the
+    #    framework's root-visible SERVICE/SOCKET surface is exactly the four
+    #    local-root units — the public socket + daemon, and the broker socket
+    #    + service. No per-VM systemd template, no per-workload unit, no
+    #    per-realm child unit, no microvms.target. d2b.slice is the broker's
+    #    systemd-delegated cgroup slice (systemd.slices.d2b) — cgroup
+    #    organization, not a framework service — so it is permitted to appear;
+    #    everything else under the d2b/microvm prefix is forbidden.
     units = machine.succeed(
         "systemctl list-units --no-pager --all --plain "
         "| grep -E '^(d2b|microvm)' | awk '{print $1}' | sort"
@@ -102,23 +113,24 @@ pkgs.testers.runNixOSTest {
     print("d2b/microvm units:\n" + units)
     unit_names = set(units.split())
     required = {
+        "d2bd.socket",
         "d2bd.service",
         "d2b-priv-broker.socket",
         "d2b-priv-broker.service",
     }
     # The delegated cgroup slice is legitimate cgroup infrastructure, not a
-    # framework service/socket unit, so allow it alongside the three required.
+    # framework service/socket unit, so allow it alongside the four required.
     allowed = required | {"d2b.slice"}
     missing = required - unit_names
-    assert not missing, f"daemon-only end-state: required units missing: {missing}"
+    assert not missing, f"local-root end-state: required units missing: {missing}"
     forbidden = unit_names - allowed
     assert not forbidden, (
-        "daemon-only end-state violated: unexpected root-visible d2b/microvm "
-        f"unit(s) {forbidden} (retired per-VM template / host-singleton service / "
-        "microvms.target?)"
+        "local-root end-state violated: unexpected root-visible d2b/microvm "
+        f"unit(s) {forbidden} (retired per-VM template / per-workload / "
+        "per-realm child unit / host-singleton service / microvms.target?)"
     )
 
-    # 5. The broker service is socket-activated (not running until a request),
+    # 6. The broker service is socket-activated (not running until a request),
     #    while the socket is listening. A clean idle posture.
     machine.succeed("systemctl is-active d2b-priv-broker.socket")
   '';

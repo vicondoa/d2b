@@ -1,85 +1,99 @@
-# nix-unit cases migrated from tests/umask-roundtrip-eval.sh (group E).
-#
-# umask end-to-end eval round-trip: the `umask` field declared in
-# nixos-modules/minijail-profiles.nix for each sidecar role (swtpm, gpu,
-# video, audio) MUST propagate end-to-end through
-#
-#   minijail-profiles.nix → _bundle.minijailProfiles.<id>.roleProfile.umask
-#   → processesJson.data.vms[*].nodes[*].profile.umask
-#
-# so a sidecar socket is created with 0o007 (decimal 7), NOT the broker's
-# inherited 0o022. A silent pipeline drop in any layer would surface here.
-#
-# Evaluated against a synthesized nixosSystem with tpm.enable,
-# graphics.enable, graphics.videoSidecar, and audio.enable all true — the
-# minimal config that instantiates all four roles at once. Like the niri
-# graphics case, this is x86_64-only by nature (the framework's
-# checkVmPlatform gate refuses graphics/audio on non-x86_64 hosts).
-{ mkEval, lib, system, ... }:
+{ flakeRoot, lib, system, ... }:
 
-# Like niri, this evaluates a graphics/audio VM that checkVmPlatform refuses
-# on aarch64 (the bash gate hardcoded x86_64-linux); contribute these cases
-# only to the x86_64-linux nix-unit check.
+# Coverage owned by this file: the per-role minijail profile's rendered
+# `umask` field for the four roles that must own their runtime/socket paths
+# exclusively (0700 via umask 7) once granted a private mount namespace:
+# swtpm, gpu, video, and audio. Each case evaluates the real
+# index.nix + minijail-profiles.nix pipeline over a fixture workload that
+# enables all four roles and reads the actual rendered
+# `_bundle.minijailProfiles."role-${roleId}".data.umask`, rather than
+# scanning minijail-profiles.nix source text.
 lib.optionalAttrs (system == "x86_64-linux") (
-
-let
-  base = { lib, ... }: {
-    boot.loader.grub.enable = false;
-    boot.loader.systemd-boot.enable = false;
-    boot.initrd.includeDefaultModules = false;
-    fileSystems."/" = { device = "tmpfs"; fsType = "tmpfs"; };
-    environment.etc."machine-id".text = "00000000000000000000000000000000";
-    system.stateVersion = "25.11";
-    users.users.alice = { isNormalUser = true; uid = 1000; };
-    d2b.site = {
-      waylandUser = "alice";
-      launcherUsers = [ "alice" ];
-      yubikey.enable = false;
-    };
-    d2b.envs.work = {
-      lanSubnet = "10.20.0.0/24";
-      uplinkSubnet = "192.0.2.0/30";
-    };
-    d2b.vms.umask-probe = {
-      enable = true;
-      env = "work";
-      index = 10;
-      ssh.user = "alice";
-      tpm.enable = true;
-      graphics.enable = true;
-      graphics.videoSidecar = true;
-      audio.enable = true;
-      config = {
-        networking.hostName = lib.mkDefault "umask-probe";
-        users.users.alice = { isNormalUser = true; uid = 1000; };
-        system.stateVersion = "25.11";
+  let
+    fixtureModule = { lib, ... }: {
+      options = {
+        assertions = lib.mkOption {
+          type = lib.types.listOf lib.types.attrs;
+          default = [ ];
+        };
+        environment.etc = lib.mkOption {
+          type = lib.types.attrs;
+          default = { };
+        };
+        d2b = {
+          realms = lib.mkOption {
+            type = lib.types.attrs;
+            default = { };
+          };
+          _bundle.minijailProfiles = lib.mkOption {
+            type = lib.types.attrs;
+            default = { };
+          };
+        };
+      };
+      config.d2b.realms.work = {
+        path = "work.local-root";
+        providers.runtime = {
+          type = "runtime";
+          implementationId = "cloud-hypervisor";
+        };
+        providers.audio = {
+          type = "audio";
+          implementationId = "pipewire-vhost-user";
+        };
+        workloads.desktop = {
+          providerRefs = {
+            runtime = "runtime";
+            audio = "audio";
+          };
+          tpm.enable = true;
+          graphics = {
+            enable = true;
+            videoSidecar = true;
+          };
+          audio.enable = true;
+          # The graphics/audio enablement above would otherwise default
+          # `display.wayland` on and add a wayland-proxy role that needs
+          # its own display provider binding; this fixture only exercises
+          # the swtpm/gpu/video/audio umask, so keep it out of scope.
+          display.wayland = false;
+        };
       };
     };
-  };
-
-  vms = (mkEval [ base ]).config.d2b._bundle.processesJson.data.vms;
-  vm = builtins.head (builtins.filter (v: v.vm == "umask-probe") vms);
-  nodes = vm.nodes;
-  umaskOf = role:
-    let matches = builtins.filter (n: n.role == role) nodes;
-    in (builtins.head matches).profile.umask or null;
-in
-{
-  "umask-roundtrip/swtpm" = {
-    expr = umaskOf "swtpm";
-    expected = 7;
-  };
-  "umask-roundtrip/gpu" = {
-    expr = umaskOf "gpu";
-    expected = 7;
-  };
-  "umask-roundtrip/video" = {
-    expr = umaskOf "video";
-    expected = 7;
-  };
-  "umask-roundtrip/audio" = {
-    expr = umaskOf "audio";
-    expected = 7;
-  };
-}
+    evaluation = lib.evalModules {
+      modules = [
+        (flakeRoot + "/nixos-modules/index.nix")
+        (flakeRoot + "/nixos-modules/minijail-profiles.nix")
+        fixtureModule
+      ];
+    };
+    config = evaluation.config;
+    workload =
+      config.d2b._index.workloads.byCanonicalTarget."desktop.work.local-root.d2b";
+    roleIdFor = roleKind:
+      (lib.findFirst
+        (role: role.roleKind == roleKind)
+        (throw "umask-roundtrip: workload desktop is missing role ${roleKind}")
+        workload.roles).roleId;
+    umaskFor = roleKind:
+      config.d2b._bundle.minijailProfiles."role-${roleIdFor roleKind}".data.umask;
+  in
+  {
+    "umask-roundtrip/swtpm" = {
+      expr = umaskFor "swtpm";
+      expected = 7;
+    };
+    "umask-roundtrip/gpu" = {
+      expr = umaskFor "gpu";
+      expected = 7;
+    };
+    "umask-roundtrip/video" = {
+      expr = umaskFor "video";
+      expected = 7;
+    };
+    "umask-roundtrip/audio" = {
+      expr = umaskFor "audio";
+      expected = 7;
+    };
+  }
 )

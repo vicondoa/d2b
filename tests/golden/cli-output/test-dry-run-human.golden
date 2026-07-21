@@ -1,2 +1,2 @@
 # Rust dry-run snapshot only; bash side comparison gated on Tier-2 self-hosted KVM runner.
-d2b test --dry-run: would activate the planned generation for vm 'corp-vm'
+d2b test --dry-run: would activate the planned generation for vm 'bm6ccueaqlr7wd2cskza'

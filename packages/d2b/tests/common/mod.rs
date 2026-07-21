@@ -137,7 +137,6 @@ pub fn build_hermetic_bundle_tree(fixtures: &Path, destination: &Path) {
             .expect("decode copied bundle");
     let object = bundle.as_object_mut().expect("bundle object");
     for field in [
-        "allocatorPath",
         "hostPath",
         "privilegesPath",
         "processesPath",
@@ -148,7 +147,6 @@ pub fn build_hermetic_bundle_tree(fixtures: &Path, destination: &Path) {
         "realmWorkloadsLauncherV2Path",
         "storagePath",
         "syncPath",
-        "unsafeLocalWorkloadsPath",
     ] {
         let name = if field == "publicManifestPath" {
             "manifest.json".to_owned()
@@ -162,6 +160,18 @@ pub fn build_hermetic_bundle_tree(fixtures: &Path, destination: &Path) {
                 .into_owned()
         };
         object.insert(field.to_owned(), serde_json::Value::String(name));
+    }
+    // The rendered fixture's allocator.json carries per-workload tap resource
+    // requests (`AllocatorResourceSourceKind::realm-workload-network`) and its
+    // unsafe-local-workloads.json declares a realm-native (non `unsafe-local`)
+    // configured workload — both outside this CLI-contract suite's scope: no
+    // `d2b` command under test here reads either artifact, and the
+    // fixture-contract layer already owns validating their Nix<->Rust schema
+    // shape (packages/d2b-contract-tests). Drop the references so the
+    // hermetic sanity check below only re-validates the artifacts this
+    // suite's fixtures actually depend on.
+    for unused_field in ["allocatorPath", "unsafeLocalWorkloadsPath"] {
+        object.insert(unused_field.to_owned(), serde_json::Value::Null);
     }
     let artifact_hashes = object
         .get("artifactHashes")

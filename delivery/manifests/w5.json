@@ -1969,11 +1969,6 @@
       "path": "tests/golden/pinned/guest-control-token-materializer.txt"
     },
     {
-      "name": "w5-prep-guest-token-materializer-test",
-      "repository": "github.com/vicondoa/d2b",
-      "path": "packages/d2b-host/tests/guest_control_token_materializer.rs"
-    },
-    {
       "name": "w5-prep-guest-vsock-ttrpc-test",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2b-host/tests/guest_vsock_ttrpc_compile.rs"

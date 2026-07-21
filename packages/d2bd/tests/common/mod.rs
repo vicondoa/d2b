@@ -177,7 +177,7 @@ fn write_empty_provider_registry_artifacts(root: &Path) -> serde_json::Value {
         );
     }
     let mut bundle = serde_json::json!({
-        "bundleVersion": 12,
+        "bundleVersion": 13,
         "schemaVersion": "v2",
         "publicManifestPath": "vms.json",
         "hostPath": "host.json",

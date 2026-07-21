@@ -9,7 +9,7 @@
 //! `chown` and is skipped automatically when the process is not root.
 
 use d2b_core::bundle_resolver::{BundleResolver, BundleVerifyPolicy};
-use d2b_core::error::{BundleError, Error};
+use d2b_core::error::{BundleError, Error, ManifestError};
 use sha2::Digest as _;
 use std::fs;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -183,7 +183,7 @@ fn minimal_vms_json() -> Vec<u8> {
     .expect("vms json serializes")
 }
 
-fn minimal_unsafe_local_workloads_json() -> Vec<u8> {
+fn unsafe_local_workloads_json_with_identity(runtime_kind: &str, provider_id: &str) -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
         "schemaVersion": "v2",
         "workloads": [{
@@ -192,8 +192,8 @@ fn minimal_unsafe_local_workloads_json() -> Vec<u8> {
                 "realmId": "host",
                 "realmPath": ["host"],
                 "canonicalTarget": "tools.host.d2b",
-                "runtimeKind": "unsafe-local",
-                "providerId": "unsafe-local"
+                "runtimeKind": runtime_kind,
+                "providerId": provider_id
             },
             "defaultItemId": "browser",
             "items": [{
@@ -207,6 +207,13 @@ fn minimal_unsafe_local_workloads_json() -> Vec<u8> {
         }]
     }))
     .expect("unsafe-local workloads json serializes")
+}
+
+/// The real values `nixos-modules/unsafe-local-workloads-json.nix` emits: the
+/// same-uid systemd-user runtime implementation id and an opaque, per-realm
+/// derived provider id (never the legacy `unsafe-local` placeholder).
+fn minimal_unsafe_local_workloads_json() -> Vec<u8> {
+    unsafe_local_workloads_json_with_identity("systemd-user", "wrk-tools-systemd-user")
 }
 
 /// Write all sibling artifacts the resolver needs into `dir`.
@@ -347,7 +354,7 @@ fn write_allocator_bundle(dir: &Path, allocator: &[u8]) -> std::path::PathBuf {
     let processes = minimal_processes_json();
     let pre_hash = serde_json::to_vec(&serde_json::json!({
         "artifactHashes": null,
-        "bundleVersion": 12,
+        "bundleVersion": 13,
         "schemaVersion": "v2",
         "publicManifestPath": "vms.json",
         "hostPath": "host.json",
@@ -614,16 +621,19 @@ fn minimal_realm_workloads_launcher_v2_json() -> Vec<u8> {
     .expect("launcher v2 fixture serializes")
 }
 
-fn write_unsafe_local_bundle(dir: &Path, policy: &BundleVerifyPolicy) -> std::path::PathBuf {
+fn write_unsafe_local_bundle_with(
+    dir: &Path,
+    policy: &BundleVerifyPolicy,
+    unsafe_local: &[u8],
+) -> std::path::PathBuf {
     let host = minimal_host_json();
     let processes = minimal_processes_json();
     let launcher_v2 = minimal_realm_workloads_launcher_v2_json();
-    let unsafe_local = minimal_unsafe_local_workloads_json();
     let hashes = serde_json::json!({
         "host.json": sha256_hex(&host),
         "processes.json": sha256_hex(&processes),
         "realm-workloads-launcher-v2.json": sha256_hex(&launcher_v2),
-        "unsafe-local-workloads.json": sha256_hex(&unsafe_local)
+        "unsafe-local-workloads.json": sha256_hex(unsafe_local)
     });
     let bundle = bundle_json_with_full_hashes(&unsafe_local_bundle_pre_hash(), hashes);
     let bundle_path = dir.join("bundle.json");
@@ -635,7 +645,7 @@ fn write_unsafe_local_bundle(dir: &Path, policy: &BundleVerifyPolicy) -> std::pa
     write_private(&host_path, &host);
     write_private(&processes_path, &processes);
     write_private(&launcher_v2_path, &launcher_v2);
-    write_private(&unsafe_local_path, &unsafe_local);
+    write_private(&unsafe_local_path, unsafe_local);
     fs::write(dir.join("vms.json"), minimal_vms_json()).expect("write vms.json");
     for path in [
         &bundle_path,
@@ -647,6 +657,10 @@ fn write_unsafe_local_bundle(dir: &Path, policy: &BundleVerifyPolicy) -> std::pa
         set_mode_to(path, policy.required_mode);
     }
     bundle_path
+}
+
+fn write_unsafe_local_bundle(dir: &Path, policy: &BundleVerifyPolicy) -> std::path::PathBuf {
+    write_unsafe_local_bundle_with(dir, policy, &minimal_unsafe_local_workloads_json())
 }
 
 #[test]
@@ -691,6 +705,75 @@ fn rejects_tampered_unsafe_local_workloads_artifact() {
     let error = BundleResolver::load_with_policy(&bundle_path, &policy)
         .expect_err("tampered unsafe-local artifact rejects");
     assert_tampered(&error, "hash");
+}
+
+/// Regression coverage for the `UnsafeLocalWorkload::validate` /
+/// `LocalVmConfiguredWorkload::validate` runtime/provider identity check:
+/// a correctly-hashed (non-tampered) artifact that carries the legacy,
+/// never-emitted `unsafe-local`/`nixos` placeholder identity must still be
+/// rejected as an invalid schema, not silently accepted. Accepting it would
+/// mean the resolver's validation can never reject a genuinely malformed
+/// artifact — a self-inflicted parsing denial-of-service surface, since a
+/// real Nix-emitted bundle (which always uses `systemd-user` /
+/// `cloud-hypervisor` / `qemu-media`) would then be indistinguishable from
+/// this stale placeholder shape.
+#[test]
+fn rejects_unsafe_local_workloads_artifact_with_legacy_placeholder_identity() {
+    let dir = TempDir::new().expect("tempdir");
+    let policy = current_user_policy();
+    let legacy = unsafe_local_workloads_json_with_identity("unsafe-local", "unsafe-local");
+    let bundle_path = write_unsafe_local_bundle_with(dir.path(), &policy, &legacy);
+    let error = BundleResolver::load_with_policy(&bundle_path, &policy)
+        .expect_err("legacy placeholder runtimeKind/providerId must fail schema validation");
+    match error {
+        Error::Manifest(ManifestError::ParseError { artifact, .. }) => {
+            assert_eq!(artifact, "unsafe-local-workloads.json");
+        }
+        other => panic!("expected Manifest ParseError, got {other:?}"),
+    }
+}
+
+/// A `LocalVmConfiguredWorkload` with the legacy `nixos` placeholder
+/// `runtimeKind` (the field the Nix emitter never produces; it always emits
+/// `cloud-hypervisor` or `qemu-media`) must also fail schema validation
+/// rather than parse silently.
+#[test]
+fn rejects_local_vm_workload_with_legacy_placeholder_runtime_kind() {
+    let dir = TempDir::new().expect("tempdir");
+    let policy = current_user_policy();
+    let legacy = serde_json::to_vec(&serde_json::json!({
+        "schemaVersion": "v2",
+        "workloads": [],
+        "localVmWorkloads": [{
+            "identity": {
+                "workloadId": "corp-vm",
+                "realmId": "host",
+                "realmPath": ["host"],
+                "canonicalTarget": "corp-vm.host.d2b",
+                "runtimeKind": "nixos",
+                "providerId": "wrk-corp-vm-cloud-hypervisor"
+            },
+            "defaultItemId": "browser",
+            "items": [{
+                "type": "exec",
+                "id": "browser",
+                "name": "Browser",
+                "icon": {"name": "firefox"},
+                "argv": ["firefox"],
+                "graphical": true
+            }]
+        }]
+    }))
+    .expect("legacy local-vm workload fixture serializes");
+    let bundle_path = write_unsafe_local_bundle_with(dir.path(), &policy, &legacy);
+    let error = BundleResolver::load_with_policy(&bundle_path, &policy)
+        .expect_err("legacy placeholder runtimeKind must fail schema validation");
+    match error {
+        Error::Manifest(ManifestError::ParseError { artifact, .. }) => {
+            assert_eq!(artifact, "unsafe-local-workloads.json");
+        }
+        other => panic!("expected Manifest ParseError, got {other:?}"),
+    }
 }
 
 // ---------------------------------------------------------------

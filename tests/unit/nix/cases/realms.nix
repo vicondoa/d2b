@@ -1,5 +1,5 @@
-# nix-unit coverage for realm option/schema foundations.
-{ mkEval, lib, flakeRoot, ... }:
+# Realm-native schema, normalization, and fixed control-plane coverage.
+{ mkEval, lib, flakeRoot, pkgs, ... }:
 
 let
   hostBase = {
@@ -9,1594 +9,649 @@ let
     fileSystems."/" = { device = "tmpfs"; fsType = "tmpfs"; };
     environment.etc."machine-id".text = "00000000000000000000000000000000";
     system.stateVersion = "25.11";
-    users.users.alice = { isNormalUser = true; uid = 1000; };
+    users.users.alice = {
+      isNormalUser = true;
+      uid = 1000;
+    };
 
+    d2b.acceptDestructiveV2Cutover = true;
     d2b.site = {
-      stateDir = "/var/lib/d2b";
       waylandUser = "alice";
       launcherUsers = [ "alice" ];
-    };
-
-    d2b.envs.home = {
-      lanSubnet = "10.10.0.0/24";
-      uplinkSubnet = "192.0.2.0/30";
-    };
-    d2b.envs.dev = {
-      lanSubnet = "10.20.0.0/24";
-      uplinkSubnet = "198.51.100.0/30";
-    };
-    d2b.envs.work = {
-      lanSubnet = "10.30.0.0/24";
-      uplinkSubnet = "203.0.113.0/30";
-    };
-
-    d2b.vms.homebox = {
-      env = "home";
-      index = 10;
-      ssh.user = "alice";
-      config.users.users.alice = { isNormalUser = true; uid = 1000; };
-    };
-    d2b.vms.devbox = {
-      env = "dev";
-      index = 10;
-      ssh.user = "alice";
-      config.users.users.alice = { isNormalUser = true; uid = 1000; };
-    };
-    d2b.vms.corp = {
-      env = "work";
-      index = 10;
-      ssh.user = "alice";
-      config.users.users.alice = { isNormalUser = true; uid = 1000; };
+      yubikey.enable = true;
     };
   };
 
+  providers = {
+    runtime = {
+      type = "runtime";
+      implementationId = "cloud-hypervisor";
+    };
+    devices = {
+      type = "device";
+      implementationId = "host-mediated";
+    };
+    display = {
+      type = "display";
+      implementationId = "wayland";
+    };
+    sound = {
+      type = "audio";
+      implementationId = "pipewire-vhost-user";
+    };
+    network = {
+      type = "network";
+      implementationId = "local-realm";
+    };
+    storage = {
+      type = "storage";
+      implementationId = "local";
+    };
+    transport = {
+      type = "transport";
+      implementationId = "cloud-hypervisor-vsock";
+    };
+  };
+
+  providerRefs = {
+    runtime = "runtime";
+    device = "devices";
+    display = "display";
+    audio = "sound";
+    network = "network";
+    storage = "storage";
+    transport = "transport";
+  };
+
   realmFixture = lib.recursiveUpdate hostBase {
-    d2b.realms.home = {
-      name = "Home";
-      env = "home";
-      network.envs = [ "home" ];
-      allowedUsers = [ "alice" "alice" ];
-      allowedGroups = [ "realm-home" "realm-home" ];
+    d2b.realms.work = {
+      path = "work";
+      placement = "host-local";
+      allowedUsers = [ "alice" ];
       broker = {
         enable = true;
         hostMutation = true;
       };
-    };
-
-    d2b.realms.dev = {
-      parent = "home";
-      path = "dev.home";
-      env = "dev";
+      inherit providers;
       network = {
-        envs = [ "work" "dev" ];
-        mode = "inherit-env";
-        cidrRefs = [ "lab" "dev" "lab" ];
+        mode = "declared";
+        lanSubnet = "10.20.0.0/24";
+        uplinkSubnet = "192.0.2.0/30";
       };
-    };
-
-    d2b.realms.work = {
-      parent = "home";
-      path = "work.home";
-      placement = "gateway-vm";
-      env = "work";
-      network.envs = [ "work" ];
-      providers.aca = {
-        kind = "aca";
-        placement = "provider-agent";
-        capabilityRefs = [ "relay" "aca" "relay" ];
-        configRef = "work-aca-non-secret";
+      workloads.desktop = {
+        inherit providerRefs;
+        tpm.enable = true;
+        graphics = {
+          enable = true;
+          videoSidecar = true;
+        };
+        audio = {
+          enable = true;
+          allowSpeakerByDefault = true;
+        };
+        usbip.enable = true;
+        display.wayland = true;
+        launcher = {
+          enable = true;
+          label = "Work desktop";
+          items.terminal = {
+            type = "exec";
+            argv = [ "foot" ];
+            graphical = true;
+          };
+        };
+        config.users.users.alice = {
+          isNormalUser = true;
+          uid = 1000;
+        };
       };
-      keys = {
-        realmIdentityRef = "idref-work";
-        realmIdentityFingerprint = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        controllerKeyRef = "cgref-work";
-        controllerCredentialFingerprint = "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
-        trustBundleRef = "trust-work";
-        enrollmentRef = "enroll-work";
-        rotationPolicyRef = "rotate-work";
+      workloads.entra = {
+        providerRefs = {
+          runtime = "runtime";
+          device = "devices";
+          network = "network";
+          storage = "storage";
+          transport = "transport";
+        };
+        tpm.enable = true;
+        config.users.users.alice = {
+          isNormalUser = true;
+          uid = 1000;
+        };
       };
-      relay = {
-        enable = true;
-        mode = "static";
-        endpoints = [ "relns-b.example.invalid" "relns-a.example.invalid" ];
-        credentialRef = "work-relay-credential";
+      workloads.fido = {
+        providerRefs = {
+          runtime = "runtime";
+          device = "devices";
+        };
+        securityKey.enable = true;
       };
-      policy.bundleRef = "work-policy";
-    };
-
-    d2b.realms.archive = {
-      enable = false;
-      placement = "provider-specific";
-      providerSpecificPlacement = "archived-off-host";
     };
   };
 
   cfg = (mkEval [ realmFixture ]).config;
-  realms = cfg.d2b._index.realms;
-  realmHash = path: builtins.substring 0 16 (builtins.hashString "sha256" path);
-  realmUnitPrefix = path: "d2b-realm-${realmHash path}";
-  homeUnitPrefix = realmUnitPrefix "home";
-  devUnitPrefix = realmUnitPrefix "dev.home";
-  workUnitPrefix = realmUnitPrefix "work.home";
+  workRealm = builtins.head cfg.d2b._index.realms.enabledList;
+  workload = name:
+    lib.findFirst (row: row.workloadName == name) null
+      cfg.d2b._index.workloads.enabledList;
+  desktop = workload "desktop";
+  entra = workload "entra";
+  fido = workload "fido";
+  roleKinds = row: map (role: role.roleKind) row.roles;
+  resourceKinds = name:
+    map (row: row.resourceKind)
+      (cfg.d2b._index.devices.byWorkloadId.${(workload name).workloadId} or [ ]);
 
   failureMessages = modules:
-    map (a: a.message)
-      (lib.filter (a: !a.assertion) (mkEval modules).config.assertions);
+    map (assertion: assertion.message)
+      (lib.filter (assertion: !assertion.assertion)
+        (mkEval modules).config.assertions);
+  hasMessage = needle: messages:
+    lib.any (message: lib.hasInfix needle message) messages;
 
-  hasMessage = needles: messages:
-    lib.any
-      (message: lib.all (needle: lib.hasInfix needle message) needles)
-      messages;
-
-  missingParentMessages = failureMessages [
-    (lib.recursiveUpdate hostBase {
-      d2b.realms.child = {
-        parent = "missing";
-        path = "child.missing";
+  # Fixture for the reserved-workload-name assertions: a bare realm with a
+  # single cloud-hypervisor runtime provider, so each case only needs to
+  # override the workload name/config under test.
+  reservedNameFixture = workloads: lib.recursiveUpdate hostBase {
+    d2b.realms.reserved = {
+      path = "reserved";
+      providers.runtime = {
+        type = "runtime";
+        implementationId = "cloud-hypervisor";
       };
-    })
-  ];
+      inherit workloads;
+    };
+  };
 
-  parentCycleMessages = failureMessages [
-    (lib.recursiveUpdate hostBase {
-      d2b.realms.alpha = {
-        path = "alpha";
-        parent = "beta";
-      };
-      d2b.realms.beta = {
-        path = "beta";
-        parent = "alpha";
-      };
-    })
-  ];
-
-  duplicateIdPathMessages = failureMessages [
-    (lib.recursiveUpdate hostBase {
-      d2b.realms.alpha = {
-        id = "same";
-        path = "same-path";
-      };
-      d2b.realms.beta = {
-        id = "same";
-        path = "same-path";
-      };
-    })
-  ];
-
-  duplicateRuntimePathMessages = failureMessages [
-    (lib.recursiveUpdate hostBase {
-      d2b.realms.alpha = { };
-      d2b.realms.beta.paths = {
-        stateDir = "/var/lib/d2b/realms/alpha";
-        auditDir = "/var/lib/d2b/audit/realms/alpha";
-        runDir = "/run/d2b/realms/alpha";
-        publicSocket = "/run/d2b/realms/alpha/public.sock";
-        brokerSocket = "/run/d2b/realms/alpha/broker.sock";
-      };
-    })
-  ];
-
-  longSocketPath = "/run/d2b/realms/${lib.concatStrings (lib.genList (_: "a") 96)}/public.sock";
-
-  overlongPublicSocketMessages = failureMessages [
-    (lib.recursiveUpdate hostBase {
-      d2b.realms.work.paths.publicSocket = longSocketPath;
-    })
-  ];
-
-  overlongBrokerSocketMessages = failureMessages [
-    (lib.recursiveUpdate hostBase {
-      d2b.realms.work.paths.brokerSocket = longSocketPath;
-    })
-  ];
-
-  missingPlacementProviderMessages = failureMessages [
-    (lib.recursiveUpdate hostBase {
-      d2b.realms.work = {
-        placement = "provider-controller";
-        providers.aca.kind = "aca";
-      };
-    })
-  ];
-
-  missingProviderSpecificPlacementProviderMessages = failureMessages [
-    (lib.recursiveUpdate hostBase {
-      d2b.realms.work = {
-        placement = "provider-specific";
-        providerSpecificPlacement = "aca-managed-sandbox";
-        providers.aca.kind = "aca";
-      };
-    })
-  ];
-
-  unexpectedPlacementProviderMessages = failureMessages [
-    (lib.recursiveUpdate hostBase {
-      d2b.realms.work = {
-        placement = "gateway-vm";
-        placementProvider = "aca";
-        providers.aca.kind = "aca";
-      };
-    })
-  ];
-
-  missingRealmAllowedUserMessages = failureMessages [
-    (lib.recursiveUpdate hostBase {
-      d2b.realms.home = {
-        allowedUsers = [ "missing-user" ];
-      };
-    })
-  ];
-
-  secretIdentityRefMessages = failureMessages [
-    (lib.recursiveUpdate hostBase {
-      d2b.realms.work.keys = {
-        realmIdentityRef = "secret-identity";
-        controllerKeyRef = "-----BEGIN PRIVATE KEY-----";
-        trustBundleRef = "SharedAccessKey=must-not-live-in-nix";
-        enrollmentRef = "bearer-enrollment-token";
-        rotationPolicyRef = "private-key-policy";
-      };
-    })
-  ];
-
-  validProviderPlacementCfg = (mkEval [
-    (lib.recursiveUpdate hostBase {
-      d2b.realms.work = {
-        placement = "provider-agent";
-        placementProvider = "aca";
-        providers.aca.kind = "aca";
-      };
-    })
-  ]).config;
-  validProviderController =
-    builtins.head validProviderPlacementCfg.d2b._bundle.realmControllersJson.data.controllers;
-
-  legacyGatewayMessages = failureMessages [
-    (lib.recursiveUpdate hostBase {
-      d2b.gateways.work = {
-        env = "work";
-        aca.endpoint = "https://example.azurecontainerapps.invalid";
-        aca.resourceGroup = "rg-example";
-      };
-    })
-  ];
-
-  minimalCfg = (mkEval [ (import (flakeRoot + "/examples/minimal/configuration.nix")) ]).config;
-  multiEnvCfg = (mkEval [ (import (flakeRoot + "/examples/multi-env/configuration.nix")) ]).config;
-
-  # ── tombstone / migration warning fixtures ──────────────────────────────────
-
-  # Realm linking to d2b.envs but with network.mode="none" and no workloads
-  # should emit an advisory "inheritEnvNudge" warning pointing at the
-  # v1.2→v2 migration guide.
-  inheritEnvNudgeWarnings = (mkEval [
-    (lib.recursiveUpdate hostBase {
-      d2b.realms.nudge-me = {
-        env = "home";
-        network.envs = [ "home" ];
-        network.mode = "none";
-        # no workloads declared
-      };
-    })
-  ]).config.warnings;
-
-  # Realm workload with legacyVmName pointing to a VM that does not exist in
-  # d2b.vms should emit an advisory warning.
-  orphanLegacyVmWarnings = (mkEval [
-    (lib.recursiveUpdate hostBase {
-      d2b.realms.migrating = {
-        env = "home";
-        network.envs = [ "home" ];
-        workloads.laptop = {
-          legacyVmName = "old-laptop-vm";
-          kind = "local-vm";
+  # Fixture for the systemd-user / policy.allowUnsafeLocal default-deny
+  # assertion. `policyOverride` is `null` to omit `policy.allowUnsafeLocal`
+  # entirely (exercising the schema default of `false`).
+  unsafeLocalFixture = policyOverride: lib.recursiveUpdate hostBase {
+    d2b.realms.unsaferealm =
+      {
+        path = "unsaferealm";
+        providers.runtime = {
+          type = "runtime";
+          implementationId = "systemd-user";
         };
+        workloads.tools.providerRefs.runtime = "runtime";
+      }
+      // lib.optionalAttrs (policyOverride != null) {
+        policy.allowUnsafeLocal = policyOverride;
       };
-    })
-  ]).config.warnings;
+  };
 
-  # Realm with matching legacyVmName that DOES exist in d2b.vms should NOT
-  # emit the orphan warning.
-  legacyVmPresentWarnings = (mkEval [
-    (lib.recursiveUpdate hostBase {
-      d2b.realms.migrating = {
-        env = "home";
-        network.envs = [ "home" ];
-        workloads.laptop = {
-          legacyVmName = "homebox";
-          kind = "local-vm";
+  schemaAssertionsModule = { lib, ... }: {
+    options.assertions = lib.mkOption {
+      type = lib.types.listOf (lib.types.submodule {
+        options = {
+          assertion = lib.mkOption { type = lib.types.bool; };
+          message = lib.mkOption { type = lib.types.str; };
         };
-      };
-    })
-  ]).config.warnings;
+      });
+      default = [ ];
+    };
+  };
+  schemaTry = module:
+    builtins.tryEval (builtins.deepSeq
+      (lib.evalModules {
+        modules = [
+          schemaAssertionsModule
+          (flakeRoot + "/nixos-modules/options.nix")
+          module
+        ];
+      }).config.d2b
+      true);
 
-  # Realm with workloads declared (even without env) does NOT emit the
-  # inheritEnvNudge warning.
-  withWorkloadsNoNudgeWarnings = (mkEval [
-    (lib.recursiveUpdate hostBase {
-      d2b.realms.with-workloads = {
-        env = "home";
-        network.envs = [ "home" ];
-        network.mode = "none";
-        workloads.main = {
-          kind = "local-vm";
+  minimalCfg =
+    (mkEval [ (import (flakeRoot + "/examples/minimal/configuration.nix")) ]).config;
+  multiCfg =
+    (mkEval [ (import (flakeRoot + "/examples/multi-env/configuration.nix")) ]).config;
+  graphicsCfg =
+    (mkEval [ (import (flakeRoot + "/examples/graphics-workstation/configuration.nix")) ]).config;
+  entraCfg = (mkEval [
+    (import (flakeRoot + "/examples/with-entra-id/configuration.nix"))
+    {
+      d2b.realms.work.workloads.work-entra = {
+        providerRefs = {
+          runtime = "runtime";
+          device = "devices";
+          network = "network";
+          storage = "storage";
         };
+        tpm.enable = true;
       };
-    })
-  ]).config.warnings;
-
-  # ── accepted workload options shape ─────────────────────────────────────────
-
-  # Verify the full workload options submodule evaluates without assertion
-  # failures for each supported kind (local-vm, qemu-media, provider-placeholder)
-  # and that per-workload defaults are correctly materialized.
-  acceptedWorkloadCfg = (mkEval [
-    (lib.recursiveUpdate hostBase {
-      d2b.realms.corp = {
-        parent = "home";
-        path = "corp.home";
-        placement = "gateway-vm";
-        # No env/network.envs: this fixture tests workload schema only;
-        # env linkage would trigger the NixOS systemd.network warning.
-        workloads.laptop = {
-          kind = "local-vm";
-          legacyVmName = null;
-          localVm = {
-            ssh.user = "alice";
-            memoryMiB = 4096;
-            vcpus = 2;
-            graphics.enable = false;
-            tpm.enable = false;
-            autostart = false;
-          };
-          launcher = {
-            enable = true;
-            label = "Corp Laptop";
-            icon.id = "computer-laptop";
-            icon.name = "laptop";
-            capabilities = [ "guest-exec" ];
-          };
-        };
-        workloads.installer = {
-          kind = "qemu-media";
-          qemuMedia.source = {
-            kind = "physical-usb";
-            ref = "installer-usb";
-            readOnly = true;
-          };
-          launcher.enable = true;
-          launcher.label = "Live Installer";
-        };
-        workloads.cloud-service = {
-          kind = "provider-placeholder";
-          launcher.enable = false;
-        };
-      };
-      d2b.realms.home = {
-        name = "Home";
-        allowedUsers = [ "alice" ];
-      };
-    })
+    }
   ]).config;
 in
 {
-  "realms/valid-home-dev-work-keeps-env-substrate-active" = {
-    expr = {
-      assertionsPass = lib.all (a: a.assertion) cfg.assertions;
-      enabledEnvNames = cfg.d2b._index.enabledEnvNames;
-      netVmByEnv = cfg.d2b._index.netVmByEnv;
-      workloadNamesByEnv = cfg.d2b._index.workloadNamesByEnv;
-    };
-    expected = {
-      assertionsPass = true;
-      enabledEnvNames = [ "dev" "home" "work" ];
-      netVmByEnv = {
-        dev = "sys-dev-net";
-        home = "sys-home-net";
-        work = "sys-work-net";
-      };
-      workloadNamesByEnv = {
-        dev = [ "devbox" ];
-        home = [ "homebox" ];
-        work = [ "corp" ];
-      };
-    };
-  };
-
-  "realms/index-normalizes-enabled-disabled-and-derived-paths" = {
-    expr = {
-      names = realms.names;
-      enabledNames = realms.enabledNames;
-      archiveInDeclared = realms.byId.archive.enabled;
-      archiveInEnabled = builtins.hasAttr "archive" realms.enabledById;
-      dev = {
-        inherit (realms.byPath."dev.home") realmName id path pathParts parentPath parentId placement enabled;
-        network = realms.byPath."dev.home".network;
-      };
-      home = {
-        allowedUsers = realms.byPath.home.allowedUsers;
-        allowedGroups = realms.byPath.home.allowedGroups;
-        paths = realms.byPath.home.paths;
-        controller = {
-          controllerId = realms.byPath.home.controller.controllerId;
-          runtimeState = realms.byPath.home.controller.runtimeState;
-          daemon = {
-            inherit (realms.byPath.home.controller.daemon)
-              serviceName
-              configPath
-              stateLockPath
-              locksDir
-              socketActivated
-              materializedService
-              ;
-            userShape = builtins.substring 0 5 realms.byPath.home.controller.daemon.user == "d2br-";
-            daemonPrincipalIsShared =
-              realms.byPath.home.controller.daemon.user
-              == realms.byPath.home.controller.daemon.group
-              && realms.byPath.home.controller.daemon.user
-              == realms.byPath.home.controller.daemon.publicSocketGroup;
-          };
-          broker = {
-            inherit (realms.byPath.home.controller.broker)
-              socketUnitName
-              serviceUnitName
-              materializedSocket
-              materializedService
-              ;
-          };
-        };
-      };
-      work = {
-        inherit (realms.byPath."work.home") placement placementProvider;
-        providerKeys = realms.byPath."work.home".providerKeys;
-        enabledProviderKeys = realms.byPath."work.home".enabledProviderKeys;
-        provider = realms.byPath."work.home".providers.aca;
-        relay = realms.byPath."work.home".relay;
-      };
-      byEnv = realms.byEnv;
-      bridges = {
-        dev = cfg.d2b._index.envMeta.dev.lanBridge;
-        home = cfg.d2b._index.envMeta.home.lanBridge;
-        work = cfg.d2b._index.envMeta.work.lanBridge;
-      };
-    };
-
-    expected = {
-      names = [ "archive" "dev" "home" "work" ];
-      enabledNames = [ "dev" "home" "work" ];
-      archiveInDeclared = false;
-      archiveInEnabled = false;
-      dev = {
-        realmName = "dev";
-        id = "dev";
-        path = "dev.home";
-        pathParts = [ "dev" "home" ];
-        parentPath = "home";
-        parentId = "home";
-        placement = "host-local";
-        enabled = true;
-        network = {
-          env = "dev";
-          envNames = [ "dev" "work" ];
-          declaredEnvNames = [ "dev" "work" ];
-          enabledEnvNames = [ "dev" "work" ];
-          missingEnvNames = [ ];
-          mode = "inherit-env";
-          cidrRefs = [ "dev" "lab" ];
-        };
-      };
-
-      home = {
-        allowedUsers = [ "alice" ];
-        allowedGroups = [ "realm-home" ];
-        paths = {
-          stateDir = "/var/lib/d2b/realms/home";
-          auditDir = "/var/lib/d2b/audit/realms/home";
-          runDir = "/run/d2b/realms/home";
-          publicSocket = "/run/d2b/realms/home/public.sock";
-          brokerSocket = "/run/d2b/realms/home/broker.sock";
-        };
-        controller = {
-          controllerId = "realm-${realmHash "home"}";
-          runtimeState = "metadata-only";
-          daemon = {
-            serviceName = "${homeUnitPrefix}-daemon.service";
-            configPath = "/etc/d2b/realms/home/daemon-config.json";
-            stateLockPath = "/run/d2b/realms/home/daemon.lock";
-            locksDir = "/run/d2b/realms/home/locks";
-            socketActivated = false;
-            materializedService = true;
-            userShape = true;
-            daemonPrincipalIsShared = false;
-          };
-          broker = {
-            socketUnitName = "${homeUnitPrefix}-priv-broker.socket";
-            serviceUnitName = "${homeUnitPrefix}-priv-broker.service";
-            materializedSocket = true;
-            materializedService = true;
-          };
-        };
-      };
-      work = {
-        placement = "gateway-vm";
-        placementProvider = null;
-        providerKeys = [ "aca" ];
-        enabledProviderKeys = [ "aca" ];
-        provider = {
-          providerName = "aca";
-          id = "aca";
-          enabled = true;
-          kind = "aca";
-          placement = "provider-agent";
-          capabilityRefs = [ "aca" "relay" ];
-          configRef = "work-aca-non-secret";
-        };
-        relay = {
-          enable = true;
-          mode = "static";
-          endpoints = [ "relns-a.example.invalid" "relns-b.example.invalid" ];
-          credentialRef = "work-relay-credential";
-        };
-      };
-      byEnv = {
-        dev = {
-          realmNames = [ "dev" ];
-          realmIds = [ "dev" ];
-          realmPaths = [ "dev.home" ];
-        };
-        home = {
-          realmNames = [ "home" ];
-          realmIds = [ "home" ];
-          realmPaths = [ "home" ];
-        };
-        work = {
-          realmNames = [ "dev" "work" ];
-          realmIds = [ "dev" "work" ];
-          realmPaths = [ "dev.home" "work.home" ];
-        };
-      };
-      bridges = {
-        dev = "br-dev-lan";
-        home = "br-home-lan";
-        work = "br-work-lan";
-      };
-    };
-  };
-
-  "realms/allocator-artifact-roots-enabled-realm-index" = {
-    expr =
-      let
-        data = cfg.d2b._bundle.allocatorJson.data;
-        firstRequest = resourceId:
-          lib.findFirst (row: row.resourceId == resourceId) null data.resourceRequests;
-        namespaceBoundaryRequests =
-          lib.filter (row: row.kind == "namespace-boundary") data.resourceRequests;
-        devNamespaceBoundaryRequests =
-          lib.filter (row: row.resourceId == "realm-dev-netns") namespaceBoundaryRequests;
-        namespaceBoundaryResourceIds = map (row: row.resourceId) namespaceBoundaryRequests;
-        envRow = realmPath: envName:
-          lib.findFirst
-            (row: row.realmPath == realmPath && row.envName == envName)
-            null
-            data.envBridge;
-      in
-      {
-        installFileName = cfg.d2b._bundle.allocatorJson.installFileName;
-        classification = cfg.d2b._bundle.allocatorJson.classification;
-        sensitivity = cfg.d2b._bundle.allocatorJson.sensitivity;
-        mode = cfg.d2b._bundle.allocatorJson.mode;
-        user = cfg.d2b._bundle.allocatorJson.user;
-        group = cfg.d2b._bundle.allocatorJson.group;
-        bundleAllocatorPath = cfg.d2b._bundle.bundle.data.allocatorPath;
-        storageCoversAllocator =
-          lib.any (path: path.pathTemplate == "/etc/d2b/allocator.json")
-            cfg.d2b._bundle.storageJson.data.paths;
-        allocatorRuntimeServices =
-          lib.filter
-            (name: lib.hasInfix "allocator" name || lib.hasInfix "local-root" name)
-            (lib.attrNames cfg.systemd.services);
-        allocator = {
-          inherit (data.allocator) enabled runtimeState rootSocket stateDir leaseLedger auditDir runtime;
-        };
-        realmPaths = map (row: row.realmPath) data.realms;
-        devNetns = firstRequest "realm-dev-netns";
-        devNetnsCount = lib.length devNamespaceBoundaryRequests;
-        namespaceBoundaryResourceIdsUnique =
-          lib.length namespaceBoundaryResourceIds == lib.length (lib.unique namespaceBoundaryResourceIds);
-        homeBridge = firstRequest "env-home-bridge";
-        workProvider = builtins.head data.providerPlacements;
-        devWorkBridge = envRow "dev.home" "work";
-        inherit (data) invariants;
-      };
-    expected = {
-      installFileName = "allocator.json";
-      classification = "contractPrivateNonSecret";
-      sensitivity = "nonSecret";
-      mode = "0640";
-      user = "root";
-      group = "d2bd";
-      bundleAllocatorPath = "/etc/d2b/allocator.json";
-      storageCoversAllocator = true;
-      allocatorRuntimeServices = [ ];
-      allocator = {
-        enabled = true;
-        runtimeState = "metadata-only";
-        rootSocket = "/run/d2b/allocator/local-root.sock";
-        stateDir = "/var/lib/d2b/allocator";
-        leaseLedger = "/var/lib/d2b/allocator/leases.jsonl";
-        auditDir = "/var/lib/d2b/allocator/audit";
-        runtime = {
-          spawnsService = false;
-          socketActivated = false;
-          serviceName = null;
-        };
-      };
-      realmPaths = [ "dev.home" "home" "work.home" ];
-      devNetns = {
-        realmPath = "dev.home";
-        resourceId = "realm-dev-netns";
-        kind = "namespace-boundary";
-        share = "exclusive";
-        acquisitionOrder = {
-          phase = 31;
-          ordinal = 0;
-        };
-        source = {
-          kind = "realm-network";
-          refName = "dev";
-        };
-      };
-      devNetnsCount = 1;
-      namespaceBoundaryResourceIdsUnique = true;
-      homeBridge = {
-        realmPath = "home";
-        resourceId = "env-home-bridge";
-        kind = "bridge";
-        share = "shared-partition";
-        acquisitionOrder = {
-          phase = 30;
-          ordinal = 0;
-        };
-        source = {
-          kind = "env-bridge";
-          refName = "home";
-        };
-      };
-      workProvider = {
-        realmPath = "work.home";
-        providerName = "aca";
-        providerId = "aca";
-        enabled = true;
-        kind = "aca";
-        placement = "provider-agent";
-        capabilityRefs = [ "aca" "relay" ];
-        configRef = "work-aca-non-secret";
-      };
-      devWorkBridge = {
-        realmPath = "dev.home";
-        envName = "work";
-        declared = true;
-        enabled = true;
-        mode = "inherit-env";
-        netVm = "sys-work-net";
-        lanBridge = "br-work-lan";
-        uplinkBridge = "br-work-up";
-      };
-      invariants = {
-        noRuntimeAllocatorService = true;
-        preservesEnvRuntimeSourceOfTruth = true;
-        privateMetadataOnly = true;
-      };
-    };
-  };
-
-  "realms/controller-config-artifact-materializes-host-local-units" = {
-    expr =
-      let
-        data = cfg.d2b._bundle.realmControllersJson.data;
-        controllerByPath = path:
-          lib.findFirst (row: row.realmPath == path) null data.controllers;
-        home = controllerByPath "home";
-        dev = controllerByPath "dev.home";
-        work = controllerByPath "work.home";
-        realmServiceNames =
-          lib.filter
-            (name: lib.hasPrefix "d2b-realm-" name)
-            (lib.attrNames cfg.systemd.services);
-        realmSocketNames =
-          lib.filter
-            (name: lib.hasPrefix "d2b-realm-" name)
-            (lib.attrNames cfg.systemd.sockets);
-        allRealmUnitNames = realmServiceNames ++ realmSocketNames;
-        homeDaemonServiceName = lib.removeSuffix ".service" home.daemon.serviceName;
-        homeBrokerServiceName = lib.removeSuffix ".service" home.broker.serviceUnitName;
-        homeBrokerSocketName = lib.removeSuffix ".socket" home.broker.socketUnitName;
-        devDaemonServiceName = lib.removeSuffix ".service" dev.daemon.serviceName;
-        workDaemonServiceName = lib.removeSuffix ".service" work.daemon.serviceName;
-        homeDaemonUnit = cfg.systemd.services.${homeDaemonServiceName};
-        devDaemonUnit = cfg.systemd.services.${devDaemonServiceName};
-        homeBrokerSocket = cfg.systemd.sockets.${homeBrokerSocketName};
-        homeBrokerService = cfg.systemd.services.${homeBrokerServiceName};
-        homeResourceRefs = home.allocator.resourceRequestRefs;
-      in
-      {
-        installFileName = cfg.d2b._bundle.realmControllersJson.installFileName;
-        classification = cfg.d2b._bundle.realmControllersJson.classification;
-        sensitivity = cfg.d2b._bundle.realmControllersJson.sensitivity;
-        mode = cfg.d2b._bundle.realmControllersJson.mode;
-        user = cfg.d2b._bundle.realmControllersJson.user;
-        group = cfg.d2b._bundle.realmControllersJson.group;
-        bundleRealmControllersPath = cfg.d2b._bundle.bundle.data.realmControllersPath;
-        bundleRealmIdentityPath = cfg.d2b._bundle.bundle.data.realmIdentityPath;
-        realmIdentityArtifact = {
-          installFileName = cfg.d2b._bundle.realmIdentityJson.installFileName;
-          classification = cfg.d2b._bundle.realmIdentityJson.classification;
-          sensitivity = cfg.d2b._bundle.realmIdentityJson.sensitivity;
-          mode = cfg.d2b._bundle.realmIdentityJson.mode;
-          user = cfg.d2b._bundle.realmIdentityJson.user;
-          group = cfg.d2b._bundle.realmIdentityJson.group;
-        };
-        storageCoversRealmControllers =
-          lib.any (path: path.pathTemplate == "/etc/d2b/realm-controllers.json")
-            cfg.d2b._bundle.storageJson.data.paths;
-        storageCoversRealmIdentity =
-          lib.any (path: path.pathTemplate == "/etc/d2b/realm-identity.json")
-            cfg.d2b._bundle.storageJson.data.paths;
-        realmSystemdUnits = {
-          serviceCount = lib.length realmServiceNames;
-          socketCount = lib.length realmSocketNames;
-          hasHomeDaemon = builtins.elem homeDaemonServiceName realmServiceNames;
-          hasDevDaemon = builtins.elem devDaemonServiceName realmServiceNames;
-          hasHomeBrokerService = builtins.elem homeBrokerServiceName realmServiceNames;
-          hasHomeBrokerSocket = builtins.elem homeBrokerSocketName realmSocketNames;
-          rawRealmIdsAbsent =
-            !lib.any
-              (name:
-                lib.hasInfix "home-daemon" name
-                || lib.hasInfix "dev-daemon" name
-                || lib.hasInfix "work-daemon" name)
-              allRealmUnitNames;
-          gatewayRealmUnitAbsent = !(builtins.hasAttr workDaemonServiceName cfg.systemd.services);
-        };
-        accessMaterialization = {
-          socketGroup = home.daemon.publicSocketGroup;
-          daemonGroup = home.daemon.group;
-          socketGroupIsDistinct = home.daemon.publicSocketGroup != home.daemon.group;
-          aliceExtraGroups = lib.sort lib.lessThan cfg.users.users.alice.extraGroups;
-          aliceInD2bLifecycleGroup =
-            builtins.elem "d2b" cfg.users.users.alice.extraGroups;
-          aliceInRealmSocketGroup =
-            builtins.elem home.daemon.publicSocketGroup cfg.users.users.alice.extraGroups;
-          daemonUserExists = builtins.hasAttr home.daemon.user cfg.users.users;
-          daemonUserSupplementarySocketGroup =
-            builtins.elem home.daemon.publicSocketGroup cfg.users.users.${home.daemon.user}.extraGroups;
-        };
-        units = {
-          homeDaemon = {
-            wantedBy = homeDaemonUnit.wantedBy;
-            wantsRootBrokerSocket = builtins.elem "d2b-priv-broker.socket" homeDaemonUnit.wants;
-            afterRootBrokerSocket = builtins.elem "d2b-priv-broker.socket" homeDaemonUnit.after;
-            afterRootBrokerService = builtins.elem "d2b-priv-broker.service" homeDaemonUnit.after;
-            wantsBrokerSocket = builtins.elem home.broker.socketUnitName homeDaemonUnit.wants;
-            afterBrokerSocket = builtins.elem home.broker.socketUnitName homeDaemonUnit.after;
-            afterBrokerService = builtins.elem home.broker.serviceUnitName homeDaemonUnit.after;
-            inherit (homeDaemonUnit.serviceConfig) User Group ExecStart SupplementaryGroups Slice;
-            execStartHasDaemonStateDir =
-              lib.hasInfix "--daemon-state-dir /var/lib/d2b/realms/home" homeDaemonUnit.serviceConfig.ExecStart;
-          };
-          devDaemonAfterHome =
-            builtins.elem home.daemon.serviceName devDaemonUnit.after;
-          homeBrokerSocket = {
-            inherit (homeBrokerSocket.socketConfig) ListenSequentialPacket SocketGroup SocketMode;
-          };
-          homeBroker = {
-            requiresBrokerSocket = builtins.elem home.broker.socketUnitName homeBrokerService.requires;
-            afterBrokerSocket = builtins.elem home.broker.socketUnitName homeBrokerService.after;
-            inherit (homeBrokerService.serviceConfig) Group Slice;
-            execStartHasAuditDir =
-              lib.hasInfix "--audit-dir /var/lib/d2b/audit/realms/home" homeBrokerService.serviceConfig.ExecStart;
-            execStartHasRealmControllersPath =
-              lib.hasInfix "--realm-controllers-path /etc/d2b/realm-controllers.json" homeBrokerService.serviceConfig.ExecStart;
-            execStartHasStateDir =
-              lib.hasInfix "--state-dir /var/lib/d2b/realms/home" homeBrokerService.serviceConfig.ExecStart;
-            execStartHasD2bdUid =
-              lib.hasInfix "--d2bd-uid " homeBrokerService.serviceConfig.ExecStart;
-            execStartHasD2bdGid =
-              lib.hasInfix "--d2bd-gid " homeBrokerService.serviceConfig.ExecStart;
-            noGlobalSetEnvironment =
-              !(lib.hasInfix "set-environment" (homeBrokerService.serviceConfig.ExecStartPre or ""))
-              && !(lib.hasInfix "systemctl set-environment" homeBrokerService.serviceConfig.ExecStart);
-          };
-        };
-        runtimeState = data.runtimeState;
-        controllerPaths = map (row: row.realmPath) data.controllers;
-        home = {
-          inherit (home) realmName realmId realmPath placement providerPlacement sockets access;
-          paths = home.paths // {
-            auditDirOutsideStateDir =
-              !(lib.hasPrefix "${home.paths.stateDir}/" home.paths.auditDir);
-          };
-          daemon = {
-            inherit (home.daemon)
-              serviceName
-              configPath
-              stateLockPath
-              locksDir
-              socketActivated
-              materializedService
-              ;
-            principalShape = builtins.substring 0 5 home.daemon.user == "d2br-";
-            socketGroupIsDaemonGroup =
-              home.daemon.user == home.daemon.group
-              && home.daemon.user == home.daemon.publicSocketGroup;
-          };
-          broker = home.broker;
-          allocator = {
-            inherit (home.allocator) kind configPath rootSocket;
-            resourceRefCount = lib.length homeResourceRefs;
-            hasStateRef = builtins.elem "realm-home-state" homeResourceRefs;
-            hasPublicSocketRef = builtins.elem "realm-home-public-socket" homeResourceRefs;
-            hasBrokerSocketRef = builtins.elem "realm-home-broker-socket" homeResourceRefs;
-          };
-          localRuntime = {
-            runtimeState = home.localRuntime.runtimeState;
-            providerIds = map (provider: provider.provider.id) home.localRuntime.providers;
-            workloads = map
-              (workload: {
-                inherit (workload) workloadId vmName env paths;
-                runtimeKind = workload.runtime.kind;
-                providerId = workload.runtime.provider.id;
-                driver = workload.runtime.provider.driver;
-                lifecycleStart = workload.runtime.operationCapabilities.lifecycle.start;
-                guestExec = workload.runtime.operationCapabilities.guest.exec;
-                storageStoreSync = workload.runtime.operationCapabilities.storage.storeSync;
-                serviceIds = map (service: service.id) workload.runtime.services;
-              })
-              home.localRuntime.workloads;
-            inherit (home.localRuntime) invariants;
-          };
-        };
-        workLocalRuntime = work.localRuntime;
-        workProviderCount = lib.length work.providers;
-        workProvider = builtins.head work.providers;
-        providerPlacement = validProviderController.providerPlacement;
-        inherit (data) invariants;
-      };
-    expected = {
-      installFileName = "realm-controllers.json";
-      classification = "contractPrivateNonSecret";
-      sensitivity = "nonSecret";
-      mode = "0640";
-      user = "root";
-      group = "d2bd";
-      bundleRealmControllersPath = "/etc/d2b/realm-controllers.json";
-      bundleRealmIdentityPath = "/etc/d2b/realm-identity.json";
-      realmIdentityArtifact = {
-        installFileName = "realm-identity.json";
-        classification = "contractPrivateNonSecret";
-        sensitivity = "nonSecret";
-        mode = "0640";
-        user = "root";
-        group = "d2bd";
-      };
-      storageCoversRealmControllers = true;
-      storageCoversRealmIdentity = true;
-      realmSystemdUnits = {
-        serviceCount = 3;
-        socketCount = 1;
-        hasHomeDaemon = true;
-        hasDevDaemon = true;
-        hasHomeBrokerService = true;
-        hasHomeBrokerSocket = true;
-        rawRealmIdsAbsent = true;
-        gatewayRealmUnitAbsent = true;
-      };
-      accessMaterialization = {
-        socketGroup = "d2bra-${realmHash "home"}";
-        daemonGroup = "d2br-${realmHash "home"}";
-        socketGroupIsDistinct = true;
-        aliceExtraGroups = [
-          "d2b"
-          "d2b-user-services"
-          "d2bra-${realmHash "home"}"
+  "realms/feature-rich-schema-evaluates" = {
+    expr = map (assertion: assertion.message)
+      (lib.filter (assertion: !assertion.assertion) cfg.assertions);
+    expected =
+      if pkgs.stdenv.hostPlatform.system == "x86_64-linux" then
+        [ ]
+      else
+        [
+          "realm workload graphics and audio roles require x86_64-linux"
+          "Workload desktop.work.local-root.d2b: graphics/audio components are supported only on x86_64-linux."
         ];
-        aliceInD2bLifecycleGroup = true;
-        aliceInRealmSocketGroup = true;
-        daemonUserExists = true;
-        daemonUserSupplementarySocketGroup = true;
+  };
+
+  "realms/typed-provider-bindings-normalize" = {
+    expr = lib.mapAttrs
+      (_: binding: {
+        inherit (binding) implementationId providerType;
+      })
+      desktop.providerBindings;
+    expected = {
+      audio = {
+        implementationId = "pipewire-vhost-user";
+        providerType = "audio";
       };
-      units = {
-        homeDaemon = {
-          wantedBy = [ "multi-user.target" ];
-          wantsRootBrokerSocket = true;
-          afterRootBrokerSocket = true;
-          afterRootBrokerService = true;
-          wantsBrokerSocket = true;
-          afterBrokerSocket = true;
-          afterBrokerService = true;
-          User = "d2br-${realmHash "home"}";
-          Group = "d2br-${realmHash "home"}";
-          ExecStart = "${cfg.d2b._hostToolPackages.d2bd}/bin/d2bd serve --config /etc/d2b/realms/home/daemon-config.json --daemon-state-dir /var/lib/d2b/realms/home";
-          execStartHasDaemonStateDir = true;
-          SupplementaryGroups = [ "d2bra-${realmHash "home"}" "d2bd" ];
-          Slice = "d2b.slice";
-        };
-        devDaemonAfterHome = true;
-        homeBrokerSocket = {
-          ListenSequentialPacket = "/run/d2b/realms/home/broker.sock";
-          SocketGroup = "d2br-${realmHash "home"}";
-          SocketMode = "0660";
-        };
-        homeBroker = {
-          requiresBrokerSocket = true;
-          afterBrokerSocket = true;
-          Group = "d2br-${realmHash "home"}";
-          execStartHasAuditDir = true;
-          execStartHasRealmControllersPath = true;
-          execStartHasStateDir = true;
-          execStartHasD2bdUid = true;
-          execStartHasD2bdGid = true;
-          noGlobalSetEnvironment = true;
-          Slice = "d2b.slice";
-        };
+      device = {
+        implementationId = "host-mediated";
+        providerType = "device";
       };
-      runtimeState = "metadata-only";
-      controllerPaths = [ "dev.home" "home" "work.home" ];
-      home = {
-        realmName = "home";
-        realmId = "home";
-        realmPath = "home";
-        placement = "host-local";
-        providerPlacement = null;
-        paths = {
-          runDir = "/run/d2b/realms/home";
-          stateDir = "/var/lib/d2b/realms/home";
-          auditDir = "/var/lib/d2b/audit/realms/home";
-          auditDirOutsideStateDir = true;
-        };
-        sockets = {
-          publicSocketPath = "/run/d2b/realms/home/public.sock";
-          brokerSocketPath = "/run/d2b/realms/home/broker.sock";
-        };
-        access = {
-          allowedUsers = [ "alice" ];
-          allowedGroups = [ "realm-home" ];
-          inheritedAdminUsers = [ ];
-        };
-        daemon = {
-        serviceName = "${homeUnitPrefix}-daemon.service";
-          configPath = "/etc/d2b/realms/home/daemon-config.json";
-          stateLockPath = "/run/d2b/realms/home/daemon.lock";
-          locksDir = "/run/d2b/realms/home/locks";
-          socketActivated = false;
-          materializedService = true;
-          principalShape = true;
-          socketGroupIsDaemonGroup = false;
-        };
-        broker = {
-          enabled = true;
-          hostMutation = true;
-          user = "root";
-          group = realms.byPath.home.controller.broker.group;
-          socketPath = "/run/d2b/realms/home/broker.sock";
-          socketUnitName = "${homeUnitPrefix}-priv-broker.socket";
-          serviceUnitName = "${homeUnitPrefix}-priv-broker.service";
-          auditDir = "/var/lib/d2b/audit/realms/home";
-          materializedSocket = true;
-          materializedService = true;
-        };
-        allocator = {
-          kind = "local-root-metadata";
-          configPath = "/etc/d2b/allocator.json";
-          rootSocket = "/run/d2b/allocator/local-root.sock";
-          resourceRefCount = 8;
-          hasStateRef = true;
-          hasPublicSocketRef = true;
-          hasBrokerSocketRef = true;
-        };
-        localRuntime = {
-          runtimeState = "metadata-only";
-          providerIds = [ "local-cloud-hypervisor" ];
-          workloads = [
-            {
-              workloadId = "homebox";
-              vmName = "homebox";
-              env = "home";
-              paths = {
-                stateDir = "/var/lib/d2b/vms/homebox";
-                runDir = "/run/d2b/vms/homebox";
-                storeView = "/var/lib/d2b/vms/homebox/store-view";
-                guestControlDir = "/run/d2b/vms/homebox/guest-control";
-              };
-              runtimeKind = "nixos";
-              providerId = "local-cloud-hypervisor";
-              driver = "cloud-hypervisor";
-              lifecycleStart = true;
-              guestExec = true;
-              storageStoreSync = true;
-              serviceIds = [
-                "host-reconcile"
-                "store-virtiofs-preflight"
-                "virtiofsd"
-                "cloud-hypervisor"
-                "guest-control-health"
-                "swtpm"
-                "gpu"
-                "audio"
-                "video"
-                "usbip"
-              ];
-            }
-          ];
-          invariants = {
-            metadataOnly = true;
-            existingGlobalVmPathsPreserved = true;
-            noStateMigrationDuringActivation = true;
-            brokerEffectsRemainRealmDelegated = true;
-          };
-        };
+      display = {
+        implementationId = "wayland";
+        providerType = "display";
       };
-      workLocalRuntime = null;
-      workProviderCount = 1;
-      workProvider = {
-        providerName = "aca";
-        providerId = "aca";
-        enabled = true;
-        kind = "aca";
-        placement = "provider-agent";
-        capabilityRefs = [ "aca" "relay" ];
-        configRef = "work-aca-non-secret";
+      network = {
+        implementationId = "local-realm";
+        providerType = "network";
       };
-      providerPlacement = {
-        providerName = "aca";
-        providerId = "aca";
-        kind = "aca";
-        providerSpecificPlacement = null;
+      runtime = {
+        implementationId = "cloud-hypervisor";
+        providerType = "runtime";
       };
-      invariants = {
-        metadataOnly = true;
-        noSystemdUnitsMaterialized = false;
-        preservesGlobalDaemonBehavior = true;
-        preservesDirectUnixSocketSemantics = true;
+      storage = {
+        implementationId = "local";
+        providerType = "storage";
+      };
+      transport = {
+        implementationId = "cloud-hypervisor-vsock";
+        providerType = "transport";
       };
     };
   };
 
-  "realms/identity-config-artifact-is-metadata-only" = {
+  "realms/feature-roles-are-normalized" = {
+    expr = {
+      desktop = roleKinds desktop;
+      entra = roleKinds entra;
+      fido = roleKinds fido;
+    };
+    expected = {
+      desktop = [
+        "audio"
+        "cloud-hypervisor"
+        "gpu"
+        "gpu-render-node"
+        "guest-control-health"
+        "store-virtiofs-preflight"
+        "swtpm"
+        "swtpm-pre-start-flush"
+        "usbip"
+        "video"
+        "virtiofsd"
+        "vsock-relay"
+        "wayland-proxy"
+      ];
+      entra = [
+        "cloud-hypervisor"
+        "guest-control-health"
+        "store-virtiofs-preflight"
+        "swtpm"
+        "swtpm-pre-start-flush"
+        "virtiofsd"
+        "vsock-relay"
+      ];
+      fido = [
+        "cloud-hypervisor"
+        "guest-control-health"
+        "security-key-frontend"
+        "store-virtiofs-preflight"
+        "virtiofsd"
+        "vsock-relay"
+      ];
+    };
+  };
+
+  "realms/device-resources-cover-feature-schema" = {
+    expr = {
+      desktop = resourceKinds "desktop";
+      entra = resourceKinds "entra";
+      fido = resourceKinds "fido";
+    };
+    expected = {
+      desktop = [ "gpu" "tpm" "usbip" "video" ];
+      entra = [ "tpm" ];
+      fido = [ "fido" ];
+    };
+  };
+
+  "realms/resources-use-derived-identities" = {
+    expr = {
+      realmPath = workRealm.realmPath;
+      target = desktop.canonicalTarget;
+      pathsAreDerived = lib.all
+        (resource:
+          resource.path == null
+          || lib.hasInfix "/r/${desktop.realmId}/" resource.path)
+        desktop.resources;
+      noConfiguredWorkloadPath = lib.all
+        (resource:
+          resource.path == null
+          || !(lib.hasInfix "/desktop/" resource.path))
+        desktop.resources;
+    };
+    expected = {
+      realmPath = "work.local-root";
+      target = "desktop.work.local-root.d2b";
+      pathsAreDerived = true;
+      noConfiguredWorkloadPath = true;
+    };
+  };
+
+  "realms/fixed-local-root-units-only" = {
     expr =
       let
-        data = cfg.d2b._bundle.realmIdentityJson.data;
-        work = builtins.head data.realms;
-      in
-      {
-        runtimeState = data.runtimeState;
-        realmCount = lib.length data.realms;
-        work = work;
-        invariants = data.invariants;
-        renderedTextHasNoMaterial =
-          !(lib.hasInfix "privateKey" cfg.d2b._bundle.realmIdentityJson.jsonText)
-          && !(lib.hasInfix "publicKeyPem" cfg.d2b._bundle.realmIdentityJson.jsonText)
-          && !(lib.hasInfix "credentialMaterial" cfg.d2b._bundle.realmIdentityJson.jsonText);
+        services = lib.attrNames cfg.systemd.services;
+        sockets = lib.attrNames cfg.systemd.sockets;
+        d2bUnits = lib.filter (name: lib.hasPrefix "d2b" name)
+          (services ++ sockets);
+      in {
+        localRoot = {
+          d2bdService = builtins.hasAttr "d2bd" cfg.systemd.services;
+          d2bdSocket = builtins.hasAttr "d2bd" cfg.systemd.sockets;
+          brokerService =
+            builtins.hasAttr "d2b-priv-broker" cfg.systemd.services;
+          brokerSocket =
+            builtins.hasAttr "d2b-priv-broker" cfg.systemd.sockets;
+        };
+        childRealmUnits = lib.filter
+          (name:
+            lib.hasPrefix "d2bd-r-" name
+            || lib.hasPrefix "d2bbr-r-" name)
+          d2bUnits;
+        workloadUnits = lib.filter
+          (name:
+            lib.hasInfix desktop.workloadId name
+            || lib.hasInfix entra.workloadId name
+            || lib.hasInfix fido.workloadId name)
+          d2bUnits;
       };
     expected = {
-      runtimeState = "metadata-only";
-      realmCount = 1;
-      work = {
-        realm = [ "work" "home" ];
-        realmIdentityRef = "idref-work";
-        realmIdentityFingerprint = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        controllerCredentialRef = "cgref-work";
-        controllerCredentialFingerprint = "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
-        trustBundleRef = "trust-work";
-        enrollmentRef = "enroll-work";
-        rotationPolicyRef = "rotate-work";
+      localRoot = {
+        d2bdService = true;
+        d2bdSocket = true;
+        brokerService = true;
+        brokerSocket = true;
       };
-      invariants = {
-        metadataOnly = true;
-        noSecretMaterial = true;
-        preservesRuntimeBehavior = true;
-      };
-      renderedTextHasNoMaterial = true;
+      childRealmUnits = [ ];
+      workloadUnits = [ ];
     };
   };
 
-  "realms/rejects-secret-shaped-identity-key-refs" = {
-    expr = hasMessage [
-      "identity key refs must be opaque, non-secret locators"
-      "work.realmIdentityRef"
-      "work.controllerKeyRef"
-      "work.trustBundleRef"
-      "work.enrollmentRef"
-      "work.rotationPolicyRef"
-    ] secretIdentityRefMessages;
-    expected = true;
+  "realms/child-controller-and-broker-are-parent-spawned" = {
+    expr = map
+      (row: {
+        inherit (row)
+          processRole
+          parentSpawnRequired
+          initialCgroupPlacement
+          receivesSystemdListenFds
+          selfBindsListener
+          supervisionOwner;
+      })
+      cfg.d2b._realmProcessRows;
+    expected = [
+      {
+        processRole = "controller";
+        parentSpawnRequired = true;
+        initialCgroupPlacement = "direct";
+        receivesSystemdListenFds = false;
+        selfBindsListener = false;
+        supervisionOwner = "local-root-controller";
+      }
+      {
+        processRole = "broker";
+        parentSpawnRequired = true;
+        initialCgroupPlacement = "direct";
+        receivesSystemdListenFds = false;
+        selfBindsListener = false;
+        supervisionOwner = "local-root-controller";
+      }
+    ];
   };
 
-  "realms/host-local-units-users-groups-tmpfiles-and-no-per-vm-units" = {
+  "realms/canonical-artifacts-reference-realm-control-plane" = {
+    expr = {
+      allocator = cfg.d2b._bundle.bundle.data.allocatorPath;
+      controllers = cfg.d2b._bundle.bundle.data.realmControllersPath;
+      identity = cfg.d2b._bundle.bundle.data.realmIdentityPath;
+      controllerRows =
+        lib.length cfg.d2b._bundle.realmControllersJson.data.controllers;
+      allocatorRealmPaths =
+        map (row: row.realmPath)
+          cfg.d2b._bundle.allocatorJson.data.realms;
+    };
+    expected = {
+      allocator = "/etc/d2b/allocator.json";
+      controllers = "/etc/d2b/realm-controllers.json";
+      identity = "/etc/d2b/realm-identity.json";
+      controllerRows = 1;
+      allocatorRealmPaths = [ "work.local-root" ];
+    };
+  };
+
+  "realms/examples-render-feature-roles" = {
     expr =
       let
-        data = cfg.d2b._bundle.realmControllersJson.data;
-        controllerByPath = path:
-          lib.findFirst (row: row.realmPath == path) null data.controllers;
-        home = controllerByPath "home";
-        dev = controllerByPath "dev.home";
-        homeDaemonServiceName = lib.removeSuffix ".service" home.daemon.serviceName;
-        devDaemonServiceName = lib.removeSuffix ".service" dev.daemon.serviceName;
-        homeBrokerSocketName = lib.removeSuffix ".socket" home.broker.socketUnitName;
-        homeDaemonUnit = cfg.systemd.services.${homeDaemonServiceName};
-        devDaemonUnit = cfg.systemd.services.${devDaemonServiceName};
-        homeBrokerSocket = cfg.systemd.sockets.${homeBrokerSocketName};
-        homeDaemonUser = cfg.users.users.${home.daemon.user};
-        homeDaemonEtc = cfg.environment.etc."d2b/realms/home/daemon-config.json";
-        homeDaemonConfig = builtins.fromJSON homeDaemonEtc.text;
-        tmpfiles = cfg.systemd.tmpfiles.rules;
-        disabledUnitPrefix = realmUnitPrefix "archive";
-        disabledPrincipal = "d2br-${realmHash "archive"}";
-        disabledAccessGroup = "d2bra-${realmHash "archive"}";
-        unitNames = (lib.attrNames cfg.systemd.services) ++ (lib.attrNames cfg.systemd.sockets);
-        perVmUnitNames =
-          lib.filter
-            (name:
-              lib.any
-                (vmName: lib.hasInfix vmName name)
-                [ "homebox" "devbox" "corp" "sys-home-net" "sys-dev-net" "sys-work-net" ])
-            unitNames;
-      in
-      {
-        groups = {
-          daemonGroupDeclared = builtins.hasAttr home.daemon.group cfg.users.groups;
-          accessGroupDeclared = builtins.hasAttr home.daemon.publicSocketGroup cfg.users.groups;
-          daemonAndAccessGroupsDistinct = home.daemon.group != home.daemon.publicSocketGroup;
-          disabledDaemonGroupAbsent = !(builtins.hasAttr disabledPrincipal cfg.users.groups);
-          disabledAccessGroupAbsent = !(builtins.hasAttr disabledAccessGroup cfg.users.groups);
-        };
-        users = {
-          allowedUserInAccessGroup =
-            builtins.elem home.daemon.publicSocketGroup cfg.users.users.alice.extraGroups;
-          daemonUser = {
-            inherit (homeDaemonUser) isSystemUser group description extraGroups;
+        graphics = builtins.head graphicsCfg.d2b._index.workloads.enabledList;
+        # The realm sets `network.mode = "declared"`, so the auto-declared
+        # net VM workload is also present in `enabledList` alongside
+        # `work-entra`; select the example's own workload by name rather
+        # than assuming it's the only (or first) entry.
+        entraExample = lib.findFirst
+          (row: row.workloadName == "work-entra")
+          (throw "with-entra-id example: work-entra workload missing from enabledList")
+          entraCfg.d2b._index.workloads.enabledList;
+      in {
+        minimalAssertions =
+          lib.all (assertion: assertion.assertion) minimalCfg.assertions;
+        multiAssertions =
+          lib.all (assertion: assertion.assertion) multiCfg.assertions;
+        graphicsAssertions =
+          lib.all (assertion: assertion.assertion) graphicsCfg.assertions;
+        entraAssertions =
+          lib.all (assertion: assertion.assertion) entraCfg.assertions;
+        graphicsRoles = roleKinds graphics;
+        graphicsDevices = map (row: row.resourceKind)
+          (graphicsCfg.d2b._index.devices.byWorkloadId.${graphics.workloadId} or [ ]);
+        entraRoles = roleKinds entraExample;
+        entraDevices = map (row: row.resourceKind)
+          (entraCfg.d2b._index.devices.byWorkloadId.${entraExample.workloadId} or [ ]);
+      };
+    expected = {
+      minimalAssertions = true;
+      multiAssertions = true;
+      graphicsAssertions = pkgs.stdenv.hostPlatform.system == "x86_64-linux";
+      entraAssertions = true;
+      graphicsRoles = [
+        "audio"
+        "cloud-hypervisor"
+        "gpu"
+        "gpu-render-node"
+        "guest-control-health"
+        "store-virtiofs-preflight"
+        "swtpm"
+        "swtpm-pre-start-flush"
+        "usbip"
+        "video"
+        "virtiofsd"
+        "vsock-relay"
+        "wayland-proxy"
+      ];
+      graphicsDevices = [ "tpm" "gpu" "video" "usbip" ];
+      entraRoles = [
+        "cloud-hypervisor"
+        "guest-control-health"
+        "store-virtiofs-preflight"
+        "swtpm"
+        "swtpm-pre-start-flush"
+        "virtiofsd"
+        "vsock-relay"
+      ];
+      entraDevices = [ "tpm" ];
+    };
+  };
+
+  "realms/rejects-missing-runtime-binding" = {
+    expr = hasMessage
+      "must bind providerRefs.runtime explicitly"
+      (failureMessages [
+        (lib.recursiveUpdate hostBase {
+          d2b.realms.work.workloads.desktop.enable = true;
+        })
+      ]);
+    expected = true;
+  };
+
+  "realms/rejects-unknown-provider-binding" = {
+    expr = hasMessage
+      "selects undeclared device provider missing"
+      (failureMessages [
+        (lib.recursiveUpdate hostBase {
+          d2b.realms.work = {
+            providers.runtime = providers.runtime;
+            workloads.desktop.providerRefs = {
+              runtime = "runtime";
+              device = "missing";
+            };
           };
-          disabledDaemonUserAbsent = !(builtins.hasAttr disabledPrincipal cfg.users.users);
-        };
-        tmpfiles = {
-          stateDir =
-            builtins.elem
-              "d /var/lib/d2b/realms/home 0750 ${home.daemon.user} ${home.daemon.group} -"
-              tmpfiles;
-          auditDir =
-            builtins.elem
-              "d /var/lib/d2b/audit/realms/home 0750 root ${home.daemon.group} -"
-              tmpfiles;
-          auditParentDir =
-            builtins.elem
-              "d /var/lib/d2b/audit/realms 0750 root d2bd -"
-              tmpfiles;
-          runDir =
-            builtins.elem
-              "d /run/d2b/realms/home 1770 root ${home.daemon.publicSocketGroup} -"
-              tmpfiles;
-          runDirReset =
-            builtins.elem
-              "z /run/d2b/realms/home 1770 root ${home.daemon.publicSocketGroup} -"
-              tmpfiles;
-          runDirGroupAccessAcl =
-            builtins.elem
-              "a+ /run/d2b/realms/home - - - - g::r-x"
-              tmpfiles;
-          daemonRunAcl =
-            builtins.elem
-              "a+ /run/d2b/realms/home - - - - u:${home.daemon.user}:rwx"
-              tmpfiles;
-          stateLock =
-            builtins.elem
-              "f /run/d2b/realms/home/daemon.lock 0640 ${home.daemon.user} ${home.daemon.group} -"
-              tmpfiles;
-          locksDir =
-            builtins.elem
-              "d /run/d2b/realms/home/locks 0700 ${home.daemon.user} ${home.daemon.group} -"
-              tmpfiles;
-          etcD2bTraverseAcl =
-            builtins.elem
-              "a+ /etc/d2b - - - - u:${home.daemon.user}:--x"
-              tmpfiles;
-          realmControllersReadAcl =
-            builtins.elem
-              "a+ /etc/d2b/realm-controllers.json - - - - u:${home.daemon.user}:r--"
-              tmpfiles;
-          realmIdentityReadAcl =
-            builtins.elem
-              "a+ /etc/d2b/realm-identity.json - - - - u:${home.daemon.user}:r--"
-              tmpfiles;
-          etcRealmsTraverseAcl =
-            builtins.elem
-              "a+ /etc/d2b/realms - - - - u:${home.daemon.user}:--x"
-              tmpfiles;
-          etcRealmConfigDirTraverseAcl =
-            builtins.elem
-              "a+ /etc/d2b/realms/home - - - - u:${home.daemon.user}:--x"
-              tmpfiles;
-          runD2bTraverseAcl =
-            builtins.elem
-              "a+ /run/d2b - - - - u:${home.daemon.user}:--x"
-              tmpfiles;
-          runRealmsTraverseAcl =
-            builtins.elem
-              "a+ /run/d2b/realms - - - - u:${home.daemon.user}:--x"
-              tmpfiles;
-        };
-        daemonConfig = {
-          inherit (homeDaemonEtc) mode user group;
-          publicSocketPath = homeDaemonConfig.publicSocketPath;
-          brokerSocketPath = homeDaemonConfig.brokerSocketPath;
-          daemonUser = homeDaemonConfig.daemonUser;
-          daemonGroup = homeDaemonConfig.daemonGroup;
-          publicSocketGroup = homeDaemonConfig.publicSocketGroup;
-          launcherUsers = homeDaemonConfig.launcherUsers;
-          realmControllersConfigPath = homeDaemonConfig.realmControllersConfigPath;
-          realmIdentityConfigPath = homeDaemonConfig.realmIdentityConfigPath;
-          artifacts = homeDaemonConfig.artifacts;
-        };
-        unitOrdering = {
-          childAfterParent = builtins.elem home.daemon.serviceName devDaemonUnit.after;
-          parentDoesNotAfterChild = !(builtins.elem dev.daemon.serviceName homeDaemonUnit.after);
-          parentAfterRootBrokerSocket = builtins.elem "d2b-priv-broker.socket" homeDaemonUnit.after;
-          parentAfterRootBrokerService = builtins.elem "d2b-priv-broker.service" homeDaemonUnit.after;
-        };
-        socketAccess = {
-          inherit (homeBrokerSocket.socketConfig) ListenSequentialPacket SocketGroup SocketMode;
-        };
-        disabledRealm = {
-          unitsAbsent = !lib.any (name: lib.hasPrefix disabledUnitPrefix name) unitNames;
-          controllersAbsent =
-            !lib.any (row: row.realmPath == "archive") data.controllers;
-        };
-        noPerVmSystemdUnits = perVmUnitNames;
-      };
-    expected = {
-      groups = {
-        daemonGroupDeclared = true;
-        accessGroupDeclared = true;
-        daemonAndAccessGroupsDistinct = true;
-        disabledDaemonGroupAbsent = true;
-        disabledAccessGroupAbsent = true;
-      };
-      users = {
-        allowedUserInAccessGroup = true;
-        daemonUser = {
-          isSystemUser = true;
-          group = "d2br-${realmHash "home"}";
-          description = "d2b realm daemon user for home";
-          extraGroups = [ "d2bra-${realmHash "home"}" "d2bd" ];
-        };
-        disabledDaemonUserAbsent = true;
-      };
-      tmpfiles = {
-        stateDir = true;
-        auditDir = true;
-        auditParentDir = true;
-        runDir = true;
-        runDirReset = true;
-        runDirGroupAccessAcl = true;
-        daemonRunAcl = true;
-        stateLock = true;
-        locksDir = true;
-        etcD2bTraverseAcl = true;
-        realmControllersReadAcl = true;
-        realmIdentityReadAcl = true;
-        etcRealmsTraverseAcl = true;
-        etcRealmConfigDirTraverseAcl = true;
-        runD2bTraverseAcl = true;
-        runRealmsTraverseAcl = true;
-      };
-      daemonConfig = {
-        mode = "0640";
-        user = "root";
-        group = "d2br-${realmHash "home"}";
-        publicSocketPath = "/run/d2b/realms/home/public.sock";
-        brokerSocketPath = "/run/d2b/realms/home/broker.sock";
-        daemonUser = "d2br-${realmHash "home"}";
-        daemonGroup = "d2br-${realmHash "home"}";
-        publicSocketGroup = "d2bra-${realmHash "home"}";
-        launcherUsers = [ "alice" ];
-        realmControllersConfigPath = "/etc/d2b/realm-controllers.json";
-        realmIdentityConfigPath = "/etc/d2b/realm-identity.json";
-        artifacts = {
-          publicManifestPath = "/run/current-system/sw/share/d2b/vms.json";
-          bundlePath = "/etc/d2b/bundle.json";
-          hostPath = "/etc/d2b/host.json";
-          processesPath = "/etc/d2b/processes.json";
-          closuresDir = "/etc/d2b/closures";
-        };
-      };
-      unitOrdering = {
-        childAfterParent = true;
-        parentDoesNotAfterChild = true;
-        parentAfterRootBrokerSocket = true;
-        parentAfterRootBrokerService = true;
-      };
-      socketAccess = {
-        ListenSequentialPacket = "/run/d2b/realms/home/broker.sock";
-        SocketGroup = "d2br-${realmHash "home"}";
-        SocketMode = "0660";
-      };
-      disabledRealm = {
-        unitsAbsent = true;
-        controllersAbsent = true;
-      };
-      noPerVmSystemdUnits = [ ];
-    };
-  };
-
-  "realms/rejects-missing-parent" = {
-    expr = hasMessage [
-      "enabled child realms must name an enabled parent realm"
-      "child.missing -> missing"
-    ] missingParentMessages;
+        })
+      ]);
     expected = true;
   };
 
-  "realms/rejects-parent-cycle" = {
-    expr = hasMessage [
-      "enabled d2b.realms parent links must form an acyclic tree"
-      "alpha -> beta -> alpha"
-    ] parentCycleMessages;
+  "realms/rejects-device-conflicts" = {
+    expr = hasMessage
+      "cannot request USBIP and FIDO security-key mediation simultaneously"
+      (failureMessages [
+        (lib.recursiveUpdate realmFixture {
+          d2b.realms.work.workloads.desktop.securityKey.enable = true;
+        })
+      ]);
     expected = true;
   };
 
-  "realms/rejects-duplicate-id-and-path" = {
-    expr = {
-      duplicateId = hasMessage [
-        "d2b.realms must use unique stable realm ids"
-        "same"
-      ] duplicateIdPathMessages;
-      duplicatePath = hasMessage [
-        "d2b.realms must use unique canonical realm paths"
-        "same-path"
-      ] duplicateIdPathMessages;
-    };
-    expected = {
-      duplicateId = true;
-      duplicatePath = true;
-    };
-  };
-
-  "realms/rejects-duplicate-runtime-paths" = {
-    expr = {
-      stateDir = hasMessage [ "must not share stateDir paths" "/var/lib/d2b/realms/alpha" ] duplicateRuntimePathMessages;
-      auditDir = hasMessage [ "must not share auditDir paths" "/var/lib/d2b/audit/realms/alpha" ] duplicateRuntimePathMessages;
-      runDir = hasMessage [ "must not share runDir paths" "/run/d2b/realms/alpha" ] duplicateRuntimePathMessages;
-      publicSocket = hasMessage [ "must not share publicSocket paths" "/run/d2b/realms/alpha/public.sock" ] duplicateRuntimePathMessages;
-      brokerSocket = hasMessage [ "must not share brokerSocket paths" "/run/d2b/realms/alpha/broker.sock" ] duplicateRuntimePathMessages;
-    };
-    expected = {
-      stateDir = true;
-      auditDir = true;
-      runDir = true;
-      publicSocket = true;
-      brokerSocket = true;
-    };
-  };
-
-  "realms/rejects-overlong-unix-socket-paths" = {
-    expr = {
-      publicSocket = hasMessage [
-        "paths.publicSocket must fit Linux AF_UNIX pathname"
-        "at most 107 bytes"
-        "work"
-      ] overlongPublicSocketMessages;
-      brokerSocket = hasMessage [
-        "paths.brokerSocket must fit Linux AF_UNIX pathname"
-        "at most 107 bytes"
-        "work"
-      ] overlongBrokerSocketMessages;
-    };
-    expected = {
-      publicSocket = true;
-      brokerSocket = true;
-    };
-  };
-
-  "realms/rejects-missing-host-local-allowed-user" = {
-    expr = hasMessage [
-      "d2b.realms.home.allowedUsers contains \"missing-user\""
-      "users.users.missing-user is declared"
-    ] missingRealmAllowedUserMessages;
+  "realms/rejects-unsafe-east-west-without-ack" = {
+    expr = hasMessage
+      "network.lan.allowEastWest requires d2b.site.allowUnsafeEastWest"
+      (failureMessages [
+        (lib.recursiveUpdate realmFixture {
+          d2b.realms.work.network.lan.allowEastWest = true;
+        })
+      ]);
     expected = true;
   };
 
-  "realms/requires-provider-for-provider-backed-placement" = {
-    expr = {
-      missingProvider = hasMessage [
-        "provider-backed d2b.realms placements require"
-        "placementProvider"
-        "work (provider-controller)"
-      ] missingPlacementProviderMessages;
-      missingProviderSpecificProvider = hasMessage [
-        "provider-backed d2b.realms placements require"
-        "placementProvider"
-        "work (provider-specific)"
-      ] missingProviderSpecificPlacementProviderMessages;
-      rejectsLocal = hasMessage [
-        "placementProvider is valid only for provider-backed"
-        "work (gateway-vm)"
-      ] unexpectedPlacementProviderMessages;
-      validProvider = lib.all (a: a.assertion) validProviderPlacementCfg.assertions;
-      indexedProvider = validProviderPlacementCfg.d2b._index.realms.byPath.work.placementProvider;
-    };
-    expected = {
-      missingProvider = true;
-      missingProviderSpecificProvider = true;
-      rejectsLocal = true;
-      validProvider = true;
-      indexedProvider = "aca";
-    };
-  };
-
-  "realms/rejects-legacy-gateway-aca-surface-with-migration-guidance" = {
-    expr = hasMessage [
-      "legacy-surface-detected: d2b.gateways"
-      "old gateway/ACA sandbox fields"
-      "d2b.realms.work"
-      "`d2b.envs` remains the current substrate"
-    ] legacyGatewayMessages;
+  "realms/rejects-reserved-launcher-workload-name" = {
+    expr = hasMessage
+      "'launcher' is reserved for the polkit-launcher group"
+      (failureMessages [
+        (reservedNameFixture {
+          launcher.providerRefs.runtime = "runtime";
+        })
+      ]);
     expected = true;
   };
 
-  "realms/examples-minimal-and-multi-env-still-eval" = {
-    expr = {
-      minimal = lib.all (a: a.assertion) minimalCfg.assertions;
-      multiEnv = lib.all (a: a.assertion) multiEnvCfg.assertions;
-    };
-    expected = {
-      minimal = true;
-      multiEnv = true;
-    };
+  "realms/rejects-reserved-sys-prefixed-workload-name" = {
+    expr = hasMessage
+      "names starting with 'sys-' and the exact name 'network' are reserved"
+      (failureMessages [
+        (reservedNameFixture {
+          "sys-random".providerRefs.runtime = "runtime";
+        })
+      ]);
+    expected = true;
   };
 
-  # ── tombstone / migration advisory warnings ──────────────────────────────────
-
-  # Realm linking to d2b.envs with mode=none and no workloads → nudge warning.
-  "realms/tombstone-inherit-env-nudge-warning-fires" = {
-    expr = {
-      hasWarning = lib.any
-        (w: lib.hasInfix "nudge-me" w && lib.hasInfix "migrate-d2b-v1-2-to-v2" w)
-        inheritEnvNudgeWarnings;
-      pointsAtEnvRef = lib.any
-        (w: lib.hasInfix "d2b.envs.home" w)
-        inheritEnvNudgeWarnings;
-      mentionsWorkloadSurface = lib.any
-        (w: lib.hasInfix "d2b.realms.nudge-me.workloads" w)
-        inheritEnvNudgeWarnings;
-    };
-    expected = {
-      hasWarning = true;
-      pointsAtEnvRef = true;
-      mentionsWorkloadSurface = true;
-    };
+  "realms/rejects-operator-declared-network-workload-without-auto-declare" = {
+    expr = hasMessage
+      "names starting with 'sys-' and the exact name 'network' are reserved"
+      (failureMessages [
+        (reservedNameFixture {
+          network.providerRefs.runtime = "runtime";
+        })
+      ]);
+    expected = true;
   };
 
-  # Realm with workloads declared — inherit-env nudge must NOT fire.
-  "realms/tombstone-no-nudge-when-workloads-declared" = {
-    expr = lib.any
-      (w: lib.hasInfix "migrate-d2b-v1-2-to-v2" w)
-      withWorkloadsNoNudgeWarnings;
+  "realms/allows-framework-auto-declared-network-workload" = {
+    # realmFixture's "work" realm sets network.mode = "declared", so the
+    # auto-declared "network" workload (options-realms-workloads.nix) is
+    # present and must NOT trip the reserved-name assertion.
+    expr = hasMessage
+      "names starting with 'sys-' and the exact name 'network' are reserved"
+      (failureMessages [ realmFixture ]);
     expected = false;
   };
 
-  # Workload with legacyVmName pointing to a missing VM → orphan warning.
-  "realms/tombstone-orphan-legacy-vm-warning-fires" = {
-    expr = {
-      hasWarning = lib.any
-        (w: lib.hasInfix "old-laptop-vm" w)
-        orphanLegacyVmWarnings;
-      mentionsWorkload = lib.any
-        (w: lib.hasInfix "migrating" w && lib.hasInfix "laptop" w)
-        orphanLegacyVmWarnings;
-      suggestsDeclaringVm = lib.any
-        (w: lib.hasInfix "d2b.vms.old-laptop-vm" w)
-        orphanLegacyVmWarnings;
-    };
-    expected = {
-      hasWarning = true;
-      mentionsWorkload = true;
-      suggestsDeclaringVm = true;
-    };
+  "realms/rejects-systemd-user-without-allow-unsafe-local" = {
+    expr = hasMessage
+      "systemd-user unsafe-local runtime implementation"
+      (failureMessages [ (unsafeLocalFixture null) ]);
+    expected = true;
   };
 
-  # Workload with legacyVmName pointing to an EXISTING VM → no orphan warning.
-  "realms/tombstone-no-orphan-warning-when-vm-exists" = {
-    expr = lib.any
-      (w: lib.hasInfix "homebox" w && lib.hasInfix "d2b.vms" w)
-      legacyVmPresentWarnings;
+  "realms/rejects-systemd-user-with-allow-unsafe-local-false" = {
+    expr = hasMessage
+      "systemd-user unsafe-local runtime implementation"
+      (failureMessages [ (unsafeLocalFixture false) ]);
+    expected = true;
+  };
+
+  "realms/allows-systemd-user-with-allow-unsafe-local-true" = {
+    expr = hasMessage
+      "systemd-user unsafe-local runtime implementation"
+      (failureMessages [ (unsafeLocalFixture true) ]);
     expected = false;
   };
 
-  # ── accepted workload option shapes ─────────────────────────────────────────
-
-  # Full workload options tree evaluates without assertion failures for all three
-  # supported kinds (local-vm, qemu-media, provider-placeholder).
-  "realms/accepted-all-workload-kinds-eval-clean" = {
+  "realms/legacy-options-are-unknown-with-no-tombstones" = {
     expr = {
-      assertionsPass = lib.all (a: a.assertion) acceptedWorkloadCfg.assertions;
-      # Filter to d2b-originated warnings only; the NixOS systemd.network
-      # combination warning fires for any d2b config and is unrelated.
-      noExtraWarnings =
-        lib.filter (w: lib.hasInfix "d2b" w) acceptedWorkloadCfg.warnings == [ ];
-      corpRealmHasWorkloads =
-        acceptedWorkloadCfg.d2b.realms.corp.workloads != { };
+      vms = (schemaTry {
+        d2b.acceptDestructiveV2Cutover = true;
+        d2b.vms.desktop.enable = true;
+      }).success;
+      envs = (schemaTry {
+        d2b.acceptDestructiveV2Cutover = true;
+        d2b.envs.work.enable = true;
+      }).success;
+      legacyWorkloadKind = (schemaTry {
+        d2b.acceptDestructiveV2Cutover = true;
+        d2b.realms.work.workloads.desktop = {
+          kind = "local-vm";
+          providerRefs.runtime = "runtime";
+        };
+      }).success;
+      legacyVmName = (schemaTry {
+        d2b.acceptDestructiveV2Cutover = true;
+        d2b.realms.work.workloads.desktop = {
+          legacyVmName = "desktop";
+          providerRefs.runtime = "runtime";
+        };
+      }).success;
     };
     expected = {
-      assertionsPass = true;
-      noExtraWarnings = true;
-      corpRealmHasWorkloads = true;
-    };
-  };
-
-  # local-vm workload fields default and materialize correctly.
-  "realms/accepted-local-vm-workload-fields" = {
-    expr =
-      let
-        laptop = acceptedWorkloadCfg.d2b.realms.corp.workloads.laptop;
-      in {
-        kind = laptop.kind;
-        legacyVmName = laptop.legacyVmName;
-        launcherEnable = laptop.launcher.enable;
-        launcherLabel = laptop.launcher.label;
-        launcherIconId = laptop.launcher.icon.id;
-        launcherIconName = laptop.launcher.icon.name;
-        memoryMiB = laptop.localVm.memoryMiB;
-        vcpus = laptop.localVm.vcpus;
-        # stateDir defaults to /var/lib/d2b/vms/<workload-id>
-        stateDirMatchesId = lib.hasSuffix "/laptop" laptop.stateDir;
-      };
-    expected = {
-      kind = "local-vm";
-      legacyVmName = null;
-      launcherEnable = true;
-      launcherLabel = "Corp Laptop";
-      launcherIconId = "computer-laptop";
-      launcherIconName = "laptop";
-      memoryMiB = 4096;
-      vcpus = 2;
-      stateDirMatchesId = true;
-    };
-  };
-
-  # qemu-media workload fields materialize correctly.
-  "realms/accepted-qemu-media-workload-fields" = {
-    expr =
-      let
-        installer = acceptedWorkloadCfg.d2b.realms.corp.workloads.installer;
-      in {
-        kind = installer.kind;
-        sourceKind = installer.qemuMedia.source.kind;
-        sourceRef = installer.qemuMedia.source.ref;
-        sourceReadOnly = installer.qemuMedia.source.readOnly;
-        launcherEnable = installer.launcher.enable;
-        launcherLabel = installer.launcher.label;
-      };
-    expected = {
-      kind = "qemu-media";
-      sourceKind = "physical-usb";
-      sourceRef = "installer-usb";
-      sourceReadOnly = true;
-      launcherEnable = true;
-      launcherLabel = "Live Installer";
-    };
-  };
-
-  # provider-placeholder workload evaluates with launcher disabled.
-  "realms/accepted-provider-placeholder-workload-fields" = {
-    expr =
-      let
-        svc = acceptedWorkloadCfg.d2b.realms.corp.workloads.cloud-service;
-      in {
-        kind = svc.kind;
-        launcherEnable = svc.launcher.enable;
-      };
-    expected = {
-      kind = "provider-placeholder";
-      launcherEnable = false;
+      vms = false;
+      envs = false;
+      legacyWorkloadKind = false;
+      legacyVmName = false;
     };
   };
 }

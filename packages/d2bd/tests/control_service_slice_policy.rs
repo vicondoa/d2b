@@ -16,7 +16,7 @@ const DECLARATIVE_DOCUMENTS: [&str; 2] = [
     "docs/reference/realm-identity-lifecycle.md",
 ];
 const GUEST_TOKEN_PIN: &str = "tests/golden/pinned/guest-control-token-materializer.txt";
-const REQUIRED_OWNERS: [(&str, &str); 26] = [
+const REQUIRED_OWNERS: [(&str, &str); 25] = [
     (
         "docs/reference/allocator-service-api.md",
         "allocator-child-broker",
@@ -41,10 +41,6 @@ const REQUIRED_OWNERS: [(&str, &str); 26] = [
     ("packages/d2b-gateway/Cargo.toml", "realm-service"),
     ("packages/d2b-guestd/Cargo.toml", "guest-service"),
     ("packages/d2b-host/Cargo.toml", "allocator-child-broker"),
-    (
-        "packages/d2b-host/tests/guest_control_token_materializer.rs",
-        "guest-service",
-    ),
     (
         "packages/d2b-host/tests/guest_vsock_ttrpc_compile.rs",
         "guest-service",
@@ -71,7 +67,7 @@ const REQUIRED_OWNERS: [(&str, &str); 26] = [
     ),
     (GUEST_TOKEN_PIN, "guest-service"),
 ];
-const W5_PREP_FINGERPRINTS: [(&str, &str); 36] = [
+const W5_PREP_FINGERPRINTS: [(&str, &str); 35] = [
     (
         "w5-client-daemon-service",
         "packages/d2b-client/src/daemon_service.rs",
@@ -144,10 +140,6 @@ const W5_PREP_FINGERPRINTS: [(&str, &str); 36] = [
     (
         "w5-prep-guest-token-materializer-pin",
         "tests/golden/pinned/guest-control-token-materializer.txt",
-    ),
-    (
-        "w5-prep-guest-token-materializer-test",
-        "packages/d2b-host/tests/guest_control_token_materializer.rs",
     ),
     (
         "w5-prep-guest-vsock-ttrpc-test",
@@ -485,10 +477,7 @@ fn component_file_ownership_is_disjoint_and_within_shared_policy() {
     );
     assert_eq!(
         guest.retired_read_only_files,
-        [
-            "nixos-modules/guest-control-host.nix",
-            "nixos-modules/guest-control-token-materialize.py"
-        ]
+        ["nixos-modules/guest-control-host.nix"]
     );
     for component in &policy.components {
         for path in &component.retired_read_only_files {

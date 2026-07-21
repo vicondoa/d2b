@@ -132,7 +132,6 @@
         "packages/d2b/tests/cli_json_contract.rs",
         "packages/d2b/tests/cli_json_output_contract.rs",
         "packages/d2b/tests/common/mod.rs",
-        "packages/d2b/tests/daemon_service_v2.rs",
         "packages/d2b/tests/host_check_contract.rs",
         "packages/d2b/tests/host_doctor_contract.rs",
         "packages/d2b/tests/host_validate_verb.rs",
@@ -246,7 +245,6 @@
         "packages/d2b-guestd/src/terminal_io.rs",
         "packages/d2b-guestd/tests/fail_closed.rs",
         "packages/d2b-guestd/tests/guest_service_v2.rs",
-        "packages/d2b-host/tests/guest_control_token_materializer.rs",
         "packages/d2b-host/tests/guest_vsock_ttrpc_compile.rs",
         "packages/d2bd/src/console_session.rs",
         "packages/d2bd/src/control_services/guest.rs",
@@ -261,8 +259,7 @@
         "tests/golden/pinned/guest-control-token-materializer.txt"
       ],
       "retired_read_only_files": [
-        "nixos-modules/guest-control-host.nix",
-        "nixos-modules/guest-control-token-materialize.py"
+        "nixos-modules/guest-control-host.nix"
       ],
       "baseline_call_graph": [
         "d2b-guestd::main -> load token credential -> GuestdServeConfig -> serve_vsock",
@@ -313,8 +310,7 @@
         "packages/d2b-realm-provider/src/provider.rs",
         "packages/d2b-realm-provider/src/rate_limit.rs",
         "packages/d2b-realm-provider/src/types.rs",
-        "packages/d2bd/src/control_services/provider.rs",
-        "packages/d2bd/tests/provider_agent_service_v2.rs"
+        "packages/d2bd/src/control_services/provider.rs"
       ],
       "baseline_call_graph": [
         "d2b-gateway-runtime::agent_prologue -> specialized display HMAC frame",
@@ -345,7 +341,6 @@
         "packages/d2b-gateway/Cargo.toml",
         "packages/d2b-gateway/src/audit.rs",
         "packages/d2b-gateway/src/error.rs",
-        "packages/d2b-gateway/src/handshake.rs",
         "packages/d2b-gateway/src/ledger.rs",
         "packages/d2b-gateway/src/lib.rs",
         "packages/d2b-gateway/src/orchestrator.rs",
@@ -353,14 +348,10 @@
         "packages/d2b-realm-codec-protobuf/Cargo.toml",
         "packages/d2b-realm-codec-protobuf/src/lib.rs",
         "packages/d2b-realm-router/Cargo.toml",
-        "packages/d2b-realm-router/src/display_transport.rs",
         "packages/d2b-realm-router/src/execution.rs",
         "packages/d2b-realm-router/src/lib.rs",
-        "packages/d2b-realm-router/src/mux_session.rs",
         "packages/d2b-realm-router/src/remote_node.rs",
-        "packages/d2b-realm-router/src/secure_session.rs",
         "packages/d2b-realm-router/src/service_v2.rs",
-        "packages/d2b-realm-router/src/session.rs",
         "packages/d2b-realm-router/src/session_lifecycle.rs",
         "packages/d2b-realm-router/src/target_resolver.rs",
         "packages/d2b-realm-router/tests/realm_service_v2.rs",

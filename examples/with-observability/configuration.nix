@@ -4,12 +4,11 @@
 # the d2b observability subsystem end-to-end:
 #
 #   * host-side flag    → `d2b.observability.enable = true`
-#   * per-VM opt-in     → `d2b.vms.work-app.observability.enable = true`
-#   * stack VM reserved → `d2b.observability.vmName = "sys-obs"`
+#   * workload opt-in   → import the guest observability component
+#   * stack workload    → `sys-obs.local-root.d2b`
 #
-# Setting the host flag auto-declares the `obs` env and the
-# `sys-obs` VM (native SigNoz).
-# The workload VM `work-app` lives in a separate `work` env and
+# Setting the host flag declares the `sys-obs` workload in `local-root`.
+# The workload `work-app` lives in the separate `work` realm and
 # forwards its telemetry to the stack VM over the vsock transport.
 #
 # See ./README.md for the topology diagram and validation steps.
@@ -35,6 +34,7 @@
 
   networking.hostName = "demo";
   system.stateVersion = "25.11";
+  d2b.acceptDestructiveV2Cutover = true;
 
   # Host-side human user. Same `alice` placeholder used across the
   # other examples; replace with your login name on a real host.
@@ -61,11 +61,8 @@
   # d2b.observability — turn on the framework's telemetry layer.
   #
   # Setting `enable = true` causes the framework to:
-  #   * auto-declare `d2b.envs.obs`     (LAN  10.40.0.0/24,
-  #                                          uplink 203.0.113.0/30)
-  #   * auto-declare `d2b.vms.<vmName>` carrying the native
-  #     SigNoz stack
-  #     (default UI http://10.40.0.10:8080 at index 10)
+  #   * declare the `sys-obs.local-root.d2b` workload carrying the
+  #     native SigNoz stack
   #   * enable the host-side OTLP relay and the
   #     per-VM observability sidecar wiring for any VM that opts in
   #
@@ -75,42 +72,26 @@
   };
 
   # ---------------------------------------------------------------
-  # d2b.envs.work — the env that hosts the workload VM.
-  #
-  # The `obs` env is auto-declared by `observability.enable` above,
-  # so we only need to declare envs for *workload* VMs here. Pick
-  # CIDRs that don't collide with the auto-declared obs env
-  # (10.40.0.0/24 / 203.0.113.0/30) or with each other.
+  # d2b.realms.work — the realm that owns the workload.
   # ---------------------------------------------------------------
-  d2b.envs.work = {
-    lanSubnet    = "10.20.0.0/24";
-    uplinkSubnet = "192.0.2.0/30";
-  };
-
-  # ---------------------------------------------------------------
-  # d2b.vms.work-app — one headless workload VM that opts into
-  # observability. The per-VM `observability.enable = true` toggle
-  # attaches the guest-side telemetry agent and wires the OTLP relay path
-  # through the host into `sys-obs`'s vsock receiver.
-  #
-  # Topology:
-  #   work-app guest  → /run/d2b/otlp.sock
-  #   host relay      → AF_VSOCK into sys-obs
-  #   sys-obs         → SigNoz
-  # ---------------------------------------------------------------
-  d2b.vms.work-app = {
-    enable = true;
-    env = "work";
-    index = 10;
-    ssh.user = "alice";
-
-    observability.enable = true;
-
-    config = {
-      networking.hostName = lib.mkDefault "work-app";
-      users.users.alice = {
-        isNormalUser = true;
-        uid = 1000;
+  d2b.realms.work = {
+    path = "work.local-root";
+    providers.runtime-local = {
+      type = "runtime";
+      implementationId = "cloud-hypervisor";
+    };
+    workloads.work-app = {
+      providerRefs.runtime = "runtime-local";
+      autostart = true;
+      config = {
+        imports = [
+          ../../nixos-modules/components/observability/guest.nix
+        ];
+        networking.hostName = lib.mkDefault "work-app";
+        users.users.alice = {
+          isNormalUser = true;
+          uid = 1000;
+        };
       };
     };
   };

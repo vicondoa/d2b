@@ -12,10 +12,10 @@ world-readable system profile.
 
 | Artifact | Visibility | Mode | Purpose |
 | --- | --- | --- | --- |
-| `vms.json` | public compatibility surface | world-readable, existing installation path | VM list and public capability metadata; see `docs/reference/manifest-schema.md` for the current `manifestVersion`. |
+| `vms.json` | public compatibility surface | world-readable, existing installation path | Canonical workload compatibility entries and public capability metadata. |
 | `bundle.json` | private bundle index | root:`d2bd` `0640` | Bundle version, artifact paths, hashes, and compatibility policy. |
 | `host.json` | private host intent | root:`d2bd` `0640` | Host requirements, network intent, runtime/provider catalog, kernel/device/fd requirements, and support tier. |
-| `processes.json` | private supervisor intent | root:`d2bd` `0640` | Per-VM process DAG, readiness predicates, cgroup placement, and minijail profile IDs. |
+| `processes.json` | private supervisor intent | root:`d2bd` `0640` | Realm-owned workload DAGs, readiness predicates, cgroup placement, and minijail profile IDs. |
 | `storage.json` | private storage lifecycle contract | root:`d2bd` `0640` | Managed path inventory, restart/adoption policy, degraded-state taxonomy, cleanup/repair policy, and remediation IDs. |
 | `sync.json` | private synchronization contract | root:`d2bd` `0640` | Lock inventory, OFD/fd-transfer policy, acquisition order, stale-owner policy, and lock degraded-state handling. |
 | `allocator.json` | private allocator metadata and launch authority | root:`d2bd` `0640` | Integrity-bound local-root allocator plan rooted in `d2b.realms`: enabled realms, resource requests, path/socket partitions, provider placement, env bridges, and bounded paired controller/broker process-launch records. |
@@ -25,8 +25,12 @@ world-readable system profile.
 | `unsafe-local-workloads.json` | private configured launcher intent | root:`d2bd` `0640` | Normalized configured argv and default items for unsafe-local and local-VM workloads, plus unsafe-local persistent-shell policy, resolved only by `d2bd`. |
 | `provider-registry-v2.json` | private provider composition contract | root:`d2bd` `0640` | Canonical provider descriptors and closed per-axis bindings to opaque bundle intent IDs; contains no argv or credentials. |
 | `privileges.json` | private authorization policy | root:`d2bd` `0640` | Public API/CLI authorization matrix and private broker operation matrix. |
-| `closures/<vm>.json` | private closure metadata | root:`d2bd` `0640` | Per-VM toplevel, closure paths, declared-runner parity data, and generation metadata. |
+| `closures/<workload-id>.json` | private closure metadata | root:`d2bd` `0640` | Per-workload toplevel, closure paths, declared-runner parity data, and generation metadata. |
 | `minijail-profile.json` | private sandbox profile catalog | root:`d2bd` `0640` | Typed minijail profile fields, mount policy, and bounded start-as-root exceptions. |
+
+`GuestSessionCredentialV1` is deliberately absent from this inventory. Only
+its non-secret runtime storage policy may appear in `storage.json`; credential
+bytes and private/PSK material are never bundle or public-manifest data.
 
 `vms.json` is the only world-readable artifact. All other artifacts are
 daemon-owned bundle inputs, including public-safe launcher metadata that
@@ -46,8 +50,9 @@ The policy is defined by
 schema directory is `docs/reference/schemas/v2/`; the bundle and
 per-artifact schemas were bumped from `v1` to `v2` to land the
 host-prepare additions; the current emitted
-bundle keeps `schemaVersion = "v2"` and uses `bundleVersion = 12`
-for generated provider registry composition.
+bundle keeps `schemaVersion = "v2"` and uses `bundleVersion = 13`;
+version 12 added generated provider-registry composition and version 13 adds
+discovery of the observability secret-generation metadata contract.
 Each artifact now carries a
 matching v2 markdown companion beside the committed JSON schema.
 `cargo xtask gen-schemas` regenerates the JSON files under
@@ -73,15 +78,17 @@ same wave integration.
 
 The public boundary is intentionally narrow:
 
-- `vms.json` may contain VM names, public capability bits, public socket
-  locations already required by the bash CLI, and non-secret topology
-  metadata.
+- `vms.json` may contain canonical workload IDs, public capability bits, and
+  the non-secret compatibility fields required by the frozen Rust parser.
 - `realm-workloads-launcher-v2.json` contains public-safe, argv-free metadata
   but remains daemon-owned `0640`; unprivileged consumers receive it through
   the authorized public daemon API.
 - `provider-registry-v2.json` is private, argv-free composition metadata. Its
   IDs authorize nothing by themselves; `d2bd` resolves its opaque intent IDs
   only through the integrity-verified current bundle.
+- `observability-secrets.json` is private, non-secret metadata describing
+  broker-owned credential destinations and generation bounds. Secret bytes are
+  never embedded in the artifact.
 - Private artifacts may contain command argv, broker-only paths,
   cgroup/device/fd requirements, sandbox profile internals, closure
   paths, qemu-media direct image-file paths authored in Nix config, and
@@ -111,7 +118,7 @@ references below.
 | `unsafe-local-workloads.json` | [`schemas/v2/unsafe-local-workloads.md`](./schemas/v2/unsafe-local-workloads.md) | `schemas/v2/unsafe-local-workloads.json` |
 | `provider-registry-v2.json` | [`schemas/v2/provider-registry-v2.md`](./schemas/v2/provider-registry-v2.md) | `schemas/v2/provider-registry-v2.json` |
 | `privileges.json` | [`schemas/v2/privileges.md`](./schemas/v2/privileges.md) | `schemas/v2/privileges.json` |
-| `closures/<vm>.json` | [`schemas/v2/closures.md`](./schemas/v2/closures.md) | `schemas/v2/closures.json` |
+| `closures/<workload-id>.json` | [`schemas/v2/closures.md`](./schemas/v2/closures.md) | `schemas/v2/closures.json` |
 | `minijail-profile.json` | [`schemas/v2/minijail-profile.md`](./schemas/v2/minijail-profile.md) | `schemas/v2/minijail-profile.json` |
 | `manifest_v04.json` | [`schemas/v2/manifest_v04.md`](./schemas/v2/manifest_v04.md) | `schemas/v2/manifest_v04.json` |
 | `wire-protocol.json` | [`schemas/v2/wire-protocol.md`](./schemas/v2/wire-protocol.md) | `schemas/v2/wire-protocol.json` |

@@ -846,9 +846,9 @@ fn listener(name: &[u8]) -> OwnedFd {
 static CREDENTIAL_SOCKET_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
 fn socket_tempdir() -> tempfile::TempDir {
-    let root = std::env::var_os("D2B_VALIDATION_SOCKET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
+    let Some(root) = std::env::var_os("D2B_VALIDATION_SOCKET_DIR").map(PathBuf::from) else {
+        return tempfile::tempdir().expect("create broker service socket tempdir");
+    };
     std::fs::create_dir_all(&root).expect("create broker service test socket root");
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
         .expect("harden broker service test socket root");

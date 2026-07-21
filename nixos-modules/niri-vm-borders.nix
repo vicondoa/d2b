@@ -1,16 +1,13 @@
 # nixos-modules/niri-vm-borders.nix — opt-in niri window-rule include
-# generation for d2b graphics and qemu-media VMs.
+# generation for realm workloads with mediated Wayland displays.
 #
 # When `d2b.site.ui.compositors.niri.enable = true` or the legacy
 # `d2b.site.niriVmBorders.enable = true`, installs a KDL file
 # at the configured path (default `/etc/d2b/niri-vm-borders.kdl`)
 # containing:
 #   - a rule to hide the host-side crosvm GPU sidecar scanout window;
-#   - one window-rule per enabled graphics VM, matching app-ids that
-#     carry the `d2b.<vm>.` prefix and applying a per-VM border
-#     color.
-#   - one window-rule per enabled qemu-media VM, matching the app-id
-#     prefix written by the Wayland proxy.
+#   - one window-rule per normalized Wayland display mapping, matching
+#     workload-scoped app ids and applying the owning realm's accent.
 #
 # Operators source the file from their niri config with:
 #   include "/etc/d2b/niri-vm-borders.kdl"
@@ -21,34 +18,15 @@
 let
   legacyCfg = config.d2b.site.niriVmBorders;
   cfg = config.d2b.site.ui.compositors.niri;
-  vmsCfg = config.d2b.vms;
+  index = config.d2b._index;
   colors = config.d2b._uiColors;
 
-  isQemuMediaVm = vm: (vm.runtime.kind or "nixos") == "qemu-media";
   niriEnabled = cfg.enable || legacyCfg.enable;
   outputPath = if cfg.enable then cfg.outputPath else legacyCfg.outputPath;
 
-  # All enabled graphics VMs that need compositor-native niri border colors,
-  # sorted by name for a stable output order. Proxy-drawn decorations use a
-  # host-visible wrapper toplevel, so niri's native border and focus ring wrap
-  # the whole proxy window instead of fighting the proxy-owned rail.
-  graphicsVmNames = builtins.sort (a: b: a < b) (
-    lib.attrNames (
-      lib.filterAttrs
-        (name: vm: vm.enable && vm.graphics.enable)
-        vmsCfg
-    )
-  );
-
-  # All enabled qemu-media VMs that still need compositor-native niri borders,
-  # sorted by name for a stable output order.
-  qemuMediaVmNames = builtins.sort (a: b: a < b) (
-    lib.attrNames (
-      lib.filterAttrs
-        (name: vm: vm.enable && isQemuMediaVm vm)
-        vmsCfg
-    )
-  );
+  displayMappings = lib.sort
+    (left: right: lib.lessThan left.workloadId right.workloadId)
+    index.providerRegistryV2Mappings.display;
 
   makeBorderBlock = border: ''
         border {
@@ -59,38 +37,20 @@ let
         }
   '';
 
-  # KDL window-rule block for one graphics VM.
-  # VM names match `^[a-z][a-z0-9-]*$` so they contain no regex
-  # metacharacters other than `-`, which needs no escaping in a regex.
-  makeGraphicsVmRule = name:
+  makeWorkloadRule = mapping:
     let
-      border = colors.vms.${name}.border;
+      workload = index.workloads.byId.${mapping.workloadId};
+      border = colors.vms.${mapping.workloadId}.border;
     in
     ''
-      // Borders for VM: ${name}
+      // Borders for workload: ${workload.canonicalTarget}
       window-rule {
-          match app-id=r#"^d2b\.${name}\."#
+          match app-id=r#"^d2b\.${mapping.workloadId}\."#
     ${makeBorderBlock border}
       }
     '';
 
-  # KDL window-rule block for one qemu-media VM host QEMU window.
-  makeQemuMediaVmRule = name:
-    let
-      border = colors.vms.${name}.border;
-    in
-    ''
-      // Borders for qemu-media VM host window: ${name}
-      window-rule {
-          match app-id=r#"^d2b\.${name}\."#
-    ${makeBorderBlock border}
-      }
-    '';
-
-  # Concatenated window-rule blocks for all enabled graphics and qemu-media VMs.
-  vmRules =
-    (lib.concatMapStrings makeGraphicsVmRule graphicsVmNames)
-    + (lib.concatMapStrings makeQemuMediaVmRule qemuMediaVmNames);
+  workloadRules = lib.concatMapStrings makeWorkloadRule displayMappings;
 
   # The path key for environment.etc is relative to /etc/.
   etcKey = lib.removePrefix "/etc/" outputPath;
@@ -102,7 +62,7 @@ let
     //
     // Requires niri >= 0.1.9 (KDL include directive).
     //
-    // Re-generate after adding or removing graphics or qemu-media VMs by running
+    // Re-generate after adding or removing display-bound workloads by running
     // nixos-rebuild switch (or nixos-rebuild build to preview).
 
     // Hide the host-side crosvm GPU sidecar scanout window.
@@ -118,28 +78,21 @@ let
         }
     }
 
-    ${vmRules}
+    ${workloadRules}
   '';
 
 in
 {
   options.d2b.site.niriVmBorders = {
     enable = lib.mkEnableOption ''
-      Generate a niri KDL window-rule include file for per-VM border
-      coloring, qemu-media host-window coloring, and crosvm
-      scanout-window hiding.
+      Generate a niri KDL window-rule include file for realm workload
+      border coloring and crosvm scanout-window hiding.
 
       When enabled, installs a KDL file at `outputPath` (default
       `/etc/d2b/niri-vm-borders.kdl`) containing one
-      `window-rule` per enabled graphics VM and qemu-media VM.
-      Graphics rules match app-ids that carry the `d2b.<vm>.`
-      prefix, which the host-side Wayland proxy writes onto
-      every surface from that VM.  qemu-media also routes QEMU's host
-      window through the same Wayland proxy, so its app-id carries the
-      `d2b.<vm>.` prefix too. Each rule applies a configurable
-      border color; the default color is derived deterministically from
-      the VM name so every VM gets a stable, distinct color without
-      operator configuration.
+      `window-rule` per normalized Wayland display mapping. Rules match
+      the workload-scoped app-id prefix written by the host-side Wayland
+      proxy. Each rule applies the owning realm's resolved accent color.
 
       To activate the rules, add the following line to your niri
       `config.kdl`:

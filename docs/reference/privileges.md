@@ -18,7 +18,8 @@ Every row carries three policy flags:
   material or whose audit record may reference secret-material
   identifiers. `redacted-only` rows carry only derived/redacted metadata:
   `UsbipBind` records normalized device identity plus serial HMAC
-  correlations, never the raw serial, raw sysfs path, or device path.
+  correlations, never guest credential bytes, signature bytes, raw serial, raw
+  sysfs path, or device path.
 
 Unknown variants and unknown fields in security-sensitive artifacts
 are denied (`defaultForUnknown: deny`).
@@ -209,6 +210,15 @@ protocol stays stable, but the current broker dispatches them to an
 | `RotateSecretById` | secret store | future work | yes | yes | Secret rotation is not implemented. |
 | `PauseBroker` | broker admin | future work | partial (state transition) | no | Broker pause tooling is not implemented. |
 | `ResumeBroker` | broker admin | future work | partial (state transition) | no | Broker resume tooling is not implemented. |
+
+Guest ComponentSession credential generation is realm-controller authority, not
+a privileged signing operation. The owning realm broker may materialize the
+controller-supplied bytes into its declared private runtime path, but it neither
+holds the parent private key nor derives a guest signature.
+The declarative omission of `GuestControlSign` is dependency-blocked until the
+live daemon/broker dispatch is removed. A tree that still has that live Rust
+operation must fail full privilege parity rather than filter the operation from
+the expected matrix.
 
 The wire goldens under `tests/golden/broker-wire/` cover one canonical
 encoding per reserved variant so handlers can be added without

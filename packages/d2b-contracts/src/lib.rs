@@ -161,9 +161,6 @@ impl FeatureFlag {
             "manifest-v04" => Some(KnownFeatureFlag::ManifestV04),
             "status-check-bridges" => Some(KnownFeatureFlag::StatusCheckBridges),
             "export-broker-audit" => Some(KnownFeatureFlag::ExportBrokerAudit),
-            "configured-launch-v1" => Some(KnownFeatureFlag::ConfiguredLaunchV1),
-            "unsafe-local-provider-v1" => Some(KnownFeatureFlag::UnsafeLocalProviderV1),
-            "unsafe-local-shell-v1" => Some(KnownFeatureFlag::UnsafeLocalShellV1),
             _ => None,
         }
     }
@@ -198,9 +195,6 @@ pub enum KnownFeatureFlag {
     ManifestV04,
     StatusCheckBridges,
     ExportBrokerAudit,
-    ConfiguredLaunchV1,
-    UnsafeLocalProviderV1,
-    UnsafeLocalShellV1,
 }
 
 #[cfg(feature = "common")]
@@ -211,9 +205,6 @@ impl KnownFeatureFlag {
             Self::ManifestV04 => "manifest-v04",
             Self::StatusCheckBridges => "status-check-bridges",
             Self::ExportBrokerAudit => "export-broker-audit",
-            Self::ConfiguredLaunchV1 => "configured-launch-v1",
-            Self::UnsafeLocalProviderV1 => "unsafe-local-provider-v1",
-            Self::UnsafeLocalShellV1 => "unsafe-local-shell-v1",
         }
     }
 
@@ -485,14 +476,22 @@ mod tests {
     }
 
     #[test]
-    fn unsafe_local_shell_feature_is_known_without_changing_public_protocol() {
-        let feature = FeatureFlag::new("unsafe-local-shell-v1").expect("valid feature");
-        assert_eq!(feature.known(), Some(KnownFeatureFlag::UnsafeLocalShellV1));
-        assert_eq!(KnownFeatureFlag::UnsafeLocalShellV1.wire_value(), feature);
+    fn legacy_v1_compatibility_flags_are_no_longer_known() {
+        // ADR 0045 destructive cutover: these compatibility flags were dead
+        // negotiation aliases (never checked by d2bd's dispatch) and have
+        // been removed. The literal strings remain syntactically valid
+        // `FeatureFlag`s (any client could still send them), but they no
+        // longer resolve to a `KnownFeatureFlag` — there is fixed v2 service
+        // availability, not an aliased/negotiated compatibility surface.
+        for legacy in [
+            "configured-launch-v1",
+            "unsafe-local-provider-v1",
+            "unsafe-local-shell-v1",
+        ] {
+            let feature = FeatureFlag::new(legacy).expect("valid feature flag syntax");
+            assert_eq!(feature.known(), None, "{legacy} must no longer be known");
+        }
         assert_eq!(PROTOCOL_VERSION, 3);
-
-        let unknown = FeatureFlag::new("unsafe-local-shell-v2").expect("valid future feature");
-        assert_eq!(unknown.known(), None);
     }
 
     #[test]

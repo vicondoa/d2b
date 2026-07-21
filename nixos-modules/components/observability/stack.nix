@@ -1,4 +1,4 @@
-# Observability stack guest component for the auto-declared `sys-obs` VM.
+# Observability stack guest component for the realm-owned observability workload.
 #
 # Native SigNoz backend: ClickHouse + ClickHouse Keeper + SigNoz +
 # SigNoz OTel Collector. No container runtime is used.
@@ -29,8 +29,8 @@ let
   defaultIngressSources = {
     host = {
       # Standalone-only fallback (used when cfg.ingress.sources == {}).
-      # The bundled path always sets ingress.sources via
-      # observability-vm.nix's obsIngressSources, which threads the host's
+      # The bundled path always sets ingress.sources from the canonical
+      # realm observability rows, which thread the host's
       # d2b.observability.host.identityName here instead. Do NOT derive
       # this from config.networking.hostName: in stack.nix that is the
       # obs-VM's own hostname, not the physical host (ADR 0033).

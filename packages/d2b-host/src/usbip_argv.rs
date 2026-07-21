@@ -180,6 +180,7 @@ mod tests {
             .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
             .collect::<Vec<_>>()
             .join("\n")
+            .replace("<BROKER_RESOLVED_BUS_ID>", &audit_input().bus_id)
     }
 
     #[test]

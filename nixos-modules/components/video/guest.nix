@@ -4,19 +4,27 @@
 # The dedicated --vhost-user-media CH device type provides proper SHM
 # support (same pattern as the GPU device), avoiding the broken
 # generic-vhost-user SHM path.
-{ config, lib, pkgs, name, ... }:
+{ config
+, lib
+, pkgs
+, d2bRealmId
+, d2bWorkloadId
+, d2bRoleIds
+, ...
+}:
 
 let
-  vmName = name;
   virtioMediaModule = config.boot.kernelPackages.callPackage
     ../../../pkgs/virtio-media-driver { };
+  videoSocket =
+    "/run/d2b/r/${d2bRealmId}/w/${d2bWorkloadId}/roles/${d2bRoleIds.video}/video.sock";
 in
 {
   microvm.hypervisor = lib.mkDefault "cloud-hypervisor";
 
   microvm.cloud-hypervisor.extraArgs = lib.mkAfter [
     "--vhost-user-media"
-    "socket=/run/d2b-video/${vmName}/video.sock"
+    "socket=${videoSocket}"
   ];
 
   boot.extraModulePackages = [ virtioMediaModule ];

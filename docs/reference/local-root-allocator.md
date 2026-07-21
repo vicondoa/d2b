@@ -2,10 +2,9 @@
 
 **Diataxis category:** reference.
 
-This page documents the committed `d2b-realm-core` contract for
-arbitrating host resources that are shared by local realm controllers. It
-is a contract and schema foundation only: it does not provide a runtime
-allocator service, live host mutation, or realm-broker dispatch for these DTOs.
+This page documents the declarative inputs emitted for the local-root allocator
+and the `d2b-realm-core` typed lease contract. The emitted records do not bind
+listeners, allocate leases, spawn children, or supervise processes.
 
 ## Purpose
 
@@ -90,6 +89,39 @@ A request that cannot be expressed in this total order must be denied
 rather than partially applied. Future runtime code must not acquire a
 resource out of order and then rely on cleanup to recover correctness.
 
+## Generated child-realm inputs
+
+Every enabled host-local child realm contributes a deterministic set of rows:
+
+- one public and one broker `SOCK_SEQPACKET` listener request under
+  `/run/d2b/r/<realm-id>/`;
+- one bounded typed lease-request template containing cgroup, namespace,
+  host-file partition, and listener resources;
+- separate controller and broker launch records, each naming its principal,
+  listener, cgroup leaf, namespace inputs, and resource references;
+- controller and broker identity configurations with deterministic UID/GID
+  maps, including only the realm's internal cgroup group;
+- cgroup layout and ownership rows for the process-free realm/workload roots
+  and the controller, broker, and workload role leaves; and
+- dedicated user, mount, network, IPC, PID, and cgroup namespace rows for each
+  child process.
+
+The rows are sorted by canonical realm path. Resource acquisition is ordered by
+phase and ordinal, and process launch order is explicit. These records describe
+inputs to the runtime owned by the local-root controller and broker; booleans in
+the records state that binding, spawning, supervision, adoption, and lease
+execution have not occurred.
+
+The private `allocator.json.processLaunch` projection pairs the controller and
+broker for each child realm under one canonical controller-generation key.
+Every child row binds its numeric principal, listener, cgroup, namespace,
+resource, and lease references with SHA-256 digests and fail-closed spawn
+flags. References are opaque and bounded; the executable reference is the only
+path-bearing launch field, and no argv or environment is reconstructed from
+ambient host state. Host-mediated device lease requests from the normalized
+device index are included in `resourceRequests` and referenced only by the
+owning realm broker's bounded resource and lease authority.
+
 ## Immutable host-file boundary
 
 `host-file-partition` is a typed resource kind, not permission for a
@@ -164,9 +196,9 @@ The in-memory `FakeAllocatorLedger`, `FakeObservedAllocatorState`, and
 that explicitly enable the `test-support` feature. They are not default generic
 parameters and are absent from the normal production API.
 
-`/etc/d2b/realm-controllers.json` may reference allocator resource ids for a
-realm, but those references remain metadata until a runtime allocator exists.
-They do not grant host mutation authority by themselves.
+`/etc/d2b/realm-controllers.json` references the emitted resource ids for each
+child realm. Those references are inputs, not grants, and do not confer host
+mutation authority.
 
 Operator repair should be explicit and evidence-driven rather than
 automatic cleanup. A CLI or daemon repair path for states such as
@@ -202,12 +234,13 @@ interface names, command output, credentials, provider endpoints, and
 opaque resource values that would expand label cardinality or leak host
 state.
 
-## Current implementation status
+## Runtime boundary
 
 The committed foundation consists of Rust DTOs, validation helpers, a pure
-allocator decision engine with injectable state adapters, tests, and generated
-schema coverage in `d2b-realm-core`. It does not install a local-root allocator
-daemon, implement a durable production adapter, expose a public or broker socket
-operation, or change the live behavior of existing `d2b.envs` networking,
-cgroup, nftables, host-file, or namespace management. Runtime allocation, live
-mutation, and migration from local host-resource paths are contract boundaries.
+allocator decision engine with injectable state adapters, tests, generated
+schema coverage, and declarative Nix rows. The local-root runtime composes
+durable ledger, observed-state, and pidfd-backed liveness adapters; validates
+the generated rows; binds listeners; creates namespaces and cgroups; allocates
+and revokes leases; parent-spawns children; returns pidfds; and performs
+adoption and supervision. No child realm `.socket` or `.service` unit is
+generated, and the allocator is not a separate daemon.

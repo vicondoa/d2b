@@ -82,7 +82,7 @@ hardlink_farm::tests::swap_current_overwrites_existing_symlink
 hardlink_farm::tests::swap_current_refuses_marker_less_generation
 hardlink_farm::tests::swap_current_refuses_marker_with_wrong_generation_number
 hardlink_farm::tests::sweep_live_pool_keeps_retained_generations_and_removes_stale_entries
-otel_host_bridge_argv::tests::argv_shape_matches_singleton_service
+otel_host_bridge_argv::tests::argv_shape_matches_canonical_realm_endpoint
 otel_host_bridge_argv::tests::rejects_empty_host_egress_socket
 otel_host_bridge_argv::tests::rejects_nul_in_path
 otel_host_bridge_argv::tests::rejects_port_above_max

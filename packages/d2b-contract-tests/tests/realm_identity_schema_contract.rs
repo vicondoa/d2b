@@ -1,10 +1,7 @@
 use std::{env, fs, path::PathBuf};
 
 use d2b_contract_tests::read_repo_file;
-use d2b_core::{
-    bundle::Bundle,
-    storage::{SensitivityClass, StorageJson, StoragePathKind},
-};
+use d2b_core::{bundle::Bundle, realm_controller_config::RealmControllersJson};
 use serde_json::Value;
 
 fn realm_core_schema() -> Value {
@@ -137,15 +134,15 @@ fn identity_lifecycle_schema_excludes_material_fields() {
 }
 
 #[test]
-fn rendered_realm_identity_contract_shape_and_private_bundle_path_when_fixture_available() {
+fn rendered_realm_identity_and_controller_contracts_are_integrity_pinned_when_fixture_available() {
     let Some(dir) = env::var_os("D2B_FIXTURES").map(PathBuf::from) else {
         eprintln!("  (skipping rendered realm-identity contract check; D2B_FIXTURES unset)");
         return;
     };
 
     let identity: Value = read_fixture_json(&dir, "realm-identity.json");
+    let controllers: RealmControllersJson = read_fixture_json(&dir, "realm-controllers.json");
     let bundle: Bundle = read_fixture_json(&dir, "bundle.json");
-    let storage: StorageJson = read_fixture_json(&dir, "storage.json");
 
     assert_eq!(identity["schemaVersion"], "v2");
     assert_eq!(identity["runtimeState"], "metadata-only");
@@ -175,12 +172,28 @@ fn rendered_realm_identity_contract_shape_and_private_bundle_path_when_fixture_a
         bundle.realm_identity_path.as_deref(),
         Some("/etc/d2b/realm-identity.json")
     );
-    let identity_path = storage
-        .paths
-        .iter()
-        .find(|path| path.path_template.as_str() == "/etc/d2b/realm-identity.json")
-        .expect("storage.json covers realm-identity.json as a private bundle artifact");
-    assert_eq!(identity_path.kind, StoragePathKind::RegularFile);
-    assert_eq!(identity_path.sensitivity, SensitivityClass::Private);
-    assert_eq!(identity_path.mode, "0640");
+    assert_eq!(
+        bundle.realm_controllers_path.as_deref(),
+        Some("/etc/d2b/realm-controllers.json")
+    );
+    assert_eq!(bundle.bundle_version, 13);
+    assert_eq!(bundle.schema_version, "v2");
+    assert_eq!(controllers.schema_version, "v2");
+    assert_eq!(
+        controllers.runtime_state,
+        d2b_core::realm_controller_config::RealmControllerRuntimeState::MetadataOnly
+    );
+    let hashes = bundle
+        .artifact_hashes
+        .as_ref()
+        .expect("bundle fixture must carry artifact hashes");
+    for path in [
+        "/etc/d2b/realm-identity.json",
+        "/etc/d2b/realm-controllers.json",
+    ] {
+        assert!(
+            hashes.contains_key(path),
+            "bundle v13 must integrity-pin private realm artifact {path}"
+        );
+    }
 }

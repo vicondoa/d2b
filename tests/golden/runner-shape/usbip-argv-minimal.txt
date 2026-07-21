@@ -1,3 +1,5 @@
-# P1 usbip argv snapshot from d2b_host::usbip_argv::generate_usbip_argv(audit_input(), {Bind, Unbind})
-/nix/store/USBIPUSBIPUSBIP-linux-usbip/bin/usbip bind --busid 1-2
-/nix/store/USBIPUSBIPUSBIP-linux-usbip/bin/usbip unbind --busid 1-2
+# Broker-private USBIP argv snapshot. The realm bundle contains only an opaque
+# device resource id; the allocator resolves this placeholder after granting
+# the workload-exclusive lease. Raw bus ids never enter bundle or path data.
+/nix/store/USBIPUSBIPUSBIP-linux-usbip/bin/usbip bind --busid <BROKER_RESOLVED_BUS_ID>
+/nix/store/USBIPUSBIPUSBIP-linux-usbip/bin/usbip unbind --busid <BROKER_RESOLVED_BUS_ID>

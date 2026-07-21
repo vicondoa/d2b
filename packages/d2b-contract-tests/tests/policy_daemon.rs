@@ -26,61 +26,61 @@ fn any_line_matches(content: &str, pattern: &str) -> bool {
 // ---------------------------------------------------------------------------
 // Migrated from tests/broker-systemd-unit-eval.sh.
 //
-// Asserts d2b-priv-broker.service + d2b-priv-broker.socket are
-// unconditionally configured in `nixos-modules/host-broker.nix` (NOT gated
-// behind `cfg.daemonExperimental.enable`), and that the canonical
-// socket/service shape is preserved: ListenSequentialPacket =
-// /run/d2b/priv.sock, SocketGroup = d2bd, SocketMode = 0660,
-// serviceConfig.Type = "notify", and the socket unit wantedBy sockets.target.
+// Asserts PID1 owns exactly the fixed four unsuffixed local-root endpoints.
+// Child realm controllers and brokers are parent-spawned and therefore must
+// not be materialized as systemd units.
 // ---------------------------------------------------------------------------
 #[test]
-fn broker_systemd_unit_declarations() {
-    let rel = "nixos-modules/host-broker.nix";
-    assert!(
-        repo_path_exists(rel),
-        "broker-systemd-unit-eval: {rel} missing"
-    );
-    let module = read_repo_file(rel);
+fn fixed_local_root_systemd_unit_declarations() {
+    let daemon_rel = "nixos-modules/host-daemon.nix";
+    let broker_rel = "nixos-modules/host-broker.nix";
+    assert!(repo_path_exists(daemon_rel), "{daemon_rel} missing");
+    assert!(repo_path_exists(broker_rel), "{broker_rel} missing");
+    let daemon = read_repo_file(daemon_rel);
+    let broker = read_repo_file(broker_rel);
 
-    // (a) gating REMOVED — the module must not wrap its config in
-    // `lib.mkIf cfg.daemonExperimental.enable`.
-    assert!(
-        !any_line_matches(
-            &module,
-            r#"config\s*=\s*lib\.mkIf\s+cfg\.daemonExperimental\.enable"#
+    for (module, declaration) in [
+        (&daemon, "systemd.sockets.d2bd ="),
+        (&daemon, "systemd.services.d2bd ="),
+        (&broker, "systemd.sockets.d2b-priv-broker ="),
+        (&broker, "systemd.services.d2b-priv-broker ="),
+    ] {
+        assert!(
+            module.contains(declaration),
+            "fixed local-root unit missing: {declaration}"
+        );
+    }
+    for (module, socket_path) in [
+        (&daemon, r#"ListenSequentialPacket = "/run/d2b/root.sock";"#),
+        (
+            &broker,
+            r#"ListenSequentialPacket = "/run/d2b/broker.sock";"#,
         ),
-        "broker-systemd-unit-eval: config still gated behind cfg.daemonExperimental.enable in {rel}"
-    );
+    ] {
+        assert!(
+            module.contains(socket_path),
+            "fixed local-root socket path missing: {socket_path}"
+        );
+        assert!(module.contains(r#"wantedBy = [ "sockets.target" ];"#));
+    }
+    assert!(daemon.contains("SocketGroup = publicSocketPrincipal.group;"));
+    assert!(broker.contains("SocketGroup = brokerSocketPrincipal.group;"));
+    assert!(daemon.contains(r#"Type = "notify";"#));
+    assert!(broker.contains(r#"Type = "notify";"#));
 
-    // (b) socket declaration present + correct path/group/mode.
-    assert!(
-        any_line_matches(
-            &module,
-            r#"ListenSequentialPacket\s*=\s*"/run/d2b/priv\.sock""#
-        ),
-        r#"broker-systemd-unit-eval: ListenSequentialPacket = "/run/d2b/priv.sock" missing"#
-    );
-    assert!(
-        any_line_matches(&module, r#"SocketGroup\s*=\s*"d2bd""#),
-        r#"broker-systemd-unit-eval: SocketGroup = "d2bd" missing"#
-    );
-    assert!(
-        any_line_matches(&module, r#"SocketMode\s*=\s*"0660""#),
-        r#"broker-systemd-unit-eval: SocketMode = "0660" missing"#
-    );
-
-    // (c) serviceConfig.Type = "notify".
-    assert!(
-        any_line_matches(&module, r#"Type\s*=\s*"notify""#),
-        r#"broker-systemd-unit-eval: serviceConfig.Type = "notify" missing"#
-    );
-
-    // (d) socket unit must wantedBy sockets.target so it activates at boot
-    // without operator intervention.
-    assert!(
-        any_line_matches(&module, r#"wantedBy\s*=\s*\[\s*"sockets\.target"\s*\]"#),
-        "broker-systemd-unit-eval: socket unit not wantedBy sockets.target"
-    );
+    for module in [&daemon, &broker] {
+        for forbidden in [
+            "systemd.sockets.\"d2bd-r-",
+            "systemd.services.\"d2bd-r-",
+            "systemd.sockets.\"d2bbr-r-",
+            "systemd.services.\"d2bbr-r-",
+        ] {
+            assert!(
+                !module.contains(forbidden),
+                "child realm process leaked into PID1 unit declarations: {forbidden}"
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -3,11 +3,362 @@
 let
   topConfig = config;
   types = lib.types;
+  identity = import ./v2-identity.nix;
+  realmStorageRows = import ./realm-storage-rows.nix {
+    inherit config lib;
+  };
+  networkPlan = import ./realm-network-rows.nix {
+    inherit config lib;
+  };
+
+  # The observability stack workload's realm/workload identity is
+  # deterministic from its configured VM name alone, so it can be
+  # recomputed here even when `d2b._realmObservability` is empty
+  # (observability disabled). When observability is enabled, prefer the
+  # already-derived canonical row so there is a single source of truth
+  # for the vsock socket path.
+  observabilityRealmId = identity.deriveRealmId "local-root";
+  observabilityWorkloadId =
+    identity.deriveWorkloadId observabilityRealmId
+      topConfig.d2b.observability.vmName;
+  observabilityVsockHostSocket =
+    topConfig.d2b._realmObservability.endpoints.stackVsock.path
+      or "/var/lib/d2b/r/${observabilityRealmId}/w/${observabilityWorkloadId}/vsock.sock";
+
+  runtimeWorkloads = lib.filter
+    (workload:
+      let runtime = workload.providerBindings.runtime or null;
+      in runtime != null
+        && builtins.elem runtime.implementationId [
+          "cloud-hypervisor"
+          "qemu-media"
+        ])
+    topConfig.d2b._index.workloads.enabledList;
+
+  networkRowFor = workload:
+    lib.findFirst
+      (row: row.canonicalWorkloadId == workload.workloadId)
+      null
+      (lib.flatten (map
+        (realm: map
+          (row: row // { bridge = realm.resources.bridges.lan.ifName; })
+          realm.addressing.workloadRows)
+        networkPlan.realms));
+  networkPlanFor = workload:
+    lib.findFirst
+      (realm: realm.canonicalRealmId == workload.realmId)
+      null
+      networkPlan.realms;
+  roleFor = workload: kind:
+    lib.findFirst
+      (role: role.roleKind == kind)
+      null
+      workload.roles;
+  roleRuntime = role:
+    if role == null then null else
+    (lib.findFirst
+      (resource: resource.kind == "role-runtime")
+      (throw "workload role ${role.roleId} is missing its runtime resource")
+      (topConfig.d2b._index.resources.byRoleId.${role.roleId} or [ ])).path;
+
+  manifestEntry = workload:
+    let
+      implementation =
+        workload.providerBindings.runtime.implementationId;
+      nixos = implementation == "cloud-hypervisor";
+      network = networkRowFor workload;
+      realmNetwork = networkPlanFor workload;
+      isNetVm = workload.workloadName == "network";
+      stateDir =
+        "/var/lib/d2b/r/${workload.realmId}/w/${workload.workloadId}";
+      roleKinds = map (role: role.roleKind) workload.roles;
+      hasRole = role: builtins.elem role roleKinds;
+      runtimeRole = roleFor workload
+        (if nixos then "cloud-hypervisor" else "qemu-media");
+      gpuRole =
+        let full = roleFor workload "gpu";
+        in if full != null then full else roleFor workload "gpu-render-node";
+      tpmRole = roleFor workload "swtpm";
+    in
+    {
+      name = workload.workloadId;
+      apiSocket =
+        if nixos then "${roleRuntime runtimeRole}/api.sock" else null;
+      audio = hasRole "audio";
+      audioService = null;
+      audioStateFile =
+        if hasRole "audio" then "${stateDir}/audio/audio-state.json" else null;
+      bridge =
+        if isNetVm then realmNetwork.resources.bridges.uplink.ifName
+        else if network == null then null
+        else network.bridge;
+      env = workload.realmId;
+      gpuSocket =
+        if gpuRole != null then "${roleRuntime gpuRole}/gpu.sock" else null;
+      graphics = hasRole "gpu";
+      inherit isNetVm;
+      lifecycle = {
+        gracefulShutdown = {
+          enable = true;
+          timeoutSeconds = null;
+        };
+        liveActivation.timeoutSeconds = null;
+      };
+      netVm =
+        if isNetVm || network == null
+        then null
+        else realmNetwork.netVmWorkloadId;
+      observability = {
+        enabled = hasRole "observability-agent";
+        vsockCid = null;
+        vsockHostSocket = null;
+        agentSocket = null;
+      };
+      runtime = {
+        kind = if nixos then "nixos" else "qemu-media";
+        provider = {
+          id =
+            if nixos
+            then "local-cloud-hypervisor"
+            else "local-qemu-media";
+          type = "local";
+          driver = if nixos then "cloud-hypervisor" else "qemu";
+        };
+        capabilities =
+          if nixos then {
+            lifecycle = true;
+            display = true;
+            usbHotplug = true;
+            guestControl = true;
+            exec = true;
+            configSync = true;
+            ssh = true;
+            storeSync = true;
+            keys = true;
+            inGuestObservability = true;
+          } else {
+            lifecycle = true;
+            display = true;
+            usbHotplug = true;
+            guestControl = false;
+            exec = false;
+            configSync = false;
+            ssh = false;
+            storeSync = false;
+            keys = false;
+            inGuestObservability = false;
+          };
+      };
+      securityKey = hasRole "security-key-frontend";
+      shell =
+        if nixos && (workload.spec.shell.enable or false) then {
+          enabled = true;
+          defaultName = workload.spec.shell.defaultName;
+          maxSessions = workload.spec.shell.maxSessions;
+          maxAttached = 1;
+        } else null;
+      sshUser = null;
+      inherit stateDir;
+      staticIp =
+        if isNetVm then realmNetwork.addressing.uplink.netVm
+        else if network == null then null
+        else network.ip;
+      tap =
+        if isNetVm then realmNetwork.resources.taps.netVm.uplink.ifName
+        else if network == null then "none"
+        else network.tap.ifName;
+      tpm = hasRole "swtpm";
+      tpmSocket =
+        if tpmRole != null then "${roleRuntime tpmRole}/tpm.sock" else null;
+      usbipYubikey = hasRole "usbip";
+      usbipdHostIp =
+        if isNetVm || network == null
+        then null
+        else realmNetwork.addressing.uplink.host;
+    };
+
+  publicManifest = {
+    _manifest.manifestVersion = 7;
+    _observability = {
+      enabled = topConfig.d2b.observability.enable;
+      vmName = topConfig.d2b.observability.vmName;
+      obsVsockCid = 1000;
+      obsVsockHostSocket = observabilityVsockHostSocket;
+      signozUrl = "http://127.0.0.1:8080";
+      signozOtlpGrpcPort = topConfig.d2b.observability.signoz.otlpGrpcPort;
+      signozOtlpHttpPort = topConfig.d2b.observability.signoz.otlpHttpPort;
+    };
+  } // lib.listToAttrs (map
+    (workload: {
+      name = workload.workloadId;
+      value = manifestEntry workload;
+    })
+    runtimeWorkloads);
+  publicManifestText = builtins.toJSON publicManifest;
+  publicManifestPkg = pkgs.writeTextFile {
+    name = "d2b-realm-workloads-manifest";
+    text = publicManifestText;
+    destination = "/share/d2b/vms.json";
+  };
+
+  runtimeBinding = workload:
+    workload.providerBindings.runtime or {
+      implementationId = "provider-managed";
+      providerId = null;
+    };
+  providerKind = implementation:
+    if implementation == "cloud-hypervisor" then "local-vm"
+    else if implementation == "qemu-media" then "qemu-media"
+    else if implementation == "systemd-user" then "unsafe-local"
+    else "provider-managed";
+  executionPosture = implementation:
+    if implementation == "systemd-user" then {
+      isolation = "unsafe-local";
+      environment = "systemd-user-manager-ambient";
+      displayEnvironment = "wayland-proxy-only";
+      executionIdentity = "authenticated-requester-uid";
+      sessionPersistence = "user-manager-lifetime";
+    } else {
+      isolation =
+        if builtins.elem implementation [ "cloud-hypervisor" "qemu-media" ]
+        then "virtual-machine"
+        else "provider-managed";
+      environment = "runtime-managed";
+      displayEnvironment = "runtime-managed";
+      executionIdentity =
+        if builtins.elem implementation [ "cloud-hypervisor" "qemu-media" ]
+        then "workload-user"
+        else "provider-managed";
+      sessionPersistence = "runtime-managed";
+    };
+  publicIcon = icon:
+    lib.filterAttrs (_: value: value != null) icon;
+  publicLauncherItem = itemId: item: {
+    id = itemId;
+    inherit (item) type name graphical;
+    icon = publicIcon item.icon;
+    capabilities =
+      if item.type == "shell"
+      then [ "persistent-shell" "pty" ]
+      else [ "configured-launch" ]
+        ++ lib.optional item.graphical "window-forwarding";
+  };
+  launcherWorkload = workload:
+    let
+      runtime = runtimeBinding workload;
+    in
+    {
+      identity = {
+        inherit (workload) workloadId canonicalTarget realmId;
+        realmPath = lib.splitString "." workload.realmPath;
+        workloadName =
+          if workload.metadata.label == workload.configuredName
+          then null
+          else workload.metadata.label;
+        legacyVmName = null;
+        runtimeKind = runtime.implementationId;
+        providerId = runtime.providerId;
+      };
+      providerKind = providerKind runtime.implementationId;
+      executionPosture = executionPosture runtime.implementationId;
+      label = workload.metadata.label;
+      icon = publicIcon workload.metadata.icon;
+      realmAccentColor =
+        topConfig.d2b._uiColors.realms.${workload.realmName}.accent;
+      launcherEnabled = workload.launcher.enabled;
+      defaultItemId = workload.launcher.defaultItem;
+      capabilities = workload.capabilityRefs;
+      items = lib.mapAttrsToList publicLauncherItem workload.launcher.items;
+    };
+  launcherData = {
+    schemaVersion = "v2";
+    runtimeState = "contract-only";
+    workloads = map launcherWorkload
+      topConfig.d2b._index.workloads.enabledList;
+    invariants = {
+      argvPrivate = true;
+      noSecretsOrCredentials = true;
+      providerNeutral = true;
+      realmAccentColorOnly = true;
+      typedExecutionPosture = true;
+    };
+  };
+
+  privateLauncherItem = itemId: item:
+    {
+      id = itemId;
+      inherit (item) type name;
+      icon = publicIcon item.icon;
+    }
+    // lib.optionalAttrs (item.type == "exec") {
+      inherit (item) argv graphical;
+    };
+  privateWorkload = workload:
+    let
+      runtime = runtimeBinding workload;
+    in
+    {
+      identity = {
+        inherit (workload) workloadId canonicalTarget realmId;
+        realmPath = lib.splitString "." workload.realmPath;
+        workloadName =
+          if workload.metadata.label == workload.configuredName
+          then null
+          else workload.metadata.label;
+        legacyVmName = null;
+        runtimeKind = runtime.implementationId;
+        providerId = runtime.providerId;
+      };
+      defaultItemId = workload.launcher.defaultItem;
+      items = lib.mapAttrsToList privateLauncherItem workload.launcher.items;
+    }
+    // lib.optionalAttrs (runtime.implementationId == "systemd-user"
+      && (workload.spec.shell.enable or false)) {
+      shell = {
+        inherit (workload.spec.shell) defaultName maxSessions;
+      };
+    };
+  privateLauncherWorkloads = lib.filter
+    (workload:
+      let implementation = (runtimeBinding workload).implementationId;
+      in implementation == "systemd-user"
+        || workload.launcher.items != { }
+        || workload.launcher.defaultItem != null)
+    topConfig.d2b._index.workloads.enabledList;
+  unsafeLocalData = {
+    schemaVersion = "v2";
+    workloads = map privateWorkload (lib.filter
+      (workload:
+        (runtimeBinding workload).implementationId == "systemd-user")
+      privateLauncherWorkloads);
+    localVmWorkloads = map privateWorkload (lib.filter
+      (workload:
+        builtins.elem (runtimeBinding workload).implementationId [
+          "cloud-hypervisor"
+          "qemu-media"
+        ])
+      privateLauncherWorkloads);
+  };
+
+  artifactDataModule = types.submodule {
+    freeformType = types.attrsOf types.anything;
+
+    options.resourceRequests = lib.mkOption {
+      type = types.listOf types.attrs;
+      default = [ ];
+      internal = true;
+      visible = false;
+      description = "Composable allocator resource request rows.";
+    };
+  };
 
   artifactModule = types.submodule ({ name, config, ... }: {
     options = {
       data = lib.mkOption {
-        type = types.attrsOf types.anything;
+        type =
+          if name == "allocatorJson"
+          then artifactDataModule
+          else types.attrsOf types.anything;
         default = { };
         internal = true;
         visible = false;
@@ -144,7 +495,6 @@ let
     "allocatorJson"
     "realmControllersJson"
     "realmIdentityJson"
-    "realmWorkloadsLauncherJson"
     "realmWorkloadsLauncherV2Json"
     "unsafeLocalWorkloadsJson"
     "providerRegistryV2Json"
@@ -241,14 +591,6 @@ in
       description = "Internal typed realm-identity.json artifact metadata.";
     };
 
-    realmWorkloadsLauncherJson = lib.mkOption {
-      type = artifactModule;
-      default = { };
-      internal = true;
-      visible = false;
-      description = "Internal typed realm-workloads-launcher.json artifact metadata for desktop launcher consumers.";
-    };
-
     realmWorkloadsLauncherV2Json = lib.mkOption {
       type = artifactModule;
       default = { };
@@ -298,7 +640,73 @@ in
     };
   };
 
+  options.d2b._manifestJsonPath = lib.mkOption {
+    type = types.str;
+    internal = true;
+    visible = false;
+    readOnly = true;
+  };
+
+  options.d2b._manifestPkg = lib.mkOption {
+    type = types.package;
+    internal = true;
+    visible = false;
+    readOnly = true;
+  };
+
+  options.d2b._manifestData = lib.mkOption {
+    type = types.attrsOf types.anything;
+    internal = true;
+    visible = false;
+    readOnly = true;
+    description = ''
+      Internal pre-serialization view of the public realm-workloads
+      manifest, for contract-test introspection without requiring a
+      derivation build/IFD to read the rendered vms.json.
+    '';
+  };
+
   config = {
+    d2b._manifestJsonPath =
+      "${publicManifestPkg}/share/d2b/vms.json";
+    d2b._manifestPkg = publicManifestPkg;
+    d2b._manifestData = publicManifest;
+    environment.systemPackages = [ publicManifestPkg ];
+
+    d2b._bundle.storageJson = {
+      data = {
+        schemaVersion = "v2";
+        paths = realmStorageRows.paths;
+      };
+      installFileName = "storage.json";
+      classification = "contractPrivateNonSecret";
+      sensitivity = "nonSecret";
+    };
+
+    d2b._bundle.syncJson = {
+      data = {
+        schemaVersion = "v2";
+        locks = realmStorageRows.locks;
+      };
+      installFileName = "sync.json";
+      classification = "contractPrivateNonSecret";
+      sensitivity = "nonSecret";
+    };
+
+    d2b._bundle.realmWorkloadsLauncherV2Json = {
+      data = launcherData;
+      installFileName = "realm-workloads-launcher-v2.json";
+      classification = "contractPublic";
+      sensitivity = "nonSecret";
+    };
+
+    d2b._bundle.unsafeLocalWorkloadsJson = {
+      data = unsafeLocalData;
+      installFileName = "unsafe-local-workloads.json";
+      classification = "contractPrivateNonSecret";
+      sensitivity = "nonSecret";
+    };
+
     assertions = [
       {
         assertion = collidingExtraArtifactNames == [ ];

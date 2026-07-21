@@ -1,635 +1,742 @@
-# nix-unit cases migrated from tests/net-vm-network-eval.sh.
-#
-# Reconstructs the bash gate's work/safe/observability topology against the
-# root d2b module set via `mkEval`, then asserts the net-VM/firewall
-# contract directly from the rendered host config and composed per-VM configs.
-#
-# Spec correction (existing code is canon): the legacy bash gate read guest
-# networkd/nftables details from `config.microvm.vms.<vm>.config`, which is a
-# raw compatibility-shaped surface in the daemon-only tree and now lacks the
-# realized guest networkd details. Current code stores the composed VM NixOS
-# evaluations under `config.d2b._computed.<vm>.config`; these cases assert
-# the same intended values there instead of preserving the bash gate's late
-# skip after only the catch-all DHCP neutralization check.
-{ mkEval, lib, ... }:
+{ lib, flakeRoot, mkEval, ... }:
 
 let
-  fixture = { lib, ... }: {
-    boot.loader.grub.enable = false;
-    boot.loader.systemd-boot.enable = false;
-    boot.initrd.includeDefaultModules = false;
-    fileSystems."/" = { device = "tmpfs"; fsType = "tmpfs"; };
-    environment.etc."machine-id".text = "00000000000000000000000000000000";
-    system.stateVersion = "25.11";
-    users.users.alice = { isNormalUser = true; uid = 1000; };
-
-    d2b.site = {
-      waylandUser = "alice";
-      launcherUsers = [ "alice" ];
-      yubikey.enable = false;
-      allowUnsafeEastWest = true;
-    };
-
-    # Auto-declares env "obs" (lanSubnet 10.40.0.0/24, uplinkSubnet
-    # 203.0.113.0/30), the sys-obs workload VM, and sys-obs-net.
-    d2b.observability.enable = true;
-
-    d2b.envs.work = {
-      lanSubnet = "10.20.0.0/24";
-      uplinkSubnet = "192.0.2.0/30";
-      mtu = 1280;
-      mssClamp = true;
-      lan.allowEastWest = true;
-      externalNetwork = {
-        attachment = {
-          enable = true;
-          interface = "eno1";
-        };
-        egress = {
-          enable = true;
-          allowedCidrs = [ "192.168.1.0/24" ];
-        };
-        portForwards = [
-          { protocol = "tcp"; listenPort = 2222; vm = "corp-vm"; targetPort = 22; }
-        ];
-        mdns = {
-          enable = true;
-          dnsmasqLocal.enable = true;
-        };
-      };
-    };
-    d2b.envs.safe = {
-      lanSubnet = "10.30.0.0/24";
-      uplinkSubnet = "198.51.100.0/30";
-    };
-    d2b.envs.quiet = {
-      lanSubnet = "10.50.0.0/24";
-      uplinkSubnet = "198.51.100.4/30";
-      externalNetwork = {
-        attachment = {
-          enable = true;
-          interface = "eno2";
-        };
-        mdns = {
-          enable = true;
-          reflector.enable = false;
-        };
-      };
-    };
-    d2b.vms.corp-vm = {
+  identity = import (flakeRoot + "/nixos-modules/v2-identity.nix");
+  d2bLib = import (flakeRoot + "/nixos-modules/lib.nix") { inherit lib; };
+  realmId = identity.deriveRealmId "home.local-root";
+  workloadId = identity.deriveWorkloadId realmId "app";
+  rawD2b = {
+    site.allowUnsafeEastWest = false;
+    hostLanCidrs = [ "192.168.0.0/16" ];
+    realms.home = {
       enable = true;
-      env = "work";
-      index = 10;
-      ssh.user = "alice";
-      config = {
-        networking.hostName = lib.mkDefault "corp-vm";
-        users.users.alice = { isNormalUser = true; uid = 1000; };
+      id = "home";
+      path = "home";
+      placement = "host-local";
+      broker = {
+        enable = true;
+        hostMutation = true;
+      };
+      network = {
+        mode = "declared";
+        lanSubnet = "10.20.0.0/24";
+        uplinkSubnet = "192.0.2.0/30";
+        mtu = 1280;
+        mssClamp = true;
+        netVmName = null;
+        lan.allowEastWest = false;
+        hostBlocklist = [ "10.0.0.0/8" ];
+        externalNetwork = {
+          enable = true;
+          attachment = {
+            enable = true;
+            interface = "eno1";
+            mode = "macvtap";
+            macvtapMode = "bridge";
+            macAddress = null;
+            ipv4 = {
+              method = "dhcp";
+              address = null;
+              gateway = null;
+              dns = [ ];
+            };
+          };
+          egress = {
+            enable = true;
+            allowedCidrs = [ "192.168.1.0/24" ];
+            masquerade = true;
+          };
+          portForwards = [{
+            protocol = "tcp";
+            listenPort = 2222;
+            workload = "app";
+            targetIp = null;
+            targetPort = 22;
+            sourceCidrs = [ ];
+          }];
+          mdns = {
+            enable = true;
+            reflector.enable = true;
+            dnsmasqLocal = {
+              enable = true;
+              port = 53530;
+            };
+            publishWorkstation = false;
+          };
+        };
+      };
+      providers.vm = {
+        enable = true;
+        type = "runtime";
+        implementationId = "cloud-hypervisor";
+      };
+      workloads.app = {
+        enable = true;
+        provider = "vm";
       };
     };
   };
+  realmIndex =
+    import (flakeRoot + "/nixos-modules/index-realms.nix") {
+      inherit identity lib;
+    } rawD2b.realms;
+  workloadIndex =
+    import (flakeRoot + "/nixos-modules/index-workloads.nix") {
+      inherit identity lib;
+    } {
+      realms = rawD2b.realms;
+      inherit realmIndex;
+    };
+  resourceIndex =
+    import (flakeRoot + "/nixos-modules/index-resources.nix") {
+      inherit identity lib;
+    } {
+      realms = rawD2b.realms;
+      inherit realmIndex workloadIndex;
+    };
+  normalizedWorkloads = map
+    (row: row // {
+      providerBindings =
+        resourceIndex.providers.bindingsByWorkloadId.${row.workloadId};
+    })
+    workloadIndex.enabledList;
+  config.d2b = rawD2b // {
+    _index = {
+      realms = realmIndex;
+      workloads.enabledByRealmId =
+        lib.groupBy (row: row.realmId) normalizedWorkloads;
+    };
+  };
 
-  cfg = (mkEval [ fixture ]).config;
-  computed = cfg.d2b._computed;
-
-  workNet = computed.sys-work-net.config;
-  safeNet = computed.sys-safe-net.config;
-  quietNet = computed.sys-quiet-net.config;
-  obsNet = computed.sys-obs-net.config;
-  workGuest = computed.corp-vm.config;
-
-  workEthDhcp = workNet.systemd.network.networks."10-eth-dhcp";
-  workUplink = workNet.systemd.network.networks."10-uplink";
-  workLan = workNet.systemd.network.networks."10-lan";
-  workHome = workNet.systemd.network.networks."10-home";
-  workHomeLink = workNet.systemd.network.links."10-home";
-  workGuestDhcp = workGuest.systemd.network.networks."10-eth-dhcp";
-  workHomeIface = builtins.elemAt workNet.microvm.interfaces 2;
-  workHomeMac = workHomeIface.mac;
-
-  hostBrUp = cfg.systemd.network.networks."20-br-work-up";
-  hostBrUpRoute = builtins.head hostBrUp.routes;
-  hostBrLan = cfg.systemd.network.networks."20-br-work-lan";
-  hostUpTap = cfg.systemd.network.networks."30-up-work";
-  hostNetLanTap = cfg.systemd.network.networks."25-net-lan-work";
-  workLanBridge = cfg.systemd.network.networks."30-lan-work";
-  safeLanBridge = cfg.systemd.network.networks."30-lan-safe";
-  obsLanBridge = cfg.systemd.network.networks."30-lan-obs";
-
-  obsUplink = obsNet.systemd.network.networks."10-uplink";
-  obsLan = obsNet.systemd.network.networks."10-lan";
-
-  workRuleset = workNet.networking.nftables.ruleset;
-  safeRuleset = safeNet.networking.nftables.ruleset;
-  obsRuleset = obsNet.networking.nftables.ruleset;
-  workDnsmasqServers = workNet.services.dnsmasq.settings.server;
-
-  mssClampRule = "tcp flags syn tcp option maxseg size set rt mtu";
-  lanToLanForwardRule = ''iifname "eth1" oifname "eth1" ct state new accept'';
-  lanToUplinkAcceptRule = ''iifname "eth1" oifname "eth0" ct state new accept'';
-  lanToHomeAcceptRule = ''iifname "eth1" oifname "external0" ip daddr 192.168.1.0/24 ct state new accept'';
-  externalNetworkEth0DropRule = ''iifname "eth1" oifname "eth0" ip daddr 192.168.1.0/24 drop'';
-  homeDnatRule = ''iifname "external0" tcp dport 2222 dnat to 10.20.0.10:22'';
-  homeForwardRule = ''iifname "external0" oifname "eth1" ip daddr 10.20.0.10 tcp dport 22 ct state new accept'';
-  homeMasqueradeRule = ''oifname "external0" masquerade'';
-
-  hostJson = builtins.fromJSON cfg.d2b._bundle.hostJson.jsonText;
-  workHostEnv = builtins.head (builtins.filter (env: env.env == "work") hostJson.environments);
-  processesJson = cfg.d2b._bundle.processesJson.data;
-  workNetDag = builtins.head (builtins.filter (dag: dag.vm == "sys-work-net") processesJson.vms);
-  workNetChNode = builtins.head (builtins.filter (node: node.id == "cloud-hypervisor") workNetDag.nodes);
-  workNetHomeProcessIface = builtins.elemAt workNetChNode.networkInterfaces 2;
-  workNetHomeArgvFd =
-    lib.any
-      (arg: lib.hasInfix "fd=10" arg && lib.hasInfix "mac=${workHomeMac}" arg)
-      workNetChNode.argv;
-  mdnsHomeInputRule = ''iifname "external0" udp dport 5353 accept'';
-  mdnsLanInputRule = ''iifname "eth1" udp dport 5353 accept'';
-
-  hasRule = ruleset: needle: lib.hasInfix needle ruleset;
-
-  lineOf = ruleset: needle:
+  plan = import (flakeRoot + "/nixos-modules/realm-network-rows.nix") {
+    inherit config lib;
+  };
+  realm = builtins.head plan.realms;
+  resources = realm.resources;
+  workload = builtins.head realm.addressing.workloadRows;
+  workloadTap = builtins.head resources.taps.workloads;
+  forward = builtins.head realm.guest.externalNetwork.portForwards;
+  providerFragment =
+    import
+      (flakeRoot
+        + "/nixos-modules/provider-registry-v2-extensions/network.nix")
+      { inherit config lib; };
+  provider = builtins.head providerFragment.providers;
+  invalidHostCidrPlan =
+    import (flakeRoot + "/nixos-modules/realm-network-rows.nix") {
+      inherit lib;
+      config.d2b = config.d2b // {
+        hostLanCidrs = [ "999.168.0.0/16" ];
+      };
+    };
+  # Behavior-level allowEastWest=true fixture: same realm, but with
+  # `network.lan.allowEastWest = true` and the required
+  # `site.allowUnsafeEastWest = true` acknowledgement. Only the tap
+  # `isolated` bridge-port flag is expected to flip; the forward/input
+  # nftables rows below stay keyed on `inputRole = "uplink"` regardless,
+  # since east-west enforcement never lived in nftables.
+  eastWestConfig.d2b = config.d2b // {
+    site = config.d2b.site // { allowUnsafeEastWest = true; };
+    realms = config.d2b.realms // {
+      home = config.d2b.realms.home // {
+        network = config.d2b.realms.home.network // {
+          lan = config.d2b.realms.home.network.lan // { allowEastWest = true; };
+        };
+      };
+    };
+  };
+  eastWestPlan =
+    import (flakeRoot + "/nixos-modules/realm-network-rows.nix") {
+      config = eastWestConfig;
+      inherit lib;
+    };
+  eastWestRealm = builtins.head eastWestPlan.realms;
+  eastWestWorkloadTap = builtins.head eastWestRealm.resources.taps.workloads;
+  allRulesMarked =
+    lib.all
+      (rule: rule.comment == realm.ownershipMarker)
+      resources.nftables.rules;
+  allChainsMarked =
+    lib.all
+      (chain: chain.comment == realm.ownershipMarker)
+      resources.nftables.chains;
+  findIndex = predicate: values:
     let
-      indexed = lib.imap0
-        (i: line: { lineNo = i + 1; inherit line; })
-        (lib.splitString "\n" ruleset);
-      matches = builtins.filter (entry: lib.hasInfix needle entry.line) indexed;
+      matches = lib.filter (index: predicate (builtins.elemAt values index))
+        (builtins.genList (index: index) (builtins.length values));
     in
-    if matches == [ ] then null else (builtins.head matches).lineNo;
+    if matches == [ ] then null else builtins.head matches;
+  hostDropIndex =
+    findIndex
+      (rule: lib.hasInfix "-host-drop-" rule.id)
+      resources.nftables.rules;
+  internetIndex =
+    findIndex
+      (rule: lib.hasSuffix "-internet" rule.id)
+      resources.nftables.rules;
+  resourceKinds = map (request: request.kind) plan.allocatorRequests;
 
-  beforeRule = ruleset: first: second:
-    let
-      firstLine = lineOf ruleset first;
-      secondLine = lineOf ruleset second;
-    in
-    firstLine != null && secondLine != null && firstLine < secondLine;
+  # Exact chain/rule-role fixtures for the host-facing forward/input/
+  # postrouting rows: every one of them keys on `inputRole = "uplink"`
+  # because the net VM — not the host — terminates the workload LAN, and
+  # the host only ever forwards what the net VM re-emits on its uplink.
+  forwardChainName = "${realm.ownershipId}-forward";
+  inputChainName = "${realm.ownershipId}-input";
+  postroutingChainName = "${realm.ownershipId}-postrouting";
+  hostDropForwardRules = lib.filter
+    (rule: lib.hasInfix "-host-drop-forward-" rule.id)
+    resources.nftables.rules;
+  hostDropInputRules = lib.filter
+    (rule: lib.hasInfix "-host-drop-input-" rule.id)
+    resources.nftables.rules;
+  internetRule = lib.findFirst
+    (rule: lib.hasSuffix "-internet" rule.id)
+    (throw "net-vm-network: no internet forward rule in fixture")
+    resources.nftables.rules;
+  masqueradeRule = lib.findFirst
+    (rule: lib.hasSuffix "-masquerade" rule.id)
+    (throw "net-vm-network: no masquerade postrouting rule in fixture")
+    resources.nftables.rules;
+  deadBridgeRules = lib.filter
+    (rule: lib.hasInfix "-lan-netvm" rule.id || lib.hasInfix "-peer-default" rule.id)
+    resources.nftables.rules;
+  expectedGeneratedExternalMac = d2bLib.mkMac realmId "external" 0;
+
+  # Real end-to-end reachability proof, on top of the hand-rolled `plan`
+  # fixture above (which only proves realm-network-rows.nix's own pure
+  # output shape). This builds an ordinary consumer-shaped realm through
+  # the actual module system: a realm with `network.mode = "declared"`
+  # and one regular declared workload ("corp-vm"). It then asserts the
+  # auto-declared "network" workload (a) is actually reachable from that
+  # realm's own `d2b.realms.<realm>` config (not merely a pure-function
+  # row), (b) flows through the ordinary workload/role/resource index into
+  # the composed processes.json / minijail-profiles / `_computedWorkloads`
+  # bundle artifacts alongside its declared sibling, and (c) that sibling's
+  # own composed DAG/argv are unaffected by the net VM's presence.
+  workRealmId = identity.deriveRealmId "work.local-root";
+  netVmWorkloadId = identity.deriveWorkloadId workRealmId "network";
+  corpVmWorkloadId = identity.deriveWorkloadId workRealmId "corp-vm";
+  netVmCloudHypervisorRoleId =
+    identity.deriveRoleId workRealmId netVmWorkloadId "cloud-hypervisor";
+  reachabilityManifest =
+    builtins.fromJSON reachability.d2b._manifestPkg.text;
+
+  reachability = (mkEval [
+    {
+      boot.loader.grub.enable = false;
+      boot.loader.systemd-boot.enable = false;
+      boot.initrd.includeDefaultModules = false;
+      fileSystems."/" = {
+        device = "tmpfs";
+        fsType = "tmpfs";
+      };
+      environment.etc."machine-id".text =
+        "00000000000000000000000000000000";
+      system.stateVersion = "25.11";
+      users.users.alice = {
+        isNormalUser = true;
+        uid = 1000;
+      };
+      d2b.acceptDestructiveV2Cutover = true;
+      d2b.site = {
+        waylandUser = "alice";
+        launcherUsers = [ "alice" ];
+        yubikey.enable = false;
+      };
+      d2b.realms.work = {
+        path = "work";
+        placement = "host-local";
+        broker = {
+          enable = true;
+          hostMutation = true;
+        };
+        network = {
+          mode = "declared";
+          lanSubnet = "10.90.0.0/24";
+          uplinkSubnet = "192.0.2.40/30";
+        };
+        providers.runtime = {
+          type = "runtime";
+          implementationId = "cloud-hypervisor";
+        };
+        workloads.corp-vm = {
+          providerRefs.runtime = "runtime";
+          config = {
+            networking.hostName = lib.mkDefault "corp-vm";
+            users.users.alice = {
+              isNormalUser = true;
+              uid = 1000;
+            };
+          };
+        };
+      };
+    }
+  ]).config;
+
+  reachabilityNetwork = lib.findFirst
+    (realm: realm.canonicalRealmId == workRealmId)
+    (throw "reachability: realm work.local-root has no network rows")
+    reachability.d2b._realmNetwork.realms;
+  reachabilityNetGuest = reachabilityNetwork.guest;
+  corpVmNetwork = lib.findFirst
+    (row: row.canonicalWorkloadId == corpVmWorkloadId)
+    (throw "reachability: corp-vm has no network row")
+    reachabilityNetwork.addressing.workloadRows;
+
+  netVmDag = builtins.head (builtins.filter
+    (row: row.workloadIdentity.canonicalTarget == "network.work.local-root.d2b")
+    reachability.d2b._bundle.processesJson.data.vms);
+  corpVmDag = builtins.head (builtins.filter
+    (row: row.workloadIdentity.canonicalTarget == "corp-vm.work.local-root.d2b")
+    reachability.d2b._bundle.processesJson.data.vms);
+  netVmRolesByKind = lib.sort lib.lessThan
+    (map (node: node.role) netVmDag.nodes);
+  corpVmRolesByKind = lib.sort lib.lessThan
+    (map (node: node.role) corpVmDag.nodes);
+  netVmHypervisor = lib.findFirst
+    (node: node.role == "cloud-hypervisor-runner")
+    (throw "missing net VM cloud-hypervisor-runner node")
+    netVmDag.nodes;
+  corpVmHypervisor = lib.findFirst
+    (node: node.role == "cloud-hypervisor-runner")
+    (throw "missing corp-vm cloud-hypervisor-runner node")
+    corpVmDag.nodes;
+  netFlagIndex = argv:
+    findIndex (arg: arg == "--net") argv;
+  netVmNetArgs =
+    let idx = netFlagIndex netVmHypervisor.argv;
+    in lib.sublist (idx + 1) 2 netVmHypervisor.argv;
+  corpVmNetArgs =
+    let idx = netFlagIndex corpVmHypervisor.argv;
+    in lib.sublist (idx + 1) 1 corpVmHypervisor.argv;
 in
 {
-  "net-vm-network/eth-dhcp-match-type-not-ether" = {
-    expr = (workEthDhcp.matchConfig.Type or null) == "ether";
-    expected = false;
-  };
-  "net-vm-network/eth-dhcp-match-mac-sentinel" = {
-    expr = workEthDhcp.matchConfig.MACAddress or null;
-    expected = "00:00:00:00:00:00";
+  "net-vm-network/realm-plan-assertions-pass" = {
+    expr = builtins.all (assertion: assertion.assertion) plan.assertions;
+    expected = true;
   };
 
-  # ---- work net VM static addressing + MTU propagation ----------------
-  "net-vm-network/work-uplink-address" = {
-    expr = (builtins.head workUplink.addresses).Address or "";
-    expected = "192.0.2.2/30";
-  };
-  "net-vm-network/work-lan-address" = {
-    expr = (builtins.head workLan.addresses).Address or "";
-    expected = "10.20.0.1/24";
-  };
-  "net-vm-network/work-uplink-mtu" = {
-    expr = workUplink.linkConfig.MTUBytes or null;
-    expected = "1280";
-  };
-  "net-vm-network/work-lan-mtu" = {
-    expr = workLan.linkConfig.MTUBytes or null;
-    expected = "1280";
-  };
-  "net-vm-network/host-uplink-bridge-mtu" = {
-    expr = hostBrUp.linkConfig.MTUBytes or null;
-    expected = "1280";
-  };
-  "net-vm-network/host-lan-bridge-mtu" = {
-    expr = hostBrLan.linkConfig.MTUBytes or null;
-    expected = "1280";
-  };
-  "net-vm-network/host-uplink-tap-mtu" = {
-    expr = hostUpTap.linkConfig.MTUBytes or null;
-    expected = "1280";
-  };
-  "net-vm-network/host-net-lan-tap-mtu" = {
-    expr = hostNetLanTap.linkConfig.MTUBytes or null;
-    expected = "1280";
-  };
-  "net-vm-network/host-workload-lan-tap-mtu" = {
-    expr = workLanBridge.linkConfig.MTUBytes or null;
-    expected = "1280";
-  };
-  "net-vm-network/workload-guest-dhcp-mtu" = {
-    expr = workGuestDhcp.linkConfig.MTUBytes or null;
-    expected = "1280";
-  };
-
-  # ---- external network net VM attachment --------------------------------------
-  "net-vm-network/home-lan-net-vm-third-interface-type" = {
-    expr = workHomeIface.type;
-    expected = "macvtap";
-  };
-  "net-vm-network/home-lan-net-vm-third-interface-id" = {
-    expr = workHomeIface.id;
-    expected = "work-h0";
-  };
-  "net-vm-network/home-lan-net-vm-macvtap-parent" = {
-    expr = workHomeIface.macvtap.link;
-    expected = "eno1";
-  };
-  "net-vm-network/home-lan-net-vm-macvtap-mode" = {
-    expr = workHomeIface.macvtap.mode;
-    expected = "bridge";
-  };
-  "net-vm-network/home-lan-guest-renamed-external0" = {
-    expr = workHomeLink.linkConfig.Name or null;
-    expected = "external0";
-  };
-  "net-vm-network/home-lan-guest-dhcp" = {
-    expr = workHome.networkConfig.DHCP or null;
-    expected = "ipv4";
-  };
-  "net-vm-network/home-lan-guest-dhcp-routes-ignored" = {
-    expr = workHome.dhcpV4Config.UseRoutes or null;
-    expected = false;
-  };
-  "net-vm-network/home-lan-host-nm-unmanaged-macvtap-only" = {
+  "net-vm-network/consumes-normalized-identities" = {
     expr = {
-      hasHome = builtins.elem "interface-name:work-h0" cfg.networking.networkmanager.unmanaged;
-      hasParent = builtins.elem "interface-name:eno1" cfg.networking.networkmanager.unmanaged;
-    };
-    expected = { hasHome = true; hasParent = false; };
-  };
-  "net-vm-network/home-lan-host-json-contract" = {
-    expr = {
-      parent = workHostEnv.externalNetwork.attachment.parentInterface;
-      hostIf = workHostEnv.externalNetwork.attachment.hostIfName;
-      guestIf = workHostEnv.externalNetwork.attachment.guestIfName;
-      egress = workHostEnv.externalNetwork.egress.enabled;
-      egressCidrs = workHostEnv.externalNetwork.egress.allowedCidrs;
-      forward = builtins.head workHostEnv.externalNetwork.portForwards;
+      realm = realm.canonicalRealmId;
+      workload = workload.canonicalWorkloadId;
     };
     expected = {
-      parent = "eno1";
-      hostIf = "work-h0";
-      guestIf = "external0";
-      egress = true;
-      egressCidrs = [ "192.168.1.0/24" ];
-      forward = {
-        protocol = "tcp";
-        listenPort = 2222;
-        sourceCidrs = [ ];
-        vm = "corp-vm";
-        targetIp = "10.20.0.10";
-        targetPort = 22;
+      realm = realmId;
+      workload = workloadId;
+    };
+  };
+
+  "net-vm-network/invalid-host-cidr-fails-closed" = {
+    expr =
+      builtins.any (assertion: !assertion.assertion)
+        invalidHostCidrPlan.assertions;
+    expected = true;
+  };
+
+  "net-vm-network/allocator-resource-kinds" = {
+    expr = resourceKinds;
+    expected = [
+      "bridge"
+      "bridge"
+      "veth-pair"
+      "tap"
+      "tap"
+      "tap"
+      "nftables-partition"
+    ];
+  };
+
+  "net-vm-network/canonical-resource-ids" = {
+    expr = lib.all
+      (request:
+        builtins.match "^[a-z][a-z0-9-]*$" request.resourceId != null)
+      plan.allocatorRequests;
+    expected = true;
+  };
+
+  "net-vm-network/interface-names-bounded" = {
+    expr = lib.all
+      (name: builtins.stringLength name <= 15)
+      realm.coexistence.networkManager.unmanagedIfNames;
+    expected = true;
+  };
+
+  "net-vm-network/workload-address" = {
+    expr = workload.ip;
+    expected = "10.20.0.10";
+  };
+
+  "net-vm-network/port-forward-target" = {
+    expr = forward.targetIp;
+    expected = "10.20.0.10";
+  };
+
+  "net-vm-network/mtu-propagates-to-bridges" = {
+    expr = {
+      lan = resources.bridges.lan.mtu;
+      uplink = resources.bridges.uplink.mtu;
+    };
+    expected = {
+      lan = 1280;
+      uplink = 1280;
+    };
+  };
+
+  "net-vm-network/mtu-propagates-to-taps" = {
+    expr = {
+      netLan = resources.taps.netVm.lan.mtu;
+      workload = workloadTap.mtu;
+    };
+    expected = {
+      netLan = 1280;
+      workload = 1280;
+    };
+  };
+
+  "net-vm-network/link-attachment-references" = {
+    expr = {
+      vethNamespace = resources.veth.namespaceResourceId;
+      vethBridge = resources.veth.realmBridgeResourceId;
+      hostAddress = resources.veth.hostAddress;
+      hostRoute = builtins.head resources.veth.routes;
+      netUplinkBridge = resources.taps.netVm.uplink.bridgeResourceId;
+      netLanBridge = resources.taps.netVm.lan.bridgeResourceId;
+      workloadBridge = workloadTap.bridgeResourceId;
+    };
+    expected = {
+      vethNamespace = realm.namespaceResourceId;
+      vethBridge = resources.bridges.uplink.resourceId;
+      hostAddress = {
+        address = "192.0.2.1";
+        prefixLength = "30";
+      };
+      hostRoute = {
+        destination = "10.20.0.0/24";
+        via = "192.0.2.2";
+      };
+      netUplinkBridge = resources.bridges.uplink.resourceId;
+      netLanBridge = resources.bridges.lan.resourceId;
+      workloadBridge = resources.bridges.lan.resourceId;
+    };
+  };
+
+  "net-vm-network/mss-clamp" = {
+    expr = {
+      enabled = realm.policy.mssClamp;
+      bytes = realm.policy.mssClampBytes;
+      rulePresent =
+        lib.any
+          (rule: rule.action == "clamp-mss-to-pmtu")
+          resources.nftables.rules;
+    };
+    expected = {
+      enabled = true;
+      bytes = 1240;
+      rulePresent = true;
+    };
+  };
+
+  "net-vm-network/default-workload-isolation" = {
+    expr = {
+      policy = realm.policy.workloadTapIsolation;
+      tap = workloadTap.isolated;
+      netVm = resources.taps.netVm.lan.isolated;
+    };
+    expected = {
+      policy = true;
+      tap = true;
+      netVm = false;
+    };
+  };
+
+  "net-vm-network/allow-east-west-true-unisolates-workload-tap" = {
+    expr = {
+      policy = eastWestRealm.policy.workloadTapIsolation;
+      tap = eastWestWorkloadTap.isolated;
+      netVm = eastWestRealm.resources.taps.netVm.lan.isolated;
+    };
+    expected = {
+      policy = false;
+      tap = false;
+      netVm = false;
+    };
+  };
+
+  "net-vm-network/no-dead-bridge-forward-rules" = {
+    expr = deadBridgeRules;
+    expected = [ ];
+  };
+
+  "net-vm-network/host-drops-cover-forward-and-input-chains" = {
+    expr = {
+      forwardCount = builtins.length hostDropForwardRules;
+      inputCount = builtins.length hostDropInputRules;
+      forwardChains = lib.unique (map (rule: rule.chain) hostDropForwardRules);
+      inputChains = lib.unique (map (rule: rule.chain) hostDropInputRules);
+      forwardInputRoles =
+        lib.unique (map (rule: rule.match.inputRole) hostDropForwardRules);
+      inputInputRoles =
+        lib.unique (map (rule: rule.match.inputRole) hostDropInputRules);
+    };
+    expected = {
+      forwardCount = builtins.length realm.policy.hostBlocklist;
+      inputCount = builtins.length realm.policy.hostBlocklist;
+      forwardChains = [ forwardChainName ];
+      inputChains = [ inputChainName ];
+      forwardInputRoles = [ "uplink" ];
+      inputInputRoles = [ "uplink" ];
+    };
+  };
+
+  "net-vm-network/internet-forward-matches-uplink-input-role" = {
+    expr = {
+      chain = internetRule.chain;
+      action = internetRule.action;
+      match = internetRule.match;
+    };
+    expected = {
+      chain = forwardChainName;
+      action = "accept";
+      match = { inputRole = "uplink"; };
+    };
+  };
+
+  "net-vm-network/masquerade-matches-uplink-input-role" = {
+    expr = {
+      chain = masqueradeRule.chain;
+      action = masqueradeRule.action;
+      match = masqueradeRule.match;
+    };
+    expected = {
+      chain = postroutingChainName;
+      action = "masquerade";
+      match = { inputRole = "uplink"; };
+    };
+  };
+
+  "net-vm-network/generated-external-mac-used-for-guest" = {
+    expr = {
+      guestMac = realm.guest.externalNetwork.attachment.guestMac;
+      hostMac = realm.guest.externalNetwork.attachment.macAddress;
+    };
+    expected = {
+      guestMac = expectedGeneratedExternalMac;
+      hostMac = expectedGeneratedExternalMac;
+    };
+  };
+
+  "net-vm-network/nft-rows-carry-ownership-marker" = {
+    expr = allRulesMarked && allChainsMarked;
+    expected = true;
+  };
+
+  "net-vm-network/nft-foreign-state-fails-closed" = {
+    expr = resources.nftables.foreignRulePolicy;
+    expected = "preserve-and-fail-closed";
+  };
+
+  "net-vm-network/host-drops-precede-internet-accept" = {
+    expr =
+      hostDropIndex != null
+      && internetIndex != null
+      && hostDropIndex < internetIndex;
+    expected = true;
+  };
+
+  "net-vm-network/network-manager-marked-block" = {
+    expr = realm.coexistence.networkManager;
+    expected = realm.coexistence.networkManager // {
+      configPath = "/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf";
+      beginMarker = "# d2b-managed begin";
+      endMarker = "# d2b-managed end";
+      foreignConflict = "nm-managed-foreign-conflict";
+    };
+  };
+
+  "net-vm-network/networkd-detect-only" = {
+    expr = realm.coexistence.networkd;
+    expected = {
+      mode = "detect-only";
+      requiredUnmanagedPrefix = "d2b-";
+      foreignConflict = "networkd-managed-foreign-conflict";
+    };
+  };
+
+  "net-vm-network/child-broker-lease-authority" = {
+    expr = realm.namespaceLocalEffects.authority;
+    expected = "allocator-lease-fds-only";
+  };
+
+  "net-vm-network/provider-fragment-axis" = {
+    expr = {
+      axis = providerFragment.axis;
+      implementation = provider.descriptor.implementationId;
+      binding = provider.binding.axis;
+      capabilities = provider.descriptor.capabilities;
+    };
+    expected = {
+      axis = "network";
+      implementation = "local-realm";
+      binding = "network";
+      capabilities = [
+        "network.plan"
+        "network.ensure"
+        "network.inspect"
+        "network.adopt"
+        "network.release"
+      ];
+    };
+  };
+
+  "net-vm-network/auto-declared-from-realm-network-mode" = {
+    expr = {
+      workload = {
+        inherit (reachability.d2b.realms.work.workloads.network)
+          providerRefs autostart;
+      };
+      provider = {
+        inherit (reachability.d2b.realms.work.providers.network-vm-runtime)
+          type implementationId;
+      };
+    };
+    expected = {
+      workload = {
+        providerRefs.runtime = "network-vm-runtime";
+        autostart = true;
+      };
+      provider = {
+        type = "runtime";
+        implementationId = "cloud-hypervisor";
       };
     };
   };
-  "net-vm-network/home-lan-process-contract-carries-macvtap" = {
-    expr = workNetHomeProcessIface;
+
+  "net-vm-network/reachable-through-generic-workload-index" = {
+    expr = {
+      indexed = reachability.d2b._index.workloads.byId ? ${netVmWorkloadId};
+      runtimeImplementation =
+        reachability.d2b._index.workloads.byId.${netVmWorkloadId}
+          .providerBindings.runtime.implementationId;
+      computed = reachability.d2b._computedWorkloads ? ${netVmWorkloadId};
+    };
     expected = {
-      type = "macvtap";
-      id = "work-h0";
-      mac = workHomeMac;
-      macvtap = {
-        link = "eno1";
-        mode = "bridge";
+      indexed = true;
+      runtimeImplementation = "cloud-hypervisor";
+      computed = true;
+    };
+  };
+
+  "net-vm-network/composed-dag-has-expected-role-set" = {
+    expr = lib.unique netVmRolesByKind;
+    expected = lib.sort lib.lessThan [
+      "cloud-hypervisor-runner"
+      "guest-control-health"
+      "store-virtiofs-preflight"
+      "vsock-relay"
+      "virtiofsd"
+    ];
+  };
+
+  "net-vm-network/composed-dag-net-argv-matches-guest-metadata" = {
+    expr = netVmNetArgs;
+    expected = [
+      "tap=${reachabilityNetGuest.interfaces.netVmUplink},mac=${reachabilityNetGuest.netUplinkMac}"
+      "tap=${reachabilityNetGuest.interfaces.netVmLan},mac=${reachabilityNetGuest.netLanMac}"
+    ];
+  };
+
+  "net-vm-network/eth-dhcp-neutralizer-survives-real-composition" = {
+    expr =
+      let
+        netCfg = reachability.d2b._computedWorkloads.${netVmWorkloadId}
+          .config.systemd.network.networks."10-eth-dhcp";
+      in {
+        mac = netCfg.matchConfig.MACAddress;
+        enable = netCfg.enable;
+      };
+    expected = {
+      mac = "00:00:00:00:00:00";
+      enable = false;
+    };
+  };
+
+  "net-vm-network/public-manifest-identifies-network-workload" = {
+    expr = {
+      netVm = {
+        inherit (reachabilityManifest.${netVmWorkloadId})
+          bridge
+          isNetVm
+          netVm
+          staticIp
+          tap
+          ;
+      };
+      workload = {
+        inherit (reachabilityManifest.${corpVmWorkloadId})
+          bridge
+          isNetVm
+          netVm
+          staticIp
+          tap
+          usbipdHostIp
+          ;
+      };
+    };
+    expected = {
+      netVm = {
+        bridge = reachabilityNetwork.resources.bridges.uplink.ifName;
+        isNetVm = true;
+        netVm = null;
+        staticIp = reachabilityNetwork.addressing.uplink.netVm;
+        tap = reachabilityNetwork.resources.taps.netVm.uplink.ifName;
+      };
+      workload = {
+        bridge = reachabilityNetwork.resources.bridges.lan.ifName;
+        isNetVm = false;
+        netVm = netVmWorkloadId;
+        staticIp = corpVmNetwork.ip;
+        tap = corpVmNetwork.tap.ifName;
+        usbipdHostIp = reachabilityNetwork.addressing.uplink.host;
       };
     };
   };
-  "net-vm-network/home-lan-ch-argv-uses-macvtap-fd" = {
+
+  "net-vm-network/minijail-profile-present-for-net-vm-runtime-role" = {
+    expr =
+      let
+        profile = reachability.d2b._bundle.minijailProfiles
+          ."role-${netVmCloudHypervisorRoleId}".data;
+      in {
+        profileId = profile.profileId;
+        cgroupSubtree = profile.cgroupPlacement.subtree;
+      };
+    expected = {
+      profileId = "role-${netVmCloudHypervisorRoleId}";
+      cgroupSubtree =
+        "d2b.slice/r-${workRealmId}/workloads/w-${netVmWorkloadId}/${netVmCloudHypervisorRoleId}";
+    };
+  };
+
+  "net-vm-network/non-network-workload-unaffected" = {
     expr = {
-      hasFd = workNetHomeArgvFd;
-      hasPlainTap = lib.any
-        (arg: lib.hasInfix "mac=${workHomeMac}" arg && lib.hasInfix "tap=work-h0" arg)
-        workNetChNode.argv;
+      roles = lib.unique corpVmRolesByKind;
+      netArgsCount = builtins.length corpVmNetArgs;
+      workloadCount =
+        builtins.length reachability.d2b._bundle.processesJson.data.vms;
     };
     expected = {
-      hasFd = true;
-      hasPlainTap = false;
+      roles = lib.sort lib.lessThan [
+        "cloud-hypervisor-runner"
+        "guest-control-health"
+        "store-virtiofs-preflight"
+        "vsock-relay"
+        "virtiofsd"
+      ];
+      netArgsCount = 1;
+      # Exactly the auto-declared net VM plus the one consumer-declared
+      # workload — no extra workloads leak in from the auto-declaration.
+      workloadCount = 2;
     };
-  };
-  "net-vm-network/safe-home-lan-default-off" = {
-    expr = {
-      optionDefault = cfg.d2b.envs.safe.externalNetwork.enable;
-      hasGuestNetwork = builtins.hasAttr "10-home" safeNet.systemd.network.networks;
-      hasGuestLink = builtins.hasAttr "10-home" safeNet.systemd.network.links;
-      interfaceCount = builtins.length safeNet.microvm.interfaces;
-    };
-    expected = {
-      optionDefault = false;
-      hasGuestNetwork = false;
-      hasGuestLink = false;
-      interfaceCount = 2;
-    };
-  };
-  "net-vm-network/obs-home-lan-default-off" = {
-    expr = {
-      optionDefault = cfg.d2b.envs.obs.externalNetwork.enable;
-      hasGuestNetwork = builtins.hasAttr "10-home" obsNet.systemd.network.networks;
-      hasGuestLink = builtins.hasAttr "10-home" obsNet.systemd.network.links;
-      interfaceCount = builtins.length obsNet.microvm.interfaces;
-    };
-    expected = {
-      optionDefault = false;
-      hasGuestNetwork = false;
-      hasGuestLink = false;
-      interfaceCount = 2;
-    };
-  };
-
-  # ---- nftables MSS clamp and inter-env/host drops ---------------------
-  "net-vm-network/work-nft-mss-clamp-present" = {
-    expr = hasRule workRuleset mssClampRule;
-    expected = true;
-  };
-  "net-vm-network/safe-nft-mss-clamp-absent" = {
-    expr = hasRule safeRuleset mssClampRule;
-    expected = false;
-  };
-  "net-vm-network/work-nft-host-uplink-drop-present" = {
-    expr = hasRule workRuleset "ip daddr 192.0.2.1 drop";
-    expected = true;
-  };
-  "net-vm-network/work-nft-safe-lan-drop-present" = {
-    expr = hasRule workRuleset "ip daddr 10.30.0.0/24 drop";
-    expected = true;
-  };
-  "net-vm-network/work-nft-safe-uplink-drop-present" = {
-    expr = hasRule workRuleset "ip daddr 198.51.100.0/30 drop";
-    expected = true;
-  };
-  "net-vm-network/work-nft-obs-lan-drop-present" = {
-    expr = hasRule workRuleset "ip daddr 10.40.0.0/24 drop";
-    expected = true;
-  };
-  "net-vm-network/work-nft-obs-uplink-drop-present" = {
-    expr = hasRule workRuleset "ip daddr 203.0.113.0/30 drop";
-    expected = true;
-  };
-  "net-vm-network/safe-nft-work-lan-drop-present" = {
-    expr = hasRule safeRuleset "ip daddr 10.20.0.0/24 drop";
-    expected = true;
-  };
-  "net-vm-network/safe-nft-work-uplink-drop-present" = {
-    expr = hasRule safeRuleset "ip daddr 192.0.2.0/30 drop";
-    expected = true;
-  };
-  "net-vm-network/safe-nft-obs-lan-drop-present" = {
-    expr = hasRule safeRuleset "ip daddr 10.40.0.0/24 drop";
-    expected = true;
-  };
-  "net-vm-network/safe-nft-obs-uplink-drop-present" = {
-    expr = hasRule safeRuleset "ip daddr 203.0.113.0/30 drop";
-    expected = true;
-  };
-  "net-vm-network/work-nft-egress-accept-present" = {
-    expr = hasRule workRuleset lanToUplinkAcceptRule;
-    expected = true;
-  };
-  "net-vm-network/work-nft-home-egress-accept-present" = {
-    expr = hasRule workRuleset lanToHomeAcceptRule;
-    expected = true;
-  };
-  "net-vm-network/work-nft-home-egress-eth0-drop-guard-present" = {
-    expr = hasRule workRuleset externalNetworkEth0DropRule;
-    expected = true;
-  };
-  "net-vm-network/work-nft-home-egress-eth0-drop-before-internet" = {
-    expr = beforeRule workRuleset externalNetworkEth0DropRule lanToUplinkAcceptRule;
-    expected = true;
-  };
-  "net-vm-network/work-nft-home-egress-masquerade-present" = {
-    expr = hasRule workRuleset homeMasqueradeRule;
-    expected = true;
-  };
-  "net-vm-network/work-nft-home-port-forward-dnat-present" = {
-    expr = hasRule workRuleset homeDnatRule;
-    expected = true;
-  };
-  "net-vm-network/work-nft-home-port-forward-filter-present" = {
-    expr = hasRule workRuleset homeForwardRule;
-    expected = true;
-  };
-  "net-vm-network/work-nft-home-dhcp-client-only" = {
-    expr = hasRule workRuleset ''iifname "external0" udp sport 67 udp dport 68 accept'';
-    expected = true;
-  };
-  "net-vm-network/host-avahi-not-enabled" = {
-    expr = cfg.services.avahi.enable or false;
-    expected = false;
-  };
-  "net-vm-network/safe-nft-egress-accept-present" = {
-    expr = hasRule safeRuleset lanToUplinkAcceptRule;
-    expected = true;
-  };
-  "net-vm-network/work-nft-host-uplink-drop-before-egress-accept" = {
-    expr = beforeRule workRuleset "ip daddr 192.0.2.1 drop" lanToUplinkAcceptRule;
-    expected = true;
-  };
-  "net-vm-network/work-nft-safe-lan-drop-before-egress-accept" = {
-    expr = beforeRule workRuleset "ip daddr 10.30.0.0/24 drop" lanToUplinkAcceptRule;
-    expected = true;
-  };
-  "net-vm-network/work-nft-safe-uplink-drop-before-egress-accept" = {
-    expr = beforeRule workRuleset "ip daddr 198.51.100.0/30 drop" lanToUplinkAcceptRule;
-    expected = true;
-  };
-  "net-vm-network/safe-nft-work-lan-drop-before-egress-accept" = {
-    expr = beforeRule safeRuleset "ip daddr 10.20.0.0/24 drop" lanToUplinkAcceptRule;
-    expected = true;
-  };
-  "net-vm-network/safe-nft-work-uplink-drop-before-egress-accept" = {
-    expr = beforeRule safeRuleset "ip daddr 192.0.2.0/30 drop" lanToUplinkAcceptRule;
-    expected = true;
-  };
-
-  # ---- east-west positive and negative controls ------------------------
-  "net-vm-network/work-lan-bridge-east-west-unisolated" = {
-    expr = workLanBridge.bridgeConfig.Isolated or null;
-    expected = false;
-  };
-  "net-vm-network/work-nft-lan-to-lan-forward-present" = {
-    expr = hasRule workRuleset lanToLanForwardRule;
-    expected = true;
-  };
-  "net-vm-network/safe-lan-bridge-isolated-default" = {
-    expr = safeLanBridge.bridgeConfig.Isolated or null;
-    expected = true;
-  };
-  "net-vm-network/safe-nft-lan-to-lan-forward-absent" = {
-    expr = hasRule safeRuleset lanToLanForwardRule;
-    expected = false;
-  };
-
-  # ---- external network mDNS is net-VM scoped and opt-in -----------------------
-  "net-vm-network/host-avahi-disabled" = {
-    expr = cfg.services.avahi.enable;
-    expected = false;
-  };
-  "net-vm-network/workload-avahi-disabled" = {
-    expr = workGuest.services.avahi.enable;
-    expected = false;
-  };
-  "net-vm-network/work-net-avahi-enabled" = {
-    expr = workNet.services.avahi.enable;
-    expected = true;
-  };
-  "net-vm-network/work-net-avahi-reflector-enabled" = {
-    expr = workNet.services.avahi.reflector;
-    expected = true;
-  };
-  "net-vm-network/quiet-net-avahi-reflector-disabled" = {
-    expr = {
-      enable = quietNet.services.avahi.enable;
-      reflector = quietNet.services.avahi.reflector;
-    };
-    expected = {
-      enable = true;
-      reflector = false;
-    };
-  };
-  "net-vm-network/work-net-avahi-open-firewall-disabled" = {
-    expr = workNet.services.avahi.openFirewall;
-    expected = false;
-  };
-  "net-vm-network/work-net-avahi-interfaces" = {
-    expr = workNet.services.avahi.allowInterfaces;
-    expected = [ "external0" "eth1" ];
-  };
-  "net-vm-network/safe-net-avahi-disabled" = {
-    expr = safeNet.services.avahi.enable;
-    expected = false;
-  };
-  "net-vm-network/work-net-mdns-external0-input-rule" = {
-    expr = hasRule workRuleset mdnsHomeInputRule;
-    expected = true;
-  };
-  "net-vm-network/work-net-mdns-eth1-input-rule" = {
-    expr = hasRule workRuleset mdnsLanInputRule;
-    expected = true;
-  };
-  "net-vm-network/safe-net-mdns-external0-input-rule-absent" = {
-    expr = hasRule safeRuleset mdnsHomeInputRule;
-    expected = false;
-  };
-  "net-vm-network/safe-net-mdns-eth1-input-rule-absent" = {
-    expr = hasRule safeRuleset mdnsLanInputRule;
-    expected = false;
-  };
-  "net-vm-network/work-net-dnsmasq-local-forward" = {
-    expr = builtins.elem "/local/127.0.0.1#53530" workDnsmasqServers;
-    expected = true;
-  };
-  "net-vm-network/work-net-mdns-local-resolver-service" = {
-    expr = builtins.hasAttr "d2b-mdns-local-resolver" workNet.systemd.services;
-    expected = true;
-  };
-  "net-vm-network/safe-net-mdns-local-resolver-service-absent" = {
-    expr = builtins.hasAttr "d2b-mdns-local-resolver" safeNet.systemd.services;
-    expected = false;
-  };
-
-  # ---- host-side uplink/LAN bridge and tap contracts -------------------
-  "net-vm-network/host-uplink-bridge-configure-without-carrier" = {
-    expr = hostBrUp.networkConfig.ConfigureWithoutCarrier or null;
-    expected = true;
-  };
-  "net-vm-network/host-uplink-bridge-link-local-addressing-disabled" = {
-    expr = hostBrUp.networkConfig.LinkLocalAddressing or null;
-    expected = "no";
-  };
-  "net-vm-network/host-lan-bridge-link-local-addressing-disabled" = {
-    expr = hostBrLan.networkConfig.LinkLocalAddressing or null;
-    expected = "no";
-  };
-  "net-vm-network/host-uplink-bridge-ipv6-ra-disabled" = {
-    expr = hostBrUp.networkConfig.IPv6AcceptRA or null;
-    expected = false;
-  };
-  "net-vm-network/host-lan-bridge-ipv6-ra-disabled" = {
-    expr = hostBrLan.networkConfig.IPv6AcceptRA or null;
-    expected = false;
-  };
-  "net-vm-network/host-uplink-bridge-route-destination" = {
-    expr = hostBrUpRoute.Destination or null;
-    expected = "10.20.0.0/24";
-  };
-  "net-vm-network/host-uplink-bridge-route-gateway" = {
-    expr = hostBrUpRoute.Gateway or null;
-    expected = "192.0.2.2";
-  };
-  "net-vm-network/net-lan-tap-bridge" = {
-    expr = hostNetLanTap.networkConfig.Bridge or null;
-    expected = "br-work-lan";
-  };
-  "net-vm-network/net-lan-tap-isolation-unset" = {
-    expr = hostNetLanTap.bridgeConfig.Isolated or null;
-    expected = null;
-  };
-  "net-vm-network/workload-lan-tap-bridge" = {
-    expr = workLanBridge.networkConfig.Bridge or null;
-    expected = "br-work-lan";
-  };
-  "net-vm-network/workload-lan-tap-isolation-east-west" = {
-    expr = workLanBridge.bridgeConfig.Isolated or null;
-    expected = false;
-  };
-
-  # ---- auto-declared observability env/net VM --------------------------
-  "net-vm-network/obs-stack-vm-name" = {
-    expr = cfg.d2b.observability.vmName;
-    expected = "sys-obs";
-  };
-  "net-vm-network/obs-stack-vm-env" = {
-    expr = (builtins.getAttr cfg.d2b.observability.vmName cfg.d2b.manifest).env or "";
-    expected = "obs";
-  };
-  "net-vm-network/obs-uplink-address" = {
-    expr = (builtins.head obsUplink.addresses).Address or "";
-    expected = "203.0.113.2/30";
-  };
-  "net-vm-network/obs-lan-address" = {
-    expr = (builtins.head obsLan.addresses).Address or "";
-    expected = "10.40.0.1/24";
-  };
-  "net-vm-network/obs-nft-mss-clamp-absent" = {
-    expr = hasRule obsRuleset mssClampRule;
-    expected = false;
-  };
-  "net-vm-network/obs-nft-lan-to-lan-forward-absent" = {
-    expr = hasRule obsRuleset lanToLanForwardRule;
-    expected = false;
-  };
-  "net-vm-network/obs-lan-bridge-isolated-default" = {
-    expr = obsLanBridge.bridgeConfig.Isolated or null;
-    expected = true;
-  };
-  "net-vm-network/obs-nft-work-lan-drop-present" = {
-    expr = hasRule obsRuleset "ip daddr 10.20.0.0/24 drop";
-    expected = true;
-  };
-  "net-vm-network/obs-nft-work-uplink-drop-present" = {
-    expr = hasRule obsRuleset "ip daddr 192.0.2.0/30 drop";
-    expected = true;
-  };
-  "net-vm-network/obs-nft-safe-lan-drop-present" = {
-    expr = hasRule obsRuleset "ip daddr 10.30.0.0/24 drop";
-    expected = true;
-  };
-  "net-vm-network/obs-nft-safe-uplink-drop-present" = {
-    expr = hasRule obsRuleset "ip daddr 198.51.100.0/30 drop";
-    expected = true;
-  };
-  "net-vm-network/obs-nft-egress-accept-present" = {
-    expr = hasRule obsRuleset lanToUplinkAcceptRule;
-    expected = true;
-  };
-  "net-vm-network/obs-nft-work-lan-drop-before-egress-accept" = {
-    expr = beforeRule obsRuleset "ip daddr 10.20.0.0/24 drop" lanToUplinkAcceptRule;
-    expected = true;
-  };
-  "net-vm-network/obs-nft-work-uplink-drop-before-egress-accept" = {
-    expr = beforeRule obsRuleset "ip daddr 192.0.2.0/30 drop" lanToUplinkAcceptRule;
-    expected = true;
-  };
-  "net-vm-network/obs-nft-safe-lan-drop-before-egress-accept" = {
-    expr = beforeRule obsRuleset "ip daddr 10.30.0.0/24 drop" lanToUplinkAcceptRule;
-    expected = true;
-  };
-  "net-vm-network/obs-nft-safe-uplink-drop-before-egress-accept" = {
-    expr = beforeRule obsRuleset "ip daddr 198.51.100.0/30 drop" lanToUplinkAcceptRule;
-    expected = true;
   };
 }

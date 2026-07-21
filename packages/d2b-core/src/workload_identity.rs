@@ -89,11 +89,13 @@ pub struct WorkloadIdentity {
     /// workloads declared directly inside a realm without a legacy VM entry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legacy_vm_name: Option<ContractId>,
-    /// Opaque runtime kind identifier (e.g. `nixos`, `qemu-media`).
+    /// Opaque runtime implementation identifier (e.g. `systemd-user` for
+    /// unsafe-local workloads, `cloud-hypervisor`/`qemu-media` for
+    /// local-VM-backed workloads).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_kind: Option<ContractId>,
-    /// Stable provider identifier within the realm (e.g.
-    /// `local-cloud-hypervisor`).
+    /// Opaque, per-realm derived provider identifier (e.g.
+    /// `wrk-corp-vm-cloud-hypervisor`); never a fixed literal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_id: Option<ContractId>,
 }

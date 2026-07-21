@@ -7,10 +7,14 @@
 //! access is sound here.
 //!
 //! Migrated gates:
-//!   * tests/polkit-allowlist-eval.sh -> polkit_allowlist_daemon_only_singletons
-//!   * tests/vm-submodule-eval.sh -> vm_submodule_compose_vm_shape
+//!   * tests/vm-submodule-eval.sh -> workload_composition_shape
 //!   * tests/minijail-version-check.sh -> minijail_version_comparison_canary,
 //!     minijail_version_parser_canary
+//!   * tests/unit/nix/cases/index.nix
+//!     "index/companion-builders-do-not-read-the-module-fixpoint" ->
+//!     index_companion_builders_avoid_module_fixpoint (relocated from a Nix
+//!     source-text scan to this Rust policy lint, since the invariant is a
+//!     repo-wide source-shape rule, not an evaluable module value)
 
 use d2b_contract_tests::{read_repo_file, repo_path_exists};
 use regex::Regex;
@@ -24,140 +28,56 @@ fn any_line_matches(content: &str, pattern: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Migrated from tests/polkit-allowlist-eval.sh.
-//
-// Asserts nixos-modules/host-polkit.nix names ONLY the daemon-only singleton
-// units in its launcher-group allowlist (d2bd.service,
-// d2b-priv-broker.service, d2b-priv-broker.socket) and contains NO
-// references to the retired per-VM / per-env unit shapes in its executable
-// region (the leading comment block is allowed to name the retired shapes;
-// the executable code MUST NOT). Also asserts the structural invariants on the
-// surviving polkit grant: the manage-units action-id guard, the `d2b`
-// group guard, the start/stop/restart verb allowlist, and that exactly one
-// `polkit.addRule(` callback remains (the per-VM gpu->snd fallback rule must be
-// retired).
-// ---------------------------------------------------------------------------
-#[test]
-fn polkit_allowlist_daemon_only_singletons() {
-    let rel = "nixos-modules/host-polkit.nix";
-    assert!(
-        repo_path_exists(rel),
-        "polkit-allowlist-eval: missing {rel}"
-    );
-    let polkit = read_repo_file(rel);
-
-    // Required daemon-only singletons present in the allowlist (grep -qF; the
-    // search strings include the surrounding double-quotes).
-    for unit in [
-        r#""d2bd.service""#,
-        r#""d2b-priv-broker.service""#,
-        r#""d2b-priv-broker.socket""#,
-    ] {
-        assert!(
-            polkit.contains(unit),
-            "polkit-allowlist-eval: {rel} allowlist missing required singleton {unit}"
-        );
-    }
-
-    // Forbidden patterns: any reference to the retired per-VM / per-env unit
-    // shapes the bash CLI used to drive via systemctl. Scoped to the executable
-    // region only (the `awk '/^in$/,0'` range: the `in` line through EOF).
-    let exec = exec_region(&polkit);
-    let forbidden_patterns = [
-        r"d2b@",
-        r"microvm@",
-        r"microvm-virtiofsd@",
-        r"d2b-<vm>-",
-        r"d2b-sys-<env>-usbipd",
-        r"d2b-audit-check",
-        r"perVmUnits",
-        r"perEnvUnits",
-        r"config\.d2b\.vms",
-        r"config\.d2b\.envs",
-        r"cfg\.vms",
-        r"cfg\.envs",
-        r"enabledVms",
-        r"mapAttrsToList",
-    ];
-    for pat in forbidden_patterns {
-        assert!(
-            !any_line_matches(&exec, pat),
-            "polkit-allowlist-eval: host-polkit.nix executable region references \
-             retired per-VM/per-env shape: {pat}"
-        );
-    }
-
-    // Structural invariants on the surviving polkit grant (grep -qF).
-    assert!(
-        polkit.contains("org.freedesktop.systemd1.manage-units"),
-        "polkit-allowlist-eval: {rel} lost the manage-units action-id guard"
-    );
-    assert!(
-        polkit.contains(r#"isInGroup("d2b")"#),
-        "polkit-allowlist-eval: {rel} lost the d2b group guard"
-    );
-
-    // Verb allowlist still restricts to start/stop/restart (grep -qE, single
-    // line).
-    assert!(
-        any_line_matches(
-            &polkit,
-            r#"verb !== "start".*verb !== "stop".*verb !== "restart""#
-        ),
-        "polkit-allowlist-eval: {rel} lost the start/stop/restart verb allowlist"
-    );
-
-    // Exactly one polkit.addRule callback should remain — `grep -cF` counts
-    // matching lines, so this mirrors the bash gate's line-count semantics (the
-    // per-VM gpu->snd fallback rule must be gone).
-    let addrule_count = polkit
-        .lines()
-        .filter(|line| line.contains("polkit.addRule("))
-        .count();
-    assert_eq!(
-        addrule_count, 1,
-        "polkit-allowlist-eval: {rel} must declare exactly one polkit.addRule \
-         callback (found {addrule_count}); the per-VM gpu->snd fallback rule \
-         must be retired"
-    );
-}
-
-/// The executable region of a Nix module: from the first line that is exactly
-/// `in` through EOF, inclusive — a faithful port of the bash gate's
-/// `awk '/^in$/,0'` range extraction (which scopes the forbidden-pattern scan
-/// to the `let`-binding-closing `in` through the end of the file, excluding the
-/// leading comment block that legitimately names the retired unit shapes).
-fn exec_region(content: &str) -> String {
-    let lines: Vec<&str> = content.lines().collect();
-    let start = lines
-        .iter()
-        .position(|line| *line == "in")
-        .expect("host-polkit.nix must contain a top-level `in` line");
-    lines[start..].join("\n")
-}
-
-// ---------------------------------------------------------------------------
 // Migrated from tests/vm-submodule-eval.sh.
 //
-// Asserts `nixos-modules/vm-submodule.nix` exists with the expected `composeVm`
-// ownership shape. The full toplevel-hash parity test (vm-submodule.nix vs the
-// upstream microvm.vms evaluation) is covered separately.
-//
-// Spec correction: the bash gate's assertion text speaks of a `composeVm`
-// binding, but the current repo renamed it to `_composeVm` (it re-exports
-// `evaluator._composeVm`). The gate's unanchored `composeVm\s*=` grep still
-// matches the `_composeVm =` substring, so the gate passes against the current
-// repo; this port keeps the same unanchored pattern (existing code is canon).
+// Asserts the legacy evaluator split is gone and the workload evaluator owns
+// the canonical composition entry point.
 // ---------------------------------------------------------------------------
 #[test]
-fn vm_submodule_compose_vm_shape() {
-    let rel = "nixos-modules/vm-submodule.nix";
-    assert!(repo_path_exists(rel), "vm-submodule-eval: {rel} missing");
-    let submodule = read_repo_file(rel);
+fn workload_composition_shape() {
     assert!(
-        any_line_matches(&submodule, r"composeVm\s*="),
-        "vm-submodule-eval: composeVm function not found in {rel}"
+        !repo_path_exists("nixos-modules/vm-submodule.nix"),
+        "workload composition must not restore vm-submodule.nix"
     );
+    assert!(
+        !repo_path_exists("nixos-modules/vm-options.nix"),
+        "workload composition must not restore vm-options.nix"
+    );
+    let rel = "nixos-modules/vm-evaluator.nix";
+    let evaluator = read_repo_file(rel);
+    assert!(
+        any_line_matches(&evaluator, r"_composeWorkload\s*="),
+        "workload composition entry point not found in {rel}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Relocated from tests/unit/nix/cases/index.nix
+// "index/companion-builders-do-not-read-the-module-fixpoint".
+//
+// The three index companion builders (index-realms.nix, index-workloads.nix,
+// index-resources.nix) are recursion-safe precisely because they only ever
+// consume the raw `d2b.realms` attrs and each other's outputs — never the
+// fully-merged `config.d2b._index` module fixpoint they themselves feed. That
+// invariant is a source-shape rule (no reference to the module system's own
+// output may appear in the files that produce it), not a value nix-unit can
+// evaluate, so it belongs here as a source scan rather than as a Nix eval
+// case.
+// ---------------------------------------------------------------------------
+#[test]
+fn index_companion_builders_avoid_module_fixpoint() {
+    for rel in [
+        "nixos-modules/index-realms.nix",
+        "nixos-modules/index-workloads.nix",
+        "nixos-modules/index-resources.nix",
+    ] {
+        let source = read_repo_file(rel);
+        assert!(
+            !source.contains("config.d2b._index"),
+            "{rel}: index companion builders must not read the module fixpoint \
+             (config.d2b._index) they themselves feed"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

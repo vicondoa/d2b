@@ -1,7 +1,7 @@
-{ envMeta, pkgs, lib, ... }:
+{ realmNetwork, pkgs, lib, ... }:
 
 let
-  m = envMeta;
+  m = realmNetwork;
   mdns = m.externalNetwork.mdns;
   avahiEnabled = mdns.enable || mdns.dnsmasqLocal.enable;
   bridgeEnabled = mdns.dnsmasqLocal.enable;

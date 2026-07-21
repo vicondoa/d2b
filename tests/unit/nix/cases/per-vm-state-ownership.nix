@@ -1,28 +1,9 @@
-# nix-unit cases migrated from tests/per-vm-state-ownership-eval.sh.
-#
-# Asserts the canonical per-VM state ownership matrix from
-# nixos-modules/options-ownership-matrix.nix: structure, required path
-# presence, per-path owner/group/mode posture, hardlink-farm recursion
-# carve-outs, and the signed store-view layout.
-#
-# The bash gate's source-level store-sync guardrails (no legacy root:kvm /
-# 2775 store-mode enforcement in nixos-modules/store.nix or the daemon's
-# packages/d2bd/src/ownership_preflight.rs) are SOURCE-LINTS, not
-# eval-time value assertions, so they live in the Rust policy layer:
-# packages/d2b-contract-tests/tests/policy_ownership_preflight.rs
-# (per the eval/Rust routing discipline — nix-unit holds pure-eval
-# assertions; source-greps belong with the other policy_*.rs lints).
-#
-# Spec correction (existing code is canon): the retired gate's prose used the
-# shorthand `d2b:<group>` for several host-created entries, but the
-# committed matrix owner is `d2bd` (for example
-# `d2bd:d2b 0600` for store-view/sync.lock and
-# `d2bd:users 0644` for the live marker). These cases assert the current
-# matrix values rather than the stale prose shorthand.
-{ mkEval, ... }:
+# Realm-native successor coverage for the retired per-VM ownership gate.
+{ mkEval, lib, ... }:
 
 let
-  configMod = { lib, ... }: {
+  identity = import ../../../../nixos-modules/v2-identity.nix;
+  fixture = { ... }: {
     boot.loader.grub.enable = false;
     boot.loader.systemd-boot.enable = false;
     boot.initrd.includeDefaultModules = false;
@@ -30,125 +11,213 @@ let
     environment.etc."machine-id".text = "00000000000000000000000000000000";
     system.stateVersion = "25.11";
     users.users.alice = { isNormalUser = true; uid = 1000; };
+    d2b.acceptDestructiveV2Cutover = true;
     d2b.site = {
       waylandUser = "alice";
       launcherUsers = [ "alice" ];
+      yubikey.enable = false;
+    };
+    d2b.realms.home = {
+      allowedUsers = [ "alice" ];
+      providers.runtime = {
+        type = "runtime";
+        implementationId = "cloud-hypervisor";
+      };
+      workloads.corp = {
+        providerRefs.runtime = "runtime";
+        tpm.enable = true;
+        config = {
+          networking.hostName = "corp";
+          users.users.alice = { isNormalUser = true; uid = 1000; };
+        };
+      };
     };
   };
 
-  matrix = (mkEval [ configMod ]).config.d2b.daemon.perVmStateOwnershipMatrix;
-  octalRe = "^[0-7]{3,4}$";
-
-  hasPath = path: builtins.any (e: e.path == path) matrix;
-  entry = path:
-    let matches = builtins.filter (e: e.path == path) matrix;
-    in if matches == [ ] then throw "per-vm-state-ownership: missing matrix path ${path}"
-       else builtins.head matches;
-  hasPathCase = path: { expr = hasPath path; expected = true; };
-  fieldCase = path: field: expected: {
-    expr = (entry path).${field};
-    inherit expected;
+  cfg = (mkEval [ fixture ]).config;
+  realmId = identity.deriveRealmId "home.local-root";
+  workloadId = identity.deriveWorkloadId realmId "corp";
+  tpmRoleId = identity.deriveRoleId realmId workloadId "swtpm";
+  paths = cfg.d2b._bundle.storageJson.data.paths;
+  workloadPaths =
+    builtins.filter (row: row.scope == "workload:${workloadId}") paths;
+  pathById = id:
+    lib.findFirst
+      (row: row.id == id)
+      (throw "per-vm-state-ownership: missing realm-native row ${id}")
+      paths;
+  workloadPathById = id:
+    lib.findFirst
+      (row: row.id == id)
+      (throw "per-vm-state-ownership: missing workload row ${id}")
+      workloadPaths;
+  broker = {
+    kind = "broker";
+    value = "d2bbr-r-${realmId}";
   };
+  hardlinkInvariants = row:
+    lib.all
+      (invariant: builtins.elem invariant row.invariants)
+      [
+        "same-filesystem"
+        "hardlink-farm-no-recursion"
+        "no-recursive-mutation"
+      ];
 in
 {
-  # ---- Structural matrix invariants ----
-  "per-vm-state-ownership/matrix-count-at-least-five" = {
-    expr = builtins.length matrix >= 5;
-    expected = true;
-  };
-  "per-vm-state-ownership/all-paths-strings" = {
-    expr = builtins.all (e: (e ? path) && builtins.isString e.path) matrix;
-    expected = true;
-  };
-  "per-vm-state-ownership/all-owners-strings" = {
-    expr = builtins.all (e: (e ? owner) && builtins.isString e.owner) matrix;
-    expected = true;
-  };
-  "per-vm-state-ownership/all-groups-strings" = {
-    expr = builtins.all (e: (e ? group) && builtins.isString e.group) matrix;
-    expected = true;
-  };
-  "per-vm-state-ownership/all-modes-octal" = {
-    expr = builtins.all
-      (e: (e ? mode) && builtins.isString e.mode && builtins.match octalRe e.mode != null)
-      matrix;
-    expected = true;
-  };
-  "per-vm-state-ownership/all-kinds-known" = {
-    expr = builtins.all (e: (e ? kind) && (e.kind == "dir" || e.kind == "file")) matrix;
-    expected = true;
-  };
-  "per-vm-state-ownership/all-required-bools" = {
-    expr = builtins.all (e: (e ? required) && builtins.isBool e.required) matrix;
-    expected = true;
-  };
-  "per-vm-state-ownership/all-recursive-bools" = {
-    expr = builtins.all (e: (e ? recursive) && builtins.isBool e.recursive) matrix;
-    expected = true;
-  };
-  "per-vm-state-ownership/all-descriptions-nonempty" = {
-    expr = builtins.all
-      (e: (e ? description) && builtins.isString e.description && e.description != "")
-      matrix;
+  "per-vm-state-ownership/uses-short-id-scopes" = {
+    expr = lib.all
+      (row:
+        row.scope == "realm:${realmId}"
+        || row.scope == "workload:${workloadId}"
+        || row.scope == "host")
+      (builtins.filter
+        (row:
+          row.scope == "realm:${realmId}"
+          || row.scope == "workload:${workloadId}"
+          || row.id == "path:realm-runtime-root")
+        paths);
     expected = true;
   };
 
-  # ---- Canonical entry presence ----
-  "per-vm-state-ownership/root-exists" = hasPathCase ".";
-  "per-vm-state-ownership/store-exists" = hasPathCase "store";
-  "per-vm-state-ownership/swtpm-exists" = hasPathCase "swtpm";
-  "per-vm-state-ownership/store-view-meta-exists" = hasPathCase "store-view/meta";
-  "per-vm-state-ownership/store-view-generations-absent" = {
-    expr = hasPath "store-view/generations";
-    expected = false;
-  };
-
-  # ---- Legacy store hardlink-farm carve-out ----
-  "per-vm-state-ownership/store-owner" = fieldCase "store" "owner" "d2bd";
-  "per-vm-state-ownership/store-group" = fieldCase "store" "group" "users";
-  "per-vm-state-ownership/store-mode" = fieldCase "store" "mode" "0755";
-  "per-vm-state-ownership/store-recursive-false" = fieldCase "store" "recursive" false;
-  "per-vm-state-ownership/store-required-false" = fieldCase "store" "required" false;
-
-  # ---- Per-VM swtpm runner ownership ----
-  "per-vm-state-ownership/swtpm-owner" = fieldCase "swtpm" "owner" "d2b-<vm>-swtpm";
-  "per-vm-state-ownership/swtpm-group" = fieldCase "swtpm" "group" "d2b-<vm>-swtpm";
-  "per-vm-state-ownership/swtpm-mode" = fieldCase "swtpm" "mode" "0700";
-  "per-vm-state-ownership/swtpm-owner-templated" = {
-    expr = builtins.match ".*<vm>.*" (entry "swtpm").owner != null;
-    expected = true;
-  };
-  "per-vm-state-ownership/swtpm-group-templated" = {
-    expr = builtins.match ".*<vm>.*" (entry "swtpm").group != null;
+  "per-vm-state-ownership/no-legacy-vm-or-env-scopes" = {
+    expr = lib.all
+      (row:
+        !(lib.hasPrefix "vm:" row.scope)
+        && !(lib.hasPrefix "env:" row.scope))
+      paths;
     expected = true;
   };
 
-  # ---- Signed store-view layout ----
-  "per-vm-state-ownership/sync-lock-exists" = hasPathCase "store-view/sync.lock";
-  "per-vm-state-ownership/sync-lock-owner" = fieldCase "store-view/sync.lock" "owner" "d2bd";
-  "per-vm-state-ownership/sync-lock-group" = fieldCase "store-view/sync.lock" "group" "d2b";
-  "per-vm-state-ownership/sync-lock-mode" = fieldCase "store-view/sync.lock" "mode" "0600";
-  "per-vm-state-ownership/sync-lock-kind" = fieldCase "store-view/sync.lock" "kind" "file";
+  "per-vm-state-ownership/no-human-names-in-paths" = {
+    expr = lib.all
+      (row:
+        !(lib.hasInfix "/home/" row.pathTemplate)
+        && !(lib.hasInfix "/corp/" row.pathTemplate))
+      paths;
+    expected = true;
+  };
 
-  "per-vm-state-ownership/meta-owner" = fieldCase "store-view/meta" "owner" "d2bd";
-  "per-vm-state-ownership/meta-group" = fieldCase "store-view/meta" "group" "users";
-  "per-vm-state-ownership/meta-mode" = fieldCase "store-view/meta" "mode" "0755";
-  "per-vm-state-ownership/meta-kind" = fieldCase "store-view/meta" "kind" "dir";
+  "per-vm-state-ownership/all-realm-rows-broker-created" = {
+    expr = lib.all
+      (row: row.creator.kind == "broker")
+      paths;
+    expected = true;
+  };
 
-  "per-vm-state-ownership/state-exists" = hasPathCase "store-view/state";
-  "per-vm-state-ownership/state-owner" = fieldCase "store-view/state" "owner" "d2bd";
-  "per-vm-state-ownership/state-group" = fieldCase "store-view/state" "group" "d2b";
-  "per-vm-state-ownership/state-mode" = fieldCase "store-view/state" "mode" "0750";
+  "per-vm-state-ownership/all-realm-rows-non-recursive" = {
+    expr = lib.all (row: row.recursive == false) paths;
+    expected = true;
+  };
 
-  "per-vm-state-ownership/gcroots-exists" = hasPathCase "store-view/gcroots";
-  "per-vm-state-ownership/gcroots-owner" = fieldCase "store-view/gcroots" "owner" "d2bd";
-  "per-vm-state-ownership/gcroots-group" = fieldCase "store-view/gcroots" "group" "d2b";
-  "per-vm-state-ownership/gcroots-mode" = fieldCase "store-view/gcroots" "mode" "0750";
+  "per-vm-state-ownership/workload-state-root" = {
+    expr =
+      let row = workloadPathById "workload/${workloadId}/state";
+      in {
+        inherit (row) pathTemplate owner group mode creator repairPolicy;
+      };
+    expected = {
+      pathTemplate = "/var/lib/d2b/r/${realmId}/w/${workloadId}";
+      owner = {
+        kind = "user";
+        value = "d2bd-r-${realmId}";
+      };
+      group = {
+        kind = "group";
+        value = "d2bcg-r-${realmId}";
+      };
+      mode = "0750";
+      creator = broker;
+      repairPolicy = "broker-reconcile";
+    };
+  };
 
-  "per-vm-state-ownership/live-marker-exists" = hasPathCase "store-view/live/.d2b-marker-<vm>";
-  "per-vm-state-ownership/live-marker-owner" = fieldCase "store-view/live/.d2b-marker-<vm>" "owner" "d2bd";
-  "per-vm-state-ownership/live-marker-group" = fieldCase "store-view/live/.d2b-marker-<vm>" "group" "users";
-  "per-vm-state-ownership/live-marker-mode" = fieldCase "store-view/live/.d2b-marker-<vm>" "mode" "0644";
-  "per-vm-state-ownership/live-marker-kind" = fieldCase "store-view/live/.d2b-marker-<vm>" "kind" "file";
-  "per-vm-state-ownership/live-marker-required-false" = fieldCase "store-view/live/.d2b-marker-<vm>" "required" false;
+  "per-vm-state-ownership/tpm-state-is-role-owned" = {
+    expr =
+      let row = workloadPathById "workload/${workloadId}/tpm";
+      in {
+        inherit (row) owner group mode repairPolicy sensitivity;
+      };
+    expected = {
+      owner = {
+        kind = "role";
+        value = tpmRoleId;
+      };
+      group = {
+        kind = "role";
+        value = tpmRoleId;
+      };
+      mode = "0700";
+      repairPolicy = "broker-fail-closed";
+      sensitivity = "secret-adjacent";
+    };
+  };
+
+  "per-vm-state-ownership/store-parent-hardlink-carve-out" = {
+    expr =
+      hardlinkInvariants
+        (pathById "path:workload-store-view:${workloadId}");
+    expected = true;
+  };
+
+  "per-vm-state-ownership/store-live-hardlink-carve-out" = {
+    expr =
+      let row = workloadPathById
+        "workload/${workloadId}/store-view-live";
+      in {
+        invariants = hardlinkInvariants row;
+        inherit (row) pathTemplate recursive creator repairPolicy;
+      };
+    expected = {
+      invariants = true;
+      pathTemplate =
+        "/var/lib/d2b/r/${realmId}/w/${workloadId}/store-view/live";
+      recursive = false;
+      creator = broker;
+      repairPolicy = "broker-reconcile";
+    };
+  };
+
+  "per-vm-state-ownership/store-ready-marker-is-read-only" = {
+    expr =
+      let row = pathById "path:workload-store-ready:${workloadId}";
+      in {
+        inherit (row) kind mode recursive;
+      };
+    expected = {
+      kind = "regular-file";
+      mode = "0444";
+      recursive = false;
+    };
+  };
+
+  "per-vm-state-ownership/guest-session-credential-preserved" = {
+    expr =
+      let
+        directory =
+          pathById "path:workload-guest-session:${workloadId}";
+        credential =
+          pathById "path:workload-guest-session-credential:${workloadId}";
+      in {
+        directoryMode = directory.mode;
+        credentialMode = credential.mode;
+        credentialKind = credential.kind;
+        group = credential.group;
+        creator = credential.creator;
+        repairPolicy = credential.repairPolicy;
+        recursive = credential.recursive;
+      };
+    expected = {
+      directoryMode = "0750";
+      credentialMode = "0440";
+      credentialKind = "regular-file";
+      group = {
+        kind = "group";
+        value = "d2b-gctlfs-${workloadId}";
+      };
+      creator = broker;
+      repairPolicy = "broker-fail-closed";
+      recursive = false;
+    };
+  };
 }

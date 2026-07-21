@@ -8,7 +8,7 @@ use std::{
 use d2b_contract_tests::load_full_bundle_resolver_from_env;
 use d2b_core::{
     bundle_resolver::BundleResolver,
-    processes::{ProcessNode, VmProcessDag},
+    processes::{ProcessNode, ProcessRole, VmProcessDag},
 };
 
 fn full_resolver_or_skip(test: &str) -> Option<BundleResolver> {
@@ -29,11 +29,11 @@ fn graphics_video_dag<'a>(resolver: &'a BundleResolver, test: &str) -> &'a VmPro
         .vms
         .iter()
         .filter(|dag| {
-            dag.nodes.iter().any(|node| node.id.0.as_str() == "video")
+            dag.nodes.iter().any(|node| node.role == ProcessRole::Video)
                 && dag
                     .nodes
                     .iter()
-                    .any(|node| node.id.0.as_str() == "cloud-hypervisor")
+                    .any(|node| node.role == ProcessRole::CloudHypervisorRunner)
         })
         .collect();
     assert_eq!(
@@ -48,16 +48,12 @@ fn graphics_video_dag<'a>(resolver: &'a BundleResolver, test: &str) -> &'a VmPro
     matches[0]
 }
 
-fn node_by_id<'a>(dag: &'a VmProcessDag, id: &str, test: &str) -> &'a ProcessNode {
-    let matches: Vec<&ProcessNode> = dag
-        .nodes
-        .iter()
-        .filter(|node| node.id.0.as_str() == id)
-        .collect();
+fn node_by_role<'a>(dag: &'a VmProcessDag, role: ProcessRole, test: &str) -> &'a ProcessNode {
+    let matches: Vec<&ProcessNode> = dag.nodes.iter().filter(|node| node.role == role).collect();
     assert_eq!(
         matches.len(),
         1,
-        "{test}: VM {} must render exactly one node with id {id:?}",
+        "{test}: workload {} must render exactly one {role:?} role",
         dag.vm
     );
     matches[0]
@@ -104,9 +100,30 @@ fn patched_video_binaries_expose_required_command_surface() {
     };
     let dag = graphics_video_dag(&resolver, test);
 
-    let video_bin = executable_binary_path(node_by_id(dag, "video", test), "video crosvm", test);
+    let video_node = node_by_role(dag, ProcessRole::Video, test);
+    let identity = dag
+        .workload_identity
+        .as_ref()
+        .expect("video runner must carry realm workload identity");
+    assert_eq!(
+        video_node.profile.cgroup_placement.subtree,
+        format!(
+            "d2b.slice/r-{}/workloads/w-{}/{}",
+            identity.realm_id.as_str(),
+            identity.workload_id.as_str(),
+            video_node.id.0
+        )
+    );
+    assert!(video_node.profile.mount_policy.device_binds.is_empty());
+    assert!(
+        video_node
+            .env
+            .iter()
+            .any(|entry| entry == "LIBVA_DRM_DEVICE=/proc/self/fd/10")
+    );
+    let video_bin = executable_binary_path(video_node, "video crosvm", test);
     let ch_bin = executable_binary_path(
-        node_by_id(dag, "cloud-hypervisor", test),
+        node_by_role(dag, ProcessRole::CloudHypervisorRunner, test),
         "cloud-hypervisor",
         test,
     );

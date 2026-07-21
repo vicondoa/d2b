@@ -4,9 +4,8 @@
 let
   cfg = config.d2b.site.ui;
   legacyNiri = config.d2b.site.niriVmBorders;
-  vmsCfg = config.d2b.vms;
-  envsCfg = config.d2b.envs;
   realmsCfg = config.d2b.realms;
+  workloads = config.d2b._index.workloads.enabledList;
 
   colorPalette = [
     "#7fc8ff"
@@ -33,51 +32,39 @@ let
     builtins.elemAt colorPalette idx;
 
   normalizeColor = color: lib.toLower color;
-  defaultVmColor = colorForName "d2b-niri-border";
-  defaultEnvColor = colorForName "d2b-env-accent";
   defaultRealmColor = colorForName "d2b-realm-accent";
-
-  enabledEnvNames = builtins.sort (a: b: a < b) (
-    lib.attrNames (lib.filterAttrs (_: env: env.enable) envsCfg)
-  );
-
-  enabledVmNames = builtins.sort (a: b: a < b) (
-    lib.attrNames (lib.filterAttrs (_: vm: vm.enable) vmsCfg)
-  );
 
   enabledRealmNames = builtins.sort (a: b: a < b) (
     lib.attrNames (lib.filterAttrs (_: realm: realm.enable) realmsCfg)
   );
 
-  legacyVmActiveColor = name: vm:
-    if vm.graphics.niriBorderColor != null
-    then vm.graphics.niriBorderColor
-    else if vm.qemuMedia.window.niriBorderColor != null
-    then vm.qemuMedia.window.niriBorderColor
-    else null;
-
-  resolvedVmBorder = name: vm:
+  resolvedRealms = lib.genAttrs enabledRealmNames (name:
     let
-      active =
-        if vm.ui.border.activeColor != null
-        then vm.ui.border.activeColor
-        else if legacyVmActiveColor name vm != null
-        then legacyVmActiveColor name vm
-        else defaultVmColor name;
-      inactive =
-        if vm.ui.border.inactiveColor != null
-        then vm.ui.border.inactiveColor
-        else active;
-      urgent =
-        if vm.ui.border.urgentColor != null
-        then vm.ui.border.urgentColor
-        else active;
+      realm = realmsCfg.${name};
     in
     {
-      active = normalizeColor active;
-      inactive = normalizeColor inactive;
-      urgent = normalizeColor urgent;
-    };
+      path = realm.path;
+      accent = normalizeColor (
+        if realm.network.ui.accentColor != null
+        then realm.network.ui.accentColor
+        else defaultRealmColor name
+      );
+    });
+  resolvedWorkloads = lib.listToAttrs (map
+    (workload:
+      let accent = resolvedRealms.${workload.realmName}.accent;
+      in {
+        name = workload.workloadId;
+        value = {
+          env = workload.realmName;
+          border = {
+            active = accent;
+            inactive = accent;
+            urgent = accent;
+          };
+        };
+      })
+    workloads);
 
   resolved = {
     version = 1;
@@ -85,33 +72,9 @@ let
       accent = normalizeColor cfg.colors.hostAccent;
     };
     states = lib.mapAttrs (_: normalizeColor) cfg.colors.states;
-    envs = lib.genAttrs enabledEnvNames (name: {
-      accent = normalizeColor (
-        if envsCfg.${name}.ui.accentColor != null
-        then envsCfg.${name}.ui.accentColor
-        else defaultEnvColor name
-      );
-    });
-    vms = lib.genAttrs enabledVmNames (name:
-      let
-        vm = vmsCfg.${name};
-      in
-      {
-        env = vm.env;
-        border = resolvedVmBorder name vm;
-      });
-    realms = lib.genAttrs enabledRealmNames (name:
-      let
-        realm = realmsCfg.${name};
-      in
-      {
-        path = realm.path;
-        accent = normalizeColor (
-          if realm.network.ui.accentColor != null
-          then realm.network.ui.accentColor
-          else defaultRealmColor name
-        );
-      });
+    envs = { };
+    vms = resolvedWorkloads;
+    realms = resolvedRealms;
   };
 
   artifactEnabled =
@@ -135,23 +98,20 @@ let
       (name: value: "@define-color d2b_state_${cssStateIdent name} ${value};")
       resolved.states)
     ++ (lib.concatMap
-      (name: [ "@define-color d2b_env_${cssIdent name}_accent ${resolved.envs.${name}.accent};" ])
-      enabledEnvNames)
-    ++ (lib.concatMap
       (name: [ "@define-color d2b_realm_${cssIdent name}_accent ${resolved.realms.${name}.accent};" ])
       enabledRealmNames)
     ++ (lib.concatMap
-      (name:
+      (workload:
         let
-          border = resolved.vms.${name}.border;
-          vmIdent = cssIdent name;
+          border = resolved.vms.${workload.workloadId}.border;
+          workloadIdent = cssIdent workload.workloadId;
         in
         [
-          "@define-color d2b_vm_${vmIdent}_border_active ${border.active};"
-          "@define-color d2b_vm_${vmIdent}_border_inactive ${border.inactive};"
-          "@define-color d2b_vm_${vmIdent}_border_urgent ${border.urgent};"
+          "@define-color d2b_vm_${workloadIdent}_border_active ${border.active};"
+          "@define-color d2b_vm_${workloadIdent}_border_inactive ${border.inactive};"
+          "@define-color d2b_vm_${workloadIdent}_border_urgent ${border.urgent};"
         ])
-      enabledVmNames)
+      workloads)
     ;
 
   cssContent = lib.concatStringsSep "\n" cssLines + "\n";

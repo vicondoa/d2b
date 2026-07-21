@@ -2,56 +2,46 @@
 
 let
   cfg = config.d2b;
-  d2bLib = import ./lib.nix { inherit lib; };
-  envMeta = cfg._envMeta;
-  enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
-  anyGraphics = builtins.any (vm: vm.graphics.enable) (lib.attrValues enabledVms);
-  anyAudio = builtins.any (vm: vm.audio.enable) (lib.attrValues enabledVms);
-  anyTpm = builtins.any (vm: vm.tpm.enable) (lib.attrValues enabledVms);
-  anyObservability = builtins.any (vm: vm.observability.enable) (lib.attrValues enabledVms);
-  anyUsbip = cfg.site.yubikey.enable && builtins.any (vm: vm.usbip.yubikey) (lib.attrValues enabledVms);
-  anyExternalNetwork = builtins.any (m: m.externalNetwork.attachment.enable) (lib.attrValues envMeta);
-  defaultMtu = 1500;
+  networkPlan = import ./realm-network-rows.nix {
+    inherit config lib;
+  };
 
   moduleRow = module: feature: requirement: gate: sysctls: jailVisibleDevice: {
     inherit module feature requirement gate sysctls jailVisibleDevice;
-  };
-
-  capabilityRow = capability: status: devicesOrModules: sidecars: readiness: notes: {
-    inherit capability status devicesOrModules sidecars readiness notes;
   };
 
   fdRow = resource: brokerOperation: recipient: transfer: jailVisibleDevice: notes: {
     inherit resource brokerOperation recipient transfer jailVisibleDevice notes;
   };
 
-  lanEastWestEnabled = m: m.allowEastWest && cfg.site.allowUnsafeEastWest;
-  resolvedMtu = m: if m.mtu != null then m.mtu else defaultMtu;
-  resolvedMssClamp = m: if m.mssClamp then (resolvedMtu m) - 40 else null;
+  bridgeFlags = realm: [
+    {
+      role = "net-vm-lan";
+      isolated = false;
+      neighSuppress = false;
+      learning = true;
+      unicastFlood = true;
+      rule = "The realm network workload remains reachable from workload TAPs.";
+    }
+    {
+      role = "workload-lan";
+      isolated = realm.policy.workloadTapIsolation;
+      neighSuppress = realm.policy.workloadTapIsolation;
+      learning = true;
+      unicastFlood = !realm.policy.workloadTapIsolation;
+      rule = "Workload TAP isolation follows the realm's explicit east-west policy.";
+    }
+    {
+      role = "uplink";
+      isolated = true;
+      neighSuppress = true;
+      learning = false;
+      unicastFlood = false;
+      rule = "The realm uplink remains point-to-point.";
+    }
+  ];
 
-  workloadTapNames = envName:
-    lib.sort lib.lessThan (lib.mapAttrsToList
-      (vmName: _: cfg.manifest.${vmName}.tap)
-      (lib.filterAttrs (_: vm: vm.enable && vm.env == envName) cfg.vms));
-
-  workloadTapByVm = envName:
-    lib.mapAttrsToList
-      (vmName: _: { vm = vmName; tap = cfg.manifest.${vmName}.tap; })
-      (lib.filterAttrs (_: vm: vm.enable && vm.env == envName) cfg.vms);
-
-  usbipVendorProductAllowlist = map (entry: {
-    vendor = lib.fromHexString (lib.removePrefix "0x" entry.vendor);
-    product = lib.fromHexString (lib.removePrefix "0x" entry.product);
-  }) cfg.host.usbip.allowlist;
-
-  usbipBusidLocksForEnv = envName:
-    map (lock:
-      lock
-      // lib.optionalAttrs (usbipVendorProductAllowlist != [ ]) {
-        vendorProductAllowlist = usbipVendorProductAllowlist;
-      }) (cfg._index.usbip.busidLocksByEnv.${envName} or [ ]);
-
-  ipv6SysctlEntry = ifName: {
+  ipv6Row = ifName: {
     inherit ifName;
     disableIpv6 = 1;
     acceptRa = 0;
@@ -60,260 +50,70 @@ let
     arpIgnore = 1;
   };
 
-  envIfNames = envName: m:
-    lib.unique ([
-      m.lanBridge
-      m.uplinkBridge
-      "${envName}-l1"
-      "${envName}-u2"
-    ] ++ lib.optional m.externalNetwork.attachment.enable m.externalNetwork.attachment.hostIfName
-      ++ workloadTapNames envName);
-
-  # live systems now have a broker-written canonical runtime
-  # ifname map. Pure flake evals cannot see `/var/lib/...`, so they
-  # fall back to the legacy hash algorithm; impure live evals prefer the
-  # runtime artifact when it exists.
-  hostRuntimePath =
-    let override = builtins.getEnv "D2B_HOST_RUNTIME_PATH";
-    in if override != "" then override else "/var/lib/d2b/runtime/host-runtime.json";
-
-  hostRuntimeIfnames =
-    if builtins.pathExists hostRuntimePath then
-      let runtime = builtins.fromJSON (builtins.readFile hostRuntimePath);
-      in if runtime ? ifnames then runtime.ifnames else [ ]
-    else [ ];
-
-  derivedIfNameRoleTag = inputRole:
-    if inputRole == "br" || inputRole == "up" then "b"
-    else if inputRole == "tap" then "t"
-    else throw "d2b host.json: unknown derivedIfName role '${inputRole}'";
-
-  derivedIfNameRuntimeRoleTag = inputRole:
-    if inputRole == "br" then "nvl"
-    else if inputRole == "up" then "upl"
-    else if inputRole == "tap" then "wkl"
-    else throw "d2b host.json: unknown derivedIfName role '${inputRole}'";
-
-  legacyDerivedIfName = inputRole: envName: vmName:
-    let
-      vmSuffix = if vmName == null then "" else vmName;
-      input = "${inputRole}:${envName}:${vmSuffix}";
-      hashLower = builtins.substring 0 8 (builtins.hashString "sha256" input);
-      hashUpper = lib.toUpper hashLower;
-      tag = derivedIfNameRoleTag inputRole;
-    in "d2b-${tag}${hashUpper}";
-
-  derivedIfName = inputRole: envName: vmName:
-    let
-      runtimeRoleTag = derivedIfNameRuntimeRoleTag inputRole;
-      runtimeRow = lib.findFirst
-        (row:
-          row.env == envName
-          && (if (if row ? vm then row.vm else null) == null then vmName == null else row.vm == vmName)
-          && row.roleTag == runtimeRoleTag)
-        null
-        hostRuntimeIfnames;
-    in if runtimeRow != null then runtimeRow.derivedIfname else legacyDerivedIfName inputRole envName vmName;
-
-  # One IfNameMapping row per managed bridge/TAP. Exposed under
-  # `host.json.ifNameMappings` so the broker can re-validate
-  # collision-freeness and so `d2b host check` / `status` can
-  # surface the user-visible ↔ derived pair.
-  envMappings = envName: m:
-    let
-      lanRow = {
-        env = envName;
-        role = "net-vm-lan";
-        userVisibleName = m.lanBridge;
-        derivedIfname = derivedIfName "br" envName null;
-      };
-      upRow = {
-        env = envName;
-        role = "uplink";
-        userVisibleName = m.uplinkBridge;
-        derivedIfname = derivedIfName "up" envName null;
-      };
-      workloadRows = map
-        (entry: {
-          env = envName;
-          vm = entry.vm;
-          role = "workload-lan";
-          userVisibleName = entry.tap;
-          derivedIfname = derivedIfName "tap" envName entry.vm;
-        })
-        (workloadTapByVm envName);
-    in [ lanRow upRow ] ++ workloadRows;
-
-  allIfNameMappings =
-    lib.concatLists (lib.mapAttrsToList envMappings envMeta);
-
-  derivedIfNameList = map (row: row.derivedIfname) allIfNameMappings;
-
-  runtimeProviders = lib.sortOn (provider: provider.provider.id)
-    (map (provider: builtins.removeAttrs provider [ "_hypervisorService" ])
-      (lib.attrValues d2bLib.runtimeProviderCatalog));
-
-  qemuMediaSourceId = vmName: slotName: source:
-    if source.kind == "physical-usb"
-    then (if source.ref != null then source.ref else "invalid-missing-ref")
-    else "image-${builtins.substring 0 16 (builtins.hashString "sha256" "${vmName}/${slotName}/${if source.path != null then source.path else "missing-path"}")}";
-
-  qemuMediaSourceRow = vmName: slotName: source: ({
-    vm = vmName;
-    mediaRef = qemuMediaSourceId vmName slotName source;
-    slot = slotName;
-    sourceKind = source.kind;
-    format = source.format;
-    readOnly = source.readOnly;
-    registryScope =
-      if source.kind == "image-file"
-      then "direct-config-path"
-      else "root-only-runtime-state";
-  } // lib.optionalAttrs (source.kind == "image-file") {
-    imagePath = source.path;
-  } // lib.optionalAttrs (source.kind == "physical-usb" && source.usbSelector != null) {
-    usbSelector = source.usbSelector;
-  });
-
-  qemuMediaSourceRowsForVm = vmName: vm:
-    let
-      bootRows =
-        if vm.qemuMedia.source == null
-        then [ ]
-        else [ (qemuMediaSourceRow vmName "boot" vm.qemuMedia.source) ];
-      slotRows = lib.flatten (lib.mapAttrsToList
-        (slotName: slot:
-          if slot.source == null
-          then [ ]
-          else [ (qemuMediaSourceRow vmName slotName slot.source) ])
-        vm.qemuMedia.removableSlots);
-    in bootRows ++ slotRows;
-
-  qemuMediaSources = lib.sortOn (row: "${row.vm}/${row.mediaRef}/${row.slot}")
-    (lib.concatLists (lib.mapAttrsToList qemuMediaSourceRowsForVm (d2bLib.qemuMediaVms cfg.vms)));
-
-  vmRuntimeRows = lib.sortOn (row: row.vm) (lib.mapAttrsToList
-    (name: vm:
-      let manifest = cfg.manifest.${name};
-      in {
-        vm = name;
-        runtime = d2bLib.vmRuntimeMetadata name vm;
-        env = manifest.env;
-        stateDir = manifest.stateDir;
-        tap = manifest.tap;
-        bridge = manifest.bridge;
-        staticIp = manifest.staticIp;
-        netVm = manifest.netVm;
-      })
-    enabledVms);
-
-  duplicateDerived =
-    lib.unique (lib.filter
-      (n: lib.length (lib.filter (m: m == n) derivedIfNameList) > 1)
-      derivedIfNameList);
-
-  # Emitter-time collision detection. The broker also
-  # re-runs `d2b_host::ifname::detect_collisions` against the
-  # trusted bundle copy at runtime; this assert is the first gate.
-  ifNameCollisionMessage =
-    "d2b host.json: hash-derived ifname collision detected: ${
-      builtins.toJSON duplicateDerived
-    }. Rename one of the colliding env/VM scopes to break the SHA-256 prefix tie.";
-
-  envInfo = envName: m:
-    let usbipBusidLocks = usbipBusidLocksForEnv envName;
-    in {
-      env = envName;
-      bridge = m.lanBridge;
-      hostUplinkIp = m.hostUplinkIp;
-      netUplinkIp = m.netUplinkIp;
-      bridgePortFlags = [
-      {
-        role = "net-vm-lan";
-        isolated = false;
-        neighSuppress = false;
-        learning = true;
-        unicastFlood = true;
-        rule = "The net VM LAN TAP stays unisolated so workload VMs can always reach the gateway sidecar.";
-      }
-      {
-        role = "workload-lan";
-        isolated = !(lanEastWestEnabled m);
-        neighSuppress = !(lanEastWestEnabled m);
-        learning = true;
-        unicastFlood = lanEastWestEnabled m;
-        rule =
-          if lanEastWestEnabled m
-          then "Workload LAN TAPs are unisolated only when both lan.allowEastWest and site.allowUnsafeEastWest are true."
-          else "Workload LAN TAPs stay isolated by default until both east-west opt-ins are present.";
-      }
-      {
-        role = "uplink";
-        isolated = true;
-        neighSuppress = true;
-        learning = false;
-        unicastFlood = false;
-        rule = "The host-to-net-VM uplink TAP stays point-to-point: no learning, no flooding, neighbor suppression on.";
-      }
-    ];
-      ipv6Sysctls = map ipv6SysctlEntry (envIfNames envName m);
-      inherit usbipBusidLocks;
-      lan = {
-        allowEastWest = m.allowEastWest;
-        effectiveEastWest = lanEastWestEnabled m;
-      };
-      mtu = resolvedMtu m;
-      mssClamp = resolvedMssClamp m;
-      netVmForwardBlocklist = m.hostBlocklist;
-      externalNetwork = if m.externalNetwork.attachment.enable then {
-        attachment = {
-          mode = m.externalNetwork.attachment.mode;
-          parentInterface = m.externalNetwork.attachment.interface;
-          hostIfName = m.externalNetwork.attachment.hostIfName;
-          guestIfName = m.externalNetwork.attachment.guestIfName;
-          macAddress = m.externalNetwork.attachment.macAddress;
-          macvtapMode = m.externalNetwork.attachment.macvtapMode;
-          ipv4 = {
-            method = m.externalNetwork.attachment.ipv4.method;
-            address = m.externalNetwork.attachment.ipv4.address;
-            gateway = m.externalNetwork.attachment.ipv4.gateway;
-            dns = m.externalNetwork.attachment.ipv4.dns;
-          };
-        };
-        egress = {
-          enabled = m.externalNetwork.egress.enable;
-          allowedCidrs = m.externalNetwork.egress.allowedCidrs;
-        };
-        portForwards = m.externalNetwork.portForwards;
-      } else null;
-    } // lib.optionalAttrs (usbipBusidLocks != [ ]) {
-      usbipBackendPort = cfg._index.usbip.backendPorts.${envName};
+  environmentRow = realm: {
+    env = realm.canonicalRealmId;
+    bridge = realm.resources.bridges.lan.ifName;
+    hostUplinkIp = realm.addressing.uplink.host;
+    netUplinkIp = realm.addressing.uplink.netVm;
+    mtu = if realm.policy.mtu == null then 1500 else realm.policy.mtu;
+    mssClamp =
+      if realm.policy.mssClamp
+      then (if realm.policy.mssClampBytes == null
+        then 1460
+        else realm.policy.mssClampBytes)
+      else null;
+    lan = {
+      allowEastWest = realm.policy.allowEastWest;
+      effectiveEastWest = realm.policy.allowEastWest;
     };
+    netVmForwardBlocklist = realm.policy.hostBlocklist;
+    externalNetwork = null;
+    bridgePortFlags = bridgeFlags realm;
+    ipv6Sysctls = map ipv6Row
+      realm.coexistence.networkManager.unmanagedIfNames;
+    usbipBusidLocks = [ ];
+  };
 
-  # ownership marker. Stable per-host id used in
-  # nft rule comment markers (`comment "d2b managed: <ownership-id>"`).
+  mappingRows = realm:
+    [
+      {
+        env = realm.canonicalRealmId;
+        role = "net-vm-lan";
+        userVisibleName = realm.resources.bridges.lan.ifName;
+        derivedIfname = realm.resources.bridges.lan.ifName;
+      }
+      {
+        env = realm.canonicalRealmId;
+        role = "uplink";
+        userVisibleName = realm.resources.bridges.uplink.ifName;
+        derivedIfname = realm.resources.bridges.uplink.ifName;
+      }
+    ]
+    ++ map (workload: {
+      env = realm.canonicalRealmId;
+      vm = workload.canonicalWorkloadId;
+      role = "workload-lan";
+      userVisibleName = workload.tap.ifName;
+      derivedIfname = workload.tap.ifName;
+    }) realm.addressing.workloadRows;
+
+  realms = lib.sortOn (realm: realm.canonicalRealmId) networkPlan.realms;
+  realmIds = map (realm: realm.canonicalRealmId) realms;
+  managedIfNames = lib.unique (lib.flatten
+    (map (realm: realm.coexistence.networkManager.unmanagedIfNames) realms));
   ownershipId = "d2b-${
-    builtins.substring 0 8 (builtins.hashString "sha256" (
-      "d2b:${toString cfg.site.allowUnsafeEastWest}:${
-        builtins.concatStringsSep "," (lib.attrNames envMeta)
-      }"
-    ))
+    builtins.substring 0 8
+      (builtins.hashString "sha256" (builtins.concatStringsSep "," realmIds))
   }";
 
-  data = assert lib.assertMsg (duplicateDerived == [ ]) ifNameCollisionMessage; {
+  data = {
     schemaVersion = "v2";
-    site = {
-      allowUnsafeEastWest = cfg.site.allowUnsafeEastWest;
-    };
-    environments = lib.mapAttrsToList envInfo envMeta;
-    # 4-chain `inet d2b` layout. Plan
-    # §" `inet d2b` chain layout". No raw/mangle/nat hooks.
-    # All rules carry a `comment "d2b managed: <ownership-id>"`
-    # marker; foreign tables/chains are never flushed.
+    site.allowUnsafeEastWest = cfg.site.allowUnsafeEastWest;
+    environments = map environmentRow realms;
     nftables = {
       family = "inet";
       table = "d2b";
-      ownershipId = ownershipId;
+      inherit ownershipId;
       tableHashAfterApply = null;
       chains = [
         {
@@ -321,171 +121,94 @@ let
           hook = "prerouting";
           priority = -150;
           policy = "accept";
-          purpose = "Filter-class prerouting chain at priority -150 (equal to mangle). Reserved for d2b-marked classification; no NAT/mangle hooks.";
+          purpose = "Realm classification before forwarding.";
         }
         {
           name = "forward";
           hook = "forward";
           priority = -5;
           policy = "drop";
-          purpose = "Default-drop forward chain at priority -5 carrying per-env d2b forward policy. Foreign chains preserved untouched.";
+          purpose = "Default-deny realm forwarding.";
         }
         {
           name = "output";
           hook = "output";
           priority = -5;
           policy = "accept";
-          purpose = "Host-originated d2b output chain at priority -5; default accept with marked drops as needed.";
+          purpose = "Host-originated realm traffic.";
         }
         {
           name = "input";
           hook = "input";
           priority = -5;
           policy = "accept";
-          purpose = "Host ingress chain at priority -5; default accept except broker-managed USBIP listener/backend drops, with runtime carve-outs inserted before those drops.";
+          purpose = "Broker-mediated host ingress.";
         }
       ];
     };
     networkManager = {
       filePath = "/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf";
-      matchCriteria = lib.unique (lib.flatten (lib.mapAttrsToList
-        (envName: m: map (ifName: "interface-name:${ifName}") (envIfNames envName m))
-        envMeta));
-      reloadBehavior = "Reload NetworkManager after replacing the d2b-managed unmanaged-devices file when the service is active.";
+      matchCriteria = map (ifName: "interface-name:${ifName}") managedIfNames;
+      reloadBehavior = "Reload NetworkManager after replacing the marked d2b unmanaged-device file.";
       ownership = {
         owner = "root";
         group = "root";
         mode = "0644";
-        driftPolicy = "Replace only the d2b-managed generated file; do not edit foreign NetworkManager config.";
+        driftPolicy = "Replace only the d2b-managed file and preserve foreign configuration.";
       };
     };
     hostsFile = {
       startMarker = "# d2b-managed begin";
       endMarker = "# d2b-managed end";
-      rule = "Replace only the deterministic d2b-managed block between sentinels and preserve foreign /etc/hosts lines.";
+      rule = "Replace only the deterministic marked block and preserve foreign lines.";
     };
     kernelModules = [
-      (moduleRow "kvm" "cloud-hypervisor" "required" "All d2b VMs require the base KVM module." [ ] false)
-      (moduleRow "kvm_intel" "cloud-hypervisor-intel" "alternatives" "host-cpu-vendor=intel" [ ] false)
-      (moduleRow "kvm_amd" "cloud-hypervisor-amd" "alternatives" "host-cpu-vendor=amd" [ ] false)
-      (moduleRow "tun" "tap" "required" "All env-backed VMs require TAP devices on the host." [ ] false)
-      (moduleRow "vhost_net" "virtio-net" "required" "Required when vhost-net acceleration is used for Cloud Hypervisor TAP handoff." [ ] false)
-      (moduleRow "macvtap" "home-lan-macvtap" (if anyExternalNetwork then "required" else "optional")
-        (if anyExternalNetwork then "Required when any env enables external network attachment." else "Used only when an env enables external network attachment.")
-        [ ] false)
-      (moduleRow "macvlan" "home-lan-macvtap" (if anyExternalNetwork then "required" else "optional")
-        (if anyExternalNetwork then "Required by macvtap-backed external network attachment." else "Used only when an env enables external network attachment.")
-        [ ] false)
-      (moduleRow "fuse" "virtiofs" "required" "Required for the per-VM virtiofs store views served by virtiofsd." [ ] false)
-      (moduleRow "nf_tables" "nftables" "required" "Required for the marker-owned inet d2b table." [ ] false)
-      (moduleRow "bridge" "linux-bridge" "required" "Required for every env LAN and uplink bridge." [ ] false)
-      (moduleRow "br_netfilter" "bridge-netfilter" "optional" "Optional, but if present d2b fails closed unless all bridge-nf-call sysctls are zero." [
-        "net.bridge.bridge-nf-call-iptables=0"
-        "net.bridge.bridge-nf-call-ip6tables=0"
-        "net.bridge.bridge-nf-call-arptables=0"
-      ] false)
-      (moduleRow "i915" "graphics-intel" "optional"
-        (if anyGraphics then "Required on Intel hosts whenever any VM enables graphics." else "Used only on Intel hosts when a VM enables graphics.")
-        [ ] true)
-      (moduleRow "amdgpu" "graphics-amd" "optional"
-        (if anyGraphics then "Required on AMD hosts whenever any VM enables graphics." else "Used only on AMD hosts when a VM enables graphics.")
-        [ ] true)
-      (moduleRow "nvidia" "graphics-nvidia" "optional"
-        (if anyGraphics then "Required on Nvidia hosts whenever any VM enables graphics." else "Used only on Nvidia hosts when a VM enables graphics.")
-        [ ] true)
-      (moduleRow "nvidia_modeset" "graphics-nvidia-modeset" "optional"
-        (if anyGraphics then "Required on Nvidia hosts whenever any VM enables graphics." else "Used only on Nvidia hosts when a VM enables graphics.")
-        [ ] true)
-      (moduleRow "nvidia_uvm" "graphics-nvidia-uvm" "optional"
-        (if anyGraphics then "Required on Nvidia hosts whenever any VM enables graphics." else "Used only on Nvidia hosts when a VM enables graphics.")
-        [ ] true)
-      (moduleRow "nvidia_drm" "graphics-nvidia-drm" "optional"
-        (if anyGraphics then "Required on Nvidia hosts whenever any VM enables graphics." else "Used only on Nvidia hosts when a VM enables graphics.")
-        [ ] true)
-      (moduleRow "usbip_host" "usbip" "optional"
-        (if anyUsbip then "Required when host YubiKey support and at least one VM usbip.yubikey flag are both enabled." else "Used only when host YubiKey support and a VM usbip.yubikey flag are both enabled.")
-        [ ] false)
-      (moduleRow "vfio" "future-passthrough" "deferred" "Reserved for a later passthrough role; not required for the baseline target." [ ] false)
-      (moduleRow "vhost_vsock" "future-kernel-vsock" "deferred" "Reserved for a later kernel-backed vsock path; the baseline uses Unix-socket-backed Cloud Hypervisor vsock only." [ ] false)
+      (moduleRow "kvm" "realm-workload-runtime" "required"
+        "Local VM workloads require KVM." [ ] false)
+      (moduleRow "tun" "realm-network-tap" "required"
+        "Declared realm networks use broker-created TAP descriptors." [ ] false)
+      (moduleRow "vhost_net" "realm-network-vhost" "required"
+        "Local VM workload networking uses vhost-net." [ ] false)
+      (moduleRow "fuse" "realm-store-view" "required"
+        "Workload store views use virtiofs." [ ] false)
+      (moduleRow "nf_tables" "realm-firewall" "required"
+        "Realm network partitions use nftables." [ ] false)
+      (moduleRow "bridge" "realm-bridge" "required"
+        "Declared realm networks use Linux bridges." [ ] false)
     ];
     fdOwnership = [
-      (fdRow "/dev/kvm" "OpenKvm" "cloud-hypervisor" "SCM_RIGHTS" false "The broker opens /dev/kvm and passes the fd to the Cloud Hypervisor runner.")
-      (fdRow "tap" "CreateTapFd" "cloud-hypervisor" "SCM_RIGHTS preferred; CreatePersistentTap fallback" false "The broker owns TAP creation so long-lived payloads do not retain CAP_NET_ADMIN.")
-      (fdRow "/dev/vhost-net" "OpenVhostNet" "cloud-hypervisor" "SCM_RIGHTS with the TAP fd" false "vhost-net acceleration is handed off as an fd, not a visible device node.")
-      (fdRow "/dev/fuse" "OpenFuse" "virtiofsd" "SCM_RIGHTS" false "virtiofsd receives /dev/fuse through the broker instead of a broad device namespace.")
-      (fdRow "cgroup-dirfd" "OpenCgroupDir" "d2bd" "SCM_RIGHTS or delegated path" false "The broker opens only the delegated d2b cgroup subtree for daemon-owned role placement.")
+      (fdRow "/dev/kvm" "OpenKvm" "workload-runtime" "SCM_RIGHTS" false
+        "The broker passes a KVM descriptor to the selected runtime role.")
+      (fdRow "tap" "CreateTapFd" "workload-runtime" "SCM_RIGHTS" false
+        "The allocator and realm broker own TAP creation.")
+      (fdRow "/dev/vhost-net" "OpenVhostNet" "workload-runtime" "SCM_RIGHTS" false
+        "The broker transfers vhost-net with the TAP descriptor.")
+      (fdRow "/dev/fuse" "OpenFuse" "virtiofsd" "SCM_RIGHTS" false
+        "The broker transfers only the declared FUSE descriptor.")
+      (fdRow "cgroup-dirfd" "OpenCgroupDir" "realm-controller" "SCM_RIGHTS" false
+        "Controllers receive only their delegated cgroup partition.")
     ];
-    runtimeProviders = runtimeProviders;
-    vmRuntimes = vmRuntimeRows;
-    qemuMedia =
-      if qemuMediaSources == [ ] then null else {
-        registryDir = "/var/lib/d2b/media-registry";
-        runtimeRulesPath = "/run/udev/rules.d/99-d2b-media-ignore.rules";
-        reloadBehavior = "Broker writes root-only runtime udev rules with UDISKS_IGNORE=1 and reloads udev rules after physical USB resolution; direct image-file paths do not use runtime USB rules.";
-        sources = qemuMediaSources;
-      };
-    cloudHypervisorCapabilities = [
-      (capabilityRow "headless" "required"
-        [ "/dev/kvm" "tun" "vhost_net" "fuse" ]
-        [ "virtiofsd" ]
-        [ "api-socket-info" "store-virtiofs-preflight" ]
-        "Headless and net-VM Cloud Hypervisor runs are the baseline target.")
-      (capabilityRow "graphics" (if anyGraphics then "required" else "optional")
-        [ "i915" "amdgpu" "nvidia" "nvidia_modeset" "nvidia_uvm" "nvidia_drm" ]
-        [ "gpu" "video" ]
-        [ "unix-socket-exists:gpu" "unix-socket-exists:video" ]
-        "Graphics VMs split GPU and video helpers from the Cloud Hypervisor runner.")
-      (capabilityRow "audio" (if anyAudio then "required" else "optional")
-        [ "pipewire" "vhost-user-sound" ]
-        [ "audio" ]
-        [ "unix-socket-exists:audio" ]
-        "Audio support uses a dedicated vhost-user-sound sidecar with its own profile and cgroup.")
-      (capabilityRow "tpm" (if anyTpm then "required" else "optional")
-        [ "swtpm" ]
-        [ "swtpm" ]
-        [ "unix-socket-exists:tpm-socket" ]
-        "TPM support stays external to the runner and preserves the pre-start flush invariant.")
-      (capabilityRow "vsock" (if anyObservability then "required" else "optional")
-        [ "AF_VSOCK" "virtio-vsock" ]
-        [ "vsock-relay" ]
-        [ "unix-socket-exists:vsock-relay" ]
-        "The baseline uses the Unix-socket-backed Cloud Hypervisor vsock path and a relay sidecar for observability flows.")
-      (capabilityRow "firecracker" "deferred" [ ] [ ] [ ] "Firecracker remains a deferred non-goal pending a later ADR and parity review.")
-      (capabilityRow "crosvmAsFullVmm" "deferred" [ ] [ ] [ ] "Crosvm may remain a helper, but it is not the primary VMM.")
-    ];
-    # hash-derived IfName mapping exposure.
-    ifNameMappings = allIfNameMappings;
-    # Cloud Hypervisor net-handoff probe result. The
-    # broker re-runs the host-check probe at runtime and fails closed
-    # with `ch-net-handoff-not-supported` if neither mode satisfies
-    # declared VM resources without `CAP_NET_ADMIN`.
-    ch = {
-      netHandoffMode = cfg.site.ch.netHandoffMode;
-    };
-    # Per-host firewall coexistence policy. The default is "no managed
-    # firewall detected -> coexist with whatever foreign rules exist";
-    # the broker's runtime probe overrides at apply-time. Until then,
-    # the static default makes the field present so downstream consumers
-    # (broker, drift gate, docs) can rely on
-    # `host.json.firewallCoexistencePolicy` always existing.
+    runtimeProviders = [ ];
+    vmRuntimes = [ ];
+    qemuMedia = null;
+    cloudHypervisorCapabilities = [ ];
+    ifNameMappings = lib.flatten (map mappingRows realms);
+    ch.netHandoffMode = cfg.site.ch.netHandoffMode;
     firewallCoexistencePolicy = {
       manager = "none";
       policy = "coexist";
-      rationale = "Default: no managed firewall manager declared on this host. The broker runtime probe overrides via ApplyNftables decisions; until then, nft rules install alongside foreign tables without flushing.";
+      rationale = "The broker preserves foreign rules and owns only marked realm partitions.";
     };
   };
 
   jsonText = builtins.toJSON data;
-  jsonFile = pkgs.writeText "d2b-host.json" jsonText;
 in
 {
-  config = {
-    d2b._bundle.hostJson = {
-      inherit data jsonText;
-      path = "${jsonFile}";
-      installFileName = "host.json";
-      classification = "contractPrivateNonSecret";
-      sensitivity = "nonSecret";
-    };
+  config.d2b._bundle.hostJson = {
+    inherit data jsonText;
+    path = "${pkgs.writeText "d2b-host.json" jsonText}";
+    installFileName = "host.json";
+    classification = "contractPrivateNonSecret";
+    sensitivity = "nonSecret";
   };
 }

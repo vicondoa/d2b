@@ -1175,7 +1175,8 @@ fn daemon_provider_composition_is_exact_startup_owned_and_credential_free() {
     );
     let provider_emitter = read_repo_file("nixos-modules/provider-registry-v2-json.nix");
     assert!(
-        provider_emitter.contains("cfg._index.realms.workloads.enabled")
+        provider_emitter.contains("import ./workload-process-rows.nix")
+            && provider_emitter.contains("cfg._index.workloads.byId.${workloadId}")
             && provider_emitter.contains("provider-registry-v2.json")
             && provider_emitter.contains("contractPrivateNonSecret")
             && !provider_emitter.contains("runtime.execute"),
@@ -2175,7 +2176,7 @@ fn w5_guest_signing_retirement_seam_is_exact() {
 fn w7_legacy_contract_migration_seam_is_exact() {
     let policy =
         xtask::wave_policy::read_policy(&repo_root()).expect("shared-contract migration policy");
-    assert_eq!(policy.w7_contract_test_migrations.len(), 7);
+    assert_eq!(policy.w7_contract_test_migrations.len(), 6);
 
     let expected_files = BTreeSet::from([
         "packages/d2b-contract-tests/tests/policy_host_realm_relay.rs".to_owned(),
@@ -2199,12 +2200,13 @@ fn w7_legacy_contract_migration_seam_is_exact() {
                 "packages/d2b-contract-tests/tests/realm_workload_schema_contract.rs",
             ),
             BTreeSet::from([
-                "realm_workloads_launcher_artifact_wired_as_private_non_secret",
-                "realm_workloads_launcher_exposes_canonical_target_and_actions",
-                "realm_workloads_launcher_exposes_icon_grouping_fields",
-                "realm_workloads_launcher_exposes_workload_id_field",
-                "realm_workloads_launcher_icon_group_key_has_semantic_comment",
-                "realm_workloads_launcher_invariant_is_no_sensitive_command_payloads",
+                "desktop_metadata_artifact_is_public_non_secret",
+                "desktop_metadata_consumes_normalized_rows_without_rederiving_ids",
+                "desktop_metadata_is_bounded_and_non_authoritative",
+                "desktop_metadata_keeps_configured_argv_private",
+                "desktop_metadata_maps_systemd_user_to_unsafe_local_posture",
+                "desktop_metadata_preserves_presentation_without_legacy_group_aliases",
+                "normalized_index_owns_canonical_desktop_identity",
             ]),
         ),
         (
@@ -2230,17 +2232,10 @@ fn w7_legacy_contract_migration_seam_is_exact() {
         ),
         (
             (
-                "realm-principals",
-                "packages/d2b-contract-tests/tests/policy_misc.rs",
-            ),
-            BTreeSet::from(["polkit_allowlist_daemon_only_singletons"]),
-        ),
-        (
-            (
                 "workload-processes",
                 "packages/d2b-contract-tests/tests/policy_misc.rs",
             ),
-            BTreeSet::from(["vm_submodule_compose_vm_shape"]),
+            BTreeSet::from(["workload_composition_shape"]),
         ),
         (
             (
@@ -2481,6 +2476,48 @@ fn provider_registry_v2_has_one_canonical_artifact_family() {
             "packages/d2b-contracts/src/provider_registry_v2.rs".to_owned(),
         ])
     );
+
+    let composer = read_repo_file("nixos-modules/provider-registry-v2-json.nix");
+    for fragment in [
+        "transport",
+        "substrate",
+        "display",
+        "network",
+        "storage",
+        "device",
+        "audio",
+    ] {
+        assert!(
+            composer.contains(&format!("./provider-registry-v2-extensions/{fragment}.nix")),
+            "provider registry composer must import the {fragment} fragment"
+        );
+    }
+    for required in [
+        "config.d2b._bundle.providerRegistryV2Json",
+        "left.descriptor.providerId",
+        "inherit providers;",
+        "builtins.isList fragment.providers",
+        "import ./workload-process-rows.nix",
+        "inherit (row) workloadId vmStartIntentId runnerIntentId;",
+    ] {
+        assert!(
+            composer.contains(required),
+            "provider registry composer is missing required contract {required:?}"
+        );
+    }
+    for forbidden in [
+        "builtins.pathExists",
+        "_index.realms.workloads",
+        "_index.enabledVms",
+        "_index.runtime.byVm",
+        "builtins.isList fragment then fragment",
+        "providerRegistryV3",
+    ] {
+        assert!(
+            !composer.contains(forbidden),
+            "provider registry composer retained forbidden contract {forbidden:?}"
+        );
+    }
 }
 
 #[test]
@@ -2525,7 +2562,17 @@ fn provider_binding_consumers_require_and_preserve_fail_closed_fallbacks() {
         .collect::<BTreeSet<_>>();
     assert_eq!(
         wire_axes,
-        BTreeSet::from(["local-observability", "local-runtime"]),
+        BTreeSet::from([
+            "local-audio",
+            "local-device",
+            "local-display",
+            "local-observability",
+            "local-runtime",
+            "local-storage",
+            "local-substrate",
+            "local-transport",
+            "network",
+        ]),
         "provider binding wire schema must remain closed to declared axes"
     );
     assert!(

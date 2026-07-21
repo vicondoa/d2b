@@ -1,85 +1,57 @@
-# nix-unit cases migrated from tests/broker-socket-activation-eval.sh.
-#
-# Asserts host-broker.nix wires d2b-priv-broker for socket activation:
-#
-#   (A) ExecStart does NOT pass --socket-path (with SD_LISTEN_FDS the broker
-#       MUST adopt the inherited fd, not self-bind the path).
-#   (B) systemd.sockets.d2b-priv-broker exists (socket-activated).
-#   (C) socketConfig.FileDescriptorName is "priv.sock" (matched by
-#       adopt_listen_fd() against LISTEN_FDNAMES).
-#   (D) socketConfig.ListenSequentialPacket is /run/d2b/priv.sock.
-#
-# (A) was a source-text check in the bash gate: evaluating
-# serviceConfig.ExecStart forces the broker derivation build and recurses,
-# so the source is inspected directly. The faithful successor reads
-# host-broker.nix via `builtins.readFile (flakeRoot + rel)` and asserts no
-# NON-COMMENT line carries --socket-path (the source mentions the flag only
-# in an explanatory comment, which is excluded), plus that the ExecStart
-# assignment is still present (file not hollowed out). (B)-(D) migrate to
-# `mkEval` introspection of `systemd.sockets`, mirroring the bash gate's
-# nix eval — socketConfig fields are safe to force (unlike ExecStart).
-{ mkEval, lib, flakeRoot, ... }:
+{ lib, pkgs, flakeRoot, ... }:
 
 let
-  brokerLines = lib.splitString "\n"
-    (builtins.readFile (flakeRoot + "/nixos-modules/host-broker.nix"));
-
-  # A source line is a comment iff its first non-whitespace char is '#'.
-  isComment = l: builtins.match "[[:space:]]*#.*" l != null;
-  codeLines = lib.filter (l: !(isComment l)) brokerLines;
-
-  # The bash gate used the MINIMAL daemon-only config (no site/envs) for the
-  # socket eval; the socket unit shape is independent of site/envs. Mirror it.
-  minimal = { ... }: {
-    boot.loader.grub.enable = false;
-    boot.loader.systemd-boot.enable = false;
-    boot.initrd.includeDefaultModules = false;
-    fileSystems."/" = { device = "tmpfs"; fsType = "tmpfs"; };
-    environment.etc."machine-id".text = "00000000000000000000000000000000";
-    system.stateVersion = "25.11";
-    d2b.daemonExperimental.enable = true;
-  };
-
-  cfg = (mkEval [ minimal ]).config;
-  sockCfg = cfg.systemd.sockets.d2b-priv-broker.socketConfig or { };
+  module =
+    (import (flakeRoot + "/nixos-modules/host-broker.nix") { inputs = { }; })
+      {
+        config.d2b = {
+          site = {
+            usePrebuiltHostTools = false;
+            stateDir = "/var/lib/d2b";
+            audit.retentionDays = 14;
+            bundle.currentManifest = "/etc/d2b/bundle.json";
+          };
+          _realmPrincipals.localRoot = {
+            controller = "d2bd";
+            broker = "root";
+            socketPrincipals.broker = {
+              owner = "root";
+              group = "d2bd";
+              mode = "0660";
+            };
+          };
+        };
+        inherit lib pkgs;
+      };
+  socket = module.config.systemd.sockets.d2b-priv-broker;
+  service = module.config.systemd.services.d2b-priv-broker;
 in
 {
-  # (A) No uncommented --socket-path in host-broker.nix.
-  "broker-socket-activation/no-socket-path-flag" = {
-    expr = lib.any (l: lib.hasInfix "--socket-path" l) codeLines;
-    expected = false;
-  };
-  # (A) ExecStart assignment is present (sanity: file not hollowed out).
-  "broker-socket-activation/exec-start-present" = {
-    expr = lib.any (l: lib.hasInfix "ExecStart =" l) brokerLines;
-    expected = true;
-  };
-
-  # (B) Socket unit exists (broker is socket-activated).
-  "broker-socket-activation/has-socket" = {
-    expr = cfg.systemd.sockets ? d2b-priv-broker;
-    expected = true;
-  };
-  # (C) FileDescriptorName matches the name adopt_listen_fd() validates.
-  "broker-socket-activation/fd-name" = {
-    expr = sockCfg.FileDescriptorName or "";
-    expected = "priv.sock";
-  };
-  # (D) Socket listens at the canonical private socket path.
-  "broker-socket-activation/listen-seq-packet" = {
-    expr = sockCfg.ListenSequentialPacket or "";
-    expected = "/run/d2b/priv.sock";
+  "broker-socket-activation/listener-provenance" = {
+    expr = {
+      path = socket.socketConfig.ListenSequentialPacket;
+      owner = socket.socketConfig.SocketUser;
+      group = socket.socketConfig.SocketGroup;
+      mode = socket.socketConfig.SocketMode;
+      fdName = socket.socketConfig.FileDescriptorName;
+      service = socket.socketConfig.Service;
+      accept = socket.socketConfig.Accept;
+    };
+    expected = {
+      path = "/run/d2b/broker.sock";
+      owner = "root";
+      group = "d2bd";
+      mode = "0660";
+      fdName = "priv.sock";
+      service = "d2b-priv-broker.service";
+      accept = false;
+    };
   };
 
-  "broker-socket-activation/socket-after-tmpfiles" = {
-    expr = builtins.elem "systemd-tmpfiles-setup.service"
-      (cfg.systemd.sockets.d2b-priv-broker.after or [ ]);
-    expected = true;
-  };
-
-  "broker-socket-activation/socket-requires-tmpfiles" = {
-    expr = builtins.elem "systemd-tmpfiles-setup.service"
-      (cfg.systemd.sockets.d2b-priv-broker.requires or [ ]);
+  "broker-socket-activation/fd-only-service" = {
+    expr =
+      !(lib.hasInfix "--socket-path" service.serviceConfig.ExecStart)
+      && builtins.elem "d2b-priv-broker.socket" service.requires;
     expected = true;
   };
 }

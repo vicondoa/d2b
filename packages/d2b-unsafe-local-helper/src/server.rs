@@ -42,6 +42,7 @@ use tokio::task::JoinSet;
 use ttrpc::r#async::TtrpcContext;
 
 use crate::{
+    controller_allowlist::ControllerAllowlist,
     services::{
         AuthenticatedRuntimeSession, CompositionError, RuntimeComposition,
         runtime_systemd_user::{
@@ -71,6 +72,7 @@ pub enum ServerError {
     InvalidIdentity,
     Generation,
     Signal,
+    Allowlist,
 }
 
 impl fmt::Display for ServerError {
@@ -80,17 +82,40 @@ impl fmt::Display for ServerError {
             Self::InvalidIdentity => "runtime-identity-invalid",
             Self::Generation => "runtime-generation-unavailable",
             Self::Signal => "shutdown-signal-unavailable",
+            Self::Allowlist => "controller-allowlist-invalid",
         })
     }
 }
 
 impl std::error::Error for ServerError {}
 
+/// Immutable Nix-owned document naming the exact, bounded set of enabled
+/// host-local realm controller UIDs authorized to reach this requesting
+/// user's endpoint (see `nixos-modules/unsafe-local-helper.nix`). Absent
+/// means no wiring has been provisioned yet; the helper then falls back to
+/// the safe same-uid-only default rather than failing to start.
+const CONTROLLER_ALLOWLIST_ENV: &str = "D2B_UNSAFE_LOCAL_CONTROLLER_ALLOWLIST";
+
+fn load_controller_allowlist(uid: u32) -> Result<ControllerAllowlist, ServerError> {
+    let Some(path) = std::env::var_os(CONTROLLER_ALLOWLIST_ENV) else {
+        return Ok(ControllerAllowlist::empty());
+    };
+    // The allowlist document is keyed by this process's own username, never
+    // by anything peer-supplied, so a connecting peer can never select
+    // which row authorizes it.
+    let username = uzers::get_user_by_uid(uid)
+        .and_then(|user| user.name().to_str().map(str::to_owned))
+        .ok_or(ServerError::Allowlist)?;
+    let document = std::fs::read(&path).map_err(|_| ServerError::Allowlist)?;
+    ControllerAllowlist::resolve(&document, &username).map_err(|_| ServerError::Allowlist)
+}
+
 pub async fn run() -> Result<(), ServerError> {
     let uid = geteuid().as_raw();
     if uid == 0 || uid != nix::unistd::getuid().as_raw() {
         return Err(ServerError::InvalidIdentity);
     }
+    let allowlist = load_controller_allowlist(uid)?;
     let generation = random_generation()?;
     let listeners = ActivatedSeqpacketListeners::from_systemd(&[ACTIVATED_LISTENER_NAME])
         .map_err(|_| ServerError::Activation)?;
@@ -106,7 +131,7 @@ pub async fn run() -> Result<(), ServerError> {
             _ = interrupt.recv() => Ok(()),
         }
     };
-    serve_until_shutdown(&listeners, generation, shutdown).await
+    serve_until_shutdown(&listeners, generation, &allowlist, shutdown).await
 }
 
 fn random_generation() -> Result<u64, ServerError> {
@@ -133,6 +158,7 @@ impl ActivatedListener for ActivatedSeqpacketListeners {
 async fn serve_until_shutdown<L, S>(
     listener: &L,
     generation: u64,
+    allowlist: &ControllerAllowlist,
     shutdown: S,
 ) -> Result<(), ServerError>
 where
@@ -151,8 +177,9 @@ where
             }
             accepted = listener.accept(), if sessions.len() < MAX_ACTIVE_SESSIONS => {
                 let socket = accepted?;
+                let allowlist = allowlist.clone();
                 sessions.spawn(async move {
-                    let _ = serve_socket(socket, generation).await;
+                    let _ = serve_socket(socket, generation, allowlist).await;
                 });
             }
             completed = sessions.join_next(), if !sessions.is_empty() => {
@@ -162,10 +189,23 @@ where
     }
 }
 
-async fn serve_socket(socket: SeqpacketSocket, generation: u64) -> Result<(), ()> {
+/// Whether an already-authenticated peer uid may open a session on this
+/// endpoint. This is a pure boolean decision: it never selects, returns, or
+/// otherwise influences which uid anything executes as. The helper always
+/// executes as `own_uid` (enforced once, in `run`); this only gates which
+/// *other* connecting uid is additionally trusted to reach it.
+fn peer_is_authorized(peer_uid: u32, own_uid: u32, allowlist: &ControllerAllowlist) -> bool {
+    peer_uid != 0 && own_uid != 0 && (peer_uid == own_uid || allowlist.contains(peer_uid))
+}
+
+async fn serve_socket(
+    socket: SeqpacketSocket,
+    generation: u64,
+    allowlist: ControllerAllowlist,
+) -> Result<(), ()> {
     let peer = socket.acceptor_peer_credentials().map_err(|_| ())?;
     let uid = geteuid().as_raw();
-    if uid == 0 || peer.uid().as_raw() != uid {
+    if !peer_is_authorized(peer.uid().as_raw(), uid, &allowlist) {
         return Err(());
     }
     let gid = peer.gid().as_raw();
@@ -1473,9 +1513,108 @@ mod tests {
         let peer = socket.acceptor_peer_credentials().unwrap();
         assert_eq!(peer.uid().as_raw(), geteuid().as_raw());
         assert_eq!(
-            peer.uid().as_raw() != 0 && peer.uid().as_raw() == geteuid().as_raw(),
+            peer_is_authorized(
+                peer.uid().as_raw(),
+                geteuid().as_raw(),
+                &ControllerAllowlist::empty()
+            ),
             geteuid().as_raw() != 0
         );
+    }
+
+    #[test]
+    fn peer_admission_accepts_the_exact_allowlisted_controller() {
+        let allowlist = ControllerAllowlist::resolve(
+            controller_allowlist_document(&[("alice", &[1234])]),
+            "alice",
+        )
+        .unwrap();
+        assert!(peer_is_authorized(1234, 1000, &allowlist));
+    }
+
+    #[test]
+    fn peer_admission_denies_an_unrelated_controller() {
+        let allowlist = ControllerAllowlist::resolve(
+            controller_allowlist_document(&[("alice", &[1234])]),
+            "alice",
+        )
+        .unwrap();
+        // 1300 is a real, distinct controller uid but was never granted to
+        // this requester.
+        assert!(!peer_is_authorized(1300, 1000, &allowlist));
+    }
+
+    #[test]
+    fn peer_admission_denies_an_unrelated_users_controller() {
+        // The document authorizes 1234 only for bob, not for alice.
+        let allowlist = ControllerAllowlist::resolve(
+            controller_allowlist_document(&[("bob", &[1234])]),
+            "alice",
+        )
+        .unwrap();
+        assert!(!peer_is_authorized(1234, 1000, &allowlist));
+    }
+
+    #[test]
+    fn peer_admission_denies_root_regardless_of_allowlist_or_own_uid() {
+        // A document that ever tried to authorize uid 0 fails closed at
+        // parse time (see controller_allowlist::tests), so uid 0 can never
+        // legitimately appear in a resolved allowlist. `peer_is_authorized`
+        // additionally defends in depth against uid 0 on either side.
+        let empty = ControllerAllowlist::empty();
+        assert!(!peer_is_authorized(0, 1000, &empty));
+        assert!(!peer_is_authorized(1000, 0, &empty));
+    }
+
+    #[test]
+    fn peer_admission_still_accepts_the_same_uid_direct_path() {
+        let allowlist = ControllerAllowlist::empty();
+        assert!(peer_is_authorized(1000, 1000, &allowlist));
+    }
+
+    #[test]
+    fn malformed_allowlist_document_never_authorizes_a_foreign_uid() {
+        for bytes in [
+            &b"not-json"[..],
+            br#"{"schemaVersion":1,"entries":[{"user":"alice","controllerUids":[0]}]}"#,
+            br#"{"schemaVersion":1,"entries":[{"user":"alice","controllerUids":[1300,1234]}]}"#,
+        ] {
+            assert!(ControllerAllowlist::resolve(bytes, "alice").is_err());
+        }
+    }
+
+    #[test]
+    fn admission_never_selects_or_changes_the_execution_uid() {
+        // `peer_is_authorized` is a pure predicate: it takes both uids and
+        // an allowlist and returns a bool. There is no code path by which an
+        // authorized peer uid can become the uid the helper executes
+        // requests as -- that identity is fixed once, in `run`, from the
+        // process's own real/effective uid, before any peer is ever
+        // accepted.
+        let allowlist = ControllerAllowlist::resolve(
+            controller_allowlist_document(&[("alice", &[1234])]),
+            "alice",
+        )
+        .unwrap();
+        assert!(peer_is_authorized(1234, 1000, &allowlist));
+        // Swapping which side is "own" vs "peer" must not also authorize --
+        // authorization is not symmetric execution-identity selection.
+        assert!(!peer_is_authorized(1000, 1234, &allowlist));
+    }
+
+    fn controller_allowlist_document(entries: &[(&str, &[u32])]) -> &'static [u8] {
+        // Only literal fixtures are exercised through this helper; leaking a
+        // small boxed buffer keeps call sites terse without unsafe code.
+        let entries: Vec<serde_json::Value> = entries
+            .iter()
+            .map(|(user, uids)| serde_json::json!({ "user": user, "controllerUids": uids }))
+            .collect();
+        let document = serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 1,
+            "entries": entries,
+        }))
+        .unwrap();
+        Box::leak(document.into_boxed_slice())
     }
 
     #[test]
@@ -1570,7 +1709,7 @@ mod tests {
             Ok(())
         };
         let task = tokio::spawn(async move {
-            serve_until_shutdown(&listener, 1, shutdown)
+            serve_until_shutdown(&listener, 1, &ControllerAllowlist::empty(), shutdown)
                 .await
                 .map(|()| listener.calls.load(Ordering::Relaxed))
         });

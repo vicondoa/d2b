@@ -22,7 +22,7 @@
 //! `tests/migration-state.d/guest-control-auth-eval.toml`). Because this
 //! pure-Rust contract crate does not run `nix`, the port asserts the
 //! still-source-greppable current reality: the two former non-goals are now
-//! shipped goals, and the auth-core token-share / LoadCredential contract the
+//! shipped goals, and the runtime ComponentSession credential contract the
 //! smoke eval exercises is present in the module source. The bash gate's
 //! `rg`-availability precondition is a shell-tooling guard with no Rust
 //! analogue and is intentionally dropped.
@@ -149,50 +149,177 @@ fn retired_guest_control_nongoals_are_now_shipped_goals() {
     );
 }
 
-// Migrated from tests/guest-control-auth-nongoals.sh. The auth-core
-// token-share / LoadCredential contract the smoke eval
-// (tests/unit/nix/eval-cases/guest-control-auth-eval.nix) exercises is present in the module
-// source.
 #[test]
-fn guest_control_auth_core_token_share_contract_present() {
-    // Host-side per-VM guest-control credential share: read-only `d2b-gctl`
-    // virtiofs share mounted at the host-control mount point.
-    let host = read_repo_file("nixos-modules/host.nix");
+fn guest_session_credential_contract_present() {
+    let workloads = read_repo_file("nixos-modules/workload-process-rows.nix");
     assert!(
-        host.contains(r#"tag = "d2b-gctl""#),
-        "host.nix must declare the d2b-gctl guest-control credential share"
-    );
-    assert!(
-        host.contains(r#"mountPoint = "/run/d2b-guest-control-host""#),
-        "host.nix must mount the guest-control share at /run/d2b-guest-control-host"
+        workloads.contains(r#"tag = "d2b-gctl""#)
+            && workloads.contains(r#"mountPoint = "/run/d2b-guest-control-host""#)
+            && workloads.contains(r#""workload-runtime").path}/guest-session""#)
+            && workloads.contains("readOnly = true;"),
+        "workload-process-rows.nix must expose only the workload runtime credential directory"
     );
 
-    // guestd service LoadCredential delivering the token over the share.
+    let host_credential = read_repo_file("nixos-modules/guest-control-host.nix");
+    assert!(
+        host_credential.contains("options.d2b._workloadGuestSessionCredentialRows")
+            && host_credential.contains(r#"format = "GuestSessionCredentialV1""#)
+            && host_credential.contains("schemaVersion = 1;")
+            && host_credential.contains("generation = row.controller;")
+            && host_credential.contains("materialization = row.broker;")
+            && host_credential.contains("materializedByHostActivation = false;")
+            && host_credential.contains("bundleArtifact = false;")
+            && host_credential.contains("derivationMaterial = false;"),
+        "guest-control-host.nix must declare runtime-only realm-confined session credentials"
+    );
+
     let guest_control = read_repo_file("nixos-modules/guest-control.nix");
     assert!(
         guest_control.contains("d2b-guestd"),
         "guest-control.nix must declare the d2b-guestd service"
     );
     assert!(
-        guest_control.contains(r#""guest_control_token:/run/d2b-guest-control-host/token""#),
-        "guest-control.nix must LoadCredential guest_control_token from the host share"
+        guest_control.contains(r#"type = lib.types.enum [ "d2b-guest-session-v2" ];"#)
+            && guest_control
+                .contains(r#""${cfg.sessionCredential.name}:${cfg.sessionCredential.sourcePath}""#),
+        "guest-control.nix must deliver only the fixed ComponentSession credential"
     );
 
-    // Operator-facing auth.tokenFile option + the absolute-path / outside
-    // /nix/store validation the eval's negative cases cover.
-    let host_token = read_repo_file("nixos-modules/guest-control-host.nix");
     assert!(
-        host_token.contains("vm.guest.control.auth.tokenFile"),
-        "guest-control-host.nix must wire vm.guest.control.auth.tokenFile"
+        !host_credential.contains("auth.tokenFile")
+            && !host_credential.contains("guest_control_token"),
+        "guest session rows must not retain a caller path or legacy token"
+    );
+}
+
+#[test]
+fn guest_session_credential_has_exact_public_bindings_and_private_delivery() {
+    let host_credential = read_repo_file("nixos-modules/guest-control-host.nix");
+    for field in [
+        r#""sessionGeneration""#,
+        r#""parentPublicKey""#,
+        r#""channelBinding""#,
+        r#""guestIdentity""#,
+        r#""guestPublicKey""#,
+        r#""operationId""#,
+        r#""realmId""#,
+        r#""workloadId""#,
+        r#""controllerGeneration""#,
+        r#""workloadGeneration""#,
+        r#""runtimeInstanceHandleDigest""#,
+        r#""transportEndpointDigest""#,
+        r#""purpose""#,
+        r#""replayNonce""#,
+        r#""expiresAtUnixMs""#,
+        r#""binding""#,
+        r#""secret""#,
+    ] {
+        assert!(
+            host_credential.contains(field),
+            "GuestSessionCredentialV1 is missing {field}"
+        );
+    }
+    for forbidden in [r#""parentPrivateKey""#, r#""guestPrivateKey""#] {
+        assert!(
+            host_credential.contains(forbidden),
+            "GuestSessionCredentialV1 must explicitly forbid {forbidden}"
+        );
+    }
+    for invariant in [
+        r#"directoryMode = "0750""#,
+        r#"mode = "0440""#,
+        r#"mode = "0400""#,
+        "ambientFallback = false;",
+        r#"mechanism = "authenticated-component-session-fd""#,
+        r#"service = "d2b.broker.v2""#,
+        r#"method = "Apply""#,
+        "methodId = 2253834528;",
+        "attachmentCount = 1;",
+        r#"attachmentKind = "file-descriptor""#,
+        r#"descriptor = "memfd""#,
+        r#"access = "read-only""#,
+        r#"purpose = "request-input""#,
+        "sealedRequired = true;",
+        "cloexecRequired = true;",
+        "exactStorageRefRequired = true;",
+        "pathPayloadAllowed = false;",
+        "operationPskAllOrNone = true;",
+        "operationPskSingleUse = true;",
+        r#"restart = "rotate-before-publish""#,
+        r#"adoption = "exact-binding-or-quarantine""#,
+        r#"stale = "fail-closed""#,
+        r#"ambiguous = "fail-closed""#,
+    ] {
+        assert!(
+            host_credential.contains(invariant),
+            "guest session credential contract is missing {invariant}"
+        );
+    }
+}
+
+#[test]
+fn legacy_guest_token_materializer_and_signing_authority_are_absent() {
+    assert!(
+        !repo_root()
+            .join("nixos-modules/guest-control-token-materialize.py")
+            .exists(),
+        "the long-lived guest token materializer must be deleted"
     );
     assert!(
-        host_token.contains(r#"lib.hasPrefix "/nix/store/" vm.guest.control.auth.tokenFile"#),
-        "guest-control-host.nix must reject tokenFile paths inside /nix/store"
+        !repo_root()
+            .join("packages/d2b-host/tests/guest_control_token_materializer.rs")
+            .exists(),
+        "the retired materializer test must be deleted with its implementation"
     );
-    let options = read_repo_file("nixos-modules/options-vms.nix");
+
+    for path in [
+        "nixos-modules/guest-control-host.nix",
+        "nixos-modules/host.nix",
+        "nixos-modules/host-activation.nix",
+        "nixos-modules/guest-control.nix",
+        "nixos-modules/privileges-json.nix",
+    ] {
+        let source = read_repo_file(path);
+        assert!(
+            !source.contains("guest_control_token") && !source.contains("guest-control-token"),
+            "{path} retains a legacy token surface"
+        );
+    }
     assert!(
-        options.contains("auth.tokenFile = lib.mkOption"),
-        "options-vms.nix must declare the auth.tokenFile option"
+        !read_repo_file("nixos-modules/privileges-json.nix").contains("GuestControlSign"),
+        "the emitted privileges matrix must omit GuestControlSign"
+    );
+
+    let legacy_storage = read_repo_file("nixos-modules/storage-json.nix");
+    assert!(
+        !legacy_storage.contains("path:vm-run-guest-control")
+            && !legacy_storage.contains(r#"/run/d2b/vms/${name}/guest-control"#),
+        "the inactive legacy storage emitter must not retain a guest token directory"
+    );
+
+    let public_manifest = read_repo_file("nixos-modules/bundle-artifacts.nix");
+    for forbidden in [
+        "GuestSessionCredentialV1",
+        "d2b-guest-session-v2",
+        "parentPrivateKey",
+        "guestPrivateKey",
+        "operationPsk",
+    ] {
+        assert!(
+            !public_manifest.contains(forbidden),
+            "the public manifest emitter must not contain {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn privileges_parity_does_not_hide_live_guest_control_sign() {
+    let parity = read_repo_file("packages/d2b-contract-tests/tests/privileges_parity.rs");
+    assert!(
+        !parity.contains("GuestControlSign")
+            && !parity.contains(".retain(|row|")
+            && !parity.contains(".filter(|row|"),
+        "privileges parity must compare the complete live Rust matrix without filtering"
     );
 }
 

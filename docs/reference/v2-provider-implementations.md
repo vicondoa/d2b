@@ -56,9 +56,10 @@ references to existing bundle intents. Descriptor placement is the sole realm
 authority: the binding deliberately cannot encode a contradictory realm.
 Keeping `workloadId` is necessary because a realm-scoped trusted in-process
 descriptor does not identify its target workload. The artifact contains no
-argv, host path, credential, or secret payload. `bundleVersion` 12 adds the
-artifact; its own schema remains version `v2`. Provider activation accepts
-exactly bundle version 12 with bundle schema `v2`, a declared provider artifact
+argv, host path, credential, or secret payload. `bundleVersion` 12 added the
+artifact; bundle version 13 adds observability-secret metadata discovery while
+its own schema remains version `v2`. Provider activation accepts exactly bundle
+version 13 with bundle schema `v2`, a declared provider artifact
 path, a bundle hash, and an artifact-hash entry for that path. Older bundle
 versions remain readable by compatibility consumers but cannot activate this
 registry.

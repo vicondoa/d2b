@@ -2,193 +2,77 @@
 
 **Diataxis category:** reference.
 
-`/etc/d2b/realm-controllers.json` is a private, non-secret bundle
-artifact that records the host-local realm controller plan derived from
-`d2b.realms.<realm>`. It remains metadata only as a runtime contract: the
-artifact describes which host-local daemon, broker, socket, user, group,
-state, and audit surfaces NixOS materializes, but it is not itself an
-activation command or router.
+`/etc/d2b/realm-controllers.json` is private, non-secret configuration for
+host-local child realms. It projects the normalized realm index, generated
+principals, allocator resource references, listener paths, and controller and
+broker identities into the existing versioned bundle contract.
 
-The artifact exists so later runtime code can consume one typed contract
-instead of re-deriving names, paths, allocator bindings, and access metadata
-from the public option tree.
+## Deterministic child identity
 
-## Top-level contract
+For a canonical child realm ID `<realm-id>`, the emitted identity is:
 
-The JSON root is `RealmControllersJson`:
-
-| Field | Meaning |
+| Surface | Value |
 | --- | --- |
-| `schemaVersion` | Bundle schema version. Current value is `v2`. |
-| `runtimeState` | Current runtime posture. The only current value is `metadata-only`. |
-| `controllers[]` | One enabled realm controller record per enabled `d2b.realms.<realm>`. |
-| `invariants` | Booleans that make the non-runtime boundary explicit. |
+| Controller user/group | `d2bd-r-<realm-id>` |
+| Broker user/group | `d2bbr-r-<realm-id>` |
+| Internal cgroup group | `d2bcg-r-<realm-id>` |
+| Public access group | `d2b-r-<realm-id>` |
+| Public listener | `/run/d2b/r/<realm-id>/public.sock` |
+| Broker listener | `/run/d2b/r/<realm-id>/broker.sock` |
 
-The current invariants are:
+Controller and broker identities, listener rows, launch rows, and resource
+references are separate. Rows are sorted by canonical realm path and exclude
+the local-root instance and non-host-local realms.
 
-| Invariant | Required meaning |
-| --- | --- |
-| `metadataOnly` | The file is descriptive metadata, not a runtime activation command. |
-| `noSystemdUnitsMaterialized` | Legacy double-negative kept for the v2 schema: `true` means every controller row is metadata-only with no emitted systemd unit/socket; `false` means at least one host-local realm materializes daemon/broker units or sockets. |
-| `preservesGlobalDaemonBehavior` | Existing `d2bd.service`, `d2b-priv-broker.socket`, and `d2b-priv-broker.service` behavior is unchanged. |
-| `preservesDirectUnixSocketSemantics` | Future realm clients are expected to authenticate to the owning realm socket directly, not through a host byte proxy. |
+## Declarative launch records
 
-## Deterministic names
+The allocator input contains one controller launch record and one broker launch
+record per child realm. Each record names:
 
-Each controller row reserves deterministic host-local names. Host-local rows
-also materialize the matching control-plane surfaces described below:
+- its exact principal and internal supplementary group;
+- its pre-bound public or broker listener reference;
+- its direct `controller/` or `broker/` cgroup leaf;
+- dedicated user, mount, network, IPC, PID, and cgroup namespace references;
+- bounded resource references and the non-secret identity configuration path;
+- the local-root broker as spawn authority and local-root controller as
+  supervision owner.
 
-| Shape | Source |
-| --- | --- |
-| Realm daemon user/group/socket group | `d2br-<hash>`, where `<hash>` is the first 16 hex characters of the SHA-256 hash of the realm path. |
-| Realm daemon unit name | `d2b-realm-<hash>-daemon.service` |
-| Realm broker socket unit name | `d2b-realm-<hash>-priv-broker.socket` |
-| Realm broker service unit name | `d2b-realm-<hash>-priv-broker.service` |
-| Realm daemon config path | `/etc/d2b/realms/<realm-id>/daemon-config.json` |
-| Realm run directory | `/run/d2b/realms/<realm-id>` by default. |
-| Realm public socket | `<runDir>/public.sock` by default. |
-| Realm broker socket | `<runDir>/broker.sock` by default. |
-| Realm state directory | `config.d2b.site.stateDir + "/realms/<realm-id>"` by default. |
-| Realm audit directory | `/var/lib/d2b/audit/realms/<realm-id>` by default. |
+The records explicitly deny self-binding and `SD_LISTEN_FDS`. They are
+declarative: no process is started while evaluating or installing the bundle.
 
-For host-local realms, NixOS creates the deterministic principals, tmpfiles
-paths, daemon service, and (when host mutation is enabled) broker socket/service.
-The generated row marks those emitted surfaces with
-`daemon.materializedService`, `broker.materializedSocket`, and
-`broker.materializedService`. Provider-backed and disabled realms do not emit
-host-local units.
+## Cgroup and ownership records
 
-Socket paths are validated against Linux AF_UNIX pathname limits before they
-can enter the bundle.
+The generated cgroup tree is rooted at:
 
-## Direct realm socket authorization
+```text
+/sys/fs/cgroup/d2b.slice/r-<realm-id>/
+  controller/
+  broker/
+  workloads/
+    w-<workload-id>/
+      <role-id>/
+```
 
-The `access` block records host users and groups intended to receive direct
-access to a future realm public socket:
+The realm root, `workloads/`, and each workload root are process-free.
+Controllers and brokers start directly in their role leaves; workload
+processes may appear only in generated role leaves. Ownership rows keep the
+public access group separate from the internal cgroup group and assign repair
+authority to the declared broker boundary.
 
-- `allowedUsers` and `allowedGroups` come from the realm declaration;
-- `inheritedAdminUsers` comes from `d2b.site.adminUsers`.
+## Bundle projection
 
-Host-local realms add `allowedUsers` to the deterministic realm socket-access
-group. The live global control plane still authorizes local lifecycle requests
-through `SO_PEERCRED` plus the canonical `d2b` group on the global public
-socket.
+The frozen `realm-controllers.json` schema retains historical `serviceName`,
+`socketUnitName`, and `serviceUnitName` field names. For child realms these
+fields carry deterministic launch/listener record IDs, not PID1 unit names.
+`materializedService` and `materializedSocket` are always `false`, and
+`noSystemdUnitsMaterialized` is `true`.
 
-The direct-access contract is important for future runtime work: a client that
-is authorized for a realm should connect to that realm's public AF_UNIX socket
-and be checked there. The global host daemon is not a byte proxy that forwards
-opaque traffic between local users and realm daemons.
+The allocator block lists resource request IDs from `/etc/d2b/allocator.json`.
+It is a resolver input, not a lease grant or host-mutation capability.
 
-## Local-root allocator binding
+## Runtime boundary
 
-The `allocator` block binds each realm controller to the private allocator
-metadata:
-
-| Field | Meaning |
-| --- | --- |
-| `kind` | Current value `local-root-metadata`. |
-| `configPath` | `/etc/d2b/allocator.json`. |
-| `rootSocket` | The reserved local-root allocator socket path from `allocator.json`. |
-| `resourceRequestRefs[]` | Opaque resource ids requested by this realm. |
-
-This is a resolver contract, not a byte proxy. Future realm brokers must
-request typed host-resource leases from the local-root allocator and receive
-opaque grants. They must not pass raw host paths, nftables snippets, interface
-names, or command bytes through the host daemon to get work done.
-
-## Identity lifecycle boundary
-
-Realm controller rows reserve the host-local state and audit locations where a
-future controller can persist identity lifecycle state. The identity contract
-itself lives in
-[`d2b-realm-core`](./realm-identity-lifecycle.md) and the generated
-[`d2b-realm-core` schema companion](./schemas/v2/d2b-realm-core.md): identity
-references, fingerprints, controller generations, enrollment records, rotation
-plans, revocation lists, teardown directives, recovery procedures, and redacted
-identity audit metadata.
-
-`realm-controllers.json` does not contain private keys, public key bytes,
-provider credentials, relay credentials, session secrets, or signed credential
-material. It also does not enforce revocation or session teardown. Future
-runtime code must load identity metadata from controller state, fail closed on
-stale or revoked generations, and write bounded audit records to the realm
-audit surface described by this file.
-
-## Local runtime metadata
-
-Host-local controller rows may include a `localRuntime` block. This is still
-metadata-only: it binds the realm to existing local runtime providers and VM
-workloads so the realm daemon can later consume one typed contract instead of
-re-deriving provider ids, VM paths, and operation capabilities from host-global
-state.
-
-`localRuntime.providers[]` copies the local runtime provider catalog entries
-used by the realm's workloads, including the provider id (`local-cloud-hypervisor`
-or `local-qemu-media`), local driver, legacy capability summary, operation
-capability summary, autostart policy, and role/service summaries.
-
-`localRuntime.workloads[]` records the VM workload id, VM name, owning env,
-runtime metadata, and the preserved host paths:
-
-| Field | Meaning |
-| --- | --- |
-| `paths.stateDir` | Existing per-VM persistent state root, such as `/var/lib/d2b/vms/<vm>`. |
-| `paths.runDir` | Existing per-VM runtime directory under `/run/d2b/vms/<vm>`. |
-| `paths.storeView` | Existing per-VM store-view hardlink farm root. |
-| `paths.guestControlDir` | Existing guest-control socket directory. |
-
-The `localRuntime.invariants` block must keep `metadataOnly`,
-`existingGlobalVmPathsPreserved`, `noStateMigrationDuringActivation`, and
-`brokerEffectsRemainRealmDelegated` true. The contract therefore does not move
-large state in activation and does not authorize a realm broker to mutate host
-state outside allocator-delegated effects.
-
-## State, locks, and audit separation
-
-Realm controller metadata keeps three storage classes distinct:
-
-| Class | Default location | Boundary |
-| --- | --- | --- |
-| Runtime/locks | `/run/d2b/realms/<realm-id>` | Ephemeral runtime metadata such as daemon locks. |
-| State | `config.d2b.site.stateDir + "/realms/<realm-id>"` | Future persistent realm-controller state. |
-| Audit | `/var/lib/d2b/audit/realms/<realm-id>` | Future per-realm audit stream location; also recorded as the broker audit directory. |
-
-Audit and state separation is deliberate. The default audit tree is root-owned
-and disjoint from daemon-owned mutable realm state, so a compromised realm daemon
-cannot replace the audit directory with attacker-controlled contents. Future
-audit records should remain append-oriented, bounded, and redacted; they must not
-be treated as repair authority for mutable realm state. Conversely, controller
-state must not be used as an audit substitute or mixed into the global broker
-audit stream.
-
-## Current implementation boundary
-
-The committed implementation materializes host-local control-plane scaffolding:
-deterministic users/groups, daemon config files, tmpfiles directories and ACLs,
-realm daemon services, and broker socket/service units for host-local realms
-whose broker is enabled. The artifact is still metadata-only for access,
-routing, and identity behavior: it describes the local surfaces and allocator
-bindings plus the existing local runtime providers/workloads, but does not make
-the global host daemon a realm router.
-
-It does not implement:
-
-- host-resource allocation or mutation through the allocator binding;
-- identity enrollment, relay connectivity, route advertisement, or provider
-  controller runtime;
-- state-path migration for existing VMs or migration from `d2b.envs` to a
-  realm-owned network model;
-- a realm-local lifecycle API that replaces the existing global public socket.
-
-Existing `d2b.envs` and `d2b.vms.<vm>.env` behavior remains the implemented
-runtime substrate until those later runtime surfaces land.
-
-## Related references
-
-- [Realm option schema](./realm-options.md)
-- [Realm access resolver contract](./realm-access-resolver.md)
-- [Realm tree routing contract](./realm-routing.md)
-- [Realm identity lifecycle contract](./realm-identity-lifecycle.md)
-- [Local-root allocator contract](./local-root-allocator.md)
-- [Realm policy](./realm-policy.md)
-- [Realm core model reference](./realm-core.md)
+Nix does not bind the child listeners, spawn either child, open pidfds,
+allocate or execute leases, adopt a generation, or supervise a process. Those
+operations belong to the local-root runtime. No per-realm or per-workload
+systemd unit is emitted.

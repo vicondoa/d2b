@@ -1,39 +1,18 @@
-//! Per-VM store-ownership source-lint guardrails, migrated from the source-grep
-//! tail of `tests/per-vm-state-ownership-eval.sh`.
-//!
-//! The eval-time assertions over `d2b.daemon.perVmStateOwnershipMatrix`
-//! live in the nix-unit corpus (`tests/unit/nix/cases/per-vm-state-ownership.nix`).
-//! The bash gate ALSO carried source-level regression guards — that
-//! `nixos-modules/store.nix` and the daemon's
-//! `packages/d2bd/src/ownership_preflight.rs` never re-introduce the legacy
-//! `root:kvm` ownership / `2775` group-writable store mode. Those are
-//! source-greps, not eval-time values, so they belong in the Rust policy layer
-//! with the other `policy_*.rs` lints (this crate reads the real checkout via
-//! `tests/tools/rust-workspace-checks.sh`, which is excluded from the hermetic Nix
-//! sandbox).
-//!
-//! Faithful port of the bash gate's `grep`s:
-//!   * store.nix keeps the canonical `chown d2bd:users` / `chmod 0755`
-//!     META_DIR fix-ups, and contains NO `chown root:kvm` / `chmod 2775`.
-//!   * no nixos-modules file enforces `store store-meta` at mode `2775`.
-//!   * ownership_preflight.rs declares NO `mode: 0o2775` on a `store*` path
-//!     (within the 6-line window after each `path: "store` line, mirroring the
-//!     bash `grep -A5`).
+//! Source-policy guardrails for realm/workload store-view ownership.
 
 use d2b_contract_tests::{read_repo_file, repo_path_exists, repo_root};
 
 const STORE_NIX: &str = "nixos-modules/store.nix";
+const STORAGE_ROWS_NIX: &str = "nixos-modules/realm-storage-rows.nix";
+const LEGACY_STORAGE_NIX: &str = "nixos-modules/storage-json.nix";
+const LEGACY_SYNC_NIX: &str = "nixos-modules/sync-json.nix";
 const OWNERSHIP_PREFLIGHT_RS: &str = "packages/d2bd/src/ownership_preflight.rs";
 
-fn store_nix() -> String {
-    assert!(
-        repo_path_exists(STORE_NIX),
-        "expected {STORE_NIX} to exist in the checkout",
-    );
-    read_repo_file(STORE_NIX)
+fn source(path: &str) -> String {
+    assert!(repo_path_exists(path), "expected {path} to exist");
+    read_repo_file(path)
 }
 
-/// Recursively collect every regular file under `nixos-modules/`.
 fn nixos_module_files() -> Vec<std::path::PathBuf> {
     let root = repo_root().join("nixos-modules");
     let mut out = Vec::new();
@@ -54,53 +33,111 @@ fn nixos_module_files() -> Vec<std::path::PathBuf> {
     out
 }
 
-// ---------------------------------------------------------------------------
-// store.nix keeps the canonical META_DIR ownership fix-up.
-// ---------------------------------------------------------------------------
 #[test]
-fn store_sync_chowns_meta_dirs_to_d2bd_users() {
-    let content = store_nix();
-    let needle = r#"find "$META_DIR" -type d -exec chown d2bd:users {} +"#;
-    assert!(
-        content.lines().any(|l| l.contains(needle)),
-        "{STORE_NIX} must keep the canonical META_DIR chown fix-up: `{needle}`",
-    );
+fn store_view_rows_are_broker_owned() {
+    let store = source(STORE_NIX);
+    for needle in [
+        "realmStorageRows = import ./realm-storage-rows.nix",
+        r#"lib.hasSuffix "/store-view-live" row.id"#,
+        r#"row.creator.kind == "broker""#,
+        r#"row.repairPolicy == "broker-reconcile""#,
+    ] {
+        assert!(
+            store.contains(needle),
+            "{STORE_NIX} missing realm storage-row integration: {needle}"
+        );
+    }
+
+    let rows = source(STORAGE_ROWS_NIX);
+    for needle in [
+        "creator ? brokerActor realmId,",
+        "writers ? [ (brokerActor realmId) ]",
+        "repairPolicy ? \"broker-reconcile\"",
+        "recursive = false;",
+        "id = (normalized \"workload-store-view-live\").resourceId;",
+    ] {
+        assert!(
+            rows.contains(needle),
+            "{STORAGE_ROWS_NIX} missing broker-owned store-view policy: {needle}"
+        );
+    }
 }
 
 #[test]
-fn store_sync_chmods_meta_dirs_0755() {
-    let content = store_nix();
-    let needle = r#"find "$META_DIR" -type d -exec chmod 0755 {} +"#;
-    assert!(
-        content.lines().any(|l| l.contains(needle)),
-        "{STORE_NIX} must keep the canonical META_DIR chmod 0755 fix-up: `{needle}`",
-    );
-}
-
-// ---------------------------------------------------------------------------
-// store.nix must NOT carry the legacy root:kvm / 2775 store enforcement.
-// ---------------------------------------------------------------------------
-#[test]
-fn store_sync_has_no_legacy_root_kvm_ownership() {
-    let content = store_nix();
-    assert!(
-        !content.lines().any(|l| l.contains("chown root:kvm")),
-        "{STORE_NIX} still contains legacy `chown root:kvm` store ownership fix-up",
-    );
+fn store_view_rows_require_hardlink_invariants() {
+    let store = source(STORE_NIX);
+    for needle in [
+        "hasInvariant \"same-filesystem\" row",
+        "hasInvariant \"hardlink-farm-no-recursion\" row",
+        "hasInvariant \"no-recursive-mutation\" row",
+        "row.creator.kind == \"broker\"",
+        "row.repairPolicy == \"broker-reconcile\"",
+        "row.recursive == false",
+        "hard_linkFarmRoot != \"/nix/store\"",
+    ] {
+        assert!(
+            store.contains(needle),
+            "{STORE_NIX} missing store-view hardlink guard: {needle}"
+        );
+    }
 }
 
 #[test]
-fn store_sync_has_no_2775_store_mode() {
-    let content = store_nix();
-    assert!(
-        !content.lines().any(|l| l.contains("chmod 2775")),
-        "{STORE_NIX} must not grant group-write (`chmod 2775`) on store/store-meta directories",
-    );
+fn store_module_has_no_activation_repair() {
+    let store = source(STORE_NIX);
+    for forbidden in [
+        "system.activationScripts",
+        "systemd.tmpfiles.rules",
+        "META_DIR",
+        "find ",
+        "chown ",
+        "chmod ",
+        "setfacl ",
+    ] {
+        assert!(
+            !store.contains(forbidden),
+            "{STORE_NIX} must not repair broker-owned store trees: {forbidden}"
+        );
+    }
 }
 
-// ---------------------------------------------------------------------------
-// No nixos-modules file enforces `store store-meta` at mode 2775.
-// ---------------------------------------------------------------------------
+#[test]
+fn inactive_emitters_have_no_parallel_vm_repair_policy() {
+    for path in [LEGACY_STORAGE_NIX, LEGACY_SYNC_NIX] {
+        let content = source(path);
+        assert!(
+            content.contains("realmStorageRows = import ./realm-storage-rows.nix"),
+            "{path} must delegate to canonical realm storage rows"
+        );
+        for forbidden in [
+            "cfg.vms",
+            "cfg.envs",
+            "cfg.store.stateDir",
+            "scope = \"vm:",
+            "scope = \"env:",
+            "nix-activation",
+            "/run/d2b/vms/",
+            "/var/lib/d2b/vms/",
+        ] {
+            assert!(
+                !content.contains(forbidden),
+                "{path} retains a parallel legacy repair policy: {forbidden}"
+            );
+        }
+    }
+}
+
+#[test]
+fn store_sync_has_no_legacy_root_kvm_or_2775_ownership() {
+    let store = source(STORE_NIX);
+    for forbidden in ["chown root:kvm", "chmod 2775", "mode = \"2775\""] {
+        assert!(
+            !store.contains(forbidden),
+            "{STORE_NIX} contains legacy store ownership policy: {forbidden}"
+        );
+    }
+}
+
 #[test]
 fn nixos_modules_have_no_store_store_meta_2775_enforcement() {
     let mut offenders = Vec::new();
@@ -123,33 +160,20 @@ fn nixos_modules_have_no_store_store_meta_2775_enforcement() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// The daemon canonical ownership preflight declares no store* path at 2775.
-//
-// Mirrors the bash gate's `grep -n 'path: "store' ownership_preflight.rs -A5 |
-// grep -Fq 'mode: 0o2775'`: scan a 6-line window (the matching line plus the
-// next five) after each `path: "store` declaration.
-// ---------------------------------------------------------------------------
 #[test]
 fn daemon_ownership_preflight_has_no_store_2775_mode() {
-    assert!(
-        repo_path_exists(OWNERSHIP_PREFLIGHT_RS),
-        "expected {OWNERSHIP_PREFLIGHT_RS} to exist in the checkout",
-    );
-    let content = read_repo_file(OWNERSHIP_PREFLIGHT_RS);
+    let content = source(OWNERSHIP_PREFLIGHT_RS);
     let lines: Vec<&str> = content.lines().collect();
     for (i, line) in lines.iter().enumerate() {
         if line.contains(r#"path: "store"#) {
             let end = (i + 6).min(lines.len());
-            for window_line in &lines[i..end] {
-                assert!(
-                    !window_line.contains("mode: 0o2775"),
-                    "daemon canonical ownership preflight ({OWNERSHIP_PREFLIGHT_RS}) still \
-                     expects store/store-meta 2775 (found `mode: 0o2775` within 6 lines of a \
-                     `path: \"store` declaration at line {})",
-                    i + 1,
-                );
-            }
+            assert!(
+                lines[i..end]
+                    .iter()
+                    .all(|window_line| !window_line.contains("mode: 0o2775")),
+                "{OWNERSHIP_PREFLIGHT_RS} expects store mode 0o2775 near line {}",
+                i + 1
+            );
         }
     }
 }

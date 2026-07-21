@@ -1167,18 +1167,6 @@ let
     "auditMode": "yes"
   },
   {
-    "operation": "GuestControlSign",
-    "subject": "guest-control token",
-    "scope": "per-VM",
-    "allowedGroups": [
-      "d2bd"
-    ],
-    "destructive": false,
-    "secretAccess": "redacted-only",
-    "brokerRequired": "yes",
-    "auditMode": "yes"
-  },
-  {
     "operation": "InjectSecretById",
     "subject": "secret/key",
     "scope": "per-VM/key",

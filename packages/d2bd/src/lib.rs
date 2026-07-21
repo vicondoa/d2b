@@ -24615,7 +24615,7 @@ mod broker_dispatch_tests {
         let mut bundle: Value =
             serde_json::from_slice(&fs::read(&artifacts.bundle_path).expect("read bundle"))
                 .expect("parse bundle");
-        bundle["bundleVersion"] = json!(12);
+        bundle["bundleVersion"] = json!(13);
         bundle["schemaVersion"] = json!("v2");
         bundle["hostPath"] = json!(host_path.display().to_string());
         bundle["providerRegistryV2Path"] = json!(path.display().to_string());
@@ -25987,7 +25987,7 @@ mod broker_dispatch_tests {
     }
 
     #[test]
-    fn provider_activation_rejects_non_v12_or_hashless_bundle_contracts() {
+    fn provider_activation_rejects_non_v13_or_hashless_bundle_contracts() {
         for defect in [
             "wrong-version",
             "wrong-schema",
