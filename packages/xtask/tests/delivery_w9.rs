@@ -426,21 +426,62 @@ fn w9_required_check_publishers_name_exact_live_workflow_names_not_filenames() {
 }
 
 #[test]
-fn w9_source_fingerprint_uses_candidate_pinned_python() {
+fn w9_validations_use_detached_checkout_hermetic_toolchains() {
     let manifest = w9_manifest();
-    let validation = manifest
+    let validations = manifest
         .required_validations
         .iter()
-        .find(|validation| validation.id == "client-toolkit-source-fingerprint")
-        .expect("client-toolkit source-fingerprint validation");
-    assert_eq!(
-        validation.argv,
-        [
-            "nix",
-            "develop",
-            "--command",
-            "python3",
-            "scripts/check-source-fingerprint.py"
-        ]
-    );
+        .map(|validation| {
+            (
+                validation.id.as_str(),
+                validation
+                    .argv
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    for (id, argv) in [
+        (
+            "client-toolkit-source-fingerprint",
+            &[
+                "nix",
+                "build",
+                ".#checks.x86_64-linux.source-fingerprint",
+                "--no-link",
+            ][..],
+        ),
+        (
+            "d2b-make-check",
+            &["nix", "develop", "--command", "make", "check"][..],
+        ),
+        ("provider-toolkit-flake", &["nix", "flake", "check"][..]),
+        ("wlcontrol-flake", &["nix", "flake", "check"][..]),
+        ("wlterm-flake", &["nix", "flake", "check"][..]),
+        (
+            "weezterm-precommit",
+            &["nix", "develop", "--command", "make", "precommit"][..],
+        ),
+    ] {
+        assert_eq!(
+            validations.get(id).map(Vec::as_slice),
+            Some(argv),
+            "validation {id} must use its candidate-pinned toolchain"
+        );
+    }
+    for removed in [
+        "provider-toolkit-make-check",
+        "wlcontrol-clippy",
+        "wlcontrol-fmt",
+        "wlcontrol-test",
+        "wlterm-clippy",
+        "wlterm-fmt",
+        "wlterm-test",
+    ] {
+        assert!(
+            !validations.contains_key(removed),
+            "detached-invalid validation {removed} must stay retired"
+        );
+    }
 }

@@ -162,7 +162,7 @@
       "repository": "vicondoa/d2b-wlterm",
       "futureRepository": null,
       "auditedRef": "adr0045-w9-wlterm",
-      "auditedRevision": "acc386c7ee1153b23c80864cd82d12e6b972ba9a",
+      "auditedRevision": "1953c55eb0693a730b1fc409a2fd07bf686e5c06",
       "defaultBranchRevision": "80c077277797ff129bb040f0c1b748f0fe162dc0",
       "protocolPolicy": "canonical-only",
       "consumesDistribution": {
@@ -230,7 +230,7 @@
       "repository": "vicondoa/d2b-wlcontrol",
       "futureRepository": null,
       "auditedRef": "adr0045-w9-wlcontrol",
-      "auditedRevision": "6511a8cb45564e041b1a6331ad9609c269ed5b94",
+      "auditedRevision": "7aa11aa91ca2826021087a9f9a2f00af6d7c462e",
       "defaultBranchRevision": "06010b953a9dd05f4be236ef5c7265d86c3c5812",
       "protocolPolicy": "canonical-only",
       "consumesDistribution": {
@@ -307,7 +307,7 @@
       "repository": "vicondoa/weezterm",
       "futureRepository": null,
       "auditedRef": "adr0045-w9-weezterm",
-      "auditedRevision": "0c91319f88e82c5a650b64155eec7708053d8670",
+      "auditedRevision": "811a7081b1da0062535f1cf61e23e1a4fcce4899",
       "defaultBranchRevision": "d461e3f92d9ff7faafc8e6c83a111ca0aa5ae9ca",
       "protocolPolicy": "canonical-only",
       "consumesDistribution": {

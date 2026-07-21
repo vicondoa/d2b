@@ -102,6 +102,9 @@
     {
       "id": "d2b-make-check",
       "argv": [
+        "nix",
+        "develop",
+        "--command",
         "make",
         "check"
       ],
@@ -194,10 +197,9 @@
       "id": "client-toolkit-source-fingerprint",
       "argv": [
         "nix",
-        "develop",
-        "--command",
-        "python3",
-        "scripts/check-source-fingerprint.py"
+        "build",
+        ".#checks.x86_64-linux.source-fingerprint",
+        "--no-link"
       ],
       "cwd": {
         "repository": "github.com/vicondoa/d2b-toolkit",
@@ -225,9 +227,10 @@
       "timeout_seconds": 1800
     },
     {
-      "id": "provider-toolkit-make-check",
+      "id": "provider-toolkit-flake",
       "argv": [
-        "make",
+        "nix",
+        "flake",
         "check"
       ],
       "cwd": {
@@ -240,124 +243,14 @@
       "timeout_seconds": 3600
     },
     {
-      "id": "wlcontrol-fmt",
-      "argv": [
-        "cargo",
-        "fmt",
-        "--all",
-        "--",
-        "--check"
-      ],
-      "cwd": {
-        "repository": "github.com/vicondoa/d2b-wlcontrol",
-        "path": "."
-      },
-      "authority": "local_runner",
-      "ci_publisher": null,
-      "ci_signer_workflow": null,
-      "timeout_seconds": 600
-    },
-    {
-      "id": "wlcontrol-clippy",
-      "argv": [
-        "cargo",
-        "clippy",
-        "--workspace",
-        "--all-targets",
-        "--",
-        "-D",
-        "warnings"
-      ],
-      "cwd": {
-        "repository": "github.com/vicondoa/d2b-wlcontrol",
-        "path": "."
-      },
-      "authority": "local_runner",
-      "ci_publisher": null,
-      "ci_signer_workflow": null,
-      "timeout_seconds": 1800
-    },
-    {
-      "id": "wlcontrol-test",
-      "argv": [
-        "cargo",
-        "test",
-        "--workspace"
-      ],
-      "cwd": {
-        "repository": "github.com/vicondoa/d2b-wlcontrol",
-        "path": "."
-      },
-      "authority": "local_runner",
-      "ci_publisher": null,
-      "ci_signer_workflow": null,
-      "timeout_seconds": 1800
-    },
-    {
       "id": "wlcontrol-flake",
       "argv": [
         "nix",
         "flake",
-        "check",
-        "--no-build",
-        "--all-systems"
+        "check"
       ],
       "cwd": {
         "repository": "github.com/vicondoa/d2b-wlcontrol",
-        "path": "."
-      },
-      "authority": "local_runner",
-      "ci_publisher": null,
-      "ci_signer_workflow": null,
-      "timeout_seconds": 1800
-    },
-    {
-      "id": "wlterm-test",
-      "argv": [
-        "cargo",
-        "test",
-        "--workspace"
-      ],
-      "cwd": {
-        "repository": "github.com/vicondoa/d2b-wlterm",
-        "path": "."
-      },
-      "authority": "local_runner",
-      "ci_publisher": null,
-      "ci_signer_workflow": null,
-      "timeout_seconds": 1800
-    },
-    {
-      "id": "wlterm-fmt",
-      "argv": [
-        "cargo",
-        "fmt",
-        "--all",
-        "--",
-        "--check"
-      ],
-      "cwd": {
-        "repository": "github.com/vicondoa/d2b-wlterm",
-        "path": "."
-      },
-      "authority": "local_runner",
-      "ci_publisher": null,
-      "ci_signer_workflow": null,
-      "timeout_seconds": 600
-    },
-    {
-      "id": "wlterm-clippy",
-      "argv": [
-        "cargo",
-        "clippy",
-        "--workspace",
-        "--all-targets",
-        "--",
-        "-D",
-        "warnings"
-      ],
-      "cwd": {
-        "repository": "github.com/vicondoa/d2b-wlterm",
         "path": "."
       },
       "authority": "local_runner",
@@ -384,6 +277,9 @@
     {
       "id": "weezterm-precommit",
       "argv": [
+        "nix",
+        "develop",
+        "--command",
         "make",
         "precommit"
       ],
