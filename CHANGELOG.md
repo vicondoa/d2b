@@ -446,6 +446,8 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Made exec-runner service tests allocate collision-proof scratch roots under
+  parallel CI instead of silently reusing a pid/timestamp directory.
 - Advanced the W9 wlcontrol, wlterm, and WeezTerm audited revisions to their
   final toolkit-pin and hermetic-toolchain follow-up heads, keeping the
   coordination authority aligned with the exact open sibling PRs.

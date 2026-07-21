@@ -964,20 +964,24 @@ mod tests {
     use d2b_exec_runner::RunnerEnv;
     use d2b_exec_runner::filering::FileRingReader;
 
+    static SCRATCH_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
     fn scratch_slot() -> (PathBuf, RunnerPaths) {
         // Always place test scratch under the system temp dir (respects TMPDIR,
         // falls back to /tmp) — never the repo-relative "." which leaks
         // runner-svc-* dirs into the worktree.
         let base = std::env::temp_dir();
         let dir = base.join(format!(
-            "runner-svc-{}-{}",
+            "runner-svc-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            SCRATCH_SEQUENCE.fetch_add(1, Ordering::Relaxed),
         ));
         let paths = RunnerPaths::new(&dir, 3);
+        std::fs::create_dir(&dir).unwrap();
         std::fs::create_dir_all(paths.slot_dir()).unwrap();
         (dir, paths)
     }
