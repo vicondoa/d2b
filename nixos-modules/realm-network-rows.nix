@@ -75,7 +75,14 @@ let
         && builtins.elem runtime [ "cloud-hypervisor" "qemu-media" ])
       (cfg._index.workloads.enabledByRealmId.${realmRow.realmId} or [ ]);
 
-  workloadRow = canonicalRealmId: lanSubnet: ordinal: workload:
+  # `isolated` tracks the realm's explicit east-west policy: workload TAPs
+  # are bridge-port-isolated by default, and only lose isolation when
+  # `network.lan.allowEastWest = true` (which itself requires
+  # `d2b.site.allowUnsafeEastWest = true`, asserted below). This is the
+  # actual east-west enforcement point — same-LAN-bridge traffic between
+  # workload taps is L2-local and never reaches the IP forward hook, so
+  # there is no corresponding nftables forward rule to gate it.
+  workloadRow = canonicalRealmId: lanSubnet: isolated: ordinal: workload:
     let
       index = ordinal + 10;
     in
@@ -89,7 +96,7 @@ let
         resourceId = "tap-${workload.workloadId}";
         ifName = ifName "t" "workload:${canonicalRealmId}:${workload.workloadId}";
         bridgeRole = "workload-lan";
-        isolated = true;
+        inherit isolated;
       };
     };
 
@@ -123,7 +130,8 @@ let
       ownershipMarker = "d2b managed: ${ownershipId}";
       network = realm.network;
       workloadRows = lib.imap0
-        (workloadRow canonicalRealmId network.lanSubnet)
+        (workloadRow canonicalRealmId network.lanSubnet
+          (!network.lan.allowEastWest))
         (realmWorkloads realmIndexRow);
       workloadByName = lib.listToAttrs (map
         (workload: {
@@ -168,6 +176,26 @@ let
         name = chainName chain.name;
         comment = ownershipMarker;
       };
+      # Host-blocked destinations, shared by the forward/input host-drop
+      # rows below and by `policy.hostBlocklist` / `guest.hostBlocklist`.
+      effectiveHostBlocklist =
+        sortNames (lib.unique (network.hostBlocklist ++ cfg.hostLanCidrs));
+      hostDropRule = chainHook: ordinal: cidr:
+        markedRule "${networkId}-host-drop-${chainHook}-${toString ordinal}"
+          chainHook "drop" {
+            inputRole = "uplink";
+            destinationCidr = cidr;
+          };
+      # Host-side traffic never sees the workload LAN bridge directly:
+      # the net VM terminates the LAN and re-emits everything bound for
+      # the host/internet on its uplink tap. So every host-facing
+      # forward/input/postrouting match below keys on `inputRole =
+      # "uplink"`, not the workload-lan bridge role. East-west traffic
+      # between workload taps on the same LAN bridge is L2-local and
+      # never reaches the IP forward hook at all; it is gated purely by
+      # the bridge port `isolated` flag (see `workloadRow`'s
+      # `!network.lan.allowEastWest` tap isolation), so there is no
+      # "lan-netvm" / "peer-default" forward rule to write here.
       nftRules = [
         (markedRule "${networkId}-established" "forward" "accept" {
           connectionState = [ "established" "related" ];
@@ -175,35 +203,19 @@ let
         (markedRule "${networkId}-invalid" "forward" "drop" {
           connectionState = [ "invalid" ];
         })
-        (markedRule "${networkId}-lan-netvm" "forward" "accept" {
-          inputRole = "workload-lan";
-          outputRole = "net-vm-lan";
-        })
-        (markedRule "${networkId}-peer-default" "forward"
-          (if network.lan.allowEastWest then "accept" else "drop") {
-            inputRole = "workload-lan";
-            outputRole = "workload-lan";
-          })
       ]
       ++ lib.optional network.mssClamp
         (markedRule "${networkId}-mss-clamp" "forward" "clamp-mss-to-pmtu" {
           tcpSyn = true;
         })
-      ++ lib.imap0
-        (ordinal: cidr:
-          markedRule "${networkId}-host-drop-${toString ordinal}"
-            "forward" "drop" {
-              inputRole = "workload-lan";
-              destinationCidr = cidr;
-            })
-        (sortNames (lib.unique (network.hostBlocklist ++ cfg.hostLanCidrs)))
+      ++ lib.imap0 (hostDropRule "forward") effectiveHostBlocklist
+      ++ lib.imap0 (hostDropRule "input") effectiveHostBlocklist
       ++ [
         (markedRule "${networkId}-internet" "forward" "accept" {
-         inputRole = "workload-lan";
-         outputRole = "uplink";
+         inputRole = "uplink";
         })
         (markedRule "${networkId}-masquerade" "postrouting" "masquerade" {
-         outputRole = "uplink";
+         inputRole = "uplink";
         })
       ];
       externalIfName = ifName "x" "external:${canonicalRealmId}";
@@ -426,8 +438,7 @@ let
         workloadTapIsolation = !network.lan.allowEastWest;
         netVmTapIsolation = false;
         uplinkIsolation = true;
-        hostBlocklist =
-          sortNames (lib.unique (network.hostBlocklist ++ cfg.hostLanCidrs));
+        hostBlocklist = effectiveHostBlocklist;
         mtu = network.mtu;
         mssClamp = network.mssClamp;
         mssClampBytes =
@@ -512,8 +523,7 @@ let
         mtu = network.mtu;
         mssClamp = network.mssClamp;
         allowEastWest = network.lan.allowEastWest;
-        hostBlocklist =
-          sortNames (lib.unique (network.hostBlocklist ++ cfg.hostLanCidrs));
+        hostBlocklist = effectiveHostBlocklist;
         interfaces = {
           netVmUplink = netVmUplinkTap.ifName;
           netVmLan = netVmLanTap.ifName;
@@ -529,7 +539,15 @@ let
               ;
             hostIfName = externalIfName;
             guestIfName = "external0";
+            # `macAddress` stays the resolved (never-null) value consumed by
+            # the host-side macvtap attachment (workload-process-rows.nix).
+            # `guestMac` is the same resolved value under a name that can
+            # never be confused with the nullable configured
+            # `network.externalNetwork.attachment.macAddress` option — the
+            # net VM guest module (net.nix) matches its `10-home` link on
+            # `guestMac` for exactly that reason.
             macAddress = externalMac;
+            guestMac = externalMac;
           };
           inherit (network.externalNetwork) egress mdns;
           inherit portForwards;

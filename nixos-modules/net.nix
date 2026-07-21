@@ -74,10 +74,12 @@ in
     # NICs explicitly bound by MAC below, and `10-eth-dhcp` would sort
     # lex-first (10-eth-dhcp < 10-lan < 10-uplink) and DHCP both NICs
     # — preempting the static config. `mkForce` replaces the whole
-    # attrset; the bogus MAC ensures no interface ever matches, so
-    # systemd-networkd writes a harmless file and skips it.
+    # attrset; the bogus MAC ensures no interface ever matches, and
+    # `enable = false` is belt-and-suspenders so systemd-networkd skips
+    # the file outright rather than relying on the match alone.
     "10-eth-dhcp" = lib.mkForce {
       matchConfig.MACAddress = "00:00:00:00:00:00";
+      enable = false;
     };
     "10-uplink" = {
       matchConfig.MACAddress = m.netUplinkMac;
@@ -105,7 +107,7 @@ in
     };
   } // lib.optionalAttrs externalNetworkEnabled {
     "10-home" = {
-      matchConfig.MACAddress = homeAttachment.macAddress;
+      matchConfig.MACAddress = homeAttachment.guestMac;
       networkConfig = {
         LinkLocalAddressing = "no";
         IPv6AcceptRA = false;
@@ -161,7 +163,7 @@ in
     };
   } // lib.optionalAttrs externalNetworkEnabled {
     "10-home" = {
-      matchConfig.MACAddress = homeAttachment.macAddress;
+      matchConfig.MACAddress = homeAttachment.guestMac;
       linkConfig.Name = homeIf;
     };
   };

@@ -2,6 +2,7 @@
 
 let
   identity = import (flakeRoot + "/nixos-modules/v2-identity.nix");
+  d2bLib = import (flakeRoot + "/nixos-modules/lib.nix") { inherit lib; };
   realmId = identity.deriveRealmId "home.local-root";
   workloadId = identity.deriveWorkloadId realmId "app";
   rawD2b = {
@@ -128,6 +129,29 @@ let
         hostLanCidrs = [ "999.168.0.0/16" ];
       };
     };
+  # Behavior-level allowEastWest=true fixture: same realm, but with
+  # `network.lan.allowEastWest = true` and the required
+  # `site.allowUnsafeEastWest = true` acknowledgement. Only the tap
+  # `isolated` bridge-port flag is expected to flip; the forward/input
+  # nftables rows below stay keyed on `inputRole = "uplink"` regardless,
+  # since east-west enforcement never lived in nftables.
+  eastWestConfig.d2b = config.d2b // {
+    site = config.d2b.site // { allowUnsafeEastWest = true; };
+    realms = config.d2b.realms // {
+      home = config.d2b.realms.home // {
+        network = config.d2b.realms.home.network // {
+          lan = config.d2b.realms.home.network.lan // { allowEastWest = true; };
+        };
+      };
+    };
+  };
+  eastWestPlan =
+    import (flakeRoot + "/nixos-modules/realm-network-rows.nix") {
+      config = eastWestConfig;
+      inherit lib;
+    };
+  eastWestRealm = builtins.head eastWestPlan.realms;
+  eastWestWorkloadTap = builtins.head eastWestRealm.resources.taps.workloads;
   netSource = builtins.readFile (flakeRoot + "/nixos-modules/net.nix");
   hostSource = builtins.readFile (flakeRoot + "/nixos-modules/network.nix");
   allRulesMarked =
@@ -153,6 +177,32 @@ let
       (rule: lib.hasSuffix "-internet" rule.id)
       resources.nftables.rules;
   resourceKinds = map (request: request.kind) plan.allocatorRequests;
+
+  # Exact chain/rule-role fixtures for the host-facing forward/input/
+  # postrouting rows: every one of them keys on `inputRole = "uplink"`
+  # because the net VM — not the host — terminates the workload LAN, and
+  # the host only ever forwards what the net VM re-emits on its uplink.
+  forwardChainName = "${realm.ownershipId}-forward";
+  inputChainName = "${realm.ownershipId}-input";
+  postroutingChainName = "${realm.ownershipId}-postrouting";
+  hostDropForwardRules = lib.filter
+    (rule: lib.hasInfix "-host-drop-forward-" rule.id)
+    resources.nftables.rules;
+  hostDropInputRules = lib.filter
+    (rule: lib.hasInfix "-host-drop-input-" rule.id)
+    resources.nftables.rules;
+  internetRule = lib.findFirst
+    (rule: lib.hasSuffix "-internet" rule.id)
+    (throw "net-vm-network: no internet forward rule in fixture")
+    resources.nftables.rules;
+  masqueradeRule = lib.findFirst
+    (rule: lib.hasSuffix "-masquerade" rule.id)
+    (throw "net-vm-network: no masquerade postrouting rule in fixture")
+    resources.nftables.rules;
+  deadBridgeRules = lib.filter
+    (rule: lib.hasInfix "-lan-netvm" rule.id || lib.hasInfix "-peer-default" rule.id)
+    resources.nftables.rules;
+  expectedGeneratedExternalMac = d2bLib.mkMac realmId "external" 0;
 
   # Real end-to-end reachability proof, on top of the hand-rolled `plan`
   # fixture above (which only proves realm-network-rows.nix's own pure
@@ -402,6 +452,82 @@ in
     };
   };
 
+  "net-vm-network/allow-east-west-true-unisolates-workload-tap" = {
+    expr = {
+      policy = eastWestRealm.policy.workloadTapIsolation;
+      tap = eastWestWorkloadTap.isolated;
+      netVm = eastWestRealm.resources.taps.netVm.lan.isolated;
+    };
+    expected = {
+      policy = false;
+      tap = false;
+      netVm = false;
+    };
+  };
+
+  "net-vm-network/no-dead-bridge-forward-rules" = {
+    expr = deadBridgeRules;
+    expected = [ ];
+  };
+
+  "net-vm-network/host-drops-cover-forward-and-input-chains" = {
+    expr = {
+      forwardCount = builtins.length hostDropForwardRules;
+      inputCount = builtins.length hostDropInputRules;
+      forwardChains = lib.unique (map (rule: rule.chain) hostDropForwardRules);
+      inputChains = lib.unique (map (rule: rule.chain) hostDropInputRules);
+      forwardInputRoles =
+        lib.unique (map (rule: rule.match.inputRole) hostDropForwardRules);
+      inputInputRoles =
+        lib.unique (map (rule: rule.match.inputRole) hostDropInputRules);
+    };
+    expected = {
+      forwardCount = builtins.length realm.policy.hostBlocklist;
+      inputCount = builtins.length realm.policy.hostBlocklist;
+      forwardChains = [ forwardChainName ];
+      inputChains = [ inputChainName ];
+      forwardInputRoles = [ "uplink" ];
+      inputInputRoles = [ "uplink" ];
+    };
+  };
+
+  "net-vm-network/internet-forward-matches-uplink-input-role" = {
+    expr = {
+      chain = internetRule.chain;
+      action = internetRule.action;
+      match = internetRule.match;
+    };
+    expected = {
+      chain = forwardChainName;
+      action = "accept";
+      match = { inputRole = "uplink"; };
+    };
+  };
+
+  "net-vm-network/masquerade-matches-uplink-input-role" = {
+    expr = {
+      chain = masqueradeRule.chain;
+      action = masqueradeRule.action;
+      match = masqueradeRule.match;
+    };
+    expected = {
+      chain = postroutingChainName;
+      action = "masquerade";
+      match = { inputRole = "uplink"; };
+    };
+  };
+
+  "net-vm-network/generated-external-mac-used-for-guest" = {
+    expr = {
+      guestMac = realm.guest.externalNetwork.attachment.guestMac;
+      hostMac = realm.guest.externalNetwork.attachment.macAddress;
+    };
+    expected = {
+      guestMac = expectedGeneratedExternalMac;
+      hostMac = expectedGeneratedExternalMac;
+    };
+  };
+
   "net-vm-network/nft-rows-carry-ownership-marker" = {
     expr = allRulesMarked && allChainsMarked;
     expected = true;
@@ -469,7 +595,8 @@ in
     expr =
       lib.hasInfix ''"10-eth-dhcp" = lib.mkForce'' netSource
       && lib.hasInfix ''matchConfig.MACAddress = "00:00:00:00:00:00";''
-        netSource;
+        netSource
+      && lib.hasInfix "enable = false;" netSource;
     expected = true;
   };
 
@@ -540,9 +667,18 @@ in
   };
 
   "net-vm-network/eth-dhcp-neutralizer-survives-real-composition" = {
-    expr = reachability.d2b._computedWorkloads.${netVmWorkloadId}
-      .config.systemd.network.networks."10-eth-dhcp".matchConfig.MACAddress;
-    expected = "00:00:00:00:00:00";
+    expr =
+      let
+        netCfg = reachability.d2b._computedWorkloads.${netVmWorkloadId}
+          .config.systemd.network.networks."10-eth-dhcp";
+      in {
+        mac = netCfg.matchConfig.MACAddress;
+        enable = netCfg.enable;
+      };
+    expected = {
+      mac = "00:00:00:00:00:00";
+      enable = false;
+    };
   };
 
   "net-vm-network/public-manifest-identifies-network-workload" = {
