@@ -19,12 +19,32 @@
 //! used by every other path-bearing broker audit record), a SHA-256
 //! `material_digest_hex` fingerprint (so operators can correlate a
 //! rotation to specific delivered material without ever seeing it),
-//! and closed-set result/marker enums.
+//! and closed-set result/marker/reason enums. **`fail_reason` is a
+//! closed enum, not a free-form string** — this is a deliberate
+//! hardening over an earlier draft of this module that carried
+//! `Option<String>` populated from convention-only `&'static str`
+//! constants; nothing outside this file's [`FailReason`] enum can ever
+//! reach the audit surface.
+//!
+//! # Status
+//!
+//! This schema, and the [`crate::ops::secrets_lifecycle`] engine that
+//! produces it, are **not wired into any live broker dispatch path or
+//! `crate::audit::AuditLog` sink**. See that module's "Integration
+//! wiring points" doc section for the exact list of follow-up steps a
+//! future integrator must perform before any of this is observable in
+//! a running broker's audit log.
 
 use serde::{Deserialize, Serialize};
 
 /// Schema version for the secrets-lifecycle terminal audit record.
-pub const SECRETS_LIFECYCLE_AUDIT_SCHEMA_VERSION: u32 = 1;
+///
+/// Bumped from `1` to `2` for the transaction/recovery + strengthened
+/// identity-binding redesign: `generation` (u32) became `lineage_epoch`
+/// (u64) with a companion `high_water_epoch`, `retained_generations`
+/// became `u64`-keyed, `fail_reason` became a closed enum instead of a
+/// free-form string, and `recovered_prior_transaction` was added.
+pub const SECRETS_LIFECYCLE_AUDIT_SCHEMA_VERSION: u32 = 2;
 
 /// Bound on `retained_generations` so a single audit record can never
 /// grow unbounded (the operational retention policy in
@@ -124,6 +144,140 @@ pub enum MarkerResult {
     FailedClosed,
 }
 
+/// Closed set of path-free, redaction-safe failure/refusal reasons.
+/// Every [`SecretsLifecycleAuditFields::denied`] /
+/// [`SecretsLifecycleAuditFields::failed`] call site in
+/// `secrets_lifecycle.rs` constructs one of these variants directly —
+/// there is no code path that can place an arbitrary string or a raw
+/// filesystem path onto the audit surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailReason {
+    InvalidVmId,
+    PathDerivationFailed,
+    SecretsDirOpenFailed,
+    MarkerTreeOpenFailed,
+    MarkerWriteFailed,
+    MarkerTamperedOrMissingMaterial,
+    AlreadyProvisioned,
+    AlreadyRetired,
+    NotProvisioned,
+    NoRollbackTarget,
+    PreviouslyProvisionedMaterialMissing,
+    GenerationConflict,
+    MaterialWriteFailed,
+    CurrentSwapFailed,
+    InvalidMaterial,
+    /// The cross-process per-`(vm, kind)` exclusive lock could not be
+    /// acquired within the bounded wait budget.
+    LockUnavailable,
+    /// The durable transaction/recovery log (`txlog`) could not be
+    /// written or fsynced.
+    IntentWriteFailed,
+    /// A leftover `txlog` exists but is not well-formed JSON, fails
+    /// schema validation, or names a `(vm, kind)` other than the one
+    /// it was found under.
+    IntentCorrupt,
+    /// Resuming a leftover in-flight transaction found on-disk content
+    /// that does not match what the transaction log recorded before
+    /// the crash (e.g. a digest mismatch on the staged/committed
+    /// epoch). Recovery refuses to guess and fails closed without
+    /// touching `current` or the marker.
+    RecoveryContentMismatch,
+    /// Resuming a leftover in-flight transaction found the filesystem
+    /// in a state recovery cannot map to any phase of the recorded
+    /// transaction (e.g. `current` points somewhere the log did not
+    /// expect). Recovery fails closed rather than guessing.
+    RecoveryAmbiguous,
+    /// A collision-resistant staging name could not be allocated
+    /// within the bounded retry budget (astronomically unlikely; ever
+    /// observing this indicates a broken randomness source).
+    StagingNameExhausted,
+    /// Retirement's full anchored-tree enumeration found an entry it
+    /// could not account for (unexpected name, unexpected type, or a
+    /// material file with more than one hard link) and refused to
+    /// delete anything.
+    RetirementTreeAnomaly,
+    /// Retirement removed every entry it validated but the generations
+    /// tree was not observably empty afterward.
+    RetirementNotProvablyEmpty,
+    /// The live active-generation directory's owner uid/gid does not
+    /// match the marker's recorded identity.
+    IdentityOwnerMismatch,
+    /// The live active-generation directory's mode does not match the
+    /// marker's recorded identity.
+    IdentityModeMismatch,
+    /// The live active-generation directory carries (or lost) an
+    /// extended POSIX ACL relative to what the marker recorded.
+    IdentityAclMismatch,
+    /// The live active-generation directory's material file link
+    /// count is not exactly 1 (a hard-link plant), or otherwise does
+    /// not match the marker's recorded identity.
+    IdentityLinkCountMismatch,
+    /// The live active-generation material's SHA-256 digest does not
+    /// match the marker's recorded identity.
+    IdentityDigestMismatch,
+    /// The live active-generation material's SHA-256 digest matches
+    /// the marker's recorded identity, but the `(dev, ino)` pair does
+    /// not — a hard-link or directory-swap tamper that byte-content
+    /// comparison alone cannot see (a replacement file with identical
+    /// bytes but a different physical inode).
+    IdentityInodeMismatch,
+    /// `current` does not literally resolve (by name, not just by
+    /// coincidental dev/ino) to the epoch the marker records as active.
+    IdentityCurrentTargetMismatch,
+    /// A newly computed high-water epoch would not be strictly greater
+    /// than the marker's previously committed high-water epoch — a
+    /// monotonicity invariant violation this module refuses to persist.
+    HighWaterRegressed,
+}
+
+impl FailReason {
+    /// Stable slug matching the enum variant's `snake_case` wire form,
+    /// safe for any Debug/log/audit surface (never a path or secret).
+    pub fn as_slug(self) -> &'static str {
+        match self {
+            Self::InvalidVmId => "invalid_vm_id",
+            Self::PathDerivationFailed => "path_derivation_failed",
+            Self::SecretsDirOpenFailed => "secrets_dir_open_failed",
+            Self::MarkerTreeOpenFailed => "marker_tree_open_failed",
+            Self::MarkerWriteFailed => "marker_write_failed",
+            Self::MarkerTamperedOrMissingMaterial => "marker_tampered_or_missing_material",
+            Self::AlreadyProvisioned => "already_provisioned",
+            Self::AlreadyRetired => "already_retired",
+            Self::NotProvisioned => "not_provisioned",
+            Self::NoRollbackTarget => "no_rollback_target",
+            Self::PreviouslyProvisionedMaterialMissing => "previously_provisioned_material_missing",
+            Self::GenerationConflict => "generation_conflict",
+            Self::MaterialWriteFailed => "material_write_failed",
+            Self::CurrentSwapFailed => "current_swap_failed",
+            Self::InvalidMaterial => "invalid_material",
+            Self::LockUnavailable => "lock_unavailable",
+            Self::IntentWriteFailed => "intent_write_failed",
+            Self::IntentCorrupt => "intent_corrupt",
+            Self::RecoveryContentMismatch => "recovery_content_mismatch",
+            Self::RecoveryAmbiguous => "recovery_ambiguous",
+            Self::StagingNameExhausted => "staging_name_exhausted",
+            Self::RetirementTreeAnomaly => "retirement_tree_anomaly",
+            Self::RetirementNotProvablyEmpty => "retirement_not_provably_empty",
+            Self::IdentityOwnerMismatch => "identity_owner_mismatch",
+            Self::IdentityModeMismatch => "identity_mode_mismatch",
+            Self::IdentityAclMismatch => "identity_acl_mismatch",
+            Self::IdentityLinkCountMismatch => "identity_link_count_mismatch",
+            Self::IdentityDigestMismatch => "identity_digest_mismatch",
+            Self::IdentityInodeMismatch => "identity_inode_mismatch",
+            Self::IdentityCurrentTargetMismatch => "identity_current_target_mismatch",
+            Self::HighWaterRegressed => "high_water_regressed",
+        }
+    }
+}
+
+impl std::fmt::Display for FailReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_slug())
+    }
+}
+
 /// Always-present, path-free context threaded through every
 /// constructor so a per-status variant only supplies the fields that
 /// vary.
@@ -149,23 +303,45 @@ pub struct SecretsLifecycleAuditFields {
     pub base_dir_hash: String,
     pub result: LifecycleResult,
     pub marker_result: MarkerResult,
-    /// The active generation number after this action, when one
-    /// exists (`None` after a successful `retire`).
+    /// The active lineage epoch after this action, when one exists
+    /// (`None` after a successful `retire`, and for `Denied`/
+    /// `FailedClosed` results). This is the monotonic identity anchor
+    /// (see `secrets_lifecycle::MarkerData::high_water_epoch`) — never
+    /// simply "current epoch number + 1", so a rotate issued after a
+    /// rollback can never collide with (or silently resurrect) a
+    /// still-materialized older epoch directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub generation: Option<u32>,
+    pub lineage_epoch: Option<u64>,
+    /// The monotonic high-water epoch recorded by the marker after
+    /// this action (present exactly when `lineage_epoch` is present,
+    /// and additionally present after a successful `retire` so an
+    /// auditor can confirm a subsequent re-provision's first epoch is
+    /// still strictly greater than every epoch this `(vm, kind)` ever
+    /// used). Never decreases across the lifetime of a `(vm, kind)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub high_water_epoch: Option<u64>,
     /// On-disk generations retained for rollback after this action
     /// (excludes the active generation).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub retained_generations: Vec<u32>,
+    pub retained_generations: Vec<u64>,
     /// SHA-256 hex digest of the material this action wrote, when the
     /// action wrote material (`provision`/`rotate`). `None` for
     /// `rollback`/`retire`/failed attempts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material_digest_hex: Option<String>,
-    /// Closed-set, path-free reason slug. Present exactly when
-    /// `result` is `Denied` or `FailedClosed`.
+    /// Closed-set, path-free failure/refusal reason. Present exactly
+    /// when `result` is `Denied` or `FailedClosed`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fail_reason: Option<String>,
+    pub fail_reason: Option<FailReason>,
+    /// `true` when this action first had to resolve a leftover,
+    /// crash-interrupted transaction (see
+    /// `secrets_lifecycle::recover_in_flight_transaction`) before
+    /// proceeding with the requested action. Always `false` on the
+    /// common, no-crash path; surfaced so an operator can distinguish
+    /// "this rotate ran cleanly" from "this rotate first had to finish
+    /// or unwind a prior crashed rotate".
+    #[serde(default)]
+    pub recovered_prior_transaction: bool,
 }
 
 /// Errors [`SecretsLifecycleAuditFields::validate`] can report. Kept
@@ -175,17 +351,24 @@ pub struct SecretsLifecycleAuditFields {
 pub enum SecretsLifecycleAuditError {
     SchemaVersionMismatch { found: u32 },
     InvalidVmId,
-    MissingGeneration,
-    UnexpectedGeneration,
-    GenerationIsZero,
+    MissingLineageEpoch,
+    UnexpectedLineageEpoch,
+    LineageEpochIsZero,
+    MissingHighWaterEpoch,
+    UnexpectedHighWaterEpoch,
+    HighWaterBelowLineageEpoch,
     RetainedGenerationsTooLarge { len: usize },
     RetainedGenerationsNotUnique,
     RetainedGenerationsIncludeActive,
+    RetainedGenerationsMustBeNonEmpty,
+    RetainedGenerationsMustBeEmpty,
     MissingFailReason,
     UnexpectedFailReason,
+    ActionResultIncompatible,
     MarkerResultInconsistentWithResult,
     InvalidMaterialDigest,
     UnexpectedMaterialDigest,
+    MissingMaterialDigest,
 }
 
 impl std::fmt::Display for SecretsLifecycleAuditError {
@@ -198,9 +381,14 @@ impl std::fmt::Display for SecretsLifecycleAuditError {
                 )
             }
             Self::InvalidVmId => write!(f, "vm_id is empty or contains a path separator"),
-            Self::MissingGeneration => write!(f, "result requires a generation number"),
-            Self::UnexpectedGeneration => write!(f, "result must not carry a generation number"),
-            Self::GenerationIsZero => write!(f, "generation numbers start at 1"),
+            Self::MissingLineageEpoch => write!(f, "result requires a lineage_epoch"),
+            Self::UnexpectedLineageEpoch => write!(f, "result must not carry a lineage_epoch"),
+            Self::LineageEpochIsZero => write!(f, "lineage epochs start at 1"),
+            Self::MissingHighWaterEpoch => write!(f, "result requires a high_water_epoch"),
+            Self::UnexpectedHighWaterEpoch => write!(f, "result must not carry a high_water_epoch"),
+            Self::HighWaterBelowLineageEpoch => {
+                write!(f, "high_water_epoch must be >= lineage_epoch")
+            }
             Self::RetainedGenerationsTooLarge { len } => write!(
                 f,
                 "retained_generations length {len} exceeds {MAX_AUDITED_RETAINED_GENERATIONS}"
@@ -209,8 +397,18 @@ impl std::fmt::Display for SecretsLifecycleAuditError {
             Self::RetainedGenerationsIncludeActive => {
                 write!(f, "retained_generations must exclude the active generation")
             }
+            Self::RetainedGenerationsMustBeNonEmpty => write!(
+                f,
+                "this action/result requires at least one retained generation"
+            ),
+            Self::RetainedGenerationsMustBeEmpty => {
+                write!(f, "this action/result must not carry a retained generation")
+            }
             Self::MissingFailReason => write!(f, "fail_reason required for this result"),
             Self::UnexpectedFailReason => write!(f, "fail_reason forbidden for this result"),
+            Self::ActionResultIncompatible => {
+                write!(f, "result is not a reachable outcome of this action")
+            }
             Self::MarkerResultInconsistentWithResult => {
                 write!(f, "marker_result is inconsistent with result")
             }
@@ -219,6 +417,9 @@ impl std::fmt::Display for SecretsLifecycleAuditError {
             }
             Self::UnexpectedMaterialDigest => {
                 write!(f, "material_digest_hex forbidden for this action/result")
+            }
+            Self::MissingMaterialDigest => {
+                write!(f, "material_digest_hex required for this action/result")
             }
         }
     }
@@ -241,6 +442,13 @@ impl SecretsLifecycleAuditFields {
     /// Validate every cross-field invariant the JSON drift / schema
     /// tests rely on to reject a hand-built invalid record. Every
     /// constructor below returns a record that already passes this.
+    ///
+    /// This enforces a **complete** `action` x `result` x
+    /// `marker_result` compatibility matrix (not just per-field
+    /// presence checks): every `(action, result)` pair not explicitly
+    /// reachable from `secrets_lifecycle.rs` is rejected here too, so
+    /// a hand-built or future-buggy record can never claim an
+    /// impossible combination (e.g. `Provision` producing `RolledBack`).
     pub fn validate(&self) -> Result<(), SecretsLifecycleAuditError> {
         if self.schema_version != SECRETS_LIFECYCLE_AUDIT_SCHEMA_VERSION {
             return Err(SecretsLifecycleAuditError::SchemaVersionMismatch {
@@ -250,10 +458,10 @@ impl SecretsLifecycleAuditFields {
         if !valid_vm_id(&self.vm_id) {
             return Err(SecretsLifecycleAuditError::InvalidVmId);
         }
-        if let Some(generation) = self.generation
-            && generation == 0
+        if let Some(epoch) = self.lineage_epoch
+            && epoch == 0
         {
-            return Err(SecretsLifecycleAuditError::GenerationIsZero);
+            return Err(SecretsLifecycleAuditError::LineageEpochIsZero);
         }
         if self.retained_generations.len() > MAX_AUDITED_RETAINED_GENERATIONS {
             return Err(SecretsLifecycleAuditError::RetainedGenerationsTooLarge {
@@ -262,36 +470,103 @@ impl SecretsLifecycleAuditFields {
         }
         {
             let mut seen = std::collections::HashSet::new();
-            for generation in &self.retained_generations {
-                if !seen.insert(*generation) {
+            for epoch in &self.retained_generations {
+                if !seen.insert(*epoch) {
                     return Err(SecretsLifecycleAuditError::RetainedGenerationsNotUnique);
                 }
             }
         }
-        if let Some(generation) = self.generation
-            && self.retained_generations.contains(&generation)
+        if let Some(epoch) = self.lineage_epoch
+            && self.retained_generations.contains(&epoch)
         {
             return Err(SecretsLifecycleAuditError::RetainedGenerationsIncludeActive);
         }
+        if let (Some(epoch), Some(high_water)) = (self.lineage_epoch, self.high_water_epoch)
+            && high_water < epoch
+        {
+            return Err(SecretsLifecycleAuditError::HighWaterBelowLineageEpoch);
+        }
+
+        // Action x result reachability matrix: only these pairs are
+        // ever constructed by `secrets_lifecycle.rs`. Anything else
+        // (e.g. `Provision` -> `RolledBack`) is rejected outright,
+        // before the per-result field checks below even run.
+        let action_result_ok = matches!(
+            (self.action, self.result),
+            (LifecycleAction::Provision, LifecycleResult::Created)
+                | (LifecycleAction::Provision, LifecycleResult::Denied)
+                | (LifecycleAction::Provision, LifecycleResult::FailedClosed)
+                | (LifecycleAction::Rotate, LifecycleResult::Rotated)
+                | (LifecycleAction::Rotate, LifecycleResult::Denied)
+                | (LifecycleAction::Rotate, LifecycleResult::FailedClosed)
+                | (LifecycleAction::Rollback, LifecycleResult::RolledBack)
+                | (LifecycleAction::Rollback, LifecycleResult::Denied)
+                | (LifecycleAction::Rollback, LifecycleResult::FailedClosed)
+                | (LifecycleAction::Retire, LifecycleResult::Retired)
+                | (LifecycleAction::Retire, LifecycleResult::VerifiedClean)
+                | (LifecycleAction::Retire, LifecycleResult::FailedClosed)
+        );
+        if !action_result_ok {
+            return Err(SecretsLifecycleAuditError::ActionResultIncompatible);
+        }
 
         match self.result {
-            LifecycleResult::Created | LifecycleResult::Rotated | LifecycleResult::RolledBack => {
-                if self.generation.is_none() {
-                    return Err(SecretsLifecycleAuditError::MissingGeneration);
+            LifecycleResult::Created => {
+                if self.lineage_epoch.is_none() {
+                    return Err(SecretsLifecycleAuditError::MissingLineageEpoch);
+                }
+                if self.high_water_epoch.is_none() {
+                    return Err(SecretsLifecycleAuditError::MissingHighWaterEpoch);
+                }
+                if !self.retained_generations.is_empty() {
+                    return Err(SecretsLifecycleAuditError::RetainedGenerationsMustBeEmpty);
                 }
                 if self.fail_reason.is_some() {
                     return Err(SecretsLifecycleAuditError::UnexpectedFailReason);
                 }
-                if matches!(
-                    self.marker_result,
-                    MarkerResult::FailedClosed | MarkerResult::Unchanged | MarkerResult::Tombstoned
-                ) {
+                if self.marker_result != MarkerResult::Created {
                     return Err(SecretsLifecycleAuditError::MarkerResultInconsistentWithResult);
+                }
+                if self.material_digest_hex.is_none() {
+                    return Err(SecretsLifecycleAuditError::MissingMaterialDigest);
+                }
+            }
+            LifecycleResult::Rotated | LifecycleResult::RolledBack => {
+                if self.lineage_epoch.is_none() {
+                    return Err(SecretsLifecycleAuditError::MissingLineageEpoch);
+                }
+                if self.high_water_epoch.is_none() {
+                    return Err(SecretsLifecycleAuditError::MissingHighWaterEpoch);
+                }
+                if self.retained_generations.is_empty() {
+                    return Err(SecretsLifecycleAuditError::RetainedGenerationsMustBeNonEmpty);
+                }
+                if self.fail_reason.is_some() {
+                    return Err(SecretsLifecycleAuditError::UnexpectedFailReason);
+                }
+                if self.marker_result != MarkerResult::Verified {
+                    return Err(SecretsLifecycleAuditError::MarkerResultInconsistentWithResult);
+                }
+                let digest_required = self.result == LifecycleResult::Rotated;
+                match (&self.material_digest_hex, digest_required) {
+                    (None, true) => {
+                        return Err(SecretsLifecycleAuditError::MissingMaterialDigest);
+                    }
+                    (Some(_), false) => {
+                        return Err(SecretsLifecycleAuditError::UnexpectedMaterialDigest);
+                    }
+                    _ => {}
                 }
             }
             LifecycleResult::Retired => {
-                if self.generation.is_some() {
-                    return Err(SecretsLifecycleAuditError::UnexpectedGeneration);
+                if self.lineage_epoch.is_some() {
+                    return Err(SecretsLifecycleAuditError::UnexpectedLineageEpoch);
+                }
+                if self.high_water_epoch.is_none() {
+                    return Err(SecretsLifecycleAuditError::MissingHighWaterEpoch);
+                }
+                if !self.retained_generations.is_empty() {
+                    return Err(SecretsLifecycleAuditError::RetainedGenerationsMustBeEmpty);
                 }
                 if self.fail_reason.is_some() {
                     return Err(SecretsLifecycleAuditError::UnexpectedFailReason);
@@ -304,8 +579,23 @@ impl SecretsLifecycleAuditFields {
                 }
             }
             LifecycleResult::VerifiedClean => {
+                // Only reachable for `Retire` (already-retired /
+                // never-provisioned) per the action/result matrix
+                // above.
+                if self.lineage_epoch.is_some() {
+                    return Err(SecretsLifecycleAuditError::UnexpectedLineageEpoch);
+                }
+                if self.high_water_epoch.is_none() {
+                    return Err(SecretsLifecycleAuditError::MissingHighWaterEpoch);
+                }
+                if !self.retained_generations.is_empty() {
+                    return Err(SecretsLifecycleAuditError::RetainedGenerationsMustBeEmpty);
+                }
                 if self.fail_reason.is_some() {
                     return Err(SecretsLifecycleAuditError::UnexpectedFailReason);
+                }
+                if self.marker_result != MarkerResult::Verified {
+                    return Err(SecretsLifecycleAuditError::MarkerResultInconsistentWithResult);
                 }
                 if self.material_digest_hex.is_some() {
                     return Err(SecretsLifecycleAuditError::UnexpectedMaterialDigest);
@@ -318,6 +608,15 @@ impl SecretsLifecycleAuditFields {
                 if self.marker_result != MarkerResult::Unchanged {
                     return Err(SecretsLifecycleAuditError::MarkerResultInconsistentWithResult);
                 }
+                if self.lineage_epoch.is_some() {
+                    return Err(SecretsLifecycleAuditError::UnexpectedLineageEpoch);
+                }
+                if self.high_water_epoch.is_some() {
+                    return Err(SecretsLifecycleAuditError::UnexpectedHighWaterEpoch);
+                }
+                if !self.retained_generations.is_empty() {
+                    return Err(SecretsLifecycleAuditError::RetainedGenerationsMustBeEmpty);
+                }
                 if self.material_digest_hex.is_some() {
                     return Err(SecretsLifecycleAuditError::UnexpectedMaterialDigest);
                 }
@@ -326,20 +625,16 @@ impl SecretsLifecycleAuditFields {
                 if self.fail_reason.is_none() {
                     return Err(SecretsLifecycleAuditError::MissingFailReason);
                 }
+                if self.material_digest_hex.is_some() {
+                    return Err(SecretsLifecycleAuditError::UnexpectedMaterialDigest);
+                }
             }
         }
 
-        // Only provision/rotate ever write fresh material.
-        if let Some(digest) = &self.material_digest_hex {
-            if !valid_material_digest_hex(digest) {
-                return Err(SecretsLifecycleAuditError::InvalidMaterialDigest);
-            }
-            if !matches!(
-                self.action,
-                LifecycleAction::Provision | LifecycleAction::Rotate
-            ) {
-                return Err(SecretsLifecycleAuditError::UnexpectedMaterialDigest);
-            }
+        if let Some(digest) = &self.material_digest_hex
+            && !valid_material_digest_hex(digest)
+        {
+            return Err(SecretsLifecycleAuditError::InvalidMaterialDigest);
         }
 
         Ok(())
@@ -354,37 +649,51 @@ impl SecretsLifecycleAuditFields {
             base_dir_hash: ctx.base_dir_hash.clone(),
             result: LifecycleResult::VerifiedClean,
             marker_result: MarkerResult::Unchanged,
-            generation: None,
+            lineage_epoch: None,
+            high_water_epoch: None,
             retained_generations: Vec::new(),
             material_digest_hex: None,
             fail_reason: None,
+            recovered_prior_transaction: false,
         }
     }
 
     /// A fresh generation 1 was provisioned.
-    pub fn provisioned(ctx: &SecretsLifecycleAuditContext, material_digest_hex: String) -> Self {
+    pub fn provisioned(
+        ctx: &SecretsLifecycleAuditContext,
+        high_water_epoch: u64,
+        material_digest_hex: String,
+        recovered_prior_transaction: bool,
+    ) -> Self {
         Self {
             result: LifecycleResult::Created,
             marker_result: MarkerResult::Created,
-            generation: Some(1),
+            lineage_epoch: Some(1),
+            high_water_epoch: Some(high_water_epoch),
             material_digest_hex: Some(material_digest_hex),
+            recovered_prior_transaction,
             ..Self::base(ctx)
         }
     }
 
     /// A new generation was created and activated.
+    #[allow(clippy::too_many_arguments)]
     pub fn rotated(
         ctx: &SecretsLifecycleAuditContext,
-        generation: u32,
-        retained_generations: Vec<u32>,
+        lineage_epoch: u64,
+        high_water_epoch: u64,
+        retained_generations: Vec<u64>,
         material_digest_hex: String,
+        recovered_prior_transaction: bool,
     ) -> Self {
         Self {
             result: LifecycleResult::Rotated,
             marker_result: MarkerResult::Verified,
-            generation: Some(generation),
+            lineage_epoch: Some(lineage_epoch),
+            high_water_epoch: Some(high_water_epoch),
             retained_generations,
             material_digest_hex: Some(material_digest_hex),
+            recovered_prior_transaction,
             ..Self::base(ctx)
         }
     }
@@ -392,43 +701,54 @@ impl SecretsLifecycleAuditFields {
     /// `current` was swapped back to a retained prior generation.
     pub fn rolled_back(
         ctx: &SecretsLifecycleAuditContext,
-        generation: u32,
-        retained_generations: Vec<u32>,
+        lineage_epoch: u64,
+        high_water_epoch: u64,
+        retained_generations: Vec<u64>,
+        recovered_prior_transaction: bool,
     ) -> Self {
         Self {
             result: LifecycleResult::RolledBack,
             marker_result: MarkerResult::Verified,
-            generation: Some(generation),
+            lineage_epoch: Some(lineage_epoch),
+            high_water_epoch: Some(high_water_epoch),
             retained_generations,
+            recovered_prior_transaction,
             ..Self::base(ctx)
         }
     }
 
     /// Every generation was removed and the marker tombstoned.
-    pub fn retired(ctx: &SecretsLifecycleAuditContext) -> Self {
+    pub fn retired(
+        ctx: &SecretsLifecycleAuditContext,
+        high_water_epoch: u64,
+        recovered_prior_transaction: bool,
+    ) -> Self {
         Self {
             result: LifecycleResult::Retired,
             marker_result: MarkerResult::Tombstoned,
+            high_water_epoch: Some(high_water_epoch),
+            recovered_prior_transaction,
             ..Self::base(ctx)
         }
     }
 
-    /// The action was already satisfied; no mutation occurred.
-    pub fn verified_clean(ctx: &SecretsLifecycleAuditContext, generation: Option<u32>) -> Self {
+    /// The action was already satisfied; no mutation occurred. Only
+    /// reachable for `retire` (never-provisioned or already-retired).
+    pub fn verified_clean(ctx: &SecretsLifecycleAuditContext, high_water_epoch: u64) -> Self {
         Self {
             result: LifecycleResult::VerifiedClean,
             marker_result: MarkerResult::Verified,
-            generation,
+            high_water_epoch: Some(high_water_epoch),
             ..Self::base(ctx)
         }
     }
 
     /// The action was refused before any filesystem mutation.
-    pub fn denied(ctx: &SecretsLifecycleAuditContext, reason: &'static str) -> Self {
+    pub fn denied(ctx: &SecretsLifecycleAuditContext, reason: FailReason) -> Self {
         Self {
             result: LifecycleResult::Denied,
             marker_result: MarkerResult::Unchanged,
-            fail_reason: Some(reason.to_owned()),
+            fail_reason: Some(reason),
             ..Self::base(ctx)
         }
     }
@@ -437,12 +757,12 @@ impl SecretsLifecycleAuditFields {
     pub fn failed(
         ctx: &SecretsLifecycleAuditContext,
         marker_result: MarkerResult,
-        reason: &'static str,
+        reason: FailReason,
     ) -> Self {
         Self {
             result: LifecycleResult::FailedClosed,
             marker_result,
-            fail_reason: Some(reason.to_owned()),
+            fail_reason: Some(reason),
             ..Self::base(ctx)
         }
     }
@@ -485,11 +805,66 @@ mod tests {
     }
 
     #[test]
+    fn fail_reason_slugs_are_stable_and_distinct() {
+        let variants = [
+            FailReason::InvalidVmId,
+            FailReason::PathDerivationFailed,
+            FailReason::SecretsDirOpenFailed,
+            FailReason::MarkerTreeOpenFailed,
+            FailReason::MarkerWriteFailed,
+            FailReason::MarkerTamperedOrMissingMaterial,
+            FailReason::AlreadyProvisioned,
+            FailReason::AlreadyRetired,
+            FailReason::NotProvisioned,
+            FailReason::NoRollbackTarget,
+            FailReason::PreviouslyProvisionedMaterialMissing,
+            FailReason::GenerationConflict,
+            FailReason::MaterialWriteFailed,
+            FailReason::CurrentSwapFailed,
+            FailReason::InvalidMaterial,
+            FailReason::LockUnavailable,
+            FailReason::IntentWriteFailed,
+            FailReason::IntentCorrupt,
+            FailReason::RecoveryContentMismatch,
+            FailReason::RecoveryAmbiguous,
+            FailReason::StagingNameExhausted,
+            FailReason::RetirementTreeAnomaly,
+            FailReason::RetirementNotProvablyEmpty,
+            FailReason::IdentityOwnerMismatch,
+            FailReason::IdentityModeMismatch,
+            FailReason::IdentityAclMismatch,
+            FailReason::IdentityLinkCountMismatch,
+            FailReason::IdentityDigestMismatch,
+            FailReason::IdentityInodeMismatch,
+            FailReason::IdentityCurrentTargetMismatch,
+            FailReason::HighWaterRegressed,
+        ];
+        let slugs: Vec<&str> = variants.iter().map(|v| v.as_slug()).collect();
+        let unique: std::collections::HashSet<_> = slugs.iter().collect();
+        assert_eq!(
+            unique.len(),
+            slugs.len(),
+            "every FailReason variant must have a distinct slug"
+        );
+        for slug in &slugs {
+            assert!(
+                slug.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'),
+                "slug {slug:?} must be snake_case ascii only (path-free, redaction-safe)"
+            );
+        }
+    }
+
+    #[test]
     fn provisioned_validates() {
-        let record =
-            SecretsLifecycleAuditFields::provisioned(&ctx(LifecycleAction::Provision), digest());
+        let record = SecretsLifecycleAuditFields::provisioned(
+            &ctx(LifecycleAction::Provision),
+            1,
+            digest(),
+            false,
+        );
         record.validate().expect("provisioned record must validate");
-        assert_eq!(record.generation, Some(1));
+        assert_eq!(record.lineage_epoch, Some(1));
+        assert_eq!(record.high_water_epoch, Some(1));
         assert!(record.retained_generations.is_empty());
     }
 
@@ -498,8 +873,10 @@ mod tests {
         let record = SecretsLifecycleAuditFields::rotated(
             &ctx(LifecycleAction::Rotate),
             2,
+            2,
             vec![1],
             digest(),
+            false,
         );
         record.validate().expect("rotated record must validate");
 
@@ -512,22 +889,67 @@ mod tests {
     }
 
     #[test]
-    fn rolled_back_validates() {
-        let record =
-            SecretsLifecycleAuditFields::rolled_back(&ctx(LifecycleAction::Rollback), 1, vec![2]);
-        record.validate().expect("rolled back record must validate");
+    fn rotated_requires_nonempty_retained_generations() {
+        let mut record = SecretsLifecycleAuditFields::rotated(
+            &ctx(LifecycleAction::Rotate),
+            2,
+            2,
+            vec![1],
+            digest(),
+            false,
+        );
+        record.retained_generations.clear();
+        assert_eq!(
+            record.validate(),
+            Err(SecretsLifecycleAuditError::RetainedGenerationsMustBeNonEmpty)
+        );
     }
 
     #[test]
-    fn retired_validates_and_forbids_generation() {
-        let record = SecretsLifecycleAuditFields::retired(&ctx(LifecycleAction::Retire));
+    fn rolled_back_validates_and_requires_retained_generation() {
+        let record = SecretsLifecycleAuditFields::rolled_back(
+            &ctx(LifecycleAction::Rollback),
+            1,
+            2,
+            vec![2],
+            false,
+        );
+        record.validate().expect("rolled back record must validate");
+
+        let mut broken = record.clone();
+        broken.retained_generations.clear();
+        assert_eq!(
+            broken.validate(),
+            Err(SecretsLifecycleAuditError::RetainedGenerationsMustBeNonEmpty)
+        );
+    }
+
+    #[test]
+    fn rolled_back_forbids_material_digest() {
+        let mut record = SecretsLifecycleAuditFields::rolled_back(
+            &ctx(LifecycleAction::Rollback),
+            1,
+            2,
+            vec![2],
+            false,
+        );
+        record.material_digest_hex = Some(digest());
+        assert_eq!(
+            record.validate(),
+            Err(SecretsLifecycleAuditError::UnexpectedMaterialDigest)
+        );
+    }
+
+    #[test]
+    fn retired_validates_and_forbids_lineage_epoch() {
+        let record = SecretsLifecycleAuditFields::retired(&ctx(LifecycleAction::Retire), 5, false);
         record.validate().expect("retired record must validate");
 
         let mut broken = record.clone();
-        broken.generation = Some(1);
+        broken.lineage_epoch = Some(1);
         assert_eq!(
             broken.validate(),
-            Err(SecretsLifecycleAuditError::UnexpectedGeneration)
+            Err(SecretsLifecycleAuditError::UnexpectedLineageEpoch)
         );
     }
 
@@ -535,7 +957,7 @@ mod tests {
     fn denied_requires_fail_reason_and_unchanged_marker() {
         let record = SecretsLifecycleAuditFields::denied(
             &ctx(LifecycleAction::Rotate),
-            "secrets-lifecycle-not-provisioned",
+            FailReason::NotProvisioned,
         );
         record.validate().expect("denied record must validate");
 
@@ -559,7 +981,7 @@ mod tests {
         let record = SecretsLifecycleAuditFields::failed(
             &ctx(LifecycleAction::Rotate),
             MarkerResult::FailedClosed,
-            "secrets-lifecycle-marker-tampered",
+            FailReason::MarkerTamperedOrMissingMaterial,
         );
         record.validate().expect("failed record must validate");
 
@@ -573,19 +995,27 @@ mod tests {
 
     #[test]
     fn schema_version_mismatch_is_rejected() {
-        let mut record =
-            SecretsLifecycleAuditFields::provisioned(&ctx(LifecycleAction::Provision), digest());
-        record.schema_version = 2;
+        let mut record = SecretsLifecycleAuditFields::provisioned(
+            &ctx(LifecycleAction::Provision),
+            1,
+            digest(),
+            false,
+        );
+        record.schema_version = 1;
         assert_eq!(
             record.validate(),
-            Err(SecretsLifecycleAuditError::SchemaVersionMismatch { found: 2 })
+            Err(SecretsLifecycleAuditError::SchemaVersionMismatch { found: 1 })
         );
     }
 
     #[test]
     fn invalid_vm_id_is_rejected() {
-        let mut record =
-            SecretsLifecycleAuditFields::provisioned(&ctx(LifecycleAction::Provision), digest());
+        let mut record = SecretsLifecycleAuditFields::provisioned(
+            &ctx(LifecycleAction::Provision),
+            1,
+            digest(),
+            false,
+        );
         for bad in ["", "work/vm", "wor\0k"] {
             record.vm_id = bad.to_owned();
             assert_eq!(
@@ -596,13 +1026,34 @@ mod tests {
     }
 
     #[test]
-    fn generation_zero_is_rejected() {
-        let mut record =
-            SecretsLifecycleAuditFields::provisioned(&ctx(LifecycleAction::Provision), digest());
-        record.generation = Some(0);
+    fn lineage_epoch_zero_is_rejected() {
+        let mut record = SecretsLifecycleAuditFields::provisioned(
+            &ctx(LifecycleAction::Provision),
+            1,
+            digest(),
+            false,
+        );
+        record.lineage_epoch = Some(0);
         assert_eq!(
             record.validate(),
-            Err(SecretsLifecycleAuditError::GenerationIsZero)
+            Err(SecretsLifecycleAuditError::LineageEpochIsZero)
+        );
+    }
+
+    #[test]
+    fn high_water_below_lineage_epoch_is_rejected() {
+        let mut record = SecretsLifecycleAuditFields::rotated(
+            &ctx(LifecycleAction::Rotate),
+            5,
+            5,
+            vec![4],
+            digest(),
+            false,
+        );
+        record.high_water_epoch = Some(4);
+        assert_eq!(
+            record.validate(),
+            Err(SecretsLifecycleAuditError::HighWaterBelowLineageEpoch)
         );
     }
 
@@ -611,8 +1062,10 @@ mod tests {
         let mut record = SecretsLifecycleAuditFields::rotated(
             &ctx(LifecycleAction::Rotate),
             100,
-            (1..=MAX_AUDITED_RETAINED_GENERATIONS as u32 + 1).collect(),
+            100,
+            (1..=MAX_AUDITED_RETAINED_GENERATIONS as u64 + 1).collect(),
             digest(),
+            false,
         );
         assert_eq!(
             record.validate(),
@@ -630,8 +1083,13 @@ mod tests {
 
     #[test]
     fn material_digest_is_scoped_to_provision_and_rotate_actions() {
-        let mut record =
-            SecretsLifecycleAuditFields::rolled_back(&ctx(LifecycleAction::Rollback), 1, vec![2]);
+        let mut record = SecretsLifecycleAuditFields::rolled_back(
+            &ctx(LifecycleAction::Rollback),
+            1,
+            2,
+            vec![2],
+            false,
+        );
         record.material_digest_hex = Some(digest());
         assert_eq!(
             record.validate(),
@@ -640,9 +1098,42 @@ mod tests {
     }
 
     #[test]
+    fn created_and_rotated_require_material_digest() {
+        let mut created = SecretsLifecycleAuditFields::provisioned(
+            &ctx(LifecycleAction::Provision),
+            1,
+            digest(),
+            false,
+        );
+        created.material_digest_hex = None;
+        assert_eq!(
+            created.validate(),
+            Err(SecretsLifecycleAuditError::MissingMaterialDigest)
+        );
+
+        let mut rotated = SecretsLifecycleAuditFields::rotated(
+            &ctx(LifecycleAction::Rotate),
+            2,
+            2,
+            vec![1],
+            digest(),
+            false,
+        );
+        rotated.material_digest_hex = None;
+        assert_eq!(
+            rotated.validate(),
+            Err(SecretsLifecycleAuditError::MissingMaterialDigest)
+        );
+    }
+
+    #[test]
     fn material_digest_must_be_lowercase_hex_64() {
-        let mut record =
-            SecretsLifecycleAuditFields::provisioned(&ctx(LifecycleAction::Provision), digest());
+        let mut record = SecretsLifecycleAuditFields::provisioned(
+            &ctx(LifecycleAction::Provision),
+            1,
+            digest(),
+            false,
+        );
         for bad in ["", "AA", &"a".repeat(63), &"g".repeat(64), &"A".repeat(64)] {
             record.material_digest_hex = Some(bad.to_owned());
             assert_eq!(
@@ -653,29 +1144,68 @@ mod tests {
     }
 
     #[test]
+    fn action_result_matrix_rejects_impossible_combinations() {
+        // `Provision` can never produce `Rotated`.
+        let mut impossible = SecretsLifecycleAuditFields::rotated(
+            &ctx(LifecycleAction::Rotate),
+            2,
+            2,
+            vec![1],
+            digest(),
+            false,
+        );
+        impossible.action = LifecycleAction::Provision;
+        assert_eq!(
+            impossible.validate(),
+            Err(SecretsLifecycleAuditError::ActionResultIncompatible)
+        );
+
+        // `Rollback` can never produce `VerifiedClean` (only `Retire`
+        // reaches that result).
+        let mut impossible2 =
+            SecretsLifecycleAuditFields::verified_clean(&ctx(LifecycleAction::Retire), 3);
+        impossible2.action = LifecycleAction::Rollback;
+        assert_eq!(
+            impossible2.validate(),
+            Err(SecretsLifecycleAuditError::ActionResultIncompatible)
+        );
+    }
+
+    #[test]
     fn serde_round_trip_preserves_every_field() {
         let record = SecretsLifecycleAuditFields::rotated(
             &ctx(LifecycleAction::Rotate),
             3,
+            3,
             vec![2],
             digest(),
+            true,
         );
         let json = serde_json::to_string(&record).expect("serialize");
         let decoded: SecretsLifecycleAuditFields =
             serde_json::from_str(&json).expect("deserialize");
         assert_eq!(decoded, record);
+        assert!(decoded.recovered_prior_transaction);
     }
 
     #[test]
-    fn verified_clean_allows_absent_or_present_generation() {
-        let without =
-            SecretsLifecycleAuditFields::verified_clean(&ctx(LifecycleAction::Retire), None);
-        without
+    fn fail_reason_serde_round_trips_as_closed_enum() {
+        let json = serde_json::to_string(&FailReason::RecoveryContentMismatch).unwrap();
+        assert_eq!(json, "\"recovery_content_mismatch\"");
+        let decoded: FailReason = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, FailReason::RecoveryContentMismatch);
+        // An arbitrary string is not a valid FailReason: this is the
+        // structural guarantee behind "closed failure reasons".
+        assert!(serde_json::from_str::<FailReason>("\"totally-made-up\"").is_err());
+    }
+
+    #[test]
+    fn verified_clean_never_carries_lineage_epoch() {
+        let record = SecretsLifecycleAuditFields::verified_clean(&ctx(LifecycleAction::Retire), 7);
+        record
             .validate()
-            .expect("verified clean without generation must validate");
-        let with =
-            SecretsLifecycleAuditFields::verified_clean(&ctx(LifecycleAction::Rotate), Some(4));
-        with.validate()
-            .expect("verified clean with generation must validate");
+            .expect("verified clean record must validate");
+        assert_eq!(record.lineage_epoch, None);
+        assert_eq!(record.high_water_epoch, Some(7));
     }
 }
