@@ -55,7 +55,7 @@
       "repository": "vicondoa/d2b-toolkit",
       "futureRepository": "vicondoa/d2b-client-toolkit",
       "auditedRef": "adr0045-w9-client-toolkit",
-      "auditedRevision": "3d6b75d47c8df66c1722ea324d64334a127d43ec",
+      "auditedRevision": "926de54e7320599c373524a10b65aaf13b6ff422",
       "defaultBranchRevision": "fde6af8b842718e7150f5056d4eba73093d4ad77",
       "protocolPolicy": "canonical-only",
       "ownership": {
@@ -168,7 +168,7 @@
       "consumesDistribution": {
         "id": "d2b-client-toolkit",
         "repository": "vicondoa/d2b-toolkit",
-        "revision": "3d6b75d47c8df66c1722ea324d64334a127d43ec",
+        "revision": "926de54e7320599c373524a10b65aaf13b6ff422",
         "sourceRevision": "9dc902243cdd7aba7ef269988b96f0aae6e037da",
         "fingerprint": "5a20cef3a64281df819eeb76bdfe385999755479b467b559653011582fb9c043"
       },
@@ -236,7 +236,7 @@
       "consumesDistribution": {
         "id": "d2b-client-toolkit",
         "repository": "vicondoa/d2b-toolkit",
-        "revision": "3d6b75d47c8df66c1722ea324d64334a127d43ec",
+        "revision": "926de54e7320599c373524a10b65aaf13b6ff422",
         "sourceRevision": "9dc902243cdd7aba7ef269988b96f0aae6e037da",
         "fingerprint": "5a20cef3a64281df819eeb76bdfe385999755479b467b559653011582fb9c043"
       },
@@ -313,7 +313,7 @@
       "consumesDistribution": {
         "id": "d2b-client-toolkit",
         "repository": "vicondoa/d2b-toolkit",
-        "revision": "3d6b75d47c8df66c1722ea324d64334a127d43ec",
+        "revision": "926de54e7320599c373524a10b65aaf13b6ff422",
         "sourceRevision": "9dc902243cdd7aba7ef269988b96f0aae6e037da",
         "fingerprint": "5a20cef3a64281df819eeb76bdfe385999755479b467b559653011582fb9c043"
       },

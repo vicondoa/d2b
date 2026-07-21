@@ -442,6 +442,19 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Advanced `docs/adr/0045-toolkit-sibling-coordination.json`'s
+  `client-toolkit-distribution` `auditedRevision` and the `wlterm`,
+  `wlcontrol`, and `weezterm` `consumesDistribution.revision` pins from the
+  stale `3d6b75d` PR head to the toolkit's current `926de54e` head (a
+  CI-workflow-dedup-only commit touching solely `.github/workflows/ci.yml`
+  and `CHANGELOG.md`). The distribution `sourceRevision`/`fingerprint` pins
+  are unchanged: `policy_toolkit_sources.rs` computes that fingerprint from
+  this repo's own canonical source tree at a fixed `CLIENT_SOURCE_REVISION`,
+  independent of which toolkit commit is referenced, and `926de54e` touches
+  no path in the fingerprinted/ownership inventory, so the audited content is
+  byte-identical to `3d6b75d`. All four bindings are advanced together to
+  keep the policy's revision/fingerprint lockstep invariant satisfied without
+  a follow-up migration entry.
 - Corrected `delivery/manifests/w9.json`'s required-check publishers for the
   client-toolkit, provider-toolkit, wlcontrol, and wlterm sibling nodes: they
   named the workflow *filename* (`ci.yml`, `check.yml`), but the delivery
