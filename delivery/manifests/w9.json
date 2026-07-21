@@ -1,0 +1,787 @@
+{
+  "schema_version": 1,
+  "program": "adr0045",
+  "wave": "w9",
+  "authority_repository": "github.com/vicondoa/d2b",
+  "panel_trust_root_sha256": "7abd63f590296e7dfcb4d12ca9f66837c7b925c75cf07f89ee777d8eb4c0f135",
+  "repositories": [
+    {
+      "id": "github.com/vicondoa/d2b",
+      "object_format": "sha1",
+      "trunk_ref": "main",
+      "integration_ref": "adr0045-w9-toolkits"
+    },
+    {
+      "id": "github.com/vicondoa/d2b-toolkit",
+      "object_format": "sha1",
+      "trunk_ref": "main",
+      "integration_ref": "adr0045-w9-client-toolkit"
+    },
+    {
+      "id": "github.com/vicondoa/d2b-provider-toolkit",
+      "object_format": "sha1",
+      "trunk_ref": "main",
+      "integration_ref": "adr0045-w9-provider-toolkit"
+    },
+    {
+      "id": "github.com/vicondoa/d2b-wlcontrol",
+      "object_format": "sha1",
+      "trunk_ref": "main",
+      "integration_ref": "adr0045-w9-wlcontrol"
+    },
+    {
+      "id": "github.com/vicondoa/d2b-wlterm",
+      "object_format": "sha1",
+      "trunk_ref": "main",
+      "integration_ref": "adr0045-w9-wlterm"
+    },
+    {
+      "id": "github.com/vicondoa/weezterm",
+      "object_format": "sha1",
+      "trunk_ref": "main",
+      "integration_ref": "adr0045-w9-weezterm"
+    }
+  ],
+  "stack_nodes": [
+    {
+      "id": "client-toolkit",
+      "repository": "github.com/vicondoa/d2b-toolkit",
+      "branch": "adr0045-w9-client-toolkit",
+      "pr_number": 6,
+      "external_dependencies": []
+    },
+    {
+      "id": "provider-toolkit",
+      "repository": "github.com/vicondoa/d2b-provider-toolkit",
+      "branch": "adr0045-w9-provider-toolkit",
+      "pr_number": 1,
+      "external_dependencies": []
+    },
+    {
+      "id": "wlterm",
+      "repository": "github.com/vicondoa/d2b-wlterm",
+      "branch": "adr0045-w9-wlterm",
+      "pr_number": 20,
+      "external_dependencies": [
+        "client-toolkit"
+      ]
+    },
+    {
+      "id": "wlcontrol",
+      "repository": "github.com/vicondoa/d2b-wlcontrol",
+      "branch": "adr0045-w9-wlcontrol",
+      "pr_number": 37,
+      "external_dependencies": [
+        "client-toolkit"
+      ]
+    },
+    {
+      "id": "weezterm",
+      "repository": "github.com/vicondoa/weezterm",
+      "branch": "adr0045-w9-weezterm",
+      "pr_number": 48,
+      "external_dependencies": [
+        "client-toolkit"
+      ]
+    },
+    {
+      "id": "d2b-w9",
+      "repository": "github.com/vicondoa/d2b",
+      "branch": "adr0045-w9-toolkits",
+      "pr_number": 314,
+      "external_dependencies": [
+        "client-toolkit",
+        "provider-toolkit",
+        "wlcontrol",
+        "wlterm",
+        "weezterm"
+      ]
+    }
+  ],
+  "required_validations": [
+    {
+      "id": "d2b-make-check",
+      "argv": [
+        "make",
+        "check"
+      ],
+      "cwd": {
+        "repository": "github.com/vicondoa/d2b",
+        "path": "."
+      },
+      "authority": "local_runner",
+      "ci_publisher": null,
+      "ci_signer_workflow": null,
+      "timeout_seconds": 7200
+    },
+    {
+      "id": "client-toolkit-fmt",
+      "argv": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "cwd": {
+        "repository": "github.com/vicondoa/d2b-toolkit",
+        "path": "."
+      },
+      "authority": "local_runner",
+      "ci_publisher": null,
+      "ci_signer_workflow": null,
+      "timeout_seconds": 600
+    },
+    {
+      "id": "client-toolkit-build",
+      "argv": [
+        "cargo",
+        "build",
+        "--workspace",
+        "--all-features",
+        "--locked"
+      ],
+      "cwd": {
+        "repository": "github.com/vicondoa/d2b-toolkit",
+        "path": "."
+      },
+      "authority": "local_runner",
+      "ci_publisher": null,
+      "ci_signer_workflow": null,
+      "timeout_seconds": 1800
+    },
+    {
+      "id": "client-toolkit-clippy",
+      "argv": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-features",
+        "--all-targets",
+        "--locked",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "cwd": {
+        "repository": "github.com/vicondoa/d2b-toolkit",
+        "path": "."
+      },
+      "authority": "local_runner",
+      "ci_publisher": null,
+      "ci_signer_workflow": null,
+      "timeout_seconds": 1800
+    },
+    {
+      "id": "client-toolkit-test",
+      "argv": [
+        "cargo",
+        "test",
+        "--workspace",
+        "--all-features",
+        "--locked"
+      ],
+      "cwd": {
+        "repository": "github.com/vicondoa/d2b-toolkit",
+        "path": "."
+      },
+      "authority": "local_runner",
+      "ci_publisher": null,
+      "ci_signer_workflow": null,
+      "timeout_seconds": 1800
+    },
+    {
+      "id": "client-toolkit-source-fingerprint",
+      "argv": [
+        "python3",
+        "scripts/check-source-fingerprint.py"
+      ],
+      "cwd": {
+        "repository": "github.com/vicondoa/d2b-toolkit",
+        "path": "."
+      },
+      "authority": "local_runner",
+      "ci_publisher": null,
+      "ci_signer_workflow": null,
+      "timeout_seconds": 300
+    },
+    {
+      "id": "client-toolkit-flake",
+      "argv": [
+        "nix",
+        "flake",
+        "check"
+      ],
+      "cwd": {
+        "repository": "github.com/vicondoa/d2b-toolkit",
+        "path": "."
+      },
+      "authority": "local_runner",
+      "ci_publisher": null,
+      "ci_signer_workflow": null,
+      "timeout_seconds": 1800
+    },
+    {
+      "id": "provider-toolkit-make-check",
+      "argv": [
+        "make",
+        "check"
+      ],
+      "cwd": {
+        "repository": "github.com/vicondoa/d2b-provider-toolkit",
+        "path": "."
+      },
+      "authority": "local_runner",
+      "ci_publisher": null,
+      "ci_signer_workflow": null,
+      "timeout_seconds": 3600
+    },
+    {
+      "id": "wlcontrol-fmt",
+      "argv": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "cwd": {
+        "repository": "github.com/vicondoa/d2b-wlcontrol",
+        "path": "."
+      },
+      "authority": "local_runner",
+      "ci_publisher": null,
+      "ci_signer_workflow": null,
+      "timeout_seconds": 600
+    },
+    {
+      "id": "wlcontrol-clippy",
+      "argv": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "cwd": {
+        "repository": "github.com/vicondoa/d2b-wlcontrol",
+        "path": "."
+      },
+      "authority": "local_runner",
+      "ci_publisher": null,
+      "ci_signer_workflow": null,
+      "timeout_seconds": 1800
+    },
+    {
+      "id": "wlcontrol-test",
+      "argv": [
+        "cargo",
+        "test",
+        "--workspace"
+      ],
+      "cwd": {
+        "repository": "github.com/vicondoa/d2b-wlcontrol",
+        "path": "."
+      },
+      "authority": "local_runner",
+      "ci_publisher": null,
+      "ci_signer_workflow": null,
+      "timeout_seconds": 1800
+    },
+    {
+      "id": "wlcontrol-flake",
+      "argv": [
+        "nix",
+        "flake",
+        "check",
+        "--no-build",
+        "--all-systems"
+      ],
+      "cwd": {
+        "repository": "github.com/vicondoa/d2b-wlcontrol",
+        "path": "."
+      },
+      "authority": "local_runner",
+      "ci_publisher": null,
+      "ci_signer_workflow": null,
+      "timeout_seconds": 1800
+    },
+    {
+      "id": "wlterm-test",
+      "argv": [
+        "cargo",
+        "test",
+        "--workspace"
+      ],
+      "cwd": {
+        "repository": "github.com/vicondoa/d2b-wlterm",
+        "path": "."
+      },
+      "authority": "local_runner",
+      "ci_publisher": null,
+      "ci_signer_workflow": null,
+      "timeout_seconds": 1800
+    },
+    {
+      "id": "wlterm-fmt",
+      "argv": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "cwd": {
+        "repository": "github.com/vicondoa/d2b-wlterm",
+        "path": "."
+      },
+      "authority": "local_runner",
+      "ci_publisher": null,
+      "ci_signer_workflow": null,
+      "timeout_seconds": 600
+    },
+    {
+      "id": "wlterm-clippy",
+      "argv": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "cwd": {
+        "repository": "github.com/vicondoa/d2b-wlterm",
+        "path": "."
+      },
+      "authority": "local_runner",
+      "ci_publisher": null,
+      "ci_signer_workflow": null,
+      "timeout_seconds": 1800
+    },
+    {
+      "id": "wlterm-flake",
+      "argv": [
+        "nix",
+        "flake",
+        "check"
+      ],
+      "cwd": {
+        "repository": "github.com/vicondoa/d2b-wlterm",
+        "path": "."
+      },
+      "authority": "local_runner",
+      "ci_publisher": null,
+      "ci_signer_workflow": null,
+      "timeout_seconds": 1800
+    },
+    {
+      "id": "weezterm-precommit",
+      "argv": [
+        "make",
+        "precommit"
+      ],
+      "cwd": {
+        "repository": "github.com/vicondoa/weezterm",
+        "path": "."
+      },
+      "authority": "local_runner",
+      "ci_publisher": null,
+      "ci_signer_workflow": null,
+      "timeout_seconds": 7200
+    }
+  ],
+  "required_checks": [
+    {
+      "node": "d2b-w9",
+      "name": "check",
+      "publisher": {
+        "kind": "check_run",
+        "app_slug": "github-actions",
+        "app_id": 15368,
+        "workflow": "pr-l1-static-fast",
+        "workflow_id": 286033206
+      }
+    },
+    {
+      "node": "d2b-w9",
+      "name": "eval",
+      "publisher": {
+        "kind": "check_run",
+        "app_slug": "github-actions",
+        "app_id": 15368,
+        "workflow": "eval-with-entra-id",
+        "workflow_id": 283041463
+      }
+    },
+    {
+      "node": "d2b-w9",
+      "name": "eval-shell-tests",
+      "publisher": {
+        "kind": "check_run",
+        "app_slug": "github-actions",
+        "app_id": 15368,
+        "workflow": "pr-eval-shell-tests",
+        "workflow_id": 289704928
+      }
+    },
+    {
+      "node": "client-toolkit",
+      "name": "rust",
+      "publisher": {
+        "kind": "check_run",
+        "app_slug": "github-actions",
+        "app_id": 15368,
+        "workflow": "ci.yml",
+        "workflow_id": 307600819
+      }
+    },
+    {
+      "node": "client-toolkit",
+      "name": "nix",
+      "publisher": {
+        "kind": "check_run",
+        "app_slug": "github-actions",
+        "app_id": 15368,
+        "workflow": "ci.yml",
+        "workflow_id": 307600819
+      }
+    },
+    {
+      "node": "provider-toolkit",
+      "name": "rust",
+      "publisher": {
+        "kind": "check_run",
+        "app_slug": "github-actions",
+        "app_id": 15368,
+        "workflow": "ci.yml",
+        "workflow_id": 314261598
+      }
+    },
+    {
+      "node": "provider-toolkit",
+      "name": "nix",
+      "publisher": {
+        "kind": "check_run",
+        "app_slug": "github-actions",
+        "app_id": 15368,
+        "workflow": "ci.yml",
+        "workflow_id": 314261598
+      }
+    },
+    {
+      "node": "wlcontrol",
+      "name": "Rust workspace gate",
+      "publisher": {
+        "kind": "check_run",
+        "app_slug": "github-actions",
+        "app_id": 15368,
+        "workflow": "ci.yml",
+        "workflow_id": 296720226
+      }
+    },
+    {
+      "node": "wlcontrol",
+      "name": "Nix flake check",
+      "publisher": {
+        "kind": "check_run",
+        "app_slug": "github-actions",
+        "app_id": 15368,
+        "workflow": "ci.yml",
+        "workflow_id": 296720226
+      }
+    },
+    {
+      "node": "wlterm",
+      "name": "nix",
+      "publisher": {
+        "kind": "check_run",
+        "app_slug": "github-actions",
+        "app_id": 15368,
+        "workflow": "check.yml",
+        "workflow_id": 307600733
+      }
+    },
+    {
+      "node": "wlterm",
+      "name": "rust",
+      "publisher": {
+        "kind": "check_run",
+        "app_slug": "github-actions",
+        "app_id": 15368,
+        "workflow": "check.yml",
+        "workflow_id": 307600733
+      }
+    },
+    {
+      "node": "weezterm",
+      "name": "windows",
+      "publisher": {
+        "kind": "check_run",
+        "app_slug": "github-actions",
+        "app_id": 15368,
+        "workflow": "weezterm-build",
+        "workflow_id": 256580772
+      }
+    }
+  ],
+  "generated_artifacts": [
+    {
+      "name": "client-toolkit-contract-doc",
+      "repository": "github.com/vicondoa/d2b-toolkit",
+      "path": "canonical-source-artifacts/docs/reference/toolkit-source-contract.md"
+    },
+    {
+      "name": "client-toolkit-foundation-doc",
+      "repository": "github.com/vicondoa/d2b-toolkit",
+      "path": "canonical-source-artifacts/docs/reference/v2-foundation-crates.md"
+    },
+    {
+      "name": "provider-toolkit-contract-features",
+      "repository": "github.com/vicondoa/d2b-provider-toolkit",
+      "path": "contract/docs/reference/d2b-contracts-features.md"
+    },
+    {
+      "name": "provider-toolkit-contract-foundation-doc",
+      "repository": "github.com/vicondoa/d2b-provider-toolkit",
+      "path": "contract/docs/reference/v2-foundation-crates.md"
+    },
+    {
+      "name": "provider-toolkit-contract-identity-doc",
+      "repository": "github.com/vicondoa/d2b-provider-toolkit",
+      "path": "contract/docs/reference/v2-identity.md"
+    },
+    {
+      "name": "provider-toolkit-contract-identity-vectors",
+      "repository": "github.com/vicondoa/d2b-provider-toolkit",
+      "path": "contract/docs/reference/v2-identity-vectors.json"
+    },
+    {
+      "name": "provider-toolkit-contract-provider-doc",
+      "repository": "github.com/vicondoa/d2b-provider-toolkit",
+      "path": "contract/docs/reference/provider-contract-v2.md"
+    },
+    {
+      "name": "provider-toolkit-contract-provider-fixture",
+      "repository": "github.com/vicondoa/d2b-provider-toolkit",
+      "path": "contract/docs/reference/provider-contract-v2-fixture.json"
+    },
+    {
+      "name": "provider-toolkit-contract-provider-schema",
+      "repository": "github.com/vicondoa/d2b-provider-toolkit",
+      "path": "contract/docs/reference/provider-contract-v2.schema.json"
+    },
+    {
+      "name": "provider-toolkit-contract-readme",
+      "repository": "github.com/vicondoa/d2b-provider-toolkit",
+      "path": "contract/README.md"
+    },
+    {
+      "name": "provider-toolkit-contract-services-doc",
+      "repository": "github.com/vicondoa/d2b-provider-toolkit",
+      "path": "contract/docs/reference/v2-services.md"
+    },
+    {
+      "name": "provider-toolkit-contract-services-json",
+      "repository": "github.com/vicondoa/d2b-provider-toolkit",
+      "path": "contract/docs/reference/v2-services.json"
+    },
+    {
+      "name": "provider-toolkit-contract-services-schema",
+      "repository": "github.com/vicondoa/d2b-provider-toolkit",
+      "path": "contract/docs/reference/v2-services-schema.json"
+    },
+    {
+      "name": "provider-toolkit-contract-session-doc",
+      "repository": "github.com/vicondoa/d2b-provider-toolkit",
+      "path": "contract/docs/reference/component-session-v2.md"
+    },
+    {
+      "name": "provider-toolkit-contract-session-schema",
+      "repository": "github.com/vicondoa/d2b-provider-toolkit",
+      "path": "contract/docs/reference/component-session-v2-schema.json"
+    },
+    {
+      "name": "provider-toolkit-contract-session-vectors",
+      "repository": "github.com/vicondoa/d2b-provider-toolkit",
+      "path": "contract/docs/reference/component-session-v2-vectors.json"
+    },
+    {
+      "name": "provider-toolkit-contract-toolkit-source",
+      "repository": "github.com/vicondoa/d2b-provider-toolkit",
+      "path": "contract/docs/reference/toolkit-source-contract.md"
+    }
+  ],
+  "dependency_fingerprints": [
+    {
+      "name": "client-toolkit-cargo-manifest",
+      "repository": "github.com/vicondoa/d2b-toolkit",
+      "path": "Cargo.toml"
+    },
+    {
+      "name": "client-toolkit-flake-lock",
+      "repository": "github.com/vicondoa/d2b-toolkit",
+      "path": "flake.lock"
+    },
+    {
+      "name": "client-toolkit-source-pin",
+      "repository": "github.com/vicondoa/d2b-toolkit",
+      "path": "docs/reference/source-pin.json"
+    },
+    {
+      "name": "provider-toolkit-cargo-manifest",
+      "repository": "github.com/vicondoa/d2b-provider-toolkit",
+      "path": "Cargo.toml"
+    },
+    {
+      "name": "provider-toolkit-flake-lock",
+      "repository": "github.com/vicondoa/d2b-provider-toolkit",
+      "path": "flake.lock"
+    },
+    {
+      "name": "provider-toolkit-source-pin",
+      "repository": "github.com/vicondoa/d2b-provider-toolkit",
+      "path": "pins/d2b-provider-source.json"
+    },
+    {
+      "name": "weezterm-cargo-lock",
+      "repository": "github.com/vicondoa/weezterm",
+      "path": "Cargo.lock"
+    },
+    {
+      "name": "weezterm-cargo-manifest",
+      "repository": "github.com/vicondoa/weezterm",
+      "path": "Cargo.toml"
+    },
+    {
+      "name": "wlcontrol-cargo-manifest",
+      "repository": "github.com/vicondoa/d2b-wlcontrol",
+      "path": "Cargo.toml"
+    },
+    {
+      "name": "wlcontrol-flake-lock",
+      "repository": "github.com/vicondoa/d2b-wlcontrol",
+      "path": "flake.lock"
+    },
+    {
+      "name": "wlterm-cargo-manifest",
+      "repository": "github.com/vicondoa/d2b-wlterm",
+      "path": "Cargo.toml"
+    },
+    {
+      "name": "wlterm-flake-lock",
+      "repository": "github.com/vicondoa/d2b-wlterm",
+      "path": "flake.lock"
+    }
+  ],
+  "contract_fingerprints": [
+    {
+      "name": "client-toolkit-agents",
+      "repository": "github.com/vicondoa/d2b-toolkit",
+      "path": "AGENTS.md"
+    },
+    {
+      "name": "client-toolkit-changelog",
+      "repository": "github.com/vicondoa/d2b-toolkit",
+      "path": "CHANGELOG.md"
+    },
+    {
+      "name": "client-toolkit-source-contract",
+      "repository": "github.com/vicondoa/d2b-toolkit",
+      "path": "docs/reference/toolkit-source-contract.json"
+    },
+    {
+      "name": "delivery-authority",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "delivery/manifests/w9.json"
+    },
+    {
+      "name": "delivery-command",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/src/delivery/command.rs"
+    },
+    {
+      "name": "delivery-model",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/src/delivery/model.rs"
+    },
+    {
+      "name": "delivery-snapshot",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/src/delivery/snapshot.rs"
+    },
+    {
+      "name": "provider-toolkit-agents",
+      "repository": "github.com/vicondoa/d2b-provider-toolkit",
+      "path": "AGENTS.md"
+    },
+    {
+      "name": "provider-toolkit-changelog",
+      "repository": "github.com/vicondoa/d2b-provider-toolkit",
+      "path": "CHANGELOG.md"
+    },
+    {
+      "name": "provider-toolkit-source-pin-doc",
+      "repository": "github.com/vicondoa/d2b-provider-toolkit",
+      "path": "docs/reference/source-pin.md"
+    },
+    {
+      "name": "shared-changelog",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "CHANGELOG.md"
+    },
+    {
+      "name": "shared-delivery-cli-test",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/tests/delivery_cli.rs"
+    },
+    {
+      "name": "shared-delivery-policy",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "delivery/shared-contracts.json"
+    },
+    {
+      "name": "shared-delivery-reference",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "docs/reference/delivery-tooling.md"
+    },
+    {
+      "name": "shared-test-policy",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "tests/AGENTS.md"
+    },
+    {
+      "name": "toolkit-sibling-coordination",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "docs/adr/0045-toolkit-sibling-coordination.json"
+    },
+    {
+      "name": "toolkit-source-contract",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "docs/reference/toolkit-source-contract.json"
+    },
+    {
+      "name": "weezterm-agents",
+      "repository": "github.com/vicondoa/weezterm",
+      "path": "AGENTS.md"
+    },
+    {
+      "name": "weezterm-provider-doc",
+      "repository": "github.com/vicondoa/weezterm",
+      "path": "docs/d2b-provider.md"
+    },
+    {
+      "name": "wlcontrol-agents",
+      "repository": "github.com/vicondoa/d2b-wlcontrol",
+      "path": "AGENTS.md"
+    },
+    {
+      "name": "wlterm-agents",
+      "repository": "github.com/vicondoa/d2b-wlterm",
+      "path": "AGENTS.md"
+    }
+  ]
+}

@@ -44,6 +44,19 @@ deprecations ship one minor release before removal.
   registration. Suffixed component branches remain denied. The predecessor
   prep still excludes `delivery/manifests/w8.json` and any Cargo workspace or
   lockfile content change.
+- Added `delivery/manifests/w9.json`, the checked-in W9 (toolkit and sibling
+  cutover) delivery authority spanning all six ordinary open pull requests
+  across `d2b`, `d2b-toolkit`, `d2b-provider-toolkit`, `d2b-wlcontrol`,
+  `d2b-wlterm`, and `weezterm`: their exact trunk/integration refs, stack
+  node/dependency topology, required GitHub check authorities, focused
+  per-repository local validations, and generated-artifact/dependency/contract
+  fingerprint inventories. W9 remains independent of W8 except the
+  coordination doc's explicitly blocked live-routing features.
+- Added focused xtask tests proving the W9 manifest's exact six-repository
+  membership, PR/ref/dependency graph (including acyclicity), unique wave
+  selection, and the absence of duplicate toolkit DTO ownership between the
+  canonical protocol-source contract and each sibling's legacy duplicate
+  sources slated for deletion.
 - Added bundle version 13 discovery for private observability
   secret-generation metadata, allowing the integrated runtime wave to consume
   the contract without a hardcoded path.
