@@ -275,13 +275,12 @@
       "timeout_seconds": 1800
     },
     {
-      "id": "weezterm-precommit",
+      "id": "weezterm-source-build",
       "argv": [
         "nix",
-        "develop",
-        "--command",
-        "make",
-        "precommit"
+        "build",
+        ".#source",
+        "--no-link"
       ],
       "cwd": {
         "repository": "github.com/vicondoa/weezterm",

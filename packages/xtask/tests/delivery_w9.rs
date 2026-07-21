@@ -460,8 +460,8 @@ fn w9_validations_use_detached_checkout_hermetic_toolchains() {
         ("wlcontrol-flake", &["nix", "flake", "check"][..]),
         ("wlterm-flake", &["nix", "flake", "check"][..]),
         (
-            "weezterm-precommit",
-            &["nix", "develop", "--command", "make", "precommit"][..],
+            "weezterm-source-build",
+            &["nix", "build", ".#source", "--no-link"][..],
         ),
     ] {
         assert_eq!(
@@ -478,6 +478,7 @@ fn w9_validations_use_detached_checkout_hermetic_toolchains() {
         "wlterm-clippy",
         "wlterm-fmt",
         "wlterm-test",
+        "weezterm-precommit",
     ] {
         assert!(
             !validations.contains_key(removed),

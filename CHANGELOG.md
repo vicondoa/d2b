@@ -455,8 +455,8 @@ deprecations ship one minor release before removal.
   load without changing production handshake deadlines.
 - Replaced W9 validator commands that depended on ambient tools, initialized
   submodules, or adjacent toolkit path dependencies with candidate-pinned Nix
-  checks and development-shell gates that run in the delivery runner's
-  detached, read-only checkout.
+  checks and the WeezTerm flake's explicit source build, all runnable from the
+  delivery runner's detached, read-only checkout.
 - Advanced `docs/adr/0045-toolkit-sibling-coordination.json`'s
   `client-toolkit-distribution` `auditedRevision` and the `wlterm`,
   `wlcontrol`, and `weezterm` `consumesDistribution.revision` pins from the
