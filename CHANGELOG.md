@@ -55,6 +55,21 @@ deprecations ship one minor release before removal.
   weezterm ownership exclusive-file-set was missing paths its own sibling
   commit had already modified (closed this round, with an open backlog item
   to add an automated ownership-diff check).
+- Added the checked-in W8 delivery authority (`delivery/manifests/w8.json`),
+  binding one repository and the single current stack node
+  (`adr0045-w8-integration` / PR #324) against `main`, a candidate-pinned
+  `nix develop --command make check` local validation for hermeticity in a
+  controlled detached checkout, the three live branch-protection required
+  checks (`check`, `eval`, `eval-shell-tests`), and a comprehensive
+  generated/dependency/contract fingerprint matrix covering every planned
+  integration surface named in
+  `tests/unit/nix/eval-cases/w8-integration-wave-plan.nix` plus the manifest's
+  own self-fingerprint. Added focused `packages/xtask/tests/delivery_w8.rs`
+  coverage for unique authority, stack-graph topology, required-command
+  hermeticity, and critical reserved-path fingerprint coverage, and extended
+  the checked-in per-wave manifest list assertion in `delivery_cli.rs` to
+  `w8`. This is integrator-owned manifest prep only: it does not flip
+  `shared-root-w8-manifest-seam` or edit the W8 wave plan.
 - Anchored W8 component dispatch to the landed `5ba02876` trusted policy root
   before manifest creation and parallel implementation launch.
 - Added the W8 shared prep phase A: extended the shared-contract policy and

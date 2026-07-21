@@ -65,7 +65,7 @@ fn checked_in_per_wave_delivery_manifests_are_unique_and_self_fingerprinted() {
     }
     assert_eq!(
         authorities.keys().map(String::as_str).collect::<Vec<_>>(),
-        ["w4", "w5", "w6", "w7", "w9"]
+        ["w4", "w5", "w6", "w7", "w8", "w9"]
     );
 }
 
