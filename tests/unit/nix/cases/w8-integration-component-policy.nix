@@ -147,14 +147,14 @@ in
     };
   };
 
-  "w8-integration-component-policy/existing-user-agent-boundary-is-ready" = {
+  "w8-integration-component-policy/user-agent-client-waits-for-service-seam" = {
     expr = {
       inherit (systemdUser) blockedExternalDependencies unmetDependencies valid;
     };
     expected = {
       blockedExternalDependencies = [ ];
-      unmetDependencies = [ ];
-      valid = true;
+      unmetDependencies = [ "user-agent-service-seam" ];
+      valid = false;
     };
   };
 }
