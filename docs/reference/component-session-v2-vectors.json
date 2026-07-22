@@ -965,5 +965,35 @@
         "responderToInitiator": "142046e59faf31284c2ad23461cd32499ca0172c295682a52356f08b42378bdf"
       }
     }
+  ],
+  "channelBindingDomainVersion": 1,
+  "channelBindingVectors": [
+    {
+      "fixtureId": "component-session-v2-channel-binding-runtime-systemd-user",
+      "service": "d2b.runtime.systemd-user.v2",
+      "transport": "unix-seqpacket",
+      "responderRole": "runtime-systemd-user-agent",
+      "uid": 1000,
+      "gid": 1000,
+      "expectedHex": "bde7b2097594091cdf14e092821aee1badc00d74e101b9ce1fd853f4a87a4aa1"
+    },
+    {
+      "fixtureId": "component-session-v2-channel-binding-runtime-systemd-user-cross-uid",
+      "service": "d2b.runtime.systemd-user.v2",
+      "transport": "unix-seqpacket",
+      "responderRole": "runtime-systemd-user-agent",
+      "uid": 65534,
+      "gid": 65534,
+      "expectedHex": "8f90acfc6af17e8f8df143ed1b339b435fbf24626003feba97f1cdacd815e74e"
+    },
+    {
+      "fixtureId": "component-session-v2-channel-binding-shell-supervisor",
+      "service": "d2b.shell.v2",
+      "transport": "unix-stream",
+      "responderRole": "shell-supervisor",
+      "uid": 1000,
+      "gid": 100,
+      "expectedHex": "c2f5d836699abbe215aa6131ce7865d811015c7532c40e2a61d2532c96dd42d7"
+    }
   ]
 }

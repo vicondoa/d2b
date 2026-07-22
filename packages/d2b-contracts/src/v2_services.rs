@@ -14,9 +14,10 @@ use sha2::{Digest as _, Sha256};
 
 use crate::{
     v2_component_session::{
-        BoundedVec, CorrelationId, IdempotencyKey, MAX_LOGICAL_MESSAGE_BYTES,
+        BoundedVec, CorrelationId, EndpointPolicy, EndpointPolicyIdentity, HandshakeOffer,
+        HandshakeRejectReason, IdempotencyKey, MAX_LOGICAL_MESSAGE_BYTES,
         MAX_NAMED_STREAM_QUEUE_BYTES, MAX_REQUEST_ATTACHMENTS, MAX_REQUEST_LIFETIME_MS,
-        RequestEnvelope, RequestId, TraceId,
+        RequestEnvelope, RequestId, ServicePackage, TraceId,
     },
     v2_identity::{
         ProviderId, ProviderType as IdentityProviderType, RealmId, RealmLabel, RealmPath, RoleId,
@@ -590,6 +591,191 @@ pub fn direct_guest_schema_fingerprint() -> [u8; 32] {
     )
 }
 
+/// A fixed, ordered set of [`ServicePackage`]s authenticated together over
+/// exactly one `ComponentSession` endpoint.
+///
+/// Compositions exist because some endpoints expose more than one ttrpc
+/// service over the same negotiated session. `EndpointPolicy`,
+/// `HandshakeOffer`, and `EndpointPolicyIdentity` each carry a single
+/// `service`/`schema_fingerprint` pair; a composition binds that single
+/// fingerprint to the *entire* ordered member set (via
+/// [`ordered_endpoint_fingerprint`]) so a client can never negotiate one
+/// member service in isolation against this endpoint's peer identity. The
+/// wire-visible `service` field is always the composition's `primary`
+/// member.
+#[derive(Debug, Clone, Copy)]
+pub struct ServiceComposition {
+    domain: &'static [u8],
+    primary: ServicePackage,
+    members: &'static [ServicePackage],
+}
+
+impl ServiceComposition {
+    /// The [`ServicePackage`] carried on the wire in
+    /// `EndpointPolicy`/`HandshakeOffer`/`EndpointPolicyIdentity.service` for
+    /// this composition. Always the first member.
+    pub const fn primary(&self) -> ServicePackage {
+        self.primary
+    }
+
+    /// The fixed, ordered member packages bound into this composition's
+    /// schema fingerprint.
+    pub fn members(&self) -> &'static [ServicePackage] {
+        self.members
+    }
+
+    /// `true` only when `service` is one of this composition's authenticated
+    /// members.
+    pub fn contains(&self, service: ServicePackage) -> bool {
+        self.members.contains(&service)
+    }
+
+    fn member_descriptors(&self) -> Vec<PackageSchemaDescriptor<'static>> {
+        self.members
+            .iter()
+            .map(|package| composition_member_descriptor(*package))
+            .collect()
+    }
+
+    /// The composed schema fingerprint binding every member's proto,
+    /// dependencies, and method inventory, in fixed order.
+    pub fn schema_fingerprint(&self) -> [u8; 32] {
+        ordered_endpoint_fingerprint(self.domain, &self.member_descriptors())
+    }
+
+    /// Build the canonical, fully-formed [`EndpointPolicyIdentity`] for this
+    /// composition: `service` is [`Self::primary`] and `schema_fingerprint`
+    /// is [`Self::schema_fingerprint`], so callers never hand-roll either
+    /// field and cannot drift from the frozen composition.
+    #[allow(clippy::too_many_arguments)]
+    pub fn endpoint_policy_identity(
+        &self,
+        purpose: crate::v2_component_session::EndpointPurpose,
+        purpose_class: crate::v2_component_session::PurposeClass,
+        initiator_role: crate::v2_component_session::EndpointRole,
+        responder_role: crate::v2_component_session::EndpointRole,
+        noise_profile: crate::v2_component_session::NoiseProfile,
+        limits: crate::v2_component_session::LimitProfile,
+        transport_binding: crate::v2_component_session::TransportBinding,
+        attachment_policy: crate::v2_component_session::AttachmentPolicy,
+    ) -> EndpointPolicyIdentity {
+        EndpointPolicyIdentity {
+            purpose,
+            purpose_class,
+            initiator_role,
+            responder_role,
+            service: self.primary,
+            schema_fingerprint: self.schema_fingerprint(),
+            noise_profile,
+            limits,
+            transport_binding,
+            attachment_policy,
+        }
+    }
+
+    /// Validate that `offer` matches `policy` exactly *and* that `policy`
+    /// itself is this exact composition — not merely some other single
+    /// service that happens to reuse [`Self::primary`]'s tag with an
+    /// unrelated fingerprint. This is the composition-aware entry point
+    /// endpoint offer/validation call sites must use instead of calling
+    /// `HandshakeOffer::validate_exact` directly for a composed endpoint.
+    pub fn validate_offer(
+        &self,
+        offer: &HandshakeOffer,
+        policy: &EndpointPolicy,
+    ) -> Result<(), HandshakeRejectReason> {
+        self.validate_policy(policy)?;
+        offer.validate_exact(policy)
+    }
+
+    /// Validate that a generation-free [`EndpointPolicyIdentity`] matches
+    /// `policy` exactly and that `policy` is this exact composition.
+    pub fn validate_identity(
+        &self,
+        identity: &EndpointPolicyIdentity,
+        policy: &EndpointPolicy,
+    ) -> Result<(), HandshakeRejectReason> {
+        self.validate_policy(policy)?;
+        identity.validate_exact(policy)
+    }
+
+    /// Reject a `policy` whose `service`/`schema_fingerprint` do not match
+    /// this exact composition.
+    pub fn validate_policy(&self, policy: &EndpointPolicy) -> Result<(), HandshakeRejectReason> {
+        if policy.service != self.primary {
+            return Err(HandshakeRejectReason::ServiceMismatch);
+        }
+        if policy.schema_fingerprint != self.schema_fingerprint() {
+            return Err(HandshakeRejectReason::SchemaMismatch);
+        }
+        Ok(())
+    }
+}
+
+type CompositionMemberProtoTuple = (
+    &'static str,
+    &'static [u8],
+    &'static [(&'static str, &'static [u8])],
+);
+
+fn composition_member_descriptor(package: ServicePackage) -> PackageSchemaDescriptor<'static> {
+    let spec = SERVICE_INVENTORY
+        .iter()
+        .find(|service| service.package == package.as_str())
+        .unwrap_or_else(|| {
+            panic!(
+                "composition member {} missing from inventory",
+                package.as_str()
+            )
+        });
+    let (role, proto, dependencies): CompositionMemberProtoTuple = match package {
+        ServicePackage::RuntimeSystemdUserV2 => (
+            "runtime-systemd-user-service",
+            include_bytes!("../proto/v2/runtime_systemd_user.proto"),
+            &[("d2b.common.v2", include_bytes!("../proto/v2/common.proto"))],
+        ),
+        ServicePackage::ShellV2 => (
+            "shell-service",
+            include_bytes!("../proto/v2/shell.proto"),
+            &[("d2b.common.v2", include_bytes!("../proto/v2/common.proto"))],
+        ),
+        ServicePackage::TtyV2 => (
+            "tty-service",
+            include_bytes!("../proto/v2/tty.proto"),
+            &[("d2b.common.v2", include_bytes!("../proto/v2/common.proto"))],
+        ),
+        other => panic!("{} is not a supported composition member", other.as_str()),
+    };
+    PackageSchemaDescriptor {
+        role,
+        service: spec,
+        proto,
+        dependencies,
+    }
+}
+
+/// The one frozen composition for the `runtime-systemd-user` endpoint:
+/// `RuntimeSystemdUserV2` is the wire-visible primary service, but its
+/// schema fingerprint binds the ordered `RuntimeSystemdUserV2` + `ShellV2` +
+/// `TtyV2` member set. This is the *only* way `ShellV2`/`TtyV2` may be
+/// reached on this endpoint; there is no unauthenticated extra service and
+/// no second listener.
+pub static RUNTIME_SYSTEMD_USER_COMPOSITION: ServiceComposition = ServiceComposition {
+    domain: b"d2b-runtime-systemd-user-composition-schema-v1\0",
+    primary: ServicePackage::RuntimeSystemdUserV2,
+    members: &[
+        ServicePackage::RuntimeSystemdUserV2,
+        ServicePackage::ShellV2,
+        ServicePackage::TtyV2,
+    ],
+};
+
+/// Convenience wrapper for [`RUNTIME_SYSTEMD_USER_COMPOSITION`]'s schema
+/// fingerprint.
+pub fn runtime_systemd_user_composition_schema_fingerprint() -> [u8; 32] {
+    RUNTIME_SYSTEMD_USER_COMPOSITION.schema_fingerprint()
+}
+
 fn direct_service_schema_fingerprint(service: &ServiceSpec) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(b"d2b-service-schema-v2\0");
@@ -1120,6 +1306,295 @@ mod endpoint_fingerprint_tests {
             public_daemon_schema_fingerprint(),
             direct_service_schema_fingerprint(daemon())
         );
+    }
+}
+
+#[cfg(test)]
+mod service_composition_tests {
+    use super::*;
+    use crate::v2_component_session::{
+        AttachmentPolicy, AttachmentPolicyKind, EndpointPurpose, EndpointRole,
+        IdentityEvidenceRequirement, LimitProfile, Locality, NoiseProfile, PurposeClass,
+        TransportBinding, TransportClass,
+    };
+
+    fn transport_binding() -> TransportBinding {
+        TransportBinding {
+            transport: TransportClass::UnixSeqpacket,
+            locality: Locality::HostLocal,
+            channel_binding: [0x11; 32],
+            identity_evidence: IdentityEvidenceRequirement::DirectionalUnix,
+        }
+    }
+
+    fn attachment_policy() -> AttachmentPolicy {
+        AttachmentPolicy {
+            kind: AttachmentPolicyKind::PacketAtomic,
+            max_per_packet: 1,
+            max_per_request: 1,
+            max_per_operation: 1,
+            max_per_session: 64,
+            credentials_allowed: false,
+        }
+    }
+
+    fn composed_identity() -> EndpointPolicyIdentity {
+        RUNTIME_SYSTEMD_USER_COMPOSITION.endpoint_policy_identity(
+            EndpointPurpose::RuntimeSystemdUser,
+            PurposeClass::Local,
+            EndpointRole::LocalRootController,
+            EndpointRole::RuntimeSystemdUserAgent,
+            NoiseProfile::Nn25519ChaChaPolySha256,
+            LimitProfile::local_default(),
+            transport_binding(),
+            attachment_policy(),
+        )
+    }
+
+    #[test]
+    fn composition_binds_exactly_the_three_ordered_members() {
+        assert_eq!(
+            RUNTIME_SYSTEMD_USER_COMPOSITION.primary(),
+            ServicePackage::RuntimeSystemdUserV2
+        );
+        assert_eq!(
+            RUNTIME_SYSTEMD_USER_COMPOSITION.members(),
+            &[
+                ServicePackage::RuntimeSystemdUserV2,
+                ServicePackage::ShellV2,
+                ServicePackage::TtyV2,
+            ]
+        );
+        assert!(RUNTIME_SYSTEMD_USER_COMPOSITION.contains(ServicePackage::ShellV2));
+        assert!(RUNTIME_SYSTEMD_USER_COMPOSITION.contains(ServicePackage::TtyV2));
+        assert!(!RUNTIME_SYSTEMD_USER_COMPOSITION.contains(ServicePackage::UserV2));
+    }
+
+    #[test]
+    fn composition_fingerprint_differs_from_any_single_member_fingerprint() {
+        let composed = RUNTIME_SYSTEMD_USER_COMPOSITION.schema_fingerprint();
+        assert_eq!(
+            composed,
+            runtime_systemd_user_composition_schema_fingerprint()
+        );
+        let runtime_only = service_schema_fingerprint(
+            SERVICE_INVENTORY
+                .iter()
+                .find(|service| service.package == "d2b.runtime.systemd-user.v2")
+                .unwrap(),
+        );
+        let shell_only = service_schema_fingerprint(
+            SERVICE_INVENTORY
+                .iter()
+                .find(|service| service.package == "d2b.shell.v2")
+                .unwrap(),
+        );
+        let tty_only = service_schema_fingerprint(
+            SERVICE_INVENTORY
+                .iter()
+                .find(|service| service.package == "d2b.tty.v2")
+                .unwrap(),
+        );
+        assert_ne!(composed, runtime_only);
+        assert_ne!(composed, shell_only);
+        assert_ne!(composed, tty_only);
+    }
+
+    #[test]
+    fn composition_fingerprint_is_order_sensitive_and_member_sensitive() {
+        let baseline = RUNTIME_SYSTEMD_USER_COMPOSITION;
+        let reordered = ServiceComposition {
+            domain: baseline.domain,
+            primary: ServicePackage::RuntimeSystemdUserV2,
+            members: &[
+                ServicePackage::RuntimeSystemdUserV2,
+                ServicePackage::TtyV2,
+                ServicePackage::ShellV2,
+            ],
+        };
+        assert_ne!(
+            baseline.schema_fingerprint(),
+            reordered.schema_fingerprint()
+        );
+
+        let runtime_only = ServiceComposition {
+            domain: baseline.domain,
+            primary: ServicePackage::RuntimeSystemdUserV2,
+            members: &[ServicePackage::RuntimeSystemdUserV2],
+        };
+        assert_ne!(
+            baseline.schema_fingerprint(),
+            runtime_only.schema_fingerprint()
+        );
+    }
+
+    #[test]
+    fn validate_policy_rejects_a_standalone_shell_service_reusing_the_primary_tag() {
+        let composed_policy = composed_identity()
+            .with_generation(7)
+            .expect("composed policy is valid");
+        assert_eq!(
+            RUNTIME_SYSTEMD_USER_COMPOSITION.validate_policy(&composed_policy),
+            Ok(())
+        );
+
+        let mut standalone_policy = composed_policy.clone();
+        standalone_policy.schema_fingerprint = service_schema_fingerprint(
+            SERVICE_INVENTORY
+                .iter()
+                .find(|service| service.package == "d2b.runtime.systemd-user.v2")
+                .unwrap(),
+        );
+        assert_eq!(
+            RUNTIME_SYSTEMD_USER_COMPOSITION.validate_policy(&standalone_policy),
+            Err(HandshakeRejectReason::SchemaMismatch)
+        );
+
+        let mut wrong_primary = composed_policy;
+        wrong_primary.service = ServicePackage::ShellV2;
+        assert_eq!(
+            RUNTIME_SYSTEMD_USER_COMPOSITION.validate_policy(&wrong_primary),
+            Err(HandshakeRejectReason::ServiceMismatch)
+        );
+    }
+
+    #[test]
+    fn validate_offer_and_validate_identity_agree_with_validate_policy() {
+        let identity = composed_identity();
+        let policy = identity.with_generation(3).unwrap();
+        let offer = HandshakeOffer::from(policy.clone());
+        assert_eq!(
+            RUNTIME_SYSTEMD_USER_COMPOSITION.validate_offer(&offer, &policy),
+            Ok(())
+        );
+        assert_eq!(
+            RUNTIME_SYSTEMD_USER_COMPOSITION.validate_identity(&identity, &policy),
+            Ok(())
+        );
+
+        let mut wrong_generation_offer = offer;
+        wrong_generation_offer.reconnect_generation = 4;
+        assert_eq!(
+            RUNTIME_SYSTEMD_USER_COMPOSITION.validate_offer(&wrong_generation_offer, &policy),
+            Err(HandshakeRejectReason::GenerationMismatch)
+        );
+    }
+}
+
+#[cfg(test)]
+mod bounded_resource_observation_tests {
+    use super::*;
+
+    fn digest(byte: u8) -> [u8; DIGEST_BYTES] {
+        [byte; DIGEST_BYTES]
+    }
+
+    #[test]
+    fn accepts_a_well_formed_resource_summary_and_round_trips_through_wire_validation() {
+        let observation = bounded_resource_observation(
+            "shell-a",
+            Generation::new(1).unwrap(),
+            common::ObservationState::OBSERVATION_STATE_RUNNING,
+            digest(0x11),
+        )
+        .unwrap();
+        assert_eq!(observation.resource_id, "shell-a");
+        assert_eq!(observation.generation, 1);
+        assert_eq!(
+            observation.state,
+            EnumOrUnknown::new(common::ObservationState::OBSERVATION_STATE_RUNNING)
+        );
+        assert_eq!(observation.digest, digest(0x11).to_vec());
+        assert!(validate_observations(std::slice::from_ref(&observation)).is_ok());
+    }
+
+    #[test]
+    fn rejects_an_unbounded_or_malformed_resource_id() {
+        assert_eq!(
+            bounded_resource_observation(
+                "Shell-A",
+                Generation::new(1).unwrap(),
+                common::ObservationState::OBSERVATION_STATE_RUNNING,
+                digest(0x11),
+            ),
+            Err(ServiceContractError::InvalidId)
+        );
+        assert_eq!(
+            bounded_resource_observation(
+                "",
+                Generation::new(1).unwrap(),
+                common::ObservationState::OBSERVATION_STATE_RUNNING,
+                digest(0x11),
+            ),
+            Err(ServiceContractError::InvalidId)
+        );
+    }
+
+    #[test]
+    fn rejects_the_unspecified_state_and_the_all_zero_digest() {
+        assert_eq!(
+            bounded_resource_observation(
+                "shell-a",
+                Generation::new(1).unwrap(),
+                common::ObservationState::OBSERVATION_STATE_UNSPECIFIED,
+                digest(0x11),
+            ),
+            Err(ServiceContractError::InvalidEnum)
+        );
+        assert_eq!(
+            bounded_resource_observation(
+                "shell-a",
+                Generation::new(1).unwrap(),
+                common::ObservationState::OBSERVATION_STATE_RUNNING,
+                digest(0x00),
+            ),
+            Err(ServiceContractError::InvalidDigest)
+        );
+    }
+
+    #[test]
+    fn bounded_resource_observations_rejects_an_oversized_list_before_any_entry_is_checked() {
+        let generation = Generation::new(1).unwrap();
+        let entries: Vec<ResourceObservationInput<'_>> = (0..=MAX_OBSERVATIONS)
+            .map(|_| ResourceObservationInput {
+                resource_id: "shell-a",
+                generation,
+                state: common::ObservationState::OBSERVATION_STATE_UNSPECIFIED,
+                digest: digest(0x00),
+            })
+            .collect();
+        assert_eq!(entries.len(), MAX_OBSERVATIONS + 1);
+        assert_eq!(
+            bounded_resource_observations(&entries),
+            Err(ServiceContractError::BoundExceeded)
+        );
+    }
+
+    #[test]
+    fn bounded_resource_observations_maps_a_bounded_shell_summary_style_list_into_a_valid_service_response()
+     {
+        let generation = Generation::new(2).unwrap();
+        let entries = [
+            ResourceObservationInput {
+                resource_id: "shell-a",
+                generation,
+                state: common::ObservationState::OBSERVATION_STATE_RUNNING,
+                digest: digest(0x22),
+            },
+            ResourceObservationInput {
+                resource_id: "shell-b",
+                generation,
+                state: common::ObservationState::OBSERVATION_STATE_STOPPED,
+                digest: digest(0x33),
+            },
+        ];
+        let observations = bounded_resource_observations(&entries).unwrap();
+        assert_eq!(observations.len(), 2);
+
+        let mut response = common::ServiceResponse::new();
+        response.outcome = EnumOrUnknown::new(common::Outcome::OUTCOME_SUCCEEDED);
+        response.observations = observations;
+        assert!(response.validate_wire(false).is_ok());
     }
 }
 
@@ -4798,6 +5273,77 @@ fn validate_observations(values: &[common::Observation]) -> Result<(), ServiceCo
         }
     }
     Ok(())
+}
+
+/// Builds one bound-checked [`common::Observation`] from a resource id,
+/// generation, closed lifecycle state, and content digest.
+///
+/// This is the sanctioned constructor for serializing a caller's own
+/// resource summary — for example a component-session responder's local
+/// `ShellSummary { resource_id, state }` — into an existing
+/// [`common::ServiceResponse::observations`] /
+/// [`common::ProviderResponse::observations`] entry. The caller maps its own
+/// state to one of the already-declared [`common::ObservationState`] values
+/// and calls this function for the bounding/digest invariants that
+/// [`validate_observations`] enforces on receipt, so no new wire schema is
+/// ever invented for a service's summary shape. Any service whose schema
+/// contributes observations through this helper is expected to be a member
+/// of the composition whose [`ServiceComposition::schema_fingerprint`]
+/// binds it.
+pub fn bounded_resource_observation(
+    resource_id: &str,
+    generation: Generation,
+    state: common::ObservationState,
+    digest: [u8; DIGEST_BYTES],
+) -> Result<common::Observation, ServiceContractError> {
+    if !bounded_opaque(resource_id, MAX_SERVICE_STRING_BYTES) {
+        return Err(ServiceContractError::InvalidId);
+    }
+    if state == common::ObservationState::OBSERVATION_STATE_UNSPECIFIED {
+        return Err(ServiceContractError::InvalidEnum);
+    }
+    let digest = digest.to_vec();
+    if !required_digest(&digest) {
+        return Err(ServiceContractError::InvalidDigest);
+    }
+    let mut observation = common::Observation::new();
+    observation.resource_id = resource_id.to_owned();
+    observation.generation = generation.get();
+    observation.state = EnumOrUnknown::new(state);
+    observation.digest = digest;
+    Ok(observation)
+}
+
+/// One resource summary to map into a bound-checked [`common::Observation`]
+/// via [`bounded_resource_observations`].
+pub struct ResourceObservationInput<'a> {
+    pub resource_id: &'a str,
+    pub generation: Generation,
+    pub state: common::ObservationState,
+    pub digest: [u8; DIGEST_BYTES],
+}
+
+/// Builds a bound-checked observations vector from a slice of resource
+/// summaries, rejecting an oversized caller list before any single entry is
+/// validated — the same [`MAX_OBSERVATIONS`] bound
+/// [`validate_observations`] enforces on receipt.
+pub fn bounded_resource_observations(
+    entries: &[ResourceObservationInput<'_>],
+) -> Result<Vec<common::Observation>, ServiceContractError> {
+    if entries.len() > MAX_OBSERVATIONS {
+        return Err(ServiceContractError::BoundExceeded);
+    }
+    entries
+        .iter()
+        .map(|entry| {
+            bounded_resource_observation(
+                entry.resource_id,
+                entry.generation,
+                entry.state,
+                entry.digest,
+            )
+        })
+        .collect()
 }
 
 impl StrictWireMessage for common::ServiceResponse {

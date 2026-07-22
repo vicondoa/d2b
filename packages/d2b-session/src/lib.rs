@@ -14,6 +14,7 @@ mod engine;
 mod error;
 mod fragmentation;
 mod handshake;
+mod inbound_call;
 mod lifecycle;
 mod metrics;
 mod record;
@@ -36,6 +37,7 @@ pub use handshake::{
     encode_generation_discovery_request, encode_generation_discovery_response, encode_offer,
     is_generation_discovery_request, negotiate_offer, x25519_public_key,
 };
+pub use inbound_call::InboundCallGuard;
 pub use lifecycle::{KeepaliveAction, SessionLifecycle, SessionPhase};
 pub use metrics::{MetricEvent, MetricsSink, NoopMetrics};
 pub use record::{ProtectedRecord, RecordProtector};

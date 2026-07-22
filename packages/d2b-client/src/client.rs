@@ -14,7 +14,7 @@ use d2b_contracts::{
     },
     v2_identity::{WorkloadId, WorkloadName},
     v2_services::{
-        StrictWireMessage,
+        RUNTIME_SYSTEMD_USER_COMPOSITION, StrictWireMessage,
         common::{
             self, ErrorKind as WireErrorKind, Outcome, RetryClass as WireRetryClass, ServiceRequest,
         },
@@ -367,6 +367,42 @@ impl ConnectedClient {
         Ok(Self {
             target: self.target.proxy_owner_service(owner, ServiceKind::Guest),
             service: self.service.proxy(ServiceKind::Guest),
+            driver: Arc::clone(&self.driver),
+            generation: self.generation,
+            limits: self.limits,
+            clock: Arc::clone(&self.clock),
+            active_streams: Arc::clone(&self.active_streams),
+            stream_dispatcher: Arc::clone(&self.stream_dispatcher),
+        })
+    }
+
+    /// Retargets an already-authenticated RuntimeSystemdUser-composition
+    /// session to one of that SAME composition's other members
+    /// (`RuntimeSystemdUser`, `Shell`, or `Tty`), reusing the existing
+    /// driver/ttrpc socket instead of negotiating a new session.
+    ///
+    /// This is the sanctioned way to reach the Shell/Tty generated ttrpc
+    /// clients for this endpoint: they are exposed only from inside the one
+    /// authenticated composition session established for
+    /// [`ServiceKind::RuntimeSystemdUser`], [`ServiceKind::Shell`], or
+    /// [`ServiceKind::Tty`] — never via an independent handshake against a
+    /// standalone `ShellV2`/`TtyV2` identity. Both `self` and `member` must
+    /// already be members of [`RUNTIME_SYSTEMD_USER_COMPOSITION`]; anything
+    /// else is rejected before any proxying occurs.
+    pub fn runtime_systemd_user_composition_member_proxy(
+        &self,
+        member: ServiceKind,
+    ) -> Result<Self, ClientError> {
+        if !RUNTIME_SYSTEMD_USER_COMPOSITION.contains(service_package(self.service.kind()))
+            || !RUNTIME_SYSTEMD_USER_COMPOSITION.contains(service_package(member))
+        {
+            return Err(ClientError::TransportPolicyMismatch);
+        }
+        Ok(Self {
+            target: self
+                .target
+                .proxy_owner_service(self.target.owner().clone(), member),
+            service: self.service.proxy(member),
             driver: Arc::clone(&self.driver),
             generation: self.generation,
             limits: self.limits,

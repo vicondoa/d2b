@@ -27,8 +27,9 @@ mod vsock;
 
 #[cfg(feature = "host-socket")]
 pub use adapter::{
-    DescriptorPolicyResolver, OwnedUnixAttachment, PathnamePeerVerifier, PeerIdentityPolicy,
-    UnixAttachmentPayload, UnixSeqpacketTransport, UnixStreamTransport,
+    DescriptorAllowlistEntry, DescriptorPolicyResolver, OwnedUnixAttachment, PathnamePeerVerifier,
+    PeerIdentityPolicy, UnixAttachmentPayload, UnixSeqpacketTransport, UnixStreamTransport,
+    negotiated_descriptor_policy_resolver,
 };
 #[cfg(feature = "host-socket")]
 pub use credit::{
@@ -39,7 +40,7 @@ pub use descriptor::ReceivedPacket;
 #[cfg(feature = "host-socket")]
 pub use descriptor::{
     AcceptedAttachment, DescriptorPolicy, FirstPacketCredentials, ObjectIdentity, PeerCredentials,
-    PidfdIdentityPolicy, VerifiedPacket,
+    PidfdIdentityPolicy, ResponderIdentity, VerifiedPacket,
 };
 #[cfg(feature = "host-socket")]
 pub use error::UnixSessionError;

@@ -10,13 +10,14 @@ use std::{
 use async_trait::async_trait;
 use d2b_contracts::{
     v2_component_session::{
-        AttachmentPolicy, EndpointPolicyIdentity, EndpointPurpose, EndpointRole,
-        IdentityEvidenceRequirement, LimitProfile, Locality, NoiseProfile, PurposeClass, RequestId,
-        ServicePackage, SessionErrorCode, TransportBinding, TransportClass,
+        AttachmentPolicy, AttachmentPolicyKind, EndpointPolicyIdentity, EndpointPurpose,
+        EndpointRole, IdentityEvidenceRequirement, LimitProfile, Locality, NoiseProfile,
+        PurposeClass, RequestId, ServicePackage, SessionErrorCode, TransportBinding,
+        TransportClass, directional_channel_binding,
     },
     v2_services::{
-        SERVICE_INVENTORY, broker, common, decode_strict, guest, service_schema_fingerprint,
-        terminal,
+        RUNTIME_SYSTEMD_USER_COMPOSITION, SERVICE_INVENTORY, broker, common, decode_strict, guest,
+        service_schema_fingerprint, terminal,
     },
 };
 use d2b_session::{
@@ -338,6 +339,93 @@ pub fn local_daemon_endpoint_identity(
     Ok(identity)
 }
 
+/// The canonical, fully-formed [`EndpointPolicyIdentity`] for the frozen
+/// RuntimeSystemdUser+Shell+Tty composition (see
+/// [`RUNTIME_SYSTEMD_USER_COMPOSITION`]).
+///
+/// `responder_uid`/`responder_gid` are the target runtime-systemd-user
+/// helper's own identity — known out of band by the initiator (the
+/// local-root controller always connects to a specific, already-known
+/// target user's session) and never supplied by the peer on the wire. The
+/// helper independently derives the same channel-binding digest from its
+/// own process identity via
+/// `d2b_session_unix::ResponderIdentity::current().channel_binding(..)`, so
+/// this function and that responder-side call must keep agreeing on
+/// [`d2b_contracts::v2_component_session::directional_channel_binding`]'s
+/// domain, transport, and role inputs.
+///
+/// `service`/`schema_fingerprint` come from
+/// [`ServiceComposition::endpoint_policy_identity`], so a caller can never
+/// drift from the frozen composition by hand-rolling either field: any of
+/// [`ServiceKind::RuntimeSystemdUser`], [`ServiceKind::Shell`], or
+/// [`ServiceKind::Tty`] negotiate this SAME identity, and none of them can
+/// be reached with a standalone single-service identity instead.
+///
+/// This crate's own (non-test) code never calls this directly: it is the
+/// initiator-side constructor a future external caller (the local-root
+/// controller / `d2bd`) uses to build the identity it hands to
+/// [`HostSocketConnector::new`]/[`HostSocketConnector::from_seqpacket_fd`]
+/// before calling [`crate::Client::connect`] with
+/// [`ServiceKind::RuntimeSystemdUser`]. It is covered by this module's own
+/// tests today; exposing it outside this crate additionally requires a
+/// follow-up `pub use` in `lib.rs`.
+#[allow(dead_code)]
+pub fn runtime_systemd_user_composition_endpoint_identity(
+    responder_uid: u32,
+    responder_gid: u32,
+) -> Result<EndpointPolicyIdentity, ClientError> {
+    let identity = RUNTIME_SYSTEMD_USER_COMPOSITION.endpoint_policy_identity(
+        EndpointPurpose::RuntimeSystemdUser,
+        PurposeClass::Local,
+        EndpointRole::LocalRootController,
+        EndpointRole::RuntimeSystemdUserAgent,
+        NoiseProfile::Nn25519ChaChaPolySha256,
+        LimitProfile::local_default(),
+        TransportBinding {
+            transport: TransportClass::UnixSeqpacket,
+            locality: Locality::HostLocal,
+            channel_binding: directional_channel_binding(
+                RUNTIME_SYSTEMD_USER_COMPOSITION.primary(),
+                TransportClass::UnixSeqpacket,
+                EndpointRole::RuntimeSystemdUserAgent,
+                responder_uid,
+                responder_gid,
+            ),
+            identity_evidence: IdentityEvidenceRequirement::DirectionalUnix,
+        },
+        AttachmentPolicy {
+            kind: AttachmentPolicyKind::PacketAtomic,
+            max_per_packet: 1,
+            max_per_request: 1,
+            max_per_operation: 1,
+            max_per_session: 64,
+            credentials_allowed: false,
+        },
+    );
+    identity
+        .validate_local_generation_discovery()
+        .map_err(|_| ClientError::TransportPolicyMismatch)?;
+    Ok(identity)
+}
+
+/// Whether `identity` may be used to negotiate `service` on this connector.
+///
+/// A composition member (currently `RuntimeSystemdUser`, `Shell`, and `Tty`)
+/// is only admitted when `identity` carries the exact frozen composition tag
+/// — [`RUNTIME_SYSTEMD_USER_COMPOSITION`]'s primary package and schema
+/// fingerprint — never a standalone single-service identity for that same
+/// member package. Every non-member service keeps the prior exact
+/// service-package equality check unchanged.
+fn identity_admits_service(identity: &EndpointPolicyIdentity, service: ServiceKind) -> bool {
+    let expected = service_package(service);
+    if RUNTIME_SYSTEMD_USER_COMPOSITION.contains(expected) {
+        identity.service == RUNTIME_SYSTEMD_USER_COMPOSITION.primary()
+            && identity.schema_fingerprint == RUNTIME_SYSTEMD_USER_COMPOSITION.schema_fingerprint()
+    } else {
+        identity.service == expected
+    }
+}
+
 impl fmt::Debug for HostSocketConnector {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("HostSocketConnector([redacted])")
@@ -360,7 +448,7 @@ impl ComponentSessionConnector for HostSocketConnector {
             .await
             .take()
             .ok_or(ClientError::ConnectFailed)?;
-        if pending.identity.service != service_package(service) {
+        if !identity_admits_service(&pending.identity, service) {
             return Err(ClientError::InvalidService);
         }
         let limits = pending.identity.limits;
@@ -817,6 +905,7 @@ mod tests {
         Cancellation, OwnedAttachment, Result as SessionResult, SessionError, SessionEvent,
         StreamEvent, StreamId,
     };
+    use d2b_session_unix::{PeerIdentityPolicy, negotiated_descriptor_policy_resolver};
     use protobuf::MessageField;
     use tokio::{io::AsyncWriteExt, sync::Notify};
 
@@ -1298,6 +1387,333 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(connected.session_generation(), generation);
+        assert_eq!(server.await.unwrap().generation(), generation);
+    }
+
+    fn standalone_service_identity(
+        package: ServicePackage,
+        responder_role: EndpointRole,
+        attachment_policy: AttachmentPolicy,
+    ) -> EndpointPolicyIdentity {
+        let service = SERVICE_INVENTORY
+            .iter()
+            .find(|service| service.package == package.as_str())
+            .unwrap();
+        EndpointPolicyIdentity {
+            purpose: EndpointPurpose::RuntimeSystemdUser,
+            purpose_class: PurposeClass::Local,
+            initiator_role: EndpointRole::LocalRootController,
+            responder_role,
+            service: package,
+            schema_fingerprint: service_schema_fingerprint(service),
+            noise_profile: NoiseProfile::Nn25519ChaChaPolySha256,
+            limits: LimitProfile::local_default(),
+            transport_binding: TransportBinding {
+                transport: TransportClass::UnixSeqpacket,
+                locality: Locality::HostLocal,
+                channel_binding: directional_channel_binding(
+                    package,
+                    TransportClass::UnixSeqpacket,
+                    responder_role,
+                    nix::unistd::Uid::effective().as_raw(),
+                    nix::unistd::Gid::effective().as_raw(),
+                ),
+                identity_evidence: IdentityEvidenceRequirement::DirectionalUnix,
+            },
+            attachment_policy,
+        }
+    }
+
+    #[test]
+    fn identity_admits_service_gates_composition_members_to_the_frozen_composition_identity() {
+        let uid = nix::unistd::Uid::effective().as_raw();
+        let gid = nix::unistd::Gid::effective().as_raw();
+        let composed = runtime_systemd_user_composition_endpoint_identity(uid, gid).unwrap();
+        assert!(identity_admits_service(
+            &composed,
+            ServiceKind::RuntimeSystemdUser
+        ));
+        assert!(identity_admits_service(&composed, ServiceKind::Shell));
+        assert!(identity_admits_service(&composed, ServiceKind::Tty));
+        assert!(!identity_admits_service(&composed, ServiceKind::Daemon));
+
+        // A standalone identity that only claims the composition's primary
+        // service package, but with that single service's OWN (uncomposed)
+        // fingerprint, must never be admitted for any composition member —
+        // the fingerprint must be the exact bound composition, not merely a
+        // matching primary tag.
+        let runtime_only = standalone_service_identity(
+            ServicePackage::RuntimeSystemdUserV2,
+            EndpointRole::RuntimeSystemdUserAgent,
+            AttachmentPolicy::disabled(),
+        );
+        assert_ne!(
+            runtime_only.schema_fingerprint,
+            RUNTIME_SYSTEMD_USER_COMPOSITION.schema_fingerprint()
+        );
+        assert!(!identity_admits_service(
+            &runtime_only,
+            ServiceKind::RuntimeSystemdUser
+        ));
+        assert!(!identity_admits_service(&runtime_only, ServiceKind::Shell));
+        assert!(!identity_admits_service(&runtime_only, ServiceKind::Tty));
+
+        // A standalone Shell-only identity must never be admitted for the
+        // Shell composition member either: it is a completely different,
+        // unauthenticated peer identity for this endpoint.
+        let shell_only = standalone_service_identity(
+            ServicePackage::ShellV2,
+            EndpointRole::RuntimeSystemdUserAgent,
+            AttachmentPolicy::disabled(),
+        );
+        assert!(!identity_admits_service(&shell_only, ServiceKind::Shell));
+        assert!(!identity_admits_service(
+            &shell_only,
+            ServiceKind::RuntimeSystemdUser
+        ));
+    }
+
+    #[tokio::test]
+    async fn connect_rejects_a_standalone_single_service_identity_requesting_a_composition_member()
+    {
+        // The client's own routing check (`identity_admits_service`) must
+        // reject a standalone Shell identity before any transport I/O, so
+        // the (unconnected) server end of the pair is never read.
+        let identity = standalone_service_identity(
+            ServicePackage::ShellV2,
+            EndpointRole::RuntimeSystemdUserAgent,
+            AttachmentPolicy::disabled(),
+        );
+        let (client_fd, _server_fd) = nix::sys::socket::socketpair(
+            nix::sys::socket::AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            nix::sys::socket::SockFlag::SOCK_CLOEXEC | nix::sys::socket::SockFlag::SOCK_NONBLOCK,
+        )
+        .unwrap();
+        let uid = nix::unistd::Uid::effective().as_raw();
+        let connector = HostSocketConnector::from_seqpacket_fd(
+            client_fd,
+            uid,
+            identity,
+            HandshakeCredentials::Nn,
+        )
+        .unwrap();
+        let realm = d2b_contracts::v2_identity::RealmId::parse("aaaaaaaaaaaaaaaaaaaa").unwrap();
+        let result = Client::new(
+            RouteTable::new(vec![RouteRecord {
+                owner: ServiceOwner::LocalRoot(realm.clone()),
+                transport: TransportKind::LocalUnix,
+            }]),
+            connector,
+        )
+        .connect(
+            TargetInput::LocalRoot(realm),
+            ServiceKind::Shell,
+            TransportSelection::exact(TransportKind::LocalUnix),
+        )
+        .await;
+        assert!(matches!(result, Err(ClientError::InvalidService)));
+    }
+
+    /// A real client/server `UnixSeqpacketTransport` pair (a genuine
+    /// `AF_UNIX SOCK_SEQPACKET` socketpair, negotiated peer credentials, and
+    /// the exact per-connection [`negotiated_descriptor_policy_resolver`]
+    /// resolver), suitable for exercising the composed `PacketAtomic`
+    /// attachment policy end to end. `allowlist` is empty in every current
+    /// caller: these tests exercise composition/session semantics, not
+    /// attachment transfer, so the resolver is present (satisfying the
+    /// transport's structural requirement) but never invoked.
+    fn unix_seqpacket_transport_pair(
+        policy: AttachmentPolicy,
+    ) -> (UnixSeqpacketTransport, UnixSeqpacketTransport) {
+        use d2b_session_unix::{CreditPool, CreditScopeSet, SeqpacketSocket};
+
+        let (left, right) = nix::sys::socket::socketpair(
+            nix::sys::socket::AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            nix::sys::socket::SockFlag::SOCK_CLOEXEC | nix::sys::socket::SockFlag::SOCK_NONBLOCK,
+        )
+        .unwrap();
+        let client_socket = SeqpacketSocket::from_owned(left).unwrap();
+        let server_socket = SeqpacketSocket::from_owned(right).unwrap();
+        let client_peer = client_socket.acceptor_peer_credentials().unwrap();
+        let server_peer = server_socket.acceptor_peer_credentials().unwrap();
+        let scopes = || {
+            let pool = || CreditPool::new(8).unwrap();
+            CreditScopeSet::new(pool(), pool(), pool(), pool(), pool(), pool())
+        };
+        let generation = TEST_GENERATION;
+        let client_resolver =
+            negotiated_descriptor_policy_resolver(client_peer.uid(), generation, Vec::new())
+                .unwrap();
+        let server_resolver =
+            negotiated_descriptor_policy_resolver(server_peer.uid(), generation, Vec::new())
+                .unwrap();
+        let client = UnixSeqpacketTransport::new(
+            client_socket,
+            Locality::HostLocal,
+            LimitProfile::local_default(),
+            policy,
+            scopes(),
+            client_resolver,
+            PeerIdentityPolicy::accepted(client_peer),
+        )
+        .unwrap();
+        let server = UnixSeqpacketTransport::new(
+            server_socket,
+            Locality::HostLocal,
+            LimitProfile::local_default(),
+            policy,
+            scopes(),
+            server_resolver,
+            PeerIdentityPolicy::accepted(server_peer),
+        )
+        .unwrap();
+        (client, server)
+    }
+
+    #[tokio::test]
+    async fn composed_client_identity_is_rejected_by_a_runtime_only_non_composed_responder() {
+        // Real end-to-end proof, via the actual `SessionEngine` handshake
+        // over a real `UnixSeqpacketTransport`, that a responder offering
+        // only the standalone RuntimeSystemdUser service (not the frozen
+        // 3-member composition) rejects a client negotiating the composed
+        // identity: the wire-level fingerprints genuinely differ, not
+        // merely the client's own local check.
+        let generation = 7;
+        let uid = nix::unistd::Uid::effective().as_raw();
+        let gid = nix::unistd::Gid::effective().as_raw();
+        let composed_identity =
+            runtime_systemd_user_composition_endpoint_identity(uid, gid).unwrap();
+        let runtime_only_policy = standalone_service_identity(
+            ServicePackage::RuntimeSystemdUserV2,
+            EndpointRole::RuntimeSystemdUserAgent,
+            composed_identity.attachment_policy,
+        )
+        .with_generation(generation)
+        .unwrap();
+        let (client_transport, server_transport) =
+            unix_seqpacket_transport_pair(composed_identity.attachment_policy);
+
+        let server = tokio::spawn(async move {
+            SessionEngine::establish_responder(
+                server_transport,
+                runtime_only_policy,
+                HandshakeCredentials::Nn,
+                Instant::now(),
+            )
+            .await
+        });
+        let connector = HostSocketConnector::new(
+            client_transport,
+            composed_identity,
+            HandshakeCredentials::Nn,
+        )
+        .unwrap();
+        let realm = d2b_contracts::v2_identity::RealmId::parse("aaaaaaaaaaaaaaaaaaaa").unwrap();
+        let result = Client::new(
+            RouteTable::new(vec![RouteRecord {
+                owner: ServiceOwner::LocalRoot(realm.clone()),
+                transport: TransportKind::LocalUnix,
+            }]),
+            connector,
+        )
+        .connect(
+            TargetInput::LocalRoot(realm),
+            ServiceKind::RuntimeSystemdUser,
+            TransportSelection::exact(TransportKind::LocalUnix),
+        )
+        .await;
+        // The responder rejects the mismatched schema before ever
+        // completing the Noise handshake, so it never sends the client a
+        // detailed reject reason over this unauthenticated pre-auth wire —
+        // the client only observes the resulting disconnect. The
+        // responder's own `SessionEngine::establish_responder` result is
+        // the authoritative proof that the exact failure was a schema
+        // mismatch between the composed client offer and the standalone
+        // policy.
+        assert!(result.is_err(), "{result:?}");
+        assert_eq!(
+            server.await.unwrap().unwrap_err().code(),
+            SessionErrorCode::SchemaMismatch
+        );
+    }
+
+    #[tokio::test]
+    async fn connected_client_proxies_within_the_composition_but_rejects_outside_members() {
+        // Real end-to-end proof (actual `SessionEngine` handshake over a
+        // real `UnixSeqpacketTransport`) that the one authenticated
+        // composition session for `RuntimeSystemdUser` reaches
+        // `Shell`/`Tty` only via `runtime_systemd_user_composition_member_proxy`
+        // on the SAME driver/generation, and rejects any non-member service.
+        let generation = 53;
+        let uid = nix::unistd::Uid::effective().as_raw();
+        let gid = nix::unistd::Gid::effective().as_raw();
+        let identity = runtime_systemd_user_composition_endpoint_identity(uid, gid).unwrap();
+        let policy = identity.clone().with_generation(generation).unwrap();
+        let (client_transport, server_transport) =
+            unix_seqpacket_transport_pair(identity.attachment_policy);
+        let server = tokio::spawn(async move {
+            SessionEngine::establish_responder(
+                server_transport,
+                policy,
+                HandshakeCredentials::Nn,
+                Instant::now(),
+            )
+            .await
+            .unwrap()
+        });
+        let connector =
+            HostSocketConnector::new(client_transport, identity, HandshakeCredentials::Nn).unwrap();
+        let realm = d2b_contracts::v2_identity::RealmId::parse("aaaaaaaaaaaaaaaaaaaa").unwrap();
+        let connected = Client::new(
+            RouteTable::new(vec![RouteRecord {
+                owner: ServiceOwner::LocalRoot(realm.clone()),
+                transport: TransportKind::LocalUnix,
+            }]),
+            connector,
+        )
+        .connect(
+            TargetInput::LocalRoot(realm),
+            ServiceKind::RuntimeSystemdUser,
+            TransportSelection::exact(TransportKind::LocalUnix),
+        )
+        .await
+        .unwrap();
+        assert_eq!(connected.session_generation(), generation);
+        assert_eq!(connected.service().kind(), ServiceKind::RuntimeSystemdUser);
+
+        let shell = connected
+            .runtime_systemd_user_composition_member_proxy(ServiceKind::Shell)
+            .unwrap();
+        assert_eq!(shell.service().kind(), ServiceKind::Shell);
+        assert_eq!(shell.session_generation(), generation);
+
+        let tty = connected
+            .runtime_systemd_user_composition_member_proxy(ServiceKind::Tty)
+            .unwrap();
+        assert_eq!(tty.service().kind(), ServiceKind::Tty);
+        assert_eq!(tty.session_generation(), generation);
+
+        // Re-proxying from the Shell member back to RuntimeSystemdUser and
+        // Tty must also succeed: composition membership, not the current
+        // member, gates the proxy.
+        let back = shell
+            .runtime_systemd_user_composition_member_proxy(ServiceKind::RuntimeSystemdUser)
+            .unwrap();
+        assert_eq!(back.service().kind(), ServiceKind::RuntimeSystemdUser);
+
+        assert!(matches!(
+            connected.runtime_systemd_user_composition_member_proxy(ServiceKind::Daemon),
+            Err(ClientError::TransportPolicyMismatch)
+        ));
+        assert!(matches!(
+            shell.runtime_systemd_user_composition_member_proxy(ServiceKind::Guest),
+            Err(ClientError::TransportPolicyMismatch)
+        ));
+
         assert_eq!(server.await.unwrap().generation(), generation);
     }
 

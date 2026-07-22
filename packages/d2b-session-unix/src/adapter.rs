@@ -5,14 +5,17 @@ use crate::{
 };
 use async_trait::async_trait;
 use d2b_contracts::v2_component_session::{
-    AttachmentDescriptor, AttachmentKind, AttachmentPolicy, AttachmentPolicyKind, LimitProfile,
-    Locality, TransportClass,
+    AttachmentAccess, AttachmentDescriptor, AttachmentKind, AttachmentPolicy, AttachmentPolicyKind,
+    AttachmentPurpose, KernelObjectType, LimitProfile, Locality, ServicePackage, TransportClass,
 };
 use d2b_session::{
     AttachmentPayload, AttachmentValidationError, OwnedAttachment, OwnedTransport,
     TransportDescriptor, TransportError, TransportPacket,
 };
-use rustix::fd::{AsFd, BorrowedFd, OwnedFd};
+use rustix::{
+    fd::{AsFd, BorrowedFd, OwnedFd},
+    process::Uid,
+};
 use std::{
     any::Any,
     collections::VecDeque,
@@ -25,6 +28,89 @@ pub type DescriptorPolicyResolver =
 
 pub type PathnamePeerVerifier =
     Arc<dyn Fn(&SeqpacketSocket) -> Result<(), UnixSessionError> + Send + Sync>;
+
+/// One entry of a per-connection closed descriptor allowlist.
+///
+/// Every axis is checked for an exact match against the received
+/// [`AttachmentDescriptor`]: the declaring service composition member, the
+/// method that is allowed to attach it, its packet index, its declared
+/// purpose, its kernel object type, and whether `close-on-exec` is
+/// required. There is no wildcard axis — an attachment that does not match
+/// every field of some entry is rejected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DescriptorAllowlistEntry {
+    pub service: ServicePackage,
+    pub method_id: u32,
+    pub index: u16,
+    pub purpose: AttachmentPurpose,
+    pub object_type: KernelObjectType,
+    pub cloexec_required: bool,
+}
+
+impl DescriptorAllowlistEntry {
+    fn matches(&self, descriptor: &AttachmentDescriptor) -> bool {
+        self.service == descriptor.service
+            && self.method_id == descriptor.method_id
+            && self.index == descriptor.index
+            && self.purpose == descriptor.purpose
+            && self.object_type == descriptor.object_type
+            && self.cloexec_required == descriptor.cloexec_required
+    }
+}
+
+/// Builds a fresh, per-connection [`DescriptorPolicyResolver`] closure that
+/// is the sole gate for descriptors received over `SCM_RIGHTS` on this one
+/// connection.
+///
+/// The resolver rejects everything that is not an exact match against
+/// `allowlist` (undeclared method/index/purpose/object-type/cloexec
+/// combinations), everything bound to a different `session_generation`, and
+/// closes down to exactly two supported structural policies: a connected
+/// `AF_UNIX`/`SOCK_STREAM` socket credentialed to `peer_uid` (the already
+/// -authenticated peer of this connection, never a value read from the
+/// wire), or a fully-sealed read-only `memfd`. Every other kernel object
+/// type declared in `allowlist` is a caller/builder-time misconfiguration
+/// (a static policy authoring error, not attacker-controlled input), so
+/// building a resolver with an unsupported entry fails eagerly rather than
+/// silently accepting the whole allowlist.
+///
+/// This function captures `peer_uid`/`session_generation`/`allowlist` by
+/// value inside the returned closure and touches no process-global or
+/// shared mutable state, so two connections built from independent calls
+/// are fully isolated from one another.
+pub fn negotiated_descriptor_policy_resolver(
+    peer_uid: Uid,
+    session_generation: u64,
+    allowlist: Vec<DescriptorAllowlistEntry>,
+) -> Result<DescriptorPolicyResolver, UnixSessionError> {
+    for entry in &allowlist {
+        match entry.object_type {
+            KernelObjectType::UnixStreamSocket | KernelObjectType::Memfd => {}
+            _ => return Err(UnixSessionError::DescriptorMismatch),
+        }
+    }
+    Ok(Arc::new(move |descriptor: &AttachmentDescriptor| {
+        if descriptor.kind != AttachmentKind::FileDescriptor {
+            return Err(UnixSessionError::DescriptorMismatch);
+        }
+        if descriptor.reconnect_generation != session_generation {
+            return Err(UnixSessionError::DescriptorMismatch);
+        }
+        let matched = allowlist
+            .iter()
+            .find(|entry| entry.matches(descriptor))
+            .ok_or(UnixSessionError::DescriptorMismatch)?;
+        match matched.object_type {
+            KernelObjectType::UnixStreamSocket => Ok(DescriptorPolicy::ConnectedUnixStreamSocket {
+                expected_peer_uid: peer_uid,
+            }),
+            KernelObjectType::Memfd if descriptor.access == AttachmentAccess::ReadOnly => {
+                Ok(DescriptorPolicy::SealedReadOnlyMemfd)
+            }
+            _ => Err(UnixSessionError::DescriptorMismatch),
+        }
+    }))
+}
 
 pub enum PeerIdentityPolicy {
     Pathname { verifier: PathnamePeerVerifier },
@@ -694,7 +780,8 @@ fn validate_value(
             AttachmentKind::FileDescriptor,
             DescriptorPolicy::File(_)
             | DescriptorPolicy::SealedReadOnlyMemfd
-            | DescriptorPolicy::Pidfd(_),
+            | DescriptorPolicy::Pidfd(_)
+            | DescriptorPolicy::ConnectedUnixStreamSocket { .. },
         ) => validate_owned_file_identity(fd, descriptor, policy).map(Some),
         (UnixAttachmentValue::File(_), _, _) => Err(UnixSessionError::DescriptorMismatch),
     }
@@ -849,5 +936,320 @@ mod tests {
             Err(UnixSessionError::CredentialMismatch)
         );
         assert!(controls.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod negotiated_descriptor_policy_resolver_tests {
+    use super::*;
+    use crate::credit::{CreditPool, CreditScopeSet};
+    use d2b_contracts::v2_component_session::{AttachmentCreditClass, BoundedVec, RequestId};
+    use rustix::{
+        io::fcntl_getfd,
+        net::{AddressFamily, SocketFlags, SocketType, socketpair},
+        process::getuid,
+    };
+
+    fn scopes(limit: usize) -> CreditScopeSet {
+        CreditScopeSet::new(
+            CreditPool::new(limit).unwrap(),
+            CreditPool::new(limit).unwrap(),
+            CreditPool::new(limit).unwrap(),
+            CreditPool::new(limit).unwrap(),
+            CreditPool::new(limit).unwrap(),
+            CreditPool::new(limit).unwrap(),
+        )
+    }
+
+    fn seqpacket_pair() -> (SeqpacketSocket, SeqpacketSocket) {
+        let (left, right) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::SEQPACKET,
+            SocketFlags::NONBLOCK | SocketFlags::CLOEXEC,
+            None,
+        )
+        .unwrap();
+        (
+            SeqpacketSocket::from_owned(left).unwrap(),
+            SeqpacketSocket::from_owned(right).unwrap(),
+        )
+    }
+
+    /// Returns a connected `AF_UNIX`/`SOCK_STREAM` fd. The other end of the
+    /// pair is intentionally dropped: Linux caches `SO_PEERCRED` for a
+    /// socketpair at connect time, independent of the peer fd's lifetime.
+    fn connected_stream_fd() -> OwnedFd {
+        let (left, _right) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::STREAM,
+            SocketFlags::CLOEXEC,
+            None,
+        )
+        .unwrap();
+        left
+    }
+
+    fn allowlist_entry(
+        service: ServicePackage,
+        method_id: u32,
+        index: u16,
+        purpose: AttachmentPurpose,
+        object_type: KernelObjectType,
+        cloexec_required: bool,
+    ) -> DescriptorAllowlistEntry {
+        DescriptorAllowlistEntry {
+            service,
+            method_id,
+            index,
+            purpose,
+            object_type,
+            cloexec_required,
+        }
+    }
+
+    fn descriptor_for(
+        service: ServicePackage,
+        method_id: u32,
+        index: u16,
+        purpose: AttachmentPurpose,
+        object_type: KernelObjectType,
+        reconnect_generation: u64,
+    ) -> AttachmentDescriptor {
+        AttachmentDescriptor {
+            index,
+            kind: AttachmentKind::FileDescriptor,
+            object_type,
+            access: AttachmentAccess::ReadWrite,
+            purpose,
+            service,
+            method_id,
+            request_id: RequestId::new([9_u8; 16]).unwrap(),
+            operation_id: None,
+            packet_sequence: 1,
+            reconnect_generation,
+            duplicate_object_allowed: false,
+            cloexec_required: true,
+            credit_classes: BoundedVec::new(vec![
+                AttachmentCreditClass::Packet,
+                AttachmentCreditClass::Request,
+                AttachmentCreditClass::Operation,
+                AttachmentCreditClass::Session,
+                AttachmentCreditClass::Process,
+                AttachmentCreditClass::Host,
+            ])
+            .unwrap(),
+        }
+    }
+
+    fn base_entry() -> DescriptorAllowlistEntry {
+        allowlist_entry(
+            ServicePackage::ShellV2,
+            42,
+            0,
+            AttachmentPurpose::RuntimeHandle,
+            KernelObjectType::UnixStreamSocket,
+            true,
+        )
+    }
+
+    fn base_descriptor() -> AttachmentDescriptor {
+        descriptor_for(
+            ServicePackage::ShellV2,
+            42,
+            0,
+            AttachmentPurpose::RuntimeHandle,
+            KernelObjectType::UnixStreamSocket,
+            7,
+        )
+    }
+
+    #[test]
+    fn builder_rejects_an_unsupported_object_type_eagerly() {
+        let unsupported = allowlist_entry(
+            ServicePackage::ShellV2,
+            1,
+            0,
+            AttachmentPurpose::RuntimeHandle,
+            KernelObjectType::Pidfd,
+            true,
+        );
+        assert!(matches!(
+            negotiated_descriptor_policy_resolver(getuid(), 1, vec![unsupported]),
+            Err(UnixSessionError::DescriptorMismatch)
+        ));
+    }
+
+    #[test]
+    fn exact_allowlisted_descriptor_resolves_to_connected_unix_stream_policy() {
+        let resolver =
+            negotiated_descriptor_policy_resolver(getuid(), 7, vec![base_entry()]).unwrap();
+        let descriptor = base_descriptor();
+        let policy = resolver(&descriptor).unwrap();
+        assert!(matches!(
+            policy,
+            DescriptorPolicy::ConnectedUnixStreamSocket { expected_peer_uid } if expected_peer_uid == getuid()
+        ));
+    }
+
+    #[test]
+    fn every_mismatch_axis_is_rejected() {
+        let resolver =
+            negotiated_descriptor_policy_resolver(getuid(), 7, vec![base_entry()]).unwrap();
+
+        let mut wrong_service = base_descriptor();
+        wrong_service.service = ServicePackage::TtyV2;
+        assert!(matches!(
+            resolver(&wrong_service),
+            Err(UnixSessionError::DescriptorMismatch)
+        ));
+
+        let mut wrong_method = base_descriptor();
+        wrong_method.method_id = 43;
+        assert!(matches!(
+            resolver(&wrong_method),
+            Err(UnixSessionError::DescriptorMismatch)
+        ));
+
+        let mut wrong_index = base_descriptor();
+        wrong_index.index = 1;
+        assert!(matches!(
+            resolver(&wrong_index),
+            Err(UnixSessionError::DescriptorMismatch)
+        ));
+
+        let mut wrong_purpose = base_descriptor();
+        wrong_purpose.purpose = AttachmentPurpose::Terminal;
+        assert!(matches!(
+            resolver(&wrong_purpose),
+            Err(UnixSessionError::DescriptorMismatch)
+        ));
+
+        let mut wrong_object_type = base_descriptor();
+        wrong_object_type.object_type = KernelObjectType::Memfd;
+        assert!(matches!(
+            resolver(&wrong_object_type),
+            Err(UnixSessionError::DescriptorMismatch)
+        ));
+
+        let mut wrong_cloexec = base_descriptor();
+        wrong_cloexec.cloexec_required = false;
+        assert!(matches!(
+            resolver(&wrong_cloexec),
+            Err(UnixSessionError::DescriptorMismatch)
+        ));
+
+        let mut wrong_generation = base_descriptor();
+        wrong_generation.reconnect_generation = 8;
+        assert!(matches!(
+            resolver(&wrong_generation),
+            Err(UnixSessionError::DescriptorMismatch)
+        ));
+
+        let mut wrong_kind = base_descriptor();
+        wrong_kind.kind = AttachmentKind::Credentials;
+        assert!(matches!(
+            resolver(&wrong_kind),
+            Err(UnixSessionError::DescriptorMismatch)
+        ));
+
+        assert!(resolver(&base_descriptor()).is_ok());
+    }
+
+    #[test]
+    fn two_concurrent_connection_resolvers_are_isolated() {
+        let resolver_a =
+            negotiated_descriptor_policy_resolver(getuid(), 7, vec![base_entry()]).unwrap();
+        let mut entry_b = base_entry();
+        entry_b.method_id = 99;
+        let resolver_b = negotiated_descriptor_policy_resolver(getuid(), 7, vec![entry_b]).unwrap();
+
+        let descriptor = base_descriptor();
+        assert!(resolver_a(&descriptor).is_ok());
+        assert!(matches!(
+            resolver_b(&descriptor),
+            Err(UnixSessionError::DescriptorMismatch)
+        ));
+
+        // Building/using resolver_b did not mutate or replace resolver_a's
+        // independently captured allowlist/generation/peer_uid state.
+        assert!(resolver_a(&descriptor).is_ok());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn real_scm_rights_transfer_through_the_resolver_accepts_exactly_one_and_retains_cloexec()
+    {
+        let (sender_socket, receiver_socket) = seqpacket_pair();
+        let sender_peer = sender_socket.acceptor_peer_credentials().unwrap();
+        let receiver_peer = receiver_socket.acceptor_peer_credentials().unwrap();
+        let policy = AttachmentPolicy {
+            kind: AttachmentPolicyKind::PacketAtomic,
+            max_per_packet: 1,
+            max_per_request: 1,
+            max_per_operation: 1,
+            max_per_session: 8,
+            credentials_allowed: false,
+        };
+        let sender_scopes = scopes(8);
+        let receiver_scopes = scopes(8);
+
+        let fd = connected_stream_fd();
+        let descriptor = base_descriptor();
+        let sender_policy = DescriptorPolicy::ConnectedUnixStreamSocket {
+            expected_peer_uid: getuid(),
+        };
+        let attachment = OwnedUnixAttachment::file(descriptor.clone(), fd, sender_policy).unwrap();
+
+        let receiver_resolver =
+            negotiated_descriptor_policy_resolver(getuid(), 7, vec![base_entry()]).unwrap();
+        // The sender side never consults a resolver (its policy is bound
+        // at attachment-construction time), so an empty allowlist is fine.
+        let sender_resolver = negotiated_descriptor_policy_resolver(getuid(), 7, vec![]).unwrap();
+
+        let mut sender = UnixSeqpacketTransport::new(
+            sender_socket,
+            Locality::HostLocal,
+            LimitProfile::local_default(),
+            policy,
+            sender_scopes,
+            sender_resolver,
+            PeerIdentityPolicy::accepted(sender_peer),
+        )
+        .unwrap();
+        let mut receiver = UnixSeqpacketTransport::new(
+            receiver_socket,
+            Locality::HostLocal,
+            LimitProfile::local_default(),
+            policy,
+            receiver_scopes,
+            receiver_resolver,
+            PeerIdentityPolicy::accepted(receiver_peer),
+        )
+        .unwrap();
+
+        sender
+            .send(TransportPacket::with_attachments(
+                b"resolver-e2e".to_vec(),
+                vec![attachment],
+            ))
+            .await
+            .unwrap();
+        let received = receiver
+            .receive(LimitProfile::local_default().protected_ciphertext_bytes as usize)
+            .await
+            .unwrap();
+        let (payload, attachments) = received.into_parts();
+        assert_eq!(payload, b"resolver-e2e");
+        assert_eq!(attachments.len(), 1);
+        let unix_payload = attachments[0]
+            .payload()
+            .and_then(|payload| payload.downcast_ref::<UnixAttachmentPayload>())
+            .unwrap();
+        AttachmentPayload::validate_descriptor(unix_payload, &descriptor).unwrap();
+        let received_fd = unix_payload.file().unwrap();
+        assert!(
+            fcntl_getfd(received_fd)
+                .unwrap()
+                .contains(rustix::io::FdFlags::CLOEXEC)
+        );
     }
 }

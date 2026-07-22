@@ -15,6 +15,7 @@ use serde::{
     Deserialize, Deserializer, Serialize,
     de::{SeqAccess, Visitor},
 };
+use sha2::{Digest as _, Sha256};
 use std::{
     error::Error,
     fmt,
@@ -633,6 +634,54 @@ pub struct TransportBinding {
     pub locality: Locality,
     pub channel_binding: [u8; 32],
     pub identity_evidence: IdentityEvidenceRequirement,
+}
+
+/// Version tag for the byte layout of [`directional_channel_binding`]. Bump
+/// this and add a fresh committed vector set in
+/// `docs/reference/component-session-v2-vectors.json`
+/// (`channelBindingVectors`) whenever the domain separation or input framing
+/// changes; existing deployed endpoints keep validating against the version
+/// they were provisioned with until they are migrated.
+pub const CHANNEL_BINDING_DOMAIN_VERSION: u8 = 1;
+
+/// Deterministic, allocation-light directional Unix channel-binding digest.
+///
+/// Binds a `(service, transport, responder_role)` endpoint identity to the
+/// authenticated peer's numeric `uid`/`gid`. The function is pure: it
+/// performs no I/O and reads no ambient/process-global state, which makes it
+/// safe for a Noise *initiator* to call directly with a target identity it
+/// already independently trusts (for example a configured `uid`/`gid` for
+/// the endpoint it is dialing).
+///
+/// A *responder* MUST NOT call this with a peer-supplied `uid`/`gid`: the
+/// authenticated value must come only from the responder's own live process
+/// identity. `ResponderIdentity::current()` in `d2b-session-unix` wraps this
+/// function with a real `getuid()`/`getgid()` read so the responder side can
+/// never be handed a spoofed identity.
+///
+/// The exact byte layout (`service.as_str()` + NUL + `transport.as_str()` +
+/// NUL + big-endian `uid` + big-endian `gid` + `responder_role.as_str()`) is
+/// pinned by the fixed vectors in
+/// `docs/reference/component-session-v2-vectors.json`
+/// (`channelBindingVectors`, `channelBindingDomainVersion`). Changing the
+/// layout requires bumping [`CHANNEL_BINDING_DOMAIN_VERSION`] and updating
+/// those vectors.
+pub fn directional_channel_binding(
+    service: ServicePackage,
+    transport: TransportClass,
+    responder_role: EndpointRole,
+    uid: u32,
+    gid: u32,
+) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(service.as_str().as_bytes());
+    digest.update(b"\0");
+    digest.update(transport.as_str().as_bytes());
+    digest.update(b"\0");
+    digest.update(uid.to_be_bytes());
+    digest.update(gid.to_be_bytes());
+    digest.update(responder_role.as_str().as_bytes());
+    digest.finalize().into()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -3537,5 +3586,150 @@ mod guest_session_credential_tests {
         encoded.drop_observer = Some(std::sync::Arc::clone(&observer));
         drop(encoded);
         assert!(observer.load(std::sync::atomic::Ordering::SeqCst));
+    }
+}
+
+#[cfg(test)]
+mod directional_channel_binding_tests {
+    use super::*;
+
+    fn hex_to_bytes(hex: &str) -> [u8; 32] {
+        assert_eq!(hex.len(), 64, "channel binding vector must be 32 bytes");
+        let mut out = [0u8; 32];
+        for (index, chunk) in hex.as_bytes().chunks_exact(2).enumerate() {
+            let text = std::str::from_utf8(chunk).unwrap();
+            out[index] = u8::from_str_radix(text, 16).unwrap();
+        }
+        out
+    }
+
+    fn service_from_str(value: &str) -> ServicePackage {
+        ServicePackage::ALL
+            .iter()
+            .copied()
+            .find(|service| service.as_str() == value)
+            .unwrap_or_else(|| panic!("unknown service package {value}"))
+    }
+
+    fn transport_from_str(value: &str) -> TransportClass {
+        TransportClass::ALL
+            .iter()
+            .copied()
+            .find(|transport| transport.as_str() == value)
+            .unwrap_or_else(|| panic!("unknown transport class {value}"))
+    }
+
+    fn role_from_str(value: &str) -> EndpointRole {
+        EndpointRole::ALL
+            .iter()
+            .copied()
+            .find(|role| role.as_str() == value)
+            .unwrap_or_else(|| panic!("unknown endpoint role {value}"))
+    }
+
+    #[test]
+    fn committed_channel_binding_vectors_match_pure_function() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../docs/reference/component-session-v2-vectors.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            fixture["channelBindingDomainVersion"],
+            u64::from(CHANNEL_BINDING_DOMAIN_VERSION)
+        );
+        let vectors = fixture["channelBindingVectors"].as_array().unwrap();
+        assert!(vectors.len() >= 3, "expected at least 3 fixed vectors");
+        let mut fixture_ids = std::collections::BTreeSet::new();
+        for vector in vectors {
+            let service = service_from_str(vector["service"].as_str().unwrap());
+            let transport = transport_from_str(vector["transport"].as_str().unwrap());
+            let responder_role = role_from_str(vector["responderRole"].as_str().unwrap());
+            let uid = u32::try_from(vector["uid"].as_u64().unwrap()).unwrap();
+            let gid = u32::try_from(vector["gid"].as_u64().unwrap()).unwrap();
+            let expected = hex_to_bytes(vector["expectedHex"].as_str().unwrap());
+            let actual = directional_channel_binding(service, transport, responder_role, uid, gid);
+            assert_eq!(
+                actual, expected,
+                "channel binding vector {} mismatched",
+                vector["fixtureId"]
+            );
+            fixture_ids.insert(vector["fixtureId"].as_str().unwrap().to_owned());
+        }
+        assert_eq!(
+            vectors.len(),
+            fixture_ids.len(),
+            "fixture ids must be unique"
+        );
+    }
+
+    #[test]
+    fn cross_uid_values_are_independent() {
+        let base = directional_channel_binding(
+            ServicePackage::RuntimeSystemdUserV2,
+            TransportClass::UnixSeqpacket,
+            EndpointRole::RuntimeSystemdUserAgent,
+            1000,
+            1000,
+        );
+        let other_uid = directional_channel_binding(
+            ServicePackage::RuntimeSystemdUserV2,
+            TransportClass::UnixSeqpacket,
+            EndpointRole::RuntimeSystemdUserAgent,
+            1001,
+            1000,
+        );
+        let other_gid = directional_channel_binding(
+            ServicePackage::RuntimeSystemdUserV2,
+            TransportClass::UnixSeqpacket,
+            EndpointRole::RuntimeSystemdUserAgent,
+            1000,
+            1001,
+        );
+        let other_service = directional_channel_binding(
+            ServicePackage::ShellV2,
+            TransportClass::UnixSeqpacket,
+            EndpointRole::RuntimeSystemdUserAgent,
+            1000,
+            1000,
+        );
+        let other_role = directional_channel_binding(
+            ServicePackage::RuntimeSystemdUserV2,
+            TransportClass::UnixSeqpacket,
+            EndpointRole::ShellSupervisor,
+            1000,
+            1000,
+        );
+        let other_transport = directional_channel_binding(
+            ServicePackage::RuntimeSystemdUserV2,
+            TransportClass::UnixStream,
+            EndpointRole::RuntimeSystemdUserAgent,
+            1000,
+            1000,
+        );
+        assert_ne!(base, other_uid);
+        assert_ne!(base, other_gid);
+        assert_ne!(base, other_service);
+        assert_ne!(base, other_role);
+        assert_ne!(base, other_transport);
+        assert_ne!(other_uid, other_gid);
+    }
+
+    #[test]
+    fn deterministic_and_repeatable() {
+        let first = directional_channel_binding(
+            ServicePackage::TtyV2,
+            TransportClass::UnixStream,
+            EndpointRole::TtyHelper,
+            42,
+            7,
+        );
+        let second = directional_channel_binding(
+            ServicePackage::TtyV2,
+            TransportClass::UnixStream,
+            EndpointRole::TtyHelper,
+            42,
+            7,
+        );
+        assert_eq!(first, second);
     }
 }
