@@ -134,6 +134,7 @@ let
       externalDependsOn = [ ];
       ownedFiles = [
         "docs/reference/component-session-v2-vectors.json"
+        "packages/d2b-client/src/client.rs"
         "packages/d2b-client/src/host_socket.rs"
         "packages/d2b-contracts/src/v2_component_session.rs"
         "packages/d2b-contracts/src/v2_services.rs"
@@ -142,6 +143,7 @@ let
         "packages/d2b-session/src/server.rs"
         "packages/d2b-session-unix/src/adapter.rs"
         "packages/d2b-session-unix/src/descriptor.rs"
+        "packages/d2b-session-unix/src/lib.rs"
       ];
       reservedPaths = [
         "packages/d2b-contracts/src/v2_component_session.rs"
