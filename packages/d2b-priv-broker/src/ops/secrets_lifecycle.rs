@@ -145,7 +145,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use nix::fcntl::{FlockArg, flock};
 use rustix::fs::OFlags;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -153,10 +152,11 @@ use zeroize::Zeroizing;
 
 use crate::ops::hosts::stable_hash_str;
 use crate::ops::secrets_rotation_audit::{
-    FailReason, LifecycleAction, MarkerResult, SecretKind, SecretsLifecycleAuditContext,
+    FailReason, LifecycleAction, SecretKind, SecretsLifecycleAuditContext,
     SecretsLifecycleAuditFields,
 };
 use crate::sys::path_safe;
+use d2b_contracts::types::VmId;
 
 // ---------------------------------------------------------------------
 // Constants
@@ -270,7 +270,7 @@ fn context(
     paths: &SecretsLifecyclePaths,
 ) -> SecretsLifecycleAuditContext {
     SecretsLifecycleAuditContext {
-        vm_id: vm_id.to_owned(),
+        vm_id: VmId::new(vm_id),
         kind,
         action,
         base_dir_hash: paths.base_dir_hash.clone(),
@@ -510,16 +510,17 @@ fn denied(
 
 /// `recovered` must reflect whether this call already successfully
 /// drained a leftover crashed transaction before this failure — see
-/// [`SecretsLifecycleAuditFields::failed`].
+/// [`SecretsLifecycleAuditFields::failed`]. There is no
+/// caller-supplied `MarkerResult` here: `failed` itself always
+/// records `MarkerResult::FailedClosed`.
 fn failed_closed(
     ctx: &SecretsLifecycleAuditContext,
     recovered: bool,
-    marker_result: MarkerResult,
     reason: FailReason,
 ) -> SecretsLifecycleError {
     SecretsLifecycleError {
         reason,
-        audit: SecretsLifecycleAuditFields::failed(ctx, recovered, marker_result, reason),
+        audit: SecretsLifecycleAuditFields::failed(ctx, recovered, reason),
     }
 }
 
@@ -817,6 +818,90 @@ fn read_fd_to_end(fd: BorrowedFd<'_>) -> io::Result<Vec<u8>> {
     Ok(buf)
 }
 
+/// One byte more than [`SecretMaterial::MAX_LEN`]: large enough to
+/// distinguish "at the maximum permitted size" from "oversized",
+/// small enough that a read against this cap can never be unbounded.
+const MATERIAL_READ_CAP: u64 = SecretMaterial::MAX_LEN as u64 + 1;
+
+/// Read up to `cap` bytes from `fd` directly into a
+/// `Zeroizing<Vec<u8>>` -- never through an intermediate plain
+/// `Vec<u8>` -- so a partial-read-then-error buffer is zeroized on
+/// drop rather than silently dropped as ordinary heap memory. Returns
+/// an error (without ever exceeding `cap` bytes of allocation) if the
+/// stream still has unread data past `cap`, so a file that grows
+/// between `fstat` and `read` can never be read past the cap either.
+fn read_fd_to_end_capped(fd: BorrowedFd<'_>, cap: u64) -> io::Result<Zeroizing<Vec<u8>>> {
+    use std::io::Read;
+    use std::os::fd::AsRawFd as _;
+    let dup = rustix::fs::fcntl_dupfd_cloexec(fd, 0).map_err(io_from_rustix)?;
+    let file: std::fs::File = dup.into();
+    // Cap the reader at `cap + 1`: reading exactly `cap + 1` bytes
+    // successfully proves the underlying stream is oversized, which
+    // we reject below, while never allocating more than `cap + 1`
+    // bytes regardless of how large the real stream actually is.
+    let mut limited = file.take(cap + 1);
+    let mut buf = Zeroizing::new(Vec::new());
+    limited.read_to_end(&mut buf)?;
+    let _ = fd.as_raw_fd();
+    if buf.len() as u64 > cap {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "material file exceeds the closed read cap",
+        ));
+    }
+    Ok(buf)
+}
+
+/// Safely open, type/size-verify, and read an on-disk material file
+/// beneath `dir_fd`, returning the opened fd (for any further
+/// fd-based checks the caller needs, e.g. an ACL probe), its `fstat`
+/// result, and its full contents in a buffer that is *never*
+/// observable as a plain, unwrapped `Vec<u8>`.
+///
+/// - Opens with `O_RDONLY | O_NONBLOCK`: nofollow / no-magiclink /
+///   beneath-only resolution is already enforced unconditionally by
+///   [`path_safe::open_file_at_safe`]; `O_NONBLOCK` additionally
+///   guarantees this call can never block indefinitely if a FIFO has
+///   been planted at the material path instead of a regular file.
+/// - Rejects, before reading a single byte, anything that is not a
+///   regular file or whose reported size exceeds
+///   [`MATERIAL_READ_CAP`] -- a device, FIFO, or corrupt/oversized
+///   on-disk entry is never read.
+/// - Reads directly into a `Zeroizing<Vec<u8>>` via
+///   [`read_fd_to_end_capped`] (never through an intermediate plain
+///   `Vec<u8>`).
+///
+/// Callers that need to compare *owner/mode/nlink* identity against
+/// an expected value (e.g. tamper detection across a rollback) do so
+/// on the returned `stat` themselves, using the existing per-field
+/// `FailReason` variants (`IdentityOwnerMismatch`,
+/// `IdentityModeMismatch`, `IdentityLinkCountMismatch`, ...) -- this
+/// function only enforces the type/size invariants that must hold
+/// before *any* read is safe to attempt; it deliberately does not
+/// reject on nlink so that identity capture can still surface the
+/// precise mismatch reason downstream.
+fn read_material_file_capped(
+    dir_fd: &OwnedFd,
+) -> Result<(OwnedFd, nix::libc::stat, Zeroizing<Vec<u8>>), FailReason> {
+    let file_fd = path_safe::open_file_at_safe(
+        dir_fd,
+        MATERIAL_FILE_NAME,
+        nix::libc::O_RDONLY | nix::libc::O_NONBLOCK,
+    )
+    .map_err(|_| FailReason::PreviouslyProvisionedMaterialMissing)?;
+    let stat = path_safe::fstat_fd(file_fd.as_fd())
+        .map_err(|_| FailReason::PreviouslyProvisionedMaterialMissing)?;
+    if (stat.st_mode & nix::libc::S_IFMT) != nix::libc::S_IFREG {
+        return Err(FailReason::PreviouslyProvisionedMaterialMissing);
+    }
+    if stat.st_size < 0 || stat.st_size as u64 > MATERIAL_READ_CAP {
+        return Err(FailReason::PreviouslyProvisionedMaterialMissing);
+    }
+    let bytes = read_fd_to_end_capped(file_fd.as_fd(), MATERIAL_READ_CAP)
+        .map_err(|_| FailReason::PreviouslyProvisionedMaterialMissing)?;
+    Ok((file_fd, stat, bytes))
+}
+
 // Test-only fault injection seam: when enabled (see
 // `tests::FsyncFaultGuard`), every `fsync_fd` call fails with
 // `FailReason::FsyncFailed` instead of touching the filesystem, so
@@ -890,6 +975,48 @@ fn verify_broker_owned(
     Ok(())
 }
 
+/// Build a whole-file (`l_len == 0`, `l_start == 0`, `l_whence ==
+/// SEEK_SET`) `libc::flock` descriptor for an OFD lock/unlock
+/// operation. `l_pid` is left `0`: the kernel ignores it for
+/// `F_OFD_*` commands (it is only meaningful for the classic
+/// process-associated `F_SETLK`/`F_GETLK`).
+fn whole_file_flock(l_type: nix::libc::c_short) -> nix::libc::flock {
+    nix::libc::flock {
+        l_type,
+        l_whence: nix::libc::SEEK_SET as nix::libc::c_short,
+        l_start: 0,
+        l_len: 0,
+        l_pid: 0,
+    }
+}
+
+/// Attempt to acquire a non-blocking, whole-file, exclusive **open
+/// file description** (OFD) lock on `fd` via `F_OFD_SETLK`
+/// (`F_OFD_SETLKW`'s non-blocking sibling). This is the repository's
+/// established cross-process advisory-lock primitive (mirroring
+/// `d2bd::audio_dispatch::ofd_lock`/`ofd_unlock`'s `F_OFD_SETLK{,W}`
+/// pattern) rather than BSD `flock(2)`: an OFD lock is associated
+/// with the *open file description*, not the owning process, so it
+/// composes correctly with `fork`/exec and with a single process
+/// holding multiple independent fds on the same lock file — unlike
+/// BSD `flock`, whose whole-process association would let two
+/// unrelated fds opened by the same process silently share one lock.
+///
+/// Returns `Ok(true)` if the lock was acquired, `Ok(false)` if it is
+/// currently held by another open file description (the caller should
+/// retry), and `Err` for any other failure. Both `EAGAIN` and `EACCES`
+/// are treated as "held elsewhere" per the Linux `fcntl(2)` manual
+/// page, which documents either errno as possible for a conflicting
+/// `F_SETLK`-family lock request depending on lock type.
+fn try_ofd_lock_exclusive(fd: BorrowedFd<'_>) -> Result<bool, FailReason> {
+    let fl = whole_file_flock(nix::libc::F_WRLCK as nix::libc::c_short);
+    match nix::fcntl::fcntl(fd.as_raw_fd(), nix::fcntl::FcntlArg::F_OFD_SETLK(&fl)) {
+        Ok(_) => Ok(true),
+        Err(nix::errno::Errno::EAGAIN) | Err(nix::errno::Errno::EACCES) => Ok(false),
+        Err(_) => Err(FailReason::LockUnavailable),
+    }
+}
+
 // ---------------------------------------------------------------------
 // Cross-process lock
 // ---------------------------------------------------------------------
@@ -900,18 +1027,29 @@ pub struct LockGuard {
 }
 
 /// Acquire the cross-process exclusive lock for one `(vm, kind)`
-/// directory. Before trusting the `flock`, this verifies: the
+/// directory. Before trusting the OFD lock, this verifies: the
 /// anchored parent (`secrets_fd`, i.e. `kind_root`) is a trusted-
 /// broker-owned directory with the expected mode; the lock file
 /// itself is a trusted-broker-owned regular file with the expected
 /// mode and exactly one hard link (never a hard-link plant); and,
-/// immediately after the `flock` succeeds, that the directory entry
+/// immediately after the lock succeeds, that the directory entry
 /// named `lock` still resolves (by `(dev, ino)`) to the exact file
 /// this call opened and locked — guarding against the classic
-/// flock-via-path race where another actor unlinks-and-recreates the
-/// lock file between this call's `open` and its `flock`, which would
-/// let two callers each hold an uncontended lock on two different,
-/// now-unlinked-vs-live inodes of the same name.
+/// lock-via-path race where another actor unlinks-and-recreates the
+/// lock file between this call's `open` and its lock attempt, which
+/// would let two callers each hold an uncontended lock on two
+/// different, now-unlinked-vs-live inodes of the same name. The
+/// underlying primitive is the repository's `F_OFD_SETLK` convention
+/// (see [`try_ofd_lock_exclusive`]), not BSD `flock`; releasing the
+/// lock is simply closing `LockGuard`'s owned fd (the kernel drops an
+/// OFD lock exactly when every fd referencing its open file
+/// description is closed — no separate unlock call is needed, and
+/// [`LockGuard`] deliberately exposes no public/forgeable "is locked"
+/// proof, only an opaque RAII token).
+///
+/// A full generated-sync-row `d2b-state::LockSet`/`AuthorityRef`
+/// integration remains an explicit integrator-owned wiring point: see
+/// the module doc's "Integration wiring points" §5.
 fn acquire_lock(
     secrets_fd: BorrowedFd<'_>,
     cfg: &SecretsLifecycleConfig,
@@ -935,13 +1073,13 @@ fn acquire_lock(
     let file: std::fs::File = fd.into();
     let deadline = Instant::now() + cfg.lock_max_wait;
     loop {
-        match flock(file.as_raw_fd(), FlockArg::LockExclusiveNonblock) {
-            Ok(()) => {
+        match try_ofd_lock_exclusive(file.as_fd())? {
+            true => {
                 // Re-stat by name (anchored beneath the already-
                 // verified `secrets_fd` parent) and compare `(dev,
                 // ino)` against the fd we just locked: if another
                 // actor swapped the `lock` entry between our open and
-                // our successful flock, the identity will differ and
+                // our successful lock, the identity will differ and
                 // we must not trust this lock.
                 let by_name = path_safe::fstatat_nofollow(&owned, LOCK_FILE_NAME)
                     .map_err(|_| FailReason::BrokerOwnershipViolation)?
@@ -953,13 +1091,12 @@ fn acquire_lock(
                 }
                 return Ok(LockGuard { _file: file });
             }
-            Err(nix::errno::Errno::EWOULDBLOCK) => {
+            false => {
                 if Instant::now() >= deadline {
                     return Err(FailReason::LockUnavailable);
                 }
                 std::thread::sleep(cfg.lock_poll_interval);
             }
-            Err(_) => return Err(FailReason::LockUnavailable),
         }
     }
 }
@@ -1259,12 +1396,9 @@ fn digest_of_material_dir(generations_fd: &OwnedFd, dir_name: &str) -> io::Resul
         Path::new(dir_name),
         OFlags::RDONLY | OFlags::DIRECTORY,
     )?;
-    let material_fd = path_safe::open_file_at_safe(
-        &borrowed_to_owned_io(dir_fd.as_fd())?,
-        MATERIAL_FILE_NAME,
-        nix::libc::O_RDONLY,
-    )?;
-    let bytes = Zeroizing::new(read_fd_to_end(material_fd.as_fd())?);
+    let dir_owned = borrowed_to_owned_io(dir_fd.as_fd())?;
+    let (_file_fd, _stat, bytes) = read_material_file_capped(&dir_owned)
+        .map_err(|reason| io::Error::other(format!("{reason:?}")))?;
     let mut hasher = Sha256::new();
     hasher.update(&*bytes);
     Ok(hex_encode(&hasher.finalize()))
@@ -1319,29 +1453,21 @@ fn capture_identity(
     )
     .map_err(|_| FailReason::PreviouslyProvisionedMaterialMissing)?;
     let dir_owned = borrowed_to_owned(dir_fd.as_fd())?;
-    let material_fd =
-        path_safe::open_file_at_safe(&dir_owned, MATERIAL_FILE_NAME, nix::libc::O_RDONLY)
-            .map_err(|_| FailReason::PreviouslyProvisionedMaterialMissing)?;
-    let stat = path_safe::fstat_fd(material_fd.as_fd())
-        .map_err(|_| FailReason::PreviouslyProvisionedMaterialMissing)?;
+    let (material_fd, stat, bytes) = read_material_file_capped(&dir_owned)?;
     let (has_acl, _) = path_safe::fd_extended_acl_present(material_fd.as_fd())
         .map_err(|_| FailReason::PreviouslyProvisionedMaterialMissing)?;
-    let bytes = Zeroizing::new(
-        read_fd_to_end(material_fd.as_fd())
-            .map_err(|_| FailReason::PreviouslyProvisionedMaterialMissing)?,
-    );
     let mut hasher = Sha256::new();
     hasher.update(&*bytes);
     let digest_hex = hex_encode(&hasher.finalize());
     let _ = generations_owned;
     Ok(MaterialIdentity {
         epoch,
-        dev: stat.st_dev as u64,
-        ino: stat.st_ino as u64,
+        dev: stat.st_dev,
+        ino: stat.st_ino,
         uid: stat.st_uid,
         gid: stat.st_gid,
-        mode: (stat.st_mode as u32) & 0o7777,
-        nlink: stat.st_nlink as u64,
+        mode: stat.st_mode & 0o7777,
+        nlink: stat.st_nlink,
         has_acl,
         digest_hex,
     })
@@ -1416,6 +1542,22 @@ fn current_resolves_exactly_to(secrets_fd: BorrowedFd<'_>, epoch: u64) -> bool {
     match current_target_text(secrets_fd) {
         Some(target) => target == expected_current_target(epoch),
         None => false,
+    }
+}
+
+/// Confirm the `current` entry is exactly absent -- not merely a
+/// dangling/foreign symlink `current_target_text` happens to be
+/// unable to parse, and not some other filesystem object (regular
+/// file, directory, ...) squatting the reserved name. Used only where
+/// the invariant under test is "no active generation exists", so any
+/// entry at all (of any type, resolving to anything) must be treated
+/// as a live-state disagreement rather than silently ignored.
+fn current_is_genuinely_absent(secrets_fd: BorrowedFd<'_>) -> Result<bool, FailReason> {
+    let owned = borrowed_to_owned(secrets_fd)?;
+    match path_safe::fstatat_nofollow(&owned, CURRENT_LINK_NAME) {
+        Ok(Some(_)) => Ok(false),
+        Ok(None) => Ok(true),
+        Err(_) => Err(FailReason::MarkerTreeOpenFailed),
     }
 }
 
@@ -1650,25 +1792,35 @@ fn verify_generation_dir_is_exactly_material(
 // ---------------------------------------------------------------------
 
 /// Invoked by every public lifecycle action (provision/rotate/
-/// rollback/retire) immediately after loading the on-disk marker,
-/// whenever that marker records an active generation. Refuses to
-/// proceed if the marker's own semantics are internally inconsistent,
-/// or if it does not match the caller's own `(vm_id, kind)`, or if the
-/// live on-disk state has drifted from what the marker claims -- most
-/// importantly, whether `current` resolves, by *exact literal text*,
-/// to the marker's recorded active epoch. A symlink retargeted to any
-/// other path -- absolute, foreign-rooted, or merely ending in the
-/// right epoch number -- is never accepted as a match. This is the
-/// single reachable trigger for
-/// [`FailReason::IdentityCurrentTargetMismatch`].
+/// rollback/retire) immediately after loading the on-disk marker.
+/// Refuses to proceed if the marker's own semantics are internally
+/// inconsistent, if it does not match the caller's own `(vm_id,
+/// kind_slug)`, or if the live on-disk state has drifted from what
+/// the marker claims.
+///
+/// This validates **every** marker shape reachable on disk, not only
+/// an active one:
+/// - An *active* marker requires `current` to resolve, by *exact
+///   literal text*, to the marker's recorded active epoch. A symlink
+///   retargeted to any other path -- absolute, foreign-rooted, or
+///   merely ending in the right epoch number -- is never accepted as
+///   a match. This is the single reachable trigger for
+///   [`FailReason::IdentityCurrentTargetMismatch`] on the active path.
+/// - An *inactive* marker (`active == None`, whether a fresh never-
+///   provisioned state or a retirement tombstone) requires
+///   `previous == None`, coherent `retired`/`high_water_epoch`
+///   metadata, and -- critically -- that `current` is genuinely
+///   absent (not stale, not foreign, not dangling): a marker claiming
+///   "nothing active" is never accepted as consistent with a live
+///   `current` entry of any kind.
 fn verify_marker_against_live_state(
     secrets_fd: BorrowedFd<'_>,
     generations_fd: BorrowedFd<'_>,
     vm_id: &str,
-    kind: SecretKind,
+    kind_slug: &str,
     marker: &MarkerData,
 ) -> Result<(), FailReason> {
-    if marker.vm != vm_id || marker.kind != kind.as_slug() {
+    if marker.vm != vm_id || marker.kind != kind_slug {
         return Err(FailReason::MarkerTamperedOrMissingMaterial);
     }
     if marker.retired && marker.active.is_some() {
@@ -1678,6 +1830,36 @@ fn verify_marker_against_live_state(
         return Err(FailReason::MarkerTamperedOrMissingMaterial);
     }
     let Some(active) = marker.active.as_ref() else {
+        // Inactive marker: either a fresh never-provisioned state
+        // (`retired == false`) or a retirement tombstone
+        // (`retired == true`). Validate complete tombstone / never-
+        // provisioned semantics rather than trivially accepting.
+        if marker.previous.is_some() {
+            // Retirement and (successful) provision both always
+            // clear `previous` together with `active`; a lingering
+            // `previous` over an inactive marker can only be tamper
+            // or corruption.
+            return Err(FailReason::MarkerTamperedOrMissingMaterial);
+        }
+        if marker.retired {
+            if marker.high_water_epoch == 0 {
+                // `retire()` always records the real epoch count
+                // that was retired; a tombstone claiming zero epochs
+                // were ever provisioned is incoherent.
+                return Err(FailReason::MarkerTamperedOrMissingMaterial);
+            }
+        } else if marker.high_water_epoch != 0 {
+            // A never-provisioned marker (no action has ever
+            // committed for this `(vm, kind)`) has no legitimate way
+            // to record a nonzero high-water epoch.
+            return Err(FailReason::MarkerTamperedOrMissingMaterial);
+        }
+        if !current_is_genuinely_absent(secrets_fd)? {
+            // Never treat an inactive marker as `verified_clean` (or
+            // otherwise consistent) over a stale, foreign, or
+            // otherwise still-present `current` entry.
+            return Err(FailReason::IdentityCurrentTargetMismatch);
+        }
         return Ok(());
     };
     if active.epoch == 0 || active.epoch > marker.high_water_epoch {
@@ -1906,6 +2088,26 @@ fn execute_promote(
                 write_txlog(secrets_fd, &TxLog::Promote(intent.clone()))?;
             }
             PromotePhase::EpochReady => {
+                // Recovery may resume directly at this phase from a
+                // persisted txlog written in a wholly separate process
+                // invocation -- `Planned`'s own verification above
+                // ran (if at all) only earlier in that other
+                // invocation's call stack, never here. Re-verify the
+                // complete intended target generation identity BEFORE
+                // swapping `current`: for a rollback (`expected_identity`
+                // present) this is the same full owner/mode/ACL/
+                // nlink/digest/inode comparison `Planned` uses; for a
+                // freshly-created epoch this is at least the digest
+                // check, so a tampered/replaced/missing target never
+                // gets activated.
+                if let Some(expected) = intent.expected_identity.as_ref() {
+                    verify_existing_generation_identity(generations_fd, expected)?;
+                } else {
+                    let identity = capture_identity(generations_fd, intent.to_epoch)?;
+                    if identity.digest_hex != intent.expected_digest_hex {
+                        return Err(FailReason::RecoveryContentMismatch);
+                    }
+                }
                 atomic_swap_current(secrets_fd, intent.to_epoch)?;
                 intent.phase = PromotePhase::CurrentPromoted;
                 write_txlog(secrets_fd, &TxLog::Promote(intent.clone()))?;
@@ -1930,6 +2132,17 @@ fn execute_promote(
                 }
                 if intent.new_high_water_epoch < intent.to_epoch {
                     return Err(FailReason::HighWaterRegressed);
+                }
+                // Re-verify `carry_previous`'s on-disk identity before
+                // writing it into the marker's `previous` field: the
+                // recorded identity in the txlog reflects a snapshot
+                // taken when the intent was first built, and this
+                // phase may run in a later, wholly separate recovery
+                // invocation. Never let a stale, tampered, or removed
+                // `previous` generation be asserted as still-valid
+                // marker state.
+                if let Some(previous) = intent.carry_previous.as_ref() {
+                    verify_existing_generation_identity(generations_fd, previous)?;
                 }
                 let marker = MarkerData {
                     v: MARKER_SCHEMA_VERSION,
@@ -1961,22 +2174,49 @@ fn execute_promote(
                     return Err(FailReason::IdentityCurrentTargetMismatch);
                 }
                 let marker = read_marker(secrets_fd)?.ok_or(FailReason::MarkerWriteFailed)?;
+                if marker.vm != intent.vm || marker.kind != intent.kind {
+                    return Err(FailReason::RecoveryAmbiguous);
+                }
                 let active_matches = marker.active.as_ref().is_some_and(|a| {
                     a.epoch == intent.to_epoch && a.digest_hex == intent.expected_digest_hex
                 });
                 if !active_matches {
                     return Err(FailReason::RecoveryAmbiguous);
                 }
+                if marker.previous != intent.carry_previous {
+                    return Err(FailReason::RecoveryAmbiguous);
+                }
                 if let Some(prune) = intent.prune_epoch {
-                    // Best-effort: pruning failure does not fail the
-                    // action (the marker already durably reflects the
-                    // correct active/previous state); it only leaves
-                    // an orphaned generation directory for a future
-                    // retire() to clean up via its full-tree
-                    // enumeration. Pruning only ever happens after the
-                    // marker commit that no longer references the
-                    // pruned epoch has been durably written above.
-                    let _ = remove_generation(generations_fd, prune);
+                    // Defense in depth beyond `validate_promote_intent_
+                    // semantics`'s intrinsic `prune_epoch != to_epoch
+                    // && prune_epoch != carry_previous.epoch` check:
+                    // now that the marker's own `active`/`previous`
+                    // have been read and confirmed to equal
+                    // `intent.to_epoch`/`intent.carry_previous` above,
+                    // re-derive the same guarantee directly from the
+                    // marker actually on disk, never from the intent
+                    // alone -- pruning must never be able to target
+                    // the marker's live active or previous epoch.
+                    if marker.active.as_ref().is_some_and(|a| a.epoch == prune)
+                        || marker.previous.as_ref().is_some_and(|p| p.epoch == prune)
+                    {
+                        return Err(FailReason::RecoveryAmbiguous);
+                    }
+                    // Never discard a prune failure: pruning only
+                    // ever happens after the marker commit that no
+                    // longer references the pruned epoch has been
+                    // durably written above, so a `remove_generation`
+                    // failure here -- including a deletion that
+                    // succeeded but whose trailing `generations/`
+                    // directory fsync failed -- must propagate and
+                    // retain this durable `MarkerCommitted` txlog
+                    // entry (we return before reaching `remove_txlog`
+                    // below) rather than silently clearing it. A
+                    // future recovery pass resumes exactly here and
+                    // retries both the deletion and the durability
+                    // barrier; it never assumes an unsynced deletion
+                    // is final.
+                    remove_generation(generations_fd, prune)?;
                 }
                 // Any leftover `.stage-*` directory at this point is a
                 // real secret-tree entry from this or a prior crashed
@@ -2021,11 +2261,41 @@ fn execute_retire(
                 {
                     return Err(FailReason::RecoveryAmbiguous);
                 }
+                // Recovery may resume directly at this phase from a
+                // persisted txlog written in a wholly separate process
+                // invocation, with `current` still live and never yet
+                // touched. Re-read and fully validate the marker
+                // against live state -- vm/kind identity, internal
+                // marker semantics, and (if it claims an active
+                // generation) `current`'s exact-target match and full
+                // material identity -- before performing this
+                // transaction's first mutation.
+                if let Some(marker) = read_marker(secrets_fd)? {
+                    verify_marker_against_live_state(
+                        secrets_fd,
+                        generations_fd,
+                        &intent.vm,
+                        &intent.kind,
+                        &marker,
+                    )?;
+                }
                 remove_current_symlink(secrets_fd)?;
                 intent.phase = RetirePhase::CurrentRemoved;
                 write_txlog(secrets_fd, &TxLog::Retire(intent.clone()))?;
             }
             RetirePhase::CurrentRemoved => {
+                // Phase-authority check: this phase's own precondition
+                // is that `Enumerated` already removed `current`. A
+                // persisted txlog resuming here in a separate
+                // recovery invocation must not proceed to delete any
+                // generation until that prior mutation is itself
+                // re-confirmed -- a `current` that reappeared (tamper,
+                // hand-edited txlog, or a foreign actor) must fail
+                // closed rather than let deletion continue underneath
+                // a live activation.
+                if !current_is_genuinely_absent(secrets_fd)? {
+                    return Err(FailReason::RecoveryAmbiguous);
+                }
                 for &epoch in &intent.epochs {
                     revalidate_generation_before_delete(generations_fd, epoch, cfg)?;
                     remove_generation(generations_fd, epoch)?;
@@ -2044,6 +2314,12 @@ fn execute_retire(
                 write_txlog(secrets_fd, &TxLog::Retire(intent.clone()))?;
             }
             RetirePhase::EpochsRemoved => {
+                // Phase-authority check: `current` must still be
+                // absent (this phase never re-creates it) before
+                // trusting a fresh re-enumeration to advance further.
+                if !current_is_genuinely_absent(secrets_fd)? {
+                    return Err(FailReason::RecoveryAmbiguous);
+                }
                 let remaining = enumerate_and_validate_generation_tree(generations_fd)?;
                 if !remaining.epochs.is_empty() || !remaining.stage_names.is_empty() {
                     return Err(FailReason::RetirementNotProvablyEmpty);
@@ -2052,6 +2328,22 @@ fn execute_retire(
                 write_txlog(secrets_fd, &TxLog::Retire(intent.clone()))?;
             }
             RetirePhase::ProvenEmpty => {
+                // Never write the tombstone marker on the strength of
+                // a *previous* invocation's emptiness proof alone: a
+                // persisted txlog resuming exactly here (in a wholly
+                // separate recovery pass) must re-prove both that
+                // `current` is absent and that the generations tree
+                // is still empty immediately before this phase's
+                // otherwise-unconditional mutation, rather than
+                // trusting `EpochsRemoved`'s prior check to still
+                // hold.
+                if !current_is_genuinely_absent(secrets_fd)? {
+                    return Err(FailReason::RecoveryAmbiguous);
+                }
+                let remaining = enumerate_and_validate_generation_tree(generations_fd)?;
+                if !remaining.epochs.is_empty() || !remaining.stage_names.is_empty() {
+                    return Err(FailReason::RetirementNotProvablyEmpty);
+                }
                 let marker = MarkerData {
                     v: MARKER_SCHEMA_VERSION,
                     vm: intent.vm.clone(),
@@ -2130,7 +2422,7 @@ pub fn recover_in_flight_transaction(
         reason,
         audit: SecretsLifecycleAuditFields::denied(
             &SecretsLifecycleAuditContext {
-                vm_id: vm_id.to_owned(),
+                vm_id: VmId::new(vm_id),
                 kind,
                 action: LifecycleAction::Provision,
                 base_dir_hash: String::new(),
@@ -2157,12 +2449,7 @@ pub fn recover_in_flight_transaction(
                 err.action.unwrap_or(LifecycleAction::Provision),
                 &paths,
             );
-            Err(failed_closed(
-                &ctx,
-                false,
-                MarkerResult::FailedClosed,
-                err.reason,
-            ))
+            Err(failed_closed(&ctx, false, err.reason))
         }
     }
 }
@@ -2189,7 +2476,7 @@ fn open_and_recover(
 ) -> Result<OpenAndRecoverOk, SecretsLifecycleError> {
     let paths = derive_paths(vm_id, kind, cfg).map_err(|reason| {
         let ctx = SecretsLifecycleAuditContext {
-            vm_id: vm_id.to_owned(),
+            vm_id: VmId::new(vm_id),
             kind,
             action,
             base_dir_hash: String::new(),
@@ -2206,12 +2493,7 @@ fn open_and_recover(
             Ok(recovered) => recovered,
             Err(err) => {
                 let recovered_ctx = context(vm_id, kind, err.action.unwrap_or(action), &paths);
-                return Err(failed_closed(
-                    &recovered_ctx,
-                    false,
-                    MarkerResult::FailedClosed,
-                    err.reason,
-                ));
+                return Err(failed_closed(&recovered_ctx, false, err.reason));
             }
         };
     let marker =
@@ -2221,10 +2503,10 @@ fn open_and_recover(
             secrets_fd.as_fd(),
             generations_fd.as_fd(),
             vm_id,
-            kind,
+            kind.as_slug(),
             marker,
         )
-        .map_err(|reason| failed_closed(&ctx, recovered, MarkerResult::FailedClosed, reason))?;
+        .map_err(|reason| failed_closed(&ctx, recovered, reason))?;
     }
     Ok((paths, secrets_fd, generations_fd, lock, recovered, marker))
 }
@@ -2252,12 +2534,11 @@ pub fn provision(
         return Err(denied(&ctx, recovered, FailReason::AlreadyProvisioned));
     }
     let existing = enumerate_and_validate_generation_tree(generations_fd.as_fd())
-        .map_err(|reason| failed_closed(&ctx, recovered, MarkerResult::FailedClosed, reason))?;
+        .map_err(|reason| failed_closed(&ctx, recovered, reason))?;
     if !existing.epochs.is_empty() || !existing.stage_names.is_empty() {
         return Err(failed_closed(
             &ctx,
             recovered,
-            MarkerResult::FailedClosed,
             FailReason::GenerationConflict,
         ));
     }
@@ -2279,9 +2560,9 @@ pub fn provision(
         phase: PromotePhase::Planned,
     };
     validate_promote_intent_semantics(&intent, vm_id, kind)
-        .map_err(|reason| failed_closed(&ctx, recovered, MarkerResult::FailedClosed, reason))?;
+        .map_err(|reason| failed_closed(&ctx, recovered, reason))?;
     write_txlog(secrets_fd.as_fd(), &TxLog::Promote(intent.clone()))
-        .map_err(|reason| failed_closed(&ctx, recovered, MarkerResult::FailedClosed, reason))?;
+        .map_err(|reason| failed_closed(&ctx, recovered, reason))?;
     match execute_promote(
         secrets_fd.as_fd(),
         generations_fd.as_fd(),
@@ -2298,15 +2579,9 @@ pub fn provision(
         Ok(PromoteOutcome::AbortedNoMaterial) => Err(failed_closed(
             &ctx,
             recovered,
-            MarkerResult::FailedClosed,
             FailReason::MaterialWriteFailed,
         )),
-        Err(reason) => Err(failed_closed(
-            &ctx,
-            recovered,
-            MarkerResult::FailedClosed,
-            reason,
-        )),
+        Err(reason) => Err(failed_closed(&ctx, recovered, reason)),
     }
 }
 
@@ -2355,9 +2630,9 @@ pub fn rotate(
         phase: PromotePhase::Planned,
     };
     validate_promote_intent_semantics(&intent, vm_id, kind)
-        .map_err(|reason| failed_closed(&ctx, recovered, MarkerResult::FailedClosed, reason))?;
+        .map_err(|reason| failed_closed(&ctx, recovered, reason))?;
     write_txlog(secrets_fd.as_fd(), &TxLog::Promote(intent.clone()))
-        .map_err(|reason| failed_closed(&ctx, recovered, MarkerResult::FailedClosed, reason))?;
+        .map_err(|reason| failed_closed(&ctx, recovered, reason))?;
     match execute_promote(
         secrets_fd.as_fd(),
         generations_fd.as_fd(),
@@ -2376,15 +2651,9 @@ pub fn rotate(
         Ok(PromoteOutcome::AbortedNoMaterial) => Err(failed_closed(
             &ctx,
             recovered,
-            MarkerResult::FailedClosed,
             FailReason::MaterialWriteFailed,
         )),
-        Err(reason) => Err(failed_closed(
-            &ctx,
-            recovered,
-            MarkerResult::FailedClosed,
-            reason,
-        )),
+        Err(reason) => Err(failed_closed(&ctx, recovered, reason)),
     }
 }
 
@@ -2428,9 +2697,9 @@ pub fn rollback(
         phase: PromotePhase::Planned,
     };
     validate_promote_intent_semantics(&intent, vm_id, kind)
-        .map_err(|reason| failed_closed(&ctx, recovered, MarkerResult::FailedClosed, reason))?;
+        .map_err(|reason| failed_closed(&ctx, recovered, reason))?;
     write_txlog(secrets_fd.as_fd(), &TxLog::Promote(intent.clone()))
-        .map_err(|reason| failed_closed(&ctx, recovered, MarkerResult::FailedClosed, reason))?;
+        .map_err(|reason| failed_closed(&ctx, recovered, reason))?;
     match execute_promote(
         secrets_fd.as_fd(),
         generations_fd.as_fd(),
@@ -2448,15 +2717,9 @@ pub fn rollback(
         Ok(PromoteOutcome::AbortedNoMaterial) => Err(failed_closed(
             &ctx,
             recovered,
-            MarkerResult::FailedClosed,
             FailReason::RecoveryAmbiguous,
         )),
-        Err(reason) => Err(failed_closed(
-            &ctx,
-            recovered,
-            MarkerResult::FailedClosed,
-            reason,
-        )),
+        Err(reason) => Err(failed_closed(&ctx, recovered, reason)),
     }
 }
 
@@ -2478,7 +2741,7 @@ pub fn retire(
     let ctx = context(vm_id, kind, LifecycleAction::Retire, &paths);
 
     let existing = enumerate_and_validate_generation_tree(generations_fd.as_fd())
-        .map_err(|reason| failed_closed(&ctx, recovered, MarkerResult::FailedClosed, reason))?;
+        .map_err(|reason| failed_closed(&ctx, recovered, reason))?;
 
     let recorded_high_water = marker.as_ref().map(|m| m.high_water_epoch).unwrap_or(0);
     let marker_claims_active = marker
@@ -2494,8 +2757,24 @@ pub fn retire(
             return Err(failed_closed(
                 &ctx,
                 recovered,
-                MarkerResult::FailedClosed,
                 FailReason::PreviouslyProvisionedMaterialMissing,
+            ));
+        }
+        // Missing marker never implies clean storage, and the
+        // symmetric case matters just as much: never declare
+        // `verified_clean` over a stale, foreign, or otherwise
+        // still-present `current` entry -- regardless of whether a
+        // marker exists at all (an entirely absent marker skips
+        // `verify_marker_against_live_state`'s own current-absence
+        // check inside `open_and_recover`, so this call is the only
+        // place that invariant is enforced in that case).
+        if !current_is_genuinely_absent(secrets_fd.as_fd())
+            .map_err(|reason| failed_closed(&ctx, recovered, reason))?
+        {
+            return Err(failed_closed(
+                &ctx,
+                recovered,
+                FailReason::IdentityCurrentTargetMismatch,
             ));
         }
         return Ok(SecretsLifecycleAuditFields::verified_clean(
@@ -2516,21 +2795,16 @@ pub fn retire(
         phase: RetirePhase::Enumerated,
     };
     validate_retire_intent_semantics(&intent, vm_id, kind)
-        .map_err(|reason| failed_closed(&ctx, recovered, MarkerResult::FailedClosed, reason))?;
+        .map_err(|reason| failed_closed(&ctx, recovered, reason))?;
     write_txlog(secrets_fd.as_fd(), &TxLog::Retire(intent.clone()))
-        .map_err(|reason| failed_closed(&ctx, recovered, MarkerResult::FailedClosed, reason))?;
+        .map_err(|reason| failed_closed(&ctx, recovered, reason))?;
     match execute_retire(secrets_fd.as_fd(), generations_fd.as_fd(), cfg, intent) {
         Ok(()) => Ok(SecretsLifecycleAuditFields::retired(
             &ctx,
             high_water_epoch,
             recovered,
         )),
-        Err(reason) => Err(failed_closed(
-            &ctx,
-            recovered,
-            MarkerResult::FailedClosed,
-            reason,
-        )),
+        Err(reason) => Err(failed_closed(&ctx, recovered, reason)),
     }
 }
 
@@ -4945,5 +5219,841 @@ mod tests {
         assert_eq!(err.reason, FailReason::PreviouslyProvisionedMaterialMissing);
         // Fails closed without deleting anything.
         assert!(gen_dir.exists());
+    }
+
+    // -------------------------------------------------------------
+    // Round-6 finding 1: promotion recovery phase-ordering
+    // -------------------------------------------------------------
+
+    #[test]
+    fn epoch_ready_recovery_rejects_a_tampered_freshly_created_target_before_swapping_current() {
+        // `EpochReady` recovery resuming in a separate invocation must
+        // re-verify the intended target's digest BEFORE swapping
+        // `current` -- a target tampered between `Planned` (in one
+        // process) and `EpochReady` recovery (in another) must never
+        // be activated.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "epoch-ready-tamper-fresh";
+        let kind = SecretKind::GuestSigningKey;
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let mat = material(b"e1");
+        let stage_name = random_stage_name();
+        ensure_staged(
+            generations_fd.as_fd(),
+            &cfg,
+            &stage_name,
+            &mat.digest_hex(),
+            Some(&mat),
+        )
+        .unwrap();
+        promote_stage_to_generation(generations_fd.as_fd(), &stage_name, 1, &mat.digest_hex())
+            .unwrap();
+        // Tamper the target epoch's material after it was promoted,
+        // simulating drift between the crashed attempt and this
+        // recovery pass.
+        let gen_dir = paths.kind_root.join(GENERATIONS_DIR_NAME).join("1");
+        std::fs::write(gen_dir.join(MATERIAL_FILE_NAME), b"tampered").unwrap();
+
+        let intent = PromoteIntent {
+            vm: vm.to_owned(),
+            kind: kind.as_slug().to_owned(),
+            action: LifecycleAction::Provision,
+            to_epoch: 1,
+            create_epoch: true,
+            stage_name,
+            expected_digest_hex: mat.digest_hex(),
+            expected_identity: None,
+            carry_previous: None,
+            prune_epoch: None,
+            new_high_water_epoch: 1,
+            first_provisioned_ms: now_ms(),
+            phase: PromotePhase::EpochReady,
+        };
+        let err = execute_promote(
+            secrets_fd.as_fd(),
+            generations_fd.as_fd(),
+            &cfg,
+            intent,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(err, FailReason::RecoveryContentMismatch);
+        // `current` was never swapped.
+        assert!(!current_resolves_exactly_to(secrets_fd.as_fd(), 1));
+        assert!(read_marker(secrets_fd.as_fd()).unwrap().is_none());
+    }
+
+    #[test]
+    fn epoch_ready_recovery_rejects_a_tampered_rollback_target_before_swapping_current() {
+        // Rollback's `EpochReady` recovery must re-run the full
+        // owner/mode/ACL/nlink/digest/inode comparison against
+        // `expected_identity` before swapping `current`, not merely
+        // trust that `Planned` already checked it in an earlier
+        // invocation.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "epoch-ready-tamper-rollback";
+        let kind = SecretKind::GuestSigningKey;
+        provision(vm, kind, material(b"e1"), &cfg).unwrap();
+        rotate(vm, kind, material(b"e2"), &cfg).unwrap();
+
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        // Capture the *correct* identity of epoch 1 (the rollback
+        // target) before tampering.
+        let expected = capture_identity(generations_fd.as_fd(), 1).unwrap();
+        // Tamper the rollback target's mode after the identity was
+        // captured/recorded into the intent.
+        let gen_dir = paths.kind_root.join(GENERATIONS_DIR_NAME).join("1");
+        std::fs::set_permissions(
+            gen_dir.join(MATERIAL_FILE_NAME),
+            std::fs::Permissions::from_mode(0o777),
+        )
+        .unwrap();
+
+        let intent = PromoteIntent {
+            vm: vm.to_owned(),
+            kind: kind.as_slug().to_owned(),
+            action: LifecycleAction::Rollback,
+            to_epoch: 1,
+            create_epoch: false,
+            stage_name: random_stage_name(),
+            expected_digest_hex: expected.digest_hex.clone(),
+            expected_identity: Some(expected),
+            carry_previous: None,
+            prune_epoch: None,
+            new_high_water_epoch: 2,
+            first_provisioned_ms: now_ms(),
+            phase: PromotePhase::EpochReady,
+        };
+        let err = execute_promote(
+            secrets_fd.as_fd(),
+            generations_fd.as_fd(),
+            &cfg,
+            intent,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(err, FailReason::IdentityModeMismatch);
+        // `current` must still resolve to the pre-rollback active
+        // epoch (2), never having been swapped toward the tampered
+        // target.
+        assert!(current_resolves_exactly_to(secrets_fd.as_fd(), 2));
+    }
+
+    #[test]
+    fn current_promoted_recovery_rejects_a_tampered_carry_previous_before_marker_write() {
+        // `CurrentPromoted` recovery must re-verify `carry_previous`'s
+        // on-disk identity before writing it into the marker's
+        // `previous` field -- a `previous` generation tampered between
+        // intent-build time and this recovery pass must never be
+        // asserted as still-valid marker state.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "current-promoted-tamper-previous";
+        let kind = SecretKind::GuestSigningKey;
+        provision(vm, kind, material(b"e1"), &cfg).unwrap();
+
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let carry_previous = capture_identity(generations_fd.as_fd(), 1).unwrap();
+        // Tamper epoch 1 (the carried-forward `previous`) after its
+        // identity was captured -- change its content (and therefore
+        // digest) so the tamper is unambiguous regardless of the
+        // material file's original mode.
+        let gen_dir = paths.kind_root.join(GENERATIONS_DIR_NAME).join("1");
+        std::fs::write(gen_dir.join(MATERIAL_FILE_NAME), b"tampered-previous").unwrap();
+
+        let mat = material(b"e2");
+        let stage_name = random_stage_name();
+        ensure_staged(
+            generations_fd.as_fd(),
+            &cfg,
+            &stage_name,
+            &mat.digest_hex(),
+            Some(&mat),
+        )
+        .unwrap();
+        promote_stage_to_generation(generations_fd.as_fd(), &stage_name, 2, &mat.digest_hex())
+            .unwrap();
+        atomic_swap_current(secrets_fd.as_fd(), 2).unwrap();
+
+        let intent = PromoteIntent {
+            vm: vm.to_owned(),
+            kind: kind.as_slug().to_owned(),
+            action: LifecycleAction::Rotate,
+            to_epoch: 2,
+            create_epoch: true,
+            stage_name,
+            expected_digest_hex: mat.digest_hex(),
+            expected_identity: None,
+            carry_previous: Some(carry_previous),
+            prune_epoch: None,
+            new_high_water_epoch: 2,
+            first_provisioned_ms: now_ms(),
+            phase: PromotePhase::CurrentPromoted,
+        };
+        let err = execute_promote(
+            secrets_fd.as_fd(),
+            generations_fd.as_fd(),
+            &cfg,
+            intent,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(err, FailReason::IdentityDigestMismatch);
+        // The pre-existing (provision-time) marker must be untouched:
+        // no marker claiming epoch 2 active was ever written.
+        let marker = read_marker(secrets_fd.as_fd()).unwrap().unwrap();
+        assert_eq!(marker.active.unwrap().epoch, 1);
+    }
+
+    #[test]
+    fn marker_committed_recovery_rejects_a_marker_vm_kind_mismatch() {
+        // A marker whose `active`/`previous` line up with the intent
+        // but whose `vm`/`kind` do not must still be rejected --
+        // proves the vm/kind check is independent of the
+        // active/previous comparison.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "mc-vm-kind-mismatch";
+        let kind = SecretKind::GuestSigningKey;
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let mat = material(b"e1");
+        let stage_name = random_stage_name();
+        ensure_staged(
+            generations_fd.as_fd(),
+            &cfg,
+            &stage_name,
+            &mat.digest_hex(),
+            Some(&mat),
+        )
+        .unwrap();
+        promote_stage_to_generation(generations_fd.as_fd(), &stage_name, 1, &mat.digest_hex())
+            .unwrap();
+        atomic_swap_current(secrets_fd.as_fd(), 1).unwrap();
+        let identity = capture_identity(generations_fd.as_fd(), 1).unwrap();
+        let wrong_kind_marker = MarkerData {
+            v: MARKER_SCHEMA_VERSION,
+            vm: vm.to_owned(),
+            // Wrong kind slug, everything else matches.
+            kind: SecretKind::SecurityKeyChannelState.as_slug().to_owned(),
+            retired: false,
+            high_water_epoch: 1,
+            active: Some(identity),
+            previous: None,
+            first_provisioned_ms: now_ms(),
+            updated_ms: now_ms(),
+        };
+        write_marker(secrets_fd.as_fd(), &wrong_kind_marker).unwrap();
+
+        let intent = PromoteIntent {
+            vm: vm.to_owned(),
+            kind: kind.as_slug().to_owned(),
+            action: LifecycleAction::Provision,
+            to_epoch: 1,
+            create_epoch: true,
+            stage_name,
+            expected_digest_hex: mat.digest_hex(),
+            expected_identity: None,
+            carry_previous: None,
+            prune_epoch: None,
+            new_high_water_epoch: 1,
+            first_provisioned_ms: now_ms(),
+            phase: PromotePhase::MarkerCommitted,
+        };
+        let err = execute_promote(
+            secrets_fd.as_fd(),
+            generations_fd.as_fd(),
+            &cfg,
+            intent,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(err, FailReason::RecoveryAmbiguous);
+    }
+
+    #[test]
+    fn marker_committed_recovery_rejects_a_previous_mismatch() {
+        // Active epoch/digest agree, but the marker's `previous` does
+        // not match `intent.carry_previous` -- must still be rejected
+        // as its own, independent check.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "mc-previous-mismatch";
+        let kind = SecretKind::GuestSigningKey;
+        provision(vm, kind, material(b"e1"), &cfg).unwrap();
+        rotate(vm, kind, material(b"e2"), &cfg).unwrap();
+
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        // Marker on disk (from the real rotate) correctly carries
+        // previous = epoch 1. Build an intent claiming a *different*
+        // (nonexistent) previous epoch.
+        let bogus_previous = MaterialIdentity {
+            epoch: 1,
+            dev: 0,
+            ino: 0,
+            uid: 0,
+            gid: 0,
+            mode: 0o600,
+            nlink: 1,
+            has_acl: false,
+            digest_hex: "0".repeat(64),
+        };
+        let mat = material(b"e2");
+        let intent = PromoteIntent {
+            vm: vm.to_owned(),
+            kind: kind.as_slug().to_owned(),
+            action: LifecycleAction::Rotate,
+            to_epoch: 2,
+            create_epoch: true,
+            stage_name: random_stage_name(),
+            expected_digest_hex: mat.digest_hex(),
+            expected_identity: None,
+            carry_previous: Some(bogus_previous),
+            prune_epoch: None,
+            new_high_water_epoch: 2,
+            first_provisioned_ms: now_ms(),
+            phase: PromotePhase::MarkerCommitted,
+        };
+        let err = execute_promote(
+            secrets_fd.as_fd(),
+            generations_fd.as_fd(),
+            &cfg,
+            intent,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(err, FailReason::RecoveryAmbiguous);
+    }
+
+    #[test]
+    fn marker_committed_recovery_rejects_pruning_the_markers_own_active_epoch() {
+        // Defense in depth: even though `validate_promote_intent_
+        // semantics` already rejects `prune_epoch == to_epoch`/
+        // `carry_previous.epoch` as an intrinsic intent-shape check,
+        // `MarkerCommitted` recovery must independently re-derive the
+        // same guarantee from the marker actually read from disk.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "mc-prune-collision";
+        let kind = SecretKind::GuestSigningKey;
+        provision(vm, kind, material(b"e1"), &cfg).unwrap();
+
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let marker = read_marker(secrets_fd.as_fd()).unwrap().unwrap();
+        let active = marker.active.clone().unwrap();
+
+        let intent = PromoteIntent {
+            vm: vm.to_owned(),
+            kind: kind.as_slug().to_owned(),
+            action: LifecycleAction::Provision,
+            to_epoch: 1,
+            create_epoch: true,
+            stage_name: random_stage_name(),
+            expected_digest_hex: active.digest_hex.clone(),
+            expected_identity: None,
+            carry_previous: None,
+            // Hand-edited/corrupted txlog: prune targets the marker's
+            // own active epoch.
+            prune_epoch: Some(1),
+            new_high_water_epoch: 1,
+            first_provisioned_ms: now_ms(),
+            phase: PromotePhase::MarkerCommitted,
+        };
+        let err = execute_promote(
+            secrets_fd.as_fd(),
+            generations_fd.as_fd(),
+            &cfg,
+            intent,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(err, FailReason::RecoveryAmbiguous);
+        // Nothing was pruned.
+        let generations_dir = paths.kind_root.join(GENERATIONS_DIR_NAME);
+        assert!(generations_dir.join("1").join(MATERIAL_FILE_NAME).is_file());
+    }
+
+    #[test]
+    fn marker_committed_prune_fsync_failure_retains_txlog_for_retry() {
+        // Pruning durability: if `remove_generation` succeeds in
+        // deleting content but its trailing `generations/` directory
+        // fsync fails, the already-durable `MarkerCommitted` txlog
+        // must be retained (never cleared) so a later recovery pass
+        // resumes exactly here and retries the barrier.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "mc-prune-fsync-retry";
+        let kind = SecretKind::GuestSigningKey;
+        provision(vm, kind, material(b"e1"), &cfg).unwrap();
+        rotate(vm, kind, material(b"e2"), &cfg).unwrap();
+
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let marker = read_marker(secrets_fd.as_fd()).unwrap().unwrap();
+        let active = marker.active.clone().unwrap();
+        let previous = marker.previous.clone();
+
+        // Stage an extra leftover generation the prune step is free
+        // to target so the fsync-failure path is genuinely exercised
+        // through `remove_generation`, not skipped for lack of a
+        // prune target.
+        let stray_mat = material(b"stray");
+        let stray_stage = random_stage_name();
+        ensure_staged(
+            generations_fd.as_fd(),
+            &cfg,
+            &stray_stage,
+            &stray_mat.digest_hex(),
+            Some(&stray_mat),
+        )
+        .unwrap();
+        promote_stage_to_generation(
+            generations_fd.as_fd(),
+            &stray_stage,
+            99,
+            &stray_mat.digest_hex(),
+        )
+        .unwrap();
+
+        let intent = PromoteIntent {
+            vm: vm.to_owned(),
+            kind: kind.as_slug().to_owned(),
+            action: LifecycleAction::Rotate,
+            to_epoch: active.epoch,
+            create_epoch: true,
+            stage_name: random_stage_name(),
+            expected_digest_hex: active.digest_hex.clone(),
+            expected_identity: None,
+            carry_previous: previous,
+            prune_epoch: Some(99),
+            new_high_water_epoch: active.epoch,
+            first_provisioned_ms: now_ms(),
+            phase: PromotePhase::MarkerCommitted,
+        };
+        write_txlog(secrets_fd.as_fd(), &TxLog::Promote(intent.clone())).unwrap();
+
+        {
+            let _fault = FsyncFaultGuard::enable();
+            let err = execute_promote(
+                secrets_fd.as_fd(),
+                generations_fd.as_fd(),
+                &cfg,
+                intent,
+                None,
+            )
+            .unwrap_err();
+            assert_eq!(err, FailReason::FsyncFailed);
+        }
+        // The txlog must still be present: the prune failure must not
+        // have caused `remove_txlog` to run.
+        assert!(read_txlog(secrets_fd.as_fd(), vm, kind).unwrap().is_some());
+    }
+
+    // -------------------------------------------------------------
+    // Round-6 finding 2: retire recovery phase-ordering /
+    // phase-authority checks
+    // -------------------------------------------------------------
+
+    #[test]
+    fn enumerated_phase_rejects_a_marker_disagreeing_with_live_state_before_removing_current() {
+        // `execute_retire`'s own `Enumerated` handler (exercised
+        // directly here the way a separate recovery-invocation would
+        // resume it) must re-read and fully validate the marker
+        // against live state before its first mutation
+        // (`remove_current_symlink`) -- not merely trust a validation
+        // that may have run in an earlier, different process
+        // invocation.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "enumerated-marker-mismatch";
+        let kind = SecretKind::GuestSigningKey;
+        provision(vm, kind, material(b"e1"), &cfg).unwrap();
+
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        // Corrupt the marker's recorded digest without touching the
+        // real on-disk generation content.
+        let mut marker = read_marker(secrets_fd.as_fd()).unwrap().unwrap();
+        marker.active.as_mut().unwrap().digest_hex = "0".repeat(64);
+        write_marker(secrets_fd.as_fd(), &marker).unwrap();
+
+        let intent = RetireIntent {
+            vm: vm.to_owned(),
+            kind: kind.as_slug().to_owned(),
+            epochs: vec![1],
+            stage_names: Vec::new(),
+            high_water_epoch: 1,
+            phase: RetirePhase::Enumerated,
+        };
+        let err =
+            execute_retire(secrets_fd.as_fd(), generations_fd.as_fd(), &cfg, intent).unwrap_err();
+        assert_eq!(err, FailReason::IdentityDigestMismatch);
+        // Nothing was deleted: `current` and the generation are both
+        // still intact.
+        assert!(current_resolves_exactly_to(secrets_fd.as_fd(), 1));
+        let generations_dir = paths.kind_root.join(GENERATIONS_DIR_NAME);
+        assert!(generations_dir.join("1").join(MATERIAL_FILE_NAME).is_file());
+    }
+
+    #[test]
+    fn current_removed_phase_rejects_resumption_when_current_still_present() {
+        // Phase-authority check: a txlog resuming at `CurrentRemoved`
+        // asserts, by construction, that `Enumerated` already removed
+        // `current`. A hand-edited/corrupted txlog claiming this
+        // phase over a still-present `current` must fail closed
+        // before deleting any generation.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "current-removed-still-present";
+        let kind = SecretKind::GuestSigningKey;
+        provision(vm, kind, material(b"e1"), &cfg).unwrap();
+
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        // `current` is deliberately left in place, unlike the
+        // legitimate `CurrentRemoved` precondition.
+        let intent = RetireIntent {
+            vm: vm.to_owned(),
+            kind: kind.as_slug().to_owned(),
+            epochs: vec![1],
+            stage_names: Vec::new(),
+            high_water_epoch: 1,
+            phase: RetirePhase::CurrentRemoved,
+        };
+        let err =
+            execute_retire(secrets_fd.as_fd(), generations_fd.as_fd(), &cfg, intent).unwrap_err();
+        assert_eq!(err, FailReason::RecoveryAmbiguous);
+        let generations_dir = paths.kind_root.join(GENERATIONS_DIR_NAME);
+        assert!(generations_dir.join("1").join(MATERIAL_FILE_NAME).is_file());
+    }
+
+    #[test]
+    fn epochs_removed_phase_rejects_resumption_when_current_still_present() {
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "epochs-removed-still-present";
+        let kind = SecretKind::GuestSigningKey;
+        provision(vm, kind, material(b"e1"), &cfg).unwrap();
+
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let intent = RetireIntent {
+            vm: vm.to_owned(),
+            kind: kind.as_slug().to_owned(),
+            epochs: vec![1],
+            stage_names: Vec::new(),
+            high_water_epoch: 1,
+            phase: RetirePhase::EpochsRemoved,
+        };
+        let err =
+            execute_retire(secrets_fd.as_fd(), generations_fd.as_fd(), &cfg, intent).unwrap_err();
+        assert_eq!(err, FailReason::RecoveryAmbiguous);
+        let generations_dir = paths.kind_root.join(GENERATIONS_DIR_NAME);
+        assert!(generations_dir.join("1").join(MATERIAL_FILE_NAME).is_file());
+    }
+
+    #[test]
+    fn proven_empty_phase_rejects_resumption_when_tree_is_no_longer_empty() {
+        // Never write the tombstone marker on the strength of a
+        // *previous* invocation's emptiness proof alone: a persisted
+        // txlog resuming at `ProvenEmpty` must re-prove the tree is
+        // still empty immediately before this phase's otherwise-
+        // unconditional mutation.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "proven-empty-reappeared";
+        let kind = SecretKind::GuestSigningKey;
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        // Simulate a generation reappearing between `EpochsRemoved`
+        // and this resumed `ProvenEmpty` pass (e.g. a foreign actor,
+        // or a bug elsewhere) by planting one directly.
+        let mat = material(b"reappeared");
+        let stage_name = random_stage_name();
+        ensure_staged(
+            generations_fd.as_fd(),
+            &cfg,
+            &stage_name,
+            &mat.digest_hex(),
+            Some(&mat),
+        )
+        .unwrap();
+        promote_stage_to_generation(generations_fd.as_fd(), &stage_name, 5, &mat.digest_hex())
+            .unwrap();
+
+        let intent = RetireIntent {
+            vm: vm.to_owned(),
+            kind: kind.as_slug().to_owned(),
+            epochs: vec![1],
+            stage_names: Vec::new(),
+            high_water_epoch: 1,
+            phase: RetirePhase::ProvenEmpty,
+        };
+        let err =
+            execute_retire(secrets_fd.as_fd(), generations_fd.as_fd(), &cfg, intent).unwrap_err();
+        assert_eq!(err, FailReason::RetirementNotProvablyEmpty);
+        // No tombstone marker was written.
+        assert!(read_marker(secrets_fd.as_fd()).unwrap().is_none());
+    }
+
+    #[test]
+    fn proven_empty_phase_rejects_resumption_when_current_still_present() {
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "proven-empty-current-present";
+        let kind = SecretKind::GuestSigningKey;
+        provision(vm, kind, material(b"e1"), &cfg).unwrap();
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        // `current` still resolves to epoch 1 even though the txlog
+        // claims the tree has already been proven empty.
+        let intent = RetireIntent {
+            vm: vm.to_owned(),
+            kind: kind.as_slug().to_owned(),
+            epochs: vec![1],
+            stage_names: Vec::new(),
+            high_water_epoch: 1,
+            phase: RetirePhase::ProvenEmpty,
+        };
+        let err =
+            execute_retire(secrets_fd.as_fd(), generations_fd.as_fd(), &cfg, intent).unwrap_err();
+        assert_eq!(err, FailReason::RecoveryAmbiguous);
+        assert!(
+            read_marker(secrets_fd.as_fd())
+                .unwrap()
+                .unwrap()
+                .active
+                .is_some()
+        );
+    }
+
+    // -------------------------------------------------------------
+    // Round-6 finding 5: inactive/tombstone marker validation
+    // -------------------------------------------------------------
+
+    #[test]
+    fn open_and_recover_rejects_an_inactive_marker_with_lingering_previous() {
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "inactive-lingering-previous";
+        let kind = SecretKind::GuestSigningKey;
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (secrets_fd, _generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let bogus_previous = MaterialIdentity {
+            epoch: 1,
+            dev: 0,
+            ino: 0,
+            uid: 0,
+            gid: 0,
+            mode: 0o600,
+            nlink: 1,
+            has_acl: false,
+            digest_hex: "0".repeat(64),
+        };
+        let marker = MarkerData {
+            v: MARKER_SCHEMA_VERSION,
+            vm: vm.to_owned(),
+            kind: kind.as_slug().to_owned(),
+            retired: false,
+            high_water_epoch: 0,
+            active: None,
+            // Inactive marker with a lingering `previous` -- always
+            // tamper/corruption, never a legitimate write-path shape.
+            previous: Some(bogus_previous),
+            first_provisioned_ms: 0,
+            updated_ms: now_ms(),
+        };
+        write_marker(secrets_fd.as_fd(), &marker).unwrap();
+        drop(secrets_fd);
+
+        let err = provision(vm, kind, material(b"e1"), &cfg).unwrap_err();
+        assert_eq!(err.reason, FailReason::MarkerTamperedOrMissingMaterial);
+    }
+
+    #[test]
+    fn open_and_recover_rejects_a_tombstone_with_zero_high_water() {
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "tombstone-zero-high-water";
+        let kind = SecretKind::GuestSigningKey;
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (secrets_fd, _generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let marker = MarkerData {
+            v: MARKER_SCHEMA_VERSION,
+            vm: vm.to_owned(),
+            kind: kind.as_slug().to_owned(),
+            // A tombstone claiming `retired == true` must always
+            // carry the real epoch count that was retired.
+            retired: true,
+            high_water_epoch: 0,
+            active: None,
+            previous: None,
+            first_provisioned_ms: 0,
+            updated_ms: now_ms(),
+        };
+        write_marker(secrets_fd.as_fd(), &marker).unwrap();
+        drop(secrets_fd);
+
+        let err = provision(vm, kind, material(b"e1"), &cfg).unwrap_err();
+        assert_eq!(err.reason, FailReason::MarkerTamperedOrMissingMaterial);
+    }
+
+    #[test]
+    fn open_and_recover_rejects_a_never_provisioned_marker_with_nonzero_high_water() {
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "never-provisioned-nonzero-high-water";
+        let kind = SecretKind::GuestSigningKey;
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (secrets_fd, _generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let marker = MarkerData {
+            v: MARKER_SCHEMA_VERSION,
+            vm: vm.to_owned(),
+            kind: kind.as_slug().to_owned(),
+            retired: false,
+            // Never-provisioned but claims a nonzero high-water --
+            // has no legitimate write path.
+            high_water_epoch: 3,
+            active: None,
+            previous: None,
+            first_provisioned_ms: 0,
+            updated_ms: now_ms(),
+        };
+        write_marker(secrets_fd.as_fd(), &marker).unwrap();
+        drop(secrets_fd);
+
+        let err = provision(vm, kind, material(b"e1"), &cfg).unwrap_err();
+        assert_eq!(err.reason, FailReason::MarkerTamperedOrMissingMaterial);
+    }
+
+    #[test]
+    fn open_and_recover_rejects_an_inactive_marker_over_a_stale_foreign_current() {
+        // Never treat an inactive marker as consistent (let alone
+        // `verified_clean`) over a stale, foreign, or otherwise
+        // still-present `current` entry.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "inactive-stale-current";
+        let kind = SecretKind::GuestSigningKey;
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        // Plant a foreign `current` pointing at a real-looking, but
+        // never-recorded, generation.
+        let mat = material(b"foreign");
+        let stage_name = random_stage_name();
+        ensure_staged(
+            generations_fd.as_fd(),
+            &cfg,
+            &stage_name,
+            &mat.digest_hex(),
+            Some(&mat),
+        )
+        .unwrap();
+        promote_stage_to_generation(generations_fd.as_fd(), &stage_name, 7, &mat.digest_hex())
+            .unwrap();
+        atomic_swap_current(secrets_fd.as_fd(), 7).unwrap();
+        // Marker claims a clean, never-provisioned state -- disagrees
+        // with the live `current`.
+        let marker = MarkerData {
+            v: MARKER_SCHEMA_VERSION,
+            vm: vm.to_owned(),
+            kind: kind.as_slug().to_owned(),
+            retired: false,
+            high_water_epoch: 0,
+            active: None,
+            previous: None,
+            first_provisioned_ms: 0,
+            updated_ms: now_ms(),
+        };
+        write_marker(secrets_fd.as_fd(), &marker).unwrap();
+        drop(secrets_fd);
+        drop(generations_fd);
+
+        let err = provision(vm, kind, material(b"e1"), &cfg).unwrap_err();
+        assert_eq!(err.reason, FailReason::IdentityCurrentTargetMismatch);
+    }
+
+    #[test]
+    fn retire_verified_clean_rejects_when_current_present_despite_missing_marker() {
+        // Symmetric to "missing marker never implies clean storage":
+        // when the marker file is entirely absent (so
+        // `verify_marker_against_live_state` never runs at all) and
+        // the physical generation tree is empty, `retire()`'s own
+        // `verified_clean` path must still independently check
+        // `current` itself, rather than declare clean storage over a
+        // stale/foreign `current` entry.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "verified-clean-stale-current";
+        let kind = SecretKind::GuestSigningKey;
+        provision(vm, kind, material(b"e1"), &cfg).unwrap();
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        // Remove the generation content and the marker, but leave
+        // `current` behind pointing at the now-vanished epoch --
+        // exactly the pathological "empty tree, no marker, but
+        // current still present" state.
+        let gen_dir = paths.kind_root.join(GENERATIONS_DIR_NAME).join("1");
+        std::fs::remove_file(gen_dir.join(MATERIAL_FILE_NAME)).unwrap();
+        std::fs::remove_dir(&gen_dir).unwrap();
+        std::fs::remove_file(paths.kind_root.join(MARKER_FILE_NAME)).unwrap();
+
+        let err = retire(vm, kind, &cfg).unwrap_err();
+        assert_eq!(err.reason, FailReason::IdentityCurrentTargetMismatch);
+    }
+
+    // -------------------------------------------------------------
+    // Round-6 finding 6: material read type/size hardening
+    // -------------------------------------------------------------
+
+    #[test]
+    fn capture_identity_rejects_an_oversized_material_file_without_reading_it_whole() {
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "oversized-material-read";
+        let kind = SecretKind::GuestSigningKey;
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (_secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let gen_dir = paths.kind_root.join(GENERATIONS_DIR_NAME).join("1");
+        std::fs::create_dir(&gen_dir).unwrap();
+        // Plant a file larger than the closed read cap directly
+        // (bypassing `SecretMaterial`'s own constructor-time size
+        // check) to prove the *read layer* itself also refuses to
+        // read an oversized on-disk entry.
+        let oversized = vec![0u8; SecretMaterial::MAX_LEN + 2];
+        std::fs::write(gen_dir.join(MATERIAL_FILE_NAME), &oversized).unwrap();
+
+        let err = capture_identity(generations_fd.as_fd(), 1).unwrap_err();
+        assert_eq!(err, FailReason::PreviouslyProvisionedMaterialMissing);
+    }
+
+    #[test]
+    fn capture_identity_rejects_a_fifo_planted_at_the_material_path() {
+        // A FIFO planted at the material path must be rejected before
+        // any read is attempted -- opened non-blocking specifically
+        // so this can never hang indefinitely.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "fifo-material-read";
+        let kind = SecretKind::GuestSigningKey;
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let (_secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let gen_dir = paths.kind_root.join(GENERATIONS_DIR_NAME).join("1");
+        std::fs::create_dir(&gen_dir).unwrap();
+        let material_path = gen_dir.join(MATERIAL_FILE_NAME);
+        nix::unistd::mkfifo(
+            &material_path,
+            nix::sys::stat::Mode::from_bits_truncate(0o600),
+        )
+        .unwrap();
+
+        let err = capture_identity(generations_fd.as_fd(), 1).unwrap_err();
+        assert_eq!(err, FailReason::PreviouslyProvisionedMaterialMissing);
     }
 }

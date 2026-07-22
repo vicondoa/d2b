@@ -61,20 +61,35 @@ already been activated.**
 ### Cross-process locking and the durable transaction log
 
 Every mutating action first opens (or creates)
-`<kind_root>/lock` and takes an exclusive, blocking-with-timeout
-`flock(2)` on it (`acquire_lock`, bounded by
+`<kind_root>/lock` and takes an exclusive, poll-with-timeout **open
+file description (OFD)** lock on it via `F_OFD_SETLK`
+(`acquire_lock`/`try_ofd_lock_exclusive`, bounded by
 `SecretsLifecycleConfig::lock_max_wait`/`lock_poll_interval`, failing
 closed with `FailReason::LockUnavailable` on timeout — this is the
 cross-process, per-`(vm, kind)` exclusive lock finding (1) asked for).
-Before trusting the lock, `acquire_lock` verifies: the anchored parent
-(`kind_root`) is a trusted-broker-owned directory of the expected mode
+This module deliberately uses the repository's established `F_OFD_SETLK`
+convention (mirroring `d2bd::audio_dispatch::ofd_lock`/`ofd_unlock`)
+rather than BSD `flock(2)`: an OFD lock is associated with the *open
+file description*, not the owning process, so it composes correctly
+with a single process holding multiple independent fds on the same
+lock file, where `flock`'s whole-process association would let two
+unrelated fds silently share one lock. Before trusting the lock,
+`acquire_lock` verifies: the anchored parent (`kind_root`) is a
+trusted-broker-owned directory of the expected mode
 (`verify_broker_owned`); the lock file itself is a trusted-broker-owned
 regular file of the expected mode with exactly one hard link (never a
-hard-link plant); and, immediately after `flock` succeeds, that the
-`lock` directory entry still resolves — by `(dev, ino)` — to the exact
-file this call opened and locked, closing the classic
-unlink-and-recreate-between-open-and-flock race. Any mismatch is
-`FailReason::BrokerOwnershipViolation`. "Broker-owned" here means
+hard-link plant); and, immediately after the OFD lock succeeds, that
+the `lock` directory entry still resolves — by `(dev, ino)` — to the
+exact file this call opened and locked, closing the classic
+unlink-and-recreate-between-open-and-lock race. Any mismatch is
+`FailReason::BrokerOwnershipViolation`. `LockGuard` is an opaque RAII
+token with no public/forgeable "is locked" proof; releasing the lock
+is simply closing its owned fd (the kernel drops an OFD lock exactly
+when every fd referencing its open file description is closed — no
+separate unlock call is needed). A full generated-sync-row
+`d2b-state::LockSet`/`AuthorityRef` integration remains an explicit
+integrator-owned wiring point (see "Integration wiring points" below).
+"Broker-owned" here means
 "owned by this process's own effective uid/gid" (`broker_identity`):
 metadata directories (`kind_root`, `generations/`) and the lock file
 are never `cfg.owner_uid`/`cfg.owner_gid`-owned — that consumer-facing
@@ -282,10 +297,18 @@ A dedicated marker file per `(vm, kind)` at `<kind_root>/marker.json`
 
 Every public action (`provision`/`rotate`/`rollback`/`retire`) routes
 through the single shared `open_and_recover` entry point, which — right
-after loading the marker and whenever it records an active generation —
-runs one central pre-mutation check, `verify_marker_against_live_state`,
-rather than four separately-maintained call sites. This is the one
-reachable trigger for `FailReason::IdentityCurrentTargetMismatch`: it
+after loading the marker — runs one central pre-mutation check,
+`verify_marker_against_live_state`, rather than four separately-
+maintained call sites. This validates **both** marker shapes, not just
+the active one: for an *active* marker it is the live-generation check
+described below; for an *inactive* (retired/never-provisioned) marker
+it independently verifies `previous == None`, that `high_water_epoch`
+and the marker's own bookkeeping are internally coherent for a
+never-active lineage, and — via `current_is_genuinely_absent` — that
+`current` does not resolve to anything at all (never merely that it
+"looks retired"); a stale or foreign `current` entry surviving over an
+inactive marker is rejected the same way a live-state mismatch is. This
+is the one reachable trigger for `FailReason::IdentityCurrentTargetMismatch`: it
 confirms that `current` resolves, by **exact literal symlink text**, to
 `generations/<active.epoch>` — a path that merely *ends* in the right
 epoch number (an absolute path, a foreign-rooted relative path, or any
@@ -513,7 +536,7 @@ cross-field invariant listed above; every constructor
     <epoch>/material        # 0600, expected_uid:expected_gid
   current -> generations/<epoch>
   marker.json                # 0600 JSON, schema v2
-  lock                        # 0600, flock(2) target, never contains data
+  lock                        # 0600, F_OFD_SETLK target, never contains data
   txlog                       # 0600 JSON, present only mid-transaction
 ```
 
@@ -544,7 +567,22 @@ into any shared sink. An integrator still needs to:
    already exist** with a non-world-writable mode before this module
    is called; this module only creates `state_root/<vm_id>/<kind-slug>`
    beneath it, never `state_root` itself — and the real owner
-   uid/gid for each kind.
+   uid/gid for each kind. This module's public functions still take
+   `vm_id: &str` and derive `kind_root` via `state_root.join(vm_id)`,
+   matching the existing `vm: &str`/label-derived-path convention this
+   repository already uses for this class of op (e.g.
+   `swtpm_dir.rs::paths`); this is **not** the same thing as this
+   component's own audit surface, which is already opaque-ID-bound
+   (`SecretsLifecycleAuditFields::vm_id` is a `d2b_contracts::types::VmId`,
+   never a raw path or label). If/when the ADR 0034 storage contract
+   exposes a generated, caller-resolved opaque storage-id →
+   pre-opened-anchored-dirfd mapping, this module's path-derivation
+   helpers (`derive_paths`/`kind_root`) are the exact integration
+   point to replace with that typed authority instead of a
+   `state_root.join(vm_id)` join; until that resolver exists as a
+   stable, generated contract this component cannot consume, this
+   remains an explicit integrator-owned wiring point rather than
+   something this component can close unilaterally.
 5. Decide whether `SecretKind::GuestSigningKey` material comes from
    `exec_reconcile::run_ssh_keygen` output fed into `rotate`'s
    `material` parameter, or stays separate.
@@ -579,6 +617,16 @@ into any shared sink. An integrator still needs to:
     `tests/unit/nix/pinned/*.txt` picks up the new
     `w8-secrets-lifecycle-eval.nix` case names (not run here since the
     pinned files are not owned by this component).
+12. `acquire_lock` uses this module's own `F_OFD_SETLK` primitive
+    (mirroring `d2bd::audio_dispatch::ofd_lock`/`ofd_unlock`) rather
+    than inventing a new lock namespace, but it does not yet register
+    with any shared `d2b-state::LockSet`/`AuthorityRef` lock registry —
+    no such generated, cross-component lock-row contract exists for
+    this module to consume today. If/when one lands, the integrator
+    should either replace `acquire_lock`'s standalone OFD lock with a
+    caller-supplied typed held-lock/lease token from that registry, or
+    confirm this module's private per-`(vm, kind)` lock file is exempt
+    because nothing outside this module ever contends for it.
 
 ## See also
 

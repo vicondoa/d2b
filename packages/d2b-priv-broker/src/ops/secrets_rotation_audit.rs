@@ -35,6 +35,7 @@
 //! future integrator must perform before any of this is observable in
 //! a running broker's audit log.
 
+use d2b_contracts::types::VmId;
 use serde::{Deserialize, Serialize};
 
 /// Schema version for the secrets-lifecycle terminal audit record.
@@ -298,7 +299,13 @@ impl std::fmt::Display for FailReason {
 /// vary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecretsLifecycleAuditContext {
-    pub vm_id: String,
+    /// Typed, opaque per-VM identity (the same [`VmId`] newtype used
+    /// broker-wide) rather than a bare human-readable label: this
+    /// keeps the audit surface bound to a canonical typed identity
+    /// instead of an ad hoc string, even though its `#[serde(
+    /// transparent)]` wire form is unchanged (a plain JSON string) so
+    /// this is not an audit-schema break.
+    pub vm_id: VmId,
     pub kind: SecretKind,
     pub action: LifecycleAction,
     /// FNV1a-64 hash of the per-kind secrets-state directory path
@@ -312,7 +319,9 @@ pub struct SecretsLifecycleAuditContext {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SecretsLifecycleAuditFields {
     pub schema_version: u32,
-    pub vm_id: String,
+    /// Typed, opaque per-VM identity -- see
+    /// [`SecretsLifecycleAuditContext::vm_id`].
+    pub vm_id: VmId,
     pub kind: SecretKind,
     pub action: LifecycleAction,
     pub base_dir_hash: String,
@@ -480,7 +489,7 @@ impl SecretsLifecycleAuditFields {
                 found: self.schema_version,
             });
         }
-        if !valid_vm_id(&self.vm_id) {
+        if !valid_vm_id(self.vm_id.as_str()) {
             return Err(SecretsLifecycleAuditError::InvalidVmId);
         }
         if let Some(epoch) = self.lineage_epoch
@@ -828,15 +837,24 @@ impl SecretsLifecycleAuditFields {
     /// `recovered_prior_transaction` carries the same meaning as in
     /// [`Self::denied`]: whether a leftover crashed transaction was
     /// already successfully drained before this failure was reached.
+    ///
+    /// `marker_result` is deliberately **not** a caller-supplied
+    /// parameter: every reachable `secrets_lifecycle.rs` call site
+    /// already only ever passes `MarkerResult::FailedClosed` (this
+    /// is the *only* result variant `validate` accepts for
+    /// `FailedClosed`, see the match arm below), so accepting an
+    /// arbitrary `MarkerResult` here was dead flexibility that could
+    /// only ever construct an invalid, immediately-`validate`-
+    /// rejected record. Hardcoding it makes that invalid state
+    /// unconstructible instead of merely unreachable-in-practice.
     pub fn failed(
         ctx: &SecretsLifecycleAuditContext,
         recovered_prior_transaction: bool,
-        marker_result: MarkerResult,
         reason: FailReason,
     ) -> Self {
         Self {
             result: LifecycleResult::FailedClosed,
-            marker_result,
+            marker_result: MarkerResult::FailedClosed,
             fail_reason: Some(reason),
             recovered_prior_transaction,
             ..Self::base(ctx)
@@ -850,7 +868,7 @@ mod tests {
 
     fn ctx(action: LifecycleAction) -> SecretsLifecycleAuditContext {
         SecretsLifecycleAuditContext {
-            vm_id: "work".to_owned(),
+            vm_id: VmId::new("work"),
             kind: SecretKind::GuestSigningKey,
             action,
             base_dir_hash: "0123456789abcdef".to_owned(),
@@ -1060,7 +1078,6 @@ mod tests {
         let record = SecretsLifecycleAuditFields::failed(
             &ctx(LifecycleAction::Rotate),
             false,
-            MarkerResult::FailedClosed,
             FailReason::MarkerTamperedOrMissingMaterial,
         );
         record.validate().expect("failed record must validate");
@@ -1078,7 +1095,6 @@ mod tests {
         let mut record = SecretsLifecycleAuditFields::failed(
             &ctx(LifecycleAction::Retire),
             false,
-            MarkerResult::FailedClosed,
             FailReason::RetirementTreeAnomaly,
         );
         record
@@ -1097,7 +1113,6 @@ mod tests {
         let base = SecretsLifecycleAuditFields::failed(
             &ctx(LifecycleAction::Rotate),
             false,
-            MarkerResult::FailedClosed,
             FailReason::HighWaterRegressed,
         );
 
@@ -1186,7 +1201,7 @@ mod tests {
             false,
         );
         for bad in ["", "work/vm", "wor\0k"] {
-            record.vm_id = bad.to_owned();
+            record.vm_id = VmId::new(bad);
             assert_eq!(
                 record.validate(),
                 Err(SecretsLifecycleAuditError::InvalidVmId)
@@ -1407,7 +1422,6 @@ mod tests {
         let failed = SecretsLifecycleAuditFields::failed(
             &ctx(LifecycleAction::Rotate),
             true,
-            MarkerResult::FailedClosed,
             FailReason::MarkerTamperedOrMissingMaterial,
         );
         failed.validate().expect("recovered failed must validate");
