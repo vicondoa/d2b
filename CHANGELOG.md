@@ -39,6 +39,8 @@ deprecations ship one minor release before removal.
   deployed `d2b-unsafe-local-helper` per-user ComponentSession services.
   Removed the three duplicate dependency-free scaffold crates and their
   workspace policy gate; W8 now owns only the missing d2bd client cutover.
+  Pinned d2bd's direct canonical `d2b-client/host-socket` dependency so the
+  cutover does not rely on `d2b-session` feature unification.
 - Granted only the exact `adr0045-w8-integration` branch the protected delivery
   README and xtask manifest-test paths required to introduce W8's checked-in
   manifest authority; suffixed component branches remain denied.

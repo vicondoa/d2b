@@ -1762,6 +1762,7 @@ dependencies = [
  "async-trait",
  "base64",
  "clap",
+ "d2b-client",
  "d2b-contracts",
  "d2b-core",
  "d2b-gateway",
