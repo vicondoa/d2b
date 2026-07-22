@@ -717,6 +717,12 @@ impl SharedContractPolicy {
     }
 
     fn parent_is_allowed(&self, ownership: &WaveOwnership, parent: &str) -> bool {
+        // W8 component branches use the exact integration branch as their
+        // parent-authoritative ownership root. Other same-wave/suffixed
+        // branches remain ineligible.
+        if ownership.wave == "w8" && parent == ownership.branch_stem {
+            return true;
+        }
         if parent == self.shared_root_branch {
             return ownership.landed_predecessor_ref.is_none();
         }
@@ -1332,7 +1338,12 @@ fn verify_parent_graph<P: OwnershipProbe>(
         "w5" => waves.is_empty(),
         "w6" => waves.is_empty() || waves == ["w5"],
         "w7" => waves.is_empty() || waves == ["w6", "w5"],
-        "w8" => waves.is_empty() || waves == ["w7", "w6", "w5"],
+        "w8" => {
+            waves.is_empty()
+                || waves == ["w8"]
+                || waves == ["w7", "w6", "w5"]
+                || waves == ["w8", "w7", "w6", "w5"]
+        }
         _ => false,
     };
     if !allowed {
@@ -3358,6 +3369,13 @@ mod tests {
 
         // Wrong parent: w8 may only chain from w7, not from w6 directly.
         assert!(!policy.parent_is_allowed(ownership, "adr0045-w6-user-services"));
+        // Component branches may use only the exact W8 integration branch,
+        // never another W8 component, as their ownership authority.
+        assert!(policy.parent_is_allowed(ownership, "adr0045-w8-integration"));
+        assert!(!policy.parent_is_allowed(
+            ownership,
+            "adr0045-w8-integration-secrets-lifecycle"
+        ));
         // Wrong base: an unrelated, non-governed branch is not an authority root.
         assert!(!policy.parent_is_allowed(ownership, "some-unrelated-branch"));
         // W8 must start from the landed predecessor, not bypass W5-W7 by

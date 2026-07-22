@@ -12,6 +12,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Allowed W8 component branches to use only the exact W8 integration branch
+  as their parent-authoritative ownership root; sibling component branches
+  remain ineligible.
 - Updated W8 delivery fingerprint assertions for the Rust 1.94 Clippy
   `len_zero` lint so the parent Rust gate remains green.
 - Added stack node/repository/PR context to every `verify_required_checks`
