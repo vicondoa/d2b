@@ -96,7 +96,7 @@ let
 
     "secrets-lifecycle" = {
       branch = "adr0045-w8-integration-secrets-lifecycle";
-      dependsOn = [ "secrets-authority-seam" ];
+      dependsOn = [ ];
       externalDependsOn = [ ];
       ownedFiles = [
         "docs/how-to/rotate-secrets.md"
@@ -112,19 +112,44 @@ let
       ];
       deletes = [ ];
       scope = [
-        "Provision, rotate, and retire per-realm secrets material (TPM-bound credentials, guest signing keys, security-key channel state) through the existing broker ops surface."
-        "Keep rotation audited through the existing broker audit_op.rs op-emission path; do not add a new broker op family without an explicit follow-up."
-        "Do not touch swtpm_dir.rs, security_key.rs, or guest_material_* files directly; extend them only through the new owned files."
+        "Implement the pure provision/rotate/rollback/retire transaction state machine and closed audit/channel vocabulary behind an injected authority port."
+        "Use DurableState generation/checksum/ownership-epoch fences conceptually; do not implement raw paths, locks, atomic JSON, or broker dispatch here."
+        "Keep tests hermetic so the transaction core can proceed while the authority seam lands."
       ];
       prompt = ''
-        Implement realm secrets lifecycle (provision/rotate/retire) in exactly
-        the owned files. Route every mutation through the existing broker
-        audit-op emission path and existing swtpm/security-key state
-        directories without touching them directly. Do not create a new
-        broker op enum family, edit packages/d2b-priv-broker/src/runtime.rs,
-        packages/d2b-priv-broker/src/lib.rs, or any frozen/global-protected
-        path. Do not implement systemd-user shell routing, gateway,
-        provider-parity, or restart/observability work here.
+        Implement the pure secrets transaction core in exactly the owned
+        files, using an injected authority trait and fake state port for tests.
+        Retain the closed audit/channel contracts but delete hand-rolled path,
+        lock, atomic JSON, and recovery authority. Do not wire broker dispatch
+        or generated storage in this component.
+      '';
+    };
+
+    "secrets-runtime-integration" = {
+      branch = "adr0045-w8-integration-secrets-runtime-integration";
+      dependsOn = [ "secrets-lifecycle" "secrets-authority-seam" ];
+      externalDependsOn = [ ];
+      ownedFiles = [
+        "packages/d2b-priv-broker/src/ops/audit_op.rs"
+        "packages/d2b-priv-broker/src/ops/mod.rs"
+        "packages/d2b-priv-broker/src/runtime.rs"
+        "packages/d2b-sk-frontend/src/lib.rs"
+      ];
+      reservedPaths = [
+        "packages/d2b-priv-broker/src/runtime.rs"
+      ];
+      forbiddenEditExceptions = [
+        "packages/d2b-priv-broker/src/runtime.rs"
+      ];
+      deletes = [ ];
+      scope = [
+        "Wire the accepted secrets transaction core to the generated authority, broker dispatch, audit sink, startup recovery, and guest channel."
+        "No lifecycle semantics or storage authority are invented here."
+      ];
+      prompt = ''
+        Integrate the landed secrets transaction and authority components in
+        exactly the owned files. Wire broker dispatch/audit/startup recovery
+        and guest channel registration without raw paths or a second lock.
       '';
     };
 
@@ -172,19 +197,14 @@ let
 
     "user-agent-service-seam" = {
       branch = "adr0045-w8-integration-user-agent-service-seam";
-      dependsOn = [ "component-session-service-seam" ];
+      dependsOn = [ "component-session-service-seam" "user-agent-backend-core" ];
       externalDependsOn = [ ];
       ownedFiles = [
         "docs/reference/component-session-v2-vectors.json"
         "nixos-modules/unsafe-local-helper.nix"
         "packages/d2b-contracts/src/v2_component_session.rs"
-        "packages/d2b-unsafe-local-helper/src/controller_allowlist.rs"
         "packages/d2b-unsafe-local-helper/src/server.rs"
         "packages/d2b-unsafe-local-helper/src/services/runtime_systemd_user/mod.rs"
-        "packages/d2b-unsafe-local-helper/src/shell_runtime.rs"
-        "packages/d2b-unsafe-local-helper/src/shell_socket.rs"
-        "packages/d2b-unsafe-local-helper/src/shell_supervisor.rs"
-        "packages/d2b-unsafe-local-helper/src/systemd.rs"
         "tests/host-integration/unsafe-local-helper.nix"
       ];
       reservedPaths = [
@@ -210,15 +230,68 @@ let
       '';
     };
 
+    "user-agent-backend-core" = {
+      branch = "adr0045-w8-integration-user-agent-backend-core";
+      dependsOn = [ ];
+      externalDependsOn = [ ];
+      ownedFiles = [
+        "docs/explanation/systemd-user-shell-backend.md"
+        "packages/d2b-unsafe-local-helper/src/controller_allowlist.rs"
+        "packages/d2b-unsafe-local-helper/src/shell_runtime.rs"
+        "packages/d2b-unsafe-local-helper/src/shell_socket.rs"
+        "packages/d2b-unsafe-local-helper/src/shell_supervisor.rs"
+        "packages/d2b-unsafe-local-helper/src/systemd.rs"
+      ];
+      reservedPaths = [
+        "packages/d2b-unsafe-local-helper/src/shell_supervisor.rs"
+        "packages/d2b-unsafe-local-helper/src/systemd.rs"
+      ];
+      deletes = [ ];
+      scope = [
+        "Implement the real per-user scope/shell backend independently of ComponentSession transport."
+        "Eliminate fork-before-scope-placement, target confusion, and blocking pump teardown while preserving reconnectable PTY/output-ring semantics."
+      ];
+      prompt = ''
+        Implement the real helper backend core in exactly the owned files.
+        Launch inside verified transient USER scopes without an escape window,
+        key state by authenticated target, and make pumps nonblocking,
+        bounded, wakeable, and lock-safe. Do not edit session transport/server
+        composition.
+      '';
+    };
+
+    "shell-client-core" = {
+      branch = "adr0045-w8-integration-shell-client-core";
+      dependsOn = [ ];
+      externalDependsOn = [ ];
+      ownedFiles = [
+        "docs/explanation/systemd-user-shell-client.md"
+        "packages/d2bd/src/unsafe_local_helper.rs"
+        "packages/d2bd/src/unsafe_local_terminal.rs"
+      ];
+      reservedPaths = [
+        "packages/d2bd/src/unsafe_local_helper.rs"
+      ];
+      deletes = [ ];
+      scope = [
+        "Make the d2bd shell client async-first, operation-scoped, target-bound, cancellation-correct, and free of dummy terminal drains."
+        "Depend on an injected session/terminal port until the ComponentSession composition lands."
+      ];
+      prompt = ''
+        Implement the d2bd shell client core in exactly the owned files behind
+        an injected async port. Remove block_in_place/current-thread panic,
+        per-uid reconnectable sessions, dummy drains, and wrong request-id
+        cancellation. Do not select the final ComponentSession adapter here.
+      '';
+    };
+
     "systemd-user-shell-routing" = {
       branch = "adr0045-w8-integration-systemd-user-shell-routing";
-      dependsOn = [ "user-agent-service-seam" ];
+      dependsOn = [ "user-agent-service-seam" "shell-client-core" ];
       externalDependsOn = [ ];
       ownedFiles = [
         "docs/explanation/systemd-user-shell-routing.md"
         "packages/d2bd/src/shell_backend.rs"
-        "packages/d2bd/src/unsafe_local_helper.rs"
-        "packages/d2bd/src/unsafe_local_terminal.rs"
         "packages/d2bd/src/workload_dispatch.rs"
       ];
       reservedPaths = [
@@ -286,7 +359,6 @@ let
       ownedFiles = [
         "docs/explanation/gateway-replacement.md"
         "packages/d2b-gateway-runtime/src/aca_workload.rs"
-        "packages/d2b-gateway-runtime/src/production.rs"
         "packages/d2b-gateway-runtime/src/provider_agent.rs"
         "packages/d2b-gateway/src/audit.rs"
         "packages/d2b-gateway/src/ledger.rs"
@@ -312,18 +384,97 @@ let
       '';
     };
 
-    "provider-parity-fallback-removal" = {
-      branch = "adr0045-w8-integration-provider-parity-fallback-removal";
-      dependsOn = [ "gateway-replacement" ];
+    "runtime-state-platform-seam" = {
+      branch = "adr0045-w8-integration-runtime-state-platform-seam";
+      dependsOn = [ "state-lock-authority-contract" ];
+      externalDependsOn = [ ];
+      ownedFiles = [
+        "nixos-modules/realm-storage-rows.nix"
+        "packages/Cargo.lock"
+        "packages/d2b-contract-tests/tests/storage_sync_contracts.rs"
+        "packages/d2b-gateway-runtime/Cargo.toml"
+        "packages/d2bd/Cargo.toml"
+        "packages/d2b-state/src/audit.rs"
+        "packages/d2b-state/src/path.rs"
+      ];
+      reservedPaths = [
+        "packages/d2b-state/src/audit.rs"
+        "nixos-modules/realm-storage-rows.nix"
+      ];
+      forbiddenEditExceptions = [
+        "packages/Cargo.lock"
+      ];
+      deletes = [ ];
+      scope = [
+        "Freeze shared d2b-state dependencies, durable directory creation, segmented audit, and generated gateway ledger/audit storage+sync rows."
+        "Do not implement gateway or restart business logic."
+      ];
+      prompt = ''
+        Implement the shared runtime-state platform in exactly the owned files
+        after state-lock authority lands. Add gateway ledger/audit rows,
+        d2b-state dependencies, durable mkdir, segmented audit/checkpoint/gap
+        support, and real contract tests.
+      '';
+    };
+
+    "gateway-runtime-integration" = {
+      branch = "adr0045-w8-integration-gateway-runtime-integration";
+      dependsOn = [ "gateway-replacement" "runtime-state-platform-seam" ];
+      externalDependsOn = [ ];
+      ownedFiles = [
+        "packages/d2b-gateway-runtime/src/audit_jsonl.rs"
+        "packages/d2b-gateway-runtime/src/production.rs"
+        "packages/d2bd/src/lib.rs"
+      ];
+      reservedPaths = [
+        "packages/d2b-gateway-runtime/src/production.rs"
+        "packages/d2bd/src/lib.rs"
+      ];
+      forbiddenEditExceptions = [
+        "packages/d2bd/src/lib.rs"
+      ];
+      deletes = [ ];
+      scope = [
+        "Replace free-form gateway files with generated d2b-state ledger/audit authority and wire the authenticated gateway into d2bd/WorkExecutor."
+      ];
+      prompt = ''
+        Integrate the accepted gateway core with runtime-state authority and
+        d2bd in exactly the owned files. Remove JsonlGatewayAudit/free-form
+        paths and wire the authenticated GatewayPort/RemotePeerClient.
+      '';
+    };
+
+    "provider-parity-proof" = {
+      branch = "adr0045-w8-integration-provider-parity-proof";
+      dependsOn = [ ];
       externalDependsOn = [ ];
       ownedFiles = [
         "docs/how-to/verify-provider-parity.md"
         "packages/d2b-realm-provider/src/mock.rs"
         "packages/d2b-realm-provider/src/parity.rs"
-        "packages/d2bd/src/realm_stubs.rs"
       ];
       reservedPaths = [
         "packages/d2b-realm-provider/src/parity.rs"
+      ];
+      deletes = [ ];
+      scope = [
+        "Build the exhaustive provider-parity inventory and tests independently of daemon fallback deletion."
+      ];
+      prompt = ''
+        Implement provider parity proof in exactly the owned files. Inventory
+        every integrated provider operation and prove no W5/W6/W7 behavior is
+        missing. Do not edit daemon fallback wiring.
+      '';
+    };
+
+    "provider-parity-fallback-removal" = {
+      branch = "adr0045-w8-integration-provider-parity-fallback-removal";
+      dependsOn = [ "gateway-runtime-integration" "provider-parity-proof" ];
+      externalDependsOn = [ ];
+      ownedFiles = [
+        "packages/d2bd/src/realm_stubs.rs"
+      ];
+      reservedPaths = [
         "packages/d2bd/src/realm_stubs.rs"
       ];
       deletes = [ ];
@@ -374,6 +525,70 @@ let
         any frozen/global-protected path.
       '';
     };
+
+    "restart-broker-authority" = {
+      branch = "adr0045-w8-integration-restart-broker-authority";
+      dependsOn = [ ];
+      externalDependsOn = [ ];
+      ownedFiles = [
+        "docs/reference/privileges.md"
+        "packages/d2b-contracts/src/broker_wire.rs"
+        "packages/d2b-core/src/bundle_resolver.rs"
+        "packages/d2b-priv-broker/src/live_handlers.rs"
+        "packages/d2b-priv-broker/src/runtime.rs"
+      ];
+      reservedPaths = [
+        "packages/d2b-priv-broker/src/live_handlers.rs"
+        "packages/d2b-priv-broker/src/runtime.rs"
+      ];
+      forbiddenEditExceptions = [
+        "packages/d2b-contracts/src/broker_wire.rs"
+        "packages/d2b-core/src/bundle_resolver.rs"
+        "packages/d2b-priv-broker/src/runtime.rs"
+      ];
+      deletes = [ ];
+      scope = [
+        "Implement broker-authoritative exact-cgroup candidate discovery, pidfd handoff, shared population lock, and consuming Missing cleanup lease."
+        "The verified OwnedFd must flow unchanged from broker discovery to daemon registration."
+      ];
+      prompt = ''
+        Implement restart broker authority in exactly the owned files:
+        resolve cgroup contracts, lock the exact leaf, discover 0/1/many
+        candidates, open and hand off one pidfd with identity, and authorize
+        consuming Missing cleanup. Do not implement daemon reporting.
+      '';
+    };
+
+    "restart-runtime-integration" = {
+      branch = "adr0045-w8-integration-restart-runtime-integration";
+      dependsOn = [
+        "restart-observability-audit"
+        "restart-broker-authority"
+        "runtime-state-platform-seam"
+      ];
+      externalDependsOn = [ ];
+      ownedFiles = [
+        "packages/d2bd/src/lib.rs"
+        "packages/d2bd/src/supervisor/pidfd_table.rs"
+      ];
+      reservedPaths = [
+        "packages/d2bd/src/lib.rs"
+        "packages/d2bd/src/supervisor/pidfd_table.rs"
+      ];
+      forbiddenEditExceptions = [
+        "packages/d2bd/src/lib.rs"
+      ];
+      deletes = [ ];
+      scope = [
+        "Wire contract-first broker adoption/cleanup, exact pidfd-consuming registration, report validation, d2b-state audit, and provider polling into live startup."
+      ];
+      prompt = ''
+        Integrate accepted restart daemon and broker components in exactly the
+        owned files. Validate contracts before effects, consume the exact
+        verified pidfd into registration, and persist/audit only complete
+        coverage.
+      '';
+    };
   };
 
   hasPrefix = prefix: value:
@@ -402,13 +617,21 @@ let
     "state-lock-authority-contract"
     "secrets-authority-seam"
     "secrets-lifecycle"
+    "secrets-runtime-integration"
     "component-session-service-seam"
+    "user-agent-backend-core"
     "user-agent-service-seam"
+    "shell-client-core"
     "systemd-user-shell-routing"
     "realm-routing-work-executor-fabric"
     "gateway-replacement"
+    "runtime-state-platform-seam"
+    "gateway-runtime-integration"
+    "provider-parity-proof"
     "provider-parity-fallback-removal"
     "restart-observability-audit"
+    "restart-broker-authority"
+    "restart-runtime-integration"
   ];
 
   globalExternalDependencies = [
