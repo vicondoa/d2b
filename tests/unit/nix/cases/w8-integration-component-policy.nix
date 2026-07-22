@@ -54,12 +54,13 @@ in
         "state-lock-authority-contract"
         "secrets-authority-seam"
         "secrets-lifecycle"
+        "user-agent-service-seam"
         "systemd-user-shell-routing"
         "gateway-replacement"
         "provider-parity-fallback-removal"
         "restart-observability-audit"
       ];
-      blockedCount = 7;
+      blockedCount = 8;
       ready = [ ];
       readyCount = 0;
       blockedExternalDependencies = [ "shared-root-w8-manifest-seam" ];
@@ -76,17 +77,18 @@ in
       pendingOnDependency = [
         "secrets-authority-seam"
         "secrets-lifecycle"
+        "systemd-user-shell-routing"
         "provider-parity-fallback-removal"
       ];
-      pendingOnDependencyCount = 3;
+      pendingOnDependencyCount = 4;
       ready = [
         "state-lock-authority-contract"
-        "systemd-user-shell-routing"
+        "user-agent-service-seam"
         "gateway-replacement"
         "restart-observability-audit"
       ];
       readyCount = 4;
-      totalComponents = 8;
+      totalComponents = 9;
     };
   };
 
@@ -132,13 +134,14 @@ in
       valid = true;
       launchReady = [
         "state-lock-authority-contract"
-        "systemd-user-shell-routing"
+        "user-agent-service-seam"
         "gateway-replacement"
         "restart-observability-audit"
       ];
       launchPending = [
         "secrets-authority-seam"
         "secrets-lifecycle"
+        "systemd-user-shell-routing"
         "provider-parity-fallback-removal"
       ];
     };

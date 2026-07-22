@@ -54,6 +54,10 @@ deprecations ship one minor release before removal.
   components so generated sync rows map losslessly to runtime locks, held
   lock FDs and guarded directories share one attested capability, and path
   resolution/directory creation are durable and symlink-safe.
+- Added a two-sided user-agent service seam ahead of the d2bd shell cutover:
+  canonical channel binding, narrow controller authorization, real helper
+  backend wiring, exact terminal attachment/stream transport, and
+  request-bound cancellation must land before client routing.
 - Granted only the exact `adr0045-w8-integration` branch the protected delivery
   README and xtask manifest-test paths required to introduce W8's checked-in
   manifest authority; suffixed component branches remain denied.

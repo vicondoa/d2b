@@ -116,9 +116,49 @@ let
       '';
     };
 
+    "user-agent-service-seam" = {
+      branch = "adr0045-w8-integration-user-agent-service-seam";
+      dependsOn = [ ];
+      externalDependsOn = [ ];
+      ownedFiles = [
+        "docs/reference/component-session-v2-vectors.json"
+        "nixos-modules/unsafe-local-helper.nix"
+        "packages/d2b-contracts/src/v2_component_session.rs"
+        "packages/d2b-unsafe-local-helper/src/controller_allowlist.rs"
+        "packages/d2b-unsafe-local-helper/src/server.rs"
+        "packages/d2b-unsafe-local-helper/src/services/runtime_systemd_user/mod.rs"
+        "packages/d2b-unsafe-local-helper/src/shell_runtime.rs"
+        "packages/d2b-unsafe-local-helper/src/shell_socket.rs"
+        "packages/d2b-unsafe-local-helper/src/shell_supervisor.rs"
+        "packages/d2b-unsafe-local-helper/src/systemd.rs"
+        "tests/host-integration/unsafe-local-helper.nix"
+      ];
+      reservedPaths = [
+        "packages/d2b-contracts/src/v2_component_session.rs"
+        "packages/d2b-unsafe-local-helper/src/server.rs"
+        "nixos-modules/unsafe-local-helper.nix"
+      ];
+      deletes = [ ];
+      scope = [
+        "Make the existing deployed d2b-unsafe-local-helper a production-ready responder for the runtime-systemd-user and co-located shell services."
+        "Freeze one canonical directional channel binding, narrow controller authorization, real systemd-user/shell backend wiring, one exact terminal attachment/named stream, and request-bound cancellation."
+        "Do not implement the d2bd initiator cutover in this component."
+      ];
+      prompt = ''
+        Implement the two-sided user-agent service seam in exactly the owned
+        files. Use one shared channel-binding helper/vector on both ends,
+        authorize only the exact controller identity, wire the real
+        systemd-user scope and persistent-shell backend, preserve one
+        runtime-agent socket/session with co-located services, transfer exactly
+        one validated CLOEXEC terminal stream, and bind cancellation to the
+        exact in-flight request. Never add a root unit, broad group access,
+        SSH path, or success-shaped unavailable backend.
+      '';
+    };
+
     "systemd-user-shell-routing" = {
       branch = "adr0045-w8-integration-systemd-user-shell-routing";
-      dependsOn = [ ];
+      dependsOn = [ "user-agent-service-seam" ];
       externalDependsOn = [ ];
       ownedFiles = [
         "docs/explanation/systemd-user-shell-routing.md"
@@ -308,6 +348,7 @@ let
     "state-lock-authority-contract"
     "secrets-authority-seam"
     "secrets-lifecycle"
+    "user-agent-service-seam"
     "systemd-user-shell-routing"
     "realm-routing-work-executor-fabric"
     "gateway-replacement"
