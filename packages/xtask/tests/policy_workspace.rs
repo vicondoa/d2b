@@ -1857,25 +1857,25 @@ fn service_dependency_edges_are_locked_and_directional() {
                 .map(|feature| feature.as_str().expect("feature").to_owned())
                 .collect::<BTreeSet<_>>();
             if features.contains("host-socket") {
-                assert_eq!(
-                    consumer, "d2b-daemon-access",
+                assert!(
+                    matches!(consumer, "d2b-daemon-access" | "d2bd"),
                     "{consumer} must not enable d2b-client/host-socket"
                 );
                 assert_eq!(
                     dependency["uses_default_features"],
                     serde_json::Value::Bool(false),
-                    "daemon-access host-socket edge must disable default features"
+                    "{consumer} host-socket edge must disable default features"
                 );
                 assert_eq!(
                     features,
                     BTreeSet::from(["host-socket".to_owned()]),
-                    "daemon-access host-socket edge must not amplify features"
+                    "{consumer} host-socket edge must not amplify features"
                 );
                 host_socket_owners.push(consumer);
             }
         }
     }
-    assert_eq!(host_socket_owners, ["d2b-daemon-access"]);
+    assert_eq!(host_socket_owners, ["d2b-daemon-access", "d2bd"]);
     assert!(
         !transitive_package_names(&metadata, "d2b-daemon-access").contains("d2b"),
         "daemon-access dependency graph must remain acyclic"

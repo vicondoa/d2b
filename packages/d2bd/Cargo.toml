@@ -20,6 +20,7 @@ libc = "0.2"
 nix = { version = "0.29", features = ["fs", "socket", "uio", "user", "signal", "process", "poll"] }
 parking_lot = { version = "0.12", features = ["arc_lock"] }
 rustix = { workspace = true }
+d2b-client = { workspace = true, default-features = false, features = ["host-socket"] }
 d2b-core = { workspace = true }
 d2b-host = { workspace = true }
 d2b-contracts = { workspace = true, features = ["unsafe-local", "v2-guest-configured-launches", "v2-provider"] }
