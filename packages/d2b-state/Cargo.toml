@@ -16,6 +16,7 @@ host-fs = [
     "dep:serde",
     "dep:serde_json",
     "dep:sha2",
+    "dep:zeroize",
 ]
 tokio = ["host-fs", "dep:tokio"]
 
@@ -27,6 +28,7 @@ serde = { workspace = true, optional = true }
 serde_json = { workspace = true, features = ["raw_value"], optional = true }
 sha2 = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt"], optional = true }
+zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
