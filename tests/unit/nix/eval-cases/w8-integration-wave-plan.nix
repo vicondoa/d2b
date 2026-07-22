@@ -7,9 +7,43 @@
 
 let
   components = {
+    "secrets-authority-seam" = {
+      branch = "adr0045-w8-integration-secrets-authority-seam";
+      dependsOn = [ ];
+      externalDependsOn = [ ];
+      ownedFiles = [
+        "docs/reference/secrets-authority.md"
+        "nixos-modules/realm-storage-rows.nix"
+        "packages/d2b-contract-tests/tests/storage_sync_contracts.rs"
+        "packages/d2b-priv-broker/src/ops/secrets_authority.rs"
+        "packages/d2b-state/src/lib.rs"
+        "packages/d2b-state/src/secret.rs"
+      ];
+      reservedPaths = [
+        "packages/d2b-state/src/secret.rs"
+        "packages/d2b-priv-broker/src/ops/secrets_authority.rs"
+      ];
+      deletes = [ ];
+      scope = [
+        "Freeze the typed generated authority consumed by secrets lifecycle: WorkloadId, pre-opened AnchoredDir, the existing workload-keys storage/lock rows, caller-held d2b-state LockGuard, and ownership epoch."
+        "Add the missing bounded zeroizing secret-leaf metadata/read primitive to d2b-state instead of duplicating locks, atomic JSON, generation fencing, or quarantine."
+        "Do not implement lifecycle provision/rotate/rollback/retire behavior in this component."
+      ];
+      prompt = ''
+        Implement the secrets authority seam in exactly the owned files. Reuse
+        the existing generated workload-keys storage path and OFD lock when
+        they satisfy the contract; change realm-storage-rows.nix only if an
+        invariant is genuinely missing. Expose a typed pre-opened authority
+        bound to WorkloadId, AnchoredDir, caller-held LockGuard, resource id,
+        and ownership epoch. Add the bounded zeroizing secret-leaf primitive
+        to d2b-state. Do not implement lifecycle operations or add a private
+        lock/path namespace.
+      '';
+    };
+
     "secrets-lifecycle" = {
       branch = "adr0045-w8-integration-secrets-lifecycle";
-      dependsOn = [ ];
+      dependsOn = [ "secrets-authority-seam" ];
       externalDependsOn = [ ];
       ownedFiles = [
         "docs/how-to/rotate-secrets.md"
@@ -230,6 +264,7 @@ let
         componentOrder);
 
   componentOrder = [
+    "secrets-authority-seam"
     "secrets-lifecycle"
     "systemd-user-shell-routing"
     "realm-routing-work-executor-fabric"

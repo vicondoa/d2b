@@ -45,6 +45,10 @@ deprecations ship one minor release before removal.
   workspace policy gate; W8 now owns only the missing d2bd client cutover.
   Pinned d2bd's direct canonical `d2b-client/host-socket` dependency so the
   cutover does not rely on `d2b-session` feature unification.
+- Added a W8 secrets-authority seam ahead of lifecycle implementation so
+  secrets reuse `d2b-state` locking, atomic state, generation fencing, and
+  quarantine with typed generated storage authority instead of hand-rolled
+  path and durability machinery.
 - Granted only the exact `adr0045-w8-integration` branch the protected delivery
   README and xtask manifest-test paths required to introduce W8's checked-in
   manifest authority; suffixed component branches remain denied.
