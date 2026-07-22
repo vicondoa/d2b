@@ -188,10 +188,12 @@ fn is_generated_lock_file_row(resolver: &BundleResolver, spec: &StoragePathSpec)
 /// path string handed to the kernel outside that anchored walk. A
 /// pre-existing file is validated (regular, exact owner/mode, single hard
 /// link) rather than silently trusted or blindly re-created, and the
-/// parent directory entry is `fsync`ed before reporting success on both
-/// the fresh-create and the already-exists path, so a caller observing a
-/// successful reconcile can trust the file is durably present under its
-/// final name.
+/// file itself is `fsync`ed, then the parent directory entry is `fsync`ed,
+/// before reporting success on both the fresh-create and the
+/// already-exists path - so a caller observing a successful reconcile can
+/// trust both the file's contents/metadata and its directory entry are
+/// durably present under its final name, even if the file being reused
+/// was left by a prior invocation whose own fsyncs were interrupted.
 fn reconcile_lock_file_row(
     spec: &StoragePathSpec,
     storage_ref: &BundleOpId,
@@ -266,8 +268,12 @@ fn reconcile_lock_file_row(
 /// opened (still anchored/nofollow) and validated to actually be the
 /// regular file this row describes (type, hard-link count, owner, mode)
 /// rather than assumed. Both the fresh-create and the validated-EEXIST
-/// paths `fsync` the parent directory entry before returning success, so
-/// a durable listing is guaranteed either way.
+/// paths `fsync` the file itself before `fsync`ing the parent directory
+/// entry and returning success, so any owner/mode metadata this call just
+/// wrote (or just validated on a reused file) is durable before the
+/// caller is told the reconcile succeeded - even if the reused file was
+/// left behind by a prior invocation that was interrupted before its own
+/// fsyncs landed.
 fn create_or_validate_lock_file(
     parent_fd: &OwnedFd,
     name: &str,
@@ -275,6 +281,45 @@ fn create_or_validate_lock_file(
     uid: Uid,
     gid: Gid,
     path_hash: &str,
+) -> Result<StorageReconcileStatus, StorageContractError> {
+    create_or_validate_lock_file_with_sync(
+        parent_fd,
+        name,
+        mode,
+        uid,
+        gid,
+        path_hash,
+        &RealLockFileSync,
+    )
+}
+
+/// Seam over the `fsync(2)` calls inside
+/// [`create_or_validate_lock_file_with_sync`], letting tests inject a
+/// fault on a specific call (e.g. the reused-file `fsync` on the EEXIST
+/// path) without touching real filesystem behaviour. Production code
+/// always uses [`RealLockFileSync`].
+trait LockFileSync {
+    fn fsync(&self, fd: std::os::fd::BorrowedFd<'_>) -> nix::Result<()>;
+}
+
+/// The real `fsync(2)` syscall, used by every non-test caller of
+/// [`create_or_validate_lock_file`].
+struct RealLockFileSync;
+
+impl LockFileSync for RealLockFileSync {
+    fn fsync(&self, fd: std::os::fd::BorrowedFd<'_>) -> nix::Result<()> {
+        nix::unistd::fsync(fd.as_raw_fd())
+    }
+}
+
+fn create_or_validate_lock_file_with_sync(
+    parent_fd: &OwnedFd,
+    name: &str,
+    mode: u32,
+    uid: Uid,
+    gid: Gid,
+    path_hash: &str,
+    sync: &dyn LockFileSync,
 ) -> Result<StorageReconcileStatus, StorageContractError> {
     let io_err = |err: std::io::Error| StorageContractError::Io {
         path_hash: path_hash.to_owned(),
@@ -290,14 +335,16 @@ fn create_or_validate_lock_file(
             crate::sys::path_safe::fchmod(fd.as_fd(), mode).map_err(io_err)?;
             crate::sys::path_safe::fchown(fd.as_fd(), Some(uid.as_raw()), Some(gid.as_raw()))
                 .map_err(io_err)?;
-            nix::unistd::fsync(fd.as_raw_fd()).map_err(|err| StorageContractError::Io {
-                path_hash: path_hash.to_owned(),
-                detail: format!("fsync lock file: {err}"),
-            })?;
-            nix::unistd::fsync(parent_fd.as_raw_fd()).map_err(|err| StorageContractError::Io {
-                path_hash: path_hash.to_owned(),
-                detail: format!("fsync lock file parent: {err}"),
-            })?;
+            sync.fsync(fd.as_fd())
+                .map_err(|err| StorageContractError::Io {
+                    path_hash: path_hash.to_owned(),
+                    detail: format!("fsync lock file: {err}"),
+                })?;
+            sync.fsync(parent_fd.as_fd())
+                .map_err(|err| StorageContractError::Io {
+                    path_hash: path_hash.to_owned(),
+                    detail: format!("fsync lock file parent: {err}"),
+                })?;
             Ok(StorageReconcileStatus::Created)
         }
         Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -328,10 +375,21 @@ fn create_or_validate_lock_file(
                     reason: "lock-file-existing-mode-mismatch".to_owned(),
                 });
             }
-            nix::unistd::fsync(parent_fd.as_raw_fd()).map_err(|err| StorageContractError::Io {
-                path_hash: path_hash.to_owned(),
-                detail: format!("fsync lock file parent: {err}"),
-            })?;
+            // The validated existing file may have been created (and its
+            // owner/mode set) by a prior invocation whose own fsyncs were
+            // interrupted before landing durably - re-fsync the file itself
+            // here, ahead of the parent, so the metadata this call just
+            // validated is guaranteed durable before reporting `Reused`.
+            sync.fsync(fd.as_fd())
+                .map_err(|err| StorageContractError::Io {
+                    path_hash: path_hash.to_owned(),
+                    detail: format!("fsync lock file: {err}"),
+                })?;
+            sync.fsync(parent_fd.as_fd())
+                .map_err(|err| StorageContractError::Io {
+                    path_hash: path_hash.to_owned(),
+                    detail: format!("fsync lock file parent: {err}"),
+                })?;
             Ok(StorageReconcileStatus::Reused)
         }
         Err(err) => Err(io_err(err)),
@@ -666,6 +724,91 @@ mod tests {
         let reused = create_or_validate_lock_file(&parent_fd, "keys.lock", 0o640, uid, gid, "hash")
             .expect("second call validates and reuses the same file");
         assert_eq!(reused, StorageReconcileStatus::Reused);
+    }
+
+    /// A [`LockFileSync`] that fails the `call_to_fail`th `fsync` call
+    /// this instance sees (1-indexed, counted from when the instance is
+    /// constructed), then delegates every other call to the real
+    /// syscall.
+    struct FailAtCallSync {
+        calls: std::cell::Cell<u32>,
+        call_to_fail: u32,
+    }
+
+    impl LockFileSync for FailAtCallSync {
+        fn fsync(&self, fd: std::os::fd::BorrowedFd<'_>) -> nix::Result<()> {
+            let call = self.calls.get() + 1;
+            self.calls.set(call);
+            if call == self.call_to_fail {
+                return Err(nix::Error::EIO);
+            }
+            nix::unistd::fsync(fd.as_raw_fd())
+        }
+    }
+
+    #[test]
+    fn create_or_validate_lock_file_propagates_a_failed_reuse_path_fsync_and_is_retryable() {
+        let scratch = project_scratch("create-or-validate-lock-file-reuse-fsync-fault");
+        let parent_fd = crate::sys::path_safe::open_dir_path_safe(scratch.path()).unwrap();
+        let uid = current_uid();
+        let gid = current_gid();
+
+        // First call: real sync, creates the file (2 fsyncs: file, parent).
+        let created = create_or_validate_lock_file_with_sync(
+            &parent_fd,
+            "keys.lock",
+            0o640,
+            uid,
+            gid,
+            "hash",
+            &RealLockFileSync,
+        )
+        .expect("first call creates the lock file");
+        assert_eq!(created, StorageReconcileStatus::Created);
+
+        // Second call hits the EEXIST/reuse path, which validates the
+        // existing file and then re-fsyncs it (the 1st fsync call this
+        // fresh `FailAtCallSync` instance sees) before fsyncing the
+        // parent (the 2nd) and returning `Reused`. Fail exactly that 1st
+        // call - the reused file's own fsync, ahead of the parent - and
+        // assert the fault propagates as an error rather than being
+        // swallowed into a silent `Reused`, and that the parent fsync
+        // (call 2) never happens because the file fsync failure
+        // short-circuits it.
+        let faulting = FailAtCallSync {
+            calls: std::cell::Cell::new(0),
+            call_to_fail: 1,
+        };
+        let err = create_or_validate_lock_file_with_sync(
+            &parent_fd,
+            "keys.lock",
+            0o640,
+            uid,
+            gid,
+            "hash",
+            &faulting,
+        )
+        .expect_err("a failed reused-file fsync must not be reported as success");
+        match err {
+            StorageContractError::Io { detail, .. } => {
+                assert!(detail.contains("fsync lock file:"), "{detail}");
+            }
+            other => panic!("expected Io error, got {other:?}"),
+        }
+        assert_eq!(
+            faulting.calls.get(),
+            1,
+            "the parent fsync must never run once the file fsync fails"
+        );
+
+        // A retry with a healthy sync mechanism must still succeed and
+        // observe the same file as `Reused`: the earlier fault must not
+        // have left the lock file (or the reconcile step) in a state
+        // that requires anything other than a plain retry.
+        let retried =
+            create_or_validate_lock_file(&parent_fd, "keys.lock", 0o640, uid, gid, "hash")
+                .expect("retry after a transient fsync fault must succeed");
+        assert_eq!(retried, StorageReconcileStatus::Reused);
     }
 
     #[test]
