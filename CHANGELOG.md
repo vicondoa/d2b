@@ -73,6 +73,11 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Split W8's remaining integration work at real file/contract boundaries so
+  nine dependency-ready components can implement concurrently: secrets
+  transactions, helper backend, shell client, gateway core, provider parity,
+  restart daemon, and restart broker now proceed independently while only
+  shared state/session contracts and final wiring remain serialized.
 - Added three more W9 friction entries to ADR 0045's W13 evidence-driven
   delivery streamlining backlog: verifying the CI-dedup-only toolkit pin
   advance required manual per-round `grep` across sibling `Cargo.lock`s

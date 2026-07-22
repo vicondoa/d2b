@@ -62,14 +62,22 @@ in
         "state-lock-authority-contract"
         "secrets-authority-seam"
         "secrets-lifecycle"
+        "secrets-runtime-integration"
         "component-session-service-seam"
+        "user-agent-backend-core"
         "user-agent-service-seam"
+        "shell-client-core"
         "systemd-user-shell-routing"
         "gateway-replacement"
+        "runtime-state-platform-seam"
+        "gateway-runtime-integration"
+        "provider-parity-proof"
         "provider-parity-fallback-removal"
         "restart-observability-audit"
+        "restart-broker-authority"
+        "restart-runtime-integration"
       ];
-      blockedCount = 9;
+      blockedCount = 17;
       ready = [ ];
       readyCount = 0;
       blockedExternalDependencies = [ "shared-root-w8-manifest-seam" ];
@@ -85,20 +93,28 @@ in
       note = basePlan.launchSummary.note;
       pendingOnDependency = [
         "secrets-authority-seam"
-        "secrets-lifecycle"
+        "secrets-runtime-integration"
         "user-agent-service-seam"
         "systemd-user-shell-routing"
+        "runtime-state-platform-seam"
+        "gateway-runtime-integration"
         "provider-parity-fallback-removal"
+        "restart-runtime-integration"
       ];
-      pendingOnDependencyCount = 5;
+      pendingOnDependencyCount = 8;
       ready = [
         "state-lock-authority-contract"
+        "secrets-lifecycle"
         "component-session-service-seam"
+        "user-agent-backend-core"
+        "shell-client-core"
         "gateway-replacement"
+        "provider-parity-proof"
         "restart-observability-audit"
+        "restart-broker-authority"
       ];
-      readyCount = 4;
-      totalComponents = 10;
+      readyCount = 9;
+      totalComponents = 18;
     };
   };
 
@@ -144,16 +160,24 @@ in
       valid = true;
       launchReady = [
         "state-lock-authority-contract"
+        "secrets-lifecycle"
         "component-session-service-seam"
+        "user-agent-backend-core"
+        "shell-client-core"
         "gateway-replacement"
+        "provider-parity-proof"
         "restart-observability-audit"
+        "restart-broker-authority"
       ];
       launchPending = [
         "secrets-authority-seam"
-        "secrets-lifecycle"
+        "secrets-runtime-integration"
         "user-agent-service-seam"
         "systemd-user-shell-routing"
+        "runtime-state-platform-seam"
+        "gateway-runtime-integration"
         "provider-parity-fallback-removal"
+        "restart-runtime-integration"
       ];
     };
   };
@@ -164,7 +188,7 @@ in
     };
     expected = {
       blockedExternalDependencies = [ ];
-      unmetDependencies = [ "user-agent-service-seam" ];
+      unmetDependencies = [ "user-agent-service-seam" "shell-client-core" ];
       valid = false;
     };
   };
