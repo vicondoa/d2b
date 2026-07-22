@@ -1155,6 +1155,9 @@ fn sync_contract_reason_slug(reason: &SyncContractValidationReason) -> &'static 
             "fd-passing-missing-lease-transfer-record"
         }
         SyncContractValidationReason::DuplicateAcquireOrder => "duplicate-acquire-order",
+        SyncContractValidationReason::LockMissingProtectedResourceId => {
+            "lock-missing-protected-resource-id"
+        }
         SyncContractValidationReason::Unclassified => "unclassified",
     }
 }
@@ -1810,6 +1813,52 @@ mod tests {
         report.push("metrics-endpoint", DoctorStatus::Warn, "unreachable");
         assert_eq!(report.exit_code(), 1);
         assert!(report.broker_ready());
+    }
+
+    #[test]
+    fn sync_contract_reason_slug_covers_every_variant_including_missing_protected_resource_id() {
+        assert_eq!(
+            sync_contract_reason_slug(&SyncContractValidationReason::DuplicateLockId),
+            "duplicate-lock-id"
+        );
+        assert_eq!(
+            sync_contract_reason_slug(&SyncContractValidationReason::OfdLockMissingCloexec),
+            "ofd-lock-missing-cloexec"
+        );
+        assert_eq!(
+            sync_contract_reason_slug(
+                &SyncContractValidationReason::FdPassingMissingLeaseTransferRecord
+            ),
+            "fd-passing-missing-lease-transfer-record"
+        );
+        assert_eq!(
+            sync_contract_reason_slug(&SyncContractValidationReason::DuplicateAcquireOrder),
+            "duplicate-acquire-order"
+        );
+        assert_eq!(
+            sync_contract_reason_slug(
+                &SyncContractValidationReason::LockMissingProtectedResourceId
+            ),
+            "lock-missing-protected-resource-id"
+        );
+        assert_eq!(
+            sync_contract_reason_slug(&SyncContractValidationReason::Unclassified),
+            "unclassified"
+        );
+    }
+
+    #[test]
+    fn invalid_contract_summary_reports_missing_protected_resource_id_as_a_typed_slug() {
+        let issues = vec![StorageLifecycleIssue::SyncContractInvalid {
+            contract_id: "daemon".to_owned(),
+            reason: SyncContractValidationReason::LockMissingProtectedResourceId,
+            offending_id: Some("lock:daemon".to_owned()),
+        }];
+        let summary = storage_lifecycle_invalid_contract_summary(&issues).unwrap();
+        assert_eq!(
+            summary,
+            "sync:daemon:lock-missing-protected-resource-id:lock:daemon"
+        );
     }
 
     #[test]
