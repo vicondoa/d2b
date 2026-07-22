@@ -272,11 +272,11 @@ fn w8_fingerprint_matrix_covers_every_reserved_integration_seam() {
     );
 
     assert!(
-        manifest.dependency_fingerprints.len() >= 1,
+        !manifest.dependency_fingerprints.is_empty(),
         "dependency fingerprints must be non-empty"
     );
     assert!(
-        manifest.contract_fingerprints.len() >= 1,
+        !manifest.contract_fingerprints.is_empty(),
         "contract fingerprints must be non-empty"
     );
 }
