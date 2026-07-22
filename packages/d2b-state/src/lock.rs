@@ -28,7 +28,7 @@ use rustix::fs::{FileType, Mode, OFlags};
 
 use crate::{
     AnchoredDir, AnchoredResource, Error, ErrorCode, MetadataExpectation, RelativePath, Result,
-    path::{GeneratedResource, dup_cloexec},
+    path::{GeneratedResource, GuardedResource, dup_cloexec},
 };
 
 /// Ceiling on how long a single bounded-wait poll iteration sleeps, used by
@@ -58,6 +58,17 @@ fn poll_backoff_or_deadline<C: Clock + ?Sized>(
     let remaining = deadline - elapsed;
     clock.sleep(remaining.min(MAX_LOCK_POLL_BACKOFF));
     Ok(())
+}
+
+/// Rechecks the absolute deadline without sleeping, reporting whether it has
+/// already elapsed. Called at the top of every acquisition retry *after*
+/// the first attempt (never before the first, so a caller always gets one
+/// real attempt even with a near-zero deadline), so a late wakeup from
+/// [`poll_backoff_or_deadline`]'s sleep — for example the OS scheduling a
+/// thread back later than requested — can never let a subsequent
+/// `set_ofd_lock` attempt win the lock after the deadline has elapsed.
+fn deadline_elapsed<C: Clock + ?Sized>(clock: &C, started: Instant, deadline: Duration) -> bool {
+    clock.now().saturating_duration_since(started) >= deadline
 }
 
 pub trait Cancellation {
@@ -145,7 +156,7 @@ pub struct LockGuard {
     /// [`Self::protected_resources`], which names the *protected state*
     /// resource this lock authorizes mutation of — never the same field
     /// doing double duty (see [`Self::validate_state_binding`] and
-    /// [`Self::bind_protected_resource`]).
+    /// [`Self::protected_resource`]).
     lock_file_resource_id: ResourceId,
     owner: AuthorityRef,
     ownership_epoch: OwnershipEpoch,
@@ -163,14 +174,22 @@ pub struct LockGuard {
     /// semantic), never a caller-supplied set. Distinct from
     /// [`Self::lock_file_resource_id`].
     protected_resources: Vec<ResourceId>,
-    /// The protected resource's own generated `ContractId`, present only for
-    /// guards acquired via [`LockSet::acquire_from_generated`] (the only
-    /// path that can re-resolve a resource by trusted-root + generated row;
-    /// see [`Self::bind_protected_resource`]). `None` for legacy
-    /// `acquire`/`acquire_with_clock`-acquired guards, which are handed
-    /// their protected resource directly as an [`AnchoredResource`] at
-    /// acquisition time and have no generated-inventory id to re-resolve.
-    protected_resource_contract_id: Option<ContractId>,
+    /// The protected resource's own acquisition-time-resolved capability,
+    /// present only for guards acquired via
+    /// [`LockSet::acquire_from_generated`] (the only path that resolves a
+    /// protected resource at all; see [`Self::protected_resource`]). `None`
+    /// for legacy `acquire`/`acquire_with_clock`-acquired guards, which are
+    /// handed their protected resource directly as an [`AnchoredResource`]
+    /// at acquisition time and have no generated-inventory row to resolve.
+    ///
+    /// Resolved exactly once, inside `acquire_from_generated_with_clock`,
+    /// immediately from the trusted `storage`/`anchor` the caller supplied
+    /// to *that* call — never re-resolved, and never re-derived from a
+    /// later call's inventory/anchor. [`Self::protected_resource`] only
+    /// ever borrows this value; it accepts no inventory/anchor/metadata
+    /// parameters of its own, so a caller cannot pair this guard's identity
+    /// with a different resolution after the fact.
+    protected_resource: Option<GeneratedResource>,
     /// Generated stale/adoption/degrade policy, carried through losslessly
     /// from the generated `sync.json` row. `None` for guards acquired via
     /// the legacy path, which predates and does not carry this policy.
@@ -275,65 +294,45 @@ impl LockGuard {
         Ok((stat.st_dev, stat.st_ino))
     }
 
-    /// Opens the single resource this held guard authorizes mutation for,
-    /// resolved fresh via a trusted-root + `openat2` walk against `storage`'s
-    /// validated inventory and `anchor`/`anchor_path` — never an inferred
-    /// parent/path relationship. There is no `resource_id` parameter: which
-    /// resource is protected is decided exclusively by the generated lock's
-    /// own `resource_id` field at acquisition time (see
-    /// [`LockSet::acquire_from_generated`]'s docs) — a caller cannot select
-    /// or substitute a different resource here, even one that exists and is
-    /// otherwise well-formed.
+    /// Borrows the single resource this held guard authorizes mutation for,
+    /// resolved exactly once at acquisition time (see
+    /// [`LockSet::acquire_from_generated`]'s docs) and retained by the
+    /// guard for its whole lifetime — never re-resolved against a
+    /// caller-supplied inventory, anchor, or path here. There is no
+    /// `storage`/`anchor`/`metadata` parameter of any kind: which resource
+    /// is protected, and the exact filesystem resolution backing it, were
+    /// both decided once, at acquisition time, from the generated
+    /// contract alone. `resource_id` only *selects* among (in practice,
+    /// confirms identity with) [`Self::protected_resources`]; it can never
+    /// cause a different resolution to be substituted.
     ///
     /// Only available for guards acquired via
-    /// [`LockSet::acquire_from_generated`] (legacy `acquire`-acquired guards
-    /// have no generated-inventory id to re-resolve and fail closed here).
+    /// [`LockSet::acquire_from_generated`] (legacy `acquire`-acquired
+    /// guards have no generated-inventory row to retain and fail closed
+    /// here).
     ///
-    /// On success, returns the legacy [`AnchoredResource`] shape so
-    /// existing atomic/audit consumers can use it without any change to
-    /// their own code; the resolution backing it is exactly as
-    /// non-forgeable as [`LockSet::acquire_from_generated`]'s own lock-file
-    /// resolution — the returned value is a fresh capability, not a clone
-    /// of anything the caller supplied.
-    pub fn bind_protected_resource(
+    /// The returned [`GuardedResource`] borrows `self` for its `'guard`
+    /// lifetime: it cannot outlive this guard, has no public constructor,
+    /// no field access, and no `Clone`/`Copy` impl. Its only sanctioned
+    /// consumer is `d2b-state`'s own guarded `AtomicWrite` read/write API
+    /// (`atomic::AtomicWrite::read_guarded`/`write_guarded`), which
+    /// verifies live fstat identity against the acquisition-time snapshot
+    /// before using it.
+    pub(crate) fn protected_resource(
         &self,
-        storage: &StorageJson,
-        anchor: &AnchoredDir,
-        anchor_path: &std::path::Path,
-        metadata: MetadataExpectation,
-    ) -> Result<AnchoredResource> {
+        resource_id: &ResourceId,
+    ) -> Result<GuardedResource<'_>> {
         if !self.held {
             return Err(Error::Code(ErrorCode::LockReleased));
         }
-        metadata.validate()?;
-        storage
-            .validate_unique_ids()
-            .map_err(|_| Error::Code(ErrorCode::InvalidSchema))?;
-        let resource_id = self
-            .protected_resource_contract_id
-            .as_ref()
-            .ok_or(Error::Code(ErrorCode::InvalidSchema))?;
-        let row = find_unique_storage_row(storage, resource_id)?;
-        let encoded = encode_resource_id(row.id.as_str())?;
-        // Always true by construction (this row's id is exactly what was
-        // encoded into `protected_resources` at acquisition time); kept as
-        // a fail-closed defense against a future refactor weakening that
-        // invariant rather than trusted silently.
-        if !self.protected_resources.contains(&encoded) {
+        if !self.protected_resources.contains(resource_id) {
             return Err(Error::Code(ErrorCode::LockMismatch));
         }
-        let row_mode =
-            u32::from_str_radix(&row.mode, 8).map_err(|_| Error::Code(ErrorCode::InvalidSchema))?;
-        if metadata.mode != row_mode {
-            return Err(Error::Code(ErrorCode::MetadataMismatch));
-        }
-        let generated = GeneratedResource::resolve(
-            anchor,
-            anchor_path,
-            encoded,
-            std::path::Path::new(row.path_template.as_str()),
-        )?;
-        Ok(generated.into_anchored_resource())
+        let resource = self
+            .protected_resource
+            .as_ref()
+            .ok_or(Error::Code(ErrorCode::InvalidSchema))?;
+        Ok(GuardedResource::new(resource))
     }
 
     pub fn authorize_transfer(&mut self, requested: FdTransferPolicy) -> Result<OfdTransfer<'_>> {
@@ -478,6 +477,7 @@ impl LockSet {
 
         let started = clock.now();
         let deadline = Duration::from_millis(u64::from(spec.deadline_ms));
+        let mut attempted = false;
         loop {
             if cancellation.acquisition_abandoned()
                 || (spec.cancellation == CancellationPolicy::Cancellable
@@ -485,6 +485,10 @@ impl LockSet {
             {
                 return Err(Error::Code(ErrorCode::Cancelled));
             }
+            if attempted && deadline_elapsed(clock, started, deadline) {
+                return Err(Error::Code(ErrorCode::Deadline));
+            }
+            attempted = true;
             match set_ofd_lock(&fd, libc::F_WRLCK as i16) {
                 Ok(()) => break,
                 Err(Errno::EAGAIN | Errno::EACCES) => {
@@ -512,7 +516,7 @@ impl LockSet {
             transfer: spec.fd_transfer,
             held: true,
             protected_resources: vec![resource.resource_id.clone()],
-            protected_resource_contract_id: None,
+            protected_resource: None,
             generated_stale_policy: None,
             generated_adoption_policy: None,
             generated_degrade_scope: None,
@@ -688,6 +692,19 @@ impl LockSet {
             std::path::Path::new(lock_row.path_template.as_str()),
         )?;
 
+        // The protected resource is resolved exactly once, here, at
+        // acquisition time, from the trusted `storage`/`anchor` this call
+        // was given — never re-resolved later against a caller-supplied
+        // inventory or anchor. It is retained by the pushed [`LockGuard`]
+        // for its whole lifetime; [`LockGuard::protected_resource`] only
+        // ever borrows this exact resolution.
+        let protected_resource = GeneratedResource::resolve(
+            anchor,
+            anchor_path,
+            binding.protected_resources[0].clone(),
+            std::path::Path::new(protected_row.path_template.as_str()),
+        )?;
+
         // Generated lock files are exclusively broker-created: open only,
         // never create. A missing file fails closed with
         // `ErrorCode::Missing` (naturally surfaced by `open_beneath`'s
@@ -705,6 +722,7 @@ impl LockSet {
         }
 
         let started = clock.now();
+        let mut attempted = false;
         loop {
             // The generated contract has no distinct cancellation-policy
             // field (unlike `v2_state::LockSpec::cancellation`); honouring
@@ -714,6 +732,15 @@ impl LockSet {
             if cancellation.acquisition_abandoned() || cancellation.is_cancelled() {
                 return Err(Error::Code(ErrorCode::Cancelled));
             }
+            if attempted && !binding.fail_fast {
+                let deadline = binding
+                    .deadline
+                    .expect("bounded-wait binding always carries a validated deadline");
+                if deadline_elapsed(clock, started, deadline) {
+                    return Err(Error::Code(ErrorCode::Deadline));
+                }
+            }
+            attempted = true;
             match set_ofd_lock(&fd, libc::F_WRLCK as i16) {
                 Ok(()) => break,
                 Err(Errno::EAGAIN | Errno::EACCES) => {
@@ -744,7 +771,7 @@ impl LockSet {
             transfer: binding.fd_transfer,
             held: true,
             protected_resources: binding.protected_resources,
-            protected_resource_contract_id: Some(protected_resource_id.clone()),
+            protected_resource: Some(protected_resource),
             generated_stale_policy: Some(lock.stale_policy.clone()),
             generated_adoption_policy: Some(lock.adoption_policy),
             generated_degrade_scope: Some(lock.degrade_scope),
@@ -1422,6 +1449,31 @@ mod tests {
         assert!(clock.recorded_sleeps().is_empty());
     }
 
+    /// Deterministically exercises the deadline recheck both acquisition
+    /// loops perform at the top of every retry *after* the first attempt:
+    /// a scripted clock that reports the deadline as already elapsed by
+    /// the second call must report `deadline_elapsed == true`, while the
+    /// very first call (before any attempt) is never even consulted by
+    /// the loops (that invariant is exercised end-to-end by
+    /// [`bounded_wait_never_acquires_after_a_late_wakeup_past_deadline`]
+    /// below; this test isolates just the pure elapsed-check arithmetic).
+    #[test]
+    fn deadline_elapsed_reports_true_only_once_the_deadline_has_passed() {
+        let deadline = Duration::from_millis(5);
+        let clock = FakeClock::new([
+            Duration::from_millis(0),
+            Duration::from_millis(3),
+            Duration::from_millis(4),
+            Duration::from_millis(5),
+            Duration::from_millis(6),
+        ]);
+        let started = clock.now();
+        assert!(!deadline_elapsed(&clock, started, deadline));
+        assert!(!deadline_elapsed(&clock, started, deadline));
+        assert!(deadline_elapsed(&clock, started, deadline));
+        assert!(deadline_elapsed(&clock, started, deadline));
+    }
+
     #[test]
     fn acquire_from_generated_round_trips_authority_order_and_protected_resource() {
         let scratch = Scratch::new("generated-ok");
@@ -1528,20 +1580,24 @@ mod tests {
             ErrorCode::LockMismatch
         );
 
-        // A guard-bound resolution of the protected resource: opaque,
-        // non-forgeable, derived only from the held guard's authorized set
-        // plus a fresh trusted-root walk.
-        let bound = guard
-            .bind_protected_resource(
-                &storage,
-                &anchor,
-                Path::new(ANCHOR_PATH),
-                host_metadata(&scratch.0, 0o600),
-            )
-            .unwrap();
+        // A guard-bound, acquisition-time-resolved capability for the
+        // protected resource: opaque, non-forgeable, borrowed from the
+        // guard's own retained resolution rather than re-derived from any
+        // caller-supplied inventory/anchor.
+        let protected_id = ResourceId::parse("path-realm-workload-state-my-realm").unwrap();
+        let bound = guard.protected_resource(&protected_id).unwrap();
+        assert_eq!(bound.resource_id(), &protected_id);
+        assert!(bound.verify_live_identity().is_ok());
+
+        // Selecting the lock file's own resource id (instead of the
+        // protected resource's) is rejected: the two are never conflated.
         assert_eq!(
-            bound.resource_id.as_str(),
-            "path-realm-workload-state-my-realm"
+            guard
+                .protected_resource(guard.lock_file_resource_id())
+                .err()
+                .unwrap()
+                .code(),
+            ErrorCode::LockMismatch
         );
     }
 
@@ -1949,7 +2005,7 @@ mod tests {
     }
 
     #[test]
-    fn bind_protected_resource_rejects_after_release() {
+    fn protected_resource_rejects_after_release() {
         let scratch = Scratch::new("bind-after-release");
         let owner = controller_actor("my-realm");
         let lock = valid_generated_lock(
@@ -2001,14 +2057,8 @@ mod tests {
             .unwrap();
         let guard = set.last().expect("released guard remains in the set");
 
-        let err = guard
-            .bind_protected_resource(
-                &storage,
-                &anchor,
-                Path::new(ANCHOR_PATH),
-                host_metadata(&scratch.0, 0o600),
-            )
-            .unwrap_err();
+        let protected_id = ResourceId::parse("path-realm-workload-state-my-realm").unwrap();
+        let err = guard.protected_resource(&protected_id).err().unwrap();
         assert_eq!(err.code(), ErrorCode::LockReleased);
     }
 
@@ -2418,5 +2468,189 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(err.code(), ErrorCode::Deadline);
+    }
+
+    /// End-to-end proof (real threads, real OFD lock contention,
+    /// [`SystemClock`], generous timing margins) that a late wakeup can
+    /// never let acquisition win a lock after its own deadline has
+    /// passed. A background thread holds the conflicting OFD lock until
+    /// well *after* `acquire_from_generated`'s bounded-wait deadline has
+    /// elapsed, then releases it — so the only way this call could ever
+    /// observe `set_ofd_lock` succeed is if it attempted one *after* its
+    /// deadline, exactly the late-wakeup race the top-of-loop deadline
+    /// recheck exists to close. Without that recheck, a poll iteration's
+    /// sleep could return late (after the deadline) and immediately
+    /// attempt (and, once the background thread has released, win) the
+    /// lock; with it, the call must fail closed with `ErrorCode::Deadline`
+    /// every time, regardless of exactly when the background thread
+    /// releases relative to the deadline.
+    #[test]
+    fn bounded_wait_never_acquires_after_a_late_wakeup_past_deadline() {
+        let scratch = Scratch::new("bounded-wait-late-wakeup");
+        let owner = controller_actor("my-realm");
+        let mut lock = valid_generated_lock(
+            "lock:realm-controller:my-realm",
+            "path:realm-workload-state:my-realm",
+            "/var/lib/d2b/r/realm/controller/state.lock",
+            owner.clone(),
+        );
+        // A short 15ms deadline against a background hold released only
+        // at ~60ms: any implementation missing the late-wakeup recheck
+        // would have ample real-world scheduling slack to observe the
+        // held lock as free on some poll iteration whose own sleep
+        // overran past 15ms, and could then win it — this margin makes
+        // that outcome the overwhelmingly likely failure mode if the
+        // fix regresses, while the fixed implementation must still fail
+        // closed every time.
+        lock.timeout_policy = LockTimeoutPolicy {
+            kind: LockTimeoutKind::BoundedWait,
+            timeout_ms: Some(15),
+        };
+        let lock_row = valid_storage_row(
+            "path:realm-controller-lock:my-realm",
+            "state.lock",
+            owner.clone(),
+        );
+        let protected_row =
+            valid_storage_row("path:realm-workload-state:my-realm", "state.json", owner);
+        let lock_path = scratch.0.join("state.lock");
+        fs::write(&lock_path, b"").unwrap();
+        fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+        let contender = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .unwrap();
+        let contender_fd = OwnedFd::from(contender);
+        set_ofd_lock(&contender_fd, libc::F_WRLCK as i16).unwrap();
+
+        let handle = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(60));
+            set_ofd_lock(&contender_fd, libc::F_UNLCK as i16).unwrap();
+        });
+
+        let sync = sync_of(vec![lock.clone()]);
+        let storage = storage_of(vec![lock_row, protected_row]);
+        let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
+        let metadata = host_metadata(&scratch.0, 0o600);
+
+        let mut set = LockSet::new();
+        let err = set
+            .acquire_from_generated(
+                &sync,
+                &storage,
+                &lock.id,
+                &anchor,
+                Path::new(ANCHOR_PATH),
+                realm_controller("my-realm"),
+                OwnershipEpoch::new(1).unwrap(),
+                metadata,
+                &NeverCancelled,
+            )
+            .unwrap_err();
+        assert_eq!(err.code(), ErrorCode::Deadline);
+        assert!(set.last().is_none());
+
+        handle.join().unwrap();
+    }
+
+    /// End-to-end proof that the guarded `AtomicWrite` API
+    /// (`atomic::AtomicWrite::write_guarded`/`read_guarded`) round-trips
+    /// through exactly the acquisition-time-bound capability a generated
+    /// guard retains — never a caller-supplied `AnchoredResource` — and
+    /// rejects a mismatched `resource_id` even though the guard is held
+    /// and every other input is otherwise valid.
+    #[test]
+    fn guarded_atomic_write_round_trips_and_rejects_wrong_resource_id() {
+        let scratch = Scratch::new("guarded-atomic-round-trip");
+        let owner = controller_actor("my-realm");
+        let lock = valid_generated_lock(
+            "lock:realm-controller:my-realm",
+            "path:realm-workload-state:my-realm",
+            "/var/lib/d2b/r/realm/controller/state.lock",
+            owner.clone(),
+        );
+        let lock_row = valid_storage_row(
+            "path:realm-controller-lock:my-realm",
+            "state.lock",
+            owner.clone(),
+        );
+        let protected_row =
+            valid_storage_row("path:realm-workload-state:my-realm", "state.json", owner);
+        fs::write(scratch.0.join("state.lock"), b"").unwrap();
+        fs::set_permissions(
+            scratch.0.join("state.lock"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        let sync = sync_of(vec![lock.clone()]);
+        let storage = storage_of(vec![lock_row, protected_row]);
+        let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
+        let metadata = host_metadata(&scratch.0, 0o600);
+
+        let mut set = LockSet::new();
+        let guard = set
+            .acquire_from_generated(
+                &sync,
+                &storage,
+                &lock.id,
+                &anchor,
+                Path::new(ANCHOR_PATH),
+                realm_controller("my-realm"),
+                OwnershipEpoch::new(1).unwrap(),
+                metadata,
+                &NeverCancelled,
+            )
+            .unwrap();
+        let protected_id = ResourceId::parse("path-realm-workload-state-my-realm").unwrap();
+
+        let generation_one = d2b_contracts::v2_state::Generation::new(1).unwrap();
+        let write_policy = crate::atomic::WritePolicy {
+            metadata,
+            writer: realm_controller("my-realm"),
+            config_generation: generation_one,
+            state_generation: generation_one,
+            expected_previous: None,
+            lock_id: guard.lock_id().clone(),
+            ownership_epoch: guard.ownership_epoch(),
+        };
+        let receipt =
+            crate::atomic::AtomicWrite::<crate::atomic::RealAtomicFilesystem>::write_guarded(
+                guard,
+                &protected_id,
+                &42u64,
+                &write_policy,
+            )
+            .unwrap();
+        assert_eq!(receipt.resource_id, protected_id);
+
+        let read_policy = crate::atomic::ReadPolicy {
+            metadata,
+            writer: realm_controller("my-realm"),
+            config_generation: generation_one,
+            state_generation: crate::atomic::GenerationPolicy::Exact(generation_one),
+        };
+        let state =
+            crate::atomic::AtomicWrite::<crate::atomic::RealAtomicFilesystem>::read_guarded::<u64>(
+                guard,
+                &protected_id,
+                &read_policy,
+            )
+            .unwrap();
+        assert_eq!(state.payload, 42u64);
+
+        // The lock file's own resource id is a distinct concept from the
+        // protected resource: selecting it here is rejected exactly like
+        // any other unrelated id, never silently substituted.
+        let err =
+            crate::atomic::AtomicWrite::<crate::atomic::RealAtomicFilesystem>::read_guarded::<u64>(
+                guard,
+                guard.lock_file_resource_id(),
+                &read_policy,
+            )
+            .err()
+            .unwrap();
+        assert_eq!(err.code(), ErrorCode::LockMismatch);
     }
 }

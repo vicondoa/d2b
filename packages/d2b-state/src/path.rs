@@ -307,6 +307,14 @@ pub(crate) struct GeneratedResource {
     resource_id: ResourceId,
     directory: AnchoredDir,
     leaf: LeafName,
+    /// The bound containing directory's `(dev, ino)`, captured via `fstat`
+    /// exactly once, at the end of [`Self::resolve`]'s own trusted-anchor +
+    /// `openat2` walk. This is the acquisition-time identity a held
+    /// [`crate::LockGuard`] retains and later re-verifies against (see
+    /// [`Self::verify_live_identity`]) — never recomputed from a
+    /// caller-supplied path/anchor after acquisition, which is exactly the
+    /// substitution this field closes off.
+    captured_identity: (u64, u64),
 }
 
 impl GeneratedResource {
@@ -363,27 +371,62 @@ impl GeneratedResource {
             AnchoredDir::from_owned_fd(fd)?
         };
 
+        let captured_identity = {
+            let stat = rustix::fs::fstat(directory.fd())
+                .map_err(|error| Error::io(ErrorCode::Io, error))?;
+            (stat.st_dev, stat.st_ino)
+        };
         Ok(Self {
             resource_id,
             directory,
             leaf,
+            captured_identity,
         })
     }
 
     /// The exact `(dev, ino)` of the bound containing directory, queried
-    /// fresh via `fstat` on *every* call — never a value captured or cached
-    /// from resolution time — so a consumer re-checking this at bind/use
-    /// time can never be fooled by a stale identity. Exercised by this
-    /// module's own tests (production code no longer caches or re-derives
-    /// directory identity through this type, since binding a protected
-    /// resource re-resolves fresh via [`Self::resolve`] on every call
-    /// instead); kept as a `#[cfg(test)]` verification hook rather than a
-    /// live production accessor.
+    /// fresh via `fstat` on *every* call — distinct from
+    /// [`Self::captured_identity`]/[`Self::verify_live_identity`], which
+    /// compare against the one-time snapshot taken at [`Self::resolve`]
+    /// time. Kept as a `#[cfg(test)]` verification hook for this module's
+    /// own tests to observe live directory state independently of the
+    /// captured snapshot (e.g. proving a replacement race is detectable),
+    /// not as a production accessor.
     #[cfg(test)]
     pub(crate) fn directory_identity(&self) -> Result<(u64, u64)> {
         let stat = rustix::fs::fstat(self.directory.fd())
             .map_err(|error| Error::io(ErrorCode::Io, error))?;
         Ok((stat.st_dev, stat.st_ino))
+    }
+
+    /// Re-`fstat`s the bound containing directory and compares it against
+    /// the `(dev, ino)` captured once at [`Self::resolve`] time. A
+    /// [`crate::LockGuard`] resolves and retains its protected resource
+    /// exactly once, at acquisition time; this is the guard's only
+    /// re-verification step before a consumer is allowed to read/write
+    /// through it — it detects a directory replacement race (unlink +
+    /// recreate under the same path between acquisition and use) without
+    /// re-walking the path or accepting a new anchor/inventory from the
+    /// caller.
+    pub(crate) fn verify_live_identity(&self) -> Result<()> {
+        let stat = rustix::fs::fstat(self.directory.fd())
+            .map_err(|error| Error::io(ErrorCode::Io, error))?;
+        if (stat.st_dev, stat.st_ino) != self.captured_identity {
+            return Err(Error::Code(ErrorCode::LockMismatch));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn resource_id(&self) -> &ResourceId {
+        &self.resource_id
+    }
+
+    pub(crate) fn directory(&self) -> &AnchoredDir {
+        &self.directory
+    }
+
+    pub(crate) fn leaf(&self) -> &LeafName {
+        &self.leaf
     }
 
     /// Opens the bound leaf beneath the resolved, trusted directory. Uses
@@ -394,18 +437,60 @@ impl GeneratedResource {
         let path = RelativePath::from_components([self.leaf.as_str().to_owned()])?;
         self.directory.open_beneath(&path, flags, mode)
     }
+}
 
-    /// Converts into the legacy [`AnchoredResource`] shape consumed by
-    /// atomic/audit/broker code that predates the generated-contract
-    /// bridge. This is the one sanctioned way to hand a generated-resolved
-    /// resource to that code; the recipient still cannot re-derive or
-    /// mutate the resolution that produced it (it only gets the same
-    /// public fields any [`AnchoredResource::new`] caller could construct
-    /// by hand, with no way to tell the two apart — the non-forgeability
-    /// guarantee applies to *how this value was obtained*, not to the
-    /// legacy type's own shape).
-    pub(crate) fn into_anchored_resource(self) -> AnchoredResource {
-        AnchoredResource::new(self.resource_id, &self.directory, self.leaf)
+/// A non-forgeable, acquisition-time-bound borrow of a held
+/// [`crate::LockGuard`]'s single protected [`GeneratedResource`].
+///
+/// [`crate::LockGuard::protected_resource`] is the *only* way to obtain
+/// one, and it never re-resolves against a caller-supplied inventory,
+/// anchor, or path — it only ever borrows the exact [`GeneratedResource`]
+/// [`crate::LockSet::acquire_from_generated`] resolved once, at
+/// acquisition time. The `'guard` lifetime ties every `GuardedResource` to
+/// the specific [`crate::LockGuard`] it was borrowed from: it cannot
+/// outlive that guard (the borrow checker enforces this), it has no
+/// public constructor, no field access, and no `Clone`/`Copy` impl, so a
+/// caller can never manufacture one, retain one independently of the
+/// guard, or pair one guard's resolution with another guard's identity.
+/// The only sanctioned consumer is `d2b-state`'s own guarded
+/// `AtomicWrite` read/write API (see `atomic::AtomicWrite::read_guarded`/
+/// `write_guarded`), which uses the borrow for the duration of a single
+/// synchronous operation and never returns it (or anything derived from
+/// it that could outlive the guard) to its own caller.
+pub(crate) struct GuardedResource<'guard> {
+    resource: &'guard GeneratedResource,
+}
+
+impl<'guard> GuardedResource<'guard> {
+    pub(crate) fn new(resource: &'guard GeneratedResource) -> Self {
+        Self { resource }
+    }
+
+    pub(crate) fn resource_id(&self) -> &ResourceId {
+        self.resource.resource_id()
+    }
+
+    /// Re-verifies the borrowed resource's directory identity against the
+    /// snapshot captured when the owning guard acquired it. See
+    /// [`GeneratedResource::verify_live_identity`].
+    pub(crate) fn verify_live_identity(&self) -> Result<()> {
+        self.resource.verify_live_identity()
+    }
+
+    /// Builds a fresh legacy [`AnchoredResource`] handle from this borrow,
+    /// for immediate synchronous use by the guarded `AtomicWrite` API only
+    /// (never returned to an external caller). The recipient still cannot
+    /// re-derive or mutate the resolution that produced it (it only gets
+    /// the same public fields any [`AnchoredResource::new`] caller could
+    /// construct by hand, with no way to tell the two apart — the
+    /// non-forgeability guarantee applies to *how this value was
+    /// obtained*, not to the legacy type's own shape).
+    pub(crate) fn to_anchored_resource(&self) -> AnchoredResource {
+        AnchoredResource::new(
+            self.resource.resource_id().clone(),
+            self.resource.directory(),
+            self.resource.leaf().clone(),
+        )
     }
 }
 
@@ -728,6 +813,47 @@ mod tests {
         let first = resource.directory_identity().unwrap();
         let second = resource.directory_identity().unwrap();
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn verify_live_identity_detects_a_captured_identity_mismatch() {
+        // A held open file descriptor is, by construction, immune to a
+        // later path-level replacement: once `resolve` opens the
+        // containing directory, an `unlink`+`recreate` (or `rename`) at
+        // that same path can never change what the already-open fd
+        // refers to (POSIX `fstat` on an open descriptor always reports
+        // the original, possibly now-unlinked, inode). Provoking a
+        // *live* mismatch through ordinary filesystem operations alone
+        // is therefore not a meaningful test of `verify_live_identity`
+        // — this is precisely the "no re-walking the path" safety
+        // property the capability is meant to provide.
+        //
+        // What *is* testable in isolation is the comparison itself:
+        // `verify_live_identity` must fail closed whenever the
+        // acquisition-time `captured_identity` no longer matches the
+        // bound directory's live `(dev, ino)`, however that mismatch
+        // came to be. This test constructs that condition directly
+        // (same crate/module scope, so the private fields are visible)
+        // rather than fabricating an unrepresentable filesystem race.
+        let scratch = Scratch::new("resolve-identity-mismatch");
+        let nested = scratch.0.join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        std::fs::write(nested.join("state.lock"), b"").unwrap();
+
+        let directory = AnchoredDir::open_trusted(&nested).unwrap();
+        let resource_id = ResourceId::parse("nested-lock").unwrap();
+        let leaf = LeafName::parse("state.lock").unwrap();
+        let resource = GeneratedResource {
+            resource_id,
+            directory,
+            leaf,
+            captured_identity: (u64::MAX, u64::MAX),
+        };
+
+        assert_eq!(
+            resource.verify_live_identity().unwrap_err().code(),
+            ErrorCode::LockMismatch
+        );
     }
 
     #[test]

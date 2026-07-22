@@ -13,6 +13,7 @@ use d2b_core::{
         ActorKind, PrincipalKind, RepairPolicy, SensitivityClass, StorageInvariant, StorageJson,
         StoragePathKind,
     },
+    storage_lifecycle::{StorageContractValidationReason, SyncContractValidationReason},
     sync::{LockKind, SyncJson},
 };
 use regex::Regex;
@@ -402,6 +403,89 @@ fn storage_lifecycle_report_schema_and_reference_are_committed() {
     assert!(reference.contains("/var/lib/d2b/daemon-state/storage-lifecycle-report.json"));
     assert!(reference.contains("./schemas/v2/storage-lifecycle-report.json"));
     assert!(xtask.contains("\"storage-lifecycle-report.json\""));
+}
+
+/// A real drift/round-trip check for the new `lock-missing-protected-resource-id`
+/// `SyncContractValidationReason` member: it walks *every* variant of the
+/// actual `d2b_core::storage_lifecycle::SyncContractValidationReason` (and its
+/// `StorageContractValidationReason` sibling) Rust enum, serializes each with
+/// `serde_json` (the exact same serializer `schemars`/`xtask gen-schemas`
+/// renders the committed schema from), and asserts the resulting slug set is
+/// *exactly* — neither a subset nor a superset of — the committed schema's
+/// enum array. This catches both a schema/Rust drift in either direction: a
+/// new Rust variant left undeclared in the schema, or a stale schema slug
+/// whose Rust variant was removed/renamed.
+#[test]
+fn storage_lifecycle_report_schema_reason_enums_round_trip_every_rust_variant() {
+    let schema = read_repo_file("docs/reference/schemas/v2/storage-lifecycle-report.json");
+    let schema: serde_json::Value =
+        serde_json::from_str(&schema).expect("storage lifecycle report schema parses as JSON");
+    let companion_doc = read_repo_file("docs/reference/schemas/v2/storage-lifecycle-report.md");
+
+    let sync_reasons = [
+        SyncContractValidationReason::DuplicateLockId,
+        SyncContractValidationReason::OfdLockMissingCloexec,
+        SyncContractValidationReason::FdPassingMissingLeaseTransferRecord,
+        SyncContractValidationReason::DuplicateAcquireOrder,
+        SyncContractValidationReason::LockMissingProtectedResourceId,
+        SyncContractValidationReason::Unclassified,
+    ];
+    let rendered_sync_reasons: BTreeSet<String> = sync_reasons
+        .iter()
+        .map(|reason| {
+            serde_json::to_value(reason)
+                .expect("SyncContractValidationReason serializes")
+                .as_str()
+                .expect("serializes to a plain string")
+                .to_owned()
+        })
+        .collect();
+    let schema_sync_reasons: BTreeSet<String> =
+        schema["definitions"]["SyncContractValidationReason"]["enum"]
+            .as_array()
+            .expect("SyncContractValidationReason enum array")
+            .iter()
+            .map(|value| value.as_str().expect("enum values are strings").to_owned())
+            .collect();
+    assert_eq!(
+        rendered_sync_reasons, schema_sync_reasons,
+        "every SyncContractValidationReason Rust variant must have exactly one \
+         matching committed schema enum slug, and vice versa"
+    );
+    assert!(rendered_sync_reasons.contains("lock-missing-protected-resource-id"));
+
+    let storage_reasons = [
+        StorageContractValidationReason::DuplicateStoragePathId,
+        StorageContractValidationReason::DuplicateRestartPolicy,
+        StorageContractValidationReason::DuplicateDegradedReason,
+        StorageContractValidationReason::Unclassified,
+    ];
+    let rendered_storage_reasons: BTreeSet<String> = storage_reasons
+        .iter()
+        .map(|reason| {
+            serde_json::to_value(reason)
+                .expect("StorageContractValidationReason serializes")
+                .as_str()
+                .expect("serializes to a plain string")
+                .to_owned()
+        })
+        .collect();
+    let schema_storage_reasons: BTreeSet<String> =
+        schema["definitions"]["StorageContractValidationReason"]["enum"]
+            .as_array()
+            .expect("StorageContractValidationReason enum array")
+            .iter()
+            .map(|value| value.as_str().expect("enum values are strings").to_owned())
+            .collect();
+    assert_eq!(rendered_storage_reasons, schema_storage_reasons);
+
+    // The companion doc must document the new slug and stay cross-referenced
+    // with both the schema it describes and the sync-contract reference it
+    // borrows the `resourceId` semantics from.
+    assert!(companion_doc.contains("lock-missing-protected-resource-id"));
+    assert!(companion_doc.contains("./storage-lifecycle-report.json"));
+    assert!(companion_doc.contains("./sync.md"));
+    assert!(companion_doc.contains("schemaVersion"));
 }
 
 #[test]
@@ -866,6 +950,70 @@ fn rendered_sync_locks_pair_exactly_with_real_storage_rows_when_fixture_availabl
                 lock.id.as_str()
             );
         }
+
+        // Every `lock:workload-store:*` lock's resourceId must resolve to
+        // the aggregate `path:workload-store-view:*` resource — the
+        // directory covering the live/meta/state/gcroots leaves beneath it
+        // — never to a single leaf such as `workload-store-view-live`. The
+        // lock's whole mutation domain is that aggregate, so its protected
+        // resource must cover the same domain, not one narrower slice of
+        // it that would leave the rest unprotected.
+        let workload_store_locks: Vec<_> = sync
+            .locks
+            .iter()
+            .filter(|lock| lock.id.as_str().starts_with("lock:workload-store:"))
+            .collect();
+        assert!(
+            !workload_store_locks.is_empty(),
+            "{fixture_name} sync.json must include a workload-store lock"
+        );
+        for lock in &workload_store_locks {
+            let protected_id = lock.resource_id.as_ref().unwrap_or_else(|| {
+                panic!("{fixture_name} lock {} has no resourceId", lock.id.as_str())
+            });
+            assert!(
+                protected_id
+                    .as_str()
+                    .starts_with("path:workload-store-view:"),
+                "{fixture_name} workload-store lock {} must protect the aggregate \
+                 path:workload-store-view:* resource, not a single leaf (got {})",
+                lock.id.as_str(),
+                protected_id.as_str()
+            );
+            let protected_row = rows_by_id.get(protected_id.as_str()).unwrap_or_else(|| {
+                panic!(
+                    "{fixture_name} lock {} resourceId {} has no matching storage.json row",
+                    lock.id.as_str(),
+                    protected_id.as_str()
+                )
+            });
+            assert_eq!(protected_row.kind, StoragePathKind::Directory);
+            let aggregate_path = protected_row.path_template.as_str();
+            // Every one of this exact workload's live/meta/state/gcroots
+            // leaf rows must live strictly beneath the aggregate path this
+            // lock protects — scoped by path prefix (not by id substring,
+            // which would risk matching a sibling workload's identically
+            // suffixed leaf id under a multi-workload fixture).
+            let leaf_suffixes = [
+                "/store-view/live",
+                "/store-view/meta",
+                "/store-view/state",
+                "/store-view/gcroots",
+            ];
+            for suffix in leaf_suffixes {
+                let matched = storage.paths.iter().any(|row| {
+                    let path = row.path_template.as_str();
+                    path.starts_with(aggregate_path) && path.ends_with(suffix)
+                });
+                assert!(
+                    matched,
+                    "{fixture_name} workload-store lock {}'s aggregate protected resource {} \
+                     must have a real storage.json row for its {suffix} leaf beneath it",
+                    lock.id.as_str(),
+                    aggregate_path
+                );
+            }
+        }
     }
 }
 
@@ -1162,6 +1310,10 @@ fn registered_host_mutation_sources() -> BTreeMap<&'static str, &'static str> {
         (
             "packages/d2b-priv-broker/src/ops/media.rs",
             "storage paths:qemu-media registry/runtime index",
+        ),
+        (
+            "packages/d2b-priv-broker/src/ops/storage_contract.rs",
+            "broker reconciles generated regular-file lock rows anchored/nofollow",
         ),
         (
             "packages/d2b-priv-broker/src/ops/store_sync.rs",

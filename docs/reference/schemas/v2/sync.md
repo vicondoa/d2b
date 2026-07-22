@@ -59,12 +59,12 @@ wrong row:
 | Lock file's own storage row (a distinct concept from `resourceId` — see above) | Resolved internally via `find_unique_lock_file_row`: the unique row in `storage.json` whose `pathTemplate` exactly equals this lock's own (mandatory) `pathTemplate`. That row must be a `RegularFile` sharing the lock's `scope`, must declare an owner (`owner.value`) matching `ownerProcess.value`, and must declare both the `no-symlink` and `no-magic-link` invariants. Stored on the guard as `lock_file_resource_id()`. | No second schema field for the lock-file row; no caller-suppliable row of any kind; a path-template collision (more than one match) or a scope/owner/invariant mismatch fails closed rather than guessing. |
 | Total order | `SyncJson::global_order_rank(&lock.id)` — the unique `(scopeClass, anchoredRoot, normalizedPath, lockId)` sort key across every declared lock, converted to a 0-based rank. | No synthetic `global_order` field invented; no fabricated `acquire_after` edges — none exist in the generated contract, so none are processed. |
 | `ownerProcess` / `releaseAuthority` | Rendered to `(ActorKind, name)` via `render_authority`, covering only `RealmController`/`RealmBroker` (the only authorities the current generator emits); every other `AuthorityRef` variant fails closed. Symmetry (`ownerProcess == releaseAuthority`) is required and verified, never assumed. | No default/first-holder guess when the two diverge. |
-| `timeoutPolicy` | `FailFast`/`NoWait` require `timeoutMs == null`, perform no sleep, and produce no deadline. `BoundedWait` requires `timeoutMs` in `1..=300000`; the acquire loop computes one absolute monotonic deadline up front (`Clock::now() + timeoutMs`) and, on each contended poll, sleeps `min(remaining, MAX_LOCK_POLL_BACKOFF)` via `poll_backoff_or_deadline` — never an invented fixed backoff, and never a sleep that would overshoot the deadline. | No synthetic 1ms deadline; extraneous `timeoutMs` on a fail-fast lock fails closed instead of being silently ignored; no unconditional max-backoff sleep once less than the cap remains. |
+| `timeoutPolicy` | `FailFast`/`NoWait` require `timeoutMs == null`, perform no sleep, and produce no deadline. `BoundedWait` requires `timeoutMs` in `1..=300000`; the acquire loop computes one absolute monotonic deadline up front (`Clock::now() + timeoutMs`) and, on each contended poll, sleeps `min(remaining, MAX_LOCK_POLL_BACKOFF)` via `poll_backoff_or_deadline` — never an invented fixed backoff, and never a sleep that would overshoot the deadline. Before every retry attempt after the first — including immediately after any sleep — the loop re-checks the same absolute deadline (`deadline_elapsed`) and fails closed on a late wakeup rather than issuing one more `set_ofd_lock` attempt past the deadline. | No synthetic 1ms deadline; extraneous `timeoutMs` on a fail-fast lock fails closed instead of being silently ignored; no unconditional max-backoff sleep once less than the cap remains; no acquisition past the deadline due to OS scheduling delay after a sleep returns. |
 | Cancellation | Honored unconditionally in the acquire loop (the generated contract carries no distinct cancellation-policy field). | Documented as the strictly-safer default, not a fabricated policy value. |
 | `stalePolicy`, `adoptionPolicy`, `degradeScope` | Passed through byte-for-byte onto the returned `LockGuard` (`generated_stale_policy()`, `generated_adoption_policy()`, `generated_degrade_scope()` accessors) for the caller's own reconciliation, never reinterpreted inside the adapter. | No stale/adoption heuristic baked into `d2b-state`. |
 | `fdPassingPolicy` | Mapped losslessly by name to `d2b_contracts::v2_state::FdTransferPolicy` (`None → Never`, `ScmRights → ScmRightsLeaseHandoff`, `ExplicitFdMapping → ExplicitFdMapping`); `inheritancePolicy` is cross-checked for the one valid pairing per mechanism. | No default transfer mechanism. |
 | `cloexecRequired` | Verified `true` (fails closed otherwise) and independently re-checked via `fcntl(F_GETFD)` on the held fd after open. | Never assumed from the declared policy alone. |
-| Lock-file row (`path`, `mode`, owner metadata) | Resolved through the caller's trusted anchor + the crate-private `GeneratedResource::resolve` (`openat2` `BENEATH|NO_SYMLINKS|NO_MAGICLINKS`), never a separately-probed inode; cross-checked against the row's own declared `mode`/owner metadata. The lock file itself is only ever **opened** (`O_RDWR`), never created: a missing lock file fails closed and the caller must route through broker reconciliation to (re-)create it, instead of the generated adapter silently materializing broker-owned state. | No pairing by array position; no `O_CREAT`/`O_EXCL` in the generated-row acquisition path; no trust of a caller-supplied resource id that doesn't match the row the guard actually opened. |
+| Lock-file row (`path`, `mode`, owner metadata) | Resolved through the caller's trusted anchor + the crate-private `GeneratedResource::resolve` (`openat2` `BENEATH|NO_SYMLINKS|NO_MAGICLINKS`), never a separately-probed inode; cross-checked against the row's own declared `mode`/owner metadata. The lock file itself is only ever **opened** (`O_RDWR`), never created by the holder: a missing lock file fails closed and the caller must route through broker reconciliation to (re-)create it. Broker-side reconciliation (`d2b-priv-broker`'s `reconcile_storage_scope`) creates a missing generated regular-file lock row anchored/`O_NOFOLLOW`, with `O_CREAT\|O_EXCL\|O_CLOEXEC`, the row's exact declared owner/group/mode, `fsync`s the new file then its parent directory, and on `EEXIST` validates the existing file's type/owner/mode/link-count and `fsync`s the parent before reporting success — never a holder-side create and never an arbitrary-path regular-file creation. | No pairing by array position; no `O_CREAT`/`O_EXCL` in the generated-row acquisition path; no trust of a caller-supplied resource id that doesn't match the row the guard actually opened. |
 
 The returned `LockGuard` exposes the held lock file's *exact* `(dev, ino)`
 identity via `fd_identity()` (a fresh `fstat` of the held fd on every call —
@@ -78,21 +78,44 @@ schema-declared protected resource, never the lock file's own id) — so
 the id of the state it is writing, not the id of the lock file guarding that
 state.
 
-To actually open the protected resource under the guard's authority, callers
-use `LockGuard::bind_protected_resource(storage, anchor, anchor_path,
-metadata)`: there is no caller-supplied resource-id parameter — the resource
-resolved is always exactly the one this guard's generated lock declared via
-`resourceId`, re-validated against the trusted `storage.json`. It then resolves
-a fresh, non-forgeable `GeneratedResource` the same way the lock file itself
-was resolved — a resolved resource is never a clone of anything the caller
-supplied, and a guard that has been released (`release`/`release_in_place`)
-rejects every subsequent bind with `LockReleased`. The crate-private
-`GeneratedResource` capability itself is fully opaque outside `d2b-state`: its
-resource id, directory descriptor, leaf name, and re-derived directory
-identity are private fields with no public constructor, field mutation, or
-clone that would let a resolved resource outlive the guard/anchor that
-produced it; public code only ever receives the legacy `AnchoredResource` shape
-via `into_anchored_resource()`.
+To actually use the protected resource under the guard's authority, callers
+call `LockGuard::protected_resource(resource_id)` — a no-argument (besides the
+opaque id it is asserting, purely for a fail-closed identity check), no-storage,
+no-anchor, no-metadata borrow of a capability the guard already resolved and
+retained *once*, at generated-lock acquisition time (`acquire_from_generated_with_clock`),
+from the same trusted `storage.json` + anchor that call was given. There is no
+way to hand the guard a new inventory, a new anchor, or a "same id, different
+row" substitute after acquisition: the `GeneratedResource` it resolved is
+retained on the guard for its entire lifetime and is never re-resolved. Passing
+any `resource_id` other than the guard's own single protected resource (for
+example, the lock file's own `lock_file_resource_id()`) is rejected with
+`LockMismatch`, as is any call after `release`/`release_in_place`
+(`LockReleased`).
+
+`protected_resource` returns a `GuardedResource<'guard>` — a non-cloneable,
+non-`Debug` capability borrowed from (and lifetime-tied to) `&LockGuard`. It
+cannot be constructed, mutated, or cloned by public code; it exposes only
+`resource_id()` (the resolved resource's own id, for a fail-closed identity
+check — never a caller-supplied override) and `verify_live_identity()` (a
+fresh `fstat` of the bound directory, re-checked against the identity captured
+once at resolution time, so a resolved binding can never silently authorize
+access through a since-replaced directory). The underlying crate-private
+`GeneratedResource` capability itself remains fully opaque outside
+`d2b-state`: its resource id, directory descriptor, leaf name, and captured
+directory identity are private fields with no public constructor, field
+mutation, or clone that would let a resolved resource outlive the guard that
+produced it.
+
+`d2b-state`'s `AtomicWrite<RealAtomicFilesystem>` exposes two generated/guarded
+entry points built on this capability — `write_guarded(guard, resource_id,
+payload, policy)` and `read_guarded::<T>(guard, resource_id, policy)` — which
+resolve the `GuardedResource`, re-verify its live identity, and perform the
+durable write/read, returning only the plain `AtomicWriteReceipt`/
+`DurableState<T>` result: the filesystem handle and the `GuardedResource`
+itself never escape these calls. The pre-existing `AtomicWrite::write`/`read`
+APIs (`atomic.rs`, otherwise unchanged by this bridge) remain available for
+callers still driving a plain `AnchoredResource`; the guarded entry points are
+the non-forgeable authority seam for callers consuming generated locks.
 
 This bridge is additive: existing callers of `LockSet::acquire`/
 `acquire_with_clock` (the pre-existing scratch-`LockSpec` API) are

@@ -452,6 +452,70 @@ impl<F: AtomicFilesystem> AtomicWrite<F> {
     }
 }
 
+impl AtomicWrite<RealAtomicFilesystem> {
+    /// Reads exactly the resource `guard` acquired protection for at
+    /// generated-lock acquisition time, identified by `resource_id`.
+    ///
+    /// Never accepts a caller-supplied [`AnchoredResource`] or storage
+    /// inventory: the only resolution consulted is
+    /// [`LockGuard::protected_resource`]'s acquisition-time-bound
+    /// [`GuardedResource`](crate::path::GuardedResource) borrow, which is
+    /// re-verified against its live directory identity (detecting a
+    /// replacement race between acquisition and this call) before any
+    /// filesystem access. The temporary [`RealAtomicFilesystem`] built
+    /// from that borrow is used and dropped entirely inside this call —
+    /// only the plain [`DurableState<T>`] result is returned, never the
+    /// filesystem handle or the guarded borrow itself.
+    pub fn read_guarded<T>(
+        guard: &LockGuard,
+        resource_id: &d2b_contracts::v2_state::ResourceId,
+        policy: &ReadPolicy,
+    ) -> Result<DurableState<T>>
+    where
+        T: DeserializeOwned + Serialize + PartialEq,
+    {
+        let resource = guard.protected_resource(resource_id)?;
+        // `protected_resource` already validates `resource_id` against the
+        // guard's own acquisition-time-bound resource id before returning
+        // this capability; re-asserting it here is a belt-and-suspenders
+        // check against the exact opaque identity carried by the
+        // capability itself, never a re-derivation from caller input.
+        debug_assert_eq!(resource.resource_id(), resource_id);
+        resource.verify_live_identity()?;
+        let mut atomic =
+            AtomicWrite::new(RealAtomicFilesystem::new(resource.to_anchored_resource()));
+        atomic.read::<T>(policy)
+    }
+
+    /// Writes `payload` to exactly the resource `guard` acquired
+    /// protection for at generated-lock acquisition time, identified by
+    /// `resource_id`.
+    ///
+    /// Same non-forgeable resolution and live-identity re-verification as
+    /// [`Self::read_guarded`]. `policy.lock_id` and `guard` still flow
+    /// through the unchanged [`Self::validate_lock`]/
+    /// [`LockGuard::validate_state_binding`] check that every legacy
+    /// `write` call already goes through — this guarded entry point adds
+    /// the non-forgeable resource resolution on top of, not instead of,
+    /// that existing authority check.
+    pub fn write_guarded<T>(
+        guard: &LockGuard,
+        resource_id: &d2b_contracts::v2_state::ResourceId,
+        payload: &T,
+        policy: &WritePolicy,
+    ) -> Result<AtomicWriteReceipt>
+    where
+        T: DeserializeOwned + Serialize + PartialEq,
+    {
+        let resource = guard.protected_resource(resource_id)?;
+        debug_assert_eq!(resource.resource_id(), resource_id);
+        resource.verify_live_identity()?;
+        let mut atomic =
+            AtomicWrite::new(RealAtomicFilesystem::new(resource.to_anchored_resource()));
+        atomic.write::<T>(payload, policy, Some(guard))
+    }
+}
+
 pub struct RealTemp {
     fd: OwnedFd,
     name: LeafName,

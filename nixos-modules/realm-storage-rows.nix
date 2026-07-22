@@ -575,7 +575,13 @@ let
           inherit scope realmId;
           path = "${stateRoot}/store-view/sync.lock";
           normalizedPath = "r/${realmId}/w/${workloadId}/store-view/sync.lock";
-          resourceId = (normalized "workload-store-view-live").resourceId;
+          # Protects the aggregate store-view directory (covering the
+          # live/meta/state/gcroots leaves beneath it), not just one leaf:
+          # this lock's whole mutation domain is the aggregate, so its
+          # protected resource must be too. See the hand-authored
+          # "path:workload-store-view:${workloadId}" row above, not a
+          # `normalized "workload-store-view-*"` single-leaf lookup.
+          resourceId = "path:workload-store-view:${workloadId}";
         })
         (mkOfdLock {
           id = "lock:workload-keys:${workloadId}";

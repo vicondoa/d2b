@@ -227,6 +227,7 @@
         "ofd-lock-missing-cloexec",
         "fd-passing-missing-lease-transfer-record",
         "duplicate-acquire-order",
+        "lock-missing-protected-resource-id",
         "unclassified"
       ]
     }
