@@ -12,6 +12,10 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Allowed W8 component branches to use only the exact W8 integration branch
+  as parent authority and granted the exact shared contract/state/session
+  paths assigned by the parent W8 component plan. Component-level ownership
+  remains fail-closed for every sibling path.
 - Added stack node/repository/PR context to every `verify_required_checks`
   error message (duplicate publisher, cross-commit, unlisted failing/pending,
   missing, wrong publisher, skipped, unsuccessful, no-authoritative-checks,
