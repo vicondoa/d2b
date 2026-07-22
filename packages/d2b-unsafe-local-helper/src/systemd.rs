@@ -126,6 +126,48 @@ impl SystemdUserScopeManager {
         })
     }
 
+    /// Starts a transient user-manager scope for `supervisor_pid` under an
+    /// exact, caller-supplied unit name rather than one derived internally
+    /// from `kind`. Real callers that must satisfy an external exact-name
+    /// invariant (for example `VerifiedTransientScope`'s
+    /// `d2b-shell-<resource_id>.scope` binding, or the one-shot TTY runtime's
+    /// `d2b-tty-<request_id>.scope` binding) use this directly; `start_scope`
+    /// remains a thin wrapper that derives a random name for callers with no
+    /// such external naming contract.
+    pub fn start_named_scope(
+        &self,
+        supervisor_pid: u32,
+        unit_name: &str,
+        kind: HelperScopeKind,
+    ) -> Result<VerifiedScope, ScopeError> {
+        self.with_connection(|connection| {
+            let manager = Self::manager_proxy(connection)?;
+            let properties = vec![
+                ("PIDs", Value::from(vec![supervisor_pid])),
+                (
+                    "Description",
+                    Value::from("d2b unsafe-local supervised process"),
+                ),
+                ("Slice", Value::from("app.slice")),
+                ("CollectMode", Value::from("inactive-or-failed")),
+                ("KillMode", Value::from("control-group")),
+            ];
+            let auxiliary: Vec<(&str, Vec<(&str, Value<'_>)>)> = Vec::new();
+            let _: OwnedObjectPath = manager
+                .call(
+                    "StartTransientUnit",
+                    &(unit_name, "fail", properties, auxiliary),
+                )
+                .map_err(map_create_error)?;
+
+            await_scope_identity(
+                || Self::query_scope(connection, unit_name, kind),
+                SCOPE_IDENTITY_READY_TIMEOUT,
+                SCOPE_IDENTITY_RETRY_INTERVAL,
+            )
+        })
+    }
+
     fn with_connection<T>(
         &self,
         operation: impl FnOnce(&Connection) -> Result<T, ScopeError>,
@@ -230,33 +272,8 @@ impl UserScopeManager for SystemdUserScopeManager {
         supervisor_pid: u32,
         kind: HelperScopeKind,
     ) -> Result<VerifiedScope, ScopeError> {
-        self.with_connection(|connection| {
-            let manager = Self::manager_proxy(connection)?;
-            let unit_name = scope_unit_name(kind)?;
-            let properties = vec![
-                ("PIDs", Value::from(vec![supervisor_pid])),
-                (
-                    "Description",
-                    Value::from("d2b unsafe-local supervised process"),
-                ),
-                ("Slice", Value::from("app.slice")),
-                ("CollectMode", Value::from("inactive-or-failed")),
-                ("KillMode", Value::from("control-group")),
-            ];
-            let auxiliary: Vec<(&str, Vec<(&str, Value<'_>)>)> = Vec::new();
-            let _: OwnedObjectPath = manager
-                .call(
-                    "StartTransientUnit",
-                    &(unit_name.as_str(), "fail", properties, auxiliary),
-                )
-                .map_err(map_create_error)?;
-
-            await_scope_identity(
-                || Self::query_scope(connection, &unit_name, kind),
-                SCOPE_IDENTITY_READY_TIMEOUT,
-                SCOPE_IDENTITY_RETRY_INTERVAL,
-            )
-        })
+        let unit_name = scope_unit_name(kind)?;
+        self.start_named_scope(supervisor_pid, &unit_name, kind)
     }
 
     fn inspect_scope(&self, scope: &VerifiedScope) -> Result<ScopeInspection, ScopeError> {

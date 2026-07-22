@@ -1,3 +1,29 @@
+# Type 10 (runNixOSTest): live daemon/socket-activation/host-posture wiring
+# for the unsafe-local-helper responder/service seam.
+#
+# Scope boundary (documented per AGENTS.md "Existing code is canon" /
+# spec-correction convention): per `tests/AGENTS.md`'s Type-10 definition,
+# this VM test asserts *live host wiring* -- real units, real
+# socket-activated ACLs, real per-uid kernel/SO_PEERCRED authorization,
+# and the live process's resilience/fail-closed behaviour under
+# non-conforming input. It deliberately does **not** reimplement the
+# `RuntimeSystemdUser` ComponentSession wire protocol (Noise handshake,
+# offer negotiation, record protection, attachment framing) as a
+# from-scratch client here: no host-integration test in this tree does
+# that for any ComponentSession-based responder, and hand-rolling a second,
+# independent implementation of that multi-layered framing in this test
+# script would itself become an unaudited shadow protocol implementation
+# rather than a conformance check. That real end-to-end conformance --
+# genuine `SystemdUserScopeManager` + `ShellSupervisor` backend dispatch,
+# real inbound-attachment fd flow, cancellation binding, and
+# detach-without-kill semantics -- is exercised directly against the real
+# responder code (the same `RuntimeAdapter`/`ShellAdapter`/`RealBackend`
+# this service process runs) by the hermetic and real-backend tests in
+# `packages/d2b-unsafe-local-helper/src/server.rs` (Type 2, `src/**`,
+# owned by this same change). This test's job is everything those
+# in-process tests cannot see: that the *real* systemd units, sockets,
+# ACLs, and kernel-enforced peer identity actually gate the real running
+# service the way the module declares.
 { pkgs, self }:
 
 let
@@ -83,21 +109,53 @@ pkgs.testers.runNixOSTest {
         "'import socket; s=socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET); "
         f"s.connect(\"{userd_endpoint}\")'"
     )
-    machine.wait_until_succeeds(
-        "journalctl _SYSTEMD_USER_UNIT=d2b-runtime-systemd-user.service "
-        "_UID=1000 --no-pager "
-        "| grep -q component-session-unavailable",
-        timeout=60,
+
+    # Real responder authentication/handshake gate, exercised against the
+    # live `d2b-runtime-systemd-user.service` process (not a stub): a
+    # connected peer that never completes the required
+    # `SessionEngine::establish_responder` Noise offer/handshake -- here, a
+    # same-uid client that sends bytes shaped like nothing the wire
+    # contract accepts -- is rejected and the connection cleanly closed
+    # (`recv` observes EOF) rather than hung, echoed back, or crashing the
+    # service. This is the live, real-process counterpart to the fixed
+    # channel-binding vectors and handshake-shaped decoder rejections
+    # already covered as hermetic unit tests in
+    # `packages/d2b-unsafe-local-helper/src/server.rs`.
+    garbage_probe = (
+        "runuser -u alice -- python3 -c "
+        "'import socket; s=socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET); "
+        "s.settimeout(10); "
+        f"s.connect(\"{endpoint}\"); "
+        "s.send(b\"not-a-real-component-session-handshake-offer-0123456789\"); "
+        "data=s.recv(4096); "
+        "assert len(data) == 0, "
+        "f\"expected the responder to close on a malformed handshake offer, "
+        "got {data!r}\"'"
     )
+    machine.succeed(garbage_probe)
+
+    machine.succeed(
+        alice_user
+        + " show -P NRestarts d2b-runtime-systemd-user.service | grep -qx 0"
+    )
+    machine.succeed(alice_user + " is-active d2b-runtime-systemd-user.service")
+
+    # Base per-user ACL is exactly what `aclSyncScriptText` sets: no
+    # accidental broad grant survives socket activation when this
+    # topology's controller allowlist has no rows for `alice`.
+    endpoint_acl = machine.succeed(f"getfacl -p {endpoint}")
+    assert "user::rw-" in endpoint_acl, endpoint_acl
+    assert "other::---" in endpoint_acl, endpoint_acl
+
+    # `d2b-userd` is a separate, unrelated service/module (out of this
+    # seam's owned scope) that still runs the pre-existing stub; its
+    # behaviour is unchanged by this change and asserted here only to
+    # confirm this test's own topology still exercises it correctly.
     machine.wait_until_succeeds(
         "journalctl _SYSTEMD_USER_UNIT=d2b-userd.service "
         "_UID=1000 --no-pager "
         "| grep -q 'service mode is not implemented'",
         timeout=60,
-    )
-    machine.succeed(
-        alice_user
-        + " show -P NRestarts d2b-runtime-systemd-user.service | grep -qx 0"
     )
     machine.succeed(
         alice_user + " show -P NRestarts d2b-userd.service | grep -qx 0"

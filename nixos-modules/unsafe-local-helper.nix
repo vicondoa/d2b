@@ -56,15 +56,22 @@ EOF
 
   # Narrow authorization surface: only the fixed, Nix-derived controller
   # identities of *enabled host-local child realms that actually host an
-  # unsafe-local workload* may ever reach a helper user's endpoint from a
-  # different uid. `_realmPrincipals.localRoot` (the `d2bd` controller) is
-  # deliberately excluded: unlike child-realm controllers it has no
-  # `stablePrincipalId`-derived fixed UID (it's a NixOS-allocated dynamic
-  # system-user uid), so it cannot be resolved into this static allowlist at
-  # eval time, and it has no `allowedUsers` field to scope against anyway.
+  # unsafe-local workload*, plus the single host-wide local-root controller
+  # (`d2bd`), may ever reach a helper user's endpoint from a different uid.
+  # `_realmPrincipals.localRoot` (the `d2bd` controller) has no
+  # `stablePrincipalId`-derived fixed UID -- unlike child-realm controllers,
+  # it's a NixOS-allocated dynamic system-user uid -- so it cannot be
+  # resolved into a fixed `controllerUids` row at eval time. It also has no
+  # `allowedUsers` field to scope against: it is the single, host-wide
+  # local-root controller that supervises every enabled realm (see AGENTS.md
+  # "Realm-local control-plane end state"), so it is named, by its stable
+  # account name, for every eligible user below and resolved to its exact
+  # current uid once at helper startup (see `controller_allowlist.rs`).
   relevantPrincipalRows = lib.filter
     (row: builtins.elem row.realmId unsafeLocalRealmIds)
     cfg._realmPrincipals.children;
+
+  localRootControllerName = cfg._realmPrincipals.localRoot.controller;
 
   # For one helper user: the bounded, sorted, deduplicated set of controller
   # UIDs whose realm explicitly names that exact user in `allowedUsers`.
@@ -81,6 +88,7 @@ EOF
     entries = map (user: {
       inherit user;
       controllerUids = controllerUidsForUser user;
+      controllerPrincipalNames = [ localRootControllerName ];
     }) eligibleUsers;
   };
   controllerAllowlistFile = pkgs.writeText "d2b-unsafe-local-controller-allowlist.json"
@@ -113,6 +121,24 @@ EOF
         ${pkgs.acl}/bin/setfacl -m "u:''${controller_uid}:x" "$dir"
         ${pkgs.acl}/bin/setfacl -m "u:''${controller_uid}:rw" "$sock"
       done <<< "$controller_uids"
+    fi
+
+    # Stable controller *principal names* (for example the local-root
+    # controller's own account, "d2bd", whose uid NixOS allocates
+    # dynamically rather than fixing at eval time) are resolved to their
+    # exact current uid here, at ACL-sync time, exactly once per activation
+    # -- never cached, never assumed fixed across a host's lifetime.
+    controller_principal_names="$(${pkgs.jq}/bin/jq -r --arg user "$user" \
+      '(.entries[]? | select(.user == $user) | .controllerPrincipalNames[]?)' \
+      ${controllerAllowlistFile})"
+
+    if [ -n "$controller_principal_names" ]; then
+      while IFS= read -r principal_name; do
+        [ -n "$principal_name" ] || continue
+        principal_uid="$(${pkgs.coreutils}/bin/id -u "$principal_name")"
+        ${pkgs.acl}/bin/setfacl -m "u:''${principal_uid}:x" "$dir"
+        ${pkgs.acl}/bin/setfacl -m "u:''${principal_uid}:rw" "$sock"
+      done <<< "$controller_principal_names"
     fi
   '';
   aclSyncScript = pkgs.writeShellScript "d2b-unsafe-local-acl-sync" aclSyncScriptText;

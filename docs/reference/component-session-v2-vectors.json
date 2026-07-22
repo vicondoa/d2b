@@ -965,5 +965,12 @@
         "responderToInitiator": "142046e59faf31284c2ad23461cd32499ca0172c295682a52356f08b42378bdf"
       }
     }
-  ]
+  ],
+  "runtimeSystemdUserChannelBinding": {
+    "contract": "d2b-runtime-systemd-user-channel-binding-v1",
+    "description": "Fixed committed vector for d2b_contracts::v2_component_session::runtime_systemd_user_channel_binding. Both the unsafe-local-helper responder and a future d2bd-side initiator must derive this exact digest from the same (responderUid, responderGid) target identity.",
+    "responderUid": 1000,
+    "responderGid": 1000,
+    "channelBindingHex": "284c3db4f3df8f87861051558d1734cca72dc68ca4e56ab531e62652daef07d2"
+  }
 }

@@ -40,6 +40,11 @@ pub enum ControllerAllowlistError {
     DuplicateControllerUid,
     UnsortedControllerUids,
     ZeroControllerUid,
+    TooManyPrincipalNames,
+    EmptyPrincipalName,
+    DuplicatePrincipalName,
+    UnsortedPrincipalNames,
+    UnresolvedPrincipalName,
 }
 
 #[derive(serde::Deserialize)]
@@ -54,6 +59,16 @@ struct AllowlistEntry {
     user: String,
     #[serde(rename = "controllerUids")]
     controller_uids: Vec<u32>,
+    /// Stable principal *names* (for example `"d2bd"`, the local-root
+    /// controller's account) that must be resolved to their exact uid once,
+    /// at helper startup, via [`ControllerAllowlist::resolve`]'s
+    /// `principal_uid_lookup`. Used for controllers whose uid is not fixed
+    /// at Nix eval time (unlike child realm controllers, which get an
+    /// eval-time `stablePrincipalId` and so are listed directly in
+    /// `controllerUids`). Never resolved per-connection or from anything
+    /// peer-supplied.
+    #[serde(rename = "controllerPrincipalNames", default)]
+    controller_principal_names: Vec<String>,
 }
 
 /// The exact, bounded set of realm-controller UIDs authorized to reach this
@@ -87,14 +102,24 @@ impl ControllerAllowlist {
 
     /// Parses the immutable Nix-owned allowlist document and returns only
     /// the exact, bounded set of controller UIDs authorized for
-    /// `requester_user`. Any malformed, duplicate, unsorted, unbounded, or
-    /// zero-uid content fails the *whole* document closed rather than
-    /// permissively skipping the offending row, so a corrupt or tampered
-    /// file can never be interpreted as "no extra grants" for one user while
-    /// silently keeping a bad row for another.
+    /// `requester_user`. Any malformed, duplicate, unsorted, unbounded,
+    /// zero-uid, or unresolvable-principal-name content fails the *whole*
+    /// document closed rather than permissively skipping the offending row,
+    /// so a corrupt or tampered file can never be interpreted as "no extra
+    /// grants" for one user while silently keeping a bad row for another.
+    ///
+    /// `principal_uid_lookup` resolves a stable controller principal *name*
+    /// (for example `"d2bd"`, the local-root controller's own account, whose
+    /// uid NixOS allocates dynamically rather than fixing at eval time) to
+    /// its exact current uid. It is invoked once per named principal across
+    /// the *entire* document at this single startup-time call, never
+    /// per-connection and never with anything peer-supplied — the document
+    /// itself is keyed only by this process's own username (see
+    /// `load_controller_allowlist` in `server.rs`).
     pub fn resolve(
         document: &[u8],
         requester_user: &str,
+        principal_uid_lookup: &dyn Fn(&str) -> Option<u32>,
     ) -> Result<Self, ControllerAllowlistError> {
         let document: AllowlistDocument =
             serde_json::from_slice(document).map_err(|_| ControllerAllowlistError::Malformed)?;
@@ -136,6 +161,31 @@ impl ControllerAllowlist {
                 uids.insert(controller_uid);
             }
 
+            if entry.controller_principal_names.len() > MAX_CONTROLLER_UIDS_PER_USER {
+                return Err(ControllerAllowlistError::TooManyPrincipalNames);
+            }
+            let mut previous_name: Option<&str> = None;
+            for name in &entry.controller_principal_names {
+                if name.is_empty() {
+                    return Err(ControllerAllowlistError::EmptyPrincipalName);
+                }
+                if let Some(previous) = previous_name {
+                    if name.as_str() == previous {
+                        return Err(ControllerAllowlistError::DuplicatePrincipalName);
+                    }
+                    if name.as_str() < previous {
+                        return Err(ControllerAllowlistError::UnsortedPrincipalNames);
+                    }
+                }
+                previous_name = Some(name.as_str());
+                let resolved_uid = principal_uid_lookup(name)
+                    .ok_or(ControllerAllowlistError::UnresolvedPrincipalName)?;
+                if resolved_uid == 0 {
+                    return Err(ControllerAllowlistError::ZeroControllerUid);
+                }
+                uids.insert(resolved_uid);
+            }
+
             if entry.user == requester_user {
                 matched = Some(uids);
             }
@@ -149,12 +199,22 @@ mod tests {
     use super::*;
 
     fn document(entries: &[(&str, &[u32])]) -> Vec<u8> {
+        document_with_names(
+            &entries
+                .iter()
+                .map(|(user, uids)| (*user, *uids, [].as_slice()))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    fn document_with_names(entries: &[(&str, &[u32], &[&str])]) -> Vec<u8> {
         let entries: Vec<serde_json::Value> = entries
             .iter()
-            .map(|(user, uids)| {
+            .map(|(user, uids, names)| {
                 serde_json::json!({
                     "user": user,
                     "controllerUids": uids,
+                    "controllerPrincipalNames": names,
                 })
             })
             .collect();
@@ -165,10 +225,14 @@ mod tests {
         .unwrap()
     }
 
+    fn no_names() -> impl Fn(&str) -> Option<u32> {
+        |_| None
+    }
+
     #[test]
     fn resolves_exact_controller_uids_for_the_matching_user() {
         let bytes = document(&[("alice", &[1234, 1300]), ("bob", &[1400])]);
-        let allowlist = ControllerAllowlist::resolve(&bytes, "alice").unwrap();
+        let allowlist = ControllerAllowlist::resolve(&bytes, "alice", &no_names()).unwrap();
         assert!(allowlist.contains(1234));
         assert!(allowlist.contains(1300));
         assert!(!allowlist.contains(1400));
@@ -178,7 +242,7 @@ mod tests {
     #[test]
     fn unrelated_user_has_no_entry_and_resolves_empty() {
         let bytes = document(&[("bob", &[1400])]);
-        let allowlist = ControllerAllowlist::resolve(&bytes, "alice").unwrap();
+        let allowlist = ControllerAllowlist::resolve(&bytes, "alice", &no_names()).unwrap();
         assert!(allowlist.is_empty());
         assert!(!allowlist.contains(1400));
     }
@@ -203,7 +267,7 @@ mod tests {
     #[test]
     fn malformed_json_fails_closed() {
         assert_eq!(
-            ControllerAllowlist::resolve(b"not-json", "alice"),
+            ControllerAllowlist::resolve(b"not-json", "alice", &no_names()),
             Err(ControllerAllowlistError::Malformed)
         );
     }
@@ -216,7 +280,7 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(
-            ControllerAllowlist::resolve(&bytes, "alice"),
+            ControllerAllowlist::resolve(&bytes, "alice", &no_names()),
             Err(ControllerAllowlistError::UnsupportedSchema)
         );
     }
@@ -225,7 +289,7 @@ mod tests {
     fn duplicate_user_rows_fail_the_whole_document_closed() {
         let bytes = document(&[("alice", &[1234]), ("alice", &[1300])]);
         assert_eq!(
-            ControllerAllowlist::resolve(&bytes, "alice"),
+            ControllerAllowlist::resolve(&bytes, "alice", &no_names()),
             Err(ControllerAllowlistError::DuplicateUser)
         );
     }
@@ -234,7 +298,7 @@ mod tests {
     fn duplicate_controller_uid_fails_the_whole_document_closed() {
         let bytes = document(&[("alice", &[1234, 1234])]);
         assert_eq!(
-            ControllerAllowlist::resolve(&bytes, "alice"),
+            ControllerAllowlist::resolve(&bytes, "alice", &no_names()),
             Err(ControllerAllowlistError::DuplicateControllerUid)
         );
     }
@@ -243,7 +307,7 @@ mod tests {
     fn unsorted_controller_uids_fail_the_whole_document_closed() {
         let bytes = document(&[("alice", &[1300, 1234])]);
         assert_eq!(
-            ControllerAllowlist::resolve(&bytes, "alice"),
+            ControllerAllowlist::resolve(&bytes, "alice", &no_names()),
             Err(ControllerAllowlistError::UnsortedControllerUids)
         );
     }
@@ -252,7 +316,7 @@ mod tests {
     fn zero_controller_uid_fails_the_whole_document_closed() {
         let bytes = document(&[("alice", &[0])]);
         assert_eq!(
-            ControllerAllowlist::resolve(&bytes, "alice"),
+            ControllerAllowlist::resolve(&bytes, "alice", &no_names()),
             Err(ControllerAllowlistError::ZeroControllerUid)
         );
     }
@@ -268,7 +332,7 @@ mod tests {
             .collect();
         let bytes = document(&borrowed);
         assert_eq!(
-            ControllerAllowlist::resolve(&bytes, "alice"),
+            ControllerAllowlist::resolve(&bytes, "alice", &no_names()),
             Err(ControllerAllowlistError::TooManyEntries)
         );
     }
@@ -278,8 +342,98 @@ mod tests {
         let uids: Vec<u32> = (1..=(MAX_CONTROLLER_UIDS_PER_USER as u32 + 1)).collect();
         let bytes = document(&[("alice", &uids)]);
         assert_eq!(
-            ControllerAllowlist::resolve(&bytes, "alice"),
+            ControllerAllowlist::resolve(&bytes, "alice", &no_names()),
             Err(ControllerAllowlistError::TooManyControllerUids)
+        );
+    }
+
+    /// The concrete gap this extension closes: the local-root controller
+    /// (`d2bd`) has no `stablePrincipalId`-derived fixed uid at Nix eval
+    /// time (unlike child realm controllers), so it is granted by stable
+    /// *name* and resolved to its exact uid once, here, at helper startup.
+    #[test]
+    fn resolves_stable_principal_name_to_its_looked_up_uid() {
+        let bytes = document_with_names(&[("alice", &[1300], &["d2bd"])]);
+        let lookup = |name: &str| (name == "d2bd").then_some(64_100);
+        let allowlist = ControllerAllowlist::resolve(&bytes, "alice", &lookup).unwrap();
+        assert!(allowlist.contains(1300));
+        assert!(allowlist.contains(64_100));
+        assert_eq!(allowlist.len(), 2);
+    }
+
+    #[test]
+    fn unresolved_principal_name_fails_the_whole_document_closed() {
+        let bytes = document_with_names(&[("alice", &[], &["d2bd"])]);
+        assert_eq!(
+            ControllerAllowlist::resolve(&bytes, "alice", &no_names()),
+            Err(ControllerAllowlistError::UnresolvedPrincipalName)
+        );
+    }
+
+    #[test]
+    fn unresolved_principal_name_on_an_unrelated_row_still_fails_closed() {
+        // A bad name in *another* user's row must not be silently ignored
+        // just because it doesn't affect the requesting user's own grants.
+        let bytes = document_with_names(&[("bob", &[], &["nonexistent-principal"])]);
+        assert_eq!(
+            ControllerAllowlist::resolve(&bytes, "alice", &no_names()),
+            Err(ControllerAllowlistError::UnresolvedPrincipalName)
+        );
+    }
+
+    #[test]
+    fn empty_principal_name_fails_closed() {
+        let bytes = document_with_names(&[("alice", &[], &[""])]);
+        assert_eq!(
+            ControllerAllowlist::resolve(&bytes, "alice", &no_names()),
+            Err(ControllerAllowlistError::EmptyPrincipalName)
+        );
+    }
+
+    #[test]
+    fn duplicate_principal_name_fails_closed() {
+        let bytes = document_with_names(&[("alice", &[], &["d2bd", "d2bd"])]);
+        let lookup = |name: &str| (name == "d2bd").then_some(64_100);
+        assert_eq!(
+            ControllerAllowlist::resolve(&bytes, "alice", &lookup),
+            Err(ControllerAllowlistError::DuplicatePrincipalName)
+        );
+    }
+
+    #[test]
+    fn unsorted_principal_names_fail_closed() {
+        let bytes = document_with_names(&[("alice", &[], &["realm-b", "d2bd"])]);
+        let lookup = |name: &str| match name {
+            "d2bd" => Some(64_100),
+            "realm-b" => Some(64_200),
+            _ => None,
+        };
+        assert_eq!(
+            ControllerAllowlist::resolve(&bytes, "alice", &lookup),
+            Err(ControllerAllowlistError::UnsortedPrincipalNames)
+        );
+    }
+
+    #[test]
+    fn too_many_principal_names_fail_closed() {
+        let names: Vec<String> = (0..=(MAX_CONTROLLER_UIDS_PER_USER))
+            .map(|index| format!("principal-{index:04}"))
+            .collect();
+        let borrowed: Vec<&str> = names.iter().map(String::as_str).collect();
+        let bytes = document_with_names(&[("alice", &[], &borrowed)]);
+        assert_eq!(
+            ControllerAllowlist::resolve(&bytes, "alice", &no_names()),
+            Err(ControllerAllowlistError::TooManyPrincipalNames)
+        );
+    }
+
+    #[test]
+    fn principal_name_resolving_to_zero_fails_closed() {
+        let bytes = document_with_names(&[("alice", &[], &["root-alias"])]);
+        let lookup = |name: &str| (name == "root-alias").then_some(0);
+        assert_eq!(
+            ControllerAllowlist::resolve(&bytes, "alice", &lookup),
+            Err(ControllerAllowlistError::ZeroControllerUid)
         );
     }
 }

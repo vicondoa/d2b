@@ -10,7 +10,7 @@ use std::os::fd::OwnedFd;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::output_ring::{MAX_TOTAL_RING_BYTES, RingRead};
+use crate::output_ring::{MAX_TOTAL_RING_BYTES, RingRead, RingReservation};
 use crate::services::shell::{ENDPOINT_PURPOSE, ENDPOINT_ROLE, SERVICE_PACKAGE};
 use crate::shell_socket::{AttachmentError, validate_exact_terminal_attachment};
 use crate::shell_supervisor::{ShellRegistry, ShellSupervisorError};
@@ -298,8 +298,29 @@ impl<B: AuthenticatedSystemdUserRuntime> ShellRuntimeService<B> {
             &request.resource_id,
             &request.operation_id,
         )?;
-        verify_scope_binding(&self.owner, &scope, &request.resource_id)?;
-        let inspection = self.backend.inspect_shell_scope(&self.owner, &scope)?;
+        // From here on, the real systemd-user scope + PTY already exists.
+        // Any failure must tear it back down before returning, so a
+        // partial `Create` failure never leaks a live, untracked
+        // supervised process (the reservation itself releases on drop).
+        match self.finish_create(request, &scope, reservation) {
+            Ok(response) => Ok(response),
+            Err(error) => {
+                let _ = self
+                    .backend
+                    .kill_shell_scope(&self.owner, &scope, &request.operation_id);
+                Err(error)
+            }
+        }
+    }
+
+    fn finish_create(
+        &mut self,
+        request: &ShellRequest,
+        scope: &VerifiedTransientScope,
+        reservation: RingReservation,
+    ) -> Result<ShellResponse, ShellServiceError> {
+        verify_scope_binding(&self.owner, scope, &request.resource_id)?;
+        let inspection = self.backend.inspect_shell_scope(&self.owner, scope)?;
         if inspection
             != (ScopeInspection {
                 ownership: ScopeOwnership::Exact,
@@ -309,7 +330,7 @@ impl<B: AuthenticatedSystemdUserRuntime> ShellRuntimeService<B> {
             return Err(ShellServiceError::ScopeOwnershipMismatch);
         }
         self.registry()?
-            .insert_reserved(scope, reservation, ScopeOwnership::Exact)
+            .insert_reserved(scope.clone(), reservation, ScopeOwnership::Exact)
             .map_err(ShellServiceError::from)?;
         Ok(response(request, ShellState::Running))
     }
@@ -319,6 +340,7 @@ impl<B: AuthenticatedSystemdUserRuntime> ShellRuntimeService<B> {
         request: &ShellRequest,
         attachments: Vec<AuthenticatedTerminalAttachment>,
     ) -> Result<ShellResponse, ShellServiceError> {
+        self.registry()?.reconcile_hangups();
         let scope = self
             .registry()?
             .get(&request.resource_id)
@@ -362,7 +384,8 @@ impl<B: AuthenticatedSystemdUserRuntime> ShellRuntimeService<B> {
     }
 
     fn list(&mut self, request: &ShellRequest) -> Result<ShellResponse, ShellServiceError> {
-        let registry = self.registry()?;
+        let mut registry = self.registry()?;
+        registry.reconcile_hangups();
         let shells = registry
             .iter()
             .take(MAX_LIST_RESULTS)
@@ -377,6 +400,7 @@ impl<B: AuthenticatedSystemdUserRuntime> ShellRuntimeService<B> {
     }
 
     fn inspect(&mut self, request: &ShellRequest) -> Result<ShellResponse, ShellServiceError> {
+        self.registry()?.reconcile_hangups();
         let scope = self
             .registry()?
             .get(&request.resource_id)
@@ -422,9 +446,21 @@ impl<B: AuthenticatedSystemdUserRuntime> ShellRuntimeService<B> {
         Ok(response(request, ShellState::Exited))
     }
 
+    /// Reports the backend's real cancellation outcome instead of a fixed,
+    /// fabricated state. `ShellState` has no dedicated cancellation-outcome
+    /// variant, so the real `CancelOutcome` is mapped onto the closest
+    /// truthful state: an already-terminal scope reports `Exited`, anything
+    /// else (signalled or unknown) reports `Running` since neither implies
+    /// the scope has actually exited.
     fn cancel(&mut self, request: &ShellRequest) -> ShellResponse {
-        let _ = self.backend.cancel(&self.owner, request.request_id);
-        response(request, ShellState::Running)
+        let outcome = self.backend.cancel(&self.owner, request.request_id);
+        let state = match outcome {
+            CancelOutcome::AlreadyTerminal => ShellState::Exited,
+            CancelOutcome::CancellationSignalled | CancelOutcome::UnknownRequest => {
+                ShellState::Running
+            }
+        };
+        response(request, state)
     }
 
     pub fn adopt(

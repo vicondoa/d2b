@@ -15,6 +15,7 @@ use serde::{
     Deserialize, Deserializer, Serialize,
     de::{SeqAccess, Visitor},
 };
+use sha2::{Digest, Sha256};
 use std::{
     error::Error,
     fmt,
@@ -633,6 +634,51 @@ pub struct TransportBinding {
     pub locality: Locality,
     pub channel_binding: [u8; 32],
     pub identity_evidence: IdentityEvidenceRequirement,
+}
+
+/// Domain-separation prefix for [`runtime_systemd_user_channel_binding`].
+/// Versioned so any future, incompatible change to the binding's input
+/// shape cannot silently collide with this one.
+const RUNTIME_SYSTEMD_USER_CHANNEL_BINDING_DOMAIN: &[u8] =
+    b"d2b.runtime.systemd-user.v2/channel-binding/v1\0";
+
+/// Canonical, directional channel-binding digest for the `RuntimeSystemdUser`
+/// endpoint (see [`ServicePackage::RuntimeSystemdUserV2`]).
+///
+/// Both sides of this endpoint MUST compute this exact digest from the exact
+/// same inputs so the Noise handshake's [`TransportBinding::channel_binding`]
+/// can catch any transport-level identity mismatch (wrong peer, wrong
+/// direction, cross-endpoint replay) as
+/// [`HandshakeRejectReason::ChannelBindingMismatch`]:
+///
+/// * the unsafe-local-helper **responder** (this crate's consumer today,
+///   `packages/d2b-unsafe-local-helper/src/server.rs`), which knows
+///   `responder_uid`/`responder_gid` because it *is* that process; and
+/// * the local-root controller **initiator** (a future `d2bd`-side
+///   consumer), which knows the same values because it resolved the target
+///   helper's authenticated uid/gid before dialing it.
+///
+/// `responder_uid`/`responder_gid` MUST always be the actual
+/// unsafe-local-helper process's own authenticated identity — never a
+/// peer-supplied value — regardless of which side computes the digest.
+/// Domain-separation bytes bind the service package, transport class, and
+/// the exact `(initiator, responder)` role pair in that fixed order, so this
+/// value can never collide with a channel binding computed for a different
+/// service, a different transport, or a reflected/swapped role assignment.
+pub fn runtime_systemd_user_channel_binding(responder_uid: u32, responder_gid: u32) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(RUNTIME_SYSTEMD_USER_CHANNEL_BINDING_DOMAIN);
+    digest.update(ServicePackage::RuntimeSystemdUserV2.as_str().as_bytes());
+    digest.update(b"\0");
+    digest.update(TransportClass::UnixSeqpacket.as_str().as_bytes());
+    digest.update(b"\0");
+    digest.update(EndpointRole::LocalRootController.as_str().as_bytes());
+    digest.update(b"\0");
+    digest.update(EndpointRole::RuntimeSystemdUserAgent.as_str().as_bytes());
+    digest.update(b"\0");
+    digest.update(responder_uid.to_be_bytes());
+    digest.update(responder_gid.to_be_bytes());
+    digest.finalize().into()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -3537,5 +3583,66 @@ mod guest_session_credential_tests {
         encoded.drop_observer = Some(std::sync::Arc::clone(&observer));
         drop(encoded);
         assert!(observer.load(std::sync::atomic::Ordering::SeqCst));
+    }
+}
+
+#[cfg(test)]
+mod runtime_systemd_user_channel_binding_tests {
+    use super::*;
+
+    const VECTORS_JSON: &str =
+        include_str!("../../../docs/reference/component-session-v2-vectors.json");
+
+    fn hex_bytes32(value: &str) -> [u8; 32] {
+        assert_eq!(value.len(), 64, "digest hex must encode exactly 32 bytes");
+        let mut out = [0_u8; 32];
+        for (index, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
+            let text = std::str::from_utf8(chunk).unwrap();
+            out[index] = u8::from_str_radix(text, 16).unwrap();
+        }
+        out
+    }
+
+    /// The function's output is fixed for all time given fixed inputs: this
+    /// exercises the exact committed vector in
+    /// `docs/reference/component-session-v2-vectors.json`, so an accidental
+    /// change to the digest layout (domain prefix, field order, role
+    /// constants) is caught even though no cryptographic secret is involved.
+    #[test]
+    fn matches_committed_fixed_vector() {
+        let fixture: serde_json::Value = serde_json::from_str(VECTORS_JSON).unwrap();
+        let vector = &fixture["runtimeSystemdUserChannelBinding"];
+        let responder_uid = vector["responderUid"].as_u64().unwrap() as u32;
+        let responder_gid = vector["responderGid"].as_u64().unwrap() as u32;
+        let expected = hex_bytes32(vector["channelBindingHex"].as_str().unwrap());
+        assert_eq!(
+            runtime_systemd_user_channel_binding(responder_uid, responder_gid),
+            expected
+        );
+    }
+
+    /// Models both ends of the endpoint independently computing the binding
+    /// from the exact same target identity: the unsafe-local-helper
+    /// *responder* (which knows its own uid/gid because it *is* that
+    /// process) and a future `d2bd`-side *initiator* (which resolved the
+    /// same helper uid/gid before dialing it). Both MUST derive a
+    /// byte-identical digest so the handshake's transport binding can be
+    /// compared for equality across the wire.
+    #[test]
+    fn responder_and_initiator_ends_agree_on_target_identity() {
+        let target_uid = 4_242;
+        let target_gid = 424;
+        let computed_by_responder = runtime_systemd_user_channel_binding(target_uid, target_gid);
+        let computed_by_initiator = runtime_systemd_user_channel_binding(target_uid, target_gid);
+        assert_eq!(computed_by_responder, computed_by_initiator);
+        assert_ne!(computed_by_responder, [0; 32]);
+    }
+
+    #[test]
+    fn differs_across_uid_gid_and_is_never_zero() {
+        let baseline = runtime_systemd_user_channel_binding(1_000, 1_000);
+        assert_ne!(baseline, runtime_systemd_user_channel_binding(1_001, 1_000));
+        assert_ne!(baseline, runtime_systemd_user_channel_binding(1_000, 1_001));
+        assert_ne!(baseline, [0; 32]);
     }
 }

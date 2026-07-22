@@ -73,6 +73,22 @@ impl VerifiedTransientScope {
         &self.resource_id
     }
 
+    /// Exact transient unit name this scope was verified against. Exposed
+    /// only so the real systemd-user backend can re-issue the identical
+    /// `systemd::VerifiedScope` it originally observed when reconciling
+    /// state; never sent on the wire.
+    pub(crate) fn unit_name(&self) -> &str {
+        &self.unit_name
+    }
+
+    pub(crate) fn invocation_id(&self) -> &str {
+        &self.invocation_id
+    }
+
+    pub(crate) fn control_group(&self) -> &str {
+        &self.control_group
+    }
+
     pub fn owner_uid(&self) -> u32 {
         self.owner_uid
     }
@@ -224,6 +240,32 @@ impl ShellSupervisor {
         }
     }
 
+    /// Best-effort, non-blocking liveness check on the stored terminal
+    /// descriptor. A real client hangup (peer closed its end of the
+    /// helper-created pair) shows up as `POLLHUP`/`POLLERR` here even though
+    /// a second, backend-held duplicate keeps the underlying socket
+    /// allocated for the byte pump; without this the shell would stay
+    /// permanently reported as `Attached` and reject every future `Attach`.
+    /// Called opportunistically by dispatch paths that observe state
+    /// (`List`, `Inspect`, `Attach`) rather than pushed asynchronously, since
+    /// the supervisor itself never runs a background task.
+    pub(crate) fn reconcile_hangup(&mut self) {
+        let hung_up = self.terminal.as_ref().is_some_and(|terminal| {
+            let mut fds = [rustix::event::PollFd::new(
+                &terminal.fd,
+                rustix::event::PollFlags::empty(),
+            )];
+            rustix::event::poll(&mut fds, 0i32).is_ok_and(|_| {
+                fds[0]
+                    .revents()
+                    .intersects(rustix::event::PollFlags::HUP | rustix::event::PollFlags::ERR)
+            })
+        });
+        if hung_up {
+            self.detach_any();
+        }
+    }
+
     pub(crate) fn append_output(&self, bytes: &[u8]) {
         self.ring.append(bytes);
     }
@@ -347,6 +389,15 @@ impl ShellRegistry {
     pub(crate) fn detach_all(&mut self) {
         for supervisor in self.supervisors.values_mut() {
             supervisor.detach_any();
+        }
+    }
+
+    /// Opportunistic reconciliation of every tracked shell's terminal
+    /// attachment against a real hangup. See
+    /// [`ShellSupervisor::reconcile_hangup`].
+    pub(crate) fn reconcile_hangups(&mut self) {
+        for supervisor in self.supervisors.values_mut() {
+            supervisor.reconcile_hangup();
         }
     }
 }
