@@ -16,6 +16,8 @@ deprecations ship one minor release before removal.
   as parent authority and granted the exact shared contract/state/session
   paths assigned by the parent W8 component plan. Component-level ownership
   remains fail-closed for every sibling path.
+- Updated W8 delivery fingerprint assertions for the Rust 1.94 Clippy
+  `len_zero` lint so the parent Rust gate remains green.
 - Added stack node/repository/PR context to every `verify_required_checks`
   error message (duplicate publisher, cross-commit, unlisted failing/pending,
   missing, wrong publisher, skipped, unsuccessful, no-authoritative-checks,
