@@ -55,7 +55,8 @@ deprecations ship one minor release before removal.
   lock FDs and guarded directories share one attested capability, and path
   resolution/directory creation are durable and symlink-safe. Added exact,
   component-scoped exceptions for its lockfile and core contract files
-  without weakening the global forbidden-path policy for any other branch.
+  without weakening the global forbidden-path policy for any other branch,
+  and included the CLI doctor consumer in the same contract migration.
 - Added a two-sided user-agent service seam ahead of the d2bd shell cutover:
   canonical channel binding, narrow controller authorization, real helper
   backend wiring, exact terminal attachment/stream transport, and

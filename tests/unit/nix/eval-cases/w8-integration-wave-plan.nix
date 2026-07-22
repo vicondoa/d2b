@@ -17,6 +17,7 @@ let
         "nixos-modules/realm-storage-rows.nix"
         "packages/Cargo.lock"
         "packages/d2b-contract-tests/tests/storage_sync_contracts.rs"
+        "packages/d2b/src/doctor.rs"
         "packages/d2b-core/src/storage_lifecycle.rs"
         "packages/d2b-core/src/sync.rs"
         "packages/d2b-state/Cargo.toml"
