@@ -347,6 +347,40 @@ mod tests {
     }
 
     #[test]
+    fn reports_missing_protected_resource_id_as_a_typed_reason_not_unclassified() {
+        let mut missing_resource_id = sync();
+        missing_resource_id.locks[0].resource_id = None;
+        let resolver = resolver_with_optional_contracts(
+            STORAGE_LIFECYCLE_CONTRACT_BUNDLE_VERSION,
+            Some(storage(true, true)),
+            Some(missing_resource_id),
+        );
+        let report = run_startup_contract_check(&resolver);
+        assert!(report.issues.iter().any(|issue| {
+            matches!(
+                issue,
+                StorageLifecycleIssue::SyncContractInvalid {
+                    contract_id,
+                    reason: SyncContractValidationReason::LockMissingProtectedResourceId,
+                    offending_id
+                } if contract_id == "sync.json" && offending_id.as_deref() == Some("lock:daemon")
+            )
+        }));
+        assert!(!report.issues.iter().any(|issue| {
+            matches!(
+                issue,
+                StorageLifecycleIssue::SyncContractInvalid {
+                    reason: SyncContractValidationReason::Unclassified,
+                    ..
+                }
+            )
+        }));
+        let serialized = serde_json::to_string(&report).expect("serialize missing-resource report");
+        assert!(serialized.contains("lock-missing-protected-resource-id"));
+        assert!(serialized.contains("lock:daemon"));
+    }
+
+    #[test]
     fn startup_report_carries_diagnostics_without_pidfd_authority() {
         let resolver = resolver_with_contracts(true, false);
         let report = run_startup_contract_check(&resolver);
@@ -537,7 +571,7 @@ mod tests {
                 id: ContractId::parse("lock:daemon").unwrap(),
                 scope: ContractId::parse("host").unwrap(),
                 path_template: Some(PathTemplate::parse("/run/d2b/daemon.lock").unwrap()),
-                resource_id: None,
+                resource_id: Some(ContractId::parse("path:run-root").unwrap()),
                 kind: LockKind::Ofd,
                 owner_process: actor(ActorKind::Daemon, "d2bd"),
                 allowed_holders: vec![actor(ActorKind::Daemon, "d2bd")],

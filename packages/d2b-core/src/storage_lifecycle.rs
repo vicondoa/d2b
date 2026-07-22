@@ -110,6 +110,7 @@ pub enum SyncContractValidationReason {
     OfdLockMissingCloexec,
     FdPassingMissingLeaseTransferRecord,
     DuplicateAcquireOrder,
+    LockMissingProtectedResourceId,
     Unclassified,
 }
 
@@ -146,6 +147,8 @@ pub fn classify_sync_validation_reason(detail: &str) -> SyncContractValidationRe
         && detail.ends_with(" must require a lease transfer record")
     {
         SyncContractValidationReason::FdPassingMissingLeaseTransferRecord
+    } else if detail.ends_with(" must be paired with a storage resourceId") {
+        SyncContractValidationReason::LockMissingProtectedResourceId
     } else if detail.starts_with("lock ") && detail.contains(" shares acquire order key with ") {
         SyncContractValidationReason::DuplicateAcquireOrder
     } else {
@@ -165,6 +168,15 @@ pub fn sync_validation_offending_id(detail: &str) -> Option<String> {
     } else if let Some(rest) = detail.strip_prefix("lock ") {
         rest.split_once(" shares acquire order key with ")
             .and_then(|(id, _)| bounded_contract_detail(id))
+    } else if let Some(prefixed) = detail.strip_suffix(" must be paired with a storage resourceId")
+    {
+        // Message shape is "<LockKind Debug> lock <lock_id>"; the kind name
+        // never contains the literal " lock " separator, so splitting on its
+        // first occurrence isolates the lock id regardless of which lock
+        // kind (Ofd/FileRecord) produced the message.
+        prefixed
+            .split_once(" lock ")
+            .and_then(|(_, id)| bounded_contract_detail(id))
     } else {
         None
     }
@@ -249,6 +261,62 @@ mod tests {
                 "reason": "duplicate-storage-path-id",
                 "offendingId": "path:run-root"
             })
+        );
+
+        let missing_protected_resource =
+            serde_json::to_value(StorageLifecycleIssue::SyncContractInvalid {
+                contract_id: "sync.json".to_owned(),
+                reason: SyncContractValidationReason::LockMissingProtectedResourceId,
+                offending_id: Some("lock:daemon".to_owned()),
+            })
+            .expect("serialize missing protected resource issue");
+        assert_eq!(
+            missing_protected_resource,
+            json!({
+                "kind": "sync-contract-invalid",
+                "contractId": "sync.json",
+                "reason": "lock-missing-protected-resource-id",
+                "offendingId": "lock:daemon"
+            })
+        );
+    }
+
+    #[test]
+    fn classifies_missing_protected_resource_id_for_every_paired_lock_kind() {
+        assert_eq!(
+            classify_sync_validation_reason(
+                "Ofd lock lock:daemon must be paired with a storage resourceId"
+            ),
+            SyncContractValidationReason::LockMissingProtectedResourceId,
+        );
+        assert_eq!(
+            classify_sync_validation_reason(
+                "FileRecord lock lock:workload-keys must be paired with a storage resourceId"
+            ),
+            SyncContractValidationReason::LockMissingProtectedResourceId,
+        );
+        assert_eq!(
+            sync_validation_offending_id(
+                "Ofd lock lock:daemon must be paired with a storage resourceId"
+            )
+            .as_deref(),
+            Some("lock:daemon"),
+        );
+        assert_eq!(
+            sync_validation_offending_id(
+                "FileRecord lock lock:workload-keys must be paired with a storage resourceId"
+            )
+            .as_deref(),
+            Some("lock:workload-keys"),
+        );
+        // A raw path in the offending-id position must never leak; the
+        // bounded-detail charset check rejects it and the caller instead
+        // gets a redacted `None` rather than a raw storage path.
+        assert_eq!(
+            sync_validation_offending_id(
+                "Ofd lock /run/d2b/daemon.lock must be paired with a storage resourceId"
+            ),
+            None,
         );
     }
 
