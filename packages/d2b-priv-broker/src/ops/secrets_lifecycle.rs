@@ -1707,23 +1707,98 @@ fn verify_marker_against_live_state(
 
 /// Immediately before deleting a generation directory as part of
 /// retirement, re-stat it (nofollow, anchored) and confirm it is
-/// still exactly a validated material directory. A missing entry is
+/// still either a validated material directory, or the exact
+/// legitimate mid-deletion crash checkpoint `remove_generation` can
+/// leave behind: `material` already unlinked, but the (now-empty)
+/// epoch directory itself not yet removed. A missing entry is
 /// tolerated (another recovery pass, or this same pass on retry,
-/// already removed it); any other anomaly -- wrong type, extra
-/// entries, a hard-linked material file -- fails closed rather than
-/// deleting a directory that no longer matches what enumeration
-/// originally validated.
+/// already removed it entirely).
+///
+/// Recognizing the empty-directory checkpoint is reachable **only**
+/// from here -- i.e. only from `execute_retire`'s `CurrentRemoved`
+/// phase, always acting on a `RetireIntent` that has already passed
+/// `validate_retire_intent_semantics` (checked both when the intent is
+/// first written and every time a leftover txlog is re-read before
+/// recovery acts on it). Fresh, pre-retirement planning never goes
+/// through this function: `enumerate_and_validate_generation_tree`
+/// (used to build a brand-new retirement plan, and again to prove the
+/// tree fully empty once `EpochsRemoved` is reached) always calls the
+/// strict `verify_generation_dir_is_exactly_material` and remains
+/// exactly as strict as before -- an empty generation directory
+/// encountered there is still `FailReason::RetirementTreeAnomaly`, not
+/// a silently-accepted "nothing here yet" state.
+///
+/// To accept the directory as the empty checkpoint (rather than any
+/// other empty-directory shape an attacker could construct in its
+/// place) every one of these must hold:
+/// - the entry is still a directory (never a symlink, regular file, or
+///   any other type swapped into the same name -- that is a
+///   replacement, not a partially-deleted survivor, and fails closed);
+/// - it is still trusted-broker-owned at the expected `cfg.dir_mode`
+///   (a foreign owner, or any other mode, means the directory itself
+///   was replaced rather than left behind by this module's own
+///   deletion sequence, and fails closed);
+/// - it contains **zero** entries other than `.`/`..` -- any
+///   unrecognised leftover entry, or a `material` entry of the wrong
+///   type or link-count, fails closed rather than being swept away as
+///   part of "finishing" the deletion.
+///
+/// Any other anomaly -- wrong type, an unexpected extra entry, a
+/// hard-linked material file -- fails closed rather than deleting a
+/// directory that no longer matches what enumeration originally
+/// validated.
 fn revalidate_generation_before_delete(
     generations_fd: BorrowedFd<'_>,
     epoch: u64,
+    cfg: &SecretsLifecycleConfig,
 ) -> Result<(), FailReason> {
     let epoch_name = epoch.to_string();
     let generations_owned = borrowed_to_owned(generations_fd)?;
-    match path_safe::fstatat_nofollow(&generations_owned, &epoch_name) {
-        Ok(Some(_)) => verify_generation_dir_is_exactly_material(&generations_owned, &epoch_name),
-        Ok(None) => Ok(()),
-        Err(_) => Err(FailReason::RetirementTreeAnomaly),
+    let stat = match path_safe::fstatat_nofollow(&generations_owned, &epoch_name) {
+        Ok(Some(stat)) => stat,
+        Ok(None) => return Ok(()),
+        Err(_) => return Err(FailReason::RetirementTreeAnomaly),
+    };
+    if (stat.st_mode & nix::libc::S_IFMT) != nix::libc::S_IFDIR {
+        return Err(FailReason::RetirementTreeAnomaly);
     }
+    match verify_generation_dir_is_exactly_material(&generations_owned, &epoch_name) {
+        Ok(()) => return Ok(()),
+        Err(FailReason::RetirementTreeAnomaly) => {}
+        Err(other) => return Err(other),
+    }
+    // Not a fully-materialized generation: the only other shape this
+    // retire deletion loop may ever accept is the exact
+    // post-material-unlink, pre-directory-removal checkpoint, and only
+    // over a directory that is still verifiably this module's own
+    // trusted-broker-owned metadata directory.
+    verify_broker_owned(&stat, nix::libc::S_IFDIR, cfg.dir_mode)
+        .map_err(|_| FailReason::RetirementTreeAnomaly)?;
+    let dir_fd = path_safe::open_at(
+        generations_owned.as_fd(),
+        Path::new(&epoch_name),
+        OFlags::RDONLY | OFlags::DIRECTORY,
+    )
+    .map_err(|_| FailReason::RetirementTreeAnomaly)?;
+    let inner = rustix::fs::Dir::read_from(dir_fd.as_fd())
+        .map_err(|_| FailReason::RetirementTreeAnomaly)?;
+    for entry in inner {
+        let entry = entry.map_err(|_| FailReason::RetirementTreeAnomaly)?;
+        let ename = entry
+            .file_name()
+            .to_str()
+            .map_err(|_| FailReason::RetirementTreeAnomaly)?
+            .to_owned();
+        if ename != "." && ename != ".." {
+            // A genuinely empty checkpoint has zero entries; anything
+            // else here (an unrelated leftover, or a `material` entry
+            // that `verify_generation_dir_is_exactly_material` already
+            // rejected above as the wrong type/link-count) is an
+            // anomaly, never silently accepted.
+            return Err(FailReason::RetirementTreeAnomaly);
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------
@@ -1931,6 +2006,7 @@ fn execute_promote(
 fn execute_retire(
     secrets_fd: BorrowedFd<'_>,
     generations_fd: BorrowedFd<'_>,
+    cfg: &SecretsLifecycleConfig,
     mut intent: RetireIntent,
 ) -> Result<(), FailReason> {
     loop {
@@ -1951,7 +2027,7 @@ fn execute_retire(
             }
             RetirePhase::CurrentRemoved => {
                 for &epoch in &intent.epochs {
-                    revalidate_generation_before_delete(generations_fd, epoch)?;
+                    revalidate_generation_before_delete(generations_fd, epoch, cfg)?;
                     remove_generation(generations_fd, epoch)?;
                 }
                 for stage_name in &intent.stage_names {
@@ -2030,7 +2106,7 @@ fn recover_if_needed(
                 }),
             }
         }
-        TxLog::Retire(intent) => match execute_retire(secrets_fd, generations_fd, intent) {
+        TxLog::Retire(intent) => match execute_retire(secrets_fd, generations_fd, cfg, intent) {
             Ok(()) => Ok(true),
             Err(reason) => Err(RecoveryError {
                 action: Some(LifecycleAction::Retire),
@@ -2443,7 +2519,7 @@ pub fn retire(
         .map_err(|reason| failed_closed(&ctx, recovered, MarkerResult::FailedClosed, reason))?;
     write_txlog(secrets_fd.as_fd(), &TxLog::Retire(intent.clone()))
         .map_err(|reason| failed_closed(&ctx, recovered, MarkerResult::FailedClosed, reason))?;
-    match execute_retire(secrets_fd.as_fd(), generations_fd.as_fd(), intent) {
+    match execute_retire(secrets_fd.as_fd(), generations_fd.as_fd(), cfg, intent) {
         Ok(()) => Ok(SecretsLifecycleAuditFields::retired(
             &ctx,
             high_water_epoch,
@@ -3716,13 +3792,13 @@ mod tests {
             .unwrap();
 
         // Absent generation is tolerated (idempotent replay).
-        revalidate_generation_before_delete(generations_fd.as_fd(), 2).unwrap();
+        revalidate_generation_before_delete(generations_fd.as_fd(), 2, &cfg).unwrap();
 
         // Tamper: hard-link a second name into the generation just
         // before deletion would occur.
         let gen_dir = paths.kind_root.join(GENERATIONS_DIR_NAME).join("1");
         std::fs::hard_link(gen_dir.join(MATERIAL_FILE_NAME), gen_dir.join("planted")).unwrap();
-        let err = revalidate_generation_before_delete(generations_fd.as_fd(), 1).unwrap_err();
+        let err = revalidate_generation_before_delete(generations_fd.as_fd(), 1, &cfg).unwrap_err();
         assert_eq!(err, FailReason::RetirementTreeAnomaly);
     }
 
@@ -4642,5 +4718,232 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.reason, FailReason::NotProvisioned);
         assert!(!err.audit.recovered_prior_transaction);
+    }
+
+    // -------------------------------------------------------------
+    // Round-5 finding: txlog-backed retirement recovery must accept
+    // the legitimate "material already unlinked, epoch directory not
+    // yet removed" crash checkpoint -- but only from the retire
+    // txlog-recovery deletion loop, and only over a directory that
+    // still proves out as this module's own trusted-broker-owned,
+    // fully empty metadata directory. Fresh pre-retirement planning
+    // (`retire()`'s initial enumeration) must remain exactly as
+    // strict as before.
+    // -------------------------------------------------------------
+
+    #[test]
+    fn execute_retire_finishes_a_generation_crashed_immediately_after_material_unlink() {
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "crash-after-material-unlink";
+        let kind = SecretKind::GuestSigningKey;
+        provision(vm, kind, material(b"e1"), &cfg).unwrap();
+
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let gen_dir = paths.kind_root.join(GENERATIONS_DIR_NAME).join("1");
+        // Simulate the crash: `remove_generation` already unlinked
+        // `material` but the process died before it removed the
+        // now-empty epoch directory entry itself.
+        std::fs::remove_file(gen_dir.join(MATERIAL_FILE_NAME)).unwrap();
+        assert_eq!(std::fs::read_dir(&gen_dir).unwrap().count(), 0);
+
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        remove_current_symlink(secrets_fd.as_fd()).unwrap();
+        let intent = RetireIntent {
+            vm: vm.to_owned(),
+            kind: kind.as_slug().to_owned(),
+            epochs: vec![1],
+            stage_names: vec![],
+            high_water_epoch: 1,
+            phase: RetirePhase::CurrentRemoved,
+        };
+        execute_retire(secrets_fd.as_fd(), generations_fd.as_fd(), &cfg, intent).unwrap();
+
+        assert!(!gen_dir.exists());
+        let marker = read_marker(secrets_fd.as_fd()).unwrap().unwrap();
+        assert!(marker.retired);
+        assert!(read_txlog(secrets_fd.as_fd(), vm, kind).unwrap().is_none());
+    }
+
+    #[test]
+    fn execute_retire_cleans_up_mixed_crashed_and_still_materialized_generations() {
+        // A multi-generation retry: one epoch was left in the empty
+        // post-material-unlink checkpoint by a prior crashed attempt,
+        // another is still fully materialized and was never touched.
+        // Both must be correctly removed in one pass.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "mixed-crash-retry";
+        let kind = SecretKind::GuestSigningKey;
+        provision(vm, kind, material(b"e1"), &cfg).unwrap();
+        rotate(vm, kind, material(b"e2"), &cfg).unwrap();
+
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let generations_dir = paths.kind_root.join(GENERATIONS_DIR_NAME);
+        let gen1_dir = generations_dir.join("1");
+        let gen2_dir = generations_dir.join("2");
+        // Epoch 1: crashed mid-deletion (material unlinked, directory
+        // left behind). Epoch 2: untouched, still fully materialized.
+        std::fs::remove_file(gen1_dir.join(MATERIAL_FILE_NAME)).unwrap();
+        assert_eq!(std::fs::read_dir(&gen1_dir).unwrap().count(), 0);
+        assert!(gen2_dir.join(MATERIAL_FILE_NAME).exists());
+
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        remove_current_symlink(secrets_fd.as_fd()).unwrap();
+        let intent = RetireIntent {
+            vm: vm.to_owned(),
+            kind: kind.as_slug().to_owned(),
+            epochs: vec![1, 2],
+            stage_names: vec![],
+            high_water_epoch: 2,
+            phase: RetirePhase::CurrentRemoved,
+        };
+        execute_retire(secrets_fd.as_fd(), generations_fd.as_fd(), &cfg, intent).unwrap();
+
+        assert!(!gen1_dir.exists());
+        assert!(!gen2_dir.exists());
+        assert_eq!(std::fs::read_dir(&generations_dir).unwrap().count(), 0);
+        let marker = read_marker(secrets_fd.as_fd()).unwrap().unwrap();
+        assert!(marker.retired);
+    }
+
+    #[test]
+    fn resumed_generation_deletion_retries_a_failed_directory_fsync() {
+        // Fault-inject the trailing `fsync_fd(generations_fd)` barrier
+        // specifically while finishing a crash-left empty checkpoint:
+        // the failure must block phase advancement rather than being
+        // silently swallowed, and a bare retry (no other mutation)
+        // must complete the whole retirement.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "resumed-deletion-fsync-fault";
+        let kind = SecretKind::GuestSigningKey;
+        provision(vm, kind, material(b"e1"), &cfg).unwrap();
+
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let gen_dir = paths.kind_root.join(GENERATIONS_DIR_NAME).join("1");
+        std::fs::remove_file(gen_dir.join(MATERIAL_FILE_NAME)).unwrap();
+
+        let (secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        remove_current_symlink(secrets_fd.as_fd()).unwrap();
+        let intent = RetireIntent {
+            vm: vm.to_owned(),
+            kind: kind.as_slug().to_owned(),
+            epochs: vec![1],
+            stage_names: vec![],
+            high_water_epoch: 1,
+            phase: RetirePhase::CurrentRemoved,
+        };
+        {
+            let _fault = FsyncFaultGuard::enable();
+            let err = execute_retire(
+                secrets_fd.as_fd(),
+                generations_fd.as_fd(),
+                &cfg,
+                intent.clone(),
+            )
+            .unwrap_err();
+            assert_eq!(err, FailReason::FsyncFailed);
+        }
+        // The directory entry itself was already removed by
+        // `remove_generation` before the fsync it retried failed; the
+        // retry below must not require the entry to still be present.
+        assert!(!gen_dir.exists());
+        execute_retire(secrets_fd.as_fd(), generations_fd.as_fd(), &cfg, intent).unwrap();
+        let marker = read_marker(secrets_fd.as_fd()).unwrap().unwrap();
+        assert!(marker.retired);
+    }
+
+    #[test]
+    fn revalidate_generation_before_delete_rejects_a_fake_empty_directory_with_wrong_mode() {
+        // An empty directory alone is not sufficient: it must also
+        // still be trusted-broker-owned at the expected mode. A
+        // foreign/incorrectly-moded replacement fails closed rather
+        // than being swept away as "finishing" a legitimate deletion.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let paths =
+            derive_paths("fake-empty-wrong-mode", SecretKind::GuestSigningKey, &cfg).unwrap();
+        let (_secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let mat = material(b"e1");
+        let stage_name = random_stage_name();
+        ensure_staged(
+            generations_fd.as_fd(),
+            &cfg,
+            &stage_name,
+            &mat.digest_hex(),
+            Some(&mat),
+        )
+        .unwrap();
+        promote_stage_to_generation(generations_fd.as_fd(), &stage_name, 1, &mat.digest_hex())
+            .unwrap();
+
+        let gen_dir = paths.kind_root.join(GENERATIONS_DIR_NAME).join("1");
+        std::fs::remove_file(gen_dir.join(MATERIAL_FILE_NAME)).unwrap();
+        assert_eq!(std::fs::read_dir(&gen_dir).unwrap().count(), 0);
+        let mut perms = std::fs::metadata(&gen_dir).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&gen_dir, perms).unwrap();
+
+        let err = revalidate_generation_before_delete(generations_fd.as_fd(), 1, &cfg).unwrap_err();
+        assert_eq!(err, FailReason::RetirementTreeAnomaly);
+        // Nothing was deleted: the anomaly is detected, not swept.
+        assert!(gen_dir.exists());
+    }
+
+    #[test]
+    fn revalidate_generation_before_delete_rejects_an_empty_looking_directory_with_a_stray_entry() {
+        // Zero *recognized* entries is required, not merely "no
+        // `material`". An unrelated leftover entry alongside a
+        // missing `material` must still fail closed.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let paths =
+            derive_paths("fake-empty-stray-entry", SecretKind::GuestSigningKey, &cfg).unwrap();
+        let (_secrets_fd, generations_fd) = open_or_create_secrets_dir(&paths, &cfg).unwrap();
+        let mat = material(b"e1");
+        let stage_name = random_stage_name();
+        ensure_staged(
+            generations_fd.as_fd(),
+            &cfg,
+            &stage_name,
+            &mat.digest_hex(),
+            Some(&mat),
+        )
+        .unwrap();
+        promote_stage_to_generation(generations_fd.as_fd(), &stage_name, 1, &mat.digest_hex())
+            .unwrap();
+
+        let gen_dir = paths.kind_root.join(GENERATIONS_DIR_NAME).join("1");
+        std::fs::remove_file(gen_dir.join(MATERIAL_FILE_NAME)).unwrap();
+        std::fs::write(gen_dir.join("rogue"), b"unexpected").unwrap();
+
+        let err = revalidate_generation_before_delete(generations_fd.as_fd(), 1, &cfg).unwrap_err();
+        assert_eq!(err, FailReason::RetirementTreeAnomaly);
+        assert!(gen_dir.exists());
+    }
+
+    #[test]
+    fn fresh_retire_over_a_crashed_generation_checkpoint_still_fails_closed() {
+        // The empty-checkpoint acceptance is reachable *only* from the
+        // retire txlog-recovery deletion loop. A brand-new, fresh call
+        // to `retire()` (no leftover txlog) must still go through the
+        // strict initial enumeration and fail closed over the exact
+        // same on-disk state the crash-recovery tests above complete
+        // successfully.
+        let dir = tempdir().unwrap();
+        let cfg = cfg_at(dir.path());
+        let vm = "fresh-retire-over-crash-state";
+        let kind = SecretKind::GuestSigningKey;
+        provision(vm, kind, material(b"e1"), &cfg).unwrap();
+
+        let paths = derive_paths(vm, kind, &cfg).unwrap();
+        let gen_dir = paths.kind_root.join(GENERATIONS_DIR_NAME).join("1");
+        std::fs::remove_file(gen_dir.join(MATERIAL_FILE_NAME)).unwrap();
+
+        let err = retire(vm, kind, &cfg).unwrap_err();
+        assert_eq!(err.reason, FailReason::PreviouslyProvisionedMaterialMissing);
+        // Fails closed without deleting anything.
+        assert!(gen_dir.exists());
     }
 }

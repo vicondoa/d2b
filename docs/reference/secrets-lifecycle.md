@@ -180,7 +180,34 @@ an immediate, anchored, nofollow re-stat/re-validate of that exact
 generation directory right before it is removed, so a tamper injected
 between the original enumeration and the delete (not merely between
 process restarts) is still caught rather than trusted from a stale
-snapshot. Both `execute_promote`'s post-commit stage cleanup and
+snapshot. `revalidate_generation_before_delete` accepts exactly two
+directory shapes: the fully-materialized generation
+`enumerate_and_validate_generation_tree` originally validated, or the
+one legitimate mid-deletion crash checkpoint `remove_generation` can
+leave behind — `material` already unlinked, the epoch directory itself
+not yet removed. Recognizing that checkpoint requires every one of: the
+entry is still a directory (not a symlink, file, or anything else
+swapped into the name); it is still trusted-broker-owned at the
+expected `cfg.dir_mode` (a foreign owner or any other mode means the
+directory was replaced, not left behind by this module's own deletion
+sequence); and it contains **zero** entries other than `.`/`..` (an
+unrecognized leftover entry, or a `material` entry of the wrong type or
+link-count, still fails closed rather than being swept away). This
+acceptance is reachable **only** from `execute_retire`'s
+`CurrentRemoved` phase deletion loop, always acting on a `RetireIntent`
+that has already passed `validate_retire_intent_semantics` — never from
+`enumerate_and_validate_generation_tree`, which fresh pre-retirement
+planning (`retire`'s initial enumeration) and the final `EpochsRemoved`
+prove-empty check both still call, and which remains exactly as strict
+as before: an empty generation directory encountered there is still
+`FailReason::RetirementTreeAnomaly`, not a silently-accepted "nothing
+here yet" state. A missing marker, or a marker that still claims the
+epoch active over that same physically-empty directory, is likewise
+never treated as clean storage by the fresh path — it fails closed on
+the more specific `PreviouslyProvisionedMaterialMissing` reason raised
+while re-verifying the marker's claimed active generation identity,
+before enumeration is even reached. Both `execute_promote`'s post-commit
+stage cleanup and
 `execute_retire`'s `CurrentRemoved` phase likewise call
 `revalidate_stage_before_delete` on each `.stage-*` directory
 immediately before its own deletion. `CurrentPromoted` and
