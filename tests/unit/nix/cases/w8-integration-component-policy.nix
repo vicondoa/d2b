@@ -41,7 +41,7 @@ let
     [ "packages/d2b-gateway/src/replacement.rs" ];
   systemdUser = evaluate manifestReadyPlan
     "adr0045-w8-integration-systemd-user-shell-routing"
-    [ "packages/d2b-systemd-user-agent/src/lib.rs" ];
+    [ "packages/d2bd/src/shell_backend.rs" ];
 in
 {
   "w8-integration-component-policy/manifest-is-a-global-blocker" = {
@@ -68,8 +68,8 @@ in
   "w8-integration-component-policy/current-manifest-releases-independent-components" = {
     expr = basePlan.launchSummary;
     expected = {
-      blocked = [ "systemd-user-shell-routing" ];
-      blockedCount = 1;
+      blocked = [ ];
+      blockedCount = 0;
       note = basePlan.launchSummary.note;
       pendingOnDependency = [
         "provider-parity-fallback-removal"
@@ -77,10 +77,11 @@ in
       pendingOnDependencyCount = 1;
       ready = [
         "secrets-lifecycle"
+        "systemd-user-shell-routing"
         "gateway-replacement"
         "restart-observability-audit"
       ];
-      readyCount = 3;
+      readyCount = 4;
       totalComponents = 6;
     };
   };
@@ -127,6 +128,7 @@ in
       valid = true;
       launchReady = [
         "secrets-lifecycle"
+        "systemd-user-shell-routing"
         "gateway-replacement"
         "restart-observability-audit"
       ];
@@ -134,14 +136,14 @@ in
     };
   };
 
-  "w8-integration-component-policy/workspace-seam-remains-independent" = {
+  "w8-integration-component-policy/existing-user-agent-boundary-is-ready" = {
     expr = {
       inherit (systemdUser) blockedExternalDependencies unmetDependencies valid;
     };
     expected = {
-      blockedExternalDependencies = [ "workspace-crate-registration-seam" ];
+      blockedExternalDependencies = [ ];
       unmetDependencies = [ ];
-      valid = false;
+      valid = true;
     };
   };
 }

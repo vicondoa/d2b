@@ -46,16 +46,6 @@ const W4_UNAVAILABLE_PROVIDER_SCAFFOLDS: &[&str] = &[
     "d2b-provider-infrastructure-azure-vm",
     "d2b-provider-runtime-azure-vm",
 ];
-// The W8 `workspace-crate-registration-seam` scaffold crates. They exist only
-// to satisfy the `systemd-user-shell-routing` component's external
-// dependency: additive workspace members with a buildable, dependency-free,
-// behavior-free `src/lib.rs`. Real behavior, wire protocols, and dependency
-// selection are that component's job, not this seam's.
-const W8_SYSTEMD_USER_SHELL_ROUTING_SCAFFOLD_CRATES: &[&str] = &[
-    "d2b-runtime-systemd-user",
-    "d2b-shell-supervisor",
-    "d2b-systemd-user-agent",
-];
 const NON_PRODUCTION_BINARY_PACKAGES: &[&str] = &["d2b-core-fuzz"];
 const REQUIRED_SHIPPED_PRODUCTION_PACKAGES: &[&str] = &[
     "d2b",
@@ -2719,101 +2709,4 @@ fn v2_foundation_io_surfaces_are_async_first() {
         ),
         "state host filesystem/OFD-lock support must fail explicitly off Linux"
     );
-}
-
-#[test]
-fn w8_systemd_user_shell_routing_scaffold_crates_are_additive_and_dependency_free() {
-    let metadata = workspace_metadata();
-    let workspace = read_repo_file("packages/Cargo.toml");
-
-    let members = workspace
-        .split_once("members = [")
-        .and_then(|(_, rest)| rest.split_once(']'))
-        .map(|(members, _)| members)
-        .expect("workspace members array")
-        .lines()
-        .filter_map(|line| line.trim().strip_prefix('"'))
-        .filter_map(|line| line.strip_suffix("\","))
-        .collect::<Vec<_>>();
-
-    let base_first_position = members
-        .iter()
-        .position(|member| *member == "d2b-realm-transport")
-        .expect("d2b-realm-transport is a workspace member");
-    for package in W8_SYSTEMD_USER_SHELL_ROUTING_SCAFFOLD_CRATES {
-        assert!(
-            members.contains(package),
-            "workspace must register the W8 scaffold crate {package}"
-        );
-        assert!(
-            !workspace.contains(&format!("{package} = {{ path = \"{package}\"")),
-            "{package} must remain additive: it must not be published under [workspace.dependencies] until a real consumer needs it"
-        );
-        // The scaffold crates fall between d2b-realm-transport and
-        // d2b-ttrpc-api-fit-spike in the required base-first sorted order.
-        let position = members
-            .iter()
-            .position(|member| member == package)
-            .unwrap_or_else(|| panic!("{package} position not found"));
-        assert!(
-            position > base_first_position,
-            "{package} must sort after d2b-realm-transport in base-first order"
-        );
-
-        let manifest = read_repo_file(&format!("packages/{package}/Cargo.toml"));
-        for required in [
-            "version.workspace = true",
-            "edition.workspace = true",
-            "rust-version.workspace = true",
-            "license.workspace = true",
-            "repository.workspace = true",
-            "publish = false",
-            "[lints]\nworkspace = true",
-        ] {
-            assert!(
-                manifest.contains(required),
-                "{package} manifest is missing {required:?}"
-            );
-        }
-        assert!(
-            !manifest.contains("[dependencies]"),
-            "{package} must stay dependency-free until systemd-user-shell-routing designs its real API"
-        );
-
-        let source = read_repo_file(&format!("packages/{package}/src/lib.rs"));
-        assert!(
-            source.starts_with("//!") && source.contains("#![forbid(unsafe_code)]"),
-            "{package} must document its purpose and forbid unsafe code"
-        );
-
-        let package_metadata = metadata_package(&metadata, package);
-        assert_eq!(
-            package_metadata["dependencies"]
-                .as_array()
-                .expect("dependency array"),
-            &Vec::<serde_json::Value>::new(),
-            "{package} must resolve with zero direct dependencies"
-        );
-
-        assert!(
-            !std::path::Path::new(
-                &repo_root()
-                    .join("packages")
-                    .join(package)
-                    .join("Cargo.lock")
-            )
-            .exists(),
-            "{package} must use the workspace lockfile"
-        );
-    }
-
-    for production_package in shipped_production_rust_packages(&metadata) {
-        let dependencies = transitive_package_names(&metadata, &production_package);
-        for scaffold in W8_SYSTEMD_USER_SHELL_ROUTING_SCAFFOLD_CRATES {
-            assert!(
-                !dependencies.contains(*scaffold),
-                "{production_package} must not depend on the not-yet-implemented {scaffold} scaffold"
-            );
-        }
-    }
 }

@@ -1,6 +1,6 @@
 { landedComponents ? {
     realm-routing-work-executor-fabric =
-      "afd519cfb6aaaa9f8d77d6f4d5002dcbde457fab";
+      "60bfa39d4664fc111f585191e39b6b8a0441450a";
   }
 , externalDependenciesOverride ? null
 }:
@@ -44,41 +44,32 @@ let
     "systemd-user-shell-routing" = {
       branch = "adr0045-w8-integration-systemd-user-shell-routing";
       dependsOn = [ ];
-      externalDependsOn = [
-        "workspace-crate-registration-seam"
-      ];
+      externalDependsOn = [ ];
       ownedFiles = [
         "docs/explanation/systemd-user-shell-routing.md"
         "packages/d2bd/src/shell_backend.rs"
         "packages/d2bd/src/unsafe_local_helper.rs"
         "packages/d2bd/src/unsafe_local_terminal.rs"
         "packages/d2bd/src/workload_dispatch.rs"
-        "packages/d2b-runtime-systemd-user/src/lib.rs"
-        "packages/d2b-shell-supervisor/src/lib.rs"
-        "packages/d2b-systemd-user-agent/src/lib.rs"
       ];
       reservedPaths = [
         "packages/d2bd/src/shell_backend.rs"
         "packages/d2bd/src/workload_dispatch.rs"
       ];
-      deletes = [ ];
+      deletes = [       ];
       scope = [
-        "Route unsafe-local persistent-shell dispatch through a real systemd-user-scoped supervisor instead of the current daemon-owned shell backend stand-in."
+        "Route d2bd unsafe-local persistent-shell dispatch through the existing deployed d2b-unsafe-local-helper ComponentSession services instead of the legacy JSON client path."
         "Keep the existing per-session PTY, output-ring, and attach/detach ownership model from AGENTS.md's 'Unsafe-local persistent shells' row; do not add a root unit, per-VM service, or SSH path."
-        "New crates are additive workspace members only; they must not become required for any wave already landed on main."
+        "Reuse the W6 per-user runtime agent and co-located shell service; do not add duplicate runtime-agent or shell-supervisor crates or processes."
       ];
       prompt = ''
-        Implement systemd-user-scoped shell supervision in exactly the owned
-        files, including three new crates
-        (d2b-systemd-user-agent, d2b-runtime-systemd-user,
-        d2b-shell-supervisor). Do not create these crate directories or their
-        Cargo.toml files until the workspace-crate-registration-seam external
-        dependency is ready (packages/Cargo.toml membership +
-        packages/Cargo.lock regeneration land through shared-root/integrator
-        prep first, never through this component). Preserve the existing
+        Implement the d2bd ComponentSession client routing to the existing
+        d2b-unsafe-local-helper runtime-systemd-user and shell services in
+        exactly the owned files. Replace the legacy JSON helper/terminal
+        client only after parity is proven. Preserve the existing
         session-table admission and audit shape in shell_backend.rs and
-        workload_dispatch.rs; do not add a root service, per-VM unit, or
-        direct compositor fallback.
+        workload_dispatch.rs; do not add a duplicate agent/supervisor process,
+        root service, per-VM unit, SSH path, or direct compositor fallback.
       '';
     };
 
@@ -252,20 +243,6 @@ let
   ];
 
   baseExternalDependencies = {
-    workspace-crate-registration-seam = {
-      owner = "adr0045-w8-integration";
-      status = "blocked";
-      requiredRebase = true;
-      contractFiles = [
-        "packages/Cargo.toml"
-        "packages/Cargo.lock"
-      ];
-      acceptance = [
-        "packages/Cargo.toml workspace members add d2b-systemd-user-agent, d2b-runtime-systemd-user, and d2b-shell-supervisor in base-first sorted order."
-        "packages/Cargo.lock is regenerated for the new members by the shared-root/integrator, never by the component branch."
-        "The systemd-user-shell-routing branch is rebased onto the accepted crate-registration commit before creating any new crate directory."
-      ];
-    };
     shared-root-w8-manifest-seam = {
       owner = "adr0045-w8-integration";
       status = "ready";
@@ -282,16 +259,7 @@ let
     then baseExternalDependencies
     else externalDependenciesOverride;
 
-  pathExternalDependencies = [
-    {
-      dependency = "workspace-crate-registration-seam";
-      paths = [
-        "packages/d2b-runtime-systemd-user/src/lib.rs"
-        "packages/d2b-shell-supervisor/src/lib.rs"
-        "packages/d2b-systemd-user-agent/src/lib.rs"
-      ];
-    }
-  ];
+  pathExternalDependencies = [ ];
 
   readyComponents = builtins.filter
     (name:
@@ -386,34 +354,20 @@ in
       These crates are referenced by allowed/foreign prefixes already in
       delivery/shared-contracts.json (inherited by w8 through
       inherits_prefixes_from) but do not exist on disk and are not workspace
-      members today. Phase A intentionally does not create them, edit
-      packages/Cargo.toml, or edit packages/Cargo.lock. Before
-      systemd-user-shell-routing (or any future component needing them) can
-      begin, the integrator/shared-root must:
-        1. Add each crate as a packages/Cargo.toml workspace member in the
-           existing base-first sorted position.
-        2. Scaffold each crate's own Cargo.toml + src/lib.rs stub.
-        3. Regenerate packages/Cargo.lock for the new members.
-        4. Flip workspace-crate-registration-seam to status = "ready" after the
-           registration commit lands on the trusted W8 root, then have the
-           component rebase onto it.
+      members today. They remain future contract placeholders, not W8
+      implementation requirements. W8 reuses the deployed
+      d2b-unsafe-local-helper per-user agent and its co-located generated
+      runtime-systemd-user and shell services.
     '';
     notYetCreatedCrates = [
       "packages/d2b-activation-helper/"
       "packages/d2b-one-shot-helper/"
       "packages/d2b-provider-agent/"
-      "packages/d2b-runtime-systemd-user/"
       "packages/d2b-security-key-helper/"
-      "packages/d2b-shell-supervisor/"
-      "packages/d2b-systemd-user-agent/"
       "packages/d2b-tty-helper/"
       "packages/d2b-wlcontrol/"
     ];
-    requiredForThisWave = [
-      "packages/d2b-runtime-systemd-user/"
-      "packages/d2b-shell-supervisor/"
-      "packages/d2b-systemd-user-agent/"
-    ];
+    requiredForThisWave = [ ];
   };
 
   forbiddenEdits = [

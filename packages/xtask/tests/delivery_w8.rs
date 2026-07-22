@@ -85,15 +85,6 @@ const W8_RESERVED_PATHS: &[&str] = &[
     "packages/d2bd/src/realm_stubs.rs",
     "packages/d2bd/src/storage_lifecycle.rs",
 ];
-const W8_WORKSPACE_SCAFFOLD_PATHS: &[&str] = &[
-    "packages/d2b-runtime-systemd-user/Cargo.toml",
-    "packages/d2b-runtime-systemd-user/src/lib.rs",
-    "packages/d2b-shell-supervisor/Cargo.toml",
-    "packages/d2b-shell-supervisor/src/lib.rs",
-    "packages/d2b-systemd-user-agent/Cargo.toml",
-    "packages/d2b-systemd-user-agent/src/lib.rs",
-];
-
 #[test]
 fn w8_manifest_is_valid_and_uniquely_authoritative() {
     let manifest = load_w8_manifest();
@@ -270,12 +261,6 @@ fn w8_fingerprint_matrix_covers_every_reserved_integration_seam() {
         assert!(
             all_paths.contains(reserved),
             "fingerprint matrix is missing reserved integration seam {reserved}"
-        );
-    }
-    for scaffold in W8_WORKSPACE_SCAFFOLD_PATHS {
-        assert!(
-            all_paths.contains(scaffold),
-            "fingerprint matrix is missing landed workspace scaffold {scaffold}"
         );
     }
 
