@@ -35,6 +35,10 @@ deprecations ship one minor release before removal.
 - Included the W8 workspace-registration regression in the exact integration
   branch's protected xtask test authority; suffixed component branches remain
   denied.
+- Corrected W8's systemd-user shell-routing plan to reuse the existing
+  deployed `d2b-unsafe-local-helper` per-user ComponentSession services.
+  Removed the three duplicate dependency-free scaffold crates and their
+  workspace policy gate; W8 now owns only the missing d2bd client cutover.
 - Granted only the exact `adr0045-w8-integration` branch the protected delivery
   README and xtask manifest-test paths required to introduce W8's checked-in
   manifest authority; suffixed component branches remain denied.
@@ -55,22 +59,6 @@ deprecations ship one minor release before removal.
   multi-transport fabric, preserving original operation identity,
   authorization and idempotency, gateway boundaries, session capacity, and
   recoverable listener backoff.
-- Added the W8 `workspace-crate-registration-seam` shared-root prep:
-  registered `d2b-runtime-systemd-user`, `d2b-shell-supervisor`, and
-  `d2b-systemd-user-agent` as additive `packages/Cargo.toml` workspace
-  members in base-first/alphanumeric sorted order, scaffolded each crate's
-  own dependency-free `Cargo.toml` and a minimal, behavior-free,
-  `#![forbid(unsafe_code)]` `src/lib.rs`, and regenerated the single
-  `packages/Cargo.lock` for exactly those three new packages. Added focused
-  `packages/xtask/tests/policy_workspace.rs` coverage
-  (`w8_systemd_user_shell_routing_scaffold_crates_are_additive_and_dependency_free`)
-  proving the crates are registered, dependency-free, and not yet consumed
-  by any shipped production package. This is shared-root/integrator prep
-  only: it implements no runtime behavior, does not edit `d2bd`, and does
-  not flip `workspace-crate-registration-seam` to `status = "ready"` in
-  `tests/unit/nix/eval-cases/w8-integration-wave-plan.nix` — that remains
-  the integrator's call once the `systemd-user-shell-routing` component is
-  ready to rebase onto this commit.
 - Added the checked-in W8 delivery authority (`delivery/manifests/w8.json`),
   binding one repository and the single current stack node
   (`adr0045-w8-integration` / PR #324) against `main`, a candidate-pinned

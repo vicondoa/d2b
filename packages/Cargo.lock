@@ -1624,10 +1624,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "d2b-runtime-systemd-user"
-version = "2.0.0"
-
-[[package]]
 name = "d2b-session"
 version = "2.0.0"
 dependencies = [
@@ -1656,10 +1652,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "d2b-shell-supervisor"
-version = "2.0.0"
-
-[[package]]
 name = "d2b-sk-frontend"
 version = "2.0.0"
 dependencies = [
@@ -1686,10 +1678,6 @@ dependencies = [
  "sha2",
  "tokio",
 ]
-
-[[package]]
-name = "d2b-systemd-user-agent"
-version = "2.0.0"
 
 [[package]]
 name = "d2b-ttrpc-api-fit-spike"
