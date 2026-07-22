@@ -53,10 +53,17 @@ deprecations ship one minor release before removal.
   component-scoped exceptions for its lockfile and core contract files
   without weakening the global forbidden-path policy for any other branch,
   and included the CLI doctor consumer in the same contract migration.
+- Added the remaining state/lock prerequisites: immutable acquisition-time
+  protected-resource capabilities, broker lock-file reconciliation, aggregate
+  store-lock authority, and regenerated lifecycle-report reason schema.
 - Added a two-sided user-agent service seam ahead of the d2bd shell cutover:
   canonical channel binding, narrow controller authorization, real helper
   backend wiring, exact terminal attachment/stream transport, and
   request-bound cancellation must land before client routing.
+- Added a shared ComponentSession service seam ahead of the helper responder:
+  composition-wide schema authentication, per-connection descriptor policy,
+  inbound call cancellation, and client composition support are frozen before
+  helper business logic resumes.
 - Granted only the exact `adr0045-w8-integration` branch the protected delivery
   README and xtask manifest-test paths required to introduce W8's checked-in
   manifest authority; suffixed component branches remain denied.
