@@ -10,7 +10,8 @@ use d2b_contracts::v2_state::{
     OwnershipEpoch, ResourceId,
 };
 use d2b_core::{
-    storage::{ActorKind, DegradeScope, StoragePathKind, StoragePathSpec},
+    contract_id::ContractId,
+    storage::{ActorKind, DegradeScope, StorageJson, StoragePathKind, StoragePathSpec},
     sync::{
         FdPassingMechanism, InheritancePolicy, LockAdoptionPolicy, LockKind as GeneratedLockKind,
         LockSpec as GeneratedLockSpec, LockStalePolicy, LockTimeoutKind, SyncJson,
@@ -24,9 +25,38 @@ use nix::{
 use rustix::fs::{FileType, Mode, OFlags};
 
 use crate::{
-    AnchoredResource, Error, ErrorCode, MetadataExpectation, RelativePath, Result,
-    path::dup_cloexec,
+    AnchoredDir, AnchoredResource, Error, ErrorCode, MetadataExpectation, RelativePath, Result,
+    path::{GeneratedResource, dup_cloexec},
 };
+
+/// Ceiling on how long a single bounded-wait poll iteration sleeps, used by
+/// both [`LockSet::acquire_with_clock`] and
+/// [`LockSet::acquire_from_generated_with_clock`]. Every sleep is computed
+/// as `remaining_time_before_deadline.min(MAX_LOCK_POLL_BACKOFF)` — this is
+/// a *cap*, never an unconditional sleep duration, so a short or
+/// soon-to-expire deadline is never overshot by an invented fixed sleep.
+const MAX_LOCK_POLL_BACKOFF: Duration = Duration::from_millis(2);
+
+/// Sleeps for the remaining time before `deadline` (measured from
+/// `started`), capped at [`MAX_LOCK_POLL_BACKOFF`], or fails closed with
+/// [`ErrorCode::Deadline`] if `deadline` has already elapsed. Never sleeps
+/// past what remains before the deadline: a sub-cap remaining duration
+/// (for example, a lock with a 1ms bounded-wait timeout) sleeps for exactly
+/// that remaining duration, never the full cap, so a short or nearly
+/// expired deadline is never overshot by an invented fixed sleep.
+fn poll_backoff_or_deadline<C: Clock + ?Sized>(
+    clock: &C,
+    started: Instant,
+    deadline: Duration,
+) -> Result<()> {
+    let elapsed = clock.now().saturating_duration_since(started);
+    if elapsed >= deadline {
+        return Err(Error::Code(ErrorCode::Deadline));
+    }
+    let remaining = deadline - elapsed;
+    clock.sleep(remaining.min(MAX_LOCK_POLL_BACKOFF));
+    Ok(())
+}
 
 pub trait Cancellation {
     fn is_cancelled(&self) -> bool;
@@ -108,16 +138,26 @@ impl OfdTransfer<'_> {
 pub struct LockGuard {
     fd: OwnedFd,
     lock_id: ResourceId,
-    resource_id: ResourceId,
+    /// The lock file's own storage-row resource id (the file this guard's
+    /// `fd` is actually opened/locked against). Distinct from
+    /// [`Self::protected_resources`], which names the *protected state*
+    /// resources this lock authorizes mutation of — never the same field
+    /// doing double duty (see [`Self::validate_state_binding`] and
+    /// [`Self::bind_protected_resource`]).
+    lock_file_resource_id: ResourceId,
     owner: AuthorityRef,
     ownership_epoch: OwnershipEpoch,
     global_order: u32,
     transfer: FdTransferPolicy,
     held: bool,
-    /// Storage resource ids this lock protects, beyond the lock file's own
-    /// `resource_id`. Empty for guards acquired via the legacy
-    /// `v2_state::LockSpec`-based [`LockSet::acquire`]/`acquire_with_clock`,
-    /// which has no generated notion of a protected-resource set.
+    /// Storage resource ids this lock protects. For guards acquired via the
+    /// legacy `v2_state::LockSpec`-based [`LockSet::acquire`]/
+    /// `acquire_with_clock`, this is always exactly `[resource.resource_id]`
+    /// (the single resource that API has ever protected), preserving that
+    /// path's existing single-resource semantics. For guards acquired via
+    /// [`LockSet::acquire_from_generated`], this is the caller-supplied,
+    /// inventory-validated `protected_resource_ids` set — distinct from
+    /// [`Self::lock_file_resource_id`].
     protected_resources: Vec<ResourceId>,
     /// Generated stale/adoption/degrade policy, carried through losslessly
     /// from the generated `sync.json` row. `None` for guards acquired via
@@ -130,13 +170,12 @@ pub struct LockGuard {
     generated_stale_policy: Option<LockStalePolicy>,
     generated_adoption_policy: Option<LockAdoptionPolicy>,
     generated_degrade_scope: Option<DegradeScope>,
-    /// `(dev, ino)` of the resource's containing directory at bind time (see
-    /// [`AnchoredResource::directory_identity`]), used by
-    /// [`LockGuard::verify_binding`] to reject a resource whose containing
-    /// directory was replaced after resolution.
-    directory_identity: Option<(u64, u64)>,
     /// Whether this call created the lock file (as opposed to opening an
-    /// already-existing one).
+    /// already-existing one). Always `false` for guards acquired via
+    /// [`LockSet::acquire_from_generated`], which never creates a lock file
+    /// (see that method's docs): a generated lock file is exclusively
+    /// broker-created, and the generated acquire path only ever opens an
+    /// existing one.
     created: bool,
 }
 
@@ -144,7 +183,7 @@ impl fmt::Debug for LockGuard {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LockGuard")
             .field("lock_id", &self.lock_id)
-            .field("resource_id", &self.resource_id)
+            .field("lock_file_resource_id", &self.lock_file_resource_id)
             .field("ownership_epoch", &self.ownership_epoch)
             .field("global_order", &self.global_order)
             .field("held", &self.held)
@@ -162,8 +201,12 @@ impl LockGuard {
         self.global_order
     }
 
-    pub fn resource_id(&self) -> &ResourceId {
-        &self.resource_id
+    /// The lock file's own storage-row resource id — i.e. the identity of
+    /// the file this guard's held descriptor is actually locked against.
+    /// This is *not* one of [`Self::protected_resources`] unless a caller
+    /// explicitly requested the lock file itself as a protected resource.
+    pub fn lock_file_resource_id(&self) -> &ResourceId {
+        &self.lock_file_resource_id
     }
 
     pub fn owner(&self) -> &AuthorityRef {
@@ -178,9 +221,9 @@ impl LockGuard {
         self.held
     }
 
-    /// Storage resource ids protected by this lock (beyond the lock file's
-    /// own `resource_id`), as bound at acquisition time by
-    /// [`LockSet::acquire_from_generated`]. Empty for legacy-path guards.
+    /// Storage resource ids protected by this lock. See the field docs on
+    /// [`LockGuard::protected_resources`] for exactly what this contains
+    /// for each acquisition path.
     pub fn protected_resources(&self) -> &[ResourceId] {
         &self.protected_resources
     }
@@ -220,23 +263,60 @@ impl LockGuard {
         Ok((stat.st_dev, stat.st_ino))
     }
 
-    /// Verifies that `resource` is exactly the resource this guard is bound
-    /// to: same `resource_id`, and — for resources resolved via
-    /// [`AnchoredResource::resolve_generated`] — the same containing
-    /// directory identity captured at bind time. Rejects a resource whose
-    /// `resource_id` matches by coincidence/forgery but whose directory was
-    /// replaced (or that was never bound through the guarded resolution
-    /// path when the guard requires it).
-    pub fn verify_binding(&self, resource: &AnchoredResource) -> Result<()> {
-        if resource.resource_id != self.resource_id {
+    /// Opens one of the resources this held guard authorizes mutation for,
+    /// resolved fresh via a trusted-root + `openat2` walk against `storage`'s
+    /// validated inventory and `anchor`/`anchor_path` — never an inferred
+    /// parent/path relationship, and never a caller-supplied resource
+    /// accepted on trust. `resource_id` must both:
+    ///
+    /// - resolve to exactly one row in `storage`'s validated inventory
+    ///   (missing or duplicate ids fail closed), and
+    /// - be a member of [`Self::protected_resources`] as bound at
+    ///   acquisition time — a resource this specific guard does not
+    ///   authorize is rejected even if it exists and is otherwise
+    ///   well-formed.
+    ///
+    /// On success, returns the legacy [`AnchoredResource`] shape so
+    /// existing atomic/audit consumers can use it without any change to
+    /// their own code; the resolution backing it is exactly as
+    /// non-forgeable as [`LockSet::acquire_from_generated`]'s own lock-file
+    /// resolution — the returned value is a fresh capability, not a clone
+    /// of anything the caller supplied.
+    pub fn bind_protected_resource(
+        &self,
+        storage: &StorageJson,
+        resource_id: &ContractId,
+        anchor: &AnchoredDir,
+        anchor_path: &std::path::Path,
+        metadata: MetadataExpectation,
+    ) -> Result<AnchoredResource> {
+        if !self.held {
+            return Err(Error::Code(ErrorCode::LockReleased));
+        }
+        metadata.validate()?;
+        storage
+            .validate_unique_ids()
+            .map_err(|_| Error::Code(ErrorCode::InvalidSchema))?;
+        let row = find_unique_storage_row(storage, resource_id)?;
+        if row.kind != StoragePathKind::RegularFile {
+            return Err(Error::Code(ErrorCode::InvalidSchema));
+        }
+        let encoded = encode_resource_id(row.id.as_str())?;
+        if !self.protected_resources.contains(&encoded) {
             return Err(Error::Code(ErrorCode::LockMismatch));
         }
-        if let Some(expected) = self.directory_identity
-            && resource.directory_identity() != Some(expected)
-        {
-            return Err(Error::Code(ErrorCode::LockMismatch));
+        let row_mode =
+            u32::from_str_radix(&row.mode, 8).map_err(|_| Error::Code(ErrorCode::InvalidSchema))?;
+        if metadata.mode != row_mode {
+            return Err(Error::Code(ErrorCode::MetadataMismatch));
         }
-        Ok(())
+        let generated = GeneratedResource::resolve(
+            anchor,
+            anchor_path,
+            encoded,
+            std::path::Path::new(row.path_template.as_str()),
+        )?;
+        Ok(generated.into_anchored_resource())
     }
 
     pub fn authorize_transfer(&mut self, requested: FdTransferPolicy) -> Result<OfdTransfer<'_>> {
@@ -272,7 +352,7 @@ impl LockGuard {
             return Err(Error::Code(ErrorCode::LockReleased));
         }
         if &self.lock_id != lock_id
-            || &self.resource_id != resource_id
+            || !self.protected_resources.contains(resource_id)
             || &self.owner != owner
             || self.ownership_epoch != ownership_epoch
             || self.transfer != FdTransferPolicy::Never
@@ -394,10 +474,7 @@ impl LockSet {
                     if spec.contention == ContentionPolicy::FailFast {
                         return Err(Error::Code(ErrorCode::LockContended));
                     }
-                    if clock.now().saturating_duration_since(started) >= deadline {
-                        return Err(Error::Code(ErrorCode::Deadline));
-                    }
-                    clock.sleep(Duration::from_millis(1));
+                    poll_backoff_or_deadline(clock, started, deadline)?;
                 }
                 Err(error) => {
                     return Err(Error::Os {
@@ -411,17 +488,16 @@ impl LockSet {
         self.guards.push(LockGuard {
             fd,
             lock_id: spec.lock_id.clone(),
-            resource_id: spec.key.resource_id.clone(),
+            lock_file_resource_id: spec.key.resource_id.clone(),
             owner: spec.owner.clone(),
             ownership_epoch,
             global_order: spec.global_order,
             transfer: spec.fd_transfer,
             held: true,
-            protected_resources: Vec::new(),
+            protected_resources: vec![resource.resource_id.clone()],
             generated_stale_policy: None,
             generated_adoption_policy: None,
             generated_degrade_scope: None,
-            directory_identity: resource.directory_identity(),
             created,
         });
         Ok(self
@@ -452,24 +528,43 @@ impl LockSet {
     /// is invented, defaulted, or reinterpreted, and any field this
     /// function cannot validate causes it to fail closed.
     ///
-    /// - `sync` is the full generated document (needed to derive the exact
-    ///   total acquire order via [`SyncJson::global_order_rank`]).
-    /// - `lock` is the specific generated lock row being acquired.
-    /// - `lock_row` is the generated storage row for `lock`'s own lock
-    ///   file (`lock.resource_id` must name it); it supplies the lock
-    ///   file's declared mode, kind, and path template, cross-checked
-    ///   against `resource` and `metadata` rather than trusted blindly.
-    /// - `protected` are the generated storage rows this lock is being
-    ///   used to protect. The caller supplies them (there is no generated
-    ///   parent/child field linking a lock to the resources it protects);
-    ///   each row's `scope` is checked against `lock.scope` so an
-    ///   unrelated resource cannot be smuggled in as "protected" by this
-    ///   lock.
-    /// - `resource` must already be bound via
-    ///   [`AnchoredResource::resolve_generated`] against `lock_row`; this
-    ///   function independently re-derives `lock_row`'s resource id and
-    ///   rejects a mismatch, so a caller cannot pair an unrelated
-    ///   `AnchoredResource` with a given `lock`/`lock_row`.
+    /// Callers never hand in a detached `&GeneratedLockSpec`/
+    /// `&StoragePathSpec`/`&AnchoredResource` — a prior shape of this API
+    /// did, which let a caller substitute an arbitrary same-id row or
+    /// resource that was never actually looked up from the trusted
+    /// document. Instead:
+    ///
+    /// - `sync`/`storage` are the full trusted generated documents. This
+    ///   function resolves every row it needs — the lock, its own
+    ///   lock-file storage row, and each protected resource's storage row —
+    ///   directly from these documents by opaque id.
+    ///   `sync.validate_lock_order()` and `storage.validate_unique_ids()`
+    ///   are re-run here so a caller cannot pass an already-invalid
+    ///   document and have a stale or duplicate row silently resolved.
+    /// - `lock_id` is the opaque generated id of the lock to acquire; it
+    ///   must resolve to exactly one row in `sync.locks` (a missing or
+    ///   duplicate id fails closed).
+    /// - `protected_resource_ids` are the opaque ids of the storage
+    ///   resources this acquisition protects. There is no generated
+    ///   parent/child field linking a lock to the resources it protects,
+    ///   so the caller supplies them; each one must resolve to exactly one
+    ///   row in `storage`, must not repeat, and that row's `scope` is
+    ///   checked against the lock's own `scope` so an unrelated resource
+    ///   cannot be smuggled in as "protected" by this lock. The lock file's
+    ///   own storage row (named by `lock.resource_id`) is a distinct
+    ///   concept from a protected resource; see [`LockGuard`]'s field docs.
+    /// - `anchor`/`anchor_path` are the trusted pre-opened root and its
+    ///   absolute path. The lock file's own storage row is resolved
+    ///   beneath `anchor` via [`GeneratedResource::resolve`] only *after*
+    ///   every other validation succeeds, directly from the row's own id —
+    ///   there is no longer a separate caller-supplied resource parameter
+    ///   that could be mismatched with the wrong lock/row.
+    /// - The generated lock file is opened, never created (`OFlags::RDWR`
+    ///   only — no `CREATE`/`EXCL`). A generated lock file is exclusively
+    ///   broker-created; if it is missing, this fails closed with
+    ///   [`ErrorCode::Missing`] and the caller must trigger broker
+    ///   reconciliation rather than have this function silently create
+    ///   one.
     /// - `owner` is rendered to the exact `(ActorKind, value)` convention
     ///   the Nix generator uses and checked against `lock.owner_process`;
     ///   since this API accepts only one authority, `lock.owner_process`
@@ -479,10 +574,11 @@ impl LockSet {
     pub fn acquire_from_generated(
         &mut self,
         sync: &SyncJson,
-        lock: &GeneratedLockSpec,
-        lock_row: &StoragePathSpec,
-        protected: &[StoragePathSpec],
-        resource: &AnchoredResource,
+        storage: &StorageJson,
+        lock_id: &ContractId,
+        protected_resource_ids: &[ContractId],
+        anchor: &AnchoredDir,
+        anchor_path: &std::path::Path,
         owner: AuthorityRef,
         ownership_epoch: OwnershipEpoch,
         metadata: MetadataExpectation,
@@ -490,10 +586,11 @@ impl LockSet {
     ) -> Result<&mut LockGuard> {
         self.acquire_from_generated_with_clock(
             sync,
-            lock,
-            lock_row,
-            protected,
-            resource,
+            storage,
+            lock_id,
+            protected_resource_ids,
+            anchor,
+            anchor_path,
             owner,
             ownership_epoch,
             metadata,
@@ -506,18 +603,41 @@ impl LockSet {
     pub fn acquire_from_generated_with_clock<C: Clock + ?Sized>(
         &mut self,
         sync: &SyncJson,
-        lock: &GeneratedLockSpec,
-        lock_row: &StoragePathSpec,
-        protected: &[StoragePathSpec],
-        resource: &AnchoredResource,
+        storage: &StorageJson,
+        lock_id: &ContractId,
+        protected_resource_ids: &[ContractId],
+        anchor: &AnchoredDir,
+        anchor_path: &std::path::Path,
         owner: AuthorityRef,
         ownership_epoch: OwnershipEpoch,
         metadata: MetadataExpectation,
         cancellation: &(impl Cancellation + ?Sized),
         clock: &C,
     ) -> Result<&mut LockGuard> {
+        sync.validate_lock_order()
+            .map_err(|_| Error::Code(ErrorCode::InvalidSchema))?;
+        storage
+            .validate_unique_ids()
+            .map_err(|_| Error::Code(ErrorCode::InvalidSchema))?;
+
+        let lock = find_unique_lock(sync, lock_id)?;
+        let lock_resource_id = lock
+            .resource_id
+            .as_ref()
+            .ok_or(Error::Code(ErrorCode::InvalidSchema))?;
+        let lock_row = find_unique_storage_row(storage, lock_resource_id)?;
+
+        let mut seen_requested = std::collections::BTreeSet::new();
+        let mut protected_rows = Vec::with_capacity(protected_resource_ids.len());
+        for id in protected_resource_ids {
+            if !seen_requested.insert(id.clone()) {
+                return Err(Error::Code(ErrorCode::InvalidSchema));
+            }
+            protected_rows.push(find_unique_storage_row(storage, id)?);
+        }
+
         let binding =
-            validate_generated_lock(sync, lock, lock_row, protected, resource, &owner, metadata)?;
+            validate_generated_lock(sync, lock, lock_row, &protected_rows, &owner, metadata)?;
 
         if self.held(&binding.lock_id)
             || self
@@ -529,25 +649,18 @@ impl LockSet {
             return Err(Error::Code(ErrorCode::LockOrder));
         }
 
-        let path = RelativePath::from_components([resource.leaf.as_str()])?;
-        let (fd, created) = match resource.directory.open_beneath(
-            &path,
-            OFlags::RDWR | OFlags::CREATE | OFlags::EXCL,
-            Mode::from_raw_mode(metadata.mode),
-        ) {
-            Ok(fd) => (fd, true),
-            Err(error) if error.code() == ErrorCode::AlreadyExists => (
-                resource
-                    .directory
-                    .open_beneath(&path, OFlags::RDWR, Mode::empty())?,
-                false,
-            ),
-            Err(error) => return Err(error),
-        };
-        if created {
-            rustix::fs::fchmod(&fd, Mode::from_raw_mode(metadata.mode))
-                .map_err(|error| Error::io(ErrorCode::Io, error))?;
-        }
+        let resource = GeneratedResource::resolve(
+            anchor,
+            anchor_path,
+            binding.lock_file_resource_id.clone(),
+            std::path::Path::new(lock_row.path_template.as_str()),
+        )?;
+
+        // Generated lock files are exclusively broker-created: open only,
+        // never create. A missing file fails closed with
+        // `ErrorCode::Missing` (naturally surfaced by `open_beneath`'s
+        // NOENT mapping) rather than being silently conjured here.
+        let fd = resource.open(OFlags::RDWR, Mode::empty())?;
         validate_metadata(&fd, metadata)?;
 
         // `lock.cloexec_required` was already checked true by
@@ -578,10 +691,7 @@ impl LockSet {
                     let deadline = binding
                         .deadline
                         .expect("bounded-wait binding always carries a validated deadline");
-                    if clock.now().saturating_duration_since(started) >= deadline {
-                        return Err(Error::Code(ErrorCode::Deadline));
-                    }
-                    clock.sleep(Duration::from_millis(1));
+                    poll_backoff_or_deadline(clock, started, deadline)?;
                 }
                 Err(error) => {
                     return Err(Error::Os {
@@ -595,7 +705,7 @@ impl LockSet {
         self.guards.push(LockGuard {
             fd,
             lock_id: binding.lock_id,
-            resource_id: resource.resource_id.clone(),
+            lock_file_resource_id: binding.lock_file_resource_id,
             owner,
             ownership_epoch,
             global_order: binding.global_order,
@@ -605,8 +715,10 @@ impl LockSet {
             generated_stale_policy: Some(lock.stale_policy.clone()),
             generated_adoption_policy: Some(lock.adoption_policy),
             generated_degrade_scope: Some(lock.degrade_scope),
-            directory_identity: resource.directory_identity(),
-            created,
+            // The generated acquisition path never creates a lock file
+            // (see this method's docs): it only ever opens an
+            // already-existing, broker-created one.
+            created: false,
         });
         Ok(self
             .guards
@@ -615,12 +727,48 @@ impl LockSet {
     }
 }
 
+/// Looks up exactly one lock row in `sync.locks` by opaque id. A missing or
+/// duplicate id fails closed rather than silently picking the first/last
+/// match.
+fn find_unique_lock<'a>(sync: &'a SyncJson, lock_id: &ContractId) -> Result<&'a GeneratedLockSpec> {
+    let mut matches = sync.locks.iter().filter(|lock| &lock.id == lock_id);
+    let found = matches
+        .next()
+        .ok_or(Error::Code(ErrorCode::InvalidSchema))?;
+    if matches.next().is_some() {
+        return Err(Error::Code(ErrorCode::InvalidSchema));
+    }
+    Ok(found)
+}
+
+/// Looks up exactly one storage row in `storage.paths` by opaque id. A
+/// missing or duplicate id fails closed rather than silently picking the
+/// first/last match.
+fn find_unique_storage_row<'a>(
+    storage: &'a StorageJson,
+    id: &ContractId,
+) -> Result<&'a StoragePathSpec> {
+    let mut matches = storage.paths.iter().filter(|row| &row.id == id);
+    let found = matches
+        .next()
+        .ok_or(Error::Code(ErrorCode::InvalidSchema))?;
+    if matches.next().is_some() {
+        return Err(Error::Code(ErrorCode::InvalidSchema));
+    }
+    Ok(found)
+}
+
 /// The fully-validated, ready-to-acquire projection of a generated
 /// `d2b_core::sync::LockSpec`, produced by [`validate_generated_lock`].
 /// Every field here is either copied verbatim from the generated contract
 /// or deterministically derived from it (never invented).
 struct GeneratedLockBinding {
     lock_id: ResourceId,
+    /// The lock-file's own storage-row resource id, encoded from
+    /// `lock_row.id`. Kept distinct from [`Self::protected_resources`] —
+    /// see [`LockGuard`]'s field docs for why the lock file and the
+    /// resources it protects are never conflated.
+    lock_file_resource_id: ResourceId,
     global_order: u32,
     protected_resources: Vec<ResourceId>,
     fd_transfer: FdTransferPolicy,
@@ -636,8 +784,7 @@ fn validate_generated_lock(
     sync: &SyncJson,
     lock: &GeneratedLockSpec,
     lock_row: &StoragePathSpec,
-    protected: &[StoragePathSpec],
-    resource: &AnchoredResource,
+    protected: &[&StoragePathSpec],
     owner: &AuthorityRef,
     metadata: MetadataExpectation,
 ) -> Result<GeneratedLockBinding> {
@@ -680,10 +827,6 @@ fn validate_generated_lock(
     {
         return Err(Error::Code(ErrorCode::InvalidSchema));
     }
-    let encoded_resource = encode_resource_id(lock_row.id.as_str())?;
-    if encoded_resource != resource.resource_id {
-        return Err(Error::Code(ErrorCode::LockMismatch));
-    }
 
     let row_mode = u32::from_str_radix(&lock_row.mode, 8)
         .map_err(|_| Error::Code(ErrorCode::InvalidSchema))?;
@@ -702,8 +845,9 @@ fn validate_generated_lock(
     }
 
     let lock_id = encode_resource_id(lock.id.as_str())?;
+    let lock_file_resource_id = encode_resource_id(lock_row.id.as_str())?;
     let mut seen = std::collections::BTreeSet::new();
-    if !seen.insert(lock_id.clone()) || !seen.insert(resource.resource_id.clone()) {
+    if !seen.insert(lock_id.clone()) || !seen.insert(lock_file_resource_id.clone()) {
         return Err(Error::Code(ErrorCode::InvalidSchema));
     }
     let mut protected_resources = Vec::with_capacity(protected.len());
@@ -753,6 +897,7 @@ fn validate_generated_lock(
 
     Ok(GeneratedLockBinding {
         lock_id,
+        lock_file_resource_id,
         global_order,
         protected_resources,
         fd_transfer,
@@ -869,7 +1014,9 @@ fn set_ofd_lock(fd: &OwnedFd, lock_type: i16) -> nix::Result<()> {
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::VecDeque,
         fs,
+        os::unix::fs::PermissionsExt,
         path::{Path, PathBuf},
         sync::atomic::{AtomicU64, Ordering},
     };
@@ -891,6 +1038,18 @@ mod tests {
     use crate::AnchoredDir;
 
     static SCRATCH_ID: AtomicU64 = AtomicU64::new(0);
+
+    /// The fixed, fake absolute directory every test's `StoragePathSpec`
+    /// rows declare their `path_template` beneath (see
+    /// [`valid_storage_row`]). [`GeneratedResource::resolve`] only ever
+    /// uses `anchor_path` for a pure string `strip_prefix` computation
+    /// against the row's declared path — it never checks that `anchor`
+    /// (the real, opened scratch-directory descriptor used for every
+    /// actual filesystem operation) truly lives at this path on disk — so
+    /// tests can use one fixed, human-readable `anchor_path` constant
+    /// while still exercising the real trusted-root `openat2` resolution
+    /// against a real per-test scratch directory.
+    const ANCHOR_PATH: &str = "/var/lib/d2b/r/realm/controller";
 
     struct Scratch(PathBuf);
 
@@ -976,14 +1135,15 @@ mod tests {
     }
 
     /// A fully-populated, schema-valid regular-file `StoragePathSpec`
-    /// mirroring the paired lock-file rows added to
+    /// mirroring the paired lock-file/protected-resource rows added to
     /// `nixos-modules/realm-storage-rows.nix` (mode `0600`, process-scoped,
-    /// not adoptable, no follow).
-    fn valid_storage_row(id: &str, owner: ActorRef) -> StoragePathSpec {
+    /// not adoptable, no follow). `leaf` names the file beneath a per-test
+    /// scratch directory so distinct rows in one test never collide.
+    fn valid_storage_row(id: &str, leaf: &str, owner: ActorRef) -> StoragePathSpec {
         StoragePathSpec {
             id: ContractId::parse(id).unwrap(),
             scope: ContractId::parse("host").unwrap(),
-            path_template: PathTemplate::parse("/var/lib/d2b/r/realm/controller/state.lock")
+            path_template: PathTemplate::parse(format!("/var/lib/d2b/r/realm/controller/{leaf}"))
                 .unwrap(),
             kind: StoragePathKind::RegularFile,
             lifecycle: StorageLifecycle::ProcessScoped,
@@ -1014,10 +1174,21 @@ mod tests {
         }
     }
 
-    fn sync_of(lock: &GeneratedLockSpec) -> SyncJson {
+    fn sync_of(locks: Vec<GeneratedLockSpec>) -> SyncJson {
         SyncJson {
             schema_version: "1".to_owned(),
-            locks: vec![lock.clone()],
+            locks,
+        }
+    }
+
+    fn storage_of(paths: Vec<StoragePathSpec>) -> StorageJson {
+        StorageJson {
+            schema_version: "1".to_owned(),
+            roots: Vec::new(),
+            paths,
+            restart_policies: Vec::new(),
+            degraded_states: Vec::new(),
+            remediations: Vec::new(),
         }
     }
 
@@ -1031,20 +1202,45 @@ mod tests {
         }
     }
 
-    /// Resolves `resource_id`/`leaf` beneath `scratch` exactly the way a
-    /// real caller would: via [`AnchoredResource::resolve_generated`]
-    /// against a trusted anchor, never a raw struct literal.
-    fn resolve(scratch: &Path, resource_id: &str, leaf: &str) -> (AnchoredDir, AnchoredResource) {
-        let anchor = AnchoredDir::open_trusted(scratch).unwrap();
-        let row_path = scratch.join(leaf);
-        let resource = AnchoredResource::resolve_generated(
-            &anchor,
-            scratch,
-            ResourceId::parse(resource_id).unwrap(),
-            &row_path,
-        )
-        .unwrap();
-        (anchor, resource)
+    /// A fully-scripted [`Clock`] for precisely testing
+    /// [`poll_backoff_or_deadline`]'s capped-backoff arithmetic without any
+    /// dependency on real wall-clock timing. `now()` returns each queued
+    /// instant in order (panicking if exhausted, so a test that scripts too
+    /// few calls fails loudly rather than silently reusing a stale value);
+    /// every `sleep()` call is recorded verbatim, never actually sleeping.
+    struct FakeClock {
+        base: Instant,
+        nows: std::cell::RefCell<VecDeque<Duration>>,
+        sleeps: std::cell::RefCell<Vec<Duration>>,
+    }
+
+    impl FakeClock {
+        fn new(nows: impl IntoIterator<Item = Duration>) -> Self {
+            Self {
+                base: Instant::now(),
+                nows: std::cell::RefCell::new(nows.into_iter().collect()),
+                sleeps: std::cell::RefCell::new(Vec::new()),
+            }
+        }
+
+        fn recorded_sleeps(&self) -> Vec<Duration> {
+            self.sleeps.borrow().clone()
+        }
+    }
+
+    impl Clock for FakeClock {
+        fn now(&self) -> Instant {
+            let offset = self
+                .nows
+                .borrow_mut()
+                .pop_front()
+                .expect("FakeClock::now() called more times than scripted");
+            self.base + offset
+        }
+
+        fn sleep(&self, duration: Duration) {
+            self.sleeps.borrow_mut().push(duration);
+        }
     }
 
     #[test]
@@ -1079,35 +1275,105 @@ mod tests {
         assert!(render_authority(&AuthorityRef::Pid1).is_err());
     }
 
+    /// Precisely exercises [`poll_backoff_or_deadline`]'s capped-backoff
+    /// arithmetic with a fully-scripted fake clock: a short (sub-cap)
+    /// remaining duration sleeps for exactly that remaining duration, never
+    /// the fixed [`MAX_LOCK_POLL_BACKOFF`] cap, and an elapsed deadline
+    /// fails closed without sleeping at all.
     #[test]
-    fn acquire_from_generated_round_trips_authority_order_and_policy() {
+    fn poll_backoff_or_deadline_caps_to_remaining_never_overshoots() {
+        // Deadline is 3ms. First poll: 0ms elapsed -> 3ms remaining, capped
+        // at the 2ms MAX_LOCK_POLL_BACKOFF -> sleeps exactly 2ms (the cap).
+        // Second poll: 2ms elapsed -> 1ms remaining, *below* the cap ->
+        // sleeps exactly 1ms (proving "cap to remaining" is distinct from
+        // "always sleep the cap").
+        let deadline = Duration::from_millis(3);
+        let clock = FakeClock::new([
+            Duration::from_millis(0),
+            Duration::from_millis(0),
+            Duration::from_millis(2),
+        ]);
+        let started = clock.now();
+        poll_backoff_or_deadline(&clock, started, deadline).unwrap();
+        poll_backoff_or_deadline(&clock, started, deadline).unwrap();
+        assert_eq!(
+            clock.recorded_sleeps(),
+            vec![Duration::from_millis(2), Duration::from_millis(1)]
+        );
+    }
+
+    #[test]
+    fn poll_backoff_or_deadline_handles_sub_millisecond_remaining() {
+        // Deadline is 1ms; 900us have already elapsed, leaving only 100us
+        // remaining — far below the 2ms cap. The sleep must be exactly the
+        // 100us remaining, never rounded up to the cap.
+        let deadline = Duration::from_millis(1);
+        let clock = FakeClock::new([Duration::from_micros(0), Duration::from_micros(900)]);
+        let started = clock.now();
+        poll_backoff_or_deadline(&clock, started, deadline).unwrap();
+        assert_eq!(clock.recorded_sleeps(), vec![Duration::from_micros(100)]);
+    }
+
+    #[test]
+    fn poll_backoff_or_deadline_fails_closed_without_sleeping_when_elapsed() {
+        let deadline = Duration::from_millis(1);
+        let clock = FakeClock::new([Duration::from_millis(0), Duration::from_millis(1)]);
+        let started = clock.now();
+        let err = poll_backoff_or_deadline(&clock, started, deadline).unwrap_err();
+        assert_eq!(err.code(), ErrorCode::Deadline);
+        assert!(clock.recorded_sleeps().is_empty());
+    }
+
+    #[test]
+    fn acquire_from_generated_round_trips_authority_order_and_protected_resource() {
         let scratch = Scratch::new("generated-ok");
         let owner = controller_actor("my-realm");
         let lock = valid_generated_lock(
             "lock:realm-controller:my-realm",
             "path:realm-controller-lock:my-realm",
-            owner,
+            owner.clone(),
         );
-        let row = valid_storage_row(
+        let lock_row = valid_storage_row(
             "path:realm-controller-lock:my-realm",
-            lock.owner_process.clone(),
-        );
-        let sync = sync_of(&lock);
-        let (_anchor, resource) = resolve(
-            &scratch.0,
-            "path-realm-controller-lock-my-realm",
             "state.lock",
+            owner.clone(),
         );
+        // A distinct resource this lock protects — never the lock file
+        // itself — sharing the lock's scope, matching the real
+        // `lock:workload-state:<id>` / `workload-state-data` pairing in
+        // `nixos-modules/realm-storage-rows.nix`.
+        let protected_row =
+            valid_storage_row("path:realm-workload-state:my-realm", "state.json", owner);
+        // The generated adapter only ever opens a lock file that already
+        // exists (broker-created); the protected resource is a plain file
+        // the guard authorizes, not something this API touches directly.
+        fs::write(scratch.0.join("state.lock"), b"").unwrap();
+        fs::set_permissions(
+            scratch.0.join("state.lock"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        fs::write(scratch.0.join("state.json"), b"{}").unwrap();
+        fs::set_permissions(
+            scratch.0.join("state.json"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+
+        let sync = sync_of(vec![lock.clone()]);
+        let storage = storage_of(vec![lock_row.clone(), protected_row.clone()]);
+        let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
         let metadata = host_metadata(&scratch.0, 0o600);
 
         let mut set = LockSet::new();
         let guard = set
             .acquire_from_generated(
                 &sync,
-                &lock,
-                &row,
-                &[],
-                &resource,
+                &storage,
+                &lock.id,
+                std::slice::from_ref(&protected_row.id),
+                &anchor,
+                Path::new(ANCHOR_PATH),
                 realm_controller("my-realm"),
                 OwnershipEpoch::new(1).unwrap(),
                 metadata,
@@ -1116,10 +1382,16 @@ mod tests {
             .unwrap();
 
         assert!(guard.is_held());
-        assert!(guard.created());
+        assert!(!guard.created());
         assert_eq!(guard.global_order(), 0);
-        assert_eq!(guard.resource_id(), &resource.resource_id);
-        assert!(guard.protected_resources().is_empty());
+        assert_eq!(
+            guard.lock_file_resource_id().as_str(),
+            "path-realm-controller-lock-my-realm"
+        );
+        assert_eq!(
+            guard.protected_resources(),
+            &[ResourceId::parse("path-realm-workload-state-my-realm").unwrap()]
+        );
         assert_eq!(
             guard.generated_adoption_policy(),
             Some(LockAdoptionPolicy::ReacquireAfterProof)
@@ -1131,137 +1403,478 @@ mod tests {
         let flags = rustix::fs::fcntl_getfd(&guard.fd).unwrap();
         assert!(flags.contains(rustix::io::FdFlags::CLOEXEC));
 
-        assert!(guard.verify_binding(&resource).is_ok());
+        // `validate_state_binding` authorizes the *protected* resource, not
+        // the lock file's own resource id.
+        assert!(
+            guard
+                .validate_state_binding(
+                    guard.lock_id(),
+                    &ResourceId::parse("path-realm-workload-state-my-realm").unwrap(),
+                    guard.owner(),
+                    guard.ownership_epoch(),
+                )
+                .is_ok()
+        );
+        assert_eq!(
+            guard
+                .validate_state_binding(
+                    guard.lock_id(),
+                    guard.lock_file_resource_id(),
+                    guard.owner(),
+                    guard.ownership_epoch(),
+                )
+                .unwrap_err()
+                .code(),
+            ErrorCode::LockMismatch
+        );
+
+        // A guard-bound resolution of the protected resource: opaque,
+        // non-forgeable, derived only from the held guard's authorized set
+        // plus a fresh trusted-root walk.
+        let bound = guard
+            .bind_protected_resource(
+                &storage,
+                &protected_row.id,
+                &anchor,
+                Path::new(ANCHOR_PATH),
+                host_metadata(&scratch.0, 0o600),
+            )
+            .unwrap();
+        assert_eq!(
+            bound.resource_id.as_str(),
+            "path-realm-workload-state-my-realm"
+        );
     }
 
     #[test]
-    fn acquire_from_generated_rejects_mismatched_resource() {
-        let scratch = Scratch::new("generated-mismatch");
+    fn acquire_from_generated_missing_lock_file_fails_closed_without_creating() {
+        let scratch = Scratch::new("generated-missing-lock-file");
         let owner = controller_actor("my-realm");
         let lock = valid_generated_lock(
             "lock:realm-controller:my-realm",
             "path:realm-controller-lock:my-realm",
-            owner,
+            owner.clone(),
         );
-        let row = valid_storage_row(
-            "path:realm-controller-lock:my-realm",
-            lock.owner_process.clone(),
-        );
-        let sync = sync_of(&lock);
-        // Bound against a DIFFERENT resource id than the lock/row declare.
-        let (_anchor, resource) = resolve(&scratch.0, "totally-unrelated-resource", "state.lock");
+        let lock_row =
+            valid_storage_row("path:realm-controller-lock:my-realm", "state.lock", owner);
+        // Deliberately do NOT create `state.lock` on disk: a generated
+        // lock file is exclusively broker-created, so the adapter must
+        // open-only and fail closed rather than conjuring one.
+        let sync = sync_of(vec![lock.clone()]);
+        let storage = storage_of(vec![lock_row]);
+        let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
         let metadata = host_metadata(&scratch.0, 0o600);
 
         let mut set = LockSet::new();
         let err = set
             .acquire_from_generated(
                 &sync,
-                &lock,
-                &row,
+                &storage,
+                &lock.id,
                 &[],
-                &resource,
+                &anchor,
+                Path::new(ANCHOR_PATH),
                 realm_controller("my-realm"),
                 OwnershipEpoch::new(1).unwrap(),
                 metadata,
                 &NeverCancelled,
             )
             .unwrap_err();
+        assert_eq!(err.code(), ErrorCode::Missing);
+        assert!(!scratch.0.join("state.lock").exists());
+    }
+
+    #[test]
+    fn acquire_from_generated_rejects_unknown_lock_id() {
+        let scratch = Scratch::new("generated-unknown-lock");
+        let owner = controller_actor("my-realm");
+        let lock = valid_generated_lock(
+            "lock:realm-controller:my-realm",
+            "path:realm-controller-lock:my-realm",
+            owner.clone(),
+        );
+        let lock_row =
+            valid_storage_row("path:realm-controller-lock:my-realm", "state.lock", owner);
+        fs::write(scratch.0.join("state.lock"), b"").unwrap();
+        fs::set_permissions(
+            scratch.0.join("state.lock"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        let sync = sync_of(vec![lock]);
+        let storage = storage_of(vec![lock_row]);
+        let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
+        let metadata = host_metadata(&scratch.0, 0o600);
+
+        let mut set = LockSet::new();
+        let err = set
+            .acquire_from_generated(
+                &sync,
+                &storage,
+                &ContractId::parse("lock:does-not-exist").unwrap(),
+                &[],
+                &anchor,
+                Path::new(ANCHOR_PATH),
+                realm_controller("my-realm"),
+                OwnershipEpoch::new(1).unwrap(),
+                metadata,
+                &NeverCancelled,
+            )
+            .unwrap_err();
+        assert_eq!(err.code(), ErrorCode::InvalidSchema);
+    }
+
+    #[test]
+    fn acquire_from_generated_rejects_unknown_protected_resource_id() {
+        let scratch = Scratch::new("generated-unknown-protected");
+        let owner = controller_actor("my-realm");
+        let lock = valid_generated_lock(
+            "lock:realm-controller:my-realm",
+            "path:realm-controller-lock:my-realm",
+            owner.clone(),
+        );
+        let lock_row =
+            valid_storage_row("path:realm-controller-lock:my-realm", "state.lock", owner);
+        fs::write(scratch.0.join("state.lock"), b"").unwrap();
+        fs::set_permissions(
+            scratch.0.join("state.lock"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        let sync = sync_of(vec![lock.clone()]);
+        let storage = storage_of(vec![lock_row]);
+        let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
+        let metadata = host_metadata(&scratch.0, 0o600);
+
+        let mut set = LockSet::new();
+        let err = set
+            .acquire_from_generated(
+                &sync,
+                &storage,
+                &lock.id,
+                &[ContractId::parse("path:does-not-exist").unwrap()],
+                &anchor,
+                Path::new(ANCHOR_PATH),
+                realm_controller("my-realm"),
+                OwnershipEpoch::new(1).unwrap(),
+                metadata,
+                &NeverCancelled,
+            )
+            .unwrap_err();
+        assert_eq!(err.code(), ErrorCode::InvalidSchema);
+    }
+
+    #[test]
+    fn acquire_from_generated_rejects_duplicate_requested_protected_resource_ids() {
+        let scratch = Scratch::new("generated-duplicate-protected");
+        let owner = controller_actor("my-realm");
+        let lock = valid_generated_lock(
+            "lock:realm-controller:my-realm",
+            "path:realm-controller-lock:my-realm",
+            owner.clone(),
+        );
+        let lock_row = valid_storage_row(
+            "path:realm-controller-lock:my-realm",
+            "state.lock",
+            owner.clone(),
+        );
+        let protected_row =
+            valid_storage_row("path:realm-workload-state:my-realm", "state.json", owner);
+        fs::write(scratch.0.join("state.lock"), b"").unwrap();
+        fs::set_permissions(
+            scratch.0.join("state.lock"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        fs::write(scratch.0.join("state.json"), b"{}").unwrap();
+        fs::set_permissions(
+            scratch.0.join("state.json"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        let sync = sync_of(vec![lock.clone()]);
+        let storage = storage_of(vec![lock_row, protected_row.clone()]);
+        let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
+        let metadata = host_metadata(&scratch.0, 0o600);
+
+        let mut set = LockSet::new();
+        // The same protected id requested twice in one call — a caller
+        // smuggling a duplicate — must be rejected even though the id
+        // itself is a valid, unique row in `storage`.
+        let err = set
+            .acquire_from_generated(
+                &sync,
+                &storage,
+                &lock.id,
+                &[protected_row.id.clone(), protected_row.id],
+                &anchor,
+                Path::new(ANCHOR_PATH),
+                realm_controller("my-realm"),
+                OwnershipEpoch::new(1).unwrap(),
+                metadata,
+                &NeverCancelled,
+            )
+            .unwrap_err();
+        assert_eq!(err.code(), ErrorCode::InvalidSchema);
+    }
+
+    #[test]
+    fn protected_resource_scope_mismatch_fails_closed() {
+        let scratch = Scratch::new("protected-scope-mismatch");
+        let owner = controller_actor("my-realm");
+        let lock = valid_generated_lock(
+            "lock:realm-controller:my-realm",
+            "path:realm-controller-lock:my-realm",
+            owner.clone(),
+        );
+        let lock_row = valid_storage_row(
+            "path:realm-controller-lock:my-realm",
+            "state.lock",
+            owner.clone(),
+        );
+        let mut foreign =
+            valid_storage_row("path:realm-workloads:my-realm", "workloads.json", owner);
+        foreign.scope = ContractId::parse("vm").unwrap();
+        fs::write(scratch.0.join("state.lock"), b"").unwrap();
+        fs::set_permissions(
+            scratch.0.join("state.lock"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        fs::write(scratch.0.join("workloads.json"), b"{}").unwrap();
+        fs::set_permissions(
+            scratch.0.join("workloads.json"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        let sync = sync_of(vec![lock.clone()]);
+        let storage = storage_of(vec![lock_row, foreign.clone()]);
+        let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
+        let metadata = host_metadata(&scratch.0, 0o600);
+
+        let mut set = LockSet::new();
+        let err = set
+            .acquire_from_generated(
+                &sync,
+                &storage,
+                &lock.id,
+                &[foreign.id],
+                &anchor,
+                Path::new(ANCHOR_PATH),
+                realm_controller("my-realm"),
+                OwnershipEpoch::new(1).unwrap(),
+                metadata,
+                &NeverCancelled,
+            )
+            .unwrap_err();
+        assert_eq!(err.code(), ErrorCode::InvalidSchema);
+    }
+
+    #[test]
+    fn bind_protected_resource_rejects_resource_not_authorized_by_this_guard() {
+        let scratch = Scratch::new("bind-unauthorized");
+        let owner = controller_actor("my-realm");
+        let lock = valid_generated_lock(
+            "lock:realm-controller:my-realm",
+            "path:realm-controller-lock:my-realm",
+            owner.clone(),
+        );
+        let lock_row = valid_storage_row(
+            "path:realm-controller-lock:my-realm",
+            "state.lock",
+            owner.clone(),
+        );
+        // Exists in the trusted inventory and on disk, but is never listed
+        // as a protected resource for this acquisition.
+        let unauthorized =
+            valid_storage_row("path:realm-workload-state:my-realm", "state.json", owner);
+        fs::write(scratch.0.join("state.lock"), b"").unwrap();
+        fs::set_permissions(
+            scratch.0.join("state.lock"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        fs::write(scratch.0.join("state.json"), b"{}").unwrap();
+        fs::set_permissions(
+            scratch.0.join("state.json"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        let sync = sync_of(vec![lock.clone()]);
+        let storage = storage_of(vec![lock_row, unauthorized.clone()]);
+        let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
+        let metadata = host_metadata(&scratch.0, 0o600);
+
+        let mut set = LockSet::new();
+        let guard = set
+            .acquire_from_generated(
+                &sync,
+                &storage,
+                &lock.id,
+                &[],
+                &anchor,
+                Path::new(ANCHOR_PATH),
+                realm_controller("my-realm"),
+                OwnershipEpoch::new(1).unwrap(),
+                metadata,
+                &NeverCancelled,
+            )
+            .unwrap();
+
+        let err = guard
+            .bind_protected_resource(
+                &storage,
+                &unauthorized.id,
+                &anchor,
+                Path::new(ANCHOR_PATH),
+                host_metadata(&scratch.0, 0o600),
+            )
+            .unwrap_err();
         assert_eq!(err.code(), ErrorCode::LockMismatch);
     }
 
     #[test]
-    fn verify_binding_rejects_wrong_resource_id() {
-        let scratch = Scratch::new("verify-wrong-id");
+    fn bind_protected_resource_rejects_after_release() {
+        let scratch = Scratch::new("bind-after-release");
         let owner = controller_actor("my-realm");
         let lock = valid_generated_lock(
             "lock:realm-controller:my-realm",
             "path:realm-controller-lock:my-realm",
-            owner,
+            owner.clone(),
         );
-        let row = valid_storage_row(
+        let lock_row = valid_storage_row(
             "path:realm-controller-lock:my-realm",
-            lock.owner_process.clone(),
-        );
-        let sync = sync_of(&lock);
-        let (_anchor, resource) = resolve(
-            &scratch.0,
-            "path-realm-controller-lock-my-realm",
             "state.lock",
+            owner.clone(),
         );
+        let protected_row =
+            valid_storage_row("path:realm-workload-state:my-realm", "state.json", owner);
+        fs::write(scratch.0.join("state.lock"), b"").unwrap();
+        fs::set_permissions(
+            scratch.0.join("state.lock"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        fs::write(scratch.0.join("state.json"), b"{}").unwrap();
+        fs::set_permissions(
+            scratch.0.join("state.json"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        let sync = sync_of(vec![lock.clone()]);
+        let storage = storage_of(vec![lock_row, protected_row.clone()]);
+        let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
         let metadata = host_metadata(&scratch.0, 0o600);
 
         let mut set = LockSet::new();
-        let guard = set
-            .acquire_from_generated(
-                &sync,
-                &lock,
-                &row,
-                &[],
-                &resource,
-                realm_controller("my-realm"),
-                OwnershipEpoch::new(1).unwrap(),
-                metadata,
-                &NeverCancelled,
-            )
+        set.acquire_from_generated(
+            &sync,
+            &storage,
+            &lock.id,
+            std::slice::from_ref(&protected_row.id),
+            &anchor,
+            Path::new(ANCHOR_PATH),
+            realm_controller("my-realm"),
+            OwnershipEpoch::new(1).unwrap(),
+            metadata,
+            &NeverCancelled,
+        )
+        .unwrap();
+        set.last_mut()
+            .expect("guard was inserted immediately above")
+            .release_in_place()
             .unwrap();
+        let guard = set.last().expect("released guard remains in the set");
 
-        let (_other_anchor, forged) = resolve(&scratch.0, "some-other-resource", "state.lock");
-        assert_eq!(
-            guard.verify_binding(&forged).unwrap_err().code(),
-            ErrorCode::LockMismatch
-        );
+        let err = guard
+            .bind_protected_resource(
+                &storage,
+                &protected_row.id,
+                &anchor,
+                Path::new(ANCHOR_PATH),
+                host_metadata(&scratch.0, 0o600),
+            )
+            .unwrap_err();
+        assert_eq!(err.code(), ErrorCode::LockReleased);
     }
 
     #[test]
-    fn verify_binding_rejects_replaced_directory() {
-        let scratch = Scratch::new("verify-replaced-dir");
+    fn acquire_from_generated_enforces_total_order_across_two_locks() {
+        let scratch = Scratch::new("generated-total-order");
         let owner = controller_actor("my-realm");
-        let lock = valid_generated_lock(
-            "lock:realm-controller:my-realm",
-            "path:realm-controller-lock:my-realm",
-            owner,
+        // "aaa" sorts before "bbb" under the acquire-order key, so `first`
+        // must always be acquired before `second`.
+        let mut first = valid_generated_lock(
+            "lock:aaa-realm-controller:my-realm",
+            "path:aaa-realm-controller-lock:my-realm",
+            owner.clone(),
         );
-        let row = valid_storage_row(
-            "path:realm-controller-lock:my-realm",
-            lock.owner_process.clone(),
+        first.acquire_order.normalized_path = ContractId::parse("aaa").unwrap();
+        first.acquire_order.lock_id = first.id.clone();
+        let mut second = valid_generated_lock(
+            "lock:bbb-realm-controller:my-realm",
+            "path:bbb-realm-controller-lock:my-realm",
+            owner.clone(),
         );
-        let sync = sync_of(&lock);
-        let (_anchor, resource) = resolve(
-            &scratch.0,
-            "path-realm-controller-lock-my-realm",
-            "state.lock",
+        second.acquire_order.normalized_path = ContractId::parse("bbb").unwrap();
+        second.acquire_order.lock_id = second.id.clone();
+        let first_row = valid_storage_row(
+            "path:aaa-realm-controller-lock:my-realm",
+            "aaa.lock",
+            owner.clone(),
         );
+        let second_row =
+            valid_storage_row("path:bbb-realm-controller-lock:my-realm", "bbb.lock", owner);
+        fs::write(scratch.0.join("aaa.lock"), b"").unwrap();
+        fs::set_permissions(
+            scratch.0.join("aaa.lock"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        fs::write(scratch.0.join("bbb.lock"), b"").unwrap();
+        fs::set_permissions(
+            scratch.0.join("bbb.lock"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        let sync = sync_of(vec![first.clone(), second.clone()]);
+        let storage = storage_of(vec![first_row, second_row]);
+        let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
         let metadata = host_metadata(&scratch.0, 0o600);
 
         let mut set = LockSet::new();
-        let guard = set
+        // Acquiring the lower-ranked `second` while holding nothing yet is
+        // fine on its own, but acquiring `first` (a *lower* rank) after
+        // `second` (a *higher* rank) is already held must fail: total
+        // order forbids acquiring backwards.
+        set.acquire_from_generated(
+            &sync,
+            &storage,
+            &second.id,
+            &[],
+            &anchor,
+            Path::new(ANCHOR_PATH),
+            realm_controller("my-realm"),
+            OwnershipEpoch::new(1).unwrap(),
+            metadata,
+            &NeverCancelled,
+        )
+        .unwrap();
+        let err = set
             .acquire_from_generated(
                 &sync,
-                &lock,
-                &row,
+                &storage,
+                &first.id,
                 &[],
-                &resource,
+                &anchor,
+                Path::new(ANCHOR_PATH),
                 realm_controller("my-realm"),
                 OwnershipEpoch::new(1).unwrap(),
                 metadata,
                 &NeverCancelled,
             )
-            .unwrap();
-
-        // Same resource id, but resolved against a *different* directory:
-        // simulates the containing directory being replaced out from under
-        // an earlier resolution.
-        let elsewhere = Scratch::new("verify-replaced-dir-elsewhere");
-        fs::write(elsewhere.0.join("state.lock"), b"").unwrap();
-        let (_other_anchor, replaced) = resolve(
-            &elsewhere.0,
-            "path-realm-controller-lock-my-realm",
-            "state.lock",
-        );
-        assert_eq!(
-            guard.verify_binding(&replaced).unwrap_err().code(),
-            ErrorCode::LockMismatch
-        );
+            .unwrap_err();
+        assert_eq!(err.code(), ErrorCode::LockOrder);
     }
 
     #[test]
@@ -1271,28 +1884,30 @@ mod tests {
         let lock = valid_generated_lock(
             "lock:realm-controller:my-realm",
             "path:realm-controller-lock:my-realm",
-            owner,
+            owner.clone(),
         );
-        let row = valid_storage_row(
-            "path:realm-controller-lock:my-realm",
-            lock.owner_process.clone(),
-        );
-        let sync = sync_of(&lock);
-        let (_anchor, resource) = resolve(
-            &scratch.0,
-            "path-realm-controller-lock-my-realm",
-            "state.lock",
-        );
+        let lock_row =
+            valid_storage_row("path:realm-controller-lock:my-realm", "state.lock", owner);
+        fs::write(scratch.0.join("state.lock"), b"").unwrap();
+        fs::set_permissions(
+            scratch.0.join("state.lock"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        let sync = sync_of(vec![lock.clone()]);
+        let storage = storage_of(vec![lock_row]);
+        let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
         let metadata = host_metadata(&scratch.0, 0o600);
 
         let mut set = LockSet::new();
         let guard = set
             .acquire_from_generated(
                 &sync,
-                &lock,
-                &row,
+                &storage,
+                &lock.id,
                 &[],
-                &resource,
+                &anchor,
+                Path::new(ANCHOR_PATH),
                 realm_controller("my-realm"),
                 OwnershipEpoch::new(1).unwrap(),
                 metadata,
@@ -1326,29 +1941,31 @@ mod tests {
         let mut lock = valid_generated_lock(
             "lock:realm-controller:my-realm",
             "path:realm-controller-lock:my-realm",
-            owner,
+            owner.clone(),
         );
         lock.cloexec_required = false;
-        let row = valid_storage_row(
-            "path:realm-controller-lock:my-realm",
-            lock.owner_process.clone(),
-        );
-        let sync = sync_of(&lock);
-        let (_anchor, resource) = resolve(
-            &scratch.0,
-            "path-realm-controller-lock-my-realm",
-            "state.lock",
-        );
+        let lock_row =
+            valid_storage_row("path:realm-controller-lock:my-realm", "state.lock", owner);
+        fs::write(scratch.0.join("state.lock"), b"").unwrap();
+        fs::set_permissions(
+            scratch.0.join("state.lock"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        let sync = sync_of(vec![lock.clone()]);
+        let storage = storage_of(vec![lock_row]);
+        let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
         let metadata = host_metadata(&scratch.0, 0o600);
 
         let mut set = LockSet::new();
         let err = set
             .acquire_from_generated(
                 &sync,
-                &lock,
-                &row,
+                &storage,
+                &lock.id,
                 &[],
-                &resource,
+                &anchor,
+                Path::new(ANCHOR_PATH),
                 realm_controller("my-realm"),
                 OwnershipEpoch::new(1).unwrap(),
                 metadata,
@@ -1365,32 +1982,34 @@ mod tests {
         let mut lock = valid_generated_lock(
             "lock:realm-controller:my-realm",
             "path:realm-controller-lock:my-realm",
-            owner,
+            owner.clone(),
         );
         lock.release_authority = ActorRef {
             kind: ActorKind::Broker,
             value: ContractId::parse("d2bbr-r-my-realm").unwrap(),
         };
-        let row = valid_storage_row(
-            "path:realm-controller-lock:my-realm",
-            lock.owner_process.clone(),
-        );
-        let sync = sync_of(&lock);
-        let (_anchor, resource) = resolve(
-            &scratch.0,
-            "path-realm-controller-lock-my-realm",
-            "state.lock",
-        );
+        let lock_row =
+            valid_storage_row("path:realm-controller-lock:my-realm", "state.lock", owner);
+        fs::write(scratch.0.join("state.lock"), b"").unwrap();
+        fs::set_permissions(
+            scratch.0.join("state.lock"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        let sync = sync_of(vec![lock.clone()]);
+        let storage = storage_of(vec![lock_row]);
+        let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
         let metadata = host_metadata(&scratch.0, 0o600);
 
         let mut set = LockSet::new();
         let err = set
             .acquire_from_generated(
                 &sync,
-                &lock,
-                &row,
+                &storage,
+                &lock.id,
                 &[],
-                &resource,
+                &anchor,
+                Path::new(ANCHOR_PATH),
                 realm_controller("my-realm"),
                 OwnershipEpoch::new(1).unwrap(),
                 metadata,
@@ -1407,32 +2026,34 @@ mod tests {
         let mut lock = valid_generated_lock(
             "lock:realm-controller:my-realm",
             "path:realm-controller-lock:my-realm",
-            owner,
+            owner.clone(),
         );
         lock.timeout_policy = LockTimeoutPolicy {
             kind: LockTimeoutKind::BoundedWait,
             timeout_ms: None,
         };
-        let row = valid_storage_row(
-            "path:realm-controller-lock:my-realm",
-            lock.owner_process.clone(),
-        );
-        let sync = sync_of(&lock);
-        let (_anchor, resource) = resolve(
-            &scratch.0,
-            "path-realm-controller-lock-my-realm",
-            "state.lock",
-        );
+        let lock_row =
+            valid_storage_row("path:realm-controller-lock:my-realm", "state.lock", owner);
+        fs::write(scratch.0.join("state.lock"), b"").unwrap();
+        fs::set_permissions(
+            scratch.0.join("state.lock"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        let sync = sync_of(vec![lock.clone()]);
+        let storage = storage_of(vec![lock_row]);
+        let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
         let metadata = host_metadata(&scratch.0, 0o600);
 
         let mut set = LockSet::new();
         let err = set
             .acquire_from_generated(
                 &sync,
-                &lock,
-                &row,
+                &storage,
+                &lock.id,
                 &[],
-                &resource,
+                &anchor,
+                Path::new(ANCHOR_PATH),
                 realm_controller("my-realm"),
                 OwnershipEpoch::new(1).unwrap(),
                 metadata,
@@ -1449,29 +2070,31 @@ mod tests {
         let mut lock = valid_generated_lock(
             "lock:realm-controller:my-realm",
             "path:realm-controller-lock:my-realm",
-            owner,
+            owner.clone(),
         );
         lock.timeout_policy.timeout_ms = Some(5);
-        let row = valid_storage_row(
-            "path:realm-controller-lock:my-realm",
-            lock.owner_process.clone(),
-        );
-        let sync = sync_of(&lock);
-        let (_anchor, resource) = resolve(
-            &scratch.0,
-            "path-realm-controller-lock-my-realm",
-            "state.lock",
-        );
+        let lock_row =
+            valid_storage_row("path:realm-controller-lock:my-realm", "state.lock", owner);
+        fs::write(scratch.0.join("state.lock"), b"").unwrap();
+        fs::set_permissions(
+            scratch.0.join("state.lock"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        let sync = sync_of(vec![lock.clone()]);
+        let storage = storage_of(vec![lock_row]);
+        let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
         let metadata = host_metadata(&scratch.0, 0o600);
 
         let mut set = LockSet::new();
         let err = set
             .acquire_from_generated(
                 &sync,
-                &lock,
-                &row,
+                &storage,
+                &lock.id,
                 &[],
-                &resource,
+                &anchor,
+                Path::new(ANCHOR_PATH),
                 realm_controller("my-realm"),
                 OwnershipEpoch::new(1).unwrap(),
                 metadata,
@@ -1482,88 +2105,59 @@ mod tests {
     }
 
     #[test]
-    fn protected_resource_scope_mismatch_fails_closed() {
-        let scratch = Scratch::new("protected-scope-mismatch");
+    fn bounded_wait_contention_times_out_against_a_real_conflicting_descriptor() {
+        let scratch = Scratch::new("bounded-wait-real-contention");
         let owner = controller_actor("my-realm");
-        let lock = valid_generated_lock(
+        let mut lock = valid_generated_lock(
             "lock:realm-controller:my-realm",
             "path:realm-controller-lock:my-realm",
-            owner,
+            owner.clone(),
         );
-        let row = valid_storage_row(
-            "path:realm-controller-lock:my-realm",
-            lock.owner_process.clone(),
-        );
-        let mut foreign =
-            valid_storage_row("path:realm-workloads:my-realm", lock.owner_process.clone());
-        foreign.scope = ContractId::parse("vm").unwrap();
-        let sync = sync_of(&lock);
-        let (_anchor, resource) = resolve(
-            &scratch.0,
-            "path-realm-controller-lock-my-realm",
-            "state.lock",
-        );
+        lock.timeout_policy = LockTimeoutPolicy {
+            kind: LockTimeoutKind::BoundedWait,
+            timeout_ms: Some(15),
+        };
+        let lock_row =
+            valid_storage_row("path:realm-controller-lock:my-realm", "state.lock", owner);
+        let lock_path = scratch.0.join("state.lock");
+        fs::write(&lock_path, b"").unwrap();
+        fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+        // Hold a conflicting OFD write lock via an independent open file
+        // description for the whole test, so every poll iteration inside
+        // `acquire_from_generated` observes real contention. The `OwnedFd`
+        // must stay alive for the entire test — dropping it (even as an
+        // unbound temporary) closes the descriptor and releases the OFD
+        // lock immediately, since OFD locks are tied to the open file
+        // description's last referencing descriptor, not to the process.
+        let contender = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .unwrap();
+        let _contender_fd = OwnedFd::from(contender);
+        set_ofd_lock(&_contender_fd, libc::F_WRLCK as i16).unwrap();
+
+        let sync = sync_of(vec![lock.clone()]);
+        let storage = storage_of(vec![lock_row]);
+        let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
         let metadata = host_metadata(&scratch.0, 0o600);
 
         let mut set = LockSet::new();
         let err = set
             .acquire_from_generated(
                 &sync,
-                &lock,
-                &row,
-                &[foreign],
-                &resource,
+                &storage,
+                &lock.id,
+                &[],
+                &anchor,
+                Path::new(ANCHOR_PATH),
                 realm_controller("my-realm"),
                 OwnershipEpoch::new(1).unwrap(),
                 metadata,
                 &NeverCancelled,
             )
             .unwrap_err();
-        assert_eq!(err.code(), ErrorCode::InvalidSchema);
-    }
-
-    #[test]
-    fn protected_resource_id_collision_fails_closed() {
-        let scratch = Scratch::new("protected-collision");
-        let owner = controller_actor("my-realm");
-        let lock = valid_generated_lock(
-            "lock:realm-controller:my-realm",
-            "path:realm-controller-lock:my-realm",
-            owner,
-        );
-        let row = valid_storage_row(
-            "path:realm-controller-lock:my-realm",
-            lock.owner_process.clone(),
-        );
-        // `:` and `/` both collapse to `-`, so these two structurally
-        // distinct generated ids encode to the same ResourceId.
-        let mut colliding = valid_storage_row(
-            "path:realm-controller-lock:my-realm",
-            lock.owner_process.clone(),
-        );
-        colliding.id = ContractId::parse("path/realm-controller-lock/my-realm").unwrap();
-        let sync = sync_of(&lock);
-        let (_anchor, resource) = resolve(
-            &scratch.0,
-            "path-realm-controller-lock-my-realm",
-            "state.lock",
-        );
-        let metadata = host_metadata(&scratch.0, 0o600);
-
-        let mut set = LockSet::new();
-        let err = set
-            .acquire_from_generated(
-                &sync,
-                &lock,
-                &row,
-                &[colliding],
-                &resource,
-                realm_controller("my-realm"),
-                OwnershipEpoch::new(1).unwrap(),
-                metadata,
-                &NeverCancelled,
-            )
-            .unwrap_err();
-        assert_eq!(err.code(), ErrorCode::InvalidSchema);
+        assert_eq!(err.code(), ErrorCode::Deadline);
     }
 }

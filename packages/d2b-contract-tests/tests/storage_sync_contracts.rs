@@ -767,6 +767,53 @@ fn rendered_sync_locks_pair_exactly_with_real_storage_rows_when_fixture_availabl
                 "{fixture_name} keys.lock owner/release authority must be symmetric"
             );
         }
+
+        // The generated adapter's `protected_resource_ids` are a distinct
+        // concept from a lock's own `resourceId` (the lock *file*): a lock
+        // protects some other piece of state, it is not itself that state.
+        // Prove the real fixture actually carries, for every generated
+        // workload-state lock, at least one storage row that (a) shares the
+        // lock's scope (the same invariant `bind_protected_resource`
+        // enforces) and (b) is genuinely distinct from the lock file's own
+        // paired `resourceId` row — the real `workload-state-data` row from
+        // `nixos-modules/realm-storage-rows.nix`, discovered by scope
+        // rather than a guessed id string, never a fabricated row.
+        let workload_state_locks: Vec<_> = sync
+            .locks
+            .iter()
+            .filter(|lock| lock.id.as_str().starts_with("lock:workload-state:"))
+            .collect();
+        assert!(
+            !workload_state_locks.is_empty(),
+            "{fixture_name} sync.json must include a workload-state lock"
+        );
+        for lock in &workload_state_locks {
+            let lock_file_id = lock.resource_id.as_ref().unwrap_or_else(|| {
+                panic!(
+                    "{fixture_name} lock {} has no resourceId",
+                    lock.id.as_str()
+                )
+            });
+            let candidate_protected_rows: Vec<_> = storage
+                .paths
+                .iter()
+                .filter(|row| {
+                    row.scope.as_str() == lock.scope.as_str()
+                        && row.id.as_str() != lock_file_id.as_str()
+                        && row.kind == StoragePathKind::RegularFile
+                })
+                .collect();
+            assert!(
+                !candidate_protected_rows.is_empty(),
+                "{fixture_name} expected at least one regular-file storage row sharing scope {} \
+                 with lock {} that is distinct from the lock file's own resourceId {} — the \
+                 runtime bridge's caller-supplied protected_resource_ids needs a real, \
+                 non-lock-file row to bind",
+                lock.scope.as_str(),
+                lock.id.as_str(),
+                lock_file_id.as_str()
+            );
+        }
     }
 }
 
