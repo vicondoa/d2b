@@ -15,11 +15,13 @@ let
         "docs/reference/secrets-authority.md"
         "nixos-modules/realm-storage-rows.nix"
         "packages/d2b-contract-tests/tests/storage_sync_contracts.rs"
+        "packages/d2b-priv-broker/src/ops/mod.rs"
         "packages/d2b-priv-broker/src/ops/secrets_authority.rs"
         "packages/d2b-state/src/lib.rs"
         "packages/d2b-state/src/secret.rs"
       ];
       reservedPaths = [
+        "packages/d2b-priv-broker/src/ops/mod.rs"
         "packages/d2b-state/src/secret.rs"
         "packages/d2b-priv-broker/src/ops/secrets_authority.rs"
       ];
