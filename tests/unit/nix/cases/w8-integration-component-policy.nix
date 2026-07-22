@@ -51,6 +51,7 @@ in
     };
     expected = {
       blocked = [
+        "state-lock-authority-contract"
         "secrets-authority-seam"
         "secrets-lifecycle"
         "systemd-user-shell-routing"
@@ -58,7 +59,7 @@ in
         "provider-parity-fallback-removal"
         "restart-observability-audit"
       ];
-      blockedCount = 6;
+      blockedCount = 7;
       ready = [ ];
       readyCount = 0;
       blockedExternalDependencies = [ "shared-root-w8-manifest-seam" ];
@@ -73,18 +74,19 @@ in
       blockedCount = 0;
       note = basePlan.launchSummary.note;
       pendingOnDependency = [
+        "secrets-authority-seam"
         "secrets-lifecycle"
         "provider-parity-fallback-removal"
       ];
-      pendingOnDependencyCount = 2;
+      pendingOnDependencyCount = 3;
       ready = [
-        "secrets-authority-seam"
+        "state-lock-authority-contract"
         "systemd-user-shell-routing"
         "gateway-replacement"
         "restart-observability-audit"
       ];
       readyCount = 4;
-      totalComponents = 7;
+      totalComponents = 8;
     };
   };
 
@@ -129,12 +131,13 @@ in
       unmetDependencies = [ ];
       valid = true;
       launchReady = [
-        "secrets-authority-seam"
+        "state-lock-authority-contract"
         "systemd-user-shell-routing"
         "gateway-replacement"
         "restart-observability-audit"
       ];
       launchPending = [
+        "secrets-authority-seam"
         "secrets-lifecycle"
         "provider-parity-fallback-removal"
       ];

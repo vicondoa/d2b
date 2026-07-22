@@ -7,9 +7,48 @@
 
 let
   components = {
+    "state-lock-authority-contract" = {
+      branch = "adr0045-w8-integration-state-lock-authority-contract";
+      dependsOn = [ ];
+      externalDependsOn = [ ];
+      ownedFiles = [
+        "docs/reference/schemas/v2/sync.json"
+        "docs/reference/schemas/v2/sync.md"
+        "nixos-modules/realm-storage-rows.nix"
+        "packages/Cargo.lock"
+        "packages/d2b-contract-tests/tests/storage_sync_contracts.rs"
+        "packages/d2b-core/src/sync.rs"
+        "packages/d2b-state/Cargo.toml"
+        "packages/d2b-state/src/lock.rs"
+        "packages/d2b-state/src/path.rs"
+      ];
+      reservedPaths = [
+        "packages/d2b-core/src/sync.rs"
+        "packages/d2b-state/src/lock.rs"
+        "packages/d2b-state/src/path.rs"
+      ];
+      deletes = [ ];
+      scope = [
+        "Make the generated sync row losslessly consumable by d2b-state without invented runtime policy or a second lock namespace."
+        "Bind the exact opened lock FD and guarded resource directory identities to one non-forgeable LockGuard capability."
+        "Provide anchored no-symlink/no-magic-link path resolution and durable directory creation for later secrets, gateway, and restart authority seams."
+      ];
+      prompt = ''
+        Reconcile the generated d2b-core sync contract with d2b-state's runtime
+        lock authority in exactly the owned files. Every runtime field must be
+        generated or losslessly derived; never invent order, dependencies,
+        cancellation, deadlines, authority, metadata, or resource identity.
+        Expose the exact held lock-fd identity and a non-forgeable
+        guard-bound resource capability. Resolve generated paths beneath a
+        trusted anchor with openat2 no-symlink/no-magic-link semantics. Add
+        durable mkdir plus parent fsync. Do not implement secrets, gateway, or
+        restart behavior.
+      '';
+    };
+
     "secrets-authority-seam" = {
       branch = "adr0045-w8-integration-secrets-authority-seam";
-      dependsOn = [ ];
+      dependsOn = [ "state-lock-authority-contract" ];
       externalDependsOn = [ ];
       ownedFiles = [
         "docs/reference/secrets-authority.md"
@@ -266,6 +305,7 @@ let
         componentOrder);
 
   componentOrder = [
+    "state-lock-authority-contract"
     "secrets-authority-seam"
     "secrets-lifecycle"
     "systemd-user-shell-routing"
