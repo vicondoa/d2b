@@ -50,6 +50,10 @@ deprecations ship one minor release before removal.
   quarantine with typed generated storage authority instead of hand-rolled
   path and durability machinery. Added `zeroize` to d2b-state's host
   filesystem surface and granted the seam permanent broker module wiring.
+- Added a shared state/lock authority contract ahead of the W8 authority
+  components so generated sync rows map losslessly to runtime locks, held
+  lock FDs and guarded directories share one attested capability, and path
+  resolution/directory creation are durable and symlink-safe.
 - Granted only the exact `adr0045-w8-integration` branch the protected delivery
   README and xtask manifest-test paths required to introduce W8's checked-in
   manifest authority; suffixed component branches remain denied.
