@@ -111,10 +111,14 @@ let
       path,
       realmId,
       normalizedPath,
-      # The storage-row id of the regular-file this OFD lock is taken on.
-      # Mandatory (no default/null): every generated lock MUST be paired
-      # with the exact storage row for its lock file so a runtime consumer
-      # can resolve/open/create it without inventing a resource identity.
+      # The storage-row id of the protected state resource this OFD lock
+      # guards (e.g. the state/store-view/keys directory it serializes
+      # access to) -- NOT the lock file's own storage row. Mandatory (no
+      # default/null): every generated lock MUST declare exactly which
+      # resource it protects so a runtime consumer never invents that
+      # binding. The lock file's own storage row is resolved separately,
+      # internally, by exact pathTemplate match against this lock's
+      # `path`, so it needs no id here.
       resourceId,
       owner ? brokerActor realmId,
     }:
@@ -563,7 +567,7 @@ let
           inherit scope realmId;
           path = "${stateRoot}/state/state.lock";
           normalizedPath = "r/${realmId}/w/${workloadId}/state/state.lock";
-          resourceId = "path:workload-state-lock:${workloadId}";
+          resourceId = (normalized "workload-state-data").resourceId;
           owner = controllerActor realmId;
         })
         (mkOfdLock {
@@ -571,14 +575,14 @@ let
           inherit scope realmId;
           path = "${stateRoot}/store-view/sync.lock";
           normalizedPath = "r/${realmId}/w/${workloadId}/store-view/sync.lock";
-          resourceId = "path:workload-store-lock:${workloadId}";
+          resourceId = (normalized "workload-store-view-live").resourceId;
         })
         (mkOfdLock {
           id = "lock:workload-keys:${workloadId}";
           inherit scope realmId;
           path = "${stateRoot}/keys/keys.lock";
           normalizedPath = "r/${realmId}/w/${workloadId}/keys/keys.lock";
-          resourceId = "path:workload-keys-lock:${workloadId}";
+          resourceId = (normalized "workload-keys").resourceId;
         })
       ];
     in
@@ -799,7 +803,7 @@ let
           inherit scope realmId;
           path = "${stateRoot}/controller/state.lock";
           normalizedPath = "r/${realmId}/controller/state.lock";
-          resourceId = "path:realm-controller-lock:${realmId}";
+          resourceId = (normalized "realm-controller-state").resourceId;
           owner = controllerActor realmId;
         })
         (mkOfdLock {
@@ -807,14 +811,14 @@ let
           inherit scope realmId;
           path = "${stateRoot}/broker/state.lock";
           normalizedPath = "r/${realmId}/broker/state.lock";
-          resourceId = "path:realm-broker-lock:${realmId}";
+          resourceId = (normalized "realm-broker-state").resourceId;
         })
         (mkOfdLock {
           id = "lock:realm-audit:${realmId}";
           inherit scope realmId;
           path = "${stateRoot}/audit/audit.lock";
           normalizedPath = "r/${realmId}/audit/audit.lock";
-          resourceId = "path:realm-audit-lock:${realmId}";
+          resourceId = (normalized "realm-audit").resourceId;
         })
       ] ++ lib.flatten (map (workload: workload.locks) workloads);
       providers = map

@@ -10,8 +10,10 @@ use d2b_contracts::v2_state::{
     OwnershipEpoch, ResourceId,
 };
 use d2b_core::{
-    contract_id::ContractId,
-    storage::{ActorKind, DegradeScope, StorageJson, StoragePathKind, StoragePathSpec},
+    contract_id::{ContractId, PathTemplate},
+    storage::{
+        ActorKind, DegradeScope, StorageInvariant, StorageJson, StoragePathKind, StoragePathSpec,
+    },
     sync::{
         FdPassingMechanism, InheritancePolicy, LockAdoptionPolicy, LockKind as GeneratedLockKind,
         LockSpec as GeneratedLockSpec, LockStalePolicy, LockTimeoutKind, SyncJson,
@@ -141,7 +143,7 @@ pub struct LockGuard {
     /// The lock file's own storage-row resource id (the file this guard's
     /// `fd` is actually opened/locked against). Distinct from
     /// [`Self::protected_resources`], which names the *protected state*
-    /// resources this lock authorizes mutation of — never the same field
+    /// resource this lock authorizes mutation of — never the same field
     /// doing double duty (see [`Self::validate_state_binding`] and
     /// [`Self::bind_protected_resource`]).
     lock_file_resource_id: ResourceId,
@@ -155,10 +157,20 @@ pub struct LockGuard {
     /// `acquire_with_clock`, this is always exactly `[resource.resource_id]`
     /// (the single resource that API has ever protected), preserving that
     /// path's existing single-resource semantics. For guards acquired via
-    /// [`LockSet::acquire_from_generated`], this is the caller-supplied,
-    /// inventory-validated `protected_resource_ids` set — distinct from
+    /// [`LockSet::acquire_from_generated`], this is always exactly
+    /// `[encode(lock.resource_id)]` — the single protected resource named by
+    /// the generated lock's own `resource_id` field (its schema-intended
+    /// semantic), never a caller-supplied set. Distinct from
     /// [`Self::lock_file_resource_id`].
     protected_resources: Vec<ResourceId>,
+    /// The protected resource's own generated `ContractId`, present only for
+    /// guards acquired via [`LockSet::acquire_from_generated`] (the only
+    /// path that can re-resolve a resource by trusted-root + generated row;
+    /// see [`Self::bind_protected_resource`]). `None` for legacy
+    /// `acquire`/`acquire_with_clock`-acquired guards, which are handed
+    /// their protected resource directly as an [`AnchoredResource`] at
+    /// acquisition time and have no generated-inventory id to re-resolve.
+    protected_resource_contract_id: Option<ContractId>,
     /// Generated stale/adoption/degrade policy, carried through losslessly
     /// from the generated `sync.json` row. `None` for guards acquired via
     /// the legacy path, which predates and does not carry this policy.
@@ -263,18 +275,19 @@ impl LockGuard {
         Ok((stat.st_dev, stat.st_ino))
     }
 
-    /// Opens one of the resources this held guard authorizes mutation for,
+    /// Opens the single resource this held guard authorizes mutation for,
     /// resolved fresh via a trusted-root + `openat2` walk against `storage`'s
     /// validated inventory and `anchor`/`anchor_path` — never an inferred
-    /// parent/path relationship, and never a caller-supplied resource
-    /// accepted on trust. `resource_id` must both:
+    /// parent/path relationship. There is no `resource_id` parameter: which
+    /// resource is protected is decided exclusively by the generated lock's
+    /// own `resource_id` field at acquisition time (see
+    /// [`LockSet::acquire_from_generated`]'s docs) — a caller cannot select
+    /// or substitute a different resource here, even one that exists and is
+    /// otherwise well-formed.
     ///
-    /// - resolve to exactly one row in `storage`'s validated inventory
-    ///   (missing or duplicate ids fail closed), and
-    /// - be a member of [`Self::protected_resources`] as bound at
-    ///   acquisition time — a resource this specific guard does not
-    ///   authorize is rejected even if it exists and is otherwise
-    ///   well-formed.
+    /// Only available for guards acquired via
+    /// [`LockSet::acquire_from_generated`] (legacy `acquire`-acquired guards
+    /// have no generated-inventory id to re-resolve and fail closed here).
     ///
     /// On success, returns the legacy [`AnchoredResource`] shape so
     /// existing atomic/audit consumers can use it without any change to
@@ -285,7 +298,6 @@ impl LockGuard {
     pub fn bind_protected_resource(
         &self,
         storage: &StorageJson,
-        resource_id: &ContractId,
         anchor: &AnchoredDir,
         anchor_path: &std::path::Path,
         metadata: MetadataExpectation,
@@ -297,11 +309,16 @@ impl LockGuard {
         storage
             .validate_unique_ids()
             .map_err(|_| Error::Code(ErrorCode::InvalidSchema))?;
+        let resource_id = self
+            .protected_resource_contract_id
+            .as_ref()
+            .ok_or(Error::Code(ErrorCode::InvalidSchema))?;
         let row = find_unique_storage_row(storage, resource_id)?;
-        if row.kind != StoragePathKind::RegularFile {
-            return Err(Error::Code(ErrorCode::InvalidSchema));
-        }
         let encoded = encode_resource_id(row.id.as_str())?;
+        // Always true by construction (this row's id is exactly what was
+        // encoded into `protected_resources` at acquisition time); kept as
+        // a fail-closed defense against a future refactor weakening that
+        // invariant rather than trusted silently.
         if !self.protected_resources.contains(&encoded) {
             return Err(Error::Code(ErrorCode::LockMismatch));
         }
@@ -495,6 +512,7 @@ impl LockSet {
             transfer: spec.fd_transfer,
             held: true,
             protected_resources: vec![resource.resource_id.clone()],
+            protected_resource_contract_id: None,
             generated_stale_policy: None,
             generated_adoption_policy: None,
             generated_degrade_scope: None,
@@ -529,36 +547,45 @@ impl LockSet {
     /// function cannot validate causes it to fail closed.
     ///
     /// Callers never hand in a detached `&GeneratedLockSpec`/
-    /// `&StoragePathSpec`/`&AnchoredResource` — a prior shape of this API
-    /// did, which let a caller substitute an arbitrary same-id row or
-    /// resource that was never actually looked up from the trusted
-    /// document. Instead:
+    /// `&StoragePathSpec`/`&AnchoredResource`, nor any caller-supplied
+    /// protected-resource selection — a prior shape of this API accepted
+    /// both, which let a caller substitute an arbitrary same-id row or pick
+    /// which resource a lock protects. Instead:
     ///
     /// - `sync`/`storage` are the full trusted generated documents. This
-    ///   function resolves every row it needs — the lock, its own
-    ///   lock-file storage row, and each protected resource's storage row —
-    ///   directly from these documents by opaque id.
-    ///   `sync.validate_lock_order()` and `storage.validate_unique_ids()`
-    ///   are re-run here so a caller cannot pass an already-invalid
-    ///   document and have a stale or duplicate row silently resolved.
+    ///   function resolves every row it needs directly from these documents
+    ///   by opaque id/template — the lock, the single protected resource it
+    ///   names, and its own lock-file storage row. `sync.validate_lock_order()`
+    ///   and `storage.validate_unique_ids()` are re-run here so a caller
+    ///   cannot pass an already-invalid document and have a stale or
+    ///   duplicate row silently resolved.
     /// - `lock_id` is the opaque generated id of the lock to acquire; it
     ///   must resolve to exactly one row in `sync.locks` (a missing or
     ///   duplicate id fails closed).
-    /// - `protected_resource_ids` are the opaque ids of the storage
-    ///   resources this acquisition protects. There is no generated
-    ///   parent/child field linking a lock to the resources it protects,
-    ///   so the caller supplies them; each one must resolve to exactly one
-    ///   row in `storage`, must not repeat, and that row's `scope` is
-    ///   checked against the lock's own `scope` so an unrelated resource
-    ///   cannot be smuggled in as "protected" by this lock. The lock file's
-    ///   own storage row (named by `lock.resource_id`) is a distinct
-    ///   concept from a protected resource; see [`LockGuard`]'s field docs.
+    /// - The lock's own `resource_id` field names the *protected state*
+    ///   resource this lock guards — its schema-intended semantic. A `None`
+    ///   `resource_id` fails closed (`ErrorCode::InvalidSchema`): every
+    ///   generated lock must declare what it protects. That id must resolve
+    ///   to exactly one row in `storage` (missing/duplicate ids fail
+    ///   closed) sharing the lock's own `scope`; there is no caller
+    ///   parameter of any kind that selects or overrides this — it is
+    ///   entirely schema-derived. [`LockGuard::protected_resources`] is
+    ///   always exactly this single encoded id.
+    /// - The lock file's own storage row (a distinct concept from the
+    ///   protected resource — see [`LockGuard`]'s field docs) is *not*
+    ///   named by any id field. It is resolved internally by requiring
+    ///   exactly one `RegularFile` row in `storage` whose `path_template`
+    ///   exactly equals the lock's own (mandatory) `path_template` — a
+    ///   missing or duplicate match fails closed. That row's `scope`,
+    ///   owner identity (`owner.value`, compared against
+    ///   `lock.owner_process.value`), and safety invariants
+    ///   (`no-symlink`/`no-magic-link`) are all validated to actually
+    ///   belong to this lock rather than being a coincidental path
+    ///   collision.
     /// - `anchor`/`anchor_path` are the trusted pre-opened root and its
     ///   absolute path. The lock file's own storage row is resolved
     ///   beneath `anchor` via [`GeneratedResource::resolve`] only *after*
-    ///   every other validation succeeds, directly from the row's own id —
-    ///   there is no longer a separate caller-supplied resource parameter
-    ///   that could be mismatched with the wrong lock/row.
+    ///   every other validation succeeds, directly from the row's own id.
     /// - The generated lock file is opened, never created (`OFlags::RDWR`
     ///   only — no `CREATE`/`EXCL`). A generated lock file is exclusively
     ///   broker-created; if it is missing, this fails closed with
@@ -576,7 +603,6 @@ impl LockSet {
         sync: &SyncJson,
         storage: &StorageJson,
         lock_id: &ContractId,
-        protected_resource_ids: &[ContractId],
         anchor: &AnchoredDir,
         anchor_path: &std::path::Path,
         owner: AuthorityRef,
@@ -588,7 +614,6 @@ impl LockSet {
             sync,
             storage,
             lock_id,
-            protected_resource_ids,
             anchor,
             anchor_path,
             owner,
@@ -605,7 +630,6 @@ impl LockSet {
         sync: &SyncJson,
         storage: &StorageJson,
         lock_id: &ContractId,
-        protected_resource_ids: &[ContractId],
         anchor: &AnchoredDir,
         anchor_path: &std::path::Path,
         owner: AuthorityRef,
@@ -621,23 +645,31 @@ impl LockSet {
             .map_err(|_| Error::Code(ErrorCode::InvalidSchema))?;
 
         let lock = find_unique_lock(sync, lock_id)?;
-        let lock_resource_id = lock
+
+        // `lock.resource_id` names the *protected state* resource (its
+        // schema-intended semantic) — not the lock file's own row. A null
+        // id fails closed: every generated lock must declare what it
+        // protects, and nothing here may substitute a caller's choice for
+        // it.
+        let protected_resource_id = lock
             .resource_id
             .as_ref()
             .ok_or(Error::Code(ErrorCode::InvalidSchema))?;
-        let lock_row = find_unique_storage_row(storage, lock_resource_id)?;
+        let protected_row = find_unique_storage_row(storage, protected_resource_id)?;
 
-        let mut seen_requested = std::collections::BTreeSet::new();
-        let mut protected_rows = Vec::with_capacity(protected_resource_ids.len());
-        for id in protected_resource_ids {
-            if !seen_requested.insert(id.clone()) {
-                return Err(Error::Code(ErrorCode::InvalidSchema));
-            }
-            protected_rows.push(find_unique_storage_row(storage, id)?);
-        }
+        // The lock file's own storage row is a distinct concept, resolved
+        // internally — never supplied by a caller — by exact
+        // `path_template` match against this lock's own (mandatory)
+        // template. This is the only way to recover that pairing without a
+        // second schema field.
+        let lock_path_template = lock
+            .path_template
+            .as_ref()
+            .ok_or(Error::Code(ErrorCode::InvalidSchema))?;
+        let lock_row = find_unique_lock_file_row(storage, lock_path_template)?;
 
         let binding =
-            validate_generated_lock(sync, lock, lock_row, &protected_rows, &owner, metadata)?;
+            validate_generated_lock(sync, lock, lock_row, protected_row, &owner, metadata)?;
 
         if self.held(&binding.lock_id)
             || self
@@ -712,6 +744,7 @@ impl LockSet {
             transfer: binding.fd_transfer,
             held: true,
             protected_resources: binding.protected_resources,
+            protected_resource_contract_id: Some(protected_resource_id.clone()),
             generated_stale_policy: Some(lock.stale_policy.clone()),
             generated_adoption_policy: Some(lock.adoption_policy),
             generated_degrade_scope: Some(lock.degrade_scope),
@@ -758,6 +791,31 @@ fn find_unique_storage_row<'a>(
     Ok(found)
 }
 
+/// Looks up exactly one storage row in `storage.paths` whose `path_template`
+/// exactly equals `path_template` — the mechanism by which a lock's own
+/// lock-file row is resolved, since `d2b_core::sync::LockSpec` has no id
+/// field naming that row directly (its `resource_id` names the *protected*
+/// resource instead; see [`validate_generated_lock`]'s docs). A missing or
+/// duplicate match fails closed rather than silently picking the
+/// first/last one. Kind/scope/owner/invariant conformance of the found row
+/// is checked separately by [`validate_generated_lock`].
+fn find_unique_lock_file_row<'a>(
+    storage: &'a StorageJson,
+    path_template: &PathTemplate,
+) -> Result<&'a StoragePathSpec> {
+    let mut matches = storage
+        .paths
+        .iter()
+        .filter(|row| &row.path_template == path_template);
+    let found = matches
+        .next()
+        .ok_or(Error::Code(ErrorCode::InvalidSchema))?;
+    if matches.next().is_some() {
+        return Err(Error::Code(ErrorCode::InvalidSchema));
+    }
+    Ok(found)
+}
+
 /// The fully-validated, ready-to-acquire projection of a generated
 /// `d2b_core::sync::LockSpec`, produced by [`validate_generated_lock`].
 /// Every field here is either copied verbatim from the generated contract
@@ -765,11 +823,14 @@ fn find_unique_storage_row<'a>(
 struct GeneratedLockBinding {
     lock_id: ResourceId,
     /// The lock-file's own storage-row resource id, encoded from
-    /// `lock_row.id`. Kept distinct from [`Self::protected_resources`] —
-    /// see [`LockGuard`]'s field docs for why the lock file and the
-    /// resources it protects are never conflated.
+    /// `lock_row.id` (the row found by exact `path_template` match — see
+    /// [`find_unique_lock_file_row`]). Kept distinct from
+    /// [`Self::protected_resources`] — see [`LockGuard`]'s field docs for
+    /// why the lock file and the resource it protects are never conflated.
     lock_file_resource_id: ResourceId,
     global_order: u32,
+    /// Always exactly one element: `encode(lock.resource_id)`. See
+    /// [`LockGuard::protected_resources`]'s field docs.
     protected_resources: Vec<ResourceId>,
     fd_transfer: FdTransferPolicy,
     /// `true` for `FailFast`/`NoWait` (a single non-blocking attempt with no
@@ -779,12 +840,20 @@ struct GeneratedLockBinding {
     deadline: Option<Duration>,
 }
 
+/// Validates a generated lock against its schema-resolved lock-file row
+/// (`lock_row`, found internally by `path_template` — see
+/// [`find_unique_lock_file_row`]) and its schema-declared protected
+/// resource row (`protected_row`, found by `lock.resource_id` — see
+/// [`find_unique_storage_row`]). Neither row is caller-suppliable; both are
+/// resolved exclusively from the trusted `sync`/`storage` documents by
+/// [`LockSet::acquire_from_generated_with_clock`] before this function is
+/// ever called.
 #[allow(clippy::too_many_arguments)]
 fn validate_generated_lock(
     sync: &SyncJson,
     lock: &GeneratedLockSpec,
     lock_row: &StoragePathSpec,
-    protected: &[&StoragePathSpec],
+    protected_row: &StoragePathSpec,
     owner: &AuthorityRef,
     metadata: MetadataExpectation,
 ) -> Result<GeneratedLockBinding> {
@@ -812,18 +881,38 @@ fn validate_generated_lock(
         return Err(Error::Code(ErrorCode::InvalidSchema));
     }
 
-    let declared_resource = lock
-        .resource_id
-        .as_ref()
-        .ok_or(Error::Code(ErrorCode::InvalidSchema))?;
-    if *declared_resource != lock_row.id || lock.scope != lock_row.scope {
+    // The protected resource (named by `lock.resource_id`) must share this
+    // lock's scope — an unrelated-scope resource can never be "protected"
+    // by this lock, even though the id is schema-declared rather than
+    // caller-supplied.
+    if protected_row.scope != lock.scope {
         return Err(Error::Code(ErrorCode::InvalidSchema));
     }
-    if lock_row.kind != StoragePathKind::RegularFile {
+
+    // The lock file's own row — resolved internally by exact
+    // `path_template` match — must actually be a regular file in this
+    // lock's own scope. `lock.path_template` was the key used to find it;
+    // re-check it matches here too, for defense in depth against a future
+    // refactor of the lookup itself.
+    if lock_row.kind != StoragePathKind::RegularFile || lock_row.scope != lock.scope {
         return Err(Error::Code(ErrorCode::InvalidSchema));
     }
-    if let Some(template) = &lock.path_template
-        && *template != lock_row.path_template
+    if lock.path_template.as_ref() != Some(&lock_row.path_template) {
+        return Err(Error::Code(ErrorCode::InvalidSchema));
+    }
+    // The lock file's declared owner must name the same authority as this
+    // lock's own owner/release authority — an owner mismatch between the
+    // lock and its physical file is rejected rather than silently
+    // accepted.
+    if lock.owner_process.value.as_str() != lock_row.owner.value.as_str() {
+        return Err(Error::Code(ErrorCode::InvalidSchema));
+    }
+    // The lock file's row must declare the safety invariants the runtime
+    // actually enforces via `openat2` (no-symlink/no-magic-link) — if the
+    // schema doesn't declare them, treat the contract as malformed rather
+    // than relying solely on the runtime flags to make up for it.
+    if !lock_row.invariants.contains(&StorageInvariant::NoSymlink)
+        || !lock_row.invariants.contains(&StorageInvariant::NoMagicLink)
     {
         return Err(Error::Code(ErrorCode::InvalidSchema));
     }
@@ -846,20 +935,13 @@ fn validate_generated_lock(
 
     let lock_id = encode_resource_id(lock.id.as_str())?;
     let lock_file_resource_id = encode_resource_id(lock_row.id.as_str())?;
+    let protected_resource = encode_resource_id(protected_row.id.as_str())?;
     let mut seen = std::collections::BTreeSet::new();
-    if !seen.insert(lock_id.clone()) || !seen.insert(lock_file_resource_id.clone()) {
+    if !seen.insert(lock_id.clone())
+        || !seen.insert(lock_file_resource_id.clone())
+        || !seen.insert(protected_resource.clone())
+    {
         return Err(Error::Code(ErrorCode::InvalidSchema));
-    }
-    let mut protected_resources = Vec::with_capacity(protected.len());
-    for row in protected {
-        if row.scope != lock.scope {
-            return Err(Error::Code(ErrorCode::InvalidSchema));
-        }
-        let encoded = encode_resource_id(row.id.as_str())?;
-        if !seen.insert(encoded.clone()) {
-            return Err(Error::Code(ErrorCode::InvalidSchema));
-        }
-        protected_resources.push(encoded);
     }
 
     let fd_transfer = match lock.fd_passing_policy.mechanism {
@@ -899,7 +981,7 @@ fn validate_generated_lock(
         lock_id,
         lock_file_resource_id,
         global_order,
-        protected_resources,
+        protected_resources: vec![protected_resource],
         fd_transfer,
         fail_fast,
         deadline,
@@ -1026,8 +1108,8 @@ mod tests {
         contract_id::{ContractId, PathTemplate},
         storage::{
             ActorRef, CleanupPolicy, DegradedReason, LeaseClass, PrincipalKind, PrincipalRef,
-            RepairPolicy, SensitivityClass, StorageAdoptionPolicy, StorageLifecycle,
-            StoragePersistence, StorageRestartPolicy,
+            RepairPolicy, SensitivityClass, StorageAdoptionPolicy, StorageInvariant,
+            StorageLifecycle, StoragePersistence, StorageRestartPolicy,
         },
         sync::{
             FdPassingPolicy, LockAcquireOrder, LockScopeClass, LockStaleKind, LockTimeoutPolicy,
@@ -1097,13 +1179,23 @@ mod tests {
 
     /// A fully-populated, schema-valid `GeneratedLockSpec` mirroring the
     /// exact shape `nixos-modules/realm-storage-rows.nix`'s `mkOfdLock`
-    /// renders for a controller-owned realm lock. Individual fields are
-    /// overridden per test to exercise a single failure mode at a time.
-    fn valid_generated_lock(id: &str, resource_id: &str, owner: ActorRef) -> GeneratedLockSpec {
+    /// renders for a controller-owned realm lock. `resource_id` is the
+    /// *protected state* resource this lock guards (its schema-intended
+    /// semantic) — never the lock file's own row; the lock file's own
+    /// storage row is resolved separately, internally, by exact
+    /// `path_template` match (see [`find_unique_lock_file_row`]), so it is
+    /// not named by any field here. Individual fields are overridden per
+    /// test to exercise a single failure mode at a time.
+    fn valid_generated_lock(
+        id: &str,
+        resource_id: &str,
+        path_template: &str,
+        owner: ActorRef,
+    ) -> GeneratedLockSpec {
         GeneratedLockSpec {
             id: ContractId::parse(id).unwrap(),
             scope: ContractId::parse("host").unwrap(),
-            path_template: None,
+            path_template: Some(PathTemplate::parse(path_template).unwrap()),
             resource_id: Some(ContractId::parse(resource_id).unwrap()),
             kind: GeneratedLockKind::Ofd,
             owner_process: owner.clone(),
@@ -1135,10 +1227,16 @@ mod tests {
     }
 
     /// A fully-populated, schema-valid regular-file `StoragePathSpec`
-    /// mirroring the paired lock-file/protected-resource rows added to
+    /// mirroring a lock-file/protected-resource row added to
     /// `nixos-modules/realm-storage-rows.nix` (mode `0600`, process-scoped,
-    /// not adoptable, no follow). `leaf` names the file beneath a per-test
-    /// scratch directory so distinct rows in one test never collide.
+    /// not adoptable, no follow, declaring the `no-symlink`/`no-magic-link`
+    /// invariants the runtime's `openat2` resolution actually enforces).
+    /// `leaf` names the file beneath a per-test scratch directory so
+    /// distinct rows in one test never collide. `owner`'s `value` becomes
+    /// this row's declared owner identity, mirroring the real Nix
+    /// generator's `controllerUser`/`brokerUser` (`PrincipalRef`) sharing
+    /// the same `value` string as `controllerActor`/`brokerActor`
+    /// (`ActorRef`).
     fn valid_storage_row(id: &str, leaf: &str, owner: ActorRef) -> StoragePathSpec {
         StoragePathSpec {
             id: ContractId::parse(id).unwrap(),
@@ -1150,11 +1248,11 @@ mod tests {
             persistence: StoragePersistence::ProcessScoped,
             owner: PrincipalRef {
                 kind: PrincipalKind::Role,
-                value: ContractId::parse("d2bd").unwrap(),
+                value: owner.value.clone(),
             },
             group: PrincipalRef {
                 kind: PrincipalKind::Role,
-                value: ContractId::parse("d2bd").unwrap(),
+                value: owner.value.clone(),
             },
             mode: "0600".to_owned(),
             access_acl: Vec::new(),
@@ -1170,7 +1268,7 @@ mod tests {
             sensitivity: SensitivityClass::Private,
             no_follow: true,
             recursive: false,
-            invariants: Vec::new(),
+            invariants: vec![StorageInvariant::NoSymlink, StorageInvariant::NoMagicLink],
         }
     }
 
@@ -1328,9 +1426,16 @@ mod tests {
     fn acquire_from_generated_round_trips_authority_order_and_protected_resource() {
         let scratch = Scratch::new("generated-ok");
         let owner = controller_actor("my-realm");
+        // `lock.resource_id` names the *protected* resource directly — its
+        // schema-intended semantic — matching the real
+        // `lock:realm-controller:<id>` / `realm-controller-state` pairing in
+        // `nixos-modules/realm-storage-rows.nix`. The lock file's own row is
+        // never named by an id field; it is resolved internally by exact
+        // `path_template` match.
         let lock = valid_generated_lock(
             "lock:realm-controller:my-realm",
-            "path:realm-controller-lock:my-realm",
+            "path:realm-workload-state:my-realm",
+            "/var/lib/d2b/r/realm/controller/state.lock",
             owner.clone(),
         );
         let lock_row = valid_storage_row(
@@ -1338,10 +1443,6 @@ mod tests {
             "state.lock",
             owner.clone(),
         );
-        // A distinct resource this lock protects — never the lock file
-        // itself — sharing the lock's scope, matching the real
-        // `lock:workload-state:<id>` / `workload-state-data` pairing in
-        // `nixos-modules/realm-storage-rows.nix`.
         let protected_row =
             valid_storage_row("path:realm-workload-state:my-realm", "state.json", owner);
         // The generated adapter only ever opens a lock file that already
@@ -1371,7 +1472,6 @@ mod tests {
                 &sync,
                 &storage,
                 &lock.id,
-                std::slice::from_ref(&protected_row.id),
                 &anchor,
                 Path::new(ANCHOR_PATH),
                 realm_controller("my-realm"),
@@ -1434,7 +1534,6 @@ mod tests {
         let bound = guard
             .bind_protected_resource(
                 &storage,
-                &protected_row.id,
                 &anchor,
                 Path::new(ANCHOR_PATH),
                 host_metadata(&scratch.0, 0o600),
@@ -1452,16 +1551,22 @@ mod tests {
         let owner = controller_actor("my-realm");
         let lock = valid_generated_lock(
             "lock:realm-controller:my-realm",
-            "path:realm-controller-lock:my-realm",
+            "path:realm-workload-state:my-realm",
+            "/var/lib/d2b/r/realm/controller/state.lock",
             owner.clone(),
         );
-        let lock_row =
-            valid_storage_row("path:realm-controller-lock:my-realm", "state.lock", owner);
+        let lock_row = valid_storage_row(
+            "path:realm-controller-lock:my-realm",
+            "state.lock",
+            owner.clone(),
+        );
+        let protected_row =
+            valid_storage_row("path:realm-workload-state:my-realm", "state.json", owner);
         // Deliberately do NOT create `state.lock` on disk: a generated
         // lock file is exclusively broker-created, so the adapter must
         // open-only and fail closed rather than conjuring one.
         let sync = sync_of(vec![lock.clone()]);
-        let storage = storage_of(vec![lock_row]);
+        let storage = storage_of(vec![lock_row, protected_row]);
         let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
         let metadata = host_metadata(&scratch.0, 0o600);
 
@@ -1471,7 +1576,6 @@ mod tests {
                 &sync,
                 &storage,
                 &lock.id,
-                &[],
                 &anchor,
                 Path::new(ANCHOR_PATH),
                 realm_controller("my-realm"),
@@ -1490,87 +1594,8 @@ mod tests {
         let owner = controller_actor("my-realm");
         let lock = valid_generated_lock(
             "lock:realm-controller:my-realm",
-            "path:realm-controller-lock:my-realm",
-            owner.clone(),
-        );
-        let lock_row =
-            valid_storage_row("path:realm-controller-lock:my-realm", "state.lock", owner);
-        fs::write(scratch.0.join("state.lock"), b"").unwrap();
-        fs::set_permissions(
-            scratch.0.join("state.lock"),
-            fs::Permissions::from_mode(0o600),
-        )
-        .unwrap();
-        let sync = sync_of(vec![lock]);
-        let storage = storage_of(vec![lock_row]);
-        let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
-        let metadata = host_metadata(&scratch.0, 0o600);
-
-        let mut set = LockSet::new();
-        let err = set
-            .acquire_from_generated(
-                &sync,
-                &storage,
-                &ContractId::parse("lock:does-not-exist").unwrap(),
-                &[],
-                &anchor,
-                Path::new(ANCHOR_PATH),
-                realm_controller("my-realm"),
-                OwnershipEpoch::new(1).unwrap(),
-                metadata,
-                &NeverCancelled,
-            )
-            .unwrap_err();
-        assert_eq!(err.code(), ErrorCode::InvalidSchema);
-    }
-
-    #[test]
-    fn acquire_from_generated_rejects_unknown_protected_resource_id() {
-        let scratch = Scratch::new("generated-unknown-protected");
-        let owner = controller_actor("my-realm");
-        let lock = valid_generated_lock(
-            "lock:realm-controller:my-realm",
-            "path:realm-controller-lock:my-realm",
-            owner.clone(),
-        );
-        let lock_row =
-            valid_storage_row("path:realm-controller-lock:my-realm", "state.lock", owner);
-        fs::write(scratch.0.join("state.lock"), b"").unwrap();
-        fs::set_permissions(
-            scratch.0.join("state.lock"),
-            fs::Permissions::from_mode(0o600),
-        )
-        .unwrap();
-        let sync = sync_of(vec![lock.clone()]);
-        let storage = storage_of(vec![lock_row]);
-        let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
-        let metadata = host_metadata(&scratch.0, 0o600);
-
-        let mut set = LockSet::new();
-        let err = set
-            .acquire_from_generated(
-                &sync,
-                &storage,
-                &lock.id,
-                &[ContractId::parse("path:does-not-exist").unwrap()],
-                &anchor,
-                Path::new(ANCHOR_PATH),
-                realm_controller("my-realm"),
-                OwnershipEpoch::new(1).unwrap(),
-                metadata,
-                &NeverCancelled,
-            )
-            .unwrap_err();
-        assert_eq!(err.code(), ErrorCode::InvalidSchema);
-    }
-
-    #[test]
-    fn acquire_from_generated_rejects_duplicate_requested_protected_resource_ids() {
-        let scratch = Scratch::new("generated-duplicate-protected");
-        let owner = controller_actor("my-realm");
-        let lock = valid_generated_lock(
-            "lock:realm-controller:my-realm",
-            "path:realm-controller-lock:my-realm",
+            "path:realm-workload-state:my-realm",
+            "/var/lib/d2b/r/realm/controller/state.lock",
             owner.clone(),
         );
         let lock_row = valid_storage_row(
@@ -1586,27 +1611,283 @@ mod tests {
             fs::Permissions::from_mode(0o600),
         )
         .unwrap();
-        fs::write(scratch.0.join("state.json"), b"{}").unwrap();
-        fs::set_permissions(
-            scratch.0.join("state.json"),
-            fs::Permissions::from_mode(0o600),
-        )
-        .unwrap();
-        let sync = sync_of(vec![lock.clone()]);
-        let storage = storage_of(vec![lock_row, protected_row.clone()]);
+        let sync = sync_of(vec![lock]);
+        let storage = storage_of(vec![lock_row, protected_row]);
         let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
         let metadata = host_metadata(&scratch.0, 0o600);
 
         let mut set = LockSet::new();
-        // The same protected id requested twice in one call — a caller
-        // smuggling a duplicate — must be rejected even though the id
-        // itself is a valid, unique row in `storage`.
+        let err = set
+            .acquire_from_generated(
+                &sync,
+                &storage,
+                &ContractId::parse("lock:does-not-exist").unwrap(),
+                &anchor,
+                Path::new(ANCHOR_PATH),
+                realm_controller("my-realm"),
+                OwnershipEpoch::new(1).unwrap(),
+                metadata,
+                &NeverCancelled,
+            )
+            .unwrap_err();
+        assert_eq!(err.code(), ErrorCode::InvalidSchema);
+    }
+
+    #[test]
+    fn acquire_from_generated_rejects_unknown_protected_resource_id() {
+        let scratch = Scratch::new("generated-unknown-protected");
+        let owner = controller_actor("my-realm");
+        // `lock.resource_id` (the schema-declared protected resource) names
+        // a row absent from the trusted inventory: this must fail closed
+        // before anything about the lock file itself is even considered.
+        let lock = valid_generated_lock(
+            "lock:realm-controller:my-realm",
+            "path:does-not-exist",
+            "/var/lib/d2b/r/realm/controller/state.lock",
+            owner.clone(),
+        );
+        let lock_row =
+            valid_storage_row("path:realm-controller-lock:my-realm", "state.lock", owner);
+        let sync = sync_of(vec![lock.clone()]);
+        let storage = storage_of(vec![lock_row]);
+        let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
+        let metadata = host_metadata(&scratch.0, 0o600);
+
+        let mut set = LockSet::new();
         let err = set
             .acquire_from_generated(
                 &sync,
                 &storage,
                 &lock.id,
-                &[protected_row.id.clone(), protected_row.id],
+                &anchor,
+                Path::new(ANCHOR_PATH),
+                realm_controller("my-realm"),
+                OwnershipEpoch::new(1).unwrap(),
+                metadata,
+                &NeverCancelled,
+            )
+            .unwrap_err();
+        assert_eq!(err.code(), ErrorCode::InvalidSchema);
+    }
+
+    #[test]
+    fn acquire_from_generated_rejects_null_resource_id() {
+        let scratch = Scratch::new("generated-null-resource-id");
+        let owner = controller_actor("my-realm");
+        let mut lock = valid_generated_lock(
+            "lock:realm-controller:my-realm",
+            "path:realm-workload-state:my-realm",
+            "/var/lib/d2b/r/realm/controller/state.lock",
+            owner.clone(),
+        );
+        // No caller parameter can substitute for a declared protected
+        // resource: a `None` `resource_id` must fail closed rather than
+        // silently protecting nothing (or the lock file itself).
+        lock.resource_id = None;
+        let lock_row =
+            valid_storage_row("path:realm-controller-lock:my-realm", "state.lock", owner);
+        let sync = sync_of(vec![lock.clone()]);
+        let storage = storage_of(vec![lock_row]);
+        let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
+        let metadata = host_metadata(&scratch.0, 0o600);
+
+        let mut set = LockSet::new();
+        let err = set
+            .acquire_from_generated(
+                &sync,
+                &storage,
+                &lock.id,
+                &anchor,
+                Path::new(ANCHOR_PATH),
+                realm_controller("my-realm"),
+                OwnershipEpoch::new(1).unwrap(),
+                metadata,
+                &NeverCancelled,
+            )
+            .unwrap_err();
+        assert_eq!(err.code(), ErrorCode::InvalidSchema);
+    }
+
+    #[test]
+    fn acquire_from_generated_rejects_duplicate_lock_file_path_template_matches() {
+        let scratch = Scratch::new("generated-duplicate-path-template");
+        let owner = controller_actor("my-realm");
+        let lock = valid_generated_lock(
+            "lock:realm-controller:my-realm",
+            "path:realm-workload-state:my-realm",
+            "/var/lib/d2b/r/realm/controller/state.lock",
+            owner.clone(),
+        );
+        // Two distinct rows sharing the exact `path_template` the lock
+        // declares: there is no id field naming the lock-file row directly,
+        // so an ambiguous path match must fail closed rather than silently
+        // picking either one.
+        let mut lock_row_a = valid_storage_row(
+            "path:realm-controller-lock:my-realm",
+            "state.lock",
+            owner.clone(),
+        );
+        let mut lock_row_b = valid_storage_row(
+            "path:realm-controller-lock-dup:my-realm",
+            "state.lock",
+            owner.clone(),
+        );
+        lock_row_a.path_template =
+            PathTemplate::parse("/var/lib/d2b/r/realm/controller/state.lock").unwrap();
+        lock_row_b.path_template = lock_row_a.path_template.clone();
+        let protected_row =
+            valid_storage_row("path:realm-workload-state:my-realm", "state.json", owner);
+        fs::write(scratch.0.join("state.lock"), b"").unwrap();
+        fs::set_permissions(
+            scratch.0.join("state.lock"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        let sync = sync_of(vec![lock.clone()]);
+        let storage = storage_of(vec![lock_row_a, lock_row_b, protected_row]);
+        let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
+        let metadata = host_metadata(&scratch.0, 0o600);
+
+        let mut set = LockSet::new();
+        let err = set
+            .acquire_from_generated(
+                &sync,
+                &storage,
+                &lock.id,
+                &anchor,
+                Path::new(ANCHOR_PATH),
+                realm_controller("my-realm"),
+                OwnershipEpoch::new(1).unwrap(),
+                metadata,
+                &NeverCancelled,
+            )
+            .unwrap_err();
+        assert_eq!(err.code(), ErrorCode::InvalidSchema);
+    }
+
+    #[test]
+    fn acquire_from_generated_rejects_missing_lock_file_path_template_match() {
+        let scratch = Scratch::new("generated-missing-path-template-match");
+        let owner = controller_actor("my-realm");
+        let lock = valid_generated_lock(
+            "lock:realm-controller:my-realm",
+            "path:realm-workload-state:my-realm",
+            "/var/lib/d2b/r/realm/controller/state.lock",
+            owner.clone(),
+        );
+        // No row in `storage` shares the lock's `path_template` at all.
+        let protected_row =
+            valid_storage_row("path:realm-workload-state:my-realm", "state.json", owner);
+        let sync = sync_of(vec![lock.clone()]);
+        let storage = storage_of(vec![protected_row]);
+        let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
+        let metadata = host_metadata(&scratch.0, 0o600);
+
+        let mut set = LockSet::new();
+        let err = set
+            .acquire_from_generated(
+                &sync,
+                &storage,
+                &lock.id,
+                &anchor,
+                Path::new(ANCHOR_PATH),
+                realm_controller("my-realm"),
+                OwnershipEpoch::new(1).unwrap(),
+                metadata,
+                &NeverCancelled,
+            )
+            .unwrap_err();
+        assert_eq!(err.code(), ErrorCode::InvalidSchema);
+    }
+
+    #[test]
+    fn acquire_from_generated_rejects_lock_file_owner_mismatch() {
+        let scratch = Scratch::new("generated-lock-file-owner-mismatch");
+        let owner = controller_actor("my-realm");
+        let foreign_owner = controller_actor("other-realm");
+        let lock = valid_generated_lock(
+            "lock:realm-controller:my-realm",
+            "path:realm-workload-state:my-realm",
+            "/var/lib/d2b/r/realm/controller/state.lock",
+            owner.clone(),
+        );
+        // The lock-file row's own declared owner does not match
+        // `lock.owner_process.value` — a mismatch between the lock and the
+        // physical file it is supposed to guard.
+        let lock_row = valid_storage_row(
+            "path:realm-controller-lock:my-realm",
+            "state.lock",
+            foreign_owner,
+        );
+        let protected_row =
+            valid_storage_row("path:realm-workload-state:my-realm", "state.json", owner);
+        fs::write(scratch.0.join("state.lock"), b"").unwrap();
+        fs::set_permissions(
+            scratch.0.join("state.lock"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        let sync = sync_of(vec![lock.clone()]);
+        let storage = storage_of(vec![lock_row, protected_row]);
+        let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
+        let metadata = host_metadata(&scratch.0, 0o600);
+
+        let mut set = LockSet::new();
+        let err = set
+            .acquire_from_generated(
+                &sync,
+                &storage,
+                &lock.id,
+                &anchor,
+                Path::new(ANCHOR_PATH),
+                realm_controller("my-realm"),
+                OwnershipEpoch::new(1).unwrap(),
+                metadata,
+                &NeverCancelled,
+            )
+            .unwrap_err();
+        assert_eq!(err.code(), ErrorCode::InvalidSchema);
+    }
+
+    #[test]
+    fn acquire_from_generated_rejects_lock_file_missing_invariants() {
+        let scratch = Scratch::new("generated-lock-file-missing-invariants");
+        let owner = controller_actor("my-realm");
+        let lock = valid_generated_lock(
+            "lock:realm-controller:my-realm",
+            "path:realm-workload-state:my-realm",
+            "/var/lib/d2b/r/realm/controller/state.lock",
+            owner.clone(),
+        );
+        let mut lock_row = valid_storage_row(
+            "path:realm-controller-lock:my-realm",
+            "state.lock",
+            owner.clone(),
+        );
+        // The generator always declares `no-symlink`/`no-magic-link` on
+        // lock-file rows; a row missing either must be treated as a
+        // malformed contract rather than relying solely on the runtime's
+        // own `openat2` flags to compensate.
+        lock_row.invariants = Vec::new();
+        let protected_row =
+            valid_storage_row("path:realm-workload-state:my-realm", "state.json", owner);
+        fs::write(scratch.0.join("state.lock"), b"").unwrap();
+        fs::set_permissions(
+            scratch.0.join("state.lock"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        let sync = sync_of(vec![lock.clone()]);
+        let storage = storage_of(vec![lock_row, protected_row]);
+        let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
+        let metadata = host_metadata(&scratch.0, 0o600);
+
+        let mut set = LockSet::new();
+        let err = set
+            .acquire_from_generated(
+                &sync,
+                &storage,
+                &lock.id,
                 &anchor,
                 Path::new(ANCHOR_PATH),
                 realm_controller("my-realm"),
@@ -1622,9 +1903,13 @@ mod tests {
     fn protected_resource_scope_mismatch_fails_closed() {
         let scratch = Scratch::new("protected-scope-mismatch");
         let owner = controller_actor("my-realm");
+        // `lock.resource_id` names a row in a different scope than the
+        // lock itself — an unrelated-scope resource can never be
+        // "protected" by this lock.
         let lock = valid_generated_lock(
             "lock:realm-controller:my-realm",
-            "path:realm-controller-lock:my-realm",
+            "path:realm-workloads:my-realm",
+            "/var/lib/d2b/r/realm/controller/state.lock",
             owner.clone(),
         );
         let lock_row = valid_storage_row(
@@ -1641,14 +1926,8 @@ mod tests {
             fs::Permissions::from_mode(0o600),
         )
         .unwrap();
-        fs::write(scratch.0.join("workloads.json"), b"{}").unwrap();
-        fs::set_permissions(
-            scratch.0.join("workloads.json"),
-            fs::Permissions::from_mode(0o600),
-        )
-        .unwrap();
         let sync = sync_of(vec![lock.clone()]);
-        let storage = storage_of(vec![lock_row, foreign.clone()]);
+        let storage = storage_of(vec![lock_row, foreign]);
         let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
         let metadata = host_metadata(&scratch.0, 0o600);
 
@@ -1658,7 +1937,6 @@ mod tests {
                 &sync,
                 &storage,
                 &lock.id,
-                &[foreign.id],
                 &anchor,
                 Path::new(ANCHOR_PATH),
                 realm_controller("my-realm"),
@@ -1671,75 +1949,13 @@ mod tests {
     }
 
     #[test]
-    fn bind_protected_resource_rejects_resource_not_authorized_by_this_guard() {
-        let scratch = Scratch::new("bind-unauthorized");
-        let owner = controller_actor("my-realm");
-        let lock = valid_generated_lock(
-            "lock:realm-controller:my-realm",
-            "path:realm-controller-lock:my-realm",
-            owner.clone(),
-        );
-        let lock_row = valid_storage_row(
-            "path:realm-controller-lock:my-realm",
-            "state.lock",
-            owner.clone(),
-        );
-        // Exists in the trusted inventory and on disk, but is never listed
-        // as a protected resource for this acquisition.
-        let unauthorized =
-            valid_storage_row("path:realm-workload-state:my-realm", "state.json", owner);
-        fs::write(scratch.0.join("state.lock"), b"").unwrap();
-        fs::set_permissions(
-            scratch.0.join("state.lock"),
-            fs::Permissions::from_mode(0o600),
-        )
-        .unwrap();
-        fs::write(scratch.0.join("state.json"), b"{}").unwrap();
-        fs::set_permissions(
-            scratch.0.join("state.json"),
-            fs::Permissions::from_mode(0o600),
-        )
-        .unwrap();
-        let sync = sync_of(vec![lock.clone()]);
-        let storage = storage_of(vec![lock_row, unauthorized.clone()]);
-        let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
-        let metadata = host_metadata(&scratch.0, 0o600);
-
-        let mut set = LockSet::new();
-        let guard = set
-            .acquire_from_generated(
-                &sync,
-                &storage,
-                &lock.id,
-                &[],
-                &anchor,
-                Path::new(ANCHOR_PATH),
-                realm_controller("my-realm"),
-                OwnershipEpoch::new(1).unwrap(),
-                metadata,
-                &NeverCancelled,
-            )
-            .unwrap();
-
-        let err = guard
-            .bind_protected_resource(
-                &storage,
-                &unauthorized.id,
-                &anchor,
-                Path::new(ANCHOR_PATH),
-                host_metadata(&scratch.0, 0o600),
-            )
-            .unwrap_err();
-        assert_eq!(err.code(), ErrorCode::LockMismatch);
-    }
-
-    #[test]
     fn bind_protected_resource_rejects_after_release() {
         let scratch = Scratch::new("bind-after-release");
         let owner = controller_actor("my-realm");
         let lock = valid_generated_lock(
             "lock:realm-controller:my-realm",
-            "path:realm-controller-lock:my-realm",
+            "path:realm-workload-state:my-realm",
+            "/var/lib/d2b/r/realm/controller/state.lock",
             owner.clone(),
         );
         let lock_row = valid_storage_row(
@@ -1762,7 +1978,7 @@ mod tests {
         )
         .unwrap();
         let sync = sync_of(vec![lock.clone()]);
-        let storage = storage_of(vec![lock_row, protected_row.clone()]);
+        let storage = storage_of(vec![lock_row, protected_row]);
         let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
         let metadata = host_metadata(&scratch.0, 0o600);
 
@@ -1771,7 +1987,6 @@ mod tests {
             &sync,
             &storage,
             &lock.id,
-            std::slice::from_ref(&protected_row.id),
             &anchor,
             Path::new(ANCHOR_PATH),
             realm_controller("my-realm"),
@@ -1789,7 +2004,6 @@ mod tests {
         let err = guard
             .bind_protected_resource(
                 &storage,
-                &protected_row.id,
                 &anchor,
                 Path::new(ANCHOR_PATH),
                 host_metadata(&scratch.0, 0o600),
@@ -1806,14 +2020,16 @@ mod tests {
         // must always be acquired before `second`.
         let mut first = valid_generated_lock(
             "lock:aaa-realm-controller:my-realm",
-            "path:aaa-realm-controller-lock:my-realm",
+            "path:aaa-realm-workload-state:my-realm",
+            "/var/lib/d2b/r/realm/controller/aaa.lock",
             owner.clone(),
         );
         first.acquire_order.normalized_path = ContractId::parse("aaa").unwrap();
         first.acquire_order.lock_id = first.id.clone();
         let mut second = valid_generated_lock(
             "lock:bbb-realm-controller:my-realm",
-            "path:bbb-realm-controller-lock:my-realm",
+            "path:bbb-realm-workload-state:my-realm",
+            "/var/lib/d2b/r/realm/controller/bbb.lock",
             owner.clone(),
         );
         second.acquire_order.normalized_path = ContractId::parse("bbb").unwrap();
@@ -1823,8 +2039,18 @@ mod tests {
             "aaa.lock",
             owner.clone(),
         );
-        let second_row =
-            valid_storage_row("path:bbb-realm-controller-lock:my-realm", "bbb.lock", owner);
+        let second_row = valid_storage_row(
+            "path:bbb-realm-controller-lock:my-realm",
+            "bbb.lock",
+            owner.clone(),
+        );
+        let first_protected = valid_storage_row(
+            "path:aaa-realm-workload-state:my-realm",
+            "aaa.json",
+            owner.clone(),
+        );
+        let second_protected =
+            valid_storage_row("path:bbb-realm-workload-state:my-realm", "bbb.json", owner);
         fs::write(scratch.0.join("aaa.lock"), b"").unwrap();
         fs::set_permissions(
             scratch.0.join("aaa.lock"),
@@ -1838,7 +2064,12 @@ mod tests {
         )
         .unwrap();
         let sync = sync_of(vec![first.clone(), second.clone()]);
-        let storage = storage_of(vec![first_row, second_row]);
+        let storage = storage_of(vec![
+            first_row,
+            second_row,
+            first_protected,
+            second_protected,
+        ]);
         let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
         let metadata = host_metadata(&scratch.0, 0o600);
 
@@ -1851,7 +2082,6 @@ mod tests {
             &sync,
             &storage,
             &second.id,
-            &[],
             &anchor,
             Path::new(ANCHOR_PATH),
             realm_controller("my-realm"),
@@ -1865,7 +2095,6 @@ mod tests {
                 &sync,
                 &storage,
                 &first.id,
-                &[],
                 &anchor,
                 Path::new(ANCHOR_PATH),
                 realm_controller("my-realm"),
@@ -1883,11 +2112,17 @@ mod tests {
         let owner = controller_actor("my-realm");
         let lock = valid_generated_lock(
             "lock:realm-controller:my-realm",
-            "path:realm-controller-lock:my-realm",
+            "path:realm-workload-state:my-realm",
+            "/var/lib/d2b/r/realm/controller/state.lock",
             owner.clone(),
         );
-        let lock_row =
-            valid_storage_row("path:realm-controller-lock:my-realm", "state.lock", owner);
+        let lock_row = valid_storage_row(
+            "path:realm-controller-lock:my-realm",
+            "state.lock",
+            owner.clone(),
+        );
+        let protected_row =
+            valid_storage_row("path:realm-workload-state:my-realm", "state.json", owner);
         fs::write(scratch.0.join("state.lock"), b"").unwrap();
         fs::set_permissions(
             scratch.0.join("state.lock"),
@@ -1895,7 +2130,7 @@ mod tests {
         )
         .unwrap();
         let sync = sync_of(vec![lock.clone()]);
-        let storage = storage_of(vec![lock_row]);
+        let storage = storage_of(vec![lock_row, protected_row]);
         let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
         let metadata = host_metadata(&scratch.0, 0o600);
 
@@ -1905,7 +2140,6 @@ mod tests {
                 &sync,
                 &storage,
                 &lock.id,
-                &[],
                 &anchor,
                 Path::new(ANCHOR_PATH),
                 realm_controller("my-realm"),
@@ -1940,12 +2174,18 @@ mod tests {
         let owner = controller_actor("my-realm");
         let mut lock = valid_generated_lock(
             "lock:realm-controller:my-realm",
-            "path:realm-controller-lock:my-realm",
+            "path:realm-workload-state:my-realm",
+            "/var/lib/d2b/r/realm/controller/state.lock",
             owner.clone(),
         );
         lock.cloexec_required = false;
-        let lock_row =
-            valid_storage_row("path:realm-controller-lock:my-realm", "state.lock", owner);
+        let lock_row = valid_storage_row(
+            "path:realm-controller-lock:my-realm",
+            "state.lock",
+            owner.clone(),
+        );
+        let protected_row =
+            valid_storage_row("path:realm-workload-state:my-realm", "state.json", owner);
         fs::write(scratch.0.join("state.lock"), b"").unwrap();
         fs::set_permissions(
             scratch.0.join("state.lock"),
@@ -1953,7 +2193,7 @@ mod tests {
         )
         .unwrap();
         let sync = sync_of(vec![lock.clone()]);
-        let storage = storage_of(vec![lock_row]);
+        let storage = storage_of(vec![lock_row, protected_row]);
         let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
         let metadata = host_metadata(&scratch.0, 0o600);
 
@@ -1963,7 +2203,6 @@ mod tests {
                 &sync,
                 &storage,
                 &lock.id,
-                &[],
                 &anchor,
                 Path::new(ANCHOR_PATH),
                 realm_controller("my-realm"),
@@ -1981,15 +2220,21 @@ mod tests {
         let owner = controller_actor("my-realm");
         let mut lock = valid_generated_lock(
             "lock:realm-controller:my-realm",
-            "path:realm-controller-lock:my-realm",
+            "path:realm-workload-state:my-realm",
+            "/var/lib/d2b/r/realm/controller/state.lock",
             owner.clone(),
         );
         lock.release_authority = ActorRef {
             kind: ActorKind::Broker,
             value: ContractId::parse("d2bbr-r-my-realm").unwrap(),
         };
-        let lock_row =
-            valid_storage_row("path:realm-controller-lock:my-realm", "state.lock", owner);
+        let lock_row = valid_storage_row(
+            "path:realm-controller-lock:my-realm",
+            "state.lock",
+            owner.clone(),
+        );
+        let protected_row =
+            valid_storage_row("path:realm-workload-state:my-realm", "state.json", owner);
         fs::write(scratch.0.join("state.lock"), b"").unwrap();
         fs::set_permissions(
             scratch.0.join("state.lock"),
@@ -1997,7 +2242,7 @@ mod tests {
         )
         .unwrap();
         let sync = sync_of(vec![lock.clone()]);
-        let storage = storage_of(vec![lock_row]);
+        let storage = storage_of(vec![lock_row, protected_row]);
         let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
         let metadata = host_metadata(&scratch.0, 0o600);
 
@@ -2007,7 +2252,6 @@ mod tests {
                 &sync,
                 &storage,
                 &lock.id,
-                &[],
                 &anchor,
                 Path::new(ANCHOR_PATH),
                 realm_controller("my-realm"),
@@ -2025,15 +2269,21 @@ mod tests {
         let owner = controller_actor("my-realm");
         let mut lock = valid_generated_lock(
             "lock:realm-controller:my-realm",
-            "path:realm-controller-lock:my-realm",
+            "path:realm-workload-state:my-realm",
+            "/var/lib/d2b/r/realm/controller/state.lock",
             owner.clone(),
         );
         lock.timeout_policy = LockTimeoutPolicy {
             kind: LockTimeoutKind::BoundedWait,
             timeout_ms: None,
         };
-        let lock_row =
-            valid_storage_row("path:realm-controller-lock:my-realm", "state.lock", owner);
+        let lock_row = valid_storage_row(
+            "path:realm-controller-lock:my-realm",
+            "state.lock",
+            owner.clone(),
+        );
+        let protected_row =
+            valid_storage_row("path:realm-workload-state:my-realm", "state.json", owner);
         fs::write(scratch.0.join("state.lock"), b"").unwrap();
         fs::set_permissions(
             scratch.0.join("state.lock"),
@@ -2041,7 +2291,7 @@ mod tests {
         )
         .unwrap();
         let sync = sync_of(vec![lock.clone()]);
-        let storage = storage_of(vec![lock_row]);
+        let storage = storage_of(vec![lock_row, protected_row]);
         let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
         let metadata = host_metadata(&scratch.0, 0o600);
 
@@ -2051,7 +2301,6 @@ mod tests {
                 &sync,
                 &storage,
                 &lock.id,
-                &[],
                 &anchor,
                 Path::new(ANCHOR_PATH),
                 realm_controller("my-realm"),
@@ -2069,12 +2318,18 @@ mod tests {
         let owner = controller_actor("my-realm");
         let mut lock = valid_generated_lock(
             "lock:realm-controller:my-realm",
-            "path:realm-controller-lock:my-realm",
+            "path:realm-workload-state:my-realm",
+            "/var/lib/d2b/r/realm/controller/state.lock",
             owner.clone(),
         );
         lock.timeout_policy.timeout_ms = Some(5);
-        let lock_row =
-            valid_storage_row("path:realm-controller-lock:my-realm", "state.lock", owner);
+        let lock_row = valid_storage_row(
+            "path:realm-controller-lock:my-realm",
+            "state.lock",
+            owner.clone(),
+        );
+        let protected_row =
+            valid_storage_row("path:realm-workload-state:my-realm", "state.json", owner);
         fs::write(scratch.0.join("state.lock"), b"").unwrap();
         fs::set_permissions(
             scratch.0.join("state.lock"),
@@ -2082,7 +2337,7 @@ mod tests {
         )
         .unwrap();
         let sync = sync_of(vec![lock.clone()]);
-        let storage = storage_of(vec![lock_row]);
+        let storage = storage_of(vec![lock_row, protected_row]);
         let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
         let metadata = host_metadata(&scratch.0, 0o600);
 
@@ -2092,7 +2347,6 @@ mod tests {
                 &sync,
                 &storage,
                 &lock.id,
-                &[],
                 &anchor,
                 Path::new(ANCHOR_PATH),
                 realm_controller("my-realm"),
@@ -2110,15 +2364,21 @@ mod tests {
         let owner = controller_actor("my-realm");
         let mut lock = valid_generated_lock(
             "lock:realm-controller:my-realm",
-            "path:realm-controller-lock:my-realm",
+            "path:realm-workload-state:my-realm",
+            "/var/lib/d2b/r/realm/controller/state.lock",
             owner.clone(),
         );
         lock.timeout_policy = LockTimeoutPolicy {
             kind: LockTimeoutKind::BoundedWait,
             timeout_ms: Some(15),
         };
-        let lock_row =
-            valid_storage_row("path:realm-controller-lock:my-realm", "state.lock", owner);
+        let lock_row = valid_storage_row(
+            "path:realm-controller-lock:my-realm",
+            "state.lock",
+            owner.clone(),
+        );
+        let protected_row =
+            valid_storage_row("path:realm-workload-state:my-realm", "state.json", owner);
         let lock_path = scratch.0.join("state.lock");
         fs::write(&lock_path, b"").unwrap();
         fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o600)).unwrap();
@@ -2139,7 +2399,7 @@ mod tests {
         set_ofd_lock(&_contender_fd, libc::F_WRLCK as i16).unwrap();
 
         let sync = sync_of(vec![lock.clone()]);
-        let storage = storage_of(vec![lock_row]);
+        let storage = storage_of(vec![lock_row, protected_row]);
         let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
         let metadata = host_metadata(&scratch.0, 0o600);
 
@@ -2149,7 +2409,6 @@ mod tests {
                 &sync,
                 &storage,
                 &lock.id,
-                &[],
                 &anchor,
                 Path::new(ANCHOR_PATH),
                 realm_controller("my-realm"),

@@ -599,13 +599,16 @@ fn rendered_storage_contract_covers_process_writable_paths_when_fixture_availabl
 }
 
 /// Every rendered lock in `sync.json` must carry a non-null `resourceId`
-/// that pairs, without invention, to a real generated `storage.json` row
-/// which the shared `d2b-state` runtime bridge
-/// (`LockSet::acquire_from_generated`) will actually open. This is a
-/// schema/JSON-level contract test (this crate does not depend on
-/// `d2b-state`): it proves the *generated fixtures* carry every field the
-/// runtime bridge requires, not that the bridge itself behaves correctly
-/// (that is covered by `d2b-state`'s own unit tests in `lock.rs`/`path.rs`).
+/// naming the *protected state* resource it guards (its schema-intended
+/// semantic), and a `pathTemplate` that resolves, without invention, to
+/// exactly one real generated regular-file `storage.json` row — the lock
+/// file's own row, paired internally by the shared `d2b-state` runtime
+/// bridge (`LockSet::acquire_from_generated`) via exact `pathTemplate`
+/// match rather than a second id field. This is a schema/JSON-level
+/// contract test (this crate does not depend on `d2b-state`): it proves
+/// the *generated fixtures* carry every field the runtime bridge requires,
+/// not that the bridge itself behaves correctly (that is covered by
+/// `d2b-state`'s own unit tests in `lock.rs`/`path.rs`).
 #[test]
 fn rendered_sync_locks_pair_exactly_with_real_storage_rows_when_fixture_available() {
     let fixture_dirs: Vec<_> = ["D2B_FIXTURES", "D2B_FIXTURES_FULL"]
@@ -632,54 +635,101 @@ fn rendered_sync_locks_pair_exactly_with_real_storage_rows_when_fixture_availabl
             "{fixture_name} sync.json must render at least one lock"
         );
 
-        // Every lock must carry a resourceId, and it must resolve to a real
-        // regular-file storage row that the runtime bridge can actually
-        // open/acquire against — never a dangling or absent id.
+        // Every lock must carry a non-null resourceId naming its protected
+        // state resource, and a pathTemplate that resolves to exactly one
+        // real regular-file storage row — the lock file's own row, never
+        // caller-selected or guessed by id.
         for lock in &sync.locks {
-            let resource_id = lock.resource_id.as_ref().unwrap_or_else(|| {
+            let protected_id = lock.resource_id.as_ref().unwrap_or_else(|| {
                 panic!(
                     "{fixture_name} lock {} has no resourceId; the shared runtime bridge cannot \
-                     acquire it without inventing a resource identity",
+                     resolve the protected resource it guards without inventing an identity",
                     lock.id.as_str()
                 )
             });
-            let row = rows_by_id.get(resource_id.as_str()).unwrap_or_else(|| {
+            let protected_row = rows_by_id.get(protected_id.as_str()).unwrap_or_else(|| {
                 panic!(
                     "{fixture_name} lock {} resourceId {} has no matching storage.json row",
                     lock.id.as_str(),
-                    resource_id.as_str()
+                    protected_id.as_str()
                 )
             });
             assert_eq!(
-                row.kind,
-                StoragePathKind::RegularFile,
-                "{fixture_name} lock {} resourceId {} must pair with a regular-file row",
-                lock.id.as_str(),
-                resource_id.as_str()
+                lock.scope.as_str(),
+                protected_row.scope.as_str(),
+                "{fixture_name} lock {} scope must match its protected resource row's scope",
+                lock.id.as_str()
             );
-            assert!(
-                row.no_follow,
-                "{fixture_name} lock-file row {} must be noFollow",
-                row.id.as_str()
-            );
-            assert!(
-                !row.recursive,
-                "{fixture_name} lock-file row {} must not be recursive",
-                row.id.as_str()
-            );
-            if let Some(path_template) = &lock.path_template {
-                assert_eq!(
-                    path_template.as_str(),
-                    row.path_template.as_str(),
-                    "{fixture_name} lock {} pathTemplate must match its paired storage row",
+
+            let path_template = lock.path_template.as_ref().unwrap_or_else(|| {
+                panic!(
+                    "{fixture_name} lock {} has no pathTemplate; the shared runtime bridge \
+                     cannot resolve the paired lock-file row without inventing a match",
                     lock.id.as_str()
-                );
-            }
+                )
+            });
+            let lock_file_rows: Vec<_> = storage
+                .paths
+                .iter()
+                .filter(|row| row.path_template.as_str() == path_template.as_str())
+                .collect();
+            assert_eq!(
+                lock_file_rows.len(),
+                1,
+                "{fixture_name} lock {} pathTemplate {} must match exactly one storage.json row \
+                 (found {}); an ambiguous or missing match cannot be resolved without invention",
+                lock.id.as_str(),
+                path_template.as_str(),
+                lock_file_rows.len()
+            );
+            let lock_row = lock_file_rows[0];
+            assert_eq!(
+                lock_row.kind,
+                StoragePathKind::RegularFile,
+                "{fixture_name} lock {} pathTemplate {} must pair with a regular-file row",
+                lock.id.as_str(),
+                path_template.as_str()
+            );
             assert_eq!(
                 lock.scope.as_str(),
-                row.scope.as_str(),
-                "{fixture_name} lock {} scope must match its paired storage row's scope",
+                lock_row.scope.as_str(),
+                "{fixture_name} lock {} scope must match its paired lock-file row's scope",
                 lock.id.as_str()
+            );
+            assert_eq!(
+                lock.owner_process.value.as_str(),
+                lock_row.owner.value.as_str(),
+                "{fixture_name} lock {} owner must match its paired lock-file row's owner",
+                lock.id.as_str()
+            );
+            assert!(
+                lock_row.invariants.contains(&StorageInvariant::NoSymlink),
+                "{fixture_name} lock-file row {} must declare no-symlink",
+                lock_row.id.as_str()
+            );
+            assert!(
+                lock_row.invariants.contains(&StorageInvariant::NoMagicLink),
+                "{fixture_name} lock-file row {} must declare no-magic-link",
+                lock_row.id.as_str()
+            );
+            assert!(
+                lock_row.no_follow,
+                "{fixture_name} lock-file row {} must be noFollow",
+                lock_row.id.as_str()
+            );
+            assert!(
+                !lock_row.recursive,
+                "{fixture_name} lock-file row {} must not be recursive",
+                lock_row.id.as_str()
+            );
+            assert_ne!(
+                protected_row.id.as_str(),
+                lock_row.id.as_str(),
+                "{fixture_name} lock {} protected resource {} must be distinct from its own \
+                 lock-file row {} — a lock never protects itself",
+                lock.id.as_str(),
+                protected_id.as_str(),
+                lock_row.id.as_str()
             );
             // Every generated lock is CLOEXEC OFD, close-on-exec inheritance,
             // and fail-fast with no fd-passing mechanism today: assert the
@@ -715,8 +765,8 @@ fn rendered_sync_locks_pair_exactly_with_real_storage_rows_when_fixture_availabl
         // The per-workload `keys.lock` row (task requirement: every OFD lock
         // file that currently lacks a storage row, especially workload keys)
         // must exist, be broker-owned/secret-adjacent/mode-0600, and pair
-        // with exactly one lock whose owner/allowedHolders match the row's
-        // broker owner.
+        // — by exact pathTemplate match, never by resourceId — with exactly
+        // one lock whose owner/allowedHolders match the row's broker owner.
         let keys_lock_rows: Vec<_> = storage
             .paths
             .iter()
@@ -744,18 +794,25 @@ fn rendered_sync_locks_pair_exactly_with_real_storage_rows_when_fixture_availabl
             assert!(row.invariants.contains(&StorageInvariant::NoSymlink));
             assert!(row.invariants.contains(&StorageInvariant::NoMagicLink));
 
-            let paired_lock = sync
+            let paired_locks: Vec<_> = sync
                 .locks
                 .iter()
-                .find(|lock| {
-                    lock.resource_id.as_ref().map(|id| id.as_str()) == Some(row.id.as_str())
+                .filter(|lock| {
+                    lock.path_template
+                        .as_ref()
+                        .map(|template| template.as_str())
+                        == Some(row.path_template.as_str())
                 })
-                .unwrap_or_else(|| {
-                    panic!(
-                        "{fixture_name} keys.lock row {} has no paired lock in sync.json",
-                        row.id.as_str()
-                    )
-                });
+                .collect();
+            assert_eq!(
+                paired_locks.len(),
+                1,
+                "{fixture_name} keys.lock row {} must pair with exactly one lock by pathTemplate \
+                 (found {})",
+                row.id.as_str(),
+                paired_locks.len()
+            );
+            let paired_lock = paired_locks[0];
             assert_eq!(paired_lock.owner_process.kind, ActorKind::Broker);
             assert_eq!(
                 paired_lock.owner_process.value.as_str(),
@@ -766,18 +823,22 @@ fn rendered_sync_locks_pair_exactly_with_real_storage_rows_when_fixture_availabl
                 row.owner.value.as_str(),
                 "{fixture_name} keys.lock owner/release authority must be symmetric"
             );
+            // The lock's own resourceId names the protected `workload-keys`
+            // resource, never this lock-file row itself.
+            let protected_id = paired_lock.resource_id.as_ref().unwrap_or_else(|| {
+                panic!(
+                    "{fixture_name} keys lock {} has no resourceId",
+                    paired_lock.id.as_str()
+                )
+            });
+            assert_ne!(protected_id.as_str(), row.id.as_str());
         }
 
-        // The generated adapter's `protected_resource_ids` are a distinct
-        // concept from a lock's own `resourceId` (the lock *file*): a lock
-        // protects some other piece of state, it is not itself that state.
-        // Prove the real fixture actually carries, for every generated
-        // workload-state lock, at least one storage row that (a) shares the
-        // lock's scope (the same invariant `bind_protected_resource`
-        // enforces) and (b) is genuinely distinct from the lock file's own
-        // paired `resourceId` row — the real `workload-state-data` row from
-        // `nixos-modules/realm-storage-rows.nix`, discovered by scope
-        // rather than a guessed id string, never a fabricated row.
+        // Every `lock:workload-state:*` lock's resourceId must resolve to
+        // the real `workload-state-data` resource — a directory, not the
+        // lock file — proving the protected resource is schema-derived and
+        // genuinely distinct from the lock file's own row, never a
+        // fabricated or guessed id.
         let workload_state_locks: Vec<_> = sync
             .locks
             .iter()
@@ -788,30 +849,21 @@ fn rendered_sync_locks_pair_exactly_with_real_storage_rows_when_fixture_availabl
             "{fixture_name} sync.json must include a workload-state lock"
         );
         for lock in &workload_state_locks {
-            let lock_file_id = lock.resource_id.as_ref().unwrap_or_else(|| {
+            let protected_id = lock.resource_id.as_ref().unwrap_or_else(|| {
+                panic!("{fixture_name} lock {} has no resourceId", lock.id.as_str())
+            });
+            let protected_row = rows_by_id.get(protected_id.as_str()).unwrap_or_else(|| {
                 panic!(
-                    "{fixture_name} lock {} has no resourceId",
-                    lock.id.as_str()
+                    "{fixture_name} lock {} resourceId {} has no matching storage.json row",
+                    lock.id.as_str(),
+                    protected_id.as_str()
                 )
             });
-            let candidate_protected_rows: Vec<_> = storage
-                .paths
-                .iter()
-                .filter(|row| {
-                    row.scope.as_str() == lock.scope.as_str()
-                        && row.id.as_str() != lock_file_id.as_str()
-                        && row.kind == StoragePathKind::RegularFile
-                })
-                .collect();
-            assert!(
-                !candidate_protected_rows.is_empty(),
-                "{fixture_name} expected at least one regular-file storage row sharing scope {} \
-                 with lock {} that is distinct from the lock file's own resourceId {} — the \
-                 runtime bridge's caller-supplied protected_resource_ids needs a real, \
-                 non-lock-file row to bind",
+            assert_eq!(
+                protected_row.scope.as_str(),
                 lock.scope.as_str(),
-                lock.id.as_str(),
-                lock_file_id.as_str()
+                "{fixture_name} workload-state lock {} protected resource must share its scope",
+                lock.id.as_str()
             );
         }
     }
