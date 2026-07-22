@@ -14,13 +14,17 @@ let
       ownedFiles = [
         "docs/reference/schemas/v2/sync.json"
         "docs/reference/schemas/v2/sync.md"
+        "docs/reference/schemas/v2/storage-lifecycle-report.json"
+        "docs/reference/schemas/v2/storage-lifecycle-report.md"
         "nixos-modules/realm-storage-rows.nix"
         "packages/Cargo.lock"
         "packages/d2b-contract-tests/tests/storage_sync_contracts.rs"
         "packages/d2b/src/doctor.rs"
+        "packages/d2b-priv-broker/src/ops/storage_contract.rs"
         "packages/d2b-core/src/storage_lifecycle.rs"
         "packages/d2b-core/src/sync.rs"
         "packages/d2b-state/Cargo.toml"
+        "packages/d2b-state/src/atomic.rs"
         "packages/d2b-state/src/lock.rs"
         "packages/d2b-state/src/path.rs"
         "packages/d2bd/src/storage_lifecycle.rs"
@@ -124,9 +128,49 @@ let
       '';
     };
 
+    "component-session-service-seam" = {
+      branch = "adr0045-w8-integration-component-session-service-seam";
+      dependsOn = [ ];
+      externalDependsOn = [ ];
+      ownedFiles = [
+        "docs/reference/component-session-v2-vectors.json"
+        "packages/d2b-client/src/host_socket.rs"
+        "packages/d2b-contracts/src/v2_component_session.rs"
+        "packages/d2b-contracts/src/v2_services.rs"
+        "packages/d2b-session/src/inbound_call.rs"
+        "packages/d2b-session/src/lib.rs"
+        "packages/d2b-session/src/server.rs"
+        "packages/d2b-session-unix/src/adapter.rs"
+        "packages/d2b-session-unix/src/descriptor.rs"
+      ];
+      reservedPaths = [
+        "packages/d2b-contracts/src/v2_component_session.rs"
+        "packages/d2b-session/src/server.rs"
+        "packages/d2b-session-unix/src/adapter.rs"
+      ];
+      forbiddenEditExceptions = [
+        "packages/d2b-contracts/src/v2_component_session.rs"
+        "packages/d2b-contracts/src/v2_services.rs"
+      ];
+      deletes = [ ];
+      scope = [
+        "Freeze an authenticated runtime-systemd-user service composition fingerprint covering runtime, shell, and tty while retaining one fixed listener/session."
+        "Provide one per-connection negotiated descriptor resolver and one shared inbound-call registration/cancellation wrapper."
+        "Align d2b-client with the composition session before helper or d2bd cutover."
+      ];
+      prompt = ''
+        Implement the ComponentSession service seam in exactly the owned files:
+        canonical runtime+shell+tty composition fingerprint, per-connection
+        method/index descriptor policy, exact SCM_RIGHTS binding, shared
+        register-dispatch-complete cancellation, canonical cross-uid channel
+        binding, and d2b-client composition support. Do not implement helper
+        business logic or d2bd routing in this component.
+      '';
+    };
+
     "user-agent-service-seam" = {
       branch = "adr0045-w8-integration-user-agent-service-seam";
-      dependsOn = [ ];
+      dependsOn = [ "component-session-service-seam" ];
       externalDependsOn = [ ];
       ownedFiles = [
         "docs/reference/component-session-v2-vectors.json"
@@ -356,6 +400,7 @@ let
     "state-lock-authority-contract"
     "secrets-authority-seam"
     "secrets-lifecycle"
+    "component-session-service-seam"
     "user-agent-service-seam"
     "systemd-user-shell-routing"
     "realm-routing-work-executor-fabric"
