@@ -17,15 +17,22 @@ let
         "nixos-modules/realm-storage-rows.nix"
         "packages/Cargo.lock"
         "packages/d2b-contract-tests/tests/storage_sync_contracts.rs"
+        "packages/d2b-core/src/storage_lifecycle.rs"
         "packages/d2b-core/src/sync.rs"
         "packages/d2b-state/Cargo.toml"
         "packages/d2b-state/src/lock.rs"
         "packages/d2b-state/src/path.rs"
+        "packages/d2bd/src/storage_lifecycle.rs"
       ];
       reservedPaths = [
         "packages/d2b-core/src/sync.rs"
         "packages/d2b-state/src/lock.rs"
         "packages/d2b-state/src/path.rs"
+      ];
+      forbiddenEditExceptions = [
+        "packages/Cargo.lock"
+        "packages/d2b-core/src/storage_lifecycle.rs"
+        "packages/d2b-core/src/sync.rs"
       ];
       deletes = [ ];
       scope = [

@@ -97,8 +97,23 @@ let
     if component == null
     then [ ]
     else plan.components.${component}.ownedFiles;
+  forbiddenEditExceptions =
+    if component == null
+    then [ ]
+    else plan.components.${component}.forbiddenEditExceptions or [ ];
+  invalidForbiddenEditExceptions = builtins.filter
+    (path:
+      !(builtins.elem path ownedFiles)
+      || !(builtins.any
+        (forbidden: path == forbidden || hasPrefix forbidden path)
+        plan.forbiddenEdits))
+    forbiddenEditExceptions;
   forbiddenViolations = builtins.filter
-    (path: builtins.any (forbidden: path == forbidden || hasPrefix forbidden path) plan.forbiddenEdits)
+    (path:
+      !(builtins.elem path forbiddenEditExceptions)
+      && builtins.any
+        (forbidden: path == forbidden || hasPrefix forbidden path)
+        plan.forbiddenEdits)
     paths;
   violations = builtins.filter
     (path: !(builtins.elem path ownedFiles))
@@ -112,6 +127,7 @@ in
     component
     externalDependencies
     forbiddenViolations
+    invalidForbiddenEditExceptions
     invalidLandedDependencies
     landedDependencyCommits
     ownedFiles
@@ -124,6 +140,7 @@ in
     && validPathList
     && violations == [ ]
     && forbiddenViolations == [ ]
+    && invalidForbiddenEditExceptions == [ ]
     && blockedExternalDependencies == [ ]
     && invalidLandedDependencies == [ ]
     && unmetDependencies == [ ];

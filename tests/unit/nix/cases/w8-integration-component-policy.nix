@@ -42,6 +42,14 @@ let
   systemdUser = evaluate manifestReadyPlan
     "adr0045-w8-integration-systemd-user-shell-routing"
     [ "packages/d2bd/src/shell_backend.rs" ];
+  stateLockAuthority = evaluate manifestReadyPlan
+    "adr0045-w8-integration-state-lock-authority-contract"
+    [
+      "packages/Cargo.lock"
+      "packages/d2b-core/src/storage_lifecycle.rs"
+      "packages/d2b-core/src/sync.rs"
+      "packages/d2bd/src/storage_lifecycle.rs"
+    ];
 in
 {
   "w8-integration-component-policy/manifest-is-a-global-blocker" = {
@@ -155,6 +163,23 @@ in
       blockedExternalDependencies = [ ];
       unmetDependencies = [ "user-agent-service-seam" ];
       valid = false;
+    };
+  };
+
+  "w8-integration-component-policy/exact-forbidden-edit-exceptions-are-component-scoped" = {
+    expr = {
+      inherit (stateLockAuthority)
+        forbiddenViolations
+        invalidForbiddenEditExceptions
+        violations
+        valid
+        ;
+    };
+    expected = {
+      forbiddenViolations = [ ];
+      invalidForbiddenEditExceptions = [ ];
+      violations = [ ];
+      valid = true;
     };
   };
 }
