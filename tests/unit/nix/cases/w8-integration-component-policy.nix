@@ -51,13 +51,14 @@ in
     };
     expected = {
       blocked = [
+        "secrets-authority-seam"
         "secrets-lifecycle"
         "systemd-user-shell-routing"
         "gateway-replacement"
         "provider-parity-fallback-removal"
         "restart-observability-audit"
       ];
-      blockedCount = 5;
+      blockedCount = 6;
       ready = [ ];
       readyCount = 0;
       blockedExternalDependencies = [ "shared-root-w8-manifest-seam" ];
@@ -72,17 +73,18 @@ in
       blockedCount = 0;
       note = basePlan.launchSummary.note;
       pendingOnDependency = [
+        "secrets-lifecycle"
         "provider-parity-fallback-removal"
       ];
-      pendingOnDependencyCount = 1;
+      pendingOnDependencyCount = 2;
       ready = [
-        "secrets-lifecycle"
+        "secrets-authority-seam"
         "systemd-user-shell-routing"
         "gateway-replacement"
         "restart-observability-audit"
       ];
       readyCount = 4;
-      totalComponents = 6;
+      totalComponents = 7;
     };
   };
 
@@ -127,12 +129,15 @@ in
       unmetDependencies = [ ];
       valid = true;
       launchReady = [
-        "secrets-lifecycle"
+        "secrets-authority-seam"
         "systemd-user-shell-routing"
         "gateway-replacement"
         "restart-observability-audit"
       ];
-      launchPending = [ "provider-parity-fallback-removal" ];
+      launchPending = [
+        "secrets-lifecycle"
+        "provider-parity-fallback-removal"
+      ];
     };
   };
 
