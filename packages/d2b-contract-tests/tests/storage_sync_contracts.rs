@@ -10,7 +10,8 @@ use d2b_core::{
     processes::ProcessesJson,
     realm_controller_config::{RealmControllerRuntimeState, RealmControllersJson},
     storage::{
-        ActorKind, PrincipalKind, RepairPolicy, StorageInvariant, StorageJson, StoragePathKind,
+        ActorKind, PrincipalKind, RepairPolicy, SensitivityClass, StorageInvariant, StorageJson,
+        StoragePathKind,
     },
     sync::{LockKind, SyncJson},
 };
@@ -593,6 +594,178 @@ fn rendered_storage_contract_covers_process_writable_paths_when_fixture_availabl
                     "{fixture_name} observability storage rows must use a broker repair policy"
                 );
             }
+        }
+    }
+}
+
+/// Every rendered lock in `sync.json` must carry a non-null `resourceId`
+/// that pairs, without invention, to a real generated `storage.json` row
+/// which the shared `d2b-state` runtime bridge
+/// (`LockSet::acquire_from_generated`) will actually open. This is a
+/// schema/JSON-level contract test (this crate does not depend on
+/// `d2b-state`): it proves the *generated fixtures* carry every field the
+/// runtime bridge requires, not that the bridge itself behaves correctly
+/// (that is covered by `d2b-state`'s own unit tests in `lock.rs`/`path.rs`).
+#[test]
+fn rendered_sync_locks_pair_exactly_with_real_storage_rows_when_fixture_available() {
+    let fixture_dirs: Vec<_> = ["D2B_FIXTURES", "D2B_FIXTURES_FULL"]
+        .into_iter()
+        .filter_map(|name| env::var_os(name).map(|dir| (name, PathBuf::from(dir))))
+        .collect();
+    if fixture_dirs.is_empty() {
+        eprintln!("  (skipping rendered sync/storage pairing check; D2B_FIXTURES unset)");
+        return;
+    }
+
+    for (fixture_name, dir) in fixture_dirs {
+        let storage: StorageJson = read_json(&dir, "storage.json");
+        let sync: SyncJson = read_json(&dir, "sync.json");
+
+        let rows_by_id: BTreeMap<&str, _> = storage
+            .paths
+            .iter()
+            .map(|row| (row.id.as_str(), row))
+            .collect();
+
+        assert!(
+            !sync.locks.is_empty(),
+            "{fixture_name} sync.json must render at least one lock"
+        );
+
+        // Every lock must carry a resourceId, and it must resolve to a real
+        // regular-file storage row that the runtime bridge can actually
+        // open/acquire against — never a dangling or absent id.
+        for lock in &sync.locks {
+            let resource_id = lock.resource_id.as_ref().unwrap_or_else(|| {
+                panic!(
+                    "{fixture_name} lock {} has no resourceId; the shared runtime bridge cannot \
+                     acquire it without inventing a resource identity",
+                    lock.id.as_str()
+                )
+            });
+            let row = rows_by_id.get(resource_id.as_str()).unwrap_or_else(|| {
+                panic!(
+                    "{fixture_name} lock {} resourceId {} has no matching storage.json row",
+                    lock.id.as_str(),
+                    resource_id.as_str()
+                )
+            });
+            assert_eq!(
+                row.kind,
+                StoragePathKind::RegularFile,
+                "{fixture_name} lock {} resourceId {} must pair with a regular-file row",
+                lock.id.as_str(),
+                resource_id.as_str()
+            );
+            assert!(
+                row.no_follow,
+                "{fixture_name} lock-file row {} must be noFollow",
+                row.id.as_str()
+            );
+            assert!(
+                !row.recursive,
+                "{fixture_name} lock-file row {} must not be recursive",
+                row.id.as_str()
+            );
+            if let Some(path_template) = &lock.path_template {
+                assert_eq!(
+                    path_template.as_str(),
+                    row.path_template.as_str(),
+                    "{fixture_name} lock {} pathTemplate must match its paired storage row",
+                    lock.id.as_str()
+                );
+            }
+            assert_eq!(
+                lock.scope.as_str(),
+                row.scope.as_str(),
+                "{fixture_name} lock {} scope must match its paired storage row's scope",
+                lock.id.as_str()
+            );
+            // Every generated lock is CLOEXEC OFD, close-on-exec inheritance,
+            // and fail-fast with no fd-passing mechanism today: assert the
+            // exact uniform policy so a silent drift is caught, not papered
+            // over by a permissive adapter.
+            assert_eq!(lock.kind, LockKind::Ofd);
+            assert!(lock.cloexec_required);
+        }
+
+        // Global total order: `SyncJson::global_order_rank` must assign a
+        // strict bijection onto `0..locks.len()` — no duplicate or missing
+        // rank, proving the total order is well-defined across every
+        // rendered lock without any fabricated `acquire_after` edge.
+        let mut ranks: Vec<usize> = sync
+            .locks
+            .iter()
+            .map(|lock| {
+                sync.global_order_rank(&lock.id).unwrap_or_else(|| {
+                    panic!(
+                        "{fixture_name} lock {} missing from its own global order",
+                        lock.id.as_str()
+                    )
+                })
+            })
+            .collect();
+        ranks.sort_unstable();
+        let expected: Vec<usize> = (0..sync.locks.len()).collect();
+        assert_eq!(
+            ranks, expected,
+            "{fixture_name} global_order_rank must be a strict bijection over every rendered lock"
+        );
+
+        // The per-workload `keys.lock` row (task requirement: every OFD lock
+        // file that currently lacks a storage row, especially workload keys)
+        // must exist, be broker-owned/secret-adjacent/mode-0600, and pair
+        // with exactly one lock whose owner/allowedHolders match the row's
+        // broker owner.
+        let keys_lock_rows: Vec<_> = storage
+            .paths
+            .iter()
+            .filter(|row| row.id.as_str().starts_with("path:workload-keys-lock:"))
+            .collect();
+        assert!(
+            !keys_lock_rows.is_empty(),
+            "{fixture_name} storage.json must include a workload keys.lock row"
+        );
+        for row in &keys_lock_rows {
+            assert_eq!(row.kind, StoragePathKind::RegularFile);
+            assert_eq!(row.mode, "0600");
+            assert_eq!(row.sensitivity, SensitivityClass::SecretAdjacent);
+            assert_eq!(row.creator.kind, ActorKind::Broker);
+            assert_eq!(row.owner.kind, PrincipalKind::User);
+            assert!(row.owner.value.as_str().starts_with("d2bbr-r-"));
+            assert!(
+                matches!(
+                    row.repair_policy,
+                    RepairPolicy::BrokerReconcile | RepairPolicy::BrokerFailClosed
+                ),
+                "{fixture_name} keys.lock row {} must use a broker repair policy",
+                row.id.as_str()
+            );
+            assert!(row.invariants.contains(&StorageInvariant::NoSymlink));
+            assert!(row.invariants.contains(&StorageInvariant::NoMagicLink));
+
+            let paired_lock = sync
+                .locks
+                .iter()
+                .find(|lock| {
+                    lock.resource_id.as_ref().map(|id| id.as_str()) == Some(row.id.as_str())
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{fixture_name} keys.lock row {} has no paired lock in sync.json",
+                        row.id.as_str()
+                    )
+                });
+            assert_eq!(paired_lock.owner_process.kind, ActorKind::Broker);
+            assert_eq!(
+                paired_lock.owner_process.value.as_str(),
+                row.owner.value.as_str()
+            );
+            assert_eq!(
+                paired_lock.release_authority.value.as_str(),
+                row.owner.value.as_str(),
+                "{fixture_name} keys.lock owner/release authority must be symmetric"
+            );
         }
     }
 }

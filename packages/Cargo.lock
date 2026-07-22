@@ -1671,6 +1671,7 @@ name = "d2b-state"
 version = "2.0.0"
 dependencies = [
  "d2b-contracts",
+ "d2b-core",
  "nix 0.29.0",
  "rustix 0.38.44",
  "serde",

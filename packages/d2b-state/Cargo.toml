@@ -11,6 +11,7 @@ publish = false
 default = []
 host-fs = [
     "dep:d2b-contracts",
+    "dep:d2b-core",
     "dep:nix",
     "dep:rustix",
     "dep:serde",
@@ -22,6 +23,11 @@ tokio = ["host-fs", "dep:tokio"]
 
 [dependencies]
 d2b-contracts = { workspace = true, default-features = false, features = ["v2-state"], optional = true }
+# Optional, host-fs-gated: bridges the generated d2b-core sync/storage
+# contract (Nix-rendered LockSpec/StoragePathSpec rows) into this crate's
+# runtime LockSet/LockGuard/AnchoredResource without inventing mapping data.
+# d2b-core intentionally does NOT depend back on d2b-state or d2b-contracts.
+d2b-core = { workspace = true, optional = true }
 nix = { workspace = true, features = ["fs"], optional = true }
 rustix = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }

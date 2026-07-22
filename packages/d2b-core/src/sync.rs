@@ -145,6 +145,14 @@ impl SyncJson {
             if lock.kind == LockKind::Ofd && !lock.cloexec_required {
                 return Err(format!("OFD lock {} must require O_CLOEXEC", lock.id));
             }
+            if matches!(lock.kind, LockKind::Ofd | LockKind::FileRecord)
+                && lock.resource_id.is_none()
+            {
+                return Err(format!(
+                    "{:?} lock {} must be paired with a storage resourceId",
+                    lock.kind, lock.id
+                ));
+            }
             if lock.fd_passing_policy.mechanism != FdPassingMechanism::None
                 && !lock.fd_passing_policy.lease_transfer_record_required
             {
@@ -167,6 +175,41 @@ impl SyncJson {
             }
         }
         Ok(())
+    }
+
+    /// Deterministic global total-order rank for `lock_id`.
+    ///
+    /// The generated contract has no separate stored `global_order` field:
+    /// [`validate_lock_order`] already enforces that every lock's
+    /// `(scope_class, anchored_root, normalized_path, lock_id)` acquire-order
+    /// key is unique across the whole `SyncJson`. Sorting the full lock set
+    /// by that key yields a strict, reproducible total order; this method
+    /// returns the 0-based position of `lock_id` in that order, or `None` if
+    /// `lock_id` is absent. A runtime that only ever acquires locks in
+    /// non-decreasing rank order (never a lower rank while holding a guard
+    /// with an equal-or-greater rank) satisfies acquire-after ordering for
+    /// every lock, which is a strict superset of any partial-order DAG:
+    /// today's generated locks declare no cross-lock dependency, so the
+    /// total order is the entire ordering contract there is to enforce.
+    pub fn global_order_rank(&self, lock_id: &ContractId) -> Option<usize> {
+        type OrderKey<'a> = (LockScopeClass, &'a str, &'a str, &'a str);
+        let mut keyed: Vec<(OrderKey<'_>, &ContractId)> = self
+            .locks
+            .iter()
+            .map(|lock| {
+                (
+                    (
+                        lock.acquire_order.scope_class,
+                        lock.acquire_order.anchored_root.as_str(),
+                        lock.acquire_order.normalized_path.as_str(),
+                        lock.acquire_order.lock_id.as_str(),
+                    ),
+                    &lock.id,
+                )
+            })
+            .collect();
+        keyed.sort_by(|left, right| left.0.cmp(&right.0));
+        keyed.iter().position(|(_, id)| *id == lock_id)
     }
 }
 
@@ -191,13 +234,14 @@ mod tests {
         }
     }
 
-    #[test]
-    fn ofd_locks_require_cloexec() {
-        let lock = LockSpec {
-            id: ContractId::parse("lock:daemon").unwrap(),
+    /// A schema-valid, fully-paired OFD lock baseline for `id`, so individual
+    /// tests only need to override the single field they're exercising.
+    fn valid_lock(id: &str) -> LockSpec {
+        LockSpec {
+            id: ContractId::parse(id).unwrap(),
             scope: ContractId::parse("host").unwrap(),
-            path_template: Some(PathTemplate::parse("/run/d2b/daemon.lock").unwrap()),
-            resource_id: None,
+            path_template: Some(PathTemplate::parse(format!("/run/d2b/{id}.lock")).unwrap()),
+            resource_id: Some(ContractId::parse(format!("path:{id}")).unwrap()),
             kind: LockKind::Ofd,
             owner_process: actor(ActorKind::Daemon, "d2bd"),
             allowed_holders: vec![actor(ActorKind::Daemon, "d2bd")],
@@ -206,7 +250,7 @@ mod tests {
                 mechanism: FdPassingMechanism::None,
                 lease_transfer_record_required: false,
             },
-            acquire_order: order("lock:daemon"),
+            acquire_order: order(id),
             timeout_policy: LockTimeoutPolicy {
                 kind: LockTimeoutKind::FailFast,
                 timeout_ms: None,
@@ -218,8 +262,14 @@ mod tests {
             adoption_policy: LockAdoptionPolicy::ReacquireAfterProof,
             degrade_scope: DegradeScope::Host,
             release_authority: actor(ActorKind::Daemon, "d2bd"),
-            cloexec_required: false,
-        };
+            cloexec_required: true,
+        }
+    }
+
+    #[test]
+    fn ofd_locks_require_cloexec() {
+        let mut lock = valid_lock("lock:daemon");
+        lock.cloexec_required = false;
         assert!(
             SyncJson {
                 schema_version: "v2".to_owned(),
@@ -227,6 +277,58 @@ mod tests {
             }
             .validate_lock_order()
             .is_err()
+        );
+    }
+
+    #[test]
+    fn ofd_locks_require_resource_id() {
+        let mut lock = valid_lock("lock:daemon");
+        lock.resource_id = None;
+        let err = SyncJson {
+            schema_version: "v2".to_owned(),
+            locks: vec![lock],
+        }
+        .validate_lock_order()
+        .unwrap_err();
+        assert!(err.contains("resourceId"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn valid_paired_lock_passes() {
+        let lock = valid_lock("lock:daemon");
+        assert!(
+            SyncJson {
+                schema_version: "v2".to_owned(),
+                locks: vec![lock],
+            }
+            .validate_lock_order()
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn global_order_rank_is_deterministic_and_unique() {
+        // Deliberately inserted out of natural sort order to prove the rank
+        // is derived from the acquire-order key, not from array position.
+        let locks = vec![
+            valid_lock("lock:zebra"),
+            valid_lock("lock:apple"),
+            valid_lock("lock:mango"),
+        ];
+        let doc = SyncJson {
+            schema_version: "v2".to_owned(),
+            locks,
+        };
+        assert!(doc.validate_lock_order().is_ok());
+        let apple = doc.global_order_rank(&ContractId::parse("lock:apple").unwrap());
+        let mango = doc.global_order_rank(&ContractId::parse("lock:mango").unwrap());
+        let zebra = doc.global_order_rank(&ContractId::parse("lock:zebra").unwrap());
+        assert_eq!(apple, Some(0));
+        assert_eq!(mango, Some(1));
+        assert_eq!(zebra, Some(2));
+        assert_eq!(
+            doc.global_order_rank(&ContractId::parse("lock:missing").unwrap()),
+            None
         );
     }
 }

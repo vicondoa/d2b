@@ -111,12 +111,16 @@ let
       path,
       realmId,
       normalizedPath,
+      # The storage-row id of the regular-file this OFD lock is taken on.
+      # Mandatory (no default/null): every generated lock MUST be paired
+      # with the exact storage row for its lock file so a runtime consumer
+      # can resolve/open/create it without inventing a resource identity.
+      resourceId,
       owner ? brokerActor realmId,
     }:
     {
-      inherit id scope;
+      inherit id scope resourceId;
       pathTemplate = path;
-      resourceId = null;
       kind = "ofd";
       ownerProcess = owner;
       allowedHolders = [ owner ];
@@ -297,6 +301,15 @@ let
           writers = [ (controllerActor realmId) (brokerActor realmId) ];
         })
         (mkPath {
+          id = "path:workload-state-lock:${workloadId}";
+          inherit scope realmId;
+          path = "${stateRoot}/state/state.lock";
+          kind = "regular-file";
+          mode = "0600";
+          owner = controllerUser realmId;
+          readers = [ (controllerActor realmId) ];
+        })
+        (mkPath {
           id = (normalized "workload-disks").resourceId;
           inherit scope realmId;
           path = (normalized "workload-disks").path;
@@ -440,6 +453,16 @@ let
           sensitivity = "secret-adjacent";
         })
         (mkPath {
+          id = "path:workload-keys-lock:${workloadId}";
+          inherit scope realmId;
+          path = "${stateRoot}/keys/keys.lock";
+          kind = "regular-file";
+          mode = "0600";
+          owner = brokerUser realmId;
+          readers = [ (brokerActor realmId) ];
+          sensitivity = "secret-adjacent";
+        })
+        (mkPath {
           id = "path:workload-audit:${workloadId}";
           inherit scope realmId;
           path = auditRoot;
@@ -540,6 +563,7 @@ let
           inherit scope realmId;
           path = "${stateRoot}/state/state.lock";
           normalizedPath = "r/${realmId}/w/${workloadId}/state/state.lock";
+          resourceId = "path:workload-state-lock:${workloadId}";
           owner = controllerActor realmId;
         })
         (mkOfdLock {
@@ -547,12 +571,14 @@ let
           inherit scope realmId;
           path = "${stateRoot}/store-view/sync.lock";
           normalizedPath = "r/${realmId}/w/${workloadId}/store-view/sync.lock";
+          resourceId = "path:workload-store-lock:${workloadId}";
         })
         (mkOfdLock {
           id = "lock:workload-keys:${workloadId}";
           inherit scope realmId;
           path = "${stateRoot}/keys/keys.lock";
           normalizedPath = "r/${realmId}/w/${workloadId}/keys/keys.lock";
+          resourceId = "path:workload-keys-lock:${workloadId}";
         })
       ];
     in
@@ -652,6 +678,15 @@ let
           writers = [ (controllerActor realmId) (brokerActor realmId) ];
         })
         (mkPath {
+          id = "path:realm-controller-lock:${realmId}";
+          inherit scope realmId;
+          path = "${stateRoot}/controller/state.lock";
+          kind = "regular-file";
+          mode = "0600";
+          owner = controllerUser realmId;
+          readers = [ (controllerActor realmId) ];
+        })
+        (mkPath {
           id = "path:realm-controller-keys:${realmId}";
           inherit scope realmId;
           path = "${stateRoot}/controller/keys";
@@ -668,11 +703,30 @@ let
           readers = [ (brokerActor realmId) ];
         })
         (mkPath {
+          id = "path:realm-broker-lock:${realmId}";
+          inherit scope realmId;
+          path = "${stateRoot}/broker/state.lock";
+          kind = "regular-file";
+          mode = "0600";
+          owner = brokerUser realmId;
+          readers = [ (brokerActor realmId) ];
+        })
+        (mkPath {
           id = (normalized "realm-audit").resourceId;
           inherit scope realmId;
           path = (normalized "realm-audit").path;
           owner = brokerUser realmId;
           writers = [ (brokerActor realmId) ];
+          sensitivity = "audit";
+        })
+        (mkPath {
+          id = "path:realm-audit-lock:${realmId}";
+          inherit scope realmId;
+          path = "${stateRoot}/audit/audit.lock";
+          kind = "regular-file";
+          mode = "0600";
+          owner = brokerUser realmId;
+          readers = [ (brokerActor realmId) ];
           sensitivity = "audit";
         })
         (mkPath {
@@ -745,6 +799,7 @@ let
           inherit scope realmId;
           path = "${stateRoot}/controller/state.lock";
           normalizedPath = "r/${realmId}/controller/state.lock";
+          resourceId = "path:realm-controller-lock:${realmId}";
           owner = controllerActor realmId;
         })
         (mkOfdLock {
@@ -752,12 +807,14 @@ let
           inherit scope realmId;
           path = "${stateRoot}/broker/state.lock";
           normalizedPath = "r/${realmId}/broker/state.lock";
+          resourceId = "path:realm-broker-lock:${realmId}";
         })
         (mkOfdLock {
           id = "lock:realm-audit:${realmId}";
           inherit scope realmId;
           path = "${stateRoot}/audit/audit.lock";
           normalizedPath = "r/${realmId}/audit/audit.lock";
+          resourceId = "path:realm-audit-lock:${realmId}";
         })
       ] ++ lib.flatten (map (workload: workload.locks) workloads);
       providers = map
