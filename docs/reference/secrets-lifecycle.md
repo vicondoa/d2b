@@ -4,12 +4,12 @@
 > `packages/d2b-priv-broker/src/ops/secrets_lifecycle.rs`,
 > `packages/d2b-priv-broker/src/ops/secrets_rotation_audit.rs`, and
 > `packages/d2b-sk-frontend/src/secrets_channel.rs`. This is the
-> storage/atomicity/rotation-state layer only — see "Non-goals" below
-> for what it deliberately does not do.
+> storage-agnostic transaction/rotation-state layer only — see
+> "Non-goals" below for what it deliberately does not do.
 >
-> **Status: not wired into any live broker dispatch path or guest
-> transport.** Every function this page documents is a tested,
-> standalone Rust API reachable only from this component's own
+> **Status: not wired into any live broker dispatch path, audit sink,
+> or guest transport.** Every function this page documents is a
+> tested, standalone Rust API reachable only from this component's own
 > `#[cfg(test)]` modules today. See
 > [Integration wiring points](#integration-wiring-points-not-performed-by-this-component)
 > for the exact remaining steps and
@@ -19,19 +19,143 @@
 This page is the contract for the provision/rotate/rollback/retire
 engine that tracks per-realm secrets material: TPM-bound credentials,
 guest signing keys, and security-key channel state (the closed
-[`SecretKind`] set). It follows the broker's existing fd-relative,
-anchored, atomic, identity-bound, fail-closed conventions (the same
-family as `swtpm_dir.rs`'s hardening step and `store_sync_audit.rs`'s
-typed audit schema), applied generically across all three secret
-kinds through one shared engine rather than three separate ones.
+[`SecretKind`] set). It follows the broker's existing identity-bound,
+fail-closed, redaction-safe conventions (the same family as
+`swtpm_dir.rs`'s hardening step and `store_sync_audit.rs`'s typed audit
+schema), applied generically across all three secret kinds through one
+shared engine rather than three separate ones.
 
-This document describes the **second, redesigned** iteration of this
-engine (superseding an earlier draft that an external security review
-found was not crash-safe). The redesign's driving property, repeated
-throughout this page, is: **a process crash must never leave storage
-in a state where recovery is forced to either silently activate
-something unverified, or return an error while unrecoverable state has
-already been activated.**
+## W8fu6: a pure transaction core behind an injected port
+
+This document describes the **third** iteration of this engine.
+
+- Rounds 1-5 (superseded) built a **filesystem-anchored** engine: raw
+  fd-relative paths (`crate::sys::path_safe`), a private `F_OFD_SETLK`
+  cross-process lock, a durable on-disk JSON marker + transaction log,
+  fsync-heavy crash recovery, and an anchored enumerate-then-delete
+  retirement walk.
+- **This round (W8fu6, current) replaces all of that** with a **pure
+  transaction core** that has zero side effects of its own: no
+  filesystem access, no locking, no process spawning, no JSON
+  serialization of its own state. Every stateful effect goes through
+  one injected trait, [`SecretsAuthorityPort`], and every
+  crash/fault/concurrency/tamper test in `secrets_lifecycle.rs` runs
+  entirely against an in-memory `FakeAuthorityPort` test double defined
+  in that file's own `#[cfg(test)] mod fake_port` — there is no test in
+  this component that spins up a real directory tree, a real lock, or
+  touches a real filesystem.
+
+The redesign's driving property, unchanged from earlier rounds and
+still the standard every change below is held to, is: **a crash, a
+concurrent writer, or a tampered read must never leave this module
+having silently activated something unverified, and must never force
+a caller to see an error after unrecoverable state has already been
+durably activated.**
+
+### Why a compare-and-swap fencing token instead of a lock + txlog
+
+The prior design's lock (mutual exclusion) and transaction log (crash
+recovery) both existed to make a *sequence* of raw filesystem writes
+durable and atomic despite crashes and concurrent callers. A storage
+substrate that already offers atomic compare-and-swap (etcd's
+`mod_revision`, ZooKeeper's `version`, a database row's optimistic-lock
+column, or — for a filesystem adapter of the integrator's own design —
+a `rename(2)`-based scheme) makes both unnecessary *from this module's
+point of view*: every action below reads a [`DurableState`] plus an
+opaque [`OwnershipEpoch`] fencing token via
+[`SecretsAuthorityPort::read_state`], computes the next state, and
+calls [`SecretsAuthorityPort::cas_commit`] with the token it read.
+Either the CAS succeeds (this call was the only writer the whole time)
+or it is fenced (some other writer's transition is now current; this
+call fails cleanly with [`FailReason::OwnershipFenced`] and has mutated
+nothing). This module never acquires or holds a lock, and never writes
+a transaction log of its own — whatever recovery a concrete adapter
+needs for its own commit primitive is the adapter's problem, entirely
+hidden behind `cas_commit` returning `Ok`/`Err` atomically.
+
+### What "forward recovery" means without a txlog
+
+There is no separate "recovery mode": a caller that observes
+`FailReason::OwnershipFenced` simply re-reads the current state and
+retries (or gives up) — there is no crashed, half-applied transaction
+to detect or unwind, because `cas_commit` is defined to be atomic
+(all-or-nothing) from this module's point of view. "Forward recovery"
+instead applies to *pruning*: a transition that supersedes a generation
+(`rotate` superseding the old `previous`, `retire` superseding both
+`active` and `previous`) commits the superseding [`DurableState`]
+**first** and only then attempts to synchronously prune the superseded
+material via [`SecretsAuthorityPort::prune_material`]. If that
+synchronous prune does not fully succeed, the still-owed epochs are
+recorded in the *already-durably-committed* state's
+[`DurableState::pending_prune`] list (bounded at [`MAX_PENDING_PRUNE`])
+rather than being lost or blocking the caller's success — every
+subsequent action for that `(workload, kind)` resolves any outstanding
+debt (via the shared `read_and_verify` helper) before doing its own
+work, so the debt is self-healing and monotonically shrinks. This is
+the module's concrete answer to "never return an error after silently
+activating unrecoverable state": the CAS commit that activates a new
+generation and the best-effort prune of the old one are two separate
+steps, and a failure in the second step is recorded as durable,
+retriable debt — never swallowed, and never allowed to turn a
+successful activation into a reported failure.
+
+### Why deterministic, high-water-keyed epoch allocation
+
+A new generation's epoch number is always `state.high_water_epoch + 1`
+— never "current epoch + 1" — so a `rotate` issued after a `rollback`
+can never collide with (or silently resurrect) a still-materialized,
+newer-numbered epoch the rollback moved away from. Because the next
+epoch number is a pure function of the last *durably committed*
+high-water mark, staging is naturally idempotent by epoch: two calls
+that stage the same not-yet-committed epoch number simply race on
+whose bytes are staged last (closed by the post-commit
+re-verification described next), and there is never a need for the
+collision-resistant random staging-name scheme rounds 1-5 required.
+
+### Closing the "last stage wins" race
+
+`stage_material` is defined to run *before* `cas_commit`, so two
+concurrent callers that both read the same pre-commit state and
+compute the same next epoch number can each call `stage_material` for
+that epoch before either of them calls `cas_commit`. Only one of the
+two `cas_commit` calls can win the race, but the *order* of the two
+`stage_material` calls relative to the winning `cas_commit` is not
+itself CAS-serialized — the loser's `stage_material` call could still
+run (and overwrite the winner's staged bytes) *after* the winner's
+`cas_commit` succeeds, silently corrupting the now-durably-active
+generation's material without ever going through `cas_commit` again.
+[`provision`] and [`rotate`] close this window by **immediately
+re-reading the live digest of the epoch they just committed** and
+comparing it against the digest they themselves staged: a mismatch
+means some other writer's `stage_material` call landed after this
+call's `cas_commit`, so this call quarantines the authority and fails
+closed with `FailReason::ChecksumMismatch` rather than certifying
+success over corrupted, no-longer-trusted material. `rollback` and
+`retire` never stage material, so neither is exposed to this race; both
+still independently re-verify every generation identity they read
+before mutating (via the shared `read_and_verify` helper and, for
+`rollback`, an additional call-site re-check immediately before its own
+mutation).
+
+### Canonical typed identity, no legacy VM-name string
+
+Every function below takes a
+[`d2b_contracts::v2_identity::WorkloadId`] — the same canonical v2
+identity type already used elsewhere in this crate
+(`guest_session_material.rs`, `child_realm_guest_material.rs`) —
+rather than a bare `vm_id: &str` or the legacy
+`d2b_contracts::types::VmId` human-label newtype rounds 1-5 used.
+`WorkloadId`'s own `parse`/`FromStr` already enforces the canonical
+bounded-opaque-string shape, so this module has no `valid_vm_id`-style
+runtime string check of its own to maintain — an invalid identity
+simply cannot exist as a `WorkloadId` value in the first place. Every
+[`SecretsAuthorityPort`] method is scoped by `(&WorkloadId,
+SecretKind)`; how (or whether) an adapter maps that pair onto any
+underlying storage location — a path, a database key, a KV-store
+prefix — is entirely the adapter's concern and never observable here.
+The audit surface (`SecretsLifecycleAuditFields::workload_id`) carries
+the same typed, opaque `WorkloadId` — never a human-readable label or a
+filesystem path.
 
 ## Scope and invariants
 
@@ -39,400 +163,146 @@ already been activated.**
   [`SecretKind::GuestSigningKey`], and
   [`SecretKind::SecurityKeyChannelState`] all flow through the same
   `provision`/`rotate`/`rollback`/`retire` functions, parameterized by
-  [`SecretsLifecyclePaths`] (derived per `(vm_id, kind)` via
-  `derive_paths`). Generating the raw material itself — running
-  `ssh-keygen`, deriving a TPM attestation blob, or producing
-  channel-binding wire material — stays the caller's concern; this
-  engine only owns storage, atomicity, rotation-state tracking, and
-  crash recovery.
-- **Fd-relative and anchored.** Every filesystem mutation goes through
-  `crate::sys::path_safe`'s existing primitives (`ensure_dir`,
-  `open_at`, `mkdir_at_exclusive`, `create_file_at_safe`,
-  `atomic_replace_fd_with_owner`, `remove_path_safe`, `fstat_fd`,
-  `fstatat_nofollow`, `fd_extended_acl_present`) — no bare `std::fs`
-  path-string call ever touches a role-writable directory. `state_root`
-  itself is treated as an externally-established precondition (opened
-  read-only via `open_dir_path_safe`, never `ensure_dir`'d): only
-  `state_root/<vm_id>` and `state_root/<vm_id>/<kind-slug>` are created
-  by this module, since a bare `ensure_dir` on `state_root` itself would
-  fail closed under `path_safe::refuse_world_writable_parent` for any
-  `state_root` whose own parent is world-writable.
+  `(workload: &WorkloadId, kind: SecretKind)`. Generating the raw
+  material itself — running `ssh-keygen`, deriving a TPM attestation
+  blob, or producing channel-binding wire material — stays the
+  caller's concern; this engine only owns durable-state transitions,
+  CAS fencing, digest re-verification, and forward-recovery pruning.
+- **Zero side effects of its own.** No filesystem access, no locking,
+  no process spawning. Every mutating effect is a call through the
+  injected [`SecretsAuthorityPort`] trait; this module has no opinion
+  on, and no dependency on, whatever real storage/locking/CAS
+  substrate a concrete adapter chooses.
+- **Never silently activates unverified state.** See "W8fu6" above:
+  CAS fencing, post-commit digest re-verification, and
+  self-consistency validation on every read together mean a caller
+  either sees a durably committed, independently re-verified success,
+  or a loud, fail-closed error — never a quiet partial mutation.
 
-### Cross-process locking and the durable transaction log
+### Durable state (`DurableState`)
 
-Every mutating action first opens (or creates)
-`<kind_root>/lock` and takes an exclusive, poll-with-timeout **open
-file description (OFD)** lock on it via `F_OFD_SETLK`
-(`acquire_lock`/`try_ofd_lock_exclusive`, bounded by
-`SecretsLifecycleConfig::lock_max_wait`/`lock_poll_interval`, failing
-closed with `FailReason::LockUnavailable` on timeout — this is the
-cross-process, per-`(vm, kind)` exclusive lock finding (1) asked for).
-This module deliberately uses the repository's established `F_OFD_SETLK`
-convention (mirroring `d2bd::audio_dispatch::ofd_lock`/`ofd_unlock`)
-rather than BSD `flock(2)`: an OFD lock is associated with the *open
-file description*, not the owning process, so it composes correctly
-with a single process holding multiple independent fds on the same
-lock file, where `flock`'s whole-process association would let two
-unrelated fds silently share one lock. Before trusting the lock,
-`acquire_lock` verifies: the anchored parent (`kind_root`) is a
-trusted-broker-owned directory of the expected mode
-(`verify_broker_owned`); the lock file itself is a trusted-broker-owned
-regular file of the expected mode with exactly one hard link (never a
-hard-link plant); and, immediately after the OFD lock succeeds, that
-the `lock` directory entry still resolves — by `(dev, ino)` — to the
-exact file this call opened and locked, closing the classic
-unlink-and-recreate-between-open-and-lock race. Any mismatch is
-`FailReason::BrokerOwnershipViolation`. `LockGuard` is an opaque RAII
-token with no public/forgeable "is locked" proof; releasing the lock
-is simply closing its owned fd (the kernel drops an OFD lock exactly
-when every fd referencing its open file description is closed — no
-separate unlock call is needed). A full generated-sync-row
-`d2b-state::LockSet`/`AuthorityRef` integration remains an explicit
-integrator-owned wiring point (see "Integration wiring points" below).
-"Broker-owned" here means
-"owned by this process's own effective uid/gid" (`broker_identity`):
-metadata directories (`kind_root`, `generations/`) and the lock file
-are never `cfg.owner_uid`/`cfg.owner_gid`-owned — that consumer-facing
-identity applies only to the `material` file leaf a generation
-directory contains.
+[`DurableState`] is the *entire* payload [`SecretsAuthorityPort::cas_commit`]
+ever writes for one `(workload, kind)` pair — there is no separate
+marker, transaction log, or lock-state object:
 
-While holding that lock, every promote-shaped action
-(`provision`/`rotate`/`rollback`) and `retire` runs through one of two
-shared phase-machine engines:
+- `high_water_epoch: u64` — monotonic high-water mark: the highest
+  epoch number the current, unbroken lineage (since the last
+  `provision`) has committed as active. Never decreases within one
+  such lineage. `provision` deliberately resets this to `1` for a
+  fresh lineage: the shared read helper unconditionally requires any
+  `pending_prune` debt from a prior `retire` to be fully drained
+  (every previously-live epoch confirmed pruned by the authority)
+  before `provision` may run at all, so reusing epoch `1`'s key can
+  never resurrect a prior lineage's leftover bytes.
+- `active: Option<GenerationRecord>` — the currently active
+  generation (`epoch` + SHA-256 hex `digest_hex`), when one exists.
+  `None` for a never-provisioned or freshly retired pair.
+- `previous: Option<GenerationRecord>` — the most recently superseded
+  generation still retained for a possible `rollback`, when one
+  exists. Always `None` when `active` is `None`.
+- `retired: bool` — `true` exactly for a pair that has been retired
+  and not since re-provisioned. A retired pair always has
+  `active: None, previous: None`.
+- `pending_prune: Vec<Epoch>` — epochs a prior committed transition
+  determined are superseded and safe to prune, but whose synchronous
+  best-effort prune attempt did not fully succeed. Bounded at
+  [`MAX_PENDING_PRUNE`] (`2`); never contains the current `active` or
+  `previous` epoch; always strictly ascending and duplicate-free.
 
-- **Promote** ([`PromotePhase`]): `Planned` (material staged into a
-  fresh `.stage-*` directory, or a rollback's already-existing target
-  generation tamper-verified) → `EpochReady` (the target generation is
-  materialised at its final `generations/<epoch>` name, fsynced) →
-  `CurrentPromoted` (`current` atomically repointed at the new
-  generation, fsynced) → `MarkerCommitted` (marker durably rewritten,
-  fsynced; superseded generation pruned best-effort; any leftover
-  `.stage-*` directory enumerated/validated/deleted with every failure
-  propagated) → transaction log removed.
-- **Retire** ([`RetirePhase`]): `Enumerated` (the physical
-  `generations/` tree anchored-enumerated and validated) →
-  `CurrentRemoved` (`current` unlinked, then every recorded generation
-  *and* every recorded `.stage-*` directory deleted, each re-validated
-  immediately before its own deletion) → `EpochsRemoved` (a fresh
-  re-enumeration must observe the tree fully empty) → `ProvenEmpty`
-  (marker tombstoned) → transaction log removed.
+`DurableState::validate_self_consistent` checks every one of the above
+cross-field invariants (bound, ascending/duplicate-free order,
+retired-implies-empty, digest-hex shape, epoch-vs-high-water bounds,
+no overlap between `pending_prune` and the live generations) before
+this module trusts a value read from the authority. This is
+deliberately independent of live digest re-verification (which the
+shared read helper performs separately by calling
+`SecretsAuthorityPort::material_digest`) — `validate_self_consistent`
+only checks that the state's *own* fields are mutually consistent.
 
-Before each phase transition, the *current phase* is written to
-`<kind_root>/txlog` (JSON, fsynced) — this is the durable
-transaction/recovery state machine finding (1) asked for. Every fsync
-in this module (`fsync_fd`) returns `Result<(), FailReason::FsyncFailed>`;
-a failed sync at any phase transition — material write, staging
-directory, epoch rename, `current` swap, marker write, txlog write,
-generation/stage deletion — propagates immediately and blocks that
-phase from ever being recorded as advanced. No phase transition is
-ever considered committed on an unsynced write, so a crash immediately
-after a failed sync is always safely re-driveable by a later recovery
-pass; nothing is ever left activated with only a *possible* failure to
-persist it durably.
+### The authority port (`SecretsAuthorityPort`)
 
-Immediately on read, before any recovery attempt acts on it, a leftover
-`txlog` undergoes full semantic validation
-(`validate_txlog_semantics`/`validate_promote_intent_semantics`/
-`validate_retire_intent_semantics`) bound to the exact `(vm_id, kind)`
-directory it was found in: the recorded `vm`/`kind` must match the
-directory; the action/`create_epoch`/`stage_name`/`expected_identity`
-combination must be one this module can legally have written;
-epoch/high-water/prune-epoch/carry-previous relationships must be
-internally consistent; `RetireIntent.epochs`/`stage_names` must be
-sorted, deduplicated, in-bounds, and correctly prefixed. Any violation
-is `FailReason::IntentCorrupt` — a hand-edited or otherwise corrupted
-txlog is never handed to the recovery engine to interpret.
-[`recover_if_needed`] is called at the start of every action (and by
-the standalone [`recover_in_flight_transaction`] entry point) and, once
-the txlog passes semantic validation:
+The single seam this pure transaction core depends on. An
+integrator-owned adapter implements this against whatever real
+storage/locking/CAS substrate lands (a filesystem tree with its own
+`rename(2)`-based scheme, a KV store with native CAS, a database row
+with an optimistic-lock column, etc). Every method is "guarded":
+scoped to exactly one `(workload, kind)` pair, taking and returning
+only this module's own typed values — never a raw path, file
+descriptor, lock handle, or adapter-internal error detail.
 
-- if the phase recorded is at or before the point where an external
-  observer could see any change (`Planned` for promote; `Enumerated`
-  for retire), the leftover state is safely discarded or completed —
-  nothing was ever activated, so a fresh re-drive is always safe;
-- `Planned`-phase promote recovery never abandons or silently
-  re-stages a target epoch that a prior crashed attempt already
-  renamed into place: if `generations/<to_epoch>` already exists with
-  content whose digest matches the intent's `expected_digest_hex`, the
-  engine treats it as already-materialised, **retries the
-  `generations_fd` durability barrier** (the prior attempt's own
-  trailing fsync may be exactly what crashed it) before advancing, and
-  continues forward without needing the original material again; if
-  content already occupies that epoch number with a **different**
-  digest, recovery fails closed (`RecoveryContentMismatch`) rather than
-  ever adopting or overwriting a stale, foreign, or previously-aborted
-  generation;
-- a `Planned`-phase abort with no leftover material to complete the
-  transaction (`PromoteOutcome::AbortedNoMaterial`) never leaves an
-  orphan wedge: `discard_partial_stage_if_present` validates and
-  deletes any partial `.stage-*` directory the crashed attempt left
-  behind (propagating any deletion error) before the txlog is cleared;
-  if that partial stage cannot be safely validated (an unrecognised
-  on-disk shape), the abort fails closed and **retains** the txlog
-  instead, so a future recovery attempt still has the record needed to
-  reason about it — the transaction is never silently dropped over
-  unrecognised on-disk state;
-- if the phase recorded is at or after the commit point
-  (`CurrentPromoted`/`MarkerCommitted` for promote,
-  `CurrentRemoved`/`EpochsRemoved`/`ProvenEmpty` for retire), recovery
-  **only ever moves forward** — it re-verifies the already-activated
-  content against what the log recorded and completes the remaining
-  steps; it never reverts an already-swapped `current` or resurrects an
-  already-deleted generation. A verification mismatch at this stage
-  fails closed (`RecoveryContentMismatch`/`RecoveryAmbiguous`) without
-  touching anything further — it does not silently re-diverge storage,
-  and it does not clear the txlog (so a subsequent recovery attempt,
-  e.g. after fixing the anomaly by hand, gets another chance).
+| Method | Contract |
+| --- | --- |
+| `read_state(workload, kind) -> Result<(DurableState, OwnershipEpoch), PortError>` | A pair never committed to returns `DurableState::never_provisioned()` paired with `OwnershipEpoch::NEVER_COMMITTED`. |
+| `stage_material(workload, kind, epoch, material) -> Result<String, PortError>` | Durably stores `material`'s bytes as the candidate content for `epoch`, returning the digest the adapter actually stored. May be called more than once for an epoch not yet referenced as `active`/`previous` by the currently committed state; MUST refuse (`PortError::EpochAlreadyCommitted`) a stage call for an epoch already so referenced. |
+| `material_digest(workload, kind, epoch) -> Result<String, PortError>` | Re-derives the digest of whatever is currently stored for `epoch`, without ever handing the raw bytes back to this module. |
+| `cas_commit(workload, kind, expected, next) -> Result<OwnershipEpoch, PortError>` | Atomically replaces the committed state with `next` iff the adapter's currently stored fencing token equals `expected` — all or nothing. On success returns a new, different token. On a lost race returns `PortError::OwnershipFenced` and mutates nothing. |
+| `prune_material(workload, kind, epoch) -> Result<(), PortError>` | Durably discards the material for `epoch`. Idempotent: already absent is `Ok(())`. Never called for an epoch still referenced as `active`/`previous` by the last-known committed state — the superseding transition is always committed first, then pruned. |
+| `quarantine(workload, kind, reason) -> Result<(), PortError>` | Durably marks the pair quarantined: every subsequent call of any method above for this pair must fail closed with `PortError::Quarantined` until an out-of-band, integrator-owned clearing operation (this module exposes none) resets it. Idempotent. |
 
-`provision`, `rotate`, and `rollback` share the same
-[`execute_promote`] codepath (parameterized by a [`PromoteIntent`]) for
-both a fresh call and for completing a leftover recovery — there is no
-separate "recovery-only" branch that could drift out of sync with the
-normal path. `retire` and its own recovery both run through
-[`execute_retire`] the same way. Every generation deletion inside
-`execute_retire` is preceded by `revalidate_generation_before_delete`:
-an immediate, anchored, nofollow re-stat/re-validate of that exact
-generation directory right before it is removed, so a tamper injected
-between the original enumeration and the delete (not merely between
-process restarts) is still caught rather than trusted from a stale
-snapshot. `revalidate_generation_before_delete` accepts exactly two
-directory shapes: the fully-materialized generation
-`enumerate_and_validate_generation_tree` originally validated, or the
-one legitimate mid-deletion crash checkpoint `remove_generation` can
-leave behind — `material` already unlinked, the epoch directory itself
-not yet removed. Recognizing that checkpoint requires every one of: the
-entry is still a directory (not a symlink, file, or anything else
-swapped into the name); it is still trusted-broker-owned at the
-expected `cfg.dir_mode` (a foreign owner or any other mode means the
-directory was replaced, not left behind by this module's own deletion
-sequence); and it contains **zero** entries other than `.`/`..` (an
-unrecognized leftover entry, or a `material` entry of the wrong type or
-link-count, still fails closed rather than being swept away). This
-acceptance is reachable **only** from `execute_retire`'s
-`CurrentRemoved` phase deletion loop, always acting on a `RetireIntent`
-that has already passed `validate_retire_intent_semantics` — never from
-`enumerate_and_validate_generation_tree`, which fresh pre-retirement
-planning (`retire`'s initial enumeration) and the final `EpochsRemoved`
-prove-empty check both still call, and which remains exactly as strict
-as before: an empty generation directory encountered there is still
-`FailReason::RetirementTreeAnomaly`, not a silently-accepted "nothing
-here yet" state. A missing marker, or a marker that still claims the
-epoch active over that same physically-empty directory, is likewise
-never treated as clean storage by the fresh path — it fails closed on
-the more specific `PreviouslyProvisionedMaterialMissing` reason raised
-while re-verifying the marker's claimed active generation identity,
-before enumeration is even reached. Both `execute_promote`'s post-commit
-stage cleanup and
-`execute_retire`'s `CurrentRemoved` phase likewise call
-`revalidate_stage_before_delete` on each `.stage-*` directory
-immediately before its own deletion. `CurrentPromoted` and
-`MarkerCommitted` recovery/completion each re-verify, before any
-further mutation or txlog removal, that `current` still resolves by
-exact literal symlink text to the intended target epoch
-(`current_resolves_exactly_to`) — and `MarkerCommitted` additionally
-re-reads and checks the marker's `active` fields against the intent —
-so a phase is never advanced, and the txlog never cleared, over a
-`current`/marker state that does not match what that phase's own
-identity contract requires. A missing generation or stage directory
-encountered while `retire` is retried still retries the
-`generations_fd` durability barrier before the retirement phase
-advances, so an unsynced prior deletion can never reappear (e.g. via a
-crash-induced write-back) after the marker has already been
-tombstoned.
+Implementations MUST provide the exact atomicity/idempotency
+guarantees documented on each method; this module's correctness (in
+particular "never return an error after silently activating
+unrecoverable state") depends on `cas_commit` being genuinely atomic
+and `prune_material`/`quarantine` being genuinely idempotent.
 
-Staging directory names use `random_stage_name`: a collision-resistant
-name mixing the process id, a per-process atomic monotonic counter,
-wall-clock nanoseconds, and a `RandomState`-seeded hash folded through
-SHA-256, always exactly `STAGE_PREFIX` (`.stage-`) followed by 32
-lowercase-hex characters. `is_well_formed_stage_name` closes the
-syntax to exactly that shape — no path separator, no `..`, no
-alternate length or alphabet — and every stage name recorded in a
-txlog intent is checked against it (`validate_promote_intent_semantics`/
-`validate_retire_intent_semantics`) before that intent is ever written
-or acted on, in addition to `enumerate_and_validate_generation_tree`'s
-own defense-in-depth check over whatever names are physically present
-on disk. Staged entries are **real secret-tree contents**, never a
-separately-swept, best-effort concern: `enumerate_and_validate_generation_tree`
-collects `.stage-*` directories exactly like generation epochs
-(`validate_stage_dir_contents` refuses anything but at most one
-regular, single-hard-link entry inside), and every deletion path
-(`remove_stage_dir`, used by promote's post-commit leftover sweep and
-by retire's `CurrentRemoved` phase) fully enumerates, deletes,
-positively proves empty, and fsyncs — propagating every failure rather
-than ignoring it, including a `fsync` that must run even when the
-directory to remove already appears absent (`remove_generation`'s and
-`remove_stage_dir`'s own `NotFound` fast paths still retry the
-containing directory's durability barrier rather than skipping it, so
-a deletion whose fsync had not yet landed cannot silently resurface
-after the transaction is considered complete). A stage directory is
-included in the final provably-empty proof retirement requires before
-tombstoning the marker. The transient `current`-swap staging entry
-(`CURRENT_SWAP_STAGE_NAME`) is never removed via the generic
-symlink-refusing `remove_path_safe` helper — `atomic_swap_current`
-verifies by anchored `nofollow` stat that it is exactly a symlink
-before an anchored `unlinkat`, and fails closed
-(`FailReason::CurrentSwapFailed`) without deleting anything if it ever
-finds something else occupying that name.
+`PortError` is a closed, four-variant enum (`OwnershipFenced`,
+`Quarantined`, `EpochAlreadyCommitted`, `Unavailable`) — this module
+never inspects or forwards an adapter's own internal error detail;
+every variant is meaningful to *this* module's own algorithm, and
+`map_port_error` collapses each onto the audit-facing [`FailReason`]
+set (`Unavailable` maps to the single opaque `FailReason::PortUnavailable`
+bucket, never an adapter-specific string).
 
-### Marker identity (v2)
+### Secret material (`SecretMaterial`)
 
-A dedicated marker file per `(vm, kind)` at `<kind_root>/marker.json`
-(root-owned, `0600`, JSON, `MARKER_SCHEMA_VERSION = 2`) records:
+Caller-supplied secret bytes. Deliberately **not** `Copy` or `Clone`:
+every holder of an owned `SecretMaterial` is a distinct, independently
+zeroized buffer. The bytes are wrapped in `zeroize::Zeroizing` *before*
+validation, so a rejected (empty or oversized) buffer is still zeroized
+on drop rather than discarded as a plain `Vec<u8>`. Capped at
+`SecretMaterial::MAX_LEN` (1 MiB) — generous for TPM-bound credential
+blobs, guest signing keys, and security-key channel state, while
+preventing an unbounded allocation/hash from a misbehaving caller. Its
+`Debug` impl reports only a byte length (`finish_non_exhaustive`),
+never the material itself.
 
-- `high_water_epoch`: the monotonic generation high-water mark (see
-  below);
-- `active`: `None` if retired/never-provisioned, or `Some(`[`MaterialIdentity`]`)` binding the active generation's:
-  - `epoch` (the lineage epoch number);
-  - `dev`/`ino` of the material file, captured via a `nofollow`-safe fd
-    open (never a path re-resolution that could be raced);
-  - owner `uid`/`gid`, permission `mode` bits, hard-link count, and
-    whether an extended POSIX ACL is present;
-  - a SHA-256 content digest.
-- `previous`: the immediately-prior retained generation's full identity,
-  if any (used by `rollback`). `previous.epoch` need not be numerically
-  less than `active.epoch` — a `rollback` swaps the pair, so `previous`
-  can legitimately be the *larger* epoch just rolled back away from;
-  what always holds is that it is a distinct, real, never-exceeding-
-  high-water epoch.
+### Quarantine
 
-Every public action (`provision`/`rotate`/`rollback`/`retire`) routes
-through the single shared `open_and_recover` entry point, which — right
-after loading the marker — runs one central pre-mutation check,
-`verify_marker_against_live_state`, rather than four separately-
-maintained call sites. This validates **both** marker shapes, not just
-the active one: for an *active* marker it is the live-generation check
-described below; for an *inactive* (retired/never-provisioned) marker
-it independently verifies `previous == None`, that `high_water_epoch`
-and the marker's own bookkeeping are internally coherent for a
-never-active lineage, and — via `current_is_genuinely_absent` — that
-`current` does not resolve to anything at all (never merely that it
-"looks retired"); a stale or foreign `current` entry surviving over an
-inactive marker is rejected the same way a live-state mismatch is. This
-is the one reachable trigger for `FailReason::IdentityCurrentTargetMismatch`: it
-confirms that `current` resolves, by **exact literal symlink text**, to
-`generations/<active.epoch>` — a path that merely *ends* in the right
-epoch number (an absolute path, a foreign-rooted relative path, or any
-text other than that precise relative form) is never accepted as a
-match, even when a naive `stat()`-based comparison would otherwise
-agree. It then re-derives the active (and, if present, previous)
-generation's identity tuple from the **live** filesystem state and
-compares it field-by-field against the marker. Each mismatch axis has
-its own closed [`FailReason`] variant so a hard-link plant
-(`IdentityLinkCountMismatch`, or `IdentityInodeMismatch` when the
-digest happens to match but the physical inode does not — the case
-byte-content comparison alone cannot see), a digest-preserving
-directory swap (`IdentityInodeMismatch`), an ownership drift
-(`IdentityOwnerMismatch`), a mode drift (`IdentityModeMismatch`), an
-ACL drift (`IdentityAclMismatch`), or a content drift
-(`IdentityDigestMismatch`) are independently distinguishable on the
-audit surface rather than collapsed into one generic "tampered"
-reason.
-
-Beyond that live-state check, every freshly constructed intent is also
-run through `validate_promote_intent_semantics`/
-`validate_retire_intent_semantics` immediately before it is durably
-logged (`write_txlog`) in `provision`/`rotate`/`rollback`/`retire` —
-not only when a leftover txlog is re-read during recovery. In
-particular, a `rollback`'s intent must satisfy
-`expected_digest_hex == expected_identity.digest_hex` before it is
-ever acted on: the rollback target's claimed content digest and its
-claimed full on-disk identity must agree with each other at
-construction time, not merely be independently plausible.
-
-### Fail-closed on drift, not just on error
-
-Mirroring the `swtpm_dir.rs` philosophy:
-
-- `provision` refuses (`AlreadyProvisioned`) if active material
-  already exists;
-- `provision` fails closed (`PreviouslyProvisionedMaterialMissing`) if
-  the marker says active but the generation vanished;
-- `provision` fails closed (`GenerationConflict`) if material exists on
-  disk with **no** matching active marker — never silently adopted;
-- `rotate`/`rollback`/`retire` all fail closed on any
-  [`MaterialIdentity`] mismatch axis (above), on any
-  `IdentityCurrentTargetMismatch`, and on any internally-inconsistent
-  marker (mutually exclusive `retired`/`active`, out-of-bounds epoch)
-  via the shared central validation — rather than proceeding against a
-  live generation that does not match what the marker recorded.
-
-### Retirement never trusts the marker's word alone
-
-`retire()` always **enumerates and strictly validates the entire
-physical `generations/` tree** ([`enumerate_and_validate_generation_tree`])
-before looking at what the marker says, regardless of marker state:
-
-- an *active* marker over a tree that anchored-enumeration finds
-  already empty is a hard-fail anomaly
-  (`PreviouslyProvisionedMaterialMissing`) — a missing marker, or an
-  empty tree, never by itself implies "already cleanly retired";
-- a tree with any unrecognised entry name, unexpected file type, a
-  `material` file whose link count is not exactly `1`, or a `.stage-*`
-  directory containing anything other than at most one regular,
-  single-hard-link entry aborts the entire retirement with **zero
-  deletions** (`FailReason::RetirementTreeAnomaly`);
-- otherwise every validated generation *and* every validated stage
-  directory is deleted, each re-validated immediately before its own
-  deletion (`revalidate_generation_before_delete`) so a tamper injected
-  after enumeration is still caught; each containing directory is
-  fsynced after its deletions (with any sync failure blocking further
-  progress, never silently ignored); the tree is then positively
-  re-verified empty (`FailReason::RetirementNotProvablyEmpty` if not)
-  before the marker is tombstoned;
-- retiring an already-retired or never-provisioned kind (empty tree,
-  no active marker) is idempotent and reports `verified_clean`, not an
-  error.
-
-### Monotonic generation numbering, survivable across rollback
-
-`MarkerData::high_water_epoch` is a monotonic high-water mark, not
-`current_epoch + 1`: `rotate` always allocates
-`high_water_epoch + 1`. This means a `rotate` issued **after** a
-`rollback` can never collide with (or silently resurrect) a
-still-materialised newer epoch that the rollback moved away from —
-the newer epoch's generation directory is left physically in place
-(pruned only after the new marker is durably committed) but its epoch
-number is never reissued. `rollback` itself never grows
-`high_water_epoch` and prunes nothing (it just re-points `current` at
-the retained `previous`, subject to the same identity-tamper
-verification as any other promote). `provision` always allocates epoch
-`1` and resets `high_water_epoch` to `1` for a fresh lineage — this is
-sound (not a numbering collision risk) specifically because `retire()`
-physically empties and proves-empty the entire `generations/` tree
-before the marker is tombstoned; the monotonic high-water invariant
-only needs to hold *within* one non-retired lineage.
+Quarantine is a one-way, fail-closed door from this module's point of
+view: there is no "un-quarantine" call. [`QuarantineReason`] is a
+closed three-variant enum (`ActiveChecksumMismatch`,
+`PreviousChecksumMismatch`, `StateSelfInconsistent`) recording exactly
+why this module chose to quarantine — never an arbitrary string. See
+"Integration wiring points" § 3 for the operator-facing clearing path
+this component deliberately does not implement.
 
 ### Redaction
 
-No public function in this module ever returns or logs a raw path, a
-raw secret byte, or a raw `io::Error` message. Errors are a closed-set
-[`FailReason`] enum plus a fully-formed
-[`SecretsLifecycleAuditFields`] record. That record itself never
-carries a path (only an FNV1a-64 `base_dir_hash`, parity with
-`crate::ops::hosts::stable_hash_str`) or raw material (only a SHA-256
-`material_digest_hex` fingerprint, present only for
-`provision`/`rotate`). [`SecretMaterial`]:
+No public function, error type, or `Debug` impl in this module ever
+exposes secret bytes or a raw path:
 
-- derives neither `Copy` nor `Clone`;
-- wraps caller-supplied bytes in `zeroize::Zeroizing<Vec<u8>>`
-  **before** the length/emptiness validation check runs, so a
-  rejected (empty or oversized) buffer is zeroized on drop just like an
-  accepted one — there is no code path where a rejected buffer is
-  dropped without zeroization;
-- has a `Debug` impl that never prints its bytes.
+- [`SecretsLifecycleError`] carries only a [`FailReason`] and an
+  already-redacted [`SecretsLifecycleAuditFields`] value.
+- [`SecretMaterial`]'s `Debug` impl reports only a byte length.
+- [`SecretsAuthorityPort`] itself never receives or returns a path, fd,
+  or lock handle — only `WorkloadId`, `SecretKind`, `Epoch`,
+  `DurableState`, digests (hex strings), and this module's own closed
+  error/reason enums.
 
 ## Guest-side channel state (`secrets_channel.rs`, protocol v2)
 
 The guest-side counterpart (`d2b-sk-frontend::secrets_channel`) is a
 standalone, zero-internal-dependency module (only `std`) mirroring the
-same lifecycle shape in memory. Its own redesign (superseding the
-first draft's single conflated `ChannelGeneration` counter) splits
-three previously-conflated concepts:
+same lifecycle shape in memory, already aligned with the W8fu6
+broker-side model (no functional change was needed this round beyond a
+doc-comment update to stop referencing the removed on-disk
+`MarkerData::active` field). It splits three independent concepts:
 
-- [`LineageEpoch`]: the broker-side active generation identity.
-  **Rollbackable** — a legitimate `Rollback` action moves it backwards.
-  This module enforces no monotonicity on it; the broker/authenticator
-  is the authority for whether a given epoch transition is legitimate.
+- [`LineageEpoch`]: mirrors the broker-side
+  `DurableState::active`'s `GenerationRecord::epoch`. **Rollbackable**
+  — a legitimate `Rollback` action moves it backwards. This module
+  enforces no monotonicity on it; the broker/authenticator is the
+  authority for whether a given epoch transition is legitimate.
 - [`DeliveryCounter`]: a strictly-monotonic anti-replay sequence
   number, checked first (before any other validation) on every
   [`ChannelState::apply`] call, **independent of** and **separate
@@ -441,15 +311,15 @@ three previously-conflated concepts:
   rollbackable storage generation: it is **never reset by `Retire` or
   a subsequent `Provision`**, unlike `LineageEpoch` (which legitimately
   restarts at a fresh baseline after a retire, mirroring the broker's
-  own storage-generation restart). A stale or repeated
-  `DeliveryCounter` is rejected
-  (`ChannelStateError::StaleDeliveryCounter`) regardless of which
-  [`ChannelAction`] it is attached to, including across a
-  retire-then-reprovision boundary.
+  own `DurableState::high_water_epoch` restart). A stale or repeated
+  `DeliveryCounter` is rejected (`ChannelStateError::StaleDeliveryCounter`)
+  regardless of which [`ChannelAction`] it is attached to, including
+  across a retire-then-reprovision boundary.
 - [`ChannelAction`]: an explicit four-way discriminator
   (`Provision`/`Rotate`/`Rollback`/`Retire`) carried alongside the
   epoch and counter, rather than inferred from whether the epoch went
-  up or down.
+  up or down — the same four actions [`LifecycleAction`] models on the
+  broker side.
 
 [`ChannelUpdate`] is the only way to apply a transition; its fields are
 private and only constructible through named constructors
@@ -465,10 +335,10 @@ separate "zeroize on rejection" code path to keep in sync.
 candidate bytes **before** validating them (so the rejection path also
 zeroizes on drop), and exposes its raw bytes only through an explicit,
 one-shot `expose_bytes()` call for final external handoff (e.g. to
-`SessionConfig::new`) rather than through any implicit
-copy/clone. Zeroization here is implemented without the `zeroize`
-crate — `d2b-sk-frontend` has no such dependency, and adding one would
-require a `Cargo.toml` edit this component does not own — using a
+`SessionConfig::new`) rather than through any implicit copy/clone.
+Zeroization here is implemented without the `zeroize` crate —
+`d2b-sk-frontend` has no such dependency, and adding one would require
+a `Cargo.toml` edit this component does not own — using a
 `#![forbid(unsafe_code)]`-compatible `std::hint::black_box`-guarded
 best-effort overwrite instead of the `zeroize` crate's own
 volatile-write internals.
@@ -498,18 +368,24 @@ authenticated (signature/MAC verified, origin checked) by the caller.
   identity; it is not a replacement for `swtpm_dir.rs`.
 - This component does not decide *how* material is generated for any
   kind (ssh-keygen invocation, TPM attestation derivation, or the
-  exact security-key channel wire encoding). It only stores, activates,
-  and tracks generations of whatever [`SecretMaterial`] bytes a caller
-  supplies.
+  exact security-key channel wire encoding). It only tracks durable
+  state transitions and CAS commits for whatever [`SecretMaterial`]
+  bytes a caller supplies.
 - This component does not implement message authentication or a
   concrete wire byte format for the guest channel. See "Guest-side
   channel state" above.
+- This component does not implement a `SecretsAuthorityPort` adapter
+  over any real storage substrate. It is a pure library with an
+  in-memory fault-injecting test double used only by its own
+  `#[cfg(test)]` suite; a real adapter is entirely integrator-owned
+  (see "Integration wiring points" § 1).
 
 ## Audit record shape
 
-[`SecretsLifecycleAuditFields`] (schema version 2) is a path-free,
-material-free JSON-serializable record: `vm_id`, `kind`, `action`
-(`provision`/`rotate`/`rollback`/`retire`), `base_dir_hash`, `result`
+[`SecretsLifecycleAuditFields`] (schema version 3) is a path-free,
+material-free JSON-serializable record: `workload_id` (canonical typed
+`WorkloadId`, never a human-readable label or path), `kind`, `action`
+(`provision`/`rotate`/`rollback`/`retire`), `result`
 (`created`/`rotated`/`rolled_back`/`retired`/`verified_clean`/`denied`/
 `failed_closed`), `marker_result`
 (`created`/`verified`/`tombstoned`/`unchanged`/`failed_closed`), an
@@ -519,82 +395,80 @@ for `retired`), an optional `high_water_epoch`, a bounded
 `MAX_AUDITED_RETAINED_GENERATIONS`, and always excluding the active
 epoch), an optional `material_digest_hex` (present only for
 `provision`/`rotate`, a lowercase 64-hex-digit SHA-256 string), a
-`recovered_prior_transaction` flag (set whenever the action first had
-to drain a leftover crash-interrupted transaction), and an optional
-`fail_reason` (present exactly for `denied`/`failed_closed` results,
-drawn only from the closed [`FailReason`] enum — never an arbitrary
-string or path). `SecretsLifecycleAuditFields::validate` enforces every
-cross-field invariant listed above; every constructor
-(`provisioned`/`rotated`/`rolled_back`/`retired`/`verified_clean`/
-`denied`/`failed`) returns an already-valid record.
+`prune_deferred` flag (only reachable when `result` is `Rotated` or
+`Retired` — set exactly when this action's own successful commit left
+at least one superseded generation not yet synchronously pruned, i.e.
+recorded in `DurableState::pending_prune` for a future action to
+resolve), and an optional `fail_reason` (present exactly for
+`denied`/`failed_closed` results, drawn only from the closed
+[`FailReason`] enum — never an arbitrary string or path).
+`SecretsLifecycleAuditFields::validate` enforces a **complete**
+`action` x `result` x `marker_result` compatibility matrix (not just
+per-field presence checks) — every combination not actually reachable
+from `secrets_lifecycle.rs`'s own call sites is rejected too. Every
+constructor (`provisioned`/`rotated`/`rolled_back`/`retired`/
+`verified_clean`/`denied`/`failed`) returns an already-valid record;
+`failed` in particular hardcodes `MarkerResult::FailedClosed` rather
+than accepting a caller-supplied `MarkerResult`, so it can never be
+called into producing a schema-invalid combination.
 
-## Marker and path layout
-
-```
-<state_root>/<vm_id>/<kind-slug>/
-  generations/
-    <epoch>/material        # 0600, expected_uid:expected_gid
-  current -> generations/<epoch>
-  marker.json                # 0600 JSON, schema v2
-  lock                        # 0600, F_OFD_SETLK target, never contains data
-  txlog                       # 0600 JSON, present only mid-transaction
-```
-
-`<kind-slug>` is one of `tpm-bound-credential`, `guest-signing-key`,
-`security-key-channel-state` ([`SecretKind::as_slug`]).
+This is a substantially smaller, storage-agnostic set than the rounds
+1-5 filesystem-anchored engine's 27-variant `FailReason` enum: every
+variant naming a raw path/lock/fsync/txlog/ACL/inode/link-count concept
+was a property of that engine's *own* filesystem adapter, never
+observable by the W8fu6 pure transaction core, which only ever calls
+the six guarded, typed `SecretsAuthorityPort` methods. All of that
+fine-grained tamper/I/O detail is now the adapter's own internal
+concern, hidden behind `PortError` and reported to this audit surface,
+when it must be, only via the single opaque `FailReason::PortUnavailable`
+bucket.
 
 ## Integration wiring points (not performed by this component)
 
-This component's public functions are ready to call but are not wired
-into any shared sink. An integrator still needs to:
+This module is a pure library with **zero** side effects of its own —
+no filesystem access, no locking, no process spawning. A future
+integrator must, in follow-up commits **outside this component's
+ownership**:
 
-1. Add `pub mod secrets_lifecycle;` and
-   `pub mod secrets_rotation_audit;` to
-   `packages/d2b-priv-broker/src/ops/mod.rs`.
-2. Add an
+1. Implement a concrete [`SecretsAuthorityPort`] adapter over whatever
+   real durable storage/CAS substrate lands for the broker (e.g. the
+   ADR 0034 storage/lock contract once it exists, or a dedicated KV
+   store). This is now the **single dominant** wiring blocker — rounds
+   1-5's many fine-grained filesystem wiring points (lock file
+   placement, `dir_mode`/`file_mode`, owner uid/gid, `state_root`) are
+   superseded by this one seam.
+2. Add exactly one new
    `OperationFields::SecretsLifecycle(SecretsLifecycleAuditFields)`
-   variant (and matching `from_operation_value` arm) to
-   `packages/d2b-priv-broker/src/ops/audit_op.rs`, and wire the
-   returned record into `crate::audit::AuditLog`.
-3. Add new wire request/response DTOs (in `d2b-contracts`) and a
-   `runtime.rs` dispatch path calling
-   `provision`/`rotate`/`rollback`/`retire`. The plan text for this
-   component explicitly forbids adding a new broker op enum family
-   from within it, so this step is deliberately deferred.
-4. Decide the real `SecretsLifecycleConfig::state_root` source
-   (candidate: a subdirectory of the per-realm state root established
-   by the ADR 0034 storage-lifecycle contract) — **this path must
-   already exist** with a non-world-writable mode before this module
-   is called; this module only creates `state_root/<vm_id>/<kind-slug>`
-   beneath it, never `state_root` itself — and the real owner
-   uid/gid for each kind. This module's public functions still take
-   `vm_id: &str` and derive `kind_root` via `state_root.join(vm_id)`,
-   matching the existing `vm: &str`/label-derived-path convention this
-   repository already uses for this class of op (e.g.
-   `swtpm_dir.rs::paths`); this is **not** the same thing as this
-   component's own audit surface, which is already opaque-ID-bound
-   (`SecretsLifecycleAuditFields::vm_id` is a `d2b_contracts::types::VmId`,
-   never a raw path or label). If/when the ADR 0034 storage contract
-   exposes a generated, caller-resolved opaque storage-id →
-   pre-opened-anchored-dirfd mapping, this module's path-derivation
-   helpers (`derive_paths`/`kind_root`) are the exact integration
-   point to replace with that typed authority instead of a
-   `state_root.join(vm_id)` join; until that resolver exists as a
-   stable, generated contract this component cannot consume, this
-   remains an explicit integrator-owned wiring point rather than
-   something this component can close unilaterally.
-5. Decide whether `SecretKind::GuestSigningKey` material comes from
+   variant to `crate::ops::audit_op::OperationFields` (and a matching
+   `from_operation_value` arm), and route each
+   `Ok`/`Err(SecretsLifecycleError)` returned by [`provision`],
+   [`rotate`], [`rollback`], [`retire`] into `crate::audit::AuditLog`
+   via that new variant.
+3. Add a broker dispatch path (an existing operation-request enum's
+   new variant, or a new one, per the integrator's chosen RPC shape)
+   that resolves a caller's `(realm, workload label)` into a
+   [`d2b_contracts::v2_identity::WorkloadId`] (e.g. via
+   `WorkloadId::derive`) and a [`SecretMaterial`] payload, then calls
+   the four public functions below against the concrete
+   `SecretsAuthorityPort` adapter from (1).
+4. Decide and implement whatever real quarantine-clearing operation
+   exists for [`QuarantineReason`] — this module deliberately exposes
+   no "un-quarantine" call (quarantine is a one-way, fail-closed door
+   from this module's own point of view), so an operator-facing clear
+   path is an adapter/broker-level concern.
+5. For `SecretKind::SecurityKeyChannelState`, wire the four public
+   functions to whatever calls into `d2b-sk-frontend`'s
+   `secrets_channel.rs` need this lifecycle — see that module's own
+   "Integration wiring points" note for its side of the seam (session
+   config wiring, wire schema/authentication, broker dispatch mapping,
+   delivery-counter persistence).
+6. Decide whether `SecretKind::GuestSigningKey` material comes from
    `exec_reconcile::run_ssh_keygen` output fed into `rotate`'s
    `material` parameter, or stays separate.
-6. Decide the exact coupling between `SecretKind::TpmBoundCredential`
+7. Decide the exact coupling between `SecretKind::TpmBoundCredential`
    rotation here and `swtpm_dir.rs`'s physical NVRAM (e.g. whether a
    rotate here should also trigger a swtpm reseal) — a product/security
    decision beyond this component's scope.
-7. Call [`recover_in_flight_transaction`] once at controller/broker
-   startup for every known `(vm, kind)` pair before dispatching any
-   live request, so a leftover transaction from a prior crash is
-   drained proactively rather than only on the next incoming request
-   for that exact pair.
 8. Add `pub mod secrets_channel;` to
    `packages/d2b-sk-frontend/src/lib.rs`, and wire
    `services/security_key/mod.rs`'s `SessionConfig` to source its
@@ -617,16 +491,11 @@ into any shared sink. An integrator still needs to:
     `tests/unit/nix/pinned/*.txt` picks up the new
     `w8-secrets-lifecycle-eval.nix` case names (not run here since the
     pinned files are not owned by this component).
-12. `acquire_lock` uses this module's own `F_OFD_SETLK` primitive
-    (mirroring `d2bd::audio_dispatch::ofd_lock`/`ofd_unlock`) rather
-    than inventing a new lock namespace, but it does not yet register
-    with any shared `d2b-state::LockSet`/`AuthorityRef` lock registry —
-    no such generated, cross-component lock-row contract exists for
-    this module to consume today. If/when one lands, the integrator
-    should either replace `acquire_lock`'s standalone OFD lock with a
-    caller-supplied typed held-lock/lease token from that registry, or
-    confirm this module's private per-`(vm, kind)` lock file is exempt
-    because nothing outside this module ever contends for it.
+12. Add `pub mod secrets_lifecycle;` and `pub mod secrets_rotation_audit;`
+    to `packages/d2b-priv-broker/src/ops/mod.rs` once (1)-(3) above are
+    ready to consume them — this component deliberately never adds
+    that declaration itself, since doing so without a real adapter or
+    dispatch path would compile a component with no reachable caller.
 
 ## See also
 

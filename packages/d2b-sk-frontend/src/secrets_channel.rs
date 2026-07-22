@@ -19,7 +19,11 @@
 //! properties into a single `ChannelGeneration` counter:
 //!
 //!   * the broker's **lineage epoch** — the active generation
-//!     identity from `secrets_lifecycle`'s marker (`MarkerData::active`).
+//!     identity from `secrets_lifecycle`'s durable state
+//!     (`DurableState::active`'s `GenerationRecord::epoch`, as of the
+//!     W8fu6 ports-and-adapters rewrite; an earlier draft of this doc
+//!     comment referred to a since-removed on-disk `MarkerData::active`
+//!     field from that engine's original filesystem-anchored design).
 //!     This value is **rollbackable**: a legitimate `rollback()` moves
 //!     it *backwards* to a previously-retained generation.
 //!   * a **monotonic anti-replay counter** — a value that must never

@@ -13,18 +13,34 @@
 //! Redaction contract: this is the **host-confidential** audit record
 //! (broker audit log is `0640 root:d2bd`, per
 //! `docs/reference/cgroup-delegation.md` § "Audit records"). It
-//! deliberately never carries raw secret material, a raw filesystem
-//! path, or a raw channel-binding/credential byte string — only a
-//! FNV1a-64 `base_dir_hash` (parity with [`crate::ops::hosts::stable_hash_str`]
-//! used by every other path-bearing broker audit record), a SHA-256
-//! `material_digest_hex` fingerprint (so operators can correlate a
-//! rotation to specific delivered material without ever seeing it),
-//! and closed-set result/marker/reason enums. **`fail_reason` is a
-//! closed enum, not a free-form string** — this is a deliberate
-//! hardening over an earlier draft of this module that carried
-//! `Option<String>` populated from convention-only `&'static str`
-//! constants; nothing outside this file's [`FailReason`] enum can ever
-//! reach the audit surface.
+//! deliberately never carries raw secret material or a raw
+//! channel-binding/credential byte string — only a bounded opaque
+//! typed [`WorkloadId`] (never a human VM-name label or a filesystem
+//! path; see the W8fu6 note below), a SHA-256 `material_digest_hex`
+//! fingerprint (so operators can correlate a rotation to specific
+//! delivered material without ever seeing it), and closed-set
+//! result/marker/reason enums. **`fail_reason` is a closed enum, not a
+//! free-form string** — this is a deliberate hardening over an earlier
+//! draft of this module that carried `Option<String>` populated from
+//! convention-only `&'static str` constants; nothing outside this
+//! file's [`FailReason`] enum can ever reach the audit surface.
+//!
+//! # W8fu6: canonical typed identity, no filesystem path
+//!
+//! Rounds 1-5 bound this schema to a bare [`d2b_contracts::types::VmId`]
+//! human-label string plus an FNV1a-64 `base_dir_hash` of the
+//! filesystem path the old engine derived from it. The W8fu6 rewrite of
+//! [`crate::ops::secrets_lifecycle`] into a pure transaction core over
+//! an injected, storage-agnostic authority port has no filesystem path
+//! at all, and this schema now binds to the canonical
+//! [`d2b_contracts::v2_identity::WorkloadId`] typed identity instead of
+//! a legacy VM-name string: `base_dir_hash` is removed outright (there
+//! is nothing left to hash), and `vm_id` is renamed `workload_id` with
+//! the new type. `WorkloadId`'s wire form is still a plain bounded
+//! opaque 20-character string (never the human-readable workload
+//! name/label it was derived from), so this remains schema-safe for any
+//! JSON consumer that only ever treats the field as an opaque
+//! correlation token.
 //!
 //! # Status
 //!
@@ -35,17 +51,22 @@
 //! future integrator must perform before any of this is observable in
 //! a running broker's audit log.
 
-use d2b_contracts::types::VmId;
+use d2b_contracts::v2_identity::WorkloadId;
 use serde::{Deserialize, Serialize};
 
 /// Schema version for the secrets-lifecycle terminal audit record.
 ///
-/// Bumped from `1` to `2` for the transaction/recovery + strengthened
-/// identity-binding redesign: `generation` (u32) became `lineage_epoch`
-/// (u64) with a companion `high_water_epoch`, `retained_generations`
-/// became `u64`-keyed, `fail_reason` became a closed enum instead of a
-/// free-form string, and `recovered_prior_transaction` was added.
-pub const SECRETS_LIFECYCLE_AUDIT_SCHEMA_VERSION: u32 = 2;
+/// Bumped from `2` to `3` for the W8fu6 ports-and-adapters rewrite:
+/// `vm_id: VmId` became `workload_id: WorkloadId` (the canonical v2
+/// identity type, replacing a legacy human VM-name string);
+/// `base_dir_hash` was removed outright (the new engine has no
+/// filesystem path to hash); `recovered_prior_transaction` was removed
+/// (the pure CAS-based engine has no separate "recovery" phase — a
+/// fenced writer simply retries, it never "recovers" a crashed
+/// transaction left by itself); and a new `prune_deferred: bool` field
+/// was added, surfacing the new engine's prune-after-commit-debt model
+/// on the audit surface.
+pub const SECRETS_LIFECYCLE_AUDIT_SCHEMA_VERSION: u32 = 3;
 
 /// Bound on `retained_generations` so a single audit record can never
 /// grow unbounded (the operational retention policy in
@@ -75,9 +96,11 @@ pub enum SecretKind {
 }
 
 impl SecretKind {
-    /// Stable, path-safe slug used as the on-disk directory component
-    /// and as the audit-record `kind` discriminant's string form for
-    /// any downstream consumer that only speaks JSON.
+    /// Stable slug used as the audit-record `kind` discriminant's
+    /// string form for any downstream consumer that only speaks JSON.
+    /// (Rounds 1-5 also used this as an on-disk directory component;
+    /// the W8fu6 storage-agnostic engine has no directory, so this is
+    /// now purely a wire/audit-surface identifier.)
     pub fn as_slug(self) -> &'static str {
         match self {
             SecretKind::TpmBoundCredential => "tpm-bound-credential",
@@ -103,147 +126,131 @@ pub enum LifecycleAction {
 pub enum LifecycleResult {
     /// Fresh generation 1 material was provisioned.
     Created,
-    /// A new generation was created and `current` was atomically
-    /// swapped to it.
+    /// A new generation was created and became the active generation.
     Rotated,
-    /// `current` was atomically swapped back to the retained previous
-    /// generation.
+    /// The active generation was atomically swapped back to the
+    /// retained previous generation.
     RolledBack,
-    /// All generations were removed and the marker was tombstoned.
+    /// Every generation was durably retired.
     Retired,
     /// The requested action was already satisfied (e.g. `retire` on an
-    /// already-retired kind); no mutation occurred.
+    /// already-retired or never-provisioned kind); no mutation
+    /// occurred.
     VerifiedClean,
     /// The request was refused before any mutation (e.g. `rotate`
     /// requested for a never-provisioned kind).
     Denied,
     /// The step aborted partway and failed closed. Never a silent
-    /// partial mutation.
+    /// partial mutation: [`LifecycleResult::FailedClosed`] is only ever
+    /// reachable before a commit durably succeeds, or after a
+    /// post-commit integrity re-check detects tampering and
+    /// quarantines the authority — never as a way to paper over an
+    /// already-durable, already-activated state.
     FailedClosed,
 }
 
-/// Terminal disposition of the identity-bound tamper-guard marker for
-/// this action, mirroring the `swtpm_dir.rs` marker-result shape but
-/// kept as an independent type (this module never imports from
-/// `swtpm_dir.rs`).
+/// Terminal disposition of the identity-binding integrity check for
+/// this action. Rounds 1-5 named this after the on-disk marker file
+/// that recorded a generation's trusted identity; the W8fu6 rewrite
+/// keeps the type name and variant set (per the explicit instruction
+/// to retain closed audit/channel types across the rewrite) but the
+/// meaning generalizes to "the terminal state of this action's
+/// identity-binding checks against the authority port", independent of
+/// whatever concrete marker/metadata representation an adapter uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MarkerResult {
-    /// A fresh marker recording the trusted generation identity was
-    /// written.
+    /// A fresh generation's identity was durably committed for the
+    /// first time.
     Created,
-    /// An existing marker verified against the live directory's
-    /// current identity.
+    /// An existing generation's live digest was independently
+    /// re-verified against the durably committed identity before this
+    /// action mutated anything.
     Verified,
-    /// The marker was rewritten to record a completed retirement.
+    /// The durable state was rewritten to record a completed
+    /// retirement.
     Tombstoned,
-    /// The action never reached the marker step (denied before any
-    /// filesystem mutation).
+    /// The action never reached a mutation step (denied before any
+    /// authority-port write).
     Unchanged,
-    /// The marker was absent-after-prior-provision, tampered, or
-    /// otherwise failed identity verification. The action fails closed.
+    /// The durable state failed a self-consistency or digest
+    /// verification check, or a commit/prune step failed. The action
+    /// fails closed.
     FailedClosed,
 }
 
-/// Closed set of path-free, redaction-safe failure/refusal reasons.
-/// Every [`SecretsLifecycleAuditFields::denied`] /
+/// Closed set of redaction-safe failure/refusal reasons. Every
+/// [`SecretsLifecycleAuditFields::denied`] /
 /// [`SecretsLifecycleAuditFields::failed`] call site in
 /// `secrets_lifecycle.rs` constructs one of these variants directly —
-/// there is no code path that can place an arbitrary string or a raw
-/// filesystem path onto the audit surface.
+/// there is no code path that can place an arbitrary string, a raw
+/// filesystem path, or an adapter-internal error detail onto the audit
+/// surface.
+///
+/// This is a substantially smaller, storage-agnostic set than the
+/// rounds 1-5 filesystem-anchored engine's 27-variant enum: every
+/// variant naming a raw path/lock/fsync/txlog/ACL/inode/link-count
+/// concept was a property of that engine's *own* filesystem adapter,
+/// never observable by the W8fu6 pure transaction core, which only ever
+/// calls the six guarded, typed [`crate::ops::secrets_lifecycle::SecretsAuthorityPort`]
+/// methods. All of that fine-grained tamper/I/O detail is now the
+/// adapter's own internal concern, hidden behind
+/// [`crate::ops::secrets_lifecycle::PortError`] and reported to this
+/// audit surface, when it must be, only via the single opaque
+/// [`FailReason::PortUnavailable`] bucket.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FailReason {
-    InvalidVmId,
-    PathDerivationFailed,
-    SecretsDirOpenFailed,
-    MarkerTreeOpenFailed,
-    MarkerWriteFailed,
-    MarkerTamperedOrMissingMaterial,
+    /// `provision` requested for a `(workload, kind)` that already has
+    /// an active, non-retired generation.
     AlreadyProvisioned,
-    AlreadyRetired,
+    /// `rotate`/`rollback` requested for a `(workload, kind)` with no
+    /// active generation (never provisioned, or already retired).
     NotProvisioned,
+    /// `rollback` requested with no retained prior generation to swap
+    /// back to.
     NoRollbackTarget,
-    PreviouslyProvisionedMaterialMissing,
-    GenerationConflict,
-    MaterialWriteFailed,
-    CurrentSwapFailed,
+    /// The caller-supplied material was empty or exceeded
+    /// [`crate::ops::secrets_lifecycle::SecretMaterial::MAX_LEN`].
+    /// Never actually reachable as an audit record's `fail_reason`:
+    /// [`crate::ops::secrets_lifecycle::SecretMaterial::new`] returns
+    /// this directly to the caller before any
+    /// [`SecretsLifecycleAuditContext`] exists. Kept in this enum
+    /// anyway so every lifecycle failure a caller must handle shares
+    /// one closed vocabulary.
     InvalidMaterial,
-    /// The cross-process per-`(vm, kind)` exclusive lock could not be
-    /// acquired within the bounded wait budget.
-    LockUnavailable,
-    /// The durable transaction/recovery log (`txlog`) could not be
-    /// written or fsynced.
-    IntentWriteFailed,
-    /// A leftover `txlog` exists but is not well-formed JSON, fails
-    /// schema validation, or names a `(vm, kind)` other than the one
-    /// it was found under.
-    IntentCorrupt,
-    /// Resuming a leftover in-flight transaction found on-disk content
-    /// that does not match what the transaction log recorded before
-    /// the crash (e.g. a digest mismatch on the staged/committed
-    /// epoch). Recovery refuses to guess and fails closed without
-    /// touching `current` or the marker.
-    RecoveryContentMismatch,
-    /// Resuming a leftover in-flight transaction found the filesystem
-    /// in a state recovery cannot map to any phase of the recorded
-    /// transaction (e.g. `current` points somewhere the log did not
-    /// expect). Recovery fails closed rather than guessing.
-    RecoveryAmbiguous,
-    /// A collision-resistant staging name could not be allocated
-    /// within the bounded retry budget (astronomically unlikely; ever
-    /// observing this indicates a broken randomness source).
-    StagingNameExhausted,
-    /// Retirement's full anchored-tree enumeration found an entry it
-    /// could not account for (unexpected name, unexpected type, or a
-    /// material file with more than one hard link) and refused to
-    /// delete anything.
-    RetirementTreeAnomaly,
-    /// Retirement removed every entry it validated but the generations
-    /// tree was not observably empty afterward.
-    RetirementNotProvablyEmpty,
-    /// The live active-generation directory's owner uid/gid does not
-    /// match the marker's recorded identity.
-    IdentityOwnerMismatch,
-    /// The live active-generation directory's mode does not match the
-    /// marker's recorded identity.
-    IdentityModeMismatch,
-    /// The live active-generation directory carries (or lost) an
-    /// extended POSIX ACL relative to what the marker recorded.
-    IdentityAclMismatch,
-    /// The live active-generation directory's material file link
-    /// count is not exactly 1 (a hard-link plant), or otherwise does
-    /// not match the marker's recorded identity.
-    IdentityLinkCountMismatch,
-    /// The live active-generation material's SHA-256 digest does not
-    /// match the marker's recorded identity.
-    IdentityDigestMismatch,
-    /// The live active-generation material's SHA-256 digest matches
-    /// the marker's recorded identity, but the `(dev, ino)` pair does
-    /// not — a hard-link or directory-swap tamper that byte-content
-    /// comparison alone cannot see (a replacement file with identical
-    /// bytes but a different physical inode).
-    IdentityInodeMismatch,
-    /// `current` does not literally resolve (by name, not just by
-    /// coincidental dev/ino) to the epoch the marker records as active.
-    IdentityCurrentTargetMismatch,
-    /// A newly computed high-water epoch would not be strictly greater
-    /// than the marker's previously committed high-water epoch — a
-    /// monotonicity invariant violation this module refuses to persist.
-    HighWaterRegressed,
-    /// An `fsync`/parent-directory-sync of a file or directory this
-    /// module just durably wrote returned an error. Every phase
-    /// advancement in the transaction/recovery state machine is
-    /// blocked on this succeeding — a silently-ignored fsync failure
-    /// would let a "durable" phase transition be lost on crash.
-    FsyncFailed,
-    /// The lock file, its containing directory, or another broker-
-    /// trusted metadata path (never a `material` leaf) was found with
-    /// an owner, group, mode, type, or link count that does not match
-    /// this process's own (trusted broker) identity — i.e. it was not
-    /// created/managed by this code path and must not be trusted for
-    /// mutual exclusion or transaction bookkeeping.
-    BrokerOwnershipViolation,
+    /// A generation's independently recomputed live digest did not
+    /// match the durable state's recorded digest for that generation
+    /// — live storage was tampered with, or (post-commit) a concurrent
+    /// writer's later stage attempt clobbered this call's own
+    /// just-committed material. The authority is quarantined before
+    /// this is returned.
+    ChecksumMismatch,
+    /// [`crate::ops::secrets_lifecycle::SecretsAuthorityPort::cas_commit`]
+    /// reported that another writer's transition committed first.
+    /// Nothing was mutated; the caller may re-read and retry.
+    OwnershipFenced,
+    /// The authority already reported (or newly detected and
+    /// self-reported) that this `(workload, kind)` is quarantined.
+    /// Every port call for this pair fails closed until an
+    /// out-of-band clearing operation this module does not expose
+    /// resets it.
+    Quarantined,
+    /// The durable state read from the authority failed its own
+    /// internal self-consistency check (see
+    /// [`crate::ops::secrets_lifecycle::DurableState::validate_self_consistent`]).
+    /// The authority is quarantined before this is returned.
+    StateCorrupt,
+    /// A prior action's pending prune obligation could not be fully
+    /// resolved before this action could proceed. Whatever subset was
+    /// resolvable was durably committed; the caller may retry.
+    PruneDebtUnresolved,
+    /// The authority reported an error internal to its own adapter
+    /// (I/O, its own locking/storage substrate, etc). This module
+    /// never inspects or forwards the adapter's own error detail —
+    /// only this one opaque, closed bucket ever reaches the audit
+    /// surface.
+    PortUnavailable,
 }
 
 impl FailReason {
@@ -251,39 +258,16 @@ impl FailReason {
     /// safe for any Debug/log/audit surface (never a path or secret).
     pub fn as_slug(self) -> &'static str {
         match self {
-            Self::InvalidVmId => "invalid_vm_id",
-            Self::PathDerivationFailed => "path_derivation_failed",
-            Self::SecretsDirOpenFailed => "secrets_dir_open_failed",
-            Self::MarkerTreeOpenFailed => "marker_tree_open_failed",
-            Self::MarkerWriteFailed => "marker_write_failed",
-            Self::MarkerTamperedOrMissingMaterial => "marker_tampered_or_missing_material",
             Self::AlreadyProvisioned => "already_provisioned",
-            Self::AlreadyRetired => "already_retired",
             Self::NotProvisioned => "not_provisioned",
             Self::NoRollbackTarget => "no_rollback_target",
-            Self::PreviouslyProvisionedMaterialMissing => "previously_provisioned_material_missing",
-            Self::GenerationConflict => "generation_conflict",
-            Self::MaterialWriteFailed => "material_write_failed",
-            Self::CurrentSwapFailed => "current_swap_failed",
             Self::InvalidMaterial => "invalid_material",
-            Self::LockUnavailable => "lock_unavailable",
-            Self::IntentWriteFailed => "intent_write_failed",
-            Self::IntentCorrupt => "intent_corrupt",
-            Self::RecoveryContentMismatch => "recovery_content_mismatch",
-            Self::RecoveryAmbiguous => "recovery_ambiguous",
-            Self::StagingNameExhausted => "staging_name_exhausted",
-            Self::RetirementTreeAnomaly => "retirement_tree_anomaly",
-            Self::RetirementNotProvablyEmpty => "retirement_not_provably_empty",
-            Self::IdentityOwnerMismatch => "identity_owner_mismatch",
-            Self::IdentityModeMismatch => "identity_mode_mismatch",
-            Self::IdentityAclMismatch => "identity_acl_mismatch",
-            Self::IdentityLinkCountMismatch => "identity_link_count_mismatch",
-            Self::IdentityDigestMismatch => "identity_digest_mismatch",
-            Self::IdentityInodeMismatch => "identity_inode_mismatch",
-            Self::IdentityCurrentTargetMismatch => "identity_current_target_mismatch",
-            Self::HighWaterRegressed => "high_water_regressed",
-            Self::FsyncFailed => "fsync_failed",
-            Self::BrokerOwnershipViolation => "broker_ownership_violation",
+            Self::ChecksumMismatch => "checksum_mismatch",
+            Self::OwnershipFenced => "ownership_fenced",
+            Self::Quarantined => "quarantined",
+            Self::StateCorrupt => "state_corrupt",
+            Self::PruneDebtUnresolved => "prune_debt_unresolved",
+            Self::PortUnavailable => "port_unavailable",
         }
     }
 }
@@ -299,18 +283,12 @@ impl std::fmt::Display for FailReason {
 /// vary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecretsLifecycleAuditContext {
-    /// Typed, opaque per-VM identity (the same [`VmId`] newtype used
-    /// broker-wide) rather than a bare human-readable label: this
-    /// keeps the audit surface bound to a canonical typed identity
-    /// instead of an ad hoc string, even though its `#[serde(
-    /// transparent)]` wire form is unchanged (a plain JSON string) so
-    /// this is not an audit-schema break.
-    pub vm_id: VmId,
+    /// Canonical typed, opaque workload identity — never a
+    /// human-readable VM-name label or a filesystem path. See the
+    /// module-level "W8fu6" doc section.
+    pub workload_id: WorkloadId,
     pub kind: SecretKind,
     pub action: LifecycleAction,
-    /// FNV1a-64 hash of the per-kind secrets-state directory path
-    /// (parity with [`crate::ops::hosts::stable_hash_str`]).
-    pub base_dir_hash: String,
 }
 
 /// Path-free, material-free terminal audit record for one secrets
@@ -319,33 +297,33 @@ pub struct SecretsLifecycleAuditContext {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SecretsLifecycleAuditFields {
     pub schema_version: u32,
-    /// Typed, opaque per-VM identity -- see
-    /// [`SecretsLifecycleAuditContext::vm_id`].
-    pub vm_id: VmId,
+    /// Canonical typed, opaque workload identity — see
+    /// [`SecretsLifecycleAuditContext::workload_id`].
+    pub workload_id: WorkloadId,
     pub kind: SecretKind,
     pub action: LifecycleAction,
-    pub base_dir_hash: String,
     pub result: LifecycleResult,
     pub marker_result: MarkerResult,
     /// The active lineage epoch after this action, when one exists
     /// (`None` after a successful `retire`, and for `Denied`/
     /// `FailedClosed` results). This is the monotonic identity anchor
-    /// (see `secrets_lifecycle::MarkerData::high_water_epoch`) — never
-    /// simply "current epoch number + 1", so a rotate issued after a
-    /// rollback can never collide with (or silently resurrect) a
-    /// still-materialized older epoch directory.
+    /// (see `secrets_lifecycle::DurableState::high_water_epoch`) —
+    /// never simply "current epoch number + 1", so a rotate issued
+    /// after a rollback can never collide with (or silently resurrect)
+    /// a still-materialized older epoch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lineage_epoch: Option<u64>,
-    /// The monotonic high-water epoch recorded by the marker after
-    /// this action (present exactly when `lineage_epoch` is present,
-    /// and additionally present after a successful `retire` so an
-    /// auditor can confirm a subsequent re-provision's first epoch is
-    /// still strictly greater than every epoch this `(vm, kind)` ever
-    /// used). Never decreases across the lifetime of a `(vm, kind)`.
+    /// The monotonic high-water epoch recorded by the durable state
+    /// after this action (present exactly when `lineage_epoch` is
+    /// present, and additionally present after a successful `retire`
+    /// so an auditor can confirm a subsequent re-provision's first
+    /// epoch is still strictly greater than every epoch this
+    /// `(workload, kind)` ever used). Never decreases across the
+    /// lifetime of a `(workload, kind)`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub high_water_epoch: Option<u64>,
-    /// On-disk generations retained for rollback after this action
-    /// (excludes the active generation).
+    /// Generations retained for rollback after this action (excludes
+    /// the active generation).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub retained_generations: Vec<u64>,
     /// SHA-256 hex digest of the material this action wrote, when the
@@ -357,21 +335,17 @@ pub struct SecretsLifecycleAuditFields {
     /// when `result` is `Denied` or `FailedClosed`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fail_reason: Option<FailReason>,
-    /// `true` when this action first had to resolve a leftover,
-    /// crash-interrupted transaction (see
-    /// `secrets_lifecycle::recover_in_flight_transaction`) before
-    /// proceeding with the requested action. Always `false` on the
-    /// common, no-crash path; surfaced so an operator can distinguish
-    /// "this rotate ran cleanly" from "this rotate first had to finish
-    /// or unwind a prior crashed rotate". Threaded through every
-    /// terminal constructor below, including `verified_clean`,
-    /// `denied`, and `failed` — a business-level denial or a
-    /// mid-transaction failure can both happen *after* a successful
-    /// recovery, and that fact must remain observable on the audit
-    /// surface rather than being silently dropped for any result
-    /// other than the four successful-mutation outcomes.
+    /// `true` when this action's own successful commit left at least
+    /// one superseded generation not yet synchronously pruned (the
+    /// authority durably records the debt in
+    /// `secrets_lifecycle::DurableState::pending_prune`; a future
+    /// action for this `(workload, kind)` resolves it before doing its
+    /// own work). Only reachable when `result` is `Rotated` or
+    /// `Retired` — every other result either wrote no new pending-prune
+    /// debt (`Created`, `RolledBack`) or performed no mutation at all
+    /// (`VerifiedClean`, `Denied`, `FailedClosed`).
     #[serde(default)]
-    pub recovered_prior_transaction: bool,
+    pub prune_deferred: bool,
 }
 
 /// Errors [`SecretsLifecycleAuditFields::validate`] can report. Kept
@@ -380,7 +354,6 @@ pub struct SecretsLifecycleAuditFields {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SecretsLifecycleAuditError {
     SchemaVersionMismatch { found: u32 },
-    InvalidVmId,
     MissingLineageEpoch,
     UnexpectedLineageEpoch,
     LineageEpochIsZero,
@@ -400,6 +373,7 @@ pub enum SecretsLifecycleAuditError {
     InvalidMaterialDigest,
     UnexpectedMaterialDigest,
     MissingMaterialDigest,
+    UnexpectedPruneDeferred,
 }
 
 impl std::fmt::Display for SecretsLifecycleAuditError {
@@ -411,7 +385,6 @@ impl std::fmt::Display for SecretsLifecycleAuditError {
                     "schema_version {found} != {SECRETS_LIFECYCLE_AUDIT_SCHEMA_VERSION}"
                 )
             }
-            Self::InvalidVmId => write!(f, "vm_id is empty or contains a path separator"),
             Self::MissingLineageEpoch => write!(f, "result requires a lineage_epoch"),
             Self::UnexpectedLineageEpoch => write!(f, "result must not carry a lineage_epoch"),
             Self::LineageEpochIsZero => write!(f, "lineage epochs start at 1"),
@@ -455,15 +428,15 @@ impl std::fmt::Display for SecretsLifecycleAuditError {
             Self::MissingMaterialDigest => {
                 write!(f, "material_digest_hex required for this action/result")
             }
+            Self::UnexpectedPruneDeferred => write!(
+                f,
+                "prune_deferred is only reachable for Rotated/Retired results"
+            ),
         }
     }
 }
 
 impl std::error::Error for SecretsLifecycleAuditError {}
-
-fn valid_vm_id(vm_id: &str) -> bool {
-    !vm_id.is_empty() && !vm_id.contains('/') && !vm_id.contains('\0')
-}
 
 fn valid_material_digest_hex(value: &str) -> bool {
     value.len() == 64
@@ -488,9 +461,6 @@ impl SecretsLifecycleAuditFields {
             return Err(SecretsLifecycleAuditError::SchemaVersionMismatch {
                 found: self.schema_version,
             });
-        }
-        if !valid_vm_id(self.vm_id.as_str()) {
-            return Err(SecretsLifecycleAuditError::InvalidVmId);
         }
         if let Some(epoch) = self.lineage_epoch
             && epoch == 0
@@ -522,6 +492,14 @@ impl SecretsLifecycleAuditFields {
             && high_water < epoch
         {
             return Err(SecretsLifecycleAuditError::HighWaterBelowLineageEpoch);
+        }
+        if self.prune_deferred
+            && !matches!(
+                self.result,
+                LifecycleResult::Rotated | LifecycleResult::Retired
+            )
+        {
+            return Err(SecretsLifecycleAuditError::UnexpectedPruneDeferred);
         }
 
         // Action x result reachability matrix: only these pairs are
@@ -700,10 +678,9 @@ impl SecretsLifecycleAuditFields {
     fn base(ctx: &SecretsLifecycleAuditContext) -> Self {
         Self {
             schema_version: SECRETS_LIFECYCLE_AUDIT_SCHEMA_VERSION,
-            vm_id: ctx.vm_id.clone(),
+            workload_id: ctx.workload_id.clone(),
             kind: ctx.kind,
             action: ctx.action,
-            base_dir_hash: ctx.base_dir_hash.clone(),
             result: LifecycleResult::VerifiedClean,
             marker_result: MarkerResult::Unchanged,
             lineage_epoch: None,
@@ -711,7 +688,7 @@ impl SecretsLifecycleAuditFields {
             retained_generations: Vec::new(),
             material_digest_hex: None,
             fail_reason: None,
-            recovered_prior_transaction: false,
+            prune_deferred: false,
         }
     }
 
@@ -720,7 +697,6 @@ impl SecretsLifecycleAuditFields {
         ctx: &SecretsLifecycleAuditContext,
         high_water_epoch: u64,
         material_digest_hex: String,
-        recovered_prior_transaction: bool,
     ) -> Self {
         Self {
             result: LifecycleResult::Created,
@@ -728,20 +704,18 @@ impl SecretsLifecycleAuditFields {
             lineage_epoch: Some(1),
             high_water_epoch: Some(high_water_epoch),
             material_digest_hex: Some(material_digest_hex),
-            recovered_prior_transaction,
             ..Self::base(ctx)
         }
     }
 
     /// A new generation was created and activated.
-    #[allow(clippy::too_many_arguments)]
     pub fn rotated(
         ctx: &SecretsLifecycleAuditContext,
         lineage_epoch: u64,
         high_water_epoch: u64,
         retained_generations: Vec<u64>,
         material_digest_hex: String,
-        recovered_prior_transaction: bool,
+        prune_deferred: bool,
     ) -> Self {
         Self {
             result: LifecycleResult::Rotated,
@@ -750,18 +724,19 @@ impl SecretsLifecycleAuditFields {
             high_water_epoch: Some(high_water_epoch),
             retained_generations,
             material_digest_hex: Some(material_digest_hex),
-            recovered_prior_transaction,
+            prune_deferred,
             ..Self::base(ctx)
         }
     }
 
-    /// `current` was swapped back to a retained prior generation.
+    /// The active generation was swapped back to a retained prior
+    /// generation. Never defers a prune (a rollback supersedes
+    /// nothing new; see `secrets_lifecycle::rollback`'s doc comment).
     pub fn rolled_back(
         ctx: &SecretsLifecycleAuditContext,
         lineage_epoch: u64,
         high_water_epoch: u64,
         retained_generations: Vec<u64>,
-        recovered_prior_transaction: bool,
     ) -> Self {
         Self {
             result: LifecycleResult::RolledBack,
@@ -769,94 +744,62 @@ impl SecretsLifecycleAuditFields {
             lineage_epoch: Some(lineage_epoch),
             high_water_epoch: Some(high_water_epoch),
             retained_generations,
-            recovered_prior_transaction,
             ..Self::base(ctx)
         }
     }
 
-    /// Every generation was removed and the marker tombstoned.
+    /// Every generation was retired.
     pub fn retired(
         ctx: &SecretsLifecycleAuditContext,
         high_water_epoch: u64,
-        recovered_prior_transaction: bool,
+        prune_deferred: bool,
     ) -> Self {
         Self {
             result: LifecycleResult::Retired,
             marker_result: MarkerResult::Tombstoned,
             high_water_epoch: Some(high_water_epoch),
-            recovered_prior_transaction,
+            prune_deferred,
             ..Self::base(ctx)
         }
     }
 
     /// The action was already satisfied; no mutation occurred. Only
     /// reachable for `retire` (never-provisioned or already-retired).
-    /// `recovered_prior_transaction` is still meaningful here: a
-    /// `retire` can drain a leftover crashed transaction during
-    /// `open_and_recover` and *then* observe the physical tree is
-    /// already empty, in which case this is `verified_clean` with
-    /// `recovered_prior_transaction: true`.
-    pub fn verified_clean(
-        ctx: &SecretsLifecycleAuditContext,
-        recovered_prior_transaction: bool,
-        high_water_epoch: u64,
-    ) -> Self {
+    pub fn verified_clean(ctx: &SecretsLifecycleAuditContext, high_water_epoch: u64) -> Self {
         Self {
             result: LifecycleResult::VerifiedClean,
             marker_result: MarkerResult::Verified,
             high_water_epoch: Some(high_water_epoch),
-            recovered_prior_transaction,
             ..Self::base(ctx)
         }
     }
 
-    /// The action was refused before any filesystem mutation.
-    /// `recovered_prior_transaction` reflects whether a leftover
-    /// crashed transaction was already successfully drained by
-    /// `open_and_recover` earlier in the same call before this
-    /// business-level denial was reached (e.g. `rotate` recovering a
-    /// stale transaction and *then* finding no active marker to
-    /// rotate). It is always `false` when the denial happens before
-    /// recovery could have run or succeeded (path derivation, dir
-    /// open, lock acquisition, or recovery itself failing).
-    pub fn denied(
-        ctx: &SecretsLifecycleAuditContext,
-        recovered_prior_transaction: bool,
-        reason: FailReason,
-    ) -> Self {
+    /// The action was refused before any authority-port mutation.
+    pub fn denied(ctx: &SecretsLifecycleAuditContext, reason: FailReason) -> Self {
         Self {
             result: LifecycleResult::Denied,
             marker_result: MarkerResult::Unchanged,
             fail_reason: Some(reason),
-            recovered_prior_transaction,
             ..Self::base(ctx)
         }
     }
 
     /// The action aborted partway and failed closed.
-    /// `recovered_prior_transaction` carries the same meaning as in
-    /// [`Self::denied`]: whether a leftover crashed transaction was
-    /// already successfully drained before this failure was reached.
     ///
     /// `marker_result` is deliberately **not** a caller-supplied
     /// parameter: every reachable `secrets_lifecycle.rs` call site
     /// already only ever passes `MarkerResult::FailedClosed` (this
     /// is the *only* result variant `validate` accepts for
-    /// `FailedClosed`, see the match arm below), so accepting an
+    /// `FailedClosed`, see the match arm above), so accepting an
     /// arbitrary `MarkerResult` here was dead flexibility that could
     /// only ever construct an invalid, immediately-`validate`-
     /// rejected record. Hardcoding it makes that invalid state
     /// unconstructible instead of merely unreachable-in-practice.
-    pub fn failed(
-        ctx: &SecretsLifecycleAuditContext,
-        recovered_prior_transaction: bool,
-        reason: FailReason,
-    ) -> Self {
+    pub fn failed(ctx: &SecretsLifecycleAuditContext, reason: FailReason) -> Self {
         Self {
             result: LifecycleResult::FailedClosed,
             marker_result: MarkerResult::FailedClosed,
             fail_reason: Some(reason),
-            recovered_prior_transaction,
             ..Self::base(ctx)
         }
     }
@@ -868,10 +811,9 @@ mod tests {
 
     fn ctx(action: LifecycleAction) -> SecretsLifecycleAuditContext {
         SecretsLifecycleAuditContext {
-            vm_id: VmId::new("work"),
+            workload_id: WorkloadId::parse("aaaaaaaaaaaaaaaaaaaa").expect("valid fixture id"),
             kind: SecretKind::GuestSigningKey,
             action,
-            base_dir_hash: "0123456789abcdef".to_owned(),
         }
     }
 
@@ -901,39 +843,16 @@ mod tests {
     #[test]
     fn fail_reason_slugs_are_stable_and_distinct() {
         let variants = [
-            FailReason::InvalidVmId,
-            FailReason::PathDerivationFailed,
-            FailReason::SecretsDirOpenFailed,
-            FailReason::MarkerTreeOpenFailed,
-            FailReason::MarkerWriteFailed,
-            FailReason::MarkerTamperedOrMissingMaterial,
             FailReason::AlreadyProvisioned,
-            FailReason::AlreadyRetired,
             FailReason::NotProvisioned,
             FailReason::NoRollbackTarget,
-            FailReason::PreviouslyProvisionedMaterialMissing,
-            FailReason::GenerationConflict,
-            FailReason::MaterialWriteFailed,
-            FailReason::CurrentSwapFailed,
             FailReason::InvalidMaterial,
-            FailReason::LockUnavailable,
-            FailReason::IntentWriteFailed,
-            FailReason::IntentCorrupt,
-            FailReason::RecoveryContentMismatch,
-            FailReason::RecoveryAmbiguous,
-            FailReason::StagingNameExhausted,
-            FailReason::RetirementTreeAnomaly,
-            FailReason::RetirementNotProvablyEmpty,
-            FailReason::IdentityOwnerMismatch,
-            FailReason::IdentityModeMismatch,
-            FailReason::IdentityAclMismatch,
-            FailReason::IdentityLinkCountMismatch,
-            FailReason::IdentityDigestMismatch,
-            FailReason::IdentityInodeMismatch,
-            FailReason::IdentityCurrentTargetMismatch,
-            FailReason::HighWaterRegressed,
-            FailReason::FsyncFailed,
-            FailReason::BrokerOwnershipViolation,
+            FailReason::ChecksumMismatch,
+            FailReason::OwnershipFenced,
+            FailReason::Quarantined,
+            FailReason::StateCorrupt,
+            FailReason::PruneDebtUnresolved,
+            FailReason::PortUnavailable,
         ];
         let slugs: Vec<&str> = variants.iter().map(|v| v.as_slug()).collect();
         let unique: std::collections::HashSet<_> = slugs.iter().collect();
@@ -952,16 +871,13 @@ mod tests {
 
     #[test]
     fn provisioned_validates() {
-        let record = SecretsLifecycleAuditFields::provisioned(
-            &ctx(LifecycleAction::Provision),
-            1,
-            digest(),
-            false,
-        );
+        let record =
+            SecretsLifecycleAuditFields::provisioned(&ctx(LifecycleAction::Provision), 1, digest());
         record.validate().expect("provisioned record must validate");
         assert_eq!(record.lineage_epoch, Some(1));
         assert_eq!(record.high_water_epoch, Some(1));
         assert!(record.retained_generations.is_empty());
+        assert!(!record.prune_deferred);
     }
 
     #[test]
@@ -1002,13 +918,53 @@ mod tests {
     }
 
     #[test]
+    fn rotated_may_defer_a_prune() {
+        let record = SecretsLifecycleAuditFields::rotated(
+            &ctx(LifecycleAction::Rotate),
+            3,
+            3,
+            vec![2],
+            digest(),
+            true,
+        );
+        record
+            .validate()
+            .expect("rotated record with prune_deferred must validate");
+        assert!(record.prune_deferred);
+    }
+
+    #[test]
+    fn prune_deferred_is_rejected_outside_rotated_and_retired() {
+        let mut record = SecretsLifecycleAuditFields::rolled_back(
+            &ctx(LifecycleAction::Rollback),
+            1,
+            2,
+            vec![2],
+        );
+        record.prune_deferred = true;
+        assert_eq!(
+            record.validate(),
+            Err(SecretsLifecycleAuditError::UnexpectedPruneDeferred)
+        );
+
+        let mut denied = SecretsLifecycleAuditFields::denied(
+            &ctx(LifecycleAction::Rotate),
+            FailReason::NotProvisioned,
+        );
+        denied.prune_deferred = true;
+        assert_eq!(
+            denied.validate(),
+            Err(SecretsLifecycleAuditError::UnexpectedPruneDeferred)
+        );
+    }
+
+    #[test]
     fn rolled_back_validates_and_requires_retained_generation() {
         let record = SecretsLifecycleAuditFields::rolled_back(
             &ctx(LifecycleAction::Rollback),
             1,
             2,
             vec![2],
-            false,
         );
         record.validate().expect("rolled back record must validate");
 
@@ -1027,7 +983,6 @@ mod tests {
             1,
             2,
             vec![2],
-            false,
         );
         record.material_digest_hex = Some(digest());
         assert_eq!(
@@ -1050,10 +1005,18 @@ mod tests {
     }
 
     #[test]
+    fn retired_may_defer_a_prune() {
+        let record = SecretsLifecycleAuditFields::retired(&ctx(LifecycleAction::Retire), 5, true);
+        record
+            .validate()
+            .expect("retired record with prune_deferred must validate");
+        assert!(record.prune_deferred);
+    }
+
+    #[test]
     fn denied_requires_fail_reason_and_unchanged_marker() {
         let record = SecretsLifecycleAuditFields::denied(
             &ctx(LifecycleAction::Rotate),
-            false,
             FailReason::NotProvisioned,
         );
         record.validate().expect("denied record must validate");
@@ -1077,8 +1040,7 @@ mod tests {
     fn failed_closed_requires_fail_reason() {
         let record = SecretsLifecycleAuditFields::failed(
             &ctx(LifecycleAction::Rotate),
-            false,
-            FailReason::MarkerTamperedOrMissingMaterial,
+            FailReason::StateCorrupt,
         );
         record.validate().expect("failed record must validate");
 
@@ -1094,8 +1056,7 @@ mod tests {
     fn failed_closed_rejects_non_failed_closed_marker_result() {
         let mut record = SecretsLifecycleAuditFields::failed(
             &ctx(LifecycleAction::Retire),
-            false,
-            FailReason::RetirementTreeAnomaly,
+            FailReason::ChecksumMismatch,
         );
         record
             .validate()
@@ -1112,8 +1073,7 @@ mod tests {
     fn failed_closed_rejects_leftover_epoch_or_retained_state() {
         let base = SecretsLifecycleAuditFields::failed(
             &ctx(LifecycleAction::Rotate),
-            false,
-            FailReason::HighWaterRegressed,
+            FailReason::OwnershipFenced,
         );
 
         let mut with_lineage = base.clone();
@@ -1138,17 +1098,15 @@ mod tests {
         );
     }
 
-    /// `retire` + `Denied` is a genuinely reachable pair (an invalid
-    /// `vm_id`, or a lock-acquisition failure, denies a retire attempt
-    /// exactly like every other action) — the action/result matrix
-    /// above must accept it, not just the three previously-listed
-    /// retire outcomes.
+    /// `retire` + `Denied` is a genuinely reachable pair (a prune-debt
+    /// refusal denies a retire attempt exactly like every other
+    /// action) — the action/result matrix above must accept it, not
+    /// just the three previously-listed retire outcomes.
     #[test]
     fn retire_denied_is_a_reachable_and_valid_pair() {
         let record = SecretsLifecycleAuditFields::denied(
             &ctx(LifecycleAction::Retire),
-            false,
-            FailReason::InvalidVmId,
+            FailReason::PruneDebtUnresolved,
         );
         record
             .validate()
@@ -1179,44 +1137,19 @@ mod tests {
 
     #[test]
     fn schema_version_mismatch_is_rejected() {
-        let mut record = SecretsLifecycleAuditFields::provisioned(
-            &ctx(LifecycleAction::Provision),
-            1,
-            digest(),
-            false,
-        );
-        record.schema_version = 1;
+        let mut record =
+            SecretsLifecycleAuditFields::provisioned(&ctx(LifecycleAction::Provision), 1, digest());
+        record.schema_version = 2;
         assert_eq!(
             record.validate(),
-            Err(SecretsLifecycleAuditError::SchemaVersionMismatch { found: 1 })
+            Err(SecretsLifecycleAuditError::SchemaVersionMismatch { found: 2 })
         );
-    }
-
-    #[test]
-    fn invalid_vm_id_is_rejected() {
-        let mut record = SecretsLifecycleAuditFields::provisioned(
-            &ctx(LifecycleAction::Provision),
-            1,
-            digest(),
-            false,
-        );
-        for bad in ["", "work/vm", "wor\0k"] {
-            record.vm_id = VmId::new(bad);
-            assert_eq!(
-                record.validate(),
-                Err(SecretsLifecycleAuditError::InvalidVmId)
-            );
-        }
     }
 
     #[test]
     fn lineage_epoch_zero_is_rejected() {
-        let mut record = SecretsLifecycleAuditFields::provisioned(
-            &ctx(LifecycleAction::Provision),
-            1,
-            digest(),
-            false,
-        );
+        let mut record =
+            SecretsLifecycleAuditFields::provisioned(&ctx(LifecycleAction::Provision), 1, digest());
         record.lineage_epoch = Some(0);
         assert_eq!(
             record.validate(),
@@ -1272,7 +1205,6 @@ mod tests {
             1,
             2,
             vec![2],
-            false,
         );
         record.material_digest_hex = Some(digest());
         assert_eq!(
@@ -1283,12 +1215,8 @@ mod tests {
 
     #[test]
     fn created_and_rotated_require_material_digest() {
-        let mut created = SecretsLifecycleAuditFields::provisioned(
-            &ctx(LifecycleAction::Provision),
-            1,
-            digest(),
-            false,
-        );
+        let mut created =
+            SecretsLifecycleAuditFields::provisioned(&ctx(LifecycleAction::Provision), 1, digest());
         created.material_digest_hex = None;
         assert_eq!(
             created.validate(),
@@ -1312,12 +1240,8 @@ mod tests {
 
     #[test]
     fn material_digest_must_be_lowercase_hex_64() {
-        let mut record = SecretsLifecycleAuditFields::provisioned(
-            &ctx(LifecycleAction::Provision),
-            1,
-            digest(),
-            false,
-        );
+        let mut record =
+            SecretsLifecycleAuditFields::provisioned(&ctx(LifecycleAction::Provision), 1, digest());
         for bad in ["", "AA", &"a".repeat(63), &"g".repeat(64), &"A".repeat(64)] {
             record.material_digest_hex = Some(bad.to_owned());
             assert_eq!(
@@ -1347,7 +1271,7 @@ mod tests {
         // `Rollback` can never produce `VerifiedClean` (only `Retire`
         // reaches that result).
         let mut impossible2 =
-            SecretsLifecycleAuditFields::verified_clean(&ctx(LifecycleAction::Retire), false, 3);
+            SecretsLifecycleAuditFields::verified_clean(&ctx(LifecycleAction::Retire), 3);
         impossible2.action = LifecycleAction::Rollback;
         assert_eq!(
             impossible2.validate(),
@@ -1369,15 +1293,15 @@ mod tests {
         let decoded: SecretsLifecycleAuditFields =
             serde_json::from_str(&json).expect("deserialize");
         assert_eq!(decoded, record);
-        assert!(decoded.recovered_prior_transaction);
+        assert!(decoded.prune_deferred);
     }
 
     #[test]
     fn fail_reason_serde_round_trips_as_closed_enum() {
-        let json = serde_json::to_string(&FailReason::RecoveryContentMismatch).unwrap();
-        assert_eq!(json, "\"recovery_content_mismatch\"");
+        let json = serde_json::to_string(&FailReason::ChecksumMismatch).unwrap();
+        assert_eq!(json, "\"checksum_mismatch\"");
         let decoded: FailReason = serde_json::from_str(&json).unwrap();
-        assert_eq!(decoded, FailReason::RecoveryContentMismatch);
+        assert_eq!(decoded, FailReason::ChecksumMismatch);
         // An arbitrary string is not a valid FailReason: this is the
         // structural guarantee behind "closed failure reasons".
         assert!(serde_json::from_str::<FailReason>("\"totally-made-up\"").is_err());
@@ -1385,8 +1309,7 @@ mod tests {
 
     #[test]
     fn verified_clean_never_carries_lineage_epoch() {
-        let record =
-            SecretsLifecycleAuditFields::verified_clean(&ctx(LifecycleAction::Retire), false, 7);
+        let record = SecretsLifecycleAuditFields::verified_clean(&ctx(LifecycleAction::Retire), 7);
         record
             .validate()
             .expect("verified clean record must validate");
@@ -1394,37 +1317,34 @@ mod tests {
         assert_eq!(record.high_water_epoch, Some(7));
     }
 
-    /// `recovered_prior_transaction: true` must be reachable and valid
-    /// for every terminal outcome that can follow a successful
-    /// mid-call recovery, not just the four successful-mutation
-    /// results. A `retire` can drain a crashed transaction and then
-    /// find the tree already empty (`verified_clean`); a `rotate` can
-    /// drain a crashed transaction and then hit a business-level
-    /// denial (`denied`); and a fresh action can drain a crashed
-    /// transaction and then itself fail closed (`failed`).
+    /// The wire form of `workload_id` stays a bounded opaque 20-byte
+    /// string (never the human-readable workload name it was derived
+    /// from), so a downstream consumer that only speaks JSON still
+    /// sees a plain string field, not a nested object.
     #[test]
-    fn recovered_prior_transaction_true_is_valid_on_every_non_mutation_result() {
-        let clean =
-            SecretsLifecycleAuditFields::verified_clean(&ctx(LifecycleAction::Retire), true, 9);
-        clean
-            .validate()
-            .expect("recovered verified_clean must validate");
-        assert!(clean.recovered_prior_transaction);
-
-        let denied = SecretsLifecycleAuditFields::denied(
-            &ctx(LifecycleAction::Rotate),
-            true,
-            FailReason::NotProvisioned,
+    fn workload_id_serializes_as_a_plain_opaque_string() {
+        let record =
+            SecretsLifecycleAuditFields::provisioned(&ctx(LifecycleAction::Provision), 1, digest());
+        let json = serde_json::to_value(&record).expect("serialize");
+        assert_eq!(
+            json.get("workloadId").and_then(|v| v.as_str()),
+            Some("aaaaaaaaaaaaaaaaaaaa")
         );
-        denied.validate().expect("recovered denied must validate");
-        assert!(denied.recovered_prior_transaction);
+    }
 
-        let failed = SecretsLifecycleAuditFields::failed(
-            &ctx(LifecycleAction::Rotate),
-            true,
-            FailReason::MarkerTamperedOrMissingMaterial,
+    #[test]
+    fn unknown_fields_are_rejected() {
+        let record =
+            SecretsLifecycleAuditFields::provisioned(&ctx(LifecycleAction::Provision), 1, digest());
+        let mut value = serde_json::to_value(&record).expect("serialize");
+        value
+            .as_object_mut()
+            .expect("object")
+            .insert("baseDirHash".to_owned(), serde_json::json!("deadbeef"));
+        let decoded: Result<SecretsLifecycleAuditFields, _> = serde_json::from_value(value);
+        assert!(
+            decoded.is_err(),
+            "a legacy base_dir_hash field must be rejected by deny_unknown_fields"
         );
-        failed.validate().expect("recovered failed must validate");
-        assert!(failed.recovered_prior_transaction);
     }
 }
