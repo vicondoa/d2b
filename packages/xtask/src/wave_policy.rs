@@ -644,9 +644,15 @@ impl SharedContractPolicy {
                         .protected_prefixes
                         .iter()
                         .any(|prefix| path_matches_prefix(path, prefix));
-                if !globally_protected {
+                let exact_shared_root_implementation =
+                    self.implementation_path(path)
+                        .is_some_and(|implementation| {
+                            !implementation.at_prefix_root
+                                && matches!(implementation.owner, ImplementationOwner::Frozen)
+                        });
+                if !globally_protected && !exact_shared_root_implementation {
                     return Err(format!(
-                        "{} exception {path} is not a protected shared-root path",
+                        "{} exception {path} is not a protected or exact shared-root path",
                         wave.wave
                     ));
                 }
@@ -717,6 +723,12 @@ impl SharedContractPolicy {
     }
 
     fn parent_is_allowed(&self, ownership: &WaveOwnership, parent: &str) -> bool {
+        // W8 component branches use the exact integration branch as their
+        // parent-authoritative ownership root. Other same-wave/suffixed
+        // branches remain ineligible.
+        if ownership.wave == "w8" && parent == ownership.branch_stem {
+            return true;
+        }
         if parent == self.shared_root_branch {
             return ownership.landed_predecessor_ref.is_none();
         }
@@ -1332,7 +1344,12 @@ fn verify_parent_graph<P: OwnershipProbe>(
         "w5" => waves.is_empty(),
         "w6" => waves.is_empty() || waves == ["w5"],
         "w7" => waves.is_empty() || waves == ["w6", "w5"],
-        "w8" => waves.is_empty() || waves == ["w7", "w6", "w5"],
+        "w8" => {
+            waves.is_empty()
+                || waves == ["w8"]
+                || waves == ["w7", "w6", "w5"]
+                || waves == ["w8", "w7", "w6", "w5"]
+        }
         _ => false,
     };
     if !allowed {
@@ -3300,7 +3317,36 @@ mod tests {
                 "packages/xtask/tests/policy_workspace.rs".to_owned(),
             ]
         );
-        assert!(ownership.allowed_protected_paths.is_empty());
+        assert_eq!(
+            ownership.allowed_protected_paths,
+            vec![
+                "packages/Cargo.lock".to_owned(),
+                "packages/d2b-contract-tests/tests/storage_sync_contracts.rs".to_owned(),
+                "packages/d2b-contracts/src/broker_wire.rs".to_owned(),
+                "packages/d2b-contracts/src/v2_component_session.rs".to_owned(),
+                "packages/d2b-contracts/src/v2_services.rs".to_owned(),
+                "packages/d2b-core/src/bundle_resolver.rs".to_owned(),
+                "packages/d2b-core/src/storage_lifecycle.rs".to_owned(),
+                "packages/d2b-core/src/sync.rs".to_owned(),
+                "packages/d2b-session-unix/src/adapter.rs".to_owned(),
+                "packages/d2b-session-unix/src/descriptor.rs".to_owned(),
+                "packages/d2b-session-unix/src/lib.rs".to_owned(),
+                "packages/d2b-session/src/cancellation.rs".to_owned(),
+                "packages/d2b-session/src/driver.rs".to_owned(),
+                "packages/d2b-session/src/engine.rs".to_owned(),
+                "packages/d2b-session/src/inbound_call.rs".to_owned(),
+                "packages/d2b-session/src/lib.rs".to_owned(),
+                "packages/d2b-session/src/server.rs".to_owned(),
+                "packages/d2b-state/Cargo.toml".to_owned(),
+                "packages/d2b-state/src/atomic.rs".to_owned(),
+                "packages/d2b-state/src/audit.rs".to_owned(),
+                "packages/d2b-state/src/lib.rs".to_owned(),
+                "packages/d2b-state/src/lock.rs".to_owned(),
+                "packages/d2b-state/src/path.rs".to_owned(),
+                "packages/d2b-state/src/secret.rs".to_owned(),
+                "tests/host-integration/unsafe-local-helper.nix".to_owned(),
+            ]
+        );
         assert_eq!(ownership.landed_predecessor_ref.as_deref(), Some("main"));
     }
 
@@ -3358,6 +3404,8 @@ mod tests {
 
         // Wrong parent: w8 may only chain from w7, not from w6 directly.
         assert!(!policy.parent_is_allowed(ownership, "adr0045-w6-user-services"));
+        assert!(policy.parent_is_allowed(ownership, "adr0045-w8-integration"));
+        assert!(!policy.parent_is_allowed(ownership, "adr0045-w8-integration-secrets-lifecycle"));
         // Wrong base: an unrelated, non-governed branch is not an authority root.
         assert!(!policy.parent_is_allowed(ownership, "some-unrelated-branch"));
         // W8 must start from the landed predecessor, not bypass W5-W7 by
@@ -3415,9 +3463,13 @@ mod tests {
         ] {
             let error = check_changed_paths_for_branch(&policy, "w8", branch, &paths)
                 .expect_err("W8 component workspace registration");
-            for path in &paths {
+            for path in paths
+                .iter()
+                .filter(|path| path.as_str() != "packages/Cargo.lock")
+            {
                 assert!(error.contains(path), "{error}");
             }
+            assert!(!error.contains("packages/Cargo.lock"), "{error}");
         }
         for wave in ["w5", "w6", "w7"] {
             let error = check_changed_paths(&policy, wave, &paths)
