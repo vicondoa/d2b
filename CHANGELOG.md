@@ -84,6 +84,10 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added the W8 generated state/lock authority: runtime lock acquisition now
+  consumes trusted storage/sync inventories, binds exact lock and protected
+  resource identities, uses guarded atomic state access, and reconciles lock
+  files durably through the broker.
 - Split W8's remaining integration work at real file/contract boundaries so
   nine dependency-ready components can implement concurrently: secrets
   transactions, helper backend, shell client, gateway core, provider parity,
