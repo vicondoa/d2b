@@ -78,6 +78,18 @@ caller strings. Dynamic spec/status is canonical JSON validated against the
 exact signed schema before storage. Envelope/index/operation/change values use
 one versioned deterministic encoding owned by d2b-contracts.
 
+Status is the default durable observation surface for bounded non-secret
+operational state (D087) and is stored inside the resource envelope, not in a
+side stream. A status write is validated against the frozen status bounds
+before storage — total canonical serialized status ≤ 64 KiB,
+ResourceType-/provider-specific typed detail ≤ 32 KiB, and bounded
+condition/list/map cardinality — and an over-limit write fails closed with
+`status-oversize` before any redb mutation (see
+`ADR-046-resource-object-model` § Status bounds). Controllers write status only
+on a material change, so status churn cannot outpace revision compaction; there
+are no high-frequency byte streams, logs, metrics, or ring buffers in the
+store.
+
 Unknown table/encoding/schema versions fail closed.
 
 ## Async storage adapter

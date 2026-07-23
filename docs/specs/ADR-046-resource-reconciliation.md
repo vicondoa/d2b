@@ -261,6 +261,27 @@ Controllers do not poll by default. A ResourceType whose external state can
 drift declares a bounded observe interval. Core schedules exactly that
 reconcile reason. Missed watch events are recovered by revision replay/relist.
 
+## Status-first recovery after restart
+
+Resource `status` is the default durable observation and recovery surface for
+bounded non-secret operational state (D087): reconcile stage, opaque
+non-authorizing external handles/IDs/digests, adoption observations, bounded
+counters, closed-enum detail, dependency readiness, and last successful
+checkpoints. It is written only on a material change and never carries secrets,
+authority-conferring handles, private path/argv/environment/PID/unit data, or
+high-frequency streams (see `ADR-046-resource-object-model` § Status bounds).
+
+On a Zone or controller restart a controller re-reads its owned resources'
+status and treats every field as **observation, not authority**. Before
+relying on any recovered observation it reverifies against external reality —
+re-discovering running processes from declared cgroup leaves, opening fresh
+pidfds, and revalidating opaque external handles and markers against the live
+external system — and quarantines or degrades any ambiguity. Status never
+substitutes for that reverification and never carries or stands in for a
+privileged effect. This makes a durable payload Volume unnecessary for a
+component whose operational state is fully derivable from spec, status, the
+core Operation ledger, and independent external observation.
+
 ## Backpressure and fairness
 
 - bounded watch stream credit;

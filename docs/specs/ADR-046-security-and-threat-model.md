@@ -333,7 +333,7 @@ to reach the kernel/network/filesystem/cloud API directly (D077).
 | --- | --- | --- |
 | Broker/allocator access | Yes (core-controller + broker are the sole privileged executors) | No — never imports a broker client/DTO (D077) |
 | Bootstrap exception | `Provider/system-core` and `Provider/system-minijail` are the two fixed, non-configurable bootstrap Providers (D036, D051); embedded in the Zone runtime binary, pre-created before any other resource, and still subject to full trust/package/conformance validation (RZC lines 754-777, "not exempt from trust checks") | None — every other Provider is installed as an ordinary `Provider/<name>` resource before use (D016) |
-| Own Process bootstrap | The fixed core-controller process launches every other Provider's static controller/service Processes and their per-component state Volumes (D078) | A Provider controller never bootstraps its own Process; it may create authorized dynamic child Process/EphemeralProcess/primitive resources after it exists |
+| Own Process bootstrap | The fixed core-controller process launches every other Provider's static controller/service Processes and any *declared* optional per-component state Volumes (D078; a component declares a state Volume only under the storage-need test, D087) | A Provider controller never bootstraps its own Process; it may create authorized dynamic child Process/EphemeralProcess/primitive resources after it exists |
 | Status authority | Computes aggregate Provider status from component/dependency/process health (D085) | Writes status only for the ResourceTypes/fields it is explicitly authorized to own; never self-declares its own aggregate `Provider` resource status |
 | RBAC authority | Native Role/RoleBinding engine, wildcard Roles restricted to core-controller-generated Roles only | Cannot claim a wildcard permission (`resourceNames: ["*"]`/empty `executionRefs`) without explicit review (RZC lines 868-997, `provider-wildcard-permission-restricted`) |
 
@@ -983,21 +983,38 @@ identity marker, (5) remove the root directory, (6) commit finalizer removal
 leaves a partially removed Volume with a valid marker, which is
 **quarantined, not silently re-provisioned**.
 
-**ProviderStateSet per-component isolation (D076).** `ProviderStateSet` is
-the logical, query-time grouping of ordinary Volume resources owned by a
-Provider (`ProviderStateSet(zone, provider-name)`); it is never a
-ResourceType or a stored row. Core `ProviderDeployment` creates one private,
-framework-created Volume per declared `stateNamespaces` entry for every
-semantic component from the signed state declarations, **before** launching
-that component's Process — including an empty `stateSchema` Volume for
-stateless components. These state Volumes use the canonical full Volume
-schema (extended with `stateSchema`/`persistenceClass`/`sensitivityClass`/
-quota/sealing fields) and `User/<name>` layout principals drawn from
-bounded, Nix-preprovisioned pools. Each component mounts only its own
-declared view; there is **no cross-component or cross-Provider sharing** and
-no separate non-Volume "compartment" concept. For component state Volumes,
-`persistenceClass: persistent` is required — `ephemeral`, `cache`, and
-`config` are rejected with `component-persistence-class-forbidden`.
+**ProviderStateSet per-component isolation (D076, D087).** `ProviderStateSet`
+is the optional, logical, query-time grouping of the *declared* Volume
+resources owned by a Provider (`ProviderStateSet(zone, provider-name)`); it is
+never a ResourceType or a stored row, and it is empty for a Provider that
+declares no state Volume. Bounded non-secret operational state belongs in the
+owning resource's `status` subresource and the core Operation ledger by default
+(D087). A component declares a state Volume only when a payload passes the
+storage-need test (secret/sensitive private recovery data; large/binary/file
+content; private data unsafe for status readers; or bounded-but-revision-
+unsuitable data with a demonstrated recovery need). Core `ProviderDeployment`
+creates one private, framework-created Volume per *declared* `stateNamespaces`
+entry from the signed state declarations, **before** launching that component's
+Process; a stateless component declares no namespace and receives no Volume,
+and there is no empty identity-only Volume. These declared state Volumes use the
+canonical full Volume schema (extended with
+`stateSchema`/`persistenceClass`/`sensitivityClass`/quota/sealing fields) and
+`User/<name>` layout principals drawn from bounded, Nix-preprovisioned pools.
+Each component mounts only its own declared view; there is **no cross-component
+or cross-Provider sharing** and no separate non-Volume "compartment" concept.
+For declared component state Volumes, `persistenceClass: persistent` is
+required — `ephemeral`, `cache`, and `config` are rejected with
+`component-persistence-class-forbidden`.
+
+**Status confidentiality is RBAC, not secret storage (D087).** Resource
+`status` is a redacted, RBAC-readable observation surface. It MUST NOT contain
+secrets, raw tokens/keys/PSKs, authority-conferring credential handles, private
+endpoint/path/argv/environment/PID/unit data, terminal/clipboard/CTAP bytes,
+raw cloud error bodies, large binary blobs, or unbounded/churn-heavy content
+(`ADR-046-resource-object-model` § Status prohibitions). Confidentiality of the
+bounded non-secret observations status does carry is provided by the status
+subresource's RBAC read authorization; status is never used to store a secret
+whose exposure would depend on redaction alone.
 
 Two invariants close the specific attacks Volume state is most exposed to:
 
@@ -1028,34 +1045,24 @@ for one of these classes fails with `guest-local-required`. This is the
 Volume-layer enforcement of the same custody boundary described in
 [Gateway Guest custody](#gateway-guest-custody).
 
-**The mandatory-state bootstrap cycle exception (D086).** Every
-`volume-local` controller instance normally needs its own state Volume
-before it can create Volumes for anyone else — a closed cycle, since Volume
-creation normally requires a running `Provider/volume-local` controller
-instance. D086 scopes the one break in this cycle **per execution target**
-(Host, Guest, or user-domain local-storage owner): each target running its
-own `volume-local-controller` instance has its own closed, non-resource
-**local** bootstrap storage mechanism that provisions/validates only that
-target's first `volume-local` controller's own empty-`stateSchema` state
-Volume, and — only where `system-core`/`system-minijail` are themselves
-fixed bootstrap components on that same target — their state Volumes too.
+**No bootstrap state Volume (D086, superseded by D087).** The fixed bootstrap
+components — the first `volume-local` controller instance on each execution
+target, and (where present) `system-core` and `system-minijail` — keep their
+bounded non-secret operational state in resource `status` and the core
+Operation ledger and declare **no** state Volume. Because no component requires
+a state Volume before a `volume-local` instance is Ready, there is no bootstrap
+state-Volume cycle, no per-execution-target local bootstrap storage mechanism,
+and no bootstrap-storage exception. There is no hidden bootstrap store: a fixed
+bootstrap component reaches Ready by adopting running processes and re-deriving
+its observed state from `status`, the core Operation ledger, and independent
+external observation (cgroup-leaf scanning, fresh pidfds, marker reverification
+against external reality).
 
-This exception is deliberately narrow:
-
-- It never crosses an execution-target boundary. A Guest's local bootstrap
-  mechanism uses only Guest-local primitives and never leaks a parent-Host
-  dirfd or other Host-local resource handle — this is what lets a Guest
-  bootstrap its own primitive controllers (including a Guest-local
-  `volume-local` instance) independently of the Host.
-- These are real Volume resources from their first write — ordinary
-  resource rows with normal generation/status, never placeholders — and the
-  target's `volume-local` instance adopts and reconciles its own local set
-  under its normal reconcile loop immediately after startup, exactly as it
-  would adopt any pre-existing Volume row after a restart.
-- It is not a third Process-bootstrap Provider; each target reuses the same
-  fixed, integrity-pinned bootstrap boundary that already launches that
-  target's `system-core`/`system-minijail` where present.
-- No other Provider or component, on any target, receives this exception.
+A Guest still bootstraps its own primitive controllers (including a Guest-local
+`volume-local` instance) independently of the Host: the Guest-local instance
+uses only Guest-local primitives, never a leaked parent-Host dirfd or other
+Host-local resource handle, and reaches Ready from Guest-local primitives and
+its own status alone.
 
 `volume-local` remains the single owner of the Volume ResourceType's layout/
 spec/ownership fields; `volume-virtiofs` is a separate attachment-

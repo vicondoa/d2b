@@ -178,14 +178,7 @@ spec:
       limit: 64
     fds:
       limit: 512
-  mounts:
-    - volumeRef: Volume/network-local--controller-main--controller-state--host-system
-      view: main
-      mountPath: /run/d2b/state
-      access: read-write
-      required: true
-      # Controller receives only the view dirfd for this path — not the
-      # Volume metadata or filesystem path.  See §17.3.
+  mounts: []                             # no Provider state Volume under D087
   desiredLifecycle: running
   restartPolicy:
     class: on-failure
@@ -1493,129 +1486,46 @@ The set itself is not a compartment type or a framework-managed object — it is
 query.  The Volumes in the set are ordinary Volume resources that happen to carry
 `ownerRef: Provider/network-local`.
 
-### 17.1 Component state declaration
+Under D087, `Provider/network-local` declares **no Provider state Volume**. Its
+ProviderStateSet is therefore empty:
 
-The `controller-main` component declares one stateNamespace.  Even though the
-payload schema is empty for this initial catalog entry, every semantic component
-gets a private framework/core-created Volume.  The stateNamespace declaration in
-the signed component descriptor:
-
-```yaml
-stateNamespaces:
-  - id: controller-state
-    schemaId: io.d2b.network-local/controller/controller-state
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<sealed-at-build-time>
-    persistenceClass: persistent         # survives component/Provider restart, upgrade,
-                                         # destroy, and reset; identity marker requires
-                                         # durable backing even for empty payload schema
-    sensitivityClass: private            # single-process; no cross-component access
-    migrationPolicy: none                # empty payload schema; no migration logic
-    quotaBytes: 65536                    # minimal nonzero quota: identity-marker file
-                                         # + StateEnvelope header; never zero
-    sealingRequired: false
-    views:
-      main:
-        rights: [read, write, create, delete, traverse]
+```text
+ProviderStateSet(zone, "network-local") = {}
 ```
 
-`schemaId`, `schemaVersion`, `schemaDigest`, and `views` are signed into the
-component descriptor and the Provider package digest.
+The controller's network operational state fails the storage-need test for a
+durable Provider state Volume: bridge, route, nftables, DHCP, attachment, and
+adoption observations are bounded, non-secret, and derivable from `Network.spec`,
+`Network.status`, the core Operation ledger, broker operation results, and
+external kernel/network observation after restart.
 
-`migrationPolicy: none` means **no EphemeralProcess migration worker is ever
-spawned** for this Volume.  The volume-local Provider skips all migration logic
-and leaves `stateSchemaPhase: current` once the marker is written.
+The controller Process therefore mounts no Provider state Volume, declares no
+state namespace, has no dedicated state-layout `User/<name>` principal, and has
+no identity marker, migration worker, Provider state reset path, or Provider
+state destroy path. There is no bootstrap state-Volume mechanism; the previous
+bootstrap exception (D086, superseded by D087) does not apply.
 
-The network-local controller does **not** create, update, or delete its own state
-Volume.  The state Volume is a prerequisite that must be Ready before the
-controller Process starts; core ProviderDeployment owns its lifecycle.
+The per-Network config Volumes (§9) are preserved. They carry actual runtime
+configuration content (`dnsmasq.conf`, `nftables.rules`, `routing.conf`,
+`attachments.json`) on tmpfs with `ownerRef: Network/<networkName>`, so they are
+runtime/config operational Volumes, not Provider state Volumes and not members of
+the ProviderStateSet. Runtime network artifacts such as bridges, routes,
+nftables rules, and mDNS/agent Processes are likewise unaffected and remain
+broker/controller-managed operational state, not Provider state Volumes.
 
-### 17.2 State Volume
-
-**Core ProviderDeployment creates** the following Volume when `Provider/network-local` is
-installed, before the controller Process starts.  Volume naming convention:
-`<provider-name>--<component-id>--<namespace-id>--<execution-ref-short>`.
-
-```yaml
-apiVersion: resources.d2b.io/v3
-type: Volume
-metadata:
-  name: network-local--controller-main--controller-state--host-system
-  zone: dev
-  ownerRef: Provider/network-local          # places this Volume in the ProviderStateSet
-spec:
-  providerRef: Provider/volume-local
-  persistenceClass: persistent
-  sensitivityClass: private
-  stateSchema:
-    schemaId: io.d2b.network-local/controller/controller-state
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<sealed-at-build-time>
-    migrationPolicy: none
-  quotaBytes: 65536
-  sealingCredentialRef: null
-  source:
-    executionRef: Host/host-system
-    settings: {}
-  layout:
-    - path: state
-      type: directory
-      ownerRef: User/net-local-controller   # Nix-preprovisioned User; NO ComponentPrincipal ref
-      groupRef: User/net-local-controller
-      mode: "0700"
-      sensitivity: private
-      createPolicy: create-if-never-provisioned
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      noFollow: true
-  views:
-    main:
-      path: state
-      rights: [read, write, create, delete, traverse]
-  identityMarker:
-    class: broker-maintained
-    markerRoot: provider-state-markers
-  snapshotPolicy: null
-  retentionPolicy: null
-  attachments: []
-```
-
-**Layout principals** are Nix-preprovisioned `User/<name>` resources.  No
-`ComponentPrincipal` ResourceRef is used.  No cross-component shared Volume is
-declared.  The controller Process receives only its local `main` view dirfd at
-process start — not the Volume's filesystem path or any broader Volume metadata.
-
-This is the sole Volume in the ProviderStateSet.  The per-Network config Volumes
-(§9) carry `ownerRef: Network/<networkName>` and are therefore **outside** the
-ProviderStateSet; they are part of each Network's owned resource subtree.
-
-### 17.3 Controller Process mount
-
-The controller Process spec (§4.1) mounts this Volume:
-
-```yaml
-mounts:
-  - volumeRef: Volume/network-local--controller-main--controller-state--host-system
-    view: main
-    mountPath: /run/d2b/state
-    access: read-write
-    required: true
-```
-
-### 17.4 ProviderStateSet lifecycle
-
-**Core ProviderDeployment** creates the state Volume before the controller Process
-starts and deletes it after the controller Process stops and its finalizers clear.
-The Volume is `persistent`: it survives component and Provider restarts, is
-preserved across Provider upgrades (schema migration policy applies, `none` here
-means no migration worker), and is only removed during an explicit Provider
-destroy or reset.  The identity marker is written by the broker at provision time
-and validated on every daemon restart and Process launch.
+Status is observation only. It is revisioned, optimistic-status-writer
+controlled, RBAC-readable, redacted, bounded to the global/provider-detail
+limits, written only on material change, and re-verified against external
+kernel/network reality after restart. It never contains secrets, authority
+handles, private paths, argv/env, PIDs, unit names, raw command output, large
+blobs, or unbounded collections; oversize status is rejected with
+`status-oversize`.
 
 The network-local controller does not add Volume to its exported `ResourceTypes
-implemented`.  `Provider/volume-local` is the sole Volume reconciler; the
-controller creates per-Network config Volume resource objects (§9) but does not
-reconcile them and does not create its own state Volume prerequisite.
+implemented`. `Provider/volume-local` remains the reconciler for per-Network
+config Volume resources (§9); the controller creates those resource objects and
+writes their bounded config content through the Volume service, but it does not
+reconcile Volumes and does not create a Provider state Volume prerequisite.
 
 ---
 
@@ -2103,8 +2013,9 @@ On controller binary upgrade:
    finalizer sequence (§16.3).
 2. Operator deletes `Provider/network-local` resource.
 3. Framework deletes controller Process resource; system-minijail stops controller.
-4. Framework removes `User/net-local-controller` resource (blocked if any Volume
-   still has `ownerRef: User/net-local-controller` — must clear Networks first).
+4. Framework removes `User/net-local-controller` resource (blocked if any
+   per-Network config Volume layout still references `User/net-local-controller`
+   — must clear Networks first).
 5. Nix activation removes the account (separate operator step, outside the
    resource lifecycle).
 
@@ -2160,7 +2071,7 @@ On controller binary upgrade:
 | ADR046-network-016 | Security | Verify INV-NET-008 (Guest-network-admin isolation): Process Provider correctly inherits Guest netns for agent/dnsmasq |
 | ADR046-network-017 | Docs | `packages/d2b-provider-network-local/README.md` covering all 7 required topics |
 | ADR046-network-018 | Broker | `UsbipBindFirewallRule` broker op stays with `Provider/device-usbip`; verify separation in integration tests |
-| ADR046-network-019 | Provider | Declare `controller-main` stateNamespace in signed component descriptor; confirm core ProviderDeployment (not the semantic controller) creates `Volume/network-local--controller-main--controller-state--host-system` before the controller Process starts and deletes it after; validate Volume naming convention, layout principal (`User/net-local-controller`; no `ComponentPrincipal`), `persistenceClass: persistent`, nonzero `quotaBytes`, identity marker presence, `migrationPolicy: none` (no EphemeralProcess worker spawned), upgrade/destroy/reset participation, and controller receiving only the view dirfd; confirm Volume is not in `ResourceTypes implemented` |
+| ADR046-network-019 | Provider | Confirm `controller-main` declares no stateNamespace and core ProviderDeployment creates no Provider state Volume or state mount; validate ProviderStateSet query returns empty for `Provider/network-local`; validate bounded operational state is written to revisioned/redacted status and the core Operation ledger with `status-oversize` conformance; confirm per-Network config Volumes remain `ownerRef: Network/<name>` runtime/config operational Volumes outside the ProviderStateSet and `Volume` is not in `ResourceTypes implemented` |
 
 ---
 
@@ -2186,7 +2097,7 @@ The integration test invocation commands are documented in the root `README.md`.
 | Test file | Coverage |
 | --- | --- |
 | `schema_roundtrip.rs` | `NetworkSpec` and `NetworkStatus` JSON serialize/deserialize; all optional fields; all enum variants |
-| `state_schema_roundtrip.rs` | State Volume naming convention (`<provider>--<component-id>--<namespace-id>--<execution-ref-short>`); stateNamespace field validation; `persistenceClass: persistent`; nonzero `quotaBytes`; identity marker required even for empty payload schema; Volume participates in upgrade/destroy/reset; layout principal is `User/<name>` (no `ComponentPrincipal`); Volume occupies ProviderStateSet query; per-Network config Volumes are excluded from ProviderStateSet (ownerRef mismatch) |
+| `state_schema_roundtrip.rs` | Provider descriptor has no stateNamespace for `controller-main`; no Provider state Volume, state mount, identity marker, migration worker, or state-layout principal is emitted; ProviderStateSet query returns empty; bounded operational observations live in status/core Operation ledger and pass redaction/size-bound checks; per-Network config Volumes are excluded from ProviderStateSet (ownerRef mismatch) |
 | `ifname_derive.rs` | IfName derivation determinism; collision detection; 15-byte constraint; all role prefixes |
 | `cidr_overlap.rs` | CIDR overlap matrix: same Network, cross-Network, external CIDR; all boundaries; no-false-positive at adjacent CIDRs |
 | `controller_state.rs` | Full reconcile state machine: Normal path; CIDR conflict; User not Ready; Volume error; Guest timeout; agent reload failure; finalizer sequence (all child ordering); adoption on restart; drift detection cycle |
@@ -2212,7 +2123,7 @@ The integration test invocation commands are documented in the root `README.md`.
 | `process-sandbox-netns.nix` | Agent and dnsmasq Process sandbox: `namespaceClasses: []` → inherits Guest netns; no capabilityClass on host |
 | `net-vm-artifact-id-eval.nix` | `net-vm-base` artifact ID format; `nixos-system` type; no path separator |
 | `user-no-managed-by-eval.nix` | `User/net-local-controller` spec contains no `managedBy`; `ownerRef` is in metadata |
-| `provider-state-volume-eval.nix` | ProviderStateSet query-time membership: only Volumes with `ownerRef: Provider/network-local` are included; per-Network config Volumes (ownerRef: `Network/<name>`) are excluded; state Volume naming convention validated |
+| `provider-state-volume-eval.nix` | ProviderStateSet query-time membership returns empty for `Provider/network-local`; per-Network config Volumes (ownerRef: `Network/<name>`) are excluded and remain runtime/config operational Volumes |
 
 ### 26.5 Drift gates (Layer-1)
 
@@ -2228,11 +2139,10 @@ The integration test invocation commands are documented in the root `README.md`.
 When `Provider/network-local` is retired (superseded or removed):
 
 - [ ] All `Network` resources in all Zones must be deleted and finalizers cleared.
-- [ ] Framework/core deletes the state Volume
-  `network-local--controller-main--controller-state--host-system` after the
-  controller Process stops; verify it is absent before marking Provider Deleted.
+- [ ] Verify no Provider state Volume exists for `Provider/network-local` before
+  marking Provider Deleted.
 - [ ] `User/net-local-controller` resources must be deleted (after Network deletion
-  releases all Volume `ownerRef` references).
+  releases all per-Network config Volume layout references).
 - [ ] `Provider/network-local` resource must be deleted (after all Networks cleared).
 - [ ] `net-local-controller` OS account must be removed from host NixOS config.
 - [ ] `net-vm-base` artifact catalog entry must be removed from `d2b.artifacts`.

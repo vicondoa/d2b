@@ -45,7 +45,7 @@ In scope:
 - Host `isolationPosture=none` warnings
 - relay denial for Host user-domain access
 - direct ComponentSession attach, detach, detach-all, kill, and status methods
-- core ProviderDeployment-created `Volume` resources per component with provider-state extension schema
+- D087 status-first operational state in resource `status` plus the core Operation ledger
 
 Out of scope:
 
@@ -101,17 +101,11 @@ The provider exposes exactly two services:
 - `shell-terminal.v3` on the controller
 - `shell-session-supervisor.v1` on each supervisor
 
-The provider declares two stateful components (controller and session supervisor). The
-core ProviderDeployment lifecycle handler creates the corresponding `Volume` resources
-before the component Processes start and deletes them after the component Processes
-finish. The shell-terminal controller does not own, create, or delete its prerequisite
-Volumes; it does not add `Volume` to its exported ResourceTypes. `Provider/volume-local`
-is the sole Volume reconciler. The controller only consumes its required view through a
-mount. The session-supervisor Volume is declared in the session-supervisor component
-descriptor; core ProviderDeployment creates it when the `shell-terminal.d2b.io.ShellSession`
-resource and its supervisor `Process` are provisioned. PTY state, attach state, and
-output bytes remain exclusively in session-supervisor process memory and are never
-written to any Volume.
+The provider declares no Provider state Volume. Controller reconciliation state is
+bounded, non-secret operational data in `ShellPool` and `ShellSession` `status` plus
+the core Operation ledger. Session supervisor PTY state, attach state, and output
+bytes remain exclusively in supervisor process memory and are never persisted or
+reported as status payload bytes. The `ProviderStateSet` is therefore empty.
 
 ## ResourceTypes overview
 
@@ -229,7 +223,7 @@ with `PoolSpecFrozenByChildSessions`.
 
 | Value | Meaning |
 | --- | --- |
-| `Initializing` | Pool exists but target, user, or controller Volume validation is still in progress. |
+| `Initializing` | Pool exists but target, user, login shell, and status writer validation are still in progress. |
 | `CapacityReady` | Pool is fully reconciled and may admit new sessions subject to capacity. |
 | `CapacityExhausted` | Pool is healthy but `maxSessions` or `maxAttached` has been reached. |
 | `IsolationPostureWarning` | Pool is healthy, but a Host target reports `isolationPosture=none`. |
@@ -243,7 +237,7 @@ with `PoolSpecFrozenByChildSessions`.
 
 | Condition | True when | False/Unknown when |
 | --- | --- | --- |
-| `Ready` | The pool target, user, login shell, and controller Volume resources are all valid and counted. | Any validation or reconcile step is incomplete or failed. |
+| `Ready` | The pool target, user, login shell, and status writer are valid; capacity counters are current. | Any validation or reconcile step is incomplete or failed. |
 | `ExecutionTargetVerified` | The referenced Host or Guest exists and supports user-domain placement. | The target is absent, unresolved, or missing user-domain support. |
 | `UserVerified` | The referenced `User/<name>` exists and is accepted by the target. | User lookup fails or the target rejects the user. |
 | `CapacityAvailable` | At least one more `shell-terminal.d2b.io.ShellSession` may be created. | `activeSessions >= maxSessions`. |
@@ -262,10 +256,8 @@ with `PoolSpecFrozenByChildSessions`.
    - Host pools require `Provider/system-systemd` user-domain placement support.
    - Guest pools require `spec.allowedDomains` containing `user` and a valid
      `spec.defaultUserRef` on the `Guest/<name>` resource.
-6. Observe that the component `Volume` resources in the ProviderStateSet report
-   `phase=Ready` and `stateSchemaPhase=current`. These Volumes are owned and managed by
-   core ProviderDeployment and `Provider/volume-local`; the shell-terminal controller
-   does not create or delete them, only blocks the pool on their absence.
+6. Observe that the optional ProviderStateSet is empty for `shell-terminal`; there
+   are no Provider state Volume prerequisites to gate pool readiness.
 7. Enumerate child `shell-terminal.d2b.io.ShellSession` resources by owner or `spec.poolRef`.
 8. Count `activeSessions` and `attachedSessions`.
 9. Compute remaining capacity.
@@ -291,7 +283,6 @@ with `PoolSpecFrozenByChildSessions`.
 | `LoginShellArtifactMissing` | `Pending` | No | The manifest-fixed login shell artifact cannot be resolved. |
 | `MaxAttachedOutOfRange` | `Pending` | No | The pool requested an invalid attached-session bound. |
 | `OutputRingCapacityOutOfRange` | `Pending` | No | The pool ring capacity is outside the permitted bound. |
-| `ControllerStateVolumeMissing` | `Pending` | Yes | The component `Volume` resource(s) in the ProviderStateSet are absent or not yet Ready; core ProviderDeployment provisions them. |
 | `RelayHostUserDomainDenied` | `Ready` | No | A relay-authenticated caller attempted Host user-domain access. |
 | `PoolDeleteBlockedBySessions` | `Deleting` | Yes | The pool still has child sessions that must finish finalization first. |
 
@@ -302,12 +293,9 @@ with `PoolSpecFrozenByChildSessions`.
 3. If any child session is not in `Deleted`, block pool finalization with
    `PoolDeleteBlockedBySessions`.
 4. Do not synthesize kill commands or management workers.
-5. Confirm that the controller `Volume` resource for this pool's execution target is still
-   present; if absent, log the discrepancy and continue (the pool finalizer is not
-   responsible for Volume lifecycle, which outlives individual pool resources).
-6. Clear pool-scoped route summaries and aggregate counters.
-7. Remove the provider finalizer.
-8. Allow the store to tombstone the pool and set `status.phase=Deleted`.
+5. Clear pool-scoped route summaries and aggregate counters from status.
+6. Remove the provider finalizer.
+7. Allow the store to tombstone the pool and set `status.phase=Deleted`.
 
 ## `shell-terminal.d2b.io.ShellSession` ResourceType
 
@@ -681,218 +669,46 @@ optional `metadata.annotations`, only the closed keys below are permitted.
 
 ## ProviderStateSet
 
-A **ProviderStateSet** is the query-time set of all `Volume` resources in a Zone whose
-`metadata.ownerRef` resolves to `Provider/shell-terminal`. It is not a ResourceType and
-not a stored artifact:
+Per D087, `shell-terminal` declares **no Provider state Volume**. A
+**ProviderStateSet** is the optional query-time set of declared Provider state
+Volumes in a Zone whose `metadata.ownerRef` resolves to `Provider/shell-terminal`;
+for this Provider the set is empty.
 
-```
-ProviderStateSet(zone, "shell-terminal") =
-  { v : Volume | v.metadata.zone == zone
-              && v.metadata.ownerRef == "Provider/shell-terminal" }
-```
-
-Core ProviderDeployment creates every Volume in the ProviderStateSet before the
-component Processes start, and deletes them after the component Processes finish and
-their finalizers complete. The shell-terminal controller does not own, create, or delete
-any Volume in the set. `Provider/volume-local` is the sole Volume reconciler for all
-Volumes in the set.
-
-### Component state namespaces
-
-The shell-terminal provider has two semantic components with declared state namespaces:
-
-| Component | Namespace ID | Schema ID | `kind` | `persistenceClass` | Payload | View |
-| --- | --- | --- | --- | --- | --- | --- |
-| `controller` | `reconcile-state` | `io.d2b.shell-terminal/controller/reconcile-state` | `state` | `persistent` | Empty; `migrationPolicy: none`; reconcile authority is the Zone store (ShellPool/ShellSession resources and core Operation ledger) | read-only |
-| `session-supervisor` | `supervisor-state` | `io.d2b.shell-terminal/session-supervisor/supervisor-state` | `state` | `persistent` | Empty; `migrationPolicy: none`; PTY/ring/attach state lives in supervisor process memory only | read-only |
-
-Both namespaces use `kind: state`, `persistenceClass: persistent`, `migrationPolicy: none`,
-and read-only views. The Volumes are durable: they survive component process exit,
-controller restart, daemon restart, and host reboot, and they participate in the upgrade,
-destroy, and reset protocol. Neither Volume stores any payload — the controller uses the
-Zone store (ShellPool/ShellSession resources plus the core Operation ledger) as its
-reconcile authority, not a private state file. Both Volumes carry a nonzero base
-`quotaBytes`, `sourcePolicyId`, and a broker-maintained identity marker.
-
-### Volume naming convention
-
-Volumes follow the `ADR-046-provider-state` naming rule:
-`<provider-name>--<component-id>--<namespace-id>--<execution-ref-short>`
-
-| Volume name | Owner component | Execution scope |
-| --- | --- | --- |
-| `shell-terminal--controller--reconcile-state--<host-short>` | `controller` | One per installed Host target |
-| `shell-terminal--supervisor--supervisor-state--<session-uid-short>` | `session-supervisor` | One per live `shell-terminal.d2b.io.ShellSession` |
-
-### Controller Volume declaration
-
-Core ProviderDeployment creates the controller Volume before the controller Process
-starts. The payload schema is empty; `migrationPolicy: none`; no migration worker is
-ever created. The controller mounts a read-only view; it does not write to the Volume.
-
-```yaml
-apiVersion: resources.d2b.io/v3
-type: Volume
-metadata:
-  name: shell-terminal--controller--reconcile-state--host-system
-  zone: dev
-  ownerRef: Provider/shell-terminal
-spec:
-  providerRef: Provider/volume-local
-  kind: state
-  persistenceClass: persistent
-  sensitivityClass: private
-  stateSchema:
-    schemaId: io.d2b.shell-terminal/controller/reconcile-state
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<hex>
-    migrationPolicy: none
-  quotaBytes: 65536           # 64 KiB base quota; nonzero required; payload is empty
-  quota:
-    maxBytes: 65536
-    maxInodes: 32
-    enforcement: none
-  sealingCredentialRef: null
-  source:
-    executionRef: Host/host-system
-    settings:
-      kind: local-path
-      sourcePolicyId: io.d2b.shell-terminal/controller/reconcile-state
-  layout:
-    - path: state
-      type: directory
-      ownerRef: User/shell-terminal-system
-      groupRef: User/shell-terminal-system
-      mode: "0700"
-      sensitivity: private
-      createPolicy: create-if-never-provisioned
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      noFollow: true
-  views:
-    main:
-      path: state
-      rights: [read, traverse]      # read-only; controller does not write payload
-  identityMarker:
-    class: broker-maintained
-    markerRoot: provider-state-markers
+```text
+ProviderStateSet(zone, "shell-terminal") = {}
 ```
 
-The controller `Process` mounts the controller Volume read-only with `required: true`:
+The controller has no `/state` mount and no Volume lifecycle gate. The
+session-supervisor has no Provider state Volume either; it owns live PTY fds, the
+login-shell process tree, the bounded merged-output ring, and attachment state in
+process memory only. Those bytes and handles are transient authority-bearing or
+private runtime data and must never be persisted in a Provider state Volume,
+resource status, logs, audit, or metrics.
 
-```yaml
-mounts:
-  - volumeRef: Volume/shell-terminal--controller--reconcile-state--host-system
-    view: main
-    mountPath: /state
-    access: read-only
-    required: true
-```
+Bounded non-secret operational state belongs in the owning resource status and
+the core Operation ledger:
 
-The controller receives only this local view dirfd. No other component mounts the
-controller Volume. No cross-component Volume sharing is permitted.
+- `ShellPool.status` carries phase, conditions, capacity counters, target/user
+  verification, warning details, and aggregate attachment counts.
+- `ShellSession.status` carries supervisor reference, generation, phase,
+  conditions, attach count, bounded ring counters, and adoption observations.
+- Operation rows record lifecycle transitions, attach/detach/kill requests, and
+  finalizer progress.
 
-### Session-supervisor Volume declaration
+Status writes are revisioned, optimistic-status-writer controlled, RBAC-readable,
+redacted, observation-only, and written only on material change. After restart,
+the controller re-lists resources, verifies supervisor Process identity and
+ComponentSession route reality, then republishes bounded status instead of
+recovering from a private file.
 
-Core ProviderDeployment creates one per-session Volume before the supervisor `Process`
-starts for each `shell-terminal.d2b.io.ShellSession`, and deletes it after the supervisor Process
-finishes. The payload schema is empty; `migrationPolicy: none`; no migration worker is
-ever created. The supervisor mounts a read-only view; it does not write to the Volume.
-
-```yaml
-apiVersion: resources.d2b.io/v3
-type: Volume
-metadata:
-  name: shell-terminal--supervisor--supervisor-state--<session-uid-short>
-  zone: dev
-  ownerRef: Provider/shell-terminal
-spec:
-  providerRef: Provider/volume-local
-  kind: state
-  persistenceClass: persistent
-  sensitivityClass: private
-  stateSchema:
-    schemaId: io.d2b.shell-terminal/session-supervisor/supervisor-state
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<hex>
-    migrationPolicy: none
-  quotaBytes: 65536           # 64 KiB base quota; nonzero required; payload is empty
-  quota:
-    maxBytes: 65536
-    maxInodes: 32
-    enforcement: none
-  sealingCredentialRef: null
-  source:
-    executionRef: Host/host-system    # or Guest/<name> for Guest pools
-    settings:
-      kind: local-path
-      sourcePolicyId: io.d2b.shell-terminal/session-supervisor/supervisor-state
-  layout:
-    - path: state
-      type: directory
-      ownerRef: User/<pool-user>      # Nix-preprovisioned User matching ShellPool spec.userRef
-      groupRef: User/<pool-user>
-      mode: "0700"
-      sensitivity: private
-      createPolicy: create-if-never-provisioned
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      noFollow: true
-  views:
-    main:
-      path: state
-      rights: [read, traverse]      # read-only; supervisor does not write payload
-  identityMarker:
-    class: broker-maintained
-    markerRoot: provider-state-markers
-```
-
-The session supervisor `Process` mounts the supervisor Volume read-only with
-`required: true`:
-
-```yaml
-mounts:
-  - volumeRef: Volume/shell-terminal--supervisor--supervisor-state--<session-uid-short>
-    view: main
-    mountPath: /state
-    access: read-only
-    required: true
-```
-
-The supervisor receives only its own local view dirfd. PTY file descriptors, output ring
-bytes, and attach state are held in the supervisor's process memory; nothing is written
-to the mounted Volume.
-
-The layout `ownerRef` and `groupRef` bind `User/<pool-user>` — the Nix-preprovisioned
-user matching `ShellPool.spec.userRef`. The volume-local Provider validates the inode
-owner against this reference before exposing the view. No cross-user Volume is permitted.
-
-### ProviderStateSet invariants
-
-- The set is identified by query: every `Volume` whose `ownerRef == Provider/shell-terminal`
-  in the Zone.
-- Core ProviderDeployment creates and deletes all Volumes in the set. The shell-terminal
-  controller does not own, create, or delete any Volume and does not export `Volume` as
-  a ResourceType. `Provider/volume-local` is the sole Volume reconciler.
-- Core ProviderDeployment creates the per-session supervisor Volume before the supervisor
-  `Process` starts and deletes it after the supervisor `Process` finishes. This is the
-  dynamic service state Volume lifecycle for each `shell-terminal.d2b.io.ShellSession`.
-- No two components share a Volume. Each component mounts only its own declared view
-  (local view dirfd only) with `required: true`.
-- Both views are read-only (`rights: [read, traverse]`). Neither the controller nor the
-  supervisor writes any payload to its Volume. The controller's reconcile authority is
-  the Zone store (ShellPool/ShellSession resources and the core Operation ledger).
-- Both Volumes carry `sourcePolicyId`, a nonzero base `quotaBytes` (64 KiB), and a
-  broker-maintained identity marker. `migrationPolicy: none` on both; no migration
-  worker is ever created for either namespace.
-- Both Volumes use `kind: state` and `persistenceClass: persistent`. They survive
-  component process exit, controller restart, daemon restart, and host reboot, and
-  participate in the upgrade, destroy, and reset protocol. Their lifecycle integrity
-  (identity marker, markerStatus) is tracked; a `markerStatus: missing` or `replaced`
-  causes the dependent component `Process` to enter `Degraded`.
-- PTY state, output ring bytes, and attach state are never written to any Volume.
+Storage-need test rationale: shell-terminal has no durable secret recovery
+payload, no large file content, no private data safe only outside authorized
+status readers, and no bounded-but-revision-unsuitable data with a demonstrated
+recovery need. PTY/ring/attach data is live process state, not durable Provider
+state, so the ProviderStateSet remains empty.
 
 ## ComponentSession contracts
+
 
 The provider defines two ComponentSession services.
 
@@ -1473,7 +1289,7 @@ handles into the controller.
 | ID | Area | Description | src path | tests path | integration path |
 | --- | --- | --- | --- | --- | --- |
 | `ADR046-sterm-001` | Resource schemas | Implement `shell-terminal.d2b.io.ShellPool` and `shell-terminal.d2b.io.ShellSession` schemas with qualified names, common phases, and typed detail fields. | `packages/d2b-provider-shell-terminal/src/resources/{pool,session}.rs` | `packages/d2b-provider-shell-terminal/tests/resource_schema.rs` | `packages/d2b-provider-shell-terminal/integration/resource-shape/` |
-| `ADR046-sterm-002` | Controller binary | Implement `d2b-shell-terminal-controller` with pool/session reconcile loops; observe (but do not create) component `Volume` resources provisioned by core ProviderDeployment; block pool readiness on `ControllerStateVolumeMissing`; mount controller Volume view only. | `packages/d2b-provider-shell-terminal/src/bin/d2b-shell-terminal-controller.rs` | `packages/d2b-provider-shell-terminal/tests/controller_reconcile.rs` | `packages/d2b-provider-shell-terminal/integration/controller-restart/` |
+| `ADR046-sterm-002` | Controller binary | Implement `d2b-shell-terminal-controller` with pool/session reconcile loops; assert ProviderStateSet is empty; publish bounded non-secret operational state to resource status and the core Operation ledger; no controller Provider state Volume or `/state` mount exists. | `packages/d2b-provider-shell-terminal/src/bin/d2b-shell-terminal-controller.rs` | `packages/d2b-provider-shell-terminal/tests/controller_reconcile.rs` | `packages/d2b-provider-shell-terminal/integration/controller-restart/` |
 | `ADR046-sterm-003` | Supervisor binary | Implement `d2b-shell-session-supervisor` as the sole PTY owner for Host and Guest pools. | `packages/d2b-provider-shell-terminal/src/bin/d2b-shell-session-supervisor.rs` | `packages/d2b-provider-shell-terminal/tests/supervisor_runtime.rs` | `packages/d2b-provider-shell-terminal/integration/supervisor-host-guest/` |
 | `ADR046-sterm-004` | Process templates | Teach the Nix compiler and controller to emit the canonical controller and user-domain supervisor `Process` templates. | `packages/d2b-provider-shell-terminal/src/process_templates.rs` | `packages/d2b-provider-shell-terminal/tests/process_templates.rs` | `packages/d2b-provider-shell-terminal/integration/process-placement/` |
 | `ADR046-sterm-005` | OpenSession lifecycle | Create sessions from pools, freeze inherited fields, and return `supervisorGeneration` to callers. | `packages/d2b-provider-shell-terminal/src/service/open_session.rs` | `packages/d2b-provider-shell-terminal/tests/open_session.rs` | `packages/d2b-provider-shell-terminal/integration/open-session/` |

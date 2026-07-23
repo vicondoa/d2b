@@ -756,223 +756,29 @@ rejected at admission.
 
 ### 11.1 ProviderStateSet
 
-A **ProviderStateSet** is the query-time set of all Volume resources in the
-Zone with `metadata.ownerRef = Provider/notification-desktop`.  It is not a
-ResourceType or stored artifact.  **`Provider/system-core` ProviderDeployment**
-creates every Volume in the set before any component Process starts on Provider
-installation, and deletes them on Provider removal after finalizers on all owned
-Processes complete.
+A **ProviderStateSet** is the optional, query-time set of the *declared* Volume
+resources in the Zone with `metadata.ownerRef = Provider/notification-desktop`.
+It is not a ResourceType or stored artifact and is empty for a Provider that
+declares no state Volume.
 
-Ownership and reconciliation rules:
+`Provider/notification-desktop` declares **no** Provider state Volume; its
+`ProviderStateSet` is empty. Notification delivery state — the in-memory
+projection and the action nonce store — remains exclusively in the host-sink
+process heap and is never persisted. No notification summary, body, action
+label, icon identifier, nonce, or content byte is ever written to durable
+storage. Its bounded non-secret operational state — component readiness,
+reconcile stage, and closed-enum error/health detail — lives in the owning
+resource's `status` subresource and the core Operation ledger (D087).
 
-- The notification controller **does not own Volume resources**, does not add
-  Volume to its exported ResourceTypes, and does not create or delete its
-  prerequisite Volumes.  Its reconcile authority is over `Process` resources
-  only (see §16).
-- **`Provider/volume-local` is the sole Volume reconciler.**  Every Volume
-  declared here uses `providerRef: Provider/volume-local`; that Provider owns
-  the full Volume lifecycle: provisioning, identity-marker management, layout
-  repair, virtiofs Export child creation, and teardown.
-- Each component **only consumes its required view** via the `spec.mounts`
-  entry in its Process template; it receives a dirfd and no broader access.
+Because this Provider's operational state is fully derivable from spec,
+`status`, the core Operation ledger, and its live process memory, it fails the
+storage-need test and declares no state namespace, no state Volume (neither
+host, user-domain, nor guest-backed), no virtiofs Export for state, no
+state-view mount, and no dedicated state-layout `User/<name>` principal. There
+is no empty identity-only Volume. Its reconcile authority is over `Process`
+resources only (see §16).
 
-This Provider declares one state namespace per component class, each with an
-empty payload schema (`migrationPolicy: none`).  An empty
-payload schema requires no migration worker and no schema upgrade path; the
-identity marker is the sole content managed by `volume-local`.  Notification
-delivery state — the in-memory projection and the action nonce store — remains
-exclusively in the host-sink process heap and is never written to any Volume.
-No Volume carries notification summary, body, action labels, icon identifiers,
-nonces, or any content byte.
-
-### 11.2 Volumes
-
-One Volume per component per execution target:
-
-| Volume name pattern | Component | Persistence | Notes |
-| --- | --- | --- | --- |
-| `notification-desktop--controller--runtime--<host-short>` | controller | persistent | System-domain; empty payload schema; identity marker |
-| `notification-desktop--host-sink--runtime--<host-short>` | host-sink | persistent | User-domain; layout owner is `hostUserRef` user; identity marker |
-| `notification-desktop--guest-source--runtime--<guest-short>` | guest-source | persistent | Single `volume-local` Volume with `attachments[transport=virtiofs]`; `volume-local` creates virtiofs Export child; identity marker |
-
-All Volumes use `kind: state`, `persistenceClass: persistent`, extension field
-`quotaBytes: 65536`, base `quota: {maxBytes: 65536, maxInodes: 16, enforcement: none}`,
-`source.settings.kind: local-path`, and
-`source.settings.sourcePolicyId: provider-state-persistent`.  They are created
-by ProviderDeployment before any Process starts, survive component and Provider
-restart, and participate in the upgrade,
-destroy, and reset lifecycle.  Layout owner/group entries bind
-Nix-preprovisioned `User/<name>` principals (or a bounded principal pool for
-guest-source Volumes); there are no ComponentPrincipal ResourceRefs.  No
-Volume is shared between components; `sensitivityClass: private` is required
-on all three.
-
-Controller Volume (representative example):
-
-```yaml
-apiVersion: resources.d2b.io/v3
-type: Volume
-metadata:
-  name: notification-desktop--controller--runtime--<host-short>
-  zone: <zone>
-  ownerRef: Provider/notification-desktop
-spec:
-  kind: state
-  providerRef: Provider/volume-local
-  persistenceClass: persistent
-  sensitivityClass: private
-  stateSchema:
-    schemaId: io.d2b.notification-desktop/controller/runtime
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<build-computed>
-    migrationPolicy: none
-  quotaBytes: 65536
-  quota:
-    maxBytes: 65536
-    maxInodes: 16
-    enforcement: none
-  sealingCredentialRef: null
-  source:
-    executionRef: <spec.config.hostExecutionRef>
-    settings:
-      kind: local-path
-      sourcePolicyId: provider-state-persistent
-  layout:
-    - path: state
-      type: directory
-      ownerRef: User/notification-desktop-controller
-      groupRef: User/notification-desktop-controller
-      mode: "0700"
-      sensitivity: private
-      createPolicy: create-if-never-provisioned
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      noFollow: true
-  views:
-    main:
-      path: state
-      rights: [read, write, create, delete, traverse]
-  identityMarker:
-    class: broker-maintained
-    markerRoot: provider-state-markers
-  snapshotPolicy: null
-  retentionPolicy: null
-```
-
-The host-sink Volume is structurally identical; its layout `ownerRef`/`groupRef`
-bind the Nix-preprovisioned user principal corresponding to
-`spec.config.hostUserRef` (user-domain placement requires the layout principal
-to be the same user).  It must not be shared with the controller or any other
-component.
-
-For each entry in `spec.config.guestSources`, the signed state namespace declares
-`placementMode: host-backed-guest` with `hostCustodyPermitted: true`, and
-ProviderDeployment creates one `volume-local` source Volume with an
-`attachments` entry declaring `transport: virtiofs` for the target Guest.  The
-`volume-local` provider creates a virtiofs Export child resource from that
-attachment declaration; no second attachment Volume is authored or created
-separately.  Layout principals are drawn from a bounded
-`User/notification-desktop-guest-source-*` pool, one per guestSources entry.
-
-Guest-source Volume (representative example):
-
-```yaml
-apiVersion: resources.d2b.io/v3
-type: Volume
-metadata:
-  name: notification-desktop--guest-source--runtime--<guest-short>
-  zone: <zone>
-  ownerRef: Provider/notification-desktop
-spec:
-  kind: state
-  providerRef: Provider/volume-local
-  persistenceClass: persistent
-  sensitivityClass: private
-  stateSchema:
-    schemaId: io.d2b.notification-desktop/guest-source/runtime
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<build-computed>
-    migrationPolicy: none
-  quotaBytes: 65536
-  quota:
-    maxBytes: 65536
-    maxInodes: 16
-    enforcement: none
-  sealingCredentialRef: null
-  source:
-    executionRef: <spec.config.hostExecutionRef>
-    settings:
-      kind: local-path
-      sourcePolicyId: provider-state-persistent
-  attachments:
-    - transport: virtiofs
-      executionRef: Guest/<vm-name>
-      view: main
-  layout:
-    - path: state
-      type: directory
-      ownerRef: User/notification-desktop-guest-source-<guest-short>
-      groupRef: User/notification-desktop-guest-source-<guest-short>
-      mode: "0700"
-      sensitivity: private
-      createPolicy: create-if-never-provisioned
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      noFollow: true
-  views:
-    main:
-      path: state
-      rights: [read, write, create, delete, traverse]
-  identityMarker:
-    class: broker-maintained
-    markerRoot: provider-state-markers
-  snapshotPolicy: null
-  retentionPolicy: null
-```
-
-The guest-source Process receives only its own local view dirfd through the
-virtiofs mount; no dirfd crosses component or domain boundaries.
-
-### 11.3 Process mounts
-
-The controller Process mounts its Volume:
-
-```yaml
-mounts:
-  - volumeRef: Volume/notification-desktop--controller--runtime--<host-short>
-    view: main
-    mountPath: /state
-    access: read-write
-    required: true
-```
-
-The host-sink Process mounts its own Volume:
-
-```yaml
-mounts:
-  - volumeRef: Volume/notification-desktop--host-sink--runtime--<host-short>
-    view: main
-    mountPath: /state
-    access: read-write
-    required: true
-```
-
-The guest-source Process mounts its Volume (the `volume-local` Volume whose
-virtiofs Export delivers the view inside the Guest):
-
-```yaml
-mounts:
-  - volumeRef: Volume/notification-desktop--guest-source--runtime--<guest-short>
-    view: main
-    mountPath: /state
-    access: read-write
-    required: true
-```
-
-Each component accesses only its own private Volume view; no dirfd crosses
-component or domain boundaries.
-
-### 11.4 Status aggregation and restart semantics
+### 11.2 Status aggregation and restart semantics
 
 `Provider/system-core` aggregates the overall Provider status from the health
 reports emitted by component processes; the notification controller manages
@@ -982,10 +788,10 @@ Provider-level status directly.
 On host-sink restart the nonce store is empty; any action nonces issued before
 restart are invalidated (`action-capability-unavailable` on the next invocation
 attempt).  The in-memory projection is likewise empty; connected observer
-clients receive a stream-close event and must reconnect.  Component state
-Volumes are `persistent` and survive process and Provider restart unchanged;
-they contain no notification bytes and exist solely as framework identity
-markers participating in the upgrade, destroy, and reset lifecycle.
+clients receive a stream-close event and must reconnect.  The controller
+re-derives component readiness from live `status` observation and reverifies
+against the running processes, treating `status` as observation, never
+authority (D087). No notification bytes are ever persisted.
 
 ---
 
@@ -1399,7 +1205,7 @@ The v2 `d2b.notify.v2.NotifyService` ttrpc contract is superseded by
 | Current source | `packages/d2b-notify/src/services/observer.rs` |
 | Reuse action | new |
 | Destination | `packages/d2b-provider-notification-desktop/src/controller.rs` |
-| Detailed design | Async Process placement controller; watches `guestSources` Guest refs; creates/drains/deletes guest-source Processes; creates/stops host-sink Process on display-wayland readiness change; does not own Volume resources, does not add Volume to exported ResourceTypes, does not create or delete Volumes (`Provider/volume-local` is the sole Volume reconciler; ProviderDeployment creates all Volumes before Processes start); no migration worker (empty payload schema, `migrationPolicy: none`); no notification delivery state; no ResourceType reconcile loop |
+| Detailed design | Async Process placement controller; watches `guestSources` Guest refs; creates/drains/deletes guest-source Processes; creates/stops host-sink Process on display-wayland readiness change; declares no Provider state Volume and does not own/add/create/delete Volumes; bounded non-secret operational state lives in `status`/the core Operation ledger (D087); notification delivery state (in-memory projection, action nonce store) is host-sink process memory only; no ResourceType reconcile loop |
 | Integration | Zone resource store (Process API); d2b-bus; display-wayland dependency watch |
 | Data migration | None |
 | Validation | Unit tests for placement FSM in `tests/stream_record.rs`; Volume creation/deletion lifecycle in `tests/volume_lifecycle.rs`; see also `integration/cross_zone_source.rs` end-to-end |
@@ -1468,7 +1274,7 @@ and `integration/` directories.
 
 | File | Coverage requirement |
 | --- | --- |
-| `tests/volume_lifecycle.rs` | ProviderDeployment creates one `kind: state`, `persistenceClass: persistent` Volume per component before Processes start: controller (volume-local), host-sink (volume-local), guest-source (volume-local with `attachments[transport=virtiofs]`; volume-local creates virtiofs Export child); all Volumes have `quotaBytes: 65536`, `quota: {maxBytes: 65536, maxInodes: 16, enforcement: none}`, `source.settings.kind: local-path`, `source.settings.sourcePolicyId: provider-state-persistent`, and identity marker; no Volume shared between components; `Provider/volume-local` is sole reconciler (notification controller asserts no Volume create/delete calls); empty payload schema with `migrationPolicy: none` (no migration worker spawned); Volumes survive Provider/component restart; Volumes deleted on Provider removal; no notification or nonce bytes written to any Volume |
+| `tests/status_lifecycle.rs` | The Provider declares no state Volume; `ProviderStateSet(zone, "notification-desktop")` is empty; no component Process mounts a state Volume; bounded non-secret operational state (component readiness, reconcile stage, closed-enum error/health detail) is written to `status`/the core Operation ledger within the status bounds; no notification summary/body/action-label/icon/nonce byte is ever persisted; on restart the controller re-derives component readiness from live `status` observation and reverifies against running processes, treating status as observation, never authority |
 | `tests/stream_record.rs` | `NotificationRequest`/`NotificationResult` DTO schema validation (all fields, closed category values, out-of-bound values, unknown fields rejected); category filter enforcement; `NotificationResult` `actionNonces` present only when actions declared; no content in error messages |
 | `tests/stream_redaction.rs` | Inject requests with distinguishable content bytes; assert zero occurrences in collected tracing events, OTEL span attributes, metric label values, audit record fields, error messages, and Debug output |
 | `tests/action_nonce.rs` | Single-use consumption; expired TTL consumed-and-cleared; capacity at `MAX_STORE_SIZE`; replay after consume; nonce opaque in Debug; notification action key round trip |
@@ -1500,16 +1306,10 @@ and `integration/` directories.
   ComponentSession, not status field);
 - RBAC: roles, subjects, stream verbs;
 - security invariants: content privacy, D-Bus boundary, icon safety;
-- state model: one private `kind: state`, `persistenceClass: persistent` Volume
-  per component (controller, host-sink, per-guest-source pair) created by core
-  ProviderDeployment per ADR-046-provider-state; all Volumes have empty payload
-  schema (`migrationPolicy: none`) with `quotaBytes: 65536`, `quota:
-  {maxBytes: 65536, maxInodes: 16, enforcement: none}`,
-  `source.settings.kind: local-path`,
-  `source.settings.sourcePolicyId: provider-state-persistent`, and an identity marker;
-  Volumes survive component and Provider restart and participate in upgrade,
-  destroy, and reset; notification delivery state and action nonces are
-  in-memory only and are never written to any Volume;
+- state model: declares no Provider state Volume; `ProviderStateSet(zone,
+  "notification-desktop")` is empty; bounded non-secret operational state lives
+  in `status`/the core Operation ledger (D087); notification delivery state and
+  action nonces are host-sink process memory only and are never persisted;
 - build commands: `cargo build -p d2b-provider-notification-desktop`;
 - test commands: `cargo test -p d2b-provider-notification-desktop`;
 - integration commands: invoked by the repository test orchestration; see

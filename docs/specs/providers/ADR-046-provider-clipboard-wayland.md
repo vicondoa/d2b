@@ -332,11 +332,11 @@ The clipboard-controller:
   lifecycle messages from core orchestrator via ComponentSession and forwards
   corresponding `PurgeZone`/`SuspendZone` instructions to `clipd-host` over
   the `d2b.clipboard.picker-coord.v3` service;
-- does not write Provider status;
-- does not own, export, or reconcile any Volume resource; `Provider/volume-local`
-  is the sole Volume reconciler; the two persistent state Volumes are created by
-  core ProviderDeployment from the signed component descriptor's stateNamespace
-  declarations, before this Process starts.
+- writes only bounded, redacted operational observations through the optimistic
+  status writer for `Provider/clipboard-wayland` and related Operations;
+- does not own, export, reconcile, or mount any Provider state Volume. Under
+  D087 its ProviderStateSet is empty because clipboard operational state is
+  derivable from status, the core Operation ledger, and external observation.
 
 ### Process/clipd-host
 
@@ -719,189 +719,38 @@ ProviderStateSet(zone, clipboard-wayland) =
               && v.metadata.ownerRef == "Provider/clipboard-wayland" }
 ```
 
-Core ProviderDeployment creates one Volume per declared `stateNamespace` per
-execution target from the signed component descriptor, before any component
-Process is started. After the Provider is deleted and all component Processes
-have exited and released finalizers, core ProviderDeployment deletes those same
-Volumes. These are ordinary Volume resources with the `stateSchema` extension.
+Under D087, `Provider/clipboard-wayland` declares **no Provider state Volume**.
+Its ProviderStateSet is therefore empty:
 
-Both state Volumes are payload-empty: the schema carries no application fields
-(`schemaContent: "{}"`). Provider configuration is delivered exclusively via
-the sealed LaunchTicket config FD at Process start — not through any Volume.
-These Volumes exist solely as durable, identity-bearing state anchors (identity
-marker, quota enforcement, upgrade/reset participation) for each component.
+```text
+ProviderStateSet(zone, clipboard-wayland) = {}
+```
+
+The two formerly-declared component state entries fail the storage-need test:
+their operational state is bounded, non-secret, and derivable from
+`Provider/clipboard-wayland.status`, the core Operation ledger, component
+readiness, and external compositor/guest observation after restart. Provider
+configuration is delivered exclusively via the sealed LaunchTicket config FD at
+Process start — not through any Volume.
 
 The clipboard-wayland controller (`Process/clipboard-controller`) does not
-create, own, watch, update, or delete Volume resources, and does not add
-`Volume` to any exported or reconciled ResourceType list. `Provider/volume-local`
-is the sole reconciler for all Volumes in this ProviderStateSet. Components
-only consume their required view through the `mounts:` entry in the Process
-spec.
+create, own, watch, update, delete, or mount Provider state Volumes, and does
+not add `Volume` to any exported or reconciled ResourceType list. No dedicated
+state-layout `User/<name>` principals, identity markers, migration workers,
+or reset/destroy hooks are declared for component state.
 
-`migrationPolicy: none` on both state Volumes means no migration worker
-EphemeralProcess is ever created. Startup is never blocked on a migration phase.
+Clipboard history remains bounded in-memory state in `clipd-host`'s process
+heap and is never written to a Volume or status. Clipboard bytes, entry data,
+terminal data, socket paths, FDs, and authority-conferring handles are excluded
+from status, audit, metrics, and Operations. Status is revisioned, optimistic
+status-writer controlled, RBAC-readable, redacted, written only on material
+change, and re-verified against external reality after restart; oversize status
+is rejected with `status-oversize`.
 
-### Component state Volumes
-
-The clipboard-wayland component descriptor declares two persistent state
-namespaces, one per component:
-
-| Volume name | Component | persistenceClass | sensitivityClass |
-| --- | --- | --- | --- |
-| `clipboard-wayland--controller--state--<host-short>` | clipboard-controller | `persistent` | `private` |
-| `clipboard-wayland--clipd-host--state--<host-short>` | clipd-host | `persistent` | `private` |
-
-Both Volumes are durable: they survive component restarts and Provider restarts,
-and participate in upgrade, destroy, and reset lifecycle operations. Neither is
-`ephemeral` or `cache` class. `quotaBytes` is always nonzero (65536 bytes).
-
-Neither Volume is shared between components. `sensitivityClass: private` means
-the volume-local Provider mounts the Volume to exactly one component Process at
-a time and validates domain and userRef compatibility before exposing the view
-dirfd. volume-local never hands out a dirfd accessible to a different domain or
-user; a mismatch fails Process launch with `volume-domain-mismatch`.
-
-### Canonical Volume resource (clipboard-controller state)
-
-```yaml
-apiVersion: resources.d2b.io/v3
-type: Volume
-metadata:
-  name: clipboard-wayland--controller--state--<host-short>
-  zone: dev
-  ownerRef: Provider/clipboard-wayland
-spec:
-  providerRef: Provider/volume-local
-  kind: state
-  persistenceClass: persistent
-  sensitivityClass: private
-  stateSchema:
-    schemaId: io.d2b.clipboard-wayland/controller/state
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<hex>
-    schemaContent: "{}"
-    migrationPolicy: none
-  quotaBytes: 65536
-  sealingCredentialRef: null
-  source:
-    executionRef: <spec.config.hostExecutionRef>
-    settings:
-      kind: local-path
-      sourcePolicyId: provider-state-persistent
-  layout:
-    - path: state
-      type: directory
-      ownerRef: User/d2b-clipboard-controller   # Nix-preprovisioned system service user
-      groupRef: User/d2b-clipboard-controller
-      mode: "0700"
-      sensitivity: private
-      createPolicy: create-if-never-provisioned
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      noFollow: true
-  views:
-    state:
-      path: state
-      rights: [read, traverse]
-  quota:
-    maxBytes: 65536
-    maxInodes: 64
-    enforcement: none
-  identityMarker:
-    class: broker-maintained
-    markerRoot: provider-state-markers
-  snapshotPolicy: null
-  retentionPolicy: null
-```
-
-### Canonical Volume resource (clipd-host state)
-
-```yaml
-apiVersion: resources.d2b.io/v3
-type: Volume
-metadata:
-  name: clipboard-wayland--clipd-host--state--<host-short>
-  zone: dev
-  ownerRef: Provider/clipboard-wayland
-spec:
-  providerRef: Provider/volume-local
-  kind: state
-  persistenceClass: persistent
-  sensitivityClass: private
-  stateSchema:
-    schemaId: io.d2b.clipboard-wayland/clipd-host/state
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<hex>
-    schemaContent: "{}"
-    migrationPolicy: none
-  quotaBytes: 65536
-  sealingCredentialRef: null
-  source:
-    executionRef: <spec.config.hostExecutionRef>
-    settings:
-      kind: local-path
-      sourcePolicyId: provider-state-persistent
-  layout:
-    - path: state
-      type: directory
-      ownerRef: User/d2b-clipd-host             # Nix-preprovisioned system service user
-      groupRef: User/d2b-clipd-host
-      mode: "0700"
-      sensitivity: private
-      createPolicy: create-if-never-provisioned
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      noFollow: true
-  views:
-    state:
-      path: state
-      rights: [read, traverse]
-  quota:
-    maxBytes: 65536
-    maxInodes: 64
-    enforcement: none
-  identityMarker:
-    class: broker-maintained
-    markerRoot: provider-state-markers
-  snapshotPolicy: null
-  retentionPolicy: null
-```
-
-Layout principals (`User/d2b-clipboard-controller`, `User/d2b-clipd-host`) are
-Nix-preprovisioned system service User resources declared alongside the Provider
-package registration. They are ordinary `User/<name>` ResourceRefs — not
-ComponentPrincipal ResourceRefs or any special type — resolved by volume-local
-through the Host's User resource at provision time.
-
-### Volume mounts in Process specs
-
-Each Process mounts only its own persistent state Volume using the declared `state`
-view. The Process specs in this dossier show `mounts: []` as a field placeholder;
-the actual deployed mount entries are:
-
-`Process/clipboard-controller`:
-```yaml
-mounts:
-  - volumeRef: Volume/clipboard-wayland--controller--state--<host-short>
-    view: state
-    mountPath: /state
-    access: read-only
-    required: true
-```
-
-`Process/clipd-host`:
-```yaml
-mounts:
-  - volumeRef: Volume/clipboard-wayland--clipd-host--state--<host-short>
-    view: state
-    mountPath: /state
-    access: read-only
-    required: true
-```
-
-Clipboard history is bounded in-memory state in `clipd-host`'s process heap
-and is never written to any Volume. No clipboard content, entry bytes, or FD
-data is ever stored in these Volumes.
+There is no bootstrap state-Volume mechanism; the previous bootstrap exception
+(D086, superseded by D087) does not apply. This dossier declares no runtime
+socket/config/tmpfs Volume either: Wayland access is carried by display-wayland
+and ProviderSupervisor as pre-opened FDs, not filesystem mounts.
 ---
 
 ## RBAC
@@ -1312,11 +1161,10 @@ Process. Responsibilities:
 - Receive `GuestStopped`/`GuestLocked`/etc. from core orchestrator;
   call `PurgeZoneClipboard`/`SuspendZoneClipboard` on clipd-host.
 - Create and manage RBAC Role/RoleBinding resources listed in this dossier.
-- Does not write `Provider/clipboard-wayland.status`.
-- Does not own, export, or reconcile any Volume resource; `Provider/volume-local`
-  is the sole Volume reconciler; both persistent state Volumes are created by
-  core ProviderDeployment from the signed component descriptor before this
-  Process starts, and deleted after it stops.
+- Writes only bounded, redacted operational observations to
+  `Provider/clipboard-wayland.status` through the optimistic status writer.
+- Does not own, export, reconcile, or mount any Provider state Volume; the
+  ProviderStateSet is empty under D087.
 
 ### ADR046-clipboard-004 — EphemeralProcess picker binary
 
@@ -1447,11 +1295,11 @@ Required test coverage (in `packages/d2b-provider-clipboard-wayland/tests/`):
 | `picker::test_ephemeral_ttl_defaults` | successfulTtl=1h, failedTtl=24h |
 | `invariants::test_no_filesystem_bridge` | No socket path or dir appears in Process spec config |
 | `invariants::test_core_creates_processes` | Controller does not create Process/clipd-host |
-| `state::test_volume_schema_fields` | Both state Volumes carry correct schemaId (`*/state`), `schemaContent: "{}"`, `persistenceClass: persistent` (never config/ephemeral/cache), `sensitivityClass: private`, `quotaBytes > 0`, `migrationPolicy: none`, `identityMarker.class: broker-maintained`; view named `state` mounted read-only at `/state` |
-| `state::test_volume_durable` | Volumes survive component restart and Provider restart; persistenceClass is never ephemeral or cache; quotaBytes is never 0 |
-| `state::test_volume_layout_principals` | Volume layout ownerRef/groupRef reference User/<name> ResourceRefs; no ComponentPrincipal type |
-| `state::test_no_cross_component_volume` | Each component has its own Volume; no Volume is shared between controller and clipd-host |
-| `state::test_no_clipboard_bytes_in_volume` | No clipboard bytes, entry data, or FD content in any Volume payload |
+| `state::test_provider_state_set_empty` | Provider declares no Provider state Volume; ProviderStateSet query returns empty for `Provider/clipboard-wayland` |
+| `state::test_no_state_mounts` | Component Process specs contain no `/state` mount and no Provider state Volume reference |
+| `state::test_no_state_layout_principals` | No dedicated state-layout `User/<name>` or ComponentPrincipal reference is emitted for component state |
+| `state::test_status_first_operational_state` | Bounded non-secret operational observations live in revisioned status/core Operation ledger and are re-verified after restart |
+| `state::test_no_clipboard_bytes_in_status` | No clipboard bytes, entry data, FD content, socket path, or authority handle appears in status, audit, metrics, Operations, or any Volume |
 
 ### ADR046-clipboard-010 — Integration tests
 

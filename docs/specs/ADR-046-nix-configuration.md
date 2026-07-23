@@ -613,51 +613,55 @@ Every work item in any spec that introduces a new
 - include a `README.md` stub commit in its first commit before any other
   implementation lands.
 
-### Provider state Volumes
+### Provider state Volumes (optional)
 
-A `ProviderStateSet` is a query-time logical grouping of the ordinary `Volume`
-resources owned by a `Provider`. It is not a `ResourceType` and is never stored
-as its own artifact or row.
+A `ProviderStateSet` is an optional, query-time logical grouping of the
+*declared* `Volume` resources owned by a `Provider`. It is not a `ResourceType`,
+is never stored as its own artifact or row, and is empty for a `Provider` that
+declares no state Volume.
 
-Core `ProviderDeployment` creates the static controller/service `Process`
-resources and, before launching each component `Process`, creates one private,
-framework-created state `Volume` for every declared `stateNamespaces` entry in
-that component's signed state declarations. This includes an empty-`stateSchema`
-state `Volume` for stateless components. Provider controllers never bootstrap
-their own controller/service Processes or their own per-component state Volumes.
+Bounded non-secret operational state belongs in the owning resource's `status`
+subresource and the core Operation ledger by default (D087). A component
+declares a state `Volume` only when a payload passes the storage-need test
+(secret/sensitive private recovery data; large/binary/file content; private
+data unsafe for status readers; or bounded-but-revision-unsuitable data with a
+demonstrated recovery need). Core `ProviderDeployment` creates the static
+controller/service `Process` resources and, before launching each component
+`Process`, creates one private, framework-created state `Volume` for every
+*declared* `stateNamespaces` entry in that component's signed state
+declarations. A stateless component declares no namespace and receives no
+`Volume`; there is no empty identity-only state `Volume`. Provider controllers
+never bootstrap their own controller/service Processes or their own declared
+per-component state Volumes.
 
-Each state Volume uses the canonical full `Volume` schema, extended for provider
-state with `stateSchema`, `persistenceClass`, `sensitivityClass`, `quotaBytes`,
-`quota.maxBytes`, `quota.maxInodes`, `identityMarker`, and sealing fields.
-Every state Volume has `kind = "state"` and `persistenceClass = "persistent"`.
-`source.settings.sourcePolicyId` is always set to the component's opaque private
-storage policy ID. `quotaBytes` must be strictly greater than zero; `quota.maxBytes`
-and `quota.maxInodes` must also be strictly greater than zero. Declaring
-`quotaBytes = 0` for a state namespace is rejected at build and admission time —
-the framework applies no silent base quota and the component's signed state
-declaration must carry an explicit positive value. For empty-`stateSchema`
-components the `migrationPolicy` is `none`. Layout principals use `User/<name>`
-refs drawn from bounded, Nix-preprovisioned pools, and Nix must provision the
+Each declared state Volume uses the canonical full `Volume` schema, extended for
+provider state with `stateSchema`, `persistenceClass`, `sensitivityClass`,
+`quotaBytes`, `quota.maxBytes`, `quota.maxInodes`, `identityMarker`, and sealing
+fields. Every declared state Volume has `kind = "state"` and
+`persistenceClass = "persistent"`. `source.settings.sourcePolicyId` is always
+set to the component's opaque private storage policy ID. `quotaBytes` must be
+strictly greater than zero; `quota.maxBytes` and `quota.maxInodes` must also be
+strictly greater than zero. Declaring `quotaBytes = 0` for a state namespace is
+rejected at build and admission time. Layout principals use `User/<name>` refs
+drawn from bounded, Nix-preprovisioned pools, and Nix must provision the
 referenced `User` resources in advance.
 
-These Provider state Volumes are never operator-authored in Nix. Nix does not
-declare them, does not allocate their internal paths, and does not manage their
-runtime-only identities. Each component mounts only its own declared state view
-through its `mounts`; there is no separate non-Volume compartment concept.
+Nix never authors runtime state Volumes. Nix does not declare them, does not
+allocate their internal paths, and does not manage their runtime-only
+identities; Core creates only the signed *declared* optional state Volumes at
+runtime. Each component mounts only its own declared state view through its
+`mounts`; there is no separate non-Volume compartment concept.
 
-The one exception to "state Volumes are not Nix-authored" is a closed,
-per-execution-target bootstrap mechanism that is not exposed as any Nix option.
-Each execution target (Host, Guest, or user-domain local-storage owner) running
-its own `volume-local` controller instance may use this local bootstrap path to
-provision only the empty-`stateSchema` state Volume for that target's own
-`volume-local` controller instance and, only where `system-core` or
-`system-minijail` are fixed bootstrap components on that same target, their
-state Volumes too. This is not a third Process-bootstrap Provider, never crosses
-execution-target boundaries, and never touches any other component's state
-Volume. These bootstrap-created Volumes are real `Volume` resources from their
-first write, with ordinary resource rows, generations, and status; the target's
-`volume-local` instance adopts them under its normal reconcile loop after
-startup.
+There is no bootstrap state-Volume exception. The fixed bootstrap components
+(the first `volume-local` controller instance on each execution target, and
+where present `system-core` and `system-minijail`) declare no state Volume and
+reach Ready from resource `status`, the core Operation ledger, and independent
+external observation (D086, superseded by D087). Because no component needs a
+state Volume before a `volume-local` instance is Ready, there is no closed
+bootstrap cycle, no per-execution-target local bootstrap storage mechanism, and
+no hidden bootstrap store. A Guest still bootstraps its own Guest-local
+`volume-local` instance from Guest-local primitives only, never a leaked
+parent-Host dirfd or resource handle.
 
 
 

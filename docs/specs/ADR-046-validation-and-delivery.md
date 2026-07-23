@@ -533,12 +533,22 @@ Ported verbatim (per `ADR046-session-001/002`) from main's
   plus new: 1,024 layout-entry / 64-view / 64-attachment bound tests (D062);
   `sourcePolicyId` opacity test (raw host path never in spec/status/audit,
   never reaches the Provider process as a literal path — D082).
-- Provider state Volume tests: every component (including stateless ones)
-  receives its own Volume with a `User/<name>` layout principal from a
-  bounded Nix-preprovisioned pool; no cross-component/cross-Provider
-  mount sharing (D076/D079 enforcement); bootstrap state-realization
-  exception tests, scoped per execution target, asserting no parent-Host
-  dirfd leaks across a Host/Guest boundary (D086).
+- Provider state Volume tests: a component receives a state Volume **only**
+  when it declares one under the storage-need test (D087); a stateless
+  component declares none and receives none, and no empty identity-only Volume
+  exists (revised D076); each declared state Volume has a `User/<name>` layout
+  principal from a bounded Nix-preprovisioned pool; no
+  cross-component/cross-Provider mount sharing (D076/D079 enforcement); status
+  bound/schema/conformance tests (total canonical status ≤ 64 KiB,
+  provider-specific detail ≤ 32 KiB, condition/list/map cardinality caps,
+  `status-oversize` rejection) and status-first restart-revalidation tests
+  (controller re-derives observed state from status/core ledger/external
+  observation and never treats status as authority); optional-state admission
+  tests asserting an unjustified namespace is rejected `component-state-not-
+  justified`; no bootstrap state Volume or bootstrap-storage mechanism exists —
+  fixed bootstrap components reach Ready from status/the core Operation ledger
+  (D086, superseded by D087), and a Guest still bootstraps its own Guest-local
+  `volume-local` without a parent-Host dirfd leak.
 - Quota/EmergencyPolicy tests: hierarchical Host/Guest allocation against
   Zone capacity, overcommit blocking, digest/Provider/Host/Guest/Zone/global
   emergency disable and route/session/grant revocation, incident-held

@@ -14,17 +14,79 @@
 
 ## Purpose
 
-This spec governs how Provider components declare, own, initialize, migrate, snapshot, seal, relocate, and destroy their durable payload state in d2b 3.0. Provider state in d2b 3.0 is always a Volume resource. There is no `ProviderState` ResourceType.
+This spec governs how Provider components record, own, initialize, and recover their durable operational state in d2b 3.0. The default surface for bounded non-secret operational state is the owning resource's `status` subresource. A Provider component declares durable payload state as a Volume resource **only** when a specific payload passes the [storage-need test](#storage-need-test); such state Volumes are always Volume resources, and there is no `ProviderState` ResourceType.
+
+## Status-first state model (D087)
+
+Bounded non-secret controller/Provider operational state belongs in the owning resource's `status` subresource whenever possible (D087). Resource `status` is the default durable observation and recovery surface. It is:
+
+- **Revisioned** — every status write advances the resource revision and is retained in `revision_log` until compaction (D028);
+- **Optimistic-status-writer controlled** — a status write carries an expected revision and a stale writer receives a conflict (D005);
+- **RBAC-readable and redacted** — status is a separately authorized subresource (D027) readable by authorized API subjects only, and every field is bounded and redacted;
+- **Reverified after restart** — status records observation, never authority; after a Zone or controller restart the owning controller reverifies status against external reality (running processes, cgroup leaves, external cloud/handle state) before relying on it.
+
+The spec remains the desired-state authority. Status is observation only and is **never** a host-mutation or repair authority: a controller may not treat a status field as a substitute for reverifying external reality, and status can never grant, carry, or stand in for a privileged effect.
+
+Bounded non-secret operational state that belongs in `status` includes:
+
+- reconcile stage and phase detail (closed enums / conditions);
+- opaque, non-authorizing external handles, IDs, and digests (cloud operation handles, external resource IDs, content digests) that are safe for authorized API readers and independently revalidated;
+- adoption observations after restart (e.g. observed running-process identity re-derived from cgroup leaves);
+- bounded counters and last-successful checkpoints;
+- dependency-readiness observations.
+
+Reconcile writes status only on a **material change**; there are no high-frequency byte streams, logs, metrics, command output, or ring buffers in status. Watches, revision compaction, and backpressure remain bounded per `ADR-046-resource-store-redb` and `ADR-046-resource-reconciliation`.
+
+### Status prohibitions
+
+Resource `status` MUST NOT contain:
+
+- secrets, raw tokens, keys, or PSKs, or any credential source handle that confers authority;
+- private endpoint, path, argv, environment, PID, or systemd-unit data;
+- terminal, clipboard, or CTAP byte content;
+- raw cloud error bodies or other unbounded provider diagnostics;
+- large binary blobs;
+- unbounded collections;
+- any content whose churn would bloat revision history.
+
+An opaque handle may appear in status only if it is bounded, non-secret, non-authorizing, safe for authorized API readers, and independently revalidated by the owning controller against external reality.
+
+### State-authority split
+
+Each kind of state has exactly one owner; no owner duplicates another's data:
+
+| State | Sole owner |
+| --- | --- |
+| In-flight idempotency, retry, and transaction progress | Core Operation ledger |
+| Latest bounded result / checkpoint / observation | Owning resource `status` |
+| Security history | Authoritative audit stream |
+| Metrics and traces | OTEL |
+| High-frequency content streams / rings | Owning process memory |
+| Filesystem paths and artifact integrity | Nix / private artifact catalog |
+| Secret, large, binary, or revision-unsuitable durable payload with a recovery need | An explicitly declared Provider state Volume |
+
+Provider state Volume payloads never duplicate resource refs, generation, backoff, idempotency, or session state held by resource rows, resource status, or the core Operation ledger.
+
+## Storage-need test
+
+A component declares a Provider state Volume only when a concrete payload passes an explicit storage-need test. A payload qualifies when at least one of the following holds:
+
+1. **Secret / sensitive private recovery data** — the payload is or seals a secret (key material, PSK, sealed enrollment/admission record) and cannot enter status;
+2. **Large / binary / file content** — the payload is a large or binary file that is unsuitable for the bounded status API;
+3. **Private data unsafe for status readers** — the payload is private data that must not be visible to authorized status readers under RBAC;
+4. **Bounded but revision-unsuitable data with a demonstrated recovery need** — the payload is bounded but its churn would bloat revision history, and there is a demonstrated recovery need that status cannot satisfy.
+
+A component whose durable operational state is fully derivable from spec, status, the core Operation ledger, or independent external observation declares **no** state Volume. There is no empty, identity-only state Volume, and no state Volume is created for a stateless component.
 
 ## No ProviderState ResourceType
 
-Decision D032 folds file, directory, ACL, and filesystem-view concerns into one `Volume` ResourceType. Provider payload state is a Volume with a per-component view and a `stateSchema` extension in its spec. A separate `ProviderState` ResourceType would duplicate the owner/finalizer/lifecycle model already present in Volume and add a second governance layer for the same physical bytes. The Volume ResourceType is extended instead.
+Decision D032 folds file, directory, ACL, and filesystem-view concerns into one `Volume` ResourceType. A declared Provider payload state is a Volume with a per-component view and a `stateSchema` extension in its spec. A separate `ProviderState` ResourceType would duplicate the owner/finalizer/lifecycle model already present in Volume and add a second governance layer for the same physical bytes. The Volume ResourceType is extended instead.
 
 This decision is final within this spec and does not require a new decision register entry.
 
-## ProviderStateSet (logical concept)
+## ProviderStateSet (optional logical concept)
 
-A **ProviderStateSet** is the set of all Volume resources in a Zone whose `metadata.ownerRef` resolves to `Provider/<name>`. It is a query-time grouping, not a ResourceType or stored artifact.
+A **ProviderStateSet** is the OPTIONAL, query-time grouping of the declared Volume resources in a Zone whose `metadata.ownerRef` resolves to `Provider/<name>`. It is a query-time grouping, not a ResourceType or stored artifact, and it is **empty** for a Provider that declares no state Volume.
 
 ```text
 ProviderStateSet(zone, provider-name) =
@@ -32,17 +94,17 @@ ProviderStateSet(zone, provider-name) =
               && v.metadata.ownerRef == "Provider/<provider-name>" }
 ```
 
-**Core ProviderDeployment ownership.** Core ProviderDeployment creates every Volume in the ProviderStateSet from the signed state declarations in the Provider manifest before launching any component Process. The Provider controller does not invoke Volume creation APIs; operators and Nix never author component state Volumes.
+**Core ProviderDeployment ownership.** Core ProviderDeployment creates only the declared state Volumes in the ProviderStateSet from the signed state declarations in the Provider manifest, before launching the owning component's Process. The Provider controller does not invoke Volume creation APIs; operators and Nix never author component state Volumes.
 
 **Export children excluded.** `virtiofs.d2b.io.Export` children have `ownerRef: Volume/<source>` (not `ownerRef: Provider/<name>`) and are excluded from the ProviderStateSet. Only source Volumes are included.
 
-**Every component included.** ProviderStateSet includes Volumes for every semantic Provider component, including those with an empty payload schema (`schemaId: null`).
+**Only declared components included.** ProviderStateSet includes only the Volumes of components that declared one under the [storage-need test](#storage-need-test). A component that keeps its bounded non-secret operational state in `status`/the core Operation ledger contributes no Volume. There is never an empty identity-only Volume.
 
 The controller deletes all ProviderStateSet Volumes when the Provider is removed, after finalizers on any owning Process or EphemeralProcess complete.
 
 ## Provider component state declaration
 
-Every semantic Provider component — including payload-free components — declares exactly one state namespace in its component descriptor. An empty-payload component (`schemaId: null`) still receives a private state Volume for stable identity, markers, quota, and lifecycle participation.
+A semantic Provider component declares a state namespace in its component descriptor **only** when a payload passes the [storage-need test](#storage-need-test). Components whose operational state fits in `status`/the core Operation ledger declare no `stateNamespaces` entry, receive no state Volume, and contribute no Volume to the ProviderStateSet. A component never declares an empty-payload (`schemaId: null`) identity-only namespace.
 
 ```yaml
 stateNamespaces:
@@ -54,7 +116,8 @@ stateNamespaces:
     persistenceClass: persistent    # required; ephemeral/cache/config rejected
     sensitivityClass: private       # private | internal | shared-read
     migrationPolicy: pre-launch-required  # pre-launch-required | online-optional | none
-    quotaBytes: 104857600           # required nonzero; minimum 4096 for empty-schema
+    quotaBytes: 104857600           # required nonzero
+    storageNeed: secret             # required: secret | large-binary | private-unsafe-for-status | revision-unsuitable
     sealingRequired: false
     placementMode: null             # omitted for Host-targeted; guest-local or host-backed-guest for Guest
     hostCustodyPermitted: false     # required true only for host-backed-guest
@@ -72,23 +135,24 @@ Fields:
 | --- | --- |
 | `id` | Stable component-local alphanumeric namespace identifier |
 | `kind` | Always `state` for component state Volumes; `staging` for migration staging Volumes |
-| `schemaId` | Qualified immutable schema name: `<provider-crate>/<component>/<namespace>`; null for empty-payload components |
-| `schemaVersion` | Semver `MAJOR.MINOR`; major increment requires migration; null if `schemaId` is null |
-| `schemaDigest` | Exact SHA-256 hex of the canonical schema definition; null if `schemaId` is null |
+| `schemaId` | Qualified immutable schema name: `<provider-crate>/<component>/<namespace>`; a declared namespace always carries a non-null payload schema |
+| `schemaVersion` | Semver `MAJOR.MINOR`; major increment requires migration |
+| `schemaDigest` | Exact SHA-256 hex of the canonical schema definition |
 | `persistenceClass` | Must be `persistent`; `ephemeral`, `cache`, and `config` are rejected with `component-persistence-class-forbidden` |
 | `sensitivityClass` | `private`: single-process; `internal`: same-Provider multi-component; `shared-read`: cross-Provider read-only |
 | `migrationPolicy` | `pre-launch-required`: component Process is not started until migration completes; `online-optional`: Provider may start while migration runs; `none`: no migration logic |
-| `quotaBytes` | Required nonzero; minimum 4096 bytes enforced (floor applied to smaller values for empty-schema; zero rejected with `component-quota-zero`) |
+| `quotaBytes` | Required nonzero; minimum 4096 bytes enforced (zero rejected with `component-quota-zero`) |
+| `storageNeed` | Required justification the payload satisfies: `secret`, `large-binary`, `private-unsafe-for-status`, or `revision-unsuitable`; a namespace whose payload is fully derivable from spec/status/core ledger/external observation is rejected with `component-state-not-justified` |
 | `sealingRequired` | If true the Provider controller must bind a `sealingCredentialRef` before the Volume is marked Ready |
 | `placementMode` | For Guest-targeted components: `guest-local` (source inside Guest, Host never holds bytes/paths/dirfds) or `host-backed-guest` (source on Host with virtiofs Export, requires `hostCustodyPermitted: true`). Omitted for Host-targeted components. Frozen in signed manifest; no fallback. |
 | `hostCustodyPermitted` | Required `true` for `host-backed-guest`; must be absent or `false` for `guest-local`. Core ProviderDeployment rejects `host-backed-guest` without `hostCustodyPermitted: true` with `placement-host-custody-violation`. |
 | `views` | Named views declared in the component descriptor; subset is also declared in the Volume spec |
 
-`schemaId`, `schemaVersion`, `schemaDigest`, `kind`, `persistenceClass`, `placementMode`, `hostCustodyPermitted`, and `views` are signed into the component descriptor and the Provider package digest. Any change increments the component descriptor version and the Provider resource generation.
+`schemaId`, `schemaVersion`, `schemaDigest`, `kind`, `persistenceClass`, `storageNeed`, `placementMode`, `hostCustodyPermitted`, and `views` are signed into the component descriptor and the Provider package digest. Any change increments the component descriptor version and the Provider resource generation.
 
 ## Volume creation and ownership
 
-Core ProviderDeployment creates one Volume per declared component state namespace per execution target from the signed state declarations in the Provider manifest, before launching any component Process. This applies to every component, including empty-payload ones. The Provider controller does not invoke Volume creation APIs. Operators and Nix never author component state Volumes. Each Volume:
+Core ProviderDeployment creates one Volume per **declared** component state namespace per execution target from the signed state declarations in the Provider manifest, before launching the owning component's Process. Components that declare no state namespace get no Volume. The Provider controller does not invoke Volume creation APIs. Operators and Nix never author component state Volumes. Each declared Volume:
 
 ```yaml
 apiVersion: resources.d2b.io/v3
@@ -156,47 +220,23 @@ mounts:
     required: true
 ```
 
-**Admission invariants.** Core ProviderDeployment enforces these constraints when creating a Volume from a component descriptor state namespace; the closed bootstrap mechanism applies the same checks:
+**Admission invariants.** Core ProviderDeployment enforces these constraints when creating a Volume from a declared component descriptor state namespace:
 
 | Constraint | Violation error |
 | --- | --- |
 | `kind: state` required for all component state Volumes | `component-kind-invalid` |
+| declared namespace payload must pass the storage-need test (a `storageNeed` justification of `secret`, `large-binary`, `private-unsafe-for-status`, or `revision-unsuitable`); state fully derivable from spec/status/core ledger/external observation is rejected | `component-state-not-justified` |
 | `persistenceClass: persistent` required; `ephemeral`, `cache`, and `config` rejected | `component-persistence-class-forbidden` |
 | `quotaBytes ≥ 4096`; zero or smaller values are rejected; base `quota.maxBytes` equals `quotaBytes` and `quota.maxInodes` is nonzero | `component-quota-too-small` |
 | `host-backed-guest` requires `hostCustodyPermitted: true` in signed descriptor | `placement-host-custody-violation` |
 | Credential, audit, remote-node, or cloud-control schemas require `guest-local` | `guest-local-required` |
 | layout `ownerRef`/`groupRef` must reference a Nix-preprovisioned User principal or bounded system pool; runtime-created principals rejected | `volume-principal-not-preprovisioned` |
 
-## Mandatory-state bootstrap
+## No bootstrap state Volume
 
-**Ordering constraint.** Core ProviderDeployment creates Volumes through the volume-local Provider. Before volume-local is operational in an execution domain, it cannot yet process Volume creation — a closed bootstrap cycle within that domain. The framework resolves this with a fixed local bootstrap storage mechanism, one per execution domain, embedded in the Zone runtime. No additional Provider bootstrap process is introduced.
+Because every fixed bootstrap component — `system-core`, `system-minijail`, and the first `volume-local` controller instance on each execution target — keeps its bounded non-secret operational state in resource `status` and the core Operation ledger and declares **no** Provider state Volume, no component requires a state Volume before a `volume-local` instance is Ready. The previously specified mandatory-state bootstrap cycle and its per-execution-target local bootstrap storage mechanism are therefore removed entirely (D086, superseded by D087). There is no hidden bootstrap store, no closed bootstrap cycle, and no implicit framework-created bootstrap Volume.
 
-**Bootstrap-eligible scope (D086).** The mechanism provisions Volumes for exactly the following components on the same execution target, and no others:
-
-1. The **volume-local controller component** initializing on that target.
-2. **system-core** — if system-core is a fixed bootstrap component on that target. system-core launches volume-local; it cannot wait for volume-local to be Ready before receiving its own Volume.
-3. **system-minijail** — if system-minijail is a fixed bootstrap component on that target. system-minijail launches volume-local; it cannot wait for volume-local to be Ready before receiving its own Volume.
-
-No other component or Provider — on any execution target — is bootstrap-eligible. The mechanism never handles any other component's state Volume and never crosses a target boundary.
-
-**Cross-domain isolation.** The bootstrap mechanism for a given target creates and accesses only storage local to that target. No dirfd, file descriptor, or filesystem path produced by bootstrap in one domain is accessible from any other domain. A Guest target's bootstrap mechanism uses only Guest-local primitives; it never exposes a parent-Host dirfd or other host-local handle, which is what lets a Guest bootstrap its own primitive controllers (including a Guest-local volume-local instance) independently.
-
-**Real Volume resources.** All bootstrap-provisioned Volumes are ordinary resource rows with normal generation/status. They are not placeholders. `status.phase` starts as `Pending`. volume-local adopts and reconciles them immediately after its own startup, exactly as it would adopt any pre-existing Volume row after a restart.
-
-**What the mechanism provisions.** For each eligible component the mechanism:
-
-1. Creates a canonical Volume resource row with `kind: state`, `persistenceClass: persistent`, `status.phase: Pending`, `status.stateSchemaPhase: current`, and null `stateSchema` fields (empty-payload).
-2. Provisions the anchored root directory via fd-relative layout operations within the target's local storage only.
-3. Writes the identity marker using `volume_local::marker::provision_marker` as a library call.
-4. Emits a `bootstrap-volume-provisioned` audit record (Volume name and component id only; no paths or credentials).
-
-A non-null `schemaId` in the component descriptor fails with `bootstrap-schema-mismatch` (fail-closed; all bootstrap Volumes must have empty payload schema). A zero `quotaBytes` fails with `component-quota-zero`.
-
-On Zone restart the mechanism re-validates existing markers without re-provisioning. An absent or replaced marker sets `status.phase: Pending` and records `bootstrap-marker-mismatch`; volume-local adoption surfaces this as `Degraded/marker-replaced`.
-
-**volume-local adoption.** On its first startup reconcile relist, the volume-local controller processes all Zone Volumes including bootstrap-provisioned ones. For each Volume whose name and component id match a bootstrap-eligible component for this domain, volume-local verifies the identity marker, transitions `status.phase` to `Ready`, and assumes full lifecycle authority. After adoption, bootstrap-provisioned Volumes are indistinguishable from any other Volume in normal operation.
-
-**No further exceptions.** Any invocation for a component other than the three eligible ones listed above, or for a non-initializing domain, is rejected with `bootstrap-target-not-eligible`. The mechanism is not callable by any Provider or external component.
+A fixed bootstrap component that reaches Ready, adopts running processes, and re-derives its observed state from the core Operation ledger, resource `status`, and independent external observation (cgroup-leaf scanning, fresh pidfds, marker reverification against external reality) needs no durable payload Volume. If a future bootstrap component needs secret or large private recovery state that cannot enter status, it requires a new reviewed design that declares an ordinary optional state Volume under the [storage-need test](#storage-need-test); it does not reintroduce a bootstrap-storage exception.
 
 ## State placement under Host/Guest/user execution
 
@@ -229,7 +269,7 @@ spec:
 ```
 
 - Reconciled by the volume-local controller running inside the Guest.
-- The Guest-domain bootstrap path provisions the volume-local controller's empty state Volume for that Guest (see [Mandatory-state bootstrap](#mandatory-state-bootstrap)); all other Volumes are created by Core ProviderDeployment after volume-local is Ready in that domain.
+- The Guest-local `volume-local` instance reaches Ready without a state Volume (it keeps its bounded operational state in `status`/the core Operation ledger); all declared Volumes for that Guest domain are created by Core ProviderDeployment after volume-local is Ready in that domain.
 - The Host volume-local controller holds no dirfd, path, byte content, or identity marker for this Volume.
 - **Mandatory for** components carrying gateway or realm credentials, remote-node registration, audit state, or cloud control plane state. Core ProviderDeployment rejects `placementMode: host-backed-guest` for these schema categories with `guest-local-required`.
 
@@ -642,11 +682,11 @@ No schema content, raw path, instance ID, process arguments, or credential ident
 
 ## Async controller integration
 
-A Provider controller that manages stateful components follows this integration pattern in its async reconcile loop:
+A Provider controller that declares one or more state Volumes follows this integration pattern in its async reconcile loop. A controller with no declared state Volume writes its bounded operational observations to resource `status` on material change and skips the Volume-specific steps below.
 
-1. **Watch** all Volumes in the ProviderStateSet and all EphemeralProcess resources it owns.
-2. On `spec-generation-changed` for the Provider resource: diff the new component descriptor state namespaces against existing Volumes; create, update, or delete Volumes as needed.
-3. On `Volume.status.stateSchemaPhase = migration-required` for any Volume: dispatch the migration workflow (staging Volume, EphemeralProcess, commit/rollback).
+1. **Watch** the declared Volumes in the ProviderStateSet (possibly none) and all EphemeralProcess resources it owns.
+2. On `spec-generation-changed` for the Provider resource: diff the new declared component descriptor state namespaces against existing Volumes; create, update, or delete Volumes as needed.
+3. On `Volume.status.stateSchemaPhase = migration-required` for any declared Volume: dispatch the migration workflow (staging Volume, EphemeralProcess, commit/rollback).
 4. On `Volume.status.markerStatus = missing | replaced`: set `Degraded` on affected component Processes and surface the typed condition.
 5. Gate each component Process's desired phase on its mounted Volume's `phase == Ready` and `stateSchemaPhase == current`. Use a declarative dependency selector in the controller descriptor that includes every Volume the component's Process mounts.
 6. On EphemeralProcess completion, apply the commit or rollback protocol, then delete the EphemeralProcess normally.
@@ -991,10 +1031,10 @@ Every `packages/d2b-provider-<base>-<implementation>/` crate created by this or 
 | Current source | `packages/d2b-core/src/processes.rs` (`VmProcessDag`, `ProcessNode`, `ProcessRole`: each current `ProcessRole` variant maps to a `Process` or `EphemeralProcess` resource under its owning Provider; `ProcessRole::Swtpm`/`Virtiofsd`/`CloudHypervisorRunner` → Process resources under `Provider/device-tpm`/`Provider/volume-virtiofs`/`Provider/runtime-cloud-hypervisor`); Provider descriptor component model from ADR046-provider-001 |
 | Reuse action | adapt |
 | Destination | `packages/d2b-contracts/src/v3/provider.rs` (component descriptor `stateNamespaces` field) |
-| Detailed design | Add `stateNamespaces: Vec<ComponentStateNamespace>` to the component descriptor (exactly one entry per component; presence is required even for payload-free components); each entry includes `id`, `kind` (always `state`), `schemaId` (nullable for empty-payload), `schemaVersion` (nullable), `schemaDigest` (nullable), `persistenceClass` (must be `persistent`; `ephemeral`/`cache` rejected), `sensitivityClass`, `migrationPolicy`, `quotaBytes` (nonzero; minimum 4096), `sealingRequired`, `placementMode` (`guest-local` or `host-backed-guest` for Guest-targeted; omitted for Host-targeted), `hostCustodyPermitted` (required `true` for `host-backed-guest`; absent/false for `guest-local`), and `views`; null `schemaId`/`schemaVersion`/`schemaDigest` denotes an empty-payload component |
+| Detailed design | Add `stateNamespaces: Vec<ComponentStateNamespace>` to the component descriptor (zero or more entries; a component declares an entry only when a payload passes the storage-need test; stateless components declare none); each entry includes `id`, `kind` (always `state`), `schemaId` (non-null), `schemaVersion`, `schemaDigest`, `persistenceClass` (must be `persistent`; `ephemeral`/`cache` rejected), `sensitivityClass`, `migrationPolicy`, `quotaBytes` (nonzero; minimum 4096), `storageNeed` (`secret` \| `large-binary` \| `private-unsafe-for-status` \| `revision-unsuitable`), `sealingRequired`, `placementMode` (`guest-local` or `host-backed-guest` for Guest-targeted; omitted for Host-targeted), `hostCustodyPermitted` (required `true` for `host-backed-guest`; absent/false for `guest-local`), and `views`; there is no empty-payload (`schemaId: null`) namespace |
 | Integration | Provider package build emits component descriptors with state namespaces; Provider controller creates Volumes from descriptors at install time |
 | Data migration | Full reset |
-| Validation | Descriptor schema golden vectors; descriptor-Volume consistency property test; empty-schema descriptor round-trip; every-component-has-namespace enforcement (descriptor missing a namespace → build error); `kind != state` → `component-kind-invalid`; `persistenceClass: ephemeral` → `component-persistence-class-forbidden`; `quotaBytes: 0` or `1024` → `component-quota-too-small`; base `quota.maxBytes == quotaBytes` and `quota.maxInodes > 0`; Guest-targeted with `placementMode: guest-local` → source.executionRef=Guest; Guest-targeted with `host-backed-guest` + `hostCustodyPermitted: true` → source on Host, Export created; `host-backed-guest` without `hostCustodyPermitted: true` → `placement-host-custody-violation`; credential/audit schema with `host-backed-guest` → `guest-local-required`; `placementMode` change → descriptor version increment enforced |
+| Validation | Descriptor schema golden vectors; descriptor-Volume consistency property test; stateless-component-declares-no-namespace round-trip; storage-need justification enforcement (namespace whose payload is derivable from spec/status/core ledger/external observation → `component-state-not-justified`); `kind != state` → `component-kind-invalid`; `persistenceClass: ephemeral` → `component-persistence-class-forbidden`; `quotaBytes: 0` or `1024` → `component-quota-too-small`; base `quota.maxBytes == quotaBytes` and `quota.maxInodes > 0`; Guest-targeted with `placementMode: guest-local` → source.executionRef=Guest; Guest-targeted with `host-backed-guest` + `hostCustodyPermitted: true` → source on Host, Export created; `host-backed-guest` without `hostCustodyPermitted: true` → `placement-host-custody-violation`; credential/audit schema with `host-backed-guest` → `guest-local-required`; `placementMode` change → descriptor version increment enforced |
 | Removal proof | Not applicable (new) |
 
 ### ADR046-pstate-003
@@ -1106,7 +1146,7 @@ Every `packages/d2b-provider-<base>-<implementation>/` crate created by this or 
 | Detailed design | Port all d2b-state integration tests replacing ADR 0045 contract setup with v3 Volume/StateEnvelope; add provider-state-specific migration, marker, quota, sealing, relocation, snapshot, incident-hold, and unclaimed-GC tests; include cross-component N-Volume coordination test |
 | Integration | Tests run against the real volume-local Provider over a fake Zone runtime (no live daemon required) using the standard controller-toolkit fake clients |
 | Data migration | None |
-| Validation | All ported tests pass under v3 contracts; test coverage includes every fault-injection scenario listed in d2b-state/tests/state.rs plus new provider-state cases; empty-schema Volume tests pass; shared-Volume attempt rejected; `guest-local` Volume creation inside Guest domain (source.executionRef=Guest, no Export created, Host volume-local holds no dirfd/path); `host-backed-guest` Volume creation (source on Host, Export created, Export reaches Ready, Guest Process mounts source Volume view); `host-backed-guest` without `hostCustodyPermitted: true` → `placement-host-custody-violation`; credential/audit schema with `host-backed-guest` → `guest-local-required`; cross-domain isolation: Guest-local volume-local does not create or observe Host-domain Volumes |
+| Validation | All ported tests pass under v3 contracts; test coverage includes every fault-injection scenario listed in d2b-state/tests/state.rs plus new provider-state cases; stateless-component-declares-no-Volume test passes; shared-Volume attempt rejected; `guest-local` Volume creation inside Guest domain (source.executionRef=Guest, no Export created, Host volume-local holds no dirfd/path); `host-backed-guest` Volume creation (source on Host, Export created, Export reaches Ready, Guest Process mounts source Volume view); `host-backed-guest` without `hostCustodyPermitted: true` → `placement-host-custody-violation`; credential/audit schema with `host-backed-guest` → `guest-local-required`; cross-domain isolation: Guest-local volume-local does not create or observe Host-domain Volumes |
 | Removal proof | `d2b-state` crate retired from workspace only after every caller migrates to v3 Volume state helpers and all ported tests pass |
 
 ### ADR046-pstate-010
@@ -1146,13 +1186,13 @@ Every `packages/d2b-provider-<base>-<implementation>/` crate created by this or 
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-pstate-012` |
-| Dependency/owner | ADR046-pstate-003; Zone runtime owner (`d2b-core-controller`), volume-local Provider owner |
-| Current source | `packages/d2b-priv-broker/src/ops/swtpm_dir.rs` (marker algorithm, v3 baseline `fd5b0067`); `packages/d2b-state/src/path.rs` (main, `6faa5256`): `AnchoredDir`, `AnchoredResource` |
+| Dependency/owner | ADR046-pstate-001, ADR046-pstate-002; Zone runtime owner (`d2b-core-controller`), volume-local Provider owner |
+| Current source | `packages/d2b-core/src/status.rs` (v3 common status/observedGeneration/conditions); Provider descriptor state-namespace declaration from ADR046-pstate-002 |
 | Reuse action | adapt |
-| Destination | `packages/d2b-core-controller/src/bootstrap_volumes.rs` (bootstrap mechanism: Zone-startup per-domain function, volume-local + system-core + system-minijail target resolution, Volume resource row creation, calls volume-local marker primitives as a library, emits bootstrap audit); `packages/d2b-provider-volume-local/src/bootstrap_adopt.rs` (startup-reconcile adoption path: marker verify, component id + domain check, `Pending` → `Ready` transition); `packages/d2b-core-controller/tests/bootstrap_volumes.rs` (hermetic: Host/Guest/user-local domain provision, system-core/system-minijail targets where eligible, non-eligible-component rejection, non-empty-schema rejection, idempotent re-validate on restart, cross-domain isolation); `packages/d2b-provider-volume-local/tests/bootstrap_adopt.rs` (hermetic: adopt success, marker-mismatch → `Degraded/marker-replaced`, wrong component id → adoption rejected, wrong domain → adoption rejected); `packages/d2b-core-controller/integration/bootstrap_volumes.rs` (Zone startup: Host volume-local adopts, then system-core/system-minijail Volumes created by Core ProviderDeployment; crash-at-marker-write recovery) |
-| Crate layout | See [Provider crate layout](#provider-crate-layout). Hermetic per-domain provision round-trips and cross-domain isolation assertions → `tests/bootstrap_volumes.rs`; Zone startup crash-recovery requiring real processes → `integration/bootstrap_volumes.rs` |
-| Detailed design | The bootstrap mechanism is a fixed internal function invoked once per execution domain during Zone runtime initialization, before Core ProviderDeployment runs. Provisioning scope per domain: (1) volume-local controller component (always); (2) system-core (if a fixed bootstrap component on that target — it launches volume-local, cannot wait); (3) system-minijail (if a fixed bootstrap component on that target — it launches volume-local, cannot wait). For each eligible component: check `schemaId` in signed descriptor — non-null → `bootstrap-schema-mismatch` (fail-closed); create Volume resource row with `kind: state`, `persistenceClass: persistent`, `status.phase: Pending`, null `stateSchema` fields; provision anchored root dir via fd-relative `mkdirat`/`openat`/layout entries within the domain's local storage only — no dirfd or path is accessible from another domain; write identity marker via `volume_local::marker::provision_marker` as a library call; emit `bootstrap-volume-provisioned` audit record. On daemon restart: re-validate markers without re-creating rows; absent/replaced marker → `Pending` + `bootstrap-marker-mismatch`. Any invocation for a non-eligible component → `bootstrap-target-not-eligible`. The mechanism exposes no public API. |
-| Integration | `d2b-core-controller` calls `bootstrap_volumes::provision` during Zone startup before registering Core ProviderDeployment; `d2b-provider-volume-local` controller calls `bootstrap_adopt::adopt_bootstrap_volumes` as the first step of its startup reconcile relist |
+| Destination | `packages/d2b-core-controller/src/optional_state_admission.rs` (storage-need admission: reject a declared namespace whose payload is derivable from spec/status/core ledger/external observation with `component-state-not-justified`; only declared namespaces produce a Volume; stateless components produce none); `packages/d2b-core-controller/tests/optional_state_admission.rs` (hermetic: stateless component → no Volume; declared `storageNeed` variants accepted; unjustified namespace rejected; status-first restart revalidation — controller re-derives observed state from status/core ledger/external observation after restart and never treats a status field as authority); `packages/d2b-provider-volume-local/tests/status_bounds.rs` (hermetic: total canonical serialized status cap and provider-specific detail cap enforced; oversize status write → typed rejection; status carries no secret/path/argv/PID/unit/stream/ring content) |
+| Crate layout | See [Provider crate layout](#provider-crate-layout). Hermetic admission and status-bound round-trips → `tests/`; Zone-startup restart revalidation requiring real processes → `integration/`. |
+| Detailed design | Optional state-Volume admission is a fixed step in Core ProviderDeployment: for each component, if it declares no `stateNamespaces` entry it gets no Volume; for each declared entry, verify the `storageNeed` justification (`secret` \| `large-binary` \| `private-unsafe-for-status` \| `revision-unsuitable`) and reject a namespace whose payload is fully derivable from spec/status/core ledger/external observation with `component-state-not-justified`. Fixed bootstrap components (`system-core`, `system-minijail`, first `volume-local` instance) declare no state Volume and reach Ready using resource `status`, the core Operation ledger, and external observation only; there is no bootstrap-storage mechanism. Status-bound enforcement: reject a status write whose total canonical serialized size exceeds the single canonical status cap, or whose provider-specific detail exceeds the detail cap, or whose condition/count/list/map entries exceed the bounded limits, with the typed status-oversize rejection; status writes occur only on material change. |
+| Integration | `d2b-core-controller` runs optional state-Volume admission before creating any declared Volume and before launching a component Process; the status-bound check is applied on every status subresource write in the resource store. |
 | Data migration | New; no prior bootstrap artifacts to migrate |
-| Validation | Host-domain provision for volume-local + system-core + system-minijail → all three `phase: Pending`; volume-local adoption transitions all three to `phase: Ready`; Guest-domain bootstrap round-trip (only volume-local, no system-core/minijail on Guest); user-local domain round-trip; crash at marker-write → restart re-validates, no duplicate row; non-controller-component → `bootstrap-target-not-eligible`; non-empty-schema descriptor → `bootstrap-schema-mismatch`; marker replaced between bootstrap and adoption → `Degraded/marker-replaced`; cross-domain isolation: Host-domain dirfd not accessible in Guest-domain bootstrap; system-core/system-minijail bootstrap audit records contain no filesystem paths |
-| Removal proof | Not applicable (permanent mechanism; evolves alongside volume-local and Zone runtime) |
+| Validation | Stateless component → no Volume created; each `storageNeed` variant accepted with a declared Volume; unjustified namespace → `component-state-not-justified`; status-first restart: controller re-derives observed state and reverifies against external reality, never treating status as authority; oversize/over-detail/over-cardinality status write → typed rejection; status contains no secret/path/argv/PID/unit/stream/ring content |
+| Removal proof | Not applicable (permanent admission + status-bound enforcement) |

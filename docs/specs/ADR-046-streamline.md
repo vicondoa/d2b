@@ -165,7 +165,10 @@ parallel churn: `5c287f51` ("add bootstrap-state exception to volume-local
 dossier"), `7632ebec` ("add bootstrap-state exception to
 Provider/system-minijail dossier"), and `24598e5c` ("scope bootstrap exception
 to volume-local controller per execution domain") before D086 froze the
-single per-execution-target, non-resource, closed exception.
+single per-execution-target, non-resource, closed exception. D087 later
+removed that exception entirely by making resource `status`/the core Operation
+ledger the default state surface and Provider state Volumes optional, so no
+bootstrap state Volume and no bootstrap-storage mechanism remain.
 
 ### F4 — One-resource/one-controller Volume-vs-virtiofs ownership conflict
 
@@ -565,19 +568,19 @@ v3 source to extract from.
 | Adoption timing | Immediately, before the ADR 0046 documentation set's own pre-panel gate |
 | Removal/supersession | None; graduates to permanent per [Permanent methodology](#permanent-methodology-after-accepted) |
 
-### ADR046-streamline-006 — ProviderStateSet/bootstrap/one-controller graph checker
+### ADR046-streamline-006 — ProviderStateSet/status-first/one-controller graph checker
 
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-streamline-006` |
 | Tier | B |
-| Observed friction evidence | F3: ProviderStateSet churned through four representations and the bootstrap-cycle exception was independently re-scoped three times (`5c287f51`, `7632ebec`, `24598e5c`) before D086 froze it |
-| Desired behavior | A runtime-level checker that, given a Zone's actual resource/controller registration graph, verifies every Provider component has exactly one framework-created state Volume, no ResourceType or stored row named `ProviderStateSet` exists, and the D086 bootstrap exception is exercised only per-execution-target and only for the fixed `volume-local`/`system-core`/`system-minijail` bootstrap set |
+| Observed friction evidence | F3: ProviderStateSet churned through multiple representations and the bootstrap-cycle exception was independently re-scoped three times (`5c287f51`, `7632ebec`, `24598e5c`) before D076/D086 froze it; D087 later removed the mandatory-state model in favor of a status-first, optional state Volume |
+| Desired behavior | A runtime-level checker that, given a Zone's actual resource/controller registration graph, verifies every Provider component's state Volumes are *declared* (a component with no declared namespace owns no state Volume and no empty identity-only Volume exists), no ResourceType or stored row named `ProviderStateSet` exists, and no bootstrap state Volume or bootstrap-storage mechanism exists (the fixed `volume-local`/`system-core`/`system-minijail` bootstrap set declares no state Volume and reaches Ready from `status`/the core Operation ledger per D087) |
 | Destination | `packages/d2b-resource-store-redb/tests/provider_state_graph.rs` (or the eventual crate implementing Zone resource storage) |
 | Owner/dependencies | The Zone resource-store implementation work item (not yet filed; blocked on W0-W10 implementation request per D024); ADR046-streamline-001 for the doc-level invariant source |
-| Implementation shape | A graph-walk over the real controller-registration/resource-ownership index (not Markdown) asserting the D076/D086 invariants; the doc-level half of this check (dossier text describing the invariant correctly) is covered now by ADR046-streamline-005's `policy_spec_ownership` |
+| Implementation shape | A graph-walk over the real controller-registration/resource-ownership index (not Markdown) asserting the D076/D086/D087 invariants; the doc-level half of this check (dossier text describing the invariant correctly) is covered now by ADR046-streamline-005's `policy_spec_ownership` |
 | Integration | Runs as a Type 3 integration test against the real resource-store crate once it exists |
-| Validation | New test asserting: zero `ProviderStateSet` rows in the store; exactly one state Volume per declared component; bootstrap exception scoped per-execution-target only |
+| Validation | New test asserting: zero `ProviderStateSet` rows in the store; every state Volume corresponds to a declared component namespace; no empty identity-only Volume; no bootstrap state Volume or bootstrap-storage mechanism exists |
 | Adoption timing | Streamline wave (Tier B); lands after the Zone resource-store and core-controller implementation work items reach Validation-complete |
 | Removal/supersession | None |
 

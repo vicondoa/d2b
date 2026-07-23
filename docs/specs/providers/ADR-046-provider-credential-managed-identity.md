@@ -196,99 +196,43 @@ Provider schema rejects unknown config fields at runtime.
 
 ---
 
-## ProviderStateSet Volumes and Provider status
+## ProviderStateSet and Provider status
 
-### ProviderStateSet Volumes
+### ProviderStateSet
 
-**ProviderStateSet** is the logical/query-time grouping of all Volume resources
-in a Zone whose `metadata.ownerRef` is `Provider/credential-managed-identity`.
-It is not a ResourceType or stored artifact — each member is an ordinary Volume
-resource that carries the Volume + provider-state extension schema (`stateSchema`
-block, identity marker, `stateSchemaPhase` status).
+**ProviderStateSet** is the optional query-time grouping of a Provider's
+declared state Volumes. Under D087, bounded non-secret controller and credential
+operational state belongs in the owning resource's `status` subresource and the
+core Operation ledger by default. `credential-managed-identity` declares **no
+Provider state Volume**: managed-identity token bytes are secret and never
+eligible for persistence, while the bounded non-secret lease observation is
+revision-suitable status state and does not pass the storage-need test.
 
-#### Ownership and creation
+Therefore the ProviderStateSet for `Provider/credential-managed-identity` is
+empty. Core ProviderDeployment creates no controller or agent state storage for
+this Provider, component Processes receive no state mount, no layout principal
+or `Provider/volume-local` state reconciliation is involved, and there is no
+bootstrap state Volume mechanism or exception (D086, superseded by D087).
 
-**Core ProviderDeployment** creates each declared component state Volume before
-the corresponding component Process is first spawned, and deletes it after the
-component Process has been torn down and its finalizers have completed. The
-semantic `credential-managed-identity` controller:
+### Status-first operational state
 
-- does **not** own Volume resources and is not their reconciler;
-- does **not** list `Volume` in its exported ResourceTypes;
-- does **not** create, update, or delete its prerequisite Volumes — it only
-  consumes the local view dirfd that the co-located runtime supplies at Process
-  launch.
+The owning `Credential/<name>.status` carries only bounded, redacted,
+RBAC-readable observation: lease phase, credential readiness, rotation
+generation, expiry timestamps, audience, placement binding, bounded retry
+counters, closed-enum error detail, and opaque lease IDs that are non-secret,
+non-authorizing, bounded, safe for authorized status readers, and independently
+revalidated before use. The core Operation ledger carries in-flight
+idempotency/retry; status carries the latest bounded lease result/checkpoint.
 
-`Provider/volume-local` is the sole Volume reconciler. It responds to Volume
-watch events for Volumes whose `metadata.ownerRef` is scoped to the current
-execution target; it maintains the identity marker, validates the `stateSchema`
-block on every daemon restart and Process launch, and enforces `sensitivityClass`
-and layout-principal bindings. When the execution target is `Guest/<name>`,
-credential-managed-identity component state is guest-local; no
-host-backed-guest attachment, virtiofs Export, or host fallback is permitted for
-credential state.
-
-#### Declared components and empty payload schema
-
-`credential-managed-identity` declares two components, each with an empty
-payload schema:
-
-- `managed-identity-controller`: no controller state, no watch-cache bytes, no
-  lease table — the controller derives all working state from the Zone resource
-  store at runtime.
-- `managed-identity-agent` (one Volume per Credential/execution-target binding):
-  no token bytes, no IMDS response fragments, no pidfd, no endpoint addresses,
-  no lease bytes stored to disk. All token material is held exclusively in the
-  injected `ManagedIdentityCredentialClient` implementation's memory within the
-  agent process and is never serialized to a Volume, status field, audit record,
-  log line, or any other output surface.
-
-Empty payload schema Volumes carry `migrationPolicy: none`. No migration worker
-is declared or invoked; the only operation Core ProviderDeployment performs on a
-schema-version bump for an empty schema is identity marker revalidation via the
-`stateSchema` reconcile path in `Provider/volume-local`.
-
-**Empty payload schema does not mean ephemeral or quota-zero.** Each Volume is:
-
-- `kind: state` and `persistenceClass: persistent` — Volumes survive component
-  and Provider restarts and are not discarded on daemon restart or Process exit;
-- provisioned with a minimal nonzero byte and inode quota even though the
-  payload carries no content, so `Provider/volume-local` can maintain the
-  identity marker file and layout directory without a zero-quota guard failure;
-- never `persistenceClass: ephemeral` or `quotaBytes: 0`; quota 0 disables
-  provider-level enforcement but would also signal "no on-disk presence expected",
-  which conflicts with the identity marker requirement.
-
-These Volumes participate in the full Provider upgrade, destroy, and reset
-lifecycle: on Provider removal Core ProviderDeployment deletes them in dependency
-order after all agent Process finalizers complete; on Provider version upgrade
-the `stateSchema` version is bumped (even for an empty schema) to trigger marker
-revalidation via `Provider/volume-local`; on zone-reset they are destroyed with
-the rest of the Provider's ProviderStateSet.
-
-#### Per-Volume properties
-
-Each Volume in the ProviderStateSet additionally:
-
-- carries a `stateSchema` block whose `schemaId` names the component's declared
-  empty schema, so `Provider/volume-local` can validate identity markers on
-  every daemon restart and Process launch;
-- has a layout entry whose `ownerRef`/`groupRef` references a
-  Nix-preprovisioned `User/<name>` principal (or a member of the bounded
-  principal pool for multi-instance agent Volumes); no ComponentPrincipal
-  ResourceRef is used;
-- is `sensitivityClass: private` and is never shared across components: the
-  controller Volume is mounted only by the controller Process; each agent Volume
-  is mounted only by the agent Process instance it serves; no two components
-  mount the same Volume;
-- exposes a single named view; the mounting Process receives only that
-  component's local view dirfd — no cross-component fd sharing or raw host
-  path access is permitted.
-
-Volume names follow the convention
-`credential-managed-identity--<component>--<namespace-id>--<execution-ref-short>`
-(e.g. `credential-managed-identity--controller--empty--azure-vm-host`,
-`credential-managed-identity--agent--empty--aca-sandbox`).
+Status is revisioned, optimistic-status-writer controlled, observation-only,
+reverified against external IMDS/effect-port reality after restart, written only
+on material change, and bounded to the D087 status limits (total ≤ 64 KiB,
+provider-specific detail ≤ 32 KiB, with `status-oversize` rejection). It must
+not contain managed-identity token bytes, keys, PSKs, authority-conferring
+credential handles, private path/argv/env/PID/unit data, raw IMDS/cloud error
+bodies, large blobs, endpoint private detail, or unbounded/churn-heavy content.
+Token bytes are held only transiently in the agent process and delivered solely
+over dedicated Noise_KK sensitive sessions.
 
 ### Provider status aggregation
 
@@ -1113,6 +1057,12 @@ details, subscription IDs, or resource path fragments.
 
 ### `ManagedIdentityLeaseState`
 
+The non-secret lease state below is observed through `Credential.status` and the
+core Operation ledger. Status may include expiry, audience, phase,
+rotationGeneration, bounded retry/outcome detail, and opaque lease IDs that are
+non-secret and non-authorizing; token bytes are never status fields and never
+persist to any Provider state Volume.
+
 ```
 Absent (no active lease)
   |-- AcquireToken ---------> Active
@@ -1707,7 +1657,7 @@ endpoint-role, and provider-factory code is explicitly excluded.
 | Dependency/owner | `ADR046-credential-001`, `ADR046-credential-002`; `ADR046-credential-005`; `ADR046-credential-006` |
 | Description | Implement the controller/agent process split: separate `d2b-managed-identity-controller` binary (no IMDS client, no KK delivery) and `d2b-managed-identity-agent` binary (injected IMDS client via effect port, KK delivery). Controller manages Credential resources, spawns/monitors agent Processes. Agent receives `d2b.credential.v3` token-delivery methods and terminates Noise_KK delivery sessions. |
 | Destination | `packages/d2b-provider-credential-managed-identity/src/{controller.rs, agent.rs}`; `packages/d2b-provider-credential-managed-identity/{controller/main.rs, agent/main.rs}`; `packages/d2b-provider-credential-managed-identity/tests/topology.rs` |
-| Design | (1) Controller binary: watch/reconcile loop; no IMDS import; no Noise_KK delivery; spawns agent Process on Credential admission+dependency-ready (not on `phase=Ready`); uses canonical Process template (processClass/template/sandbox namespaceClasses `[mount,pid,ipc]`/capabilityClasses/seccompClass `strict`/startRoot/noNewPrivileges/environmentClass `minimal`/readOnlyRoot, BudgetSpec nested cpu/memory/pids/fds, endpoints `{name,transport unix,purpose}`, readiness `{class provider-defined,initialDelay,timeout,failureThreshold,successThreshold}`, TelemetrySpec metricsEnabled/tracingEnabled/logLevel/sensitiveLabels); attaches LaunchTicket projecting `imdsEndpointAlias`+`credentialRef` at spawn time; `executionRef` bound from `Provider.spec.config.controllerExecutionRef`. (2) Agent binary: receives injected `ManagedIdentityCredentialClient` via effect port from co-located runtime Provider (client constructed by runtime Provider from LaunchTicket projection); `networkUsage: {networkRef: null, ports: [], allowEgress: false}`; inherits execution target network namespace (no `network` namespaceClass); no direct IMDS network; serves `AcquireToken`/`RefreshToken`/`RevokeToken`/live `InspectMetadata`; terminates Noise_KK delivery session; reports lease state to controller. (3) Controller monitors agent Process health via `ownerChildTrigger`; respawns on failure with bounded backoff. (4) Deleted-phase cleanup: controller drains/revokes, issues delete on agent Process resource, observes agent Process deletion watch event (no `phase=Deleted` row for agent Process), then clears `provider-revoke` finalizer only; Core atomically writes event-only Deleted revision + removes Credential row/index; audit subsystem appends deletion record from committed revision with exactly-once dedup; controller never commits store deletion or emits Deleted-phase closure audit record. (5) Agent validates `ExactSdkConsumer` via `AuthenticatedSubjectContext` from ComponentSession, independently of scope fields. (6) No principalRef/profileRef/endpoint-kind/Process-config/telemetry.componentRef/readiness.probe/timeoutMs/network.allowedEffects/budget.class/telemetry.class in either template. ProviderStateSet is the logical grouping of all Volumes with ownerRef Provider/credential-managed-identity (not a ResourceType); both components declare empty payload schemas with migrationPolicy:none and no migration worker; each gets one private Core-ProviderDeployment-created Volume per execution target with stateSchema block, Nix-preprovisioned User/<name> layout principal, sensitivityClass:private, single named view dirfd — no cross-component sharing, no state/token/pidfd/endpoint/lease bytes written to any Volume. The credential-managed-identity controller does not own Volumes, does not list Volume in its exported ResourceTypes, and does not create its prerequisite Volumes; Provider/volume-local is the sole Volume reconciler; component only consumes its local view dirfd. Core aggregates Provider status; controller writes Credential/agent status only. |
+| Design | (1) Controller binary: watch/reconcile loop; no IMDS import; no Noise_KK delivery; spawns agent Process on Credential admission+dependency-ready (not on `phase=Ready`); uses canonical Process template (processClass/template/sandbox namespaceClasses `[mount,pid,ipc]`/capabilityClasses/seccompClass `strict`/startRoot/noNewPrivileges/environmentClass `minimal`/readOnlyRoot, BudgetSpec nested cpu/memory/pids/fds, endpoints `{name,transport unix,purpose}`, readiness `{class provider-defined,initialDelay,timeout,failureThreshold,successThreshold}`, TelemetrySpec metricsEnabled/tracingEnabled/logLevel/sensitiveLabels); attaches LaunchTicket projecting `imdsEndpointAlias`+`credentialRef` at spawn time; `executionRef` bound from `Provider.spec.config.controllerExecutionRef`. (2) Agent binary: receives injected `ManagedIdentityCredentialClient` via effect port from co-located runtime Provider (client constructed by runtime Provider from LaunchTicket projection); `networkUsage: {networkRef: null, ports: [], allowEgress: false}`; inherits execution target network namespace (no `network` namespaceClass); no direct IMDS network; serves `AcquireToken`/`RefreshToken`/`RevokeToken`/live `InspectMetadata`; terminates Noise_KK delivery session; reports lease state to controller. (3) Controller monitors agent Process health via `ownerChildTrigger`; respawns on failure with bounded backoff. (4) Deleted-phase cleanup: controller drains/revokes, issues delete on agent Process resource, observes agent Process deletion watch event (no `phase=Deleted` row for agent Process), then clears `provider-revoke` finalizer only; Core atomically writes event-only Deleted revision + removes Credential row/index; audit subsystem appends deletion record from committed revision with exactly-once dedup; controller never commits store deletion or emits Deleted-phase closure audit record. (5) Agent validates `ExactSdkConsumer` via `AuthenticatedSubjectContext` from ComponentSession, independently of scope fields. (6) No principalRef/profileRef/endpoint-kind/Process-config/telemetry.componentRef/readiness.probe/timeoutMs/network.allowedEffects/budget.class/telemetry.class in either template. D087 status-first state model applies: `credential-managed-identity` declares no Provider state Volume, ProviderStateSet is optional/query-time and empty, and no Process receives a state mount or layout principal. Bounded non-secret lease observation (phase, expiry, audience, opaque non-authorizing lease ID, retry/outcome detail) lives in `Credential.status`; in-flight idempotency/retry lives in the core Operation ledger; token bytes remain transient process memory and are delivered only over Noise_KK sensitive sessions. Core aggregates Provider status; controller writes Credential/agent status only. |
 | Validation | `tests/topology.rs` (see §topology.rs test matrix); `integration/host-guest-placement.nix` verifying both processes; `make test-rust`, `make test-integration`, `make test-host-integration` |
 
 ### ADR046-credential-005
@@ -1720,7 +1670,7 @@ endpoint-role, and provider-factory code is explicitly excluded.
 | Reuse source | main `a1cc0b2d`: `packages/d2b-provider-credential-managed-identity/src/lib.rs` (full implementation); `src/tests.rs` (full test suite) |
 | Reuse action | copy and adapt |
 | Destination | `packages/d2b-provider-credential-managed-identity/src/{lib.rs, controller.rs, agent.rs, service.rs, audit.rs, telemetry.rs}`; `packages/d2b-provider-credential-managed-identity/{controller/main.rs, agent/main.rs}`; `packages/d2b-provider-credential-managed-identity/tests/{lifecycle.rs, conformance.rs, faults.rs, canary.rs, delivery.rs, placement.rs, topology.rs}`; `packages/d2b-provider-credential-managed-identity/integration/{container-service.sh, host-guest-placement.nix, aca-credential-ref.sh, cleanup-rollback.sh}`; `packages/d2b-provider-credential-managed-identity/README.md` |
-| Detailed design | (1) Adapt `ManagedIdentityCredentialProvider` to `d2b.credential.v3` service interface; split controller and agent roles (see `ADR046-mi-topology-001`). (2) Enforce `ManagedIdentityCredentialOwner::ExactSdkConsumer` in agent via `AuthenticatedSubjectContext` from ComponentSession, independently of scope fields. (3) Reject `user-agent` placement: `scope.domainFilter=user` returns `credential-placement-mismatch` before agent spawn. (4) Validate `clientId` using `OpaqueAzureRef::parse` from v3 baseline; artifact IDs match `^[a-z][a-z0-9-]*$`. (5) Validate `imdsEndpointAlias` against closed enum `{azure-imds, azure-imds-aca}`; project into LaunchTicket at spawn time (never into Process spec config or env); co-located runtime Provider constructs `ManagedIdentityCredentialClient` from LaunchTicket projection and supplies via effect port; resolved URL never in any output surface. (6) Agent Process declares `networkUsage.allowEgress=false`; uses canonical Process template shape (see `ADR046-mi-topology-001` design item 6). (7) Reject `sign-challenge` with `credential-schema-invalid` immediately. (8) Map `ManagedIdentityClientState::Unavailable` to `credential-provider-unavailable`; no `InteractionRequired` state. (9) Implement `ManagedIdentityLeaseHandle` as opaque bounded newtype with redacted `Debug`. (10) All token bytes held by injected client in agent; delivered only via agent-terminated `Noise_KK` delivery session. (11) Integrate with Provider resource descriptor and controller toolkit. (12) Confirm `credential_canary` never appears in any service response, status field, delivery record outer header, or audit record. |
+| Detailed design | (1) Adapt `ManagedIdentityCredentialProvider` to `d2b.credential.v3` service interface; split controller and agent roles (see `ADR046-mi-topology-001`). (2) Enforce `ManagedIdentityCredentialOwner::ExactSdkConsumer` in agent via `AuthenticatedSubjectContext` from ComponentSession, independently of scope fields. (3) Reject `user-agent` placement: `scope.domainFilter=user` returns `credential-placement-mismatch` before agent spawn. (4) Validate `clientId` using `OpaqueAzureRef::parse` from v3 baseline; artifact IDs match `^[a-z][a-z0-9-]*$`. (5) Validate `imdsEndpointAlias` against closed enum `{azure-imds, azure-imds-aca}`; project into LaunchTicket at spawn time (never into Process spec config or env); co-located runtime Provider constructs `ManagedIdentityCredentialClient` from LaunchTicket projection and supplies via effect port; resolved URL never in any output surface. (6) Agent Process declares `networkUsage.allowEgress=false`; uses canonical Process template shape (see `ADR046-mi-topology-001` design item 6). (7) Reject `sign-challenge` with `credential-schema-invalid` immediately. (8) Map `ManagedIdentityClientState::Unavailable` to `credential-provider-unavailable`; no `InteractionRequired` state. (9) Implement `ManagedIdentityLeaseHandle` as opaque bounded newtype with redacted `Debug`. (10) All token bytes held by injected client in agent; delivered only via agent-terminated `Noise_KK` delivery session. (11) Integrate with Provider resource descriptor and controller toolkit. (12) Confirm `credential_canary` never appears in any service response, status field, delivery record outer header, or audit record. (13) Apply D087 status-first state: declare no Provider state Volume, keep ProviderStateSet empty, and write only bounded non-secret lease observation to `Credential.status` plus the Operation ledger. |
 | Integration | Agent `Process` resource under `Host` or `Guest` executionRef; controller `Process` resource at Zone system host; d2b-bus routes `d2b.credential.v3` token-delivery calls to agent; Credential controller reconciles status; ACA `Provider/runtime-azure-container-apps` holds `credentialRef` pointing to a `credential-managed-identity`-backed Credential resource |
 | Data migration | Full v3 reset. `d2b-provider-aca:managed_identity_client_id` raw field migrated to a Credential resource reference in the v3 ACA Provider config; see removal precondition below. |
 | Validation | See §Test matrix |
@@ -1978,7 +1928,7 @@ retained as the `OpaqueAzureRef` reuse anchor and the `clientId` field source.
 | Current anchor | `packages/d2b-realm-provider/src/credential.rs:ManagedIdentityRef` (implemented-and-reachable); `d2b-provider-aca/src/lib.rs:managed_identity_client_id` (implemented-and-reachable); `d2bd/src/lib.rs:managed_identity_client_id` (implemented-and-reachable); `CredentialProvider` trait (minimal, implemented-and-reachable); `OpaqueAzureRef` + tests (implemented-and-reachable); `contains_sensitive_shape` (implemented-and-reachable) |
 | Evidence class | Opaque ref data model and ACA config path are reachable; full lease provider, `d2b.credential.v3` service, controller, and delivery channel are ADR-only |
 | Behavior retained | `OpaqueAzureRef` charset/length validation fail-closed on `clientId`; injected-client pattern keeps token material in the client process; zero-secret-bytes invariant at config/audit/log boundary; `ExactSdkConsumer` ownership model; `contains_sensitive_shape` guard |
-| Required delta | Full `ManagedIdentityCredentialProvider` implementation; split `managed-identity-controller` (no IMDS) + `managed-identity-agent` (IMDS client, KK delivery); `d2b.credential.v3` service dispatch split by role; agent spawn/teardown lifecycle in controller reconcile; `Noise_KK` delivery channel terminated by agent; Provider resource/descriptor; agent Process template; `imdsEndpointAlias` closed-alias config; `ExactSdkConsumer` via `AuthenticatedSubjectContext`; Nix eval assertions; controller finalizer-release-only deletion path; Core-written event-only Deleted revision; audit subsystem deletion record with exactly-once dedup; audit/OTEL; `aca-credential-ref` migration |
+| Required delta | Full `ManagedIdentityCredentialProvider` implementation; split `managed-identity-controller` (no IMDS) + `managed-identity-agent` (IMDS client, KK delivery); `d2b.credential.v3` service dispatch split by role; agent spawn/teardown lifecycle in controller reconcile; `Noise_KK` delivery channel terminated by agent; Provider resource/descriptor; agent Process template; `imdsEndpointAlias` closed-alias config; `ExactSdkConsumer` via `AuthenticatedSubjectContext`; D087 status-first state model with no Provider state Volume, empty ProviderStateSet, status/Operation-ledger lease observation, and transient-only token bytes; Nix eval assertions; controller finalizer-release-only deletion path; Core-written event-only Deleted revision; audit subsystem deletion record with exactly-once dedup; audit/OTEL; `aca-credential-ref` migration |
 | Feasibility proof | Main `a1cc0b2d` proves the `ManagedIdentityCredentialProvider` implementation; its `FakeClient` test suite covers acquire/refresh/revoke/inspect, idempotency, unavailable state, canary enforcement, `ExactSdkConsumer` enforcement, and lease cardinality |
 | Future owner | `ADR046-mi-topology-001` (process split), `ADR046-credential-005` (primary), `ADR046-credential-006`, `ADR046-credential-007`, `ADR046-credential-008` |
 
@@ -1999,9 +1949,9 @@ these sections in order:
 3. **ResourceTypes managed** — `Credential` only: lifecycle phases, status
    conditions owned (`CredentialReady`, `RotationDue`, `ProviderUnavailable`,
    `LeaseRevoked`), finalizers owned (`credential.d2b.io/provider-revoke`).
-   `Volume` is **not** listed here; the semantic controller does not own, create,
-   or reconcile Volumes — that is exclusively Core ProviderDeployment +
-   `Provider/volume-local` responsibility.
+   `Volume` is **not** listed here; this Provider declares no Provider state
+   Volume under D087 because no managed-identity payload passes the
+   storage-need test.
 4. **Controllers, services, workers, and binaries** — two binaries:
    `d2b-managed-identity-controller` (controller; one per Zone; system domain;
    no IMDS access; spawns/supervises agent Processes) and

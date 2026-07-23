@@ -39,8 +39,8 @@ namespace.
 | Internal store paths for artifact IDs | Private `artifact-catalog.json`; read by the activation-runner only, never surfaced |
 | Zone configuration generation pointer swap, `managedBy=configuration` classification | Core-controller configuration-publication handler; spec `ADR-046-core-controllers` |
 | Name conflict resolution and retained-bundle pruning at Zone level | Core-controller; spec `ADR-046-core-controllers` |
-| State Volume create/delete | Core ProviderDeployment — creates before Process launch from signed component state declaration; deletes after Process finalizer drain. Controller has no Volume create/delete authority. |
-| State Volume reconciliation (status, identity marker, quota, schema migration) | `Provider/volume-local` — sole Volume reconciler. Controller has no Volume read/write authority beyond the view delivered through its required Process mount. |
+| Provider state Volume declaration | None. Under D087, the ProviderStateSet is empty because controller operational state is bounded, non-secret, and derivable from resource status, the core Operation ledger, and external observation. |
+| Provider state reconciliation | No Provider state Volume is reconciled. `Provider/volume-local` remains the owner for unrelated store/Volume authority surfaces only. |
 | Hardlink farm layout, content operations, store-view GC | `Provider/volume-local`; spec `ADR-046-provider-state` |
 | SSH key lifecycle | Out of scope; belongs to a separate identity Provider |
 | Guest-editable config editing | Out of scope; belongs to a separate config-management Provider |
@@ -143,10 +143,9 @@ The vendor qualifier (`activation-nixos.d2b.io`) distinguishes it from any
 unqualified standard kind. All resource metadata, spec, and status fields
 follow the universal resource envelope contract (`ADR-046-resource-object-model`).
 
-`Volume` is **not** an exported ResourceType for this Provider. State Volumes
-are framework-created resources whose lifecycle is owned by core
-ProviderDeployment and reconciled exclusively by `Provider/volume-local`.
-The activation-nixos Provider neither declares nor manages Volumes.
+`Volume` is **not** an exported ResourceType for this Provider. Under D087 the
+activation-nixos Provider declares no Provider state Volume, so it neither
+declares, creates, mounts, nor manages Volumes for controller state.
 
 ### 4.2 Spec schema
 
@@ -300,11 +299,10 @@ The Provider package descriptor declares two components:
 
 ### 5.2 Controller Process
 
-The core ProviderDeployment handler creates the controller state Volume first
-(§5.3.1, from the signed component state declaration) and then creates the
-controller `Process` resource. The activation-nixos Provider does **not** author
-either resource itself; it declares their desired shape in the signed component
-descriptor.
+The core ProviderDeployment handler creates the controller `Process` resource
+from the signed component descriptor. The activation-nixos Provider does **not**
+author the Process resource itself, and declares no Provider state Volume for
+the controller.
 
 Canonical `Process` resource shape (as created by ProviderDeployment):
 
@@ -324,12 +322,7 @@ spec:
   template: activation-nixos-controller
   configRef: null
   credentialRefs: []
-  mounts:
-    - volumeRef: Volume/activation-nixos--controller--state--<controller-host-short>
-      view: main
-      mountPath: /state
-      access: read-write
-      required: true
+  mounts: []
   sandbox:
     namespaceClasses: [pid, mount, ipc]
     capabilityClasses: []
@@ -380,7 +373,7 @@ spec:
   drainTimeout: "30s"
 ```
 
-### 5.3 ProviderStateSet and controller state Volume
+### 5.3 ProviderStateSet and status-first state
 
 The **ProviderStateSet** for `Provider/activation-nixos` is the set of all
 `Volume` resources in the Zone whose `metadata.ownerRef` resolves to
@@ -393,132 +386,30 @@ ProviderStateSet(zone, "activation-nixos") =
               && v.metadata.ownerRef == "Provider/activation-nixos" }
 ```
 
-Every semantic component receives a private Volume for its declared state
-namespace, even when the payload schema is empty. For `activation-nixos`, the
-controller component declares one state namespace with an empty (zero-field)
-schema — all active generation references and reconcile bookkeeping derive from
-Zone resource rows and the core Operation ledger, not from files. The Volume
-still exists so the framework can provision the identity marker, account for the
-minimal nonzero quota, and supply the controller its local view `dirfd` through
-the declared Process mount.
+The activation-nixos Provider declares **no Provider state Volume**. Its
+ProviderStateSet is therefore empty:
 
-`Provider/volume-local` is the sole reconciler of the Volume: it owns status
-transitions, identity marker check/write, quota accounting, and schema migration.
-The activation-nixos controller has no Volume create/update/delete rights and no
-Volume read authority beyond the `main` view delivered through its required
-Process mount. It does not participate in Volume reconciliation.
-
-#### 5.3.1 Controller state Volume
-
-ProviderDeployment creates the following Volume from the signed component state
-declaration **before** launching the controller Process. The controller cannot
-create its own prerequisite state Volume:
-
-```yaml
-apiVersion: resources.d2b.io/v3
-type: Volume
-metadata:
-  name: activation-nixos--controller--state--<controller-host-short>
-  zone: dev
-  ownerRef: Provider/activation-nixos
-spec:
-  providerRef: Provider/volume-local
-  kind: state                                    # persists across reboots and restarts; fail-closed on missing-after-provision
-  persistenceClass: persistent                   # never ephemeral, cache, or tmp
-  sensitivityClass: private
-  stateSchema:
-    schemaId: io.d2b.activation-nixos/controller/state
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<hex>
-    migrationPolicy: none          # empty schema; no migration worker ever dispatched
-  sealingCredentialRef: null
-  source:
-    executionRef: <spec.config.controllerExecutionRef>
-    settings:
-      kind: local-path
-      sourcePolicyId: provider-state-persistent
-  quotaBytes: 65536                # provider-state extension: 64 KiB; nonzero required; never 0
-  quota:
-    maxBytes: 65536                # base spec: nonzero required; never null or 0
-    maxInodes: 64                  # nonzero required; never null or 0
-    enforcement: none              # informational; hard enforcement not required for local-path
-  layout:
-    - path: state
-      type: directory
-      ownerRef: User/activation-nixos-system
-      groupRef: User/activation-nixos-system
-      mode: "0700"
-      accessAcl: []
-      defaultAcl: []
-      noFollow: true
-      recursive: false
-      sensitivity: private
-      createPolicy: create-if-never-provisioned
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      adoptionPolicy: adopt-with-live-owner-proof
-      restartPolicy: preserve-across-controller-restart
-      leaseClass: none
-      invariants: [no-symlink, broker-opaque-id-only]
-  views:
-    main:
-      path: state
-      rights: [read, write, create, delete, traverse]
-  identityMarker:
-    class: broker-maintained
-    markerRoot: provider-state-markers
-  snapshotPolicy: null
-  retentionPolicy: null
+```text
+ProviderStateSet(zone, "activation-nixos") = {}
 ```
 
-Volume naming follows `ADR-046-provider-state`:
-`<provider-name>--<component-id>--<namespace-id>--<execution-ref-short>`.
+This passes the D087 storage-need test without a durable Volume: active
+generation references, reconcile checkpoints, retention decisions, and adoption
+observations are bounded, non-secret operational state derivable from
+`NixosGeneration.status`, the core Operation ledger, and re-verification against
+the target execution context after restart.
 
-The layout principal `User/activation-nixos-system` is a Nix-preprovisioned
-bounded principal pool entry declared by `nixos-modules/providers/activation-nixos.nix`.
-No `ComponentPrincipal` ResourceRef is used. No Volume is shared between
-components.
+Status is observation only. The optimistic status writer records only bounded,
+redacted, revisioned status fields and material changes; it never stores
+secrets, authority-conferring handles, host paths, argv/env, PIDs, unit names,
+store paths, raw command output, large blobs, or unbounded collections. Oversize
+status is rejected with `status-oversize` and restart recovery re-verifies the
+status against external reality before treating it as current.
 
-The controller Process mounts this Volume with `required: true` (§5.2); the
-volume-local Provider delivers the `main` view `dirfd` through the Process mount
-at launch time. Only this component's own Volume view is accessible; no other
-component's Volume is mounted.
-
-`migrationPolicy: none` means ProviderDeployment dispatches **no** migration
-`EphemeralProcess` for this Volume, even if `schemaVersion` is incremented in a
-future release. An empty (zero-field) schema never requires a migration worker.
-If a future schema revision introduces persistent fields, the `migrationPolicy`
-is updated to `pre-launch-required` at that time.
-
-The controller writes no runtime bookkeeping into this Volume. Should durable
-bookkeeping be needed in future, the schema version is incremented with a
-pre-launch migration (`migrationPolicy: pre-launch-required`).
-
-**Durability and lifecycle invariants:**
-
-- `kind: state` — persists across reboots and controller restarts; if the Volume
-  root is absent after a prior successful provision the identity marker check
-  fails closed (`markerStatus: missing`; Volume → `Failed`); volume-local never
-  silently re-provisions (`ADR-046-resources-volume` VolumeKind semantics).
-- `persistenceClass: persistent` — required. State Volumes are never `ephemeral`,
-  `cache`, `tmp`, or `durable`-without-`stateSchema`.
-- `quota.maxBytes` and `quota.maxInodes` (base spec) and `quotaBytes` (provider-state
-  extension) are all nonzero. `quota: null`, `maxBytes: 0`, `maxInodes: 0`, or
-  `quotaBytes: 0` are forbidden — they suppress usage tracking and weaken the quota
-  admission check. Minimal nonzero values are accepted even when hard enforcement is
-  not required for the backing FS.
-- The Volume survives component restart, Provider restart, and daemon restart.
-- **Upgrade**: when the Provider artifact version changes the Volume persists;
-  if `stateSchema.schemaVersion` advances a pre-launch migration runs before the
-  new controller binary starts.
-- **Destroy**: Provider uninstall triggers the ordered destruction protocol —
-  fd-relative `unlinkat` layout removal, shredding of sealed key material if
-  applicable, identity marker removal, post-commit `volume-destroyed` audit event.
-- **Reset**: a full Provider reset or Zone reset **destroys** the state Volume after
-  Process drain and identity marker cleanup, then ProviderDeployment re-creates it
-  from the signed state declaration on next install. Only ordinary restart (daemon
-  restart, controller Process restart) and upgrade (artifact version change) retain
-  the Volume without destruction.
+There is no controller state mount, identity-only state layout principal,
+migration worker, Provider state reset/destroy path, or bootstrap state-Volume
+mechanism. The previous bootstrap exception (D086, superseded by D087) does not
+apply.
 
 ### 5.4 Activation-runner EphemeralProcess
 
@@ -918,10 +809,10 @@ ComponentSession.
 | `Volume` | — | — | — | — |
 
 The activation-nixos controller has **no** `Volume` resource rights. Volume
-create and delete are performed by core ProviderDeployment only. Volume
-reconciliation (status, identity marker, quota, migration) belongs exclusively
-to `Provider/volume-local`. The controller consumes only the `main` view through
-its required Process mount; it cannot issue Volume API calls.
+create/delete and reconciliation are not part of this Provider's state model:
+under D087 it declares no Provider state Volume and mounts none. Bounded
+non-secret operational observations are written only to resource status and the
+core Operation ledger.
 
 Direct creation of `NixosGeneration` by operators (CLI `switch`/`rollback`/etc.)
 results in `managedBy: controller` resources owned by the controller.
@@ -1049,13 +940,10 @@ No guest name, artifact ID, store path, or file path appears as a metric label.
 
 1. Core-controller commits the Provider resource with `managedBy=configuration`.
 2. ProviderDeployment handler verifies package trust and conformance.
-3. ProviderDeployment creates the controller state Volume (§5.3.1) from the
-   signed component state declaration; volume-local provisions the layout and
-   identity marker.
-4. ProviderDeployment creates the controller `Process` (mounts state Volume with
-   `required: true`; see §5.2).
-5. Controller starts; opens health socket.
-6. Provider transitions to `Ready`.
+3. ProviderDeployment creates the controller `Process` with no Provider state
+   Volume mount (see §5.2 and §5.3).
+4. Controller starts; opens health socket.
+5. Provider transitions to `Ready`.
 
 ### 13.2 Update
 
@@ -1069,8 +957,7 @@ re-stages the artifact and restarts the controller Process under the new binary.
    (§ 4.5), in parallel across all targets.
 3. Controller gracefully stops; ProviderDeployment stops the controller Process
    and waits for the Process finalizer to drain.
-4. ProviderDeployment sets `deletionRequestedAt` on the state Volume; volume-local
-   Provider removes the Volume root and identity marker; Volume reaches `Deleted`.
+4. No Provider state Volume finalizer runs because none is declared.
 5. Zone runtime emits event-only `phase=Deleted` for the Provider; no tombstone.
 6. Post-commit: `ProviderActivationNixosUninstalled` audit event fires.
 
@@ -1160,9 +1047,9 @@ only after this lands (work item ADR046-activation-007).
 Emit Provider spec (§ 6.1) and `activation-nixos.d2b.io.NixosGeneration` resources
 (§ 6.2) per declared target. `retainedGenerations` flows only through
 `spec.config.retainedGenerations`. No store path in any emitted resource.
-Declares `User/activation-nixos-system` as a Nix-preprovisioned bounded principal
-pool entry in the host activation; this is the Volume layout `ownerRef`/`groupRef`
-for the controller state Volume (§5.3.1).
+Does not declare a dedicated state-layout `User/<name>` principal: the Provider
+has no Provider state Volume, and process identity remains owned by the Process
+Provider's normal principal model.
 
 ### ADR046-activation-007: Remove legacy top-level activation verbs
 
@@ -1190,9 +1077,9 @@ Gated on ADR046-activation-005 passing integration tests.
 | `runner::test_no_raw_argv` | Runner binary creates no raw command string; invokes helper via JSON protocol |
 | `runner::test_storepath_not_in_output` | Runner output contains no store path in any field |
 | `runner::test_nix_bundle_no_generation` | Compiled bundle contains no `activation-nixos.d2b.io.NixosGeneration` resources with `systemStorePath` |
-| `state::test_volume_created_with_owner` | State Volume created with `ownerRef: Provider/activation-nixos`; name follows `activation-nixos--controller--state--<host-short>` |
-| `state::test_layout_uses_user_principal` | Volume layout `ownerRef`/`groupRef` resolves to `User/activation-nixos-system`; no `ComponentPrincipal` reference |
-| `state::test_no_cross_component_volume` | No Volume in the ProviderStateSet is shared between the controller and any other component |
+| `state::test_provider_state_set_empty` | Provider declares no Provider state Volume; ProviderStateSet query returns empty for `Provider/activation-nixos` |
+| `state::test_no_state_layout_principal` | No dedicated state-layout `User/<name>` or ComponentPrincipal reference is emitted for controller state |
+| `state::test_status_first_operational_state` | Bounded non-secret controller operational observations are stored in revisioned status/core Operation ledger and re-verified after restart |
 
 ### 16.2 Integration tests (`integration/`)
 
@@ -1208,9 +1095,9 @@ Gated on ADR046-activation-005 passing integration tests.
 | `test_retention_prunes_surplus_generations` | After `retainedGenerations+1` generations, oldest is deleted |
 | `test_activation_helper_no_resource_writes` | `d2b-activation-helper` completes without writing any resource metadata |
 | `test_gc_no_direct_store_ops` | Retention deletion does not invoke `nix-collect-garbage`; ownership reference released only |
-| `test_state_volume_provisioned_on_install` | State Volume exists after Provider install; `stateSchemaPhase: current`; identity marker `verified`; `ownerRef: Provider/activation-nixos` |
-| `test_provider_state_set_logical_query` | ProviderStateSet query returns exactly the state Volume(s) with `ownerRef: Provider/activation-nixos` and correct naming convention; no additional Volumes |
-| `test_state_volume_deleted_on_uninstall` | State Volume reaches `Deleted` before Provider reaches `Deleted`; no orphan Volume remains |
+| `test_no_state_volume_provisioned_on_install` | Provider install creates no Provider state Volume and no `/state` Process mount |
+| `test_provider_state_set_logical_query` | ProviderStateSet query returns an empty set for `Provider/activation-nixos` |
+| `test_status_bounds_and_redaction` | Status rejects oversize/provider-detail overflow and never includes store paths, argv/env, PIDs, unit names, raw output, or authority handles |
 
 ### 16.3 Conformance
 

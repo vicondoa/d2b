@@ -478,95 +478,26 @@ Provider has no knowledge of them.
 
 ## ProviderStateSet
 
-A **ProviderStateSet** is a query-time grouping — the set of all Volume
-resources in a Zone whose `metadata.ownerRef` resolves to `Provider/<name>`.
-It is not a ResourceType and is not a stored artifact.
+A **ProviderStateSet** is the optional, query-time grouping — the set of the
+*declared* Volume resources in a Zone whose `metadata.ownerRef` resolves to
+`Provider/<name>`. It is not a ResourceType and is empty for a Provider that
+declares no state Volume.
 
-**Core ProviderDeployment** creates every declared component state Volume
-before starting the component's Process, and deletes them after the Process
-finalizer completes during removal. The semantic Provider controller
-(`Provider/transport-vsock`) does **not** own Volume, does not add Volume to
-its exported ResourceTypes, and does not create or delete its component's
-prerequisite Volume. `Provider/volume-local` is the sole Volume reconciler.
+`Provider/transport-vsock` declares **no** Provider state Volume; its
+`ProviderStateSet` is empty. Its bounded non-secret operational state — service
+readiness, transport-open/close reconcile stage, bounded connection/port
+observation counters, and closed-enum error detail — lives in the owning
+resource's `status` subresource and the core Operation ledger (D087). Port
+allocation and the port registry are core allocator state; all ZoneLink session
+state is owned by the core ZoneLink controller under the `ZoneLink` resource.
+The service holds only opaque byte-stream handles in its own process memory
+(`OwnedTransport`, per D081), which are never persisted.
 
-`Provider/transport-vsock` declares one state namespace for its service
-component. Even though the payload schema is empty (the Provider holds no
-durable application bytes), the framework provision model requires one Volume
-per semantic component per execution target. The Volume is created by core
-ProviderDeployment, not authored by the operator or the Provider controller.
-
-### Service component state Volume
-
-```yaml
-apiVersion: resources.d2b.io/v3
-type: Volume
-metadata:
-  name: transport-vsock--service--empty-state--<executionRef-short>
-  zone: <zone>
-  ownerRef: Provider/transport-vsock
-spec:
-  providerRef:       Provider/volume-local
-  kind:              state              # persists across reboots; fail-closed on missing-after-provision
-  persistenceClass:  persistent        # survives component/Provider restart and participates in upgrade/destroy/reset
-  sensitivityClass:  private           # single-component; no cross-component access
-  stateSchema:
-    schemaId:        io.d2b.transport-vsock/service/empty-state
-    schemaVersion:   "1.0"
-    schemaDigest:    sha256:<hex>
-    migrationPolicy: none              # empty schema; no migration ever needed
-  quotaBytes:        65536             # declared in stateNamespace descriptor; 0 is forbidden
-  quota:
-    maxBytes:        65536             # minimal nonzero; required even for empty-payload schema
-    maxInodes:       16                # minimal nonzero; at minimum the state dir inode
-    enforcement:     hard
-  sealingCredentialRef: null
-  source:
-    executionRef: <Provider.spec.config.executionRef>
-    settings: {}
-  layout:
-    - path: state
-      type: directory
-      ownerRef: User/d2b-transport-vsock        # Nix-preprovisioned system user
-      groupRef: User/d2b-transport-vsock
-      mode: "0700"
-      sensitivity: private
-      createPolicy: create-if-never-provisioned
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      noFollow: true
-  views:
-    service:
-      path: state
-      rights: [read, traverse]        # no writes; transport state lives in d2b-bus
-  identityMarker:
-    class: broker-maintained
-    markerRoot: provider-state-markers
-```
-
-Volume naming convention: `<provider-name>--<component-id>--<namespace-id>--<executionRef-short>`.
-
-**Key invariants**:
-
-- `User/d2b-transport-vsock` is a Nix-preprovisioned system user declared by
-  the Provider's NixOS module. It is a `User/<name>` ResourceRef, never a
-  `ComponentPrincipal` ResourceRef.
-- No Volume is shared between components or between this Provider and any other.
-- The service process receives only a dirfd into its declared `service` view
-  root. It never receives a raw filesystem path or a handle to a parent
-  directory outside the view.
-- Port allocation and the port registry are core allocator state, not in this
-  Volume. This Volume carries no application bytes.
-
-The Process mounts the Volume via its view:
-
-```yaml
-mounts:
-  - volumeRef: Volume/transport-vsock--service--empty-state--<executionRef-short>
-    view:       service
-    mountPath:  /state
-    access:     read-only
-    required:   true
-```
+Because this Provider's operational state is fully derivable from spec,
+`status`, the core Operation ledger, and its live process memory, it fails the
+storage-need test and declares no state namespace, no state Volume, no
+state-view mount, and no dedicated state-layout `User/<name>` principal. There
+is no empty identity-only Volume.
 
 ---
 
@@ -864,11 +795,11 @@ the Provider catalog in `ADR-046-provider-model-and-packaging.md`.
 - Provider identity: `Provider/transport-vsock`; carriage-acquisition service Provider.
 - Role: `service` component; no ResourceType ownership; core ZoneLink/delegation
   controller is the sole ZoneLink reconciler and the only caller of this service.
-- ProviderStateSet: one Volume per service component per execution target, even
-  with empty payload schema (`migrationPolicy: none`; no migration worker);
-  created and deleted by core ProviderDeployment (not the transport-vsock
-  Provider controller); `User/d2b-transport-vsock` Nix-preprovisioned layout
-  principal; no cross-component shared Volume; component receives dirfd view only.
+- ProviderStateSet: empty — `Provider/transport-vsock` declares no Provider
+  state Volume; its bounded non-secret operational state lives in `status`/the
+  core Operation ledger (D087). All ZoneLink session state is owned by the core
+  ZoneLink controller; the service holds only opaque byte-stream handles in
+  process memory.
 - `Provider.spec.config.executionRef`: required `Host/<name>` or `Guest/<name>`;
   one service Process per Provider instance, not per ZoneLink.
 - `transportSettings`: `guestRef` / `portClass` fields; what is forbidden.

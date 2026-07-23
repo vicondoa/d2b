@@ -129,32 +129,33 @@ Component types:
 Every component is a separate Process except the fixed system-core and
 system-minijail bootstrap controllers. Core ProviderDeployment creates every
 component's static Process (per the signed manifest's component descriptors)
-and, before launching that Process, its own private state Volume as part of
-the Provider's **ProviderStateSet** (`ADR-046-provider-state`: the logical,
-query-time grouping of every Volume resource owned by `Provider/<name>` — not
-a ResourceType or a stored artifact of its own). A stateless component still
-receives its own Volume, declared with an empty `stateSchema`; there is no
-separate "compartment" concept distinct from an ordinary Volume, and no
-component goes without one. A Provider controller never bootstraps its own
-Process; it may only create authorized dynamic children (further
-Process/EphemeralProcess or other primitive/vendor resources) once it is
-itself running. Creating a Volume normally requires a `Provider/volume-local`
-controller instance to be running on that same execution target (Host,
-Guest, or user-domain local-storage owner); the sole exception is each
-target's own closed, non-resource local bootstrap storage mechanism, which
-provisions only the empty state Volume for that target's first
-`Provider/volume-local` controller instance and, where they exist on that
-same target, `Provider/system-core`'s and `Provider/system-minijail`'s, and
-which that target's volume-local instance adopts and reconciles as ordinary
-Volumes immediately after its own startup. This local mechanism never crosses
-an execution-target boundary — a Guest's bootstrap Volume is always
-provisioned from Guest-local primitives only, never a leaked parent-Host
-dirfd, which is what lets a Guest bootstrap its own primitive controllers
-independently — see "Bootstrap state-realization exception" in
-`ADR-046-components-processes-and-sandbox` for the full contract. See
+and, before launching that Process, only the state Volumes the component has
+**declared** under the storage-need test, as part of the Provider's optional
+**ProviderStateSet** (`ADR-046-provider-state`: the logical, query-time
+grouping of the *declared* Volume resources owned by `Provider/<name>` — not a
+ResourceType or a stored artifact of its own, and empty for a Provider that
+declares no state Volume). Bounded non-secret operational state belongs in the
+owning resource's `status` subresource and the core Operation ledger by default
+(D087); a component declares a state Volume only when a specific payload is a
+secret or sensitive private datum, is large/binary/file content, is private
+data unsafe for status readers, or is bounded but revision-unsuitable with a
+demonstrated recovery need. A stateless component declares no state Volume,
+receives none, and contributes none to the ProviderStateSet; there is no empty
+identity-only Volume and no separate "compartment" concept. A Provider
+controller never bootstraps its own Process; it may only create authorized
+dynamic children (further Process/EphemeralProcess or other primitive/vendor
+resources) once it is itself running. Creating a declared state Volume normally
+requires a `Provider/volume-local` controller instance to be running on that
+same execution target (Host, Guest, or user-domain local-storage owner);
+because the fixed bootstrap components (`system-core`, `system-minijail`, and
+the first `volume-local` instance on each target) keep their bounded non-secret
+operational state in `status`/the core Operation ledger and declare no state
+Volume, no component needs a Volume before a `volume-local` instance is Ready,
+so there is no bootstrap state-Volume cycle and no bootstrap-storage exception
+(D086, superseded by D087). See
 `ADR-046-components-processes-and-sandbox` for the full static-deployment and
-component-state-Volume contract, and `ADR-046-resources-volume` for the
-canonical Volume schema every state Volume uses.
+optional-component-state-Volume contract, and `ADR-046-resources-volume` for
+the canonical Volume schema every declared state Volume uses.
 
 Descriptor fields include:
 

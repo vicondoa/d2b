@@ -158,51 +158,30 @@ Neither the portal nor any other `display-wayland` component reads or holds the
 compositor socket path after the portal's initial supervisor-delivered attachment
 is accepted.
 
-### 4.4 Provider state Volumes (ProviderStateSet)
+### 4.4 ProviderStateSet and status-first operational state
 
-Per `ADR-046-provider-state`, the framework creates one private `Volume` resource
-per static component at Provider enrollment:
+Per D087, `display-wayland` declares **no Provider state Volume** for either
+static component. Its `ProviderStateSet` is the optional query-time grouping of
+declared Provider state Volumes and is empty for this Provider.
 
-| Component | Volume name | Payload schema |
-| --- | --- | --- |
-| `display-controller` | `display-wayland-controller-state` | empty (all runtime state rebuilt from Zone store) |
-| `display-user-portal` | `display-wayland-user-portal-state` | empty (compositor connection grants are transient) |
+Bounded, non-secret operational state is written to the owning resource's
+`status` subresource and to the core Operation ledger: `WaylandSession` carries
+phase, conditions, proxy readiness, policy digest, pool-slot status, and finalizer
+progress; `WaylandPolicy` carries policy admission/status. Portal compositor
+connection grants are transient in-process attachments and never durable state.
+After restart, the controller re-lists current resources and re-verifies external
+Process/Device reality before writing materially changed status.
 
-These are ordinary `Volume` resources with `ownerRef: Provider/display-wayland`
-and the `providerState` extension from `ADR-046-provider-state`. The
-**ProviderStateSet** is a logical query-time grouping of all
-`Volume{ownerRef: Provider/display-wayland}` resources in the Zone; it is **not
-a ResourceType** and not a separate resource. Each component's Volume is private:
-no component can access another component's Volume. Each component receives only
-its own local view dirfd (via `ProviderSupervisor` before first instruction); it
-never holds a path to the Volume. Layout principals are Nix-preprovisioned
-`User/<name>` accounts (§16.6); no `ComponentPrincipal` ResourceRefs are used.
-There is no cross-component shared Volume.
-
-These Volumes are **durable** (`kind: state`, `persistenceClass: persistent`):
-they survive component and Provider restart and participate in upgrade, destroy,
-and reset lifecycle phases. Although the payload schema is empty for both
-components, the framework writes a `provider-state-identity` marker at
-enrollment and verifies it on each mount. A missing or corrupt marker is a
-fail-closed error, not a silent re-create.
-
-**Ownership rule.** Core `ProviderDeployment` creates the component state
-Volumes before starting component Processes and deletes them after Processes
-reach terminal state. The `display-controller` does **not** create, own, or
-watch component state Volumes and does not add Volume to its exported
-ResourceTypes. `Provider/volume-local` is the sole Volume reconciler for all
-Volumes in this Provider (component state and session-owned runtime alike):
-it materializes mounts from declared specs; controllers submit Volume resource
-objects but do not perform mounts. Each component consumes only its own required
-view dirfd, delivered by `ProviderSupervisor` before the component's first
-instruction.
-
-The Provider spec carries only `artifactId` and `config`; core aggregates
-Provider status from child resource conditions.
+Storage-need test rationale: display controller and portal state contains no
+secret recovery material, no large or binary payload, no private data that must be
+hidden from authorized status readers, and no bounded-but-revision-unsuitable
+payload with a demonstrated recovery need, so an identity-only Volume is not
+declared.
 
 ---
 
 ## 5. WaylandSession ResourceSpec
+
 
 ```yaml
 apiVersion: resources.d2b.io/v3
@@ -710,150 +689,37 @@ The actual listen socket path inside the mount is a private implementation
 detail of the proxy binary; it is never placed in the Volume spec, resource
 status, logs, or audit. No cross-provider path sharing occurs.
 
-### 7.2 `display-controller` state Volume
+### 7.2 `display-controller` Provider state
 
-Framework-created at Provider enrollment per `ADR-046-provider-state`. The
-payload schema is empty — `display-controller` rebuilds all runtime state
-(policy digest, pool lease table) from the Zone store on restart — but the
-Volume itself is **durable**: `kind: state`, `persistenceClass: persistent`.
-It survives component and Provider restart and participates in upgrade, destroy,
-and reset lifecycle phases. The empty `stateSchema` uses null schema fields with
-`migrationPolicy: none`, so no migration worker is created. The `identityMarker`
-block instructs the framework to write a bounded marker at enrollment and verify
-it before delivering the view dirfd; a missing or corrupt marker is a fail-closed
-error.
+`display-controller` declares **no Provider state Volume** and has no `/state`
+mount. Its bounded non-secret operational data lives in `WaylandSession` and
+`WaylandPolicy` `status` plus the core Operation ledger: observed generations,
+conditions, policy digests, pool-slot summaries, finalizer progress, and launch
+attempt results. Status remains observation-only, redacted, revisioned, bounded,
+and reverified against Process/Device reality after restart; it never confers
+host-mutation or repair authority.
 
-```yaml
-apiVersion: resources.d2b.io/v3
-type: Volume
-metadata:
-  name: display-wayland-controller-state
-  zone: dev
-  ownerRef: Provider/display-wayland
-  labels:
-    d2b.io/provider-state-component: display-controller
-spec:
-  providerRef: Provider/volume-local
-  sensitivityClass: private
-  source:
-    executionRef: Host/host-system
-    settings:
-      kind: local-path
-      sourcePolicyId: display-wayland.component-state.v1
-  kind: state
-  persistenceClass: persistent
-  stateSchema:
-    schemaId: null
-    schemaVersion: null
-    schemaDigest: null
-    migrationPolicy: none
-  quotaBytes: 65536
-  sealingCredentialRef: null
-  layout:
-    - path: ""
-      type: directory
-      ownerRef: User/d2b-dwl-ctrl
-      groupRef: User/d2b-dwl-ctrl
-      mode: "0700"
-      sensitivity: private
-      createPolicy: create-if-never-provisioned
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      noFollow: true
-      accessAcl: []
-      defaultAcl: []
-      invariants: [no-symlink]
-  views:
-    controller-state:
-      path: ""
-      rights: [read, traverse]
-  attachments: []
-  quota:
-    maxBytes: 65536
-    maxInodes: 32
-    enforcement: none
-  identityMarker:
-    class: broker-maintained
-    markerRoot: provider-state-markers
-```
+Storage-need test rationale: all controller runtime state is derivable from the
+Zone resource store, Operation ledger, and live Process/Device observations, and
+there is no secret, large, private, or revision-unsuitable recovery payload.
 
-The `display-controller` receives the `controller-state` view dirfd from
-`ProviderSupervisor` before its first instruction. It never holds a path to
-this Volume and has no access to the portal state Volume.
+### 7.3 `display-user-portal` Provider state
 
-### 7.3 `display-user-portal` state Volume
+`display-user-portal` declares **no Provider state Volume** and has no `/state`
+mount. Same-user compositor connection grants, received compositor fds, and
+attachment handles are transient in-process capabilities; they are never stored
+in status, logs, audit, metrics, or durable Volumes. The portal reports only
+bounded readiness and error conditions through the owning resource status and the
+core Operation ledger.
 
-Framework-created at Provider enrollment per `ADR-046-provider-state`. Portal
-compositor connection grants are transient; the payload schema is empty. The
-Volume itself is **durable**: `kind: state`, `persistenceClass: persistent`.
-It survives component and Provider restart and participates in upgrade, destroy,
-and reset lifecycle phases. The empty `stateSchema` uses null schema fields with
-`migrationPolicy: none`, so no migration worker is created. The `identityMarker`
-block instructs the framework to write a bounded marker at enrollment and verify
-it before delivering the view dirfd; a missing or corrupt marker is a fail-closed
-error.
-
-```yaml
-apiVersion: resources.d2b.io/v3
-type: Volume
-metadata:
-  name: display-wayland-user-portal-state
-  zone: dev
-  ownerRef: Provider/display-wayland
-  labels:
-    d2b.io/provider-state-component: display-user-portal
-spec:
-  providerRef: Provider/volume-local
-  sensitivityClass: private
-  source:
-    executionRef: Host/host-system
-    settings:
-      kind: local-path
-      sourcePolicyId: display-wayland.component-state.v1
-  kind: state
-  persistenceClass: persistent
-  stateSchema:
-    schemaId: null
-    schemaVersion: null
-    schemaDigest: null
-    migrationPolicy: none
-  quotaBytes: 65536
-  sealingCredentialRef: null
-  layout:
-    - path: ""
-      type: directory
-      ownerRef: User/d2b-dwl-portal
-      groupRef: User/d2b-dwl-portal
-      mode: "0700"
-      sensitivity: private
-      createPolicy: create-if-absent
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      noFollow: true
-      accessAcl: []
-      defaultAcl: []
-      invariants: [no-symlink]
-  views:
-    portal-state:
-      path: ""
-      rights: [read, traverse]
-  attachments: []
-  quota:
-    maxBytes: 65536
-    maxInodes: 32
-    enforcement: none
-  identityMarker:
-    class: broker-maintained
-    markerRoot: provider-state-markers
-```
-
-The `display-user-portal` receives the `portal-state` view dirfd from
-`ProviderSupervisor` before its first instruction. It never holds a path to
-this Volume and has no access to the controller state Volume.
+Storage-need test rationale: portal state is either transient authority-conferring
+fd/handle data that must not be persisted or small non-secret readiness data that
+fits the status-first model, so no durable Provider state Volume is declared.
 
 ---
 
 ## 8. WaylandPolicy ResourceSpec
+
 
 ```yaml
 apiVersion: resources.d2b.io/v3
@@ -1354,8 +1220,8 @@ The controller watches `WaylandSession`, `WaylandPolicy`, session-owned `Process
 and `Volume` resources, and `Device` resources advertising
 `wayland-cross-domain-endpoint`. The session-owned `Volume` watch covers the
 runtime tmpfs Volume (§7.1) whose reconciliation status gates proxy launch.
-Component state Volumes (`ownerRef: Provider/display-wayland`) are **not**
-watched by the controller: they are managed exclusively by `ProviderDeployment`.
+`display-wayland` declares no Provider state Volumes, so there are no
+`ownerRef: Provider/display-wayland` Volumes for the controller to watch.
 
 ### 15.2 Reconcile concurrency
 
@@ -1386,11 +1252,10 @@ d2b.artifacts.display-wayland-provider = {
 };
 
 # Provider resource
-# Note: the framework creates one private provider-state Volume per static
-# component at enrollment (ADR-046-provider-state). ProviderStateSet is a
-# logical query-time grouping of Volume{ownerRef: Provider/...} resources;
-# it is not a ResourceType. Both state Volumes have empty payload schemas.
-# All authority is in WaylandSession and WaylandPolicy resource objects.
+# D087 status-first state: display-wayland declares no Provider state Volumes.
+# ProviderStateSet is the optional query-time grouping of declared Provider
+# state Volumes and is empty here. Bounded non-secret operational state lives in
+# WaylandSession/WaylandPolicy status and the core Operation ledger.
 d2b.zones.dev.resources.display-wayland = {
   type = "Provider";
   spec = {
@@ -1653,38 +1518,19 @@ Nix eval enforces that the sum of declared `WaylandSession` resources per Host
 does not exceed the provisioned principal count. Exceeding this limit is a Nix
 eval error with an actionable message.
 
-### 16.6 Component state Volume principals
+### 16.6 Provider state Volume principals
 
-The two framework-created provider-state Volumes use fixed Nix-provisioned OS
-accounts as layout principals. These are Zone-singleton static components, so
-account names are fixed (not hash-derived). The Zone bundle emitter declares
-them alongside the wlproxy principal accounts:
-
-```nix
-# Auto-generated by the Zone bundle emitter (do not write by hand):
-users.users."d2b-dwl-ctrl" = {
-  isSystemUser = true;
-  group        = "d2b-dwl-ctrl";
-  description  = "d2b display-wayland controller state principal";
-};
-users.groups."d2b-dwl-ctrl" = {};
-
-users.users."d2b-dwl-portal" = {
-  isSystemUser = true;
-  group        = "d2b-dwl-portal";
-  description  = "d2b display-wayland user portal state principal";
-};
-users.groups."d2b-dwl-portal" = {};
-```
-
-Account names follow `^d2b-dwl-[a-z][a-z0-9-]*$`. No raw UID or GID integer
-is set; the OS allocates UIDs in the system range automatically. The broker
-resolves each account by name via NSS at Volume provisioning time. No
-`ComponentPrincipal` ResourceRefs are used.
+`display-wayland` declares no Provider state Volumes, so the Zone bundle emitter
+creates no dedicated layout principals for component state. There are no
+`d2b-dwl-ctrl` or `d2b-dwl-portal` state-layout users, no component `/state`
+mounts, and no `ComponentPrincipal` ResourceRefs. The only pre-provisioned OS
+accounts in this dossier are the session principal pool accounts described in
+§16.5 for runtime proxy isolation.
 
 ---
 
 ## 17. Current-code baseline mapping
+
 
 ### 17.1 Terminology
 
@@ -1757,10 +1603,10 @@ produces the guest binary (see §19 removal table).
 | Current source | `packages/d2b-wayland-proxy/`, `packages/d2b-host/src/wayland_proxy_argv.rs`, `packages/d2b-host-providers/src/lib.rs`, `packages/d2b-realm-provider/src/{conformance,mock}.rs` |
 | Reuse action | extract and adapt |
 | Destination | `packages/d2b-provider-display-wayland/src/` |
-| Detailed design | Create Provider crate layout (`src/`, `tests/`, `integration/`, `README.md`); extract `FilterPolicy`, `PolicyInput`, `DecorationManager`, `BridgeConfig`, `ProxyReadinessEvent`, `ProxyIdentity`, `ClipboardGlobalDisposition` from `d2b-wayland-proxy`; implement single `display-controller` using toolkit `ResourceClient`/`Reconciler` to manage both `WaylandSession` and `WaylandPolicy` resources; implement `display-user-portal` as a separately sandboxed user-domain service that receives pre-opened compositor connections from the fixed user session supervisor (never reads `WAYLAND_DISPLAY`), validates same-user via `SO_PEERCRED`, and issues bounded per-session compositor connection attachment grants to `ProviderSupervisor`; implement LaunchTicket composition with opaque attachment grant handles (compositor, GPU endpoint) so no fd transits through the controller; implement pool-slot acquisition using opaque hash-derived account names (`d2b-wlp-<hex12>` for bundle sessions, `d2b-wlp-p<N>` for pool) that fails closed with `NoPrincipalAvailable` when all pool slots are occupied; implement `wl-cross-domain-proxy` guest frontend binary at `src/bin/wl-cross-domain-proxy.rs` within the Provider package; implement provider-neutral `display_fails_closed_when_unsupported` conformance; verify that framework-created provider-state Volumes (§7.2/§7.3) are present at enrollment and that each component receives only its local view dirfd |
-| Integration | Zone Provider resource/catalog → `WaylandSession` controller (in `display-controller`) → Process resources → supervisor ticket; framework enrollment creates `display-wayland-controller-state` and `display-wayland-user-portal-state` Volumes |
+| Detailed design | Create Provider crate layout (`src/`, `tests/`, `integration/`, `README.md`); extract `FilterPolicy`, `PolicyInput`, `DecorationManager`, `BridgeConfig`, `ProxyReadinessEvent`, `ProxyIdentity`, `ClipboardGlobalDisposition` from `d2b-wayland-proxy`; implement single `display-controller` using toolkit `ResourceClient`/`Reconciler` to manage both `WaylandSession` and `WaylandPolicy` resources; implement `display-user-portal` as a separately sandboxed user-domain service that receives pre-opened compositor connections from the fixed user session supervisor (never reads `WAYLAND_DISPLAY`), validates same-user via `SO_PEERCRED`, and issues bounded per-session compositor connection attachment grants to `ProviderSupervisor`; implement LaunchTicket composition with opaque attachment grant handles (compositor, GPU endpoint) so no fd transits through the controller; implement pool-slot acquisition using opaque hash-derived account names (`d2b-wlp-<hex12>` for bundle sessions, `d2b-wlp-p<N>` for pool) that fails closed with `NoPrincipalAvailable` when all pool slots are occupied; implement `wl-cross-domain-proxy` guest frontend binary at `src/bin/wl-cross-domain-proxy.rs` within the Provider package; implement provider-neutral `display_fails_closed_when_unsupported` conformance; assert D087 status-first state: ProviderStateSet is empty and bounded operational state is in resource status plus the core Operation ledger |
+| Integration | Zone Provider resource/catalog → `WaylandSession` controller (in `display-controller`) → Process resources → supervisor ticket; framework enrollment creates no Provider state Volume for display components |
 | Data migration | Full reset; no v2 session compatibility |
-| Validation | conformance vectors, fake-bus tests, filter policy golden tests (migrate from `packages/d2b-wayland-proxy/`), redaction/audit contract tests, no-fallback test, `controller_unknown_interface_fails_closed`, `controller_finalizer_ambiguous_retained`, `user_portal_unavailable_blocks_pending`, `provider_state_volumes_created_at_enrollment` |
+| Validation | conformance vectors, fake-bus tests, filter policy golden tests (migrate from `packages/d2b-wayland-proxy/`), redaction/audit contract tests, no-fallback test, `controller_unknown_interface_fails_closed`, `controller_finalizer_ambiguous_retained`, `user_portal_unavailable_blocks_pending`, `provider_state_set_empty_status_first` |
 | Removal proof | `packages/d2b-host-providers/src/lib.rs` `LocalCrossDomainWaylandProvider` removed only after `display-controller` passes conformance; `packages/d2b-host/src/wayland_proxy_argv.rs` removed only after Process template sealing verified |
 
 ### ADR046-display-002
@@ -1864,8 +1710,7 @@ blocking defect.
 | `controller_unknown_interface_fails_closed` | `WaylandPolicy` spec contains an interface name not in the compiled catalog → spec admission rejected with actionable error; `unknown-interface-rejected` condition; no warn-and-continue |
 | `controller_clipboard_bridge_disabled_without_clipboard_provider` | `clipboard-wayland` Provider absent → `ClipboardBridgeReady=False` condition; session proceeds without clipboard bridge |
 | `controller_no_principal_available` | Fake-bus: all pool slots occupied → new dynamic `WaylandSession` reconcile → `NoPrincipalAvailable` condition set → session `Failed`; no spawn attempted |
-| `provider_state_volumes_created_at_enrollment` | Fake-bus: Provider enrolled → framework creates both `display-wayland-controller-state` and `display-wayland-user-portal-state` Volumes with `kind: state`, `persistenceClass: persistent`, `sensitivityClass: private`, `source.settings.kind: local-path`, `quotaBytes` plus matching quota limits, and a broker-maintained identity marker; each component receives only its own view dirfd and has no visibility to the other Volume |
-| `provider_state_volume_identity_marker_missing` | Fake-bus: `provider-state-identity` file absent from controller state Volume at mount time → framework reports fail-closed error, `ProviderStateIdentityMissing` condition set, `display-controller` not started; same for portal Volume |
+| `provider_state_set_empty_status_first` | Fake-bus: Provider enrolled → no `Volume{ownerRef: Provider/display-wayland}` is created for component state; `ProviderStateSet` query is empty; controller and portal start without `/state` mounts; bounded non-secret operational state is written only to resource status and the core Operation ledger |
 
 ### 20.3 Container/cross-process integration (`packages/d2b-provider-display-wayland/integration/`)
 
@@ -1923,12 +1768,10 @@ packages/d2b-provider-display-wayland/README.md
   no OS account creation at runtime; pool exhaustion fails closed with
   `NoPrincipalAvailable` (§16.5);
 - State / Volume use: ephemeral tmpfs proxy runtime Volume per session (§7.1);
-  durable `kind: state` / `persistenceClass: persistent` component state Volumes
-  (§7.2/§7.3), each holding an enrollment identity marker, surviving Provider
-  restart and participating in upgrade, destroy, and reset — framework fails
-  closed on missing or corrupt identity marker; no persistent Volume for policy
-  state (deterministically rebuilt from `WaylandPolicy` spec on controller
-  restart);
+  no Provider state Volume for display components (§7.2/§7.3); ProviderStateSet
+  is empty; bounded non-secret operational state is in resource status and the
+  core Operation ledger, while compositor fds and grant handles remain transient
+  and are never persisted;
 - Telemetry: closed metric labels, no socket paths, no user identities, no
   window titles in any observability surface;
 - Build: `cargo build -p d2b-provider-display-wayland`;

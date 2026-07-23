@@ -96,7 +96,22 @@ Spec is the desired state. Rules:
 
 ## Status
 
-Status is observed state and is a separately authorized subresource.
+Status is observed state and is a separately authorized subresource. It is the
+**default durable observation and recovery surface** for a resource's bounded
+non-secret operational state (D087): reconcile stage, opaque non-authorizing
+external handles/IDs/digests, adoption observations after restart, bounded
+counters, closed-enum detail, dependency-readiness observations, and last
+successful checkpoints. Status is revisioned, optimistic-status-writer
+controlled (every status write carries an expected revision), RBAC-readable,
+redacted, and reverified against external reality by the owning controller
+after a restart. The spec remains the desired-state authority; status is
+observation only and is never a host-mutation or repair authority.
+
+A controller keeps bounded non-secret operational state in `status` whenever
+possible. Separate durable state storage (a Provider-owned Volume, see
+`ADR-046-provider-state`) is used only when a payload is a secret or sensitive
+private datum, is large/binary/file content, or is otherwise unsuitable for the
+revisioned status API.
 
 ### Common fields
 
@@ -137,6 +152,38 @@ contain actionable Provider detail but is bounded, UTF-8/control-character
 validated, and must not contain secrets, tokens, credential material, terminal
 bytes, argv/environment, state contents, or host/provider paths. ResourceType
 schemas add typed status fields; they do not replace the common fields.
+
+### Status bounds
+
+Status is a bounded observation surface, not a stream. The resource store
+enforces the following caps on every status subresource write and rejects an
+over-limit write with a typed `status-oversize` error (the write changes
+nothing and the caller may re-read and retry with a smaller status):
+
+| Bound | Limit |
+| --- | --- |
+| Total canonical serialized status object | 64 KiB |
+| ResourceType-/provider-specific typed status detail (all typed fields beyond the common fields) | 32 KiB |
+| `conditions` entries | 32 |
+| Any status list or map field | 64 entries |
+| Any single bounded status string (`message`, opaque handle, digest) | 4 KiB |
+
+A controller writes status only on a **material change** in observed state.
+Status never carries high-frequency byte streams, logs, metrics, command
+output, or ring buffers; those stay in their owning surfaces (OTEL for
+metrics/traces, the authoritative audit stream for security history, owning
+process memory for content streams). Watches, revision compaction, and
+backpressure remain bounded per `ADR-046-resource-store-redb`.
+
+### Status prohibitions
+
+Status MUST NOT contain secrets, raw tokens/keys/PSKs, any credential source
+handle that confers authority, private endpoint/path/argv/environment/PID/unit
+data, terminal/clipboard/CTAP bytes, raw cloud error bodies, large binary blobs,
+unbounded collections, or any content whose churn would bloat revision history.
+An opaque handle may appear in status only if it is bounded, non-secret,
+non-authorizing, safe for authorized API readers, and independently revalidated
+by the owning controller against external reality.
 
 Status retains only the latest conditions/outcome. Prior status versions remain
 in revision_log until compaction.

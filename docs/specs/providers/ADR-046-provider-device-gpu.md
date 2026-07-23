@@ -122,12 +122,7 @@ spec:
   networkUsage: null
   deviceUsage: []
   endpoints: []
-  mounts:
-    - volumeRef: Volume/device-gpu--controller--controller-state--host-system
-      view: main
-      mountPath: /state
-      access: read-only
-      required: true
+  mounts: []
   readiness:
     class: provider-defined
     initialDelay: "1s"
@@ -144,11 +139,9 @@ spec:
 ```
 
 Core aggregates the controller Process status (phase, conditions) into the
-`Provider/device-gpu` status. Core ProviderDeployment creates the
-controller-state Volume before the controller Process starts and deletes it
-after the controller Process is stopped. The controller Process consumes the
-Volume as a read-only required mount (`required: true`). See § Provider state
-for the Volume schema and layout principal.
+`Provider/device-gpu` status. Per D087, `device-gpu` declares no Provider state
+Volume; bounded non-secret controller operational state lives in Device/Provider
+status and the core Operation ledger, and the controller has no `/state` mount.
 
 ## Device spec served by this Provider
 
@@ -1114,142 +1107,45 @@ only deletion path.
 
 ### ProviderStateSet (query-time grouping)
 
-`ProviderStateSet(zone, device-gpu)` is the set of all `Volume` resources in
-the Zone whose `metadata.ownerRef == "Provider/device-gpu"`. It is a
-**query-time grouping** derived from the owner index — it is **not** a
-ResourceType or a stored artifact. Each semantic component in
-`Provider/device-gpu` gets its own **private Volume** even if the payload
-schema is empty.
+Per D087, `device-gpu` declares **no Provider state Volume**. A
+`ProviderStateSet(zone, device-gpu)` is the optional query-time grouping of
+Provider state Volumes declared by the Provider descriptor; for this Provider it
+is empty.
 
-### Durability invariants for all state Volumes
-
-Every Volume in `ProviderStateSet(zone, device-gpu)` — including any
-payload-empty component — must satisfy all of the following invariants without
-exception:
-
-| Property | Required value | Prohibited value |
-| --- | --- | --- |
-| `stateSchema` block | Present (identifies Volume as `kind: state`) | Absent |
-| `persistenceClass` | `persistent` | `ephemeral`, `cache`, or `config` |
-| `quotaBytes` | Minimal nonzero (≥ directory overhead + identity marker footprint) | `0` |
-| `identityMarker` | `class: broker-maintained` | Absent or `null` |
-
-A `quotaBytes: 0` or `persistenceClass: ephemeral` state Volume is a
-**spec error** and fails Volume admission. These invariants apply equally to a
-Volume whose `stateSchema` declares zero payload namespaces: the identity
-marker, the layout directory inode, and the Volume root overhead all require a
-nonzero quota and a persistent durability class.
-
-These Volumes **survive** component Process restart, Provider restart, and
-daemon restart. They **participate** in the full Volume lifecycle:
-generation-based upgrade (schema migration EphemeralProcess), ordered destroy
-(stop Processes → clear mount finalizers → volume-local destruction), and
-operator-initiated reset (incident hold → explicit delete). None of these
-lifecycle events auto-expire a persistent state Volume on their own.
-
-### Controller state Volume (empty payload schema)
-
-The device-gpu controller component declares one state namespace:
-`controller-state` — an **empty payload schema** with `migrationPolicy: none`.
-No application bytes are written through this Volume; it exists exclusively for
-mandatory identity/quota lifecycle (identity marker, quota accounting,
-upgrade/destroy/reset participation).
-
-**Core ProviderDeployment** creates this Volume from the declared state
-namespace in the component descriptor before the controller Process is started,
-and deletes it after the controller Process is stopped. The device-gpu
-controller does **not** create, delete, or reconcile the Volume. `Volume` is
-not in the device-gpu exported ResourceTypes. `Provider/volume-local` is the
-sole Volume reconciler. The Volume naming follows the ADR-046-provider-state
-convention `<provider-name>--<component-id>--<namespace-id>--<execution-ref-short>`:
-
-```yaml
-apiVersion: resources.d2b.io/v3
-type: Volume
-metadata:
-  name: device-gpu--controller--controller-state--host-system
-  zone: dev
-  ownerRef: Provider/device-gpu
-  managedBy: core         # created/deleted by core ProviderDeployment; not by the device-gpu controller
-spec:
-  providerRef: Provider/volume-local
-  persistenceClass: persistent
-  sensitivityClass: private
-  stateSchema:
-    schemaId: io.d2b.provider-device-gpu/controller/controller-state
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<hex>          # signed into the component descriptor; not a public spec field
-    migrationPolicy: none               # empty payload schema; no migration worker ever created
-  quotaBytes: 65536                     # minimal nonzero; nonzero required even for empty schema
-  sealingCredentialRef: null
-  source:
-    executionRef: Host/host-system
-    settings: {}
-  layout:
-    - path: state
-      type: directory
-      ownerRef: User/device-gpu-controller-system   # Nix-preprovisioned principal
-      groupRef: User/device-gpu-controller-system
-      mode: "0700"
-      sensitivity: private
-      createPolicy: create-if-never-provisioned
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      noFollow: true
-  views:
-    main:
-      path: state
-      rights: [read, traverse]          # read-only view; no write rights on empty schema
-  identityMarker:
-    class: broker-maintained
-    markerRoot: provider-state-markers
-  snapshotPolicy: null
-  retentionPolicy: null
+```text
+ProviderStateSet(zone, device-gpu) = {}
 ```
 
-With `migrationPolicy: none`, volume-local sets `stateSchemaPhase: current`
-immediately on first provision — no migration EphemeralProcess is ever created
-for this Volume.
+GPU device state (DRM card, render node, video sidecar attachment) is physical
+or Process/Device runtime state, not a durable Provider payload. GPU has no
+Device-payload Volume; render-node access is a Device attachment resolved through
+LaunchTicket and the privileged broker, not a Provider state Volume.
 
-### State access: read-only lifecycle gate
+### Status-first operational state
 
-The controller Process template declares a `mounts` entry with `access:
-read-only, required: true`. Core ProviderDeployment gates the controller
-Process start on the Volume reaching `phase: Ready` and
-`stateSchemaPhase: current`. Since the schema is empty, **no bytes are read
-from or written through this `dirfd`**. The mount exists solely as a lifecycle
-gate.
+Bounded non-secret operational state is written to the owning `Device.status`,
+`Provider.status`, and the core Operation ledger: phase, conditions, observed
+render-node/card availability, claim/arbitration summaries, Process references,
+readiness observations, finalizer progress, restart/adoption observations, and
+wire-contract check results. Status is revisioned, optimistic-status-writer
+controlled, RBAC-readable, redacted, observation-only, bounded, and written only
+on material change. After restart, the controller re-lists Device and Process
+resources, revalidates external DRM/render-node and worker reality, and updates
+status; status never acts as host-mutation or repair authority.
 
-**Claim and adoption authority does not live in this Volume.** Device claim
-state — which Guest holds which Device, exclusive/shared arbitration, holderRefs
-— is authoritative in `Device` resource `spec`/`status` (managed via the
-`ResourceClient` resource API) and in the core Operation ledger for atomic
-adoption. The controller reads and writes claim state exclusively through the
-resource API, never through a Volume file. No state-based recovery of claim
-records occurs at controller restart; the controller re-derives its view by
-querying current Device resource status.
+Worker Processes (`gpu-worker`, `render-node-worker`, `video-worker`) declare no
+Provider state Volume and no `/state` mount. Their live fds and process-local
+observations remain transient runtime data. Genuine runtime/device attachments
+remain intact; only the former identity-only Provider state Volume is removed.
 
-**No other component receives this `dirfd`.** Worker Processes (gpu-worker,
-render-node-worker, video-worker) are stateless from the Provider's
-perspective — they declare no `mounts` entries and no state namespace
-declarations.
-
-### Layout principals: Nix-preprovisioned User refs
-
-Volume layout entries bind `User/<name>` references resolved at provision time.
-`User/device-gpu-controller-system` is a Nix-preprovisioned system principal
-(or a member of a bounded principal pool). There are **no `ComponentPrincipal`
-ResourceRefs** in the Volume layout or in any Process spec for this Provider.
-
-### No cross-component shared Volume
-
-No Volume in `ProviderStateSet(zone, device-gpu)` is shared between two
-components. The worker Processes hold no Volume mounts. If a future component
-(e.g., a discovery cache) is added, it receives its own private Volume (subject
-to the durability invariants above), not a shared view of the controller's
-controller-state Volume.
+Storage-need test rationale: device-gpu operational state contains no durable
+secret recovery payload, no large/binary/file content, no private data unsafe for
+authorized status readers, and no bounded-but-revision-unsuitable data with a
+demonstrated recovery need. Physical GPU state is reobserved, and claim/adoption
+state is already represented by Device status and Operation rows.
 
 ## Nix configuration
+
 
 ### Authoring shape
 
@@ -1421,14 +1317,11 @@ d2b.zones.<zone>.resources."provider-device-gpu" = {
 ```
 
 `spec.config.controllerExecutionRef` declares the execution context for the
-controller Process. The `ProviderStateSet` for `Provider/device-gpu` is the
-query-time grouping of all `Volume` resources with `ownerRef:
-Provider/device-gpu`; it is not a ResourceType, and `Volume` is not in the
-device-gpu exported ResourceTypes. Core ProviderDeployment creates and deletes
-component state Volumes before/after the component Processes; the device-gpu
-controller does not own or reconcile Volumes. The volume-local Provider manages
-all layout, ACL, and lifecycle operations for those Volumes. Device resource rows,
-resource operation rows, and this dossier are the authority for provider-managed state.
+controller Process. The `ProviderStateSet` for `Provider/device-gpu` is empty:
+`device-gpu` declares no Provider state Volume, does not export `Volume` as a
+ResourceType, and has no controller `/state` mount. Device resource status,
+Provider status, and core Operation rows are the authority for bounded
+non-secret operational state.
 
 The Device spec carries **no** `artifactId` field. Binary paths for crosvm
 (GPU and video) are resolved from the **signed component descriptor** inside the
@@ -1488,7 +1381,7 @@ When a GPU Device resource is removed from the Nix config:
 | `arbitration_conflict.rs` | Second Guest attempts exclusive claim; controller writes `ClaimConflict` condition, sets second Device phase `Degraded` |
 | `video_dependency.rs` | Video Process not created until GPU Process reaches `Ready`; video Process stopped when GPU Process fails |
 | `seccomp_policy_ref.rs` | `sandbox.seccompClass` for gpu/video/render-node Process templates are `w1-gpu`, `w1-video`, `w1-gpu-render-node` (stable regression guard; confirms system-minijail enforces correct class before exec) |
-| `state_volume.rs` | `Volume` spec for `device-gpu--controller--controller-state--host-system` round-trips against `ResourceTypeSchema`; `stateSchema.schemaId: io.d2b.provider-device-gpu/controller/controller-state` matches component descriptor golden; `ownerRef: User/device-gpu-controller-system` present in layout; `persistenceClass: persistent`, `quotaBytes > 0`, `identityMarker` present asserted; view rights are read-only (no write/create/delete on empty schema); `quotaBytes: 0` or `persistenceClass: ephemeral` must fail admission; no cross-component shared Volume in ProviderStateSet |
+| `status_state.rs` | Provider descriptor declares no Provider state Volume; ProviderStateSet query is empty; controller and worker Process templates have no `/state` mounts; no GPU Device-payload Volume exists; bounded operational observations are written to Device/Provider status and Operation rows; render-node access remains a Device attachment rather than Provider state |
 
 ### `integration/` — container/Host/Guest fixtures
 
@@ -1675,23 +1568,24 @@ disposition contract test passes.
 | Validation | `nix-unit tests/unit/nix/cases/device-gpu-eval.nix`; `make test-drift`; `make test-flake` |
 | Removal proof | `d2b.vms.<vm>.graphics.*` options removed only after migration guide ships and the deprecation warning has been live for one minor release |
 
-### ADR046-provider-device-gpu-08: Declare controller state namespace in component descriptor
+### ADR046-provider-device-gpu-08: Assert status-first Provider state
 
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-provider-device-gpu-08` |
-| Dependency/owner | ADR046-provider-device-gpu-01; `ADR-046-provider-state` Volume ResourceType + provider-state extension present; core ProviderDeployment wired to consume component descriptor state namespace declarations and manage Volume lifecycle |
+| Dependency/owner | ADR046-provider-device-gpu-01; D087 status-first state model present in the foundational ADR-046 specs |
 | Current source | None |
 | Reuse source | None |
-| Reuse action | `new` — state namespace declaration in the component descriptor; `mounts` entry in controller Process template |
-| Destination | `packages/d2b-provider-device-gpu/` component descriptor (state namespace declaration); controller Process template `mounts` field |
-| Detailed design | Declare `controller-state` state namespace in the device-gpu component descriptor: `schemaId: io.d2b.provider-device-gpu/controller/controller-state`, `schemaVersion: "1.0"`, `persistenceClass: persistent`, `sensitivityClass: private`, `migrationPolicy: none` (empty payload schema; no migration EphemeralProcess ever created). Core ProviderDeployment creates `Volume/device-gpu--controller--controller-state--host-system` (`managedBy: core`) with `quotaBytes: 65536` (nonzero), `identityMarker: {class: broker-maintained}`, view rights `[read, traverse]`, before the controller Process starts; core deletes it after the controller Process is stopped. The device-gpu controller does **not** create, delete, or reconcile the Volume; `Volume` is not in the device-gpu exported ResourceTypes. Controller Process template declares `mounts: [{volumeRef: Volume/device-gpu--controller--controller-state--host-system, view: main, mountPath: /state, access: read-only, required: true}]`; the mount is a read-only lifecycle gate — no bytes written through the `dirfd`. |
-| Integration | `tests/state_volume.rs`; `integration/gpu_worker_start/` (controller starts only after Volume `phase: Ready`) |
-| Data migration | None — `migrationPolicy: none`; no migration EphemeralProcess for empty payload schema. |
-| Validation | `cargo test -p d2b-provider-device-gpu --test state_volume`; component descriptor state namespace present and `schemaId` matches golden; controller Process template `mounts` entry present with `required: true` and `access: read-only`; Volume `managedBy: core` confirmed |
-| Removal proof | `StorageRoot`/`StoragePathSpec` lifecycle tracking entries for GPU/video roles in `d2b-core/src/storage.rs` removed only after state Volume lifecycle (creation and deletion by core ProviderDeployment, restart survival) passes integration tests in a live Zone |
+| Reuse action | `new` — status-first state assertions in the component descriptor and controller tests |
+| Destination | `packages/d2b-provider-device-gpu/` component descriptor; controller/status tests |
+| Detailed design | Do **not** declare a controller Provider state Volume. The device-gpu component descriptor declares an empty ProviderStateSet; controller and worker Process templates contain no `/state` mount. Bounded non-secret operational state is published to Device/Provider status and the core Operation ledger. GPU has no Device-payload Volume; render-node access remains a Device attachment resolved by LaunchTicket and broker policy. |
+| Integration | `tests/status_state.rs`; `integration/gpu_worker_start/` verifies controller startup is gated by resource dependencies and status writer authority, not by a Provider state Volume |
+| Data migration | None — no Provider state Volume exists to migrate. |
+| Validation | `cargo test -p d2b-provider-device-gpu --test status_state`; component descriptor golden has no Provider state Volume declaration; controller Process template has no `/state` mount; ProviderStateSet query is empty; status/core-ledger fields carry bounded operational observations |
+| Removal proof | `StorageRoot`/`StoragePathSpec` lifecycle tracking entries for GPU/video roles in `d2b-core/src/storage.rs` removed after Device/Process status-first lifecycle and restart-adoption integration tests pass in a live Zone |
 
 ### ADR046-provider-device-gpu-09: Provider `README.md`
+
 
 | Field | Value |
 | --- | --- |
@@ -1714,8 +1608,8 @@ disposition contract test passes.
 | Current anchor | **GPU/video process roles**: `packages/d2b-core/src/processes.rs` `ProcessRole::Gpu`, `ProcessRole::GpuRenderNode`, `ProcessRole::Video` (`implemented-and-reachable`). **GPU argv**: `packages/d2b-host/src/gpu_argv.rs` `GpuArgvInput`, `GpuParams`, `GpuContextType`, `GpuDisplayConfig` (`implemented-and-reachable`). **Video argv + wire constants**: `packages/d2b-host/src/video_argv.rs` `VideoArgvInput`, `VideoBackend`, `wire_contract_snapshot()`, all `VHOST_USER_MEDIA_*` constants (`implemented-and-reachable`). **GPU device token set**: `packages/d2b-core/src/bundle_resolver.rs` lines 1882–1894, ProcessRole::Gpu/GpuRenderNode arm (`implemented-and-reachable`). **Minijail profiles**: `nixos-modules/minijail-profiles.nix` gpu, video, gpu-render-node profiles with device binds, seccomp refs, user NS config (`implemented-and-reachable`). **Broker ops**: `packages/d2b-contracts/src/broker_wire.rs` `RunnerRole::Gpu`, `RunnerRole::Video` (`implemented-and-reachable`). **Nix host graphics**: `nixos-modules/components/graphics.nix` (crosvm wrapper, virglVideo patch, CH rev guard, crossDomainTrusted enforcement) (`implemented-and-reachable`). **Nix guest video**: `nixos-modules/components/video/guest.nix` (`virtio_media` module, CH `--vhost-user-media` arg) (`generated-or-eval-contract`). **Contract tests**: `packages/d2b-contract-tests/tests/minijail_gpu.rs`, `minijail_swtpm_video.rs`, `video_binary_contract.rs` (`implemented-and-reachable`). **Provider crate**: `packages/d2b-provider-device-gpu/` (`ADR-only`). |
 | Evidence class | GPU/video process role enum and argv generators: `implemented-and-reachable`. GPU device token set and minijail profiles: `implemented-and-reachable`. Broker RunnerRole::Gpu/Video: `implemented-and-reachable`. CH/crosvm version guard: `implemented-and-reachable`. Video wire-contract constants: `implemented-and-reachable`. Device ResourceType schema: `ADR-only`. Provider crate and reconcile loop: `ADR-only`. |
 | Behavior retained | GPU device allowlist token set (kvm/dri/udmabuf/nvidia*); video wire-contract constants frozen; distinct allocator-assigned video vs GPU worker principal (LaunchTicket invariant; private broker state); render-node fd pre-opened by the **privileged broker** and inherited via private fd-inheritance protocol; user-namespace zero-host-caps (ADR 0021); no Wayland/audio sockets for video role; `crossDomainTrusted` projected from Device setting into LaunchTicket at resolution time; argv builder omits CrossDomain from runtime args when false; NVIDIA opt-in gating for video; CH/crosvm rev compatibility guard; `videoSidecar` + `videoNvidiaDecode` mutual independence; `virglVideo` + `videoSidecar` mutual exclusion. |
-| Required delta | `d2b-provider-device-gpu` crate, async reconcile controller, Device ResourceType schema for GPU settings, Provider resource registration, process-name templates from Device UID, wire-contract check at startup, shared render-node arbitration enforcement, generation-based lifecycle via Zone resource plane; controller state namespace declaration in component descriptor (empty payload schema, `migrationPolicy: none`) — core ProviderDeployment creates/deletes the `Volume/device-gpu--controller--controller-state--host-system` resource; `Volume` is not in the device-gpu exported ResourceTypes (ADR046-provider-device-gpu-08). |
+| Required delta | `d2b-provider-device-gpu` crate, async reconcile controller, Device ResourceType schema for GPU settings, Provider resource registration, process-name templates from Device UID, wire-contract check at startup, shared render-node arbitration enforcement, generation-based lifecycle via Zone resource plane; D087 status-first state assertion in the component descriptor — no Provider state Volume, empty ProviderStateSet, no controller `/state` mount, bounded operational state in status and Operation rows (ADR046-provider-device-gpu-08). |
 | Reuse path | Re-export `gpu_argv.rs` and `video_argv.rs` from `d2b-host` unmodified. Adapt device token set constant from `bundle_resolver.rs` into `worker_gpu.rs` `GPU_DEVICE_ALLOWLIST` for `deviceUsage` population. Adapt minijail profile field names to `Process` resource spec fields. uid/gid mapping is resolved privately by core from the signed worker template — the device-gpu controller does not write hostUid/hostGid into any resource spec field. |
-| Replacement/deletion | `ProcessRole::Gpu`, `ProcessRole::GpuRenderNode`, `ProcessRole::Video` in `processes.rs` retained until Provider integration parity. `d2b.vms.<vm>.graphics.*` Nix options deprecated (with warning) until consumer migration window closes. Nix `components/graphics.nix` host-side worker-spawn logic removed after `worker_gpu.rs` is live; CH arg injection and crosvm patches stay in Guest runtime Nix module. `StorageRoot`/`StoragePathSpec` entries for GPU/video roles in `d2b-core/src/storage.rs` removed after state Volume (ADR046-provider-device-gpu-08) integration passes. |
+| Replacement/deletion | `ProcessRole::Gpu`, `ProcessRole::GpuRenderNode`, `ProcessRole::Video` in `processes.rs` retained until Provider integration parity. `d2b.vms.<vm>.graphics.*` Nix options deprecated (with warning) until consumer migration window closes. Nix `components/graphics.nix` host-side worker-spawn logic removed after `worker_gpu.rs` is live; CH arg injection and crosvm patches stay in Guest runtime Nix module. `StorageRoot`/`StoragePathSpec` entries for GPU/video roles in `d2b-core/src/storage.rs` removed after status-first Device/Process lifecycle integration passes. |
 | Feasibility proof | GPU worker process broker token set: `packages/d2b-contract-tests/tests/minijail_gpu.rs` (existing, reachable). Video wire-contract constant snapshot: `packages/d2b-host/src/video_argv.rs` `wire_contract_snapshot()` + `tests/video_binary_contract.rs` (existing, reachable). Render-node user-NS propagation: `packages/d2b-core/src/bundle_resolver.rs` test `gpu_render_node_user_namespace_propagates_to_resolved_intent` (existing, reachable). |
 | Future owner | `packages/d2b-provider-device-gpu/` crate; work items ADR046-provider-device-gpu-01 through ADR046-provider-device-gpu-09 |

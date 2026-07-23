@@ -436,6 +436,14 @@ SecretServiceState:      Locked | Unlocked
 SecretServiceLeaseState: Active | Revoked | Expired
 ```
 
+The state machine is process-local and reconstructed from the owning
+`Credential.status`, core Operation ledger entries, and live Secret Service
+observation after restart. Under D087 the Provider declares **no Provider state
+Volume**: bounded non-secret operational state belongs in status by default, and
+this Provider does not satisfy the storage-need test. ProviderStateSet remains
+only the optional query-time grouping of declared state Volumes and is empty for
+`credential-secret-service` (D086, superseded by D087).
+
 When `SecretServiceState = Locked`:
 - `AcquireToken` returns `credential-provider-unavailable`
   (from `SecretServicePortError::Locked`).
@@ -652,6 +660,14 @@ the two endpoints. The bus never buffers or stores the records.
 
 ### 9.1 State machine
 
+The latest bounded lease checkpoint (`leaseState`, `leaseHandle`,
+`expiresAtUnixMs`, `rotationGeneration`, `sourceVersion`, retry counters, and
+closed-enum outcome) is status/Operation-ledger state, not a Provider state
+Volume payload. Any `leaseHandle` written to status is opaque, non-authorizing,
+bounded, safe for authorized status readers, and independently revalidated
+against the Secret Service port before use. Secret Service object paths and
+credential bytes never enter status, audit, telemetry, or storage.
+
 ```
 Absent
   └── AcquireToken ──────────► Active (CredentialReady=True)
@@ -775,37 +791,28 @@ the Role `operationClasses`.
    not discover D-Bus addresses, connect to ambient sockets, read
    `DBUS_SESSION_BUS_ADDRESS`, or open any socket path to reach the keyring.
    Absent the portal FD, the controller fails closed.
-8. **ProviderStateSet — core ProviderDeployment owns Volume lifecycle**:
-   `ProviderStateSet` is the query-time set of all Volume resources in the Zone
-   whose `metadata.ownerRef` resolves to `Provider/credential-secret-service`.
-   It is not a ResourceType or stored artifact. The core `provider lifecycle`
-   handler (ProviderDeployment) creates declared component state Volumes
-   **before** component Processes are launched and deletes them **after**
-   component Processes complete — the semantic `credential-secret-service`
-   controller does NOT own Volumes, does NOT add Volume to its exported
-   ResourceTypes (`resourceTypes: [Credential]` only), and does NOT create its
-   prerequisite Volume. `Provider/volume-local` is the sole Volume reconciler:
-   it owns all filesystem operations, layout, ACL, identity marker, quota, and
-   stateSchema lifecycle on the backing store. The controller component only
-   consumes its required view (`dirfd`) supplied by the mounted Volume. Every
-   component state Volume for a `Guest/<name>` executionRef is guest-local; no
-   host-backed-guest attachment, virtiofs Export, or host fallback is permitted
-   for credential state. Every component state Volume is `kind: state`,
-   `persistenceClass: persistent`,
-   carries a minimal nonzero byte/inode quota, and a provisioning identity
-   marker (fail-closed on missing-after-provision per `kind: state` semantics);
-   it is never `ephemeral` and never `quota: null` or `quotaBytes: 0`. For the
-   credential-secret-service controller's empty payload schema, the Volume uses
-   `migrationPolicy: none` — there is no migration worker and no migration
-   EphemeralProcess. Volumes survive component and Provider restarts and
-   participate in upgrade, destroy, and reset lifecycle operations. Volume
-   `layout` entries use Nix-preprovisioned `User/<name>` principals (or a
-   bounded principal pool) — no `ComponentPrincipal` ResourceRefs and no
-   cross-component shared Volume. No token bytes, Secret Service object paths,
-   or lease bytes persist in any Volume. The Credential resource status fields
-   (`leaseHandle`, `leaseState`, `expiresAtUnixMs`, `rotationGeneration`,
-   `sourceVersion`) and core operation state are the sole authority for active
-   lease tracking.
+8. **Status-first operational state (D087)**: bounded non-secret controller
+   and lease observation lives in the owning `Credential.status` subresource
+   and the core Operation ledger by default. In-flight idempotency/retry is an
+   Operation-ledger concern; the latest bounded lease result/checkpoint lives in
+   status. `credential-secret-service` declares **no Provider state Volume**
+   because it has no payload that passes the storage-need test: no secret
+   private recovery data may enter storage, there is no large/binary/file
+   content, no private data unsafe for authorized status readers is persisted,
+   and bounded recovery state is suitable for revisioned status plus external
+   revalidation. ProviderStateSet is optional query-time grouping and is empty
+   for this Provider (D086, superseded by D087); there is no bootstrap state
+   Volume mechanism or exception. Status is revisioned,
+   optimistic-status-writer controlled, RBAC-readable, redacted,
+   observation-only, written only on material change, and bounded to the core
+   status limits (total ≤ 64 KiB, provider-specific detail ≤ 32 KiB, with
+   `status-oversize` rejection). It must not contain secrets, tokens, keys, PSKs,
+   authority-conferring credential handles, Secret Service object paths,
+   private path/argv/env/PID/unit data, raw provider error bodies, large blobs,
+   or churn-heavy content. Any opaque handle in status is non-secret,
+   non-authorizing, bounded, safe for authorized status readers, and
+   independently revalidated before use. Raw credential delivery remains
+   transient process memory over dedicated Noise_KK sensitive sessions only.
 
 ### 10.3 Canary tests (`tests/canary.rs`)
 
@@ -1064,7 +1071,7 @@ All controller handlers are async. The reconcile loop follows
 | Main reuse source | main `a1cc0b2d`: `packages/d2b-provider-credential-secret-service/src/lib.rs` (`Oo7SecretServicePort`, `SecretServiceLeaseRequest/Ref/Grant/Inspection/Renewal/Revocation`, `SecretServiceState/LeaseState`, `SecretServiceProviderError`, `SecretServiceOwner`, `SecretServiceCredentialProvider`, `SecretServiceCredentialProviderFactory`); `src/tests.rs` (`FakeOo7Port`, `credential_canary`, `object_path_canary`, lease lifecycle, locked-state tests, cardinality limits) |
 | Reuse action | copy and adapt (revert v2 types; replace v2 `CredentialProvider` trait with v3 `d2b.credential.v3` service; replace v2 ProviderFactory/registry with Provider resource/descriptor) |
 | Behavior retained | Zero-secret-bytes invariant structurally enforced at port boundary; `SecretServiceOwner::Userd` placement restriction; bounded opaque lease metadata only crosses the port boundary; `credential_canary`/`object_path_canary` enforcement; hand-written `Debug` on request/ref types; injected-port pattern; `MAX_LOCAL_LEASES` cardinality cap |
-| Required delta | v3 contract names/versions; Provider resource and signed controller descriptor; d2b-bus routing; Zone/Resource placement/scope; async reconcile loop and handler methods; `Noise_KK` delivery session; OTEL/audit emission; Nix resource compiler integration; workspace layout (`src/`, `tests/`, `integration/`, `README.md`); ProviderStateSet is query-time grouping of ordinary Volume resources (`ownerRef: Provider/credential-secret-service`); core ProviderDeployment creates/deletes component state Volumes before/after component Processes — the semantic controller does NOT own, export, or create Volumes (`resourceTypes: [Credential]` only); Provider/volume-local is sole Volume reconciler; component consumes only its required view (`dirfd`); each state Volume is `kind: state`, `persistenceClass: persistent`, minimal nonzero byte/inode quota, identity marker, never ephemeral/quota 0; empty payload schema uses `migrationPolicy: none` (no migration worker); survives restart; participates in upgrade/destroy/reset; no persisted lease/token/path bytes; `networkUsage: null` in Process spec; finalize sequence separates revoke/drain + Process deletion from closure audit (audit subsystem only); core aggregates Provider status (controller writes only scoped Credential/Process health) |
+| Required delta | v3 contract names/versions; Provider resource and signed controller descriptor; d2b-bus routing; Zone/Resource placement/scope; async reconcile loop and handler methods; `Noise_KK` delivery session; OTEL/audit emission; Nix resource compiler integration; workspace layout (`src/`, `tests/`, `integration/`, `README.md`); D087 status-first state model: `credential-secret-service` declares no Provider state Volume, ProviderStateSet is optional/query-time and empty, and bounded non-secret lease/acquisition/retry observation lives in `Credential.status` plus the core Operation ledger; no bootstrap state Volume mechanism (D086, superseded by D087); any status handle is non-secret, non-authorizing, bounded, safe for authorized status readers, and independently revalidated; `networkUsage: null` in Process spec; finalize sequence separates revoke/drain + Process deletion from closure audit (audit subsystem only); core aggregates Provider status (controller writes only scoped Credential/Process health) |
 | Excluded main assumptions | v2 `EndpointRole`/`Realm`/`userd` process model; v2 `ProviderFactory`/`ProviderRegistryBuilder`; v2 component-session auth and prologue; v2 `AgentPlacementBinding`; v2 `CredentialLease`/`CredentialLeaseState` from `d2b-contracts::v2_provider`; v2 `CredentialPlacementBinding::UserAgent` struct (replaced by v3 `PlacementBinding::UserAgent` enum variant) |
 | Replacement/deletion | Old `CredentialProvider` trait (`d2b-realm-provider/src/provider.rs`) and `CredentialStatus` enum removed only after all three v3 Credential Provider controllers reach full reconcile parity |
 | Feasibility proof | Main `a1cc0b2d` proves: `Oo7SecretServicePort` trait API; `FakeOo7Port` with canary enforcement; acquire/refresh/revoke/inspect lifecycle; locked-state → unavailable mapping; cardinality limits; check_provider_conformance pattern |
@@ -1083,7 +1090,7 @@ All controller handlers are async. The reconcile loop follows
 | Reuse source | main `a1cc0b2d`: `packages/d2b-provider-credential-secret-service/src/lib.rs` (full implementation); `src/tests.rs` (full test suite including `FakeOo7Port`, lease lifecycle, locked state, canary enforcement, cardinality limits) |
 | Reuse action | copy and adapt |
 | Destination | `packages/d2b-provider-credential-secret-service/src/{lib.rs, controller.rs, service.rs, main.rs}`; `packages/d2b-provider-credential-secret-service/tests/{lifecycle.rs, conformance.rs, faults.rs, canary.rs, delivery.rs, placement.rs}`; `packages/d2b-provider-credential-secret-service/integration/{container-service.sh, host-placement.nix, guest-placement.nix, cleanup-rollback.sh}`; `packages/d2b-provider-credential-secret-service/README.md` |
-| Detailed design | Adapt `SecretServiceCredentialProvider` and `SecretServiceCredentialProviderFactory` to v3 `d2b.credential.v3` service; replace v2 `CredentialProvider` trait with v3 controller/service handler; retain `Oo7SecretServicePort` trait methods unchanged; ensure `SecretServiceOwner::Userd` placement guard rejects system-domain and guest-agent construction; validate `collectionAlias` against provider-internal charset (not `OpaqueAzureRef`; collection aliases may include spaces); integrate with Provider resource descriptor and controller toolkit; test that `credential_canary` never appears in any service response; create a Process resource per `(Zone, User, executionRef)` triple with `template = "secret-service-controller"` (plain string), canonical `sandbox` fields (`namespaceClasses`, `capabilityClasses`, `seccompClass`, `noNewPrivileges`, `startRoot`, `environmentClass`, `readOnlyRoot`), `budget` with nested `cpu`/`memory`/`pids`/`fds` sub-fields, `networkUsage: null`, `endpoints = []`, and `readiness.class = "provider-defined"`; component descriptor declares the required authenticated `dbus-session` FD attachment carried privately by the LaunchTicket; ProviderStateSet is the query-time set of Volume resources with `ownerRef: Provider/credential-secret-service` (not a ResourceType); core ProviderDeployment creates component state Volumes before component Processes and deletes them after — the semantic controller does NOT own, export (`resourceTypes: [Credential]` only), or create Volumes; `Provider/volume-local` is the sole Volume reconciler; component consumes only its required view (`dirfd`); each state Volume is `kind: state`, `persistenceClass: persistent` (backed by `Provider/volume-local`, `sensitivityClass: private`), minimal nonzero byte/inode quota, identity marker, never ephemeral/quota 0; empty `stateNamespaces` with `migrationPolicy: none` (no migration worker or EphemeralProcess); `User/<name>` layout principals (Nix-preprovisioned or bounded pool) — no `ComponentPrincipal` refs, no cross-component shared Volume; no token/object-path/lease bytes persisted; finalize() emits revoke outcome audit but MUST NOT emit the resource-deleted closure audit (audit subsystem only); controller writes only scoped Credential/Process health (core aggregates Provider status) |
+| Detailed design | Adapt `SecretServiceCredentialProvider` and `SecretServiceCredentialProviderFactory` to v3 `d2b.credential.v3` service; replace v2 `CredentialProvider` trait with v3 controller/service handler; retain `Oo7SecretServicePort` trait methods unchanged; ensure `SecretServiceOwner::Userd` placement guard rejects system-domain and guest-agent construction; validate `collectionAlias` against provider-internal charset (not `OpaqueAzureRef`; collection aliases may include spaces); integrate with Provider resource descriptor and controller toolkit; test that `credential_canary` never appears in any service response; create a Process resource per `(Zone, User, executionRef)` triple with `template = "secret-service-controller"` (plain string), canonical `sandbox` fields (`namespaceClasses`, `capabilityClasses`, `seccompClass`, `noNewPrivileges`, `startRoot`, `environmentClass`, `readOnlyRoot`), `budget` with nested `cpu`/`memory`/`pids`/`fds` sub-fields, `networkUsage: null`, `endpoints = []`, and `readiness.class = "provider-defined"`; component descriptor declares the required authenticated `dbus-session` FD attachment carried privately by the LaunchTicket; D087 status-first state model: no Provider state Volume is declared, ProviderStateSet is optional/query-time and empty, no Volume mount or layout principal is required, and the storage-need test is not met; bounded non-secret lease/acquisition/retry observation lives in `Credential.status` plus the core Operation ledger; any opaque status handle is non-secret, non-authorizing, bounded, safe for authorized status readers, and independently revalidated; no token/object-path/lease bytes persist anywhere; finalize() emits revoke outcome audit but MUST NOT emit the resource-deleted closure audit (audit subsystem only); controller writes only scoped Credential/Process health (core aggregates Provider status) |
 | Integration | Target: user-domain `Process` resource under `Host` or `Guest` (ADR-only ResourceType); d2b-bus routes `d2b.credential.v3` calls to this process; Credential controller reconciles status. Current v3 has no user-credential host process: v3 `d2b-userd` is a guest exec stub (exits 78 in service mode; no credential functionality; `test-only-or-preview`). This integration path is fully new (ADR-only) work. |
 | Data migration | Full reset; no migration from old `CredentialProvider` trait |
 | Validation | See §16 |
@@ -1143,7 +1150,7 @@ Full detail in `ADR-046-resources-credential` §Implementation work items.
 | `SecretServiceLeaseRef` Debug | Same redacted shape as request |
 | `controller_process_spec_golden` | `reconcile()` generates a Process resource with `template = "secret-service-controller"`, `sandbox.namespaceClasses = [mount, pid, ipc]` (no `user` class; `Provider/system-systemd` rejects it; same-UID execution via `spec.userRef`), `sandbox.capabilityClasses = []`, `sandbox.seccompClass = "default-strict"`, `sandbox.noNewPrivileges = true`, `sandbox.startRoot = false`, `sandbox.readOnlyRoot = true`, `budget.memory.limit = "64Mi"`, `budget.pids.limit = 32`, `budget.fds.limit = 64`, `networkUsage = null`, `endpoints = []`, `readiness.class = "provider-defined"` |
 | `finalize_does_not_emit_closure_audit` | `finalize()` emits a revoke outcome audit record but does not produce a `resource-deleted` closure event; verified by asserting no `Cleanup complete` record is captured by the test audit subscriber (closure record is audit-subsystem-only) |
-| `provider_state_volume_golden` | Core ProviderDeployment (not `reconcile()`) creates exactly one Volume per component with `metadata.ownerRef = "Provider/credential-secret-service"`, `spec.providerRef = "Provider/volume-local"`, `spec.kind = "state"`, `spec.persistenceClass = "persistent"` (never `ephemeral`), `spec.sensitivityClass = "private"`, a minimal nonzero `spec.quota.maxBytes` and `spec.quota.maxInodes` (never null or 0), empty `stateNamespaces` with `migrationPolicy: none` (no migration EphemeralProcess is ever created), and `layout` entries whose `ownerRef`/`groupRef` resolve to a Nix-preprovisioned `User/<name>` principal — no `ComponentPrincipal` ref, no cross-component shared Volume; the semantic controller descriptor declares `resourceTypes: [Credential]` only (Volume not exported); the component's view exposes only its local `dirfd`; the identity marker is set at provision time and fail-closed if missing after provision |
+| `status_first_state_golden` | Provider descriptor declares `resourceTypes: [Credential]` only and no Provider state Volume; ProviderStateSet query returns an empty grouping; Process specs contain no state mount; bounded non-secret lease/acquisition/retry fields are written only to `Credential.status` and the core Operation ledger; status rejects oversize/provider-detail overrun and excludes token bytes, keys, PSKs, Secret Service object paths, private paths, raw provider error bodies, and authority-conferring handles |
 
 ### 16.2 `tests/` Cargo integration tests (`cargo test -p d2b-provider-credential-secret-service`)
 
@@ -1317,11 +1324,12 @@ and User must be Ready before controller acquires first lease).
 
 ### Section 7: Security, state, and telemetry
 
-Secret isolation model; ProviderStateSet as query-time grouping of ordinary Volume
-resources (`ownerRef: Provider/credential-secret-service`); one private Volume per
-component (empty `stateNamespaces`, `User/<name>` layout principals, local view
-`dirfd` only); what the Provider persists (opaque lease handle, source version,
-rotation generation, expiry timestamps; no token bytes); audit events; OTEL spans
+Secret isolation model; D087 status-first state model; no Provider state Volume
+for this credential Provider; ProviderStateSet is optional/query-time and empty;
+bounded non-secret status fields (opaque non-authorizing lease handle, source
+version, rotation generation, expiry timestamps, retry/outcome enums) plus core
+Operation ledger state; no token bytes, Secret Service object paths, or private
+runtime details in status, audit, telemetry, or storage; audit events; OTEL spans
 and metrics; canary enforcement (`credential_canary`, `object_path_canary`).
 
 ### Section 8: Build, test, and integration commands

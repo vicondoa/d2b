@@ -683,104 +683,32 @@ the gateway Guest. There are no per-Zone or per-ZoneLink static `.socket` or
 
 ### Provider state volumes
 
-A **ProviderStateSet** is the logical/query-time set of all `Volume` resources
-in a Zone whose `metadata.ownerRef` resolves to `Provider/transport-azure-relay`.
-It is not a ResourceType or stored artifact:
+A **ProviderStateSet** is the optional, query-time set of the *declared*
+`Volume` resources in a Zone whose `metadata.ownerRef` resolves to
+`Provider/transport-azure-relay`. It is not a ResourceType or stored artifact
+and is empty for a Provider that declares no state Volume:
 
 ```text
 ProviderStateSet(zone, "transport-azure-relay") =
   { v : Volume | v.metadata.ownerRef == "Provider/transport-azure-relay" }
 ```
 
-Core **ProviderDeployment** creates one Volume per declared component state
-namespace before component Processes start, and deletes them after Processes
-complete. The semantic `Provider/transport-azure-relay` controller does **not**
-create, own, or reconcile these Volumes — `Provider/volume-local` is the sole
-Volume reconciler. The transport Provider does not add `Volume` to its exported
-ResourceTypes. Both Volumes use the standard Volume resource with the
-`stateSchema` extension. Even though the relay transport has no payload bytes —
-all relay session state is transient in-process memory — component state Volumes
-are always `persistenceClass: persistent` with a minimal non-zero quota and an
-identity marker. They survive component and Provider restarts and participate
-in upgrade, destroy, and reset lifecycles. Each component only consumes its
-required view via Process `mounts`; no cross-component Volume sharing occurs.
+`Provider/transport-azure-relay` declares **no** Provider state Volume; its
+`ProviderStateSet` is empty. All relay session state is transient in-process
+memory (`OwnedTransport`/WebSocket handles, per D081) and is never persisted.
+Its bounded non-secret operational state — listener/sender readiness,
+transport-open/close reconcile stage, bounded reconnect/connection counters,
+and closed-enum error detail — lives in the owning resource's `status`
+subresource and the core Operation ledger (D087). All ZoneLink session state is
+owned by the core ZoneLink controller under the `ZoneLink` resource.
 
-Source Volume for the listener component (created by core ProviderDeployment;
-`managedBy: controller`; reconciled by `Provider/volume-local`):
-
-```yaml
-apiVersion: resources.d2b.io/v3
-type: Volume
-metadata:
-  name: transport-azure-relay--listener--state--work-gateway
-  ownerRef: Provider/transport-azure-relay
-spec:
-  providerRef: Provider/volume-local
-  persistenceClass: persistent
-  sensitivityClass: private
-  sourcePolicyId: provider-state-persistent
-  stateSchema:
-    schemaId: io.d2b.transport-azure-relay/listener/state
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<hex-of-empty-schema>
-    migrationPolicy: none
-  quota:
-    maxBytes: 65536                     # 64 KiB; non-zero even for empty payload
-    maxInodes: 64
-  quotaBytes: 65536
-  sealingCredentialRef: null
-  source:
-    executionRef: <config.executionRef>   # Guest/<name>; guest-local volume-local instance
-    settings: {}
-  layout:
-    - path: state
-      type: directory
-      ownerRef: User/transport-azure-relay-listener
-      groupRef: User/transport-azure-relay-listener
-      mode: "0700"
-      sensitivity: private
-      createPolicy: create-if-never-provisioned
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      noFollow: true
-  views:
-    main:
-      path: state
-      rights: [read, traverse]
-  identityMarker:
-    class: broker-maintained
-    markerRoot: provider-state-markers
-  snapshotPolicy: null
-  retentionPolicy: null
-```
-
-The sender component gets an equivalent Volume
-(`transport-azure-relay--sender--state--work-gateway`) with
-`ownerRef: User/transport-azure-relay-sender` in its layout.
-
-Both state Volumes use `source.executionRef: <config.executionRef>` (the gateway
-Guest) and the Guest-local `Provider/volume-local` instance. There is no
-Host-backed source Volume and no virtiofs attachment Volume for component state:
-because the Processes run entirely inside the gateway Guest, the Guest-local
-volume-local manages layout, quota, identity marker, and view access directly
-within the Guest filesystem. One Volume per component; `ownerRef:
-Provider/transport-azure-relay` on each; reconciled by `Provider/volume-local`.
-
-Layout principal rules:
-
-- `User/transport-azure-relay-listener` and `User/transport-azure-relay-sender`
-  are **Nix-preprovisioned** system users declared in the gateway Guest's NixOS
-  configuration. The Guest-local volume-local Provider resolves them at
-  provision time inside the Guest filesystem.
-- The two Users are distinct; no cross-component sharing of a Volume or dirfd
-  is permitted. `sensitivityClass: private` enforces this at mount time.
-- No relay auth token, WebSocket handle, session key, or credential byte is
-  written to either Volume. The `stateSchema` payload is empty;
-  `migrationPolicy: none` means no migration EphemeralProcess is ever created
-  for these Volumes. The directory exists to satisfy the framework requirement
-  that every semantic component have a private persistent Volume resource even
-  for empty payload schemas. Core ProviderDeployment deletes both Volumes as
-  part of Provider destroy/reset after component Processes complete.
+No relay auth token, WebSocket handle, session key, or credential byte is ever
+persisted; those bytes cross the sensitive KK delivery path in process memory
+only. Because this Provider's operational state is fully derivable from spec,
+`status`, the core Operation ledger, and its live process memory, it fails the
+storage-need test and declares no state namespace, no state Volume (neither
+Host-backed nor guest-local), no state-view mount, and no dedicated
+state-layout `User/<name>` principal. There is no empty identity-only Volume.
 
 ---
 

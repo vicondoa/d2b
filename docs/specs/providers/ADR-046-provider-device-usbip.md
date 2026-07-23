@@ -802,9 +802,10 @@ requeuess under exponential backoff.
 
 ## ProviderStateSet
 
-A **ProviderStateSet** is the logical/query-time set of all Volume resources in
-a Zone whose `metadata.ownerRef` resolves to `Provider/device-usbip`. It is a
-query-time grouping, not a ResourceType or stored artifact:
+A **ProviderStateSet** is the optional, query-time set of the *declared* Volume
+resources in a Zone whose `metadata.ownerRef` resolves to `Provider/device-usbip`.
+It is a query-time grouping, not a ResourceType or stored artifact, and is empty
+for a Provider that declares no state Volume:
 
 ```text
 ProviderStateSet(zone, "device-usbip") =
@@ -812,99 +813,25 @@ ProviderStateSet(zone, "device-usbip") =
               && v.metadata.ownerRef == "Provider/device-usbip" }
 ```
 
-Core **ProviderDeployment** creates every declared component state Volume before
-the component Process is started, and deletes them after all component Process
-and child finalizers complete. The semantic `device-usbip` controller does not
-create, delete, or own Volumes. `Provider/volume-local` is the sole Volume
-reconciler.
+`Provider/device-usbip` declares **no** Provider state Volume; its
+`ProviderStateSet` is empty. The controller has no durable payload state beyond
+`Device` resource status, its child `Process` resources, and the core Operation
+ledger. Its bounded non-secret operational state — attach/detach reconcile
+stage, per-busid attach observations, bounded counters, and closed-enum
+arbitration detail — lives in the owning resource's `status` subresource and the
+core Operation ledger (D087).
 
-### Controller component Volume
+Because this Provider's operational state is fully derivable from spec,
+`status`, the core Operation ledger, and independent external observation
+(running attach Processes re-derived from cgroup leaves, fresh pidfds), it fails
+the storage-need test and declares no state namespace, no state Volume, no
+state-view mount, and no dedicated state-layout `User/<name>` principal. There
+is no empty identity-only Volume.
 
-Even payload-empty component state Volumes are **durable** (`kind: state`,
-`persistenceClass: persistent`). They survive component and Provider restart,
-participate in Provider upgrade (schema migration path, even when empty),
-Provider destroy (Volume deleted only after all child finalizers complete), and
-Provider reset (Volume wiped and re-provisioned). A payload-empty Volume is
-never `kind: ephemeral` and never carries `quota: null` or zero byte/inode
-limits; the identity marker and directory entry require nonzero allocation.
-
-For `device-usbip`, the controller has no durable payload state beyond Device
-resource status and child Process resources, so the Volume carries an empty
-`stateSchema`. The Volume still exists as the durable lifecycle and identity
-anchor for the controller component across all restart and upgrade events.
-
-```yaml
-apiVersion: resources.d2b.io/v3
-type: Volume
-metadata:
-  name: device-usbip--controller--state--host-system
-  zone: work
-  ownerRef: Provider/device-usbip
-spec:
-  providerRef:      Provider/volume-local
-  kind:             state           # durable; fail-closed on missing-after-provision
-  persistenceClass: persistent      # survives daemon restart; not NixOS-activation-managed
-  sensitivityClass: private
-  stateSchema:
-    migrationPolicy: none           # empty payload; no schema, no migration worker
-  quotaBytes: 65536                 # provider-state extension; must equal quota.maxBytes
-  quota:
-    maxBytes:    65536              # 64 KiB — identity marker + directory entry
-    maxInodes:   32                 # marker inode, state directory, and small head-room
-    enforcement: none               # advisory; hard enforcement not required for identity-only content
-  sealingCredentialRef: null
-  source:
-    executionRef: Host/host-system
-    settings:     {}
-  layout:
-    - path:           state
-      type:           directory
-      ownerRef:       User/d2b-device-usbip-ctrl   # Nix-preprovisioned system user
-      groupRef:       User/d2b-device-usbip-ctrl   # same principal; no other group
-      mode:           "0700"
-      sensitivity:    private
-      createPolicy:   create-if-never-provisioned
-      repairPolicy:   exact-owner
-      cleanupPolicy:  owner-controlled
-      noFollow:       true
-  views:
-    state:
-      path:   state
-      rights: [read, write, create, delete, traverse]
-  identityMarker:
-    class:      broker-maintained
-    markerRoot: provider-state-markers
-  snapshotPolicy: null
-  retentionPolicy: null
-```
-
-### Invariants
-
-- **Layout principals are Nix-preprovisioned `User/<name>` resources** (or a
-  bounded principal pool declared in the Nix module). The `ownerRef` and
-  `groupRef` in every layout entry bind to `User/<name>` — never to a
-  ComponentPrincipal ResourceRef or a raw OS username string.
-- **No cross-component shared Volume.** `sensitivityClass: private` means only
-  the controller component Process may mount the `state` view. The daemon and
-  proxy worker processes have no Volume; stateless workers receive no dirfd.
-- **Component gets only its local view dirfd.** The volume-local Provider
-  delivers the named view dirfd to the mounting Process; no raw host filesystem
-  path is exposed outside the view boundary.
-- The Volume's stable identity (inode pair recorded in the broker-maintained
-  identity marker) persists across controller restarts and is checked on every
-  daemon restart and Process launch.
-- **Lifecycle participation.** `kind: state` Volumes participate in Provider
-  upgrade (migration path invoked even for empty `stateSchema`), Provider
-  destroy (deleted only after all child finalizers clear), and Provider reset
-  (wiped and re-provisioned by the controller). The Volume is never
-  auto-expired, never ephemeral, and quota is never zero.
-
-### Nix activation
-
-The Nix module for `Provider/device-usbip` provisions the system user
-`d2b-device-usbip-ctrl` and the corresponding `User/d2b-device-usbip-ctrl`
-resource at NixOS activation time. The user must exist before the controller
-Volume is provisioned.
+The daemon and proxy worker processes likewise hold no state Volume; stateless
+workers receive no dirfd. The stable identity of an adopted attach Process is
+re-derived after restart from its declared cgroup leaf and a fresh pidfd, not
+from any persisted snapshot.
 
 ---
 

@@ -73,7 +73,7 @@ The v3 target name appears in parentheses or an explicit mapping.
 | Controller component | `volume-local-controller`; `Process` under `Host/host-system`, `domain: system`; `controllerExecutionRef: Host/host-system` |
 | Effect operations | `ProvisionLayoutEntry`, `RepairLayoutEntry`, `CleanupLayoutEntry`, `PrepareSwtpmDir`, `StoreSyncComplete`, `MountTmpfs`, `ProvisionBlockImage` (all via injected `VolumeEffectPort`; no direct broker connection) |
 | Permissions | No special host-path permission; all host path resolution in core/broker adapter; broker ops not called directly from Provider process |
-| ProviderStateSet | Query-time logical grouping (not a ResourceType): `{ v : Volume \| ownerRef == "Provider/volume-local" }`; volume-local is the **sole reconciler** for all assigned Volumes (Volume is its exported type) and never issues Volume create/delete API calls; **core ProviderDeployment** creates/deletes component state Volume instances before/after component Processes; every component state Volume: `kind: state`, `persistenceClass: persistent`, minimal nonzero byte+inode quota; empty payload schema uses `migrationPolicy: none`, `sourcePolicyId: provider-state-persistent`, `enforcement: none` — no migration worker; never ephemeral/tmp/quota-0; Nix-preprovisioned `User/<name>` layout principals; no cross-component sharing |
+| ProviderStateSet | Optional query-time logical grouping (not a ResourceType): `{ v : Volume \| ownerRef == "Provider/volume-local" }`; **empty** — volume-local declares no state Volume of its own (its bounded non-secret operational state lives in `status`/the core Operation ledger, D087). Volume-local is the **sole reconciler** for all assigned Volumes carrying `providerRef: Provider/volume-local` (operator-created Volumes and other Providers' *declared* state Volumes; Volume is its exported type) and never issues Volume create/delete API calls; **core ProviderDeployment** creates/deletes other Providers' declared state Volume instances before/after their component Processes; a declared component state Volume is created only when its payload passes the storage-need test; Nix-preprovisioned `User/<name>` layout principals; no cross-component sharing; no empty identity-only Volume |
 | Finalizers | `volume-local/layout` |
 | Supported Host variants | Local NixOS Host; bare-metal Host; ACA if backing filesystem is accessible |
 | Guest capability | Not applicable — volume-local does not attach to Guests |
@@ -993,11 +993,7 @@ spec:
   template: volume-local-controller
   configRef: null
   credentialRefs: []
-  mounts:
-    - volumeRef: Volume/volume-local--controller--state--host-system
-      view: main
-      mountPath: /state
-      access: read-write
+  mounts: []                # no Provider state Volume; operational state in status/core ledger (D087)
   sandbox:
     namespaceClasses: []
     capabilityClasses: []
@@ -1045,8 +1041,8 @@ ComponentSession on startup.
 
 ### ProviderStateSet
 
-A **ProviderStateSet** is the set of all Volume resources in a Zone whose
-`metadata.ownerRef` resolves to `Provider/volume-local`:
+A **ProviderStateSet** is the optional, query-time set of the *declared* Volume
+resources in a Zone whose `metadata.ownerRef` resolves to `Provider/volume-local`:
 
 ```text
 ProviderStateSet(zone, "volume-local") =
@@ -1054,173 +1050,75 @@ ProviderStateSet(zone, "volume-local") =
               && v.metadata.ownerRef == "Provider/volume-local" }
 ```
 
-This is a query-time logical grouping, not a ResourceType or stored artifact.
+This is a query-time logical grouping, not a ResourceType or stored artifact,
+and it is **empty** for `Provider/volume-local`.
 
-`Volume` is **volume-local's exported and reconciled ResourceType**. Volume-local
-is the sole reconciler for all Volumes that carry `providerRef: Provider/volume-local`
-and never issues Volume create/delete API calls. Two populations of Volumes are
-assigned to volume-local:
+`Provider/volume-local` declares **no** Provider state Volume of its own. Its
+bounded non-secret operational state — reconcile stage, per-Volume layout/marker
+observations, quota usage, adoption observations, and closed-enum error detail —
+lives in the owning resource's `status` subresource and the core Operation
+ledger (D087). Because that state is fully derivable from the Volume resources
+it reconciles, their `status`, the core Operation ledger, and independent
+external observation (marker re-verification against external reality), it fails
+the storage-need test: the volume-local controller declares no state namespace,
+no state Volume, no state-view mount, and no dedicated
+`User/volume-local-system` state-layout principal. There is no empty
+identity-only Volume.
+
+`Volume` remains **volume-local's exported and reconciled ResourceType**.
+Volume-local is the sole reconciler for all Volumes that carry
+`providerRef: Provider/volume-local` and never issues Volume create/delete API
+calls. Two populations of Volumes are assigned to volume-local (neither is owned
+by `Provider/volume-local`, so neither is in its ProviderStateSet):
 
 - **Operator-created Volumes** (`kind: durable`, `cache`, `ephemeral`, `tmp`,
   `state`): operators create and delete these via the Resource API; volume-local
   reconciles their physical state (layout, ACL, quota, identity marker).
-- **Component state Volumes**: **core ProviderDeployment** creates one Volume per
-  declared `stateNamespace` in each component descriptor before the component's
-  Process starts, and deletes those Volumes after Processes stop when the Provider
-  is removed. Volume-local reconciles their physical state; it does not create or
-  delete these instances.
+- **Other Providers' declared state Volumes**: **core ProviderDeployment**
+  creates one Volume per *declared* `stateNamespace` in a component descriptor
+  (only when that payload passes the storage-need test) before the component's
+  Process starts, and deletes those Volumes after Processes stop when the owning
+  Provider is removed. Volume-local reconciles their physical state; it does not
+  create or delete these instances, and they are owned by their own Provider,
+  not by volume-local.
 
 **Component Processes consume only their required view**: each Process receives a
 `VolumeMountToken` for its declared named view; no Process creates, watches, or
 manages any Volume resource.
 
-Every component state Volume is durable **even when its payload schema is
-empty**: `kind: state`, `persistenceClass: persistent`, minimal nonzero byte
-and inode quota with `enforcement: none` for empty-payload Volumes,
-`sourcePolicyId: provider-state-persistent`, and identity marker. A
-stateNamespace with an empty payload schema always uses
-`migrationPolicy: none`; no `volume-migration-worker` EphemeralProcess is
-dispatched for it. These Volumes survive component and Provider restart and
-participate in upgrade, destroy, and reset sequences on equal footing with
-data-carrying Volumes.
-
 Layout ACL principals are **Nix-preprovisioned `User/<name>` resources**
 declared in the Provider's Nix configuration (or drawn from a bounded principal
 pool declared in the bundle). Numeric UIDs never appear in Volume spec, layout
-entries, or any public DTO. Each component's Volume is strictly private to that
-component; no Volume in the ProviderStateSet is shared across components. A
+entries, or any public DTO. Each component's declared state Volume is strictly
+private to that component; no such Volume is shared across components. A
 component receives only its declared named view: the core routes the anchored
-dirfd for that view to the requesting Process supervisor; no other component
-or domain observes that dirfd.
+dirfd for that view to the requesting Process supervisor; no other component or
+domain observes that dirfd.
 
-Volume naming follows the convention:
-`<provider-name>--<component-id>--<namespace-id>--<execution-ref-short>`
+The common `phase` field (`Pending`/`Ready`/`Degraded`/`Failed`/`Unknown`) for
+`Provider/volume-local` is aggregated by the Zone core from the health of its
+controller Process and the Volumes it reconciles, and reported in Provider
+resource status; no custom provider-level status extension is defined.
 
-The volume-local controller declares one stateNamespace (`state`) for its own
-identity and durable presence. Its payload schema is **empty** — this Volume
-holds the identity marker and the `state/` layout directory entry but carries
-no structured payload data (`migrationPolicy: none`; `enforcement: none`). This
-produces one Volume in the ProviderStateSet:
+### No bootstrap-state exception
 
-```yaml
-type: Volume
-metadata:
-  name: volume-local--controller--state--host-system
-  zone: <zone>
-  ownerRef: Provider/volume-local
-spec:
-  providerRef: Provider/volume-local
-  kind: state              # always state for component state Volumes; never ephemeral/tmp
-  persistenceClass: persistent   # always persistent; survives restart/upgrade/reset
-  sensitivityClass: private
-  stateSchema:
-    schemaId: io.d2b.volume-local/controller/state-v1  # empty payload schema
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<hex>
-    migrationPolicy: none  # empty payload: no migration worker ever dispatched
-  quota:
-    maxBytes: 4194304      # minimal nonzero; never 0; operator may increase
-    maxInodes: 1024        # minimal nonzero; enforces marker + layout dir inode bound
-    enforcement: none      # empty-payload state Volume; quota is a budget bound, not FS-enforced
-  sealingCredentialRef: null
-  source:
-    executionRef: Host/host-system
-    settings:
-      kind: local-path
-      sourcePolicyId: provider-state-persistent  # opaque; raw path in private bundle only
-  layout:
-    - path: state
-      type: directory
-      ownerRef: User/volume-local-system
-      groupRef: User/volume-local-system
-      mode: "0700"
-      sensitivity: private
-      createPolicy: create-if-never-provisioned
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      noFollow: true
-  views:
-    main:
-      path: state
-      rights: [read, write, create, delete, traverse]
-  identityMarker:
-    class: broker-maintained
-    markerRoot: provider-state-markers
-  snapshotPolicy: null
-  retentionPolicy: null
-```
+Volume-local is itself the storage Provider, but because its controller declares
+**no** state Volume, there is nothing to provision before the controller is
+active — so there is no bootstrap state-Volume cycle, no closed bootstrap
+storage sequence, no broker layout pre-provision, and no bootstrap-storage
+exception (D086, superseded by D087; see "No bootstrap state Volume" in
+`ADR-046-components-processes-and-sandbox`).
 
-`User/volume-local-system` is Nix-preprovisioned in the Provider's Nix
-configuration alongside `User/volume-local-runner` and other principal
-declarations.
-
-The common `phase` field (`Pending`/`Ready`/`Degraded`/`Failed`/`Unknown`) is
-aggregated from ProviderStateSet Volumes by the Zone core and reported in
-Provider resource status; no custom provider-level status extension is defined.
-
-### Bootstrap-state exception
-
-Volume-local is itself the storage Provider, so its controller's own state
-Volume (`volume-local--controller--state--host-system`) cannot be
-provisioned by a running controller — the controller is not yet active.
-A **closed bootstrap sequence** within core ProviderDeployment resolves
-this dependency without a third Process or bootstrap Provider resource.
-
-#### Pre-start sequence (core ProviderDeployment/broker)
-
-On first install:
-
-1. Core ProviderDeployment creates the Volume resource
-   `volume-local--controller--state--host-system` in the resource store
-   using the exact full Volume + `stateSchema` extension schema (`kind: state`,
-   `persistenceClass: persistent`, `migrationPolicy: none`,
-   `sourcePolicyId: provider-state-persistent`, nonzero quota with
-   `enforcement: none`) derived from the signed Provider package component
-   descriptor.
-2. The broker executes the layout provision operation directly (same anchored
-   `openat2`/`mkdir`/ACL sequence as the `VolumeEffectPort`
-   `ProvisionLayoutEntry` effect op) using the Nix-preprovisioned
-   `User/volume-local-system` principal from the trusted private bundle —
-   no raw UID, no operator-supplied path.
-3. The broker writes the identity marker (`class: broker-maintained`) at the
-   `provider-state-markers` root and fsyncs.
-4. Core ProviderDeployment sets `phase: Ready`, `stateSchemaPhase: current`,
-   `markerStatus: verified` on the Volume.
-5. Core ProviderDeployment starts the controller Process; the Zone runtime
-   delivers the pre-provisioned `view: main` mount token to the controller
-   via its ComponentSession.
-
-On subsequent daemon restarts the bootstrap sequence runs steps 1–4 in
-validation mode: marker is re-verified, layout is repaired if needed. The
-controller is not started if `markerStatus != verified` after the validation
-pass; the Volume remains `phase: Failed` and the bootstrap reports a typed
-`bootstrap-volume-validation-failed` condition on the Provider resource.
-
-#### Post-readiness adoption (controller)
-
-After the controller reaches `phase: Ready`:
-
-1. Startup relist discovers its own Volume already `phase: Ready`.
-2. Controller begins reconciling it as a served Volume (sets the
-   `volume-local/layout` finalizer, begins watching via
-   `providerRef: Provider/volume-local`).
-3. Reconciles in steady-state: drift detection at the configured observe
-   interval, marker re-verification, quota usage polling.
-
-This exception is **closed and scoped** to the single controller stateNamespace
-Volume. All other ProviderStateSet Volumes (state Volumes for other Providers'
-components that volume-local serves) are created by core ProviderDeployment
-when those Providers install; volume-local reconciles them as they appear in
-its `providerRef` watch, never creating them itself. There is no bootstrap
-Provider Process resource; the bootstrap is a core ProviderDeployment
-initialization step scoped to this one Volume.
-
-The bootstrapped Volume is a **real Volume** with the exact full schema and
-lifecycle as any other provider-state Volume: `kind: state`,
-`persistenceClass: persistent`, minimal nonzero byte and inode quota, complete
-`stateSchema` extension, Nix-preprovisioned `User/<name>` layout principal,
-broker-maintained identity marker, and normal Volume Resource API lifecycle.
-No simplified or alternate schema applies; no quota field is zero.
+On first install and on every daemon restart the volume-local controller Process
+starts and reaches `Ready` from its own resource `status`, the core Operation
+ledger, and a resource-store relist; there is no hidden bootstrap store and no
+pre-provisioned controller Volume. Once Ready, it reconciles every Volume
+carrying `providerRef: Provider/volume-local` (operator-created Volumes and
+other Providers' declared state Volumes) as they appear in its `providerRef`
+watch — re-verifying identity markers against external reality — never creating
+them itself. A Guest bootstraps its own Guest-local volume-local instance from
+Guest-local primitives only, never a leaked parent-Host dirfd or resource
+handle.
 
 ### EphemeralProcess templates
 
@@ -2077,13 +1975,14 @@ d2b.zones."dev".resources."work-tmp" = {
 10. Two Volumes in the same Zone referencing the same `sourcePolicyId` must not
     produce overlapping resolved paths; the resource compiler detects overlap
     and fails eval.
-11. Any Volume with a `stateSchema` block (component state Volume) must have
-    `kind: state`, `persistenceClass: persistent`, `quota.maxBytes > 0`, and
-    `quota.maxInodes > 0`. Specifying `kind: ephemeral`, `kind: tmp`,
-    `persistenceClass: ephemeral`, `quota.maxBytes: 0`, or omitting
-    `quota.maxInodes` in a stateSchema Volume fails eval with
-    `invalid-provider-state-namespace`. This applies equally to
-    payload-empty schemas.
+11. Any Volume with a `stateSchema` block (a declared component state Volume)
+    must have `kind: state`, `persistenceClass: persistent`,
+    `quota.maxBytes > 0`, and `quota.maxInodes > 0`. Specifying
+    `kind: ephemeral`, `kind: tmp`, `persistenceClass: ephemeral`,
+    `quota.maxBytes: 0`, or omitting `quota.maxInodes` in a stateSchema Volume
+    fails eval with `invalid-provider-state-namespace`. A component declares a
+    state Volume only when its payload passes the D087 storage-need test; there
+    is no empty identity-only state Volume.
 
 ---
 
@@ -2228,7 +2127,7 @@ Required files:
 | `integration/relocation.rs` | Real Host-to-Host anchored file copy; crash at copy midpoint → source preserved; successful relocation → source deleted; virtiofsd source re-point after relocation (via volume-virtiofs stub) |
 | `integration/domain_isolation.rs` | Cross-process domain-isolation rejection: two fake Processes in different domains attempt same Volume mount; `volume-domain-mismatch` returned |
 | `integration/audit.rs` | Live Zone audit stream emission: each event kind from real controller actions; verify no path in emitted records; OTEL metric export against running `observability-otel` Provider stub |
-| `integration/provider_state.rs` | End-to-end ProviderStateSet lifecycle: live daemon, Provider install creates `volume-local--controller--state--host-system` Volume (empty payload schema, `sourcePolicyId: provider-state-persistent`, `enforcement: none`) with Nix-preprovisioned `User/volume-local-system` layout principal; marker verified on restart; Volume removed on Provider delete; no cross-component dirfd sharing; full served-Volume lifecycle (provision → migrate → snapshot → destroy) |
+| `integration/provider_state.rs` | End-to-end served-Volume lifecycle: live daemon, volume-local controller starts and reaches Ready with no Provider state Volume of its own (bounded operational state in status/core ledger, D087); another Provider's *declared* state Volume is created by core ProviderDeployment, reconciled by volume-local, marker verified on restart, and removed on Provider delete; no cross-component dirfd sharing; full served-Volume lifecycle (provision → migrate → snapshot → destroy) |
 
 An empty `integration/` directory is not acceptable. The `README.md` and at
 least one `.rs` scenario file are required for the workspace policy check to
@@ -2462,21 +2361,21 @@ Documents:
 | Validation | Adapter hermetic tests: each effect op called with mock FD table and bundle; no path in any output; anchored-path rejection for RESOLVE_BENEATH violations; `cargo deny check` verifies adapter does not expose raw paths to Provider crate; `integration/provision.rs` exercises full adapter path |
 | Removal proof | Baseline broker op handlers (`state_dir.rs`, `storage_contract.rs`, `swtpm_dir.rs`, `store_sync.rs`, `store_view_posture.rs`) retired only after Volume controller parity is confirmed and all callers are on the adapter |
 
-### ADR046-vl-013 — Bootstrap-state exception (core ProviderDeployment/broker)
+### ADR046-vl-013 — No bootstrap-state exception (status-first controller start)
 
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-vl-013` |
 | Dependency/owner | ADR046-vl-001; ADR046-vl-012; Zone broker/core owner |
-| Depends on | `ADR046-vl-002` (marker algorithm); `ADR046-provider-008` (Provider install sequencing) |
-| Current source | No equivalent; new — this exception has no baseline precedent (baseline used Nix activation for host storage, not a bootstrap sequence) |
+| Depends on | `ADR046-provider-008` (Provider install sequencing) |
+| Current source | No equivalent; new |
 | Reuse action | new |
-| Destination | Zone core ProviderDeployment + broker initialization code (outside `d2b-provider-volume-local`); broker op `BootstrapProviderStateVolume`; bootstrap condition type `bootstrap-volume-validation-failed` on Provider resource |
-| Detailed design | On first Provider install: core ProviderDeployment creates Volume resource for `volume-local--controller--state--host-system` in resource store with `kind: state`, `persistenceClass: persistent`, `migrationPolicy: none`, `sourcePolicyId: provider-state-persistent`, minimal nonzero `quota.maxBytes`/`quota.maxInodes` (`enforcement: none`) — empty payload schema; never ephemeral/tmp, never quota 0; broker executes `ProvisionLayoutEntry` directly using Nix-preprovisioned `User/volume-local-system` principal from trusted bundle (no public config path, no raw UID); broker writes broker-maintained identity marker; core ProviderDeployment sets `phase: Ready`, `stateSchemaPhase: current`, `markerStatus: verified`. On daemon restart: validate marker and repair layout before starting controller; if validation fails, set `bootstrap-volume-validation-failed` condition on Provider and do not start controller. After controller reaches readiness: controller begins reconciling the Volume as a normal served Volume (sets `volume-local/layout` finalizer, watches via `providerRef` watch, reconciles in steady-state including upgrade/destroy/reset sequences). This exception is scoped to the single controller stateNamespace Volume only; no other Volume uses this path. No bootstrap Provider Process resource; no third Process. |
-| Integration | Core ProviderDeployment calls bootstrap op before spawning controller Process; controller startup relist discovers the pre-provisioned Volume already `phase: Ready` and begins reconciling it as a normal served Volume |
-| Data migration | None; first-install bootstrap creates the Volume; pre-existing baseline `StorageRoot` rows for volume-local controller are superseded by Volume controller on v3 reset |
-| Validation | `integration/provider_state.rs`: Provider install creates bootstrap Volume before controller starts; daemon restart validates marker; controller adoption confirmed via finalizer presence; `bootstrap-volume-validation-failed` condition set on marker tampering; no bootstrap Provider Process in resource list |
-| Removal proof | Not applicable (new; permanent bootstrap path for this Provider) |
+| Destination | Zone core ProviderDeployment controller-start path (outside `d2b-provider-volume-local`) |
+| Detailed design | The volume-local controller declares no Provider state Volume, so there is no bootstrap Volume, no `BootstrapProviderStateVolume` broker op, no pre-provisioned controller Volume, and no bootstrap-storage exception (D086, superseded by D087). On first install and on every daemon restart, core ProviderDeployment starts the volume-local controller Process directly; the controller reaches `Ready` from its own resource `status`, the core Operation ledger, and a resource-store relist. Once Ready, it reconciles every Volume carrying `providerRef: Provider/volume-local` (operator-created Volumes and other Providers' declared state Volumes) as they appear in its `providerRef` watch, re-verifying identity markers against external reality, never creating them itself. A Guest bootstraps its own Guest-local volume-local instance from Guest-local primitives only. |
+| Integration | Core ProviderDeployment spawns the controller Process with no state-Volume prerequisite; the controller's startup relist reconciles served Volumes and re-verifies markers |
+| Data migration | None; pre-existing baseline `StorageRoot` rows for the volume-local controller are superseded on v3 reset |
+| Validation | `integration/provider_state.rs`: controller starts and reaches Ready with no state Volume; served Volumes reconciled and markers re-verified after restart; no bootstrap Volume and no bootstrap Provider Process in the resource list |
+| Removal proof | Not applicable (new) |
 
 ---
 
@@ -2528,22 +2427,24 @@ Documents:
     any Volume FD is handed out. A tampered marker fails closed with no
     auto-recovery path.
 
-11. **Bootstrap scoped to one Volume**: the closed bootstrap sequence provisions
-    only the single `volume-local--controller--state--host-system` Volume.
-    No other Volume is created or mutated outside the normal Provider controller
-    Resource API path. The bootstrap never bypasses `User/<name>` principal
-    resolution, marker write, or audit emission. A failed bootstrap validation
-    sets `bootstrap-volume-validation-failed` on the Provider resource and does
-    not start the controller; there is no silent re-provision after a marker
-    failure.
+11. **No bootstrap Volume**: the volume-local controller declares no state
+    Volume; there is no closed bootstrap sequence, no bootstrap-provisioned
+    controller Volume, and no bootstrap-storage exception (D086, superseded by
+    D087). The controller reaches Ready from resource `status`/the core
+    Operation ledger; a Guest bootstraps its own Guest-local volume-local
+    instance from Guest-local primitives only.
 
-12. **Component state Volumes are always durable**: every Volume in the
-    ProviderStateSet must have `kind: state`, `persistenceClass: persistent`,
+12. **Declared component state Volumes are durable when justified**: a component
+    declares a state Volume only when its payload passes the storage-need test
+    (secret/large/private/revision-unsuitable). Every *declared* state Volume in
+    a ProviderStateSet must have `kind: state`, `persistenceClass: persistent`,
     and a nonzero `quota.maxBytes` and `quota.maxInodes`. A component descriptor
     declaring a stateNamespace with `persistenceClass: ephemeral`, `kind: tmp`,
     or `quota.maxBytes: 0` fails Provider admission with a typed
-    `invalid-provider-state-namespace` error. This rule applies equally to
-    payload-empty schemas.
+    `invalid-provider-state-namespace` error, and a namespace whose payload is
+    fully derivable from spec/status/core ledger/external observation fails with
+    `component-state-not-justified`. There is no empty identity-only state
+    Volume.
 
 ---
 

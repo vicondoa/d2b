@@ -695,32 +695,18 @@ schemaFingerprints:
   - resourceType: Guest
     version: "1.0"
     digest: sha256:<pinned-at-build>
-stateNamespaces:
-  - id: controller-state
-    schemaId: io.d2b.provider.runtime-cloud-hypervisor/controller/controller-state
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<pinned-at-build>
-    persistenceClass: persistent     # never ephemeral
-    sensitivityClass: private
-    migrationPolicy: none           # empty payload schema; no migration EphemeralProcess
-    quotaBytes: 10485760    # 10 MiB; nonzero required for kind: state
-    sealingRequired: false
-    views:
-      main:
-        rights: [read, write, create, delete, traverse]
+stateNamespaces: []                    # no Provider state Volume; operational state is in status/core ledger (D087)
 ```
 
 The controller descriptor is signed into the Provider package; runtime
 registration must match the installed Provider descriptor and the authenticated
 Process/Host identity. Descriptor mismatch fails registration closed.
 
-The `stateNamespaces` declaration is consumed by the **ProviderDeployment**,
-which creates the corresponding Volume via `Provider/volume-local` before
-launching the controller Process, and deletes it after the controller drains.
-The controller does not create, update, or delete its state Volume; it only
-consumes the view mounted at `/state` (§13.1, §16.1). The `schemaDigest` is
-pinned at build time from the canonical JSON Schema artifact; any schema change
-increments the descriptor version and Provider resource generation.
+The controller declares an empty `stateNamespaces` list: it holds no durable
+payload that passes the storage-need test, so the ProviderDeployment creates no
+Provider state Volume for it. Bounded non-secret operational state lives in the
+owning resource's `status` subresource and the core Operation ledger (§16.1,
+D087); the controller mounts no `/state` Volume.
 
 ### 11.2 Signed Guest schema extension
 
@@ -949,12 +935,7 @@ spec:
     ports: []
     allowEgress: false
   deviceUsage: []                    # no device access; d2b-bus provides all resource authority
-  mounts:
-    - volumeRef: Volume/runtime-cloud-hypervisor--controller--controller-state--dev-host
-      view: main
-      mountPath: /state
-      access: read-write
-      required: true               # ProviderDeployment ensures Volume is Ready before launch
+  mounts: []                         # no Provider state Volume; operational state is in status/core ledger (D087)
   endpoints:
     - name: health
       transport: unix
@@ -1167,10 +1148,10 @@ reason message. The operator must resolve the block; the controller retries at
 
 ### 16.1 Provider state (controller process)
 
-**ProviderStateSet is a logical concept, not a ResourceType.** The
-`ProviderStateSet` for `Provider/runtime-cloud-hypervisor` is the set of all
-Volume resources in the Zone whose `metadata.ownerRef` resolves to
-`Provider/runtime-cloud-hypervisor`:
+**ProviderStateSet is an optional, query-time concept, not a ResourceType.**
+The `ProviderStateSet` for `Provider/runtime-cloud-hypervisor` is the set of the
+*declared* Volume resources in the Zone whose `metadata.ownerRef` resolves to
+`Provider/runtime-cloud-hypervisor`, and is empty for this Provider:
 
 ```
 ProviderStateSet(zone, "runtime-cloud-hypervisor") =
@@ -1178,156 +1159,46 @@ ProviderStateSet(zone, "runtime-cloud-hypervisor") =
               && v.metadata.ownerRef == "Provider/runtime-cloud-hypervisor" }
 ```
 
-This is a query-time grouping only. No `ProviderStateSet` ResourceType exists.
-
-**The ProviderDeployment creates and deletes the Volume.** Before launching the
-controller Process, the ProviderDeployment reads the `stateNamespaces`
-declaration in the signed component descriptor (§11.1), creates one `Volume`
-per namespace via `Provider/volume-local`, waits for the Volume to reach Ready
-(`stateSchemaPhase: current`, `markerStatus: verified`), then launches the
-controller Process with the Volume mounted at `/state` (`required: true`). The
-ProviderDeployment deletes the Volume after the controller Process drains and
-reaches Stopped. The controller does **not** create, update, or delete its
-state Volume; it is a consumer of the view only.
-
-Volume naming convention:
-`<provider-name>--<component-id>--<namespace-id>--<execution-ref-short>`.
-Each Volume:
-
-- has `kind: state` and `persistenceClass: persistent` — never ephemeral,
-  never `persistenceClass: ephemeral` or `quotaBytes: 0`; the Volume is durable
-  across component restart, Provider upgrade, and Provider reset, and
-  participates in the full destroy/reset lifecycle;
-- has `ownerRef: Provider/runtime-cloud-hypervisor`;
-- is backed by `Provider/volume-local` (host filesystem, not a virtiofs attachment);
-- carries the `stateSchema` extension with `migrationPolicy: none` (empty
-  payload schema; no migration EphemeralProcess);
-- binds the Nix-preprovisioned system user `User/d2b-runtime-ch-controller` in
-  its `layout` entries — no `ComponentPrincipal` ResourceRefs;
-- has `sensitivityClass: private` enforcing single-process access; no
-  cross-component or cross-provider shared Volume is permitted;
-- carries a broker-maintained identity marker; `markerStatus: missing` or
-  `markerStatus: replaced` fails closed and blocks controller Process launch.
-
-The canonical Volume ResourceSpec created by the ProviderDeployment:
-
-```yaml
-apiVersion: resources.d2b.io/v3
-type: Volume
-metadata:
-  name: runtime-cloud-hypervisor--controller--controller-state--dev-host
-  zone: dev
-  ownerRef: Provider/runtime-cloud-hypervisor
-spec:
-  kind: state                      # required; never ephemeral
-  providerRef: Provider/volume-local
-  persistenceClass: persistent     # never ephemeral; survives component/Provider restart
-  sensitivityClass: private
-  stateSchema:
-    schemaId: io.d2b.provider.runtime-cloud-hypervisor/controller/controller-state
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<pinned-at-build>
-    migrationPolicy: none          # empty payload schema; no migration EphemeralProcess
-  quotaBytes: 10485760    # 10 MiB; must be nonzero — quotaBytes: 0 is prohibited for kind: state
-  quota:
-    maxBytes: 10485760
-    maxInodes: 4096
-    enforcement: none
-  sealingCredentialRef: null
-  source:
-    executionRef: Host/dev-host     # from Provider.spec.config.controllerExecutionRef
-    settings:
-      kind: local-path
-      sourcePolicyId: runtime-cloud-hypervisor-controller-state
-  layout:
-    - path: state
-      type: directory
-      ownerRef: User/d2b-runtime-ch-controller   # Nix-preprovisioned system user
-      groupRef: User/d2b-runtime-ch-controller
-      mode: "0700"
-      sensitivity: private
-      createPolicy: create-if-never-provisioned
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      noFollow: true
-  views:
-    main:
-      path: state
-      rights: [read, write, create, delete, traverse]
-  identityMarker:
-    class: broker-maintained
-    markerRoot: provider-state-markers
-  snapshotPolicy: null
-  retentionPolicy: null
-```
-
-**Volume schema** (the JSON Schema bound to `schemaId`). Contains only a
-minimal identity/quota header; the application payload is empty:
-
-```json
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "io.d2b.provider.runtime-cloud-hypervisor/controller/controller-state",
-  "type": "object",
-  "additionalProperties": false,
-  "properties": {
-    "schemaVersion": { "type": "string", "const": "1.0" },
-    "compartmentId":  { "type": "string" }
-  }
-}
-```
-
-**Application payload is empty — the Volume is still fully durable.** An
-empty application payload does not make this Volume ephemeral or lightweight.
-It is a `kind: state`, `persistenceClass: persistent` Volume with a nonzero
-byte quota and a broker-maintained identity marker. It survives component
-restart, Provider upgrade, daemon restart, and host reboot. It participates in
-the Provider upgrade path (§16.3), the Provider destroy path (ProviderDeployment
-deletes the Volume after controller Process reaches Stopped), and the Provider
-reset path (ProviderDeployment destroys and re-creates the Volume to establish
-a fresh marker).
-
-All application-level recovery data — resource generations, watch cursors,
-adoption tokens — is derivable from the Zone resource store and core operation
-state at restart time. The controller does not write checkpoint records beyond
-the identity fields written on first provision; duplicating derivable state
-creates a split-brain risk on restart.
-
-**Volume status** reported by `Provider/volume-local`:
-
-| Field | Values |
-| --- | --- |
-| `stateSchemaPhase` | `current` \| `migration-required` \| `migration-failed` |
-| `installedSchemaVersion` | Semver string; `null` before first provision |
-| `markerStatus` | `verified` \| `missing` \| `replaced` \| `unknown` |
-| `sealingStatus` | `none` (no sealing credential declared) |
-
-`stateSchemaPhase != current` or `markerStatus != verified` blocks the
-ProviderDeployment from launching the controller Process.
+`Provider/runtime-cloud-hypervisor`'s controller declares **no** Provider state
+Volume; its `ProviderStateSet` is empty. All application-level recovery data —
+resource generations, watch cursors, adoption tokens — is derivable from the
+Zone resource store, the core Operation ledger, and independent external
+observation (running VMM/virtiofsd processes re-adopted from declared cgroup
+leaves and fresh pidfds) at restart time. Its bounded non-secret operational
+state — reconcile stage, per-Guest launch/adoption observations, bounded
+counters, and closed-enum error detail — lives in the owning resource's
+`status` subresource and the core Operation ledger (D087). Because that state is
+fully derivable and duplicating it would create a split-brain risk on restart,
+the controller payload fails the storage-need test: there is no controller
+state namespace, no controller state Volume, no `/state` mount, and no dedicated
+`User/d2b-runtime-ch-controller` state-layout principal. There is no empty
+identity-only Volume.
 
 No Guest spec, status, argv, kernel path, or ephemeral runtime state is stored
-in the controller state Volume.
+in any Provider state Volume.
 
-### 16.2 Guest runtime state
+### 16.2 Guest runtime state (retained)
 
 The Guest itself has no Provider-owned Volume. All durable per-Guest state
 (swtpm NVRAM, persistent storage, the `/nix/store` farm) belongs to the
 Volume resources declared in the Zone configuration, owned by their respective
-Providers (`Provider/device-tpm`, `Provider/volume-local`). The controller
-reads their status but does not write to them.
+Providers (`Provider/device-tpm`, `Provider/volume-local`) — these are genuine
+durable payloads (large/secret/private) that pass the storage-need test and are
+retained unchanged. The controller reads their status but does not write to
+them.
 
 ### 16.3 State migration
 
-The controller state Volume has `migrationPolicy: none`. The application payload
-is empty (identity header only); there is no data to migrate between schema
-versions at `1.0`. No migration EphemeralProcess is created for this Provider.
-
-If a future schema version adds application state, the component descriptor must
-be updated with `migrationPolicy: pre-launch-required` (breaking) or
-`migrationPolicy: online-optional` (additive). The ProviderDeployment would then
-orchestrate migration via a signed EphemeralProcess template from the Provider
-package before relaunching the controller Process. That is a future concern;
-version `1.0` requires no migration infrastructure.
+Because the controller declares no state Volume, no migration EphemeralProcess
+is created for this Provider at version `1.0`. If a future schema version ever
+introduces a durable controller payload that passes the storage-need test
+(secret/large/private/revision-unsuitable data that cannot live in `status`),
+the component descriptor would declare a `stateNamespaces` entry with
+`migrationPolicy: pre-launch-required` (breaking) or `online-optional`
+(additive), and the ProviderDeployment would orchestrate migration via a signed
+EphemeralProcess template before relaunching the controller Process. That is a
+future concern; version `1.0` requires no state Volume and no migration
+infrastructure.
 
 ---
 
@@ -1703,15 +1574,19 @@ bundle and are never swept by configuration generation cleanup.
 | Validation | `policy_observability.rs` updated with v3 allowlist; cardinality tests; bounded message/field tests; audit record schema golden vectors |
 | Removal proof | Hand-rolled Prometheus registry (`d2bd/src/metrics.rs` `d2b_daemon_vm_*` section) deleted after migration |
 
-### ADR046-ch-007 (controller state view helpers)
+### ADR046-ch-007 (controller status-first operational state)
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-ch-001; `ADR046-pstate-001` (VolumeStateSchema types and StateEnvelope) |
+| Dependency/owner | ADR046-ch-001; `ADR046-pstate-001` (common status types) |
 | Current source | `packages/d2b-core/src/storage.rs` (`StoragePathSpec`, `SensitivityClass`) — to be retired |
 | Reuse action | REPLACE (storage.rs) |
-| Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/state.rs`; `packages/d2b-provider-runtime-cloud-hypervisor/tests/state_volume_test.rs` |
-| Detailed design | `state.rs` owns `StateEnvelope<T>` wrapper and view access helpers for the ProviderDeployment-provisioned state Volume mounted at `/state`; the controller does not create, update, or delete the Volume — it only reads and writes through the `main` view dirfd; controller startup checks that the Volume mount is present and `stateSchemaPhase: current` via its ComponentSession service interface before entering the reconcile loop |
+| Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/state.rs`; `packages/d2b-provider-runtime-cloud-hypervisor/tests/state_status_test.rs` |
+| Detailed design | `state.rs` owns the controller's bounded non-secret operational-state projection into the owning resource's `status` subresource (reconcile stage, per-Guest launch/adoption observations, bounded counters, closed-enum error detail) — the controller declares no Provider state Volume and mounts no `/state`; on restart it re-derives observed state from the Zone resource store, the core Operation ledger, and external observation (running VMM/virtiofsd re-adopted from cgroup leaves + fresh pidfds), treating `status` as observation, never authority (D087); status writes occur only on material change and stay within the status bounds |
+| Integration | The controller reads Volume/Device/Network dependency status through its ComponentSession/ResourceClient and writes its own bounded `status`; no Provider state Volume is provisioned or mounted |
+| Data migration | v3 reset; no v2 state storage migration |
+| Validation | `state_status_test.rs` (hermetic): status projection round-trip and bound enforcement; restart re-derivation from store/ledger/external observation without a state Volume; no secret/path/argv/PID in status |
+| Removal proof | `d2b-core/src/storage.rs` `StoragePathSpec` / `SensitivityClass` retired only after all Provider state consumers migrate to v3 status/optional-Volume helpers |
 | Integration | Volume is provisioned and mounted by ProviderDeployment before controller Process launch (`required: true` mount); controller observes Volume status only through its ComponentSession, never through direct ResourceClient Volume verbs |
 | Data migration | v3 reset; no v2 state storage migration |
 | Validation | `state_volume_test.rs` (hermetic): StateEnvelope round-trip, view helper correctness, startup-check behavior when Volume phase is not current |
@@ -1733,7 +1608,7 @@ packages/d2b-provider-runtime-cloud-hypervisor/
     shutdown.rs                  # graceful shutdown via guest-control session
     metrics.rs                   # d2b_runtime_ch_* metric definitions
     audit.rs                     # bounded durable audit record types and emit helpers
-    state.rs                     # controller state Volume spec builder, view helpers, StateEnvelope wrapper
+    state.rs                     # controller status-first operational-state projection helpers (no state Volume)
   tests/
     vmm_argv_golden_test.rs      # golden argv vectors (headless, q35, gpu, video, macvtap)
     guest_spec_validation_test.rs # validateSpec: vsockCid conflict, memoryShared, systemArtifactId,
@@ -1747,8 +1622,8 @@ packages/d2b-provider-runtime-cloud-hypervisor/
     metrics_cardinality_test.rs  # no vm= label; bounded audit fields; no path/argv in output
     schema_golden_test.rs        # providerSettings JSON Schema golden vector (no cmdlineExtra/seccompOverride)
     redaction_test.rs            # no store path in Debug, status, or audit output
-    state_volume_test.rs         # StateEnvelope round-trip; view helper correctness;
-                                 # startup-check when Volume stateSchemaPhase is not current
+    state_status_test.rs         # status projection round-trip; bound enforcement;
+                                 # restart re-derivation without a state Volume
   integration/
     README.md                    # (optional) how to run integration fixtures; prerequisites
     vmm_boot_test.rs             # single Guest boot + guest-control health on real KVM

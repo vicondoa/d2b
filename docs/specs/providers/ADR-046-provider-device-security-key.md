@@ -814,31 +814,28 @@ membership, and no wildcard device permissions are required in the Guest. The
 `SecurityKeyApplyUdevRules` operation is removed from the architecture and no
 static udev rule entry is needed in the guest Nix module for UHID access.
 
-### I-10: ProviderStateSet is a query-time grouping of Volume resources
+### I-10: ProviderStateSet is empty under status-first state
 
-Per `ADR-046-provider-state`: the **ProviderStateSet** for `device-security-key` is
-the set of all Volume resources in the Zone whose `metadata.ownerRef` resolves to
-`Provider/device-security-key`. It is a query-time grouping (owner-index lookup),
-not a ResourceType and not a stored artifact. There is no `ProviderState`
-ResourceType; every component's state is an ordinary Volume with a `stateSchema`
-extension.
+Per D087, `device-security-key` declares **no Provider state Volume** for the
+controller, relay, or frontend components. `ProviderStateSet` is the optional
+query-time grouping of declared Provider state Volumes; for
+`Provider/device-security-key` the set is empty.
 
-Core ProviderDeployment creates one Volume per declared `stateNamespace` per
-component (controller, relay, frontend) — even when the payload schema is empty in
-v1. The semantic controller does not create, own, or reconcile these Volumes and
-does not add Volume to its exported ResourceTypes; `Provider/volume-local` is the
-sole reconciler. All three Volumes use `kind: state`, `persistenceClass:
-persistent`, a nonzero byte quota, and an `identityMarker`. They survive component
-and Provider restarts and participate in upgrade and destroy/reset lifecycle hooks.
-Each Volume uses Nix-preprovisioned `User/<name>` layout principals. No Volume is
-shared between components; each component accesses only its own Volume's dirfd via
-a named view mounted in its Process spec. Device phase, conditions, and claims are
-the authoritative runtime state — the controller reads and writes only Device
-resource fields, never Volume payload bytes, for its operational decisions.
+Bounded non-secret operational state belongs in the owning `Device` status and
+the core Operation ledger: phase, conditions, current claim, virtual frontend
+reference, relay/frontend Process references, observation timestamps, session
+lifecycle summaries, and finalizer progress. CTAP bytes, relay stream content,
+UHID/hidraw fds, session keys, and cancellation handles are transient in-process
+or fd-scoped data and must never be persisted or exposed through status.
 
-See §Provider state for the full Volume specs, principal pool, and Nix wiring.
+Storage-need test rationale: v1 security-key controller, relay, and frontend
+state has no durable secret recovery payload, no large or binary file content, no
+private data that belongs outside authorized status readers, and no
+bounded-but-revision-unsuitable recovery payload. Transient CTAP and relay bytes
+fail the persistence side of the storage-need test and remain in memory only.
 
 ## RBAC
+
 
 Device resources use the standard Device RBAC verbs defined in `ADR-046-resources-device`.
 Additional security-key-specific role bindings:
@@ -863,258 +860,52 @@ no ambient path is used and the relay cannot open arbitrary Zone bus connections
 
 ## Provider state
 
-Per `ADR-046-provider-state`, Provider payload state is always a Volume resource.
-The ProviderStateSet for `device-security-key` is the query-time set
-`{ v : Volume | v.metadata.ownerRef == "Provider/device-security-key" && v.metadata.zone == <zone> }`.
+Per D087, `device-security-key` declares **no Provider state Volume**. The
+controller, relay, and frontend component descriptors contain no state namespace,
+no Provider state Volume template, and no `/state` mount. The ProviderStateSet is
+empty because no declared Volume passes the storage-need test.
 
-Core ProviderDeployment reads the `stateNamespace` declarations in the signed
-Provider descriptor and creates the declared Volumes before starting each component
-Process; it deletes them after the corresponding component Processes stop. The
-semantic `device-security-key` controller does not create, own, or reconcile state
-Volumes and does not include Volume in its exported ResourceTypes. `Provider/volume-local`
-is the sole Volume reconciler. No Volume is shared between components. Each
-component's Process spec references only its own Volume by `volumeRef`; the
-volume-local Provider passes only that component's named view dirfd to the mounting
-Process. Components in other roles never receive a foreign Volume's dirfd.
+### Controller operational state
 
-All layout `ownerRef`/`groupRef` values are Nix-preprovisioned `User/<name>`
-system users; no ComponentPrincipal ResourceRef types are used.
+Device resources and the core Operation ledger are the authority for controller
+decisions. The controller writes bounded phase, conditions, claim observations,
+relay/frontend references, observation timestamps, and finalizer progress to the
+owning `Device.status`. On restart it re-lists Device, Process, and virtual
+frontend Device resources, revalidates external reality, and writes materially
+changed status; it never recovers from a private controller state directory.
 
-### Controller state Volume
+### Relay operational state
 
-All three component state Volumes have empty payload schemas in v1. Device
-resources and the Core Operation ledger are the authority for all controller
-decisions; no operational state is written to Volume payloads. The controller
-state Volume is provisioned for durable namespace authority and future schema use.
+Each relay Process keeps CTAPHID session state, CID translation maps, cancellation
+state, and hidraw fd ownership in process memory and inherited LaunchTicket
+DeviceGrant fds. These values are transient and authority-conferring; they are not
+Volume payloads and must not appear in status, logs, audit, metrics, or persisted
+files. Relay lifecycle summaries suitable for readers are written through Device
+status and Operation rows only.
 
-```yaml
-type: Volume
-metadata:
-  name: device-security-key--controller--session-ring--host-system
-  zone: <zone>
-  ownerRef: Provider/device-security-key
-spec:
-  providerRef: Provider/volume-local
-  kind: state
-  persistenceClass: persistent
-  sensitivityClass: private
-  sourcePolicyId: provider-state-persistent
-  stateSchema:
-    schemaId: io.d2b.device-security-key/controller/session-ring
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<hex-of-schema-def>
-    migrationPolicy: none
-  quotaBytes: 1048576          # extension field; schema empty in v1
-  quota:
-    maxBytes: 1048576
-    maxInodes: 256
-    enforcement: none
-  sealingCredentialRef: null
-  source:
-    executionRef: Host/host-system
-    settings: {}
-  layout:
-    - path: state
-      type: directory
-      ownerRef: User/d2b-sk-controller
-      groupRef: User/d2b-sk-controller
-      mode: "0700"
-      sensitivity: private
-      createPolicy: create-if-never-provisioned
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      noFollow: true
-  views:
-    main:
-      path: state
-      rights: [read, traverse]
-  identityMarker:
-    class: broker-maintained
-    markerRoot: provider-state-markers
-  snapshotPolicy: null
-  retentionPolicy: null
-```
+### Frontend operational state
 
-The controller Process spec mounts this Volume:
+Each frontend Process keeps UHID/ComponentSession stream state in process memory
+and inherited DeviceGrant fds. No frontend Provider state Volume or host-side
+attachment Volume exists in v1. Bounded readiness and error summaries are written
+to the owning Device status and Operation ledger.
 
-```yaml
-mounts:
-  - volumeRef: Volume/device-security-key--controller--session-ring--host-system
-    view: main
-    mountPath: /state
-    access: read-only
-    required: true
-```
+### Lifecycle
 
-**Layout principal:** `User/d2b-sk-controller` — a single Nix-preprovisioned
-system user per Zone host. The Nix Zone host module creates this user unconditionally
-when the Provider is installed. No bounded pool is required because only one
-controller Process runs per Zone.
+Core ProviderDeployment has no Provider state Volumes to create, mount, migrate,
+or delete for `device-security-key`. Process lifecycle still uses genuine Device
+attachments and LaunchTicket-injected hidraw/UHID fds; those are Device grants,
+not Provider state Volumes. Deletion finalizers stop relay/frontend Processes,
+release DeviceGrant/OFD leases, delete the virtual frontend Device, and clear
+status/finalizer state without any Volume cleanup step.
 
-### Relay state Volume (per-Device instance)
+The storage-need test is not met by controller, relay, or frontend operational
+state: durable status/operation records cover bounded non-secret observations,
+while CTAP bytes, fd handles, session keys, and relay/frontend stream state are
+transient data that must never be persisted.
 
-Each relay Process gets its own persistent state Volume. In v1 the payload schema
-is empty (reserved for future per-relay ceremony-audit state). The Volume is
-durable: it survives relay Process restart, Provider restart, and participates in
-upgrade and destroy/reset lifecycle hooks.
-
-```yaml
-type: Volume
-metadata:
-  name: device-security-key--relay--ceremony-state--<relay-uid-short>
-  zone: <zone>
-  ownerRef: Provider/device-security-key
-spec:
-  providerRef: Provider/volume-local
-  kind: state
-  persistenceClass: persistent
-  sensitivityClass: private
-  sourcePolicyId: provider-state-persistent
-  stateSchema:
-    schemaId: io.d2b.device-security-key/relay/ceremony-state
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<hex>
-    migrationPolicy: none
-  quotaBytes: 1048576          # extension field; schema empty in v1
-  quota:
-    maxBytes: 1048576
-    maxInodes: 256
-    enforcement: none
-  source:
-    executionRef: Host/host-system
-  layout:
-    - path: state
-      type: directory
-      ownerRef: User/d2b-sk-relay-<N>
-      groupRef: User/d2b-sk-relay-<N>
-      mode: "0700"
-      sensitivity: private
-      createPolicy: create-if-never-provisioned
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      noFollow: true
-  views:
-    main:
-      path: state
-      rights: [read, traverse]
-  identityMarker:
-    class: broker-maintained
-    markerRoot: provider-state-markers
-  snapshotPolicy: null
-  retentionPolicy: null
-```
-
-**Layout principal pool:** `User/d2b-sk-relay-0` through
-`User/d2b-sk-relay-<max-devices-minus-1>` where `max-devices` is bounded by the
-Provider config `devices` list length (≤ 16). All principals in the pool are
-Nix-preprovisioned as system users on the Zone host. The controller assigns
-pool slot `N` to each relay at Volume creation time and releases it on Volume
-deletion. Nix-preprovisioned pool: at most 16 principals regardless of whether
-all are occupied, keeping the set static and auditable.
-
-The relay Process spec references this Volume only if the v1 schema is non-empty;
-in v1 the `mounts:` entry is absent and the relay Process does not receive the
-Volume's dirfd. The Volume is persistent regardless: it is created when the Device
-is claimed, survives relay crashes and restarts, and is deleted (event-only
-`Deleted`) only when the owning Device resource is finalized.
-
-### Frontend state Volume (per-Device instance)
-
-Each frontend Process gets its own persistent state Volume. In v1 the payload
-schema is empty. The Volume is durable: it survives frontend Process restart,
-Provider restart, and participates in upgrade and destroy/reset lifecycle hooks.
-Since the frontend runs inside a Guest, a source Volume (host-side, volume-local)
-is created. If a virtiofs attachment is required for future schema content, an
-attachment Volume (volume-virtiofs) would be added as a second resource; v1 omits
-the attachment.
-
-```yaml
-type: Volume
-metadata:
-  name: device-security-key--frontend--session-state--<frontend-uid-short>
-  zone: <zone>
-  ownerRef: Provider/device-security-key
-spec:
-  providerRef: Provider/volume-local
-  kind: state
-  persistenceClass: persistent
-  sensitivityClass: private
-  sourcePolicyId: provider-state-persistent
-  stateSchema:
-    schemaId: io.d2b.device-security-key/frontend/session-state
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<hex>
-    migrationPolicy: none
-  quotaBytes: 1048576          # extension field; schema empty in v1
-  quota:
-    maxBytes: 1048576
-    maxInodes: 256
-    enforcement: none
-  source:
-    executionRef: Host/host-system
-  layout:
-    - path: state
-      type: directory
-      ownerRef: User/d2b-sk-frontend-<N>
-      groupRef: User/d2b-sk-frontend-<N>
-      mode: "0700"
-      sensitivity: private
-      createPolicy: create-if-never-provisioned
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      noFollow: true
-  views:
-    main:
-      path: state
-      rights: [read, traverse]
-  identityMarker:
-    class: broker-maintained
-    markerRoot: provider-state-markers
-  snapshotPolicy: null
-  retentionPolicy: null
-```
-
-**Layout principal pool:** `User/d2b-sk-frontend-0` through
-`User/d2b-sk-frontend-<max-devices-minus-1>` (≤ 16), Nix-preprovisioned, same
-assignment and release pattern as the relay pool. In v1 the frontend Process
-`mounts:` entry is absent; the Volume is created for durable namespace authority.
-The Volume is persistent: it survives frontend crashes and restarts and is deleted
-(event-only `Deleted`) only when the owning Device resource is finalized.
-
-### Volume lifecycle (Core ProviderDeployment)
-
-State Volumes are owned and managed exclusively by Core ProviderDeployment. The
-semantic `device-security-key` controller has no Volume API authority, does not
-call Volume create or delete, and does not observe Volume reconcile events.
-`Provider/volume-local` is the sole Volume reconciler.
-
-**Creation:** Core reads the `stateNamespace` declarations from the signed Provider
-descriptor and creates the corresponding Volumes. The controller state Volume
-(`device-security-key--controller--session-ring--host-system`) is created before
-the controller Process first starts. Per-Device relay and frontend state Volumes
-are created before Core launches each relay or frontend Process. Volume names embed
-`<relay-uid-short>` or `<frontend-uid-short>` (first 12 hex chars of the owning
-Device UID) for per-Device instances; Core drives bounded principal pool slot
-assignment using the declared layout specs.
-
-**Deletion:** Core deletes per-Device relay and frontend Volumes after the
-corresponding Process stops (event-only `Deleted`, audit appended post-commit,
-pool slot released). The controller state Volume is deleted only when the Provider
-itself is removed. The controller never emits a `Deleted` revision for any Volume.
-
-**Empty schema / no migration worker:** relay and frontend Volumes declare
-`migrationPolicy: none`; Core creates them unconditionally with no pre-launch
-migration step and no migration worker Process.
-
-### No cross-component Volume access
-
-The volume-local Provider enforces `sensitivityClass: private` on all three
-Volumes. No relay or frontend Process holds a `volumeRef` to the controller
-Volume or to any other component's Volume. No principal in the relay or frontend
-pool matches the controller user. Any attempt to mount a foreign Volume fails with
-`volume-domain-mismatch`.
-
-The Provider controller consumes **no** broker operations directly. Core resolves
+The Provider controller consumes
+ **no** broker operations directly. Core resolves
 the relay Process's `deviceUsage: exclusive` DeviceGrant internally when launching
 the relay, using the trusted bundle `device_token` to open the hidraw node. The
 operations below are internal to Core's LaunchTicket machinery and are not
@@ -1227,11 +1018,9 @@ reconcile interface from `ADR-046-resource-reconciliation`. Trigger handlers:
    `Active`. Wait for `SessionCompleted` or a 5 s timeout.
 2. Emit event-only `Deleted` revision for the relay Process resource; Core removes
    the row and index entries atomically; DeviceGrant and OFD lease release
-   automatically on relay process stop; Core then deletes the relay state Volume;
-   audit records appended after commit.
+   automatically on relay process stop; audit records appended after commit.
 3. Emit event-only `Deleted` revision for the frontend Process resource (if any);
-   same atomic row/index removal; Core then deletes the frontend state Volume;
-   audit appended after commit.
+   same atomic row/index removal; audit appended after commit.
 4. Emit event-only `Deleted` revision for the virtual frontend Device resource
    (`Device/<device-name>-frontend`); Core removes atomically; audit appended
    after commit.
@@ -1492,9 +1281,9 @@ class.
 | W-N07 | ComponentSession descriptor validation: `descriptor.rs` — manifest-declared relay↔controller service `device-security-key.relay-ctrl.v1` Noise NN handshake; socket FD injected via LaunchTicket endpoint (no ambient path); relay↔frontend `d2b.security-key.v3` Noise KK enrolled-key registration and session authority enforcement; relay uses canonical authenticated subject from ComponentSession, never raw vsock CID |
 | W-N08 | Minijail profiles for relay and controller only; frontend uses `Provider/system-systemd` hardening directives compiled from `SandboxSpec` (no minijail profile for frontend). Add relay and controller entries to `nixos-modules/minijail-profiles.nix`; `capabilityClasses: []`; `seccompClass: sk-relay` and `seccompClass: sk-controller` |
 | W-N09 | Process resource templates in Provider descriptor: controller template (`Host/host-system`, `system`, `controller`, `environmentClass: provider-defined`, `endpoints[ctrl-relay]`), relay template (`Host/host-system`, `system`, `service`, `environmentClass: provider-defined`, `endpoints[ctaphid-relay, ctrl-relay]`), and frontend template (`Guest/<vm>`, `user`, `service`, `environmentClass: provider-defined`, `endpoints[ctaphid-client]`, `userRef` required) |
-| W-N10 | Provider descriptor JSON (signed): identity, config schema, exported ResourceType (Device/hidraw), controller/relay/frontend component descriptors, `d2b.security-key.v3` service declaration, `stateNamespace` declarations for three components (`controller` → persistent, `relay` → persistent, `frontend` → persistent), permission claims |
+| W-N10 | Provider descriptor JSON (signed): identity, config schema, exported ResourceType (Device/hidraw), controller/relay/frontend component descriptors, `d2b.security-key.v3` service declaration, D087 status-first state declaration with an empty ProviderStateSet, permission claims |
 | W-N11 | v3 `SecurityKeyOpenDevice` broker op update: add `zone` field; implement bundle device table `device_token` lookup as sole open path; remove iterative sysfs scan from broker; add post-open revalidation steps (fstat, HIDIOCGRAWINFO, HIDIOCGRDESC). This is an internal Core operation called by LaunchTicket; the Provider controller does not call it. |
-| W-N20 | Provider descriptor `stateNamespace` declarations: the signed Provider descriptor declares three `stateNamespace` entries — controller (`kind: state`, persistent, `stateSchema` v1.0, `migrationPolicy: none`, `sourcePolicyId: provider-state-persistent`, `User/d2b-sk-controller` principal, `quotaBytes: 1048576`, `quota.maxBytes: 1048576`, `quota.maxInodes: 256`, `quota.enforcement: none`), relay (`kind: state`, persistent, `migrationPolicy: none`, `sourcePolicyId: provider-state-persistent`, bounded pool `User/d2b-sk-relay-<N>`, same quota), and frontend (`kind: state`, persistent, `migrationPolicy: none`, `sourcePolicyId: provider-state-persistent`, bounded pool `User/d2b-sk-frontend-<N>`, same quota). All three schemas are empty in v1 with read-only views; Device resources and the Core Operation ledger are the operational authority. Core ProviderDeployment reads these declarations and creates/deletes the Volumes before/after component Processes; the `device-security-key` controller has no Volume API authority and does not call Volume create or delete. Volume is not in the Provider's exported ResourceTypes. Nix: Nix-preprovisioned `User/d2b-sk-controller`, `User/d2b-sk-relay-0..N`, `User/d2b-sk-frontend-0..N` (≤16 each) declared in Zone host module. |
+| W-N20 | Status-first Provider state contract: the signed Provider descriptor declares no Provider state Volume for controller, relay, or frontend; ProviderStateSet is empty. Device resources and the Core Operation ledger are the operational authority. Controller/relay/frontend Process templates have no `/state` mount and no dedicated state-layout principals. Nix pre-provisions only principals required for genuine Process placement and DeviceGrant access, not state Volume ownership. |
 | W-N12 | Nix resource compilation: Device spec validation in `nixos-modules/`, eval-time mutual-exclusion assertion, label resolution against Provider config, prohibited-field rejection |
 | W-N13 | Guest Nix module migration gate: `d2b.securityKey._legacySystemdUnit` option, defaulting to false when Provider is installed; remove `d2b-sk-frontend.service` unit |
 | W-N14 | Audit record emission: bounded path-free `device-grant` records from Core at DeviceGrant resolution time; `device-session` lifecycle events from Device controller; neither block carries device path, guest name, session content, or CTAP bytes |
@@ -1531,7 +1320,7 @@ class.
 | `session_timeout.rs` | CEREMONY_TIMEOUT elapsed → Active → TimedOut → Idle; audit `device-session-timeout`; relay restartable after timeout |
 | `cid_isolation.rs` | Two concurrent Guest connections to different relay instances do not share CID namespace; CID allocated per-session; CID translation round-trip for CTAPHID_INIT response; relay uses canonical subject from ComponentSession, not raw vsock CID |
 | `descriptor_validation.rs` | Manifest-declared relay-ctrl service: unregistered service name rejected; LaunchTicket endpoint FD not at ambient path; wrong descriptor digest rejected; wrong SO_PEERCRED uid rejected; oversized record discarded. Noise KK relay ComponentSession: unenrolled static key rejected; wrong service name rejected. `DeviceId`/`ObservationPolicyId` Debug output redacted in test log capture. |
-| `volume_state.rs` | Core pre-creates controller Volume before controller Process starts; test verifies Volume exists at controller startup with `kind: state`, `persistenceClass: persistent`, `stateSchema.schemaId: io.d2b.device-security-key/controller/session-ring`, `migrationPolicy: none`, `sourcePolicyId: provider-state-persistent`, `quotaBytes: 1048576`, `quota.maxBytes: 1048576`, `quota.maxInodes: 256`, `quota.enforcement: none`, and layout principal `User/d2b-sk-controller`; relay and frontend Volumes pre-exist with `sourcePolicyId: provider-state-persistent`, same quota fields, read-only view `rights: [read, traverse]`, correct pool principals; controller Process mount carries `required: true`; controller never calls Volume create or delete — any such call is rejected with an authorization error; relay and frontend Volumes deleted by Core after Process stop; `migrationPolicy: none` on all three triggers no migration worker; `private` sensitivityClass Volume rejects concurrent mount from a second component; no Volume shares a view between components |
+| `status_state.rs` | Provider descriptor declares no Provider state Volume; ProviderStateSet query is empty; controller/relay/frontend Process templates have no `/state` mounts; controller never calls Volume create/delete; bounded operational observations are written to Device status and Operation rows; CTAP bytes, relay stream data, fd handles, and session keys are absent from status/log/audit/metrics and remain transient in process memory |
 
 ### Integration (in `integration/`)
 

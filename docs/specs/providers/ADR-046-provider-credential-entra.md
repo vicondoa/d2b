@@ -265,12 +265,7 @@ spec:
   domain: system
   userRef: null
   credentialRefs: []
-  mounts:
-    - volumeRef: "Volume/credential-entra--controller--ctrl-state--<host-short>"
-      view: main
-      mountPath: /state
-      access: read-only
-      required: true
+  mounts: []                         # no Provider state Volume; D087 status-first state
   sandbox:
     namespaceClasses: [mount, pid, ipc, uts, network]
     capabilityClasses: []
@@ -327,12 +322,7 @@ spec:
   domain: user
   userRef: "<Credential.spec.scope.userRef>"            # User/<name>
   credentialRefs: []                      # agent does not consume a Credential resource directly
-  mounts:
-    - volumeRef: "Volume/credential-entra--agent--agent-state--<credential-name-short>"
-      view: main
-      mountPath: /state
-      access: read-only
-      required: true
+  mounts: []                         # no Provider state Volume; token material is transient
   sandbox:
     namespaceClasses: [mount, pid, ipc, uts, network]
     capabilityClasses: []
@@ -385,12 +375,7 @@ spec:
   domain: system
   userRef: null
   credentialRefs: []
-  mounts:
-    - volumeRef: "Volume/credential-entra--agent--agent-state--<credential-name-short>"
-      view: main
-      mountPath: /state
-      access: read-only
-      required: true
+  mounts: []                         # no Provider state Volume; token material is transient
   sandbox:
     namespaceClasses: [mount, pid, ipc, uts, network]
     capabilityClasses: []
@@ -451,111 +436,37 @@ children, or calls `setsid`.
 
 #### ProviderStateSet
 
-A **ProviderStateSet** is a query-time logical grouping — the set of all Volume
-resources in the Zone whose `metadata.ownerRef` resolves to
-`Provider/credential-entra`. It is not a ResourceType or a stored artifact.
+A **ProviderStateSet** is an optional query-time logical grouping of the
+Provider's declared state Volumes. Under D087, bounded non-secret controller and
+credential operational state belongs in the owning resource's `status`
+subresource and the core Operation ledger by default. `credential-entra`
+declares **no Provider state Volume** because its credential tokens, signatures,
+keys, and PSKs are secret material that may never enter storage, while its
+bounded non-secret lease/enrollment observation does not pass the storage-need
+test.
 
-Every semantic component of `credential-entra` receives one private ordinary
-Volume per declared state namespace, mandatory even while the payload schema
-is empty. These are ordinary Volume resources following the exact Volume +
-provider-state extension schema from `ADR-046-provider-state`. No Volume is
-shared across components. Each component receives only its local view dirfd;
-no cross-component dirfd is ever granted. Core ProviderDeployment creates
-declared component state Volumes before starting component Processes and deletes
-them after Processes have stopped. The `credential-entra` controller does not
-create, delete, or watch its own state Volumes; `Provider/volume-local` is the
-sole reconciler for these Volumes. Each component only mounts and consumes its
-declared view.
+Therefore the ProviderStateSet for `Provider/credential-entra` is empty. Core
+ProviderDeployment does not create controller or agent state Volumes, the
+Process templates have no state mount, and no layout principal or
+`Provider/volume-local` reconciliation is involved for this Provider. There is
+no bootstrap state Volume mechanism or exception (D086, superseded by D087).
 
-**Controller Volume** — `credential-entra--controller--ctrl-state--<host-short>`,
-one per Zone, created at Provider install:
-
-```yaml
-apiVersion: resources.d2b.io/v3
-type: Volume
-metadata:
-  name: credential-entra--controller--ctrl-state--<host-short>
-  zone: <zone>
-  ownerRef: Provider/credential-entra
-spec:
-  kind: state
-  providerRef: Provider/volume-local
-  persistenceClass: persistent
-  sensitivityClass: private
-  stateSchema:
-    schemaId: io.d2b.credential-entra/controller/ctrl-state
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<hex>
-    migrationPolicy: none
-  quotaBytes: 65536
-  quota:
-    maxBytes: 65536
-    maxInodes: 256
-    enforcement: none
-  sealingCredentialRef: null
-  source:
-    executionRef: Host/<controllerExecutionRef>
-    settings:
-      kind: local-path
-      sourcePolicyId: credential-entra-state-v1
-  layout:
-    - path: state
-      type: directory
-      ownerRef: User/credential-entra-system
-      groupRef: User/credential-entra-system
-      mode: "0700"
-      sensitivity: private
-      createPolicy: create-if-never-provisioned
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      noFollow: true
-  views:
-    main:
-      path: state
-      rights: [read, traverse]
-  identityMarker:
-    class: broker-maintained
-    markerRoot: provider-state-markers
-  snapshotPolicy: null
-  retentionPolicy: null
-```
-
-`User/credential-entra-system` is a Nix-preprovisioned principal. No
-`ComponentPrincipal` ResourceRef is used.
-
-**Agent Volumes** — controller, user-agent, and guest-agent each own a separate
-full Volume; no two components share a Volume. Every agent Volume carries its
-own `source.settings.sourcePolicyId`, `quotaBytes`, `quota.maxBytes`,
-`quota.maxInodes`, and broker-maintained `identityMarker`.
-
-**User-agent Volume** — `credential-entra--agent--agent-state--<credential-name-short>`:
-`providerRef: Provider/volume-local`; `source.executionRef: <scope.executionRef>`
-(a Host); `layout.ownerRef: User/<scope.userRef-short>` (Nix-preprovisioned);
-`sensitivityClass: private`; no cross-uid Volume access.
-
-**Guest-agent Volume** (system-domain, Guest) —
-`credential-entra--agent--agent-state--<credential-name-short>`: one Volume with
-`providerRef: Provider/volume-local`; `source.executionRef:
-<scope.executionRef>` (Guest/<name>); `source.settings.kind: local-path`; and
-`source.settings.sourcePolicyId: credential-entra-state-v1`. Credential state is
-guest-local for Guest execution contexts: no host-backed-guest Volume attachment,
-virtiofs Export child, or separate attachment Volume is used.
-
-**Empty payload schema invariant.** Both controller and agent Volumes carry
-`kind: state`, `persistenceClass: persistent`, and minimal nonzero base quota
-fields — `quotaBytes: 65536`, `quota.maxBytes: 65536`,
-`quota.maxInodes: 256` — sufficient
-for the identity marker file and directory inode. `quotaBytes: 0` is never
-used; these Volumes are durable and participate fully in the upgrade, destroy,
-and reset lifecycle. The stateSchema declares `migrationPolicy: none`; because
-the payload schema is empty, no migration EphemeralProcess worker is ever
-dispatched for these Volumes. The schema document (signed into the component
-descriptor) contains no payload field declarations. Token bytes, lease bytes,
-signature bytes, client secret material, authority endpoint state, hostnames,
-and scope values never appear in any Volume field, stateSchema entry, audit
-record, OTEL attribute, or log field — not even in redacted form. Volumes
-survive component and Provider restart; restart does not destroy or recreate
-the Volume.
+The only durable operational record is status/Operation-ledger state:
+`Credential.status` may carry redacted, bounded, RBAC-readable observations such
+as acquisition phase, readiness conditions, token expiry timestamps,
+non-authorizing opaque lease/enrollment IDs, bounded retry counters, and
+closed-enum error detail. In-flight idempotency/retry is tracked by the core
+Operation ledger; the latest bounded lease result/checkpoint is status. Status
+is revisioned, optimistic-status-writer controlled, observation-only,
+reverified against external reality after restart, written only on material
+change, and bounded to the D087 status limits (total ≤ 64 KiB,
+provider-specific detail ≤ 32 KiB, with `status-oversize` rejection). It must
+not contain token bytes, signature bytes, keys, PSKs, client secret material,
+authority-conferring credential handles, authority endpoint private detail,
+hostnames, scope values, private path/argv/env/PID/unit data, raw cloud error
+bodies, large blobs, or unbounded/churn-heavy content. Any opaque handle in
+status is non-secret, non-authorizing, bounded, safe for authorized status
+readers, and independently revalidated before use.
 
 ---
 
@@ -667,6 +578,14 @@ the external condition resolves.
 Ready | InteractionRequired
 ```
 
+`EntraClientState` is Provider-owned process/runtime state, not durable secret
+material and not a Provider state Volume payload. The state is reconstructed
+after restart by observing the external Entra condition and the owning
+`Credential.status`; only the bounded condition (`ProviderUnavailable=True`,
+`leaseState=Unknown`, retry/outcome enums) is written to status. Token bytes and
+client secrets remain transient in process memory and move only over dedicated
+Noise_KK sensitive sessions.
+
 When `EntraClientState=InteractionRequired`:
 
 - `AcquireToken` returns `credential-provider-unavailable`.
@@ -743,6 +662,13 @@ acquisition.
 value above 256 fails the Provider spec validation at install.
 
 ### State machine
+
+The non-secret state transitions below are reflected in `Credential.status` and
+core Operation ledger records only. `lease_ref` values recorded in status are
+opaque, non-authorizing, bounded, safe for authorized status readers, and
+independently revalidated; they are never token sources. Token and signature
+bytes remain transient in the `entra-agent` process and are zeroized after
+Noise_KK delivery.
 
 ```text
 Absent
@@ -1358,7 +1284,7 @@ sections in order:
 | Evidence class | Opaque ref model is reachable; full Entra lease provider is `ADR-only` in v3 |
 | Main reuse source | main `a1cc0b2d`: `packages/d2b-provider-credential-entra/src/lib.rs` (full implementation: `EntraCredentialClient` trait, `EntraLeaseRequest/Ref/Grant/Inspection/Renewal/Revocation`, `EntraCredentialProvider`, `EntraCredentialProviderFactory`, `EntraCredentialOwner::ExactConsumer`, `EntraClientState`, `EntraClientError` mapping); `src/tests.rs` (full test suite: `FakeEntraClient`, `credential_canary`/`endpoint_canary` enforcement, interaction-required and colocated-consumer tests, generation-mismatch tests) |
 | Reuse action | copy and adapt |
-| Required delta | v3 contract versions; Provider resource/descriptor; d2b-bus routing; v3 `PlacementBinding` enum (user-agent, guest-agent; reject host-system); validate `tenantId` config using `OpaqueAzureRef::parse` (current v3 source field is `AzureControlPlaneRef.tenant_id`; target field name is `tenantId`; not a Ref); retain `EntraCredentialClient` trait unchanged; map `EntraClientError::InteractionRequired` to `credential-provider-unavailable`; enforce `EntraCredentialOwner::ExactConsumer`; replace v2 `AgentPlacementBinding` with v3 `PlacementBinding`; replace v2 ProviderFactory/EndpointRole/Realm with v3 Provider resource descriptor |
+| Required delta | v3 contract versions; Provider resource/descriptor; d2b-bus routing; v3 `PlacementBinding` enum (user-agent, guest-agent; reject host-system); validate `tenantId` config using `OpaqueAzureRef::parse` (current v3 source field is `AzureControlPlaneRef.tenant_id`; target field name is `tenantId`; not a Ref); retain `EntraCredentialClient` trait unchanged; map `EntraClientError::InteractionRequired` to `credential-provider-unavailable`; enforce `EntraCredentialOwner::ExactConsumer`; replace v2 `AgentPlacementBinding` with v3 `PlacementBinding`; replace v2 ProviderFactory/EndpointRole/Realm with v3 Provider resource descriptor; D087 status-first state model: no Provider state Volume, empty ProviderStateSet, status/Operation-ledger lease observation, and transient-only token/signature bytes over Noise_KK |
 | Excluded main assumptions | v2 `AgentPlacementBinding`; v2 `EndpointRole`/`Realm`/`RealmPath`; v2 `ProviderFactory`/`ProviderRegistryBuilder`; v2 component-session auth and prologue; v2 `d2b-contracts/src/v2_provider.rs` types |
 | Behavior retained | `EntraCredentialClient` trait (unchanged); zero-secret-bytes invariant; `OpaqueAzureRef` charset/validation; `ExactConsumer` ownership model; `FakeEntraClient` test infrastructure; `credential_canary`/`endpoint_canary` test enforcement |
 | Replacement/deletion | Old `CredentialProvider` trait in `d2b-realm-provider/src/provider.rs` removed only after all three v3 Credential Provider controllers reach full reconcile parity and their integration tests pass |
@@ -1377,7 +1303,7 @@ sections in order:
 | Reuse source | main `a1cc0b2d`: `packages/d2b-provider-credential-entra/src/lib.rs` (full implementation); `src/tests.rs` (full test suite including `FakeEntraClient`, `credential_canary`/`endpoint_canary`, interaction-required, colocated-consumer, generation-mismatch tests) |
 | Reuse action | copy and adapt |
 | Destination | `packages/d2b-provider-credential-entra/src/{lib.rs, controller.rs, service.rs, controller_main.rs, agent_main.rs, audit.rs, telemetry.rs}`; `packages/d2b-provider-credential-entra/tests/{lifecycle.rs, conformance.rs, faults.rs, canary.rs, delivery.rs, placement.rs}`; `packages/d2b-provider-credential-entra/integration/{container-service.sh, guest-placement.nix, cleanup-rollback.sh}`; `packages/d2b-provider-credential-entra/README.md` |
-| Detailed design | (1) Copy `EntraCredentialClient` trait, `EntraLeaseRequest/Ref/Grant/Inspection/Renewal/Revocation`, `EntraCredentialProvider`, `EntraCredentialOwner::ExactConsumer`, `EntraClientState`, `EntraClientError` from main `a1cc0b2d` without modification to trait signatures. (2) Replace v2 `AgentPlacementBinding` with v3 `PlacementBinding` enum (`user-agent \| guest-agent`); reject `host-system` at construction with `credential-placement-mismatch`. (3) Validate `tenantId` config field at startup using `OpaqueAzureRef::parse` from v3 `d2b-realm-provider/src/credential.rs`; note that the current v3 source field is `AzureControlPlaneRef.tenant_id`; the target config field name is `tenantId`, which is an opaque inline identifier, not a `<ResourceType>/<name>` ResourceRef, and must not end in `Ref`. (4) Validate `authorityClass` config field is one of `{public, us-government, china}` or a registered effect-port alias; reject any string containing `://`, `.`, port separators, path components, query-string characters, or hostname-shaped bytes; effect-port aliases are validated as opaque identifiers matching `^[a-z][a-z0-9-]*$`. (5) Validate `controllerExecutionRef` is present and resolves a `Host/<name>` in the same Zone with `system` in `allowedDomains`; this field is **required** — there is no default Zone primary Host fallback; return a hard validation error if absent. (6) Retain `EntraCredentialClient` trait unchanged; adapt `EntraCredentialProvider` to v3 `d2b.credential.v3` service interface in `service.rs`. (7) Map `EntraClientError::InteractionRequired` to `credential-provider-unavailable` (not `credential-operation-denied`). (8) Enforce `EntraCredentialOwner::ExactConsumer`: `consumerRef` required in spec; reject any caller not matching `consumerRef` at d2b-bus before service dispatch. (9) Implement `entra-controller` in `controller.rs` and `controller_main.rs` per §12: receive ProviderSupervisor descriptor registration; watch Credential resources; on Create/Update create `entra-agent` Process via LaunchTicket with canonical Process template (template=entra-agent-main, correct providerRef per domainFilter, executionRef/domain/userRef from Credential scope, ownerRef=Credential/<name>, networkUsage.allowEgress=false, sealed config projection including tenantId, authorityClass, consumerRef, maxLeases, interactionPolicy, audience, idempotency_key, and effect-port FD index; no authorityUrl, no endpoint URL, no hostname); on agent Process failure set `ProviderUnavailable=True` and requeue; on Deletion: signal agent to revoke (per revocation policy), await agent confirmation, then call `UpdateFinalizers` to remove `credential.d2b.io/provider-revoke`; core automatically writes event-only Deleted revision and removes the row/indexes when no finalizers remain; audit subsystem appends deletion record post-commit with dedup/exactly-once recovery. (10) Implement `entra-agent` in `service.rs` and `agent_main.rs` per §12 agent startup: read sealed config from ProviderSupervisor inherited FD including effect-port FD index and authorityClass; open effect-port FD; construct `EntraCredentialClient` implementation over it using authorityClass to select authority endpoint/TLS internally (no ambient HTTPS socket opened; no hostname validation performed by the agent); `OpaqueAzureRef::parse(tenantId)`; call `issue_lease`; open `d2b.credential.v3` listener; write Process status Ready; serve credential methods for `consumerRef` only; establish Noise KK delivery channel for token/signature output. (11) Implement `audit.rs` and `telemetry.rs` per §10; apply `contains_sensitive_shape` guard in agent before all outbound string fields. |
+| Detailed design | (1) Copy `EntraCredentialClient` trait, `EntraLeaseRequest/Ref/Grant/Inspection/Renewal/Revocation`, `EntraCredentialProvider`, `EntraCredentialOwner::ExactConsumer`, `EntraClientState`, `EntraClientError` from main `a1cc0b2d` without modification to trait signatures. (2) Replace v2 `AgentPlacementBinding` with v3 `PlacementBinding` enum (`user-agent \| guest-agent`); reject `host-system` at construction with `credential-placement-mismatch`. (3) Validate `tenantId` config field at startup using `OpaqueAzureRef::parse` from v3 `d2b-realm-provider/src/credential.rs`; note that the current v3 source field is `AzureControlPlaneRef.tenant_id`; the target config field name is `tenantId`, which is an opaque inline identifier, not a `<ResourceType>/<name>` ResourceRef, and must not end in `Ref`. (4) Validate `authorityClass` config field is one of `{public, us-government, china}` or a registered effect-port alias; reject any string containing `://`, `.`, port separators, path components, query-string characters, or hostname-shaped bytes; effect-port aliases are validated as opaque identifiers matching `^[a-z][a-z0-9-]*$`. (5) Validate `controllerExecutionRef` is present and resolves a `Host/<name>` in the same Zone with `system` in `allowedDomains`; this field is **required** — there is no default Zone primary Host fallback; return a hard validation error if absent. (6) Retain `EntraCredentialClient` trait unchanged; adapt `EntraCredentialProvider` to v3 `d2b.credential.v3` service interface in `service.rs`. (7) Map `EntraClientError::InteractionRequired` to `credential-provider-unavailable` (not `credential-operation-denied`). (8) Enforce `EntraCredentialOwner::ExactConsumer`: `consumerRef` required in spec; reject any caller not matching `consumerRef` at d2b-bus before service dispatch. (9) Implement `entra-controller` in `controller.rs` and `controller_main.rs` per §12: receive ProviderSupervisor descriptor registration; watch Credential resources; on Create/Update create `entra-agent` Process via LaunchTicket with canonical Process template (template=entra-agent-main, correct providerRef per domainFilter, executionRef/domain/userRef from Credential scope, ownerRef=Credential/<name>, networkUsage.allowEgress=false, sealed config projection including tenantId, authorityClass, consumerRef, maxLeases, interactionPolicy, audience, idempotency_key, and effect-port FD index; no authorityUrl, no endpoint URL, no hostname); on agent Process failure set `ProviderUnavailable=True` and requeue; on Deletion: signal agent to revoke (per revocation policy), await agent confirmation, then call `UpdateFinalizers` to remove `credential.d2b.io/provider-revoke`; core automatically writes event-only Deleted revision and removes the row/indexes when no finalizers remain; audit subsystem appends deletion record post-commit with dedup/exactly-once recovery. (10) Implement `entra-agent` in `service.rs` and `agent_main.rs` per §12 agent startup: read sealed config from ProviderSupervisor inherited FD including effect-port FD index and authorityClass; open effect-port FD; construct `EntraCredentialClient` implementation over it using authorityClass to select authority endpoint/TLS internally (no ambient HTTPS socket opened; no hostname validation performed by the agent); `OpaqueAzureRef::parse(tenantId)`; call `issue_lease`; open `d2b.credential.v3` listener; write Process status Ready; serve credential methods for `consumerRef` only; establish Noise KK delivery channel for token/signature output. (11) Implement `audit.rs` and `telemetry.rs` per §10; apply `contains_sensitive_shape` guard in agent before all outbound string fields. (12) Apply D087 status-first state: declare no Provider state Volume, keep ProviderStateSet empty, put bounded non-secret lease/enrollment observation in `Credential.status` and Operation ledger, and keep token/signature bytes transient over Noise_KK only. |
 | Integration | User-domain or system-domain Process under Guest (or user-domain under Host); `entra-controller` component registered with d2b-bus; Credential controller reconciles `Credential` resources with `providerRef=Provider/credential-entra`; `Provider/system-minijail` or `Provider/system-systemd` launches the process via ProviderSupervisor LaunchTicket |
 | Data migration | Full v3 reset; no migration from old `CredentialProvider` trait |
 | Validation | See §18 |
@@ -1393,14 +1319,14 @@ sections in order:
 | --- | --- |
 | `test_controller_creates_agent_process` | Controller `reconcile` creates an `entra-agent` Process via `ProviderSupervisor::LaunchTicket` with correct `metadata.ownerRef`, placement, and sealed config fields (effect-port FD index included) |
 | `test_agent_deleted_on_credential_delete` | Controller `finalize` sends revocation signal to agent; controller calls `UpdateFinalizers` to clear `credential.d2b.io/provider-revoke`; core performs event-only Deleted + row removal; audit appends post-commit |
-| `test_controller_process_template_schema` | Controller Process template fields match canonical schema: `type: Process`, `namespaceClasses=[mount,pid,ipc,uts,network]`, `capabilityClasses=[]`, `seccompClass=strict`, `startRoot=false`, `noNewPrivileges=true`, `environmentClass=minimal`, `readOnlyRoot=true`, `networkUsage.allowEgress=false`, `mounts=[{view:main,mountPath:/state,access:read-only,required:true}]`, `endpoints=[{name:bus-registration,transport:unix,purpose:controller-registration}]`, `readiness.class=provider-defined` |
-| `test_user_agent_process_template_schema` | User-agent Process template: `type: Process`, `providerRef=Provider/system-systemd`, `domain=user`, `networkUsage.allowEgress=false`, `mounts=[{view:main,mountPath:/state,access:read-only,required:true}]`, `endpoints=[{name:credential-service,transport:unix,purpose:d2b.credential.v3}]`, `budget.memory.limit="128Mi"`, `readiness.class=provider-defined`; no `binary`, `allowedSyscalls`, `maxRssBytes`, endpoint `kind`/`service` fields |
-| `test_guest_agent_system_process_template_schema` | Guest-agent system-domain Process template: `type: Process`, `providerRef=Provider/system-minijail`, `domain=system`, `mounts=[{view:main,mountPath:/state,access:read-only,required:true}]`; all other fields identical to user-agent template |
+| `test_controller_process_template_schema` | Controller Process template fields match canonical schema: `type: Process`, `namespaceClasses=[mount,pid,ipc,uts,network]`, `capabilityClasses=[]`, `seccompClass=strict`, `startRoot=false`, `noNewPrivileges=true`, `environmentClass=minimal`, `readOnlyRoot=true`, `networkUsage.allowEgress=false`, `mounts=[]`, `endpoints=[{name:bus-registration,transport:unix,purpose:controller-registration}]`, `readiness.class=provider-defined` |
+| `test_user_agent_process_template_schema` | User-agent Process template: `type: Process`, `providerRef=Provider/system-systemd`, `domain=user`, `networkUsage.allowEgress=false`, `mounts=[]`, `endpoints=[{name:credential-service,transport:unix,purpose:d2b.credential.v3}]`, `budget.memory.limit="128Mi"`, `readiness.class=provider-defined`; no `binary`, `allowedSyscalls`, `maxRssBytes`, endpoint `kind`/`service` fields |
+| `test_guest_agent_system_process_template_schema` | Guest-agent system-domain Process template: `type: Process`, `providerRef=Provider/system-minijail`, `domain=system`, `mounts=[]`; all other fields identical to user-agent template |
 | `test_entra_client_trait_surface` | Verify `EntraCredentialClient` trait is object-safe and all methods have correct async signatures |
 | `test_opaque_azure_ref_parse_tenant_id` | `OpaqueAzureRef::parse` accepts valid GUIDs; rejects secret-shaped values, `://`, `/`, `+`, `=`, whitespace, `{}` |
 | `test_authority_class_enum_validation` | Accepts `public`, `us-government`, `china`; accepts opaque effect-port alias matching `^[a-z][a-z0-9-]*$`; rejects any string containing `://`, `.`, port separators, path components, query-string characters, or hostname-shaped bytes; rejects unknown aliases |
-| `test_provider_state_set_controller_volume_empty_payload` | Controller ProviderStateSet Volume is a durable `kind: state` Volume: `type: Volume`, `ownerRef: Provider/credential-entra`, `spec.kind: state`, `persistenceClass: persistent`, `source.settings.sourcePolicyId: credential-entra-state-v1`, `quotaBytes: 65536`, `quota.maxBytes: 65536`, `quota.maxInodes: 256` (all nonzero), `views.main.rights: [read, traverse]`, `identityMarker` present; stateSchema payload schema declares no data fields; Volume survives controller and Provider restart; participates in upgrade/destroy/reset |
-| `test_provider_state_set_agent_volume_empty_payload` | User-agent and guest-agent each have a separate durable `kind: state` Volume with `source.settings.sourcePolicyId: credential-entra-state-v1`, nonzero `quotaBytes`/`quota.maxBytes`/`quota.maxInodes`, `views.main.rights: [read, traverse]`, and identity marker; three components → three non-shared Volumes; guest-agent Volume is guest-local (`source.executionRef: Guest/<name>`) with no host-backed-guest attachment or virtiofs Export; never `persistenceClass: ephemeral`, zero quota, or `access: read-write` |
+| `test_provider_state_set_empty` | ProviderStateSet query returns an empty grouping for `Provider/credential-entra`; Core ProviderDeployment creates no Provider state Volume for the controller or agents; Process templates have `mounts=[]`; no `Provider/volume-local` state reconciliation or layout principal is required |
+| `test_status_first_lease_observation` | Bounded non-secret acquisition phase, readiness, opaque non-authorizing lease/enrollment IDs, expiry timestamps, retry counters, and closed-enum error detail are written only to `Credential.status`/Operation ledger; status rejects oversize content and excludes token bytes, signatures, keys, PSKs, client secrets, authority-conferring handles, private runtime details, and raw cloud error bodies |
 | `test_exact_consumer_guard` | `EntraCredentialOwner::ExactConsumer` rejects callers not matching `consumerRef`; accepts the exact declared consumer |
 | `test_entra_client_state_transitions` | `Ready → InteractionRequired → Ready`; correct error mapping per §6 |
 | `test_interaction_required_maps_to_unavailable` | `EntraClientError::InteractionRequired` → `credential-provider-unavailable` (not `credential-operation-denied`) |
@@ -1588,7 +1514,7 @@ tenant migration):
 | `runtime` | Guest or Host Provider providing the execution context | Required (via `scope.executionRef`) |
 | `credential` | None (this Provider provides credentials; it does not consume them) | Not applicable |
 | `transport` | Local Unix/socketpair transport for d2b-bus (provided by Zone runtime) | Required |
-| `volume` | Core ProviderDeployment creates and deletes declared component state Volumes (controller and per-agent) before/after component Processes; `Provider/volume-local` is the sole reconciler; `credential-entra` controller does not create, delete, or own Volume resources and does not add `Volume` to its exported ResourceTypes; components only consume their declared view mount | Core-provisioned (not controller-owned) |
+| `volume` | Not claimed. `credential-entra` declares no Provider state Volume under D087; ProviderStateSet is optional/query-time and empty because the storage-need test is not met for non-secret operational observation and secret credential bytes are transient only. | Not required |
 | `network` | Both controller and `entra-agent` Process templates declare `networkUsage.allowEgress=false`. No ambient MSAL network claim exists. The agent's `EntraCredentialClient` calls are proxied through the injected effect-port FD provided by the co-located consumer/runtime Provider; that Provider owns the network interface. | Not claimed by this Provider |
 
 ### Permission claims

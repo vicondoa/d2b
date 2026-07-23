@@ -264,11 +264,13 @@ controller never acts as a Volume reconciler.
 | `Host` | controller reads `spec.config.executionRef` for forwarder placement |
 | `Guest` | controller watches for Guests that need vsock-forwarder Process children |
 
-Core (not the controller) creates both Volumes (telemetry socket directory and
-collector component state Volume with `stateSchema` extension) and the collector
-`Process` from the signed `ProviderDeployment` descriptor before component
-Processes start. Core deletes those Volumes after component Process finalizers
-complete when the Provider is removed. Core also derives and writes
+Core (not the controller) creates the runtime telemetry socket directory Volume
+(`kind: tmp`) and the collector `Process` from the signed `ProviderDeployment`
+descriptor before component Processes start. It does **not** create any Provider
+state Volume — the collector declares none, and its bounded non-secret
+operational state lives in `status`/the core Operation ledger (D087). Core
+deletes the sockets Volume after component Process finalizers complete when the
+Provider is removed. Core also derives and writes
 `Provider/observability-otel` status by aggregating component health.
 
 The semantic controller does not create, update, delete, or watch-for-mutation
@@ -427,17 +429,20 @@ The mount path `/run/d2b-otel` inside the collector sandbox is a broker FD
 delivered in the LaunchTicket, resolved by the volume-local Provider. The
 host-absolute path is never exposed in resource `spec`/`status`, audit records,
 OTEL spans, or any observable surface. Relative socket names (`emitter.sock`,
-`otlp.sock`) are Volume-private. The state Volume (`kind: state`, persistent
-backing) is a separate resource defined in the next section.
+`otlp.sock`) are Volume-private. The collector declares no Provider state
+Volume; the sockets Volume is the only Volume for this component (see the next
+section).
 ---
 
 
 ## Provider state (ProviderStateSet)
 
-### Concept: logical grouping, not a ResourceType
+### Concept: optional logical grouping, not a ResourceType
 
 Per `ADR-046-provider-state` §No ProviderState ResourceType, there is no
-`ProviderState` ResourceType. A **ProviderStateSet** is a query-time grouping:
+`ProviderState` ResourceType. A **ProviderStateSet** is the optional,
+query-time grouping of the *declared* Volume resources owned by a Provider, and
+is empty for a Provider that declares no state Volume:
 
 ```text
 ProviderStateSet(zone, "observability-otel") =
@@ -445,129 +450,38 @@ ProviderStateSet(zone, "observability-otel") =
               && v.metadata.ownerRef == "Provider/observability-otel" }
 ```
 
-The set is not a stored artifact. Core (from the signed `ProviderDeployment`
-descriptor) creates one `kind: state`, `persistenceClass: persistent` Volume per
-declared component state namespace **before** the component Process is started,
-even when the payload schema is empty. Core deletes those Volumes **after**
-component Process finalizers complete when the Provider is removed.
+`Provider/observability-otel` declares **no** Provider state Volume; its
+`ProviderStateSet` is empty. The collector carries no durable data across
+restarts: telemetry is exported to its configured backend, and OTEL owns
+metrics/traces by construction. Its bounded non-secret operational state —
+collector readiness, export/backpressure reconcile stage, bounded drop/queue
+counters, and closed-enum error detail — lives in the owning resource's
+`status` subresource and the core Operation ledger (D087).
 
-The semantic Provider controller (observability-otel) does not own, create,
-update, delete, or export `Volume`. It does not add `Volume` to its exported
-ResourceTypes and does not act as a prerequisite creator for its own state
-Volumes. `Provider/volume-local` is the sole Volume reconciler.
+Because the collector's operational state is fully derivable from spec,
+`status`, the core Operation ledger, and its live process memory, it fails the
+storage-need test and declares no state namespace, no state Volume, no
+state-view mount, and no dedicated state-layout `User/<name>` principal. There
+is no empty identity-only Volume.
 
-No `ComponentPrincipal` ResourceRefs exist. All Volume layout principals are
-Nix-preprovisioned `User/<name>` resources (or a bounded principal pool where
-components share a stable system user). No cross-component shared Volume is
-permitted; a `private` Volume is mounted by exactly one Process at a time.
-Component gets only the `dirfd` for its declared named view.
+### Runtime sockets Volume (retained)
 
-### Collector component state Volume
-
-The `collector` component declares one state namespace: `runtime-state`. Even
-though the payload schema is empty (the observability-otel collector carries no
-durable data across restarts), the framework rule is unambiguous: every semantic
-component state Volume is `kind: state`, `persistenceClass: persistent`, with a
-minimal nonzero quota and an identity marker. It survives component and Provider
-restarts and participates in upgrade, destroy, and reset workflows. Core creates
-this Volume from the `ProviderDeployment` descriptor when the Provider is
-installed.
-
-```yaml
-apiVersion: resources.d2b.io/v3
-type: Volume
-metadata:
-  name: observability-otel--collector--runtime-state--host-system
-  zone: work                        # Zone name resolved at runtime
-  ownerRef: Provider/observability-otel
-  finalizers: []
-spec:
-  providerRef: Provider/volume-local
-  kind: state                       # durable; survives restart/upgrade/destroy
-  persistenceClass: persistent      # survives daemon restart and host reboot
-  sensitivityClass: private         # single-process mount only
-  stateSchema:
-    schemaId: io.d2b.observability-otel/collector/runtime-state
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<hex>      # computed from canonical schema definition
-    migrationPolicy: none           # no migration logic; payload schema is empty
-  quotaBytes: 1048576               # 1 MiB; minimal nonzero quota (empty payload)
-  sealingCredentialRef: null        # no sealing; no secret bytes in state
-  source:
-    executionRef: Host/host-system  # resolved from spec.config.executionRef
-    settings:
-      kind: local-path
-      sourcePolicyId: provider-state-persistent
-  quota:
-    maxBytes: 1048576
-    maxInodes: 64
-    enforcement: none
-  layout:
-    - path: state
-      type: directory
-      ownerRef: User/observability-otel-system
-      groupRef: User/observability-otel-system
-      mode: "0700"
-      sensitivity: private
-      createPolicy: create-if-never-provisioned
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      noFollow: true
-  views:
-    collector:
-      path: state
-      rights: [read, write, create, delete, traverse]
-  identityMarker:
-    class: broker-maintained
-    markerRoot: provider-state-markers
-  snapshotPolicy: null
-  retentionPolicy: null
-```
-
-The Volume name follows the convention `<provider>--<component>--<namespace>--<exec-short>`.
-`User/observability-otel-system` is a Nix-preprovisioned `User/<name>` ref; no
-raw UID/GID or group string appears here.
-
-### Extended Volume status for state
-
-The volume-local Provider reports these additional status fields:
-
-| Status field | Values |
-| --- | --- |
-| `stateSchemaPhase` | `current` \| `migration-required` \| `migrating` \| `migration-committed` \| `migration-failed` |
-| `installedSchemaVersion` | `"1.0"` once provisioned; `null` before first provision |
-| `markerStatus` | `verified` \| `missing` \| `replaced` \| `unknown` |
-| `sealingStatus` | `none` (no sealing for this Volume) |
-| `quotaUsage` | `{ usedBytes, inodeCount }` polled at most every 60 s |
-
-`markerStatus: missing` or `replaced` → Volume moves to `Failed`; no auto-recovery;
-operator intervention required. `migrationPolicy: none` means `stateSchemaPhase`
-is always `current` for this Volume. The Volume persists across restarts and is
-subject to standard destroy/reset/upgrade lifecycle management even with an empty
-payload schema.
+The collector's runtime `sockets` Volume (`kind: tmp`) is a genuine runtime
+operational Volume that carries the collector's live socket endpoints; it is
+retained and is not a Provider state Volume. It holds no durable payload,
+carries no `stateSchema` extension, and is not part of the (empty)
+ProviderStateSet.
 
 ### Invariants
 
-- Every state Volume in this Provider's ProviderStateSet has `ownerRef:
-  Provider/observability-otel` and a `stateSchema` extension block.
-- No state Volume is shared with the sockets Volume (`kind: tmp`).
-- No state Volume is shared with a forwarder worker Process.
-- `sensitivityClass: private` → `Provider/volume-local` rejects concurrent
-  mounts outside the same component instance.
-- Core creates state Volumes before component Processes start; core deletes them
-  after component Process finalizers complete. The controller emits neither
-  Create nor Delete for any Volume.
+- The observability-otel `ProviderStateSet` is empty; no state Volume exists,
+  and none is shared with the runtime `sockets` Volume (`kind: tmp`) or with a
+  forwarder worker Process.
 - The observability-otel controller does not add `Volume` to its exported
-  ResourceTypes; it holds only watch-status authority over Volumes it reads.
-- `Provider/volume-local` is the sole Volume reconciler: it owns all layout,
-  ACL, quota, identity-marker, migration, sealing, snapshot, and destroy
-  operations for every Volume in this Provider's ProviderStateSet.
-- The component Process receives only the `dirfd` for its declared named view;
-  it has no access to other views, the Volume root, or any sibling component's
-  Volume.
-- Empty payload schema (`migrationPolicy: none`) means no migration worker is
-  created. `stateSchemaPhase` is always `current`; the Volume still participates
-  in standard upgrade, destroy, and reset lifecycle workflows.
+  ResourceTypes.
+- The controller re-derives collector readiness from live `status` observation
+  after restart and reverifies against the running process, treating `status`
+  as observation, never authority (D087).
 ---
 
 ## Canonical Process templates
@@ -599,11 +513,6 @@ spec:
     - volumeRef: Volume/observability-otel--collector--sockets--host-system
       view: collector
       mountPath: /run/d2b-otel
-      access: read-write
-      required: true
-    - volumeRef: Volume/observability-otel--collector--runtime-state--host-system
-      view: collector
-      mountPath: /state
       access: read-write
       required: true
   sandbox:
@@ -1399,21 +1308,18 @@ All test files must be present. Workspace policy rejects a missing `tests/` or
 **Source:** new; required by standard `d2b-provider-toolkit` conformance suite.
 
 - Drive the lifecycle controller with a fake Zone store and fake ProviderSupervisor.
-  Core (not the controller) creates both Volumes (telemetry sockets Volume and
-  collector state Volume) and the collector Process; inject them as pre-existing
-  resources.
+  Core (not the controller) creates the runtime sockets Volume (`kind: tmp`) and
+  the collector Process; inject them as pre-existing resources. No Provider state
+  Volume exists.
 - Assert: controller does NOT emit Create, Update, or Delete operations for any
-  Volume; all Volumes are core's static deployment responsibility.
+  Volume; the sockets Volume is core's static deployment responsibility.
 - Assert: `Volume` does not appear in the controller's exported ResourceType
   permissions; the controller holds watch-status authority only.
-- Assert: collector state Volume has `ownerRef: Provider/observability-otel`,
-  `sensitivityClass: private`, `stateSchema.schemaId:
-  "io.d2b.observability-otel/collector/runtime-state"`, and
-  `identityMarker.class: broker-maintained`.
-- Assert: no cross-component Volume sharing; state Volume view `collector` is
-  not reachable from any forwarder Process mount.
-- Assert: ProviderStateSet query (`ownerRef == Provider/observability-otel`)
-  returns exactly two Volumes: sockets Volume and state Volume.
+- Assert: the collector declares no Provider state Volume; the
+  ProviderStateSet query (`ownerRef == Provider/observability-otel`) returns
+  zero Volumes.
+- Assert: no cross-component Volume sharing; the runtime sockets Volume view is
+  not reachable from any forwarder Process mount outside its declared view.
 - Assert: controller does NOT write Provider status; that is core's aggregation.
 - Assert: controller creates vsock-forwarder `Process` (with `providerRef:
   Provider/system-minijail`, canonical mount to `view: forwarder-write`, and
@@ -1434,40 +1340,28 @@ All test files must be present. Workspace policy rejects a missing `tests/` or
 
 #### `tests/provider_state.rs`
 
-**Source:** new; required by `ADR-046-provider-state` ProviderStateSet invariants.
+**Source:** new; required by `ADR-046-provider-state` status-first invariants.
 
-- `state_volume_is_core_created`: drive a fake Zone store with the Provider
-  installed; assert the state Volume
-  (`observability-otel--collector--runtime-state--host-system`) exists with
-  `ownerRef: Provider/observability-otel` and was not created by the controller.
-- `state_volume_has_correct_schema`: assert `spec.stateSchema.schemaId =
-  "io.d2b.observability-otel/collector/runtime-state"`, `schemaVersion = "1.0"`,
-  `migrationPolicy = "none"`, `kind = "state"`, `persistenceClass = "persistent"`,
-  `quotaBytes > 0`, and `sensitivityClass = "private"`.
-- `state_volume_layout_uses_user_refs`: assert all `ownerRef`/`groupRef` fields
-  in the Volume layout use `User/observability-otel-system` (not raw UIDs or
-  group strings).
+- `no_provider_state_volume`: drive a fake Zone store with the Provider
+  installed; assert `ProviderStateSet(zone, "observability-otel")` is empty (the
+  collector declares no state Volume) and no
+  `observability-otel--collector--runtime-state--*` Volume exists.
+- `operational_state_in_status`: assert the collector's bounded non-secret
+  operational state (readiness, export/backpressure reconcile stage, bounded
+  drop/queue counters, closed-enum error detail) is written to the owning
+  resource's `status` subresource within the frozen status bounds and carries no
+  secret/path/argv/PID/unit content.
+- `sockets_volume_is_core_created`: assert the runtime sockets Volume
+  (`kind: tmp`) exists with core as creator and is not a Provider state Volume.
 - `no_cross_component_volume_sharing`: assert no forwarder Process mount points
-  to the state Volume; assert the sockets Volume view `forwarder-write` covers
-  only the socket path, not the state namespace.
-- `provider_state_set_query`: assert `ProviderStateSet(zone, "observability-otel")`
-  returns exactly two Volumes — sockets Volume and state Volume — and no third
-  Volume is present in the store.
-- `marker_missing_blocks_launch`: inject a fake marker-missing status on the
-  state Volume (`markerStatus: missing`); assert the collector Process is not
-  allowed to move to `Ready` while the condition holds.
-- `state_volume_not_shared_with_sockets_volume`: assert the two Volumes have
-  distinct `metadata.name` values, distinct layout roots, and no overlapping
-  view names that would allow cross-access.
+  to any state Volume; the sockets Volume view `forwarder-write` covers only the
+  socket path.
+- `restart_re_derives_status`: assert that on controller restart the collector
+  readiness is re-derived from live `status` observation and reverified against
+  the running process, treating status as observation, never authority.
 - `volume_not_in_controller_exported_types`: assert the controller's exported
   ResourceType permission set does not include `Volume` as an owned or
   writable type; only watch-status is present.
-- `empty_schema_no_migration_worker`: assert that with `migrationPolicy: none`
-  the controller creates no migration EphemeralProcess or worker for the state
-  Volume; the Volume transitions directly to `stateSchemaPhase: current`.
-- `component_receives_view_dirfd_only`: assert that the Process launch ticket
-  for the collector contains only the `collector` view dirfd for the state
-  Volume; no other view fd or raw Volume-root fd is present.
 
 #### `tests/config_schema.rs`
 
@@ -1548,9 +1442,9 @@ deletion and Zone status.
 - Assert collector `Process` is stopped and deleted by core (not by the
   observability-otel controller), and that the controller does not emit a Delete
   on the core-owned `Process`.
-- Assert telemetry socket directory `Volume` and collector state `Volume` are
-  both deleted by core after the collector Process exits; neither is deleted by
-  the observability-otel controller.
+- Assert the telemetry socket directory `Volume` is deleted by core after the
+  collector Process exits; it is not deleted by the observability-otel
+  controller. No Provider state Volume exists to delete.
 - Assert emitter socket is not removed while collector is still running.
 - Assert all scheduled Deletes complete; `pending-cleanup` condition cleared.
 - Assert Zone returns to `Ready` phase.
@@ -1606,7 +1500,7 @@ deletion and Zone status.
 | Current source | `nixos-modules/components/observability/host.nix` (`otelRuntimeDir`, `hostEgressSocket`, `setfacl` ACL pattern, `scrapeJournal` option, `identityName`); `nixos-modules/components/observability/stack.nix` (`ingressSources`, `vmName`, `receiverGrpcPort`, loopback binding, `signoz.listenPort`) |
 | Reuse action | adapt Nix pipeline shape (replace per-VM `vmName` with per-Zone name; replace socat runner with vsock-forwarder long-lived Process; adapt `ingressSources` per-Zone entry) |
 | Destination | `packages/d2b-provider-observability-otel/src/collector_bin.rs`; `packages/d2b-provider-observability-otel/src/emitter_socket.rs`; `packages/d2b-provider-observability-otel/src/exporter.rs`; `packages/d2b-provider-observability-otel/src/controller.rs` (forwarder management only); updated `nixos-modules/components/observability/{host,stack}.nix` |
-| Detailed design | Collector binary: full OTEL SDK initialization (metrics, traces, logs pipelines); OTLP/gRPC exporter connected via transport alias; Unix datagram receiver at `emitter.sock` (drain loop); OTLP/gRPC Unix stream receiver at `otlp.sock`; `d2b.observability.v1.SelfMetrics` ComponentSession service on d2b-bus (local); journald receiver (disabled by default). Exporter: OTEL SDK-level batching and backpressure; `d2b_otel_backpressure_active` gauge; drain-before-shutdown; component health events on outage/backpressure (not Provider status writes). Core (not controller) creates the telemetry sockets Volume, the collector state Volume (with `stateSchema: {schemaId: "io.d2b.observability-otel/collector/runtime-state", migrationPolicy: "none"}`, `kind: state`, `persistenceClass: persistent`, minimal nonzero quota, `sensitivityClass: private`), and the collector Process from the static ProviderDeployment descriptor; controller only manages per-Guest forwarder Processes and does not own or export Volume as a ResourceType. Nix: Zone.spec is empty for observability (`spec = {}`); ring sizing lives in Provider spec.config only; adapt `identityName` to Zone name; adapt `ingressSources` to per-Zone entry; preserve `stack.nix` SigNoz shape. |
+| Detailed design | Collector binary: full OTEL SDK initialization (metrics, traces, logs pipelines); OTLP/gRPC exporter connected via transport alias; Unix datagram receiver at `emitter.sock` (drain loop); OTLP/gRPC Unix stream receiver at `otlp.sock`; `d2b.observability.v1.SelfMetrics` ComponentSession service on d2b-bus (local); journald receiver (disabled by default). Exporter: OTEL SDK-level batching and backpressure; `d2b_otel_backpressure_active` gauge; drain-before-shutdown; component health events on outage/backpressure (not Provider status writes). Core (not controller) creates the telemetry sockets Volume and the collector Process from the static ProviderDeployment descriptor; the collector declares no Provider state Volume (bounded non-secret operational state in status/core ledger, D087); controller only manages per-Guest forwarder Processes and does not own or export Volume as a ResourceType. Nix: Zone.spec is empty for observability (`spec = {}`); ring sizing lives in Provider spec.config only; adapt `identityName` to Zone name; adapt `ingressSources` to per-Zone entry; preserve `stack.nix` SigNoz shape. |
 | Integration | core `BoundedEmitter` → `emitter.sock` → collector drain loop → OTEL SDK → OTLP/gRPC → vsock → obs Zone SigNoz |
 | Data migration | Existing SigNoz data not migrated; v3 starts fresh per Zone |
 | Validation | `tests/emitter_socket_receive.rs`; `tests/exporter_outage.rs`; `tests/exporter_backpressure.rs`; `integration/scenario_full_pipeline.rs`; adapted `policy_observability.rs` (retain all existing assertions; add new `d2b.zone`, `d2b.provider` allowlist entries) |
@@ -1652,10 +1546,10 @@ deletion and Zone status.
 2. **Purpose**: the only place linking `opentelemetry_sdk`; drains Zone `BoundedEmitter` frames and exports via OTLP/gRPC.
 3. **Config schema**: all fields, bounds, `executionRef`, `exportTransportProviderRef`, `exportTargetAlias`, forbidden inline secrets; no Credential refs (transport Provider owns auth).
 4. **ResourceTypes**: consumed types (Process, Volume, Host, Guest, Provider/transport); Zone.spec is {} — ring sizing lives in Provider config only.
-5. **ProviderDeployment**: core creates both Volumes (sockets + state) and the collector Process before component Processes start; core deletes them after component finalizers when the Provider is removed. Controller manages per-Guest forwarder Processes only and does not create, update, delete, or export any Volume. `Provider/volume-local` is the sole Volume reconciler.
+5. **ProviderDeployment**: core creates the runtime sockets Volume (`kind: tmp`) and the collector Process before component Processes start; core deletes the sockets Volume after component finalizers when the Provider is removed. The collector declares no Provider state Volume — its bounded non-secret operational state lives in `status`/the core Operation ledger (D087). Controller manages per-Guest forwarder Processes only and does not create, update, delete, or export any Volume. `Provider/volume-local` is the sole Volume reconciler.
 6. **Components**: collector (long-lived Process, `service` class, `providerRef: Provider/system-minijail`), vsock-forwarder (long-lived `Process`, `worker` class, per Guest).
 7. **Placement**: both run under the Zone Host as `domain=system` via system-minijail.
-8. **Volumes**: (a) telemetry socket directory (`kind: tmp`, `source.settings.kind: tmpfs`; sockets only); (b) collector state Volume (`kind: state`, `persistenceClass: persistent`, minimal nonzero quota, `stateSchema` extension, `sensitivityClass: private`; mounted at `/state` by the collector Process only; survives restart/upgrade/reset even with empty payload schema). Both are core-created from the `ProviderDeployment` descriptor. Socket paths and state paths are Volume-private. ProviderStateSet is a query-time logical grouping (`ownerRef == Provider/observability-otel`), not a ResourceType.
+8. **Volumes**: the only Volume is the runtime telemetry socket directory (`kind: tmp`, `source.settings.kind: tmpfs`; sockets only), core-created from the `ProviderDeployment` descriptor. The collector declares **no** Provider state Volume; its bounded non-secret operational state lives in `status`/the core Operation ledger (D087). Socket paths are Volume-private. ProviderStateSet is an optional query-time logical grouping (`ownerRef == Provider/observability-otel`), not a ResourceType, and is empty.
 9. **Dependencies**: `d2b-telemetry` (BoundedEmitter); `d2b-provider-toolkit` (conformance suite); `opentelemetry_sdk`; `opentelemetry-otlp`; transport Provider alias.
 10. **RBAC**: minimum permission claims (this spec §Bus/RBAC section); no Credential or Zone verbs; no Provider status write.
 11. **Security**: dedicated UID (User/observability-otel-system); zero capabilities; no host network; no Credential bytes held by this Provider.

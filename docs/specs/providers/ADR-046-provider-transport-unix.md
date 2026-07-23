@@ -212,110 +212,26 @@ absence does not fail the workspace policy check.
 
 ## ProviderStateSet
 
-Per `ADR-046-provider-state`, a **ProviderStateSet** is the set of all Volume
-resources in a Zone whose `metadata.ownerRef` resolves to `Provider/<name>`.
-It is a query-time grouping, not a ResourceType or stored artifact.
+Per `ADR-046-provider-state`, a **ProviderStateSet** is the optional, query-time
+grouping of the *declared* Volume resources in a Zone whose
+`metadata.ownerRef` resolves to `Provider/<name>`. It is empty for a Provider
+that declares no state Volume.
 
-Every semantic Provider component — including service components with no
-payload fields — receives a private, framework/ProviderDeployment-created
-Volume. `Provider/transport-unix` declares one state namespace with an empty
-payload schema. The ProviderDeployment creates one Volume per component
-instance per Host execution target; this Volume is the sole member of the
-transport-unix ProviderStateSet.
+`Provider/transport-unix` declares **no** Provider state Volume; its
+`ProviderStateSet` is empty. Its bounded non-secret operational state — service
+readiness, transport-open/close reconcile stage, bounded connection counters,
+and closed-enum error detail — lives in the owning resource's `status`
+subresource and the core Operation ledger (D087). All ZoneLink session state
+(generation, reconnect count, queued intents, route revision) is owned by the
+core ZoneLink controller in the Zone redb store under the `ZoneLink` resource.
+The transport service holds only opaque byte-stream handles in its own process
+memory (`OwnedTransport`, per D081), which are never persisted.
 
-**Ownership rules that apply to this Provider:**
-- `Provider/volume-local` is the sole Volume reconciler. `Provider/transport-unix`
-  does not own, create, reconcile, or add `Volume` to its exported ResourceTypes.
-- Core ProviderDeployment creates the declared component state Volume resource
-  **before** creating the component Process, and deletes it **after** the Process
-  reaches terminal status.
-- The component Process only consumes its required view (`dirfd`); it never
-  receives a raw path string and has no access to any other Volume's view.
-- Empty payload schema requires `migrationPolicy: none`; no migration worker
-  is created, registered, or expected.
-
-### Volume specification
-
-```yaml
-apiVersion: resources.d2b.io/v3
-type: Volume
-metadata:
-  name: transport-unix--unix-transport-service--service-root--host-system
-  zone: k0
-  ownerRef: Provider/transport-unix      # query key for ProviderStateSet
-spec:
-  kind: state
-  providerRef: Provider/volume-local
-  persistenceClass: persistent           # durable; survives component/Provider restart and participates in upgrade/destroy/reset
-  sourcePolicyId: provider-state-persistent
-  sensitivityClass: private              # single-component; no cross-component sharing
-  stateSchema:
-    schemaId: io.d2b.transport-unix/unix-transport-service/service-root
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<hex>           # digest of the empty schema definition
-    migrationPolicy: none                # no schema migration; empty payload; no migration worker
-  quotaBytes: 65536                      # base quota (64 KiB): directory inode + identity marker
-  maxBytes: 65536                        # hard ceiling; payload-empty namespace does not grow
-  maxInodes: 16                          # directory root + identity marker file + minimal headroom
-  sealingCredentialRef: null
-  source:
-    executionRef: Host/host-system
-    settings: {}
-  layout:
-    - path: service-root
-      type: directory
-      ownerRef: User/transport-unix-system    # Nix-preprovisioned; NOT a ComponentPrincipal ref
-      groupRef: User/transport-unix-system
-      mode: "0700"
-      sensitivity: private
-      createPolicy: create-if-never-provisioned
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      noFollow: true
-  views:
-    main:
-      path: service-root
-      rights: [read, write, create, delete, traverse]
-  identityMarker:
-    class: broker-maintained
-    markerRoot: provider-state-markers
-```
-
-`User/transport-unix-system` is a Nix-preprovisioned `User` resource declared
-in the Provider's Nix module. No `ComponentPrincipal` ResourceRef is used.
-If the Provider cardinality requires multiple instances, a bounded pool of
-pre-declared `User/<name>` resources is used rather than dynamic principal
-creation.
-
-### Component isolation invariants
-
-- The `unix-transport-service` component is the only Process that may mount
-  the `main` view of this Volume; no other component or Provider shares it
-  (`sensitivityClass: private`).
-- The component receives only its local view `dirfd`; it has no access to
-  any other Volume's dirfd or to the underlying host path string.
-- No cross-component shared Volume exists in this Provider.
-
-### Why a Volume exists with no payload
-
-The Volume is a durable, persistent state anchor for the component — even when
-no application payload is stored, it is not ephemeral. It:
-- provides an isolated, anchored filesystem root that survives component and
-  Provider restarts;
-- participates in the full volume-local lifecycle: upgrade (schema version
-  check), destroy (anchored `unlinkat` cleanup), and reset (identity marker
-  invalidation);
-- carries the broker-maintained identity marker that detects tampering or
-  replacement of the root directory between restarts;
-- anchors any scratch files the service may create (e.g., a monitoring socket
-  or a per-request temp file) within a bounded, per-component quota scope.
-
-The 64 KiB quota (`quotaBytes: 65536`) is the minimum that accommodates the
-directory inode and the identity marker file; it is not zero.
-
-All ZoneLink session state (generation, reconnect count, queued intents, route
-revision) is owned by the core ZoneLink controller in the Zone redb store under
-the `ZoneLink` resource — not in this Volume.
+Because this Provider's operational state is fully derivable from spec,
+`status`, the core Operation ledger, and its live process memory, it fails the
+storage-need test and declares no state namespace, no state Volume, no
+state-view mount, and no dedicated state-layout `User/<name>` principal. There
+is no empty identity-only Volume.
 
 ---
 
@@ -612,26 +528,7 @@ component:
   supportedHostProviders: [system-minijail]
   allowedDomains: [system]
   cardinality: one-per-zone
-  stateNamespaces:
-    - id: service-root
-      kind: state
-      schemaId: io.d2b.transport-unix/unix-transport-service/service-root
-      schemaVersion: "1.0"
-      schemaDigest: sha256:<hex>       # digest of empty schema definition; sealed in package
-      persistenceClass: persistent     # durable; survives restart; participates in upgrade/destroy/reset
-      sourcePolicyId: provider-state-persistent
-      sensitivityClass: private
-      migrationPolicy: none            # empty payload; no migration worker
-      quotaBytes: 65536                # base quota (64 KiB): directory inode + identity marker
-      maxBytes: 65536                  # hard ceiling
-      maxInodes: 16                    # directory root + identity marker + minimal headroom
-      sealingRequired: false
-      identityMarker:
-        class: broker-maintained
-        markerRoot: provider-state-markers
-      views:
-        main:
-          rights: [read, write, create, delete, traverse]
+  stateNamespaces: []          # no Provider state Volume; operational state in status/core ledger (D087)
   permissionClaims:
     - verb: receive-attachment  # receives allocator-issued FD attachments via OpenTransport
     - verb: invoke              # called by core ZoneLink controller over portal
@@ -716,12 +613,7 @@ spec:
     logLevel: warn
     sensitiveLabels: false
 
-  mounts:
-    - volumeRef: Volume/transport-unix--unix-transport-service--service-root--host-system
-      view: main
-      mountPath: /service-root
-      access: read-write               # private view; dirfd only; no path string in any log
-      required: true                   # ProviderDeployment must create Volume before Process starts
+  mounts: []                          # no Provider state Volume; operational state in status/core ledger (D087)
   networkUsage: null                  # no network interface needed
   credentialRefs: []
 ```
@@ -731,17 +623,16 @@ ProviderDeployment aggregates `Provider/transport-unix` status from the
 Process phase and portal readiness condition. If the Process spec drifts, the
 ProviderDeployment reconciler restores it.
 
-**Install ordering**: ProviderDeployment creates the component state Volume
-(`Volume/transport-unix--unix-transport-service--service-root--host-system`)
-first, waits for `Provider/volume-local` to reconcile it to `Ready`, and only
-then creates the `Process` resource whose `mounts` reference that Volume.
+**Install ordering**: because the Provider declares no state Volume,
+ProviderDeployment creates the `Process` resource directly; the service reaches
+readiness from its portal condition and its bounded `status`, with no
+state-Volume prerequisite.
 
 **Delete ordering**: When `Provider/transport-unix` is deleted, ProviderDeployment
-first requests Process deletion (setting the Process finalizer) and waits until
-the Process reaches terminal status. After the Process is terminal,
-ProviderDeployment requests Volume deletion and waits for `Provider/volume-local`
-to confirm the Volume is removed. ProviderDeployment clears its own finalizer only
-after both the Process and the Volume have been fully deleted. The Provider itself
+requests Process deletion (setting the Process finalizer) and waits until the
+Process reaches terminal status. ProviderDeployment clears its own finalizer only
+after the Process has been fully deleted; the service's `status` disappears with
+the resource row and its revision. The Provider itself
 holds no finalizer on ZoneLink resources; ZoneLink finalizer and status transitions
 remain exclusively with the core ZoneLink controller.
 
@@ -1347,7 +1238,7 @@ The `xtask gen-zone-resources` step adds for `Provider/transport-unix` links:
 | Unix session tests (12) | `d2b-session-unix/tests/unix_session.rs` (main `a1cc0b2d`) | `test-only-or-preview` | copy and adapt for v3 portal model |
 | OpenTransport/CloseTransport/ObserveTransport service API | none | `ADR-only` | new |
 | Service Process resource with full sandbox/budget/endpoints spec | none in v3 baseline | `ADR-only` | new |
-| ProviderStateSet | ownerRef=Provider/transport-unix Volume query | `ADR-only` | ProviderDeployment creates one persistent Volume (`kind:state`, `persistenceClass:persistent`, `quotaBytes:65536` — `transport-unix--unix-transport-service--service-root--host-system`) with empty payload schema; layout principal is Nix-preprovisioned `User/transport-unix-system`; component receives view dirfd only |
+| ProviderStateSet | ownerRef=Provider/transport-unix Volume query | `ADR-only` | Empty — `Provider/transport-unix` declares no Provider state Volume; its bounded non-secret operational state lives in `status`/the core Operation ledger (D087) |
 | ZoneLink transportSettings schema | none | `ADR-only` | new in this spec |
 | FD pre-bind pattern (broker FD pre-binding) | `d2b-priv-broker/src/ops/{swtpm_dir,spawn_runner}.rs` (v3 baseline) | `implemented-and-reachable` | allocator/core adapts the pattern; Provider is a passive recipient |
 | Route advertisement / RouteTreeEngine | `d2b-realm-core/src/route_engine.rs` (v3 baseline) | `implemented-but-unwired` | core ZoneLink controller owns; not in this Provider |
@@ -1494,10 +1385,10 @@ The `xtask gen-zone-resources` step adds for `Provider/transport-unix` links:
 | Reuse source | Minijail sandbox semantic class patterns from current v3 broker; Process resource schema from ADR-046-resources-host-guest-process-user |
 | Reuse action | adapt; no direct symbol copy |
 | Destination | `packages/d2b-provider-transport-unix/` crate Cargo.toml binary target `d2b-transport-unix-service`; Provider component descriptor JSON committed at `packages/d2b-provider-transport-unix/descriptor/unix-transport-service.json`; Nix package derivation at `packages/d2b-provider-transport-unix/` |
-| Detailed design | Component descriptor declares: `processClass=service`, `template=unix-transport-service`, `stateNamespaces=[{id:service-root, kind:state, schemaId:io.d2b.transport-unix/unix-transport-service/service-root, schemaVersion:1.0, persistenceClass:persistent, sourcePolicyId:provider-state-persistent, sensitivityClass:private, migrationPolicy:none, quotaBytes:65536, maxBytes:65536, maxInodes:16, sealingRequired:false, identityMarker:{class:broker-maintained,markerRoot:provider-state-markers}, views:{main:{rights:[read,write,create,delete,traverse]}}}]`, `sandbox.capabilityClasses=[]`, `sandbox.namespaceClasses=[mount]`, `sandbox.seccompClass=strict`, `budget.memory.limit="16Mi"`, `budget.cpu.limit="200m"`, `budget.fds.limit=512`, `endpoints=[{name:portal,transport:unix,purpose:transport-unix-portal}]`, `readiness={class:provider-defined,initialDelay:"0s",timeout:"5s",failureThreshold:1,successThreshold:1}`, `restartPolicy={class:always,backoffBase:"2s",backoffMax:"60s",backoffMultiplier:2.0,maxRestarts:10,resetAfter:"1h"}`; Provider package bundles descriptor digest; core ProviderDeployment creates one persistent Volume (`kind:state`, `sourcePolicyId:provider-state-persistent`, `quotaBytes:65536`, `maxBytes:65536`, `maxInodes:16`, name `transport-unix--unix-transport-service--service-root--<host>`) with Nix-preprovisioned `User/transport-unix-system` as layout principal, then creates the Process with `mounts[].required=true` when `Provider/transport-unix` is installed |
-| Integration | Provider resource installed → core ProviderDeployment reads component descriptor → creates `Volume/transport-unix--unix-transport-service--service-root--host-system` (ownerRef=Provider/transport-unix; layout principal User/transport-unix-system) and waits for `Provider/volume-local` to reconcile Volume to `Ready` → **then** creates child `Process/transport-unix-service` with mounts referencing the Volume → ProviderSupervisor spawns binary with portal FD and service-root dirfd in inherited FD table. On delete: Process terminal first → Volume deleted after → ProviderDeployment finalizer cleared last |
+| Detailed design | Component descriptor declares: `processClass=service`, `template=unix-transport-service`, `stateNamespaces=[]` (no Provider state Volume; bounded non-secret operational state in status/core ledger, D087), `sandbox.capabilityClasses=[]`, `sandbox.namespaceClasses=[mount]`, `sandbox.seccompClass=strict`, `budget.memory.limit="16Mi"`, `budget.cpu.limit="200m"`, `budget.fds.limit=512`, `endpoints=[{name:portal,transport:unix,purpose:transport-unix-portal}]`, `readiness={class:provider-defined,initialDelay:"0s",timeout:"5s",failureThreshold:1,successThreshold:1}`, `restartPolicy={class:always,backoffBase:"2s",backoffMax:"60s",backoffMultiplier:2.0,maxRestarts:10,resetAfter:"1h"}`; Provider package bundles descriptor digest; core ProviderDeployment creates the Process with empty `mounts` when `Provider/transport-unix` is installed |
+| Integration | Provider resource installed → core ProviderDeployment reads component descriptor → creates child `Process/transport-unix-service` (no state-Volume prerequisite) → ProviderSupervisor spawns binary with portal FD in inherited FD table. On delete: Process terminal first → ProviderDeployment finalizer cleared last; the service `status` disappears with the resource row |
 | Data migration | None (fresh Provider resource) |
-| Validation | `tests/conformance.rs::process_resource_matches_component_descriptor`; `tests/conformance.rs::provider_state_set_has_one_persistent_volume_per_component`; `tests/conformance.rs::volume_layout_principal_is_user_not_component_principal`; sandbox policy tests against minijail conformance kit |
+| Validation | `tests/conformance.rs::process_resource_matches_component_descriptor`; `tests/conformance.rs::provider_state_set_is_empty`; `tests/conformance.rs::no_state_volume_mount`; sandbox policy tests against minijail conformance kit |
 | Removal proof | No current transport-service Process exists; new path |
 
 ---

@@ -176,15 +176,17 @@ missing catalog ID.
 Core ProviderDeployment creates and manages the volume-virtiofs-controller Process when the
 Provider is deployed. The dossier does not author this Process; it is a runtime artifact. The
 controller binary is the entry point declared in the Provider's signed manifest under the
-`volume-virtiofs-controller` component. The controller Process mounts the state Volume
-(`Volume/volume-virtiofs--controller--state--host-system`) at `/run/d2b/provider/state` with
-`required: true`, `access: read-only` via the `main` view (see §3.5 and §11).
+`volume-virtiofs-controller` component. The controller Process mounts no Provider state Volume;
+its bounded non-secret operational state lives in the owning resource's `status` subresource and
+the core Operation ledger (D087; see §3.5).
 
 ### 3.5 ProviderStateSet
 
-The **ProviderStateSet** for `Provider/volume-virtiofs` is the set of all Volume resources
-in the Zone with `metadata.ownerRef: Provider/volume-virtiofs`. It is a query-time logical
-grouping of ordinary Volume resources, not a separate ResourceType or stored artifact:
+The **ProviderStateSet** for `Provider/volume-virtiofs` is the optional,
+query-time set of the *declared* Volume resources in the Zone with
+`metadata.ownerRef: Provider/volume-virtiofs`. It is a query-time logical
+grouping, not a separate ResourceType or stored artifact, and is empty for this
+Provider:
 
 ```text
 ProviderStateSet(zone, "volume-virtiofs") =
@@ -192,79 +194,22 @@ ProviderStateSet(zone, "volume-virtiofs") =
               && v.metadata.ownerRef == "Provider/volume-virtiofs" }
 ```
 
-The volume-virtiofs-controller component declares one `stateNamespace` in its signed component
-descriptor (`id: state`, `kind: state`, `persistenceClass: persistent`, `migrationPolicy: none`,
-`quotaBytes: 1048576`). The controller's authoritative reconcile state
-rests entirely in Export and Volume resources in the resource store and in the core Operation
-ledger — the payload schema is empty. Generation counters and adoption markers are not persisted
-in provider payload storage. Even a payload-empty component state Volume must be `kind: state`,
-`persistenceClass: persistent`, carry a base `quota` block with nonzero `maxBytes` and
-`maxInodes`, and hold a broker-maintained identity marker — it is never ephemeral and never
-quota 0. The Volume survives component and Provider restarts and participates in the full
-upgrade, destroy, and Zone reset lifecycle. Because the payload schema is empty the controller
-mounts it `read-only`.
+`Provider/volume-virtiofs` declares **no** Provider state Volume; its
+`ProviderStateSet` is empty. The controller's authoritative reconcile state
+rests entirely in the Export and Volume resources in the resource store and in
+the core Operation ledger; generation counters and adoption markers are not
+persisted in provider payload storage. Its bounded non-secret operational state
+— per-attachment reconcile stage, virtiofsd Process readiness observations,
+bounded counters, and closed-enum error detail — lives in the owning resource's
+`status` subresource and the core Operation ledger (D087).
 
-Core ProviderDeployment creates the state Volume when the Provider is deployed, before the
-controller Process is started. The controller Process then **mounts** it with `required: true,
-access: read-only` (see §11):
-
-```yaml
-apiVersion: resources.d2b.io/v3
-type: Volume
-metadata:
-  name: volume-virtiofs--controller--state--host-system
-  zone: dev
-  ownerRef: Provider/volume-virtiofs
-spec:
-  providerRef: Provider/volume-local
-  kind: state
-  persistenceClass: persistent
-  sensitivityClass: private
-  stateSchema:
-    schemaId: io.d2b/volume-virtiofs/controller/state
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<hex>
-    migrationPolicy: none
-  quotaBytes: 1048576           # extension field; matches quota.maxBytes
-  quota:
-    maxBytes: 1048576
-    maxInodes: 1024
-    enforcement: none
-  sealingCredentialRef: null
-  source:
-    executionRef: Host/host-system
-    settings:
-      kind: local-path
-      sourcePolicyId: provider-state-persistent   # global canonical policy; must resolve at deploy time
-  layout:
-    - path: state
-      type: directory
-      ownerRef: User/volume-virtiofs-system
-      groupRef: User/volume-virtiofs-system
-      mode: "0700"
-      sensitivity: private
-      createPolicy: create-if-never-provisioned
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      noFollow: true
-  views:
-    main:
-      path: state
-      rights: [read, traverse]
-  identityMarker:
-    class: broker-maintained
-    markerRoot: provider-state-markers
-```
-
-Layout principal `User/volume-virtiofs-system` is a Nix-preprovisioned `User/<name>` resource
-(or drawn from a bounded principal pool). There are no `ComponentPrincipal` ResourceRefs.
-The controller accesses only its local `main` view dirfd; this Volume is never shared with other
-components or other Providers. The volume-virtiofs-controller does **not** own Volume resources,
-does **not** declare `Volume` in its exported ResourceTypes, and does **not** create or delete
-its prerequisite state Volume — that is core ProviderDeployment's exclusive responsibility.
-When the Provider is removed, core ProviderDeployment deletes the state Volume after the
-controller Process is stopped and its finalizers complete. The empty payload schema uses
-`migrationPolicy: none`; no migration worker EphemeralProcess is ever created for this Volume.
+Because that operational state is fully derivable from the Export/Volume
+resources, their `status`, the core Operation ledger, and independent external
+observation (running virtiofsd re-adopted from declared cgroup leaves and fresh
+pidfds), it fails the storage-need test: the controller declares no state
+namespace, no state Volume, no state-view mount, and no dedicated
+`User/volume-virtiofs-system` state-layout principal. There is no empty
+identity-only Volume, and the controller Process mounts no state Volume.
 
 ---
 
@@ -793,30 +738,11 @@ of volume-local.
 id: volume-virtiofs-controller
 type: controller
 providerId: volume-virtiofs
-stateNamespaces:
-  - id: state
-    kind: state
-    schemaId: io.d2b/volume-virtiofs/controller/state
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<hex>
-    persistenceClass: persistent
-    sensitivityClass: private
-    migrationPolicy: none
-    quotaBytes: 1048576
-    sealingRequired: false
-    views:
-      main:
-        rights: [read, traverse]
-mounts:
-  - volumeRef: Volume/volume-virtiofs--controller--state--host-system
-    view: main
-    mountPath: /run/d2b/provider/state
-    access: read-only
-    required: true
+stateNamespaces: []          # no Provider state Volume; operational state in status/core ledger (D087)
+mounts: []                   # controller mounts no Provider state Volume
 resourceTypes:
   # Volume is intentionally absent: volume-virtiofs-controller does not own or create Volumes.
-  # Core ProviderDeployment owns the controller's state Volume; Provider/volume-local is the
-  # sole Volume reconciler. Volume appears only in watchSelectors (read-only, below).
+  # Provider/volume-local is the sole Volume reconciler. Volume appears only in watchSelectors (read-only, below).
   - type: virtiofs.d2b.io.Export
     verbs: [create, update-spec, update-status, update-finalizers, delete, watch]
   - type: Process

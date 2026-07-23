@@ -229,7 +229,7 @@ The completed-operation ledger records the opaque `OperationBinding` — not the
 | `aca-controller` | controller | Owns `Guest` ResourceType; async reconcile/observe/finalize loop; calls ACA API exclusively through injected `AcaControl`/`AcaCredentialLeaseClient` ports |
 | `aca-deployment-service` | service | Serves typed deployment + environment health ComponentSession methods; holds ACA effect port authority; co-located in gateway Guest |
 
-Both components run as system-domain Process resources **inside the dedicated gateway Guest** (`spec.config.gatewayExecutionRef`). The framework `ProviderDeployment` creates these two static component Processes and their `ProviderStateSet` compartments. The ACA controller never creates its own peer Processes and never writes Provider resource status directly. No component runs on the local Host. No component runs inside the managed ACA sandbox.
+Both components run as system-domain Process resources **inside the dedicated gateway Guest** (`spec.config.gatewayExecutionRef`). The framework `ProviderDeployment` creates these two static component Processes; neither declares a Provider state Volume (bounded non-secret operational state lives in `Guest.status`/the core Operation ledger, D087). The ACA controller never creates its own peer Processes and never writes Provider resource status directly. No component runs on the local Host. No component runs inside the managed ACA sandbox.
 
 ### 6.2 Controller component descriptor
 
@@ -246,19 +246,7 @@ requiredDependencies:
   - alias: credential        # resolves Provider/credential-managed-identity or credential-entra
   - alias: zone-link         # resolves Provider/transport-azure-relay
 optionalDependencies: []
-stateNamespaces:
-  - id: sandbox-state
-    schemaId: io.d2b.runtime-azure-container-apps/aca-controller/sandbox-state
-    schemaVersion: "1.0"
-    persistenceClass: persistent
-    sensitivityClass: private
-    migrationPolicy: pre-launch-required
-    quotaBytes: 10485760      # 10 MiB; opaque ACA binding/adoption metadata only; no token/endpoint bytes
-    views:
-      main:
-        rights: [read, write, create, delete, traverse]
-  # operation-ledger stateNamespace removed: the core Operation ledger owns operation/requeue truth.
-  # The provider reads requeue/operation state via the core adapter; no provider-owned compartment needed.
+stateNamespaces: []          # no Provider state Volume; sandbox binding/adoption metadata lives in Guest.status; operation/requeue in the core Operation ledger (D087)
 process:
   sandbox:
     namespaceClasses: [mount, ipc, pid]
@@ -280,7 +268,16 @@ process:
   networkUsage: null
 ```
 
-The `sandbox-state` stateNamespace is declared in the controller's signed component descriptor. Core `ProviderDeployment` creates the required `sandbox-state` Volume (`providerRef: Provider/volume-local`, `source.executionRef: Guest/<aca-gateway-name>`; guest-local placement; reconciled by the Guest-local `volume-local` instance inside the gateway Guest; see §7.3) before starting the controller Process, and deletes it after the controller Process finalizes on Provider removal. The Host never holds cloud binding, admission, or operation state. The controller does not create, own, or reconcile Volume resources; `Volume` is not in the controller's exported `resourceTypes`; `Provider/volume-local` is the sole Volume reconciler. The framework delivers the mounted view dirfd to the controller at startup. The core Operation ledger adapter provides operation/requeue tracking; the `operation-ledger` stateNamespace has been removed.
+The controller declares an empty `stateNamespaces` list and no `sandbox-state`
+Volume. Sandbox binding/adoption metadata is bounded, non-secret, and opaque, so
+per D087 it lives in `Guest.status` (latest bounded observed binding/adoption
+handle digests) and the core Operation ledger (in-flight operation/requeue
+truth). The Host never holds cloud binding, admission, or operation state. The
+controller does not create, own, or reconcile Volume resources; `Volume` is not
+in the controller's exported `resourceTypes`. On restart the controller
+re-derives observed state from `Guest.status`, the core Operation ledger, and
+external ARM/session observation, treating status as observation, never
+authority.
 
 ### 6.3 Deployment service component descriptor
 
@@ -299,18 +296,7 @@ exportedMethods:
       - GuestHealth
 allowedDomains: [system]
 cardinality: one-per-zone
-stateNamespaces:
-  - id: service-state
-    schemaId: io.d2b.runtime-azure-container-apps/aca-deployment-service/service-state
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<hex>
-    persistenceClass: persistent
-    sensitivityClass: private
-    migrationPolicy: none               # empty payload schema; no migration worker
-    quotaBytes: 65536                   # 64 KiB; identity marker only
-    views:
-      main:
-        rights: [read, write, create, delete, traverse]
+stateNamespaces: []          # no Provider state Volume; bounded non-secret operational state lives in status/core ledger (D087)
 process:
   sandbox:
     namespaceClasses: [mount, ipc, pid]
@@ -341,7 +327,7 @@ process:
 
 ## 7 Process templates and placement
 
-The framework `ProviderDeployment` creates both component Processes as static resources when the Provider is admitted. The ACA controller never instantiates its own peer Processes and never writes `Provider` resource status directly. Both Processes use `providerRef: Provider/system-minijail`; the framework assigns each a dedicated core `ComponentPrincipal` (private minijail launch identity; never a ResourceRef). Core `ProviderDeployment` creates one provider-owned Volume per declared stateNamespace per component before each Process starts, and deletes them after Processes finalize. Each Volume uses guest-local placement: `providerRef: Provider/volume-local`, `source.executionRef: Guest/<aca-gateway-name>`, reconciled by the Guest-local `volume-local` instance inside the gateway Guest. There is no Host-backed source, no virtiofs attachment, and no `attachments[]` array. The Host must never hold cloud binding, admission, PSK, or operation state. The ACA controller does not create, own, or add `Volume` to its exported `resourceTypes`; `Provider/volume-local` is the sole Volume reconciler. The framework delivers each mounted view dirfd to its Process at startup. No cross-component Volume sharing, no `accessAcl`/`defaultAcl` entries with external principals, and no OS-account plumbing beyond Nix provisioning are required.
+The framework `ProviderDeployment` creates both component Processes as static resources when the Provider is admitted. The ACA controller never instantiates its own peer Processes and never writes `Provider` resource status directly. Both Processes use `providerRef: Provider/system-minijail`; the framework assigns each a dedicated core `ComponentPrincipal` (private minijail launch identity; never a ResourceRef). Neither component declares a Provider state Volume: bounded non-secret operational state (sandbox binding/adoption metadata, deployment reconcile stage) lives in `Guest.status` and the core Operation ledger (D087). The Host must never hold cloud binding, admission, PSK, or operation state. Neither Process mounts a Provider state Volume. No cross-component Volume sharing and no OS-account plumbing for state Volumes are required.
 
 `spec.template` is the signed component ID resolved at runtime by the `ProviderDeployment` of `metadata.ownerRef` (`Provider/runtime-azure-container-apps`). There is no `componentRef` field. Component-to-component calls use d2b-bus ComponentSession exclusively.
 
@@ -390,12 +376,7 @@ spec:
     resetAfter: "300s"
   adoptionPolicy: adopt-on-restart
   drainTimeout: "30s"
-  mounts:
-    - volumeRef: Volume/runtime-azure-container-apps--aca-controller--sandbox-state--<aca-gateway-name>
-      view: main
-      mountPath: /state/sandbox-state
-      access: read-write
-      required: true
+  mounts: []                # no Provider state Volume; operational state in Guest.status/core ledger (D087)
 ```
 
 The controller makes no direct network calls. All Azure API calls are dispatched through the injected `AcaControl` port, which executes inside the deployment service. Long-running cloud operations return `progressing` or a `requeue-at` timestamp immediately and never block the controller's watch read loop; the controller re-enqueues the resource and reads updated status on the next reconcile iteration.
@@ -453,181 +434,49 @@ spec:
     resetAfter: "300s"
   adoptionPolicy: adopt-on-restart
   drainTimeout: "30s"
-  mounts:
-    - volumeRef: Volume/runtime-azure-container-apps--aca-deployment-service--service-state--<aca-gateway-name>
-      view: main
-      mountPath: /state/service-state
-      access: read-write
-      required: true
+  mounts: []                # no Provider state Volume; operational state in status/core ledger (D087)
 ```
 
-### 7.3 State Volume resources
+### 7.3 Provider state (status-first; no state Volume)
 
-**ProviderStateSet** is a query-time grouping — not a ResourceType or stored artifact. It is defined as the set of all `Volume` resources in a Zone whose `metadata.ownerRef` resolves to `Provider/runtime-azure-container-apps`. Core `ProviderDeployment` creates every Volume in the ProviderStateSet before the owning component Process starts, and deletes them after the Process finalizes on Provider removal. Semantic Provider controllers do not own Volume resources, do not add `Volume` to their exported `resourceTypes`, and do not create their own prerequisite state Volumes. `Provider/volume-local` is the sole Volume reconciler; the component only consumes its required view via the framework-delivered dirfd. `ComponentPrincipal` is the private minijail launch identity and is never used as a Volume layout `ownerRef`, `groupRef`, or any ResourceRef.
+**ProviderStateSet** is the optional, query-time grouping of the *declared*
+`Volume` resources in a Zone whose `metadata.ownerRef` resolves to
+`Provider/runtime-azure-container-apps`. It is not a ResourceType or stored
+artifact and is empty for this Provider.
 
-**Empty payload schema rule**: a component that declares a stateNamespace with no payload fields (schema is an empty object) uses `migrationPolicy: none` and requires no migration worker EphemeralProcess. The Volume is still durable (`kind: state`, `persistenceClass: persistent`, minimal nonzero `quotaBytes`, broker-maintained `identityMarker`).
+`Provider/runtime-azure-container-apps` declares **no** Provider state Volume;
+its `ProviderStateSet` is empty. Its durable operational state is bounded and
+non-secret — ARM/session binding handles, sandbox adoption metadata, deployment
+reconcile stage, bounded counters, and closed-enum error detail — and is opaque,
+non-authorizing, and derivable from external observation. Per D087 it lives in
+`Guest.status` and the core Operation ledger: the core Operation ledger owns
+in-flight ARM/session idempotency, retry, and transaction progress, and
+`Guest.status` owns the latest bounded observed cloud/sandbox phase (opaque,
+non-authorizing binding/operation handle digests only — never a poll URL,
+resource URI, or endpoint). Because this state is bounded, non-secret, and
+derivable, it fails the storage-need test: there is no sandbox-state Volume, no
+service-state Volume, no `/state` mount, and no
+`User/d2b-aca-controller`/`User/d2b-aca-deployment-service` state-layout
+principal. There is no empty identity-only Volume.
 
-**Volume architecture**: each semantic component (`aca-controller` and `aca-deployment-service`) receives exactly **one** provider-owned Volume with **guest-local** placement: `providerRef: Provider/volume-local`, `source.executionRef: Guest/<aca-gateway-name>`. The Guest-local `volume-local` instance running inside the gateway Guest reconciles it. There is no Host-backed source, no virtiofs attachment, and no `attachments[]` array. The manifest freezes guest-local placement; there is no fallback to Host-side storage. The Host must never hold remote or cloud binding, admission, PSK, or operation state. All Volumes carry `ownerRef: Provider/runtime-azure-container-apps` and Nix-provisioned `User/<name>` layout principals (one system user per component; see §7.3.3). The Process mount is satisfied when the Volume is Ready; the framework delivers the view dirfd at startup.
+Credentials are never persisted by this Provider: ARM/session credentials are
+acquired from the Credential Providers (`credential-managed-identity` /
+`credential-entra`) over dedicated Noise_KK sensitive sessions and held only
+transiently in the deployment service's process memory (see §8). No token, key,
+or credential byte enters any resource, status, audit record, or Volume.
 
-Layout principals are the Nix-provisioned system user `User/d2b-aca-controller` (declared in the gateway Guest's system-core Nix module). No cross-component Volume sharing and no `accessAcl`/`defaultAcl` entries with external principals are required.
+If a future revision identifies an actual secret or large private ACA payload
+that cannot enter status (for example, a sealed private recovery blob), it would
+declare a single guest-local state Volume under the storage-need test; version
+`1.0` requires none.
 
-#### 7.3.1 Sandbox state — source Volume
+#### 7.3.1 Restart re-derivation
 
-```yaml
-apiVersion: resources.d2b.io/v3
-type: Volume
-metadata:
-  name: runtime-azure-container-apps--aca-controller--sandbox-state--<aca-gateway-name>
-  zone: <zone>
-  ownerRef: Provider/runtime-azure-container-apps
-spec:
-  providerRef: Provider/volume-local         # Guest-local volume-local instance inside gateway Guest
-  source:
-    executionRef: Guest/<aca-gateway-name>   # guest-local; manifest-frozen; no Host fallback
-    settings:
-      kind: local-path
-      sourcePolicyId: runtime-azure-container-apps-sandbox-state
-  kind: state
-  persistenceClass: persistent          # durable: survives component/Provider restart, upgrade, destroy/reset
-  sensitivityClass: private
-  stateSchema:
-    schemaId: io.d2b.runtime-azure-container-apps/aca-controller/sandbox-state
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<hex>
-    migrationPolicy: pre-launch-required
-  quotaBytes: 10485760                  # 10 MiB nonzero; opaque binding/adoption metadata only
-  quota:
-    maxBytes: 10485760
-    maxInodes: 4096
-    enforcement: none
-  sealingCredentialRef: null
-  layout:
-    - path: ""
-      type: directory
-      ownerRef: User/d2b-aca-controller   # Nix-provisioned system user in gateway Guest
-      groupRef: User/d2b-aca-controller
-      mode: "0700"
-      noFollow: true
-      sensitivity: private
-      accessAcl: []
-      defaultAcl: []
-      createPolicy: create-if-never-provisioned
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      adoptionPolicy: quarantine-on-ambiguity
-      restartPolicy: preserve-across-controller-restart
-      leaseClass: none
-      invariants: [no-symlink, broker-opaque-id-only]
-    - path: sandboxes
-      type: directory
-      ownerRef: User/d2b-aca-controller
-      groupRef: User/d2b-aca-controller
-      mode: "0700"
-      noFollow: true
-      sensitivity: private
-      accessAcl: []
-      defaultAcl: []
-      createPolicy: create-if-absent
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      adoptionPolicy: adopt-with-live-owner-proof
-      restartPolicy: preserve-across-controller-restart
-      leaseClass: none
-      invariants: [no-symlink, broker-opaque-id-only]
-  views:
-    main:
-      path: ""
-      rights: [read, write, create, delete, traverse]
-  identityMarker:
-    class: broker-maintained
-    markerRoot: provider-state-markers
-  snapshotPolicy: null
-  retentionPolicy: null
-```
-
-Guest-local `volume-local` reconciles this Volume; all state stays inside the gateway Guest. The controller Process mounts this Volume (see §7.1 `mounts`); the framework delivers the `main`-view dirfd at startup.
-
-#### 7.3.2 Deployment service state Volume
-
-Empty payload schema; `migrationPolicy: none`; minimal quota for the identity marker only. No migration worker EphemeralProcess is ever created for this Volume.
-
-```yaml
-apiVersion: resources.d2b.io/v3
-type: Volume
-metadata:
-  name: runtime-azure-container-apps--aca-deployment-service--service-state--<aca-gateway-name>
-  zone: <zone>
-  ownerRef: Provider/runtime-azure-container-apps
-spec:
-  providerRef: Provider/volume-local         # Guest-local volume-local instance inside gateway Guest
-  source:
-    executionRef: Guest/<aca-gateway-name>   # guest-local; manifest-frozen; no Host fallback
-    settings:
-      kind: local-path
-      sourcePolicyId: runtime-azure-container-apps-service-state
-  kind: state
-  persistenceClass: persistent          # durable even for empty payload schema
-  sensitivityClass: private
-  stateSchema:
-    schemaId: io.d2b.runtime-azure-container-apps/aca-deployment-service/service-state
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<hex>
-    migrationPolicy: none               # empty payload schema; no migration worker
-  quotaBytes: 65536                     # 64 KiB; identity marker only
-  quota:
-    maxBytes: 65536
-    maxInodes: 256
-    enforcement: none
-  sealingCredentialRef: null
-  layout:
-    - path: ""
-      type: directory
-      ownerRef: User/d2b-aca-deployment-service   # Nix-provisioned system user in gateway Guest
-      groupRef: User/d2b-aca-deployment-service
-      mode: "0700"
-      noFollow: true
-      sensitivity: private
-      accessAcl: []
-      defaultAcl: []
-      createPolicy: create-if-never-provisioned
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      adoptionPolicy: quarantine-on-ambiguity
-      restartPolicy: preserve-across-controller-restart
-      leaseClass: none
-      invariants: [no-symlink, broker-opaque-id-only]
-  views:
-    main:
-      path: ""
-      rights: [read, write, create, delete, traverse]
-  identityMarker:
-    class: broker-maintained
-    markerRoot: provider-state-markers
-  snapshotPolicy: null
-  retentionPolicy: null
-```
-
-Guest-local `volume-local` reconciles this Volume; the identity marker is maintained inside the gateway Guest. The deployment service Process mounts this Volume (see §7.2 `mounts`); the framework delivers the `main`-view dirfd at startup.
-
-#### 7.3.3 User resource provisioning
-
-One Nix-provisioned system user per component, declared in the gateway Guest's system-core Nix module:
-
-```nix
-d2b.vms.<aca-gateway-name>.config.users.users."d2b-aca-controller" = {
-  isSystemUser = true;
-  group = "d2b-aca-controller";
-};
-d2b.vms.<aca-gateway-name>.config.users.groups."d2b-aca-controller" = {};
-
-d2b.vms.<aca-gateway-name>.config.users.users."d2b-aca-deployment-service" = {
-  isSystemUser = true;
-  group = "d2b-aca-deployment-service";
-};
-d2b.vms.<aca-gateway-name>.config.users.groups."d2b-aca-deployment-service" = {};
-```
-
-The volume-local Provider running inside the gateway Guest resolves each `User/<name>` to its provisioned uid/gid via the Guest's own User resource registry when performing layout operations. NSS is used only for verification; no PAM session or shell is granted. Because storage is guest-local, no Host-side User resource or uid/gid mapping is involved.
+On controller or deployment-service restart, observed sandbox/deployment state
+is re-derived from `Guest.status`, the core Operation ledger, and independent
+external observation (`AcaControlClient` ARM/session queries), treating status
+as observation, never authority (D087). No guest-local state Volume is read or
+required.
 
 ---
 
@@ -757,7 +606,14 @@ The controller maps `AcaSandboxLifecycle` to `Guest.status.providerPhase` using 
 
 The provider reads operation/requeue state exclusively through the core Operation ledger adapter. The provider does **not** own an `operation-ledger` `ProviderStateSet` compartment; the core Operation ledger owns operation/requeue truth. The `operation-ledger` stateNamespace has been removed from the controller component descriptor.
 
-The provider retains only the `sandbox-state` Volume (opaque ACA binding/adoption metadata — no credential bytes, endpoint URLs, or poll URLs). The controller persists ACA sandbox binding identifiers and adoption keys in the `sandbox-state` Volume's `main` view to survive daemon restarts; the framework delivers the view dirfd at startup; no bytes are exposed in resource status, audit records, or telemetry.
+The provider retains **no** state Volume. Bounded, non-secret sandbox binding
+identifiers and adoption keys — opaque ACA binding/adoption metadata, no
+credential bytes, endpoint URLs, or poll URLs — live in `Guest.status` (latest
+bounded observed binding/adoption handle digests) so they survive daemon restart
+and are reverified against external reality; no bytes are exposed as a secret,
+and none are persisted to a Volume. On restart the controller re-derives the
+observed binding from `Guest.status`, the core Operation ledger, and an external
+`find_sandboxes` query, treating status as observation, never authority.
 
 Each completed operation context is keyed by `OperationId` in the core ledger and carries:
 
@@ -782,7 +638,11 @@ The `RuntimeAdopt` method reconciles a Guest resource that was created with a pr
 
 1. Acquire a `Adopt`-purpose credential lease.
 2. Call `find_sandboxes` with the `AcaWorkloadQuery` derived from the current `AcaResourceBinding` (realm/zone ID, workload/guest UID, provider generation, configuration fingerprint).
-3. If exactly one candidate matches by binding: record `AcaSandboxRecord` in the `sandbox-state` Volume `main` view (via framework-delivered dirfd), transition sandbox lifecycle to observed state, set `status.bootstrapReady = false` until the enrolled ComponentSession is re-established.
+3. If exactly one candidate matches by binding: record the observed
+   `AcaSandboxRecord` binding digest in `Guest.status` (bounded, non-secret,
+   reverified), transition sandbox lifecycle to observed state, set
+   `status.bootstrapReady = false` until the enrolled ComponentSession is
+   re-established.
 4. If zero candidates match: the controller proceeds with fresh `RuntimeEnsure`.
 5. If multiple candidates match: set `Guest.status.phase = Degraded` with `reason: ambiguous-adoption`, emit a `critical`-severity bounded audit record (`AuditEventKind::GuestAdoptionAmbiguous`), and requeue. Do not proceed with any candidate.
 
@@ -1225,7 +1085,7 @@ Provider Pending
   → package/trust/conformance check (Nix eval-time for digest; runtime for conformance)
   → gatewayExecutionRef Guest becomes Ready (prerequisite; Provider stays Pending until met)
   → ProviderDeployment creates controller and deployment-service Processes INSIDE gateway Guest
-  → Core ProviderDeployment creates one Volume per component (aca-controller sandbox-state + aca-deployment-service service-state; each providerRef=volume-local, source.executionRef=Guest/<aca-gateway-name>, guest-local, no attachments[]; ownerRef: Provider/runtime-azure-container-apps) before Processes start
+  → no Provider state Volume is created (bounded non-secret operational state lives in Guest.status/the core Operation ledger, D087)
   → Provider Ready
   → Guest resources reconciled by aca-controller (running inside gateway Guest)
 ```
@@ -1244,7 +1104,13 @@ A Provider generation change (new package digest, config update, or credential r
 
 ### 16.3 State schema migration
 
-State schema version increments (`schemaVersion` major bump) require `migrationPolicy: pre-launch-required`. The controller Process is not started until the migration script (declared in the Provider package) completes successfully. A migration failure leaves the Provider in `Degraded` with `reason: state-migration-failed`; the old generation's Volumes are archived, not deleted.
+This Provider declares no state Volume, so there is no controller/service state
+schema migration at version `1.0`. If a future revision introduces a durable
+payload that passes the storage-need test (an actual secret or large private
+payload that cannot enter status), it would declare a single guest-local state
+Volume with `migrationPolicy: pre-launch-required` and the migration would run
+before the owning Process starts. Version `1.0` requires no state Volume and no
+migration infrastructure.
 
 ### 16.4 Upgrade path from current code
 
@@ -1276,7 +1142,7 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | `AcaCredentialLeaseClient` trait | `packages/d2b-provider-runtime-azure-container-apps/src/control.rs` (main) | test-only at v3 baseline | RETAIN+ADAPT | Move to `packages/d2b-contracts/src/provider_effects/aca.rs`; adapt `CredentialLease` to v3 Credential resource model; provider crate remains one package |
 | `AcaRuntimeConfig` / `AcaSandboxProfile` / bounds constants | `packages/d2b-provider-runtime-azure-container-apps/src/types.rs` (main) | test-only at v3 baseline | RETAIN+ADAPT | Adapt to v3 `providerSettings` schema fields; all bounds constants preserved |
 | `AcaResourceBinding` / `AcaWorkloadQuery` | `packages/d2b-provider-runtime-azure-container-apps/src/types.rs` (main) | test-only at v3 baseline | ADAPT | Replace `RealmId`/`WorkloadId` fields with v3 `Zone`/`Guest` resource UID; retain redacted Debug |
-| Operation ledger (`CompletedOperation`, `OperationLedger`) | `packages/d2b-provider-runtime-azure-container-apps/src/provider.rs` (main) | test-only at v3 baseline | ADAPT | Adapt operation ID type to v3; delegate to core Operation ledger adapter; provider has two state Volumes (sandbox-state + service-state), each providerRef=volume-local, source.executionRef=Guest/<aca-gateway-name>, guest-local, no attachments[]; core ProviderDeployment creates/deletes both; Volume absent from controller resourceTypes |
+| Operation ledger (`CompletedOperation`, `OperationLedger`) | `packages/d2b-provider-runtime-azure-container-apps/src/provider.rs` (main) | test-only at v3 baseline | ADAPT | Adapt operation ID type to v3; delegate to the core Operation ledger adapter (it owns in-flight operation/requeue truth); the provider declares no state Volume — bounded non-secret sandbox binding/adoption metadata lives in `Guest.status` (D087) |
 | Lease cleanup job/executor pattern | `packages/d2b-provider-runtime-azure-container-apps/src/provider.rs` (main) | test-only at v3 baseline | RETAIN | Retain `LeaseCleanupJob`/`LeaseCleanupExecutor`/`TracingLeaseCleanupObserver` verbatim; target tracing key unchanged |
 | Retry/backoff (`AcaControlErrorKind` + `RetryClass`) | `packages/d2b-provider-runtime-azure-container-apps/src/control.rs` (main) | test-only at v3 baseline | RETAIN | Retain all error kind/diagnostic variants and `MAX_ACA_RETRY_AFTER_MS` |
 | Provider agent process entry point | `packages/d2b-gateway-runtime/src/provider_agent.rs` (main) | production-reachable at main | COPY/ADAPT (partial) | Adapt `ProviderAgentProcess`/`run_registered`/`run` as deployment service binary skeleton; exclude `aca_workload.rs` |
@@ -1372,10 +1238,10 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Current source | `packages/d2b-provider-runtime-azure-container-apps/src/types.rs` (main): `AcaRuntimeConfig`, `AcaSandboxProfile`, `AcaResourceBinding`, `AcaWorkloadQuery` — test-only at v3 baseline |
 | Reuse action | RETAIN+ADAPT |
 | Destination | `packages/d2b-provider-runtime-azure-container-apps/src/types.rs` |
-| Detailed design | Replace `RealmId`/`WorkloadId` with v3 `Zone`/`Guest` UID types. `AcaResourceBinding` keys the adoption query. One provider-owned Volume per component: controller holds opaque ACA binding/adoption metadata in `sandbox-state` Volume; deployment service holds empty schema in `service-state` Volume. Each Volume: `providerRef: Provider/volume-local`, `source.executionRef: Guest/<aca-gateway-name>` (guest-local; manifest-frozen; no Host fallback; no `attachments[]`); Guest-local `volume-local` instance reconciles. Layout owners: `User/d2b-aca-controller` and `User/d2b-aca-deployment-service` (Nix-provisioned in gateway Guest; no `ComponentPrincipal` ResourceRef). Both Processes mount their own Volume's `main` view (`required: true`); framework delivers view dirfd. Core `ProviderDeployment` creates/deletes both Volumes (not the ACA controller); `Volume` absent from controller `resourceTypes`; `Provider/volume-local` sole reconciler. Operation/requeue state delegated to core Operation ledger adapter; `operation-ledger` stateNamespace removed. No cross-component Volume sharing. Host never holds cloud binding, admission, PSK, or operation state. |
-| Integration | Core ProviderDeployment creates both Volumes (sandbox-state + service-state; each `providerRef=volume-local`, `source.executionRef=Guest/<aca-gateway-name>`, guest-local, no `attachments[]`) before Processes start; Guest-local Provider/volume-local reconciles; `stateSchemaPhase: current` and Volume `status.ready: true` gate Process launch |
-| Data migration | sandbox-state v1.0 initial; `migrationPolicy: pre-launch-required`; service-state `migrationPolicy: none` (empty payload; no migration worker) |
-| Validation | sandbox-state Volume round-trip (framework-delivered dirfd; `main` view); service-state Volume present with `migrationPolicy: none` and `quotaBytes: 65536`; adoption from persisted binding test; `kind: state`, `persistenceClass: persistent`, nonzero `quotaBytes`, broker-maintained `identityMarker` for both Volumes; `source.executionRef: Guest/<aca-gateway-name>` on each Volume; no `attachments[]` on any Volume; `Volume` absent from controller `resourceTypes`; controller does not create/update/watch Volume resources; `Provider/volume-local` sole reconciler; no ComponentPrincipal ResourceRef; `ProviderDeployment` creates/deletes Volumes; core Operation ledger adapter integration test |
+| Detailed design | Replace `RealmId`/`WorkloadId` with v3 `Zone`/`Guest` UID types. `AcaResourceBinding` keys the adoption query. The provider declares **no** Provider state Volume: bounded, non-secret sandbox binding/adoption metadata lives in `Guest.status` (latest bounded observed handle digests) and in-flight operation/requeue truth lives in the core Operation ledger (D087). Neither Process mounts a state Volume; there is no `sandbox-state`/`service-state` Volume, no `User/d2b-aca-controller`/`User/d2b-aca-deployment-service` state-layout principal, and no empty identity-only Volume. On restart the controller re-derives observed binding from `Guest.status`, the core Operation ledger, and an external `find_sandboxes` query, treating status as observation, never authority. Host never holds cloud binding, admission, PSK, or operation state. |
+| Integration | No Provider state Volume is created before Processes start; the controller writes its bounded observed binding/adoption metadata to `Guest.status` on material change and reads in-flight operation state from the core Operation ledger adapter |
+| Data migration | None — no state Volume at v3 `1.0` |
+| Validation | Controller/service declare empty `stateNamespaces`; no `sandbox-state`/`service-state` Volume created; neither Process mounts a state Volume; `Guest.status` binding/adoption fields are bounded, non-secret, and carry no credential/endpoint/poll-URL bytes; restart re-derivation from status/core ledger/external `find_sandboxes` without a Volume; core Operation ledger adapter integration test |
 | Removal proof | Old in-memory-only operation ledger removed after core Operation ledger adapter passes; `operation-ledger` stateNamespace absent from component descriptor |
 
 ### ADR046-aca-006
@@ -1442,7 +1308,7 @@ The controller must pass the toolkit's black-box conformance suite (`d2b-provide
 - status field redaction (guestIdentityDigest contains no raw sandbox ID string);
 - error code stability under all `AcaControlErrorKind` variants;
 - operation ledger TTL expiry and capacity eviction (via core Operation ledger adapter);
-- sandbox-state and service-state Volume round-trip: framework-delivered `main`-view dirfd; `User/d2b-aca-{controller,deployment-service}` layout owners; `providerRef: Provider/volume-local`; `source.executionRef: Guest/<aca-gateway-name>` (guest-local); no `attachments[]`; `stateSchemaPhase: current` and Volume `status.ready: true` gate Process launch; `Volume` absent from controller `resourceTypes`; controller does not create/update Volume resources.
+- no Provider state Volume: controller/service declare empty `stateNamespaces`; neither Process mounts a state Volume; bounded non-secret sandbox binding/adoption metadata lives in `Guest.status` (no credential/endpoint/poll-URL bytes) and in-flight operation/requeue truth in the core Operation ledger (D087); restart re-derivation from status/core ledger/external `find_sandboxes` without a Volume; `Volume` absent from controller `resourceTypes`.
 
 ### 19.5 Mocked Azure test suite
 

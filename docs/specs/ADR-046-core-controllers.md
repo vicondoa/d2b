@@ -100,7 +100,10 @@ It:
 
 - verifies package/trust/config/conformance;
 - validates controller/service/worker graph;
-- creates owned Volume/Process/EphemeralProcess and other required children;
+- creates owned Process/EphemeralProcess and any *declared* optional state
+  Volume (`ADR-046-provider-state`: a component declares a state Volume only
+  when a payload passes the storage-need test; stateless components declare
+  none and get none) plus other required children;
 - waits for required components/dependencies;
 - publishes exported ResourceTypes/services only after ready;
 - drains/withdraws/revokes components on update/disable/delete;
@@ -267,11 +270,14 @@ No handler requires all optional Providers to be ready.
 ## Restart
 
 The core controller stores no authoritative private ledger outside resources/
-operations/revision log. On restart it:
+operations/revision log. The core Operation ledger owns in-flight idempotency,
+retry, and transaction progress; resource `status` owns the latest bounded
+result and checkpoint (D087). On restart it:
 
 - authenticates a new ComponentSession generation;
 - relists owned resources;
-- resumes from durable checkpoints where valid;
+- resumes from durable checkpoints where valid, treating recovered `status` as
+  observation and reverifying it against external reality before relying on it;
 - revalidates Provider/controller leases;
 - does not clean up before Process/Host/Guest/Volume owners observe/adopt;
 - preserves Unknown/ambiguous states.

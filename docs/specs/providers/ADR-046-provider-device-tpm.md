@@ -162,12 +162,7 @@ spec:
   domain: system
   processClass: controller
   template: controller
-  mounts:
-    - volumeRef: Volume/device-tpm--controller--scratch--host-system
-      view: scratch
-      mountPath: /scratch
-      access: read-write
-      required: true
+  mounts: []                            # no Provider state Volume; operational state is in status/core ledger (D087)
   sandbox:
     namespaceClasses: [pid, mount]
     capabilityClasses: []
@@ -224,97 +219,31 @@ spec:
 
 ### 4.2 ProviderStateSet
 
-The **ProviderStateSet** for `Provider/device-tpm` is the query-time set
-`{ v : Volume | v.metadata.zone == zone && v.metadata.ownerRef == "Provider/device-tpm" }`.
-It is a logical grouping concept, not a ResourceType or stored artifact.
+The **ProviderStateSet** for `Provider/device-tpm` is the optional, query-time
+set `{ v : Volume | v.metadata.zone == zone && v.metadata.ownerRef == "Provider/device-tpm" }`.
+It is a logical grouping concept, not a ResourceType or stored artifact, and is
+empty of controller state Volumes.
 
-Every semantic component gets its own private **ProviderDeployment-created** Volume in the
-ProviderStateSet, even when the component's payload schema is empty. Volumes
-are private — no cross-component sharing; each component receives only the
-dirfd to its own declared view. Layout principals are Nix-preprovisioned
-`User/<name>` resources; there are no `ComponentPrincipal` ResourceRefs.
+`Provider/device-tpm`'s controller declares **no** Provider state Volume. The
+controller reconstructs all Device reconcile state from the Zone resource store
+on restart, and its bounded non-secret operational state — reconcile stage,
+per-Device attach/provision observations, marker-status observations, bounded
+counters, and closed-enum error detail — lives in the owning resource's
+`status` subresource and the core Operation ledger (D087). Because that
+operational state is fully derivable from spec, `status`, the core Operation
+ledger, and independent external observation, the controller-scratch payload
+fails the storage-need test: there is no controller `scratch` state Volume, no
+`controller-scratch` state namespace, no `scratch` mount, and no dedicated
+`User/device-tpm-controller-system` state-layout principal. There is no empty
+identity-only Volume.
 
-The device-tpm controller component declares one stateNamespace in its signed
-component descriptor:
-
-```yaml
-stateNamespaces:
-  - id: controller-scratch
-    persistenceClass: persistent     # durable; survives daemon restart
-    sensitivityClass: private
-    migrationPolicy: none            # empty payload schema; no migration worker
-    quotaBytes: 65536                # 64 KiB minimal; nonzero to enable quota and identity marker
-    views:
-      scratch:
-        rights: [read, write, create, delete, traverse]
-```
-
-Core ProviderDeployment creates the following Volume before the controller
-Process starts and deletes it after the controller Process exits. The
-device-tpm controller does not create, own, or delete its own prerequisite
-state Volume. It is never declared in Nix config and never authored by the
-operator. The semantic device-tpm controller only consumes the `scratch` view
-via its required mount; `Provider/volume-local` is the sole reconciler of this
-Volume.
-
-```yaml
-apiVersion: resources.d2b.io/v3
-type: Volume
-metadata:
-  name: device-tpm--controller--scratch--host-system
-  zone: dev
-  ownerRef: Provider/device-tpm
-spec:
-  providerRef: Provider/volume-local
-  kind: state                         # base Volume field; durable state survives restart/upgrade
-  persistenceClass: persistent        # provider-state extension; durable across restarts
-  sensitivityClass: private           # provider-state extension
-  stateSchema:                        # provider-state extension; empty payload schema
-    schemaId: io.d2b.device-tpm/controller/scratch
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<provider-descriptor-bound-digest>
-    migrationPolicy: none             # no migration worker; empty schema requires none
-  quotaBytes: 65536                   # provider-state extension; 64 KiB minimal nonzero
-  sealingCredentialRef: null          # provider-state extension
-  source:
-    sourceId: "d2b/provider-state/persistent"   # opaque policy ID; framework resolves backing path
-    executionRef: Host/host-system              # from Provider config.controllerExecutionRef
-    settings: {}
-  layout:
-    - path: scratch
-      type: directory
-      ownerRef: User/device-tpm-controller-system   # Nix-preprovisioned User
-      groupRef: User/device-tpm-controller-system
-      mode: "0700"
-      sensitivity: private
-      createPolicy: create-if-never-provisioned     # writes broker identity marker on first provision
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled               # persistent; volume-local owns cleanup
-      noFollow: true
-  views:
-    scratch:
-      path: scratch
-      rights: [read, write, create, delete, traverse]
-  quota:                              # base Volume field; minimal nonzero byte and inode quota
-    maxBytes: 65536
-    maxInodes: 256
-    enforcement: none
-  identityMarker:                     # provider-state extension; required for persistent/state kind
-    class: broker-maintained
-    markerRoot: provider-state-markers
-  snapshotPolicy: null
-  retentionPolicy: null
-```
-
-Volume naming follows the provider-state convention:
-`<provider-name>--<component-id>--<namespace-id>--<execution-ref-short>`.
-
-The controller reconstructs all Device reconcile state from the Zone resource
-store on restart; the `scratch` view carries working state that persists across
-component and Provider restart and participates in upgrade, destroy, and reset
-lifecycle operations. The controller mounts this Volume at `/scratch` (§4.1)
-and does not interact with Volume provisioning, layout, or quota — those are
-exclusively owned by `Provider/volume-local`.
+The **TPM data Volume** described in §7 is a separate matter: it is the
+per-Device swtpm NVRAM/EK-seed payload (a genuine large, secret, private
+Device payload), created by the controller as a Device-owned Volume. It is
+`ownerRef: Device/<name>` (not `Provider/device-tpm`), so it is not part of the
+ProviderStateSet, and it is retained unchanged — it easily passes the
+storage-need test as secret/large private Device state that must never enter
+status.
 
 ---
 
@@ -1347,7 +1276,7 @@ no second `ensure_state_volume` call; swtpm Process not created.
 Integration: physically replace swtpm/ dir → volume-local sets Volume Failed →
 Device Failed; no auto-recovery.
 
-### ADR046-device-tpm-010 — Controller Process and ProviderStateSet
+### ADR046-device-tpm-010 — Controller Process (status-first; no Provider state Volume)
 
 | Field | Value |
 | --- | --- |
@@ -1357,22 +1286,18 @@ Device Failed; no auto-recovery.
 
 Implement controller Process spec (§4.1). Tests prove:
 - `processClass: controller`; `readOnlyRoot: true`.
-- `mounts[0]`: `volumeRef: Volume/device-tpm--controller--scratch--host-system`,
-  `view: scratch`, `mountPath: /scratch`, `access: read-write`, `required: true`.
-- ProviderStateSet Volume (§4.2) is created and deleted by core ProviderDeployment
-  before/after the controller Process, not by the device-tpm controller. The
-  device-tpm controller holds no `create` permission for Volumes with
-  `ownerRef: Provider/<any>` — only `ownerRef: Device/<any>` (see §15.2).
-- Volume spec uses `kind: state` and provider-state extension fields:
-  `persistenceClass: persistent`, `sensitivityClass: private`,
-  `quotaBytes: 65536`, `stateSchema` with `migrationPolicy: none`,
-  `quota: {maxBytes: 65536, maxInodes: 256, enforcement: none}`,
-  `identityMarker: {class: broker-maintained, markerRoot: provider-state-markers}`.
-- `migrationPolicy: none` → no migration worker Process registered or created.
-- Layout principal `User/device-tpm-controller-system` is a Nix-preprovisioned
-  `User` resource; no `ComponentPrincipal` ResourceRef in spec.
-- `Provider/volume-local` is the sole reconciler of this Volume; device-tpm
-  controller does not provision, repair, or delete it.
+- `mounts` is empty: the controller declares no Provider state Volume; its
+  bounded non-secret operational state lives in the owning resource's `status`
+  subresource and the core Operation ledger (D087). No `controller-scratch`
+  namespace, no `scratch` mount, and no `User/device-tpm-controller-system`
+  state-layout principal exist.
+- The device-tpm controller holds no `create` permission for Volumes with
+  `ownerRef: Provider/<any>`; it creates only the per-Device TPM data Volume
+  with `ownerRef: Device/<any>` (see §7 and §15.2), which is not part of the
+  ProviderStateSet.
+- On restart the controller re-derives Device reconcile state from the Zone
+  resource store and reverifies against external reality (marker checks, running
+  swtpm processes), treating `status` as observation, never authority.
 
 ### ADR046-device-tpm-011 — Nix roundtrip test
 

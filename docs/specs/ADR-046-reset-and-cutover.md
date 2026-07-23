@@ -107,7 +107,7 @@ existing, evidenced precedent:
 | `packages/d2b/src/lib.rs` `cmd_host_migrate_storage`/`build_storage_migration_plan` (evidence class: `implemented-and-reachable`, retired per `ADR-046-cli-and-operations`) | Concrete `StorageMigrationPlan` JSON shape: `checkpointId`, `rollbackCommand`, `preflightRequirements`, `preserve`, `cutoverOnlyCleanup`, `failClosedHazards`, `applyStatus` | This spec's [CLI UX/exit codes/JSON plan](#cli-uxexit-codesjson-plan) reuses this exact JSON shape (renamed fields, extended scope) for `d2b host cutover plan` |
 | `packages/d2b/src/lib.rs` `cmd_host_destroy` (evidence class: `implemented-and-reachable`) | Dry-run-first destructive host verb gated by `require_explicit_mutation_flag`, Tier-0-legacy refusal, daemon-down refusal | Reused verbatim as the `--apply` admission precondition pattern for `d2b host cutover apply` and `d2b host reset` |
 | `ADR-046-resources-zone-control` §2.6, §9.4 | `core.zone-drain` finalizer; reverse-dependency-order child deletion; compiled bootstrap re-entry; uid=0/local-OS-authenticated out-of-band destructive reset | Adopted verbatim as the mechanism behind [Full Zone reset](#full-zone-reset-vs-provider-reset-vs-guest-reset) |
-| `ADR-046-provider-state` "Mandatory-state bootstrap", "Cross-component migration coordination", "Incident hold", "Unclaimed Volume GC" | Bootstrap-eligible Volume exception (D086); migration `EphemeralProcess` prepare/stage/commit/precommit-rollback/roll-forward-after-crash algorithm; per-Volume `IncidentHold` condition; unclaimed-Volume GC policy | Reused as the exact mechanical pattern for every Adopt-disposition row in the [migration/disposition matrix](#migrationdisposition-matrix) that moves bytes into a new Volume (TPM, store-view, disk images, unsafe-local scope state) |
+| `ADR-046-provider-state` "No bootstrap state Volume", "Cross-component migration coordination", "Incident hold", "Unclaimed Volume GC" | No bootstrap state-Volume exception (D086, superseded by D087); migration `EphemeralProcess` prepare/stage/commit/precommit-rollback/roll-forward-after-crash algorithm; per-Volume `IncidentHold` condition; unclaimed-Volume GC policy | Reused as the exact mechanical pattern for every Adopt-disposition row in the [migration/disposition matrix](#migrationdisposition-matrix) that moves bytes into a new Volume (TPM, store-view, disk images, unsafe-local scope state) |
 | `ADR-046-nix-configuration` "Prior generation retention and pruning"; D066 | Per-Zone `retainedGenerations` (default 3, range 1..16), count-based (no TTL) pruning, eval-enforced bound | Reused verbatim for [Backup/retention count 1-16, no TTL](#backupretention-count-1-16-no-ttl) applied to cutover snapshots |
 | `ADR-046-telemetry-audit-and-support` `d2b-audit` crate design | SHA-256 hash-chain JSONL, segment rotation, 30-day compaction, `AuditWriteClass`, `d2b zone audit export` | Reused for [Audit chain closure/opening](#audit-chain-closure-and-opening) |
 | `tests/tools/preflight-disk-space.sh` (10 GiB floor, cited by `AGENTS.md` "Disk hygiene contract") | Fail-closed disk-space guard ordered before toolchain bootstrap | Reused as the model for [Disk-space/GC safety](#disk-spacegc-safety) |
@@ -530,38 +530,39 @@ translated into ZoneLink terms:
 ## ProviderStateSet and state schema migration policy
 
 Every Provider component's durable payload state is governed entirely by
-`ADR-046-provider-state`; this spec does not define a second state model. Two
-distinctions matter specifically for cutover:
+`ADR-046-provider-state`; this spec does not define a second state model.
+Provider state Volumes are optional and declared only under the storage-need
+test — bounded non-secret operational state lives in resource `status` and the
+core Operation ledger by default (D087). Two distinctions matter specifically
+for cutover:
 
 1. **First-bootstrap components never have a "from" schema.** For every
    Provider installed during [Provider install/topological start](#provider-installtopological-start),
-   its component state Volumes are created fresh by Core ProviderDeployment
-   with `stateSchemaPhase: current` immediately (there is no
+   any *declared* component state Volume is created fresh by Core
+   ProviderDeployment with `stateSchemaPhase: current` immediately (there is no
    `migration-required` phase to resolve, because `installedSchemaVersion`
-   equals `spec.stateSchema.schemaVersion` at creation by construction — this
-   is the "reset of empty component state" case, expanded below). Cutover
-   never invokes `ADR-046-provider-state` "Schema migration" §"Pre-launch
-   migration"/"Online migration" for a freshly created Provider; those
-   mechanisms exist for a **later** Provider software upgrade, not for the
+   equals `spec.stateSchema.schemaVersion` at creation by construction).
+   Cutover never invokes `ADR-046-provider-state` "Schema migration"
+   §"Pre-launch migration"/"Online migration" for a freshly created Provider;
+   those mechanisms exist for a **later** Provider software upgrade, not for the
    initial cutover.
-2. **Cutover-adopted state Volumes are the one exception.** The TPM Volume
-   and store-view Volume created during [disposition
-   execution](#disposition-framework) are **not** created empty by Core
-   ProviderDeployment — they are created by the Adopt migration
-   `EphemeralProcess` itself, which writes both the layout content (from the
-   adopted source) and the identity marker before the Volume is marked
-   `Ready`. Once created, they participate in the exact same
-   `ProviderStateSet` ownership, quota, sealing, snapshot, retention,
-   incident-hold, and unclaimed-GC machinery as any other Provider state
-   Volume — cutover does not create a special-cased Volume subtype.
+2. **Cutover-adopted state Volumes.** The TPM Volume and store-view Volume
+   created during [disposition execution](#disposition-framework) are created
+   by the Adopt migration `EphemeralProcess` itself, which writes both the
+   layout content (from the adopted source) and the identity marker before the
+   Volume is marked `Ready`. Once created, they participate in the exact same
+   ownership, quota, sealing, snapshot, retention, incident-hold, and
+   unclaimed-GC machinery as any other declared Provider state Volume — cutover
+   does not create a special-cased Volume subtype.
 
-The `ProviderStateSet` query itself
+The optional `ProviderStateSet` query itself
 (`ProviderStateSet(zone, provider-name) = { v : Volume | v.metadata.zone ==
 zone && v.metadata.ownerRef == "Provider/<provider-name>" }`) requires no
 cutover-specific extension: once Phase 6 installs a Provider, its
-`ProviderStateSet` is exactly the set of Volumes Core ProviderDeployment (or,
-for the two Adopt exceptions above, the Adopt migration `EphemeralProcess`)
-created for it, queryable the same way at any later time.
+`ProviderStateSet` is exactly the set of *declared* Volumes Core
+ProviderDeployment (or, for the Adopt cases above, the Adopt migration
+`EphemeralProcess`) created for it — possibly empty — queryable the same way at
+any later time.
 
 ## Resource-store initialization
 
@@ -612,43 +613,35 @@ startup sequence `ADR-046-core-controllers` "Startup" already defines:
 8. Other Provider controllers/processes launch through resources (Phase 6).
 9. Zone readiness publishes after mandatory handlers are current.
 
-## First local bootstrap/volume-local state exception
+## volume-local reaches Ready without a state Volume
 
-Step 8 above depends on `Provider/volume-local` being able to create Volumes
-for every other Provider's component state — but `volume-local`'s own
-controller instance needs its own state Volume before it can create anyone
-else's. Cutover relies on, and does not modify, the exact fixed per-execution-target
-local bootstrap mechanism `ADR-046-provider-state` "Mandatory-state
-bootstrap" (D086) and `ADR-046-components-processes-and-sandbox` "Bootstrap
-state-realization exception" already define:
+Step 8 above depends on `Provider/volume-local` being able to create the
+*declared* state Volumes for other Providers — but `volume-local`'s own
+controller instance declares no state Volume: its bounded non-secret
+operational state lives in resource `status` and the core Operation ledger
+(D087). Because the fixed bootstrap components (`volume-local`, `system-core`,
+`system-minijail`) declare no state Volume, no component needs a Volume before
+`volume-local` is Ready, so cutover relies on no bootstrap state-Volume cycle,
+no per-execution-target local bootstrap storage mechanism, and no
+bootstrap-storage exception (D086, superseded by D087; see "No bootstrap state
+Volume" in `ADR-046-components-processes-and-sandbox`):
 
-- for the Host execution target, this fixed mechanism provisions the empty
-  (`schemaId: null`) state Volume for the first `Provider/volume-local`
-  controller instance on that Host, and — because `system-core` and
-  `system-minijail` are themselves fixed bootstrap components on the Host —
-  their empty state Volumes too;
-- the mechanism never provisions any other component's state Volume, and
-  never crosses an execution-target boundary (a Guest's own local bootstrap
-  mechanism, invoked when that Guest boots its own `volume-local` instance,
-  uses only Guest-local primitives);
-- on `volume-local`'s first startup reconcile relist, it adopts these
-  bootstrap-provisioned Volumes exactly as it would adopt any pre-existing
-  Volume row after a restart — transitioning them from `Pending` to `Ready`
-  after marker verification;
-- this cutover introduces **no second bootstrap exception**. The TPM/store-view
-  Adopt Volumes described above are created later, in Phase 4/8, by their
-  owning migration `EphemeralProcess` and Provider (`device-tpm`,
-  `runtime-cloud-hypervisor`), strictly after `volume-local` itself has
-  already reached readiness via this same fixed mechanism — they are
-  ordinary Core-ProviderDeployment-adjacent Volumes, not bootstrap-eligible
-  ones, and must never be confused with the three bootstrap-eligible Volumes
-  (`volume-local` itself, `system-core`, `system-minijail`) this mechanism
-  is scoped to.
+- the first `Provider/volume-local` controller instance on the Host reaches
+  `Ready` from Host-local primitives and its own `status` alone, then begins
+  creating the declared state Volumes of later Providers;
+- a Guest boots its own `volume-local` instance from Guest-local primitives,
+  without any parent-Host dirfd or resource handle, and that instance likewise
+  reaches Ready from its own status;
+- the TPM/store-view Adopt Volumes described above are created later, in
+  Phase 4/8, by their owning migration `EphemeralProcess` and Provider
+  (`device-tpm`, `runtime-cloud-hypervisor`), strictly after `volume-local`
+  has already reached readiness — they are ordinary
+  Core-ProviderDeployment-adjacent declared Volumes.
 
 Cutover's only responsibility here is sequencing: Phase 5 step 8 (Provider
-install) must not attempt to create any Provider's component state Volume
-before `volume-local`'s own controller Process has reached `Ready` on the
-target it will serve — this is naturally satisfied because
+install) must not attempt to create any Provider's declared component state
+Volume before `volume-local`'s own controller Process has reached `Ready` on
+the target it will serve — this is naturally satisfied because
 `Provider/volume-local` is itself the very first non-bootstrap Provider
 installed in [Provider install/topological start](#provider-installtopological-start).
 
@@ -1028,23 +1021,22 @@ Cutover treats each chain identically:
    directly (still present, per step 2); `d2b zone audit export` only ever
    serves the new chain.
 
-## Reset of empty component state
+## Reset of stateless components and fresh state
 
-"Reset of empty component state" refers to the ordinary case — the large
-majority of Provider components installed during cutover — where there is no
-prior state to adopt or reset at all: a freshly installed Provider's
-component state Volumes are created **empty** by Core ProviderDeployment
-exactly as `ADR-046-provider-state` "Volume creation and ownership" and
-"Mandatory-state bootstrap" already specify, with `schemaId: null` for
-stateless components and a fresh, valid `stateSchema` for stateful ones. This
-is not a special "reset" operation distinct from ordinary first-install
-Volume creation; it is worth naming explicitly here only to make clear that
-cutover:
+The large majority of Provider components installed during cutover are
+stateless: their bounded non-secret operational state lives in resource
+`status` and the core Operation ledger (D087), so they declare no state Volume
+and none is created. For the minority of components that declare an optional
+state Volume under the storage-need test, a freshly installed Provider's
+*declared* state Volume is created fresh by Core ProviderDeployment exactly as
+`ADR-046-provider-state` "Volume creation and ownership" specifies, with a
+valid `stateSchema`. This is worth naming explicitly here only to make clear
+that cutover:
 
-- never skips creating a component's state Volume merely because that
-  component "has nothing to migrate" — every semantic component, including
-  payload-free ones, receives its own Volume for stable identity, markers,
-  quota, and lifecycle participation, per D076;
+- creates a state Volume for a freshly installed Provider **only** for a
+  declared namespace that passed the storage-need test — never an empty,
+  identity-only Volume, and never a Volume for a stateless component (per the
+  revised D076);
 - never invents synthetic prior state for a freshly installed Provider —
   `stateSchemaPhase: current` and `installedSchemaVersion` equal to
   `spec.stateSchema.schemaVersion` are set at creation, not derived from any
@@ -1136,10 +1128,13 @@ evidence corrections](#cross-reference-and-evidence-corrections)):
 
 1. Deletes `Provider/<name>` through the normal resource API delete path
    (`deletionRequestedAt`, finalizer-ordered child deletion, `Deleted` event);
-2. Every Volume in that Provider's `ProviderStateSet` is deleted **only** if
-   `--destroy-volumes` is explicitly passed; by default, Volumes with
-   `persistenceClass: persistent` are detached (ownerRef cleared to `null`
-   pending operator disposition) rather than deleted, surfaced as
+   the Provider's and its children's `status` — the default surface for bounded
+   non-secret operational state (D087) — disappears with the resource row and
+   its revision, requiring no separate state disposition;
+2. Any declared Volume in that Provider's (possibly empty) `ProviderStateSet`
+   is deleted **only** if `--destroy-volumes` is explicitly passed; by default,
+   Volumes with `persistenceClass: persistent` are detached (ownerRef cleared
+   to `null` pending operator disposition) rather than deleted, surfaced as
    `Unclaimed` per `ADR-046-provider-state` "Unclaimed Volume GC" — an
    operator must explicitly delete an unclaimed Volume; it is never
    automatically swept by a Provider reset;
@@ -1307,7 +1302,7 @@ explicit about which one applies where:
    from that point forward; it is never used for the initial bootstrap
    switch itself, because a Provider cannot exist before the Zone runtime
    that hosts it exists — this is the same chicken-and-egg boundary the
-   [Bootstrap boundary](#first-local-bootstrapvolume-local-state-exception)
+   [volume-local reaches Ready without a state Volume](#volume-local-reaches-ready-without-a-state-volume)
    section already establishes for Volume creation, applied here to NixOS
    activation instead.
 4. **Ordering invariant.** The new fixed Zone runtime unit is declared
@@ -1429,7 +1424,7 @@ owns the destination.
 | `d2b-realm-router` PeerSession/MuxSession/`WorkloadOp`/`RealmMethod` wire | multiple rows, `dead-reachable`/`production-reachable` | Preserve (compiled into binary; Destroy only when the binary itself is retired at Phase 10) | ComponentSession/d2b-bus/`ResourceOp` | `ADR046-session-001`, `ADR046-bus-001`, `ADR046-resource-api-001` |
 | `d2b-unsafe-local-helper` binary, `DaemonToUnsafeLocalHelper` protocol | §7, `production-reachable` | Preserve until Process Provider supervisor ticket migration lands, then Destroy | User-only `Host` Process supervisor | `ADR046-primitives-003` |
 | `d2b-guest-shell-runner` | `production-reachable` | Preserve until user-only Host shell Process parity, then Destroy | `Process` child of user-only Host | `ADR046-primitives-003` |
-| `~/.local/state/d2b/unsafe-local-scopes.json` | §7 evidence, per-user scope ledger | Adopt into the user-only Host's own state Volume (empty-schema exception does not apply here — this ledger has real content) via a per-user migration `EphemeralProcess` | User-only Host component state Volume | `ADR046-primitives-003` |
+| `~/.local/state/d2b/unsafe-local-scopes.json` | §7 evidence, per-user scope ledger | Adopt into a declared user-only Host state Volume — this ledger is real private per-user content that passes the storage-need test, not derivable from status/core ledger — via a per-user migration `EphemeralProcess` | User-only Host declared component state Volume | `ADR046-primitives-003` |
 
 ### Storage/restart/synchronization contract (ADR 0034)
 

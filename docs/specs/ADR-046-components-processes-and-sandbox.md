@@ -33,52 +33,27 @@ Process controller exists to launch the first Process controller. It is
 integrity-pinned, uses the compiled bootstrap authorization, and launches every
 later Process controller, including Provider/system-systemd.
 
-### Bootstrap state-realization exception
+### No bootstrap state Volume
 
-Mandatory per-component state Volumes (see "Static Provider deployment and
-component state Volumes" below) create one closed bootstrap cycle: creating a
-Volume normally requires a `Provider/volume-local` controller instance to be
-running, but that instance's own controller Process cannot launch until its
-own state Volume already exists, and (where they exist on that target)
-system-core/system-minijail need their (empty) state Volumes before any
-Volume-type controller exists at all on that target.
+Provider state Volumes are optional and declared only under the storage-need
+test (see "Static Provider deployment and optional component state Volumes"
+below and `ADR-046-provider-state`). The fixed bootstrap components — the first
+`Provider/volume-local` controller instance on each execution target, and
+(where present) `Provider/system-core` and `Provider/system-minijail` — keep
+their bounded non-secret operational state in the owning resource's `status`
+subresource and the core Operation ledger, and declare **no** state Volume.
+Because no component requires a state Volume before a `volume-local` instance
+is Ready, there is no bootstrap state-Volume cycle, no per-execution-target
+local bootstrap storage mechanism, and no bootstrap-storage exception (D086,
+superseded by D087). There is no hidden bootstrap store.
 
-This exception is scoped **per execution target** — each Host, Guest, or
-user-domain local-storage owner that runs its own `Provider/volume-local`
-controller instance has its own independent, closed, non-resource **local**
-bootstrap storage mechanism, and that mechanism is the sole, narrow break in
-the cycle for that target alone:
-
-- it may provision and validate only the empty (empty-`stateSchema`) state
-  Volumes for the first `Provider/volume-local` controller instance running
-  on that target, and, only where system-core and/or system-minijail are
-  themselves fixed bootstrap components on that same target, their (empty)
-  state Volumes too — never Volumes for any other component, and never on a
-  target where system-core/system-minijail are not present;
-- it never crosses an execution-target boundary: a Guest's local bootstrap
-  storage mechanism provisions the Guest-local `volume-local` instance's
-  bootstrap Volume using only Guest-local primitives, and never receives,
-  forwards, or otherwise leaks a parent-Host dirfd, path, or other Host-local
-  resource handle across the Host/Guest boundary to do so. This is what lets
-  a Guest bootstrap its own primitive controllers (for example, a
-  Guest-local `volume-local` serving Guest-local Volumes) without any
-  parent-Host state or resource access.
-
-This is not a third Process-bootstrap Provider; each target's local bootstrap
-mechanism is part of the same fixed, integrity-pinned bootstrap boundary that
-already launches that target's system-core/system-minijail (where present),
-and it never handles any other component's state Volume or any other
-ResourceType. The Volumes it provisions are real Volume resources/identities
-from their first write — ordinary resource rows with normal
-generation/status, never placeholders — and as soon as that target's
-`volume-local` controller Process starts, it immediately adopts and
-reconciles all of them (its own, and system-core's/system-minijail's where
-present on that same target) under its normal `volume-local-controller`
-reconcile loop, exactly as it would adopt any pre-existing Volume row after a
-restart. No other Provider or component on any target ever receives this
-exception; every other component's state Volume, on every target, is created
-only through the normal Core ProviderDeployment → `Provider/volume-local`
-path described below.
+A fixed bootstrap component reaches Ready by adopting running processes and
+re-deriving its observed state from `status`, the core Operation ledger, and
+independent external observation (cgroup-leaf scanning, fresh pidfds, marker
+reverification against external reality). If a future bootstrap component ever
+needs secret or large private recovery state that cannot enter status, it must
+be introduced through a new reviewed design that declares an ordinary optional
+state Volume; it does not reintroduce a bootstrap-storage exception.
 
 After bootstrap:
 
@@ -89,7 +64,7 @@ After bootstrap:
 - every process has one executionRef/domain/user placement and selected Process
   Provider.
 
-## Static Provider deployment and component state Volumes
+## Static Provider deployment and optional component state Volumes
 
 Core ProviderDeployment reads the signed manifest/catalog entry a Provider's
 `artifactId` resolves to and creates the Provider's entire static
@@ -109,37 +84,44 @@ help never spawns a worker itself; it sends a typed internal request to its
 owning controller, which creates the worker Process through the normal
 ProviderDeployment/EffectPort path.
 
-Every Provider component — controller, service, or worker, including a
-stateless one — has its own private state Volume, created by Core
-ProviderDeployment as part of the Provider's **ProviderStateSet**
-(`ADR-046-provider-state`: the logical, query-time grouping of every Volume
-resource in the Zone whose `metadata.ownerRef` resolves to `Provider/<name>`;
-the set itself is never a ResourceType or a stored row — there is no separate
-compartment object distinct from an ordinary Volume). A stateless component
-still receives its own Volume, declared with an empty `stateSchema`; there is
-no component that goes without one. Each state Volume uses the canonical full
-Volume schema (see `ADR-046-resources-volume`), extended with the
+Provider state Volumes are **optional**. Bounded non-secret operational state
+belongs in the owning resource's `status` subresource and the core Operation
+ledger by default (D087). A Provider component declares a state Volume only
+when a specific payload passes the storage-need test: it is a secret or
+sensitive private datum, is large/binary/file content, is private data unsafe
+for status readers, or is bounded but revision-unsuitable with a demonstrated
+recovery need (`ADR-046-provider-state`). A stateless component declares no
+state Volume, receives none, and contributes none to the Provider's optional
+**ProviderStateSet** (`ADR-046-provider-state`: the logical, query-time
+grouping of the *declared* Volume resources in the Zone whose
+`metadata.ownerRef` resolves to `Provider/<name>`; the set is never a
+ResourceType or a stored row, and it is empty for a Provider that declares no
+state Volume). There is no empty identity-only Volume and no separate
+compartment object distinct from an ordinary Volume.
+
+Each declared state Volume uses the canonical full Volume schema (see
+`ADR-046-resources-volume`), extended with the
 `stateSchema`/`persistenceClass`/`sensitivityClass` fields defined in
 `ADR-046-provider-state`, and its layout is owned by a dedicated `User/<name>`
 principal drawn from a bounded, Nix-preprovisioned pool sized to the
 Provider descriptor's fixed controller/service/worker/namespace counts —
 never an ad hoc principal created at runtime. Core ProviderDeployment creates
-every declared state Volume from the manifest's signed state declarations
+every *declared* state Volume from the manifest's signed state declarations
 before creating and launching the corresponding component Process, so the
 component's `mounts` can reference an already-Ready Volume at launch. A
 component mounts only its own declared view of its own state Volume (a
 `mounts` entry naming that view's local dirfd); there is no cross-component or
-cross-Provider sharing of another component's state Volume. Resource rows and
-the core operation ledger remain the sole authority for resource references,
-generation counters, backoff state, and session state — a component's state
-Volume payload never duplicates any of that; it holds only the component's
-private application-level working state. Creating a Volume normally requires
-a `Provider/volume-local` controller instance to already be running on that
-same execution target; the "Bootstrap state-realization exception" above is
-the sole, narrowly scoped, per-execution-target exception to that ordering,
-covering only that target's first `Provider/volume-local` controller
-instance and, where they exist on that same target, `Provider/system-core`
-and `Provider/system-minijail`.
+cross-Provider sharing of another component's state Volume. Resource rows,
+resource `status`, and the core Operation ledger remain the sole authority for
+resource references, generation counters, backoff/idempotency state, and
+session state — a component's state Volume payload never duplicates any of
+that; it holds only the component's private secret/large/revision-unsuitable
+working payload. Creating a declared state Volume normally requires a
+`Provider/volume-local` controller instance to already be running on that same
+execution target; because the fixed bootstrap components declare no state
+Volume, no component needs a Volume before a `volume-local` instance is Ready,
+so there is no bootstrap ordering exception (see "No bootstrap state Volume"
+above).
 
 A worker Process has no ResourceClient, no d2b-bus/dependency-portal access,
 no Credential access, no CLI, no broker access, and no authority to spawn

@@ -152,7 +152,7 @@ worker components.
 | Cardinality | 1 per Zone |
 | Process placement | Fixed bootstrap; no Process resource parent |
 | Config projection | Provider `spec.config` (fixed empty; no configurable fields) |
-| State | Core ProviderDeployment-created `Volume` (`ownerRef: Provider/system-minijail`; `kind: state`; `persistenceClass: persistent`; `migrationPolicy: none`; minimal nonzero `quota.maxBytes`/`quota.maxInodes`; identity marker required; zero declared `stateNamespace` entries; empty schema); core ProviderDeployment creates this Volume before the component Process starts and deletes it after; `Provider/volume-local` is the sole Volume reconciler; the minijail controller does not create, own, or reconcile the Volume and does not list Volume in its exported ResourceTypes; `ProviderStateSet` is the logical/query-time grouping of all Volumes with `ownerRef: Provider/system-minijail` — not a ResourceType; layout principal is a Nix-preprovisioned `User/<component-principal>`; no cross-component shared Volume; component consumes its required `dirfd` view only; Volume survives component/Provider restart and participates in upgrade/destroy/reset; live pidfds/FDs non-persistent; persisted restart/backoff/checkpoints are core resource/operation state |
+| State | None — `Provider/system-minijail` declares no Provider state Volume; `ProviderStateSet(zone, "system-minijail")` is empty. Bounded non-secret operational state (reconcile stage, per-Process launch/adoption observations, counters, closed-enum error detail) lives in the owning resource's `status` subresource and the core Operation ledger (D087); persisted restart/backoff/checkpoints are core `Process`/`EphemeralProcess` status and the core Operation ledger; running units are re-adopted from declared cgroup leaves and fresh pidfds. Live pidfds/FDs are process-local and non-persistent. The controller declares no state namespace, mounts no state Volume, and needs no dedicated state-layout `User/<name>` principal (D086 superseded by D087) |
 | Permission claims | `Process` get/list/watch/update-status/update-finalizers (where `providerRef=Provider/system-minijail`); `EphemeralProcess` get/list/watch/update-status/update-finalizers (where `providerRef=Provider/system-minijail`); effect port calls via the injected `MinijailProcessEffectPort` (opaque IDs; no broker service/client/DTO imported) |
 | Readiness | Ready when bootstrap authorization active, redb connection established, all pending adopted processes verified |
 | Drain | Stop dispatching LaunchTickets; wait for inflight ProviderSupervisor operations; close ComponentSession |
@@ -167,117 +167,36 @@ The controller is the only binary entry point.
 `Provider/system-minijail` has a fixed empty, non-configurable `spec.config =
 {}`. There are no operator-settable fields.
 
-Like all Providers, `Provider/system-minijail` has a core ProviderDeployment-created
-`Volume` for its `minijail-controller` component (`ownerRef:
-Provider/system-minijail`). Core ProviderDeployment creates the Volume before
-the component Process starts and deletes it after the component Process is
-gone. `Provider/volume-local` is the sole Volume reconciler. The minijail
-controller does not create, own, add Volume to its exported ResourceTypes, or
-reconcile Volume resources; it only consumes the required `dirfd` view that core
-delivers. `ProviderStateSet(zone, "system-minijail")` is the logical/query-time
-grouping of all Volume resources carrying that `ownerRef`; it is not a
-ResourceType or stored artifact. The Volume uses the exact `Volume` +
-`provider-state` extension schema; its layout principal is a Nix-preprovisioned
-`User/<component-principal>` (or bounded principal pool) — no
-`ComponentPrincipal` ResourceRefs; no Volume is shared across components.
+`Provider/system-minijail` declares **no** Provider state Volume for its
+`minijail-controller` component. `ProviderStateSet(zone, "system-minijail")` is
+the optional, query-time grouping of the *declared* Volume resources carrying
+`ownerRef: Provider/system-minijail`; it is not a ResourceType or stored
+artifact and is empty. Bounded non-secret operational state belongs in the
+owning resource's `status` subresource and the core Operation ledger by default
+(D087): persisted restart counts, backoff state, and operational checkpoints are
+core resource/operation state (Process status and checkpoint records owned by
+the resource API), not Provider-owned private state. Live pidfds and in-flight
+FDs are process-local and non-persistent.
 
-Because the `minijail-controller` component declares zero `stateNamespace`
-entries, the Volume holds no application payload; it carries an empty schema and
-is a minimal framework envelope. Despite carrying no application payload the
-Volume is `kind: state` and `persistenceClass: persistent` — it is never
-`ephemeral` and never quota `null` or zero. The empty schema uses
-`migrationPolicy: none`; no migration EphemeralProcess or migration worker is
-ever created for this Volume. A minimal nonzero `quota.maxBytes`
-and `quota.maxInodes` are always declared to satisfy volume-local's `state`-kind
-provisioning invariants. The identity marker is always provisioned. The Volume
-survives component and Provider restarts and participates fully in the standard
-upgrade, destroy, and Zone reset lifecycle. The minijail controller does not
-write application state into it. Live pidfds and in-flight FDs are process-local
-and non-persistent. Persisted restart counts, backoff state, and operational
-checkpoints are stored as core resource/operation state (Process status and
-checkpoint records owned by the resource API), not as Provider-owned private
-state.
+Because the `minijail-controller` component holds no durable payload that passes
+the storage-need test — its operational state is fully derivable from spec,
+`status`, the core Operation ledger, and external observation (running Processes
+re-adopted from declared cgroup leaves and fresh pidfds) — it declares no state
+namespace, no state Volume, no state-view mount, and no dedicated state-layout
+`User/<name>` principal. There is no empty identity-only Volume.
 
-### 5.1 Bootstrap-state exception
+### 5.1 No bootstrap-state exception
 
-`Provider/system-minijail` is a bootstrap exception controller that starts
-before `Provider/volume-local` is ready. Core ProviderDeployment still creates
-the state Volume resource before starting the `minijail-controller` component
-Process and still deletes it after the component Process is gone. Because
-volume-local is not yet ready at the moment the minijail controller first starts,
-core's bootstrap path provisions the initial directory structure and delivers the
-required `dirfd` to the controller. The minijail controller does not participate
-in Volume creation, provisioning, or reconciliation at any point.
-
-#### Core ProviderDeployment bootstrap sequence
-
-Before starting the `minijail-controller` component Process, core ProviderDeployment:
-
-1. Creates the Volume resource in the resource store (`ownerRef:
-   Provider/system-minijail`, `spec.providerRef: Provider/volume-local`,
-   `managedBy: controller`, `kind: state`, `persistenceClass: persistent`,
-   `migrationPolicy: none`, minimal nonzero `quota.maxBytes`/`quota.maxInodes`)
-   with the full `Volume` + `provider-state` extension schema and an empty
-   `stateSchema` (zero `stateNamespace` entries).
-2. Provisions the filesystem layout via the core bootstrap storage path:
-   creates the Volume root directory owned by the Nix-preprovisioned
-   `User/<component-principal>`, mode `0700`, `noFollow: true`, with the
-   `identityMarker.class: broker-maintained` slot reserved.
-3. Opens a bounded `dirfd` to the provisioned root and delivers it to the
-   `minijail-controller` component as its required local view. This view is
-   private; no other component or process receives the same `dirfd`.
-4. The Volume resource is structurally complete but `phase: Pending`;
-   `Provider/volume-local` has not yet reconciled it.
-
-#### volume-local reconciliation
-
-When `Provider/volume-local` starts and becomes Ready it discovers all Volumes
-with `spec.providerRef: Provider/volume-local` via its watch. For the
-`Provider/system-minijail` state Volume it:
-
-1. Validates the pre-provisioned layout: directory presence, exact `st_dev` /
-   `st_ino` binding against the Volume spec, `User/<component-principal>`
-   ownership, mode `0700`, `noFollow` inode binding — any mismatch fails
-   closed (see invariants below).
-2. Writes the broker-maintained identity marker (`identityMarker.class:
-   broker-maintained`, `markerRoot: provider-state-markers`), recording
-   `(st_dev, st_ino)`, `schemaId`, and `schemaVersion`.
-3. Sets `Volume.status.phase: Ready`, `markerStatus: verified`, and
-   `stateSchemaPhase: current` (empty schema; `migrationPolicy: none`; no
-   migration required and no migration EphemeralProcess created).
-
-Reconciliation is immediate on the first pass after Ready — it does not defer.
-The Volume remains a real Volume resource throughout; it is never replaced,
-re-created, or bypassed after reconciliation. No payload bytes are written at
-any point.
-
-#### Invariants
-
-- Core ProviderDeployment creates and deletes the Volume; the minijail
-  controller does not create, update-spec, or delete it.
-- Volume is not in `Provider/system-minijail`'s exported ResourceTypes.
-  `Provider/volume-local` is the sole Volume reconciler.
-- Layout ownership binds to the exact Nix-preprovisioned `User/<name>`
-  principal; no root ownership (`uid 0`), no dynamically allocated principal.
-- The state Volume is never shared with another component.
-- `migrationPolicy: none`; no migration EphemeralProcess or migration worker
-  is ever created for this Volume.
-- If layout validation fails at reconciliation time (marker conflict, wrong
-  owner, type/mode mismatch, `st_ino` changed), volume-local sets
-  `Volume.status.phase: Failed` and `markerStatus: replaced`; the controller
-  retains its bootstrap-provisioned `dirfd` view but marks its own status
-  `Degraded/state-volume-failed` and stops accepting new Process reconcile work
-  until the condition is cleared by operator intervention.
-- After volume-local reconciliation the controller uses only the `dirfd`
-  delivered by volume-local (re-opened through the Volume's declared view);
-  the bootstrap `dirfd` is closed.
-- The Volume is `kind: state` and `persistenceClass: persistent`; it is never
-  `ephemeral`, never `quota: null`, and never `quotaBytes: 0`. Quota values
-  are declared at creation by core ProviderDeployment and are not changed by
-  reconciliation or upgrade.
-- The Volume survives component and Provider restarts and participates in the
-  standard upgrade, destroy, and Zone reset lifecycle; no special-case skip or
-  bypass applies because the schema is empty.
+`Provider/system-minijail` is a fixed bootstrap controller that starts before
+`Provider/volume-local` is ready. Because it declares no state Volume and
+reaches Ready from resource `status`, the core Operation ledger, and external
+process observation, it needs no state Volume before volume-local is ready — so
+there is no bootstrap state-Volume cycle, no closed bootstrap storage mechanism,
+no bootstrap `dirfd` delivery, and no bootstrap-storage exception (D086,
+superseded by D087; see "No bootstrap state Volume" in
+`ADR-046-components-processes-and-sandbox`). There is no hidden bootstrap store,
+and no new public resource type, d2b-bus service, or broker operation is
+introduced.
 
 Process lifecycle defaults (drain timeout, restart backoff base/max) and
 resource-level bounds (per-process `startDeadline`, `runtimeDeadline`, TTL
@@ -1355,7 +1274,7 @@ tests/
   fast_path.rs              # ≤5 ms hint / ≤20 ms launch latency gates (1/10/100 concurrent)
   adoption_quarantine.rs    # adoption identity mismatch → quarantine, no kill; blocking-adapter timeout → adoption-failed; quarantine reuse rejected without external proof
   bootstrap_authz.rs        # bootstrap authorization scope; no widening; wrong subject fails
-  bootstrap_state.rs        # bootstrap-state Volume: core ProviderDeployment creates Volume + provisions layout before volume-local; controller receives dirfd from core; volume-local reconciliation sets Ready + markerStatus:verified + stateSchemaPhase:current (migrationPolicy:none, no migration worker); reconciliation failure → Degraded/state-volume-failed; bootstrap dirfd closed after reconciliation
+  status_state.rs           # status-first operational state: controller declares no state Volume; bounded observations written to status/core ledger within status bounds; no secret/path/argv/PID/unit content; restart re-derives observed state from cgroup leaves + fresh pidfds
   blocking_adapter.rs       # /proc reads, pidfd_open, cgroup ops via bounded blocking adapter; timeout → error, not hang
 ```
 
@@ -1375,7 +1294,7 @@ integration/
   concurrent_launch/        # fixed concurrency bound semaphore; 100 parallel launches
   latency_gate/             # ≤20 ms p95 launch-attempt start gate with real broker
   user_domain/              # user-domain Process via user supervisor (if descriptor declares support)
-  bootstrap_state_adoption/ # core ProviderDeployment creates Volume + provisions layout before volume-local; volume-local reconciles: validates layout, writes marker, sets Ready; controller switches to volume-local dirfd; layout mismatch → Failed + Degraded/state-volume-failed; migrationPolicy:none verified (no migration EphemeralProcess created)
+  status_state_restart/     # controller starts with no state Volume; reaches Ready from status/core ledger; restart re-derives observed process state from declared cgroup leaves + fresh pidfds; no state-Volume mount
 ```
 
 Each integration scenario:
@@ -1410,7 +1329,7 @@ is run against both system-minijail and system-systemd providers:
 | Blocking-adapter isolation | `/proc` read, executable hash, cgroup enum, `pidfd_open` never block watch loop |
 | Effect port boundary | Provider crate imports no broker service/client/DTO; all spawn effects via `MinijailProcessEffectPort` with opaque IDs |
 | Provider status by core | Minijail controller writes no `Provider` resource status; core aggregates from checkpoint/health events |
-| Bootstrap-state Volume | Core ProviderDeployment creates Volume (kind:state, persistent, migrationPolicy:none) + provisions layout before volume-local; controller receives dirfd from core and does not create/own/reconcile Volume; volume-local reconciliation sets `Ready`/`markerStatus:verified`/`stateSchemaPhase:current`; no migration EphemeralProcess; bootstrap `dirfd` closed after reconciliation; layout mismatch → `Degraded/state-volume-failed` |
+| No state Volume | The minijail controller declares no Provider state Volume; bounded non-secret operational state lives in `status`/the core Operation ledger (D087); no bootstrap state Volume, no bootstrap storage mechanism, and no bootstrap-storage exception (D086 superseded by D087); running units re-adopted from cgroup leaves + fresh pidfds on restart |
 
 ---
 
@@ -1432,7 +1351,7 @@ The baseline is `b5ddbed67867d9244bf33390868101bd9b053e49`.
 | `packages/d2b-priv-broker/src/ops/swtpm_dir.rs` — user namespace uid_map/gid_map write sequence | production-reachable | ADAPT | `packages/d2b-provider-system-minijail/src/user_ns.rs` — pre-establishment sequence; preserve pipe sync, O_NOFOLLOW, re-validation |
 | `packages/d2b-realm-core/src/ids.rs` — `RealmId`, `WorkloadId`, `PrincipalId` | production-reachable | ADAPT | Use v3 `ZoneId`, `ResourceRef`, `UserRef` from `d2b-contracts/src/v3/identity.rs` (ADR046-identities-001) |
 | `packages/d2b-realm-core/src/workload.rs` — `WorkloadProviderKind`, `IsolationPosture`, `WorkloadExecutionPosture` | production-reachable | DELETE at cutover | Replaced by `Host`/`Guest`/`ExecutionPolicy`; evidence for `UnsafeLocal` → user-only Host mapping retained in migration map |
-| `packages/d2b-core/src/storage.rs` — `StoragePathSpec` | production-reachable | Not consumed | Provider/system-minijail declares zero `stateNamespace` entries and does not create or reconcile Volume resources; core ProviderDeployment creates the minimal Volume (kind:state, persistent, migrationPolicy:none); volume-local is the sole Volume reconciler; the minijail controller only consumes the required `dirfd` view |
+| `packages/d2b-core/src/storage.rs` — `StoragePathSpec` | production-reachable | Not consumed | Provider/system-minijail declares no state Volume; bounded non-secret operational state lives in `status`/the core Operation ledger (D087); no state-Volume creation or reconciliation on any path |
 | `packages/d2b-realm-router` session types | dead-reachable | DELETE | Replaced by ComponentSession (`d2b-session`, `a1cc0b2d` reuse) |
 | `packages/d2b-realm-transport` `LocalTcpTransport` | test-only | DELETE | No live socket; test conformance vectors replaced by v3 session tests |
 | `packages/d2bd/src/realm_stubs.rs` | dead-reachable (explicitly dead_code-allowed) | DELETE | Stubs removed after v3 ComponentSession/bus integration |
@@ -1512,7 +1431,7 @@ delivery assumptions are not copied.
 | Current source | `d2bd/src/supervisor/*.rs` (DagExecutor, NodeOutcome); `d2bd/src/supervisor/pidfd_table.rs`; `d2b-realm-core/src/allocator_engine.rs` (adoption/identity concepts) |
 | Reuse action | ADAPT |
 | Destination | `packages/d2b-provider-system-minijail/src/` — controller binary entry point; reconcile loop; adoption; quarantine; bootstrap authz; health/status; restart; finalize |
-| Detailed design | Full Process/EphemeralProcess reconcile algorithm (§8); fast path ≤5/≤20 ms gates; spawn via `MinijailProcessEffectPort` (opaque IDs; no broker DTO imported); adoption algorithm (§8.5) with `/proc` reads and cgroup enumeration via bounded blocking adapters; quarantine on ambiguity; quarantine reuse blocked until externally established process-absence proof or full Zone reset; no signal to quarantined/ambiguous identity; restart/backoff; finalize (§8.6); EphemeralProcess continuation recovery (§9); bootstrap authz scope (§3); post-bootstrap RBAC; metric label closed-set enforcement (no `zone` label); controller writes status only on Process/EphemeralProcess resources; Provider resource status aggregated by core; state Volume consumed via required `dirfd` view delivered by core ProviderDeployment (§5.1): controller does not create, own, or reconcile the Volume; monitors `Volume.status.phase` via watch and raises `Degraded/state-volume-failed` if volume-local reconciliation fails; switches to volume-local-provided `dirfd` after reconciliation completes |
+| Detailed design | Full Process/EphemeralProcess reconcile algorithm (§8); fast path ≤5/≤20 ms gates; spawn via `MinijailProcessEffectPort` (opaque IDs; no broker DTO imported); adoption algorithm (§8.5) with `/proc` reads and cgroup enumeration via bounded blocking adapters; quarantine on ambiguity; quarantine reuse blocked until externally established process-absence proof or full Zone reset; no signal to quarantined/ambiguous identity; restart/backoff; finalize (§8.6); EphemeralProcess continuation recovery (§9); bootstrap authz scope (§3); post-bootstrap RBAC; metric label closed-set enforcement (no `zone` label); controller writes status only on Process/EphemeralProcess resources; Provider resource status aggregated by core; the controller declares no Provider state Volume and mounts none — its bounded non-secret operational state lives in `status`/the core Operation ledger (§5.1, D087) and running units are re-adopted from cgroup leaves + fresh pidfds on restart |
 | Integration | Zone runtime startup (bootstrap); all v3 ResourceClient/bus/session paths |
 | Data migration | Full reset; current DAG/role snapshot import not required |
 | Validation | `tests/lifecycle.rs`; `tests/ephemeral_lifecycle.rs`; `tests/conformance.rs`; `tests/adoption_quarantine.rs`; `tests/bootstrap_authz.rs`; `tests/fast_path.rs`; `tests/blocking_adapter.rs`; `integration/adoption_restart/`; `integration/quarantine_scenario/`; `integration/latency_gate/`; shared conformance suite in `d2b-process-conformance` |

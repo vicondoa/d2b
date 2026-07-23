@@ -188,6 +188,19 @@ updates carry expected revision and observedGeneration. A Host/Guest/link/
 controller disconnect cannot write success; status becomes Unknown through the
 authorized observer/core rule.
 
+Status is the default durable observation and recovery surface for bounded
+non-secret operational state (D087). `UpdateStatus` is bounded: the resource
+store rejects a status replacement whose total canonical serialized size
+exceeds 64 KiB, whose ResourceType-/provider-specific typed detail exceeds
+32 KiB, or whose condition/list/map cardinality exceeds the frozen limits (see
+`ADR-046-resource-object-model` § Status bounds) with a typed `status-oversize`
+error; the write changes nothing and the caller re-reads and retries. Status
+never carries secrets, authority-conferring handles, private
+path/argv/environment/PID/unit data, terminal/clipboard/CTAP bytes, raw cloud
+error bodies, or high-frequency streams; those stay in their owning surfaces.
+Controllers write status only on a material change in observed state, and never
+treat status as a host-mutation or repair authority.
+
 ## OwnerRef authorization
 
 Create/reparent requires:
@@ -269,6 +282,7 @@ Stable classes include:
 - resource-provider-unavailable;
 - resource-controller-mismatch;
 - resource-status-owner-mismatch;
+- status-oversize;
 - authorization-denied;
 - revision-expired;
 - backpressure;

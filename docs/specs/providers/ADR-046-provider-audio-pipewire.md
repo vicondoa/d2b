@@ -162,7 +162,7 @@ Provider/audio-pipewire
 
 | Component | Binary | Class | Domain | Scope |
 | --- | --- | --- | --- | --- |
-| `audio-state-controller` | `audio-pipewire-controller` | controller | system | Watches `audio-pipewire.d2b.io.AudioState`; creates/updates/deletes AudioState-owned Process resources only; calls AudioMediator `SetGrant`/`SetLevel` service; never touches pidfds, broker spawn, Volume, or User resources; ProviderStateSet Volumes are prerequisite infrastructure created by core ProviderDeployment before component Processes start |
+| `audio-state-controller` | `audio-pipewire-controller` | controller | system | Watches `audio-pipewire.d2b.io.AudioState`; creates/updates/deletes AudioState-owned Process resources only; calls AudioMediator `SetGrant`/`SetLevel` service; never touches pidfds, broker spawn, Volume, or User resources; `Provider/audio-pipewire` declares no Provider state Volume under D087 |
 | `audio-mediator` | `audio-pipewire-mediator` | service | user | Same-UID user-session component; receives declared pre-opened PipeWire portal FD from user supervisor; ProviderSupervisor routes FD to worker LaunchTicket; exposes `SetGrant`/`SetLevel` service; applies enforcement via libpipewire API |
 
 The controller runs as a Process in the system domain under the Host. The
@@ -442,11 +442,9 @@ spec:
 - **No `mounts` block in the live Process spec** — the worker receives its
   configuration via the sealed component descriptor and the operation-scoped FD
   transfer. `AudioState.spec` is the durable desired authority for grants/levels;
-  no application state file is written. The worker's ProviderStateSet Volume
-  (empty-payload, `kind: state`, `persistenceClass: persistent`,
-  `quotaBytes: 65536`, `quota: {maxBytes: 65536, maxInodes: 32, enforcement: none}`)
-  provides the identity marker anchor and participates in upgrade, destroy,
-  and reset lifecycle; the worker Process mounts its `main` view dirfd.
+  no application state file is written. The worker declares no Provider state
+  Volume; bounded non-secret observations are stored in `AudioState.status`, the
+  Provider status subresource where applicable, and the core Operation ledger.
 - `domain: system` — the worker runs in the system domain. The execution
   principal is a core Process principal from the bounded pool allocated by the
   Process Provider; it is not a controller-created `User` resource and does not
@@ -895,109 +893,37 @@ ProviderStateSet(zone, "audio-pipewire") =
               && v.metadata.ownerRef == "Provider/audio-pipewire" }
 ```
 
-Every semantic audio-pipewire component receives a private `Volume` with
-`ownerRef: Provider/audio-pipewire`, including components whose payload carries
-no application-level schema content. All such Volumes are durable: `kind: state`,
-`persistenceClass: persistent`, `quotaBytes: 65536`,
-`quota: {maxBytes: 65536, maxInodes: 32, enforcement: none}`,
-`source.settings.kind: local-path`,
-`source.settings.sourcePolicyId: provider-state-persistent`, and
-`migrationPolicy: none`.
-They survive component and Provider restart and participate in upgrade, destroy,
-and reset lifecycle. No Volume is shared across components. The volume-local
-Provider hands each component Process a single view `dirfd` for its own declared
-view; no component can access another component's Volume root or view. Layout
-principals are Nix-preprovisioned `User/<name>` resources or bounded pool
-principals; no `ComponentPrincipal` ResourceType is referenced.
+Under D087, `Provider/audio-pipewire` declares **no Provider state Volume**. Its
+ProviderStateSet is therefore empty:
 
-The ProviderDeployment framework creates these Volumes during Provider
-installation (before any component Process is started) and deletes them after
-component Processes complete on Provider removal. The `audio-state-controller`
-has no Volume creation responsibility; `Provider/volume-local` is the sole
-Volume reconciler. The audio-state-controller's reconcile loop does not create,
-update, or delete Volumes of any kind.
-
-### Component Volumes
-
-| Component | Volume name | Kind / persistence | Layout principal |
-| --- | --- | --- | --- |
-| `audio-state-controller` | `audio-pipewire--controller--main-state--<host>` | `state` / `persistent`; `quotaBytes:65536`; `quota:{maxBytes:65536,maxInodes:32,enforcement:none}`; `migrationPolicy: none` | `User/audio-pipewire-controller` (Nix-provisioned) |
-| `audio-mediator` | `audio-pipewire--mediator--main-state--<host>` | `state` / `persistent`; `quotaBytes:65536`; `quota:{maxBytes:65536,maxInodes:32,enforcement:none}`; `migrationPolicy: none` | compositor `User/<name>` (Nix-provisioned) |
-| `vhost-user-sound-worker` | `audio-pipewire--worker--main-state--<guest>` | `state` / `persistent`; `quotaBytes:65536`; `quota:{maxBytes:65536,maxInodes:32,enforcement:none}`; `migrationPolicy: none` | bounded Process principal (`User/<pool-principal>`, Nix-provisioned) |
-| `guest-audio-agent` | `audio-pipewire--guest-agent--main-state--<guest>--<digest>` | `state` / `persistent`; `quotaBytes:65536`; `quota:{maxBytes:65536,maxInodes:32,enforcement:none}`; `migrationPolicy: none` | guest workload `User/<name>` (Nix-provisioned) |
-
-Host-side components use local-path source Volumes on `Host/host-system`. The
-GuestAudioAgent state Volume is `guest-local`: its source is inside the target
-Guest, has no Host fallback, and creates no virtiofs export or attachment child.
-
-### Representative Volume (controller, empty-payload)
-
-```yaml
-apiVersion: resources.d2b.io/v3
-type: Volume
-metadata:
-  name: audio-pipewire--controller--main-state--host-system
-  zone: dev
-  ownerRef: Provider/audio-pipewire
-spec:
-  kind: state
-  providerRef: Provider/volume-local
-  persistenceClass: persistent
-  sensitivityClass: private
-  stateSchema:
-    schemaId: io.d2b.audio-pipewire/audio-state-controller/main-state
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<hex>
-    migrationPolicy: none
-  quotaBytes: 65536
-  quota:
-    maxBytes: 65536
-    maxInodes: 32
-    enforcement: none
-  sealingCredentialRef: null
-  source:
-    executionRef: Host/host-system
-    settings:
-      kind: local-path
-      sourcePolicyId: provider-state-persistent
-  layout:
-    - path: state
-      type: directory
-      ownerRef: User/audio-pipewire-controller
-      groupRef: User/audio-pipewire-controller
-      mode: "0700"
-      sensitivity: private
-      createPolicy: create-if-never-provisioned
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      noFollow: true
-  views:
-    main:
-      path: state
-      rights: [read, write, create, delete, traverse]
-  identityMarker:
-    class: broker-maintained
-    markerRoot: provider-state-markers
-  snapshotPolicy: null
-  retentionPolicy: null
+```text
+ProviderStateSet(zone, "audio-pipewire") = {}
 ```
 
-Volume naming convention: `<provider-name>--<component-id>--<namespace-id>--<execution-ref-short>`,
-enforced at runtime. `migrationPolicy: none` means no migration EphemeralProcess
-or schema version guard is required. `quotaBytes: 65536` is the extension quota;
-`quota: {maxBytes: 65536, maxInodes: 32, enforcement: none}` is the base quota
-block; `source.settings.kind: local-path` with
-`source.settings.sourcePolicyId: provider-state-persistent` selects the
-persistent source policy. These values are sufficient for the identity marker
-directory anchor, survive component/Provider restart, and are never zero and
-never ephemeral. The identity marker provides tamper detection and is checked
-on every open.
+The audio components fail the storage-need test for a durable Provider state
+Volume: their operational state is bounded, non-secret, and derivable from
+`AudioState.spec`, `AudioState.status`, component `Process.status`, the core
+Operation ledger, and external PipeWire/guest observation after restart. The
+`AudioState` ResourceType remains the Provider-owned resource model; it is not a
+Provider state Volume.
 
-The worker and guest-agent Volumes follow the same schema with their respective
-execution refs (`Guest/<name>`) and layout principals. For components running
-inside a Guest with non-zero payload, a paired virtiofs-attachment Volume is
-also required (per ADR-046-provider-state); the audio components' empty-payload
-Volumes require only the source Volume backed by `Provider/volume-local`.
+No component declares a state namespace, state-layout `User/<name>` principal,
+identity marker, migration worker, or Provider state mount. The
+`audio-state-controller` reconcile loop does not create, update, or delete
+Volumes of any kind. The mediator's PipeWire portal FD, worker LaunchTicket
+configuration, and GuestAudioAgent interactions are runtime operational
+carriage, not Provider state Volumes.
+
+Status is observation only. It is revisioned, optimistic-status-writer
+controlled, RBAC-readable, redacted, bounded to the global/provider-detail
+limits, written only on material change, and re-verified against external
+PipeWire and guest-agent reality after restart. It never contains secrets,
+tokens, socket paths, argv/env, PIDs, unit names, private PipeWire object dumps,
+terminal or audio bytes, authority handles, large blobs, or unbounded
+collections; oversize status is rejected with `status-oversize`.
+
+There is no bootstrap state-Volume mechanism; the previous bootstrap exception
+(D086, superseded by D087) does not apply.
 
 **Baseline migration note**: the one-time v1/v2 `audio-state.json` migration (if
 a legacy file is found on the host during Provider installation) reads it with
@@ -1153,27 +1079,22 @@ test coverage and is subject to panel review.
 11. **Controller creates no Volume or User resources.** The
     `audio-state-controller` is not permitted to issue any verb against `User`
     or `Volume` ResourceTypes; both are absent from `allowedResourceVerbs`.
-    Core ProviderDeployment creates ProviderStateSet Volumes before component
-    Processes start; `Provider/volume-local` is the sole Volume reconciler.
-    The semantic controller is not a Volume owner, does not export `Volume` as
-    a ResourceType, and does not create its own prerequisite Volumes.
+    Under D087, `Provider/audio-pipewire` declares no Provider state Volume and
+    its ProviderStateSet is empty. The semantic controller is not a Volume owner,
+    does not export `Volume` as a ResourceType, and does not create prerequisite
+    Volumes.
     Tests: controller conformance test verifies the absence of User and Volume
-    verbs; a separate core ProviderDeployment integration test covers
-    ProviderStateSet Volume creation/deletion lifecycle.
+    verbs; ProviderDeployment integration validates that no state Volume or
+    state mount is created and that bounded operational state is status-first.
 
 ## Lifecycle, restart, and adoption
 
 ### Install sequence
 
 1. Operator creates `Provider/audio-pipewire` resource with `spec.artifactId`.
-2. Core ProviderDeployment creates ProviderStateSet Volumes (one per semantic
-   component, `kind: state`, `persistenceClass: persistent`,
-   `quotaBytes: 65536`, `quota: {maxBytes: 65536, maxInodes: 32, enforcement: none}`,
-   `source.settings.kind: local-path`,
-   `source.settings.sourcePolicyId: provider-state-persistent`,
-   `migrationPolicy: none`; `Provider/volume-local` reconciles them),
-   then creates the `audio-state-controller` Process (system domain) and the
-   `audio-mediator` Process (user domain) as static components.
+2. Core ProviderDeployment creates the `audio-state-controller` Process (system
+   domain) and the `audio-mediator` Process (user domain) as static components;
+   no Provider state Volume or state mount is created.
 3. Both register watch plans for their respective resources.
 4. `audio-pipewire.d2b.io.AudioState` resources created by Nix or the API become Ready
    through the reconcile loop.
@@ -1401,9 +1322,9 @@ retryClasses:
 cannot create EphemeralProcess resources. `SpawnRunner`, `OpenPidfd`, and all
 broker operations are also absent. `Volume` and `User` are absent: the
 audio-state-controller never creates, updates, or deletes Volume or User
-resources. ProviderStateSet Volumes are prerequisite infrastructure created and
-deleted by core ProviderDeployment; `Provider/volume-local` reconciles them.
-The component consumes only its required view `dirfd`.
+resources. The ProviderStateSet is empty under D087, so core ProviderDeployment
+creates no Provider state Volume and the component consumes no state view
+`dirfd`.
 
 ### Reconcile flow (per `AudioState`)
 
@@ -1646,14 +1567,14 @@ When an `AudioState` resource is removed from the Nix configuration:
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-audio-006` |
-| Dependency/owner | Depends on `ADR046-audio-001` through `ADR046-audio-005`; system Process Provider; AudioMediator service (`ADR046-audio-007`); GuestAudioAgent component (`ADR046-audio-011`); core reconciliation framework; ProviderStateSet Volumes are prerequisite infrastructure created by core ProviderDeployment |
+| Dependency/owner | Depends on `ADR046-audio-001` through `ADR046-audio-005`; system Process Provider; AudioMediator service (`ADR046-audio-007`); GuestAudioAgent component (`ADR046-audio-011`); core reconciliation framework; no Provider state Volume is declared under D087 |
 | Current source | `packages/d2bd/src/audio_dispatch.rs` lines 250–end (dispatch ordering reference) |
 | Reuse source | None directly; reconcile flow is new async controller |
 | Reuse action | `adapt` — dispatch logic is the reference for step ordering only |
 | Destination | `packages/d2b-provider-audio-pipewire/src/controller/audio_state.rs` |
-| Detailed design | Single async reconcile loop for `audio-pipewire.d2b.io.AudioState` resource events. Watch plan for `audio-pipewire.d2b.io.AudioState`, `Process` (sidecar+GuestAudioAgent owned, via ownerRef component identity index), `Guest` (dependency), AudioMediator `Process` (component identity), `User` (guestUsers dependency, via dependencyRefIn). Never issues SpawnRunner, OpenPidfd, any pidfd, EphemeralProcess, or Volume/User resource operation. ProviderStateSet Volumes are created/deleted by core ProviderDeployment before/after component Processes; `Provider/volume-local` reconciles them; the controller only consumes its required view `dirfd`. Queries `runtime-audio` capability alias on each reconcile. Calls AudioMediator `SetGrant`/`SetLevel` service and `GuestAudioAgent.AudioSet` service via d2b-bus for grant changes. Verifies `User.status.groupMembershipVerified` for each guestUser before sidecar start; fails closed on missing audio group. Batch `UpdateStatus` as a single post-reconcile commit. Post-commit audit event emission. No direct filesystem access. No runtime `User.spec.groups` mutation. |
+| Detailed design | Single async reconcile loop for `audio-pipewire.d2b.io.AudioState` resource events. Watch plan for `audio-pipewire.d2b.io.AudioState`, `Process` (sidecar+GuestAudioAgent owned, via ownerRef component identity index), `Guest` (dependency), AudioMediator `Process` (component identity), `User` (guestUsers dependency, via dependencyRefIn). Never issues SpawnRunner, OpenPidfd, any pidfd, EphemeralProcess, or Volume/User resource operation. ProviderStateSet is empty under D087; the controller consumes no state view `dirfd`. Queries `runtime-audio` capability alias on each reconcile. Calls AudioMediator `SetGrant`/`SetLevel` service and `GuestAudioAgent.AudioSet` service via d2b-bus for grant changes. Verifies `User.status.groupMembershipVerified` for each guestUser before sidecar start; fails closed on missing audio group. Batch `UpdateStatus` as a single post-reconcile commit. Post-commit audit event emission. No direct filesystem access. No runtime `User.spec.groups` mutation. |
 | Integration | Registered with Zone core as a controller under `Provider/audio-pipewire`. |
-| Validation | `tests/audio_state_controller.rs`: reconcile state machine matrix (enable, grant change, guest absent, mediator unavailable, guest-audio-agent unavailable, guest-user-audio-group-missing, sidecar crash loop, deletion sequence, runtime-capability-unavailable); no-EphemeralProcess-created assertion; no-broker-op assertion; no-pidfd-op assertion; no-runtime-groups-mutation assertion; no-Volume-create assertion; no-User-create assertion. ProviderStateSet Volume schema correctness (`kind: state`, `persistenceClass: persistent`, `quotaBytes: 65536`, `quota: {maxBytes: 65536, maxInodes: 32, enforcement: none}`, `source.settings.kind: local-path`, `source.settings.sourcePolicyId: provider-state-persistent`, `migrationPolicy: none`, nonzero identity marker) is validated by a separate core ProviderDeployment integration test, not by this work item. |
+| Validation | `tests/audio_state_controller.rs`: reconcile state machine matrix (enable, grant change, guest absent, mediator unavailable, guest-audio-agent unavailable, guest-user-audio-group-missing, sidecar crash loop, deletion sequence, runtime-capability-unavailable); no-EphemeralProcess-created assertion; no-broker-op assertion; no-pidfd-op assertion; no-runtime-groups-mutation assertion; no-Volume-create assertion; no-User-create assertion. ProviderDeployment integration validates that `Provider/audio-pipewire` creates no Provider state Volume or state mount, returns an empty ProviderStateSet, and keeps bounded operational state in status/core Operation ledger with redaction and size-bound conformance. |
 | Removal proof | Supersedes `audio_dispatch.rs`; `d2bd` audio dispatch deleted after e2e parity test confirms |
 
 ### ADR046-audio-007: Implement `AudioMediator` user-session service
@@ -1809,9 +1730,8 @@ The crate `README.md` must document:
 8. Security: zero capabilities, no PipeWire socket path in public surfaces,
    AudioMediator receives declared pre-opened portal FD from user supervisor
    (not ambient socket), FD routed via ProviderSupervisor to worker LaunchTicket,
-   AudioState reconcile creates no Volume or User resources (ProviderStateSet
-   Volumes are prerequisite infrastructure created by core ProviderDeployment;
-   `Provider/volume-local` is the sole Volume reconciler), no broker
+   AudioState reconcile creates no Volume or User resources (`Provider/audio-pipewire`
+   declares no Provider state Volume and its ProviderStateSet is empty), no broker
    process lifecycle ops, no EphemeralProcess for enforcement, no wpctl binary
    on host or guest, no runtime User.spec.groups mutation;
 9. Build: `cargo build -p d2b-provider-audio-pipewire`;

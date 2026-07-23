@@ -742,77 +742,27 @@ phase enum. Systemd `ActiveState` and `SubState` are tracked internally by the
 effect port as typed detail exposed only through `ProcessEffect` audit records;
 they never surface as raw strings in Provider or Process status fields.
 
-`ProviderStateSet` is the set of all `Volume` resources in a Zone whose
-`metadata.ownerRef` resolves to `Provider/system-systemd`. It is a query-time
-grouping, not a ResourceType or stored artifact.
+`ProviderStateSet` is the optional, query-time grouping of the *declared*
+`Volume` resources in a Zone whose `metadata.ownerRef` resolves to
+`Provider/system-systemd`. It is not a ResourceType or stored artifact and is
+empty for this Provider.
 
-`Provider/system-systemd` has one semantic component (the controller). Core
-`ProviderDeployment` creates one private `Volume` per component per execution
-target even when the payload schema is empty. The Volume uses the Volume +
-provider-state `stateSchema` extension:
+`Provider/system-systemd` declares **no** Provider state Volume; its
+`ProviderStateSet` is empty. Its bounded non-secret operational state —
+controller/effect-port readiness, per-Process launch/adoption observations,
+active-process counters, and closed-enum error detail — lives in the owning
+resource's `status` subresource and the core Operation ledger (D087). Pidfds and
+live effect-port handles remain ephemeral process-local state; persisted restart
+counts, backoff state, and checkpoints are core resource/operation state
+(`Process`/`EphemeralProcess` status and the core Operation ledger), and running
+units are re-adopted after restart from declared cgroup leaves and fresh pidfds.
 
-- **Naming**: `system-systemd--controller--main-state--<execution-target-short>`
-- `ownerRef: Provider/system-systemd`
-- `providerRef: Provider/volume-local`; `source.executionRef: Host/<target>`
-- `persistenceClass: persistent` — Volume survives component and Provider restart;
-  participates in upgrade, destroy, and reset lifecycle
-- `kind: state` (Volume semantic kind)
-- Minimal nonzero byte/inode quota (e.g., `quotaBytes: 65536`, `quota.maxInodes: 256`);
-  never zero-quota
-- `stateSchema.schemaId: d2b.providers.systemd.controller/state/v1`; `schemaVersion: 1`;
-  `migrationPolicy: none` — empty payload schema requires no migration worker
-- Empty layout entries (no files declared in this schema)
-- Layout `ownerRef`/`groupRef`: `User/<controller-system-user>`, a
-  Nix-preprovisioned system principal or bounded principal pool entry;
-  no `ComponentPrincipal` ResourceRef is used
-- No cross-component shared Volume; the controller gets only its local view
-  `dirfd` via the `controller-rw` view
-
-Pidfds and live effect-port handles remain ephemeral process-local state,
-not `Volume` payload.
-
-The `system-systemd` controller does NOT create, own, or reconcile this Volume;
-`Provider/volume-local` is the sole Volume reconciler. The controller only
-consumes the declared view via the mounted `dirfd`.
-
-Framework-created Volume schema (declared by core ProviderDeployment, not by
-the system-systemd controller or the operator):
-
-```yaml
-apiVersion: resources.d2b.io/v3
-type: Volume
-metadata:
-  name: system-systemd--controller--main-state--<target>
-  zone: <zone>
-  ownerRef: Provider/system-systemd
-spec:
-  providerRef: Provider/volume-local
-  kind: state
-  persistenceClass: persistent      # durable; survives restart, upgrade, destroy/reset
-  sensitivityClass: private
-  stateSchema:
-    schemaId: d2b.providers.systemd.controller/state/v1
-    schemaVersion: "1.0"
-    migrationPolicy: none           # empty payload schema; no migration worker
-  quotaBytes: 65536                 # minimal nonzero; never 0
-  quota:
-    maxBytes: 65536                 # equals quotaBytes for provider-state
-    maxInodes: 256                  # minimal nonzero; never 0
-    enforcement: none
-  source:
-    executionRef: Host/<target>
-    settings:
-      kind: local-path
-      sourcePolicyId: system-systemd-controller-state
-  layout: []          # empty payload schema; no files to declare
-  views:
-    controller-rw:
-      path: ""
-      rights: [read, write, create, delete, traverse]
-  identityMarker:
-    class: broker-maintained
-    markerRoot: provider-state-markers
-```
+Because that operational state is fully derivable from spec, `status`, the core
+Operation ledger, and external process observation, it fails the storage-need
+test: the controller declares no state namespace, no state Volume, no
+state-view mount, and no dedicated `User/<controller-system-user>` state-layout
+principal. There is no empty identity-only Volume, and the controller Process
+mounts no state Volume.
 
 Example Provider status (framework-aggregated):
 
@@ -1213,7 +1163,7 @@ Evidence class per `ADR-046-current-code-migration-map`:
   operations; implementation owned by core supervisor spec, not this crate).
 - User-domain execution via effect port; UID verification and manager-connection
   lifecycle owned by port implementation.
-- ProviderStateSet: one persistent Volume per component per execution target, owned by core ProviderDeployment (not by this controller); `migrationPolicy: none`; controller consumes view `dirfd` only.
+- ProviderStateSet: empty — the controller declares no Provider state Volume; bounded non-secret operational state lives in `status`/the core Operation ledger (D087); running units re-adopted from cgroup leaves + fresh pidfds on restart.
 - Async reconcile loop watching `Process` / `EphemeralProcess` resources.
 - `system-systemd` conformance tests and shared conformance kit integration.
 
@@ -1357,7 +1307,7 @@ repository test orchestration (`make test-integration` /
 
 | Integration file | Scenario | Required assertions |
 | --- | --- | --- |
-| `host_scenario.rs` | Real controller against Zone runtime in container | System-domain Process: Pending → Launching → Ready; SIGTERM drain → stopped; restart on crash; Provider drain stops all active Processes; adoption after controller restart; ProviderStateSet Volume pre-created by core ProviderDeployment (not by controller); controller receives Volume view dirfd; controller does not issue Volume CRUD operations |
+| `host_scenario.rs` | Real controller against Zone runtime in container | System-domain Process: Pending → Launching → Ready; SIGTERM drain → stopped; restart on crash; Provider drain stops all active Processes; adoption after controller restart re-derived from cgroup leaves + fresh pidfds; controller declares no Provider state Volume and issues no Volume CRUD operations |
 | `guest_scenario.rs` | Controller inside a Guest via runtime Provider | Same lifecycle; both system and user domain; Guest-hosted Processes visible in Zone resource watch |
 | `user_domain.rs` | User-domain Process via real effect port on Host | User-domain Process Pending → Ready; effect port reports user manager unreachable → `UserEffectReady=False`; `no_isolation=true` in ProcessEffect audit for user-only Host |
 | `cleanup_scenario.rs` | Nix generation change → async Delete | Process removed from Nix config → `ResourceDeletionRequested` audit event emitted; store `Deleted` revision and row/index removal are applied atomically in the same store transaction; `ResourceDeleted` audit record is appended separately after the atomic deletion (deduplicated on replay) and its append does not participate in the deletion transaction; no false delete for controller-managed children |
@@ -1378,7 +1328,7 @@ and `ADR-046-provider-model-and-packaging` Provider dossier requirement):
 | Controllers/services/workers/binaries | Binary `d2b-provider-system-systemd`; `systemd-controller` component (one instance per execution target); core ProviderDeployment creates controller Process via Provider/system-minijail; no user supervisor binary or entry point inside this crate; cgroup placement per §5.1 |
 | Placement | Valid Host and Guest execution targets; `allowedDomains: [system, user]`; required `providerRef` chain (Provider/system-systemd must be Ready before any Process uses it); system and user domain both dispatched through injected `SystemdProcessEffectPort`; effect port implementation is core-owned |
 | Dependencies and RBAC | Required RoleBinding verbs per §12.1 (no User RoleBindings; UID verification is effect port responsibility); no broker operations; ComponentSession on d2b-bus for ProviderSupervisor integration; no internal socketpair service |
-| Security and state | No capabilities claimed; no secrets or credential leases; no direct DBus connections (all systemd interactions through injected effect port); one persistent Volume per component per execution target created/deleted by core ProviderDeployment (not this controller); `Provider/volume-local` is sole Volume reconciler; controller consumes view `dirfd` only; `migrationPolicy: none`; pidfds and effect-port handles are ephemeral and not Volume payload; no OFD locks; no raw systemd property fragments from caller data |
+| Security and state | No capabilities claimed; no secrets or credential leases; no direct DBus connections (all systemd interactions through injected effect port); the controller declares no Provider state Volume — bounded non-secret operational state lives in `status`/the core Operation ledger (D087); pidfds and effect-port handles are ephemeral and not persisted; running units re-adopted from cgroup leaves + fresh pidfds; no OFD locks; no raw systemd property fragments from caller data |
 | Telemetry | Metric instruments per §15.1; span catalog per §15.2; audit `ProcessEffect` record per §15.3; `no_isolation=true` on user-only Host child ProcessEffect records only |
 | Build/test/integration commands | `cargo test -p d2b-provider-system-systemd`; `make test-integration -- provider-system-systemd`; `make test-host-integration -- provider-system-systemd` |
 | Standalone-repo future usage | Crate depends only on published crates and the d2b provider SDK subset (`d2b-contracts`, `d2b-provider-toolkit`); may be extracted to its own repository without copying daemon internals |
@@ -1392,7 +1342,7 @@ and `ADR-046-provider-model-and-packaging` Provider dossier requirement):
 | Current anchor | `packages/d2b-unsafe-local-helper/src/systemd.rs` (production-reachable user scope creation/verification); `packages/d2bd/src/supervisor/` (production-reachable pidfd adoption/restart) |
 | Evidence class | production-reachable (both anchors) |
 | Behavior retained | DBus transient unit creation; InvocationID/ControlGroup/MainPID/ExecMainStartTimestamp binding; pidfd open + re-verification; exponential backoff restart; scope identity verification |
-| Required delta | Process/EphemeralProcess ResourceType and status schema; LaunchTicket/ProviderSupervisor integration; sandboxRevisionDigest/processIdentityDigest; async reconcile loop; d2b-bus ComponentSession service; `SystemdProcessEffectPort` trait + test double (core implementation); one persistent Volume per component per execution target (owned/reconciled by core ProviderDeployment + Provider/volume-local; controller consumes view dirfd only); conformance tests |
+| Required delta | Process/EphemeralProcess ResourceType and status schema; LaunchTicket/ProviderSupervisor integration; sandboxRevisionDigest/processIdentityDigest; async reconcile loop; d2b-bus ComponentSession service; `SystemdProcessEffectPort` trait + test double (core implementation); no Provider state Volume (bounded non-secret operational state in status/core ledger, D087); conformance tests |
 | Reuse path | `SystemdUserScopeManager`/`VerifiedScope` inform effect port contract and test double; `d2bd/src/supervisor/` backoff logic → `src/adoption.rs` and `src/controller.rs` |
 | Replacement/deletion | `d2b-unsafe-local-helper` binary and `unsafe_local_wire.rs` protocol types retained until user-domain Host Process launch parity via effect port confirmed; `VmProcessDag` roles removed per per-role disposition table after each process type achieves conformance |
 | Feasibility proof | `SystemdUserScopeManager` demonstrates transient user scope + InvocationID binding is production-tested; pidfd adoption in `d2bd/src/supervisor/` demonstrates identity-mismatch quarantine path |

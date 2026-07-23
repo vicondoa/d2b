@@ -303,25 +303,40 @@ Provider capability descriptor: `isolationClass: "provider-managed-vm"`.
 
 ## Provider payload state (ProviderStateSet)
 
-A **ProviderStateSet** is the set of all Volume resources in a Zone whose
-`metadata.ownerRef` resolves to `Provider/runtime-azure-virtual-machine`.
-It is a logical query-time grouping, not a ResourceType and not a stored
-artifact. Every Volume in the set is an ordinary `Volume` resource created
-by **core ProviderDeployment** — before component Processes start — from the
-`stateNamespaces` declarations in the component descriptor. These Volumes are
-not authored in the Zone bundle by the operator; they do not appear in Nix
+A **ProviderStateSet** is the optional, query-time set of the *declared* Volume
+resources in a Zone whose `metadata.ownerRef` resolves to
+`Provider/runtime-azure-virtual-machine`. It is a logical query-time grouping,
+not a ResourceType and not a stored artifact. Bounded non-secret operational
+state belongs in the owning resource's `status` subresource and the core
+Operation ledger by default (D087); a state Volume is declared only for a
+payload that passes the storage-need test.
+
+For this Provider, **ARM operation handles, checkpoint/idempotency records, and
+all non-secret observed cloud state move to `Guest.status` and the core
+Operation ledger** — the core Operation ledger owns in-flight ARM
+idempotency/retry/transaction progress, and `Guest.status` owns the latest
+bounded observed cloud phase (opaque, non-authorizing `AzureOperationHandle`
+digests only; never a poll URL, resource URI, or endpoint). This Provider
+retains **exactly one** guest-local, sealed Provider state Volume, and only for
+the **secret bootstrap PSK / admission / enrolled private recovery material**
+that cannot enter status. That Volume passes the storage-need test as secret,
+sensitive private recovery data. The Volume is an ordinary `Volume` resource
+created by **core ProviderDeployment** — before component Processes start — from
+the single `stateNamespaces` declaration in the controller component descriptor.
+It is not authored in the Zone bundle by the operator and does not appear in Nix
 configuration. `Provider/volume-local` is the sole Volume reconciler; the
-`runtime-azure-virtual-machine` semantic controller does not own, create, or
-delete Volume resources and does not add `Volume` to its exported
-ResourceTypes. Components consume their required view dirfd only.
+semantic controller does not own, create, or delete Volume resources and does
+not add `Volume` to its exported ResourceTypes. The controller consumes its
+required view dirfd only.
 
 ### Guest-local placement
 
-Both state Volumes use manifest-frozen **guest-local** placement. This means the
-`Provider/volume-local` instance reconciling and hosting the Volume is the one
-running **inside the gateway Guest** named by `spec.config.controllerExecutionRef`,
-not a host-side volume-local instance. The `source.executionRef` field carries
-the same gateway Guest ref and is the authoritative reconciliation target.
+The retained sealed state Volume uses manifest-frozen **guest-local** placement.
+The `Provider/volume-local` instance reconciling and hosting the Volume is the
+one running **inside the gateway Guest** named by
+`spec.config.controllerExecutionRef`, not a host-side volume-local instance. The
+`source.executionRef` field carries the same gateway Guest ref and is the
+authoritative reconciliation target.
 
 Custody invariants:
 
@@ -329,51 +344,47 @@ Custody invariants:
   remote/cloud ARM operation bindings, bootstrap admission records, PSK
   ciphertext or plaintext, enrolled key material, or idempotency handles.
 - There is **no virtiofs or host-to-guest attachment** of provider state.
-  The state files are written and read exclusively by processes running inside
-  the gateway Guest; the host filesystem is never the backing store.
-- The **manifest freezes guest-local placement** for both Volumes; each Volume
-  expresses this with `source.executionRef: Guest/<gateway>`, and there is no
-  fallback to host-backed storage and no runtime override.
+  The sealed recovery file is written and read exclusively by the controller
+  process running inside the gateway Guest; the host filesystem is never the
+  backing store.
+- The **manifest freezes guest-local placement**; the Volume expresses this with
+  `source.executionRef: Guest/<gateway>`, with no fallback to host-backed
+  storage and no runtime override.
+- Credential/audit/remote-node/cloud-control schemas require `guest-local`;
+  `host-backed-guest` is rejected with `guest-local-required`.
 
-Each semantic component receives its own private Volume even when its payload
-schema is empty. **All component state Volumes are `persistenceClass: persistent`
-with a minimal nonzero byte quota and a broker-maintained identity marker,
-regardless of how much data the component actually writes.** They survive
-component and Provider restart, and participate in the Provider upgrade,
-destroy, and reset lifecycle. A Volume with `persistenceClass: ephemeral` or
-`quotaBytes: 0` is never valid for a provider-state namespace. The two stateful
-components receive **separate** Volumes and MUST NOT share one. The volume-local
-Provider enforces per-component isolation: a `sensitivityClass: private` Volume
-is mounted by exactly one Process at a time; any attempt to mount it from a
-different component or domain fails with `volume-domain-mismatch`. Each
-component receives only the dirfd for its own declared view; no cross-component
-shared dirfd or raw path is ever handed out.
+The retained sealed Volume is `persistenceClass: persistent` with a nonzero byte
+quota and a broker-maintained identity marker. It survives component and
+Provider restart and participates in the Provider upgrade, destroy, and reset
+lifecycle. `sensitivityClass: private` means it is mounted by exactly one
+Process at a time; any attempt to mount it from a different component or domain
+fails with `volume-domain-mismatch`. The controller receives only the dirfd for
+its own declared view; no cross-component shared dirfd or raw path is ever
+handed out.
 
 ### Layout principals
 
-Volume `layout[*].ownerRef` and `layout[*].groupRef` reference
-Nix-preprovisioned `User/<name>` resources declared in the Zone's Users
-configuration alongside the Provider. The controller never creates User resources
-itself. Either a dedicated named user per component (e.g.
-`User/azure-vm-controller`, `User/azure-vm-bootstrap-svc`) or a bounded
-principal pool is acceptable; both must be Nix-preprovisioned. Numeric UID/GID
-strings are rejected at eval time by the volume-local Provider schema.
+The Volume `layout[*].ownerRef` and `layout[*].groupRef` reference a
+Nix-preprovisioned `User/azure-vm-controller` resource declared in the Zone's
+Users configuration alongside the Provider. The controller never creates User
+resources itself. Numeric UID/GID strings are rejected at eval time by the
+volume-local Provider schema.
 
 ### Volume naming convention
 
 `<provider-name>--<component-id>--<namespace-id>--<execution-ref-short>`
 
-Enforced at runtime: every Volume in the ProviderStateSet is checked against
-a declared `stateNamespace` and execution target in the component descriptor.
+Enforced at runtime: the Volume in the ProviderStateSet is checked against the
+declared `stateNamespace` and execution target in the component descriptor.
 
-### Controller state Volume
+### Controller sealed recovery Volume (secret PSK / admission / enrollment)
 
 ```yaml
-# Example name: runtime-azure-virtual-machine--azure-vm-controller--main-state--gw
+# Example name: runtime-azure-virtual-machine--azure-vm-controller--recovery-state--gw
 apiVersion: resources.d2b.io/v3
 type: Volume
 metadata:
-  name: runtime-azure-virtual-machine--azure-vm-controller--main-state--gw
+  name: runtime-azure-virtual-machine--azure-vm-controller--recovery-state--gw
   zone: dev
   ownerRef: Provider/runtime-azure-virtual-machine
 spec:
@@ -382,14 +393,15 @@ spec:
   persistenceClass: persistent
   sensitivityClass: private       # single-process; volume-domain-mismatch on any other mount
   stateSchema:
-    schemaId: io.d2b.runtime-azure-virtual-machine/controller/main-state
+    schemaId: io.d2b.runtime-azure-virtual-machine/controller/recovery-state
     schemaVersion: "1.0"
     schemaDigest: sha256:<hex>
     migrationPolicy: pre-launch-required
-  quotaBytes: 10485760            # 10 MiB; nonzero required
+  storageNeed: secret             # sealed PSK / admission / enrolled private recovery material
+  quotaBytes: 1048576             # 1 MiB; nonzero required
   quota:
-    maxBytes: 10485760            # hard byte cap (= quotaBytes for provider-state)
-    maxInodes: 4096               # hard inode cap; nonzero required
+    maxBytes: 1048576             # hard byte cap (= quotaBytes for provider-state)
+    maxInodes: 512                # hard inode cap; nonzero required
     enforcement: none
   sealingCredentialRef: Credential/azure-vm-controller-state-key
   source:
@@ -419,78 +431,35 @@ spec:
   retentionPolicy: null
 ```
 
-**State contents** (sealed at rest by `sealingCredentialRef`):
+**State contents** (sealed at rest by `sealingCredentialRef`; secret private
+recovery material only):
 
 | Path | Content | Notes |
 | --- | --- | --- |
-| `state/ops/<guest-uid>/<handle-digest>.json` | Idempotency record: op class, `AzureOperationHandle` opaque bytes, attempt count, last disposition | Written before ARM call; no poll URL or cloud resource URI; `AzureEffectPort` maps handle to continuation internally |
-| `state/enrollment/<guest-uid>.json` | Enrolled static key digest, enrollment timestamp | Written on enrollment completion; no Noise private key bytes |
-| `state/bootstrap-psk/<guest-uid>.bin` | Sealed ciphertext PSK admission record | PSK bytes exist ONLY as sealed ciphertext; plaintext never written to Volume |
+| `state/enrollment/<guest-uid>.json` | Enrolled static key recovery digest, enrollment timestamp | Sealed; no Noise private key plaintext |
+| `state/bootstrap-psk/<guest-uid>.bin` | Sealed ciphertext PSK admission record | PSK bytes exist ONLY as sealed ciphertext; plaintext never written |
+| `state/admission/<guest-uid>.bin` | Sealed admission grant record | Session-scoped admission material the controller mediates for the bootstrap service |
 
-No ARM poll URL, ARM resource URI, or ARM endpoint appears in any state file.
-`AzureEffectPort` holds that mapping; the controller stores only the opaque
-`AzureOperationHandle` returned by the effect port.
+ARM operation handles, idempotency records, and checkpoints do **not** live in
+this Volume: in-flight idempotency/retry/transaction progress is owned by the
+core Operation ledger, and the latest bounded observed cloud phase (opaque,
+non-authorizing `AzureOperationHandle` digest only) is owned by `Guest.status`.
+No ARM poll URL, ARM resource URI, or ARM endpoint appears anywhere in
+resources, status, or this Volume; `AzureEffectPort` holds that mapping in
+process memory.
 
-### Bootstrap-service state Volume
+### Bootstrap-service state
 
-```yaml
-# Example name: runtime-azure-virtual-machine--azure-vm-bootstrap-svc--admission-state--gw
-apiVersion: resources.d2b.io/v3
-type: Volume
-metadata:
-  name: runtime-azure-virtual-machine--azure-vm-bootstrap-svc--admission-state--gw
-  zone: dev
-  ownerRef: Provider/runtime-azure-virtual-machine
-spec:
-  providerRef: Provider/volume-local
-  kind: state
-  persistenceClass: persistent     # durable: survives restart; participates in upgrade/destroy/reset
-  sensitivityClass: private       # volume-domain-mismatch on any other mount
-  stateSchema:
-    schemaId: io.d2b.runtime-azure-virtual-machine/bootstrap-svc/admission-state
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<hex>
-    migrationPolicy: none            # admission records are session-scoped; no migration worker
-  quotaBytes: 1048576             # 1 MiB; nonzero required even for minimal payload
-  quota:
-    maxBytes: 1048576             # hard byte cap (= quotaBytes for provider-state)
-    maxInodes: 512                # hard inode cap; nonzero required
-    enforcement: none
-  sealingCredentialRef: null
-  source:
-    executionRef: Guest/<gateway>
-    settings:
-      kind: local-path
-      sourcePolicyId: runtime-azure-virtual-machine-admission-state
-  layout:
-    - path: admission
-      type: directory
-      ownerRef: User/azure-vm-bootstrap-svc  # Nix-preprovisioned; not a ComponentPrincipal
-      groupRef: User/azure-vm-bootstrap-svc
-      mode: "0700"
-      sensitivity: private
-      createPolicy: create-if-never-provisioned
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      noFollow: true
-  views:
-    admission:
-      path: admission
-      rights: [read, write, create, delete, traverse]
-  identityMarker:
-    class: broker-maintained
-    markerRoot: provider-state-markers
-  snapshotPolicy: null
-  retentionPolicy: null
-```
-
-The bootstrap-service receives only the `admission` view dirfd for its own
-Volume. It never reads sibling controller state files; the volume-local Provider
-would reject that mount with `volume-domain-mismatch`. The bootstrap-service
-obtains PSK admission through an authenticated typed internal bus call to the
-controller process (`GrantBootstrapAdmission` on `d2b.azure-vm.controller.v1`).
-The controller decrypts the sealed PSK from its own Volume, validates the
-request, and delivers the admission token over that single session.
+The `azure-vm-bootstrap-svc` service declares **no** Provider state Volume. Its
+admission session state is transient in process memory; it obtains PSK admission
+through an authenticated typed internal bus call to the controller process
+(`GrantBootstrapAdmission` on `d2b.azure-vm.controller.v1`). The controller
+decrypts the sealed PSK/admission record from its own recovery Volume, validates
+the request, and delivers the admission token over that single session. The
+bootstrap service's bounded non-secret operational state (readiness, session
+counters, closed-enum error detail) lives in `status`/the core Operation ledger
+(D087). There is no bootstrap-svc admission-state Volume and no
+`User/azure-vm-bootstrap-svc` state-layout principal.
 
 ---
 
@@ -511,7 +480,7 @@ request, and delivers the admission token over that single session.
 | Dependency aliases | `credential` → `spec.config.armCredentialRef` |
 | Internal service | `d2b.azure-vm.controller.v1` |
 | Status authority | `update-status` authorized for all Guest resources with this Provider; writes common `Guest.status.phase` + typed `providerPhase` detail |
-| State Volume | ordinary Volume resource created by core ProviderDeployment (before first Process start) from the component `stateNamespaces` descriptor; component consumes required view dirfd only; controller does not own, create, or reconcile the Volume; `sensitivityClass: private`; Nix-preprovisioned `User/azure-vm-controller` layout principal |
+| State Volume | one guest-local **sealed** Provider state Volume (created by core ProviderDeployment before first Process start from the controller `stateNamespaces` descriptor) holding only the secret PSK/admission/enrolled private recovery material that cannot enter status; ARM operation/idempotency and non-secret observed cloud state live in `Guest.status`/the core Operation ledger (D087); controller consumes required view dirfd only; does not own/create/reconcile the Volume; `sensitivityClass: private`; Nix-preprovisioned `User/azure-vm-controller` layout principal |
 | Reconcile concurrency | 4 concurrent Guest resources |
 | Maximum pending | 64 Guest resources |
 | Injected ports | `AzureEffectPort`, `CredentialEffectPort`, `TransportEffectPort` |
@@ -528,7 +497,7 @@ request, and delivers the admission token over that single session.
 | Service | `d2b.azure-vm.bootstrap.v1` (IKpsk2 handshake → enrolled KK) |
 | Cardinality | 1 per Zone |
 | Session limit | 1 active bootstrap session per Guest; max 16 concurrent |
-| State Volume | ordinary Volume resource created by core ProviderDeployment (before first Process start) from the component `stateNamespaces` descriptor; component consumes required view dirfd only; bootstrap-svc does not own, create, or reconcile the Volume; `sensitivityClass: private`; Nix-preprovisioned `User/azure-vm-bootstrap-svc` layout principal |
+| State Volume | none — the bootstrap service declares no Provider state Volume; its session state is transient in process memory and it obtains sealed PSK/admission from the controller via `GrantBootstrapAdmission`; bounded non-secret operational state lives in `status`/the core Operation ledger (D087) |
 | Injected ports | `ControllerServicePort` (d2b.azure-vm.controller.v1), `TransportEffectPort` |
 
 ---
@@ -563,7 +532,7 @@ spec:
   credentialRefs:
     - Credential/arm-azure-vm       # armCredentialRef; acquire-token only via enrolled KK
   mounts:
-    - volumeRef: Volume/runtime-azure-virtual-machine--azure-vm-controller--main-state--gw
+    - volumeRef: Volume/runtime-azure-virtual-machine--azure-vm-controller--recovery-state--gw
       view: main
       mountPath: /state
       access: read-write
@@ -633,12 +602,7 @@ spec:
   configRef: null
   credentialRefs: []                # no direct credential access; obtains PSK via
                                     # GrantBootstrapAdmission from controller only
-  mounts:
-    - volumeRef: Volume/runtime-azure-virtual-machine--azure-vm-bootstrap-svc--admission-state--gw
-      view: admission
-      mountPath: /admission
-      access: read-write
-      required: true
+  mounts: []                        # no Provider state Volume; session state in process memory; operational state in status/core ledger (D087)
   sandbox:
     namespaceClasses: [mount, ipc, uts, network, pid]
     capabilityClasses: []
@@ -761,15 +725,19 @@ any `reconcile`, `observe`, or `finalize` handler.
 The contract:
 
 1. **Start**: call `AzureEffectPort::start_*(...)`, receive `AzureOperationHandle`.
-   Persist idempotency record (op class + handle opaque bytes) in state Volume.
-   Advance `providerPhase`. Return `requeue-at: now + poll_interval` immediately.
-2. **Poll ticks**: on requeue-at trigger, read persisted handle from state Volume.
-   Call `AzureEffectPort::poll_lro(&handle)`:
+   Persist the idempotency record (op class + opaque handle digest) in the
+   **core Operation ledger** (D087), and record the latest bounded observed
+   phase (opaque handle digest) in `Guest.status`. Advance `providerPhase`.
+   Return `requeue-at: now + poll_interval` immediately.
+2. **Poll ticks**: on requeue-at trigger, read the in-flight handle from the
+   core Operation ledger. Call `AzureEffectPort::poll_lro(&handle)`:
    - `InProgress`: return `requeue-at: now + next_interval`
-   - `Succeeded`: advance to next phase; clear op record; proceed
-   - `Failed`: transition to failure providerPhase; clear op record
-3. **After controller restart** (op record present but handle semantics unclear):
-   call `AzureEffectPort::get_vm_state` to re-derive state; continue.
+   - `Succeeded`: advance to next phase; clear the ledger op record; proceed
+   - `Failed`: transition to failure providerPhase; clear the ledger op record
+3. **After controller restart** (ledger op record present but handle semantics
+   unclear): call `AzureEffectPort::get_vm_state` to re-derive state from
+   external reality (treating `Guest.status` as observation, never authority);
+   continue.
 4. **Between ticks**: other Guest resources are processed concurrently.
 
 ### Provisioning sequence
@@ -1228,10 +1196,12 @@ d2b.zones.dev.resources.corp-vm = {
 ### Controller upgrade (zero VM downtime)
 
 1. New Provider resource generation applied.
-2. Controller reads sealed state Volume (enrollment table, op records).
+2. Controller reads the sealed recovery Volume (enrollment/PSK/admission
+   recovery material) and reads in-flight op records from the core Operation
+   ledger.
 3. `startup-relist` trigger; already-enrolled VMs adopted immediately.
-4. In-progress op records: read handle → `AzureEffectPort::poll_lro` to
-   re-derive state.
+4. In-progress op records: read the in-flight handle from the core Operation
+   ledger → `AzureEffectPort::poll_lro` to re-derive state.
 5. Bootstrap-svc restarts; enrolled KK sessions re-established.
 
 ### VM changes
@@ -1288,7 +1258,7 @@ d2b.zones.dev.resources.corp-vm = {
 | Current source | `d2b-realm-provider/src/types.rs`: `ProviderGuestdBootstrapContract` (implemented-and-reachable); main `a1cc0b2d`: `d2b-session/src/bootstrap.rs` |
 | Reuse action | Copy/adapt main `BootstrapPsk`/`BootstrapAdmission` |
 | Destination | `src/controller/bootstrap.rs`; `src/bootstrap_svc/{mod.rs,admission.rs,enrollment.rs}` |
-| Detailed design | PSK generation; sealed PSK (ciphertext) in controller Volume; `GrantBootstrapAdmission` typed bus call; IKpsk2 in bootstrap-svc; enrollment record; enrolled KK; bootstrap-svc receives only its own `admission` view dirfd; volume-local Provider enforces `volume-domain-mismatch` on any sibling-Volume mount attempt; both state Volumes are ordinary Volume resources created by core ProviderDeployment (before component Process start) from the component `stateNamespaces` declarations with Nix-preprovisioned `User/<name>` layout principals; controller and bootstrap-svc do not own, create, or add Volume to exported ResourceTypes; components consume view dirfd only |
+| Detailed design | PSK generation; sealed PSK/admission/enrollment recovery material (ciphertext) in the controller's single guest-local sealed recovery Volume; `GrantBootstrapAdmission` typed bus call; IKpsk2 in bootstrap-svc; enrollment record; enrolled KK; the bootstrap-svc declares **no** state Volume (session state in process memory; obtains sealed PSK/admission from the controller only); the controller's sealed recovery Volume is an ordinary Volume resource created by core ProviderDeployment (before component Process start) from the controller's single `stateNamespaces` declaration with a Nix-preprovisioned `User/azure-vm-controller` layout principal; ARM operation/idempotency records live in the core Operation ledger and non-secret observed cloud phase lives in `Guest.status` (D087); controller does not own, create, or add Volume to exported ResourceTypes; it consumes its view dirfd only |
 | Validation | `tests/bootstrap_hermetic.rs`; `tests/error_redaction.rs` |
 | Removal proof | Old vsock bootstrap path removed at v3 cutover |
 
@@ -1324,7 +1294,7 @@ d2b.zones.dev.resources.corp-vm = {
 | Current source | `nixos-modules/options-realms-workloads.nix`: `WorkloadProviderKind::ProviderManaged` |
 | Reuse action | Adapt |
 | Destination | `nixos-modules/` (Provider/Guest resource emitters); crate Nix build |
-| Detailed design | Nix `spec.config` shape; `controllerExecutionRef`/`networkRef` eval-time assertions; no Volume refs for data disks; `systemArtifactId=null` enforcement; both ProviderStateSet Volumes are ordinary Volume resources created by core ProviderDeployment (not in Zone bundle; not operator-authored); guest-local placement on both Volumes — reconciled by the Guest-local volume-local instance and expressed by `source.executionRef` = config gateway Guest; host MUST NOT hold ARM binding, admission, PSK, or operation state; no virtiofs or host-to-guest attachment; manifest freezes guest-local with no fallback; controller does not create, own, or list Volume in exported ResourceTypes; `Provider/volume-local` is the sole Volume reconciler; components consume required view dirfd only; **both Volumes are `kind: state`, `persistenceClass: persistent`, with nonzero `quotaBytes`, `quota.maxBytes`, `quota.maxInodes`, and `source.settings.sourcePolicyId`; `persistenceClass: ephemeral` and zero quotas are rejected**; bootstrap-svc Volume uses `migrationPolicy: none` (session-scoped schema; no migration worker); Volumes survive component/Provider restart and participate in upgrade/destroy/reset; full canonical Volume spec including `stateSchema`, `source`, `layout` with Nix-preprovisioned `User/<name>` principals (not ComponentPrincipal), `views`, `identityMarker`, `snapshotPolicy: null`, `retentionPolicy: null`; `sensitivityClass: private` and `volume-domain-mismatch` isolation enforced; canonical `SandboxSpec` fields with `namespaceClasses`/`capabilityClasses`/`seccompClass`/`noNewPrivileges`/`startRoot`/`environmentClass`/`readOnlyRoot`; `BudgetSpec` with SI suffix; `restartPolicy` class/backoffBase/backoffMax; `EndpointSpec` name/transport/purpose |
+| Detailed design | Nix `spec.config` shape; `controllerExecutionRef`/`networkRef` eval-time assertions; no Volume refs for data disks; `systemArtifactId=null` enforcement; the single controller sealed recovery Volume is an ordinary Volume resource created by core ProviderDeployment (not in Zone bundle; not operator-authored); the bootstrap-svc declares no state Volume; guest-local placement — reconciled by the Guest-local volume-local instance and expressed by `source.executionRef` = config gateway Guest; host MUST NOT hold ARM binding, admission, PSK, or operation state; ARM operation/idempotency records live in the core Operation ledger and non-secret observed cloud phase in `Guest.status` (D087); no virtiofs or host-to-guest attachment; manifest freezes guest-local with no fallback; controller does not create, own, or list Volume in exported ResourceTypes; `Provider/volume-local` is the sole Volume reconciler; controller consumes required view dirfd only; **the recovery Volume is `kind: state`, `persistenceClass: persistent`, `storageNeed: secret`, sealed via `sealingCredentialRef`, with nonzero `quotaBytes`, `quota.maxBytes`, `quota.maxInodes`, and `source.settings.sourcePolicyId`; `persistenceClass: ephemeral` and zero quotas are rejected**; it survives component/Provider restart and participates in upgrade/destroy/reset; full canonical Volume spec including `stateSchema`, `source`, `layout` with a Nix-preprovisioned `User/<name>` principal (not ComponentPrincipal), `views`, `identityMarker`, `snapshotPolicy: null`, `retentionPolicy: null`; `sensitivityClass: private` and `volume-domain-mismatch` isolation enforced; canonical `SandboxSpec` fields with `namespaceClasses`/`capabilityClasses`/`seccompClass`/`noNewPrivileges`/`startRoot`/`environmentClass`/`readOnlyRoot`; `BudgetSpec` with SI suffix; `restartPolicy` class/backoffBase/backoffMax; `EndpointSpec` name/transport/purpose |
 | Validation | Nix eval tests; `make test-flake`; `make test-drift` |
 | Removal proof | `d2b.realms.<r>.workloads.<w>` removed at v3 cutover |
 
@@ -1368,7 +1338,7 @@ Run with `cargo test -p d2b-provider-runtime-azure-virtual-machine`.
 | `tests/credential_hermetic.rs` | Fake enrolled KK; `AcquireToken` → token bytes via `AzureEffectPort` only; token bytes absent from status/audit/OTEL; zeroized after ARM call; no ambient fallback fires |
 | `tests/idempotency.rs` | Deterministic request ID derivation; same input → same ID; `AzureOperationHandle` opaque (no URL leaked); ARM 409 → adoption; restart recovery (handle present → `poll_lro`; handle absent → `get_vm_state`); finalizer held through ambiguity |
 | `tests/error_redaction.rs` | Canary bytes: ARM error body, ARM token, PSK plaintext, enrolled Noise pubkey, ARM poll URL, ARM resource URI. Must not appear in `Guest.status`, audit records, OTEL attributes, metric labels, or log lines. Hard test error on any match. |
-| `tests/schema_validation.rs` | `spec.config` JSON Schema; providerSettings JSON Schema; OpaqueAzureRef charset; `adminUser` charset; `diskSku` closed enum; `dataDisks` LUN uniqueness; no `sshCredentialRef` field accepted; no Volume refs in `dataDisks`; `systemArtifactId=null`; `azureTags` `d2b:*` prefix rejection; controller Volume spec round-trip: guest-local placement is manifest-frozen and expressed by `source.executionRef` = gateway Guest, layout `ownerRef: User/<name>` (numeric UID string rejected), `views`, `identityMarker`, `snapshotPolicy: null`, `retentionPolicy: null`, `quotaBytes`/`quota.maxBytes`/`quota.maxInodes`/`source.settings.sourcePolicyId` present and nonzero; bootstrap-svc Volume spec same shape; `sensitivityClass: private` on both; `persistenceClass: persistent` on both; `persistenceClass: ephemeral` rejected; zero `quota.maxBytes`/`quota.maxInodes`/`quotaBytes` rejected; host-backed placement rejected |
+| `tests/schema_validation.rs` | `spec.config` JSON Schema; providerSettings JSON Schema; OpaqueAzureRef charset; `adminUser` charset; `diskSku` closed enum; `dataDisks` LUN uniqueness; no `sshCredentialRef` field accepted; no Volume refs in `dataDisks`; `systemArtifactId=null`; `azureTags` `d2b:*` prefix rejection; the controller declares exactly one guest-local sealed recovery Volume (`storageNeed: secret`, `sealingCredentialRef` set) round-trip: guest-local placement is manifest-frozen and expressed by `source.executionRef` = gateway Guest, layout `ownerRef: User/<name>` (numeric UID string rejected), `views`, `identityMarker`, `snapshotPolicy: null`, `retentionPolicy: null`, `quotaBytes`/`quota.maxBytes`/`quota.maxInodes`/`source.settings.sourcePolicyId` present and nonzero; the bootstrap-svc declares no state Volume; `sensitivityClass: private`; `persistenceClass: persistent`; `persistenceClass: ephemeral` rejected; zero `quota.maxBytes`/`quota.maxInodes`/`quotaBytes` rejected; host-backed placement rejected (`guest-local-required`) |
 | `tests/fault_injection.rs` | ARM 429 → retry + succeed; ARM 503 persistent → `ProvisionFailed`; PSK first expiry → retry; PSK second expiry → `BootstrapFailed`; ARM credential unavailable → `CredentialUnavailable`; enrollment PSK replay rejected; controller restart mid-LRO → handle recovery |
 
 ### integration/ layout and boundaries

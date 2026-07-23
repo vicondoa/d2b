@@ -417,79 +417,27 @@ the image file path; QEMU receives an owned fd.
 
 ### 6.4 ProviderStateSet
 
-`ProviderStateSet(zone, "runtime-qemu-media")` is the query-time set of all
-Volume resources in the Zone whose `metadata.ownerRef` equals
-`Provider/runtime-qemu-media`. It is not a ResourceType and is not stored;
-it is derived by querying the Volume owner index.
+`ProviderStateSet(zone, "runtime-qemu-media")` is the optional, query-time set
+of the *declared* Volume resources in the Zone whose `metadata.ownerRef` equals
+`Provider/runtime-qemu-media`. It is not a ResourceType and is not stored; it is
+derived by querying the Volume owner index, and is empty for this Provider.
 
-The controller declares one `stateNamespace` in its component descriptor
-(initial release: empty payload schema, `kind: state`,
-`persistenceClass: persistent`, `quota.maxBytes: 1048576`,
-`quotaBytes: 1048576`). Core `ProviderDeployment` creates the corresponding
-state Volume **before** the controller Process is started. The controller
-cannot create its own prerequisite. The canonical Volume ResourceSpec is:
-
-```yaml
-apiVersion: resources.d2b.io/v3
-type: Volume
-metadata:
-  name: runtime-qemu-media--controller--state--host-system
-  zone: system
-  ownerRef: Provider/runtime-qemu-media
-spec:
-  providerRef: Provider/volume-local
-  kind: state
-  persistenceClass: persistent           # durable: survives restart, upgrade, reset
-  sensitivityClass: private
-  stateSchema:
-    schemaId: io.d2b.runtime-qemu-media/controller/state
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<hex>            # signed into component descriptor
-    migrationPolicy: none                 # empty payload schema; no migration worker
-  quota:
-    maxBytes: 1048576                     # base Volume quota; nonzero even for empty payload
-    maxInodes: 1024
-  quotaBytes: 1048576                     # provider-state extension quota (mirrors base)
-  sealingCredentialRef: null
-  source:
-    executionRef: Host/host-system        # resolved from config.controllerExecutionRef
-    settings:
-      kind: local-path
-      sourcePolicyId: runtime-qemu-media-controller-state  # opaque; volume-local resolves backing path
-  layout:
-    - path: state
-      type: directory
-      ownerRef: User/runtime-qemu-media-system    # Nix-preprovisioned principal
-      groupRef: User/runtime-qemu-media-system
-      mode: "0700"
-      sensitivity: private
-      createPolicy: create-if-never-provisioned
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      noFollow: true
-  views:
-    main:
-      path: state
-      rights: [read, write, create, delete, traverse]
-  identityMarker:
-    class: broker-maintained
-    markerRoot: provider-state-markers
-  snapshotPolicy: null
-  retentionPolicy: null
-```
-
-`ProviderDeployment` creates this Volume, waits for `Provider/volume-local`
-to report `phase: Ready`, then starts the controller Process with the Volume
-pre-mounted. The controller Process mounts the `main` view as a dirfd at
-`/state` and consumes it; it does not watch, create, delete, or otherwise
-reconcile the Volume. `Provider/volume-local` is the sole Volume reconciler.
-Volume is not in this Provider's exported ResourceTypes. `ProviderDeployment`
-sets `metadata.deletionRequestedAt` on this Volume only after the controller
-Process drain completes; the controller does not set it.
+The controller declares **no** Provider state Volume; its `ProviderStateSet` is
+empty. All controller recovery data is derivable from the Zone resource store,
+the core Operation ledger, and independent external observation (running QEMU
+runner processes re-adopted from declared cgroup leaves and fresh pidfds). Its
+bounded non-secret operational state — reconcile stage, per-Guest launch/
+adoption observations, bounded counters, and closed-enum error detail — lives in
+the owning resource's `status` subresource and the core Operation ledger (D087).
+Because that operational state is fully derivable, the controller payload fails
+the storage-need test: there is no controller state namespace, no controller
+state Volume, no `/state` mount, and no dedicated `User/runtime-qemu-media-system`
+state-layout principal. There is no empty identity-only Volume.
 
 Controller-created Guest runtime Volumes carry `ownerRef: Guest/<name>` and
 do not appear in the ProviderStateSet. Operator-authored media Volumes carry
-`ownerRef: null` and also do not appear.
+`ownerRef: null` and also do not appear. These are genuine media/runtime
+payloads owned by their respective resources and are retained unchanged.
 
 ---
 
@@ -782,12 +730,7 @@ spec:
   template: runtime-qemu-media-controller # plain template ID within signed descriptor
   configRef: null
   credentialRefs: []
-  mounts:
-    - volumeRef: Volume/runtime-qemu-media--controller--state--host-system
-      view: main
-      mountPath: /state
-      access: read-write
-      required: true
+  mounts: []                              # no Provider state Volume; operational state is in status/core ledger (D087)
   sandbox:
     namespaceClasses: [pid]
     capabilityClasses: []
@@ -1267,67 +1210,16 @@ d2b.zones.corp.resources.runtime-qemu-media = {
 };
 ```
 
-### 19.3B Controller state Volume (ProviderDeployment-created; shown for reference)
+### 19.3B Controller operational state (status-first; no state Volume)
 
-Core `ProviderDeployment` creates this Volume before the controller Process
-starts. It is **not** authored by the operator. The operator's NixOS module
-must provision the layout principal `User/runtime-qemu-media-system`:
-
-```nix
-# nixos-modules/provider-users.nix — provisioned automatically by module activation
-users.users."runtime-qemu-media-system" = {
-  isSystemUser = true;
-  group        = "runtime-qemu-media-system";
-};
-users.groups."runtime-qemu-media-system" = {};
-```
-
-The corresponding Zone resource (ProviderDeployment-created at runtime; not authored in Nix):
-
-```yaml
-# ProviderDeployment creates this before the controller Process starts; not in Nix
-type: Volume
-metadata:
-  name: runtime-qemu-media--controller--state--host-system
-  ownerRef: Provider/runtime-qemu-media
-spec:
-  providerRef: Provider/volume-local
-  kind: state
-  persistenceClass: persistent
-  sensitivityClass: private
-  stateSchema:
-    schemaId: io.d2b.runtime-qemu-media/controller/state
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<hex>
-    migrationPolicy: none                 # empty payload schema; no migration worker
-  quota:
-    maxBytes: 1048576     # base Volume quota; nonzero even for empty payload
-    maxInodes: 1024
-  quotaBytes: 1048576     # provider-state extension quota
-  source:
-    executionRef: Host/host-system
-    settings:
-      kind: local-path
-      sourcePolicyId: runtime-qemu-media-controller-state
-  layout:
-    - path: state
-      type: directory
-      ownerRef: User/runtime-qemu-media-system
-      groupRef: User/runtime-qemu-media-system
-      mode: "0700"
-      sensitivity: private
-      createPolicy: create-if-never-provisioned
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      noFollow: true
-  views:
-    main:
-      path: state
-      rights: [read, write, create, delete, traverse]
-  identityMarker:
-    class: broker-maintained
-    markerRoot: provider-state-markers
-```
+The controller declares **no** Provider state Volume; there is no
+ProviderDeployment-created controller state Volume and no
+`User/runtime-qemu-media-system` state-layout principal to provision. The
+controller's bounded non-secret operational state lives in the owning
+resource's `status` subresource and the core Operation ledger (D087), and all
+recovery data is re-derived on restart from the Zone resource store, the core
+Operation ledger, and independent external observation (running QEMU runners
+re-adopted from declared cgroup leaves and fresh pidfds). See §6.4 and §20.
 
 ### 19.4 KVM Device resource
 
@@ -1457,93 +1349,50 @@ The following eval-time assertions are added in
 
 ## 20 ProviderStateSet
 
-`ProviderStateSet(zone, "runtime-qemu-media")` is the query-time grouping of
-all Volume resources in the Zone whose `metadata.ownerRef` resolves to
-`Provider/runtime-qemu-media`. It is not a ResourceType, not a stored
-artifact, and has no "compartments". The set is derived by querying the Zone
-resource store's owner index.
+`ProviderStateSet(zone, "runtime-qemu-media")` is the optional, query-time
+grouping of the *declared* Volume resources in the Zone whose
+`metadata.ownerRef` resolves to `Provider/runtime-qemu-media`. It is not a
+ResourceType, not a stored artifact, and has no "compartments". The set is
+derived by querying the Zone resource store's owner index, and is empty for this
+Provider.
 
-### 20.1 Controller state Volume
+### 20.1 No controller state Volume
 
-Core `ProviderDeployment` creates exactly one state Volume before the
-controller Process is started. The controller cannot create its own
-prerequisite Volume:
+The controller declares **no** Provider state Volume. Its bounded non-secret
+operational state — reconcile stage, per-Guest launch/adoption observations,
+bounded counters, and closed-enum error detail — lives in the owning resource's
+`status` subresource and the core Operation ledger (D087). All recovery data is
+re-derived on restart from the Zone resource store, the core Operation ledger,
+and independent external observation (running QEMU runners re-adopted from
+declared cgroup leaves and fresh pidfds). Because that state is fully derivable,
+the controller payload fails the storage-need test: there is no controller
+state namespace, no controller state Volume, no `/state` mount, and no dedicated
+`User/runtime-qemu-media-system` state-layout principal. There is no empty
+identity-only Volume.
 
-| Field | Value |
-| --- | --- |
-| Name | `runtime-qemu-media--controller--state--host-system` |
-| Creator | `ProviderDeployment` (core); controller watches, does not create |
-| `ownerRef` | `Provider/runtime-qemu-media` |
-| `providerRef` | `Provider/volume-local` |
-| `kind` | `state` |
-| `persistenceClass` | `persistent` (durable: survives restart, upgrade, destroy/reset lifecycle) |
-| `sensitivityClass` | `private` |
-| `stateSchema.schemaId` | `io.d2b.runtime-qemu-media/controller/state` |
-| `stateSchema.schemaVersion` | `"1.0"` |
-| `stateSchema.migrationPolicy` | `none` (empty payload schema; no migration worker) |
-| `quota.maxBytes` | `1048576` (base Volume quota; nonzero even for empty payload) |
-| `quota.maxInodes` | `1024` |
-| `quotaBytes` | `1048576` (provider-state extension; participates in quota enforcement) |
-| `source.settings.sourcePolicyId` | `runtime-qemu-media-controller-state` (opaque; volume-local resolves backing path) |
-| Layout principal | `User/runtime-qemu-media-system` (Nix-preprovisioned) |
-| View | `main` — path `state`, rights `[read, write, create, delete, traverse]` |
-| `identityMarker.class` | `broker-maintained` |
+A future revision that introduces a durable per-provider payload passing the
+storage-need test (for example, a large or secret source-policy cache that
+cannot live in `status`) would add a `stateNamespace` to the component
+descriptor and create an additional Volume with
+`ownerRef: Provider/runtime-qemu-media`.
 
-The canonical Volume ResourceSpec is in §6.4.
-
-### 20.2 Controller Process mount
-
-The controller Process mounts this Volume via the `main` view:
-
-```yaml
-mounts:
-  - volumeRef: Volume/runtime-qemu-media--controller--state--host-system
-    view: main
-    mountPath: /state
-    access: read-write
-    required: true
-```
-
-The `sensitivityClass: private` constraint enforces that exactly one process
-instance mounts this Volume at a time. No worker Process, no other component,
-and no operator-authored or Guest-owned Volume shares this Volume or its view.
-
-### 20.3 What is not in the ProviderStateSet
+### 20.2 What is not in the ProviderStateSet
 
 - Runtime tmpfs Volumes for Guest runners carry `ownerRef: Guest/<name>` —
-  they are Guest resources, not Provider state.
+  they are Guest resources, not Provider state, and are retained unchanged.
 - Operator-authored boot/removable media Volumes carry `ownerRef: null` —
   they are not Provider state.
-- The controller state Volume has an empty payload schema in the initial
-  release but is still `kind: state`, `persistenceClass: persistent`, with
-  a minimal nonzero quota and an identity marker. It survives component and
-  Provider restart and participates in upgrade, destroy, and reset flows.
-  A future revision that adds persistent per-provider registry state
-  (for example, a source-policy cache) adds a new `stateNamespace` to the
-  component descriptor and creates an additional Volume with
-  `ownerRef: Provider/runtime-qemu-media`.
 
-### 20.4 Layout principal
-
-`User/runtime-qemu-media-system` is a system user provisioned by the NixOS
-module (`nixos-modules/provider-users.nix`) as part of host activation. The
-volume-local Provider resolves this `User/<name>` reference at provision time
-through the Host's User resource to obtain the numeric uid/gid. No
-`ComponentPrincipal` ResourceRef is used; the layout always binds named
-`User/<name>` references from the Nix-preprovisioned pool.
-
-### 20.5 Destruction
+### 20.3 Destruction
 
 When `Provider/runtime-qemu-media` receives `metadata.deletionRequestedAt`,
 `ProviderDeployment` (core):
 
 1. Signals the controller Process to drain (`desiredLifecycle: stopped`);
    waits for Process finalizer to complete.
-2. Sets `metadata.deletionRequestedAt` on the controller state Volume after
-   the Process drain is confirmed. The controller does not trigger this step.
-3. The volume-local Provider destroys the Volume (layout removal, marker
-   removal, finalizer commit).
-4. Core removes the Provider row and emits `ResourceDeleted`.
+2. Removes the Provider row and emits `ResourceDeleted`. The controller's
+   `status` disappears with the resource row and its revision; there is no
+   separate state-Volume disposition because the Provider declares none.
 
 ---
 
@@ -1619,57 +1468,42 @@ must match §4, §5, and §16 exactly.
 
 ---
 
-### WI-003B Controller state Volume (ProviderDeployment-created)
+### WI-003B Controller status-first operational state (no state Volume)
 
 **Priority:** P0
 
-**Description:** The controller state Volume is created and deleted by core
-`ProviderDeployment`; the semantic controller does not own, watch, create,
-or delete it. `Provider/volume-local` is the sole Volume reconciler. Volume
-is not in this Provider's exported ResourceTypes. This WI covers:
+**Description:** The controller declares no Provider state Volume. Its bounded
+non-secret operational state lives in the owning resource's `status`
+subresource and the core Operation ledger (D087). This WI covers:
 
-1. **Component descriptor declaration**: the controller component descriptor
-   declares one `stateNamespace` with `schemaId`, `schemaVersion`,
-   `schemaDigest`, `migrationPolicy: none` (empty payload; no migration
-   worker), `quota.maxBytes`, `quota.maxInodes`, `quotaBytes`, and the
-   `main` view; this drives ProviderDeployment's Volume creation.
-2. **View consumption only**: the controller Process receives the `main`
-   view pre-mounted at `/state` as a dirfd; it reads/writes state through
-   the volume-local-enforced view boundary. It holds no ResourceClient
-   handle to the Volume and issues no Volume API calls (no create, watch,
-   update, or deletionRequestedAt).
-3. **No controller-side ownership**: the controller holds no finalizer on
-   the state Volume and does not add Volume to its owned resource set.
-   ProviderDeployment sets `deletionRequestedAt` after Process drain.
+1. **No component descriptor state namespace**: the controller component
+   descriptor declares an empty `stateNamespaces` list; ProviderDeployment
+   creates no controller state Volume.
+2. **Status projection**: the controller writes reconcile stage, per-Guest
+   launch/adoption observations, bounded counters, and closed-enum error detail
+   to its `status` subresource on material change, within the frozen status
+   bounds; it never writes secrets, paths, argv, PIDs, or unit names to status.
+3. **Restart re-derivation**: on restart the controller re-derives observed
+   state from the Zone resource store, the core Operation ledger, and
+   independent external observation (running QEMU runners re-adopted from
+   declared cgroup leaves + fresh pidfds), treating `status` as observation,
+   never authority.
 
-Full Volume spec (§6.4): `ownerRef: Provider/runtime-qemu-media`,
-`kind: state`, `persistenceClass: persistent`, `migrationPolicy: none`,
-`quota.maxBytes/maxInodes: 1048576/1024`, `quotaBytes: 1048576`,
-`source.settings.sourcePolicyId: runtime-qemu-media-controller-state`,
-`User/runtime-qemu-media-system` layout principal, `main` view,
-`identityMarker: broker-maintained`. Worker Processes receive no mount;
-`sensitivityClass: private` is enforced at admission.
+Worker Processes and the controller receive no state-Volume mount.
 
 **Source:** new (no baseline equivalent)
 
-**Destination:** `src/descriptor.rs` (stateNamespace declaration in
-component descriptor); no `state_volume.rs` — the controller has no Volume
-management code.
+**Destination:** `src/descriptor.rs` (empty `stateNamespaces`); `src/state.rs`
+(status projection helpers); no Volume management code.
 
 **Tests:**
-- `tests/state_volume_spec.rs` — component descriptor's stateNamespace
-  fields match §6.4: migrationPolicy none, quota.maxBytes/maxInodes +
-  quotaBytes all nonzero, source.settings.sourcePolicyId, layout
-  ownerRef/mode, view rights, identityMarker class
-- `tests/state_volume_principal.rs` — layout principal resolves to
-  `User/runtime-qemu-media-system`; no ComponentPrincipal refs; no
-  cross-component shared Volume
-- `tests/state_volume_mount_exclusivity.rs` — worker Process spec contains
-  no mount referencing the controller state Volume
-- `tests/state_volume_no_controller_ops.rs` — controller reconcile handler
-  issues no Volume create, watch, update, or deletionRequestedAt for the
-  state namespace; Volume is absent from the controller's ResourceClient
-  permission set
+- `tests/state_status_spec.rs` — component descriptor declares no
+  `stateNamespaces`; status projection stays within bounds and carries no
+  secret/path/argv/PID/unit content
+- `tests/state_status_restart.rs` — controller re-derives observed state from
+  store/ledger/external observation without a state Volume
+- `tests/state_mount_exclusivity.rs` — neither controller nor worker Process
+  spec contains a Provider-state-Volume mount
 
 ---
 
@@ -1964,10 +1798,9 @@ hotplug attach/detach, restart recovery.
 | `guest_schema_roundtrip.rs` | GuestSpec/GuestStatus JSON Schema generation, serde, unknown-field denial |
 | `guest_provider_settings_bounds.rs` | All field bounds in §5 |
 | `config_schema_projection.rs` | ProviderConfig schema; controllerExecutionRef required |
-| `state_volume_spec.rs` | Component descriptor stateNamespace: migrationPolicy none, quota.maxBytes/maxInodes + quotaBytes nonzero, source.settings.sourcePolicyId, layout ownerRef/mode, view rights, identityMarker class |
-| `state_volume_principal.rs` | Layout principal is `User/runtime-qemu-media-system`; no ComponentPrincipal ref; no cross-component shared Volume |
-| `state_volume_mount_exclusivity.rs` | Worker Process spec contains no mount to the controller state Volume |
-| `state_volume_no_controller_ops.rs` | Controller reconcile issues no Volume create/watch/update/deletionRequestedAt; Volume absent from controller ResourceClient permissions |
+| `state_status_spec.rs` | Component descriptor declares empty `stateNamespaces`; status projection stays within bounds and carries no secret/path/argv/PID/unit content |
+| `state_status_restart.rs` | Controller re-derives observed state from store/ledger/external observation without a state Volume |
+| `state_mount_exclusivity.rs` | Neither controller nor worker Process spec contains a Provider-state-Volume mount |
 | `runtime_volume_spec.rs` | Runtime tmpfs Volume spec golden; all layout entries |
 | `volume_cleanup_policy.rs` | `cleanupPolicy: vm-stop-with-proof` correctness |
 | `media_volume_watch.rs` | Dependency gating for boot/removable Volume refs |

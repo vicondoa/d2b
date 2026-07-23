@@ -858,17 +858,18 @@ Broker path-free audit ops (current: `PrepareSwtpmDir`):
 > controllers/services/workers/binaries, placement, dependencies/RBAC, security/state/telemetry,
 > build/test/integration commands, and future standalone-repo usage.
 
-Both `volume-local` and `volume-virtiofs` receive their own framework-created,
-per-component state Volume, one per declared `stateNamespaces` entry, as part
-of their `ProviderStateSet` on deployment (see `ADR-046-provider-state`;
-`ADR-046-components-processes-and-sandbox`, "Static Provider deployment and
-component state Volumes"); the "State" rows below describe the
-ResourceType-owned data each Provider keeps in its own view of that Volume.
-`ProviderStateSet` is a query-time grouping of these ordinary Volumes, not a
-separate stored artifact; each state Volume's view mount is local and private
-to the owning component — it is never a resource row, resource-store field,
-or duplicated ledger of the resource store's own authority over
-layout/attachment status.
+Neither `volume-local` nor `volume-virtiofs` declares a Provider state Volume:
+their bounded non-secret operational state (reconcile stage, per-attachment
+readiness, adoption observations, last-successful checkpoints) lives in the
+owning resource's `status` subresource and the core Operation ledger (D087),
+and per-Volume provisioning markers for `state`-kind Volumes are broker-
+maintained outside any Volume tree. Their `ProviderStateSet` is therefore
+empty. The "State" rows below describe the ResourceType-owned data each
+Provider keeps — in resource status and the layout it manages for *other*
+Providers' declared Volumes — not a state Volume of its own.
+`ProviderStateSet` is an optional query-time grouping of a Provider's declared
+Volumes, not a separate stored artifact, and it never duplicates the resource
+store's own authority over layout/attachment status.
 
 ### Provider/volume-local
 
@@ -886,27 +887,20 @@ layout/attachment status.
 | Supported Guest capabilities | Not applicable (volume-local does not attach to Guests) |
 | Required crate layout | `src/` (controller, broker op adapters, layout engine, store_view.rs, swtpm_volume.rs, colocated unit tests); `tests/` (hermetic: layout provision/repair/cleanup/adopt, store-view invariants, ACL reconciliation, swtpm fail-closed, quota enforcement, block-image lifecycle, tmpfs mount/unmount, symlink target validation, foreignChildPolicy preserve/fail); `integration/` (container fixtures: Host path access, store-view FS boundary enforcement, quota FS fixture, swtpm marker, block-image virtio-blk attachment); `README.md` (identity, allowedHostPaths config schema, owned ResourceTypes, broker op catalogue, placement, deps/RBAC, security invariants, state/telemetry, build/test/integration commands) |
 
-volume-local is the exception target of the "Bootstrap state-realization
-exception" (`ADR-046-components-processes-and-sandbox`): each execution
-target (Host, Guest, or user-domain local-storage owner) that runs its own
-`volume-local-controller` instance has its own closed, non-resource **local**
-bootstrap storage mechanism, which provisions only the empty
-(empty-`stateSchema`) state Volume for that target's first volume-local
-controller instance and, only where they exist on that same target,
-`Provider/system-core`'s and `Provider/system-minijail`'s state Volumes —
-before that instance's controller Process exists to reconcile Volumes
-itself. On its first startup, each target's volume-local-controller instance
-adopts its own target-local set of pre-provisioned Volume rows exactly as it
-would adopt any existing Volume row after a restart — no special-cased adopt
-path, no re-creation, no placeholder-to-real conversion step. This local
-bootstrap mechanism never crosses an execution-target boundary: a Guest's
-mechanism provisions the Guest-local instance's bootstrap Volume from
-Guest-local primitives only and never receives, forwards, or leaks a parent
-Host dirfd or other Host-local resource handle to do so, which is what lets
-a Guest bootstrap its own primitive controllers (including a Guest-local
-volume-local instance) independently of its Host. No other Provider's state
-Volume is ever provisioned outside the normal Core ProviderDeployment →
-volume-local create/reconcile path, on any target.
+volume-local is the sole reconciler of every other Provider's *declared*
+optional state Volume, but it declares no state Volume of its own. Because the
+first `volume-local-controller` instance on each execution target keeps its
+bounded non-secret operational state in `status`/the core Operation ledger and
+declares no state Volume, no component needs a Volume before that instance is
+Ready — so there is no bootstrap state-Volume cycle, no per-execution-target
+local bootstrap storage mechanism, and no bootstrap-storage exception (D086,
+superseded by D087; see "No bootstrap state Volume" in
+`ADR-046-components-processes-and-sandbox`). A Guest bootstraps its own
+Guest-local `volume-local` instance without any parent-Host dirfd or resource
+handle, and that instance reaches Ready from Guest-local primitives and its own
+status alone. Every Provider's declared state Volume — on any target — is
+provisioned only through the normal Core ProviderDeployment → volume-local
+create/reconcile path.
 
 volume-local controller reconcile flow:
 
