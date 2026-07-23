@@ -164,6 +164,9 @@ let
         "packages/d2b-contracts/src/v2_component_session.rs"
         "packages/d2b-contracts/src/v2_services.rs"
         "packages/d2b-session/src/inbound_call.rs"
+        "packages/d2b-session/src/cancellation.rs"
+        "packages/d2b-session/src/driver.rs"
+        "packages/d2b-session/src/engine.rs"
         "packages/d2b-session/src/lib.rs"
         "packages/d2b-session/src/server.rs"
         "packages/d2b-session-unix/src/adapter.rs"
@@ -172,6 +175,7 @@ let
       ];
       reservedPaths = [
         "packages/d2b-contracts/src/v2_component_session.rs"
+        "packages/d2b-session/src/engine.rs"
         "packages/d2b-session/src/server.rs"
         "packages/d2b-session-unix/src/adapter.rs"
       ];

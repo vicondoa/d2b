@@ -70,7 +70,9 @@ deprecations ship one minor release before removal.
   composition-wide schema authentication, per-connection descriptor policy,
   inbound call cancellation, and client composition support are frozen before
   helper business logic resumes, including generic and host-socket client
-  service-package routing plus the Unix resolver export.
+  service-package routing plus the Unix resolver export. The seam also owns
+  the exact engine/driver/cancellation paths needed to enforce composition
+  attachments and race-free cancellation.
 - Granted only the exact `adr0045-w8-integration` branch the protected delivery
   README and xtask manifest-test paths required to introduce W8's checked-in
   manifest authority; suffixed component branches remain denied.
