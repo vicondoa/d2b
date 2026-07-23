@@ -273,6 +273,7 @@ in any of them and remain `ADR-only`.
 | Three-layer spec + status shape: base-schema parity across implementations, minimal-base acceptance, capability-declared rejection, base-only projection, extension versioning/unknown-field/shadow | `ADR-only` | Yes — SPIKE-16 |
 | Expedited reconcile commit-proof gating/idempotency/priority-lane and currency/disruptive-upgrade dependency planning | `ADR-only` | Yes — SPIKE-17 |
 | Endpoint resource promotion, no-locator resolution, producer generation, consumer dependency trigger, promotion-test lint | `ADR-only` | Yes — SPIKE-18 |
+| Entra identity-Guest login/token grounding via fake Entrablau Guest service (no live Entra) | `ADR-only` | Yes — SPIKE-19 |
 | Current v3 storage/DAG/pidfd/spawn_runner/router files exist and pass their own tests | `implemented-and-reachable`/`production-reachable` for current role (E4) | No — already evidenced |
 
 ## Mandatory disposable spike catalog
@@ -574,6 +575,22 @@ performed by this documentation-only spec.
 | Failure interpretation | A raw locator in an Endpoint's spec/status, an unauthorized resolution, or a high-churn handle wrongly promoted (or a stable cross-boundary endpoint left as an opaque ID) is a severity-blocking finding against D092 and must be fixed structurally, never suppressed. |
 | Affected decisions/work items | D010, D022, D081, D084, D088, D089, D092; resource object/API/store/reconcile/core-controller work items and every Provider dossier's endpoint-migration work item. |
 | Cleanup | Deleted once the real resource-contract/store/reconcile crates and the provider conformance kit reach equal Endpoint no-locator, resolution-authorization, producer-generation, consumer-trigger, and promotion-test-lint coverage. |
+| Status | Specified — not yet executed. |
+
+### SPIKE-19 — Entra identity-Guest login/token grounding (fake Entrablau service)
+
+| Field | Value |
+| --- | --- |
+| Hypothesis | (D093) `credential-entra` can be secret-free by grounding login/token acquisition in an Entrablau-enabled identity `Guest`: the controller binds `identityGuestRef` + a login `Endpoint`, `BeginLogin` opens an authenticated end-to-end session to a Guest login service that conducts the interactive login inside the Guest, status carries only bounded non-secret interaction observations, and an on-demand access token is delivered end-to-end (Noise_KK) only to the exact `consumerRef` consumer while Host/bus see ciphertext — with no Host login/`DefaultAzureCredential`/env/DBus/path/browser fallback and no direct Entra egress from the controller. Entrablau is external/sibling, so target integration is ADR-only and proven here with a fake service; a manual real-Guest login is a separate non-CI check. |
+| Minimal disposable artifact | `proofs/entra-guest-login-spike/` — an in-process fake resource store; a fake "Entrablau Guest login service" behind a fake login `Endpoint` that scripts success/required/cancel/timeout and issues opaque token leases over a fake KK channel; a fake consumer process; a fake Host observer asserting it only sees ciphertext. NO live Entra, NO network. |
+| Inputs | (a) BeginLogin → scripted success → on-demand token lease to the authorized consumer; (b) login-required/AwaitingUser; (c) CancelLogin; (d) deadline timeout; (e) controller restart mid-login; (f) login Endpoint unavailable / generation mismatch; (g) Host placement of the login service; (h) a cross-Zone `identityGuestRef`. |
+| Command/harness | `cargo test --manifest-path proofs/entra-guest-login-spike/Cargo.toml -- --test-threads=1 entra_guest_login`. |
+| Metrics | (1) no token/URL/cookie/authority-conferring device code/user PII appears in Credential status/audit/OTEL (only closed `interactionState` + bounded metadata); (2) the raw token reaches only the exact `consumerRef` consumer over KK; the Host observer sees ciphertext only; (3) cancel and deadline-timeout leave the durable Credential unchanged and never block past the deadline; (4) restart mid-login resumes/re-derives without leaking secrets; (5) Endpoint-unavailable/generation-mismatch → typed error and no token; (6) Host placement → `host-placement-rejected`; cross-Zone `identityGuestRef` → rejected; (7) the controller performs no direct Entra network call (all Entra flow is inside the fake Guest service). |
+| Pass/fail threshold | All metrics binary pass; metrics (1), (2), and (7) are hard zero-tolerance gates (no secret/PII in observable surfaces; token only to the exact consumer; no controller egress). |
+| Expected resource budget | ≤3 minutes wall time; ≤48 MiB RSS (in-memory store + fake Guest service). |
+| Failure interpretation | A token/URL/cookie/PII in an observable surface, a token reaching anyone but the exact consumer, a Host-grounded login path, or a direct Entra egress from the controller is a severity-blocking finding against D093 and must be fixed structurally, never suppressed. A manual real-Guest login with the sibling `vicondoa/entrablau.nix` composed validates the contract end-to-end outside CI. |
+| Affected decisions/work items | D048, D055, D056, D088, D089, D090, D092, D093; credential-entra dossier work items and the ACA/Azure-VM consumer work items. |
+| Cleanup | Deleted once `packages/d2b-provider-credential-entra` and the identity-Guest integration tests reach equal fake-service coverage and a documented manual real-Guest login procedure exists. |
 | Status | Specified — not yet executed. |
 
 ## Implementation validation — how a spike is retired

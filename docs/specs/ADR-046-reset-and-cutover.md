@@ -481,6 +481,15 @@ had been safely handled when it was not.
    marker and every adopted durable Volume's content digest against the
    cutover snapshot and fails the cutover (without touching the still-present
    Preserved source) if any digest does not match.
+6. **Entra identity-Guest login state (D093).** The Entrablau-enabled identity
+   Guest owns its machine credential, TPM binding, enrollment, and
+   refresh-token/private login state (guest-local, secret/large/private). This
+   state is treated exactly like TPM identity: it is **Preserved/Adopted**, never
+   silently wiped. A Guest, Provider, or Zone reset either preserves the identity
+   Guest's TPM/login state or **explicitly destroys** it under the operator's
+   authorized destructive disposition — never as an implicit side effect. A
+   subsequent login re-enrolls only if the operator explicitly destroyed that
+   state.
 
 ## Gateway Guest credential/audit custody
 

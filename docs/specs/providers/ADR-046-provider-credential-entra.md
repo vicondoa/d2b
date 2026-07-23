@@ -5,1640 +5,603 @@
 | Dossier ID | `ADR-046-provider-credential-entra` |
 | Parent | ADR 0046 |
 | Status | Proposed |
-| Version | 1 |
+| Version | 2 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
 | Owner | `packages/d2b-provider-credential-entra/` |
-| Depends on | `ADR-046-resources-credential`, `ADR-046-provider-model-and-packaging`, `ADR-046-componentsession-and-bus`, `ADR-046-resource-reconciliation`, `ADR-046-nix-configuration`, `ADR-046-telemetry-audit-and-support` |
-| Supersedes | `d2b-realm-provider/src/credential.rs:AzureControlPlaneRef`/`OpaqueAzureRef`; `provider.rs:CredentialProvider` minimal trait |
+| Depends on | `ADR-046-resources-credential`, `ADR-046-provider-model-and-packaging`, `ADR-046-componentsession-and-bus`, `ADR-046-resource-reconciliation`, `ADR-046-nix-configuration`, `ADR-046-telemetry-audit-and-support`, `ADR-046-resources-host-guest-process-user` |
+| Decisions applied | D087 status-first state, D088/D089 status/spec layering, D090 expedited reconcile, D091 currency/upgrade, D092 Endpoint ResourceType, **D093 Entrablau identity Guest credential flow** |
+| Supersedes | No Host login/token chains; no direct `EntraCredentialClient` production egress; no `DefaultAzureCredential`, environment, DBus, browser, or path discovery |
 
 ---
 
-## 1. Provider identity
+## 1. Provider identity and D093 outcome
 
 | Field | Value |
 | --- | --- |
 | `providerRef` | `Provider/credential-entra` |
 | Implements | `Credential` ResourceType |
-| Crate | `packages/d2b-provider-credential-entra/` |
-| Binaries | `d2b-provider-credential-entra-controller` (central, secret-free); `d2b-provider-credential-entra-agent` (per-Credential, co-located with consumer) |
-| Required layout | `src/` (impl + colocated unit tests); `tests/` (hermetic Cargo integration, conformance, fault, canary, delivery, placement); `integration/` (container/Host/Guest fixtures); `README.md` (all §Provider README required sections) |
-| Main reuse source | main `a1cc0b2d`: `packages/d2b-provider-credential-entra/src/{lib.rs, tests.rs}` |
-| Provider generation policy | Monotonically increasing; generation increments on any spec-changing upgrade; consumers must re-acquire leases on provider generation change per `revocation.onProviderGeneration` policy |
-| Zone placement constraints | Controller: one instance per Zone, system-domain on Zone host, no secret material. Agent: one per active Credential resource, placed at `scope.executionRef/domain/userRef`; placement binding `user-agent` or `guest-agent` only; `host-system` rejected |
+| Provider schema ID | `credential-entra.d2bus.org/Credential/spec` |
+| Status schema ID | `credential-entra.d2bus.org/Credential/status` |
+| Login Endpoint purpose | `credential-entra.d2bus.org/entra-login-token` |
+| Production token client | Entrablau identity Guest `Endpoint/<name>` implementing `credential-entra.d2bus.org/EntrablauLoginTokenService/v1` |
+| Secret custody | Entrablau-enabled identity `Guest/<name>` only |
+| Controller/agent custody | Secret-free; no token, refresh token, cookie, device-code authority, MSAL cache, browser state, or machine credential |
+
+D093 grounds every `Provider/credential-entra` login and token acquisition in an
+Entrablau-enabled identity Guest. The credential-entra controller and any helper
+agent are orchestration components only: they validate ResourceRefs, authorize
+ComponentSession routes, project bounded status, and coordinate lifecycle. They
+never perform a Host login, never hold refresh tokens, never run a browser flow,
+and never call Microsoft Entra directly.
+
+Each Entra `Credential` binds:
+
+- an exact same-Zone `identityGuestRef: Guest/<name>`; and
+- a stable `loginEndpointRef: Endpoint/<name>` whose producer is the Entrablau
+  login/token service running inside that identity Guest.
+
+The `scope.executionRef`/`consumerRef` pair names the exact allowed consumer. The
+consumer may be the identity Guest itself or a different same-Zone Guest. If the
+consumer is a different Guest, access-token bytes move only in end-to-end
+`Noise_KK_25519_ChaChaPoly_SHA256` records from the Entrablau service to the
+exact authenticated consumer process. The Host, d2b-bus, controllers, and all
+intermediate transport see ciphertext only. Cross-Zone `identityGuestRef`,
+`loginEndpointRef`, `scope.executionRef`, or consumer ResourceRefs are rejected.
 
 ---
 
-## 2. Root `spec.config` schema
+## 2. Secret-free controller and placement model
 
-`spec.config` is a child of `Provider.spec`, not inside any nested config block.
-`spec.artifactId` is a sibling of `spec.config` on the Provider resource.
-No field in `spec.config` accepts secret bytes; all string fields pass the
-`contains_sensitive_shape` guard at eval time before the NixOS build completes.
+`credential-entra` has a zero-secret control plane:
 
-### Schema (bounded, non-secret)
+| Component | Placement | Secret custody | Responsibility |
+| --- | --- | --- | --- |
+| `entra-controller` | Zone controller placement selected by ProviderDeployment | None | Watch `Credential` resources, validate Entrablau bindings, manage status/finalizers, request expedited reconciles, and register capability/status schemas. |
+| `entra-agent` (optional helper) | Inside `identityGuestRef` or the exact allowed consumer Guest | None | Open authenticated ComponentSessions to `loginEndpointRef`, enforce `consumerRef`/scope/RBAC, and report bounded observations. It does not decrypt access-token records. |
+| Entrablau login/token service | Inside `identityGuestRef` | Owns all Entra secrets and login state | Performs interactive login, refresh-token handling, token cache, TPM-bound machine state, Entra network/TLS, and end-to-end access-token delivery. |
+
+A `Credential` using `Provider/credential-entra` is never scoped to `Host/*`.
+`scope.executionRef` and `identityGuestRef` must resolve to `Guest/<name>` in the
+same Zone. Host placement is rejected because it would recreate Host credential
+custody. User-domain or system-domain consumer processes are allowed only inside
+Guests that the credential spec and RBAC authorize.
+
+The controller/agent Process templates declare no Provider state Volume, no
+secret mount, no browser path, no DBus path, no ambient network claim for Entra,
+and no environment-derived credential input. Any helper agent uses the standard
+bus/Endpoint launch-ticket path and receives only non-secret ResourceRefs,
+generations, deadlines, and route digests.
+
+---
+
+## 3. Provider and Credential spec schemas
+
+### 3.1 Provider `spec.config` (bounded, non-secret)
 
 ```yaml
-# Provider.spec.config — non-secret runtime config only
-tenantId:                 "2f8e1c3a-1234-5678-9abc-def012345678"
-authorityClass:           "public"
-maxLeases:                64
-interactionPolicy:        "fail-closed"
-controllerExecutionRef:   "Host/host-system"
+spec:
+  artifactId: credential-entra-provider
+  config:
+    maxLeases: 64
+    interactionPolicy: interaction-required
 ```
-
-### Field reference
 
 | Field | Type | Required | Validation rule | Default |
 | --- | --- | --- | --- | --- |
-| `tenantId` | string | Yes | `OpaqueAzureRef` charset: `^[A-Za-z0-9._-]+$`; max 256 chars; rejects `=`, `+`, whitespace, `{}`, URI-scheme prefixes | — |
-| `authorityClass` | enum | Yes | Closed set: `public` \| `us-government` \| `china`; or an opaque effect-port alias declared by the injected consumer/runtime Provider; no endpoint URL, hostname, or secret byte; the injected `EntraCredentialClient` and core policy resolve actual endpoints/TLS from this class — no Provider DTO or config ever carries an endpoint | `"public"` |
-| `maxLeases` | u32 | No | Range 1–256; upper bound is the hard `MAX_LOCAL_LEASES` constant enforced at runtime | `64` |
-| `interactionPolicy` | enum | No | `fail-closed` (map `InteractionRequired` to `credential-provider-unavailable`; never prompt); `interaction-required` (reserved for future user-agent environments; currently treated identically to `fail-closed`) | `"fail-closed"` |
-| `controllerExecutionRef` | ResourceRef | **Yes** | Must resolve to a `Host/<name>` in the same Zone; that Host must include `system` in `allowedDomains`; must not be a `Guest/<name>`; no secret shape; no fallback — operators must declare this field explicitly | — |
+| `maxLeases` | u32 | No | 1..256; caps concurrent access-token lease requests brokered for this Provider | `64` |
+| `interactionPolicy` | enum | No | `interaction-required` or `fail-closed`; controls whether `BeginLogin` may be started when no authenticated Entrablau session exists | `interaction-required` |
 
-**`tenantId` is not a `ResourceRef`.** It is an opaque inline Azure tenant GUID
-validated by the same `OpaqueAzureRef::parse` logic from v3 baseline
-`d2b-realm-provider/src/credential.rs`. The field name `tenantId` explicitly
-does not end in `Ref`; it must not be authored as `Provider/…` or any other
-`<ResourceType>/<name>` pattern. The Nix eval-time assertion that all `*Ref`
-fields follow `<ResourceType>/<name>` intentionally does not apply to `tenantId`.
+Provider config contains no tenant secret, authority URL, token endpoint, client
+secret, certificate path, store path, browser path, DBus address, or environment
+variable name. Tenant and authority policy that is necessary for Entra login is
+owned by the Entrablau Guest service configuration supplied by the sibling
+package, not by d2b core or the credential-entra controller.
 
-**`authorityClass` is a closed enum, not an endpoint.** No Provider config,
-sealed config projection, DTO, status, audit record, or OTEL span attribute
-ever contains a raw hostname, URL, or TLS endpoint. The injected
-`EntraCredentialClient` effect port and core policy resolve the actual authority
-endpoints and TLS trust anchors from `authorityClass` internally. The
-`public`, `us-government`, and `china` values map to the standard Microsoft
-national cloud authority paths; effect-port aliases are opaque tokens registered
-by the consumer/runtime Provider and resolved only inside the effect port
-implementation.
+### 3.2 Credential base fields used by D093
 
-**`controllerExecutionRef` is required.** There is no implicit Zone primary Host
-fallback. `Zone.spec` is `{}` and does not declare a primary Host; the operator
-must specify the Host explicitly.
+`identityGuestRef` and `loginEndpointRef` are Credential base fields supplied by
+`ADR-046-resources-credential`. This Provider requires both.
 
-### Nix authoring example
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Credential
+metadata:
+  name: work-entra
+  zone: work
+spec:
+  providerRef: Provider/credential-entra
+  identityGuestRef: Guest/work-identity
+  loginEndpointRef: Endpoint/work-identity-entra-login-token
+  scope:
+    executionRef: Guest/aca-gateway
+    domainFilter: system
+    userRef: null
+  consumerRef: Provider/runtime-azure-container-apps
+  audience: azure-resource-manager
+  allowedOperations: [acquire-token, refresh-token]
+  rotation:
+    policy: proactive
+    proactiveWindowMs: 300000
+    maxLeaseLifetimeMs: 3600000
+  revocation:
+    onOwnerDelete: immediate
+    onProviderGeneration: immediate
+  provider:
+    schemaId: credential-entra.d2bus.org/Credential/spec
+    schemaVersion: 1.0.0
+    settings:
+      tokenPurpose: azure-resource-manager
+      loginMode: entrablau-guest
+```
+
+Rules:
+
+1. `identityGuestRef` resolves to a `Guest/<name>` in the same Zone.
+2. `loginEndpointRef` resolves to an `Endpoint/<name>` in the same Zone whose
+   `purpose = credential-entra.d2bus.org/entra-login-token`, whose producer runs
+   inside `identityGuestRef`, and whose `endpointGeneration` is current.
+3. `scope.executionRef` resolves to the same Guest as `identityGuestRef` or to a
+   different same-Zone Guest explicitly permitted by `consumerRef`, scope, and
+   RBAC.
+4. `consumerRef` is required and must name the exact Provider/component allowed
+   to receive access-token plaintext.
+5. `allowedOperations` is a non-empty subset of `acquire-token`, `refresh-token`,
+   `revoke-token`, and `inspect-metadata`; `sign-challenge` is not provided by
+   this Entrablau token service unless a future schema version adds it.
+6. Provider-specific settings are bounded desired metadata only. They do not
+   carry access tokens, refresh tokens, cookies, login URLs, device codes,
+   store paths, service principal secrets, or tenant-private diagnostics.
+
+---
+
+## 4. Entrablau identity Guest dependency and Endpoint contract
+
+### 4.1 External sibling classification
+
+The identity Guest's NixOS system is consumer-composed with the sibling
+`vicondoa/entrablau.nix` module. d2b core never imports that flake and never
+vendors the Entrablau implementation.
 
 ```nix
-# d2b.artifacts entry (separate from resource spec)
-d2b.artifacts.credential-entra-bin = {
-  package = pkgs.d2b-provider-credential-entra;
-  type    = "provider";
-};
+inputs.entrablau.url = "github:vicondoa/entrablau.nix";
+inputs.entrablau.inputs.nixpkgs.follows = "nixpkgs";
 
-# Provider resource
-d2b.zones.dev.resources.credential-entra = {
-  type = "Provider";
-  spec = {
-    artifactId = "credential-entra-bin";   # references d2b.artifacts entry; type must be "provider"
-    config = {
-      tenantId                = "2f8e1c3a-1234-5678-9abc-def012345678";
-      authorityClass          = "public";           # public | us-government | china
-      maxLeases               = 64;
-      interactionPolicy       = "fail-closed";
-      controllerExecutionRef  = "Host/host-system"; # required; must be a Host/<name>
-    };
-  };
-};
-
-# Credential resource consuming this provider
-d2b.zones.dev.resources.work-entra = {
-  type = "Credential";
-  metadata.labels."team" = "platform";
-  spec = {
-    providerRef    = "Provider/credential-entra";
-    scope = {
-      executionRef = "Guest/work-vm";
-      domainFilter = "user";
-      userRef      = "User/alice";
-    };
-    audience           = "azure-resource-manager";
-    consumerRef        = "Provider/display-wayland";
-    allowedOperations  = [ "acquire-token" "refresh-token" ];
-    rotation = {
-      policy              = "proactive";
-      proactiveWindowMs   = 300000;
-      maxLeaseLifetimeMs  = 3600000;
-    };
-    revocation = {
-      onOwnerDelete        = "immediate";
-      onProviderGeneration = "immediate";
-    };
-  };
-};
+# Inside the NixOS system closure for Guest/work-identity only.
+d2b.zones.work.resources.work-identity.spec.config.imports = [
+  inputs.entrablau.nixosModules.default
+];
 ```
 
----
+This is an ADR-only / external-sibling integration target for ADR 0046. The
+sibling/Guest package is expected to supply the manifest-declared Process and
+Endpoint contract below. This dossier specifies the required contract; it does
+not claim that current d2b core implements Entrablau.
 
-## 3. ResourceTypes implemented and consumed
+The sibling package owns all guest-local secret and private state: Himmelblau /
+Entrablau enrollment, TPM binding, machine credential, refresh-token state, token
+cache, interactive login implementation, browser/device/desktop integration,
+network/TLS policy for Microsoft Entra, and any large/private diagnostics. That
+state is inside the identity Guest and outside d2b resource status. It is not a
+d2b Provider state Volume and is never mounted into the Host.
 
-### Implements: `Credential`
+### 4.2 Dependency alias
 
-The provider implements the full `Credential` ResourceType lifecycle for
-Entra-bound credentials. Every `Credential` resource whose `spec.providerRef =
-"Provider/credential-entra"` is owned by this controller.
+`Provider/credential-entra` declares one production dependency alias:
 
-Normative D089 spec layering: Credential base fields are ResourceType base
-`spec.*` fields, including `spec.providerRef`, `audience`, `scope`,
-`allowedOperations`, `rotation`, and `revocation`. This Provider's desired-only
-extension is the canonical `spec.provider = { schemaId:
-"credential-entra.d2bus.org/Credential/spec", schemaVersion, settings }`
-envelope; it is manifest-registered/signed, strict deny-unknown, bounded, versioned
-and digested, validated against `spec.providerRef` at Nix build and API
-admission, implementation-only, and may not shadow base fields. Shared fields
-are promoted to the Credential base. The Provider implements the exact base
-Credential spec/status version/fingerprint, accepts the canonical minimal valid
-base Spec, and rejects unsupported optional base capabilities only through its
-signed capability matrix and provider-neutral `unsupported-capability`.
-`spec.provider` aligns with `status.provider`; generic CLI/controllers operate on
-the base spec and base status only. A reference to the former Credential
-`spec.providerSettings` denotes `spec.provider.settings`; no secret
-bytes or credential material are allowed in any spec layer, including
-`spec.provider.settings`; credential bytes are delivered only over Noise_KK
-sessions.
+| Alias | Resolves to | Required | Notes |
+| --- | --- | --- | --- |
+| `entra-login-token` | `Credential.spec.loginEndpointRef` | Yes | `Endpoint/<name>` with purpose `credential-entra.d2bus.org/entra-login-token`, producer inside `identityGuestRef`, same Zone, ComponentSession attachment. |
 
-#### Lifecycle phases
+The alias is resolved by ResourceRef and Endpoint generation, not by a Unix path,
+store path, DBus name, process ID, environment variable, or hostname.
 
-| Phase | Meaning |
-| --- | --- |
-| `Pending` | Controller is initializing or Provider process not yet Ready |
-| `Ready` | `leaseState=Active`, `CredentialReady=True`, within-window |
-| `Degraded` | Provider process unreachable or rotation failing; bounded retry in progress |
-| `Failed` | Retry exhausted or unrecoverable error |
-| `Terminating` | Deletion requested; `provider-revoke` finalizer running |
-| `Deleted` | All finalizers removed; resource record gone from store |
-
-#### Status conditions owned
-
-| Condition type | Set by | Cleared by |
-| --- | --- | --- |
-| `CredentialReady` | `entra-controller` (via agent report) | `entra-controller` |
-| `RotationDue` | `entra-controller` (via agent report) | `entra-controller` on successful rotation |
-| `ProviderUnavailable` | `entra-controller` when agent reports `EntraClientState=InteractionRequired` or agent Process unreachable | `entra-controller` when agent recovers |
-| `LeaseRevoked` | `entra-controller` when agent reports `leaseState=Revoked` | `entra-controller` on new lease acquisition |
-
-#### Finalizers owned
-
-| Finalizer ID | Owned by | Trigger |
-| --- | --- | --- |
-| `credential.d2bus.org/provider-revoke` | `entra-controller` | `metadata.deletionRequestedAt != null` |
-
-The `consumer-drain` finalizer is registered by the `consumerRef` Provider's
-controller (e.g. `Provider/display-wayland`), not by `credential-entra`.
-
-### Consumes: `Provider`, `Host`, `Guest`, `User`
-
-The controller's watch selectors include:
-
-- `Credential` (providerRefFilter: `Provider/credential-entra`)
-- `Provider` (nameFilter: `credential-entra`) — own resource, for generation
-  change detection
-- `Host` and `Guest` — `scope.executionRef` dependency readiness
-- `User` — `scope.userRef` dependency readiness
-- `Process` (ownerRefFilter: controller-created agent Processes) — agent readiness
-  and health
-
----
-
-## 4. Controllers, services, workers, and binaries
-
-`credential-entra` uses two separate Process components:
-
-- **`entra-controller`** — one per Zone, system-domain on the Zone host, holds
-  no credential material, no token bytes, and no `EntraCredentialClient`
-  reference. Owns the reconcile loop: watches Credential resources, creates and
-  deletes `entra-agent` Process resources, writes Credential status from agent
-  reports, manages the `provider-revoke` finalizer.
-- **`entra-agent`** — one per active Credential resource, placed exactly at
-  `scope.executionRef / scope.domainFilter / scope.userRef`. This is the only
-  process that constructs `EntraCredentialClient`, holds token material in
-  memory, calls the Entra identity platform over HTTPS, serves `d2b.credential.v3`
-  service methods to the authorized consumer, and establishes the end-to-end
-  Noise KK delivery session. The agent Process is controller-created with
-  `metadata.ownerRef = Credential/<name>`.
-
-### Controller descriptor (`entra-controller`)
-
-```yaml
-providerId:             Provider/credential-entra
-controllerType:         Credential
-resourceTypes:          [Credential]
-watchSelectors:
-  - resourceType: Credential
-    providerRefFilter: Provider/credential-entra
-  - resourceType: Provider
-    nameFilter: credential-entra
-  - resourceType: Host
-    relationship: scope.executionRef
-  - resourceType: Guest
-    relationship: scope.executionRef
-  - resourceType: User
-    relationship: scope.userRef
-  - resourceType: Process
-    ownerRefFilter: controller-created-agent
-dependencySelectors:
-  - resourceType: Provider
-    relationship: providerRef
-  - resourceType: Host
-    relationship: scope.executionRef
-  - resourceType: Guest
-    relationship: scope.executionRef
-  - resourceType: User
-    relationship: scope.userRef
-ownerChildTriggers:     [owned-resource-changed]
-reconcileConcurrency:   8
-maxPendingResources:    256
-finalizers:             [credential.d2bus.org/provider-revoke]
-observeInterval:        30s
-```
-
-#### Currency and upgrade (D091)
-
-The `entra-controller` implements `assess_update`, `plan_upgrade`, and
-`execute_upgrade`. A Provider generation or signed artifact generation/digest
-change updates universal `status.update` with `state: UpdateAvailable` or
-`state: UpgradeRequired`, `reasons` including `ProviderGenerationChanged` or
-`ArtifactChanged`, observed/target generation or digest IDs,
-`disruption: Reload` or `disruption: Restart` for the credential component
-realization, `preserveState: true`, bounded `owned`/`dependencies`, and
-`lastAssessedAt`. Disruptive changes MUST return `UpgradeRequired` rather than
-applying in place; non-disruptive changes reconcile normally. Credential
-rotation is not an upgrade and remains the lease lifecycle flow. `status.update`
-MUST NOT contain secret bytes, tokens, or lease material; only bounded
-non-secret generation/digest IDs and lease metadata already permitted by the
-Credential base may appear. Token delivery remains solely over `Noise_KK`.
-
-#### Expedited reconcile on mutation (D090)
-
-For `Create`, `UpdateSpec`, and `Delete` with `waitForReconcile`, the
-`entra-controller` MUST perform no Entra effect, Process create/delete,
-finalizer change, or status mutation until core supplies
-`CommittedRevisionProof {resourceUid,generation,revision,operationId}`. Abort
-before that proof has no effect. After durable commit, the commit is never
-rolled back if the reconcile pass times out. The response returns the committed
-object, post-pass projected layered status, disposition
-(`Converged|Progressing|Blocked|UpgradeRequired|Failed`), and
-`statusPersistence: pending|committed`. Effect idempotency keys derive from
-`(UID,generation,revision,operationId)` and use the same per-resource
-single-flight priority lane.
-
-### Process components table
-
-| Component ID | Type | Domain | Binary | Cardinality |
-| --- | --- | --- | --- | --- |
-| `entra-controller` | controller | system (Zone host) | `d2b-provider-credential-entra-controller` | One per Zone |
-| `entra-agent` | service | user or system per `scope.domainFilter` | `d2b-provider-credential-entra-agent` | One per active Credential resource |
-
-### Canonical Process template: `entra-controller`
-
-The controller is a single Zone-wide system-domain Process. It holds no secret
-material and makes no network calls to Entra. Core instantiates it once when
-the Provider resource becomes Ready, placing it on the Host resolved from
-`spec.config.controllerExecutionRef`.
-
-```yaml
-# Process resource template for entra-controller.
-# Instantiated once per Zone by Provider/credential-entra on Provider Ready.
-apiVersion: resources.d2bus.org/v3
-type: Process
-metadata:
-  name: "<zone-id>-credential-entra-ctrl"   # derived from Zone ID at Provider install
-  zone: "<zone-name>"
-  ownerRef: Provider/credential-entra        # owning Provider; resolves template via component descriptor
-spec:
-  template: entra-controller-main            # plain ID mapped to executable by Provider descriptor
-  processClass: controller
-  providerRef: Provider/system-minijail
-  executionRef: "<spec.config.controllerExecutionRef>"  # Host/<name>; resolved from Provider config
-  domain: system
-  userRef: null
-  credentialRefs: []
-  mounts: []                         # no Provider state Volume; D087 status-first state
-  sandbox:
-    namespaceClasses: [mount, pid, ipc, uts, network]
-    capabilityClasses: []
-    seccompClass: strict
-    startRoot: false
-    noNewPrivileges: true
-    environmentClass: minimal
-    readOnlyRoot: true
-  budget:
-    pids:
-      limit: 32
-    fds:
-      limit: 256
-  networkUsage:
-    networkRef: null
-    ports: []
-    allowEgress: false    # controller makes no outbound calls; no ambient network claim
-  readiness:
-    class: provider-defined
-```
-
-### Canonical Process template: `entra-agent` (user-agent)
-
-The controller creates one user-agent Process per Credential resource whose
-`scope.domainFilter = "user"`. User-domain agents use `Provider/system-systemd`
-because the system-systemd user supervisor handles authenticated transient user
-scopes. The Process carries `metadata.ownerRef = Credential/<name>`; owner
-cascade handles deletion when the Credential resource is deleted.
-
-The agent itself declares `networkUsage.allowEgress = false`. MSAL calls to
-the Entra identity platform are proxied through the injected async
-`EntraCredentialClient` / effect port provided by the co-located consumer or
-runtime Provider; the agent binary never opens an ambient HTTPS connection
-directly.
-
-```yaml
-# User-agent Process resource template.
-# Controller instantiates one per Credential with scope.domainFilter=user.
-apiVersion: resources.d2bus.org/v3
-type: Process
-metadata:
-  name: "<zone-id>-entra-agent-<credential-name>"   # controller-assigned; derived from Credential name
-  zone: "<zone-name>"
-  ownerRef: "Credential/<credential-name>"           # set by controller; owner cascade deletes on Credential removal
-spec:
-  template: entra-agent-main              # plain ID; resolved by Provider/credential-entra via ownerRef
-  processClass: service
-  providerRef: Provider/system-systemd    # user-domain agents run under system-systemd
-  executionRef: "<Credential.spec.scope.executionRef>"  # Host/<name> or Guest/<name>
-  domain: user
-  userRef: "<Credential.spec.scope.userRef>"            # User/<name>
-  credentialRefs: []                      # agent does not consume a Credential resource directly
-  mounts: []                         # no Provider state Volume; token material is transient
-  sandbox:
-    namespaceClasses: [mount, pid, ipc, uts, network]
-    capabilityClasses: []
-    seccompClass: strict
-    startRoot: false
-    noNewPrivileges: true
-    environmentClass: minimal
-    readOnlyRoot: true
-  budget:
-    memory:
-      limit: "128Mi"    # Noise session state + token material in process-local memory
-    pids:
-      limit: 32
-    fds:
-      limit: 64
-  networkUsage:
-    networkRef: null
-    ports: []
-    allowEgress: false  # no direct MSAL network claim; Entra calls via injected client/effect port
-  readiness:
-    class: provider-defined
-```
-
-### Canonical Process template: `entra-agent` (guest-agent, system-domain)
-
-For Credentials with `scope.domainFilter = "system"` under a Guest, the
-controller creates a system-domain agent using `Provider/system-minijail`,
-which runs the agent directly in its declared cgroup leaf via broker
-`clone3(CLONE_PIDFD | CLONE_INTO_CGROUP)`. All other sandbox, budget, and
-network invariants are identical to the user-agent template.
-
-```yaml
-# Guest-agent system-domain Process resource template.
-# Controller instantiates one per Credential with scope.domainFilter=system under a Guest.
-apiVersion: resources.d2bus.org/v3
-type: Process
-metadata:
-  name: "<zone-id>-entra-agent-<credential-name>"
-  zone: "<zone-name>"
-  ownerRef: "Credential/<credential-name>"
-spec:
-  template: entra-agent-main
-  processClass: service
-  providerRef: Provider/system-minijail   # system-domain guest agents use system-minijail
-  executionRef: "<Credential.spec.scope.executionRef>"  # Guest/<name> only; host-system rejected
-  domain: system
-  userRef: null
-  credentialRefs: []
-  mounts: []                         # no Provider state Volume; token material is transient
-  sandbox:
-    namespaceClasses: [mount, pid, ipc, uts, network]
-    capabilityClasses: []
-    seccompClass: strict
-    startRoot: false
-    noNewPrivileges: true
-    environmentClass: minimal
-    readOnlyRoot: true
-  budget:
-    memory:
-      limit: "128Mi"    # Noise session state + token material in process-local memory
-    pids:
-      limit: 32
-    fds:
-      limit: 64
-  networkUsage:
-    networkRef: null
-    ports: []
-    allowEgress: false  # no direct MSAL network claim; Entra calls via injected client/effect port
-  readiness:
-    class: provider-defined
-```
-
-Each `entra-agent` produces its stable credential service identity as a separate
-owned `Endpoint` resource:
+### 4.3 Endpoint resource schema
 
 ```yaml
 apiVersion: resources.d2bus.org/v3
 type: Endpoint
 metadata:
-  name: "<zone-id>-entra-agent-<credential-name>-credential-service"
-  zone: "<zone-name>"
-  ownerRef: "Credential/<credential-name>"
+  name: work-identity-entra-login-token
+  zone: work
+  ownerRef: Guest/work-identity
 spec:
   providerRef: Provider/credential-entra
-  producerRef: "Process/<zone-id>-entra-agent-<credential-name>"
+  producerRef: Process/work-identity-entrablau-login-token
   endpointClass: service
   transport: unix
-  purpose: credential-entra.d2bus.org/credential-service
-  serviceFingerprint: credential.d2bus.org/CredentialService.v3
-  locality: host-local
+  purpose: credential-entra.d2bus.org/entra-login-token
+  serviceFingerprint: credential-entra.d2bus.org/EntrablauLoginTokenService/v1
+  locality: guest-local
   visibility: authorized-consumers
   attachmentPolicy: component-session
   consumerPolicy: same-zone-authorized
   lifecyclePolicy: recycle-with-producer
 status:
   readiness: Ready
-  observedProducerGeneration: 1
-  observedResourceGeneration: 1
-  endpointGeneration: 1
+  endpointGeneration: 7
+  observedProducerGeneration: 3
   connectionAvailability: available
-  leaseAvailability: lease-required
 ```
 
-## Endpoint resources (D092)
+Endpoint spec/status never contains raw Unix paths, fd numbers, browser URLs,
+login URLs, device codes, cookies, tenant-private endpoints, token cache paths,
+TPM paths, credential file paths, access tokens, refresh tokens, or user PII.
+Endpoint resolution returns an authorized launch ticket or fails closed with
+`endpoint-resolve-denied`.
 
-`Provider/credential-entra` conforms to the standard `Endpoint` base schema. The
-stable `d2b.credential.v3`-class ComponentSession service identity for each
-agent is an owned `Endpoint` resource with `producerRef`; consumers use
-`Endpoint/<name>`. Endpoint spec/status never carries authority URLs, endpoint
-locators, fd numbers, tenant secrets, client secrets, token bytes, signatures,
-PSKs, or credential material. Resolution occurs only through an authorized
-EffectPort/LaunchTicket; unauthorized resolution returns
-`endpoint-resolve-denied`. Producer restart bumps
-`Endpoint.status.endpointGeneration`, causing consumers to observe
-`dependency-changed` and reacquire through a fresh authorized ticket.
+### 4.4 Typed service methods
 
-## Retained opaque handles (D092 promotion test)
+Service fingerprint: `credential-entra.d2bus.org/EntrablauLoginTokenService/v1`.
+All methods are ComponentSession methods. The interactive byte/UI stream is a
+named stream on the authenticated session, not status text.
 
-- pidfds for controller/agent Processes are process supervision handles.
-- LaunchTicket fd indexes for the injected `EntraCredentialClient` effect port
-  remain per-launch attachment slots.
-- `EntraLeaseRef`, source-version handles, `operationId`, and idempotency keys are
-  bounded non-secret handles that are revalidated before use, not endpoints.
-- `OwnedTransport`, ComponentSession IDs, and the sensitive Noise_KK token/signing
-  delivery session handle are high-churn in-memory capabilities.
+| Method | Direction | Secret output? | Purpose |
+| --- | --- | --- | --- |
+| `BeginLogin` | request/reply + named stream | No status secret; UI bytes stay on stream | Start or resume an Entrablau interactive login session inside `identityGuestRef`. Opens optional named stream `credential-entra.d2bus.org/login-ui`. |
+| `ObserveLogin` | request/reply | No | Return bounded non-secret observation for `interactionState`, session generation, deadline, and challenge metadata. |
+| `CancelLogin` | request/reply | No | Cancel a pending login session by generation; idempotent. |
+| `AcquireAccessTokenLease` | request/reply + sensitive KK record | Yes, only in KK record to consumer | Issue an on-demand access-token lease for `audience`/operation; outer reply carries metadata only. |
+| `RevokeAccessTokenLease` | request/reply | No | Revoke a non-secret lease handle or mark it unusable. |
+| `InspectAccessTokenLease` | request/reply | No | Return bounded non-secret lease state. |
 
-#### Binary: `d2b-provider-credential-entra-controller`
-
-| Field | Value |
-| --- | --- |
-| Path in crate | `src/controller_main.rs` |
-| Role | Central Zone-wide controller; owns reconcile loop; no token material |
-| Domain | system only |
-| Placement | System-domain Process under `Host/<spec.config.controllerExecutionRef>` |
-| Startup | Reads sealed Provider config projection; verifies `tenantId` with `OpaqueAzureRef::parse`; validates `authorityClass` is a known enum value or registered effect-port alias; validates `controllerExecutionRef` resolves a ready system-domain Host; registers controller descriptor with d2b-bus; signals readiness. Does NOT construct `EntraCredentialClient` and never holds or logs an authority endpoint. |
-| Shutdown | Drains in-flight reconcile work to bounded deadline; exits cleanly |
-
-#### Binary: `d2b-provider-credential-entra-agent`
-
-| Field | Value |
-| --- | --- |
-| Path in crate | `src/agent_main.rs` |
-| Role | Per-Credential co-located service; constructs `EntraCredentialClient` from injected effect port; serves `d2b.credential.v3`; delivers tokens/signatures via Noise KK |
-| Domain | user (system-systemd) or system-on-Guest (system-minijail) per `scope.domainFilter` |
-| Placement | User-domain: `Host/<name>` or `Guest/<name>`. System-domain: `Guest/<name>` only; `Host/<name>` with `domain=system` is rejected |
-| Startup | Receives sealed config projection (tenantId, authorityClass, Credential ref, consumerRef, effect-port FD index) from controller via LaunchTicket; opens the injected effect-port FD; constructs `EntraCredentialClient` using `authorityClass` to select authority endpoint/TLS internally; registers `d2b.credential.v3` service on d2b-bus bound to exact Credential ref; signals readiness. No ambient HTTPS socket opened; no raw authority endpoint URL is held, logged, or audited by the agent. |
-| Shutdown | Drains in-flight RPC calls and active KK delivery sessions to bounded deadline; applies `revocation.onProviderGeneration` revocation if Provider generation is changing; zeroizes all key material and token buffers; exits cleanly |
-
-#### pidfd, wait, and reap
-
-Both the controller and agent Processes are launched, supervised, and reaped
-via the ProviderSupervisor LaunchTicket mechanism defined in
-`ADR-046-components-processes-and-sandbox`. Neither process is a PID1 unit or
-owns a `.socket` or `.service` activation file. The Zone runtime holds the
-mandatory pidfd for each and reaps on exit; neither binary forks, supervises
-children, or calls `setsid`.
-
-#### ProviderStateSet
-
-A **ProviderStateSet** is an optional query-time logical grouping of the
-Provider's declared state Volumes. Under D087, bounded non-secret controller and
-credential operational state belongs in the owning resource's `status`
-subresource and the core Operation ledger by default. `credential-entra`
-declares **no Provider state Volume** because its credential tokens, signatures,
-keys, and PSKs are secret material that may never enter storage, while its
-bounded non-secret lease/enrollment observation does not pass the storage-need
-test.
-
-Therefore the ProviderStateSet for `Provider/credential-entra` is empty. Core
-ProviderDeployment does not create controller or agent state Volumes, the
-Process templates have no state mount, and no layout principal or
-`Provider/volume-local` reconciliation is involved for this Provider. There is
-no bootstrap state Volume mechanism or exception (D086, superseded by D087).
-
-The only durable operational record is status/Operation-ledger state:
-`Credential.status` may carry redacted, bounded, RBAC-readable observations such
-as acquisition phase, readiness conditions, token expiry timestamps,
-non-authorizing opaque lease/enrollment IDs, bounded retry counters, and
-closed-enum error detail. In-flight idempotency/retry is tracked by the core
-Operation ledger; the latest bounded lease result/checkpoint is status. Status
-is revisioned, optimistic-status-writer controlled, observation-only,
-reverified against external reality after restart, written only on material
-change, and bounded to the D087 status limits (total ≤ 64 KiB,
-provider-specific detail ≤ 32 KiB, with `status-oversize` rejection). It must
-not contain token bytes, signature bytes, keys, PSKs, client secret material,
-authority-conferring credential handles, authority endpoint private detail,
-hostnames, scope values, private path/argv/env/PID/unit data, raw cloud error
-bodies, large blobs, or unbounded/churn-heavy content. Any opaque handle in
-status is non-secret, non-authorizing, bounded, safe for authorized status
-readers, and independently revalidated before use.
+`BeginLogin`, `ObserveLogin`, and `CancelLogin` are the Credential base
+interactive-login operations. The service may conduct browser, device, desktop,
+or brokered login UI inside the identity Guest, but no device code conferring
+authority, login URL, cookie, token, account UPN, display name, tenant-private
+identifier, or user PII is copied into status, audit, OTEL, or outer RPC DTOs.
+`challengeMetadata` is bounded and non-secret: examples are a closed
+`challengeKind`, an expiry timestamp, a user-action class, and optional
+operator-facing text that has passed redaction. It is never sufficient to
+complete login outside the Guest.
 
 ---
 
-## 5. Consumer co-location and `EntraCredentialOwner`
+## 5. Interactive login flow
 
-`credential-entra` enforces `EntraCredentialOwner::ExactConsumer`: **the
-`entra-agent` process is constructed for exactly one co-located consumer**
-identified by `spec.consumerRef` in the Credential resource. No other Provider,
-component, or process may acquire a lease, even if RBAC otherwise permits.
+### 5.1 State model
 
-**Co-location is achieved through the agent's Process placement**, not the
-controller's placement. The `entra-agent` is launched at exactly
-`scope.executionRef / scope.domainFilter / scope.userRef` — the same execution
-context and domain as the `consumerRef` Provider process. The central
-`entra-controller` runs Zone-wide on the Zone host and is never co-located with
-the consumer. Cross-execution-context acquisition is rejected at d2b-bus RBAC
-enforcement before any `entra-agent` service method is dispatched.
+Credential base status owns the common interaction fields:
 
-If `spec.consumerRef` is null, the Credential resource fails the Nix eval-time
-assertion for `credential-entra` (entra credentials require a declared consumer;
-open access is not supported). This is stricter than the base Credential spec
-which allows null `consumerRef`.
+| Field | Allowed values/content |
+| --- | --- |
+| `status.resource.interactionState` | `NotRequired`, `Required`, `Starting`, `AwaitingUser`, `Authenticated`, `Failed`, `Unknown` |
+| `status.resource.loginSessionGeneration` | Monotonic u64 issued by the Entrablau service; non-secret |
+| `status.resource.loginDeadline` | RFC3339 or null; controller never waits for a human past this deadline |
+| `status.resource.challengeMetadata` | Bounded non-secret object; no authority-conferring bytes or PII |
 
-Consumer co-location is validated at three points:
+Entra-specific status under `credential-entra.d2bus.org/Credential/status`
+contains only provider observations such as endpoint generation, last observed
+login generation, lease state, bounded retry counters, and closed error codes.
+It never duplicates base status fields.
 
-1. **Nix eval time**: `spec.consumerRef` is required and must resolve a declared
-   `Provider/<name>` in the same Zone with a compatible placement binding.
-2. **Controller at agent Process create time**: when creating the `entra-agent`
-   Process resource, the controller verifies that `consumerRef` resolves a Ready
-   Provider in the same Zone with a placement binding matching `scope.executionRef
-   / scope.domainFilter / scope.userRef`.
-3. **d2b-bus RBAC enforcement**: the authenticated consumer Provider subject is
-   compared to `spec.consumerRef`; a mismatch returns `credential-consumer-mismatch`
-   before any `EntraCredentialClient` method is invoked on the agent.
+### 5.2 `BeginLogin`
+
+1. The caller must be authorized for the `Credential/<name>` by `consumerRef`,
+   scope, RBAC, and same-Zone ResourceRefs.
+2. The credential-entra helper opens an authenticated ComponentSession to
+   `loginEndpointRef` inside `identityGuestRef`.
+3. `BeginLogin` binds the Credential UID/generation, `identityGuestRef`,
+   `loginEndpointRef`, Endpoint generation, `consumerRef`, operation ID,
+   requested deadline, and schema fingerprints into the session prologue.
+4. Entrablau starts or resumes login inside the Guest and, if UI is required,
+   attaches named stream `credential-entra.d2bus.org/login-ui` directly between
+   the caller and the Entrablau service. The stream bytes are not status,
+   audit, logs, metrics, or d2b-bus plaintext inspection data.
+5. The controller projects `interactionState: Starting` or `AwaitingUser` and the
+   bounded deadline/challenge metadata. It does not block until the user
+   completes login.
+
+### 5.3 `ObserveLogin` and `CancelLogin`
+
+`ObserveLogin` returns the latest non-secret observation for the current
+`loginSessionGeneration`. It may transition status to `Authenticated`, `Failed`,
+`Required`, or `Unknown`. `CancelLogin` is idempotent and generation-bound; a
+stale cancel cannot affect a newer login session.
+
+### 5.4 D090 expedited reconcile behavior
+
+For `Create`, `UpdateSpec`, and `Delete` with `waitForReconcile`, the controller
+performs no external effect, status mutation, finalizer change, or Endpoint
+session until Core supplies `CommittedRevisionProof`. After the durable commit,
+the expedited pass may return a projected status with
+`interactionState: Required`, `Starting`, or `AwaitingUser`. It never waits for
+human login past `loginDeadline`; if the deadline would be exceeded, the response
+is `Blocked` or `Progressing` with the projected interaction state and
+`statusPersistence: pending|committed`.
 
 ---
 
-## 6. Injected `EntraCredentialClient` — no ambient credential chain
+## 6. On-demand access-token lease delivery
 
-The `EntraCredentialClient` trait is the sole interface between the **`entra-agent`
-process** and the external Entra identity platform. The central `entra-controller`
-does **not** construct or hold an `EntraCredentialClient` reference; it contains
-no token material and makes no calls to Entra.
+The Credential service exposes access tokens only as short-lived leases requested
+on demand. `credential-entra` itself never stores or decrypts token bytes.
 
-**The agent does not hold a direct network capability.** Its Process template
-declares `networkUsage.allowEgress = false`. Instead, the agent receives an
-**injected async client / effect port** from the co-located consumer or runtime
-Provider via the ProviderSupervisor LaunchTicket inherited FD table. This effect
-port implements the `EntraCredentialClient` trait and proxies all calls to the
-Entra identity platform through the consumer or runtime Provider's network
-interface — the agent binary never opens an ambient HTTPS socket.
+```text
+Entrablau service (Guest/work-identity)
+  owns refresh token + token cache + Entra TLS
+        │
+        │  Noise_KK_25519_ChaChaPoly_SHA256 sensitive records
+        │  prologue binds Credential UID/gen, Endpoint gen,
+        │  identityGuestRef, consumerRef, audience, operation, deadline,
+        │  schema fingerprint, RBAC revision, and maxTokenBytes
+        ▼
+Exact authorized consumer process (same-Zone Guest)
+  uses access token in memory for the requested operation only
+```
 
-There is no ambient credential chain, no Azure SDK `DefaultAzureCredential` /
-`ChainedTokenCredential` fallback, no environment variable credential source
-(`AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_TENANT_ID`), no developer-tool
-credential path (`az` CLI, VS Code, browser flow), and no managed-identity IMDS
-endpoint within this provider. Every token acquisition path goes through the
-injected client effect port.
+Security requirements reuse the D055/D056 end-to-end KK delivery contract:
 
-### `EntraCredentialClient` trait (from main `a1cc0b2d`)
+1. Static keys are enrolled before delivery. NN/NX/unauthenticated profiles are
+   rejected.
+2. The raw access token reaches only the exact authenticated consumer process
+   permitted by `Credential.spec.consumerRef`, `scope`, and RBAC.
+3. The Host, bus, controller, helper agent, relay, and any intermediate Provider
+   see only encrypted records and bounded metadata.
+4. Refresh tokens, token caches, machine credentials, cookies, account session
+   state, and private login state never leave `identityGuestRef`.
+5. Outer RPC replies carry only non-secret lease metadata: lease handle digest,
+   expiry, issued-at time, generation, interaction state, and stable outcome.
+6. Ambiguous delivery is not success and is not automatically replayed. The
+   consumer must retry with a new operation/session.
+7. Token buffers are zeroizing in the Entrablau service and consumer. No token,
+   prefix/suffix, bearer string, JWT, cookie, refresh token, or device code is
+   logged, audited, traced, labeled, stored in status, or written to a Volume.
+
+`AcquireAccessTokenLease` may return `interactionState: Required` rather than a
+token if no authenticated Entrablau session exists or if the identity Guest says
+interactive login is required. That is a recoverable interaction condition, not a
+policy denial.
+
+---
+
+## 7. Production token API client
+
+The token API client remains injected and typed for testability, but the only
+production implementation is the Entrablau identity Guest Endpoint described in
+§4.
 
 ```rust
-pub trait EntraCredentialClient: Send + Sync + 'static {
-    async fn issue_lease(
-        &self,
-        request: &EntraLeaseRequest,
-    ) -> Result<EntraLeaseGrant, EntraClientError>;
-
-    async fn refresh_lease(
-        &self,
-        lease_ref: &EntraLeaseRef,
-    ) -> Result<EntraLeaseRenewal, EntraClientError>;
-
-    async fn revoke_lease(
-        &self,
-        lease_ref: &EntraLeaseRef,
-    ) -> Result<EntraLeaseRevocation, EntraClientError>;
-
-    async fn inspect_lease(
-        &self,
-        lease_ref: &EntraLeaseRef,
-    ) -> Result<EntraLeaseInspection, EntraClientError>;
+trait EntraTokenLeaseClient: Send + Sync {
+    async fn begin_login(&self, request: BeginLoginRequest) -> Result<LoginObservation, CredentialError>;
+    async fn observe_login(&self, request: ObserveLoginRequest) -> Result<LoginObservation, CredentialError>;
+    async fn cancel_login(&self, request: CancelLoginRequest) -> Result<LoginObservation, CredentialError>;
+    async fn acquire_access_token_lease(&self, request: TokenLeaseRequest) -> Result<TokenLeaseMetadata, CredentialError>;
+    async fn revoke_access_token_lease(&self, request: RevokeLeaseRequest) -> Result<RevokeLeaseResult, CredentialError>;
+    async fn inspect_access_token_lease(&self, request: InspectLeaseRequest) -> Result<TokenLeaseMetadata, CredentialError>;
 }
 ```
 
-The trait is retained unchanged from main `a1cc0b2d`; no method signature
-modification is required for v3.
+The fake implementation used by hermetic tests may simulate login states and
+access-token delivery, but production construction resolves
+`Credential.spec.loginEndpointRef` and opens a ComponentSession to that Endpoint.
+The credential-entra controller and helper agent perform no direct Entra network
+egress; Entrablau owns Microsoft Entra network/TLS flows inside the identity
+Guest.
 
-### Error mapping
-
-| `EntraClientError` variant | d2b stable error code | Rationale |
-| --- | --- | --- |
-| `InteractionRequired` | `credential-provider-unavailable` | Transient state requiring user interaction; not a policy denial |
-| `Unauthorized` | `credential-operation-denied` | Policy or scope rejection from Entra |
-| `ServiceUnavailable` | `credential-provider-unavailable` | Transient network or service failure |
-| `InvalidRequest` | `credential-invariant-failure` | Request violated invariant; programming error |
-| `LeaseLimitExceeded` | `credential-queue-pressure` | Backpressure; consumer should retry after delay |
-| `LeaseNotFound` | `credential-not-found` | Lease handle no longer valid in provider state |
-
-`EntraClientError::InteractionRequired` MUST map to `credential-provider-unavailable`,
-not `credential-operation-denied`. This is a deliberate design choice: interaction
-required is a transient unavailability, and the `EntraClientState` transitions
-from `InteractionRequired` back to `Ready` without operator intervention once
-the external condition resolves.
-
-### `EntraClientState`
-
-```
-Ready | InteractionRequired
-```
-
-`EntraClientState` is Provider-owned process/runtime state, not durable secret
-material and not a Provider state Volume payload. The state is reconstructed
-after restart by observing the external Entra condition and the owning
-`Credential.status`; only the bounded condition (`ProviderUnavailable=True`,
-`leaseState=Unknown`, retry/outcome enums) is written to status. Token bytes and
-client secrets remain transient in process memory and move only over dedicated
-Noise_KK sensitive sessions.
-
-When `EntraClientState=InteractionRequired`:
-
-- `AcquireToken` returns `credential-provider-unavailable`.
-- `RefreshToken` returns `credential-provider-unavailable`.
-- Controller sets `ProviderUnavailable=True`, `leaseState=Unknown`.
-- Scheduled observe interval continues; state recovers automatically.
-
-### Lease types (retained from main `a1cc0b2d`)
-
-All lease types implement `Debug` via a hand-written redacted impl that emits
-only the type name and a fixed placeholder. Derived `Debug` is forbidden.
-
-| Type | Contents | Secret bytes |
-| --- | --- | --- |
-| `EntraLeaseRequest` | `audience: OpaqueAzureRef`; `idempotency_key: [u8; 32]`; `requested_expiry_unix_ms: u64`; `operation_id: OperationId` | No |
-| `EntraLeaseRef` | Opaque bounded handle (non-secret newtype); `rotationGeneration: u64` | No |
-| `EntraLeaseGrant` | `lease_ref: EntraLeaseRef`; `source_version: OpaqueSourceVersion`; `expires_at_unix_ms: u64`; `issued_at_unix_ms: u64`; `token_bytes: Zeroizing<Vec<u8>>` | Yes — `token_bytes` only |
-| `EntraLeaseRenewal` | `lease_ref: EntraLeaseRef`; `new_expires_at_unix_ms: u64`; `token_bytes: Zeroizing<Vec<u8>>` | Yes — `token_bytes` only |
-| `EntraLeaseRevocation` | `lease_ref: EntraLeaseRef`; `revoked_at_unix_ms: u64`; `result: RevocationResult` | No |
-| `EntraLeaseInspection` | `lease_ref: EntraLeaseRef`; `lease_state: CredentialLeaseState`; `expires_at_unix_ms: u64`; `source_version: OpaqueSourceVersion` | No |
-
-`token_bytes` fields are `Zeroizing<Vec<u8>>` and are dropped immediately after
-the Noise KK delivery record is encrypted and confirmed sent. The plaintext
-buffer is zeroed before the `Zeroizing` wrapper is dropped. Token bytes never
-appear in outer RPC DTOs, status, resource store, audit records, OTEL spans, or
-log lines.
+There is no `DefaultAzureCredential`, no Azure SDK default chain, no environment
+variable credential source, no DBus credential source, no filesystem token cache
+path, no developer-tool credential path, no Host login fallback, no browser
+fallback on the Host, and no env var fallback. Removing or disabling the
+Entrablau Endpoint is a hard `interactionState: Unknown` or
+`ProviderUnavailable` condition, not a fallback trigger.
 
 ---
 
-## 7. Credential methods and lease lifecycle
+## 8. Status-first state and zero-secret invariant
 
-### `d2b.credential.v3` method mapping
+`Provider/credential-entra` declares no Provider state Volume. The ProviderStateSet
+is empty. Entrablau's private state is guest-local state owned by the sibling
+package inside the identity Guest, not a d2b Provider Volume.
 
-| d2b method | `EntraCredentialClient` call | Secret output? |
+Credential status may contain only bounded non-secret observations:
+
+| Surface | Allowed | Forbidden |
 | --- | --- | --- |
-| `AcquireToken` | `issue_lease(&EntraLeaseRequest)` → `EntraLeaseGrant` | Yes — token bytes via KK delivery session |
-| `RefreshToken` | `refresh_lease(&EntraLeaseRef)` → `EntraLeaseRenewal` | Yes — refreshed token bytes via KK delivery session |
-| `RevokeToken` | `revoke_lease(&EntraLeaseRef)` → `EntraLeaseRevocation` | No |
-| `SignChallenge` | Constructs challenge-signing request; acquires token internally; signs using Entra | Yes — signature bytes via KK delivery session |
-| `InspectMetadata` | `inspect_lease(&EntraLeaseRef)` → `EntraLeaseInspection` | No |
-| `Status` | No external call; reads provider-internal state | No |
+| `Credential.status.resource` | interaction state, login session generation, login deadline, bounded challenge metadata, lease state, expiry/issued timestamps | tokens, refresh tokens, device codes, login URLs, cookies, account names, tenant-private IDs, PII |
+| `Credential.status.provider.details` | endpoint generation, identity Guest generation digest, retry counters, closed error/outcome enums, non-authorizing lease handle digests | token bytes, Entra response bodies, MSAL cache entries, filesystem paths, DBus names, browser profile paths |
+| Audit/OTEL/logs | operation class, result code, ResourceRef, generation, digest of route/session binding | token/refresh/cookie/device code bytes, login URL, user PII, cloud response bodies, host paths |
 
-All non-secret outer DTOs carry only opaque lease identifiers, generation
-counters, expiry timestamps, outcome codes, and closed enum values. No outer DTO
-field ever contains a token prefix, token suffix, bearer string, key material,
-or connection string. These methods are served by the **`entra-agent`** process;
-the `entra-controller` never handles `d2b.credential.v3` service calls directly.
-
-### Idempotency
-
-Every `AcquireToken` and `RefreshToken` call carries an `idempotency_key`
-derived from:
-
-```text
-HMAC-SHA256(
-  key   = Credential.metadata.uid (bytes),
-  input = rotationGeneration ∥ operation_class_byte
-)
-```
-
-A duplicate `AcquireToken` with the same key and the same `rotationGeneration`
-returns the existing `EntraLeaseGrant` without issuing a new token. The provider
-tracks the idempotency key map in process-local memory; there is no persistent
-idempotency store. After a provider restart, duplicate detection is not
-guaranteed; the controller treats a post-restart duplicate as a fresh
-acquisition.
-
-### Lease cardinality
-
-`maxLeases` (config field) caps the number of concurrent active
-`EntraLeaseGrant` entries held by the provider process. Attempts to issue beyond
-`maxLeases` return `credential-queue-pressure`. The hard constant
-`MAX_LOCAL_LEASES = 256` is enforced at provider construction time; a config
-value above 256 fails the Provider spec validation at install.
-
-### State machine
-
-The non-secret state transitions below are reflected in `Credential.status` and
-core Operation ledger records only. Per D088, Credential lease metadata common to
-all implementations (phase, audience, expiry, and opaque non-authorizing
-`lease_ref`) lives in `status.resource`; Entra-specific lease/enrollment
-observations live in `status.provider.details`. `lease_ref` values recorded in
-status are opaque, non-authorizing, bounded, safe for authorized status readers,
-and independently revalidated; they are never token sources. Token and signature
-bytes remain transient in the `entra-agent` process and are zeroized after
-Noise_KK delivery.
-
-```text
-Absent
-  |-- AcquireToken ---------> Active (CredentialReady=True)
-  |-- RefreshToken ----------> credential-lease-expired (no active lease to refresh)
-
-Active
-  |-- proactive window ------> RotationDue (CredentialReady=True, RotationDue=True)
-  |-- RefreshToken ----------> Active (same lease_ref, new expires_at)
-  |-- [controller rotation] -> Active (new rotationGeneration, new lease_ref)
-  |-- RevokeToken -----------> Revoked (leaseState=Revoked, CredentialReady=False)
-  |-- expiry deadline -------> Expired (leaseState=Expired, CredentialReady=False)
-  |-- InteractionRequired ---> Degraded(ProviderUnavailable=True); retry on recovery
-
-RotationDue
-  |-- rotation attempt ------> Active (rotationGeneration+1, new lease_ref)
-  |-- rotation attempt fails -> RotationDue; bounded retry; degrade after final retry
-
-Expired
-  |-- AcquireToken ----------> Active (new lease; rotationGeneration+1)
-
-Revoked
-  |-- AcquireToken ----------> Active (if policy permits re-acquisition)
-  |-- resource deletion -----> provider-revoke finalizer satisfied immediately
-
-Degraded (InteractionRequired)
-  |-- state recovers --------> previous state
-  |-- retry exhausted -------> Failed
-```
+The zero-secret invariant applies across spec, status, resource store, audit,
+OTEL, logs, debug output, process descriptors, launch tickets, Endpoint spec/status,
+and outer RPC DTOs. Secret bytes are present only inside the Entrablau Guest and,
+for access tokens, inside the end-to-end KK record and exact consumer process.
 
 ---
 
-## 8. Raw token / signature only via end-to-end Noise KK delivery
+## 9. Nix composition
 
-Token bytes and signature bytes are delivered exclusively through a dedicated
-end-to-end `Noise_KK_25519_ChaChaPoly_SHA256` ComponentSession established by
-the **`entra-agent`** process. d2b-bus authorizes the route and forwards opaque
-Noise-protected records without terminating, decrypting, or buffering the
-delivery channel content. No intermediate process — including the
-`entra-controller` — sees plaintext.
+A consumer composes the identity Guest and then declares Credentials against the
+Endpoint exported by that Guest. d2b core does not import the sibling flake.
 
-### Delivery session profile
+```nix
+{
+  inputs.entrablau.url = "github:vicondoa/entrablau.nix";
+  inputs.entrablau.inputs.nixpkgs.follows = "nixpkgs";
 
-- **Profile**: `Noise_KK_25519_ChaChaPoly_SHA256` (enrolled KK only; NN/NX/N
-  patterns are rejected immediately and the session is closed and zeroized).
-- **Credential Provider key**: registered at Provider installation; the bus
-  holds only the public key.
-- **Consumer Provider key**: extracted from the consumer Provider's signed
-  component descriptor.
+  # Identity Guest NixOS system. The sibling module declares the Entrablau
+  # login/token Process and the Endpoint purpose
+  # credential-entra.d2bus.org/entra-login-token.
+  d2b.zones.work.resources.work-identity = {
+    type = "Guest";
+    spec = {
+      providerRef = "Provider/runtime-cloud-hypervisor";
+      defaultDomain = "system";
+      allowedDomains = [ "system" "user" ];
+      systemArtifactId = "work-identity-system";
+      config.imports = [ inputs.entrablau.nixosModules.default ];
+    };
+  };
 
-### Delivery session binding fields
+  d2b.zones.work.resources.work-identity-entra-login-token = {
+    type = "Endpoint";
+    spec = {
+      providerRef = "Provider/credential-entra";
+      producerRef = "Process/work-identity-entrablau-login-token";
+      endpointClass = "service";
+      transport = "unix";
+      purpose = "credential-entra.d2bus.org/entra-login-token";
+      serviceFingerprint = "credential-entra.d2bus.org/EntrablauLoginTokenService/v1";
+      locality = "guest-local";
+      visibility = "authorized-consumers";
+      attachmentPolicy = "component-session";
+      consumerPolicy = "same-zone-authorized";
+      lifecyclePolicy = "recycle-with-producer";
+    };
+  };
 
-Each delivery session binds:
+  d2b.zones.work.resources.work-entra = {
+    type = "Credential";
+    spec = {
+      providerRef = "Provider/credential-entra";
+      identityGuestRef = "Guest/work-identity";
+      loginEndpointRef = "Endpoint/work-identity-entra-login-token";
+      scope.executionRef = "Guest/aca-gateway";
+      scope.domainFilter = "system";
+      consumerRef = "Provider/runtime-azure-container-apps";
+      audience = "azure-resource-manager";
+      allowedOperations = [ "acquire-token" "refresh-token" ];
+      rotation.policy = "proactive";
+      rotation.proactiveWindowMs = 300000;
+      rotation.maxLeaseLifetimeMs = 3600000;
+      revocation.onOwnerDelete = "immediate";
+      revocation.onProviderGeneration = "immediate";
+      provider = {
+        schemaId = "credential-entra.d2bus.org/Credential/spec";
+        schemaVersion = "1.0.0";
+        settings = {
+          tokenPurpose = "azure-resource-manager";
+          loginMode = "entrablau-guest";
+        };
+      };
+    };
+  };
+}
+```
 
-| Field | Value |
+Eval-time validation rejects missing `identityGuestRef`/`loginEndpointRef`, any
+cross-Zone reference, any Endpoint whose producer is not inside the identity
+Guest, Host-scoped credential placement, an absent `consumerRef`, mismatched
+consumer execution scope, and any string that matches known secret/token shapes.
+
+---
+
+## 10. Reset, upgrade, and deletion
+
+Credential reset and deletion affect only d2b credential metadata and active
+lease/session observations unless the operator explicitly requests identity Guest
+state destruction through the Entrablau sibling's own interface.
+
+| Operation | Identity Guest TPM/login state |
 | --- | --- |
-| `credentialRef` | `Credential/<name>` |
-| `credentialUID` | Credential resource UID (stable across spec updates) |
-| `credentialGeneration` | Credential resource generation at delivery time |
-| `consumerProviderRef` | `Provider/<name>` matching `spec.consumerRef` |
-| `consumerComponentGeneration` | Consumer Provider component generation (from signed descriptor) |
-| `audience` | `spec.audience` value (opaque; not echoed in logs or spans) |
-| `operationClass` | Closed operation class (`acquire-token`, `refresh-token`, or `sign-challenge`) |
-| `expiryUnixMs` | Absolute expiry; clipped to `spec.rotation.maxLeaseLifetimeMs` |
-| `deadlineUnixMs` | Hard session close deadline ≤ `expiryUnixMs` |
-| `routeDigest` | Digest of bus-authorized route parameters |
-| `schemaVersion` | Fixed version of this binding contract |
-| `maxTokenBytes` | Closed upper bound on token/signature bytes for this session |
-| `transcriptDigest` | Noise transcript digest after handshake completion, before first record |
+| Credential spec update | Preserved unless the identity Guest or Endpoint binding changes; old sessions are generation-invalidated. |
+| Provider generation update | Active access-token leases are revoked or allowed to drain per `revocation.onProviderGeneration`; Entrablau refresh state is preserved. |
+| Credential delete | Active leases are revoked; status/finalizer cleanup occurs; Entrablau enrollment and TPM state are preserved. |
+| Explicit identity reset | Must be a separate, auditable operation owned by the Entrablau Guest/sibling and must declare whether TPM/login state is preserved or destroyed. |
 
-Both parties MUST verify the full binding before accepting records.
-
-### Security requirements
-
-1. **Enrolled keys only**: both static keys must be enrolled and verified at
-   session initiation. Any anonymous-channel attempt is rejected immediately and
-   the session is closed and zeroized.
-2. **Replay-safe sequence**: each delivery session carries a monotonically
-   increasing per-credential-UID sequence number. A replay at the same or lower
-   sequence number is rejected.
-3. **Bounded output size**: the sensitive output record MUST NOT exceed
-   `maxTokenBytes`. Any oversized record is rejected; the channel is closed and
-   zeroized immediately. Fragmentation is not permitted unless each fragment is
-   explicitly bounded and the reassembled record does not exceed `maxTokenBytes`.
-4. **Zeroizing buffers**: the delivery record's plaintext MUST be zeroed in
-   memory immediately after the consumer extracts it. The provider MUST zero the
-   plaintext source after encryption. All intermediate serialization/
-   deserialization buffers are zeroizing types.
-5. **Redacted Debug**: all credential-bearing Rust types (request, response,
-   record wrapper, buffer) MUST implement `Debug` via a hand-written redacted
-   impl emitting only the type name and a placeholder value. Derived `Debug` is
-   forbidden for these types.
-6. **No automatic replay on ambiguous outcome**: after any ambiguous delivery
-   outcome (timeout, partial write, disconnect before confirmation), the provider
-   MUST NOT automatically retry with the same record. The consumer must
-   re-initiate via a new service method call, which establishes a new delivery
-   session with a fresh sequence number.
-7. **Immediate close and zeroize**: after the delivery record is confirmed
-   received, the provider closes the delivery channel and zeroizes all session
-   key material. The consumer similarly closes and zeroizes after extraction. The
-   channel is not reused across multiple deliveries.
+A reset must never silently wipe or recreate the identity Guest TPM/login state.
+Destroying that state can force Entra re-enrollment and therefore requires an
+explicit operator action and audit record. Preserving state is the default for
+credential-entra lifecycle changes.
 
 ---
 
-## 9. RBAC and security
+## 11. RBAC and errors
 
 ### RBAC verbs
 
-| Verb | Who | Enforced by |
+| Verb | Who | Purpose |
 | --- | --- | --- |
-| `get` | Any authorized subject | d2b-bus resource API |
-| `list` | Any authorized subject | d2b-bus resource API |
-| `watch` | Any authorized subject | d2b-bus resource API |
-| `create` | Deployer/system-core configuration controller | d2b-bus resource API |
-| `update-spec` | Deployer/system-core configuration controller | d2b-bus resource API |
-| `update-status` | `entra-controller` process only (exact registered generation) | d2b-bus resource API |
-| `update-finalizers` | `entra-controller`; `consumerRef` controller | d2b-bus resource API |
-| `delete` | Deployer/system-core configuration controller | d2b-bus resource API |
-| `use-credential` | Consumer subject authorized by `consumerRef` and RBAC Role/RoleBinding | d2b-bus before service dispatch |
-
-RBAC rule example for `use-credential`:
-
-```yaml
-rules:
-  - resourceTypes: [Credential]
-    verbs: [use-credential]
-    resourceNames: [work-entra]
-    zones: [dev]
-    executionRefs: [Guest/work-vm]
-    operationClasses: [acquire-token, refresh-token]
-```
-
-The effective operation set is the intersection of `spec.allowedOperations` and
-the Role `operationClasses`. A consumer not matching `spec.consumerRef` receives
-`credential-consumer-mismatch` before any `EntraCredentialClient` call.
-
-### Zero-secret-bytes invariant
-
-The zero-secret-bytes invariant is unconditional across all persistent and
-observable surfaces for this Provider. Token bytes, key material, `tenantId`
-literals, Azure scope values, bearer strings, and MSAL
-cache entries:
-
-- **do not appear** in `Credential.spec` or `Credential.status`;
-- **do not appear** in the resource store row, redb WAL, or revision log;
-- **do not appear** in d2b-bus routing DTOs or ResourceRef handles;
-- **do not appear** in audit records;
-- **do not appear** in OTEL span attributes, metric label values, or log lines;
-- **do not appear** in outer `d2b.credential.v3` RPC response DTOs;
-- **are delivered only** through the end-to-end Noise KK delivery session
-  described in §8.
-
-The `contains_sensitive_shape` guard (adapted from
-`d2b-realm-provider/src/error.rs:contains_sensitive_shape`) is applied at:
-
-- Nix eval time to all string fields in `Credential.spec` and
-  `Provider.spec.config`;
-- runtime to all error message strings before they leave the provider process;
-- test time via the canary test suite (see §13).
-
-### `host-system` placement rejection
-
-The `credential-entra` Provider rejects `host-system` placement
-(`scope.domainFilter=system` + `scope.executionRef=Host/<name>`) at Provider
-install validation. Entra credentials require a configured consumer-agent
-co-location (`user-agent` on Host or Guest, or `guest-agent` on Guest). A
-system-domain host process without a co-located consumer agent cannot satisfy the
-`EntraCredentialOwner::ExactConsumer` invariant.
-
-### Process sandbox
-
-Both the `entra-controller` and `entra-agent` Processes are compiled from the
-canonical Process templates in §4 using semantic SandboxSpec fields. Both
-templates share these sandbox invariants:
-
-- `namespaceClasses: [mount, pid, ipc, uts, network]` — full isolation including
-  private network namespace for both controller and agent;
-- `capabilityClasses: []` — zero Linux capabilities granted;
-- `seccompClass: strict` — minimal allow-list compiled by the selected Process
-  Provider from the trusted bundle;
-- `startRoot: false` — process does not start as in-namespace root;
-- `noNewPrivileges: true` — `PR_SET_NO_NEW_PRIVS` before exec;
-- `environmentClass: minimal` — only the fixed approved environment set;
-- `readOnlyRoot: true` — rootfs mounted read-only.
-
-The **controller** additionally:
-
-- uses `Provider/system-minijail` — broker-compiled sandbox via `clone3(CLONE_PIDFD | CLONE_INTO_CGROUP)`;
-- `networkUsage.allowEgress: false` — no outbound connections; communicates only via d2b-bus Unix socket.
-
-The **agent** additionally:
-
-- user-domain agent uses `Provider/system-systemd`; system-domain Guest agent uses `Provider/system-minijail`;
-- `networkUsage.allowEgress: false` — no ambient MSAL network claim; all Entra calls go through
-  the injected `EntraCredentialClient` effect port provided over the LaunchTicket inherited FD;
-- no access to `/dev`, host Wayland sockets, PipeWire, or host-global broker FDs beyond
-  the Provider supervisor ticket and the injected effect-port FD.
-
----
-
-## 10. Status, errors, audit, and OTEL
-
-### Status fields
-
-Per D088, ResourceType-common Credential observation lives in `status.resource`:
-the non-secret lease metadata base that is identical across Credential
-implementations. Entra-specific lease/enrollment observations live only in
-`status.provider` with `providerRef`, qualified `schemaId`
-`credential-entra.d2bus.org/Credential/status`, `schemaVersion`,
-`observedProviderGeneration`, and strict bounded redacted `details`
-(≤32 KiB, unknown-field-denied). The controller writes all present layers
-atomically in one status mutation; shared
-fields are never duplicated into `status.provider`, and the extension schema is
-registered and signed in the Provider manifest.
-
-Common `status.resource` lease metadata:
-
-| Field | Non-secret constraint |
-| --- | --- |
-| `leaseRef` | Opaque bounded newtype (max 256 chars); never a token or partial token |
-| `leaseState` | `Active \| Expired \| Revoked \| Unknown`; closed enum |
-| `audience` | Opaque bounded audience alias or digest; never a raw Azure scope, token, or endpoint URI |
-| `expiresAtUnixMs` | Unix milliseconds timestamp; 0 when absent |
-| `issuedAtUnixMs` | Unix milliseconds timestamp of last successful acquisition |
-
-Entra-specific `status.provider.details` fields:
-
-| Field | Non-secret constraint |
-| --- | --- |
-| `rotationGeneration` | Monotonic u64; bounded |
-| `sourceVersion` | Opaque bounded newtype from `EntraLeaseInspection`; not a version string from any external system |
-| `lastRefreshedAt` | RFC 3339 UTC string |
-| `lastRotatedAt` | RFC 3339 UTC string or null |
-| `placementBinding` | `user-agent \| guest-agent`; closed enum |
-
-No status field in any layer ever contains a tenant ID literal, raw Azure
-audience/scope literal, endpoint URI, token prefix/suffix, or any byte from
-`EntraLeaseGrant.token_bytes`.
+| `get`, `list`, `watch` | Authorized readers | Inspect non-secret spec/status. |
+| `update-status` | `Provider/credential-entra` controller only | Write projected interaction/lease observations. |
+| `update-finalizers` | `Provider/credential-entra` controller | Revoke/finalize Credential resources. |
+| `begin-login`, `observe-login`, `cancel-login` | Exact `consumerRef` plus RBAC | Drive Credential base interactive login operations. |
+| `use-credential` | Exact `consumerRef` plus RBAC | Acquire/revoke/inspect access-token leases. |
 
 ### Stable error codes
 
 | Code | Condition |
 | --- | --- |
-| `credential-not-found` | Credential resource does not exist in this Zone |
-| `credential-provider-unavailable` | `EntraClientState=InteractionRequired`; provider process unreachable; not Ready |
-| `credential-lease-expired` | Lease is past its expiry deadline |
-| `credential-lease-revoked` | Lease was explicitly revoked |
-| `credential-operation-denied` | Operation class not in `allowedOperations`; RBAC denied; `Unauthorized` from Entra |
-| `credential-consumer-mismatch` | Requesting subject does not match `spec.consumerRef` |
-| `credential-placement-mismatch` | Request execution context/domain does not match `scope`; `host-system` attempted |
-| `credential-rotation-failed` | Proactive rotation failed after bounded retries |
-| `credential-invariant-failure` | Provider returned a response failing invariant checks |
-| `credential-schema-invalid` | Spec field fails validation at create/update |
-| `credential-queue-pressure` | `maxLeases` reached; retry after backpressure |
+| `credential-interaction-required` | Entrablau reports login is required before token acquisition. |
+| `credential-login-starting` | `BeginLogin` accepted; user interaction stream starting. |
+| `credential-login-cancelled` | Generation-bound login was cancelled. |
+| `credential-login-timeout` | Login did not complete before `loginDeadline`. |
+| `credential-endpoint-unavailable` | `loginEndpointRef` is absent, not Ready, or generation mismatched. |
+| `credential-endpoint-generation-mismatch` | Caller observed stale Endpoint generation. |
+| `credential-consumer-mismatch` | Authenticated caller does not match `consumerRef`/scope/RBAC. |
+| `credential-placement-mismatch` | Host placement, cross-Zone reference, or non-Guest identity binding attempted. |
+| `credential-provider-unavailable` | Entrablau service or identity Guest unavailable. |
+| `credential-operation-denied` | RBAC or Entrablau policy denied the requested operation. |
+| `credential-redaction-violation` | A candidate status/audit/log field contains secret-shaped content. |
 
-All error messages are bounded (max 240 UTF-8 chars), stripped of control
-characters, and must not contain token bytes, URLs, UUIDs, provider diagnostics,
-host paths, or connection string shapes. Error messages pass `contains_sensitive_shape`
-before being returned.
-
-### Audit events
-
-| Event | Retained fields |
-| --- | --- |
-| Credential create/update/delete | Zone, subject digest (`sha256:<hex>`), ResourceRef, verb, revision result, authorization decision |
-| `AcquireToken` | Zone, subject digest, `Credential/<name>`, operation class, `rotationGeneration`, outcome code, idempotency key digest |
-| `RefreshToken` | Zone, subject digest, `Credential/<name>`, operation class, `rotationGeneration`, outcome code, idempotency key digest |
-| `RevokeToken` | Zone, subject digest, `Credential/<name>`, operation class, `rotationGeneration`, revocation result code |
-| `SignChallenge` | Zone, subject digest, `Credential/<name>`, operation class, outcome code (no signature bytes) |
-| Rotation | Zone, `Credential/<name>`, trigger reason, old `rotationGeneration`, new `rotationGeneration`, outcome code |
-| Provider generation change revocation | Zone, `Credential/<name>`, policy applied, outcome code |
-| `InteractionRequired` state transition | Zone, `Credential/<name>`, direction (entered/recovered), outcome code |
-
-Excluded from all audit records: token bytes, key material, passwords, bearer
-strings, `tenantId` literals, `audience` literals, tenant/subscription/client
-IDs, endpoint URIs, Noise/session key material, and provider-internal
-diagnostics.
-
-### OTEL spans
-
-Span names follow `d2b.credential.<operation>`:
-
-| Span name | Emitted on |
-| --- | --- |
-| `d2b.credential.acquire_token` | `AcquireToken` service call |
-| `d2b.credential.refresh_token` | `RefreshToken` service call |
-| `d2b.credential.revoke_token` | `RevokeToken` service call |
-| `d2b.credential.sign_challenge` | `SignChallenge` service call |
-| `d2b.credential.inspect_metadata` | `InspectMetadata` service call |
-| `d2b.credential.reconcile` | Controller reconcile handler |
-| `d2b.credential.rotation` | Rotation cycle |
-
-Required span attributes (closed set):
-
-| Attribute | Value |
-| --- | --- |
-| `d2b.zone` | Zone name |
-| `d2b.credential.name` | Credential resource name |
-| `d2b.credential.provider` | `credential-entra` |
-| `d2b.credential.operation_class` | Closed enum string |
-| `d2b.credential.placement_binding` | `user-agent` or `guest-agent` |
-| `d2b.credential.outcome` | Stable closed outcome code |
-| `d2b.credential.rotation_generation` | Numeric rotation generation |
-
-Forbidden from spans and attributes: token bytes, `audience` literals, `tenantId`
-literals, provider diagnostics, host paths, Azure resource IDs,
-tenant/subscription IDs, endpoint URIs, correlation IDs that embed secret shapes,
-and any value passing `contains_sensitive_shape`.
-
-### OTEL metrics
-
-| Metric | Type | Labels |
-| --- | --- | --- |
-| `d2b_credential_operations_total` | Counter | `provider=credential-entra`, `operation_class`, `placement_binding`, `outcome` |
-| `d2b_credential_lease_expiry_seconds` | Gauge | `provider=credential-entra`, `credential_name`, `placement_binding` |
-| `d2b_credential_rotation_total` | Counter | `provider=credential-entra`, `policy`, `outcome` |
-| `d2b_credential_provider_health` | Gauge (0/1) | `provider=credential-entra` |
-| `d2b_credential_active_leases` | Gauge | `provider=credential-entra`, `placement_binding` |
-
-`credential_name` appears only in `d2b_credential_lease_expiry_seconds` where
-per-resource precision is required. It is omitted from high-cardinality counters.
-Label cardinality is bounded; no label ever encodes secret bytes or dynamic
-identifiers beyond the resource name.
+All error messages are bounded stable text. They do not include login URLs,
+device codes, user identifiers, tenant-private identifiers, HTTP bodies, paths,
+DBus names, tokens, refresh tokens, or cookies.
 
 ---
 
-## 11. Nix configuration
-
-### Eval-time assertions specific to `credential-entra`
-
-In addition to the base Credential eval-time assertions defined in
-`ADR-046-resources-credential §Eval-time assertions`, the following
-`credential-entra`-specific assertions apply to every `Credential` resource
-whose `spec.providerRef = "Provider/credential-entra"`:
-
-1. **`consumerRef` is required**: `spec.consumerRef` must be non-null and must
-   resolve a declared `Provider/<name>` in the same Zone. An absent
-   `consumerRef` fails the Nix build with:
-   ```
-   error: credential-entra requires spec.consumerRef; open-access Credentials
-   are not supported for this provider.
-   ```
-
-2. **`host-system` placement rejected**: if `spec.scope.executionRef` resolves
-   to a `Host/<name>` and `spec.scope.domainFilter = "system"`, the eval fails
-   with:
-   ```
-   error: credential-entra does not support host-system placement. Use
-   domainFilter = "user" or place the Credential under a Guest.
-   ```
-
-3. **`audience` charset**: `spec.audience` must match `^[A-Za-z0-9._:/@-]+$`
-   (max 256 chars). Values containing `=`, `+`, `{`, `}`, whitespace,
-   URL-encoded percent sequences, or any byte that passes `contains_sensitive_shape`
-   fail the eval.
-
-4. **`tenantId` in Provider config**: `Provider.spec.config.tenantId` must
-   match `^[A-Za-z0-9._-]+$` (max 256 chars). The field must not end in `Ref`,
-   must not be a `<ResourceType>/<name>` pattern, and must not contain `://`,
-   `/`, query-string characters, or any secret-shaped value.
-
-5. **`authorityClass` is a closed enum**: `Provider.spec.config.authorityClass`
-   must be one of `public`, `us-government`, or `china`, or an opaque effect-port
-   alias declared by the consumer/runtime Provider. Reject any value containing
-   `://`, `.`, port separators, path components, query strings, or any
-   hostname-shaped bytes. Effect-port aliases are validated as opaque identifiers
-   (`^[a-z][a-z0-9-]*$`); they are resolved only inside the effect port
-   implementation and never expanded into an endpoint URL in any config, sealed
-   projection, DTO, status field, or audit record.
-
-6. **`allowedOperations` subset**: all five operation classes are supported;
-   `spec.allowedOperations` must be a non-empty subset of
-   `{acquire-token, refresh-token, revoke-token, sign-challenge, inspect-metadata}`.
-
-7. **`scope.domainFilter` matches Provider capability**: `credential-entra`
-   declares `credentialDomains = [user, system]` (system = guest-agent only).
-   A `domainFilter = "system"` entry requires `scope.executionRef` to resolve a
-   Guest (not a Host); this is enforced jointly by assertions 2 and 7.
-
-8. **`controllerExecutionRef` in Provider config**: `Provider.spec.config.controllerExecutionRef`
-   is **required**. It must match `^Host/[a-z][a-z0-9-]*$` and must resolve to a
-   declared `Host/<name>` in the same Zone. It must not be a `Guest/<name>`
-   reference. `Zone.spec` is `{}` — there is no Zone primary Host concept; Nix
-   eval fails with a hard error if this field is absent:
-   `error: credential-entra requires spec.config.controllerExecutionRef; specify
-   the Host/<name> where the controller will run.`
-
-### Generated schema cross-check
-
-The build-time schema cross-check (`make test-drift`) validates that:
-
-- `docs/reference/schemas/v3/provider-credential-entra-config.json` (generated
-  by `cargo xtask gen-schemas`) matches the committed schema in the repository.
-- The `audience` charset rules in the Credential ResourceTypeSchema
-  (`docs/reference/schemas/v3/credential.json`) and the Provider-specific schema
-  agree on the `^[A-Za-z0-9._:/@-]+$` constraint.
-- The `tenantId`, `authorityClass`, and `controllerExecutionRef` schemas correctly
-  declare `OpaqueAzureRef`, closed-enum, and ResourceRef constraints in the
-  provider-specific JSON schema.
-- No schema field marks a `secretRef: true` field that is not a
-  `Credential/<name>` reference.
-
----
-
-## 12. Async reconcile
-
-The `entra-controller` implements the `ADR-046-resource-reconciliation` async
-loop model. Its role in this split architecture is to manage the **lifecycle of
-`entra-agent` Processes** — it is not responsible for token acquisition directly.
-The `entra-agent` process independently handles `EntraCredentialClient`
-acquisition, observation, and revocation. The controller coordinates the two via
-Process resource CRUD and inter-process status reporting.
-
-### Reconcile handlers
-
-#### `reconcile` — triggered by: Create, Spec update, dependency Ready
-
-1. Validate resolved Provider dependencies: `Provider/credential-entra` Ready,
-   `scope.executionRef` Ready, `scope.userRef` Ready (if applicable).
-2. Validate `spec.consumerRef` resolves a declared Ready Provider in the same Zone
-   with a placement binding matching `scope.executionRef / scope.domainFilter /
-   scope.userRef`.
-3. If no `entra-agent` Process exists for this Credential: submit a
-   `ProviderSupervisor::LaunchTicket` to create an `entra-agent` Process resource
-   with `metadata.ownerRef = Credential/<name>`, placement derived from
-   `scope.executionRef / scope.domainFilter / scope.userRef`, and a sealed config
-   projection carrying `tenantId`, `authorityClass`, `consumerRef`, `maxLeases`,
-   `interactionPolicy`, audience, and the `idempotency_key`.
-4. Wait for agent Process Ready readiness probe. If agent Process transitions to
-   `ProcessFailed` within `reconcileTimeout`: set `ProviderUnavailable=True`.
-5. Once agent Process is Ready: set `CredentialReady=True` via agent status report
-   (see `observe` below).
-6. If `spec` changed (providerRef, scope, audience, consumerRef): signal the existing
-   agent to revoke under the old spec, delete the old agent Process, and create a
-   new one under the updated spec. The old agent Process deletion is owner-cascade
-   via `metadata.ownerRef`.
-
-#### `observe` — triggered by: `observeInterval=30s` timer
-
-1. Read the `entra-agent` Process status from the resource store.
-2. Propagate `leaseState`, `expiresAtUnixMs`, `sourceVersion`, and condition
-   updates from the agent Process status into the Credential status.
-3. Evaluate proactive rotation window:
-   - If `now + proactiveWindowMs >= expiresAtUnixMs` and
-     `rotation.policy = "proactive"`: set `RotationDue=True` condition.
-4. If `RotationDue=True`: send a rotation signal to the `entra-agent` via its
-   declared control endpoint; the agent drives the actual `rotate_lease` call.
-5. If agent Process is absent (unexpected deletion or crash): set
-   `ProviderUnavailable=True`; re-trigger `reconcile` to recreate the agent.
-6. If agent reports `LeaseNotFound`: re-trigger `reconcile` for re-acquire.
-
-#### `finalize` — triggered by: `metadata.deletionRequestedAt != null`
-
-1. Apply `revocation.onOwnerDelete`:
-   - `immediate`: signal the `entra-agent` to call `revoke_lease`; wait for
-     agent to confirm `Revoked` state (agent updates Process status) before
-     proceeding. If agent Process unreachable or gone: mark `leaseState=Revoked`;
-     write bounded audit record.
-   - `drain-leases`: do not signal revocation; allow natural expiry; delete
-     agent Process immediately (owner cascade handles it if not already gone).
-2. **Controller removes `credential.d2bus.org/provider-revoke` finalizer** by
-   calling `UpdateFinalizers`. When this is the last finalizer on the resource,
-   core proceeds with deletion.
-3. **Core (automatic after zero finalizers)**: performs one atomic store
-   transaction writing the event-only `Deleted` revision and removing the
-   row/indexes. No `Deleted` row persists; the row is absent after the
-   transaction commits.
-4. **Audit subsystem (post-commit)**: after the transaction commits, appends
-   `ResourceMutation{event="deleted"}` using dedup/exactly-once recovery keyed
-   on the revision. This append is not part of the store transaction.
-
-#### Agent startup — triggered by: agent Process startup (agent side)
-
-The `entra-agent` process independently, upon startup:
-
-1. Reads its sealed config projection from the ProviderSupervisor inherited FD
-   (tenantId, authorityClass, Credential ref, consumerRef, effect-port FD index).
-2. Opens the injected effect-port FD and constructs an `EntraCredentialClient`
-   implementation over it, using `authorityClass` to select authority
-   endpoint/TLS internally. This effect port is provided by the co-located
-   consumer or runtime Provider; no ambient HTTPS socket is opened and no raw
-   authority endpoint URL is held in the agent's memory or logs.
-3. Calls `issue_lease` via the injected client with the `idempotency_key`;
-   stores `leaseHandle`, `expiresAtUnixMs`, `issuedAtUnixMs`, `rotationGeneration=1`.
-4. Opens the `d2b.credential.v3` service listener; updates Process status to Ready.
-5. Begins serving `AcquireLease`, `RenewLease`, `RevokeLease`, `InspectLease`
-   method calls from the authorized `consumerRef` only.
-
-On `EntraClientError::InteractionRequired`: agent sets Process status
-`ProviderUnavailable=True`, `leaseState=Unknown`; controller observes and
-requeuees at `observeInterval`.
-
-#### Provider generation change
-
-When the `Provider/credential-entra` generation changes:
-
-- `immediate` policy: controller signals the agent to call `revoke_lease` against
-  the old provider client before the generation transitions. If unreachable:
-  marks `leaseState=Revoked`; writes bounded audit record.
-- `drain-leases` policy: active leases expire naturally; status remains `Active`
-  until expiry.
-
-#### Retry and backpressure
-
-| Outcome | Requeue behavior |
-| --- | --- |
-| `InteractionRequired` → `credential-provider-unavailable` | Requeue at `observeInterval` |
-| `ServiceUnavailable` | Exponential backoff; max 10 retries; `phase=Degraded` on final retry |
-| `LeaseLimitExceeded` → `credential-queue-pressure` | Requeue at 2×`observeInterval` |
-| Rotation failure | Bounded retries; `credential-rotation-failed` outcome; `phase=Failed` on exhaustion |
-| Idempotent re-acquire (same key) | No new token issued; existing grant returned |
-| Agent Process creation failure | Requeue; controller logs `agent-launch-failed`; `ProviderUnavailable=True` |
-
-Reconcile concurrency is 8; max pending resources per controller is 256.
-
----
-
-## 13. Redaction
-
-### Redacted types
-
-All types that transitively contain token bytes, MSAL cache entries, session key
-material, or signature bytes implement `Debug` via a hand-written redacted impl.
-No derived `Debug` on these types. The impl emits:
-
-```rust
-impl fmt::Debug for EntraLeaseGrant {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("EntraLeaseGrant").finish_non_exhaustive()
-    }
-}
-```
-
-The same pattern applies to: `EntraLeaseRequest`, `EntraLeaseRenewal`,
-`DeliveryRecord`, `ZeroizingTokenBuffer`, and any future type that wraps token
-bytes.
-
-### `contains_sensitive_shape` guard
-
-The function (adapted from `d2b-realm-provider/src/error.rs:contains_sensitive_shape`)
-is applied to every outbound string field before it leaves the **agent** process:
-
-- Error message strings returned to callers.
-- Status field string values written to the resource store.
-- Audit record field values.
-- Metric label values.
-- Span attribute values.
-
-The guard rejects strings that match patterns for JWTs (`.` split, base64url
-header), bearer tokens, hex-encoded key material (32+ contiguous hex chars),
-UUIDs in bearer context, MSAL cache JSON shapes, `BEGIN …` PEM blocks, and
-high-entropy strings (Shannon entropy above threshold in long fields).
-
----
-
-## 14. Crate layout requirements
-
-The workspace policy gate (`ADR046-provider-002`) enforces that the following
-paths all exist in `packages/d2b-provider-credential-entra/`:
-
-```text
-packages/d2b-provider-credential-entra/
-  src/
-    lib.rs              # EntraCredentialClient trait, lease types, provider core
-    controller.rs       # reconcile/observe/finalize handlers; agent Process management
-    service.rs          # d2b.credential.v3 service dispatch (agent side)
-    controller_main.rs  # controller binary entry point; sealed config read; registered descriptor
-    agent_main.rs       # agent binary entry point; sealed config read; client construction
-    audit.rs            # audit record emission
-    telemetry.rs        # OTEL span/metric emission
-  tests/
-    lifecycle.rs    # acquire/refresh/revoke/inspect end-to-end with FakeEntraClient
-    conformance.rs  # all provider conformance arms pass
-    faults.rs       # interaction-required→unavailable; generation-mismatch; colocated-consumer rejection
-    canary.rs       # credential_canary and endpoint_canary absent from all responses and delivery records
-    delivery.rs     # delivery-session binding, zeroizing, replay-safe sequence
-    placement.rs    # host-system placement rejected; user-agent and guest-agent accepted
-  integration/
-    container-service.sh    # container-backed Provider service start/stop/drain
-    guest-placement.nix     # user-domain and system-domain agent Process on Guest (runNixOSTest)
-    cleanup-rollback.sh     # Nix-generation removal triggers async Delete and provider-revoke finalizer
-  README.md         # all §Provider README required sections (see §15 below)
-```
-
-The workspace policy rejects the crate if any of `src/`, `tests/`,
-`integration/`, or `README.md` is absent.
-
----
-
-## 15. Provider `README.md` required sections
-
-The `packages/d2b-provider-credential-entra/README.md` MUST contain these
-sections in order:
-
-1. **Provider identity** — `Provider/credential-entra`; implements `Credential`;
-   generation/versioning policy; Zone placement constraints.
-2. **Config schema** — `spec.config` fields (tenantId, authorityClass, maxLeases,
-   interactionPolicy), types, defaults, constraints, and worked Nix example.
-3. **ResourceTypes managed** — `Credential`: lifecycle phases, owned status
-   conditions, owned finalizers.
-4. **Controllers, services, workers, and binaries** — `entra-controller`
-   (Zone-wide, Zone-host system-domain, binary `d2b-provider-credential-entra-ctrl`,
-   secret-free, manages Credential lifecycle and agent Processes); `entra-agent`
-   (one per Credential, co-located at `scope.executionRef/domain/userRef`, binary
-   `d2b-provider-credential-entra-agent`, constructs `EntraCredentialClient`,
-   serves `d2b.credential.v3`).
-5. **Placement** — `user-agent` and `guest-agent` accepted; `host-system`
-   rejected with `credential-placement-mismatch`.
-6. **Dependencies and RBAC** — required Zone resources (`executionRef`,
-   `consumerRef` required, `userRef`); RBAC verbs consumed; `ExactConsumer`
-   constraint; cross-resource ordering.
-7. **Security, state, and telemetry** — secret isolation model (injected client;
-   no ambient chain; Noise KK delivery only); what is persisted (opaque handles
-   only; no token bytes); audit events; OTEL spans/metrics; canary enforcement.
-8. **Build, test, and integration commands**:
-   - `cargo test -p d2b-provider-credential-entra` (unit + Cargo integration)
-   - `cargo test -p d2b-provider-credential-entra --test canary` (canary only)
-   - `bash packages/d2b-provider-credential-entra/integration/container-service.sh`
-   - `nix build .#checks.x86_64-linux.guest-placement-credential-entra`
-   - `bash packages/d2b-provider-credential-entra/integration/cleanup-rollback.sh`
-9. **Standalone-repo usage** — flake input pattern; nixpkgs/toolkit
-   `inputs.follows` boilerplate; compatibility constraints.
-
----
-
-## 16. v3 current-code fit
-
-| Item | Value |
-| --- | --- |
-| Current anchor | `d2b-realm-provider/src/credential.rs:AzureControlPlaneRef`, `OpaqueAzureRef` (implemented-and-reachable); `provider.rs:CredentialProvider` minimal status-only trait (implemented-and-reachable) |
-| Evidence class | Opaque ref model is reachable; full Entra lease provider is `ADR-only` in v3 |
-| Main reuse source | main `a1cc0b2d`: `packages/d2b-provider-credential-entra/src/lib.rs` (full implementation: `EntraCredentialClient` trait, `EntraLeaseRequest/Ref/Grant/Inspection/Renewal/Revocation`, `EntraCredentialProvider`, `EntraCredentialProviderFactory`, `EntraCredentialOwner::ExactConsumer`, `EntraClientState`, `EntraClientError` mapping); `src/tests.rs` (full test suite: `FakeEntraClient`, `credential_canary`/`endpoint_canary` enforcement, interaction-required and colocated-consumer tests, generation-mismatch tests) |
-| Reuse action | copy and adapt |
-| Required delta | v3 contract versions; Provider resource/descriptor; d2b-bus routing; v3 `PlacementBinding` enum (user-agent, guest-agent; reject host-system); validate `tenantId` config using `OpaqueAzureRef::parse` (current v3 source field is `AzureControlPlaneRef.tenant_id`; target field name is `tenantId`; not a Ref); retain `EntraCredentialClient` trait unchanged; map `EntraClientError::InteractionRequired` to `credential-provider-unavailable`; enforce `EntraCredentialOwner::ExactConsumer`; replace v2 `AgentPlacementBinding` with v3 `PlacementBinding`; replace v2 ProviderFactory/EndpointRole/Realm with v3 Provider resource descriptor; D087 status-first state model: no Provider state Volume, empty ProviderStateSet, status/Operation-ledger lease observation, and transient-only token/signature bytes over Noise_KK |
-| Excluded main assumptions | v2 `AgentPlacementBinding`; v2 `EndpointRole`/`Realm`/`RealmPath`; v2 `ProviderFactory`/`ProviderRegistryBuilder`; v2 component-session auth and prologue; v2 `d2b-contracts/src/v2_provider.rs` types |
-| Behavior retained | `EntraCredentialClient` trait (unchanged); zero-secret-bytes invariant; `OpaqueAzureRef` charset/validation; `ExactConsumer` ownership model; `FakeEntraClient` test infrastructure; `credential_canary`/`endpoint_canary` test enforcement |
-| Replacement/deletion | Old `CredentialProvider` trait in `d2b-realm-provider/src/provider.rs` removed only after all three v3 Credential Provider controllers reach full reconcile parity and their integration tests pass |
-
----
-
-## 17. Implementation work item
+## 12. Work item
 
 ### ADR046-credential-004
 
 | Field | Value |
 | --- | --- |
-| Work item ID | `ADR046-credential-004` |
-| Dependency/owner | `ADR046-credential-001` (v3 contract types); `ADR046-credential-002` (d2b.credential.v3 service proto); `ADR046-reconcile-001` (controller toolkit); credential-entra owner |
-| Current source | `d2b-realm-provider/src/credential.rs:AzureControlPlaneRef`, `OpaqueAzureRef` (v3 baseline; implemented-and-reachable) |
-| Reuse source | main `a1cc0b2d`: `packages/d2b-provider-credential-entra/src/lib.rs` (full implementation); `src/tests.rs` (full test suite including `FakeEntraClient`, `credential_canary`/`endpoint_canary`, interaction-required, colocated-consumer, generation-mismatch tests) |
-| Reuse action | copy and adapt |
-| Destination | `packages/d2b-provider-credential-entra/src/{lib.rs, controller.rs, service.rs, controller_main.rs, agent_main.rs, audit.rs, telemetry.rs}`; `packages/d2b-provider-credential-entra/tests/{lifecycle.rs, conformance.rs, faults.rs, canary.rs, delivery.rs, placement.rs}`; `packages/d2b-provider-credential-entra/integration/{container-service.sh, guest-placement.nix, cleanup-rollback.sh}`; `packages/d2b-provider-credential-entra/README.md` |
-| Detailed design | (1) Copy `EntraCredentialClient` trait, `EntraLeaseRequest/Ref/Grant/Inspection/Renewal/Revocation`, `EntraCredentialProvider`, `EntraCredentialOwner::ExactConsumer`, `EntraClientState`, `EntraClientError` from main `a1cc0b2d` without modification to trait signatures. (2) Replace v2 `AgentPlacementBinding` with v3 `PlacementBinding` enum (`user-agent \| guest-agent`); reject `host-system` at construction with `credential-placement-mismatch`. (3) Validate `tenantId` config field at startup using `OpaqueAzureRef::parse` from v3 `d2b-realm-provider/src/credential.rs`; note that the current v3 source field is `AzureControlPlaneRef.tenant_id`; the target config field name is `tenantId`, which is an opaque inline identifier, not a `<ResourceType>/<name>` ResourceRef, and must not end in `Ref`. (4) Validate `authorityClass` config field is one of `{public, us-government, china}` or a registered effect-port alias; reject any string containing `://`, `.`, port separators, path components, query-string characters, or hostname-shaped bytes; effect-port aliases are validated as opaque identifiers matching `^[a-z][a-z0-9-]*$`. (5) Validate `controllerExecutionRef` is present and resolves a `Host/<name>` in the same Zone with `system` in `allowedDomains`; this field is **required** — there is no default Zone primary Host fallback; return a hard validation error if absent. (6) Retain `EntraCredentialClient` trait unchanged; adapt `EntraCredentialProvider` to v3 `d2b.credential.v3` service interface in `service.rs`. (7) Map `EntraClientError::InteractionRequired` to `credential-provider-unavailable` (not `credential-operation-denied`). (8) Enforce `EntraCredentialOwner::ExactConsumer`: `consumerRef` required in spec; reject any caller not matching `consumerRef` at d2b-bus before service dispatch. (9) Implement `entra-controller` in `controller.rs` and `controller_main.rs` per §12: receive ProviderSupervisor descriptor registration; watch Credential resources; on Create/Update create `entra-agent` Process via LaunchTicket with canonical Process template (template=entra-agent-main, correct providerRef per domainFilter, executionRef/domain/userRef from Credential scope, ownerRef=Credential/<name>, networkUsage.allowEgress=false, sealed config projection including tenantId, authorityClass, consumerRef, maxLeases, interactionPolicy, audience, idempotency_key, and effect-port FD index; no authorityUrl, no endpoint URL, no hostname); on agent Process failure set `ProviderUnavailable=True` and requeue; on Deletion: signal agent to revoke (per revocation policy), await agent confirmation, then call `UpdateFinalizers` to remove `credential.d2bus.org/provider-revoke`; core automatically writes event-only Deleted revision and removes the row/indexes when no finalizers remain; audit subsystem appends deletion record post-commit with dedup/exactly-once recovery. (10) Implement `entra-agent` in `service.rs` and `agent_main.rs` per §12 agent startup: read sealed config from ProviderSupervisor inherited FD including effect-port FD index and authorityClass; open effect-port FD; construct `EntraCredentialClient` implementation over it using authorityClass to select authority endpoint/TLS internally (no ambient HTTPS socket opened; no hostname validation performed by the agent); `OpaqueAzureRef::parse(tenantId)`; call `issue_lease`; open `d2b.credential.v3` listener; write Process status Ready; serve credential methods for `consumerRef` only; establish Noise KK delivery channel for token/signature output. (11) Implement `audit.rs` and `telemetry.rs` per §10; apply `contains_sensitive_shape` guard in agent before all outbound string fields. (12) Apply D087 status-first state: declare no Provider state Volume, keep ProviderStateSet empty, put bounded non-secret lease/enrollment observation in `Credential.status` and Operation ledger, and keep token/signature bytes transient over Noise_KK only. |
-| Integration | User-domain or system-domain Process under Guest (or user-domain under Host); `entra-controller` component registered with d2b-bus; Credential controller reconciles `Credential` resources with `providerRef=Provider/credential-entra`; `Provider/system-minijail` or `Provider/system-systemd` launches the process via ProviderSupervisor LaunchTicket |
-| Data migration | Full v3 reset; no migration from old `CredentialProvider` trait |
-| Validation | See §18 |
-| Removal proof | Old `d2b-realm-provider:CredentialProvider` trait removed only after `credential-entra`, `credential-secret-service`, and `credential-managed-identity` controllers all reach full reconcile parity and their integration tests pass |
+| Dependency/owner | `ADR046-credential-001` (Credential base fields and status), `ADR046-credential-002` (`d2b.credential.v3` service), D092 Endpoint, D093 Entrablau identity Guest decision, credential-entra owner |
+| Current source | `d2b-realm-provider/src/credential.rs:OpaqueAzureRef` remains a bounded opaque identifier reuse source only; no Host login/token implementation is retained |
+| Reuse action | Adapt tests/types where non-secret; replace production token acquisition with Entrablau Endpoint client |
+| Destination | `packages/d2b-provider-credential-entra/src/{lib.rs,controller.rs,service.rs,controller_main.rs,agent_main.rs,audit.rs,telemetry.rs}` and corresponding tests/integration docs |
+| Detailed design | Implement secret-free controller/helper; require Credential base `identityGuestRef` and `loginEndpointRef`; resolve dependency alias `entra-login-token`; validate same-Zone Guest placement and exact `consumerRef`; implement typed `EntraTokenLeaseClient` whose production implementation is the Entrablau Endpoint; implement `BeginLogin`/`ObserveLogin`/`CancelLogin` projection to Credential base interaction status; route access-token leases end-to-end from Entrablau service to exact consumer over Noise_KK; keep all refresh/login/TPM state inside the Entrablau Guest; declare no Provider state Volume; reject Host placement and all ambient fallback chains. |
+| Integration | Consumer composes `inputs.entrablau.nixosModules.default` into the identity Guest; sibling package declares login/token Process and Endpoint; d2b Credential resource binds `identityGuestRef`, `loginEndpointRef`, and `consumerRef` |
+| Data migration | Full v3 reset of d2b Credential metadata; Entrablau Guest state is preserved unless explicitly destroyed by the sibling-owned reset flow |
+| Validation | See §13 |
+| Removal proof | Old abstract Host credential paths and any direct Entra effect client are deleted only after the Entrablau Endpoint-backed provider passes the test matrix |
 
 ---
 
-## 18. Tests
+## 13. Tests
 
-### `src/` unit tests (`#[cfg(test)]` in `src/` files)
-
-| Test | Purpose |
-| --- | --- |
-| `test_controller_creates_agent_process` | Controller `reconcile` creates an `entra-agent` Process via `ProviderSupervisor::LaunchTicket` with correct `metadata.ownerRef`, placement, and sealed config fields (effect-port FD index included) |
-| `test_agent_deleted_on_credential_delete` | Controller `finalize` sends revocation signal to agent; controller calls `UpdateFinalizers` to clear `credential.d2bus.org/provider-revoke`; core performs event-only Deleted + row removal; audit appends post-commit |
-| `test_controller_process_template_schema` | Controller Process template fields match canonical schema: `type: Process`, `namespaceClasses=[mount,pid,ipc,uts,network]`, `capabilityClasses=[]`, `seccompClass=strict`, `startRoot=false`, `noNewPrivileges=true`, `environmentClass=minimal`, `readOnlyRoot=true`, `networkUsage.allowEgress=false`, `mounts=[]`, `readiness.class=provider-defined` |
-| `test_user_agent_process_template_schema` | User-agent Process template: `type: Process`, `providerRef=Provider/system-systemd`, `domain=user`, `networkUsage.allowEgress=false`, `mounts=[]`, owned credential-service `Endpoint` resource, `budget.memory.limit="128Mi"`, `readiness.class=provider-defined`; no `binary`, `allowedSyscalls`, `maxRssBytes`, inline endpoint `kind`/`service` fields |
-| `test_guest_agent_system_process_template_schema` | Guest-agent system-domain Process template: `type: Process`, `providerRef=Provider/system-minijail`, `domain=system`, `mounts=[]`; all other fields identical to user-agent template |
-| `test_entra_client_trait_surface` | Verify `EntraCredentialClient` trait is object-safe and all methods have correct async signatures |
-| `test_opaque_azure_ref_parse_tenant_id` | `OpaqueAzureRef::parse` accepts valid GUIDs; rejects secret-shaped values, `://`, `/`, `+`, `=`, whitespace, `{}` |
-| `test_authority_class_enum_validation` | Accepts `public`, `us-government`, `china`; accepts opaque effect-port alias matching `^[a-z][a-z0-9-]*$`; rejects any string containing `://`, `.`, port separators, path components, query-string characters, or hostname-shaped bytes; rejects unknown aliases |
-| `test_provider_state_set_empty` | ProviderStateSet query returns an empty grouping for `Provider/credential-entra`; Core ProviderDeployment creates no Provider state Volume for the controller or agents; Process templates have `mounts=[]`; no `Provider/volume-local` state reconciliation or layout principal is required |
-| `test_status_first_lease_observation` | Bounded non-secret acquisition phase, readiness, opaque non-authorizing lease/enrollment IDs, expiry timestamps, retry counters, and closed-enum error detail are written only to `Credential.status`/Operation ledger; status rejects oversize content and excludes token bytes, signatures, keys, PSKs, client secrets, authority-conferring handles, private runtime details, and raw cloud error bodies |
-| `test_exact_consumer_guard` | `EntraCredentialOwner::ExactConsumer` rejects callers not matching `consumerRef`; accepts the exact declared consumer |
-| `test_entra_client_state_transitions` | `Ready → InteractionRequired → Ready`; correct error mapping per §6 |
-| `test_interaction_required_maps_to_unavailable` | `EntraClientError::InteractionRequired` → `credential-provider-unavailable` (not `credential-operation-denied`) |
-| `test_host_system_placement_rejected` | Construction with `host-system` placement fails closed with `credential-placement-mismatch` |
-| `test_user_agent_placement_accepted` | Construction with `user-agent` placement succeeds |
-| `test_guest_agent_placement_accepted` | Construction with `guest-agent` placement succeeds |
-| `test_idempotency_key_derivation` | Same UID+rotationGeneration+operationClass always produces the same key; different inputs produce different keys; key contains no secret bytes |
-| `test_max_leases_cap_at_construction` | Config `maxLeases > MAX_LOCAL_LEASES` (256) fails Provider spec validation |
-| `test_contains_sensitive_shape_on_error_messages` | Error message strings pass `contains_sensitive_shape` guard |
-| `test_debug_redaction_entra_lease_grant` | `EntraLeaseGrant` Debug output contains only type name placeholder; no token bytes |
-| `test_debug_redaction_entra_lease_renewal` | Same for `EntraLeaseRenewal` |
-| `test_debug_redaction_entra_lease_request` | Same for `EntraLeaseRequest` |
-
-### `tests/` Cargo integration tests (`cargo test -p d2b-provider-credential-entra`)
-
-#### `tests/lifecycle.rs` — end-to-end acquire/refresh/revoke/inspect with `FakeEntraClient`
+### Unit and hermetic integration tests
 
 | Test | Purpose |
 | --- | --- |
-| `test_acquire_token_lifecycle` | Full acquire→inspect→revoke cycle with `FakeEntraClient`; verify outer DTO non-secret fields |
-| `test_refresh_token_lifecycle` | Acquire then refresh; verify `expiresAtUnixMs` updated; no token in outer DTO |
-| `test_revoke_token_lifecycle` | Acquire then revoke; verify `leaseState=Revoked`; idempotent second revoke |
-| `test_inspect_metadata_after_acquire` | Inspect returns correct `leaseState`, `expiresAtUnixMs`, `sourceVersion` without token bytes |
-| `test_sign_challenge_lifecycle` | Sign request with `FakeEntraClient`; verify signature bytes stay in delivery session only |
-| `test_acquire_idempotency` | Duplicate acquire with same `idempotency_key` returns same grant without double-issue |
-| `test_refresh_after_rotation` | Refresh with stale `rotationGeneration` ref returns `credential-not-found` |
-| `test_revoke_and_reacquire` | Post-revoke `AcquireToken` issues fresh grant with incremented `rotationGeneration` |
+| `test_fake_guest_login_success` | Fake Entrablau Guest reports `Required → Starting → AwaitingUser → Authenticated`; status carries only interaction fields and bounded challenge metadata. |
+| `test_fake_guest_login_required` | Token acquisition without an authenticated Entrablau session returns `interactionState: Required`, no token, and no denial. |
+| `test_fake_guest_login_cancel` | `CancelLogin` is generation-bound and idempotent; stale cancel cannot cancel a newer session. |
+| `test_fake_guest_login_timeout` | `loginDeadline` expiration returns `credential-login-timeout`; expedited reconcile does not wait past deadline. |
+| `test_fake_guest_login_restart_reobserve` | Controller/helper restart reconstructs status by observing Entrablau Endpoint; status is observation, not authority. |
+| `test_endpoint_unavailable` | Missing/not Ready `loginEndpointRef` yields `credential-endpoint-unavailable` and no fallback. |
+| `test_endpoint_generation_mismatch` | Stale Endpoint generation invalidates cached sessions and requires reacquire. |
+| `test_host_placement_rejected` | Any `Host/*` `identityGuestRef`, `scope.executionRef`, or Host-system placement fails closed. |
+| `test_same_zone_accepted_cross_zone_rejected` | Same-Zone identity/consumer Guest works; any cross-Zone ResourceRef is rejected at eval/admission. |
+| `test_exact_consumer_rbac` | Only the authenticated `consumerRef` process can receive token delivery; other callers fail before Endpoint dispatch. |
+| `test_token_refresh_redaction` | Access token, refresh token, cookies, device codes, login URLs, and MSAL cache canaries are absent from spec/status/audit/OTEL/logs/Debug. |
+| `test_e2e_record_only_delivery` | Raw access token appears only in the Entrablau→consumer Noise_KK record; bus/controller/helper see ciphertext only. |
+| `test_no_ambient_fallbacks` | Production code path never constructs SDK default chains, environment credential sources, DBus/browser/path fallbacks, Host login flows, or direct Entra egress. |
+| `test_nix_composition_identity_guest` | Consumer-composed `inputs.entrablau.nixosModules.default` in the identity Guest declares the expected Process and Endpoint schema without d2b core importing the sibling flake. |
+| `test_tpm_preserve_on_credential_reset` | Credential reset/delete preserves Entrablau TPM/login state by default. |
+| `test_tpm_destroy_requires_explicit_reset` | Destroying identity Guest TPM/login state requires explicit sibling-owned reset intent and emits a distinct audit record. |
+| `test_status_size_and_challenge_bounds` | `challengeMetadata` and provider details obey D087/D088 size bounds and reject secret-shaped strings. |
+| `test_d090_interaction_required_projection` | `waitForReconcile` after create/update returns projected `interactionState: Required` or `AwaitingUser` without waiting for human login. |
 
-#### `tests/conformance.rs` — all provider conformance arms pass
+### Nix/eval assertions
 
-| Test | Purpose |
-| --- | --- |
-| `test_conformance_all_arms` | All conformance arms in `check_provider_conformance` pass for `credential-entra` |
-| `test_conformance_secret_service_ops_not_declared` | `sign-challenge` is in the supported set for entra (unlike secret-service) |
-| `test_conformance_host_system_rejected` | Conformance arm for placement rejects `host-system` |
-| `test_conformance_consumer_ref_required` | Conformance arm for `consumerRef` requirement enforced |
-
-#### `tests/faults.rs` — fault injection and error mapping
-
-| Test | Purpose |
-| --- | --- |
-| `test_interaction_required_returns_unavailable` | `FakeEntraClient` returns `InteractionRequired`; service returns `credential-provider-unavailable`; no `credential-operation-denied` |
-| `test_generation_mismatch_rejected` | Lease ref with stale `rotationGeneration` is rejected; correct error code returned |
-| `test_colocated_consumer_rejection` | Caller with wrong `consumerRef` identity receives `credential-consumer-mismatch` before any client call |
-| `test_service_unavailable_maps_to_unavailable` | `EntraClientError::ServiceUnavailable` → `credential-provider-unavailable` |
-| `test_unauthorized_maps_to_denied` | `EntraClientError::Unauthorized` → `credential-operation-denied` |
-| `test_lease_limit_exceeded_maps_to_queue_pressure` | Exceeding `maxLeases` → `credential-queue-pressure` |
-| `test_sign_challenge_interaction_required` | `sign-challenge` during `InteractionRequired` state → `credential-provider-unavailable` |
-
-#### `tests/canary.rs` — `credential_canary` and `endpoint_canary` enforcement
-
-| Test | Purpose |
-| --- | --- |
-| `test_credential_canary_absent_from_acquire_response` | `"entra-token-canary"` value from `FakeEntraClient` never appears in `AcquireTokenResponse` outer DTO |
-| `test_credential_canary_absent_from_refresh_response` | Same for `RefreshTokenResponse` outer DTO |
-| `test_endpoint_canary_absent_from_status` | `"endpoint-canary"` (provider-internal URL) never appears in `Credential.status` or any service response |
-| `test_canary_absent_from_audit_records` | `"entra-token-canary"` and `"endpoint-canary"` absent from all emitted audit record fields |
-| `test_canary_absent_from_otel_spans` | Canary values absent from all span attributes and metric label values |
-| `test_canary_absent_from_log_lines` | Canary values absent from all log output during FakeEntraClient test runs |
-| `test_canary_absent_from_error_messages` | Error message strings returned to callers contain neither canary value |
-| `test_canary_absent_from_delivery_session_binding` | Delivery session binding fields (routeDigest, credentialRef, etc.) contain no canary values |
-
-#### `tests/delivery.rs` — Noise KK delivery session contract
-
-| Test | Purpose |
-| --- | --- |
-| `test_delivery_session_binding_fields` | All binding fields present and correct after handshake |
-| `test_delivery_session_kk_only` | NN/NX profile attempt is rejected; channel closed and zeroized |
-| `test_delivery_session_zeroizing_buffer` | Token plaintext buffer is zeroed after extraction; `Zeroizing<Vec<u8>>` drop verified |
-| `test_delivery_session_replay_safe_sequence` | Replay of prior session's ciphertext at same sequence number is rejected |
-| `test_delivery_session_max_token_bytes` | Record exceeding `maxTokenBytes` is rejected; channel closed immediately |
-| `test_delivery_session_no_retry_on_ambiguous_outcome` | Provider does not auto-retry delivery after ambiguous disconnect; consumer must re-initiate |
-| `test_delivery_session_immediate_close_after_ack` | Channel closed and key material zeroized after consumer ACKs delivery |
-| `test_delivery_sign_challenge_session_binding` | `sign-challenge` uses same KK channel contract; binding includes `operationClass=sign-challenge` |
-
-#### `tests/placement.rs` — placement binding enforcement
-
-| Test | Purpose |
-| --- | --- |
-| `test_host_system_placement_rejected_at_construction` | `host-system` construction fails closed; `PlacementBinding::HostSystem` arm returns `credential-placement-mismatch` |
-| `test_user_agent_on_host_accepted` | `user-agent` with `scope.executionRef=Host/<name>` accepted |
-| `test_user_agent_on_guest_accepted` | `user-agent` with `scope.executionRef=Guest/<name>` accepted |
-| `test_guest_agent_on_guest_accepted` | `guest-agent` with `scope.executionRef=Guest/<name>` accepted |
-| `test_guest_agent_on_host_rejected` | `guest-agent` with `scope.executionRef=Host/<name>` rejected; Entra guest-agent requires a Guest |
-
-### `integration/` fixtures
-
-#### `integration/container-service.sh`
-
-Container-backed Provider service start/stop/drain:
-
-- Starts `d2b-provider-credential-entra` binary in a container with a mock
-  Entra HTTP endpoint (no real network calls in CI).
-- Verifies Provider readiness signal.
-- Issues `AcquireToken` → verifies outer DTO non-secret fields.
-- Drains the provider (graceful shutdown); verifies in-flight requests complete
-  or return bounded error.
-- Verifies process exits cleanly with key material zeroized.
-
-#### `integration/guest-placement.nix`
-
-`runNixOSTest` VM fixture for user-domain and system-domain `entra-agent` Process on a Guest:
-
-- Declares a minimal Zone with `Provider/credential-entra` and a `Guest/work-vm`.
-- user-domain: `scope.domainFilter=user`, `scope.userRef=User/alice`; verifies
-  `entra-agent` Process is created and runs in user domain of `Guest/work-vm`
-  (i.e. `executionRef=Guest/work-vm, domain=user, userRef=User/alice`); verifies
-  `entra-controller` remains on Zone host (system-domain).
-- system-domain (guest-agent): `scope.domainFilter=system`,
-  `scope.executionRef=Guest/work-vm`; verifies `entra-agent` Process runs in
-  system domain of `Guest/work-vm`.
-- host-system rejection: verifies that declaring
-  `scope.executionRef=Host/host-system` with `domainFilter=system` fails the
-  Nix eval with the expected assertion message.
-- `FakeEntraClient` injected at test time; no real Entra endpoint required.
-
-#### `integration/cleanup-rollback.sh`
-
-Nix-generation removal triggers async Delete and `provider-revoke` finalizer:
-
-- NixOS generation N declares `Credential/work-entra` with `Provider/credential-entra`.
-- NixOS generation N+1 removes `Credential/work-entra`.
-- Verifies: (1) activation for generation N+1 completes (returns Ready status on
-  new resources) before `provider-revoke` finalizer finishes (non-blocking
-  activation invariant); (2) `Credential/work-entra` reaches `phase=Terminating`
-  with `credential.d2bus.org/provider-revoke` finalizer running; (3) `leaseState`
-  transitions to `Revoked` (under `revocation.onOwnerDelete=immediate`);
-  (4) controller calls `UpdateFinalizers` to clear `credential.d2bus.org/provider-revoke`
-  (last finalizer); core performs one atomic store transaction writing the
-  event-only `Deleted` revision and removing the row/indexes — no `Deleted` row
-  persists; after that transaction commits the audit subsystem appends
-  `ResourceMutation{event="deleted"}` using dedup/exactly-once recovery (audit
-  is not part of the store transaction);
-  (5) `FakeEntraClient` `revoke_lease` call was invoked exactly once (idempotency);
-  (6) no token bytes appear in any audit record or log during the cleanup run.
+- `identityGuestRef` and `loginEndpointRef` are required for every
+  `Provider/credential-entra` Credential.
+- `loginEndpointRef` must have purpose
+  `credential-entra.d2bus.org/entra-login-token` and producer inside
+  `identityGuestRef`.
+- `consumerRef` is required and must match the authorized consumer Provider.
+- Host placement and cross-Zone ResourceRefs are rejected.
+- No Provider state Volume is emitted for `credential-entra`; Entrablau private
+  state remains guest-local under the sibling package.
 
 ---
 
-## 19. Upgrade and migration
+## 14. Current-code fit
 
-### Provider generation upgrade
-
-When `spec.config.tenantId` or `spec.config.authorityClass` changes (e.g.
-tenant migration):
-
-1. Operator updates `Provider.spec.config.tenantId` (and/or `authorityClass`) in
-   Nix config. If migrating from a hypothetical future version that supported a
-   bare `authorityUrl` field, replace it with the appropriate `authorityClass`
-   value; `"public"` corresponds to the standard Microsoft Entra login endpoints
-   and is the correct default for most tenant migrations.
-2. Nix eval validates `tenantId` with `OpaqueAzureRef` charset assertion;
-   validates `authorityClass` is a known closed enum value or registered
-   effect-port alias; rejects any string containing `://`, `.`, port, path, or
-   hostname-shaped bytes.
-3. `activation-nixos` applies the new Provider resource; `entra-controller`
-   detects the generation change.
-4. Credential resources with `revocation.onProviderGeneration=immediate`: controller
-   revokes all active leases against the old provider state before generation
-   transitions.
-5. Credential resources with `revocation.onProviderGeneration=drain-leases`:
-   active leases expire by natural deadline; new `AcquireToken` calls use the
-   new tenant.
-6. No v2 credential state is imported; d2b 3.0 is a full reset.
-
-### Removal
-
-`d2b-realm-provider:CredentialProvider` trait and the associated v2
-`CredentialProvider` implementation are removed only after:
-
-1. `d2b-provider-credential-entra` controller reaches full reconcile parity with
-   the test matrix in §18.
-2. `d2b-provider-credential-secret-service` and
-   `d2b-provider-credential-managed-identity` controllers also reach full reconcile
-   parity (coordinated removal across all three).
-3. All callers of the old `CredentialProvider` trait in `d2b-realm-provider`
-   have migrated to the v3 `d2b.credential.v3` service interface.
-4. All integration tests pass with v3 controllers.
-
----
-
-## 20. Dependencies and permission claims
-
-| Dependency alias | Bound to | Required |
-| --- | --- | --- |
-| `runtime` | Guest or Host Provider providing the execution context | Required (via `scope.executionRef`) |
-| `credential` | None (this Provider provides credentials; it does not consume them) | Not applicable |
-| `transport` | Local Unix/socketpair transport for d2b-bus (provided by Zone runtime) | Required |
-| `volume` | Not claimed. `credential-entra` declares no Provider state Volume under D087; ProviderStateSet is optional/query-time and empty because the storage-need test is not met for non-secret operational observation and secret credential bytes are transient only. | Not required |
-| `network` | Both controller and `entra-agent` Process templates declare `networkUsage.allowEgress=false`. No ambient MSAL network claim exists. The agent's `EntraCredentialClient` calls are proxied through the injected effect-port FD provided by the co-located consumer/runtime Provider; that Provider owns the network interface. | Not claimed by this Provider |
-
-### Permission claims
-
-| Claim | Scope | Rationale |
-| --- | --- | --- |
-| `update-status` on `Credential` | Own `Credential` resources (providerRef match) | Controller writes reconciled status |
-| `update-finalizers` on `Credential` | Own `Credential` resources | Controller manages `provider-revoke` finalizer |
-| `use-credential` (inbound) | Granted to `consumerRef` Provider | Consumer invokes credential-bound service methods |
-| d2b-bus `open-stream` for KK delivery | Consumer Provider component | Delivery session establishment |
-
-The provider does not claim `create`, `delete`, or `update-spec` on any
-ResourceType. It does not hold host-global broker operations. It does not
-read sibling Provider state. It does not access the Zone host broker, device
-subsystem, or Wayland compositor.
+| Item | Value |
+| --- | --- |
+| Evidence class | Full Entrablau-backed login/token acquisition is ADR-only in this branch; sibling integration is external. |
+| Retained concepts | Bounded opaque identifiers, `ExactConsumer` authorization, redacted Debug/canary discipline, D055/D056 Noise_KK token delivery. |
+| Replaced concepts | No abstract Host-login path, no direct `EntraCredentialClient` production Entra egress, no effect-port proxy through consumer runtime, no Host/user-agent token custody, no ambient fallback chains, and no Provider state Volume for Entra credentials. |
+| Zero-secret invariant | Preserved and strengthened: controller/helper are secret-free; refresh/private login state lives only in the Entrablau identity Guest; access tokens go only to exact consumers over end-to-end KK records. |

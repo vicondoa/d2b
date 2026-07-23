@@ -971,6 +971,8 @@ ARM tokens acquired by the controller over enrolled KK.
 `credential-entra` placement is `guest-agent` or `user-agent`.
 Neither supports `host-system` placement for ARM credential delivery.
 
+**D093 `Provider/credential-entra` consumer note:** when `armCredentialRef` resolves to `Provider/credential-entra`, the Azure VM controller acquires the ARM access-token lease from the Entrablau identity Guest named by that Credential `identityGuestRef` and `loginEndpointRef`. The token is delivered from that Guest to the exact Azure VM controller consumer over end-to-end `Noise_KK` records; the controller never performs a Host login, never holds refresh tokens, and never uses `DefaultAzureCredential`, environment variables, DBus, filesystem token paths, or a browser fallback. The Host and bus see ciphertext only. `Provider/credential-managed-identity` behavior remains unchanged.
+
 | Method | Credential | Notes |
 | --- | --- | --- |
 | `AcquireToken(audience, leaseHandle)` | `armCredentialRef` | ARM token; enrolled KK; zeroized after ARM call via `AzureEffectPort` |
@@ -980,16 +982,17 @@ Neither supports `host-system` placement for ARM credential delivery.
 ## Credential E2E KK contract
 
 ```
-Credential Provider (gateway Guest)
-  (credential-managed-identity or credential-entra)
-        │  enrolled KK ComponentSession
-        │  prologue binds: Credential UID/gen, audience, opId, schema, deadline
+credential-managed-identity service (gateway Guest)
+  OR D093 Entrablau service (Credential.identityGuestRef)
+        │  enrolled Noise_KK ComponentSession
+        │  prologue binds: Credential UID/gen, identityGuestRef/loginEndpointRef
+        │  when present, audience, opId, schema, deadline, consumerRef
         ▼
-azure-vm-controller (gateway Guest)
+azure-vm-controller (gateway Guest; exact consumer)
         │  ARM token bytes: zeroizing buffer; passed to AzureEffectPort only
         ▼
 AzureEffectPort (real impl: azure_core/azure_mgmt_compute)
-        │  TLS to management.azure.com; Bearer <token> in Authorization header
+        │  TLS to management.azure.com; ****** in Authorization header
         ▼
 Azure Resource Manager
 ```
@@ -1002,8 +1005,12 @@ Azure Resource Manager
 3. Controller never stores a token in the state Volume.
 4. Credential acquisition is per-reconcile tick; no cross-tick token reuse.
 5. No ambient credential fallback: no `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`,
-   `MSI_ENDPOINT`, or SDK environment credential chain.
-6. All credential operations run inside the gateway Guest (ADR-0032).
+   `MSI_ENDPOINT`, SDK environment credential chain, `DefaultAzureCredential`,
+   Host login, DBus path, filesystem token path, or browser fallback.
+6. ARM-consuming controller operations run inside the gateway Guest (ADR-0032).
+   D093 Entra token issuance may originate in the same-Zone Entrablau identity
+   Guest, but the Host and bus see only end-to-end KK ciphertext and refresh
+   tokens never leave that identity Guest.
 
 ---
 

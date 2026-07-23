@@ -209,17 +209,20 @@ The required `Credential` resource (referenced by `config.controlCredentialRef`)
 - `Provider/credential-managed-identity` — for ACA sandbox lifecycle calls using an Azure-assigned managed identity
 - `Provider/credential-entra` — for Entra-authenticated service principal flows
 
-Both providers deliver raw token bytes exclusively via the end-to-end Noise KK ComponentSession channel described in §5.3. Both Credential resources must have `scope.executionRef` matching `config.gatewayExecutionRef`; resources scoped to `Host/*` or to a different Guest are rejected at admission.
+Credential resources must have `scope.executionRef` matching `config.gatewayExecutionRef`; resources scoped to `Host/*` or to a different consumer Guest are rejected at admission. Raw token delivery is end-to-end Noise KK: managed-identity credentials are co-located as described in §5.3, while D093 `Provider/credential-entra` credentials deliver from the Entrablau identity Guest as described below.
+
+**D093 `Provider/credential-entra` consumer note:** when `controlCredentialRef` or `pullCredentialRef` resolves to `Provider/credential-entra`, the ACA deployment service obtains its access-token lease from the Entrablau identity Guest named by that Credential `identityGuestRef` and `loginEndpointRef`. The raw token is delivered from that Guest to the exact ACA deployment-service consumer over end-to-end `Noise_KK` records; the ACA Provider never performs a Host login, never holds refresh tokens, and never uses `DefaultAzureCredential`, environment variables, DBus, filesystem token paths, or a browser fallback. Host and d2b-bus intermediaries see ciphertext only. Managed-identity Credential paths are unchanged by D093.
 
 ### 5.3 Raw-token delivery: end-to-end Noise KK
 
-When the authorized consumer Process (the ACA controller's credential-consuming component) needs the actual bearer token to pass to the ACA SDK adapter, the delivery happens entirely within the gateway Guest:
+When the authorized consumer Process (the ACA deployment service credential-consuming component) needs the actual bearer token to pass to the ACA SDK adapter, delivery is always end-to-end KK but source placement depends on the Credential provider:
 
-- **Both endpoints are co-located inside the gateway Guest**: the credential Provider Process and the ACA controller Process are both system-domain Processes with `executionRef: Guest/<aca-gateway-name>`. No token bytes cross the gateway Guest boundary at any point.
-- Initiator and responder are fully enrolled Provider/component identities with registered KK static public keys, both resolved within the gateway Guest's component namespace.
+- For `Provider/credential-managed-identity`, both endpoints are co-located inside the gateway Guest: the credential Provider Process and ACA deployment service are system-domain Processes with `executionRef: Guest/<aca-gateway-name>`. No token bytes cross the gateway Guest boundary.
+- For D093 `Provider/credential-entra`, the responder is the Entrablau login/token service inside `Credential.spec.identityGuestRef`; the initiator is the exact ACA deployment service consumer inside `config.gatewayExecutionRef`. The Host, bus, and any gateway/intermediate controller see only Noise ciphertext.
+- Initiator and responder are fully enrolled Provider/component identities with registered KK static public keys. For Entra, the prologue also binds `identityGuestRef`, `loginEndpointRef`, and the observed Endpoint generation.
 - Profile is `Noise_KK_25519_ChaChaPoly_SHA256`; NN and IKpsk2 are forbidden for this channel.
 - The Noise prologue binds: Credential ResourceRef/UID/generation, consumer Provider/component generations, audience token (non-secret opaque string), route, schema fingerprint, limits, expiry/deadline, and authorization revisions.
-- d2b-bus ZoneLink intermediaries (between the gateway Guest and the managed ACA sandbox) authorize route establishment but forward opaque Noise-encrypted records for the outer guest-to-sandbox session; the inner credential KK channel is a separate co-located session entirely within the gateway Guest and does not traverse any ZoneLink.
+- d2b-bus ZoneLink intermediaries (between the gateway Guest and the managed ACA sandbox) authorize route establishment but forward opaque Noise-encrypted records for the outer guest-to-sandbox session; credential token KK records are never terminated by the Host or bus.
 - Token payload has a strict small bound (`MAX_TOKEN_PAYLOAD_BYTES = 8192`), zeroizing buffers, redacted Debug, replay-safe sequence counter, no logging, no audit, no metrics, and immediate close with zeroize after delivery.
 - Ambiguous delivery is never treated as success and is not automatically replayed outside the credential method's explicit idempotency contract.
 

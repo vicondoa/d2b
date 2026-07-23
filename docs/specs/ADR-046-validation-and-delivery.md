@@ -632,6 +632,26 @@ Ported verbatim (per `ADR046-session-001/002`) from main's
   `ProcessSpec`-has-no-inline-`endpoints` lint; standard ResourceType count is 17
   (Endpoint present in the catalog); every retained public `*Id`/`Handle` has a
   documented rationale row.
+- Entra identity-Guest login tests (D093), all against a **fake Entrablau Guest
+  login service** (no live Entra in CI; a manual real-Guest login is a separate
+  non-CI check): fake Guest login success → `interactionState: Authenticated`
+  and a subsequent on-demand access-token lease delivered end-to-end (KK) only to
+  the exact `consumerRef` consumer (Host/bus see ciphertext); login-required →
+  `interactionState: Required`/`AwaitingUser`; cancel (`CancelLogin`) →
+  `login-cancelled`; timeout past `loginDeadline` → `login-deadline-exceeded`
+  with the durable Credential unchanged; controller/agent restart mid-login
+  resumes/re-derives without leaking secrets; login `Endpoint` unavailable or
+  generation mismatch → typed error, no token; Host placement of the
+  login/token service rejected (`host-placement-rejected`); token/refresh-state
+  redaction (no token, URL, cookie, authority-conferring device code, or user
+  PII in status/audit/OTEL); end-to-end record only (intermediate controllers
+  observe ciphertext); same-Zone `identityGuestRef`/`loginEndpointRef`/
+  `consumerRef` accepted and cross-Zone rejected; Nix composition validation
+  (identity Guest composes `inputs.entrablau.nixosModules.default`, login
+  Endpoint bound, Credential fields same-Zone-consistent, no store path/token);
+  identity-Guest TPM/login-state preserved on reset unless explicitly destroyed;
+  ACA and Azure VM consumers obtain their access token over KK from the identity
+  Guest; `credential-entra` controller does no direct Entra network egress.
 - Quota/EmergencyPolicy tests: hierarchical Host/Guest allocation against
   Zone capacity, overcommit blocking, digest/Provider/Host/Guest/Zone/global
   emergency disable and route/session/grant revocation, incident-held

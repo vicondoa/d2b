@@ -192,12 +192,43 @@ status:
 | `expiry.hardDeadlineMs` | u64 | No | Hard maximum total lifetime from issue; 0 = use Provider default; must not exceed `rotation.maxLeaseLifetimeMs` if both are non-zero |
 | `revocation.onOwnerDelete` | enum | Yes | `immediate` (revoke all active leases before finalizer completes) or `drain-leases` (allow active leases to expire naturally) |
 | `revocation.onProviderGeneration` | enum | Yes | `immediate` (revoke all active leases on Provider generation change) or `drain-leases` |
+| `identityGuestRef` | ResourceRef | Conditional | For interactive/identity-Guest-grounded providers (e.g. `credential-entra`, D093): required same-Zone `Guest/<name>` whose NixOS system composes the identity implementation (Entrablau) and hosts the login/token service; login/token acquisition is grounded in this Guest, never a Host login |
+| `loginEndpointRef` | ResourceRef | Conditional | For interactive providers: required `Endpoint/<name>` (D092) in the identity Guest implementing the standard typed login/token service; `scope.executionRef` and consumer placement must be same-Zone-consistent with it |
 
 Provider-specific config fields are permitted only in bounded
 `spec.provider.settings` validated against the signed Provider schema selected by
 `spec.providerRef`. No provider-specific field may accept secret bytes.
 
-### Status credential sub-object field reference
+### Interactive login base operations and status (D093)
+
+Interactive, identity-Guest-grounded credential providers share a
+ResourceType-common (base) interactive-login contract so generic CLI/controllers
+work identically across implementations. The Credential base exposes three
+operations:
+
+| Operation | Semantics |
+| --- | --- |
+| `BeginLogin` | Open an authenticated end-to-end session to the login service in `identityGuestRef` (via `loginEndpointRef`) and start an interactive login; returns a bounded projected status, never a token |
+| `ObserveLogin` | Stream/poll the bounded non-secret login-session state and progress metadata |
+| `CancelLogin` | Cancel an in-flight login session by generation |
+
+Base `status.resource` interaction fields (non-secret; on top of the universal
+base including `status.update`):
+
+| Field | Values |
+| --- | --- |
+| `interactionState` | `NotRequired`, `Required`, `Starting`, `AwaitingUser`, `Authenticated`, `Failed`, or `Unknown` |
+| `loginSessionGeneration` | Numeric; increments per `BeginLogin` |
+| `loginDeadline` | RFC 3339 UTC deadline for the in-flight interactive login |
+| `challengeMetadata` | Bounded, non-secret, closed-enum challenge/progress descriptors only |
+
+Status/audit/OTEL MUST NOT carry a device code that confers authority, a login
+URL, a cookie, a token, or any user PII. The interactive byte/UI stream is a
+named ComponentSession stream established **direct to the Guest login service**,
+never proxied as status. The provider extension (`status.provider`) carries only
+Entra-specific non-secret modes/reasons. Expedited reconcile (D090) may return
+`interactionState: Required`/`Starting` after create/update but never blocks on
+human login past `loginDeadline`.
 
 #### Three-layer status shape (D088)
 

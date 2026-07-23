@@ -1082,6 +1082,23 @@ permitted-opaque set (pidfd, fd index, per-session named stream/`OwnedTransport`
 handle, `operationId`, digests) stays internal and non-locator by the
 `ADR-046-resource-object-model` promotion test.
 
+**Entra identity Guest grounding (D093).** `credential-entra` login/token
+acquisition is grounded in an Entrablau-enabled identity `Guest`; the controller
+is secret-free and there is no Host login/token chain, `DefaultAzureCredential`,
+env, DBus, path, or browser fallback. The Entrablau Guest owns and stores the
+machine credential, TPM binding, enrollment, and refresh-token/private login
+state (guest-local, secret/large/private, outside resource status); refresh
+tokens and private login state never leave the Guest. A raw access token is
+delivered end-to-end (Noise_KK) only to the exact authenticated consumer process
+allowed by the Credential `consumerRef`/scope/RBAC; the Host, bus, and
+intermediate controllers see ciphertext only, so the Host never holds realm
+tokens/registries/audit (consistent with ADR 0032). d2b Credential status/audit/
+OTEL carry only bounded non-secret lease/login observations — never a token,
+login URL, cookie, authority-conferring device code, or user PII; the
+interactive UI stream is a named ComponentSession stream direct to the Guest.
+Entrablau owns all Entra network/TLS egress; the credential-entra
+controller/agent performs none. There is no cross-Zone ResourceRef.
+
 Two invariants close the specific attacks Volume state is most exposed to:
 
 - **TPM Volume never re-provisioned.** After the swtpm provisioning marker

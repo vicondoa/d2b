@@ -839,6 +839,60 @@ through the effect adapter at runtime). `ProcessSpec` carries no inline
 `endpoints`; a Process's stable endpoints are owned `Endpoint` resources with
 `producerRef`, and consumers reference `Endpoint/<name>`.
 
+**Entra identity Guest composition (D093).** `credential-entra` login/token
+acquisition is grounded in an Entrablau-enabled identity `Guest`, never a Host
+login. The consumer declares the identity Guest (with a `systemArtifactId` whose
+NixOS system composes `inputs.entrablau.nixosModules.default`), installs/binds
+the login-service `Endpoint`, and declares the `Credential` with
+`identityGuestRef`/`loginEndpointRef`/`consumerRef`:
+
+```nix
+# Identity Guest whose NixOS system composes the sibling Entrablau module.
+# d2b core never imports entrablau; the consumer flake does.
+d2b.zones.work.resources.entra-identity = {
+  type = "Guest";
+  spec = {
+    providerRef      = "Provider/runtime-cloud-hypervisor";
+    systemArtifactId = "entra-identity-system";   # its NixOS system imports inputs.entrablau.nixosModules.default
+    defaultDomain    = "system";
+    allowedDomains   = ["system"];
+  };
+};
+
+# The login/token service Endpoint the Entrablau service produces inside the Guest.
+d2b.zones.work.resources.entra-login = {
+  type = "Endpoint";
+  spec = {
+    providerRef  = "Provider/credential-entra";
+    producerRef  = "Guest/entra-identity";        # produced inside the identity Guest
+    endpointClass = "service";
+    transport    = "vsock";                        # closed class only; no CID/path
+    purpose      = "entra-login-token";
+    locality     = "guest-local";
+  };
+};
+
+d2b.zones.work.resources.work-entra = {
+  type = "Credential";
+  spec = {
+    providerRef      = "Provider/credential-entra";
+    identityGuestRef = "Guest/entra-identity";
+    loginEndpointRef = "Endpoint/entra-login";
+    audience         = "api://work-graph";         # non-secret audience only
+    consumerRef      = "Provider/runtime-azure-container-apps";
+    allowedOperations = ["acquire-token"];
+    rotation = { policy = "on-demand"; };
+  };
+};
+```
+
+Build/eval validation asserts: `identityGuestRef`, `loginEndpointRef`,
+`consumerRef`, and `scope.executionRef` are all the same Zone; the `Endpoint`
+`purpose`/schema and `providerRef` match the credential-entra login-service
+contract; the Endpoint is Guest-placed (Host placement is rejected); the
+Credential scope and consumer placement are consistent; and no store path or
+token appears in any emitted spec.
+
 ### Package closures into Guests
 
 Current source: `nixos-modules/closures-json.nix` — `pkgs.closureInfo` per VM,

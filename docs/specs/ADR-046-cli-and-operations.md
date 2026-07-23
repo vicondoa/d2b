@@ -1304,9 +1304,25 @@ d2b credential get <name>
 d2b credential list
 d2b credential status <name> [--watch] [--deadline <duration>]
 d2b credential delete <name>
+d2b credential login <name> [--attach] [--deadline <duration>]
+d2b credential cancel-login <name>
 ```
 
 All accept `[--zone <zone>] [--json | --human]`.
+
+`d2b credential login <name>` (D093) starts (`BeginLogin`) and, with `--attach`,
+attaches the typed interactive login stream for an identity-Guest-grounded
+credential (e.g. `credential-entra`). The interactive UI itself executes **inside
+the identity Guest** (Entrablau); the CLI attaches a named ComponentSession
+stream direct to that Guest login service and never handles tokens, URLs,
+cookies, device codes conferring authority, or user PII. `get`/`list`/`status`
+show the Credential base `interactionState`
+(`NotRequired|Required|Starting|AwaitingUser|Authenticated|Failed|Unknown`) and
+`status.update` currency; `cancel-login` cancels the in-flight session
+(`CancelLogin`). Errors are actionable (`identity-guest-unavailable`,
+`login-endpoint-unavailable`, `login-deadline-exceeded`, `login-cancelled`).
+`--deadline` bounds the interactive wait; the command never blocks past the
+login deadline.
 
 **Current v3 source:** No direct current CLI mapping.
 Evidence class: `ADR-only`.
