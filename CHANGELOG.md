@@ -81,6 +81,9 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added the W8 pure secrets transaction core with WorkloadId-scoped
+  generation/checksum/ownership-epoch CAS fencing, forward-only recovery,
+  bounded prune debt, closed audit outcomes, and replay-safe channel counters.
 - Split W8's remaining integration work at real file/contract boundaries so
   nine dependency-ready components can implement concurrently: secrets
   transactions, helper backend, shell client, gateway core, provider parity,
