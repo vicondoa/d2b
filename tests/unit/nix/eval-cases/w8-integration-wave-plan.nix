@@ -241,10 +241,12 @@ let
       ownedFiles = [
         "docs/explanation/systemd-user-shell-backend.md"
         "packages/d2b-unsafe-local-helper/src/controller_allowlist.rs"
+        "packages/d2b-unsafe-local-helper/src/services/mod.rs"
         "packages/d2b-unsafe-local-helper/src/shell_runtime.rs"
         "packages/d2b-unsafe-local-helper/src/shell_socket.rs"
         "packages/d2b-unsafe-local-helper/src/shell_supervisor.rs"
         "packages/d2b-unsafe-local-helper/src/systemd.rs"
+        "packages/d2b-unsafe-local-helper/tests/shell_supervisor.rs"
       ];
       reservedPaths = [
         "packages/d2b-unsafe-local-helper/src/shell_supervisor.rs"
@@ -509,10 +511,15 @@ let
         "packages/d2bd/src/provider_shutdown.rs"
         "packages/d2bd/src/restart_continuity.rs"
         "packages/d2bd/src/storage_lifecycle.rs"
+        "packages/d2bd/src/lib.rs"
       ];
       reservedPaths = [
+        "packages/d2bd/src/lib.rs"
         "packages/d2bd/src/restart_continuity.rs"
         "packages/d2bd/src/storage_lifecycle.rs"
+      ];
+      forbiddenEditExceptions = [
+        "packages/d2bd/src/lib.rs"
       ];
       deletes = [ ];
       scope = [
@@ -525,8 +532,8 @@ let
         surface in exactly the owned files. Preserve continuation-event
         semantics for daemon restarts, keep pidfd authority unpersisted, and
         keep telemetry label/redaction rules intact. Do not edit
-        packages/d2bd/src/lib.rs, packages/d2b-priv-broker/src/runtime.rs, or
-        any frozen/global-protected path.
+        packages/d2b-priv-broker/src/runtime.rs or any undeclared
+        frozen/global-protected path.
       '';
     };
 

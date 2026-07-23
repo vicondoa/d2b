@@ -75,6 +75,9 @@ deprecations ship one minor release before removal.
   service-package routing plus the Unix resolver export. The seam also owns
   the exact engine/driver/cancellation paths needed to enforce composition
   attachments and race-free cancellation.
+- Extended the helper-backend and restart-daemon ownership to the exact
+  compile/integration fixtures they must update, without granting unrelated
+  runtime or test paths.
 - Granted only the exact `adr0045-w8-integration` branch the protected delivery
   README and xtask manifest-test paths required to introduce W8's checked-in
   manifest authority; suffixed component branches remain denied.
