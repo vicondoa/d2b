@@ -135,6 +135,13 @@ status:
   disabledCondition: null
 ```
 
+> **Provider status ownership**: `Provider/system-core` is the fixed core
+> bootstrap provider. Its `Provider.status` fields (`phase`, `observedGeneration`,
+> `packageDigest`, `manifestDigest`, component phases, etc.) are derived and
+> written entirely by the core-controller infrastructure. The system-core
+> handlers do **not** write `Provider.status`. system-core handlers own only
+> `Host.status` and `User.status` update calls via ResourceClient.
+
 ---
 
 ## 3. Root configuration schema
@@ -484,7 +491,7 @@ dependencies: []
 watchSelectors:
   - resourceType: User
   - resourceType: Process       # Process userRef changes trigger User reconcile
-  - resourceType: Volume        # Volume ownerRef=User/<name> changes trigger User reconcile
+  - resourceType: Volume        # structural-check watch: ownerRef=User/<name> changes trigger User reconcile for deletion-blocking
 ownerChildTriggers: []
 finalizerIds: []
 reconcileConcurrency: 8
@@ -498,7 +505,7 @@ permissionClaims:
   - resourceType: Process
     verbs: [get, list]
   - resourceType: Volume
-    verbs: [get, list]
+    verbs: [get, list]          # structural-check reads only; user-controller does NOT own Volume and does NOT create/delete Volume resources
 ```
 
 ### 5.3 Services
@@ -638,6 +645,13 @@ telemetry. The `d2b-core-controller` binary is built by the separate
 `packages/d2b-core-controller` derivation.
 
 ### 8.2 Host resource authoring
+
+> **No implicit Zone-level primary Host**: there is no Zone-wide default or
+> primary Host concept. Process resources reference an exact Host by
+> `executionRef: Host/<resource-name>`. The `defaultDomain` and `defaultUserRef`
+> fields are per-Host spec fields that govern Processes targeting *that specific
+> Host* when they do not supply their own overrides. Nix declarations always name
+> exact Host resources.
 
 Standard isolated Host (system and user domains):
 
@@ -801,19 +815,119 @@ The following combinations are hard-rejected at spec admission:
 
 ---
 
-## 10. Provider payload state
+## 10. Provider state (ProviderStateSet)
 
-`Provider/system-core` owns no payload state Volumes. It has no persistent
-runtime state beyond the Host and User resources it reconciles. Those resources
-are the authoritative source of truth; they live in the Zone resource store.
+A **ProviderStateSet** is the logical/query-time grouping of all `Volume`
+resources in a Zone whose `metadata.ownerRef` resolves to
+`Provider/system-core`. It is **not a ResourceType** and no `ProviderStateSet`
+resource is created in the store. The normative contract is
+[`ADR-046-provider-state`](../ADR-046-provider-state.md).
 
-Controller handler checkpoint data (watch high-water revision, consecutive-NSS-
-failure counters) is stored in the core-controller's embedded reconcile-engine
-checkpoint table, not in a Volume. This is appropriate because:
+> **State ownership rule**: The core `ProviderDeployment` creates and deletes
+> declared component state Volume resources — before component Processes start
+> and after they stop. Semantic Provider controllers, including system-core's
+> `host-controller` and `user-controller`, do **not** own `Volume`, do **not**
+> add `Volume` to their exported ResourceTypes, and do **not** create their
+> prerequisite state Volumes. `Provider/volume-local` is the sole Volume
+> reconciler. Each component only consumes its required view: it receives a
+> `dirfd` via `OwnedAttachment` and never issues `create`, `update-status`, or
+> `delete` verbs on any Volume resource.
 
-- Host/User reconcile state is fully reconstructible by relisting after restart.
-- Handler checkpoints are not Provider payload (they carry no user data).
-- No Volume ownership or ACL management is needed for these checkpoints.
+### 10.1 Component Volumes
+
+Every semantic component — including components with an empty payload schema —
+receives a private framework/core-created `Volume` resource at Provider
+bootstrap. For `Provider/system-core` with its two controller components:
+
+| Component | Example Volume name | Payload stateSchema/namespace |
+| --- | --- | --- |
+| `host-controller` | `system-core--host-controller--state--<host>` | empty payload stateSchema (`{}` — no declared namespace keys) |
+| `user-controller` | `system-core--user-controller--state--<host>` | empty payload stateSchema (`{}` — no declared namespace keys) |
+
+Each Volume:
+
+- Uses the exact `Volume` ResourceType schema plus the `stateSchema` extension
+  block defined in `ADR-046-provider-state`, with `spec.kind: state`.
+- Carries `spec.persistenceClass: persistent` (never `ephemeral`),
+  `spec.sensitivityClass: private`, and a `stateSchema` block with the
+  `system-core/<component>/state` schema ID and an empty payload
+  stateSchema/namespace (no declared namespace keys).
+- Carries a **minimal nonzero byte and inode quota** (never `quotaBytes: 0`),
+  sized for the identity marker and directory structure only.
+- Has a **written identity marker** (provisioned by the bootstrap mechanism;
+  adopted and re-verified by volume-local on every open).
+- Declares layout principals as Nix-preprovisioned `User/<name>` entries or a
+  bounded principal pool; no `ComponentPrincipal` ResourceRef exists or is
+  referenced.
+- Has `metadata.ownerRef: Provider/system-core` and is created by the core
+  framework at bootstrap (`managedBy: controller`), not Nix-authored.
+
+### 10.2 No cross-component sharing; local view dirfd only
+
+No Volume is shared between `host-controller` and `user-controller`. Each
+component's handler receives only its own local view `dirfd` from the
+volume-local Provider via a d2b-bus file-descriptor attachment
+(`OwnedAttachment`). No component ever holds a host filesystem path string, raw
+fd, or dirfd pointing to another component's Volume.
+
+### 10.3 Payload invariants and durability
+
+Even with an **empty payload stateSchema/namespace** (no declared namespace
+keys), the component state Volumes are fully durable:
+
+- **`persistenceClass: persistent`** — Volumes survive component restart,
+  Provider restart, and daemon restart. They are never treated as ephemeral
+  or boot-scoped.
+- **Nonzero quota** — Each Volume carries a minimal nonzero byte and inode
+  quota sufficient for the identity marker and directory structure. `quotaBytes`
+  is never 0 for these Volumes.
+- **Identity marker** — Each Volume has a written marker that volume-local
+  verifies on every open. A missing or replaced marker produces `markerStatus:
+  missing` / `replaced` and blocks component readiness.
+- **Upgrade participation** — When `Provider/system-core` is upgraded (via a
+  generation switch), volume-local reconciles these Volumes as part of the
+  normal upgrade path (schema version check, marker re-verification). Because
+  the payload schema is empty, `migrationPolicy: none` applies: no migration
+  `EphemeralProcess` is launched and no migration worker exists. The upgrade
+  path is a marker re-verify and schema-version stamp only.
+- **Destroy/reset participation** — On Provider removal or Zone reset,
+  volume-local runs its normal finalizer path for these Volumes (layout removal,
+  marker cleanup, quota release) under the owning Provider's finalizer contract.
+
+No payload state keys are written or read through the Volume views. Handler
+checkpoints (watch high-water revision, consecutive-failure counters) live in
+the core-controller's embedded reconcile-engine checkpoint table — not in these
+Volumes — and are fully reconstructible from a relist after restart. No pidfds
+or open FDs are held by the system-core handlers across reconcile calls
+(system-core is not a Process Provider). The Host and User resources in the
+Zone resource store are the sole durable state for Host and User concerns.
+
+### 10.4 Bootstrap-state exception
+
+`Provider/system-core` is a bootstrap exception: its component state Volumes
+must exist before `Provider/volume-local` is ready, because volume-local is
+itself a non-bootstrap Provider that starts as a Process resource after the
+first Host is created.
+
+A **closed bootstrap storage mechanism** built into the Zone runtime handles
+this:
+
+1. At Zone first-activation, the bootstrap mechanism pre-provisions the
+   system-core component Volumes (one per component, per target Host) on the
+   host filesystem and writes their identity markers and stateSchema records.
+2. It validates each Volume (marker check, schema version, layout ownership)
+   before writing the Volume resource into the store.
+3. The Volumes enter the store as real Volume resources with
+   `managedBy: controller` and `ownerRef: Provider/system-core`.
+4. When `Provider/volume-local` starts, it finds these pre-provisioned Volumes
+   in its reconcile queue, adopts them (verifies marker identity and layout),
+   and transitions them to Ready through its normal reconcile path.
+
+No separate bootstrap Provider process and no extra bootstrapping Provider are
+introduced. The bootstrap mechanism is a closed internal path in the Zone
+runtime; it does not expose any new public resource type, d2b-bus service, or
+broker operation. After adoption, volume-local owns the full lifecycle of these
+Volumes identically to any other Volume it reconciles.
 
 ---
 
@@ -886,6 +1000,14 @@ When the Zone is drained for shutdown or reset:
 ## 12. Status, errors, audit, and OTEL
 
 ### 12.1 Handler health and status
+
+> **Status ownership boundary**: `Provider/system-core` is a fixed core
+> bootstrap provider. The `Provider.status` fields on the `Provider/system-core`
+> resource (phase, observedGeneration, packageDigest, component phases, etc.)
+> are derived and written by the core-controller infrastructure. The system-core
+> handlers write only `Host.status` and `User.status` via ResourceClient
+> `update_status` calls. No system-core code path calls `update_status` on the
+> `Provider/system-core` resource itself.
 
 Each system-core handler reports to the core-controller aggregate:
 
@@ -1130,7 +1252,7 @@ are considered complete:
 | Current source | `d2b-realm-core/src/{node,workload}.rs`; `d2b-core/src/host.rs`; `nixos-modules/options-realms*.nix` |
 | Reuse action | extract and adapt |
 | Destination | `packages/d2b-contracts/src/v3/resources/{host,user}.rs` |
-| Detailed design | Host/User full spec/status/condition/phase schemas; all field bounds; BudgetSpec; ExecutionPolicy; HostCapabilityClass enum; SandboxSpec exclusions; ResourceRef rules |
+| Detailed design | Host/User full spec/status/condition/phase schemas; all field bounds; BudgetSpec; ExecutionPolicy; HostCapabilityClass enum; SandboxSpec exclusions; ResourceRef rules; ProviderStateSet model for system-core: two private framework-created Volumes (one per component) with empty payload stateSchema/namespace per component, Volume schema + provider-state extension, Nix-preprovisioned `User/<name>` layout principals; bootstrap-state exception (closed bootstrap mechanism pre-provisions/validates Volumes before volume-local is ready; volume-local adopts on startup) |
 | Integration | Resource API admission, core-controller handlers, Nix emitter, ResourceTypeSchema emitter |
 | Data migration | Full reset |
 | Validation | JSON Schema round-trip; spec admission tests for all invariants including isolationPosture bidirectional constraints; golden resource vectors |
@@ -1186,10 +1308,10 @@ are considered complete:
 | Current source | None; new crate |
 | Reuse action | copy/adapt toolkit conformance kit from main `a1cc0b2d` |
 | Destination | `packages/d2b-provider-system-core/{src,tests,integration,README.md}` |
-| Detailed design | Workspace policy gate (`make test-policy`) verifies all four paths exist and are non-empty; `tests/` runs `check_provider_conformance` against Host/User axes; `integration/` contains container scenario for Host reconcile under real Zone runtime |
+| Detailed design | Workspace policy gate (`make test-policy`) verifies all four paths exist and are non-empty; `tests/` runs `check_provider_conformance` against Host/User axes and verifies the ProviderStateSet model: two private framework-created Volumes (one per component), empty payload stateSchema/namespace per component, no payload writes, local view dirfd only, no cross-component Volume access; bootstrap-state exception: Volume adoption by volume-local verified after startup; `integration/` contains container scenario for Host reconcile under real Zone runtime |
 | Integration | `make test-policy`; `make test-integration`; `make test-host-integration` |
 | Data migration | N/A |
-| Validation | Workspace policy test catches missing/empty paths; conformance kit asserts zero `ConformanceError` for all declared provider-type axes |
+| Validation | Workspace policy test catches missing/empty paths; conformance kit asserts zero `ConformanceError`; two component Volumes asserted created with `ownerRef: Provider/system-core`; empty payload stateSchema/namespace per component; no payload writes to Volume views; volume-local adoption asserted in integration scenario; no cross-component Volume access |
 | Removal proof | No removal; gate added permanently |
 
 ### SC-006: OTEL and audit compliance
@@ -1236,6 +1358,8 @@ are considered complete:
 | `host_isolation_posture_available_for_lookup` | `Host.status.isolationPosture` field is present and accurate after reconcile for Process Provider consumption |
 | `host_no_process_effect_emitted` | system-core reconcile emits no `ProcessEffect` audit records for any Host reconcile scenario |
 | `otel_no_isolation_not_a_label` | Metric/span labels for user-only Host reconcile contain no `no_isolation` dimension |
+| `provider_state_set_component_volumes` | Framework creates one private Volume per component (`host-controller`, `user-controller`) with `ownerRef: Provider/system-core`; empty payload stateSchema/namespace per component; no payload writes to Volume view; each component receives only its local view dirfd; no cross-component Volume access; bootstrap-state pre-provisioning produces valid Volume resource adoptable by volume-local |
+| `provider_status_not_written_by_handlers` | system-core handler code paths contain no `update_status(Provider/system-core, ...)` calls; Provider.status updates are absent from the handler call graph |
 | `provider_conformance_host` | `d2b-provider-toolkit::conformance::check_provider_conformance(Host)` returns zero errors |
 | `provider_conformance_user` | `d2b-provider-toolkit::conformance::check_provider_conformance(User)` returns zero errors |
 | `config_schema_empty_only` | Non-empty Provider config rejected with exact error |
