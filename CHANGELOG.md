@@ -10,6 +10,13 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+### Added
+
+- Proposed ADR 0046 and its normative specification set for the d2b 3.0
+  Provider control plane: Zone-local ResourceSpecs, independently packaged
+  multi-process Providers, a lightweight redb resource store, asynchronous
+  owner-driven reconciliation, and Noise-protected d2b-bus control channels.
+
 ## [1.4.1] - 2026-07-12
 
 ### Added
