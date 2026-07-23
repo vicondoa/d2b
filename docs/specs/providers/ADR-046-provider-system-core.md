@@ -1257,7 +1257,7 @@ are considered complete:
 | `user_reconcile_real_nss` | Real NSS getpwnam lookup for a declared test user; User reaches Ready |
 | `unsafe_local_host_warning_cli` | `d2b zone inspect` renders the no-isolation warning for a user-only Host; warning absent for system-domain Host |
 | `user_only_host_isolation_posture_stable` | Under a real Zone runtime, a user-only Host consistently reports `isolationPosture="none"` in status after restart and reconcile cycles |
-| `provider_system_core_absent_crashes_zone` | If `Provider/system-core` resource is absent from Zone config, Zone reports Failed with mandatory-provider condition |
+| `provider_system_core_bootstrap_failure_blocks_readiness` | If core cannot create or verify the runtime-owned `Provider/system-core` bootstrap resource, Zone reports Failed with a mandatory-provider condition; no Nix bundle declaration is expected |
 | `generation_cleanup_host_deleted` | Removing Host from Nix config triggers async Delete; ResourceDeletionRequested audit event present; store transaction removes row/index and writes Deleted revision; ResourceDeleted audit event appended with exactly-once recovery |
 
 ---
