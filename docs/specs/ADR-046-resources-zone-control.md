@@ -2319,7 +2319,7 @@ This section is normative for the d2b 3.0 Nix configuration surface, including Q
 **Unified authoring syntax**: All Zone control ResourceTypes use a single
 uniform structure. `metadata.name` is derived from the resource attrset key,
 `metadata.zone` from the Zone attrset key, and `apiVersion` defaults to
-`"d2b.dev/v3"`. `status` is omitted — it is read-only; the Zone runtime fills
+`"resources.d2bus.org/v3"`. `status` is omitted — it is read-only; the Zone runtime fills
 all status fields. Core fills `uid`, `generation`, `revision`, `createdAt`,
 `updatedAt`, `ownerRef` (where applicable), `finalizers`, and
 `deletionRequestedAt`:
@@ -2624,13 +2624,13 @@ structure (normative).
 **Nix-to-envelope mapping**: `type` in the Nix record maps to `resourceType`
 in the envelope; `spec` maps to `spec`. `metadata.name` derives from the attrset
 key; `metadata.zone` derives from the Zone attrset key; `apiVersion` defaults to
-`"d2b.dev/v3"`. `metadata.generation` is initialized to 1 for new resources and
+`"resources.d2bus.org/v3"`. `metadata.generation` is initialized to 1 for new resources and
 incremented by the compiler whenever `spec` changes. All other metadata fields
 and `status` are filled by the Zone runtime (null in the bundle).
 
 ```
 {
-  "apiVersion": "d2b.dev/v3",            // fixed; not per-type versioned
+  "apiVersion": "resources.d2bus.org/v3",            // fixed; not per-type versioned
   "resourceType": "<ResourceType>",       // PascalCase registered type name
   "metadata": {
     "name":                <string>,      // ResourceName; ^[a-z][a-z0-9-]*$; ≤128 chars
@@ -2673,7 +2673,7 @@ Invariants:
 
 ```json
 {
-  "apiVersion": "d2b.dev/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "resourceType": "Zone",
   "metadata": {
     "name": "dev", "zone": "dev", "uid": null, "generation": 1,
@@ -2693,7 +2693,7 @@ Zone is the self-resource; it is created by the Zone runtime on initialization
 
 ```json
 {
-  "apiVersion": "d2b.dev/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "resourceType": "ZoneLink",
   "metadata": {
     "name": "guest-link", "zone": "parent", "uid": null, "generation": 1,
@@ -2725,7 +2725,7 @@ first successful connection and uses it to detect UID changes.
 
 ```json
 {
-  "apiVersion": "d2b.dev/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "resourceType": "Provider",
   "metadata": {
     "name": "runtime-cloud-hypervisor", "zone": "dev", "uid": null, "generation": 1,
@@ -2776,7 +2776,7 @@ audit records, or OTEL attributes.
 
 ```json
 {
-  "apiVersion": "d2b.dev/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "resourceType": "Role",
   "metadata": {
     "name": "process-controller", "zone": "dev", "uid": null, "generation": 1,
@@ -2810,7 +2810,7 @@ ascending by the resource compiler (RFC 8785 array-of-string sort).
 
 ```json
 {
-  "apiVersion": "d2b.dev/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "resourceType": "RoleBinding",
   "metadata": {
     "name": "process-controller-binding", "zone": "dev", "uid": null, "generation": 1,

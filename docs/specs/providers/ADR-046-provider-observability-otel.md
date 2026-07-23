@@ -1264,7 +1264,7 @@ the transport Provider's private config.
 
 ```json
 {
-  "apiVersion": "d2b.dev/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "metadata": {
     "configurationGeneration": 1,
     "finalizers": ["observability-otel/lifecycle"],

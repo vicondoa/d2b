@@ -673,7 +673,7 @@ d2b.zones.<zone>.resources.<name> = {
 ```
 
 `metadata.name` is derived from the `<name>` attribute key; `metadata.zone`
-from the `<zone>` attribute key; `apiVersion` defaults to `"d2b.dev/v3"`. Nix
+from the `<zone>` attribute key; `apiVersion` defaults to `"resources.d2bus.org/v3"`. Nix
 authors may also provide `metadata.ownerRef` and presentation-only
 `metadata.labels`. They do **not** author `status`, `uid`, `revision`,
 `finalizers`, `metadata.managedBy`, or `metadata.configurationGeneration` —
@@ -757,7 +757,7 @@ owned by this spec):
 
 ```json
 {
-  "apiVersion": "d2b.dev/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "metadata": {
     "name": "work",
     "zone": "work"
@@ -780,7 +780,7 @@ shown; `status` is a separate read-only sub-document):
 
 ```json
 {
-  "apiVersion": "d2b.dev/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "metadata": {
     "configurationGeneration": 1,
     "finalizers": [],
@@ -811,7 +811,7 @@ appear in the bundle:
 
 ```json
 {
-  "apiVersion": "d2b.dev/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "metadata": {
     "name": "observability-otel",
     "zone": "work"
@@ -830,7 +830,7 @@ Nix store:
 
 ```json
 {
-  "apiVersion": "d2b.dev/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "metadata": {
     "name": "signoz-api-key",
     "zone": "work"
