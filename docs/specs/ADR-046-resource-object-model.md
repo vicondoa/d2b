@@ -94,6 +94,77 @@ Spec is the desired state. Rules:
   merge;
 - a successful spec replacement increments generation and revision.
 
+### Three-layer spec shape (D089)
+
+`spec` mirrors the D088 three-layer status shape with symmetric frozen names.
+Generic API/CLI/controllers author and reconcile only Layers 1 and 2; the
+Layer-3 Provider extension builds on — never shadows, overrides, renames, or
+duplicates — the fields below it.
+
+| Layer | Location | Owner | Consumers |
+| --- | --- | --- | --- |
+| 1. Universal Resource envelope/metadata | `apiVersion`, `type`, `metadata`, `spec` presence rules | every resource | all generic tooling |
+| 2. ResourceType base spec | top-level `spec.*` (incl. `spec.providerRef`) | the ResourceType schema (provider-neutral) | all implementations + generic tooling |
+| 3. Provider-specific extension | optional `spec.provider` | the selected Provider (signed schema) | that Provider's implementation only |
+
+```yaml
+spec:
+  # Layer 2 — ResourceType base spec (provider-neutral; includes providerRef)
+  providerRef: Provider/<name>
+  # ...exact typed base fields frozen by the ResourceType schema...
+  # Layer 3 — optional canonical selected-Provider extension envelope
+  provider:
+    schemaId: <provider-name>.d2b.io/<ResourceType>/spec
+    schemaVersion: "1.0"
+    settings:
+      # strict, bounded, versioned, deny-unknown implementation-only desired settings
+      ...
+```
+
+`spec.provider = { schemaId, schemaVersion, settings }` is the one canonical
+provider-extension envelope. It replaces the former Host/Guest/Credential
+`providerSettings`, Device `settings`, and every ad hoc per-ResourceType
+extension. It is symmetric to `status.provider`: `spec.provider.settings` (the
+desired implementation settings) mirrors `status.provider.details` (the observed
+implementation state), and `spec.provider` omits `providerRef` and
+`observedProviderGeneration` because `spec.providerRef` is a base field and spec
+is desired, not observed. The selected `spec.provider` schema and the
+`status.provider` schema align for the same Provider.
+
+**Mapping convention.** Within any spec a reference to `spec.providerSettings`
+(or, for Device, the former top-level `spec.settings`) denotes the canonical
+`spec.provider.settings`; `spec.providerRef` and every other `spec.*` field is
+ResourceType base.
+
+**Base-schema conformance.** Every Provider `ResourceApiBinding` declares and
+MUST implement the exact ResourceType base spec schema version/fingerprint and
+pass the base lifecycle/status/error/finalizer/conformance suite. It MUST accept
+the canonical minimal valid base Spec. It MAY reject an optional base capability
+only via its signed standard capability matrix and a typed, provider-neutral
+`unsupported-capability` result; it MUST NOT ignore, reinterpret, rename,
+duplicate, or weaken the bounds of any base field, and MUST NOT require
+extension data for base-required behavior.
+
+**Provider extension.** `spec.provider` is optional unless the selected
+Provider's signed schema marks it required. Its `settings` object is strict
+deny-unknown, size/cardinality bounded, versioned/digested, and validated
+against `spec.providerRef` at Nix build and at API admission. It carries only
+implementation-only desired settings and MUST NOT shadow, restate, or override a
+universal or ResourceType-base field. Any field or semantic shared across two or
+more implementations is promoted to the ResourceType base and never carried in
+`spec.provider`.
+
+**Generic tooling.** Generic CLI and controllers operate on the base spec (and
+base status); they never author or require `spec.provider`. Qualified
+Provider-defined ResourceTypes carry the universal envelope, their own type-base
+spec, and an optional implementation extension under the same `spec.provider`
+envelope.
+
+**Provider self-description exception.** The `Provider` resource's spec remains
+`{ artifactId, config }` (D075) — the one documented exception to the
+`providerRef`-plus-`spec.provider` shape, because a `Provider` cannot carry a
+non-circular `spec.providerRef` to itself.
+
 ## Status
 
 Status is observed state and is a separately authorized subresource. It is the
@@ -403,10 +474,10 @@ The following are not standalone ResourceTypes:
 | Current source | `packages/d2b-realm-core/src/ids.rs`, `workload.rs`, `error.rs`; `packages/d2b-core/src/storage.rs`, `processes.rs` |
 | Reuse action | extract and adapt |
 | Destination | `packages/d2b-contracts/src/v3/resource.rs`, `resource_status.rs`, `resource_schema.rs` |
-| Detailed design | Implement strict ResourceEnvelope, metadata, spec/status values, the three-layer status shape (universal base + `status.resource` + optional `status.provider` with `providerRef`/`schemaId`/`schemaVersion`/`observedProviderGeneration`/`details`), phase/condition/outcome, canonical JSON, per-layer bounds/redaction, ownerRef/UID fields |
+| Detailed design | Implement strict ResourceEnvelope, metadata, the three-layer spec shape (universal envelope + ResourceType base `spec.*` incl. `spec.providerRef` + optional canonical `spec.provider` `{ schemaId, schemaVersion, settings }`), the three-layer status shape (universal base + `status.resource` + optional `status.provider` with `providerRef`/`schemaId`/`schemaVersion`/`observedProviderGeneration`/`details`), phase/condition/outcome, canonical JSON, per-layer bounds/redaction, ownerRef/UID fields |
 | Integration | Store/API/SDK/Nix/codegen consume one contract |
 | Data migration | Full d2b 3.0 reset; no v2 resource import |
-| Validation | Golden JSON/protobuf vectors; serde unknown-field; three-layer status shape round-trip; base-only projection (universal + `status.resource`) ignores/omits `status.provider`; `status.provider` unknown-field/version-mismatch rejection; status redaction/size/time/phase tests |
+| Validation | Golden JSON/protobuf vectors; serde unknown-field; three-layer spec shape round-trip; canonical minimal base-spec acceptance; base-schema version/fingerprint conformance; `spec.provider` deny-unknown/version-mismatch/shadow rejection and providerRef-binding; three-layer status shape round-trip; base-only projection (universal + `status.resource`) ignores/omits `status.provider`; `status.provider` unknown-field/version-mismatch rejection; status redaction/size/time/phase tests |
 | Removal proof | Old DTOs removed per owning ResourceType wave only after rendered/runtime consumers move |
 
 ### ADR046-object-002

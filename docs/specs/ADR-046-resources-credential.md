@@ -64,6 +64,41 @@ or stores that channel's content.
 
 ### Spec
 
+#### Three-layer spec shape (D089)
+
+D089 freezes Credential spec as three layers. Layer 1 is the universal Resource
+envelope and metadata. Layer 2 is the Credential base spec at top-level
+`spec.*`, including `spec.providerRef`; the lease, scope, audience, rotation,
+expiry, revocation, consumer, and allowed-operation fields documented here are
+base fields. Layer 3 is the optional canonical selected-Provider extension
+`spec.provider = { schemaId, schemaVersion, settings }`; it is the only
+Provider-specific desired extension and replaces the former `providerSettings`
+shape. It omits `providerRef` and
+`observedProviderGeneration`: `spec.providerRef` is base, and spec is desired
+rather than observed.
+
+Mapping convention: within this spec a reference to `spec.providerSettings` (or the former Device `spec.settings`) denotes the canonical `spec.provider.settings`; `spec.providerRef` and every other `spec.*` field is ResourceType base.
+
+Every Credential Provider `ResourceApiBinding` MUST implement the exact
+Credential base spec schema version and fingerprint, accept the canonical
+minimal valid base Spec, and pass base lifecycle/status/error/finalizer
+conformance. A Provider MAY reject an optional base capability only through its
+signed standard capability matrix and a typed provider-neutral
+`unsupported-capability` error; it MUST NOT ignore, reinterpret, rename,
+duplicate, weaken, or require extension data for base-required behavior.
+`spec.provider.settings` is strict deny-unknown, bounded, schema-versioned and
+digested, validated against `spec.providerRef` at Nix build and API admission,
+and fails with `spec-provider-schema-invalid` or `spec-provider-shadow` when
+invalid or shadowing/restating/overriding/renaming/duplicating a base field.
+Shared Credential semantics are promoted to the Credential base spec and never
+live in `spec.provider`; generic CLI/controllers operate on base spec plus base
+status. For the same Provider, the `spec.provider` and `status.provider` schemas
+align.
+
+Provider resource dossiers below retain the D075 Provider self-description shape
+(`spec.artifactId`, `spec.config`) because a Provider has no non-circular
+`spec.providerRef`.
+
 ```yaml
 apiVersion: resources.d2b.io/v3
 type: Credential
@@ -99,6 +134,10 @@ spec:
   revocation:
     onOwnerDelete: immediate          # immediate | drain-leases
     onProviderGeneration: immediate   # immediate | drain-leases
+  provider:
+    schemaId: credential-entra.d2b.io/spec
+    schemaVersion: "1.0"
+    settings: {}                      # non-secret Provider-specific desired settings
 status:
   observedGeneration: 1
   phase: Ready
@@ -148,9 +187,9 @@ status:
 | `revocation.onOwnerDelete` | enum | Yes | `immediate` (revoke all active leases before finalizer completes) or `drain-leases` (allow active leases to expire naturally) |
 | `revocation.onProviderGeneration` | enum | Yes | `immediate` (revoke all active leases on Provider generation change) or `drain-leases` |
 
-Provider-specific config fields are permitted in a bounded `providerSettings`
-object validated against the signed Provider schema. No provider-specific field
-may accept secret bytes.
+Provider-specific config fields are permitted only in bounded
+`spec.provider.settings` validated against the signed Provider schema selected by
+`spec.providerRef`. No provider-specific field may accept secret bytes.
 
 ### Status credential sub-object field reference
 

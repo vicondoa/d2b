@@ -102,7 +102,7 @@ packages/d2b-provider-runtime-azure-virtual-machine/
     audit.rs                 # authoritative audit record emission
     error.rs                 # AzureVmError enum; bounded/redacted ProviderError mapping
     config.rs                # Provider spec.config schema struct
-    schema.rs                # Guest providerSettings schema struct + serde validation
+    schema.rs                # Guest spec.provider.settings schema struct + serde validation
     lib.rs                   # crate root; re-exports
   tests/
     conformance.rs
@@ -185,10 +185,24 @@ spec:
 
 ---
 
-## Guest providerSettings schema
+## Guest `spec.provider.settings` schema
 
-Each Guest resource targeting this Provider extends `spec.providerSettings`
-with the following fields. Unknown top-level fields are rejected.
+Each Guest resource targeting this Provider carries implementation-only desired
+configuration in `spec.provider.settings` with the following fields. Unknown
+fields are rejected.
+
+**D089 spec extension contract:** this Provider's implementation-only desired
+configuration is carried in `spec.provider.settings` under
+`runtime-azure-virtual-machine.d2b.io/Guest/spec`; the schema is
+registered/signed in the manifest, deny-unknown, bounded, versioned, and
+validated against `spec.providerRef` at Nix build and API admission. Base fields
+stay at `spec.*`; shared semantics are promoted to the Guest base and never
+placed in `spec.provider`. This Provider implements the exact base spec/status
+schema version/fingerprint, accepts the canonical minimal valid base Spec, and
+rejects an unsupported optional base capability only through its signed
+capability matrix plus provider-neutral `unsupported-capability`.
+`spec.provider` aligns with `status.provider` for
+`Provider/runtime-azure-virtual-machine`.
 
 `spec.systemArtifactId` is always `null` for Azure VM Guests (cloud image boot,
 no Nix system artifact). Enforced at eval time.
@@ -196,44 +210,47 @@ no Nix system artifact). Enforced at eval time.
 ### YAML reference
 
 ```yaml
-providerSettings:
-  # Azure placement
-  subscriptionId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-  resourceGroup: "d2b-workloads-rg"
-  region: "eastus"
+provider:
+  schemaId: runtime-azure-virtual-machine.d2b.io/Guest/spec
+  schemaVersion: 1.0.0
+  settings:
+    # Azure placement
+    subscriptionId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    resourceGroup: "d2b-workloads-rg"
+    region: "eastus"
 
-  # VM shape
-  vmSize: "Standard_D4s_v5"
-  imageRef: "Canonical:ubuntu-24_04-lts:server:latest"
-  diskSku: "Premium_LRS"           # enum: Premium_LRS|StandardSSD_LRS|Standard_LRS|UltraSSD_LRS
-  osDiskSizeGb: 64                 # u32 | null; null = image default
+    # VM shape
+    vmSize: "Standard_D4s_v5"
+    imageRef: "Canonical:ubuntu-24_04-lts:server:latest"
+    diskSku: "Premium_LRS"           # enum: Premium_LRS|StandardSSD_LRS|Standard_LRS|UltraSSD_LRS
+    osDiskSizeGb: 64                 # u32 | null; null = image default
 
-  # Admin user (ARM osProfile requirement; not used for SSH access)
-  adminUser: "azureuser"           # bounded string
+    # Admin user (ARM osProfile requirement; not used for SSH access)
+    adminUser: "azureuser"           # bounded string
 
-  # Network (Azure-internal; no Network Provider dependency per D045)
-  vnetSubscriptionId: null         # OpaqueAzureRef | null; null = subscriptionId
-  vnetResourceGroup: null          # OpaqueAzureRef | null; null = resourceGroup
-  vnetName: "d2b-workloads-vnet"
-  subnetName: "guests"
-  assignPublicIp: false
+    # Network (Azure-internal; no Network Provider dependency per D045)
+    vnetSubscriptionId: null         # OpaqueAzureRef | null; null = subscriptionId
+    vnetResourceGroup: null          # OpaqueAzureRef | null; null = resourceGroup
+    vnetName: "d2b-workloads-vnet"
+    subnetName: "guests"
+    assignPublicIp: false
 
-  # Disks (provider-owned ARM children; no Volume ResourceRef or cloud URI)
-  dataDisks: []
-  # list of DataDiskSpec; max 16 entries; see below
+    # Disks (provider-owned ARM children; no Volume ResourceRef or cloud URI)
+    dataDisks: []
+    # list of DataDiskSpec; max 16 entries; see below
 
-  # Bootstrap
-  bootstrapPskDelivery: "vm-extension"  # enum: vm-extension|user-data
-  bootstrapDeadlineMs: 600000
+    # Bootstrap
+    bootstrapPskDelivery: "vm-extension"  # enum: vm-extension|user-data
+    bootstrapDeadlineMs: 600000
 
-  # Optional child Zone hosting
-  childZoneHosting: false
+    # Optional child Zone hosting
+    childZoneHosting: false
 
-  # Tags (d2b:* keys reserved; rejected at eval time)
-  azureTags: {}
+    # Tags (d2b:* keys reserved; rejected at eval time)
+    azureTags: {}
 ```
 
-### providerSettings field table
+### `spec.provider.settings` field table
 
 | Field | Type | Required | Default | Bounds | Notes |
 | --- | --- | --- | --- | --- | --- |
@@ -259,7 +276,7 @@ providerSettings:
 ### DataDiskSpec
 
 ```yaml
-lun: 0                   # u8; 0..63; unique within this Guest's providerSettings
+lun: 0                   # u8; 0..63; unique within this Guest's spec.provider.settings
 diskClass: "high-perf"   # OpaqueAzureRef | null; advisory class label; max 64 chars
 sizeGb: 128              # u32; 1..32767 GiB
 label: null              # string | null; advisory label; max 64 chars; no cloud URI
@@ -286,7 +303,7 @@ the controller identifies disks internally by opaque handle
 | `allowedDomains` | `[system]` only | Same restriction. |
 | `defaultUserRef` | `null` only | User domain not supported. |
 | `budget` | Yes | Aggregate budget; applies to child Processes on this Guest. |
-| `networkAttachments` | No | Azure VNet/subnet in `providerSettings`; no Network Provider per D045. |
+| `networkAttachments` | No | Azure VNet/subnet in `spec.provider.settings`; no Network Provider per D045. |
 | `deviceAttachments` | No | No Device Provider attachment for Azure VMs. |
 
 Provider capability descriptor: `isolationClass: "provider-managed-vm"`.
@@ -1042,7 +1059,7 @@ subscription/tenant IDs, or ARM resource URIs.
 | `deletion-ambiguous` | ARM deletion LRO unreachable; state unknown |
 | `child-zone-drain-timeout` | Child Zone drain deadline exceeded |
 | `image-change-requires-confirm` | `imageRef` change without `imageChangeConfirm` guard |
-| `opaque-azure-ref-invalid` | A providerSettings field failed OpaqueAzureRef validation |
+| `opaque-azure-ref-invalid` | A spec.provider.settings field failed OpaqueAzureRef validation |
 | `adoption-zone-mismatch` | ARM VM tagged to a different Zone |
 
 ### Audit events
@@ -1166,27 +1183,31 @@ d2b.zones.dev.resources.corp-vm = {
     allowedDomains   = [ "system" ];
     defaultUserRef   = null;
     budget           = {};       # no d2b-side budget for remote VM Guests
-    providerSettings = {
-      subscriptionId  = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
-      resourceGroup   = "d2b-workloads";
-      region          = "eastus";
-      vmSize          = "Standard_D4s_v5";
-      imageRef        = "Canonical:ubuntu-24_04-lts:server:latest";
-      diskSku         = "Premium_LRS";
-      osDiskSizeGb    = 64;
-      adminUser       = "azureuser";
-      vnetName        = "d2b-workloads-vnet";
-      subnetName      = "guests";
-      assignPublicIp  = false;
-      dataDisks       = [
-        { lun = 0; diskClass = "high-perf"; sizeGb = 256; label = null; }
-      ];
-      bootstrapPskDelivery = "vm-extension";
-      bootstrapDeadlineMs  = 600000;
-      childZoneHosting     = false;
-      azureTags = {
-        environment = "development";
-        owner       = "platform-team";
+    provider = {
+      schemaId = "runtime-azure-virtual-machine.d2b.io/Guest/spec";
+      schemaVersion = "1.0.0";
+      settings = {
+        subscriptionId  = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        resourceGroup   = "d2b-workloads";
+        region          = "eastus";
+        vmSize          = "Standard_D4s_v5";
+        imageRef        = "Canonical:ubuntu-24_04-lts:server:latest";
+        diskSku         = "Premium_LRS";
+        osDiskSizeGb    = 64;
+        adminUser       = "azureuser";
+        vnetName        = "d2b-workloads-vnet";
+        subnetName      = "guests";
+        assignPublicIp  = false;
+        dataDisks       = [
+          { lun = 0; diskClass = "high-perf"; sizeGb = 256; label = null; }
+        ];
+        bootstrapPskDelivery = "vm-extension";
+        bootstrapDeadlineMs  = 600000;
+        childZoneHosting     = false;
+        azureTags = {
+          environment = "development";
+          owner       = "platform-team";
+        };
       };
     };
   };
@@ -1244,7 +1265,7 @@ d2b.zones.dev.resources.corp-vm = {
 | Current source | `d2bd/src/provider_registry.rs`: `AzureVmForbidden`, `AZURE_VM_IMPLEMENTATION_ID`; `d2b-realm-provider/src/provider.rs`: `InfrastructureProvider` (dead-reachable) |
 | Reuse action | Extract and adapt; DELETE `InfrastructureProvider` after this Provider is operational |
 | Destination | `src/{lib.rs,config.rs,schema.rs,error.rs,effect/mod.rs}` |
-| Detailed design | Provider descriptor/manifest; `spec.config` schema; Guest providerSettings schema; `AzureEffectPort` trait + `AzureOperationHandle`; `AzureVmError` enum; `SandboxSpec` with semantic classes; `BudgetSpec` with SI suffix memory fields; `restartPolicy` class/backoffBase/backoffMax; `networkUsage.allowEgress=false`; `EndpointSpec` name/transport/purpose |
+| Detailed design | Provider descriptor/manifest; `spec.config` schema; Guest spec.provider.settings schema; `AzureEffectPort` trait + `AzureOperationHandle`; `AzureVmError` enum; `SandboxSpec` with semantic classes; `BudgetSpec` with SI suffix memory fields; `restartPolicy` class/backoffBase/backoffMax; `networkUsage.allowEgress=false`; `EndpointSpec` name/transport/purpose |
 | Validation | Provider catalog; descriptor fingerprint; schema/conformance tests |
 | Removal proof | `InfrastructureProvider` deleted; `AzureVmForbidden` removed after Provider resource model replaces registry |
 
@@ -1360,7 +1381,7 @@ Run with `cargo test -p d2b-provider-runtime-azure-virtual-machine`.
 | `tests/credential_hermetic.rs` | Fake enrolled KK; `AcquireToken` → token bytes via `AzureEffectPort` only; token bytes absent from status/audit/OTEL; zeroized after ARM call; no ambient fallback fires |
 | `tests/idempotency.rs` | Deterministic request ID derivation; same input → same ID; `AzureOperationHandle` opaque (no URL leaked); ARM 409 → adoption; restart recovery (handle present → `poll_lro`; handle absent → `get_vm_state`); finalizer held through ambiguity |
 | `tests/error_redaction.rs` | Canary bytes: ARM error body, ARM token, PSK plaintext, enrolled Noise pubkey, ARM poll URL, ARM resource URI. Must not appear in `Guest.status`, audit records, OTEL attributes, metric labels, or log lines. Hard test error on any match. |
-| `tests/schema_validation.rs` | `spec.config` JSON Schema; providerSettings JSON Schema; OpaqueAzureRef charset; `adminUser` charset; `diskSku` closed enum; `dataDisks` LUN uniqueness; no `sshCredentialRef` field accepted; no Volume refs in `dataDisks`; `systemArtifactId=null`; `azureTags` `d2b:*` prefix rejection; the controller declares exactly one guest-local sealed recovery Volume (`storageNeed: secret`, `sealingCredentialRef` set) round-trip: guest-local placement is manifest-frozen and expressed by `source.executionRef` = gateway Guest, layout `ownerRef: User/<name>` (numeric UID string rejected), `views`, `identityMarker`, `snapshotPolicy: null`, `retentionPolicy: null`, `quotaBytes`/`quota.maxBytes`/`quota.maxInodes`/`source.settings.sourcePolicyId` present and nonzero; the bootstrap-svc declares no state Volume; `sensitivityClass: private`; `persistenceClass: persistent`; `persistenceClass: ephemeral` rejected; zero `quota.maxBytes`/`quota.maxInodes`/`quotaBytes` rejected; host-backed placement rejected (`guest-local-required`) |
+| `tests/schema_validation.rs` | `spec.config` JSON Schema; `spec.provider.settings` JSON Schema; OpaqueAzureRef charset; `adminUser` charset; `diskSku` closed enum; `dataDisks` LUN uniqueness; no `sshCredentialRef` field accepted; no Volume refs in `dataDisks`; `systemArtifactId=null`; `azureTags` `d2b:*` prefix rejection; the controller declares exactly one guest-local sealed recovery Volume (`storageNeed: secret`, `sealingCredentialRef` set) round-trip: guest-local placement is manifest-frozen and expressed by `source.executionRef` = gateway Guest, layout `ownerRef: User/<name>` (numeric UID string rejected), `views`, `identityMarker`, `snapshotPolicy: null`, `retentionPolicy: null`, `quotaBytes`/`quota.maxBytes`/`quota.maxInodes`/`source.settings.sourcePolicyId` present and nonzero; the bootstrap-svc declares no state Volume; `sensitivityClass: private`; `persistenceClass: persistent`; `persistenceClass: ephemeral` rejected; zero `quota.maxBytes`/`quota.maxInodes`/`quotaBytes` rejected; host-backed placement rejected (`guest-local-required`) |
 | `tests/fault_injection.rs` | ARM 429 → retry + succeed; ARM 503 persistent → `ProvisionFailed`; PSK first expiry → retry; PSK second expiry → `BootstrapFailed`; ARM credential unavailable → `CredentialUnavailable`; enrollment PSK replay rejected; controller restart mid-LRO → handle recovery |
 
 ### integration/ layout and boundaries

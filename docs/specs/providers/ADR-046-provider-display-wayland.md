@@ -79,6 +79,18 @@ following Provider-specific ResourceTypes:
 Both ResourceTypes are scoped to the owning Zone and follow the standard
 resource envelope contract from `ADR-046-resource-object-model`.
 
+**D089 spec extension contract:** any implementation-only desired configuration
+for these ResourceTypes is carried in `spec.provider.settings` under the
+registered `display-wayland.d2b.io/<ResourceType>/spec` schema; that schema is
+signed in the manifest, deny-unknown, bounded, versioned, and validated against
+`spec.providerRef` at Nix build and API admission. Base fields stay at `spec.*`;
+shared semantics are promoted to the WaylandSession/WaylandPolicy base and never
+placed in `spec.provider`. This Provider implements the exact base spec/status
+schema version/fingerprint, accepts the canonical minimal valid base Spec, and
+rejects an unsupported optional base capability only through its signed
+capability matrix plus provider-neutral `unsupported-capability`.
+`spec.provider` aligns with `status.provider` for `Provider/display-wayland`.
+
 ---
 
 ## 4. Components
@@ -1557,7 +1569,7 @@ accounts in this dossier are the session principal pool accounts described in
 | `WaylandProxyArgvInput` / `generate_wayland_proxy_argv` | sealed Process template config; argv generation is internal to Provider template; never public API |
 | `LocalCrossDomainWaylandProvider` | `display-wayland` controller component; current struct becomes controller reconcile logic |
 | `RuntimeDisplayCapabilities.wayland_proxy: bool` | `WaylandSession` resource presence; `wayland_proxy: false` maps to no `WaylandSession` resource |
-| `RuntimeDisplayCapabilities.graphics: bool` | `spec.providerSettings.displayWayland.enable` on the Guest resource |
+| `RuntimeDisplayCapabilities.graphics: bool` | `spec.provider.settings.displayWayland.enable` on the Guest resource |
 | `graphics.crossDomainTrusted` (Nix) | `WaylandSession.spec.crossDomainTrusted = true` |
 | `graphics.virglVideo` (Nix) | `WaylandSession.spec.virglVideo` |
 | `graphics.waylandProxy.enable` (Nix) | presence of a `WaylandSession` resource for the Guest |

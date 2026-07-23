@@ -36,6 +36,19 @@ identical ResourceTypes — `Process` and `EphemeralProcess` — against one com
 schema and one shared conformance suite. The compiled sandbox is the only
 implementation-specific surface.
 
+**D089 spec extension contract:** this Provider's implementation-only desired
+configuration is carried in `spec.provider.settings` under
+`system-minijail.d2b.io/Process/spec` or
+`system-minijail.d2b.io/EphemeralProcess/spec`; each schema is registered/signed
+in the manifest, deny-unknown, bounded, versioned, and validated against
+`spec.providerRef` at Nix build and API admission. Base fields stay at `spec.*`;
+shared semantics are promoted to the Process/EphemeralProcess base and never
+placed in `spec.provider`. This Provider implements the exact base spec/status
+schema version/fingerprint, accepts the canonical minimal valid base Spec, and
+rejects an unsupported optional base capability only through its signed
+capability matrix plus provider-neutral `unsupported-capability`.
+`spec.provider` aligns with `status.provider` for `Provider/system-minijail`.
+
 ---
 
 ## 2. Provider identity
@@ -293,7 +306,7 @@ Combinations that the compiler rejects at spec admission:
 
 - `user` without a `userNamespace` block;
 - `network` combined with a non-null `networkUsage.networkRef`;
-- `cgroup` when `Host.spec.providerSettings.capabilities` does not include
+- `cgroup` when `Host.spec.provider.settings.capabilities` does not include
   `cgroup-v2`.
 
 ### 7.2 Capability classes

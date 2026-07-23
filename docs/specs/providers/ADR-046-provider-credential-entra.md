@@ -139,6 +139,25 @@ The provider implements the full `Credential` ResourceType lifecycle for
 Entra-bound credentials. Every `Credential` resource whose `spec.providerRef =
 "Provider/credential-entra"` is owned by this controller.
 
+Normative D089 spec layering: Credential base fields are ResourceType base
+`spec.*` fields, including `spec.providerRef`, `audience`, `scope`,
+`allowedOperations`, `rotation`, and `revocation`. This Provider's desired-only
+extension is the canonical `spec.provider = { schemaId:
+"credential-entra.d2b.io/Credential/spec", schemaVersion, settings }`
+envelope; it is manifest-registered/signed, strict deny-unknown, bounded, versioned
+and digested, validated against `spec.providerRef` at Nix build and API
+admission, implementation-only, and may not shadow base fields. Shared fields
+are promoted to the Credential base. The Provider implements the exact base
+Credential spec/status version/fingerprint, accepts the canonical minimal valid
+base Spec, and rejects unsupported optional base capabilities only through its
+signed capability matrix and provider-neutral `unsupported-capability`.
+`spec.provider` aligns with `status.provider`; generic CLI/controllers operate on
+the base spec and base status only. A reference to the former Credential
+`spec.providerSettings` denotes `spec.provider.settings`; no secret
+bytes or credential material are allowed in any spec layer, including
+`spec.provider.settings`; credential bytes are delivered only over Noise_KK
+sessions.
+
 #### Lifecycle phases
 
 | Phase | Meaning |

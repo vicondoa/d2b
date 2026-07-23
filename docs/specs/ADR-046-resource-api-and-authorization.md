@@ -78,6 +78,40 @@ Binding:
 
 Providers cannot mutate api_schemas directly.
 
+### ResourceApiBinding base-schema conformance (D089)
+
+Each Provider `ResourceApiBinding` for a ResourceType declares and MUST
+implement the exact ResourceType **base spec** and **base status** schema
+version/fingerprint and pass the base lifecycle/status/error/finalizer
+conformance suite. Binding:
+
+1. records the declared base schema version/fingerprint and rejects a binding
+   whose declared fingerprint does not match the installed ResourceType base
+   schema;
+2. records the Provider's signed `spec.provider` extension schema
+   (`schemaId`/`schemaVersion`/`settings` JSON Schema) and the aligned
+   `status.provider` extension schema, both deny-unknown, bounded, and digested;
+3. records the Provider's signed **standard capability matrix** — the exact set
+   of optional base capabilities it does and does not support.
+
+A bound Provider MUST accept the canonical minimal valid base Spec for the
+ResourceType. It MAY reject an optional base capability only when its signed
+capability matrix declares that capability unsupported, returning a typed,
+provider-neutral `unsupported-capability` result naming the base capability; it
+MUST NOT ignore, reinterpret, rename, duplicate, or weaken the bounds of any
+base field, and MUST NOT require `spec.provider` data for base-required
+behavior. Generic API/CLI/controllers author and read only the base spec and
+base status; `spec.provider`/`status.provider` are provider-scoped and never
+required for a generic Get/List/Watch/UpdateSpec of the base.
+
+`UpdateSpec` validates the canonical `spec.provider` envelope
+(`{ schemaId, schemaVersion, settings }`) against the installed Provider named
+by `spec.providerRef`: an unregistered/version-mismatched `schemaId`/
+`schemaVersion` is rejected with `spec-provider-schema-invalid`, an unknown
+field in `settings` is denied, a `settings` that restates/overrides a base field
+is rejected with `spec-provider-shadow`, and an over-limit envelope is rejected
+with the spec bounds error. The same validation runs at Nix build time.
+
 ## Native RBAC resources
 
 ### Bootstrap authorization
@@ -300,6 +334,9 @@ Stable classes include:
 - status-oversize;
 - status-provider-schema-invalid;
 - status-provider-overlap;
+- spec-provider-schema-invalid;
+- spec-provider-shadow;
+- unsupported-capability;
 - authorization-denied;
 - revision-expired;
 - backpressure;

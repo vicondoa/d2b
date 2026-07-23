@@ -63,6 +63,22 @@ to `Provider/volume-local`.
 | Dependencies | `d2b-contracts` (v3 Export/Process/Volume types), `d2b-provider-toolkit` (ResourceClient, reconciler, fake seams), `d2b-session`, `d2b-bus`, `d2b-audit`, `d2b-telemetry` |
 | Prohibited imports | `d2bd`, `d2b-priv-broker` internals, `d2b-provider-volume-local`, any other Provider's implementation |
 
+**D089 desired-spec shape.** `Provider/volume-virtiofs` owns the
+`virtiofs.d2b.io.Export` ResourceType base spec; base fields include
+`spec.providerRef`, `volumeRef`, `executionRef`, `view`, `access`, and
+`mountPath`. Virtiofs-only desired tunables are carried only in the canonical
+`spec.provider = { schemaId, schemaVersion, settings }` envelope, whose
+`settings` object mirrors `status.provider.details`, is registered/signed in the
+Provider manifest, deny-unknown, bounded, versioned/digested, validated against
+`spec.providerRef` at Nix build and API admission, and cannot shadow base
+fields. Shared fields are promoted to the Export base. The Provider implements
+the exact base spec/status schema version/fingerprint, accepts the canonical
+minimal base Spec, passes base conformance, and rejects an
+unsupported optional base capability only via its signed capability matrix plus
+provider-neutral `unsupported-capability`.
+`spec.provider` aligns with `status.provider`. The `Provider` resource itself
+keeps the D075 `spec.{artifactId, config}` exception.
+
 ### Required crate layout
 
 ```text
@@ -128,12 +144,12 @@ metadata:
   finalizers: []
 spec:
   artifactId: volume-virtiofs-provider
-  config: {}           # no root config; all settings live in Export spec
+  config: {}           # no root config; Export tunables live in spec.provider.settings
 ```
 
 No root config is validated (empty `config: {}`). Every per-attachment option is declared
-inside the Export spec's `settings` object and validated against the Provider's signed
-`attachment.schema.json` at Nix eval time.
+inside the Export spec's `spec.provider.settings` object and validated against the
+Provider's signed spec settings schema at Nix eval time.
 
 Manifest-derived fields (loaded by the Zone runtime from the Provider's signed package
 manifest, never authored in Nix):
@@ -246,18 +262,22 @@ metadata:
   ownerRef: Volume/work-state
   finalizers: [volume-virtiofs/export]
 spec:
+  providerRef: Provider/volume-virtiofs
   volumeRef: Volume/work-state
   executionRef: Guest/work-vm
   view: controller
   access: read-write          # read-only | read-write
   mountPath: /state
-  settings:
-    posixAcl: false
-    xattr: false
-    cache: auto
-    inodeFileHandles: never
-    threadPoolSize: null      # null → resolved from Guest vcpu count
-    socketGroup: null         # null → broker-default gid
+  provider:
+    schemaId: volume-virtiofs.d2b.io/Export/spec
+    schemaVersion: "1.0"
+    settings:
+      posixAcl: false
+      xattr: false
+      cache: auto
+      inodeFileHandles: never
+      threadPoolSize: null      # null → resolved from Guest vcpu count
+      socketGroup: null         # null → broker-default gid
 status:
   phase: Ready                # Pending|Ready|Degraded|Failed|Unknown
   resource:
@@ -293,9 +313,9 @@ status:
 | `view` | ViewName | Yes | — | Must exist in Volume's `views` map at Export create time |
 | `access` | enum | No | `read-only` | `read-only` or `read-write`; `shared-write` is not supported in v3.0 |
 | `mountPath` | absolute path | Yes | — | Guest-side mount path; no overlap with other mounts on same Guest |
-| `settings.*` | see §4.3 | No | see §4.3 | Validated against Provider's signed `attachment.schema.json` |
+| `provider.settings.*` | see §4.3 | No | see §4.3 | Validated against Provider's signed Export spec settings schema |
 
-### 4.3 Attachment settings
+### 4.3 `spec.provider.settings`
 
 | Field | Type | Default | Constraints |
 | --- | --- | --- | --- |
@@ -579,8 +599,8 @@ virtiofsd
   --sandbox=chroot
   --inode-file-handles=never
   --cache=<mode>
-  [--posix-acl]           # present only if Export.spec.settings.posixAcl == true
-  [--xattr]               # present only if Export.spec.settings.xattr == true
+  [--posix-acl]           # present only if Export.spec.provider.settings.posixAcl == true
+  [--xattr]               # present only if Export.spec.provider.settings.xattr == true
   [--readonly]            # present only if access: read-only
 ```
 
@@ -620,7 +640,7 @@ only `store-view/live`.
 
 ### 8.4 `--thread-pool-size`
 
-`settings.threadPoolSize == null` (the default) causes the controller to read the target
+`spec.provider.settings.threadPoolSize == null` (the default) causes the controller to read the target
 Guest's declared `spec.vcpus` at reconciliation time and use that value. If the Guest spec
 has not been reconciled yet, the controller requeues the Export reconciliation with a short
 exponential backoff.
@@ -1034,18 +1054,23 @@ is required in Nix.
     "finalizers": ["volume-virtiofs/export"]
   },
   "spec": {
+    "providerRef": "Provider/volume-virtiofs",
     "volumeRef": "Volume/work-state",
     "executionRef": "Guest/work-vm",
     "view": "controller",
     "access": "read-write",
     "mountPath": "/state",
-    "settings": {
-      "cache": "auto",
-      "inodeFileHandles": "never",
-      "posixAcl": false,
-      "socketGroup": null,
-      "threadPoolSize": null,
-      "xattr": false
+    "provider": {
+      "schemaId": "volume-virtiofs.d2b.io/Export/spec",
+      "schemaVersion": "1.0",
+      "settings": {
+        "cache": "auto",
+        "inodeFileHandles": "never",
+        "posixAcl": false,
+        "socketGroup": null,
+        "threadPoolSize": null,
+        "xattr": false
+      }
     }
   },
   "status": {}
@@ -1064,8 +1089,9 @@ The following validations are fatal at Nix eval time for virtiofs attachments:
    View with only `[read, traverse]` aborts.
 4. `shared-write` aborts unconditionally in v3.0 (Provider does not declare
    `supportsSharedWrite: true`).
-5. `settings` is validated against the Provider's signed `attachment.schema.json` from the
-   private artifact catalog entry. Unknown fields abort; out-of-range values abort.
+5. `spec.provider.settings` is validated against the Provider's signed Export
+   spec settings schema from the private artifact catalog entry. Unknown fields
+   abort; out-of-range values abort.
 6. `executionRef` must resolve to a `Guest/<name>` resource in the same Zone.
 7. At most one `read-write` attachment per Volume at eval time. The Nix resource compiler
    rejects two simultaneous `read-write` entries at build time.
@@ -1131,7 +1157,6 @@ d2b.zones."dev".resources."store-view-work-vm" = {
         view         = "ro-store";
         access       = "read-only";
         mountPath    = "/nix/.ro-store";
-        settings = { posixAcl = false; xattr = false; cache = "auto"; inodeFileHandles = "never"; };
       }
     ];
   };
@@ -1258,7 +1283,7 @@ it does not import session implementation internals directly.
 | Current source | No analog; new ResourceType |
 | Reuse action | new |
 | Destination | `packages/d2b-provider-volume-virtiofs/src/export.rs`; `packages/d2b-contracts/src/v3/virtiofs_export.rs` |
-| Detailed design | Declare `virtiofs.d2b.io.Export` ResourceType in `d2b-contracts`. Fields: `volumeRef`, `executionRef`, `view`, `access`, `mountPath`, `settings` (as in §4.2). Status fields: top-level `phase`/`conditions`, `status.resource.exportReady`, `status.resource.guestMountReady`, and `status.provider.details.workerProcessRef`. Strict serde `deny_unknown_fields`. Implement the conformance test fixture that validates schema fingerprint stability. The Export spec JSON schema and provider status extension schema are signed and included in the Provider package. |
+| Detailed design | Declare `virtiofs.d2b.io.Export` ResourceType in `d2b-contracts`. Base fields: `providerRef`, `volumeRef`, `executionRef`, `view`, `access`, `mountPath`; virtiofs tunables live under `spec.provider.settings` (as in §4.2). Status fields: top-level `phase`/`conditions`, `status.resource.exportReady`, `status.resource.guestMountReady`, and `status.provider.details.workerProcessRef`. Strict serde `deny_unknown_fields`. Implement the conformance test fixture that validates schema fingerprint stability. The Export spec JSON schema and provider status extension schema are signed and included in the Provider package. |
 | Integration | `d2b-contracts` exports the Export DTO; volume-virtiofs controller and volume-local both import it for ResourceClient typed operations |
 | Data migration | None; new type |
 | Validation | `tests/schema_conformance.rs`: `export_schema_canonical_json_stable`, `export_spec_denied_unknown_fields`, `export_status_exportready_is_boolean_not_path`, `export_owner_must_be_volume` |

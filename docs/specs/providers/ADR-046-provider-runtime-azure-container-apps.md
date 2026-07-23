@@ -47,7 +47,7 @@ A managed ACA sandbox `Guest` differs from a local VM Guest in the following fix
 | Property | Local VM Guest | Managed ACA sandbox Guest |
 | --- | --- | --- |
 | Execution substrate | Cloud Hypervisor or QEMU process on Host | Azure Container Apps sandbox in a remote ACA environment |
-| `spec.systemArtifactId` | NixOS system closure artifact ID | `null` — no Nix-built system; image is declared via `providerSettings.configuredImageId` or `providerSettings.configuredDiskId` |
+| `spec.systemArtifactId` | NixOS system closure artifact ID | `null` — no Nix-built system; image is declared via `spec.provider.settings.configuredImageId` or `spec.provider.settings.configuredDiskId` |
 | Bootstrap process | VMM Process + virtiofsd on Host | None on Host; bootstrap is the ACA sandbox reaching the gateway Guest via `Provider/transport-azure-relay` ZoneLink |
 | `spec.allowedDomains` | `[system, user]` typical | `[system]` — no local PAM user manager; user domain processes inside the sandbox are not d2b Process resources |
 | Attachment types | virtiofs Volume, local Network bridge | ZoneLink only; no local virtiofsd, no Host-local bridge attachment |
@@ -84,7 +84,7 @@ config:
   environmentId: "env-xxxxxxxxxxxxxxxxxxxxxxxx"  # max 60 chars; [a-z0-9-] with lowercase lead
   resourceGroupId: "rg-workloads"               # max 60 chars; [a-z0-9-] with lowercase lead
 
-  # Default sandbox profile defaults (overridden per Guest by providerSettings)
+  # Default sandbox profile defaults (overridden per Guest by spec.provider.settings)
   defaults:
     cpuMillis: 500                  # integer; 250..4000 in steps of 250
     memoryMiB: 2048                 # integer; 512..16384 in steps of 256
@@ -133,27 +133,43 @@ No field may carry a subscription key, SAS token, client secret, certificate byt
 
 ---
 
-## 4 Guest providerSettings schema
+## 4 Guest `spec.provider.settings` schema
 
-The `providerSettings` object inside a `Guest.spec` when `spec.providerRef = Provider/runtime-azure-container-apps`. Validated against the Provider's exported Guest schema extension.
+The `spec.provider.settings` object inside a `Guest.spec` when `spec.providerRef = Provider/runtime-azure-container-apps` is validated against the Provider's exported Guest spec schema.
+
+**D089 spec extension contract:** this Provider's implementation-only desired
+configuration is carried in `spec.provider.settings` under
+`runtime-azure-container-apps.d2b.io/Guest/spec`; the schema is
+registered/signed in the manifest, deny-unknown, bounded, versioned, and
+validated against `spec.providerRef` at Nix build and API admission. Base fields
+stay at `spec.*`; shared semantics are promoted to the Guest base and never
+placed in `spec.provider`. This Provider implements the exact base spec/status
+schema version/fingerprint, accepts the canonical minimal valid base Spec, and
+rejects an unsupported optional base capability only through its signed
+capability matrix plus provider-neutral `unsupported-capability`.
+`spec.provider` aligns with `status.provider` for
+`Provider/runtime-azure-container-apps`.
 
 ```yaml
 spec:
   providerRef: Provider/runtime-azure-container-apps
-  providerSettings:
-    # Disk image source — exactly one of configuredDiskId or configuredImageId
-    configuredDiskId: "img-xxxxxxxxxxxxxxxxxxxxxxxx"        # max 64 chars; [a-z0-9-], lowercase lead
-    configuredImageId: null                                 # null when configuredDiskId is set
-    diskName: null                                          # required when configuredImageId is set; max 64 chars
-    pullIdentityBindingId: null                             # optional; max 64 chars; [a-z0-9-], lowercase lead
+  provider:
+    schemaId: runtime-azure-container-apps.d2b.io/Guest/spec
+    schemaVersion: 1.0.0
+    settings:
+      # Disk image source — exactly one of configuredDiskId or configuredImageId
+      configuredDiskId: "img-xxxxxxxxxxxxxxxxxxxxxxxx"        # max 64 chars; [a-z0-9-], lowercase lead
+      configuredImageId: null                                 # null when configuredDiskId is set
+      diskName: null                                          # required when configuredImageId is set; max 64 chars
+      pullIdentityBindingId: null                             # optional; max 64 chars; [a-z0-9-], lowercase lead
 
-    # Sandbox compute (override Provider defaults)
-    cpuMillis: 500                                          # 250..4000 in steps of 250
-    memoryMiB: 2048                                         # 512..16384 in steps of 256
+      # Sandbox compute (override Provider defaults)
+      cpuMillis: 500                                          # 250..4000 in steps of 250
+      memoryMiB: 2048                                         # 512..16384 in steps of 256
 
-    # Lifecycle
-    autoSuspendSecs: 300                                    # 60..86400
-    sandboxIdentityBindingId: "mid-xxxxxxxxxx"             # optional; max 64 chars; managed identity binding
+      # Lifecycle
+      autoSuspendSecs: 300                                    # 60..86400
+      sandboxIdentityBindingId: "mid-xxxxxxxxxx"             # optional; max 64 chars; managed identity binding
 ```
 
 | Field | Type | Required | Rules |
@@ -161,7 +177,7 @@ spec:
 | `configuredDiskId` | string | Conditional | Max 64 chars; `[a-z0-9-]`; lowercase lead; mutually exclusive with `configuredImageId` |
 | `configuredImageId` | string | Conditional | Max 64 chars; `[a-z0-9-]`; lowercase lead; mutually exclusive with `configuredDiskId` |
 | `diskName` | string | Conditional | Required when `configuredImageId` set; max 64 chars; `[a-z0-9-]`; lowercase lead |
-| `pullIdentityBindingId` | string | No | Max 64 chars; `[a-z0-9-]`; lowercase lead; names a managed identity in `providerSettings.sandboxIdentityBindingId` binding space |
+| `pullIdentityBindingId` | string | No | Max 64 chars; `[a-z0-9-]`; lowercase lead; names a managed identity in `spec.provider.settings.sandboxIdentityBindingId` binding space |
 | `cpuMillis` | u16 | No | 250..4000 in steps of 250; null = Provider default |
 | `memoryMiB` | u32 | No | 512..16384 in steps of 256; null = Provider default |
 | `autoSuspendSecs` | u32 | No | 60..86400; null = Provider default |
@@ -1032,12 +1048,16 @@ d2b.zones.my-zone.resources = {
       defaultDomain = "system";
       allowedDomains = [ "system" ];
       systemArtifactId = null;  # null for cloud Guests
-      providerSettings = {
-        configuredDiskId = "img-xxxxxxxxxxxxxxxxxxxxxxxx";
-        cpuMillis = 500;
-        memoryMiB = 2048;
-        autoSuspendSecs = 300;
-        sandboxIdentityBindingId = "mid-xxxxxxxxxx";
+      provider = {
+        schemaId = "runtime-azure-container-apps.d2b.io/Guest/spec";
+        schemaVersion = "1.0.0";
+        settings = {
+          configuredDiskId = "img-xxxxxxxxxxxxxxxxxxxxxxxx";
+          cpuMillis = 500;
+          memoryMiB = 2048;
+          autoSuspendSecs = 300;
+          sandboxIdentityBindingId = "mid-xxxxxxxxxx";
+        };
       };
     };
   };
@@ -1079,9 +1099,9 @@ The Nix compiler enforces at eval time:
 - `config.pullCredentialRef`, if present, has the same `scope.executionRef` constraint as `controlCredentialRef`;
 - `spec.systemArtifactId` is `null` when `spec.providerRef = "Provider/runtime-azure-container-apps"`;
 - `spec.allowedDomains` does not include `user` for ACA-backed Guests (unsupported; rejected with a clear assertion message);
-- exactly one of `configuredDiskId` or `configuredImageId` is set in `providerSettings`;
+- exactly one of `configuredDiskId` or `configuredImageId` is set in `spec.provider.settings`;
 - `diskName` is present when `configuredImageId` is set;
-- all `providerSettings` string IDs match the `^[a-z][a-z0-9-]*$` pattern and respect length bounds;
+- all `spec.provider.settings` string IDs match the `^[a-z][a-z0-9-]*$` pattern and respect length bounds;
 - `config.zoneLinkAlias` is declared in the Provider manifest's dependency aliases.
 
 No Host-scoped Credential (`scope.executionRef` matching `Host/*`) is accepted for `controlCredentialRef` or `pullCredentialRef`. The assertion fires at eval time with a descriptive message that names the offending credential resource and the required `gatewayExecutionRef`.
@@ -1152,7 +1172,7 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | `AcaRelayTransportConfig` | `packages/d2b-provider-aca/src/lib.rs` (relay transport config) | production-reachable | ADAPT | ZoneLink transport settings under Provider config §15.4 |
 | `AcaControl` trait (9 methods) | `packages/d2b-provider-runtime-azure-container-apps/src/control.rs` (main) | test-only at v3 baseline | RETAIN+ADAPT | Move to `packages/d2b-contracts/src/provider_effects/aca.rs` (shared provider-effects module; no new crate); no direct provider implementation dependency from core; adapt `OperationBinding` to v3 `ProviderOperationContext` contract |
 | `AcaCredentialLeaseClient` trait | `packages/d2b-provider-runtime-azure-container-apps/src/control.rs` (main) | test-only at v3 baseline | RETAIN+ADAPT | Move to `packages/d2b-contracts/src/provider_effects/aca.rs`; adapt `CredentialLease` to v3 Credential resource model; provider crate remains one package |
-| `AcaRuntimeConfig` / `AcaSandboxProfile` / bounds constants | `packages/d2b-provider-runtime-azure-container-apps/src/types.rs` (main) | test-only at v3 baseline | RETAIN+ADAPT | Adapt to v3 `providerSettings` schema fields; all bounds constants preserved |
+| `AcaRuntimeConfig` / `AcaSandboxProfile` / bounds constants | `packages/d2b-provider-runtime-azure-container-apps/src/types.rs` (main) | test-only at v3 baseline | RETAIN+ADAPT | Adapt to v3 `spec.provider.settings` schema fields; all bounds constants preserved |
 | `AcaResourceBinding` / `AcaWorkloadQuery` | `packages/d2b-provider-runtime-azure-container-apps/src/types.rs` (main) | test-only at v3 baseline | ADAPT | Replace `RealmId`/`WorkloadId` fields with v3 `Zone`/`Guest` resource UID; retain redacted Debug |
 | Operation ledger (`CompletedOperation`, `OperationLedger`) | `packages/d2b-provider-runtime-azure-container-apps/src/provider.rs` (main) | test-only at v3 baseline | ADAPT | Adapt operation ID type to v3; delegate to the core Operation ledger adapter (it owns in-flight operation/requeue truth); the provider declares no state Volume — bounded non-secret sandbox binding/adoption metadata lives in `Guest.status` (D087) |
 | Lease cleanup job/executor pattern | `packages/d2b-provider-runtime-azure-container-apps/src/provider.rs` (main) | test-only at v3 baseline | RETAIN | Retain `LeaseCleanupJob`/`LeaseCleanupExecutor`/`TracingLeaseCleanupObserver` verbatim; target tracing key unchanged |

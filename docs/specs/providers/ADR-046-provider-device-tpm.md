@@ -353,6 +353,24 @@ it without daemon, store, or broker.
 
 ### 6.1 Canonical Device spec
 
+Normative D089 spec layering: Device base fields are ResourceType base
+`spec.*` fields, including `spec.providerRef`, `deviceClass`,
+`inventory.selector`, attachments, and arbitration. This Provider's
+desired-only extension is the canonical `spec.provider = { schemaId:
+"device-tpm.d2b.io/Device/spec", schemaVersion, settings }` envelope; it
+is manifest-registered/signed, strict deny-unknown, bounded, versioned and
+digested,
+validated against `spec.providerRef` at Nix build and API admission,
+implementation-only, and may not shadow base fields. Shared fields are promoted
+to the Device base. The Provider implements the exact base Device spec/status
+version/fingerprint, accepts the canonical minimal valid base Spec, and rejects
+unsupported optional base capabilities only through its signed capability matrix
+and provider-neutral `unsupported-capability`. `spec.provider` aligns with
+`status.provider`; generic CLI/controllers operate on the base spec and base
+status only. A reference to the former Device `spec.settings` denotes
+`spec.provider.settings`; no secret bytes are allowed in any spec layer, and no
+credential material is allowed in `spec.provider.settings`.
+
 ```yaml
 apiVersion: resources.d2b.io/v3
 type: Device
@@ -367,21 +385,24 @@ spec:
   maxConcurrentClaims: 1
   inventory:
     selector: {}
-  settings:
-    logLevel: 20
-    executionRef: "Host/host-system"
-    # startupClear: REJECTED — flush is always mandatory
+  provider:
+    schemaId: "device-tpm.d2b.io/Device/spec"
+    schemaVersion: "1.0.0"
+    settings:
+      logLevel: 20
+      executionRef: "Host/host-system"
+      # startupClear: REJECTED — flush is always mandatory
 ```
 
-### 6.2 Device settings schema
+### 6.2 Device provider settings schema
 
 | Field | Type | Required | Default | Bound | Description |
 | --- | --- | --- | --- | --- | --- |
 | `logLevel` | uint | no | Provider config.logLevel | `1..20` | Per-Device swtpm log level override. |
 | `executionRef` | string | no | Provider config.controllerExecutionRef | `Host/<name>` | Which Host to run the swtpm Process on. Validated as a ResourceRef resolving to a Ready Host at admission. |
 
-No binary path, UID, GID, socket path, or broker wire type is accepted in
-Device spec settings.
+No binary path, UID, GID, socket path, broker wire type, secret bytes, or
+credential material is accepted in `spec.provider.settings`.
 
 ---
 
@@ -1100,9 +1121,13 @@ d2b.zones.dev.resources."corp-vm-tpm" = {
     arbitration = "exclusive";
     maxConcurrentClaims = 1;
     inventory.selector = {};
-    settings = {
-      logLevel = 20;
-      # executionRef may be omitted to inherit Provider config.controllerExecutionRef
+    provider = {
+      schemaId = "device-tpm.d2b.io/Device/spec";
+      schemaVersion = "1.0.0";
+      settings = {
+        logLevel = 20;
+        # executionRef may be omitted to inherit Provider config.controllerExecutionRef
+      };
     };
   };
 };

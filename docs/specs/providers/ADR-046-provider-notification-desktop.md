@@ -110,6 +110,21 @@ runs.
 
 ### 3.2 Exported ResourceTypes
 
+Per D089, any notification-desktop-owned ResourceType uses its typed desired
+spec as the ResourceType base spec (Layer 2): top-level `spec.*`, including
+`spec.providerRef` where applicable. Any implementation-variant desired
+settings use only the canonical Layer 3 `spec.provider = { schemaId,
+schemaVersion, settings }` envelope, whose `settings` are
+manifest-registered/signed, deny-unknown, bounded, versioned/digested,
+validated against `spec.providerRef`, and forbidden to shadow base fields;
+shared fields are promoted into the base spec. The owning Provider implements
+the exact base spec/status schema version/fingerprint, accepts the canonical
+minimal base Spec, and rejects an unsupported optional base capability only
+through its signed capability matrix plus typed provider-neutral
+`unsupported-capability`. `spec.provider` aligns with `status.provider`. The
+`Provider` resource itself remains the D075 `{ artifactId, config }`
+exception.
+
 This Provider exports no ResourceTypes.  Notification delivery is fully
 transient: `NotificationRequest` and `NotificationResult` are named-stream
 DTOs with no durable desired state.  They have no `spec`, no `revision`, no

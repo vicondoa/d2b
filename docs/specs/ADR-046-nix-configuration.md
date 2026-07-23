@@ -787,21 +787,32 @@ d2b.zones.dev.resources.dev-vm = {
     budget             = { cpu = { cores = 4; }; memory = { bytes = 4294967296; }; };
     networkAttachments = [{ networkRef = "Network/dev-lan"; }];
     deviceAttachments  = [{ deviceRef = "Device/dev-tpm"; }];
-    # providerSettings (declared in Guest schema): validated against Provider's signed JSON Schema.
-    # No raw host paths; named closure-entry IDs only.
-    providerSettings   = {
-      vsockCid      = 42;
-      memoryBacking = "shared";
+    # Canonical selected-Provider extension envelope (D089): validated against the
+    # Provider named by providerRef. No raw host paths; named closure-entry IDs only.
+    provider = {
+      schemaId      = "runtime-cloud-hypervisor.d2b.io/Guest/spec";
+      schemaVersion = "1.0";
+      settings = {
+        vsockCid      = 42;
+        memoryBacking = "shared";
+      };
     };
   };
 };
 ```
 
-Guest (and Host) `providerSettings` is declared in those ResourceType schemas and
-validated against the installed Provider's exported JSON Schema. Values that
-reference Nix derivation outputs (e.g., a closure, a kernel module path) are
-serialized as named closure-entry identifiers or content digests validated
-against the package manifest. Raw Nix store path strings (e.g.,
+The canonical `spec.provider = { schemaId, schemaVersion, settings }` envelope
+(D089) replaces the former Host/Guest/Credential `providerSettings` and Device
+`settings`; `spec.providerRef` and every other `spec.*` field is ResourceType
+base. Mapping convention: a reference to `spec.providerSettings` (or Device's
+former `spec.settings`) denotes `spec.provider.settings`. The `settings` object
+is declared by the selected Provider's signed, versioned, deny-unknown JSON
+Schema and validated against `spec.providerRef` at eval time and at API
+admission; it may not shadow a base field, and any field shared across
+implementations is promoted to the ResourceType base rather than carried here.
+Values that reference Nix derivation outputs (e.g., a closure, a kernel module
+path) are serialized as named closure-entry identifiers or content digests
+validated against the package manifest. Raw Nix store path strings (e.g.,
 `/nix/store/<hash>-foo`) are rejected at eval time and must never appear in
 emitted resource spec JSON.
 

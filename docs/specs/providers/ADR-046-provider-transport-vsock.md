@@ -119,7 +119,7 @@ is consumed from `d2b-session`.
 | `generate_vsock_relay_argv` | `packages/d2b-host/src/vsock_relay_argv.rs` | `implemented-and-reachable` | socat relay for OTLP (ports 14317/14319); uses hard-coded CID 2 for guest egress; not a ComponentSession transport |
 | `GUEST_CONTROL_CONNECT_PORT = 14318` | `packages/d2bd/src/guest_control_vsock.rs` | `implemented-and-reachable` | Reserved for guestd ttrpc; must not be reused by transport-vsock ZoneLink |
 | `VsockRelayArgvInput` | `packages/d2b-host/src/vsock_relay_argv.rs` | `implemented-and-reachable` | OTLP relay shape; socat path; superseded by Provider OTLP/vsock in observability work |
-| `SocatEndpoint::VsockConnect { cid, port }` | `packages/d2b-host/src/vsock_relay_argv.rs` | `implemented-and-reachable` | Raw CID in socat argv; pattern excluded from v3 ZoneLink transportSettings |
+| `SocatEndpoint::VsockConnect { cid, port }` | `packages/d2b-host/src/vsock_relay_argv.rs` | `implemented-and-reachable` | Raw CID in socat argv; pattern excluded from v3 ZoneLink `spec.provider.settings` |
 | vsock addr `vsock://-1:14318` | `packages/d2b-host/tests/guest_vsock_ttrpc_compile.rs` | `test-only-or-preview` | Guest-side ttrpc compile proof; cfg-gated; not a production path |
 | `vsock.rs` vsock transports | `packages/d2b-session-unix/src/vsock.rs` (v3 baseline) | `ADR-only` | Stub file; no implementation in v3 baseline; marked as Provider-specific |
 
@@ -171,6 +171,21 @@ invocations from core: `OpenTransport`, `CloseTransport`, and
 - Unix-socket ZoneLinks → `transport-unix` Provider.
 - Azure Relay ZoneLinks → `transport-azure-relay` Provider.
 
+**D089 desired-spec shape.** This transport Provider owns no ResourceType; core
+reconciles the `ZoneLink` base `spec.*` fields, including `spec.providerRef`.
+Vsock-specific desired input is carried only by the canonical
+`ZoneLink.spec.provider = { schemaId, schemaVersion, settings }` envelope, whose
+`settings` object mirrors `status.provider.details`, is registered/signed in the
+Provider manifest, deny-unknown, bounded, versioned/digested, validated against
+`spec.providerRef` at Nix build and API admission, and cannot shadow base
+fields. Shared fields are promoted to the ResourceType base. The Provider
+implements the exact base spec/status schema version/fingerprint, accepts the
+canonical minimal base Spec, passes base conformance, and rejects an
+unsupported optional base capability only through its signed capability matrix plus
+provider-neutral `unsupported-capability`.
+`spec.provider` aligns with `status.provider`. The `Provider` resource itself
+keeps the D075 `spec.{artifactId, config}` exception.
+
 ---
 
 ## Crate/package boundary
@@ -192,7 +207,7 @@ packages/d2b-provider-transport-vsock/
     open_close.rs        — OpenTransport / CloseTransport service round-trip (fake port)
     observe.rs           — ObserveTransport event stream (fake port)
     redaction.rs         — no CID / port / path in Debug / log / audit output
-    schema.rs            — transportSettings JSON Schema round-trip and rejection
+    schema.rs            — `spec.provider.settings` JSON Schema round-trip and rejection
     state_volume.rs      — state Volume spec shape, User/<name> layout principal, no ComponentPrincipal
   integration/
     host_guest.rs    — real vsock socketpair via injected effect; OpenTransport + byte round-trip
@@ -209,7 +224,7 @@ The crate depends only on:
 - `d2b-provider` (`ProviderRegistry`, `AuthenticatedProviderRpc`)
 - `tracing` (structured spans; no log macros that could emit raw IDs)
 - `opentelemetry` (metric emission only; no OTEL SDK link)
-- `serde` / `serde_json` (transportSettings schema validation)
+- `serde` / `serde_json` (`spec.provider.settings` schema validation)
 - `tokio` (async runtime; no `tokio-vsock` here)
 - Test-only: `d2b-provider-toolkit` (conformance kit)
 
@@ -447,10 +462,10 @@ defect and must be caught by the `redaction.rs` test.
 
 ---
 
-## transportSettings schema
+## `spec.provider.settings` schema
 
-The `ZoneLink.spec.transportSettings` field carries Provider-specific
-configuration when `transportProviderRef = Provider/transport-vsock`. Core
+The `settings` object inside `ZoneLink.spec.provider` carries Provider-specific
+configuration when `spec.providerRef = Provider/transport-vsock`. Core
 resolves the opaque endpoint and binding IDs from these settings; the Provider
 never receives the raw resolution.
 
@@ -540,7 +555,7 @@ resource.
 | INV-VSOCK-003 | No file descriptor is transferred over the vsock byte channel | `TransportDescriptor.attachment_support = false`; d2b-bus serialization boundary checks `descriptor()` before dispatch; `no_fd_transfer.rs` integration test |
 | INV-VSOCK-004 | Provider never calls `socket(AF_VSOCK, …)`, `connect`, or `bind` directly | `VsockEffectPort` is the only AF_VSOCK call surface; `cfg(target_os = "linux")` feature gate; all syscall paths in `LiveVsockEffectPort` only; seccomp strict profile on Provider process |
 | INV-VSOCK-005 | Provider never accesses or modifies ZoneLink, Guest, Route, or any other ResourceType | RBAC grants contain no resource-type verbs; Provider holds no resource API client; conformance test asserts no resource calls |
-| INV-VSOCK-006 | `transportSettings` schema rejects any field carrying a raw socket address, port number, CID, path, or credential | JSON Schema `additionalProperties: false`; build-time emitter secret-key scanner |
+| INV-VSOCK-006 | `spec.provider.settings` schema rejects any field carrying a raw socket address, port number, CID, path, or credential | JSON Schema `additionalProperties: false`; build-time emitter secret-key scanner |
 | INV-VSOCK-007 | Provider process: no new privileges, strict seccomp, no network namespace join, read-only root filesystem | `sandbox.seccompClass: strict`, `sandbox.noNewPrivileges: true`, `sandbox.readOnlyRoot: true` in Process template; `Provider/system-minijail` profile |
 | INV-VSOCK-008 | Port range `14420–14499` is reserved for `d2b-link` ZoneLink vsock sessions; ports 14317, 14318, 14319 are never allocated by `portClass: "d2b-link"` | Core allocator exclusion list; enforced in core, not in Provider |
 | INV-VSOCK-009 | Service component receives only a dirfd into its local `service` view of its own state Volume; no raw filesystem path, no parent-directory access, no cross-component Volume mount | volume-local Provider validates `sensitivityClass: private` and `mountPath` scope before handing dirfd to process; domain isolation enforced at mount time |
@@ -707,11 +722,15 @@ d2b.zones.k0.resources.link-to-k1 = {
   type = "ZoneLink";
   spec = {
     childZoneRef          = "Zone/k1";
-    transportProviderRef  = "Provider/transport-vsock";
-    transportSettings = {
-      guestRef              = "Guest/k1-vm";
-      portClass             = "d2b-link";
-      connectTimeoutSeconds = 30;
+    providerRef  = "Provider/transport-vsock";
+    provider = {
+      schemaId      = "transport-vsock.d2b.io/ZoneLink/spec";
+      schemaVersion = "1.0";
+      settings = {
+        guestRef              = "Guest/k1-vm";
+        portClass             = "d2b-link";
+        connectTimeoutSeconds = 30;
+      };
     };
   };
 };
@@ -719,7 +738,7 @@ d2b.zones.k0.resources.link-to-k1 = {
 
 `spec.config.executionRef` is validated at eval time against declared Zone
 resources; referential existence is verified at bundle activation time. The
-Nix module also validates `transportSettings` against the
+Nix module also validates `spec.provider.settings` against the
 `transport-vsock.transport-binding.json` schema and rejects any prohibited
 field (`cid`, `port`, `socketPath`, etc.). Validation is performed by the
 `d2b.zones.<name>.resources` schema checker, not by the Provider's own Nix
@@ -741,7 +760,7 @@ expression.
 | `vsock.rs` v3 stub | `d2b-session-unix/src/vsock.rs` (v3 baseline) | `ADR-only` | Delta: stub becomes `FramedVsockTransport` implementation; entry point is `VsockEffectPort` not raw syscall |
 | Framing tests | `d2b-session-unix/tests/unix_session.rs` vsock subset | `implemented-but-unwired` | Retained in `tests/framing.rs` (Provider crate): `vsock_framing_handles_partial_and_coalesced_records`, `vsock_frame_too_large_rejects_before_allocating`, `vsock_clean_eof_versus_reset_are_distinct` |
 | CID mismatch enforcement | `vsock_cid_mismatch_closes_without_processing` | `implemented-but-unwired` | Adapted in `tests/effect_port_mock.rs` as `OpaqueEndpointId` mismatch case; raw CID variant moves to core adapter tests |
-| ZoneLink resource | `ADR-046-zone-routing.md` | `generated-or-eval-contract` | Retained: ZoneLink spec shape and `transportSettings`; core controller owns all status/routes/finalizer |
+| ZoneLink resource | `ADR-046-zone-routing.md` | `generated-or-eval-contract` | Retained: ZoneLink base spec shape and `spec.provider.settings`; core controller owns all status/routes/finalizer |
 | ComponentSession / Noise | `ADR-046-componentsession-and-bus.md` | `generated-or-eval-contract` | Retained: owned by d2b-bus; Provider is opaque carriage only |
 
 ---
@@ -785,7 +804,7 @@ expression.
 ## Removal criteria
 
 `Provider/transport-vsock` (and its crate) may not be removed while:
-1. Any `ZoneLink` resource with `transportProviderRef: Provider/transport-vsock`
+1. Any `ZoneLink` resource with `spec.providerRef: Provider/transport-vsock`
    exists in any Zone.
 2. Any `d2b-link` port-class vsock session is active on any Zone runtime.
 3. The state Volume (`Volume/transport-vsock--service--empty-state--*`) has not
@@ -815,7 +834,7 @@ the Provider catalog in `ADR-046-provider-model-and-packaging.md`.
   process memory.
 - `Provider.spec.config.executionRef`: required `Host/<name>` or `Guest/<name>`;
   one service Process per Provider instance, not per ZoneLink.
-- `transportSettings`: `guestRef` / `portClass` fields; what is forbidden.
+- `spec.provider.settings`: `guestRef` / `portClass` fields; what is forbidden.
 - Port range `14420–14499` reservation; ports 14317/14318/14319 excluded.
 - `VsockEffectPort` injection: Provider never calls AF_VSOCK syscalls directly;
   `tokio-vsock` is NOT a Provider crate dependency.

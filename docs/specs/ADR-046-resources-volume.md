@@ -73,6 +73,42 @@ All ten Volume design decisions are resolved in this revision.
 
 ## Volume ResourceSpec
 
+### Three-layer spec shape (D089)
+
+D089 freezes Volume spec as three layers. Layer 1 is the universal Resource
+envelope and metadata. Layer 2 is the Volume base spec at top-level `spec.*`,
+including `spec.providerRef`; source, kind, layout, views, attachments, quota,
+and lifecycle fields documented here are base fields. Layer 3 is the optional
+canonical selected-Provider extension
+`spec.provider = { schemaId, schemaVersion, settings }`; it is the only
+Provider-specific desired extension. It omits `providerRef` and
+`observedProviderGeneration`: `spec.providerRef` is base, and spec is desired
+rather than observed.
+
+Mapping convention: within this spec a reference to `spec.providerSettings` (or the former Device `spec.settings`) denotes the canonical `spec.provider.settings`; `spec.providerRef` and every other `spec.*` field is ResourceType base.
+
+Every Volume Provider `ResourceApiBinding` MUST implement the exact Volume base
+spec schema version and fingerprint, accept the canonical minimal valid base
+Spec, and pass base lifecycle/status/error/finalizer conformance. A Provider MAY
+reject an optional base capability only through its signed standard capability
+matrix and a typed provider-neutral `unsupported-capability` error; it MUST NOT
+ignore, reinterpret, rename, duplicate, weaken, or require extension data for
+base-required behavior. `spec.provider.settings` is strict deny-unknown,
+bounded, schema-versioned and digested, validated against `spec.providerRef` at
+Nix build and API admission, and fails with `spec-provider-schema-invalid` or
+`spec-provider-shadow` when invalid or shadowing/restating/overriding/renaming/
+duplicating a base field. Shared Volume semantics are promoted to the Volume
+base spec and never live in `spec.provider`; generic CLI/controllers operate on
+base spec plus base status. For the same Provider, the `spec.provider` and
+`status.provider` schemas align.
+
+`Volume.spec.source.settings` (including `kind` and `sourcePolicyId`) is a
+Volume base structure, not a Provider extension. Only genuinely
+implementation-only desired settings use `spec.provider.settings`.
+Provider resource dossiers in this file retain the D075 Provider
+self-description shape (`spec.artifactId`, `spec.config`) because a Provider has
+no non-circular `spec.providerRef`.
+
 ```yaml
 apiVersion: resources.d2b.io/v3
 type: Volume

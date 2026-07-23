@@ -20,7 +20,7 @@
 2. [Provider ResourceSpec](#2-provider-resourcespec)
 3. [Provider config schema](#3-provider-config-schema)
 4. [Guest ResourceSpec](#4-guest-resourcespec)
-5. [Guest providerSettings schema](#5-guest-providersettings-schema)
+5. [Guest `spec.provider.settings` schema](#5-guest-specprovidersettings-schema)
 6. [Volume resources](#6-volume-resources)
 7. [Network dependency](#7-network-dependency)
 8. [Device dependencies](#8-device-dependencies)
@@ -130,7 +130,7 @@ It is never specified directly in Nix.
 | `qemuBinaryArtifactId` | string | yes | `"qemu-system-x86_64"` | `^[a-z][a-z0-9-]*$` | Artifact catalog ID for the QEMU binary closure |
 | `qmpReadyTimeoutSeconds` | u32 | no | `30` | 5–300 | Deadline for initial QMP greeting after process start |
 | `qmpOperationTimeoutSeconds` | u32 | no | `60` | 5–300 | Per-QMP-command timeout |
-| `pausedAtBootDefault` | bool | no | `true` | — | Default `pauseAtBoot` if not set in Guest providerSettings |
+| `pausedAtBootDefault` | bool | no | `true` | — | Default `pauseAtBoot` if not set in Guest spec.provider.settings |
 | `displayProviderRef` | ResourceRef? | no | `null` | `Provider/<n>` | Provider for WaylandSession resources; required when any Guest sets `displayWindow: true` |
 | `networkProviderRef` | ResourceRef | yes | — | `Provider/<n>` | Network Provider for tap/bridge delivery |
 | `volumeProviderRef` | ResourceRef | yes | — | `Provider/<n>` | Volume Provider for media and runtime volumes |
@@ -171,23 +171,24 @@ spec:
     - deviceRef: Device/host-kvm            # KVM acceleration; explicit required dependency
       exclusive: false
   volumeDefaults: {}
-  providerSettings:                         # see §5
-    bootMediaRef: Volume/corp-iso-boot-media
-    bootMediaView: guest-attach
-    removableVolumeRefs:
-      - volumeRef:  Volume/corp-usb-stick
-        view:       guest-attach
-    vcpu: 4
-    memoryMib: 8192
-    cpuModel: host
-    machineType: q35
-    bios: ovmf
-    pauseAtBoot: true
-    displayWindow: false
-    serialConsole: true
-    tablet: true
-    rtcBase: utc
-    extraFeatures: []
+  provider:                                  # see §5
+    schemaId: runtime-qemu-media.d2b.io/Guest/spec
+    schemaVersion: 1.0.0
+    settings:
+      bootMediaRef: Volume/corp-iso-boot-media
+      bootMediaView: guest-attach
+      removableVolumeRefs:
+        - volumeRef:  Volume/corp-usb-stick
+          view:       guest-attach
+      cpuModel: host
+      machineType: q35
+      bios: ovmf
+      pauseAtBoot: true
+      displayWindow: false
+      serialConsole: true
+      tablet: true
+      rtcBase: utc
+      extraFeatures: []
 status:
   phase: Pending
   resource:
@@ -216,11 +217,26 @@ False and reason `kvm-device-unavailable`.
 
 ---
 
-## 5 Guest providerSettings schema
+## 5 Guest `spec.provider.settings` schema
 
-`providerSettings` is a bounded map validated against the Provider's signed
-JSON Schema. It contains Guest-level settings for the VMM; no raw paths,
-executable paths, argv fragments, or credential bytes appear here.
+`spec.provider.settings` is a bounded map validated against the Provider's
+signed JSON Schema. It contains Guest-level implementation settings for the VMM;
+no raw paths, executable paths, argv fragments, or credential bytes appear here.
+
+**D089 spec extension contract:** this Provider's implementation-only desired
+configuration is carried in `spec.provider.settings` under
+`runtime-qemu-media.d2b.io/Guest/spec`; the schema is registered/signed in the
+manifest, deny-unknown, bounded, versioned, and validated against
+`spec.providerRef` at Nix build and API admission. Base fields stay at `spec.*`;
+shared semantics are promoted to the Guest base and never placed in
+`spec.provider`. This Provider implements the exact base spec/status schema
+version/fingerprint, accepts the canonical minimal valid base Spec, and rejects
+an unsupported optional base capability only through its signed capability matrix
+plus provider-neutral `unsupported-capability`. `spec.provider` aligns with
+`status.provider` for `Provider/runtime-qemu-media`.
+
+`vcpu` and `memoryMib` are promoted Guest base fields (`spec.vcpu` and
+`spec.memoryMib`); they are not Provider extension fields.
 
 | Field | Type | Required | Default | Bounds | Notes |
 | --- | --- | --- | --- | --- | --- |
@@ -229,8 +245,6 @@ executable paths, argv fragments, or credential bytes appear here.
 | `removableVolumeRefs` | list | no | `[]` | max 4 entries | Runtime-hotpluggable media Volumes |
 | `removableVolumeRefs[].volumeRef` | ResourceRef | yes | — | `Volume/<n>` | Removable media Volume |
 | `removableVolumeRefs[].view` | string | yes | — | `^[a-z][a-z0-9-]*$` | View within the Volume for guest access |
-| `vcpu` | u16 | no | `2` | 1–128 | vCPU count |
-| `memoryMib` | u32 | no | `2048` | 128–524288 | RAM in MiB |
 | `cpuModel` | string | no | `"host"` | `host\|max\|qemu64` | CPU model string; sealed set |
 | `machineType` | string | no | `"q35"` | `q35\|pc` | QEMU machine type |
 | `bios` | string | no | `"ovmf"` | `ovmf\|seabios` | Firmware type |
@@ -520,7 +534,7 @@ non-fatal informational condition.
 ## 9 WaylandSession dependency
 
 `Provider/runtime-qemu-media` does not own any display proxy Process or
-Wayland socket. When `providerSettings.displayWindow = true`, the controller
+Wayland socket. When `spec.provider.settings.displayWindow = true`, the controller
 creates a `display-wayland.d2b.io.WaylandSession` resource in the same Zone,
 using the exact ResourceSpec defined by `Provider/display-wayland`'s dossier
 (including its required `guestRef`, `hostRef`, `userRef`, `policy`, `identity`,
@@ -557,7 +571,7 @@ The `display-wayland` Provider owns all proxy Process instances internally.
    resource as an owner, and
 2. consumes the opaque endpoint attachment from that session's `Ready` status.
 
-If `providerSettings.displayWindow = false`, the controller does not create a
+If `spec.provider.settings.displayWindow = false`, the controller does not create a
 `WaylandSession` resource. QEMU runs headless (`-display none`).
 
 If `config.displayProviderRef` is null and `displayWindow = true`, the
@@ -862,7 +876,7 @@ tmpfs is unmounted only after the runner Process pidfd signals exit.
 
 1. **Dependencies check (async watch):** Controller observes via watch events
    that `Device/host-kvm.phase = Ready`, all `Volume/<media>.phase = Ready`
-   (for each ref in providerSettings), and (if displayWindow)
+   (for each ref in spec.provider.settings), and (if displayWindow)
    `WaylandSession.phase = Ready`. No blocking loop; controller re-queues on
    watch events.
 
@@ -948,7 +962,7 @@ is written to the resource store, status fields, audit events, or OTEL spans.
 ### 13.3 Hotplug protocol
 
 Removable media is attached and detached at runtime by updating the Guest
-`spec.providerSettings.removableVolumeRefs` list. The controller observes
+`spec.provider.settings.removableVolumeRefs` list. The controller observes
 the change, requests the Volume fd from `volume-local` ComponentSession, and
 issues `blockdev-add` + `device_add` over the QMP attachment. Detach is the
 reverse: `device_del` + `blockdev-del` after quiescing.
@@ -1303,19 +1317,21 @@ d2b.zones.corp.resources.corp-iso-boot = {
       deviceRef = "Device/host-kvm";
       exclusive = false;
     }];
-    providerSettings = {
-      bootMediaRef  = "Volume/corp-iso-boot-media";
-      bootMediaView = "guest-attach";
-      vcpu          = 4;
-      memoryMib     = 8192;
-      cpuModel      = "host";
-      machineType   = "q35";
-      bios          = "ovmf";
-      pauseAtBoot   = true;
-      displayWindow = false;
-      serialConsole = true;
-      tablet        = true;
-      rtcBase       = "utc";
+    provider = {
+      schemaId = "runtime-qemu-media.d2b.io/Guest/spec";
+      schemaVersion = "1.0.0";
+      settings = {
+        bootMediaRef  = "Volume/corp-iso-boot-media";
+        bootMediaView = "guest-attach";
+        cpuModel      = "host";
+        machineType   = "q35";
+        bios          = "ovmf";
+        pauseAtBoot   = true;
+        displayWindow = false;
+        serialConsole = true;
+        tablet        = true;
+        rtcBase       = "utc";
+      };
     };
   };
 };
@@ -1335,19 +1351,21 @@ d2b.zones.corp.resources.corp-media-station = {
       deviceRef = "Device/host-kvm";
       exclusive = false;
     }];
-    providerSettings = {
-      bootMediaRef  = "Volume/corp-win-installer";
-      bootMediaView = "guest-attach";
-      removableVolumeRefs = [{
-        volumeRef = "Volume/corp-drivers-usb";
-        view      = "guest-attach";
-      }];
-      vcpu          = 2;
-      memoryMib     = 4096;
-      pauseAtBoot   = false;
-      displayWindow = true;     # controller will create WaylandSession
-      serialConsole = false;
-      tablet        = true;
+    provider = {
+      schemaId = "runtime-qemu-media.d2b.io/Guest/spec";
+      schemaVersion = "1.0.0";
+      settings = {
+        bootMediaRef  = "Volume/corp-win-installer";
+        bootMediaView = "guest-attach";
+        removableVolumeRefs = [{
+          volumeRef = "Volume/corp-drivers-usb";
+          view      = "guest-attach";
+        }];
+        pauseAtBoot   = false;
+        displayWindow = true;     # controller will create WaylandSession
+        serialConsole = false;
+        tablet        = true;
+      };
     };
   };
 };
@@ -1450,7 +1468,7 @@ packages/d2b-provider-runtime-qemu-media/
 
 **Priority:** P0
 
-**Description:** Define `GuestSpec`, `GuestStatus`, `GuestProviderSettings`
+**Description:** Define `GuestSpec`, `GuestStatus`, `GuestProviderSpecSettings`
 Rust types with serde/JSON Schema. Derive JSON Schema via `schemars`. Fields
 must match §4, §5, and §16 exactly.
 
@@ -1589,7 +1607,7 @@ attachment for the owning Guest. No path inspection.
 
 **Priority:** P1
 
-**Description:** When `providerSettings.displayWindow = true`, controller
+**Description:** When `spec.provider.settings.displayWindow = true`, controller
 creates/updates/deletes a `display-wayland.d2b.io.WaylandSession` resource
 (§9) using the exact ResourceSpec defined by the `display-wayland` dossier.
 Watches for `Ready` and reads the opaque endpoint attachment from status

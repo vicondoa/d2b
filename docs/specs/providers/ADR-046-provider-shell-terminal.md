@@ -144,6 +144,20 @@ qualified immutable `schemaId`, semver `schemaVersion`, numeric
 fields. The controller writes all present layers atomically in one status
 mutation.
 
+Per D089, `ShellPool` and `ShellSession` typed desired specs are the
+ResourceType base specs (Layer 2): top-level `spec.*`, including
+`spec.providerRef` where applicable. Any implementation-variant desired
+settings use only the canonical Layer 3 `spec.provider = { schemaId,
+schemaVersion, settings }` envelope, whose `settings` are
+manifest-registered/signed, deny-unknown, bounded, versioned/digested,
+validated against `spec.providerRef`, and forbidden to shadow base fields;
+shared fields are promoted into the base spec. `Provider/shell-terminal`
+implements the exact base spec/status schema version/fingerprint, accepts the
+canonical minimal base Spec, and rejects an unsupported optional base
+capability only through its signed capability matrix plus typed
+provider-neutral `unsupported-capability`. `spec.provider` aligns with
+`status.provider`.
+
 ## `shell-terminal.d2b.io.ShellPool` ResourceType
 
 ### Purpose

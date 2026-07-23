@@ -24,6 +24,40 @@ is in the interaction Provider catalog and is independently specified.
 
 ## Device ResourceType spec
 
+### Three-layer spec shape (D089)
+
+D089 freezes Device spec as three layers. Layer 1 is the universal Resource
+envelope and metadata. Layer 2 is the Device base spec at top-level `spec.*`,
+including `spec.providerRef`; `deviceClass`, `arbitration`,
+`maxConcurrentClaims`, and `inventory.selector` remain base fields. Layer 3 is
+the optional canonical selected-Provider extension
+`spec.provider = { schemaId, schemaVersion, settings }`; it is the only
+Provider-specific desired extension and replaces the former top-level
+`spec.settings` shape. It omits `providerRef` and
+`observedProviderGeneration`: `spec.providerRef` is base, and spec is desired
+rather than observed.
+
+Mapping convention: within this spec a reference to `spec.providerSettings` (or the former Device `spec.settings`) denotes the canonical `spec.provider.settings`; `spec.providerRef` and every other `spec.*` field is ResourceType base.
+
+Every Device Provider `ResourceApiBinding` MUST implement the exact Device base
+spec schema version and fingerprint, accept the canonical minimal valid base
+Spec, and pass base lifecycle/status/error/finalizer conformance. A Provider MAY
+reject an optional base capability only through its signed standard capability
+matrix and a typed provider-neutral `unsupported-capability` error; it MUST NOT
+ignore, reinterpret, rename, duplicate, weaken, or require extension data for
+base-required behavior. `spec.provider.settings` is strict deny-unknown,
+bounded, schema-versioned and digested, validated against `spec.providerRef` at
+Nix build and API admission, and fails with `spec-provider-schema-invalid` or
+`spec-provider-shadow` when invalid or shadowing/restating/overriding/renaming/
+duplicating a base field. Shared device semantics are promoted to the Device
+base spec and never live in `spec.provider`; generic CLI/controllers operate on
+base spec plus base status. For the same Provider, the `spec.provider` and
+`status.provider` schemas align.
+
+Provider resource dossiers in this file retain the D075 Provider self-description
+shape (`spec.artifactId`, `spec.config`) because a Provider has no non-circular
+`spec.providerRef`.
+
 ### Envelope example
 
 ```yaml
@@ -47,7 +81,10 @@ spec:
   maxConcurrentClaims: 1
   inventory:
     selector: {}             # emulated devices carry no physical selector
-  settings: {}               # Provider-specific settings
+  provider:
+    schemaId: device-tpm.d2b.io/spec
+    schemaVersion: "1.0"
+    settings: {}             # Provider-specific settings
 status:
   observedGeneration: 1
   phase: Ready

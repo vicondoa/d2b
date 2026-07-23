@@ -79,6 +79,23 @@ The v3 target name appears in parentheses or an explicit mapping.
 | Guest capability | Not applicable — volume-local does not attach to Guests |
 | Main reuse | `d2b-state` at commit `6faa5256` (copy/adapt); `d2b-priv-broker/src/ops/swtpm_dir.rs` (adapt marker algorithm) |
 
+**D089 desired-spec shape.** `Provider/volume-local` owns the `Volume`
+ResourceType base spec: fields such as `spec.providerRef`,
+`spec.source.settings.kind`, and `spec.source.settings.sourcePolicyId` are base
+Volume fields, not Provider extensions. It carries no optional
+`spec.provider` payload today. If a future implementation-only desired setting
+is required, it must use the canonical `spec.provider = { schemaId,
+schemaVersion, settings }` envelope, registered/signed in the Provider
+manifest, deny-unknown, bounded, versioned/digested, validated against
+`spec.providerRef` at Nix build and API admission, and forbidden to shadow base
+fields. Shared fields are promoted to the Volume base. The Provider implements
+the exact base spec/status schema version/fingerprint, accepts the canonical
+minimal base Spec, passes base conformance, and rejects an
+unsupported optional base capability only via its signed capability matrix plus
+provider-neutral `unsupported-capability`.
+`spec.provider` aligns with `status.provider`. The `Provider` resource itself
+keeps the D075 `spec.{artifactId, config}` exception.
+
 ---
 
 ## Volume source kinds

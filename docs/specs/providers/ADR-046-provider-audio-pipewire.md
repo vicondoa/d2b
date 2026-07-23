@@ -276,6 +276,19 @@ status:
 
 ### `AudioState.spec` fields
 
+Per D089, `AudioState`'s typed desired spec is the ResourceType base spec
+(Layer 2): top-level `spec.*`, including `spec.providerRef` where applicable.
+Any implementation-variant desired settings use only the canonical Layer 3
+`spec.provider = { schemaId, schemaVersion, settings }` envelope, whose
+`settings` are manifest-registered/signed, deny-unknown, bounded,
+versioned/digested, validated against `spec.providerRef`, and forbidden to
+shadow base fields; shared fields are promoted into the base spec.
+`Provider/audio-pipewire` implements the exact base spec/status schema
+version/fingerprint, accepts the canonical minimal base Spec, and rejects an
+unsupported optional base capability only through its signed capability matrix
+plus typed provider-neutral `unsupported-capability`. `spec.provider` aligns
+with `status.provider`.
+
 | Field | Type | Required | Default | Bounds | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `providerRef` | ResourceRef | yes | — | `Provider/audio-pipewire` | Must resolve to the installed Provider; immutable after creation |

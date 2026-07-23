@@ -280,6 +280,16 @@ universal base plus `status.resource` (a base-only projection) and never read a
 peer's `status.provider.details`; any field a second implementation needs is
 promoted to `status.resource`.
 
+Symmetrically, desired `spec` has the frozen three-layer shape (D089): the
+universal envelope, the ResourceType base spec at `spec.*` (including
+`spec.providerRef`), and an optional canonical `spec.provider =
+{ schemaId, schemaVersion, settings }`. Generic controllers reconcile from the
+base spec and base status only; a Provider controller additionally reads its own
+`spec.provider.settings` and writes its own `status.provider`. A Provider that
+cannot honor an optional base capability reports the provider-neutral
+`unsupported-capability` outcome rather than ignoring or reinterpreting the base
+field.
+
 On a Zone or controller restart a controller re-reads its owned resources'
 status and treats every field as **observation, not authority**. Before
 relying on any recovered observation it reverifies against external reality —

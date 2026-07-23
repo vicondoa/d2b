@@ -115,6 +115,24 @@ component descriptor inside the Provider package closure.
 
 ## Device spec
 
+Normative D089 spec layering: Device base fields are ResourceType base
+`spec.*` fields, including `spec.providerRef`, `deviceClass`,
+`inventory.selector`, attachments, and arbitration. This Provider's
+desired-only extension is the canonical `spec.provider = { schemaId:
+"device-usbip.d2b.io/Device/spec", schemaVersion, settings }` envelope; it
+is manifest-registered/signed, strict deny-unknown, bounded, versioned and
+digested,
+validated against `spec.providerRef` at Nix build and API admission,
+implementation-only, and may not shadow base fields. Shared fields are promoted
+to the Device base. The Provider implements the exact base Device spec/status
+version/fingerprint, accepts the canonical minimal valid base Spec, and rejects
+unsupported optional base capabilities only through its signed capability matrix
+and provider-neutral `unsupported-capability`. `spec.provider` aligns with
+`status.provider`; generic CLI/controllers operate on the base spec and base
+status only. A reference to the former Device `spec.settings` denotes
+`spec.provider.settings`; no secret bytes are allowed in any spec layer, and no
+credential material is allowed in `spec.provider.settings`.
+
 ```yaml
 apiVersion: resources.d2b.io/v3
 type: Device
@@ -134,12 +152,15 @@ spec:
       vendorId:   "1050"         # exactly 4 ASCII hex digits, lowercased
       productId:  "0407"
       serial:     null           # optional; null = match any serial for this vid/pid
-  settings:
-    networkRef: Network/work-net  # required; used as zone-scoping dependency
-    claimMode:  declared          # declared|explicit
+  provider:
+    schemaId: "device-usbip.d2b.io/Device/spec"
+    schemaVersion: "1.0.0"
+    settings:
+      networkRef: Network/work-net  # required; used as zone-scoping dependency
+      claimMode:  declared          # declared|explicit
 ```
 
-### Settings fields
+### Provider settings fields
 
 | Field | Type | Default | Bounds | Notes |
 | --- | --- | --- | --- | --- |
@@ -1046,9 +1067,13 @@ d2b.zones.work.resources.corp-vm-usb = {
       vendorId  = "1050";
       productId = "0407";
     };
-    settings = {
-      networkRef = "Network/work-net";
-      claimMode  = "declared";    # or "explicit"
+    provider = {
+      schemaId = "device-usbip.d2b.io/Device/spec";
+      schemaVersion = "1.0.0";
+      settings = {
+        networkRef = "Network/work-net";
+        claimMode  = "declared";    # or "explicit"
+      };
     };
   };
 };

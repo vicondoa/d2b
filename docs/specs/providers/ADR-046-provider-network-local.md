@@ -56,6 +56,18 @@ Sections reference `ADR-046-resources-network` (hereafter **NET**),
 | Data Providers depended on | `Provider/volume-local` |
 | Broker dependency | **None** — all host-kernel effects via `NetworkEffectPort` |
 
+**D089 spec extension contract:** `Provider/network-local` carries any
+implementation-only Network desired configuration only in `spec.provider.settings`
+under `network-local.d2b.io/Network/spec`; that schema is registered/signed in
+the manifest, deny-unknown, bounded, versioned, and validated against
+`spec.providerRef` at Nix build and API admission. Base Network fields stay at
+`spec.*`; shared semantics are promoted to the Network base and never placed in
+`spec.provider`. The Provider implements the exact base spec/status schema
+version/fingerprint, accepts the canonical minimal valid base Spec, and rejects
+an unsupported optional base capability only through its signed capability matrix
+plus provider-neutral `unsupported-capability`. `spec.provider` aligns with
+`status.provider` for `Provider/network-local`.
+
 The provider crate does **not** depend on `d2bd`, `d2b-priv-broker`, any broker
 socket or wire type, or any Provider's implementation crate. All host-kernel effects
 are driven through the injected `NetworkEffectPort` async trait, which is declared in
@@ -603,7 +615,7 @@ terminal (§6.2).
 IfNames **never** appear in:
 - `Network.spec` fields (any kind);
 - `Network.status` fields (any kind);
-- `Guest.spec.providerSettings`;
+- `Guest.spec.provider.settings`;
 - audit records;
 - OTEL span attributes or metric labels;
 - any user-facing diagnostic beyond the bounded diagnostic API.
@@ -630,16 +642,25 @@ spec:
     vcpus: 1
   systemArtifactId: net-vm-base         # from Network.spec.netVmSystemArtifactId
                                         # plain bounded ID ^[a-z][a-z0-9-]*$ — NOT a path
-  # providerSettings is null for the net-VM's internal tap interfaces.
+  # spec.provider.settings carries only runtime-cloud-hypervisor desired values.
   # Tap FDs are resolved privately by core from the Network→Guest owner relationship
   # and are supplied to the runtime via LaunchTicket.
   # No attachment identity, handle, IfName, IP, or MAC appears here.
-  providerSettings: null
+  provider:
+    schemaId: runtime-cloud-hypervisor.d2b.io/Guest/spec
+    schemaVersion: 1.0.0
+    settings:
+      vsockCid: 1024                  # assigned from the Network's CIDR allocation
   # When spec.externalAttachment is non-null, the controller adds declared-spec
-  # parameters (operator-specified, not kernel-observed) for the macvtap:
-  # providerSettings:
-  #   externalHostInterface: eth0       # declared by operator in Network.spec.externalAttachment
-  #   externalMode: bridge              # same
+  # parameters (operator-specified, not kernel-observed) for the macvtap under
+  # spec.provider.settings:
+  # provider:
+  #   schemaId: runtime-cloud-hypervisor.d2b.io/Guest/spec
+  #   schemaVersion: 1.0.0
+  #   settings:
+  #     vsockCid: 1024
+  #     externalHostInterface: eth0       # declared by operator in Network.spec.externalAttachment
+  #     externalMode: bridge              # same
 ```
 
 `systemArtifactId` is a plain bounded ID (`^[a-z][a-z0-9-]*$`); it is **not** a
@@ -1316,7 +1337,7 @@ Default: `isolation.allowEastWest = false`:
 
 When `spec.externalAttachment` is non-null:
 1. Controller copies operator-declared external attachment parameters from
-   `Network.spec.externalAttachment` into the net-VM Guest spec's `providerSettings`:
+   `Network.spec.externalAttachment` into the net-VM Guest spec's `spec.provider.settings`:
    `externalHostInterface` (operator-declared NIC name), `externalMode`, and
    optional static MAC/IP fields.  These are desired spec values specified by the
    operator, not dynamically derived kernel values.
@@ -1402,7 +1423,7 @@ resources without waiting for any single handler.
 
 6. Create or update Guest/<netVmName>
    └─ systemArtifactId = Network.spec.netVmSystemArtifactId (plain bounded ID)
-   └─ providerSettings: null (tap FDs resolved privately by core from owner graph)
+   └─ spec.provider.settings.vsockCid from Network CIDR allocation
    └─ when externalAttachment non-null: add declared-spec external params only
 
 7. Wait for Guest Ready (via DependenciesReady hint)
@@ -1987,7 +2008,7 @@ name, workload IP address, DHCP MAC address, or host uplink IP address appears
 in any of:
 - `Network.spec` fields;
 - `Network.status` fields;
-- `Guest.spec.providerSettings`;
+- `Guest.spec.provider.settings`;
 - OTEL span attributes;
 - metric label values;
 - audit record payload fields.

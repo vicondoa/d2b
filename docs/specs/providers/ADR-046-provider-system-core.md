@@ -196,15 +196,33 @@ spec:
   networkAttachments: []              # 0..64 NetworkAttachmentList entries
   deviceAttachments:  []              # 0..64 DeviceAttachmentList entries
   volumeAttachmentDefaults: []        # 0..64 VolumeAttachmentDefaultList entries
-  providerSettings:                   # system-core Host extension schema
-    isolationPosture: null            # null | "none"; see §9
-    kernelVersionMin: null            # min kernel semver string; null = no requirement
-    capabilities: []                  # HostCapabilityClass[] claimed; verified at reconcile
+  isolationPosture: null              # promoted base field; null | "none"; see §9
+  provider:
+    schemaId: system-core.d2b.io/Host/spec
+    schemaVersion: 1.0.0
+    settings:                         # system-core Host implementation schema
+      kernelVersionMin: null          # min kernel semver string; null = no requirement
+      capabilities: []                # HostCapabilityClass[] claimed; verified at reconcile
 ```
 
 `spec.providerRef` must be exactly `Provider/system-core`. Any other providerRef
 on a Host resource is rejected at admission with:
 `spec-validation-error: Host.spec.providerRef must be Provider/system-core`.
+
+**D089 spec extension contract:** this Provider's implementation-only desired
+configuration is carried in `spec.provider.settings` under
+`system-core.d2b.io/Host/spec`; the schema is registered/signed in the manifest,
+deny-unknown, bounded, versioned, and validated against `spec.providerRef` at Nix
+build and API admission. Base fields stay at `spec.*`; shared semantics are
+promoted to the Host/User base and never placed in `spec.provider`. This
+Provider implements the exact base spec/status schema version/fingerprint,
+accepts the canonical minimal valid base Spec, and rejects an unsupported
+optional base capability only through its signed capability matrix plus
+provider-neutral `unsupported-capability`. `spec.provider` aligns with
+`status.provider` for `Provider/system-core`.
+
+`isolationPosture` is a promoted Host base field because admission and status use
+it across Host implementations; it is not a Provider extension field.
 
 #### 4.1.2 Status schema (normative summary)
 
@@ -689,8 +707,11 @@ d2b.zones.dev.resources.host-system = {
     allowedDomains = ["system" "user"];
     defaultUserRef = "User/alice";
     budget         = {};
-    providerSettings = {
-      capabilities = ["kvm" "pidfd" "cgroup-v2" "virtiofs"];
+    isolationPosture = null;
+    provider = {
+      schemaId = "system-core.d2b.io/Host/spec";
+      schemaVersion = "1.0.0";
+      settings.capabilities = ["kvm" "pidfd" "cgroup-v2" "virtiofs"];
     };
   };
 };
@@ -715,10 +736,14 @@ Rendered canonical JSON:
     "networkAttachments": [],
     "deviceAttachments": [],
     "volumeAttachmentDefaults": [],
-    "providerSettings": {
-      "isolationPosture": null,
-      "kernelVersionMin": null,
-      "capabilities": ["kvm", "pidfd", "cgroup-v2", "virtiofs"]
+    "isolationPosture": null,
+    "provider": {
+      "schemaId": "system-core.d2b.io/Host/spec",
+      "schemaVersion": "1.0.0",
+      "settings": {
+        "kernelVersionMin": null,
+        "capabilities": ["kvm", "pidfd", "cgroup-v2", "virtiofs"]
+      }
     }
   }
 }
@@ -734,8 +759,11 @@ d2b.zones.dev.resources.host-user-shell = {
     defaultDomain   = "user";
     allowedDomains  = ["user"];
     defaultUserRef  = "User/alice";
-    providerSettings = {
-      isolationPosture = "none";   # required; must be "none"; cannot be null for user-only
+    isolationPosture = "none";     # required; cannot be null for user-only
+    provider = {
+      schemaId = "system-core.d2b.io/Host/spec";
+      schemaVersion = "1.0.0";
+      settings = {};
     };
   };
 };
@@ -745,9 +773,9 @@ Eval assertions:
 - `isolationPosture` set to any value other than `"none"` for a user-only
   Host (`defaultDomain=user`, `allowedDomains=["user"]`) is rejected at eval
   time with:
-  `spec-validation-error: Host.spec.providerSettings.isolationPosture must be "none" for user-only hosts`.
+  `spec-validation-error: Host.spec.isolationPosture must be "none" for user-only hosts`.
 - A user-only Host with `isolationPosture=null` is rejected with:
-  `spec-validation-error: Host.spec.providerSettings.isolationPosture must be set to "none" when allowedDomains=["user"]`.
+  `spec-validation-error: Host.spec.isolationPosture must be set to "none" when allowedDomains=["user"]`.
 - A `Process` with `executionRef: Host/host-user-shell` and `domain: system`
   is rejected at eval time.
 - No `Guest` ref is emitted for a user-only Host declaration.
@@ -1355,6 +1383,6 @@ are considered complete:
 
 All probes use bounded syscall timeouts per §13. A probe that times out
 reports the capability as absent (not unknown). The operator claim in
-`spec.providerSettings.capabilities` is advisory; the reconciler always
+`spec.provider.settings.capabilities` is advisory; the reconciler always
 reports the observed set and conditions reflect any mismatch between claimed
 and observed.

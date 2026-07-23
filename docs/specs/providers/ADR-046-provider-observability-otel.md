@@ -273,6 +273,23 @@ deletes the sockets Volume after component Process finalizers complete when the
 Provider is removed. Core also derives and writes
 `Provider/observability-otel` status by aggregating component health.
 
+**D089 desired-spec shape.** `Provider/observability-otel` writes mostly
+ResourceType base `spec.*` fields for `Process` children and the
+ProviderDeployment-created `Volume`; it carries little or no `spec.provider`
+payload on those resources today. Any future implementation-only desired
+configuration must use the canonical `spec.provider = { schemaId,
+schemaVersion, settings }` envelope, registered/signed in the Provider
+manifest, deny-unknown, bounded, versioned/digested, validated against
+`spec.providerRef` at Nix build and API admission, and forbidden to shadow base
+fields. Shared fields are promoted to the ResourceType base. Each
+`ResourceApiBinding` implements the exact base spec/status schema
+version/fingerprint, accepts the canonical minimal base Spec, passes base
+conformance, and rejects an
+unsupported optional base capability only through
+its signed capability matrix plus provider-neutral `unsupported-capability`.
+`spec.provider` aligns with `status.provider`. The `Provider` resource itself
+keeps the D075 `spec.{artifactId, config}` exception.
+
 The semantic controller does not create, update, delete, or watch-for-mutation
 any Volume. Volume is not added to the controller's exported resource permissions.
 `Provider/volume-local` is the sole Volume reconciler and owns all layout, ACL,

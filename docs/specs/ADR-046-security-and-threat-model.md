@@ -1031,6 +1031,22 @@ a private field, and keeps cross-provider consumers on the provider-neutral
 base-only projection (universal base + `status.resource`) so no consumer parses
 another Provider's opaque details.
 
+**Three-layer spec shape (D089).** Desired `spec` is symmetric: the universal
+envelope, the ResourceType base spec at `spec.*` (including `spec.providerRef`),
+and the optional canonical `spec.provider = { schemaId, schemaVersion, settings }`
+extension. The `spec.provider.settings` schema is signed into and registered with
+the Provider package, versioned/digested, and validated against `spec.providerRef`
+at Nix build and API admission with strict unknown-field denial and spec bounds;
+it may not shadow a base field (`spec-provider-shadow`) or use an
+unregistered/version-mismatched schema (`spec-provider-schema-invalid`). This
+prevents an implementation from smuggling unbounded, secret-shaped, or
+authority-shaped desired data into spec under a private field, or from silently
+reinterpreting, renaming, or weakening a base field; a Provider that cannot honor
+an optional base capability must say so through its signed capability matrix and
+the provider-neutral `unsupported-capability` result rather than degrading a base
+field. Generic tooling authors only the base spec, so no operator or generic
+controller depends on a Provider's opaque `settings`.
+
 Two invariants close the specific attacks Volume state is most exposed to:
 
 - **TPM Volume never re-provisioned.** After the swtpm provisioning marker

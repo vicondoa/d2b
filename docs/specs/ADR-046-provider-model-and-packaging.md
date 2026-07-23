@@ -46,6 +46,8 @@ authored or independently duplicated in the resource row:
 - permission claims;
 - CLI projection;
 - events/telemetry/state contracts;
+- per bound ResourceType, the exact base spec and base status schema version/fingerprint the `ResourceApiBinding` implements, and the signed **standard capability matrix** of supported/unsupported optional base capabilities (D089);
+- registered `spec.provider` extension schemas (D089): per owned or bound ResourceType, the qualified `schemaId`, `schemaVersion`, and signed strict JSON Schema for the `spec.provider.settings` object the Provider accepts;
 - registered `status.provider` extension schemas (D088): per owned or written ResourceType, the qualified `schemaId`, `schemaVersion`, and signed strict JSON Schema for the `status.provider.details` object the Provider may write;
 - component placement templates;
 - upgrade/drain/restart policy.
@@ -55,16 +57,27 @@ derived data, never authored Provider spec fields. Core ProviderDeployment
 reads this signed manifest/catalog entry and creates the Provider's static
 component graph from it (see `ADR-046-components-processes-and-sandbox`).
 
-**Status extension registration (D088).** A Provider that writes a
-Provider-specific `status.provider` extension on any ResourceType registers the
-extension schema in its signed manifest: the qualified immutable `schemaId`, the
-`schemaVersion`, and the strict JSON Schema for `details` (unknown-field-denied,
-size/cardinality bounded, redacted/non-secret). The resource store validates
-every `status.provider` write against the installed Provider's registered schema
-and rejects an unregistered `schemaId`/`schemaVersion` or unknown field. Fields
-shared across implementations of a ResourceType are promoted to the
-ResourceType-common `status.resource` object and are never registered or written
-under `status.provider` (see `ADR-046-resource-object-model` § Status).
+**Base-schema conformance and extension registration (D088/D089).** Each
+`ResourceApiBinding` declares and MUST implement the exact ResourceType base
+spec/status schema version/fingerprint, accept the canonical minimal valid base
+Spec, and pass the base lifecycle/status/error/finalizer conformance suite. A
+Provider that accepts a Provider-specific `spec.provider` extension or writes a
+`status.provider` extension registers both extension schemas in its signed
+manifest: the qualified immutable `schemaId`, the `schemaVersion`, and the strict
+JSON Schema for `settings`/`details` (unknown-field-denied, size/cardinality
+bounded; `details` additionally redacted/non-secret). The resource store
+validates every `spec.provider`/`status.provider` write against the installed
+Provider's registered schema at Nix build and API admission, rejecting an
+unregistered/version-mismatched `schemaId`/`schemaVersion`, an unknown field, or
+a `settings`/`details` that shadows a base field. A Provider MAY refuse an
+optional base capability only via its signed capability matrix and the
+provider-neutral `unsupported-capability` result; it never ignores, reinterprets,
+renames, duplicates, or weakens a base field. Fields shared across
+implementations of a ResourceType are promoted to the ResourceType base
+(`spec.*`/`status.resource`) and are never registered or written under
+`spec.provider`/`status.provider` (see `ADR-046-resource-object-model` § Spec /
+§ Status). The `spec.provider` and `status.provider` schemas align for the same
+Provider.
 
 Provider status contains:
 

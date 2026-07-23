@@ -147,6 +147,24 @@ status and the core Operation ledger, and the controller has no `/state` mount.
 
 ### Canonical ResourceSpec
 
+Normative D089 spec layering: Device base fields are ResourceType base
+`spec.*` fields, including `spec.providerRef`, `deviceClass`,
+`inventory.selector`, attachments, and arbitration. This Provider's
+desired-only extension is the canonical `spec.provider = { schemaId:
+"device-gpu.d2b.io/Device/spec", schemaVersion, settings }` envelope; it is
+manifest-registered/signed, strict deny-unknown, bounded, versioned and
+digested,
+validated against `spec.providerRef` at Nix build and API admission,
+implementation-only, and may not shadow base fields. Shared fields are promoted
+to the Device base. The Provider implements the exact base Device spec/status
+version/fingerprint, accepts the canonical minimal valid base Spec, and rejects
+unsupported optional base capabilities only through its signed capability matrix
+and provider-neutral `unsupported-capability`. `spec.provider` aligns with
+`status.provider`; generic CLI/controllers operate on the base spec and base
+status only. A reference to the former Device `spec.settings` denotes
+`spec.provider.settings`; no secret bytes are allowed in any spec layer, and no
+credential material is allowed in `spec.provider.settings`.
+
 ```yaml
 apiVersion: resources.d2b.io/v3
 type: Device
@@ -171,16 +189,19 @@ spec:
       busClass: drm
       label: host-gpu
       pciSlot: null
-  settings:
-    renderNodeOnly: false
-    videoSidecar: false
-    videoNvidiaDecode: false
-    contextTypes: [cross-domain, virgl, virgl2]
-    displays: [{hidden: true}]
-    egl: true
-    vulkan: true
-    crossDomainTrusted: false
-    virglVideo: false
+  provider:
+    schemaId: "device-gpu.d2b.io/Device/spec"
+    schemaVersion: "1.0.0"
+    settings:
+      renderNodeOnly: false
+      videoSidecar: false
+      videoNvidiaDecode: false
+      contextTypes: [cross-domain, virgl, virgl2]
+      displays: [{hidden: true}]
+      egl: true
+      vulkan: true
+      crossDomainTrusted: false
+      virglVideo: false
 status:
   observedGeneration: 1
   phase: Ready
@@ -339,7 +360,8 @@ spec:
 ```
 
 GPU mode (full virtio-gpu vs render-node) and arbitration are determined by
-the Device resource `spec.settings` managed by the operator. The common Guest
+the Device resource `spec.provider.settings` managed by the operator. The
+common Guest
 spec carries only standard `deviceAttachments` referencing Device resources; no
 provider-specific `passthrough` or `claim` fields appear in the Guest spec.
 
@@ -1189,11 +1211,15 @@ d2b.zones.<zone>.resources."<vm>-gpu" = {
       busClass = "drm";
       label    = "host-gpu";
     };
-    settings = {
-      videoSidecar      = true;
-      videoNvidiaDecode = false;    # must be explicit when videoSidecar=true
-      contextTypes      = ["cross-domain" "virgl" "virgl2"];
-      crossDomainTrusted = false;
+    provider = {
+      schemaId = "device-gpu.d2b.io/Device/spec";
+      schemaVersion = "1.0.0";
+      settings = {
+        videoSidecar      = true;
+        videoNvidiaDecode = false;    # must be explicit when videoSidecar=true
+        contextTypes      = ["cross-domain" "virgl" "virgl2"];
+        crossDomainTrusted = false;
+      };
     };
   };
 };
@@ -1211,11 +1237,15 @@ d2b.zones.<zone>.resources."<vm>-render" = {
       busClass = "drm";
       label    = "host-gpu";
     };
-    settings = {
-      renderNodeOnly = true;
-      contextTypes   = ["virgl2"];
-      egl            = true;
-      vulkan         = false;
+    provider = {
+      schemaId = "device-gpu.d2b.io/Device/spec";
+      schemaVersion = "1.0.0";
+      settings = {
+        renderNodeOnly = true;
+        contextTypes   = ["virgl2"];
+        egl            = true;
+        vulkan         = false;
+      };
     };
   };
 };
@@ -1353,7 +1383,7 @@ non-secret operational state.
 The Device spec carries **no** `artifactId` field. Binary paths for crosvm
 (GPU and video) are resolved from the **signed component descriptor** inside the
 `d2b-provider-device-gpu` package closure. Store paths never appear in Device
-`spec.settings`, resource status, audit records, or telemetry.
+`spec.provider.settings`, resource status, audit records, or telemetry.
 
 ### Activation and publication path
 

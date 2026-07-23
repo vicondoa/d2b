@@ -30,6 +30,42 @@ work item for these five ResourceTypes is defined here. ResourceTypes not in
 scope (Volume, Network, Device, Credential, Zone, ZoneLink, Provider, Role,
 RoleBinding) are referenced as target types and defined in their owning specs.
 
+## ResourceSpec shape
+
+### Three-layer spec shape (D089)
+
+D089 freezes every ResourceSpec in this file as three layers. Layer 1 is the
+universal Resource envelope and metadata. Layer 2 is the ResourceType base spec
+at top-level `spec.*`, including `spec.providerRef`; all Host, Guest, Process,
+EphemeralProcess, and User fields documented here are base unless explicitly
+stated otherwise. Layer 3 is the optional canonical selected-Provider extension
+`spec.provider = { schemaId, schemaVersion, settings }`; it is the only
+Provider-specific desired extension and replaces the former Host/Guest
+`providerSettings` shape. It omits `providerRef` and
+`observedProviderGeneration`: `spec.providerRef` is base, and spec is desired
+rather than observed.
+
+Mapping convention: within this spec a reference to `spec.providerSettings` (or the former Device `spec.settings`) denotes the canonical `spec.provider.settings`; `spec.providerRef` and every other `spec.*` field is ResourceType base.
+
+Every Provider `ResourceApiBinding` MUST implement the exact base spec schema
+version and fingerprint, accept the canonical minimal valid base Spec, and pass
+base lifecycle/status/error/finalizer conformance. A Provider MAY reject an
+optional base capability only through its signed standard capability matrix and
+a typed provider-neutral `unsupported-capability` error; it MUST NOT ignore,
+reinterpret, rename, duplicate, weaken, or require extension data for
+base-required behavior. `spec.provider.settings` is strict deny-unknown,
+bounded, schema-versioned and digested, validated against `spec.providerRef` at
+Nix build and API admission, and fails with `spec-provider-schema-invalid` or
+`spec-provider-shadow` when invalid or shadowing/restating/overriding/renaming/
+duplicating a base field. Shared semantics are promoted to the ResourceType base
+and never live in `spec.provider`; generic CLI/controllers operate on base spec
+plus base status. For the same Provider, the `spec.provider` and
+`status.provider` schemas align.
+
+In Host, the no-isolation `isolationPosture` semantic is a promoted Host base
+field wherever this file's older `providerSettings` examples mention it; it is
+not a Provider extension.
+
 ## Shared field schemas
 
 ### ResourceName constraints
@@ -280,7 +316,10 @@ spec:
   networkAttachments: []              # 0..64 NetworkAttachmentList entries
   deviceAttachments: []               # 0..64 DeviceAttachmentList entries
   volumeAttachmentDefaults: []        # 0..64 VolumeAttachmentDefaultList entries
-  providerSettings: {}                # system-core Host extension schema; bounded
+  provider:
+    schemaId: system-core.d2b.io/host-spec
+    schemaVersion: "1.0"
+    settings: {}                      # system-core Host extension schema; bounded
 ```
 
 Full field table:
@@ -478,7 +517,10 @@ spec:
   networkAttachments: []
   deviceAttachments: []
   volumeAttachmentDefaults: []
-  providerSettings: {}    # validated against the selected runtime Provider's Guest schema extension
+  provider:
+    schemaId: runtime-cloud-hypervisor.d2b.io/guest-spec
+    schemaVersion: "1.0"
+    settings: {}        # selected runtime Provider's Guest schema extension
 ```
 
 Full field table:

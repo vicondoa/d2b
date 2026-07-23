@@ -269,7 +269,7 @@ exact shape (all fields always present; null where empty):
     "providerRef": "Provider/cloud-hv",
     "executionPolicy": { "cores": 4, "memoryMiB": 8192 },
     "networkRefs": ["Network/default"],
-    "providerSettings": {}
+    "provider": { "schemaId": "runtime-cloud-hypervisor.d2b.io/Guest/spec", "schemaVersion": "1.0", "settings": {} }
   },
   "status": {
     "observedGeneration": 3,

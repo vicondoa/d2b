@@ -82,6 +82,24 @@ the controller remains installed but creates no Device sub-resources.
 
 ## Device spec contract
 
+Normative D089 spec layering: Device base fields are ResourceType base
+`spec.*` fields, including `spec.providerRef`, `deviceClass`,
+`inventory.selector`, attachments, and arbitration. This Provider's
+desired-only extension is the canonical `spec.provider = { schemaId:
+"device-security-key.d2b.io/Device/spec", schemaVersion, settings }`
+envelope; it is manifest-registered/signed, strict deny-unknown, bounded, versioned
+and digested, validated against `spec.providerRef` at Nix build and API
+admission, implementation-only, and may not shadow base fields. Shared fields
+are promoted to the Device base. The Provider implements the exact base Device
+spec/status version/fingerprint, accepts the canonical minimal valid base Spec,
+and rejects unsupported optional base capabilities only through its signed
+capability matrix and provider-neutral `unsupported-capability`.
+`spec.provider` aligns with `status.provider`; generic CLI/controllers operate on
+the base spec and base status only. A reference to the former Device
+`spec.settings` denotes `spec.provider.settings`; no secret bytes are allowed
+in any spec layer, and no credential material is allowed in
+`spec.provider.settings`.
+
 ```yaml
 spec:
   providerRef: Provider/device-security-key
@@ -428,12 +446,16 @@ spec:
   inventory:
     selector:
       busClass: uhid
-  settings:
-    bindGuest: Guest/<vm>           # exact Guest that holds the claim
+  provider:
+    schemaId: "device-security-key.d2b.io/Device/spec"
+    schemaVersion: "1.0.0"
+    settings:
+      bindGuest: Guest/<vm>           # exact Guest that holds the claim
 ```
 
 The controller creates this virtual Device as part of `spec-generation-changed`
-and updates its `settings.bindGuest` whenever the claiming Guest changes. Core
+and updates its `spec.provider.settings.bindGuest` whenever the claiming Guest
+changes. Core
 resolves the virtual Device's DeviceGrant by opening `/dev/uhid` inside the Guest
 at relay/frontend launch time and passing the pre-opened fd. Because `/dev` is
 masked in the frontend's sandbox, the frontend process has no path to any device

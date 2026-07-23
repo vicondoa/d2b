@@ -78,6 +78,16 @@ caller strings. Dynamic spec/status is canonical JSON validated against the
 exact signed schema before storage. Envelope/index/operation/change values use
 one versioned deterministic encoding owned by d2b-contracts.
 
+Spec has the frozen three-layer shape (D089): the universal Resource
+envelope/metadata, the ResourceType base spec at top-level `spec.*` (including
+`spec.providerRef`), and an optional canonical `spec.provider =
+{ schemaId, schemaVersion, settings }` extension. A spec write is validated
+against the ResourceType base schema and, when `spec.provider` is present,
+against the installed Provider's registered, signed, digested extension schema
+(`schemaId`/`schemaVersion`) with strict unknown-field denial and spec bounds;
+a mismatch fails closed with `spec-provider-schema-invalid`, a `settings` that
+restates a base field with `spec-provider-shadow`, before any redb mutation.
+
 Status is the default durable observation surface for bounded non-secret
 operational state (D087) and is stored inside the resource envelope, not in a
 side stream. Status has the frozen three-layer shape (D088): the universal

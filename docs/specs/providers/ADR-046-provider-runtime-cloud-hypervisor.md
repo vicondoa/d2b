@@ -171,24 +171,39 @@ status:
 
 ## 4 Guest ResourceSpec: `runtime-cloud-hypervisor` extension
 
-`Guest.spec.providerSettings` is validated against the runtime-cloud-hypervisor
-exported Guest schema extension. Unknown top-level fields inside
-`providerSettings` are rejected.
+`Guest.spec.provider.settings` is validated against the runtime-cloud-hypervisor
+exported Guest spec schema. Unknown fields inside `spec.provider.settings` are
+rejected.
 
-### 4.1 `providerSettings` schema
+**D089 spec extension contract:** this Provider's implementation-only desired
+configuration is carried in `spec.provider.settings` under
+`runtime-cloud-hypervisor.d2b.io/Guest/spec`; the schema is registered/signed in
+the manifest, deny-unknown, bounded, versioned, and validated against
+`spec.providerRef` at Nix build and API admission. Base fields stay at `spec.*`;
+shared semantics are promoted to the Guest base and never placed in
+`spec.provider`. The Provider implements the exact base spec/status schema
+version/fingerprint, accepts the canonical minimal valid base Spec, and rejects
+an unsupported optional base capability only through its signed capability matrix
+plus provider-neutral `unsupported-capability`. `spec.provider` aligns with
+`status.provider` for `Provider/runtime-cloud-hypervisor`.
+
+### 4.1 `spec.provider.settings` schema
 
 ```yaml
-providerSettings:
-  vcpus: 2                  # int [1, 1024]; overrides Provider root default
-  memoryMb: 512             # int [128, 524288]; overrides Provider root default
-  vsockCid: 3               # uint32 [3, 4294967294]; assigned by Nix config; must be unique per Host
-  machineType: q35          # q35 | microvm; overrides root default
-  consoleType: virtio       # virtio | serial; default virtio
-  serialPort: false         # bool; emit --serial null (default) or --serial tty
-  pvpanic: false            # bool; emit --pvpanic device
-  watchdogOverride: null    # bool | null; null = inherit Provider root watchdog setting
-  memoryShared: true        # bool; must remain true for virtiofs; hard-fail if false and
-                            # any Volume attachment uses virtiofs transport
+provider:
+  schemaId: runtime-cloud-hypervisor.d2b.io/Guest/spec
+  schemaVersion: 1.0.0
+  settings:
+    vcpus: 2                  # int [1, 1024]; overrides Provider root default
+    memoryMb: 512             # int [128, 524288]; overrides Provider root default
+    vsockCid: 3               # uint32 [3, 4294967294]; assigned by Nix config; must be unique per Host
+    machineType: q35          # q35 | microvm; overrides root default
+    consoleType: virtio       # virtio | serial; default virtio
+    serialPort: false         # bool; emit --serial null (default) or --serial tty
+    pvpanic: false            # bool; emit --pvpanic device
+    watchdogOverride: null    # bool | null; null = inherit Provider root watchdog setting
+    memoryShared: true        # bool; must remain true for virtiofs; hard-fail if false and
+                              # any Volume attachment uses virtiofs transport
 ```
 
 **Required fields**: `vsockCid` is required for every `runtime-cloud-hypervisor`
@@ -205,24 +220,27 @@ Guest. All other fields are optional and inherit Provider root defaults.
 
 No raw argv string, store path, host path, socket path, credential bytes,
 broker operation name, or free-form kernel cmdline fragment is accepted in
-`providerSettings`. Sandbox parameters (seccomp filter, capability set,
+`spec.provider.settings`. Sandbox parameters (seccomp filter, capability set,
 namespace classes) are fixed by the signed Process template and cannot be
 overridden by Guest settings.
 
 ### 4.2 Required top-level `systemArtifactId`
 
 `Guest.spec.systemArtifactId` is a **top-level `spec` field** (not inside
-`providerSettings`). It is a plain bounded ID string referencing a
+`spec.provider.settings`). It is a plain bounded ID string referencing a
 `d2b.artifacts.<id>` catalog entry with `type = "nixos-system"`.
 
 ```yaml
 spec:
   providerRef: Provider/runtime-cloud-hypervisor
-  systemArtifactId: dev-vm-system   # required for this Provider; NOT in providerSettings
-  providerSettings:
-    vcpus: 4
-    memoryMb: 4096
-    vsockCid: 3
+  systemArtifactId: dev-vm-system   # required for this Provider; NOT in spec.provider.settings
+  provider:
+    schemaId: runtime-cloud-hypervisor.d2b.io/Guest/spec
+    schemaVersion: 1.0.0
+    settings:
+      vcpus: 4
+      memoryMb: 4096
+      vsockCid: 3
 ```
 
 For `runtime-cloud-hypervisor`, `systemArtifactId` is **required**. A Guest
@@ -241,10 +259,10 @@ At build time the Nix compiler resolves the artifact catalog entry:
 | Setting | Location | Scope | Override |
 | --- | --- | --- | --- |
 | `controllerExecutionRef` | Provider root config | Zone-wide; required | No per-Guest override; all VMM Processes use this Host |
-| `defaultVcpus`, `defaultMemoryMb`, `defaultMachineType`, `watchdog` | Provider root config | Zone-wide default for all Guests | Per-Guest `providerSettings.vcpus`, `memoryMb`, `machineType`, `watchdogOverride` |
-| `vsockCid` | Per-Guest `providerSettings` | Guest-unique | No inheritance; always required |
+| `defaultVcpus`, `defaultMemoryMb`, `defaultMachineType`, `watchdog` | Provider root config | Zone-wide default for all Guests | Per-Guest `spec.provider.settings.vcpus`, `memoryMb`, `machineType`, `watchdogOverride` |
+| `vsockCid` | Per-Guest `spec.provider.settings` | Guest-unique | No inheritance; always required |
 | `systemArtifactId` | Per-Guest top-level spec | Guest-unique system closure | No default; required |
-| `consoleType`, `serialPort`, `pvpanic` | Per-Guest `providerSettings` | Individual VMM tuning | No inheritance |
+| `consoleType`, `serialPort`, `pvpanic` | Per-Guest `spec.provider.settings` | Individual VMM tuning | No inheritance |
 | `healthCheckInterval`, `healthCheckTimeout`, `healthCheckFailureThreshold`, `adoptionWindow`, `startupDeadline` | Provider root config | Zone-wide | Not per-Guest overridable in v3 initial catalog |
 
 ---
@@ -441,7 +459,7 @@ The GPU Device Provider owns the vhost-user GPU worker `Process`
 adds a `--gpu` or `--vhost-user-gpu` argument to the VMM supervisor ticket.
 
 For the `video` sidecar (`ProcessRole::VhostUserVideo`): the device-gpu Provider
-owns this `Process` resource when `providerSettings.videoSidecar: true` is
+owns this `Process` resource when `spec.provider.settings.videoSidecar: true` is
 declared on the Guest (via the GPU Device spec extension). The controller waits
 for the Video Process to be Ready before the VMM starts.
 
@@ -530,7 +548,7 @@ After a Guest `spec` durable commit:
 1. Receive trigger (spec-generation-changed, owned-resource-changed,
    dependency-ready, dependency-changed, deletion-requested, retry-due, etc.).
 2. Read fresh Guest spec snapshot plus owner-index VMM Process snapshot.
-3. Call `validateSpec`: check providerSettings bounds, vsockCid uniqueness,
+3. Call `validateSpec`: check spec.provider.settings bounds, vsockCid uniqueness,
    systemArtifactId catalog type, memoryShared+virtiofs invariant,
    controllerExecutionRef validity.
 4. Read dependency snapshots (Device/kvm and all declared Devices, all Networks,
@@ -710,15 +728,15 @@ Provider state Volume for it. Bounded non-secret operational state lives in the
 owning resource's `status` subresource and the core Operation ledger (§16.1,
 D087); the controller mounts no `/state` Volume.
 
-### 11.2 Signed Guest schema extension
+### 11.2 Signed Guest spec extension
 
-The `providerSettings` schema for `runtime-cloud-hypervisor` is exported as a
-JSON Schema artifact signed with the Provider package:
+The `spec.provider.settings` schema for `runtime-cloud-hypervisor` is exported
+as a JSON Schema artifact signed with the Provider package:
 
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "io.d2b.provider.runtime-cloud-hypervisor/guest-settings/v1",
+  "$id": "runtime-cloud-hypervisor.d2b.io/Guest/spec",
   "type": "object",
   "additionalProperties": false,
   "required": ["vsockCid"],
@@ -737,7 +755,7 @@ JSON Schema artifact signed with the Provider package:
 ```
 
 This schema is registered in the Provider `ResourceApiExport` and used for:
-- build-time `spec.providerSettings` validation during Nix resource bundle
+- build-time `spec.provider.settings` validation during Nix resource bundle
   compilation;
 - runtime `validateSpec` in the controller;
 - Nix option type generation via `xtask gen-resource-nix-options`.
@@ -793,7 +811,7 @@ d2b.zones.dev.resources.dev-vm = {
   type = "Guest";
   spec = {
     providerRef    = "Provider/runtime-cloud-hypervisor";
-    systemArtifactId = "dev-vm-system";   # top-level spec field; NOT inside providerSettings
+    systemArtifactId = "dev-vm-system";   # top-level spec field; NOT inside spec.provider.settings
     budget = {
       cpu    = { request = "500m"; limit = "4000m"; };
       memory = { request = "512Mi"; limit = "4096Mi"; };
@@ -805,12 +823,16 @@ d2b.zones.dev.resources.dev-vm = {
       { deviceRef = "Device/dev-vm-kvm"; }                      # shared; no exclusive needed
       { deviceRef = "Device/dev-vm-tpm"; exclusive = true; }
     ];
-    providerSettings = {
-      vcpus       = 4;
-      memoryMb    = 4096;
-      vsockCid    = 3;
-      machineType = "q35";
-      consoleType = "virtio";
+    provider = {
+      schemaId = "runtime-cloud-hypervisor.d2b.io/Guest/spec";
+      schemaVersion = "1.0.0";
+      settings = {
+        vcpus       = 4;
+        memoryMb    = 4096;
+        vsockCid    = 3;
+        machineType = "q35";
+        consoleType = "virtio";
+      };
     };
   };
 };
@@ -845,12 +867,16 @@ bundle; `metadata.managedBy` set at activation time, not in bundle):
       { "default": true, "networkRef": "Network/dev-net" }
     ],
     "providerRef": "Provider/runtime-cloud-hypervisor",
-    "providerSettings": {
-      "consoleType": "virtio",
-      "machineType": "q35",
-      "memoryMb": 4096,
-      "vcpus": 4,
-      "vsockCid": 3
+    "provider": {
+      "schemaId": "runtime-cloud-hypervisor.d2b.io/Guest/spec",
+      "schemaVersion": "1.0.0",
+      "settings": {
+        "consoleType": "virtio",
+        "machineType": "q35",
+        "memoryMb": 4096,
+        "vcpus": 4,
+        "vsockCid": 3
+      }
     },
     "systemArtifactId": "dev-vm-system",
     "volumeAttachmentDefaults": []
@@ -860,10 +886,10 @@ bundle; `metadata.managedBy` set at activation time, not in bundle):
 
 Note:
 - `systemArtifactId` is a **top-level `spec` field**, not inside
-  `providerSettings`. The rendered JSON confirms this placement.
+  `spec.provider.settings`. The rendered JSON confirms this placement.
 - No store path, kernel path, initrd path, or any derivation value appears
   anywhere in the JSON envelope.
-- `providerSettings` contains only the closed bounded fields — `vsockCid`,
+- `spec.provider.settings` contains only the closed bounded fields — `vsockCid`,
   `vcpus`, `memoryMb`, `machineType`, `consoleType` — from the signed Guest
   schema extension. No `cmdlineExtra`, no `seccompOverride`, no free-form fields.
 - `Device/dev-vm-kvm` appears in `deviceAttachments` without `exclusive`; KVM
@@ -879,10 +905,10 @@ Guests:
 | --- | --- | --- |
 | 17 | `system-artifact-required` | `spec.systemArtifactId` must be set and non-null for this Provider |
 | 17 | `system-artifact-type-mismatch` | The artifact catalog entry must have `type = "nixos-system"` |
-| CH-1 | `vsock-cid-conflict` | `spec.providerSettings.vsockCid` must be unique across all `runtime-cloud-hypervisor` Guests in the Zone |
+| CH-1 | `vsock-cid-conflict` | `spec.provider.settings.vsockCid` must be unique across all `runtime-cloud-hypervisor` Guests in the Zone |
 | CH-2 | `vsock-cid-reserved` | `vsockCid` must be ≥ 3 (0 = hypervisor, 1 = loopback, 2 = host are reserved) |
 | CH-3 | `memory-virtiofs-conflict` | `memoryShared: false` is rejected when any Volume attachment under this Guest uses `transport: virtiofs` |
-| CH-4 | `provider-settings-unknown-field` | Any `providerSettings` field not in the signed Guest schema extension is rejected (rejects `cmdlineExtra`, `seccompOverride`, and any other unlisted field) |
+| CH-4 | `provider-settings-unknown-field` | Any `spec.provider.settings` field not in the signed Guest schema extension is rejected (rejects `cmdlineExtra`, `seccompOverride`, and any other unlisted field) |
 | CH-5 | `controller-execution-ref-invalid` | `Provider.spec.config.controllerExecutionRef` must reference an existing `Host` resource in the Zone; missing or wrong type fails Provider installation |
 
 ---
@@ -1069,7 +1095,7 @@ other named streams or control/cancel traffic.
 
 After the VMM Process is Ready, the controller opens an enrolled KK
 ComponentSession to the guest-control vsock endpoint (expected CID from
-`providerSettings.vsockCid`). The session uses
+`spec.provider.settings.vsockCid`). The session uses
 `Noise_KK_25519_ChaChaPoly_SHA256` with the guest bootstrap credential
 (delivered through the `d2b-gctl` virtiofs share). The controller uses this
 session for:
@@ -1217,7 +1243,7 @@ It must **not** appear in OTEL metrics, span attributes, or log fields.
 
 ### 17.2 No secret in spec or status
 
-The following are forbidden in any Guest spec, providerSettings, or status field:
+The following are forbidden in any Guest spec, spec.provider.settings, or status field:
 - store paths, kernel paths, initrd paths;
 - socket paths (CH API socket, virtiofsd socket, swtpm socket);
 - TAP interface names or fd numbers;
@@ -1455,7 +1481,7 @@ Migration from v2 (`d2b.vms.<vm>`) to v3 (`d2b.zones.<zone>.resources.<name>`):
 
 1. v2 runtime is stopped.
 2. Operator configures v3 Guest resource with matching `systemArtifactId`,
-   `vsockCid`, and `providerSettings`.
+   `vsockCid`, and `spec.provider.settings`.
 3. Persistent Volume resources for swtpm state and workload storage are
    retained; v3 resource cleanup contract prevents their deletion.
 4. `d2b 3.0 reset` activates v3; the controller creates the bootstrap graph
@@ -1469,7 +1495,7 @@ The `Provider/network-local` controller creates `Guest/<network-name>-net-vm`
 resources automatically for each Network. These Guests use
 `providerRef: Provider/runtime-cloud-hypervisor` and carry:
 - `spec.systemArtifactId`: set from `Network.spec.netVmSystemArtifactId`;
-- `spec.providerSettings.vsockCid`: assigned by the Network controller from the
+- `spec.provider.settings.vsockCid`: assigned by the Network controller from the
   Network's CIDR allocation;
 - `spec.deviceAttachments`: includes the net-VM's `Device/kvm` and any declared
   network device refs; no implicit Host capabilities;
@@ -1498,7 +1524,7 @@ bundle and are never swept by configuration generation cleanup.
 
 | Current symbol / path | Evidence class | Current callers | Reuse action | v3 destination |
 | --- | --- | --- | --- | --- |
-| `d2b-host/src/ch_argv.rs::ChArgvInput`, `generate_ch_argv` | production-reachable | `d2b-host/src/runtime_provider.rs` | EXTRACT and ADAPT | `packages/d2b-provider-runtime-cloud-hypervisor/src/vmm_argv.rs`; `ChArgvInput` fields are renamed to align with `providerSettings` schema; store paths move to private artifact-catalog resolution; no `spec.*` exposure |
+| `d2b-host/src/ch_argv.rs::ChArgvInput`, `generate_ch_argv` | production-reachable | `d2b-host/src/runtime_provider.rs` | EXTRACT and ADAPT | `packages/d2b-provider-runtime-cloud-hypervisor/src/vmm_argv.rs`; `ChArgvInput` fields are renamed to align with `spec.provider.settings` schema; store paths move to private artifact-catalog resolution; no `spec.*` exposure |
 | `d2b-host/src/runtime_provider.rs::CloudHypervisorRuntimeProvider` | production-reachable | `d2b-host-providers/src/lib.rs`; `d2bd/src/lib.rs` | REPLACE | `packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs`; new controller owns reconcile loop, not a `RuntimeProvider` trait implementation |
 | `d2b-host/src/runtime_provider.rs::CloudHypervisorRuntimeControl` trait | production-reachable | `d2bd`; supervisor test seams | REPLACE | Supervisor ticket passed through `Provider/system-minijail` LaunchTicket; no ambient trait |
 | `d2bd/src/provider_shutdown.rs::CloudHypervisorShutdown` | production-reachable | `d2bd` graceful shutdown | ADAPT | `packages/d2b-provider-runtime-cloud-hypervisor/src/shutdown.rs`; integrates with Process finalizer drain handler |
@@ -1553,7 +1579,7 @@ bundle and are never swept by configuration generation cleanup.
 | Current source | `d2b-host/src/ch_argv.rs::ChArgvInput`, `generate_ch_argv`; `tests/golden/runner-shape/cloud-hypervisor-argv-*.txt` |
 | Reuse action | COPY/ADAPT |
 | Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/vmm_argv.rs`; `tests/vmm_argv_golden_test.rs` |
-| Detailed design | `VmmArgvInput` derived from validated `GuestSpec.providerSettings`; kernel/initrd/rootfs paths resolved privately from artifact catalog at dispatch time; no path in spec/status; golden tests for headless/q35/microvm/gpu/video/macvtap variants |
+| Detailed design | `VmmArgvInput` derived from validated `GuestSpec.spec.provider.settings`; kernel/initrd/rootfs paths resolved privately from artifact catalog at dispatch time; no path in spec/status; golden tests for headless/q35/microvm/gpu/video/macvtap variants |
 | Integration | ProviderSupervisor LaunchTicket resolution |
 | Data migration | None |
 | Validation | Golden argv vectors matching `cloud-hypervisor-argv-*.txt` shapes with v3 adaptations; redaction test (no store path in Debug output) |
@@ -1567,10 +1593,10 @@ bundle and are never swept by configuration generation cleanup.
 | Current source | `nixos-modules/options-realms-workloads.nix`; `nixos-modules/options-vms.nix`; `nixos-modules/processes-json.nix`; `nixos-modules/store.nix` |
 | Reuse action | ADAPT and REPLACE |
 | Destination | `packages/d2b-provider-runtime-cloud-hypervisor/nix/` (Nix emitter); `nixos-modules/` option extension for `runtime-cloud-hypervisor` Guest schema |
-| Detailed design | `d2b.zones.<z>.resources.<n>` with `type = "Guest"` and `spec.providerSettings` validated against signed Provider schema; `spec.systemArtifactId` top-level field; artifact catalog `type = "nixos-system"` enforced by rule 17; vsockCid uniqueness enforced at eval; `make test-drift` gate for schema/Nix drift |
+| Detailed design | `d2b.zones.<z>.resources.<n>` with `type = "Guest"` and `spec.provider.settings` validated against signed Provider schema; `spec.systemArtifactId` top-level field; artifact catalog `type = "nixos-system"` enforced by rule 17; vsockCid uniqueness enforced at eval; `make test-drift` gate for schema/Nix drift |
 | Integration | Zone resource bundle emission; private artifact catalog; `xtask gen-resource-nix-options` for auto-generated Nix option types |
 | Data migration | `d2b.vms.<vm>` → `d2b.zones.<z>.resources.<n>` documented in migration guide |
-| Validation | nix-unit eval tests: rule CH-1 through CH-4 + rules 1–17; golden resource bundle JSON (no store path); type-mismatch eval errors; vsockCid-conflict eval error; `spec.systemArtifactId` at top-level in JSON (not in `providerSettings`) |
+| Validation | nix-unit eval tests: rule CH-1 through CH-4 + rules 1–17; golden resource bundle JSON (no store path); type-mismatch eval errors; vsockCid-conflict eval error; `spec.systemArtifactId` at top-level in JSON (not in `spec.provider.settings`) |
 | Removal proof | `options-vms.nix`; `options-realms-workloads.nix` (LocalVm path); `nixos-modules/processes-json.nix` (VMM emitter); `nixos-modules/store.nix` removed after integration parity |
 
 ### ADR046-ch-005 (guest-control health and adoption)
@@ -1629,7 +1655,7 @@ packages/d2b-provider-runtime-cloud-hypervisor/
     controller.rs                # async ResourceReconciler, describe/validate/plan/reconcile/finalize/observe
     bootstrap_graph.rs           # VMM Process spec builder and dependency-readiness check
     vmm_argv.rs                  # VmmArgvInput, vmm_argv_build (pure; no store paths in output)
-    guest_spec.rs                # GuestProviderSettings, providerSettings schema, validateSpec
+    guest_spec.rs                # GuestProviderSpecSettings, spec.provider.settings schema, validateSpec
     health.rs                    # ComponentSession KK health check, GuestReachable condition (observe)
     adoption.rs                  # pidfd adoption, ambiguity detection, quarantine
     shutdown.rs                  # graceful shutdown via guest-control session
@@ -1647,7 +1673,7 @@ packages/d2b-provider-runtime-cloud-hypervisor/
     health_check_test.rs         # fake guest-control server; timeout/failure/retry (observe handler)
     finalize_ordering_test.rs    # finalizer algorithm, single VMM Process teardown, ambiguity
     metrics_cardinality_test.rs  # no vm= label; bounded audit fields; no path/argv in output
-    schema_golden_test.rs        # providerSettings JSON Schema golden vector (no cmdlineExtra/seccompOverride)
+    schema_golden_test.rs        # spec.provider.settings JSON Schema golden vector (no cmdlineExtra/seccompOverride)
     redaction_test.rs            # no store path in Debug, status, or audit output
     state_status_test.rs         # status projection round-trip; bound enforcement;
                                  # restart re-derivation without a state Volume

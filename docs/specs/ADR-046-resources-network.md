@@ -49,6 +49,35 @@ Network satisfies all threshold criteria from
 
 ## NetworkSpec
 
+### Three-layer spec shape (D089)
+
+D089 freezes Network spec as three layers. Layer 1 is the universal Resource
+envelope and metadata. Layer 2 is the Network base spec at top-level `spec.*`,
+including `spec.providerRef`; the CIDR, bridge, isolation, routing, DHCP/DNS,
+attachment, mDNS, and net-VM fields documented here are base fields. Layer 3 is
+the optional canonical selected-Provider extension
+`spec.provider = { schemaId, schemaVersion, settings }`; it is the only
+Provider-specific desired extension. It omits `providerRef` and
+`observedProviderGeneration`: `spec.providerRef` is base, and spec is desired
+rather than observed.
+
+Mapping convention: within this spec a reference to `spec.providerSettings` (or the former Device `spec.settings`) denotes the canonical `spec.provider.settings`; `spec.providerRef` and every other `spec.*` field is ResourceType base.
+
+Every Network Provider `ResourceApiBinding` MUST implement the exact Network
+base spec schema version and fingerprint, accept the canonical minimal valid
+base Spec, and pass base lifecycle/status/error/finalizer conformance. A
+Provider MAY reject an optional base capability only through its signed standard
+capability matrix and a typed provider-neutral `unsupported-capability` error;
+it MUST NOT ignore, reinterpret, rename, duplicate, weaken, or require extension
+data for base-required behavior. `spec.provider.settings` is strict
+deny-unknown, bounded, schema-versioned and digested, validated against
+`spec.providerRef` at Nix build and API admission, and fails with
+`spec-provider-schema-invalid` or `spec-provider-shadow` when invalid or
+shadowing/restating/overriding/renaming/duplicating a base field. Shared Network
+semantics are promoted to the Network base spec and never live in
+`spec.provider`; generic CLI/controllers operate on base spec plus base status.
+For the same Provider, the `spec.provider` and `status.provider` schemas align.
+
 ```yaml
 apiVersion: resources.d2b.io/v3
 type: Network

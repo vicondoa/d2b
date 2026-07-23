@@ -568,6 +568,28 @@ Ported verbatim (per `ADR046-session-001/002`) from main's
   a different Provider version, and never parses `details`. Atomic layered write:
   all present layers are committed in one status mutation with one expected
   revision; a partial-layer write is rejected.
+- Three-layer spec shape tests (D089): every resource carries the universal
+  envelope and a ResourceType base spec at `spec.*` (including `spec.providerRef`);
+  the optional canonical `spec.provider = { schemaId, schemaVersion, settings }`
+  is the only provider-extension shape (no `providerSettings`/Device `settings`/
+  ad hoc extension survives). Base-schema parity across implementations: for each
+  multi-implementation ResourceType (Guest, Device, Credential, Volume, Process)
+  assert every Provider `ResourceApiBinding` implements the identical base spec
+  schema version/fingerprint and accepts the canonical minimal valid base Spec.
+  Capability-declared optional rejection: a Provider whose signed capability
+  matrix marks an optional base capability unsupported returns provider-neutral
+  `unsupported-capability`; a Provider that ignores/reinterprets/renames/
+  duplicates/weakens a base field, or requires `spec.provider` for base-required
+  behavior, fails conformance. Extension tests: unregistered/version-mismatched
+  `spec.provider.schemaId`/`schemaVersion` → `spec-provider-schema-invalid`;
+  unknown field in `settings` → rejected; `settings` restating a base field →
+  `spec-provider-shadow`; `spec.provider` validated against `spec.providerRef` at
+  both Nix build and API admission; over-limit envelope → spec bounds error.
+  Spec+status atomic schema binding: the selected Provider's registered
+  `spec.provider` and `status.provider` schemas align, and a binding missing
+  either base fingerprint is rejected. Generic CLI/controller base-only tests:
+  author and reconcile succeed on base spec + base status with `spec.provider`/
+  `status.provider` absent or from a newer Provider version.
 - Quota/EmergencyPolicy tests: hierarchical Host/Guest allocation against
   Zone capacity, overcommit blocking, digest/Provider/Host/Guest/Zone/global
   emergency disable and route/session/grant revocation, incident-held

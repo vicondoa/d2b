@@ -22,7 +22,7 @@ alongside `Provider/transport-unix` (local allocator-issued FD) and
 
 The Provider's responsibilities are:
 
-- Accept a typed `transportSettings` object from a `ZoneLink` spec and
+- Accept typed `spec.provider.settings` from a `ZoneLink` spec and
   establish a reliable bidirectional byte-stream channel to the remote Zone
   over an Azure Relay Hybrid Connection.
 - Present the established channel as a named opaque byte stream to
@@ -85,6 +85,21 @@ Provider/transport-azure-relay
 | ResourceTypes consumed | `Credential`, `Network`, `Provider` (ZoneLink is read and reconciled only by core) |
 | Placement | Gateway Guest only (per ADR 0032; see §Provider config schema) |
 
+**D089 desired-spec shape.** This transport Provider owns no ResourceType; core
+reconciles the `ZoneLink` base `spec.*` fields, including `spec.providerRef`.
+Azure-Relay desired transport input is carried only by the canonical
+`ZoneLink.spec.provider = { schemaId, schemaVersion, settings }` envelope, whose
+`settings` object mirrors `status.provider.details`, is registered/signed in the
+Provider manifest, deny-unknown, bounded, versioned/digested, validated against
+`spec.providerRef` at Nix build and API admission, and cannot shadow base
+fields. Shared fields are promoted to the ResourceType base. The Provider
+implements the exact base spec/status schema version/fingerprint, accepts the
+canonical minimal base Spec, passes base conformance, and rejects an
+unsupported optional base capability only through its signed capability matrix plus
+provider-neutral `unsupported-capability`.
+`spec.provider` aligns with `status.provider`. The `Provider` resource itself
+keeps the D075 `spec.{artifactId, config}` exception.
+
 Crate layout (enforced by workspace policy):
 
 ```
@@ -145,7 +160,7 @@ spec:
     networkRef: Network/relay-egress           # required; must be Network/<name>
 
     # Credential alias bindings: maps bounded alias IDs (used in
-    # ZoneLink.spec.transportSettings) to same-Zone Credential refs.
+    # ZoneLink.spec.provider.settings) to same-Zone Credential refs.
     # Alias IDs match ^[a-z][a-z0-9-]*$; max 16 entries.
     # Each referenced Credential must have scope.executionRef matching
     # config.executionRef.  No credential byte, SAS key, or token appears here.
@@ -178,9 +193,9 @@ end-to-end KK Credential session inside the gateway Guest.
 
 ---
 
-## transportSettings schema
+## `spec.provider.settings` schema
 
-The transport Provider publishes a signed `transportSettingsSchema` at:
+The transport Provider publishes a signed settings schema at:
 
 ```
 docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json
@@ -188,10 +203,10 @@ docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.jso
 
 This schema is committed alongside the crate and kept in sync by
 `make test-drift` (via `xtask gen-provider-transport-schemas && git diff --exit-code`).
-The Nix build phase validates every `ZoneLink.spec.transportSettings` object
+The Nix build phase validates every `ZoneLink.spec.provider.settings` object
 against it before emitting the resource bundle.
 
-### Canonical transportSettings object
+### Canonical `spec.provider.settings` object
 
 ```json
 {
@@ -239,12 +254,12 @@ against it before emitting the resource bundle.
 | `listenerCredentialAlias` | Yes | No | Plain alias ID; resolved by parent Zone's Provider instance against its own `config.credentialBindings` map; never a Credential ref or token |
 | `senderCredentialAlias` | Yes | No | Plain alias ID; resolved by child Zone's Provider instance against its own `config.credentialBindings` map; never a Credential ref or token |
 
-The build emitter **rejects** any `transportSettings` field:
+The build emitter **rejects** any `spec.provider.settings` field:
 
 - annotated `"secret": true`;
 - containing a top-level key named `socketPath`, `hostPath`, `password`,
   `token`, `key`, or any key ending in `CredRef` or `Credential` (Credential
-  refs must not appear in transportSettings; only alias IDs are permitted);
+  refs must not appear in `spec.provider.settings`; only alias IDs are permitted);
 - containing a value matching a SAS token shape (`SharedAccessSignature sr=…`
   or `?sv=…&sig=…`);
 - containing a value that is a private-key PEM block.
@@ -301,18 +316,22 @@ d2b.zones.k1.resources.transport-azure-relay = {
 };
 
 # ZoneLink K1→K2 using transport-azure-relay.
-# transportSettings carries plain alias IDs; parent and child each
+# spec.provider.settings carries plain alias IDs; parent and child each
 # resolve aliases locally inside their respective gateway Guests.
 d2b.zones.k1.resources.k2-guest = {
   type = "ZoneLink";
   spec = {
     childZoneName        = "k2";
-    transportProviderRef = "Provider/transport-azure-relay";
-    transportSettings = {
-      relayNamespaceId        = "relns-d2b-prod";  # non-secret namespace label
-      relayEntityId           = "hc-d2b-k2";       # non-secret entity name
-      listenerCredentialAlias = "relay-listen";    # alias ID; parent resolves locally
-      senderCredentialAlias   = "relay-send";      # alias ID; child resolves locally
+    providerRef = "Provider/transport-azure-relay";
+    provider = {
+      schemaId      = "transport-azure-relay.d2b.io/ZoneLink/spec";
+      schemaVersion = "1.0";
+      settings = {
+        relayNamespaceId        = "relns-d2b-prod";  # non-secret namespace label
+        relayEntityId           = "hc-d2b-k2";       # non-secret entity name
+        listenerCredentialAlias = "relay-listen";    # alias ID; parent resolves locally
+        senderCredentialAlias   = "relay-send";      # alias ID; child resolves locally
+      };
     };
     childStaticKeyFingerprint = "9d2e1f...7f01";   # 64 lower-hex chars
     capabilityCeiling = {
@@ -370,7 +389,7 @@ On every session establishment:
 1. The sender initiates a Noise KK handshake (`-> e, es, ss` / `<- e, ee, se`).
 2. The Noise prologue binds the canonical ZoneLink `spec` object (preface ‖
    canonical offer), including `childStaticKeyFingerprint`, `childZoneName`,
-   `transportSettings`, `capabilityCeiling`, and `reconnectGeneration`.
+   `spec.provider.settings`, `capabilityCeiling`, and `reconnectGeneration`.
 3. The listener verifies that the initiator's static public key matches the
    enrolled fingerprint. Any mismatch fails closed.
 4. On success, both sides derive directional Noise transport keys used for
@@ -442,14 +461,14 @@ scope does not match is refused by the Credential controller with
 `"relay-listen"`, `"relay-send"`) to same-Zone `Credential/<name>` refs.
 Alias IDs are plain strings carrying no credential bytes.
 
-`ZoneLink.spec.transportSettings` carries `listenerCredentialAlias` and
+`ZoneLink.spec.provider.settings` carries `listenerCredentialAlias` and
 `senderCredentialAlias` — plain alias ID strings, not Credential refs:
 
 - **Parent Zone** (`listenerCredentialAlias`): the parent gateway Guest's
   listener service resolves the alias against its own `config.credentialBindings`
   to find the Credential ref, then acquires that credential inside the gateway
   Guest via the Credential KK session.
-- **Child bootstrap**: the child receives `transportSettings` as part of the
+- **Child bootstrap**: the child receives `spec.provider.settings` as part of the
   ZoneLink bootstrap. The child gateway Guest's sender service resolves
   `senderCredentialAlias` against **its own** `config.credentialBindings` and
   acquires its credential independently, inside its own gateway Guest.
@@ -719,10 +738,10 @@ state-layout `User/<name>` principal. There is no empty identity-only Volume.
 The core ZoneLink controller drives the relay transport lifecycle. The relay
 Provider is a **typed transport service**; it does not read ZoneLink resources,
 own Zone session state, or initiate Zone-level operations. Core calls the
-Provider with already-validated `transportSettings` and receives an opaque
+Provider with already-validated `spec.provider.settings` and receives an opaque
 byte-stream handle in return.
 
-#### `OpenTransport(transportSettings) → TransportHandle`
+#### `OpenTransport(spec.provider.settings) → TransportHandle`
 
 Called by the core ZoneLink controller when it needs a new relay channel. The
 listener service:
@@ -832,7 +851,7 @@ used for all ZoneLink named streams:
 The transport-azure-relay service component processes are authorized by native
 RBAC only for what a typed transport service requires. They do **not** receive
 ZoneLink or ResourceAPI access; core calls them with already-validated
-`transportSettings`.
+`spec.provider.settings`.
 
 Granted:
 
@@ -846,7 +865,7 @@ Not held:
 
 - `get`, `watch`, `update-status`, `create`, `update-spec`, or `delete` on any
   ZoneLink (the core ZoneLink controller owns those; the relay service receives
-  `transportSettings` as a parameter from core, not by reading the resource);
+  `spec.provider.settings` as a parameter from core, not by reading the resource);
 - any ResourceAPI verb on Zone resources other than the above;
 - any relay-forwarding verb for routing calls to child Zones.
 
@@ -940,8 +959,8 @@ status:
     observedProviderGeneration: 3
     details:
       relayEndpoint:
-        namespaceId: relns-d2b-prod   # non-secret; echoed from transportSettings
-        entityId: hc-d2b-k2           # non-secret; echoed from transportSettings
+        namespaceId: relns-d2b-prod   # non-secret; echoed from spec.provider.settings
+        entityId: hc-d2b-k2           # non-secret; echoed from spec.provider.settings
       credentialExpiresAtUnixMs: 1753232401000   # listener credential expiry
       conditions:
         - type: RelayConnected
@@ -957,7 +976,7 @@ status:
 Rules:
 
 - `status.provider.details.relayEndpoint.namespaceId` and `.entityId` are
-  non-secret Azure identifiers echoed from `transportSettings` for operator
+  non-secret Azure identifiers echoed from `spec.provider.settings` for operator
   diagnostics.
 - `lastDisconnectReason` is a bounded (max 256 chars), redacted string.
   It never contains token bytes, SAS values, stack traces, or internal paths.
@@ -1003,7 +1022,7 @@ Stable error codes returned by the relay transport service via the
 | `relay-websocket-error` | Relay closed the WebSocket with an error frame |
 | `relay-credential-unavailable` | Credential Provider could not supply a credential within the deadline |
 | `relay-max-reconnect-exhausted` | Reconnect attempts exceeded `maxAttempts` |
-| `relay-invalid-transport-settings` | `transportSettings` failed runtime schema validation |
+| `relay-invalid-transport-settings` | `spec.provider.settings` failed runtime schema validation |
 
 Error observation fields:
 
@@ -1143,11 +1162,11 @@ packages/d2b-provider-transport-azure-relay/
   -> d2b-transport-azure-relay-listener   (system binary)
   -> d2b-transport-azure-relay-sender     (system binary)
   -> provider-manifest.json               (signed)
-  -> transport-settings.schema.json       (transportSettingsSchema; committed separately
+  -> transport-settings.schema.json       (settings schema; committed separately
                                            under docs/reference/schemas/v3/providers/)
 ```
 
-The `transportSettingsSchema` file at:
+The settings schema file at:
 
 ```
 docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json
@@ -1160,7 +1179,7 @@ is committed, version-controlled, and kept in sync with the Rust
 The artifact **never** includes:
 
 - a SAS key, SAS token, or bearer token;
-- a relay namespace FQDN (it is a runtime `transportSettings` field, not an
+- a relay namespace FQDN (it is a runtime `spec.provider.settings` field, not an
   artifact constant);
 - a TLS private key.
 
@@ -1179,7 +1198,7 @@ download, or PATH scan.
 | Reuse source | `d2b-provider-relay/src/lib.rs`: extract `RelayEndpoint`, `RelayCredential`, `RelayRole`, `RelayStream`, `connect()`, `listen()`, `mint_sas()`, credential redaction; adapt for v3 named byte-stream transport inside long-lived service process |
 | Excluded current behavior | Gateway-display relay path (`d2b-gateway-runtime/src/bin/d2b-gateway-relay.rs`); ACA provider composition (`d2b-provider-aca`, `AcaWorkloadProvider`); `RelayProvider` trait objects from `d2b-realm-provider` |
 | Excluded ADR45 assumptions | ADR45 fixed 4-unit PID1 endpoint set; `SD_LISTEN_FDS` relay bootstrap; `d2b-realm-router` ProviderInstance relay composition; ADR45 bundle version constants |
-| Required delta | Provider resource/catalog; one crate with mandatory layout; named byte-stream transport via `transport-service` Unix endpoint; Credential KK session acquisition inside gateway Guest; `config.executionRef`/`networkRef` placement gates; typed `transportSettings` schema; long-lived service process multiplexing; reconnect response to `CloseTransport`/`OpenTransport`; backpressure/credit integration; audit/OTEL; Nix artifact |
+| Required delta | Provider resource/catalog; one crate with mandatory layout; named byte-stream transport via `transport-service` Unix endpoint; Credential KK session acquisition inside gateway Guest; `config.executionRef`/`networkRef` placement gates; typed `spec.provider.settings` schema; long-lived service process multiplexing; reconnect response to `CloseTransport`/`OpenTransport`; backpressure/credit integration; audit/OTEL; Nix artifact |
 | Behavior retained | Relay WebSocket connect/accept mechanics; credential redaction invariant; SAS mint logic; auth-error mapping |
 | Removal proof | `d2b-provider-relay` retired only after gateway-display path migrates to Provider resource model; `d2b-gateway-relay.rs` binary retired only after ACA Provider dossier integrates |
 | Feasibility proof | Fake relay server in `src/tests/integration/` enabling hermetic reconnect and credential scenarios without live Azure service |
@@ -1197,7 +1216,7 @@ download, or PATH scan.
 | Reuse action | extract and adapt |
 | Destination | `packages/d2b-provider-transport-azure-relay/src/relay_transport.rs` |
 | Detailed design | Adapt `RelayStream` as relay transport service process; expose named opaque byte stream on the `transport-service` Unix endpoint; add 2-byte length-prefixed framing; preserve credential redaction; TLS/WebSocket state stays in-process — only Noise record bytes traverse the named stream; register named stream with d2b-bus as `TransportHandle`; transport descriptor: `attachment_support: false`, `locality: Remote`, `atomic: false`; expose `OpenTransport`/`CloseTransport`/`ObserveTransport` interface to core; long-lived service process multiplexes sessions internally |
-| Integration | Core ZoneLink controller calls `OpenTransport(transportSettings)` → receives named byte stream handle; relay service cannot interpret plaintext bytes; one carriage per call; WebSocket loss closes the named stream |
+| Integration | Core ZoneLink controller calls `OpenTransport(spec.provider.settings)` → receives named byte stream handle; relay service cannot interpret plaintext bytes; one carriage per call; WebSocket loss closes the named stream |
 | Data migration | No compatibility with current relay sessions; v3 sessions are independent |
 | Validation | `tests/fake_relay_transport.rs`: connect/accept, framing, credential redaction, named stream roundtrip; `tests/listener_sender_conformance.rs`: named stream contract; Noise KK binding; relay identity exclusion |
 | Removal proof | `d2b-provider-relay/src/lib.rs` relay plumbing retained until ACA display migration completes |
@@ -1235,7 +1254,7 @@ download, or PATH scan.
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR046-transport-relay-001; transport settings schema; Nix configuration owner |
-| Current source | `docs/specs/ADR-046-zone-routing.md` §transportSettings Nix example |
+| Current source | `docs/specs/ADR-046-zone-routing.md` transport settings Nix example |
 | Reuse action | new |
 | Destination | `packages/d2b-provider-transport-azure-relay/src/transport_settings.rs`; `docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json` |
 | Detailed design | `AzureRelayTransportSettings` Rust struct with serde; validation against committed JSON Schema; reject `secret`-annotated fields; enforce `^[a-z][a-z0-9-]*$` pattern for `listenerCredentialAlias`/`senderCredentialAlias` alias ID fields (never `Credential/<name>` refs); xtask `gen-provider-transport-schemas` integration |
