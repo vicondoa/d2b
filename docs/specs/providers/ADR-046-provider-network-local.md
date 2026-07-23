@@ -872,13 +872,12 @@ spec:
       required: true
   networkUsage:
     networkRef: Network/work-net
-    ingressPorts: []
-    egressPolicy: inherit
+    ports: []
+    allowEgress: true
   endpoints:
     - name: agent-service
       transport: vsock
-      protocol: noise-kk
-      serviceId: d2b.network.v3.agent/v1
+      purpose: d2b.network.v3.agent/v1
       # ComponentSession service endpoint; accessible to the host controller only
   desiredLifecycle: running
   restartPolicy:
@@ -990,14 +989,17 @@ spec:
       required: true
   networkUsage:
     networkRef: Network/work-net
-    ingressPorts:
-      - protocol: udp
-        port: 53                        # DNS
-      - protocol: tcp
-        port: 53
-      - protocol: udp
-        port: 67                        # DHCP server
-    egressPolicy: inherit
+    ports:
+      - port: 53
+        protocol: udp
+        purpose: dns
+      - port: 53
+        protocol: tcp
+        purpose: dns
+      - port: 67
+        protocol: udp
+        purpose: dhcp
+    allowEgress: true
   desiredLifecycle: running
   restartPolicy:
     class: on-failure
@@ -1067,10 +1069,11 @@ spec:
     fds: { limit: 32 }
   networkUsage:
     networkRef: Network/work-net
-    ingressPorts:
-      - protocol: udp
-        port: 5353                      # mDNS
-    egressPolicy: inherit
+    ports:
+      - port: 5353
+        protocol: udp
+        purpose: mdns
+    allowEgress: true
   desiredLifecycle: running
   restartPolicy:
     class: on-failure
@@ -1126,10 +1129,11 @@ spec:
     fds: { limit: 32 }
   networkUsage:
     networkRef: Network/work-net
-    ingressPorts:
-      - protocol: udp
-        port: 5353
-    egressPolicy: inherit
+    ports:
+      - port: 5353
+        protocol: udp
+        purpose: mdns
+    allowEgress: true
   desiredLifecycle: running
   restartPolicy:
     class: on-failure

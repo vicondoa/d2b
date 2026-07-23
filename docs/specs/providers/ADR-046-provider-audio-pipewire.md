@@ -18,7 +18,7 @@ This spec exhaustively defines the `audio-pipewire` Provider for d2b 3.0. It
 covers:
 
 - Provider identity, crate layout, and package boundary;
-- the `audio.d2b.io.AudioState` ResourceType: schema, status, lifecycle,
+- the `audio-pipewire.d2b.io.AudioState` ResourceType: schema, status, lifecycle,
   validation;
 - the `runtime-audio` manifest dependency alias: runtime capability discovery
   without implementation-ID branches in the spec;
@@ -45,7 +45,7 @@ covers:
 - required crate layout (`src/`, `tests/`, `integration/`, `README.md`).
 
 Audio is an **interaction Provider**, not a device Provider. It creates and
-reconciles one `audio.d2b.io.AudioState` resource and one `Process` (vhost-user-sound
+reconciles one `audio-pipewire.d2b.io.AudioState` resource and one `Process` (vhost-user-sound
 worker) per Guest that opts in.
 
 **Controller boundary**: the `audio-state-controller` creates, updates, and
@@ -88,7 +88,7 @@ explicitly stated at each design boundary.
 | per-VM binary copy path `/run/d2b/vms/<vm>/d2b-<vm>` (`audio_argv.rs:97`) | LaunchTicket verifier enforces the path shape against the component template; not exposed in the Process resource spec | `implemented-and-reachable` |
 | `RunnerRole::Audio` (`d2b-contracts/src/broker_wire.rs:1524`) | `Process` resource with `spec.template: "vhost-user-sound-worker"`; launch owned by system Process Provider | `implemented-and-reachable` |
 | `PipeWireHostController` (`d2bd/src/audio_host_controller.rs:85`) | `AudioMediator` user-session service; exposes `SetGrant`/`SetLevel` ComponentSession service; applies changes via libpipewire API | `implemented-and-reachable` |
-| `QemuAudioController` (`audio_host_controller.rs:227`) | removed; audio discovers enforcement capability via the `runtime-audio` dependency alias; no implementation-ID branch in `audio.d2b.io.AudioState.spec` | `implemented-and-reachable` |
+| `QemuAudioController` (`audio_host_controller.rs:227`) | removed; audio discovers enforcement capability via the `runtime-audio` dependency alias; no implementation-ID branch in `audio-pipewire.d2b.io.AudioState.spec` | `implemented-and-reachable` |
 | `WPCTL_PATH` / `PW_DUMP_PATH` env keys (`audio_host_controller.rs:103`) | superseded; AudioMediator uses libpipewire registry introspection and direct API calls; no wpctl binary or pw-dump subprocess | `implemented-and-reachable` |
 | `PIPEWIRE_RUNTIME_DIR` env key (`audio_host_controller.rs:105`) | not a Process spec field; AudioMediator receives a declared pre-opened PipeWire portal FD from the user supervisor/display portal — it does not open the socket from the ambient runtime environment | `implemented-and-reachable` |
 | `access(2)` credential posture check (`audio_host_controller.rs:134`) | replaced by AudioMediator readiness check; AudioMediator reports `PipeWireSessionUnavailable` when the portal FD cannot be acquired from the user supervisor | `implemented-and-reachable` |
@@ -108,14 +108,14 @@ explicitly stated at each design boundary.
 | `d2b.site.audio.inputTargetNode` (`host.nix:253`) | `Provider/audio-pipewire.spec.config.captureAlias` — bounded named alias (`^[a-z][a-z0-9-]*$`) resolved privately by AudioMediator via libpipewire registry; not a PipeWire node ID or socket path | `generated-or-eval-contract` |
 | `vhost-device-sound v0.3.0` (`pkgs/vhost-device-sound/default.nix`) | `spec.artifactId` in `Provider/audio-pipewire` pointing to Nix artifact catalog entry | `implemented-and-reachable` |
 | `microvm.extraArgsScript` CH audio injection (`guest.nix:112`) | `Guest.spec.audioExtension` arguments derived from the runtime-audio capability reported by the Guest's Runtime Provider; values such as `virtio_id` and `queue_sizes` are not spec fields | `implemented-and-reachable` |
-| `/var/lib/d2b/vms/<vm>/state/audio-state.json` (`host.nix:341`) | superseded; `audio.d2b.io.AudioState.spec` is the durable desired authority; no per-Guest state file in v3 | `implemented-and-reachable` |
+| `/var/lib/d2b/vms/<vm>/state/audio-state.json` (`host.nix:341`) | superseded; `audio-pipewire.d2b.io.AudioState.spec` is the durable desired authority; no per-Guest state file in v3 | `implemented-and-reachable` |
 | `/run/d2b/locks/audio-<vm>.lock` (`host.nix:366`) | superseded; OFD lock and state file are removed in v3 | `implemented-and-reachable` |
 | `d2b-<vm>-snd` system user (`audio_argv.rs:140`) | superseded; dedicated worker principals are core Process principals from the bounded pool allocated by the Process Provider; not runtime-created `User` resources managed by the audio controller | `implemented-and-reachable` |
 | `d2b.guestControl.wpctlPath` (`guest.nix:139`) | superseded; AudioMediator uses libpipewire API directly; no operator-visible wpctlPath option in v3 | `generated-or-eval-contract` |
 | `d2b.audio.users` guest option (`guest.nix:92`) | `AudioState.spec.guestUsers` list of `User/<name>` ResourceRefs; Nix/compiler sets `spec.groups: ["audio"]` on each referenced guest `User` resource at compile time; runtime API-created AudioState verifies `User.status.groupMembershipVerified` before sidecar start; no runtime `extraGroups` mutation | `generated-or-eval-contract` |
 | `minijail-profiles.nix` audio role block / `seccompPolicyRef = "w1-audio"` | `Process.spec.sandbox.seccompClass: audio-pipewire-worker` | `implemented-and-reachable` |
 | `minijail_audio_usbip.rs` Layer-1 contract tests | retained and extended in `d2b-provider-audio-pipewire/tests/` | `implemented-and-reachable` |
-| `d2b audio status/set-volume/mute` CLI ops (`packages/d2b/src/`) | v3: `d2b resource update AudioState/<name>` or a provider-specific `d2b audio` projection | `implemented-and-reachable` |
+| `d2b audio status/set-volume/mute` CLI ops (`packages/d2b/src/`) | v3: `d2b resource update audio-pipewire.d2b.io.AudioState/<name>` or a provider-specific `d2b audio` projection | `implemented-and-reachable` |
 
 ## Resolved design decisions
 
@@ -123,7 +123,7 @@ All design decisions are resolved in this revision.
 
 | ID | Question | Resolution |
 | --- | --- | --- |
-| DRAUDIO-001 | Separate `AudioState` ResourceType or extend `Device`? | `audio.d2b.io.AudioState` is an independent ResourceType. Audio is an interaction Provider; it does not model a Device inventory/arbitration/claim lifecycle. |
+| DRAUDIO-001 | Separate `AudioState` ResourceType or extend `Device`? | `audio-pipewire.d2b.io.AudioState` is an independent ResourceType. Audio is an interaction Provider; it does not model a Device inventory/arbitration/claim lifecycle. |
 | DRAUDIO-002 | Per-Guest `AudioState` or Zone-global? | Per-Guest. Each Guest has independent grants, levels, and enforcement posture. |
 | DRAUDIO-003 | Where does the vhost-user-sound socket path live? | Controller-generated private implementation detail. Never appears in `AudioState.spec`, `AudioState.status`, API responses, audit records, OTEL attributes, or any broker configuration. |
 | DRAUDIO-004 | How does the controller enforce PipeWire stream routing after a grant change? | The `audio-state-controller` calls the AudioMediator `SetGrant`/`SetLevel` ComponentSession service over d2b-bus. The AudioMediator applies changes directly via libpipewire API (`pw_node_set_param`, `pw_stream_set_control`) on the worker's live PipeWire node. `AudioState.spec` is the durable authority; no prior state-file write is required. No EphemeralProcess, wpctl binary, or node ID is involved. |
@@ -154,7 +154,7 @@ Provider/audio-pipewire
   one user-session service binary (`audio-pipewire-mediator`), one worker
   template (`vhost-user-sound-worker`), one guest agent template
   (`guest-audio-agent`), one manifest dependency alias (`runtime-audio`), and
-  one exported ResourceType (`audio.d2b.io.AudioState`)
+  one exported ResourceType (`audio-pipewire.d2b.io.AudioState`)
 - **Depends on**: public neutral contracts/toolkit crates only; no `d2bd`,
   `d2b-priv-broker`, Zone-store, or other Provider internals
 
@@ -162,7 +162,7 @@ Provider/audio-pipewire
 
 | Component | Binary | Class | Domain | Scope |
 | --- | --- | --- | --- | --- |
-| `audio-state-controller` | `audio-pipewire-controller` | controller | system | Watches `audio.d2b.io.AudioState`; creates/updates/deletes AudioState-owned Process resources only; calls AudioMediator `SetGrant`/`SetLevel` service; never touches pidfds, broker spawn, Volume, or User resources; ProviderStateSet Volumes are prerequisite infrastructure created by core ProviderDeployment before component Processes start |
+| `audio-state-controller` | `audio-pipewire-controller` | controller | system | Watches `audio-pipewire.d2b.io.AudioState`; creates/updates/deletes AudioState-owned Process resources only; calls AudioMediator `SetGrant`/`SetLevel` service; never touches pidfds, broker spawn, Volume, or User resources; ProviderStateSet Volumes are prerequisite infrastructure created by core ProviderDeployment before component Processes start |
 | `audio-mediator` | `audio-pipewire-mediator` | service | user | Same-UID user-session component; receives declared pre-opened PipeWire portal FD from user supervisor; ProviderSupervisor routes FD to worker LaunchTicket; exposes `SetGrant`/`SetLevel` service; applies enforcement via libpipewire API |
 
 The controller runs as a Process in the system domain under the Host. The
@@ -215,7 +215,7 @@ capability fields are the only dispatch surface.
 
 ```yaml
 apiVersion: resources.d2b.io/v3
-type: audio.d2b.io.AudioState
+type: audio-pipewire.d2b.io.AudioState
 metadata:
   name: corp-vm-audio
   zone: dev
@@ -345,7 +345,7 @@ post-commit, after the revision event is durable.
 
 | Phase | Meaning |
 | --- | --- |
-| `Pending` | `audio.d2b.io.AudioState` committed; sidecar Process not yet Ready, or Guest not yet Running, or runtime-audio capability not yet advertised |
+| `Pending` | `audio-pipewire.d2b.io.AudioState` committed; sidecar Process not yet Ready, or Guest not yet Running, or runtime-audio capability not yet advertised |
 | `Ready` | Sidecar running, Guest attached, last grants enforced, MediatorReady |
 | `Degraded` | Sidecar running but enforcement failed; or Guest temporarily absent; or AudioMediator transiently unavailable |
 | `Failed` | Sidecar Process exited unrecoverably; or runtime audio capability permanently absent |
@@ -380,7 +380,7 @@ type: Process
 metadata:
   name: corp-vm-audio-sidecar
   zone: dev
-  ownerRef: AudioState/corp-vm-audio
+  ownerRef: audio-pipewire.d2b.io.AudioState/corp-vm-audio
   finalizers: [audio-pipewire.d2b.io/sidecar-stopped]
 spec:
   providerRef: Provider/system-minijail
@@ -392,7 +392,10 @@ spec:
     namespaceClasses: [mount, pid, ipc, uts]
     capabilityClasses: []
     seccompClass: audio-pipewire-worker
+    noNewPrivileges: true
     startRoot: false
+    readOnlyRoot: true
+    environmentClass: minimal
   endpoints:
     - name: vhost-user
       transport: unix
@@ -539,7 +542,10 @@ spec:
     namespaceClasses: []
     capabilityClasses: []
     seccompClass: audio-pipewire-mediator
+    noNewPrivileges: true
     startRoot: false
+    readOnlyRoot: true
+    environmentClass: provider-defined
   endpoints:
     - name: audio-service
       transport: unix
@@ -719,7 +725,7 @@ The controller creates one `GuestAudioAgent` Process per entry in
 `AudioState.spec.guestUsers`. Each Process:
 - Is named using an opaque UID digest derived from `AudioState.metadata.uid`
   and `User/<name>.metadata.uid`, e.g. `ag-4a7f2c1b` — never by username.
-- Has `ownerRef: AudioState/corp-vm-audio` and is located in the controller's
+- Has `ownerRef: audio-pipewire.d2b.io.AudioState/corp-vm-audio` and is located in the controller's
   component identity index for that `AudioState`; never selected by mutable
   label selector.
 - Has `userRef` pointing to the corresponding `User/<name>` resource in the
@@ -740,7 +746,7 @@ type: Process
 metadata:
   name: ag-4a7f2c1b
   zone: dev
-  ownerRef: AudioState/corp-vm-audio
+  ownerRef: audio-pipewire.d2b.io.AudioState/corp-vm-audio
 spec:
   providerRef: Provider/system-systemd
   executionRef: Guest/corp-vm
@@ -752,7 +758,10 @@ spec:
     namespaceClasses: []
     capabilityClasses: []
     seccompClass: guest-audio-agent
+    noNewPrivileges: true
     startRoot: false
+    readOnlyRoot: true
+    environmentClass: provider-defined
   endpoints:
     - name: audio-set
       transport: vsock
@@ -891,6 +900,7 @@ Every semantic audio-pipewire component receives a private `Volume` with
 no application-level schema content. All such Volumes are durable: `kind: state`,
 `persistenceClass: persistent`, `quotaBytes: 65536`,
 `quota: {maxBytes: 65536, maxInodes: 32, enforcement: none}`,
+`source.settings.kind: local-path`,
 `source.settings.sourcePolicyId: provider-state-persistent`, and
 `migrationPolicy: none`.
 They survive component and Provider restart and participate in upgrade, destroy,
@@ -916,6 +926,10 @@ update, or delete Volumes of any kind.
 | `vhost-user-sound-worker` | `audio-pipewire--worker--main-state--<guest>` | `state` / `persistent`; `quotaBytes:65536`; `quota:{maxBytes:65536,maxInodes:32,enforcement:none}`; `migrationPolicy: none` | bounded Process principal (`User/<pool-principal>`, Nix-provisioned) |
 | `guest-audio-agent` | `audio-pipewire--guest-agent--main-state--<guest>--<digest>` | `state` / `persistent`; `quotaBytes:65536`; `quota:{maxBytes:65536,maxInodes:32,enforcement:none}`; `migrationPolicy: none` | guest workload `User/<name>` (Nix-provisioned) |
 
+Host-side components use local-path source Volumes on `Host/host-system`. The
+GuestAudioAgent state Volume is `guest-local`: its source is inside the target
+Guest, has no Host fallback, and creates no virtiofs export or attachment child.
+
 ### Representative Volume (controller, empty-payload)
 
 ```yaml
@@ -931,7 +945,7 @@ spec:
   persistenceClass: persistent
   sensitivityClass: private
   stateSchema:
-    schemaId: audio.d2b.io/audio-state-controller/main-state
+    schemaId: io.d2b.audio-pipewire/audio-state-controller/main-state
     schemaVersion: "1.0"
     schemaDigest: sha256:<hex>
     migrationPolicy: none
@@ -944,6 +958,7 @@ spec:
   source:
     executionRef: Host/host-system
     settings:
+      kind: local-path
       sourcePolicyId: provider-state-persistent
   layout:
     - path: state
@@ -971,7 +986,8 @@ Volume naming convention: `<provider-name>--<component-id>--<namespace-id>--<exe
 enforced at runtime. `migrationPolicy: none` means no migration EphemeralProcess
 or schema version guard is required. `quotaBytes: 65536` is the extension quota;
 `quota: {maxBytes: 65536, maxInodes: 32, enforcement: none}` is the base quota
-block; `source.settings.sourcePolicyId: provider-state-persistent` selects the
+block; `source.settings.kind: local-path` with
+`source.settings.sourcePolicyId: provider-state-persistent` selects the
 persistent source policy. These values are sufficient for the identity marker
 directory anchor, survive component/Provider restart, and are never zero and
 never ephemeral. The identity marker provides tamper detection and is checked
@@ -1045,10 +1061,10 @@ The worker core Process principal:
 
 | Role name | Verbs | ResourceTypes | Notes |
 | --- | --- | --- | --- |
-| `audio-pipewire:view-status` | `get`, `list`, `watch` | `audio.d2b.io.AudioState` | Read-only status viewer |
-| `audio-pipewire:manage-grants` | `get`, `list`, `watch`, `updateSpec` | `audio.d2b.io.AudioState` | May update `spec.grants` and `spec.guestUsers` only; intended CLI role |
-| `audio-pipewire:admin` | `get`, `list`, `watch`, `create`, `updateSpec`, `delete` | `audio.d2b.io.AudioState` | Full lifecycle |
-| `audio-pipewire:controller` | all verbs including `updateStatus`, `updateFinalizers` | `audio.d2b.io.AudioState`, `Process` (owned by this Provider) | Controller identity only; never held by operators |
+| `audio-pipewire:view-status` | `get`, `list`, `watch` | `audio-pipewire.d2b.io.AudioState` | Read-only status viewer |
+| `audio-pipewire:manage-grants` | `get`, `list`, `watch`, `updateSpec` | `audio-pipewire.d2b.io.AudioState` | May update `spec.grants` and `spec.guestUsers` only; intended CLI role |
+| `audio-pipewire:admin` | `get`, `list`, `watch`, `create`, `updateSpec`, `delete` | `audio-pipewire.d2b.io.AudioState` | Full lifecycle |
+| `audio-pipewire:controller` | all verbs including `updateStatus`, `updateFinalizers` | `audio-pipewire.d2b.io.AudioState`, `Process` (owned by this Provider) | Controller identity only; never held by operators |
 
 ### Spec field authorization
 
@@ -1153,17 +1169,18 @@ test coverage and is subject to panel review.
 2. Core ProviderDeployment creates ProviderStateSet Volumes (one per semantic
    component, `kind: state`, `persistenceClass: persistent`,
    `quotaBytes: 65536`, `quota: {maxBytes: 65536, maxInodes: 32, enforcement: none}`,
+   `source.settings.kind: local-path`,
    `source.settings.sourcePolicyId: provider-state-persistent`,
    `migrationPolicy: none`; `Provider/volume-local` reconciles them),
    then creates the `audio-state-controller` Process (system domain) and the
    `audio-mediator` Process (user domain) as static components.
 3. Both register watch plans for their respective resources.
-4. `audio.d2b.io.AudioState` resources created by Nix or the API become Ready
+4. `audio-pipewire.d2b.io.AudioState` resources created by Nix or the API become Ready
    through the reconcile loop.
 
 ### Per-Guest enable sequence
 
-1. Operator (or Nix compilation) creates `AudioState/corp-vm-audio`.
+1. Operator (or Nix compilation) creates `audio-pipewire.d2b.io.AudioState/corp-vm-audio`.
 2. `audio-state-controller` queries the `runtime-audio` dependency alias for
    the Guest's runtime capability. If no audio capability is advertised, sets
    `RuntimeCapabilityUnavailable`; Pending.
@@ -1331,10 +1348,10 @@ values, gain values, or guest workload usernames.
 
 ```yaml
 watchSelectors:
-  - resourceType: audio.d2b.io.AudioState
+  - resourceType: audio-pipewire.d2b.io.AudioState
     verbs: [spec, status, deletion]
   - resourceType: Process
-    ownerRefType: audio.d2b.io.AudioState
+    ownerRefType: audio-pipewire.d2b.io.AudioState
     verbs: [status]
   - resourceType: Guest
     verbs: [status]
@@ -1351,7 +1368,7 @@ dependencySelectors:
   - resourceType: User
     resolveFrom: AudioState.spec.guestUsers
 allowedResourceVerbs:
-  - { type: audio.d2b.io.AudioState, verbs: [get, list, watch, create, updateSpec, updateStatus, updateFinalizers, delete] }
+  - { type: audio-pipewire.d2b.io.AudioState, verbs: [get, list, watch, create, updateSpec, updateStatus, updateFinalizers, delete] }
   - { type: Process, verbs: [get, list, watch, create, updateSpec, delete] }
 reconcileConcurrency: 8
 maxPendingResources: 512
@@ -1412,7 +1429,7 @@ reconcile(AudioState):
       b. For each ref in spec.guestUsers:
          - Compute opaque digest of AudioState.metadata.uid + User.<name>.metadata.uid.
          - Create Process/ag-<digest> if absent (CREATE resource API), with
-          ownerRef: AudioState/<name> and userRef: <guestUser ref>.
+          ownerRef: audio-pipewire.d2b.io.AudioState/<name> and userRef: <guestUser ref>.
          - Locate each existing GuestAudioAgent Process via ownerRef component
           identity index, not label selector.
       c. If sidecar Process.status.phase != Ready: set SidecarNotReady; retry.
@@ -1448,7 +1465,7 @@ precondition; a conflict causes a retry.
 ```nix
 d2b.zones.dev.resources = {
   corp-vm-audio = {
-    type = "audio.d2b.io.AudioState";
+    type = "audio-pipewire.d2b.io.AudioState";
     metadata.ownerRef = "Guest/corp-vm";
     spec = {
       providerRef = "Provider/audio-pipewire";
@@ -1486,7 +1503,7 @@ d2b.zones.dev.resources.audio-pipewire = {
 
 ### Nix validation
 
-Nix eval-time validation of `audio.d2b.io.AudioState` resources checks:
+Nix eval-time validation of `audio-pipewire.d2b.io.AudioState` resources checks:
 
 - `spec.providerRef` resolves to an installed `Provider/audio-pipewire` in the
   same Zone; evaluation fails with a descriptive error if absent;
@@ -1513,7 +1530,7 @@ The Nix module also validates that:
 ```json
 {
   "apiVersion": "resources.d2b.io/v3",
-  "type": "audio.d2b.io.AudioState",
+  "type": "audio-pipewire.d2b.io.AudioState",
   "metadata": {
     "name": "corp-vm-audio",
     "zone": "dev",
@@ -1553,9 +1570,9 @@ When an `AudioState` resource is removed from the Nix configuration:
 | Item | Value |
 | --- | --- |
 | Current anchor | `nixos-modules/components/audio/host.nix`, `guest.nix`, `packages/d2b-core/src/audio_policy.rs`, `packages/d2bd/src/audio_dispatch.rs`, `packages/d2bd/src/audio_host_controller.rs`, `packages/d2b-host/src/audio_argv.rs` |
-| Evidence class | Mixed; `audio_policy.rs` / `audio_argv.rs` are `implemented-and-reachable`; v3 Provider/AudioState/AudioMediator wiring is `ADR-only` |
+| Evidence class | Mixed; `audio_policy.rs` / `audio_argv.rs` are `implemented-and-reachable`; v3 Provider/`audio-pipewire.d2b.io.AudioState`/AudioMediator wiring is `ADR-only` |
 | Behavior retained | Per-VM mic/speaker grants, `LevelPercent` 0..=100, component-template argv shape, PipeWire `client.conf.d/` stream rule placement, WirePlumber virtio-snd profile, zero host capabilities |
-| Required delta | Entire `audio.d2b.io.AudioState` ResourceType, `audio-state-controller`, `AudioMediator` service component with `SetGrant`/`SetLevel` service, `GuestAudioAgent` Process component with libpipewire `AudioSet` service, runtime-audio capability query and alias binding, Guest spec audioExtension mutation derived from AudioCapability record, libpipewire enforcement API on both host and guest sides, OTEL metric/audit shape, RBAC roles, Nix v3 resource authoring with `User/<name>` ResourceRefs, `spec.config` Provider shape |
+| Required delta | Entire `audio-pipewire.d2b.io.AudioState` ResourceType, `audio-state-controller`, `AudioMediator` service component with `SetGrant`/`SetLevel` service, `GuestAudioAgent` Process component with libpipewire `AudioSet` service, runtime-audio capability query and alias binding, Guest spec audioExtension mutation derived from AudioCapability record, libpipewire enforcement API on both host and guest sides, OTEL metric/audit shape, RBAC roles, Nix v3 resource authoring with `User/<name>` ResourceRefs, `spec.config` Provider shape |
 | Reuse path | `d2b-core/src/audio_policy.rs` → copy-unchanged into `src/audio_state.rs` (one-time activation migration from v1/v2 on-disk format only; no ongoing state file); `audio_argv.rs` → adapt into component template (not live Process spec); WirePlumber stream rule Nix logic → port to Provider Nix module |
 | Replacement/deletion | `audio_dispatch.rs`, `audio_host_controller.rs` retired after `audio-state-controller` passes e2e parity; `host.nix`, `guest.nix` retired after v3 Nix module deployed; `d2b-core/src/audio_policy.rs` may remain as re-export shim |
 | Feasibility proof | Minijail contract tests in `d2b-contract-tests/tests/minijail_audio_usbip.rs`; ComponentSession FD-attachment protocol from ADR-046-componentsession-and-bus; libpipewire `pw_node_set_param` API confirmed in upstream PipeWire 1.x |
@@ -1619,8 +1636,8 @@ When an `AudioState` resource is removed from the Nix configuration:
 | Reuse source | `public_wire.rs` `AudioChannel`, `AudioEnforcementPosture`, `AudioErrorKind`, `AudioProviderKind`, `AudioSetApplied` — copy-unchanged as closed enum definitions |
 | Reuse action | `copy-unchanged` for closed enums; `ADR-only` for schema/admission |
 | Destination | `packages/d2b-provider-audio-pipewire/src/resource_type.rs`; `packages/d2b-provider-audio-pipewire/src/admission.rs` |
-| Detailed design | `audio.d2b.io.AudioState.spec` struct with serde + schemars; strict `deny_unknown_fields`; `guestUsers` ≤16, each a `User/<name>` ResourceRef where `<name>` matches `[a-z][a-z0-9_-]*` ≤32 chars; `speakerLevel`/`micGain` in `[0,100]` or null; `providerRef` format check and immutability enforcement. Audio frontend configuration is derived at reconcile time from the `runtime-audio` capability record, not stored in the spec. JSON schema exported to `docs/reference/schemas/v3/AudioState.json` (tracked by `make test-drift`). |
-| Integration | Provider signs and exports the `audio.d2b.io.AudioState` ResourceTypeSchema during package build. Core validates `AudioState` specs on every `Create`/`UpdateSpec` call. |
+| Detailed design | `audio-pipewire.d2b.io.AudioState.spec` struct with serde + schemars; strict `deny_unknown_fields`; `guestUsers` ≤16, each a `User/<name>` ResourceRef where `<name>` matches `[a-z][a-z0-9_-]*` ≤32 chars; `speakerLevel`/`micGain` in `[0,100]` or null; `providerRef` format check and immutability enforcement. Audio frontend configuration is derived at reconcile time from the `runtime-audio` capability record, not stored in the spec. JSON schema exported to `docs/reference/schemas/v3/AudioState.json` (tracked by `make test-drift`). |
+| Integration | Provider signs and exports the `audio-pipewire.d2b.io.AudioState` ResourceTypeSchema during package build. Core validates `AudioState` specs on every `Create`/`UpdateSpec` call. |
 | Validation | `tests/resource_type.rs`: schema round-trip; admission rejection matrix (unknown fields, out-of-range level, excess guestUsers, bad name, invalid ResourceRef format, immutable providerRef mutation, forbidden audioFrontend field); JSON schema drift test |
 | Removal proof | N/A (new type) |
 
@@ -1634,9 +1651,9 @@ When an `AudioState` resource is removed from the Nix configuration:
 | Reuse source | None directly; reconcile flow is new async controller |
 | Reuse action | `adapt` — dispatch logic is the reference for step ordering only |
 | Destination | `packages/d2b-provider-audio-pipewire/src/controller/audio_state.rs` |
-| Detailed design | Single async reconcile loop for `audio.d2b.io.AudioState` resource events. Watch plan for `audio.d2b.io.AudioState`, `Process` (sidecar+GuestAudioAgent owned, via ownerRef component identity index), `Guest` (dependency), AudioMediator `Process` (component identity), `User` (guestUsers dependency, via dependencyRefIn). Never issues SpawnRunner, OpenPidfd, any pidfd, EphemeralProcess, or Volume/User resource operation. ProviderStateSet Volumes are created/deleted by core ProviderDeployment before/after component Processes; `Provider/volume-local` reconciles them; the controller only consumes its required view `dirfd`. Queries `runtime-audio` capability alias on each reconcile. Calls AudioMediator `SetGrant`/`SetLevel` service and `GuestAudioAgent.AudioSet` service via d2b-bus for grant changes. Verifies `User.status.groupMembershipVerified` for each guestUser before sidecar start; fails closed on missing audio group. Batch `UpdateStatus` as a single post-reconcile commit. Post-commit audit event emission. No direct filesystem access. No runtime `User.spec.groups` mutation. |
+| Detailed design | Single async reconcile loop for `audio-pipewire.d2b.io.AudioState` resource events. Watch plan for `audio-pipewire.d2b.io.AudioState`, `Process` (sidecar+GuestAudioAgent owned, via ownerRef component identity index), `Guest` (dependency), AudioMediator `Process` (component identity), `User` (guestUsers dependency, via dependencyRefIn). Never issues SpawnRunner, OpenPidfd, any pidfd, EphemeralProcess, or Volume/User resource operation. ProviderStateSet Volumes are created/deleted by core ProviderDeployment before/after component Processes; `Provider/volume-local` reconciles them; the controller only consumes its required view `dirfd`. Queries `runtime-audio` capability alias on each reconcile. Calls AudioMediator `SetGrant`/`SetLevel` service and `GuestAudioAgent.AudioSet` service via d2b-bus for grant changes. Verifies `User.status.groupMembershipVerified` for each guestUser before sidecar start; fails closed on missing audio group. Batch `UpdateStatus` as a single post-reconcile commit. Post-commit audit event emission. No direct filesystem access. No runtime `User.spec.groups` mutation. |
 | Integration | Registered with Zone core as a controller under `Provider/audio-pipewire`. |
-| Validation | `tests/audio_state_controller.rs`: reconcile state machine matrix (enable, grant change, guest absent, mediator unavailable, guest-audio-agent unavailable, guest-user-audio-group-missing, sidecar crash loop, deletion sequence, runtime-capability-unavailable); no-EphemeralProcess-created assertion; no-broker-op assertion; no-pidfd-op assertion; no-runtime-groups-mutation assertion; no-Volume-create assertion; no-User-create assertion. ProviderStateSet Volume schema correctness (`kind: state`, `persistenceClass: persistent`, `quotaBytes: 65536`, `quota: {maxBytes: 65536, maxInodes: 32, enforcement: none}`, `source.settings.sourcePolicyId: provider-state-persistent`, `migrationPolicy: none`, nonzero identity marker) is validated by a separate core ProviderDeployment integration test, not by this work item. |
+| Validation | `tests/audio_state_controller.rs`: reconcile state machine matrix (enable, grant change, guest absent, mediator unavailable, guest-audio-agent unavailable, guest-user-audio-group-missing, sidecar crash loop, deletion sequence, runtime-capability-unavailable); no-EphemeralProcess-created assertion; no-broker-op assertion; no-pidfd-op assertion; no-runtime-groups-mutation assertion; no-Volume-create assertion; no-User-create assertion. ProviderStateSet Volume schema correctness (`kind: state`, `persistenceClass: persistent`, `quotaBytes: 65536`, `quota: {maxBytes: 65536, maxInodes: 32, enforcement: none}`, `source.settings.kind: local-path`, `source.settings.sourcePolicyId: provider-state-persistent`, `migrationPolicy: none`, nonzero identity marker) is validated by a separate core ProviderDeployment integration test, not by this work item. |
 | Removal proof | Supersedes `audio_dispatch.rs`; `d2bd` audio dispatch deleted after e2e parity test confirms |
 
 ### ADR046-audio-007: Implement `AudioMediator` user-session service
@@ -1664,7 +1681,7 @@ When an `AudioState` resource is removed from the Nix configuration:
 | Reuse source | Same |
 | Reuse action | `replace` |
 | Destination | `nixos-modules/components/audio/v3-resource.nix`; `nixos-modules/components/audio/host-config.nix`; `nixos-modules/components/audio/guest-config.nix` |
-| Detailed design | Provider root config uses `spec.config` (not `rootConfig`). `captureAlias` is a bounded label option matching `^[a-z][a-z0-9-]*$` (≤64 chars), not an `inputTargetNode` raw PipeWire node name. No `d2b.guestControl.wpctlPath` option in v3. `v3-resource.nix` emits `audio.d2b.io.AudioState` resource specs; `guestUsers` is a list of `User/<name>` ResourceRefs; the Nix module sets `spec.groups: ["audio"]` on each referenced guest `User` resource at compile time (no runtime extraGroups mutation). No `audioFrontend`/`virtioId`/`queueSizes` in the spec; frontend configuration is derived from the `runtime-audio` capability at reconcile time. `host-config.nix` contains WirePlumber stream rules (`client.conf.d/90-d2b`) and vhost-device-sound package; no per-VM tmpfiles or state-file paths. `guest-config.nix` contains the in-guest PipeWire stack, virtio-snd kernel module, and GuestAudioAgent Process resource declaration. |
+| Detailed design | Provider root config uses `spec.config` (not `rootConfig`). `captureAlias` is a bounded label option matching `^[a-z][a-z0-9-]*$` (≤64 chars), not an `inputTargetNode` raw PipeWire node name. No `d2b.guestControl.wpctlPath` option in v3. `v3-resource.nix` emits `audio-pipewire.d2b.io.AudioState` resource specs; `guestUsers` is a list of `User/<name>` ResourceRefs; the Nix module sets `spec.groups: ["audio"]` on each referenced guest `User` resource at compile time (no runtime extraGroups mutation). No `audioFrontend`/`virtioId`/`queueSizes` in the spec; frontend configuration is derived from the `runtime-audio` capability at reconcile time. `host-config.nix` contains WirePlumber stream rules (`client.conf.d/90-d2b`) and vhost-device-sound package; no per-VM tmpfiles or state-file paths. `guest-config.nix` contains the in-guest PipeWire stack, virtio-snd kernel module, and GuestAudioAgent Process resource declaration. |
 | Integration | `nixos-modules/default.nix` imports all three modules. |
 | Validation | `tests/unit/nix/cases/audio-v3-resource.nix`: resource spec round-trip; `captureAlias` regex validation (`^[a-z][a-z0-9-]*$`); eval-time rejection of duplicate AudioState per Guest; guestUsers as `User/<name>` ResourceRefs; `spec.groups` injection; deprecation warning for legacy options; `spec.config` (not `rootConfig`) shape test; no-wpctlPath-option assertion; no-runtime-extraGroups-mutation assertion; no-audioFrontend-field assertion |
 | Removal proof | `host.nix` and `guest.nix` kept as compat shims until v3 module deployed on all Zones |

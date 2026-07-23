@@ -272,11 +272,21 @@ spec:
       access: read-only
       required: true
   sandbox:
+    namespaceClasses: [mount, pid, ipc, uts, network]
+    capabilityClasses: []
+    seccompClass: strict
+    startRoot: false
+    noNewPrivileges: true
+    environmentClass: minimal
+    readOnlyRoot: true
+  budget:
     pids:
       limit: 32
     fds:
       limit: 256
   networkUsage:
+    networkRef: null
+    ports: []
     allowEgress: false    # controller makes no outbound calls; no ambient network claim
   endpoints:
     - name: bus-registration
@@ -339,6 +349,8 @@ spec:
     fds:
       limit: 64
   networkUsage:
+    networkRef: null
+    ports: []
     allowEgress: false  # no direct MSAL network claim; Entra calls via injected client/effect port
   endpoints:
     - name: credential-service
@@ -380,10 +392,23 @@ spec:
       access: read-only
       required: true
   sandbox:
+    namespaceClasses: [mount, pid, ipc, uts, network]
+    capabilityClasses: []
+    seccompClass: strict
+    startRoot: false
+    noNewPrivileges: true
+    environmentClass: minimal
+    readOnlyRoot: true
+  budget:
+    memory:
+      limit: "128Mi"    # Noise session state + token material in process-local memory
+    pids:
       limit: 32
     fds:
       limit: 64
   networkUsage:
+    networkRef: null
+    ports: []
     allowEgress: false  # no direct MSAL network claim; Entra calls via injected client/effect port
   endpoints:
     - name: credential-service
@@ -463,13 +488,16 @@ spec:
     schemaDigest: sha256:<hex>
     migrationPolicy: none
   quotaBytes: 65536
-  maxBytes: 65536
-  maxInodes: 256
-  sourcePolicyId: credential-entra-state-v1
+  quota:
+    maxBytes: 65536
+    maxInodes: 256
+    enforcement: none
   sealingCredentialRef: null
   source:
     executionRef: Host/<controllerExecutionRef>
-    settings: {}
+    settings:
+      kind: local-path
+      sourcePolicyId: credential-entra-state-v1
   layout:
     - path: state
       type: directory
@@ -497,8 +525,8 @@ spec:
 
 **Agent Volumes** — controller, user-agent, and guest-agent each own a separate
 full Volume; no two components share a Volume. Every agent Volume carries its
-own `sourcePolicyId`, `quotaBytes`/`maxBytes`/`maxInodes` base quota, and
-broker-maintained `identityMarker`.
+own `source.settings.sourcePolicyId`, `quotaBytes`, `quota.maxBytes`,
+`quota.maxInodes`, and broker-maintained `identityMarker`.
 
 **User-agent Volume** — `credential-entra--agent--agent-state--<credential-name-short>`:
 `providerRef: Provider/volume-local`; `source.executionRef: <scope.executionRef>`
@@ -507,14 +535,16 @@ broker-maintained `identityMarker`.
 
 **Guest-agent Volume** (system-domain, Guest) —
 `credential-entra--agent--agent-state--<credential-name-short>`: one Volume with
-`providerRef: Provider/volume-local`; includes an `attachments` entry with
-`transport: virtiofs` and `executionRef: <scope.executionRef>` (Guest/<name>);
-`Provider/volume-local` creates the virtiofs Export child resource as part of
-the Volume lifecycle. There is no separate attachment Volume.
+`providerRef: Provider/volume-local`; `source.executionRef:
+<scope.executionRef>` (Guest/<name>); `source.settings.kind: local-path`; and
+`source.settings.sourcePolicyId: credential-entra-state-v1`. Credential state is
+guest-local for Guest execution contexts: no host-backed-guest Volume attachment,
+virtiofs Export child, or separate attachment Volume is used.
 
 **Empty payload schema invariant.** Both controller and agent Volumes carry
 `kind: state`, `persistenceClass: persistent`, and minimal nonzero base quota
-fields — `quotaBytes: 65536`, `maxBytes: 65536`, `maxInodes: 256` — sufficient
+fields — `quotaBytes: 65536`, `quota.maxBytes: 65536`,
+`quota.maxInodes: 256` — sufficient
 for the identity marker file and directory inode. `quotaBytes: 0` is never
 used; these Volumes are durable and participate fully in the upgrade, destroy,
 and reset lifecycle. The stateSchema declares `migrationPolicy: none`; because
@@ -1369,8 +1399,8 @@ sections in order:
 | `test_entra_client_trait_surface` | Verify `EntraCredentialClient` trait is object-safe and all methods have correct async signatures |
 | `test_opaque_azure_ref_parse_tenant_id` | `OpaqueAzureRef::parse` accepts valid GUIDs; rejects secret-shaped values, `://`, `/`, `+`, `=`, whitespace, `{}` |
 | `test_authority_class_enum_validation` | Accepts `public`, `us-government`, `china`; accepts opaque effect-port alias matching `^[a-z][a-z0-9-]*$`; rejects any string containing `://`, `.`, port separators, path components, query-string characters, or hostname-shaped bytes; rejects unknown aliases |
-| `test_provider_state_set_controller_volume_empty_payload` | Controller ProviderStateSet Volume is a durable `kind: state` Volume: `type: Volume`, `ownerRef: Provider/credential-entra`, `spec.kind: state`, `persistenceClass: persistent`, `sourcePolicyId: credential-entra-state-v1`, `quotaBytes: 65536`, `maxBytes: 65536`, `maxInodes: 256` (all nonzero), `views.main.rights: [read, traverse]`, `identityMarker` present; stateSchema payload schema declares no data fields; Volume survives controller and Provider restart; participates in upgrade/destroy/reset |
-| `test_provider_state_set_agent_volume_empty_payload` | User-agent and guest-agent each have a separate durable `kind: state` Volume with `sourcePolicyId: credential-entra-state-v1`, nonzero `quotaBytes`/`maxBytes`/`maxInodes`, `views.main.rights: [read, traverse]`, and identity marker; three components → three non-shared Volumes; guest-agent Volume has `attachments[{transport: virtiofs, executionRef: Guest/<name>}]` (single Volume, no separate attachment Volume); never `persistenceClass: ephemeral`, zero quota, or `access: read-write` |
+| `test_provider_state_set_controller_volume_empty_payload` | Controller ProviderStateSet Volume is a durable `kind: state` Volume: `type: Volume`, `ownerRef: Provider/credential-entra`, `spec.kind: state`, `persistenceClass: persistent`, `source.settings.sourcePolicyId: credential-entra-state-v1`, `quotaBytes: 65536`, `quota.maxBytes: 65536`, `quota.maxInodes: 256` (all nonzero), `views.main.rights: [read, traverse]`, `identityMarker` present; stateSchema payload schema declares no data fields; Volume survives controller and Provider restart; participates in upgrade/destroy/reset |
+| `test_provider_state_set_agent_volume_empty_payload` | User-agent and guest-agent each have a separate durable `kind: state` Volume with `source.settings.sourcePolicyId: credential-entra-state-v1`, nonzero `quotaBytes`/`quota.maxBytes`/`quota.maxInodes`, `views.main.rights: [read, traverse]`, and identity marker; three components → three non-shared Volumes; guest-agent Volume is guest-local (`source.executionRef: Guest/<name>`) with no host-backed-guest attachment or virtiofs Export; never `persistenceClass: ephemeral`, zero quota, or `access: read-write` |
 | `test_exact_consumer_guard` | `EntraCredentialOwner::ExactConsumer` rejects callers not matching `consumerRef`; accepts the exact declared consumer |
 | `test_entra_client_state_transitions` | `Ready → InteractionRequired → Ready`; correct error mapping per §6 |
 | `test_interaction_required_maps_to_unavailable` | `EntraClientError::InteractionRequired` → `credential-provider-unavailable` (not `credential-operation-denied`) |

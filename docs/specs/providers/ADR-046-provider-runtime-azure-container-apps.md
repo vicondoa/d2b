@@ -484,8 +484,9 @@ spec:
   providerRef: Provider/volume-local         # Guest-local volume-local instance inside gateway Guest
   source:
     executionRef: Guest/<aca-gateway-name>   # guest-local; manifest-frozen; no Host fallback
-    placementMode: guest-local
-    settings: {}
+    settings:
+      kind: local-path
+      sourcePolicyId: runtime-azure-container-apps-sandbox-state
   kind: state
   persistenceClass: persistent          # durable: survives component/Provider restart, upgrade, destroy/reset
   sensitivityClass: private
@@ -495,6 +496,10 @@ spec:
     schemaDigest: sha256:<hex>
     migrationPolicy: pre-launch-required
   quotaBytes: 10485760                  # 10 MiB nonzero; opaque binding/adoption metadata only
+  quota:
+    maxBytes: 10485760
+    maxInodes: 4096
+    enforcement: none
   sealingCredentialRef: null
   layout:
     - path: ""
@@ -557,8 +562,9 @@ spec:
   providerRef: Provider/volume-local         # Guest-local volume-local instance inside gateway Guest
   source:
     executionRef: Guest/<aca-gateway-name>   # guest-local; manifest-frozen; no Host fallback
-    placementMode: guest-local
-    settings: {}
+    settings:
+      kind: local-path
+      sourcePolicyId: runtime-azure-container-apps-service-state
   kind: state
   persistenceClass: persistent          # durable even for empty payload schema
   sensitivityClass: private
@@ -568,6 +574,10 @@ spec:
     schemaDigest: sha256:<hex>
     migrationPolicy: none               # empty payload schema; no migration worker
   quotaBytes: 65536                     # 64 KiB; identity marker only
+  quota:
+    maxBytes: 65536
+    maxInodes: 256
+    enforcement: none
   sealingCredentialRef: null
   layout:
     - path: ""

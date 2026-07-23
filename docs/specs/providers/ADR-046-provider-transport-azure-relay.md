@@ -82,7 +82,7 @@ Provider/transport-azure-relay
 | Binary: sender service | `d2b-transport-azure-relay-sender` |
 | Provider API major | 1 |
 | ResourceTypes exported | none (transport-only; no Zone ResourceType ownership) |
-| ResourceTypes consumed | `ZoneLink`, `Credential`, `Network`, `Provider` |
+| ResourceTypes consumed | `Credential`, `Network`, `Provider` (ZoneLink is read and reconciled only by core) |
 | Placement | Gateway Guest only (per ADR 0032; see §Provider config schema) |
 
 Crate layout (enforced by workspace policy):

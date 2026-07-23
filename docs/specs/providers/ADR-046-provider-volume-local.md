@@ -752,7 +752,7 @@ mounts:
     view: controller
     mountPath: /state
     access: read-write    # read-only | read-write
-    optional: false
+    required: true
 ```
 
 | Field | Type | Required | Default | Constraints |
@@ -761,7 +761,7 @@ mounts:
 | `view` | ViewId | Yes | — | Must exist in the Volume spec; bounded `^[a-z][a-z0-9-]*$`; max 63 chars |
 | `mountPath` | absolute path string | Yes | — | Inside the Process sandbox; no overlap |
 | `access` | `read-only` \| `read-write` | No | `read-only` | Must be compatible with View rights |
-| `optional` | bool | No | `false` | If `true`, absent/Degraded Volume does not prevent Process start |
+| `required` | bool | No | `true` | If `false`, absent/Degraded Volume does not prevent Process start |
 
 The Process Provider (system-systemd or system-minijail) resolves the Volume
 root at launch time through a broker FD delivered in the LaunchTicket. The raw
@@ -1947,8 +1947,8 @@ d2b.zones."dev".resources."volume-local" = {
   type = "Provider";
   spec = {
     artifactId = "volume-local-provider";
-    controllerExecutionRef = "Host/host-system";
     config = {
+      controllerExecutionRef = "Host/host-system";
       # Root config validated against volume-local root-config.schema.json.
       # Raw host path prefixes are private bundle authority; they are NOT in this
       # config block. sourcePolicies declares opaque IDs that Volumes reference.
@@ -2425,7 +2425,7 @@ Documents:
 | Current source | `nixos-modules/storage-json.nix`; `nixos-modules/store.nix`; `packages/xtask/src/main.rs` (`gen-schemas`) |
 | Reuse action | adapt |
 | Destination | `nixos-modules/zone-resources.nix` (per §ADR046-pstate-010); `root-config.schema.json` in the Provider package |
-| Detailed design | `sourcePolicies` in Provider root config (opaque IDs; no raw host paths); path prefix injection by resource compiler into private bundle (never into ResourceSpec or operator-authored Nix); `controllerExecutionRef` in Provider spec; all eval-time validation rules per §Nix configuration including `sourcePolicyId` validation; artifact catalog entry; Provider and Volume resource authoring shapes |
+| Detailed design | `sourcePolicies` in Provider root config (opaque IDs; no raw host paths); path prefix injection by resource compiler into private bundle (never into ResourceSpec or operator-authored Nix); `controllerExecutionRef` in Provider config; all eval-time validation rules per §Nix configuration including `sourcePolicyId` validation; artifact catalog entry; Provider and Volume resource authoring shapes |
 | Integration | NixOS build emits `/etc/d2b/zones/<zone>/resources.json`; Zone daemon activates bundle and creates Volume resources; volume-local controller reconciles |
 | Data migration | `nixos-modules/storage-json.nix` path rows superseded by Volume resources; `nixos-modules/store.nix` activation superseded by store-view Volume |
 | Validation | All Nix eval-time validation rules; `contentId` determinism; credential-ref guard; unknown Provider config key → build fail |

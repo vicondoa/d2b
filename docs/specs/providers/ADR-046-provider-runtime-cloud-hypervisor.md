@@ -1229,10 +1229,16 @@ spec:
     schemaDigest: sha256:<pinned-at-build>
     migrationPolicy: none          # empty payload schema; no migration EphemeralProcess
   quotaBytes: 10485760    # 10 MiB; must be nonzero — quotaBytes: 0 is prohibited for kind: state
+  quota:
+    maxBytes: 10485760
+    maxInodes: 4096
+    enforcement: none
   sealingCredentialRef: null
   source:
     executionRef: Host/dev-host     # from Provider.spec.config.controllerExecutionRef
-    settings: {}
+    settings:
+      kind: local-path
+      sourcePolicyId: runtime-cloud-hypervisor-controller-state
   layout:
     - path: state
       type: directory
@@ -1374,7 +1380,7 @@ virtiofsd Process resources created by `Provider/volume-virtiofs` for Guests
 managed by this Provider must declare:
 - `capabilityClasses: []` (empty — zero capability classes beyond baseline);
 - `seccompClass: virtiofsd-default` (required);
-- `requiresStartRoot: false`;
+- `startRoot: false`;
 - `userNamespace` block mapping in-NS UID/GID 0 to the per-share principal
   (`d2b-<vm>-runner` or `d2b-<vm>-gctlfs`);
 - `--sandbox=chroot --inode-file-handles=never` (added by the virtiofs Provider

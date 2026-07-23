@@ -291,7 +291,7 @@ spec:
   endpoints:
     - name:      service-session
       transport: unix
-      purpose:   d2b-bus-service
+      purpose:   transport-vsock-service
   mounts:
     - volumeRef:  Volume/transport-vsock--service--empty-state--<executionRef-short>
       view:       service

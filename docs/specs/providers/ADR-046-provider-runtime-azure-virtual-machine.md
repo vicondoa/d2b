@@ -317,7 +317,7 @@ ResourceTypes. Components consume their required view dirfd only.
 
 ### Guest-local placement
 
-Both state Volumes declare **`placement: guest-local`**. This means the
+Both state Volumes use manifest-frozen **guest-local** placement. This means the
 `Provider/volume-local` instance reconciling and hosting the Volume is the one
 running **inside the gateway Guest** named by `spec.config.controllerExecutionRef`,
 not a host-side volume-local instance. The `source.executionRef` field carries
@@ -331,8 +331,9 @@ Custody invariants:
 - There is **no virtiofs or host-to-guest attachment** of provider state.
   The state files are written and read exclusively by processes running inside
   the gateway Guest; the host filesystem is never the backing store.
-- The **manifest freezes `placement: guest-local`** for both Volumes; there
-  is no fallback to host-backed storage and no runtime override.
+- The **manifest freezes guest-local placement** for both Volumes; each Volume
+  expresses this with `source.executionRef: Guest/<gateway>`, and there is no
+  fallback to host-backed storage and no runtime override.
 
 Each semantic component receives its own private Volume even when its payload
 schema is empty. **All component state Volumes are `persistenceClass: persistent`
@@ -377,7 +378,7 @@ metadata:
   ownerRef: Provider/runtime-azure-virtual-machine
 spec:
   providerRef: Provider/volume-local
-  placement: guest-local          # reconciled by Guest-local volume-local; host never backs this Volume
+  kind: state
   persistenceClass: persistent
   sensitivityClass: private       # single-process; volume-domain-mismatch on any other mount
   stateSchema:
@@ -386,14 +387,16 @@ spec:
     schemaDigest: sha256:<hex>
     migrationPolicy: pre-launch-required
   quotaBytes: 10485760            # 10 MiB; nonzero required
-  maxBytes: 10485760              # hard byte cap (= quotaBytes for provider-state)
-  maxInodes: 4096                 # hard inode cap; nonzero required
-  sourcePolicyId: "provider-state-v1"
-  sealingRequired: true           # PSK ciphertext stored inside; sealed at rest
+  quota:
+    maxBytes: 10485760            # hard byte cap (= quotaBytes for provider-state)
+    maxInodes: 4096               # hard inode cap; nonzero required
+    enforcement: none
   sealingCredentialRef: Credential/azure-vm-controller-state-key
   source:
     executionRef: Guest/<gateway> # resolved from spec.config.controllerExecutionRef
-    settings: {}
+    settings:
+      kind: local-path
+      sourcePolicyId: runtime-azure-virtual-machine-controller-state
   layout:
     - path: state
       type: directory
@@ -440,7 +443,7 @@ metadata:
   ownerRef: Provider/runtime-azure-virtual-machine
 spec:
   providerRef: Provider/volume-local
-  placement: guest-local          # reconciled by Guest-local volume-local; host never backs this Volume
+  kind: state
   persistenceClass: persistent     # durable: survives restart; participates in upgrade/destroy/reset
   sensitivityClass: private       # volume-domain-mismatch on any other mount
   stateSchema:
@@ -449,14 +452,16 @@ spec:
     schemaDigest: sha256:<hex>
     migrationPolicy: none            # admission records are session-scoped; no migration worker
   quotaBytes: 1048576             # 1 MiB; nonzero required even for minimal payload
-  maxBytes: 1048576               # hard byte cap (= quotaBytes for provider-state)
-  maxInodes: 512                  # hard inode cap; nonzero required
-  sourcePolicyId: "provider-state-v1"
-  sealingRequired: false
+  quota:
+    maxBytes: 1048576             # hard byte cap (= quotaBytes for provider-state)
+    maxInodes: 512                # hard inode cap; nonzero required
+    enforcement: none
   sealingCredentialRef: null
   source:
     executionRef: Guest/<gateway>
-    settings: {}
+    settings:
+      kind: local-path
+      sourcePolicyId: runtime-azure-virtual-machine-admission-state
   layout:
     - path: admission
       type: directory
@@ -1319,7 +1324,7 @@ d2b.zones.dev.resources.corp-vm = {
 | Current source | `nixos-modules/options-realms-workloads.nix`: `WorkloadProviderKind::ProviderManaged` |
 | Reuse action | Adapt |
 | Destination | `nixos-modules/` (Provider/Guest resource emitters); crate Nix build |
-| Detailed design | Nix `spec.config` shape; `controllerExecutionRef`/`networkRef` eval-time assertions; no Volume refs for data disks; `systemArtifactId=null` enforcement; both ProviderStateSet Volumes are ordinary Volume resources created by core ProviderDeployment (not in Zone bundle; not operator-authored); **`placement: guest-local`** on both Volumes — reconciled by the Guest-local volume-local instance; `source.executionRef` = config gateway Guest; host MUST NOT hold ARM binding, admission, PSK, or operation state; no virtiofs or host-to-guest attachment; manifest freezes guest-local with no fallback; controller does not create, own, or list Volume in exported ResourceTypes; `Provider/volume-local` is the sole Volume reconciler; components consume required view dirfd only; **both Volumes are `persistenceClass: persistent` with nonzero `quotaBytes`/`maxBytes`/`maxInodes`/`sourcePolicyId`; `persistenceClass: ephemeral` and zero quotas are rejected**; bootstrap-svc Volume uses `migrationPolicy: none` (session-scoped schema; no migration worker); Volumes survive component/Provider restart and participate in upgrade/destroy/reset; full canonical Volume spec including `stateSchema`, `source`, `layout` with Nix-preprovisioned `User/<name>` principals (not ComponentPrincipal), `views`, `identityMarker`, `snapshotPolicy: null`, `retentionPolicy: null`; `sensitivityClass: private` and `volume-domain-mismatch` isolation enforced; canonical `SandboxSpec` fields with `namespaceClasses`/`capabilityClasses`/`seccompClass`/`noNewPrivileges`/`startRoot`/`environmentClass`/`readOnlyRoot`; `BudgetSpec` with SI suffix; `restartPolicy` class/backoffBase/backoffMax; `EndpointSpec` name/transport/purpose |
+| Detailed design | Nix `spec.config` shape; `controllerExecutionRef`/`networkRef` eval-time assertions; no Volume refs for data disks; `systemArtifactId=null` enforcement; both ProviderStateSet Volumes are ordinary Volume resources created by core ProviderDeployment (not in Zone bundle; not operator-authored); guest-local placement on both Volumes — reconciled by the Guest-local volume-local instance and expressed by `source.executionRef` = config gateway Guest; host MUST NOT hold ARM binding, admission, PSK, or operation state; no virtiofs or host-to-guest attachment; manifest freezes guest-local with no fallback; controller does not create, own, or list Volume in exported ResourceTypes; `Provider/volume-local` is the sole Volume reconciler; components consume required view dirfd only; **both Volumes are `kind: state`, `persistenceClass: persistent`, with nonzero `quotaBytes`, `quota.maxBytes`, `quota.maxInodes`, and `source.settings.sourcePolicyId`; `persistenceClass: ephemeral` and zero quotas are rejected**; bootstrap-svc Volume uses `migrationPolicy: none` (session-scoped schema; no migration worker); Volumes survive component/Provider restart and participate in upgrade/destroy/reset; full canonical Volume spec including `stateSchema`, `source`, `layout` with Nix-preprovisioned `User/<name>` principals (not ComponentPrincipal), `views`, `identityMarker`, `snapshotPolicy: null`, `retentionPolicy: null`; `sensitivityClass: private` and `volume-domain-mismatch` isolation enforced; canonical `SandboxSpec` fields with `namespaceClasses`/`capabilityClasses`/`seccompClass`/`noNewPrivileges`/`startRoot`/`environmentClass`/`readOnlyRoot`; `BudgetSpec` with SI suffix; `restartPolicy` class/backoffBase/backoffMax; `EndpointSpec` name/transport/purpose |
 | Validation | Nix eval tests; `make test-flake`; `make test-drift` |
 | Removal proof | `d2b.realms.<r>.workloads.<w>` removed at v3 cutover |
 
@@ -1363,7 +1368,7 @@ Run with `cargo test -p d2b-provider-runtime-azure-virtual-machine`.
 | `tests/credential_hermetic.rs` | Fake enrolled KK; `AcquireToken` → token bytes via `AzureEffectPort` only; token bytes absent from status/audit/OTEL; zeroized after ARM call; no ambient fallback fires |
 | `tests/idempotency.rs` | Deterministic request ID derivation; same input → same ID; `AzureOperationHandle` opaque (no URL leaked); ARM 409 → adoption; restart recovery (handle present → `poll_lro`; handle absent → `get_vm_state`); finalizer held through ambiguity |
 | `tests/error_redaction.rs` | Canary bytes: ARM error body, ARM token, PSK plaintext, enrolled Noise pubkey, ARM poll URL, ARM resource URI. Must not appear in `Guest.status`, audit records, OTEL attributes, metric labels, or log lines. Hard test error on any match. |
-| `tests/schema_validation.rs` | `spec.config` JSON Schema; providerSettings JSON Schema; OpaqueAzureRef charset; `adminUser` charset; `diskSku` closed enum; `dataDisks` LUN uniqueness; no `sshCredentialRef` field accepted; no Volume refs in `dataDisks`; `systemArtifactId=null`; `azureTags` `d2b:*` prefix rejection; controller Volume spec round-trip: `placement: guest-local` present and non-overridable; `stateSchema`, `source.executionRef` = gateway Guest, layout `ownerRef: User/<name>` (numeric UID string rejected), `views`, `identityMarker`, `snapshotPolicy: null`, `retentionPolicy: null`, `quotaBytes`/`maxBytes`/`maxInodes`/`sourcePolicyId` present and nonzero; bootstrap-svc Volume spec same shape; `sensitivityClass: private` on both; `persistenceClass: persistent` on both; `persistenceClass: ephemeral` rejected; zero `maxBytes`/`maxInodes`/`quotaBytes` rejected; `placement: host-backed` or absent placement rejected |
+| `tests/schema_validation.rs` | `spec.config` JSON Schema; providerSettings JSON Schema; OpaqueAzureRef charset; `adminUser` charset; `diskSku` closed enum; `dataDisks` LUN uniqueness; no `sshCredentialRef` field accepted; no Volume refs in `dataDisks`; `systemArtifactId=null`; `azureTags` `d2b:*` prefix rejection; controller Volume spec round-trip: guest-local placement is manifest-frozen and expressed by `source.executionRef` = gateway Guest, layout `ownerRef: User/<name>` (numeric UID string rejected), `views`, `identityMarker`, `snapshotPolicy: null`, `retentionPolicy: null`, `quotaBytes`/`quota.maxBytes`/`quota.maxInodes`/`source.settings.sourcePolicyId` present and nonzero; bootstrap-svc Volume spec same shape; `sensitivityClass: private` on both; `persistenceClass: persistent` on both; `persistenceClass: ephemeral` rejected; zero `quota.maxBytes`/`quota.maxInodes`/`quotaBytes` rejected; host-backed placement rejected |
 | `tests/fault_injection.rs` | ARM 429 → retry + succeed; ARM 503 persistent → `ProvisionFailed`; PSK first expiry → retry; PSK second expiry → `BootstrapFailed`; ARM credential unavailable → `CredentialUnavailable`; enrollment PSK replay rejected; controller restart mid-LRO → handle recovery |
 
 ### integration/ layout and boundaries

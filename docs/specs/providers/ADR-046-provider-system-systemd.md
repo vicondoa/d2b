@@ -250,17 +250,24 @@ d2b.zones.<zone>.resources."system-systemd-controller-<target>" = {
       seccompClass      = "strict";
       noNewPrivileges   = true;
       readOnlyRoot      = true;
+      startRoot         = false;
       environmentClass  = "minimal";
       userNamespace     = null;
     };
     budget = {
       memory = { limit = "128Mi"; };
-      cpu    = { shares = 512; };
+      cpu    = { request = "500m"; };
       pids   = { limit = 256; };
     };
-    networkUsage = "none";
+    networkUsage = null;
     endpoints    = [];
-    readiness    = { class = "ready-condition"; timeout = "30s"; };
+    readiness    = {
+      class            = "ready-condition";
+      initialDelay     = "0s";
+      timeout          = "30s";
+      failureThreshold = 3;
+      successThreshold = 1;
+    };
     restartPolicy = {
       class             = "on-failure";
       backoffBase       = "1s";
@@ -272,7 +279,10 @@ d2b.zones.<zone>.resources."system-systemd-controller-<target>" = {
     mounts = [
       # Volume created by core ProviderDeployment; view name matches descriptor
       { volumeRef = "Volume/system-systemd--controller--main-state--<target>";
-        view      = "controller-rw"; }
+        view      = "controller-rw";
+        mountPath = "/state";
+        access    = "read-write";
+        required  = true; }
     ];
     adoptionPolicy = "adopt-on-restart";
     drainTimeout   = "30s";
@@ -302,7 +312,10 @@ Canonical rendered JSON (schema mirror):
     "mounts": [
       {
         "volumeRef": "Volume/system-systemd--controller--main-state--<target>",
-        "view": "controller-rw"
+        "view": "controller-rw",
+        "mountPath": "/state",
+        "access": "read-write",
+        "required": true
       }
     ],
     "sandbox": {
@@ -319,14 +332,17 @@ Canonical rendered JSON (schema mirror):
     },
     "budget": {
       "memory": {"limit": "128Mi"},
-      "cpu": {"shares": 512},
+      "cpu": {"request": "500m"},
       "pids": {"limit": 256}
     },
-    "networkUsage": "none",
+    "networkUsage": null,
     "endpoints": [],
     "readiness": {
       "class": "ready-condition",
-      "timeout": "30s"
+      "initialDelay": "0s",
+      "timeout": "30s",
+      "failureThreshold": 3,
+      "successThreshold": 1
     },
     "desiredLifecycle": "running",
     "restartPolicy": {
@@ -343,7 +359,7 @@ Canonical rendered JSON (schema mirror):
 }
 ```
 
-`networkUsage: none` is correct: the controller communicates via Unix socketpair
+`networkUsage: null` is correct: the controller communicates via Unix socketpair
 (ComponentSession to ProviderSupervisor and to d2b-bus) and via the injected
 effect port (DBus is a Unix socket internally). No TCP/UDP endpoints are
 declared. `processClass: controller` is mandatory; `worker` and `service` are
@@ -740,8 +756,8 @@ provider-state `stateSchema` extension:
 - `providerRef: Provider/volume-local`; `source.executionRef: Host/<target>`
 - `persistenceClass: persistent` — Volume survives component and Provider restart;
   participates in upgrade, destroy, and reset lifecycle
-- `kind: state` (Volume source kind)
-- Minimal nonzero byte/inode quota (e.g., `quotaBytes: 65536`, `quotaInodes: 256`);
+- `kind: state` (Volume semantic kind)
+- Minimal nonzero byte/inode quota (e.g., `quotaBytes: 65536`, `quota.maxInodes: 256`);
   never zero-quota
 - `stateSchema.schemaId: d2b.providers.systemd.controller/state/v1`; `schemaVersion: 1`;
   `migrationPolicy: none` — empty payload schema requires no migration worker
@@ -771,6 +787,7 @@ metadata:
   ownerRef: Provider/system-systemd
 spec:
   providerRef: Provider/volume-local
+  kind: state
   persistenceClass: persistent      # durable; survives restart, upgrade, destroy/reset
   sensitivityClass: private
   stateSchema:
@@ -778,11 +795,15 @@ spec:
     schemaVersion: "1.0"
     migrationPolicy: none           # empty payload schema; no migration worker
   quotaBytes: 65536                 # minimal nonzero; never 0
-  quotaInodes: 256                  # minimal nonzero; never 0
+  quota:
+    maxBytes: 65536                 # equals quotaBytes for provider-state
+    maxInodes: 256                  # minimal nonzero; never 0
+    enforcement: none
   source:
-    kind: state
     executionRef: Host/<target>
-    settings: {}
+    settings:
+      kind: local-path
+      sourcePolicyId: system-systemd-controller-state
   layout: []          # empty payload schema; no files to declare
   views:
     controller-rw:
@@ -1023,8 +1044,10 @@ d2b.zones.dev.resources.wayland-proxy = {
     template       = "wayland-proxy-main";
     sandbox = {
       namespaceClasses = [ "mount" "ipc" ];
+      capabilityClasses = [];
       seccompClass     = "strict";
       noNewPrivileges  = true;
+      startRoot        = false;
       readOnlyRoot     = true;
       environmentClass = "minimal";
     };
@@ -1111,8 +1134,12 @@ d2b.zones.dev.resources.shell-session = {
     processClass = "worker";
     template     = "shell-supervisor-main";
     sandbox = {
+      namespaceClasses = [];
+      capabilityClasses = [];
       seccompClass     = "strict";
       noNewPrivileges  = true;
+      startRoot        = false;
+      readOnlyRoot     = false;
       environmentClass = "safe-inherited";
     };
   };

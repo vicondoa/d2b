@@ -360,6 +360,7 @@ spec:
     executionRef: Host/host-system  # resolved from spec.config.executionRef
     settings:
       kind: tmpfs                   # memory-backed; kernel-enforces quota
+      sourcePolicyId: observability-otel-sockets-tmpfs
   kind: tmp                         # process-scoped; cleaned on collector exit
   layout:
     - path: ""                      # Volume root
@@ -494,7 +495,13 @@ spec:
   sealingCredentialRef: null        # no sealing; no secret bytes in state
   source:
     executionRef: Host/host-system  # resolved from spec.config.executionRef
-    settings: {}                    # no tmpfs override; uses volume-local defaults
+    settings:
+      kind: local-path
+      sourcePolicyId: provider-state-persistent
+  quota:
+    maxBytes: 1048576
+    maxInodes: 64
+    enforcement: none
   layout:
     - path: state
       type: directory
@@ -593,41 +600,48 @@ spec:
       view: collector
       mountPath: /run/d2b-otel
       access: read-write
-      optional: false
+      required: true
     - volumeRef: Volume/observability-otel--collector--runtime-state--host-system
       view: collector
       mountPath: /state
       access: read-write
-      optional: false
+      required: true
   sandbox:
     namespaceClasses: [mount, pid, ipc, uts]
     capabilityClasses: []                # zero capabilities
-    seccompClass: default
+    seccompClass: strict
     noNewPrivileges: true
-    requiresStartRoot: false
-    readOnlyRootStore: true
+    startRoot: false
+    readOnlyRoot: true
     environmentClass: minimal
   budget:
-    memoryHighBytes: 134217728           # 128 MiB soft
-    memoryMaxBytes: 268435456            # 256 MiB hard
-    cpuShares: 512
-    pidsMax: 64
-    fdsMax: 256
-  networkUsage:
-    hostNetwork: false
+    cpu:
+      request: "512m"
+    memory:
+      request: "128Mi"
+      limit: "256Mi"
+    pids:
+      limit: 64
+    fds:
+      limit: 256
+  networkUsage: null
   endpoints:
-    - name: self-metrics
-      transport: d2b-bus
-      purpose: local-service             # d2b.observability.v1.SelfMetrics; local only
+    - name: bounded-emitter-ingest
+      transport: unix
+      purpose: bounded-emitter-drain
+    - name: otlp-ingest
+      transport: unix
+      purpose: otlp-grpc-ingest
   readiness:
     class: provider-defined              # collector binary reports readiness when
                                          # emitter.sock drain loop is active
-  restart:
+  restartPolicy:
     class: on-failure
+    backoffBase: "1s"
+    backoffMax: "60s"
+    backoffMultiplier: 2.0
     maxRestarts: 5
-    backoffInitialMs: 1000
-    backoffMaxMs: 60000
-    windowSeconds: 600
+    resetAfter: "600s"
 ```
 
 ### otel-vsock-forwarder Process (dynamic; created by controller per Guest)
@@ -655,37 +669,40 @@ spec:
       view: forwarder-write
       mountPath: /run/d2b-otel
       access: read-write
-      optional: false
+      required: true
   sandbox:
     namespaceClasses: [mount, pid, ipc, uts]
     capabilityClasses: []                # zero capabilities; vsock and Unix sockets
                                          # do not require CAP_NET_BIND_SERVICE
-    seccompClass: default
+    seccompClass: strict
     noNewPrivileges: true
-    requiresStartRoot: false
-    readOnlyRootStore: true
+    startRoot: false
+    readOnlyRoot: true
     environmentClass: minimal
   budget:
-    memoryHighBytes: 33554432            # 32 MiB soft
-    memoryMaxBytes: 67108864             # 64 MiB hard
-    cpuShares: 128
-    pidsMax: 16
-    fdsMax: 64
-  networkUsage:
-    hostNetwork: false
-    vsock: true                          # receives OTLP from Guest-side collector
+    cpu:
+      request: "128m"
+    memory:
+      request: "32Mi"
+      limit: "64Mi"
+    pids:
+      limit: 16
+    fds:
+      limit: 64
+  networkUsage: null
   endpoints:
     - name: vsock-ingest
       transport: vsock
       purpose: private-ingest            # Zone-allocated vsock port; no d2b-bus
   readiness:
     class: provider-defined              # forwarder reports readiness on vsock bind
-  restart:
+  restartPolicy:
     class: on-failure
+    backoffBase: "1s"
+    backoffMax: "30s"
+    backoffMultiplier: 2.0
     maxRestarts: 10
-    backoffInitialMs: 1000
-    backoffMaxMs: 30000
-    windowSeconds: 300
+    resetAfter: "300s"
 ```
 
 The forwarder worker has **no bus service, no dependency alias authority, and no
@@ -1402,7 +1419,7 @@ All test files must be present. Workspace policy rejects a missing `tests/` or
   Provider/system-minijail`, canonical mount to `view: forwarder-write`, and
   `processClass: worker`) on new `Guest/*` resource.
 - Assert: forwarder Process spec has `capabilityClasses: []` and
-  `requiresStartRoot: false`.
+  `startRoot: false`.
 - Assert: forwarder Process spec has a single `vsock-ingest` EndpointSpec and
   no d2b-bus endpoint.
 - Assert: controller handles `deletion-requested` hint: sets desired lifecycle to
@@ -1499,7 +1516,7 @@ End-to-end: fake Zone store → observability-otel controller → collector proc
 - Assert `d2b.provider = "observability-otel"` resource attribute.
 - Assert `no_vm_label_in_metrics`: no received batch carries a metric label named
   `vm` with a resource-name value.
-- Assert self-metrics endpoint returns correct `d2b_otel_frames_received_total`
+- Assert self-metrics ComponentSession service returns correct `d2b_otel_frames_received_total`
   counts.
 - Drive `d2b zone doctor` fixture; assert `telemetry.phase = "ok"`.
 

@@ -284,7 +284,9 @@ spec:
     capabilityClasses: []
     seccompClass: notification-desktop-controller-v1
     noNewPrivileges: true
+    startRoot: false
     readOnlyRoot: true
+    environmentClass: minimal
   budget:
     memory:
       request: "16Mi"
@@ -293,10 +295,7 @@ spec:
       limit: 32
     fds:
       limit: 256
-  endpoints:
-    - name: d2b-bus
-      transport: unix
-      purpose: resource-api
+  endpoints: []
   readiness:
     initialDelay: "0s"
     timeout: "5s"
@@ -345,7 +344,9 @@ spec:
     capabilityClasses: []
     seccompClass: notification-desktop-host-sink-v1
     noNewPrivileges: true
+    startRoot: false
     readOnlyRoot: true
+    environmentClass: provider-defined
   budget:
     memory:
       request: "8Mi"
@@ -409,7 +410,9 @@ spec:
     capabilityClasses: []
     seccompClass: notification-desktop-guest-source-v1
     noNewPrivileges: true
+    startRoot: false
     readOnlyRoot: true
+    environmentClass: minimal
   budget:
     memory:
       request: "4Mi"
@@ -794,8 +797,10 @@ One Volume per component per execution target:
 
 All Volumes use `kind: state`, `persistenceClass: persistent`, extension field
 `quotaBytes: 65536`, base `quota: {maxBytes: 65536, maxInodes: 16, enforcement: none}`,
-and `source.settings.sourcePolicyId: provider-state-persistent`.  They are created by ProviderDeployment before any Process
-starts, survive component and Provider restart, and participate in the upgrade,
+`source.settings.kind: local-path`, and
+`source.settings.sourcePolicyId: provider-state-persistent`.  They are created
+by ProviderDeployment before any Process starts, survive component and Provider
+restart, and participate in the upgrade,
 destroy, and reset lifecycle.  Layout owner/group entries bind
 Nix-preprovisioned `User/<name>` principals (or a bounded principal pool for
 guest-source Volumes); there are no ComponentPrincipal ResourceRefs.  No
@@ -830,6 +835,7 @@ spec:
   source:
     executionRef: <spec.config.hostExecutionRef>
     settings:
+      kind: local-path
       sourcePolicyId: provider-state-persistent
   layout:
     - path: state
@@ -859,13 +865,14 @@ bind the Nix-preprovisioned user principal corresponding to
 to be the same user).  It must not be shared with the controller or any other
 component.
 
-For each entry in `spec.config.guestSources`, ProviderDeployment creates one
-`volume-local` Volume with an `attachments` entry declaring
-`transport: virtiofs` for the target Guest.  The `volume-local` provider
-creates a virtiofs Export child resource from that attachment declaration; no
-second attachment Volume is authored or created separately.  Layout principals
-are drawn from a bounded `User/notification-desktop-guest-source-*` pool, one
-per guestSources entry.
+For each entry in `spec.config.guestSources`, the signed state namespace declares
+`placementMode: host-backed-guest` with `hostCustodyPermitted: true`, and
+ProviderDeployment creates one `volume-local` source Volume with an
+`attachments` entry declaring `transport: virtiofs` for the target Guest.  The
+`volume-local` provider creates a virtiofs Export child resource from that
+attachment declaration; no second attachment Volume is authored or created
+separately.  Layout principals are drawn from a bounded
+`User/notification-desktop-guest-source-*` pool, one per guestSources entry.
 
 Guest-source Volume (representative example):
 
@@ -895,6 +902,7 @@ spec:
   source:
     executionRef: <spec.config.hostExecutionRef>
     settings:
+      kind: local-path
       sourcePolicyId: provider-state-persistent
   attachments:
     - transport: virtiofs
@@ -1460,7 +1468,7 @@ and `integration/` directories.
 
 | File | Coverage requirement |
 | --- | --- |
-| `tests/volume_lifecycle.rs` | ProviderDeployment creates one `kind: state`, `persistenceClass: persistent` Volume per component before Processes start: controller (volume-local), host-sink (volume-local), guest-source (volume-local with `attachments[transport=virtiofs]`; volume-local creates virtiofs Export child); all Volumes have `quotaBytes: 65536`, `quota: {maxBytes: 65536, maxInodes: 16, enforcement: none}`, `source.settings.sourcePolicyId: provider-state-persistent`, and identity marker; no Volume shared between components; `Provider/volume-local` is sole reconciler (notification controller asserts no Volume create/delete calls); empty payload schema with `migrationPolicy: none` (no migration worker spawned); Volumes survive Provider/component restart; Volumes deleted on Provider removal; no notification or nonce bytes written to any Volume |
+| `tests/volume_lifecycle.rs` | ProviderDeployment creates one `kind: state`, `persistenceClass: persistent` Volume per component before Processes start: controller (volume-local), host-sink (volume-local), guest-source (volume-local with `attachments[transport=virtiofs]`; volume-local creates virtiofs Export child); all Volumes have `quotaBytes: 65536`, `quota: {maxBytes: 65536, maxInodes: 16, enforcement: none}`, `source.settings.kind: local-path`, `source.settings.sourcePolicyId: provider-state-persistent`, and identity marker; no Volume shared between components; `Provider/volume-local` is sole reconciler (notification controller asserts no Volume create/delete calls); empty payload schema with `migrationPolicy: none` (no migration worker spawned); Volumes survive Provider/component restart; Volumes deleted on Provider removal; no notification or nonce bytes written to any Volume |
 | `tests/stream_record.rs` | `NotificationRequest`/`NotificationResult` DTO schema validation (all fields, closed category values, out-of-bound values, unknown fields rejected); category filter enforcement; `NotificationResult` `actionNonces` present only when actions declared; no content in error messages |
 | `tests/stream_redaction.rs` | Inject requests with distinguishable content bytes; assert zero occurrences in collected tracing events, OTEL span attributes, metric label values, audit record fields, error messages, and Debug output |
 | `tests/action_nonce.rs` | Single-use consumption; expired TTL consumed-and-cleared; capacity at `MAX_STORE_SIZE`; replay after consume; nonce opaque in Debug; notification action key round trip |
@@ -1493,9 +1501,12 @@ and `integration/` directories.
 - RBAC: roles, subjects, stream verbs;
 - security invariants: content privacy, D-Bus boundary, icon safety;
 - state model: one private `kind: state`, `persistenceClass: persistent` Volume
-  per component (controller, host-sink, per-guest-source pair) created by the
-  controller per ADR-046-provider-state; all Volumes have empty payload schema
-  (`migrationPolicy: none`) with `quotaBytes: 65536`, `quota: {maxBytes: 65536, maxInodes: 16, enforcement: none}`, `source.settings.sourcePolicyId: provider-state-persistent`, and an identity marker;
+  per component (controller, host-sink, per-guest-source pair) created by core
+  ProviderDeployment per ADR-046-provider-state; all Volumes have empty payload
+  schema (`migrationPolicy: none`) with `quotaBytes: 65536`, `quota:
+  {maxBytes: 65536, maxInodes: 16, enforcement: none}`,
+  `source.settings.kind: local-path`,
+  `source.settings.sourcePolicyId: provider-state-persistent`, and an identity marker;
   Volumes survive component and Provider restart and participate in upgrade,
   destroy, and reset; notification delivery state and action nonces are
   in-memory only and are never written to any Volume;

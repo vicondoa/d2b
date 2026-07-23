@@ -285,12 +285,11 @@ spec:
     fds:
       limit: 64
     memory:
-      limit: "64MiB"
+      limit: "64Mi"
   endpoints:
     - name: ctrl-relay
       transport: unix
       purpose: device-security-key.relay-ctrl.v1
-      role: server
   restartPolicy:
     class: always
     backoffBase: "1s"
@@ -342,7 +341,7 @@ spec:
     fds:
       limit: 64
     memory:
-      limit: "32MiB"
+      limit: "32Mi"
   endpoints:
     - name: ctaphid-relay
       transport: vsock
@@ -350,7 +349,6 @@ spec:
     - name: ctrl-relay
       transport: unix
       purpose: device-security-key.relay-ctrl.v1
-      role: client
   restartPolicy:
     class: on-failure
     backoffBase: "1s"
@@ -474,7 +472,7 @@ spec:
     fds:
       limit: 32
     memory:
-      limit: "16MiB"
+      limit: "16Mi"
   endpoints:
     - name: ctaphid-client
       transport: vsock

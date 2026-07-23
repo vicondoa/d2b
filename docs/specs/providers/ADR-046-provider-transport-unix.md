@@ -636,11 +636,16 @@ component:
     - verb: receive-attachment  # receives allocator-issued FD attachments via OpenTransport
     - verb: invoke              # called by core ZoneLink controller over portal
   readiness:
-    kind: portal-ready
-    timeoutSeconds: 5
-  process:
-    maxRssBytes: 16777216      # 16 MiB
-    maxCpuPercent: 5
+    class: provider-defined
+    initialDelay: "0s"
+    timeout: "5s"
+    failureThreshold: 1
+    successThreshold: 1
+  budget:
+    memory:
+      limit: "16Mi"
+    cpu:
+      limit: "50m"
 ```
 
 The core ProviderDeployment (not a Provider controller — no such controller
@@ -691,15 +696,19 @@ spec:
       publicKey: null                  # KK static key enrolled during Provider install; not authored
 
   readiness:
-    kind: portal-ready                 # service declares ready after portal endpoint handshake
-    initialDelaySeconds: 0
-    timeoutSeconds: 5
-    periodSeconds: 0                   # checked once at startup; not polled
+    class: provider-defined            # service declares ready after portal endpoint handshake
+    initialDelay: "0s"
+    timeout: "5s"
+    failureThreshold: 1
+    successThreshold: 1
 
   restartPolicy:
-    policy: Always
-    maxRestartsPerHour: 10
-    backoffSeconds: 2
+    class: always
+    backoffBase: "2s"
+    backoffMax: "60s"
+    backoffMultiplier: 2.0
+    maxRestarts: 10
+    resetAfter: "1h"
 
   telemetry:
     metricsEnabled: true
@@ -1206,8 +1215,8 @@ The Nix option tree mirrors the canonical `ResourceSpec` schema directly. The
 d2b.zones.k0.resources.transport-unix = {
   type = "Provider";
   spec = {
-    artifactId  = "provider-transport-unix";  # matches d2b.artifacts.provider-transport-unix
-    description = "Local Unix-socket transport Provider";
+    artifactId = "provider-transport-unix";  # matches d2b.artifacts.provider-transport-unix
+    config = {};
   };
 };
 ```
@@ -1485,7 +1494,7 @@ The `xtask gen-zone-resources` step adds for `Provider/transport-unix` links:
 | Reuse source | Minijail sandbox semantic class patterns from current v3 broker; Process resource schema from ADR-046-resources-host-guest-process-user |
 | Reuse action | adapt; no direct symbol copy |
 | Destination | `packages/d2b-provider-transport-unix/` crate Cargo.toml binary target `d2b-transport-unix-service`; Provider component descriptor JSON committed at `packages/d2b-provider-transport-unix/descriptor/unix-transport-service.json`; Nix package derivation at `packages/d2b-provider-transport-unix/` |
-| Detailed design | Component descriptor declares: `processClass=service`, `template=unix-transport-service`, `stateNamespaces=[{id:service-root, kind:state, schemaId:io.d2b.transport-unix/unix-transport-service/service-root, schemaVersion:1.0, persistenceClass:persistent, sourcePolicyId:provider-state-persistent, sensitivityClass:private, migrationPolicy:none, quotaBytes:65536, maxBytes:65536, maxInodes:16, sealingRequired:false, identityMarker:{class:broker-maintained,markerRoot:provider-state-markers}, views:{main:{rights:[read,write,create,delete,traverse]}}}]`, `sandbox.capabilityClasses=[]`, `sandbox.namespaceClasses=[mount]`, `sandbox.seccompClass=strict`, `budget.memory.limit="16Mi"`, `budget.cpu.limit="200m"`, `budget.fds.limit=512`, `endpoints=[{name:portal,transport:unix,purpose:transport-unix-portal}]`, `readiness={kind:portal-ready,timeoutSeconds:5}`, `restartPolicy={policy:Always,maxRestartsPerHour:10,backoffSeconds:2}`; Provider package bundles descriptor digest; core ProviderDeployment creates one persistent Volume (`kind:state`, `sourcePolicyId:provider-state-persistent`, `quotaBytes:65536`, `maxBytes:65536`, `maxInodes:16`, name `transport-unix--unix-transport-service--service-root--<host>`) with Nix-preprovisioned `User/transport-unix-system` as layout principal, then creates the Process with `mounts[].required=true` when `Provider/transport-unix` is installed |
+| Detailed design | Component descriptor declares: `processClass=service`, `template=unix-transport-service`, `stateNamespaces=[{id:service-root, kind:state, schemaId:io.d2b.transport-unix/unix-transport-service/service-root, schemaVersion:1.0, persistenceClass:persistent, sourcePolicyId:provider-state-persistent, sensitivityClass:private, migrationPolicy:none, quotaBytes:65536, maxBytes:65536, maxInodes:16, sealingRequired:false, identityMarker:{class:broker-maintained,markerRoot:provider-state-markers}, views:{main:{rights:[read,write,create,delete,traverse]}}}]`, `sandbox.capabilityClasses=[]`, `sandbox.namespaceClasses=[mount]`, `sandbox.seccompClass=strict`, `budget.memory.limit="16Mi"`, `budget.cpu.limit="200m"`, `budget.fds.limit=512`, `endpoints=[{name:portal,transport:unix,purpose:transport-unix-portal}]`, `readiness={class:provider-defined,initialDelay:"0s",timeout:"5s",failureThreshold:1,successThreshold:1}`, `restartPolicy={class:always,backoffBase:"2s",backoffMax:"60s",backoffMultiplier:2.0,maxRestarts:10,resetAfter:"1h"}`; Provider package bundles descriptor digest; core ProviderDeployment creates one persistent Volume (`kind:state`, `sourcePolicyId:provider-state-persistent`, `quotaBytes:65536`, `maxBytes:65536`, `maxInodes:16`, name `transport-unix--unix-transport-service--service-root--<host>`) with Nix-preprovisioned `User/transport-unix-system` as layout principal, then creates the Process with `mounts[].required=true` when `Provider/transport-unix` is installed |
 | Integration | Provider resource installed → core ProviderDeployment reads component descriptor → creates `Volume/transport-unix--unix-transport-service--service-root--host-system` (ownerRef=Provider/transport-unix; layout principal User/transport-unix-system) and waits for `Provider/volume-local` to reconcile Volume to `Ready` → **then** creates child `Process/transport-unix-service` with mounts referencing the Volume → ProviderSupervisor spawns binary with portal FD and service-root dirfd in inherited FD table. On delete: Process terminal first → Volume deleted after → ProviderDeployment finalizer cleared last |
 | Data migration | None (fresh Provider resource) |
 | Validation | `tests/conformance.rs::process_resource_matches_component_descriptor`; `tests/conformance.rs::provider_state_set_has_one_persistent_volume_per_component`; `tests/conformance.rs::volume_layout_principal_is_user_not_component_principal`; sandbox policy tests against minijail conformance kit |

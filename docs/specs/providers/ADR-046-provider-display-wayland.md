@@ -672,7 +672,7 @@ spec:
       groupRef: User/d2b-wlp-<hex12>
       mode: "0700"
       sensitivity: private
-      createPolicy: create-if-absent
+      createPolicy: create-if-never-provisioned
       repairPolicy: exact-owner
       cleanupPolicy: owner-controlled
       noFollow: true
@@ -717,11 +717,11 @@ payload schema is empty — `display-controller` rebuilds all runtime state
 (policy digest, pool lease table) from the Zone store on restart — but the
 Volume itself is **durable**: `kind: state`, `persistenceClass: persistent`.
 It survives component and Provider restart and participates in upgrade, destroy,
-and reset lifecycle phases. `migrationPolicy: none` because `stateSchema: {}`
-requires no migration worker. The `identityMarker: provider-state-identity`
-field instructs the framework to write a bounded marker at enrollment and verify
-it before delivering the view dirfd; a missing or corrupt marker is a
-fail-closed error.
+and reset lifecycle phases. The empty `stateSchema` uses null schema fields with
+`migrationPolicy: none`, so no migration worker is created. The `identityMarker`
+block instructs the framework to write a bounded marker at enrollment and verify
+it before delivering the view dirfd; a missing or corrupt marker is a fail-closed
+error.
 
 ```yaml
 apiVersion: resources.d2b.io/v3
@@ -734,15 +734,21 @@ metadata:
     d2b.io/provider-state-component: display-controller
 spec:
   providerRef: Provider/volume-local
+  sensitivityClass: private
   source:
     executionRef: Host/host-system
     settings:
+      kind: local-path
       sourcePolicyId: display-wayland.component-state.v1
   kind: state
   persistenceClass: persistent
-  migrationPolicy: none
-  stateSchema: {}
-  identityMarker: provider-state-identity
+  stateSchema:
+    schemaId: null
+    schemaVersion: null
+    schemaDigest: null
+    migrationPolicy: none
+  quotaBytes: 65536
+  sealingCredentialRef: null
   layout:
     - path: ""
       type: directory
@@ -750,7 +756,7 @@ spec:
       groupRef: User/d2b-dwl-ctrl
       mode: "0700"
       sensitivity: private
-      createPolicy: create-if-absent
+      createPolicy: create-if-never-provisioned
       repairPolicy: exact-owner
       cleanupPolicy: owner-controlled
       noFollow: true
@@ -760,11 +766,15 @@ spec:
   views:
     controller-state:
       path: ""
-      rights: [read, write, create, delete, traverse]
+      rights: [read, traverse]
   attachments: []
   quota:
-    quotaBytes: 65536
-    enforcement: hard
+    maxBytes: 65536
+    maxInodes: 32
+    enforcement: none
+  identityMarker:
+    class: broker-maintained
+    markerRoot: provider-state-markers
 ```
 
 The `display-controller` receives the `controller-state` view dirfd from
@@ -777,11 +787,11 @@ Framework-created at Provider enrollment per `ADR-046-provider-state`. Portal
 compositor connection grants are transient; the payload schema is empty. The
 Volume itself is **durable**: `kind: state`, `persistenceClass: persistent`.
 It survives component and Provider restart and participates in upgrade, destroy,
-and reset lifecycle phases. `migrationPolicy: none` because `stateSchema: {}`
-requires no migration worker. The `identityMarker: provider-state-identity`
-field instructs the framework to write a bounded marker at enrollment and verify
-it before delivering the view dirfd; a missing or corrupt marker is a
-fail-closed error.
+and reset lifecycle phases. The empty `stateSchema` uses null schema fields with
+`migrationPolicy: none`, so no migration worker is created. The `identityMarker`
+block instructs the framework to write a bounded marker at enrollment and verify
+it before delivering the view dirfd; a missing or corrupt marker is a fail-closed
+error.
 
 ```yaml
 apiVersion: resources.d2b.io/v3
@@ -794,15 +804,21 @@ metadata:
     d2b.io/provider-state-component: display-user-portal
 spec:
   providerRef: Provider/volume-local
+  sensitivityClass: private
   source:
     executionRef: Host/host-system
     settings:
+      kind: local-path
       sourcePolicyId: display-wayland.component-state.v1
   kind: state
   persistenceClass: persistent
-  migrationPolicy: none
-  stateSchema: {}
-  identityMarker: provider-state-identity
+  stateSchema:
+    schemaId: null
+    schemaVersion: null
+    schemaDigest: null
+    migrationPolicy: none
+  quotaBytes: 65536
+  sealingCredentialRef: null
   layout:
     - path: ""
       type: directory
@@ -820,11 +836,15 @@ spec:
   views:
     portal-state:
       path: ""
-      rights: [read, write, create, delete, traverse]
+      rights: [read, traverse]
   attachments: []
   quota:
-    quotaBytes: 65536
-    enforcement: hard
+    maxBytes: 65536
+    maxInodes: 32
+    enforcement: none
+  identityMarker:
+    class: broker-maintained
+    markerRoot: provider-state-markers
 ```
 
 The `display-user-portal` receives the `portal-state` view dirfd from
@@ -1081,32 +1101,33 @@ included in any status/audit/metrics surface.
 
 ## 12. RBAC and broker security
 
-### 12.1 Permission claims
+### 12.1 Signed manifest RBAC grants
 
 ```yaml
-permissionClaims:
-  resourceVerbs:
-    - resourceType: display-wayland.d2b.io.WaylandSession
-      verbs: [get, list, watch, create, update-spec, update-status,
-              update-finalizers, delete]
-    - resourceType: display-wayland.d2b.io.WaylandPolicy
-      verbs: [get, list, watch, create, update-spec, update-status]
-    - resourceType: Process
-      verbs: [get, list, watch, create, update-spec, update-status,
-              update-finalizers, delete]
-    - resourceType: Volume
-      verbs: [get, list, watch, create, update-spec, update-status,
-              update-finalizers, delete]
-    - resourceType: Device
-      verbs: [get, list, watch]
-      resourceNames: []   # only Device resources in its owning Guest
-    - resourceType: Guest
-      verbs: [get, list, watch]
-    - resourceType: Host
-      verbs: [get, list, watch]
+resourceVerbs:
+  - resourceType: display-wayland.d2b.io.WaylandSession
+    verbs: [get, list, watch, create, update-spec, update-status,
+            update-finalizers, delete]
+  - resourceType: display-wayland.d2b.io.WaylandPolicy
+    verbs: [get, list, watch, create, update-spec, update-status]
+  - resourceType: Process
+    verbs: [get, list, watch, create, update-spec, update-status,
+            update-finalizers, delete]
+  - resourceType: Volume
+    verbs: [get, list, watch, create, update-spec, update-status,
+            update-finalizers, delete]
+  - resourceType: Device
+    verbs: [get, list, watch]
+    resourceNames: []   # only Device resources in its owning Guest
+  - resourceType: Guest
+    verbs: [get, list, watch]
+  - resourceType: Host
+    verbs: [get, list, watch]
 ```
 
-No permission claim grants access to Credential resources, Network resources,
+These grants are resolved from the signed Provider manifest selected by
+`Provider.spec.artifactId`; they are not authored fields in the Provider
+ResourceSpec. No grant gives access to Credential resources, Network resources,
 or any `update-spec` verb on Host or Guest.
 
 ### 12.2 Broker operations
@@ -1224,7 +1245,7 @@ the `WaylandSession`.
 
 The Host proxy Process restart policy follows the standard Process controller
 retry/backoff semantics from `ADR-046-resource-reconciliation`. The proxy is
-classified as `class: worker` and uses the default binary-exponential backoff
+classified as `processClass: worker` and uses the default binary-exponential backoff
 with a cap of 60 s. After 5 consecutive failures within a 5-minute window the
 controller sets `WaylandSession.status.phase = Failed` and stops retrying until
 the spec or dependent resource changes.
@@ -1524,7 +1545,7 @@ At eval time the Nix module enforces:
 - `type` must be a known ResourceType in the Zone's locked schema;
 - `spec.guestRef` is a valid `Guest/<name>` declared in the Zone;
 - `spec.hostRef` is a valid `Host/<name>` declared in the Zone;
-- `spec.policyRef` is a valid `WaylandPolicy/<name>` declared in the Zone;
+- `spec.policyRef` is a valid `display-wayland.d2b.io.WaylandPolicy/<name>` declared in the Zone;
 - `spec.identity.activeColor` matches `^#[0-9a-fA-F]{6}$`;
 - `spec.crossDomainTrusted = true` (false is a Nix eval error);
 - `spec.filter.allowGlobals` does not contain clipboard-boundary globals
@@ -1843,7 +1864,7 @@ blocking defect.
 | `controller_unknown_interface_fails_closed` | `WaylandPolicy` spec contains an interface name not in the compiled catalog → spec admission rejected with actionable error; `unknown-interface-rejected` condition; no warn-and-continue |
 | `controller_clipboard_bridge_disabled_without_clipboard_provider` | `clipboard-wayland` Provider absent → `ClipboardBridgeReady=False` condition; session proceeds without clipboard bridge |
 | `controller_no_principal_available` | Fake-bus: all pool slots occupied → new dynamic `WaylandSession` reconcile → `NoPrincipalAvailable` condition set → session `Failed`; no spawn attempted |
-| `provider_state_volumes_created_at_enrollment` | Fake-bus: Provider enrolled → framework creates both `display-wayland-controller-state` and `display-wayland-user-portal-state` Volumes with `kind: state`, `persistenceClass: persistent`, minimal nonzero quota, and `provider-state-identity` layout entry; each component receives only its own view dirfd and has no visibility to the other Volume |
+| `provider_state_volumes_created_at_enrollment` | Fake-bus: Provider enrolled → framework creates both `display-wayland-controller-state` and `display-wayland-user-portal-state` Volumes with `kind: state`, `persistenceClass: persistent`, `sensitivityClass: private`, `source.settings.kind: local-path`, `quotaBytes` plus matching quota limits, and a broker-maintained identity marker; each component receives only its own view dirfd and has no visibility to the other Volume |
 | `provider_state_volume_identity_marker_missing` | Fake-bus: `provider-state-identity` file absent from controller state Volume at mount time → framework reports fail-closed error, `ProviderStateIdentityMissing` condition set, `display-controller` not started; same for portal Volume |
 
 ### 20.3 Container/cross-process integration (`packages/d2b-provider-display-wayland/integration/`)

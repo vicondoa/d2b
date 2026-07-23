@@ -95,7 +95,6 @@ metadata:
   ownerRef: null
 spec:
   artifactId:    runtime-qemu-media   # plain bounded ID; resolves in d2b.artifacts
-  packageDigest: sha256:<compiler-populated>
   config:
     controllerExecutionRef: Host/host-system
     qemuBinaryArtifactId:   qemu-system-x86_64
@@ -274,6 +273,7 @@ spec:
     executionRef: Host/host-system   # same host as controllerExecutionRef
     settings:
       kind: tmpfs
+      sourcePolicyId: runtime-qemu-media-runtime-tmpfs
   kind: ephemeral
   layout:
     - path: ""

@@ -108,6 +108,7 @@ metadata:
 spec:
   artifactId: system-core
   config: {}
+# Derived by core-controller infrastructure; not authored in Provider.spec.
 status:
   phase: Ready
   observedGeneration: 1

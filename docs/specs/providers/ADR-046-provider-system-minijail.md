@@ -313,6 +313,7 @@ spec:
     seccompClass: strict
     noNewPrivileges: true
     startRoot: false
+    environmentClass: minimal
     readOnlyRoot: true
     userNamespace:
       mappingClass: process-principal-root
@@ -1151,6 +1152,7 @@ d2b.zones.dev.resources.virtiofsd-work = {
       seccompClass      = "virtiofsd";
       noNewPrivileges   = true;
       startRoot         = false;
+      environmentClass  = "minimal";
       readOnlyRoot      = true;
       userNamespace = {
         mappingClass = "process-principal-root";
@@ -1195,6 +1197,7 @@ Rendered canonical JSON (excerpt):
       "seccompClass": "virtiofsd",
       "noNewPrivileges": true,
       "startRoot": false,
+      "environmentClass": "minimal",
       "readOnlyRoot": true,
       "userNamespace": { "mappingClass": "process-principal-root" }
     },
@@ -1235,6 +1238,8 @@ d2b.zones.dev.resources.swtpm-flush-abc123 = {
       capabilityClasses = [];
       seccompClass      = "swtpm";
       noNewPrivileges   = true;
+      startRoot         = false;
+      environmentClass  = "minimal";
       readOnlyRoot      = true;
     };
     startDeadline    = "60s";

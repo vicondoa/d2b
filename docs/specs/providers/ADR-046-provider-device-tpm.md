@@ -106,21 +106,24 @@ metadata:
   zone: dev
 spec:
   artifactId: d2b-provider-device-tpm
-  rootConfig:
+  config:
     controllerExecutionRef: "Host/host-system"   # required; Host for controller Process
     logLevel: 20                                 # swtpm --log level; 1–20; default 20
     # startupClear: REJECTED — flush always mandatory (load-bearing invariant)
     # stateDirPath: REJECTED — path is policy-derived by volume-local; never configurable
-  supportedResourceTypes:
-    - Device
-  permissionClaims:
-    - resourceTypes: [Device, Volume, Process, EphemeralProcess]
-      verbs: [get, list, watch, create, update-spec, update-status, delete, update-metadata]
-    - resourceTypes: [Host, User]
-      verbs: [get, list, watch]
 ```
 
-### 3.2 rootConfig field reference
+The Provider ResourceSpec is exactly `{ artifactId; config }` (D075). The
+exported ResourceTypes and permission claims are resolved from the signed
+manifest/catalog entry `artifactId` selects; they are read-only derived data,
+never authored Provider spec fields. For `device-tpm` the manifest declares:
+
+- exported ResourceType: `Device`;
+- permission claims: `Device`, `Volume`, `Process`, `EphemeralProcess`
+  (`get`, `list`, `watch`, `create`, `update-spec`, `update-status`, `delete`,
+  `update-metadata`) and `Host`, `User` (`get`, `list`, `watch`).
+
+### 3.2 config field reference
 
 | Field | Type | Required | Default | Bound | Description |
 | --- | --- | --- | --- | --- | --- |
@@ -142,7 +145,7 @@ descriptor inside the Provider's package closure; they are not configurable.
 ## 4. Controller Process
 
 The Provider framework creates one controller Process from the Provider's
-signed controller component descriptor and `rootConfig.controllerExecutionRef`.
+signed controller component descriptor and `config.controllerExecutionRef`.
 
 ### 4.1 Canonical controller Process spec
 
@@ -155,7 +158,7 @@ metadata:
   ownerRef: Provider/device-tpm
 spec:
   providerRef: Provider/system-minijail
-  executionRef: Host/host-system        # from Provider rootConfig.controllerExecutionRef
+  executionRef: Host/host-system        # from Provider config.controllerExecutionRef
   domain: system
   processClass: controller
   template: controller
@@ -275,7 +278,7 @@ spec:
   sealingCredentialRef: null          # provider-state extension
   source:
     sourceId: "d2b/provider-state/persistent"   # opaque policy ID; framework resolves backing path
-    executionRef: Host/host-system              # from Provider rootConfig.controllerExecutionRef
+    executionRef: Host/host-system              # from Provider config.controllerExecutionRef
     settings: {}
   layout:
     - path: scratch
@@ -445,8 +448,8 @@ spec:
 
 | Field | Type | Required | Default | Bound | Description |
 | --- | --- | --- | --- | --- | --- |
-| `logLevel` | uint | no | Provider rootConfig.logLevel | `1..20` | Per-Device swtpm log level override. |
-| `executionRef` | string | no | Provider rootConfig.controllerExecutionRef | `Host/<name>` | Which Host to run the swtpm Process on. Validated as a ResourceRef resolving to a Ready Host at admission. |
+| `logLevel` | uint | no | Provider config.logLevel | `1..20` | Per-Device swtpm log level override. |
+| `executionRef` | string | no | Provider config.controllerExecutionRef | `Host/<name>` | Which Host to run the swtpm Process on. Validated as a ResourceRef resolving to a Ready Host at admission. |
 
 No binary path, UID, GID, socket path, or broker wire type is accepted in
 Device spec settings.
@@ -885,7 +888,7 @@ trigger: spec-generation-changed | dependency-changed | startup-relist | schedul
     - providerRef = Provider/device-tpm; deviceClass = emulated
     - settings.executionRef resolves to Ready Host with system domain
     - settings.startupClear absent (reject if present)
- 3. Resolve: executionRef = settings.executionRef ?? rootConfig.controllerExecutionRef
+ 3. Resolve: executionRef = settings.executionRef ?? config.controllerExecutionRef
  4. Probe Host.status.capabilities for tpm2.
     - Absent → Device Degraded; condition TpmCapabilityAbsent; requeue 60s.
  5. TpmEffectPort.ensure_state_volume(device_uid, executionRef)
@@ -1149,7 +1152,7 @@ d2b.zones.dev.resources."corp-vm-tpm" = {
     inventory.selector = {};
     settings = {
       logLevel = 20;
-      # executionRef may be omitted to inherit Provider rootConfig.controllerExecutionRef
+      # executionRef may be omitted to inherit Provider config.controllerExecutionRef
     };
   };
 };
@@ -1169,14 +1172,14 @@ d2b.zones.dev.resources."corp-vm" = {
 };
 ```
 
-### 17.2 Provider rootConfig in Nix
+### 17.2 Provider config in Nix
 
 ```nix
 d2b.zones.dev.resources."device-tpm" = {
   type = "Provider";
   spec = {
     artifactId = "d2b-provider-device-tpm";
-    rootConfig = {
+    config = {
       controllerExecutionRef = "Host/host-system";
       logLevel = 20;
     };

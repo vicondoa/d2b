@@ -519,18 +519,18 @@ spec:
     namespaceClasses: [mount, pid, ipc]       # Provider/system-systemd rejects user namespace class;
                                               # same-UID execution is guaranteed by spec.userRef
     capabilityClasses: []                     # zero capability classes; no host caps
-    seccompClass: default-strict              # closed default-strict seccomp class
+    seccompClass: strict                      # closed strict seccomp class
     noNewPrivileges: true
     startRoot: false                          # does not require elevated start
-    environmentClass: empty                   # no inherited environment variables
+    environmentClass: minimal                 # no inherited environment variables
     readOnlyRoot: true                        # read-only root filesystem
   budget:
     cpu:
-      request: 10m                            # 10 millicores baseline
-      limit: 500m                             # 0.5 core ceiling
+      request: "10m"                          # 10 millicores baseline
+      limit: "500m"                           # 0.5 core ceiling
     memory:
-      request: 16Mi                           # 16 MiB baseline
-      limit: 64Mi                             # 64 MiB hard ceiling
+      request: "16Mi"                         # 16 MiB baseline
+      limit: "64Mi"                           # 64 MiB hard ceiling
     pids:
       limit: 32                               # max 32 PIDs in the cgroup
     fds:
@@ -788,7 +788,10 @@ the Role `operationClasses`.
    it owns all filesystem operations, layout, ACL, identity marker, quota, and
    stateSchema lifecycle on the backing store. The controller component only
    consumes its required view (`dirfd`) supplied by the mounted Volume. Every
-   component state Volume is `kind: state`, `persistenceClass: persistent`,
+   component state Volume for a `Guest/<name>` executionRef is guest-local; no
+   host-backed-guest attachment, virtiofs Export, or host fallback is permitted
+   for credential state. Every component state Volume is `kind: state`,
+   `persistenceClass: persistent`,
    carries a minimal nonzero byte/inode quota, and a provisioning identity
    marker (fail-closed on missing-after-provision per `kind: state` semantics);
    it is never `ephemeral` and never `quota: null` or `quotaBytes: 0`. For the

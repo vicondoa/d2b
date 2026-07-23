@@ -223,7 +223,10 @@ semantic `credential-managed-identity` controller:
 watch events for Volumes whose `metadata.ownerRef` is scoped to the current
 execution target; it maintains the identity marker, validates the `stateSchema`
 block on every daemon restart and Process launch, and enforces `sensitivityClass`
-and layout-principal bindings.
+and layout-principal bindings. When the execution target is `Guest/<name>`,
+credential-managed-identity component state is guest-local; no
+host-backed-guest attachment, virtiofs Export, or host fallback is permitted for
+credential state.
 
 #### Declared components and empty payload schema
 
