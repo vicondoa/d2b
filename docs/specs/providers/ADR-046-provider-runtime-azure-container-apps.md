@@ -27,7 +27,7 @@
 | Domain | `system` only |
 | Placement | System-domain Processes inside the dedicated gateway Guest |
 
-The Provider owns exactly one ResourceType: `Guest`. All three component Processes — controller, deployment service, and health worker — run as system-domain Process resources **inside a dedicated gateway Guest** (`spec.config.gatewayExecutionRef`), never on the local physical Host. This is required by ADR-032: realm/cloud credentials, remote node state, and cloud-plane I/O belong inside a per-realm gateway guest VM, never in host processes, the broker, the host bundle, or host-readable storage.
+The Provider owns exactly one ResourceType: `Guest`. Two component Processes — controller and deployment service — run as system-domain Process resources **inside a dedicated gateway Guest** (`spec.config.gatewayExecutionRef`), never on the local physical Host. This is required by ADR-032: realm/cloud credentials, remote node state, and cloud-plane I/O belong inside a per-realm gateway guest VM, never in host processes, the broker, the host bundle, or host-readable storage.
 
 The Host holds only the opaque ZoneLink transport binding to the gateway Guest (standard `runtime-cloud-hypervisor` or equivalent relationship). The Host has no Process resources from this Provider, no Credential resources scoped to the ACA environment, no Azure management HTTP sockets, and no co-located `AcaControl` implementation. There is no Host-fallback mode.
 
@@ -39,7 +39,7 @@ All interaction with Azure Container Apps APIs crosses the injected async effect
 
 A `Guest` resource backed by `Provider/runtime-azure-container-apps` represents a **remote cloud sandbox**. This Provider operates a **two-tier Guest model**:
 
-- **Tier 1 — gateway Guest** (`spec.config.gatewayExecutionRef`): A Zone-local Guest VM (backed by `Provider/runtime-cloud-hypervisor` or equivalent) that runs the ACA controller, deployment service, and health worker Processes. This is the credential and cloud-control boundary. Azure credentials, Azure HTTP sockets, the `AcaControl` implementation, and the `AcaCredentialLeaseClient` all live exclusively inside this gateway Guest.
+- **Tier 1 — gateway Guest** (`spec.config.gatewayExecutionRef`): A Zone-local Guest VM (backed by `Provider/runtime-cloud-hypervisor` or equivalent) that runs the ACA controller and deployment service Processes. This is the credential and cloud-control boundary. Azure credentials, Azure HTTP sockets, the `AcaControl` implementation, and the `AcaCredentialLeaseClient` all live exclusively inside this gateway Guest.
 - **Tier 2 — managed ACA sandbox** (the `Guest` resources this Provider reconciles): Remote Azure Container Apps sandboxes. The controller, running inside the gateway Guest, manages the lifecycle of these remote sandboxes via the injected `AcaControl` port and reaches them over the `Provider/transport-azure-relay` ZoneLink.
 
 A managed ACA sandbox `Guest` differs from a local VM Guest in the following fixed ways:
@@ -99,6 +99,9 @@ config:
   # Operation ledger capacity
   completedOperationCapacity: 512   # integer; 1..1024
 
+  # Network reference — required for deployment service egress (all ACA API calls)
+  networkRef: "Network/aca-gateway-egress"  # optional; null disables egress in deployment service
+
   # ZoneLink transport alias (must match a declared ZoneLink dependency alias in the Zone config)
   zoneLinkAlias: "aca-relay"
 ```
@@ -107,7 +110,7 @@ config:
 
 | Field | Type | Required | Rules |
 | --- | --- | --- | --- |
-| `gatewayExecutionRef` | ResourceRef | **Yes** | Resolves `Guest/<name>` in same Zone; that Guest must be Ready; all three component Processes must have `executionRef` matching this field; **no Host fallback** |
+| `gatewayExecutionRef` | ResourceRef | **Yes** | Resolves `Guest/<name>` in same Zone; that Guest must be Ready; both component Processes must have `executionRef` matching this field; **no Host fallback** |
 | `tenantId` | string | Yes | Max 36 chars; allowed charset `[0-9a-f-]`; UUID-shaped opaque ID; not a secret |
 | `clientId` | string | Yes | Same constraints as `tenantId` |
 | `subscriptionId` | string | Yes | Same constraints as `tenantId` |
@@ -122,7 +125,7 @@ config:
 | `readiness.attempts` | u8 | No | 1..60; default 30 |
 | `readiness.intervalMs` | u32 | No | 1..10000; default 5000 |
 | `completedOperationCapacity` | usize | No | 1..1024; default 512 |
-| `zoneLinkAlias` | string | Yes | Max 63 chars; `^[a-z][a-z0-9-]*$`; must match declared dependency alias in Provider manifest |
+| `networkRef` | ResourceRef | No | Resolves `Network/<name>` in same Zone; passed to deployment service `networkUsage.networkRef`; null = no egress (deployment service `allowEgress: false`) |
 
 No field may carry a subscription key, SAS token, client secret, certificate bytes, connection string, or any value that functions as an authentication secret. Fields `tenantId`, `clientId`, `subscriptionId`, `environmentId`, and `resourceGroupId` are opaque plain identifiers, not credentials.
 
@@ -221,20 +224,18 @@ The completed-operation ledger records the opaque `OperationBinding` — not the
 
 ### 6.1 Component summary
 
-| Component ID | Type | Binary | Description |
-| --- | --- | --- | --- |
-| `aca-controller` | controller | `d2b-aca-controller` | Owns `Guest` ResourceType; async reconcile/observe/finalize loop |
-| `aca-deployment-service` | service | `d2b-aca-deployment-service` | Serves typed deployment/sandbox lifecycle ComponentSession methods; co-located with controller |
-| `aca-health-worker` | worker | `d2b-aca-health-worker` | Periodic health probe against the ACA environment endpoint; reports to controller via narrow IPC |
+| Component ID | Type | Description |
+| --- | --- | --- |
+| `aca-controller` | controller | Owns `Guest` ResourceType; async reconcile/observe/finalize loop; calls ACA API exclusively through injected `AcaControl`/`AcaCredentialLeaseClient` ports |
+| `aca-deployment-service` | service | Serves typed deployment + environment health ComponentSession methods; holds ACA effect port authority; co-located in gateway Guest |
 
-All three components run as system-domain Process resources **inside the dedicated gateway Guest** (`spec.config.gatewayExecutionRef`). No component runs on the local Host. No component runs inside the managed ACA sandbox. The Host holds no Process resources from this Provider and no Azure credentials. The `aca-deployment-service` binary is co-located with the controller in the same process boundary when the Provider descriptor declares them as co-located; each is still a distinct named component with a distinct identity and permission scope.
+Both components run as system-domain Process resources **inside the dedicated gateway Guest** (`spec.config.gatewayExecutionRef`). The framework `ProviderDeployment` creates these two static component Processes and their `ProviderStateSet` compartments. The ACA controller never creates its own peer Processes and never writes Provider resource status directly. No component runs on the local Host. No component runs inside the managed ACA sandbox.
 
 ### 6.2 Controller component descriptor
 
 ```yaml
 componentId: aca-controller
 type: controller
-binary: d2b-aca-controller
 resourceTypes:
   - Guest
 supportedHostCapabilities: []
@@ -247,32 +248,26 @@ requiredDependencies:
 optionalDependencies: []
 stateNamespaces:
   - id: sandbox-state
-    schemaId: io.d2b.runtime-azure-container-apps/controller/sandbox-state
+    schemaId: io.d2b.runtime-azure-container-apps/aca-controller/sandbox-state
     schemaVersion: "1.0"
     persistenceClass: persistent
     sensitivityClass: private
     migrationPolicy: pre-launch-required
-    quotaBytes: 10485760      # 10 MiB
+    quotaBytes: 10485760      # 10 MiB; opaque ACA binding/adoption metadata only; no token/endpoint bytes
     views:
       main:
         rights: [read, write, create, delete, traverse]
-  - id: operation-ledger
-    schemaId: io.d2b.runtime-azure-container-apps/controller/operation-ledger
-    schemaVersion: "1.0"
-    persistenceClass: persistent
-    sensitivityClass: private
-    migrationPolicy: pre-launch-required
-    quotaBytes: 5242880       # 5 MiB
-    views:
-      main:
-        rights: [read, write, create, delete, traverse]
+  # operation-ledger stateNamespace removed: the core Operation ledger owns operation/requeue truth.
+  # The provider reads requeue/operation state via the core adapter; no provider-owned compartment needed.
 process:
   sandbox:
+    namespaceClasses: [mount, ipc, pid]
+    capabilityClasses: []
     seccompClass: strict
     noNewPrivileges: true
     startRoot: false
-    readOnlyRoot: true
     environmentClass: minimal
+    readOnlyRoot: true
   budget:
     cpu:
       request: "100m"
@@ -282,14 +277,16 @@ process:
       limit: "128Mi"
     fds:
       limit: 256
+  networkUsage: null
 ```
+
+The `sandbox-state` stateNamespace is declared in the controller's signed component descriptor. Core `ProviderDeployment` creates the required `sandbox-state` Volume (`providerRef: Provider/volume-local`, `source.executionRef: Guest/<aca-gateway-name>`; guest-local placement; reconciled by the Guest-local `volume-local` instance inside the gateway Guest; see §7.3) before starting the controller Process, and deletes it after the controller Process finalizes on Provider removal. The Host never holds cloud binding, admission, or operation state. The controller does not create, own, or reconcile Volume resources; `Volume` is not in the controller's exported `resourceTypes`; `Provider/volume-local` is the sole Volume reconciler. The framework delivers the mounted view dirfd to the controller at startup. The core Operation ledger adapter provides operation/requeue tracking; the `operation-ledger` stateNamespace has been removed.
 
 ### 6.3 Deployment service component descriptor
 
 ```yaml
 componentId: aca-deployment-service
 type: service
-binary: d2b-aca-deployment-service
 exportedMethods:
   - service: d2b.aca.v3.deployment
     methods:
@@ -302,13 +299,27 @@ exportedMethods:
       - GuestHealth
 allowedDomains: [system]
 cardinality: one-per-zone
+stateNamespaces:
+  - id: service-state
+    schemaId: io.d2b.runtime-azure-container-apps/aca-deployment-service/service-state
+    schemaVersion: "1.0"
+    schemaDigest: sha256:<hex>
+    persistenceClass: persistent
+    sensitivityClass: private
+    migrationPolicy: none               # empty payload schema; no migration worker
+    quotaBytes: 65536                   # 64 KiB; identity marker only
+    views:
+      main:
+        rights: [read, write, create, delete, traverse]
 process:
   sandbox:
+    namespaceClasses: [mount, ipc, pid]
+    capabilityClasses: []
     seccompClass: strict
     noNewPrivileges: true
     startRoot: false
-    readOnlyRoot: true
     environmentClass: minimal
+    readOnlyRoot: true
   budget:
     cpu:
       request: "100m"
@@ -316,39 +327,23 @@ process:
     memory:
       request: "32Mi"
       limit: "128Mi"
+    fds:
+      limit: 256
+  networkUsage:
+    networkRef: <resolved from spec.config.networkRef>
+    ports: []
+    allowEgress: true
 ```
 
-### 6.4 Health worker component descriptor
-
-```yaml
-componentId: aca-health-worker
-type: worker
-binary: d2b-aca-health-worker
-allowedDomains: [system]
-cardinality: one-per-zone
-process:
-  sandbox:
-    seccompClass: strict
-    noNewPrivileges: true
-    startRoot: false
-    readOnlyRoot: true
-    environmentClass: minimal
-  budget:
-    cpu:
-      request: "50m"
-      limit: "200m"
-    memory:
-      request: "16Mi"
-      limit: "64Mi"
-```
+`GuestHealth` polls the ACA environment reachability endpoint through the injected `AcaControl` port. No network call is made on any ambient endpoint, SDK default, or host-level socket. The deployment service holds the ACA effect port authority; the controller invokes health probing via `d2b.aca.v3.deployment/GuestHealth` over the internal ComponentSession.
 
 ---
 
 ## 7 Process templates and placement
 
-All three component Processes run inside the dedicated gateway Guest (`spec.config.gatewayExecutionRef`) in the `system` domain. The Host holds no Process resources from this Provider. No component Process runs on the Host or inside the managed ACA sandbox. The `providerRef` for each Process is the Process Provider operating **inside the gateway Guest** (`Provider/system-systemd` or `Provider/system-minijail`).
+The framework `ProviderDeployment` creates both component Processes as static resources when the Provider is admitted. The ACA controller never instantiates its own peer Processes and never writes `Provider` resource status directly. Both Processes use `providerRef: Provider/system-minijail`; the framework assigns each a dedicated core `ComponentPrincipal` (private minijail launch identity; never a ResourceRef). Core `ProviderDeployment` creates one provider-owned Volume per declared stateNamespace per component before each Process starts, and deletes them after Processes finalize. Each Volume uses guest-local placement: `providerRef: Provider/volume-local`, `source.executionRef: Guest/<aca-gateway-name>`, reconciled by the Guest-local `volume-local` instance inside the gateway Guest. There is no Host-backed source, no virtiofs attachment, and no `attachments[]` array. The Host must never hold cloud binding, admission, PSK, or operation state. The ACA controller does not create, own, or add `Volume` to its exported `resourceTypes`; `Provider/volume-local` is the sole Volume reconciler. The framework delivers each mounted view dirfd to its Process at startup. No cross-component Volume sharing, no `accessAcl`/`defaultAcl` entries with external principals, and no OS-account plumbing beyond Nix provisioning are required.
 
-`spec.template` is the signed component ID resolved at runtime by the controller of `metadata.ownerRef` (`Provider/runtime-azure-container-apps`). There is no `componentRef` field; component identity is carried by `metadata.ownerRef` + `spec.template` together. Component-to-component calls use d2b-bus ComponentSession exclusively; no raw socket addresses, paths, or `kind/path/scope` endpoint fields appear in any spec.
+`spec.template` is the signed component ID resolved at runtime by the `ProviderDeployment` of `metadata.ownerRef` (`Provider/runtime-azure-container-apps`). There is no `componentRef` field. Component-to-component calls use d2b-bus ComponentSession exclusively.
 
 ### 7.1 Controller Process template
 
@@ -360,11 +355,11 @@ metadata:
   zone: <zone>
   ownerRef: Provider/runtime-azure-container-apps
 spec:
-  providerRef: Provider/system-systemd         # Process Provider inside gateway Guest
-  executionRef: Guest/<aca-gateway-name>        # gateway Guest from config.gatewayExecutionRef
+  providerRef: Provider/system-minijail
+  executionRef: Guest/<aca-gateway-name>
   domain: system
   processClass: controller
-  template: aca-controller                     # signed component ID; resolved via metadata.ownerRef
+  template: aca-controller
   sandbox:
     namespaceClasses: [mount, ipc, pid]
     capabilityClasses: []
@@ -377,7 +372,9 @@ spec:
     cpu: { request: "100m", limit: "500m" }
     memory: { request: "32Mi", limit: "128Mi" }
     fds: { limit: 256 }
-  endpoints: []                                # controller; no exported service endpoints
+    pids: { limit: 256 }
+  networkUsage: null
+  endpoints: []
   readiness:
     initialDelay: "0s"
     timeout: "30s"
@@ -394,26 +391,18 @@ spec:
   adoptionPolicy: adopt-on-restart
   drainTimeout: "30s"
   mounts:
-    - volumeRef: Volume/runtime-azure-container-apps--aca-controller--sandbox-state--aca-gateway
+    - volumeRef: Volume/runtime-azure-container-apps--aca-controller--sandbox-state--<aca-gateway-name>
       view: main
       mountPath: /state/sandbox-state
       access: read-write
       required: true
-    - volumeRef: Volume/runtime-azure-container-apps--aca-controller--operation-ledger--aca-gateway
-      view: main
-      mountPath: /state/operation-ledger
-      access: read-write
-      required: true
-    - volumeRef: Volume/runtime-azure-container-apps--aca-health-worker--health-state--aca-gateway
-      view: observe
-      mountPath: /state/health
-      access: read-only
-      required: true
 ```
+
+The controller makes no direct network calls. All Azure API calls are dispatched through the injected `AcaControl` port, which executes inside the deployment service. Long-running cloud operations return `progressing` or a `requeue-at` timestamp immediately and never block the controller's watch read loop; the controller re-enqueues the resource and reads updated status on the next reconcile iteration.
 
 ### 7.2 Deployment service Process template
 
-The deployment service is a `service`-class Process that serves the `d2b.aca.v3.deployment` ComponentSession methods via d2b-bus. It declares a single bus endpoint; the actual socket path is resolved at runtime by the Process Provider inside the gateway Guest and is never exposed as a spec field. The service does not inherit the controller's `Guest` resource write authority.
+The deployment service is the sole bearer of ACA effect port authority. It serves the `d2b.aca.v3.deployment` ComponentSession schema — including `GuestHealth` — and makes all outbound Azure API calls through the injected `AcaControl` port. It holds no controller authority and cannot write `Guest` resource status. Health probing (previously a separate worker) is an ordinary service method here; no separate health component or shared Volume is needed.
 
 ```yaml
 apiVersion: resources.d2b.io/v3
@@ -423,7 +412,7 @@ metadata:
   zone: <zone>
   ownerRef: Provider/runtime-azure-container-apps
 spec:
-  providerRef: Provider/system-systemd
+  providerRef: Provider/system-minijail
   executionRef: Guest/<aca-gateway-name>
   domain: system
   processClass: service
@@ -440,6 +429,11 @@ spec:
     cpu: { request: "100m", limit: "500m" }
     memory: { request: "32Mi", limit: "128Mi" }
     fds: { limit: 256 }
+    pids: { limit: 256 }
+  networkUsage:
+    networkRef: <resolved from spec.config.networkRef>
+    ports: []
+    allowEgress: true   # ACA management API via injected AcaControl; no ambient endpoint
   endpoints:
     - name: bus
       transport: unix
@@ -454,94 +448,59 @@ spec:
     class: on-failure
     backoffBase: "1s"
     backoffMax: "60s"
+    backoffMultiplier: 2.0
+    maxRestarts: null
+    resetAfter: "300s"
   adoptionPolicy: adopt-on-restart
   drainTimeout: "30s"
-  mounts: []
-```
-
-### 7.3 Health worker Process template
-
-The health worker is a `worker`-class Process with no bus authority, no exported endpoints, and no direct status write capability. It periodically probes the ACA environment endpoint and writes bounded health observations to its dedicated health-state Volume (`view: report`). The controller reads those observations via its own mount of the same Volume (`view: observe`). There is no private Unix socket between the health worker and the controller.
-
-```yaml
-apiVersion: resources.d2b.io/v3
-type: Process
-metadata:
-  name: aca-health-worker
-  zone: <zone>
-  ownerRef: Provider/runtime-azure-container-apps
-spec:
-  providerRef: Provider/system-systemd
-  executionRef: Guest/<aca-gateway-name>
-  domain: system
-  processClass: worker
-  template: aca-health-worker
-  sandbox:
-    namespaceClasses: [mount, ipc, pid]
-    capabilityClasses: []
-    seccompClass: strict
-    noNewPrivileges: true
-    startRoot: false
-    environmentClass: minimal
-    readOnlyRoot: true
-  budget:
-    cpu: { request: "50m", limit: "200m" }
-    memory: { request: "16Mi", limit: "64Mi" }
-    fds: { limit: 64 }
-  endpoints: []
-  readiness:
-    initialDelay: "1s"
-    timeout: "30s"
-    failureThreshold: 3
-    successThreshold: 1
-    class: ready-condition
-  restartPolicy:
-    class: on-failure
-    backoffBase: "2s"
-    backoffMax: "60s"
-  adoptionPolicy: adopt-on-restart
-  drainTimeout: "10s"
   mounts:
-    - volumeRef: Volume/runtime-azure-container-apps--aca-health-worker--health-state--aca-gateway
-      view: report
-      mountPath: /state/health
+    - volumeRef: Volume/runtime-azure-container-apps--aca-deployment-service--service-state--<aca-gateway-name>
+      view: main
+      mountPath: /state/service-state
       access: read-write
       required: true
 ```
 
-### 7.4 Volume resource templates
+### 7.3 State Volume resources
 
-Volumes are named per convention `<provider-name>--<component-id>--<namespace-id>--<execution-ref-short>` and are owned by `Provider/runtime-azure-container-apps`. Each Volume is backed by `Provider/volume-local` with `source.executionRef: Guest/<aca-gateway-name>` — volume-local manages all layout, ACL, and lifecycle operations within the gateway Guest's storage namespace. No Volume path is visible on the Host filesystem.
+**ProviderStateSet** is a query-time grouping — not a ResourceType or stored artifact. It is defined as the set of all `Volume` resources in a Zone whose `metadata.ownerRef` resolves to `Provider/runtime-azure-container-apps`. Core `ProviderDeployment` creates every Volume in the ProviderStateSet before the owning component Process starts, and deletes them after the Process finalizes on Provider removal. Semantic Provider controllers do not own Volume resources, do not add `Volume` to their exported `resourceTypes`, and do not create their own prerequisite state Volumes. `Provider/volume-local` is the sole Volume reconciler; the component only consumes its required view via the framework-delivered dirfd. `ComponentPrincipal` is the private minijail launch identity and is never used as a Volume layout `ownerRef`, `groupRef`, or any ResourceRef.
 
-#### 7.4.1 Sandbox state Volume
+**Empty payload schema rule**: a component that declares a stateNamespace with no payload fields (schema is an empty object) uses `migrationPolicy: none` and requires no migration worker EphemeralProcess. The Volume is still durable (`kind: state`, `persistenceClass: persistent`, minimal nonzero `quotaBytes`, broker-maintained `identityMarker`).
+
+**Volume architecture**: each semantic component (`aca-controller` and `aca-deployment-service`) receives exactly **one** provider-owned Volume with **guest-local** placement: `providerRef: Provider/volume-local`, `source.executionRef: Guest/<aca-gateway-name>`. The Guest-local `volume-local` instance running inside the gateway Guest reconciles it. There is no Host-backed source, no virtiofs attachment, and no `attachments[]` array. The manifest freezes guest-local placement; there is no fallback to Host-side storage. The Host must never hold remote or cloud binding, admission, PSK, or operation state. All Volumes carry `ownerRef: Provider/runtime-azure-container-apps` and Nix-provisioned `User/<name>` layout principals (one system user per component; see §7.3.3). The Process mount is satisfied when the Volume is Ready; the framework delivers the view dirfd at startup.
+
+Layout principals are the Nix-provisioned system user `User/d2b-aca-controller` (declared in the gateway Guest's system-core Nix module). No cross-component Volume sharing and no `accessAcl`/`defaultAcl` entries with external principals are required.
+
+#### 7.3.1 Sandbox state — source Volume
 
 ```yaml
 apiVersion: resources.d2b.io/v3
 type: Volume
 metadata:
-  name: runtime-azure-container-apps--aca-controller--sandbox-state--aca-gateway
+  name: runtime-azure-container-apps--aca-controller--sandbox-state--<aca-gateway-name>
   zone: <zone>
   ownerRef: Provider/runtime-azure-container-apps
 spec:
-  providerRef: Provider/volume-local
+  providerRef: Provider/volume-local         # Guest-local volume-local instance inside gateway Guest
   source:
-    executionRef: Guest/<aca-gateway-name>
-    settings: {}                              # volume-local resolves private storage path from policy
+    executionRef: Guest/<aca-gateway-name>   # guest-local; manifest-frozen; no Host fallback
+    placementMode: guest-local
+    settings: {}
   kind: state
-  persistenceClass: persistent
+  persistenceClass: persistent          # durable: survives component/Provider restart, upgrade, destroy/reset
   sensitivityClass: private
   stateSchema:
     schemaId: io.d2b.runtime-azure-container-apps/aca-controller/sandbox-state
     schemaVersion: "1.0"
-    schemaDigest: sha256:<hex>                  # bound at build time via xtask gen-schemas
+    schemaDigest: sha256:<hex>
     migrationPolicy: pre-launch-required
-  quotaBytes: 10485760                          # 10 MiB
+  quotaBytes: 10485760                  # 10 MiB nonzero; opaque binding/adoption metadata only
   sealingCredentialRef: null
   layout:
     - path: ""
       type: directory
-      ownerRef: User/aca-controller-system
-      groupRef: User/aca-controller-system
+      ownerRef: User/d2b-aca-controller   # Nix-provisioned system user in gateway Guest
+      groupRef: User/d2b-aca-controller
       mode: "0700"
       noFollow: true
       sensitivity: private
@@ -556,8 +515,8 @@ spec:
       invariants: [no-symlink, broker-opaque-id-only]
     - path: sandboxes
       type: directory
-      ownerRef: User/aca-controller-system
-      groupRef: User/aca-controller-system
+      ownerRef: User/d2b-aca-controller
+      groupRef: User/d2b-aca-controller
       mode: "0700"
       noFollow: true
       sensitivity: private
@@ -577,37 +536,44 @@ spec:
   identityMarker:
     class: broker-maintained
     markerRoot: provider-state-markers
+  snapshotPolicy: null
+  retentionPolicy: null
 ```
 
-#### 7.4.2 Operation ledger Volume
+Guest-local `volume-local` reconciles this Volume; all state stays inside the gateway Guest. The controller Process mounts this Volume (see §7.1 `mounts`); the framework delivers the `main`-view dirfd at startup.
+
+#### 7.3.2 Deployment service state Volume
+
+Empty payload schema; `migrationPolicy: none`; minimal quota for the identity marker only. No migration worker EphemeralProcess is ever created for this Volume.
 
 ```yaml
 apiVersion: resources.d2b.io/v3
 type: Volume
 metadata:
-  name: runtime-azure-container-apps--aca-controller--operation-ledger--aca-gateway
+  name: runtime-azure-container-apps--aca-deployment-service--service-state--<aca-gateway-name>
   zone: <zone>
   ownerRef: Provider/runtime-azure-container-apps
 spec:
-  providerRef: Provider/volume-local
+  providerRef: Provider/volume-local         # Guest-local volume-local instance inside gateway Guest
   source:
-    executionRef: Guest/<aca-gateway-name>
+    executionRef: Guest/<aca-gateway-name>   # guest-local; manifest-frozen; no Host fallback
+    placementMode: guest-local
     settings: {}
   kind: state
-  persistenceClass: persistent
+  persistenceClass: persistent          # durable even for empty payload schema
   sensitivityClass: private
   stateSchema:
-    schemaId: io.d2b.runtime-azure-container-apps/aca-controller/operation-ledger
+    schemaId: io.d2b.runtime-azure-container-apps/aca-deployment-service/service-state
     schemaVersion: "1.0"
     schemaDigest: sha256:<hex>
-    migrationPolicy: pre-launch-required
-  quotaBytes: 5242880                           # 5 MiB
+    migrationPolicy: none               # empty payload schema; no migration worker
+  quotaBytes: 65536                     # 64 KiB; identity marker only
   sealingCredentialRef: null
   layout:
     - path: ""
       type: directory
-      ownerRef: User/aca-controller-system
-      groupRef: User/aca-controller-system
+      ownerRef: User/d2b-aca-deployment-service   # Nix-provisioned system user in gateway Guest
+      groupRef: User/d2b-aca-deployment-service
       mode: "0700"
       noFollow: true
       sensitivity: private
@@ -617,22 +583,6 @@ spec:
       repairPolicy: exact-owner
       cleanupPolicy: owner-controlled
       adoptionPolicy: quarantine-on-ambiguity
-      restartPolicy: preserve-across-controller-restart
-      leaseClass: none
-      invariants: [no-symlink, broker-opaque-id-only]
-    - path: ledger
-      type: directory
-      ownerRef: User/aca-controller-system
-      groupRef: User/aca-controller-system
-      mode: "0700"
-      noFollow: true
-      sensitivity: private
-      accessAcl: []
-      defaultAcl: []
-      createPolicy: create-if-absent
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      adoptionPolicy: adopt-with-live-owner-proof
       restartPolicy: preserve-across-controller-restart
       leaseClass: none
       invariants: [no-symlink, broker-opaque-id-only]
@@ -643,127 +593,43 @@ spec:
   identityMarker:
     class: broker-maintained
     markerRoot: provider-state-markers
+  snapshotPolicy: null
+  retentionPolicy: null
 ```
 
-#### 7.4.3 Health state Volume
+Guest-local `volume-local` reconciles this Volume; the identity marker is maintained inside the gateway Guest. The deployment service Process mounts this Volume (see §7.2 `mounts`); the framework delivers the `main`-view dirfd at startup.
 
-```yaml
-apiVersion: resources.d2b.io/v3
-type: Volume
-metadata:
-  name: runtime-azure-container-apps--aca-health-worker--health-state--aca-gateway
-  zone: <zone>
-  ownerRef: Provider/runtime-azure-container-apps
-spec:
-  providerRef: Provider/volume-local
-  source:
-    executionRef: Guest/<aca-gateway-name>
-    settings: {}
-  kind: state
-  persistenceClass: persistent
-  sensitivityClass: private
-  stateSchema:
-    schemaId: io.d2b.runtime-azure-container-apps/aca-health-worker/health-state
-    schemaVersion: "1.0"
-    schemaDigest: sha256:<hex>
-    migrationPolicy: pre-launch-required
-  quotaBytes: 524288                            # 512 KiB
-  sealingCredentialRef: null
-  layout:
-    - path: ""
-      type: directory
-      ownerRef: User/aca-health-worker-system
-      groupRef: User/aca-health-worker-system
-      mode: "0700"                              # posix bits; cross-user read granted via accessAcl/defaultAcl
-      noFollow: true
-      sensitivity: private
-      accessAcl:
-        - principal:
-            ref: User/aca-controller-system
-          permissions: "r-x"                    # controller can read and traverse health-state directory
-      defaultAcl:
-        - principal:
-            ref: User/aca-controller-system
-          permissions: "r-x"                    # new files/dirs inherit controller read+traverse
-      createPolicy: create-if-never-provisioned
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      adoptionPolicy: quarantine-on-ambiguity
-      restartPolicy: preserve-across-controller-restart
-      leaseClass: none
-      invariants: [no-symlink, broker-opaque-id-only]
-    - path: current
-      type: file
-      ownerRef: User/aca-health-worker-system
-      groupRef: User/aca-health-worker-system
-      mode: "0600"                              # posix bits; controller read granted via accessAcl only
-      noFollow: true
-      sensitivity: private
-      accessAcl:
-        - principal:
-            ref: User/aca-controller-system
-          permissions: "r--"                    # controller can read health observation file
-      defaultAcl: []
-      createPolicy: create-if-absent
-      repairPolicy: exact-owner
-      cleanupPolicy: owner-controlled
-      adoptionPolicy: adopt-with-live-owner-proof
-      restartPolicy: preserve-across-controller-restart
-      leaseClass: none
-      invariants: [no-symlink, broker-opaque-id-only]
-  views:
-    report:
-      path: ""
-      rights: [read, write, create, traverse]   # health worker: write observations
-    observe:
-      path: ""
-      rights: [read, traverse]                  # controller: read observations only
-  identityMarker:
-    class: broker-maintained
-    markerRoot: provider-state-markers
+#### 7.3.3 User resource provisioning
+
+One Nix-provisioned system user per component, declared in the gateway Guest's system-core Nix module:
+
+```nix
+d2b.vms.<aca-gateway-name>.config.users.users."d2b-aca-controller" = {
+  isSystemUser = true;
+  group = "d2b-aca-controller";
+};
+d2b.vms.<aca-gateway-name>.config.users.groups."d2b-aca-controller" = {};
+
+d2b.vms.<aca-gateway-name>.config.users.users."d2b-aca-deployment-service" = {
+  isSystemUser = true;
+  group = "d2b-aca-deployment-service";
+};
+d2b.vms.<aca-gateway-name>.config.users.groups."d2b-aca-deployment-service" = {};
 ```
 
-### 7.5 Required User resources
-
-The Volume layout entries bind typed `User/<name>` ResourceRefs — no numeric UID/GID form is accepted. Two User resources must be declared in the Zone alongside the Provider resources:
-
-```yaml
-apiVersion: resources.d2b.io/v3
-type: User
-metadata:
-  name: aca-controller-system
-  zone: <zone>
-spec:
-  osUsername: aca-controller
-  displayName: "ACA Controller System User"
-  groups: []
-
----
-apiVersion: resources.d2b.io/v3
-type: User
-metadata:
-  name: aca-health-worker-system
-  zone: <zone>
-spec:
-  osUsername: aca-health-worker
-  displayName: "ACA Health Worker System User"
-  groups: []
-```
-
-**OS-account provisioning boundary**: The corresponding OS accounts (`aca-controller`, `aca-health-worker`) are Nix-provisioned inside the gateway Guest's NixOS system closure via `users.users.*` in the gateway Guest's NixOS configuration. This Nix-level declaration is the provisioning authority — system-core only verifies that the declared `osUsername` resolves via NSS (`getpwnam`) inside the gateway Guest and does not itself create or repair the OS account. If the OS account does not exist in NSS at Volume mount time, volume-local fails with `owner-resolution-failed` and the Process does not start. The Nix `users.users.*` declarations for the gateway Guest must match the `osUsername` values in the User resource specs above.
-
-The User resources must be declared before any Volume referencing them is admitted. Volume admission fails if `ownerRef: User/<name>` does not resolve to a declared User resource in the same Zone (resource-ref resolution rule 3). The health-state Volume uses explicit `accessAcl`/`defaultAcl` entries (not group membership) to grant `User/aca-controller-system` read access to health observations written by `User/aca-health-worker-system`; volume-local reconciles these ACL entries at provision time using POSIX ACLs inside the gateway Guest. Both users are system-domain only; no `allowedDomains: [user]` expansion is required for these identities.
+The volume-local Provider running inside the gateway Guest resolves each `User/<name>` to its provisioned uid/gid via the Guest's own User resource registry when performing layout operations. NSS is used only for verification; no PAM session or shell is granted. Because storage is guest-local, no Host-side User resource or uid/gid mapping is involved.
 
 ---
 
 ## 8 Async effect port
 
-The ACA controller drives all Azure API operations exclusively through two injected async traits. Both are constructor-injected; no implementation is instantiated via ambient discovery.
+The ACA controller drives all Azure API operations exclusively through two injected async traits inside the deployment service. Both are constructor-injected into the deployment service; no implementation is instantiated via ambient discovery, SDK default chain, or environment variable. The controller calls the deployment service over d2b-bus; all ACA API I/O remains inside the deployment service process.
 
 ### 8.1 `AcaCredentialLeaseClient`
 
 ```rust
-// packages/d2b-provider-runtime-azure-container-apps/src/control.rs
+// packages/d2b-contracts/src/provider_effects/aca.rs
+// Shared d2b-contracts provider-effects module; no separate d2b-aca-contracts crate.
 pub trait AcaCredentialLeaseClient: Send + Sync {
     fn descriptor(&self) -> ProviderDescriptor;
     async fn acquire(&self, request: &AcaCredentialLeaseRequest)
@@ -778,7 +644,8 @@ Returns opaque `AcaCredentialLease` — no token bytes are returned. `AcaCredent
 ### 8.2 `AcaControl`
 
 ```rust
-// packages/d2b-provider-runtime-azure-container-apps/src/control.rs
+// packages/d2b-contracts/src/provider_effects/aca.rs
+// Shared d2b-contracts provider-effects module; no separate d2b-aca-contracts crate.
 pub trait AcaControl: Send + Sync {
     async fn health(
         &self, lease: &AcaCredentialLease, context: &AcaControlContext,
@@ -830,7 +697,8 @@ All methods are:
 - fully async; no `block_on` or nested runtime;
 - bounded by `AcaControlContext.deadline_remaining_ms`;
 - fail-closed on `AcaControlErrorKind::Ambiguous` — the caller must not assume partial success;
-- do not return Azure subscription IDs, resource group ARMs, management hostnames, or any data that functioned as a credential.
+- do not return Azure subscription IDs, resource group ARMs, management hostnames, or any data that functioned as a credential;
+- return `progressing` or a `requeue-at` response when the cloud operation is still in flight, so the deployment service never blocks a watch read loop waiting for an ACA API to complete.
 
 `AcaSandboxId` and `AcaDiskImageId` are opaque bounded identifiers (`max 60 chars`; `[a-z0-9-]`) with redacted `Debug` impls. They are the controller's internal adoption keys; they are never written to resource status, audit records, or OTEL spans.
 
@@ -875,16 +743,20 @@ Provisioning → Ready → Running ↔ Idle → Stopping → Stopped
 
 The controller maps `AcaSandboxLifecycle` to `Guest.status.providerPhase` using stable lower-kebab-case labels: `provisioning`, `ready`, `running`, `idle`, `stopping`, `stopped`, `failed`, `deleted`, `unknown`.
 
-### 9.2 Completed operation ledger
+### 9.2 Core Operation ledger adapter
 
-The controller maintains an in-memory and persisted operation ledger bounded by `completedOperationCapacity` (1..1024 entries). Each entry is keyed by `OperationId` and carries:
+The provider reads operation/requeue state exclusively through the core Operation ledger adapter. The provider does **not** own an `operation-ledger` `ProviderStateSet` compartment; the core Operation ledger owns operation/requeue truth. The `operation-ledger` stateNamespace has been removed from the controller component descriptor.
+
+The provider retains only the `sandbox-state` Volume (opaque ACA binding/adoption metadata — no credential bytes, endpoint URLs, or poll URLs). The controller persists ACA sandbox binding identifiers and adoption keys in the `sandbox-state` Volume's `main` view to survive daemon restarts; the framework delivers the view dirfd at startup; no bytes are exposed in resource status, audit records, or telemetry.
+
+Each completed operation context is keyed by `OperationId` in the core ledger and carries:
 
 - `ProviderOperationContext` (method, operation ID, expiry);
 - `CachedResponse` (Plan/Handle/Observation/Receipt variant);
 - `expires_at_unix_ms` (the lease expiry, not a secret);
 - `observation_satisfied` flag.
 
-Entries with `RetryClass::SameOperation` are not recorded. When the ledger reaches capacity, the oldest expired entry is evicted. Entries are persisted in the `operation-ledger` Volume view to survive daemon restarts; they are never written to the resource store or audit log.
+Entries with `RetryClass::SameOperation` are not recorded. When the ledger reaches capacity (`completedOperationCapacity`; 1..1024; default 512), the oldest expired entry is evicted.
 
 ### 9.3 Idempotency contract
 
@@ -900,7 +772,7 @@ The `RuntimeAdopt` method reconciles a Guest resource that was created with a pr
 
 1. Acquire a `Adopt`-purpose credential lease.
 2. Call `find_sandboxes` with the `AcaWorkloadQuery` derived from the current `AcaResourceBinding` (realm/zone ID, workload/guest UID, provider generation, configuration fingerprint).
-3. If exactly one candidate matches by binding: record `AcaSandboxRecord` in `sandbox-state` Volume, transition sandbox lifecycle to observed state, set `status.bootstrapReady = false` until the enrolled ComponentSession is re-established.
+3. If exactly one candidate matches by binding: record `AcaSandboxRecord` in the `sandbox-state` Volume `main` view (via framework-delivered dirfd), transition sandbox lifecycle to observed state, set `status.bootstrapReady = false` until the enrolled ComponentSession is re-established.
 4. If zero candidates match: the controller proceeds with fresh `RuntimeEnsure`.
 5. If multiple candidates match: set `Guest.status.phase = Degraded` with `reason: ambiguous-adoption`, emit a `critical`-severity bounded audit record (`AuditEventKind::GuestAdoptionAmbiguous`), and requeue. Do not proceed with any candidate.
 
@@ -953,15 +825,9 @@ spec:
     - resourceTypes: [Credential]
       verbs: [get, update-status]
       providerRef: Provider/credential-managed-identity
-    - resourceTypes: [Volume]
-      verbs: [get, update-status]
-      ownerRef: Provider/runtime-azure-container-apps
     - resourceTypes: [ZoneLink]
       verbs: [get]
       resourceNames: ["<zone-link-name>"]
-    - resourceTypes: [User]
-      verbs: [get, list, watch]
-      ownerRef: Provider/runtime-azure-container-apps
 ```
 
 ```yaml
@@ -982,11 +848,7 @@ spec:
 
 ### 11.2 Deployment service authority
 
-The `aca-deployment-service` component may only invoke methods on the `d2b.aca.v3.deployment` service. It must not hold a `Guest` resource write verb; the controller owns all status and spec mutations.
-
-### 11.3 Health worker authority
-
-The `aca-health-worker` component has `processClass: worker` and no d2b-bus authority. No Role or RoleBinding is emitted for the health worker. The health worker does not use d2b-bus methods for reporting; it writes health observations to the health-state Volume (`view: report`, `access: read-write`). The controller reads those observations via its own mount of the same Volume (`view: observe`, `access: read-only`). No private Unix socket field appears in any spec.
+The `aca-deployment-service` component may only invoke methods on the `d2b.aca.v3.deployment` service (including `GuestHealth`). It must not hold a `Guest` resource write verb; the controller owns all status and spec mutations. No Role or RoleBinding is required beyond the framework-default service component policy.
 
 ---
 
@@ -1041,7 +903,7 @@ The Host holds **no** process, credential, socket, or transport binding for Azur
 The controller (`aca-controller`) Process, running inside the gateway Guest, holds no Azure management SDK HTTP client, no HTTPS socket to `management.azure.com`, and no direct path to ACA APIs in the Host network namespace. All Azure API calls are mediated by the co-located `AcaControl` implementation (which is instantiated by the Provider supervisor ticket inside the gateway Guest, not by the controller itself). The controller's only outbound IPC surfaces are:
 
 - d2b-bus ComponentSession to credential and ZoneLink transport Providers (both inside the gateway Guest);
-- private Unix socket to the `aca-health-worker` (also inside the gateway Guest);
+- d2b-bus ComponentSession to the `aca-deployment-service` (also inside the gateway Guest);
 - Volume read/write via kernel filesystem operations inside the gateway Guest.
 
 ---
@@ -1115,7 +977,7 @@ Closed allowlist for all metrics emitted by `d2b-provider-runtime-azure-containe
 | Allowed label | Values |
 | --- | --- |
 | `provider` | `runtime-azure-container-apps` (literal) |
-| `component` | `aca-controller`, `aca-deployment-service`, `aca-health-worker` |
+| `component` | `aca-controller`, `aca-deployment-service` |
 | `operation` | stable method name: `provision`, `start`, `stop`, `inspect`, `adopt`, `destroy`, `health` |
 | `outcome` | `success`, `failure`, `cancelled`, `deadline-expired` |
 | `error` | stable error code from §13.2, or `none` |
@@ -1127,7 +989,7 @@ No metric label may carry: Zone name, Guest resource name, sandbox ID, ACA envir
 Spans emitted by the controller carry only:
 
 - `d2b.provider = "runtime-azure-container-apps"`
-- `d2b.component` = one of the three component IDs
+- `d2b.component` = one of the two component IDs (`aca-controller`, `aca-deployment-service`)
 - `d2b.operation` = stable operation name
 - `d2b.outcome` = `success|failure|cancelled`
 
@@ -1319,26 +1181,7 @@ d2b.zones.my-zone.resources = {
 };
 ```
 
-The `aca-gateway` Guest's NixOS system closure must include: the three ACA Provider component binaries (`d2b-aca-controller`, `d2b-aca-deployment-service`, `d2b-aca-health-worker`) and their runtime dependencies; and the OS account declarations for the two system users required by the Volume layout (§7.5):
-
-```nix
-# Inside the gateway Guest's NixOS configuration (systemArtifactId = "aca-gateway-system")
-users.users.aca-controller = {
-  isSystemUser = true;
-  group = "aca-controller";
-  description = "ACA Controller System User";
-};
-users.groups.aca-controller = {};
-
-users.users.aca-health-worker = {
-  isSystemUser = true;
-  group = "aca-health-worker";
-  description = "ACA Health Worker System User";
-};
-users.groups.aca-health-worker = {};
-```
-
-These declarations are the provisioning authority for the OS accounts. system-core verifies only that the declared `osUsername` values resolve via NSS inside the gateway Guest at Volume mount time. The `gatewayExecutionRef = "Guest/aca-gateway"` in the Provider config ties all controller Processes to this specific Guest resource.
+The `aca-gateway` Guest's NixOS system closure must include the two ACA Provider component binaries (`d2b-aca-controller`, `d2b-aca-deployment-service`) and their runtime dependencies. Component principals (`ComponentPrincipal/aca-controller`, `ComponentPrincipal/aca-deployment-service`) are assigned by `Provider/system-minijail` at Process start time — they are not OS accounts and require no `users.users.*` NixOS declarations. The `gatewayExecutionRef = "Guest/aca-gateway"` in the Provider config ties all controller Processes to this specific Guest resource.
 
 ### 15.7 Eval-time validation
 
@@ -1366,8 +1209,8 @@ No Host-scoped Credential (`scope.executionRef` matching `Host/*`) is accepted f
 Provider Pending
   → package/trust/conformance check (Nix eval-time for digest; runtime for conformance)
   → gatewayExecutionRef Guest becomes Ready (prerequisite; Provider stays Pending until met)
-  → controller/service/worker Processes launch INSIDE gateway Guest
-  → Volume `runtime-azure-container-apps--aca-controller--sandbox-state--aca-gateway` and `runtime-azure-container-apps--aca-controller--operation-ledger--aca-gateway` and `runtime-azure-container-apps--aca-health-worker--health-state--aca-gateway` created inside gateway Guest
+  → ProviderDeployment creates controller and deployment-service Processes INSIDE gateway Guest
+  → Core ProviderDeployment creates one Volume per component (aca-controller sandbox-state + aca-deployment-service service-state; each providerRef=volume-local, source.executionRef=Guest/<aca-gateway-name>, guest-local, no attachments[]; ownerRef: Provider/runtime-azure-container-apps) before Processes start
   → Provider Ready
   → Guest resources reconciled by aca-controller (running inside gateway Guest)
 ```
@@ -1380,7 +1223,7 @@ A Provider generation change (new package digest, config update, or credential r
 
 1. Controller drains in-flight reconcile operations (bounded `DRAIN_TIMEOUT = 30 s`).
 2. All active Credential leases are revoked (per `revocation.onProviderGeneration = immediate`).
-3. New controller/service/worker Processes launch under the new generation.
+3. ProviderDeployment replaces controller and deployment-service Processes under the new generation.
 4. The operation ledger is retained across generation changes; entries bound to old generation IDs remain valid for their remaining TTL but are not returned to callers on new-generation operations.
 5. All Guest resources receive a reconcile hint; each adopts or re-provisions under the new generation.
 
@@ -1414,11 +1257,11 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | --- | --- | --- | --- | --- |
 | `AcaWorkloadProvider` + `GuestControlEndpointProvider impl` | `packages/d2b-provider-aca/src/lib.rs` | production-reachable | REPLACE | `d2b-provider-runtime-azure-container-apps/src/controller.rs` — new async `Guest` reconcile loop; vsock path retired |
 | `AcaRelayTransportConfig` | `packages/d2b-provider-aca/src/lib.rs` (relay transport config) | production-reachable | ADAPT | ZoneLink transport settings under Provider config §15.4 |
-| `AcaControl` trait (9 methods) | `packages/d2b-provider-runtime-azure-container-apps/src/control.rs` (main) | test-only at v3 baseline | RETAIN+ADAPT | Retain as injected async port; adapt `OperationBinding` to v3 `ProviderOperationContext` contract |
-| `AcaCredentialLeaseClient` trait | `packages/d2b-provider-runtime-azure-container-apps/src/control.rs` (main) | test-only at v3 baseline | RETAIN+ADAPT | Retain; adapt `CredentialLease` to v3 Credential resource model |
+| `AcaControl` trait (9 methods) | `packages/d2b-provider-runtime-azure-container-apps/src/control.rs` (main) | test-only at v3 baseline | RETAIN+ADAPT | Move to `packages/d2b-contracts/src/provider_effects/aca.rs` (shared provider-effects module; no new crate); no direct provider implementation dependency from core; adapt `OperationBinding` to v3 `ProviderOperationContext` contract |
+| `AcaCredentialLeaseClient` trait | `packages/d2b-provider-runtime-azure-container-apps/src/control.rs` (main) | test-only at v3 baseline | RETAIN+ADAPT | Move to `packages/d2b-contracts/src/provider_effects/aca.rs`; adapt `CredentialLease` to v3 Credential resource model; provider crate remains one package |
 | `AcaRuntimeConfig` / `AcaSandboxProfile` / bounds constants | `packages/d2b-provider-runtime-azure-container-apps/src/types.rs` (main) | test-only at v3 baseline | RETAIN+ADAPT | Adapt to v3 `providerSettings` schema fields; all bounds constants preserved |
 | `AcaResourceBinding` / `AcaWorkloadQuery` | `packages/d2b-provider-runtime-azure-container-apps/src/types.rs` (main) | test-only at v3 baseline | ADAPT | Replace `RealmId`/`WorkloadId` fields with v3 `Zone`/`Guest` resource UID; retain redacted Debug |
-| Operation ledger (`CompletedOperation`, `OperationLedger`) | `packages/d2b-provider-runtime-azure-container-apps/src/provider.rs` (main) | test-only at v3 baseline | RETAIN+ADAPT | Adapt operation ID type to v3; persist in `operation-ledger` Volume view |
+| Operation ledger (`CompletedOperation`, `OperationLedger`) | `packages/d2b-provider-runtime-azure-container-apps/src/provider.rs` (main) | test-only at v3 baseline | ADAPT | Adapt operation ID type to v3; delegate to core Operation ledger adapter; provider has two state Volumes (sandbox-state + service-state), each providerRef=volume-local, source.executionRef=Guest/<aca-gateway-name>, guest-local, no attachments[]; core ProviderDeployment creates/deletes both; Volume absent from controller resourceTypes |
 | Lease cleanup job/executor pattern | `packages/d2b-provider-runtime-azure-container-apps/src/provider.rs` (main) | test-only at v3 baseline | RETAIN | Retain `LeaseCleanupJob`/`LeaseCleanupExecutor`/`TracingLeaseCleanupObserver` verbatim; target tracing key unchanged |
 | Retry/backoff (`AcaControlErrorKind` + `RetryClass`) | `packages/d2b-provider-runtime-azure-container-apps/src/control.rs` (main) | test-only at v3 baseline | RETAIN | Retain all error kind/diagnostic variants and `MAX_ACA_RETRY_AFTER_MS` |
 | Provider agent process entry point | `packages/d2b-gateway-runtime/src/provider_agent.rs` (main) | production-reachable at main | COPY/ADAPT (partial) | Adapt `ProviderAgentProcess`/`run_registered`/`run` as deployment service binary skeleton; exclude `aca_workload.rs` |
@@ -1444,10 +1287,10 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Current source | `packages/d2b-provider-aca/src/lib.rs`: `AcaWorkloadProvider`, 2841 lines production-reachable; `packages/d2b-provider-runtime-azure-container-apps/src/provider.rs`: `AzureContainerAppsRuntimeProvider`, 2796 lines (test-only at v3 baseline) |
 | Reuse action | REPLACE (old) + ADAPT (main types/traits) |
 | Destination | `packages/d2b-provider-runtime-azure-container-apps/src/controller.rs` |
-| Detailed design | Async `Guest` reconcile loop: `describe` → `validateSpec` → `plan` → `reconcile` → `observe` → `finalize`. Adoption before first `RuntimeEnsure`. Operation ledger persisted to Volume inside gateway Guest. Credential lease acquire/revoke per call. Noise KK enrollment via ZoneLink (from gateway Guest to managed ACA sandbox). `providerPhase` and `guestIdentityDigest` in status. **All three Processes run inside the gateway Guest (`spec.config.gatewayExecutionRef`). No Host Process, no Host Credential, no Host Azure HTTP socket.** |
-| Integration | Zone ResourceClient → Provider supervisor ticket → Process launch inside gateway Guest → d2b-bus → deployment service |
+| Detailed design | Async `Guest` reconcile loop: `describe` → `validateSpec` → `plan` → `reconcile` → `observe` → `finalize`. Adoption before first `RuntimeEnsure`. Operation ledger persisted to Volume inside gateway Guest. Credential lease acquire/revoke per call. Noise KK enrollment via ZoneLink (from gateway Guest to managed ACA sandbox). `providerPhase` and `guestIdentityDigest` in status; no raw endpoint/path in any status field. **ProviderDeployment creates both static Processes; ACA controller never instantiates its own Processes and never writes Provider status directly. All Processes run inside the gateway Guest. No Host Process, no Host Credential, no Host Azure HTTP socket. Long-running cloud ops return `progressing`/`requeue-at` immediately; never block watch loop.** |
+| Integration | Zone ResourceClient → ProviderDeployment → Process launch inside gateway Guest → d2b-bus → deployment service |
 | Data migration | Full reset; no v2 provider state compatibility |
-| Validation | Controller conformance suite; adoption/ambiguity tests; deadline/cancellation matrix; redaction coverage; **gateway Guest placement validation: assert no Process has `executionRef: Host/*`**; Process spec field schema tests (`spec.template` not `metadata.template`, canonical `sandbox` fields, `endpoints` `{name,transport,purpose}` only, canonical `readiness`, `mounts` not `volumeAttachments`) |
+| Validation | Controller conformance suite; adoption/ambiguity tests; deadline/cancellation matrix; redaction coverage; **gateway Guest placement validation: assert no Process has `executionRef: Host/*`**; Process spec field schema tests (`spec.template`, canonical `sandbox`/`budget`/`networkUsage`/`endpoints`/`readiness`/`restartPolicy` fields, `mounts` with `required: true`, `providerRef: Provider/system-minijail`); ProviderDeployment creates both Processes (controller never self-spawns); no raw endpoint/path in Guest status |
 | Removal proof | `packages/d2b-provider-aca/` removed only after conformance suite green
 
 ### ADR046-aca-007
@@ -1458,7 +1301,7 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Current source | n/a — new requirement (gateway Guest placement) |
 | Reuse action | NEW |
 | Destination | `nixos-modules/` (gateway Guest declaration, Process template wiring, Credential scope assertion); eval-time validation module |
-| Detailed design | Nix eval-time assertions for: (a) `gatewayExecutionRef` resolves to a `Guest` resource, not `Host/*`; (b) Credential `scope.executionRef` matches `gatewayExecutionRef`; (c) all Process templates emitted for this Provider have `executionRef` equal to `gatewayExecutionRef`; (d) `User/aca-controller-system` and `User/aca-health-worker-system` are declared in the Zone before any Volume referencing them. Gateway Guest Nix example (§15.6) includes `users.users.aca-controller` and `users.users.aca-health-worker` OS account declarations — Nix provisioning is the OS-account authority; system-core only verifies NSS resolution. Assertion error messages name the offending resource and the required `gatewayExecutionRef`. |
+| Detailed design | Nix eval-time assertions for: (a) `gatewayExecutionRef` resolves to a `Guest` resource, not `Host/*`; (b) Credential `scope.executionRef` matches `gatewayExecutionRef`; (c) all Process templates emitted for this Provider have `executionRef` equal to `gatewayExecutionRef`. No `User` resource or `users.users.*` declarations required — component principals are framework-assigned and not OS accounts. Gateway Guest NixOS closure includes only the two ACA component binaries (§15.6). Assertion error messages name the offending resource and the required `gatewayExecutionRef`. |
 | Integration | Nix eval gate; `d2b.zones.*.resources` validation pass; consumer flake usage example |
 | Data migration | None |
 | Validation | Nix eval assertion tests (wrong `executionRef` → assertion fires; correct setup → passes); §15.7 assertion coverage tests |
@@ -1472,8 +1315,8 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Current source | `packages/d2b-gateway-runtime/src/provider_agent.rs` (main) |
 | Reuse action | COPY/ADAPT (partial); exclude `aca_workload.rs` |
 | Destination | `packages/d2b-provider-runtime-azure-container-apps/src/deployment_service.rs` |
-| Detailed design | `ProviderAgentProcess`-shaped binary; bounded dispatch (64 in-flight); bounded audit ring (1024 capacity); shutdown within 5 s; serves `d2b.aca.v3.deployment` service schema |
-| Integration | Controller spawns service via Provider supervisor ticket; d2b-bus routes GuestProvision/Start/Stop/Destroy/Adopt/Inspect/Health methods |
+| Detailed design | `ProviderAgentProcess`-shaped binary; bounded dispatch (64 in-flight); bounded audit ring (1024 capacity); shutdown within 5 s; serves `d2b.aca.v3.deployment` service schema including `GuestHealth` (health probing folded in from former health worker). All ACA API calls go through the injected `AcaControl` port — no ambient network call, no SDK default chain. Long-running ops return `progressing`/`requeue-at` to the caller; no blocking on Azure API completion. |
+| Integration | ProviderDeployment spawns service; d2b-bus routes GuestProvision/Start/Stop/Destroy/Adopt/Inspect/Health methods |
 | Data migration | None |
 | Validation | Service dispatch matrix; RBAC refusal tests; redaction tests; shutdown deadline tests |
 | Removal proof | Old `GuestControlEndpointProvider` dispatch removed per ADR046-aca-001 |
@@ -1485,8 +1328,8 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Dependency/owner | ADR046-aca-001; credential integration owner |
 | Current source | `packages/d2b-provider-runtime-azure-container-apps/src/control.rs` (main): `AcaCredentialLeaseClient`, `AcaCredentialLease`, `AcaCredentialLeaseRequest`, `AcaCredentialPurpose` |
 | Reuse action | RETAIN+ADAPT |
-| Destination | `packages/d2b-provider-runtime-azure-container-apps/src/control.rs` |
-| Detailed design | Adapt `CredentialLease` to v3 Credential resource opaque lease handle. `AcaCredentialPurpose` maps to `allowedOperations` check against `Credential.spec`. Lease expiry capped at call deadline. Cleanup job pattern retained verbatim. |
+| Destination | `packages/d2b-contracts/src/provider_effects/aca.rs` (shared `d2b-contracts` provider-effects module; no new crate; provider crate remains one package) |
+| Detailed design | `AcaCredentialLeaseClient`, `AcaCredentialLease`, `AcaCredentialLeaseRequest`, and `AcaCredentialPurpose` live in the shared `d2b-contracts` provider-effects module. Adapt `CredentialLease` to v3 Credential resource opaque lease handle. `AcaCredentialPurpose` maps to `allowedOperations` check against `Credential.spec`. Lease expiry capped at call deadline. Cleanup job pattern retained verbatim. |
 | Integration | Controller acquires lease per reconcile step via injected `AcaCredentialLeaseClient`; raw token delivered only via Noise KK E2E channel through `d2b.credential.v3.AcquireToken` method |
 | Data migration | None |
 | Validation | Mock credential client tests; lease cleanup timeout tests; token non-exposure assertion |
@@ -1514,11 +1357,11 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Current source | `packages/d2b-provider-runtime-azure-container-apps/src/types.rs` (main): `AcaRuntimeConfig`, `AcaSandboxProfile`, `AcaResourceBinding`, `AcaWorkloadQuery` — test-only at v3 baseline |
 | Reuse action | RETAIN+ADAPT |
 | Destination | `packages/d2b-provider-runtime-azure-container-apps/src/types.rs` |
-| Detailed design | Replace `RealmId`/`WorkloadId` with v3 `Zone`/`Guest` UID types. `AcaResourceBinding` keys the adoption query. Operation ledger persisted in `runtime-azure-container-apps--aca-controller--operation-ledger--aca-gateway` Volume (`spec.providerRef: Provider/volume-local`, `source.executionRef: Guest/<aca-gateway-name>`, `stateSchema.schemaId: io.d2b.runtime-azure-container-apps/aca-controller/operation-ledger`, `persistenceClass: persistent`, `sensitivityClass: private`, canonical `layout`/`views`/`identityMarker` per §7.4). Sandbox state persisted in `runtime-azure-container-apps--aca-controller--sandbox-state--aca-gateway` Volume (same schema model). Health state in `runtime-azure-container-apps--aca-health-worker--health-state--aca-gateway` Volume with dual-view (`report`/`observe`) model. All `mounts` use canonical `{volumeRef, view, mountPath, access, optional}` fields. All Volume `layout` entries use `ownerRef: User/<name>` ResourceRefs; no numeric UID/GID. |
-| Integration | Controller Volumes created at Provider install; migration script validated before Process launch |
-| Data migration | State schema v1.0 initial; `pre-launch-required` migration policy; no legacy Volume data |
-| Validation | Volume round-trip tests; migration no-op test; adoption from persisted binding test; mount canonical-field assertion (`required: true` not `optional: false`, no `volumeAttachments`, no `kind/path/scope` in endpoints); `settings: {}` not `settings.kind: local-path` in Volume source; `accessAcl`/`defaultAcl` presence for health-state cross-user entries using canonical `AclGrant` schema (`principal.ref`/`permissions` string, not `principalRef`/`rights`); sandbox schema presence test |
-| Removal proof | Old in-memory-only operation ledger removed after Volume persistence passes |
+| Detailed design | Replace `RealmId`/`WorkloadId` with v3 `Zone`/`Guest` UID types. `AcaResourceBinding` keys the adoption query. One provider-owned Volume per component: controller holds opaque ACA binding/adoption metadata in `sandbox-state` Volume; deployment service holds empty schema in `service-state` Volume. Each Volume: `providerRef: Provider/volume-local`, `source.executionRef: Guest/<aca-gateway-name>` (guest-local; manifest-frozen; no Host fallback; no `attachments[]`); Guest-local `volume-local` instance reconciles. Layout owners: `User/d2b-aca-controller` and `User/d2b-aca-deployment-service` (Nix-provisioned in gateway Guest; no `ComponentPrincipal` ResourceRef). Both Processes mount their own Volume's `main` view (`required: true`); framework delivers view dirfd. Core `ProviderDeployment` creates/deletes both Volumes (not the ACA controller); `Volume` absent from controller `resourceTypes`; `Provider/volume-local` sole reconciler. Operation/requeue state delegated to core Operation ledger adapter; `operation-ledger` stateNamespace removed. No cross-component Volume sharing. Host never holds cloud binding, admission, PSK, or operation state. |
+| Integration | Core ProviderDeployment creates both Volumes (sandbox-state + service-state; each `providerRef=volume-local`, `source.executionRef=Guest/<aca-gateway-name>`, guest-local, no `attachments[]`) before Processes start; Guest-local Provider/volume-local reconciles; `stateSchemaPhase: current` and Volume `status.ready: true` gate Process launch |
+| Data migration | sandbox-state v1.0 initial; `migrationPolicy: pre-launch-required`; service-state `migrationPolicy: none` (empty payload; no migration worker) |
+| Validation | sandbox-state Volume round-trip (framework-delivered dirfd; `main` view); service-state Volume present with `migrationPolicy: none` and `quotaBytes: 65536`; adoption from persisted binding test; `kind: state`, `persistenceClass: persistent`, nonzero `quotaBytes`, broker-maintained `identityMarker` for both Volumes; `source.executionRef: Guest/<aca-gateway-name>` on each Volume; no `attachments[]` on any Volume; `Volume` absent from controller `resourceTypes`; controller does not create/update/watch Volume resources; `Provider/volume-local` sole reconciler; no ComponentPrincipal ResourceRef; `ProviderDeployment` creates/deletes Volumes; core Operation ledger adapter integration test |
+| Removal proof | Old in-memory-only operation ledger removed after core Operation ledger adapter passes; `operation-ledger` stateNamespace absent from component descriptor |
 
 ### ADR046-aca-006
 
@@ -1540,42 +1383,17 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 
 ### 19.1 Required test layout
 
-Per the Provider crate layout requirement (ADR-046-provider-model-and-packaging §Crate/package boundary):
+The only required file is:
 
 ```
 packages/d2b-provider-runtime-azure-container-apps/
   src/
-    controller.rs
-    deployment_service.rs
-    control.rs
-    types.rs
-    audit.rs
-    metrics.rs
-    lib.rs
-  tests/
-    controller_conformance.rs   # ResourceType/controller conformance via toolkit black-box
-    control_port.rs             # mock AcaControl + AcaCredentialLeaseClient hermetic tests
-    idempotency.rs              # operation ledger TTL, replay, ambiguous outcome
-    adoption.rs                 # find/match/ambiguous/no-match adoption paths
-    credential.rs               # lease acquire/revoke/cleanup/timeout
-    redaction.rs                # Debug impl; no secret bytes in any serialized form
-    schema.rs                   # providerSettings JSON Schema round-trip
-    error_codes.rs              # AcaControlErrorKind → stable code mapping
-    backoff.rs                  # retry-after / exponential backoff timing
-  integration/
-    README.md                   # see §19.3
-    mock_azure/
-      mod.rs                    # in-process mock Azure Container Apps HTTP server
-      scenarios/
-        provision_start_stop.rs
-        adoption_ambiguous.rs
-        rate_limited.rs
-        unavailable.rs
-        credential_expiry.rs
-    provider_system/
-      lifecycle.rs              # full Provider install → Guest reconcile → destroy
-  README.md
+    tests/
+      integration/
+        README.md    # see §19.3
 ```
+
+All other test files (`tests/controller_conformance.rs`, `tests/control_port.rs`, `tests/idempotency.rs`, `tests/adoption.rs`, `tests/credential.rs`, `tests/redaction.rs`, `tests/schema.rs`, `tests/error_codes.rs`, `tests/backoff.rs`, `integration/mock_azure/`, `integration/provider_system/`) are conventional and strongly recommended, but are not individually mandated as a layout requirement.
 
 ### 19.2 Unit test requirements
 
@@ -1584,7 +1402,7 @@ Every test in `tests/` must:
 - compile and run with `cargo test -p d2b-provider-runtime-azure-container-apps` in a standard CI environment without network access, Azure credentials, or running Azure services;
 - use only injected `AcaControl` and `AcaCredentialLeaseClient` mock implementations; no real SDK adapter is linked;
 - be safe to run in parallel (`#[tokio::test]` with no shared mutable global state);
-- not write to any path outside the test's temporary directory (injected via Volume fake);
+- not write to any path outside the test's temporary directory (injected as a fake Volume `main`-view dirfd);
 - pass the `no_secret_bytes_in_any_public_surface` assertion for every public struct's `Debug` output.
 
 ### 19.3 Integration README
@@ -1608,7 +1426,8 @@ The controller must pass the toolkit's black-box conformance suite (`d2b-provide
 - credential lease acquire/revoke around each method;
 - status field redaction (guestIdentityDigest contains no raw sandbox ID string);
 - error code stability under all `AcaControlErrorKind` variants;
-- operation ledger TTL expiry and capacity eviction.
+- operation ledger TTL expiry and capacity eviction (via core Operation ledger adapter);
+- sandbox-state and service-state Volume round-trip: framework-delivered `main`-view dirfd; `User/d2b-aca-{controller,deployment-service}` layout owners; `providerRef: Provider/volume-local`; `source.executionRef: Guest/<aca-gateway-name>` (guest-local); no `attachments[]`; `stateSchemaPhase: current` and Volume `status.ready: true` gate Process launch; `Volume` absent from controller `resourceTypes`; controller does not create/update Volume resources.
 
 ### 19.5 Mocked Azure test suite
 
