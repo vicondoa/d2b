@@ -108,11 +108,16 @@ spec:
     schemaDigest: sha256:<hex>
     migrationPolicy: pre-launch-required
   quotaBytes: 104857600
+  quota:
+    maxBytes: 104857600
+    maxInodes: 4096
+    enforcement: none
   sealingCredentialRef: null
   source:
     executionRef: Host/host-system
     settings:
-      sourcePolicyId: null              # opaque ID from Provider's allowedHostPaths catalog; required for local-path/block-image sources (D082)
+      kind: local-path
+      sourcePolicyId: provider-state-persistent  # opaque source policy; no host path (D082)
   layout:
     - path: state
       type: directory
@@ -157,7 +162,7 @@ mounts:
 | --- | --- |
 | `kind: state` required for all component state Volumes | `component-kind-invalid` |
 | `persistenceClass: persistent` required; `ephemeral`, `cache`, and `config` rejected | `component-persistence-class-forbidden` |
-| `quotaBytes ≥ 4096`; zero rejected; values below 4096 rounded up to 4096 | `component-quota-zero` |
+| `quotaBytes ≥ 4096`; zero or smaller values are rejected; base `quota.maxBytes` equals `quotaBytes` and `quota.maxInodes` is nonzero | `component-quota-too-small` |
 | `host-backed-guest` requires `hostCustodyPermitted: true` in signed descriptor | `placement-host-custody-violation` |
 | Credential, audit, remote-node, or cloud-control schemas require `guest-local` | `guest-local-required` |
 | layout `ownerRef`/`groupRef` must reference a Nix-preprovisioned User principal or bounded system pool; runtime-created principals rejected | `volume-principal-not-preprovisioned` |
@@ -989,7 +994,7 @@ Every `packages/d2b-provider-<base>-<implementation>/` crate created by this or 
 | Detailed design | Add `stateNamespaces: Vec<ComponentStateNamespace>` to the component descriptor (exactly one entry per component; presence is required even for payload-free components); each entry includes `id`, `kind` (always `state`), `schemaId` (nullable for empty-payload), `schemaVersion` (nullable), `schemaDigest` (nullable), `persistenceClass` (must be `persistent`; `ephemeral`/`cache` rejected), `sensitivityClass`, `migrationPolicy`, `quotaBytes` (nonzero; minimum 4096), `sealingRequired`, `placementMode` (`guest-local` or `host-backed-guest` for Guest-targeted; omitted for Host-targeted), `hostCustodyPermitted` (required `true` for `host-backed-guest`; absent/false for `guest-local`), and `views`; null `schemaId`/`schemaVersion`/`schemaDigest` denotes an empty-payload component |
 | Integration | Provider package build emits component descriptors with state namespaces; Provider controller creates Volumes from descriptors at install time |
 | Data migration | Full reset |
-| Validation | Descriptor schema golden vectors; descriptor-Volume consistency property test; empty-schema descriptor round-trip; every-component-has-namespace enforcement (descriptor missing a namespace → build error); `kind != state` → `component-kind-invalid`; `persistenceClass: ephemeral` → `component-persistence-class-forbidden`; `quotaBytes: 0` → `component-quota-zero`; `quotaBytes: 1024` on empty-schema → floor to 4096; Guest-targeted with `placementMode: guest-local` → source.executionRef=Guest; Guest-targeted with `host-backed-guest` + `hostCustodyPermitted: true` → source on Host, Export created; `host-backed-guest` without `hostCustodyPermitted: true` → `placement-host-custody-violation`; credential/audit schema with `host-backed-guest` → `guest-local-required`; `placementMode` change → descriptor version increment enforced |
+| Validation | Descriptor schema golden vectors; descriptor-Volume consistency property test; empty-schema descriptor round-trip; every-component-has-namespace enforcement (descriptor missing a namespace → build error); `kind != state` → `component-kind-invalid`; `persistenceClass: ephemeral` → `component-persistence-class-forbidden`; `quotaBytes: 0` or `1024` → `component-quota-too-small`; base `quota.maxBytes == quotaBytes` and `quota.maxInodes > 0`; Guest-targeted with `placementMode: guest-local` → source.executionRef=Guest; Guest-targeted with `host-backed-guest` + `hostCustodyPermitted: true` → source on Host, Export created; `host-backed-guest` without `hostCustodyPermitted: true` → `placement-host-custody-violation`; credential/audit schema with `host-backed-guest` → `guest-local-required`; `placementMode` change → descriptor version increment enforced |
 | Removal proof | Not applicable (new) |
 
 ### ADR046-pstate-003
