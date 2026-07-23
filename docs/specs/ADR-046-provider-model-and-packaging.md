@@ -23,14 +23,21 @@ Provider/<name>
 Package presence alone is not installation. providerRef resolves only a Ready
 Provider resource in the same Zone.
 
-Provider spec contains:
+Provider ResourceSpec is exactly:
 
-- plain `artifactId` selecting a named Nix artifact-catalog entry;
-- exact package/executable/manifest/config/schema/service digests resolved from
-  that private artifact entry;
+```yaml
+spec:
+  artifactId: <plain bounded ID>   # selects a signed Nix artifact-catalog + manifest entry
+  config: {}                        # root configuration validated against the manifest's signed JSON Schema
+```
+
+No other field is authored in Provider spec. Every other Provider property is
+resolved from the signed manifest/catalog entry the `artifactId` selects, not
+authored or independently duplicated in the resource row:
+
+- exact package/executable/manifest/config/schema/service digests;
 - publisher/signature/trust/conformance/provenance/SBOM identity;
 - support channel and compatibility range;
-- root configuration validated against signed JSON Schema;
 - exported ResourceTypes/schemas;
 - controller component descriptors;
 - service component descriptors;
@@ -41,6 +48,11 @@ Provider spec contains:
 - events/telemetry/state contracts;
 - component placement templates;
 - upgrade/drain/restart policy.
+
+Manifest/package/component/resource/status/generated properties are read-only
+derived data, never authored Provider spec fields. Core ProviderDeployment
+reads this signed manifest/catalog entry and creates the Provider's static
+component graph from it (see `ADR-046-components-processes-and-sandbox`).
 
 Provider status contains:
 
@@ -53,6 +65,12 @@ Provider status contains:
 - state schema/migration health;
 - disabled/quarantined condition;
 - aggregate Provider generation.
+
+Provider status is derived, not self-declared: core computes the aggregate
+Provider status from component/dependency/process health. A Provider
+controller writes status only for the ResourceTypes it owns and for the
+authorized children/status fields its descriptor grants; it never authors its
+own aggregate Provider-resource status.
 
 ## Crate/package boundary
 
@@ -106,10 +124,37 @@ Component types:
 | --- | --- |
 | controller | Owns one or more ResourceTypes and async reconcile loop |
 | service | Serves typed runtime/internal ComponentSession methods; no ResourceType ownership |
-| worker | Narrow Process/EphemeralProcess with no controller/bus/dependency/CLI authority |
+| worker | Narrow Process/EphemeralProcess with no ResourceClient, d2b-bus/dependency-portal, Credential, CLI, broker, or child-spawn authority; all resources/FDs/config are inherited via LaunchTicket |
 
 Every component is a separate Process except the fixed system-core and
-system-minijail bootstrap controllers.
+system-minijail bootstrap controllers. Core ProviderDeployment creates every
+component's static Process (per the signed manifest's component descriptors)
+and, before launching that Process, its own private state Volume as part of
+the Provider's **ProviderStateSet** (`ADR-046-provider-state`: the logical,
+query-time grouping of every Volume resource owned by `Provider/<name>` — not
+a ResourceType or a stored artifact of its own). A stateless component still
+receives its own Volume, declared with an empty `stateSchema`; there is no
+separate "compartment" concept distinct from an ordinary Volume, and no
+component goes without one. A Provider controller never bootstraps its own
+Process; it may only create authorized dynamic children (further
+Process/EphemeralProcess or other primitive/vendor resources) once it is
+itself running. Creating a Volume normally requires a `Provider/volume-local`
+controller instance to be running on that same execution target (Host,
+Guest, or user-domain local-storage owner); the sole exception is each
+target's own closed, non-resource local bootstrap storage mechanism, which
+provisions only the empty state Volume for that target's first
+`Provider/volume-local` controller instance and, where they exist on that
+same target, `Provider/system-core`'s and `Provider/system-minijail`'s, and
+which that target's volume-local instance adopts and reconciles as ordinary
+Volumes immediately after its own startup. This local mechanism never crosses
+an execution-target boundary — a Guest's bootstrap Volume is always
+provisioned from Guest-local primitives only, never a leaked parent-Host
+dirfd, which is what lets a Guest bootstrap its own primitive controllers
+independently — see "Bootstrap state-realization exception" in
+`ADR-046-components-processes-and-sandbox` for the full contract. See
+`ADR-046-components-processes-and-sandbox` for the full static-deployment and
+component-state-Volume contract, and `ADR-046-resources-volume` for the
+canonical Volume schema every state Volume uses.
 
 Descriptor fields include:
 
@@ -166,15 +211,24 @@ Implements Process and EphemeralProcess for systemd-capable Hosts/Guests:
 - systemd wait/reap ownership;
 - no per-Provider static PID1 template units.
 
+Neither system-systemd's controller nor the process it launches calls
+systemd's D-Bus/socket API or `pidfd_open` directly; it validates the
+ExecutionSpec/SandboxSpec and calls the `ProcessLaunchEffectPort`
+(ProviderSupervisor), which is the sole caller of the systemd effect owner.
+
 ### Provider/system-minijail
 
 Implements the same ResourceTypes:
 
 - compiled inline Process sandbox;
-- broker/Host/Guest supervisor effect;
 - clone3(CLONE_PIDFD);
 - d2b wait/reap ownership;
 - cgroup/namespace/FD/adoption validation.
+
+system-minijail's controller never imports or calls the broker directly. It
+validates the ExecutionSpec/SandboxSpec and calls the `ProcessLaunchEffectPort`
+(ProviderSupervisor) with the resource UID and compiled sandbox digest;
+ProviderSupervisor is the sole caller of the broker's `clone3`/spawn effect.
 
 Future Process Providers pass the same conformance without schema changes.
 
@@ -358,7 +412,7 @@ independently shared Azure Network is required.
 | `audio-pipewire` | Provider-specific audio/session types | PipeWire policy/session, Host/user components, vhost-user-sound Processes |
 | `clipboard-wayland` | Provider-specific clipboard types | Selection/bridge/transfer/presentation and Host/user/Guest Processes |
 | `notification-desktop` | Provider-specific notification types | Observe/project/action/ack/presentation Processes |
-| `shell-terminal` | ShellSession | Persistent terminal session/supervisor, open/attach/detach/kill and named terminal streams |
+| `shell-terminal` | `shell-terminal.d2b.io.ShellSession` | Persistent terminal session/supervisor, open/attach/detach/kill and named terminal streams |
 
 One-shot exec is EphemeralProcess, not an exec Provider.
 
@@ -372,11 +426,18 @@ One-shot exec is EphemeralProcess, not an exec Provider.
 
 ### Transport/observability/activation
 
+Transport Providers are carriage services only; they never own ZoneLink. The
+core ZoneLink handler alone reads/writes/finalizes ZoneLink and owns
+Noise/session/reconnect/route/idempotency/intent state, calling typed
+`OpenTransport`/`CloseTransport`/`ObserveTransport` on the installed Transport
+Provider. A Transport Provider returns only an opaque `OwnedTransport`/
+byte-stream handle and observations; it holds no ZoneLink state itself.
+
 | Provider | Implements | Description/processes |
 | --- | --- | --- |
-| `transport-unix` | ZoneLink/ComponentSession transport | Local Unix/socketpair endpoints, peer evidence, FD-capable local channels |
-| `transport-vsock` | ZoneLink/ComponentSession transport | Host/Guest vsock channels, expected CID and no FD transfer |
-| `transport-azure-relay` | ZoneLink/ComponentSession transport | Remote Azure Relay reachability; relay identity is carriage only |
+| `transport-unix` | Transport carriage (`OpenTransport`/`CloseTransport`/`ObserveTransport`) | Local Unix/socketpair endpoints, peer evidence, FD-capable local channels |
+| `transport-vsock` | Transport carriage (`OpenTransport`/`CloseTransport`/`ObserveTransport`) | Host/Guest vsock channels, expected CID and no FD transfer |
+| `transport-azure-relay` | Transport carriage (`OpenTransport`/`CloseTransport`/`ObserveTransport`) | Remote Azure Relay reachability; relay identity is carriage only |
 | `observability-otel` | Provider-specific telemetry endpoint/export/status types | OTEL endpoint/export/collector integration and health |
 | `activation-nixos` | Provider-specific activation types | NixOS generation plan/apply/inspect/adopt/rollback |
 

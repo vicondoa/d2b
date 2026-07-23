@@ -53,7 +53,10 @@ Standard execution/shared:
 | User | Named identity, UID/session observations, ACL/process subject |
 | Credential | Opaque rotating credential/lease lifecycle |
 
-Provider-specific semantic ResourceTypes may extend this set.
+Provider-specific semantic ResourceTypes may extend this set, always qualified
+`<provider-name>.d2b.io.<Type>` (for example `display-wayland.d2b.io.WaylandSession`).
+Standard types above are always unqualified; a Provider-specific type name is
+never bare/unqualified.
 
 ## Folded fields
 
@@ -76,11 +79,12 @@ Inline:
 Inline:
 
 - sandbox namespaces/seccomp/capabilities/LSM;
-- CPU/memory/pids/fds/I/O/thread/concurrency budgets;
-- command template and sealed config/env;
+- CPU/memory/pids/fds/I/O/thread/concurrency budgets (canonical nested `budget`);
+- plain `template` ID and sealed `configRef`/`credentialRefs` (never a
+  command/binary/argv field);
 - Volume mounts by volumeRef/view/mountPath/access;
-- Network/Device refs and usage settings;
-- ports/endpoints;
+- `networkUsage`/`deviceUsage` (never `network`/`devices`);
+- `endpoints`;
 - bus/telemetry bindings;
 - readiness/health/deadlines;
 - user-domain portals.
@@ -170,6 +174,7 @@ userRef: null  # required/inherited for user
 processClass: controller # controller | service | worker
 template: controller-main
 configRef: Volume/example-config
+credentialRefs: []
 mounts:
   - volumeRef: Volume/example-state
     view: controller
@@ -177,8 +182,8 @@ mounts:
     access: read-write
 sandbox: { ... }
 budget: { ... }
-network: { ... }
-devices: []
+networkUsage: null
+deviceUsage: []
 endpoints: []
 telemetry: { ... }
 ```
@@ -189,7 +194,10 @@ bounded ID, not a ResourceRef. No free-form executable, raw host path, numeric
 UID/GID, raw seccomp program,
 ambient capability list, caller-selected broker op, credential bytes, or
 arbitrary socket address is accepted. Package/template/provider schemas resolve
-those implementation details.
+those implementation details. These are the exact frozen common field names
+(see `ADR-046-resources-host-guest-process-user`); they are never renamed to
+`network`, `devices`, a command/binary/argv field, or an endpoint kind/path/
+service field.
 
 ## Process
 
@@ -233,11 +241,14 @@ finalizers/incident hold, and writes cleanupEligibleAt.
 
 ### system-minijail
 
-- broker/local supervisor resolves compiled sandbox/resources;
+- Process controller calls the `ProcessLaunchEffectPort` (ProviderSupervisor)
+  with the resource UID and compiled sandbox/resource digests; the effect
+  adapter resolves the plan and the broker performs the spawn;
 - clone3(CLONE_PIDFD);
 - d2b owns wait/reap;
 - pidfd/cgroup/process start identity;
-- no direct Provider broker access.
+- no direct Provider broker access — the Provider process never imports or
+  calls the broker itself.
 
 Both implement identical ResourceTypes and status/error conformance.
 
@@ -262,11 +273,12 @@ represented by a Process under a Host or Guest.
 Volume spec preserves fine-grained current storage policy:
 
 ```yaml
-providerRef: Provider/volume-virtiofs
+providerRef: Provider/volume-local
 source:
   executionRef: Host/host-system
   settings:
-    hostPath: <authorized by Provider policy>
+    kind: local-path
+    sourcePolicyId: <opaque ID bound to a Provider-declared allowlist policy entry>
 layout:
   - path: state
     type: directory
@@ -293,9 +305,21 @@ attachments:
     access: read-write
 ```
 
-All layout paths are relative to the anchored Volume root. Host path is accepted
-only by an explicitly selected/configured Volume Provider and its allowlisted
-root policy; it never appears in public status/audit.
+`source.settings` never carries a raw host path in the authored spec.
+`sourcePolicyId` is an opaque bounded string ID; the Provider and its
+controller see the ID and semantic settings only. Raw path resolution is
+private Nix/bundle/effect authority (see `ADR-046-resources-volume`). The
+`transport: virtiofs` attachment is served by the separate `volume-virtiofs`
+Provider, which owns only the attachment lifecycle/status and its owned
+virtiofsd Process — never the Volume's own `providerRef`/layout/ownership
+fields.
+
+All layout paths are relative to the anchored Volume root. A raw host path is
+never an authored spec field; the `source.settings.sourcePolicyId` on the
+`local-path`/`block-image` source kinds resolves, only inside the Volume
+Provider's private Nix/bundle/effect authority, to the actual host path
+against that Provider's allowlisted root policy. It never appears in public
+status/audit, and it never reaches the Provider process as a literal path.
 
 Virtiofs attachment controller may create:
 

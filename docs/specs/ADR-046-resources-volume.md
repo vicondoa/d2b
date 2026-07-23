@@ -89,7 +89,7 @@ spec:
     executionRef: Host/host-system   # where the backing storage lives
     settings:
       kind: local-path               # see SourceKind below
-      hostPath: <authorized-by-provider-policy>
+      sourcePolicyId: <opaque ID bound to a volume-local allowlist policy entry>
   kind: state                        # volume semantic kind (see below)
   layout:
     - path: ""                       # root of the volume
@@ -140,7 +140,7 @@ status: {}
 | `source.executionRef` | ResourceRef | Yes | — | Must resolve to a Host or Guest in the same Zone |
 | `source.settings` | object | Yes | — | Validated against Provider-specific source schema |
 | `source.settings.kind` | SourceKind enum | Yes | — | `local-path`, `block-image`, `tmpfs` |
-| `source.settings.hostPath` | string | conditional | — | Accepted only by volume-local with allowlisted root policy; never exposed in public status or audit |
+| `source.settings.sourcePolicyId` | string | conditional | — | Opaque bounded ID for `local-path`/`block-image`; references an entry in volume-local's private allowlisted root policy. Never a raw host path; never exposed in public status or audit. |
 | `kind` | VolumeKind enum | Yes | — | `durable`, `ephemeral`, `state`, `tmp`, `cache` |
 | `layout` | LayoutEntry[] | Yes | `[]` | Anchored relative paths; must be non-overlapping; max 1024 entries |
 | `views` | map<ViewName, ViewSpec> | Yes | `{}` | ViewName matches `^[a-z][a-z0-9-]*$`; max 64 Views |
@@ -372,8 +372,9 @@ mounts:
 | `access` | `read-only` or `read-write` | No | `read-only` | Must be compatible with View rights |
 | `optional` | bool | No | `false` | If true, absent/Degraded Volume does not prevent Process start |
 
-The Process Provider (system-systemd or system-minijail) resolves the Volume root
-at launch time through a broker FD delivered in the LaunchTicket. The raw host
+The Process Provider (system-systemd or system-minijail) never resolves the
+Volume root itself. ProviderSupervisor resolves it via `VolumeSourceEffectPort`
+at launch time and delivers a bound FD in the LaunchTicket. The raw host
 path never appears in Process ResourceSpec, status, or audit.
 
 ## Volume source
@@ -382,19 +383,24 @@ path never appears in Process ResourceSpec, status, or audit.
 
 | Kind | Backing | Notes |
 | --- | --- | --- |
-| `local-path` | Host directory rooted at an authorized `hostPath` prefix | Only accepted by volume-local with policy-allowlisted root |
-| `block-image` | Raw or qcow2 disk-image file under the Volume's `hostPath` root | volume-local manages the image file; Guest Provider attaches as `virtio-blk`; `kind: ephemeral` or `kind: durable`; `quota.maxBytes` required |
+| `local-path` | Host directory rooted at an allowlisted policy entry, referenced by opaque `sourcePolicyId` | Only accepted by volume-local with a policy-allowlisted root |
+| `block-image` | Raw or qcow2 disk-image file under the allowlisted policy entry's root, referenced by opaque `sourcePolicyId` | volume-local manages the image file; Guest Provider attaches as `virtio-blk`; `kind: ephemeral` or `kind: durable`; `quota.maxBytes` required |
 | `tmpfs` | Memory-backed tmpfs mount; no persistent backing | `quota.maxBytes` and `quota.maxInodes` required (charged to Host/Guest memory budget); `kind` must be `ephemeral` or `tmp`; cleanup unmounts the tmpfs |
 
-`source.settings.hostPath` is a required field for `local-path` and is
-validated against the Provider's allowlisted root set. It is accepted only
-from authenticated controller/broker processes; it never appears in public
-status, audit records, or CLI output. The allowlisted roots in the v3.0
-initial policy are:
+`source.settings.sourcePolicyId` is a required field for `local-path` and
+`block-image`. It is an opaque bounded string ID (never a raw path) that
+references one entry in volume-local's own private `config.allowedHostPaths`
+policy catalog — each catalog entry carries its own `id` plus the actual root
+path. The Provider process and its controller see only the ID; path
+resolution happens exclusively inside volume-local's private Nix/bundle/effect
+authority, and the resolved path is handed to the caller only as an opaque FD
+via `VolumeSourceEffectPort` at attach/launch time. It never appears in
+public status, audit records, or CLI output. The allowlisted roots in the
+v3.0 initial policy are:
 
-- `$stateDir` (default `/var/lib/d2b`) — durable and state Volumes
-- `/run/d2b` — ephemeral and tmp Volumes
-- `/var/cache/d2b` — cache Volumes
+- `id: state-root`, root `$stateDir` (default `/var/lib/d2b`) — durable and state Volumes
+- `id: ephemeral-root`, root `/run/d2b` — ephemeral and tmp Volumes
+- `id: cache-root`, root `/var/cache/d2b` — cache Volumes
 
 Operator root config binds `stateDir` at Nix compile time.
 
@@ -465,28 +471,35 @@ spec:
   processClass: worker
   template: virtiofsd-worker   # resolves through Provider/volume-virtiofs registered as the Volume controller
   sandbox:
+    namespaceClasses: [mount, user]
+    capabilityClasses: []
+    startRoot: false
+    seccompClass: w1-virtiofsd
+    readOnlyRoot: true
     userNamespace:
-      hostUidForZero: <User/vol-work-state-vfd stable UID>
-      hostGidForZero: <User/vol-work-state-vfd stable UID>
-    capabilities: []
-    requiresStartRoot: false
-    seccompPolicyRef: w1-virtiofsd
-    readOnlyPaths:
-      - /nix/store
-    writablePaths:
-      - <volume-runtime-dir>
-    cgroupSubtree: <zone-cgroup>/executions/<eid>/system/providers/<pid>/components/<cid>/workers/<wid>
+      mappingClass: process-principal-root   # maps in-NS UID/GID 0 to User/vol-work-state-vfd
   mounts: []
 ```
 
+Every field above is one of the exact common Process/SandboxSpec fields (see
+`ADR-046-resources-host-guest-process-user`); there is no Provider-private
+`hostUidForZero`/`hostGidForZero`, `requiresStartRoot`, `seccompPolicyRef`,
+`readOnlyPaths`/`writablePaths`, or `cgroupSubtree` field. `cgroupSubtree` is
+never authored: cgroup placement is derived by ProviderSupervisor/the broker
+from the declared Process, exactly as for any other Process.
+
 The virtiofsd worker has:
 
-- **Zero host capabilities** (`capabilities: []`). All filesystem capabilities
+- **Zero host capabilities** (`capabilityClasses: []`). All filesystem capabilities
   are scoped inside the user namespace (ADR 0021).
-- **Broker-pre-established user namespace**: The broker uses `clone3(CLONE_NEWUSER)`
-  to write a single-entry UID/GID map (`in-NS 0 → stable principal UID`) before
-  virtiofsd's first instruction runs. The mapping principal is
-  `User/vol-<volume-name>-vfd` — a dedicated per-Volume User resource.
+- **ProviderSupervisor-mediated, broker-pre-established user namespace**: the
+  `system-minijail` Provider controller never calls the broker itself; it
+  resolves `userNamespace.mappingClass: process-principal-root` through
+  `ProcessLaunchEffectPort`, and ProviderSupervisor dispatches
+  `clone3(CLONE_NEWUSER)` to the broker to write a single-entry UID/GID map
+  (`in-NS 0 → stable principal UID`) before virtiofsd's first instruction
+  runs. The mapping principal is `User/vol-<volume-name>-vfd` — a dedicated
+  per-Volume User resource.
 - **`--sandbox=chroot`**: permitted because `CAP_SYS_ADMIN` is available inside
   the user namespace.
 - **`--inode-file-handles=never`**: `open_by_handle_at(2)` is not needed for
@@ -499,10 +512,18 @@ The virtiofsd worker has:
 - **`--cache=<mode>`** from `settings.cache`, default `auto`.
 - **`--thread-pool-size=<N>`** from resolved `settings.threadPoolSize` or
   the target Guest's vcpu count.
+- The worker's own runtime/control state (export socket, control files) is a
+  private runtime path under the Zone/Guest runtime root directory (not a
+  Volume — see `path:vm-run:<vm>` in the current-code migration table),
+  computed and handed to the worker only through its LaunchTicket. It is
+  never an authored `mounts` entry and never a raw writable sandbox path.
+- Read access to `/nix/store` for the virtiofsd binary's own execution is
+  inherent to standard sandbox namespace inheritance; it is never an authored
+  sandbox path list entry.
 
-virtiofsd is NOT started as root (`requiresStartRoot: false`). It never holds
+virtiofsd is NOT started as root (`startRoot: false`). It never holds
 ambient host capabilities. Any change to the virtiofsd sandbox profile that
-introduces host capabilities, `requiresStartRoot: true`, or `--sandbox=namespace`
+introduces host capabilities, `startRoot: true`, or `--sandbox=namespace`
 violates ADR 0021. This invariant is tested by `tests/minijail-validator-virtiofsd.sh`
 and enforced by the `tests/unit/nix/cases/broker-caps.nix` policy gate.
 
@@ -673,8 +694,11 @@ Volume reconciliation follows the common reconciliation loop
 1. On Volume spec create/update, volume-local receives `spec-generation-changed`.
 2. Controller reads current Volume spec and evaluates all layout entries.
 3. For each entry, the controller resolves `ownerRef`/`groupRef` User UID/GID.
-4. The broker performs the layout operation (create/repair/cleanup/adopt) via a
-   bounded broker operation with a path-free audit record.
+4. The controller calls `VolumeLayoutEffectPort` with the entry's declared
+   policy; ProviderSupervisor dispatches the layout operation
+   (create/repair/cleanup/adopt) to the broker via a bounded broker operation
+   with a path-free audit record. The controller itself never imports or
+   calls the broker.
 5. Controller writes status batch with expected revision; conflict → re-read/retry.
 6. On attachment create, volume-virtiofs receives `owned-resource-changed` from
    the Volume.
@@ -757,17 +781,22 @@ rules:
 ```
 
 No subject may write spec for a Volume they do not own. Status may be written only
-by the current controller lease for the declared `providerRef`. The `hostPath`
-field in `source.settings` is rejected from any subject without the
-`volume-local/host-path-write` permission claim. This permission is granted only
-to Provider/volume-local's controller process.
+by the current controller lease for the declared `providerRef`. The
+`sourcePolicyId` field in `source.settings` is an opaque ID; resolving it to an
+actual host path is rejected for any caller without the
+`volume-local/source-policy-resolve` permission claim, which authorizes only a
+`VolumeSourceEffectPort` call. This permission is granted only to
+ProviderSupervisor acting on behalf of `Provider/volume-local`'s controller
+process — never to the controller process performing the resolution itself.
 
 ## Security invariants
 
-1. **No hostPath in public surface**: `source.settings.hostPath` never appears
-   in resource list/watch responses, status, audit records, error messages,
-   CLI output, or telemetry. The controller reads it once from spec and resolves
-   it to a validated FD; subsequent broker operations use the FD, not the path.
+1. **No raw host path in public surface**: `source.settings` never carries a
+   raw host path field; it carries only the opaque `sourcePolicyId`, which
+   never appears in resource list/watch responses, status, audit records,
+   error messages, CLI output, or telemetry. The controller reads the ID once
+   from spec and calls `VolumeSourceEffectPort` to resolve it to a validated
+   FD; subsequent broker operations use the FD, never a path.
 2. **Anchored relative paths**: all layout entry paths are validated as
    relative, non-absolute, with no `..` component, no drive letter, and no null
    byte. The validator rejects Unicode homoglyphs of path separator characters.
@@ -782,9 +811,9 @@ to Provider/volume-local's controller process.
    the entry is explicitly declared with `recursive: true` and `repairPolicy`
    is `exact-owner` or `fail-closed`.
 6. **ADR 0021 virtiofsd invariant**: every virtiofsd worker process must declare
-   `capabilities: []` and `requiresStartRoot: false`. A policy test rejects any
+   `capabilityClasses: []` and `startRoot: false`. A policy test rejects any
    virtiofsd Profile that includes a non-empty capability set or a true
-   requiresStartRoot. `--sandbox=namespace` is never emitted.
+   `startRoot`. `--sandbox=namespace` is never emitted.
 7. **TPM never re-provisioned**: after the swtpm provisioning marker exists,
    a missing or replaced swtpm directory is a hard failure. The controller never
    silently creates a new empty TPM directory.
@@ -803,7 +832,7 @@ Volume audit records include:
 - authorization outcome
 - operation/correlation ID
 
-Excluded from audit: `source.settings.hostPath`, entry paths, ACL grant
+Excluded from audit: `source.settings.sourcePolicyId`, entry paths, ACL grant
 values, layout entry content, virtiofsd socket paths, secret-adjacent entry
 paths, guest mount paths, process data, terminal bytes, credential material.
 
@@ -829,6 +858,18 @@ Broker path-free audit ops (current: `PrepareSwtpmDir`):
 > controllers/services/workers/binaries, placement, dependencies/RBAC, security/state/telemetry,
 > build/test/integration commands, and future standalone-repo usage.
 
+Both `volume-local` and `volume-virtiofs` receive their own framework-created,
+per-component state Volume, one per declared `stateNamespaces` entry, as part
+of their `ProviderStateSet` on deployment (see `ADR-046-provider-state`;
+`ADR-046-components-processes-and-sandbox`, "Static Provider deployment and
+component state Volumes"); the "State" rows below describe the
+ResourceType-owned data each Provider keeps in its own view of that Volume.
+`ProviderStateSet` is a query-time grouping of these ordinary Volumes, not a
+separate stored artifact; each state Volume's view mount is local and private
+to the owning component — it is never a resource row, resource-store field,
+or duplicated ledger of the resource store's own authority over
+layout/attachment status.
+
 ### Provider/volume-local
 
 | Field | Value |
@@ -837,20 +878,47 @@ Broker path-free audit ops (current: `PrepareSwtpmDir`):
 | ResourceTypes | Volume (layout + views; no attachment transport) |
 | Source kinds | `local-path`, `block-image`, `tmpfs` |
 | Controller component | `volume-local-controller`; Process under Host/system-core |
-| Broker ops | `ProvisionLayoutEntry`, `RepairLayoutEntry`, `CleanupLayoutEntry`, `StoreSyncComplete`, `PrepareSwtpmDir` |
+| Broker ops (dispatched via `VolumeLayoutEffectPort`/ProviderSupervisor, never called by the Provider process itself) | `ProvisionLayoutEntry`, `RepairLayoutEntry`, `CleanupLayoutEntry`, `StoreSyncComplete`, `PrepareSwtpmDir` |
 | State | Volume's own layout root; per-Volume provisioning marker for `state` kind |
-| Permissions | `volume-local/host-path-write`; resolves `openat2` FD via broker; never ambient path access |
+| Permissions | `volume-local/source-policy-resolve` (authorizes only a `VolumeSourceEffectPort` FD resolution call); never ambient path access; never a broker import in the Provider process |
 | Finalizers | `volume-local/layout` |
 | Supported Host capabilities | Local NixOS Host; bare-metal; ACA if filesystem is accessible |
 | Supported Guest capabilities | Not applicable (volume-local does not attach to Guests) |
 | Required crate layout | `src/` (controller, broker op adapters, layout engine, store_view.rs, swtpm_volume.rs, colocated unit tests); `tests/` (hermetic: layout provision/repair/cleanup/adopt, store-view invariants, ACL reconciliation, swtpm fail-closed, quota enforcement, block-image lifecycle, tmpfs mount/unmount, symlink target validation, foreignChildPolicy preserve/fail); `integration/` (container fixtures: Host path access, store-view FS boundary enforcement, quota FS fixture, swtpm marker, block-image virtio-blk attachment); `README.md` (identity, allowedHostPaths config schema, owned ResourceTypes, broker op catalogue, placement, deps/RBAC, security invariants, state/telemetry, build/test/integration commands) |
 
+volume-local is the exception target of the "Bootstrap state-realization
+exception" (`ADR-046-components-processes-and-sandbox`): each execution
+target (Host, Guest, or user-domain local-storage owner) that runs its own
+`volume-local-controller` instance has its own closed, non-resource **local**
+bootstrap storage mechanism, which provisions only the empty
+(empty-`stateSchema`) state Volume for that target's first volume-local
+controller instance and, only where they exist on that same target,
+`Provider/system-core`'s and `Provider/system-minijail`'s state Volumes —
+before that instance's controller Process exists to reconcile Volumes
+itself. On its first startup, each target's volume-local-controller instance
+adopts its own target-local set of pre-provisioned Volume rows exactly as it
+would adopt any existing Volume row after a restart — no special-cased adopt
+path, no re-creation, no placeholder-to-real conversion step. This local
+bootstrap mechanism never crosses an execution-target boundary: a Guest's
+mechanism provisions the Guest-local instance's bootstrap Volume from
+Guest-local primitives only and never receives, forwards, or leaks a parent
+Host dirfd or other Host-local resource handle to do so, which is what lets
+a Guest bootstrap its own primitive controllers (including a Guest-local
+volume-local instance) independently of its Host. No other Provider's state
+Volume is ever provisioned outside the normal Core ProviderDeployment →
+volume-local create/reconcile path, on any target.
+
 volume-local controller reconcile flow:
 
-1. Resolve `source.settings.hostPath` via broker allowlist check → `OwnedFd`.
+1. Resolve `source.settings.sourcePolicyId` by calling `VolumeSourceEffectPort`;
+   ProviderSupervisor validates it against the private allowlist policy and
+   returns an `OwnedFd`. The controller never opens the host path itself and
+   never sees the raw path.
 2. For each layout entry (topological order, parent before child):
    a. Resolve `ownerRef`/`groupRef` → UID/GID from User resource.
-   b. Emit broker `ProvisionLayoutEntry` or `RepairLayoutEntry` based on `createPolicy`/`repairPolicy`.
+   b. Call `VolumeLayoutEffectPort.provision`/`.repair`; ProviderSupervisor
+      dispatches the corresponding broker `ProvisionLayoutEntry` or
+      `RepairLayoutEntry` op based on `createPolicy`/`repairPolicy`.
    c. Apply and continuously reconcile ACLs if `accessAcl` or `defaultAcl` is non-empty; enforce `foreignChildPolicy` (`preserve` or `fail`) for directory children not covered by declared ACL entries.
 3. Check store-view specific invariants (marker, sync.lock) if `kind: durable`
    and `source.settings.kind: local-path` with storeView mode.
@@ -867,9 +935,9 @@ volume-local controller reconcile flow:
 | Worker binary | `virtiofsd` (upstream Rust virtiofsd from `pkgs/virtiofsd/`) |
 | Worker Process template | `virtiofsd-worker` |
 | Owned Process naming | `vol-<volume-name>-virtiofsd-<guest-name>` |
-| Broker ops | `SpawnRunner` (virtiofsd), `VirtiofsdLaunch`, `ProvideFdToWorker` |
+| Broker ops (dispatched via `ProcessLaunchEffectPort`/`VolumeSourceEffectPort`/ProviderSupervisor, never called by the Provider process itself) | `SpawnRunner` (virtiofsd), `VirtiofsdLaunch`, `ProvideFdToWorker` |
 | State | Per-attachment virtiofsd export socket (boot-scoped; path is a private implementation detail of volume-virtiofs; never exposed in spec/status/API) |
-| Permissions | `volume-virtiofs/spawn-virtiofsd`; receives source Volume FD from volume-local |
+| Permissions | `volume-virtiofs/spawn-virtiofsd` (authorizes only a `ProcessLaunchEffectPort` call); receives source Volume FD from volume-local via ProviderSupervisor, never a direct cross-Provider or broker call |
 | Finalizers | `volume-virtiofs/attachments` |
 | Required crate layout | `src/` (controller, virtiofsd argv generation, attachment lifecycle, socket readiness, ADR 0021 user-NS pre-establishment, colocated unit tests); `tests/` (hermetic: argv golden/pinned vectors, ADR 0021 invariant rejection, attachment create/ready/delete lifecycle, single-writer enforcement, shared-write capability gate, read-only flag per access mode, multi-attachment isolation, socket path never-in-status invariant); `integration/` (container fixtures: virtiofsd launch, guest-mount readiness, finalizer drain under Guest restart); `README.md` (identity, virtiofsd argv options, owned ResourceTypes, ADR 0021 invariant summary, socket path privacy contract, placement, deps/RBAC, security invariants, state/telemetry, build/test/integration commands) |
 
@@ -1031,10 +1099,13 @@ d2b.zones."dev".resources."volume-local" = {
     artifactId = "volume-local-provider";   # must exist in d2b.artifacts with type = "provider"
     config = {
       # Root config validated against volume-local's signed root-config.schema.json.
-      # hostPath roots are the ONLY paths the controller may ever open.
+      # Each entry's "id" is the opaque value a Volume references via
+      # source.settings.sourcePolicyId. Raw prefixes are resolved only inside
+      # ProviderSupervisor's private VolumeSourceEffectPort adapter state; the
+      # Provider controller itself never opens these paths directly.
       allowedHostPaths = [
-        { prefix = config.d2b.site.stateDir;  volumeKinds = [ "durable" "state" "cache" ]; }
-        { prefix = "/run/d2b";                volumeKinds = [ "ephemeral" "tmp" ]; }
+        { id = "state-root";     prefix = config.d2b.site.stateDir;  volumeKinds = [ "durable" "state" "cache" ]; }
+        { id = "ephemeral-root"; prefix = "/run/d2b";                volumeKinds = [ "ephemeral" "tmp" ]; }
       ];
       # No secrets in Provider root config; any credential must use Credential refs.
     };
@@ -1061,8 +1132,11 @@ d2b.zones."dev".resources."work-state" = {
       executionRef = "Host/host-system";
       settings = {
         kind = "local-path";
-        # hostPath is injected by the resource compiler from d2b.site.stateDir;
-        # never written by the operator directly; never appears in public status.
+        sourcePolicyId = "state-root";
+        # sourcePolicyId references the matching "id" in volume-local's
+        # allowedHostPaths config; the operator authors only the opaque ID.
+        # The raw prefix is resolved solely inside the private effect-adapter
+        # state and never appears in public status.
       };
     };
     kind = "state";
@@ -1116,7 +1190,7 @@ above renders as:
     "providerRef": "Provider/volume-local",
     "source": {
       "executionRef": "Host/host-system",
-      "settings": { "kind": "local-path" }
+      "settings": { "kind": "local-path", "sourcePolicyId": "state-root" }
     },
     "kind": "state",
     "layout": [
@@ -1170,7 +1244,10 @@ above renders as:
 ```
 
 Rights are sorted lexicographically. All keys are sorted. Defaults are always
-present. `hostPath` is injected after Nix eval and is never in the emitted JSON.
+present. `sourcePolicyId` is a plain opaque bounded string in the emitted
+JSON, exactly like any other spec field; there is no raw `hostPath` field,
+injected or otherwise — a raw host path never exists anywhere in the Volume
+ResourceSpec, envelope JSON, or emitted bundle.
 
 ### Nix eval/build validation
 
@@ -1194,7 +1271,12 @@ Validation steps in order:
 12. **tmpfs quota**: `source.settings.kind == "tmpfs"` requires `quota.maxBytes != null` and `quota.maxInodes != null`.
 13. **Attachment provider-settings schema**: virtiofs attachment `settings` is validated against volume-virtiofs's signed `attachment.schema.json`; `virtio-blk` attachment settings against volume-local's `block-attachment.schema.json`. Both schemas are read from the private artifact catalog entries for the respective Provider `artifactId`s; no store paths in the spec.
 14. **Credential refs**: no secret values (raw keys, passwords, tokens) appear in Volume spec. If a future layout entry requires a secret (e.g., an encrypted-at-rest key), it must use `credentialRef: Credential/<name>`.
-15. **Conflict detection**: two Volumes may not declare overlapping `source.settings.hostPath` values. The Nix resource compiler checks the set of all host paths across Volumes in the Zone.
+15. **Conflict detection**: two `local-path`/`block-image` Volumes bound to the
+    same `sourcePolicyId` root may not declare overlapping resolved subtrees.
+    The Nix resource compiler checks the set of all resolved host paths across
+    Volumes in the Zone — using the private `allowedHostPaths` catalog entry
+    each `sourcePolicyId` resolves to, never a spec-authored path — and aborts
+    the build on overlap.
 
 All validation errors are fatal and prevent `nix build`. They produce a structured JSON error block written to stderr, never to a path.
 
@@ -1251,7 +1333,10 @@ d2b.zones."dev".resources."store-view-work-vm" = {
     source = {
       executionRef = "Host/host-system";
       settings.kind = "local-path";
-      # hostPath = "<storeStateDir>/work-vm/store-view" — injected by compiler
+      settings.sourcePolicyId = "state-root";
+      # Resolves via ProviderSupervisor's private VolumeSourceEffectPort
+      # adapter state to "<storeStateDir>/work-vm/store-view"; the raw path
+      # is never written to this spec by the compiler or the operator.
     };
     kind = "durable";
     layout = [
@@ -1329,8 +1414,11 @@ When a Volume is absent from the new Nix generation but its resource row carries
    layout cleanup per each entry's `cleanupPolicy`. Entries with `cleanupPolicy:
    never` are preserved. Entries with `cleanupPolicy: boot` or `cleanupPolicy:
    process-exit-with-proof` are removed.
-5. When all finalizers drain, the Volume emits a `Deleted` event and the row
-   and index are removed atomically.
+5. When all finalizers drain, the resource-store transaction writes an
+   event-only `Deleted` revision and removes the row and index atomically.
+   The audit subsystem appends the deletion audit record afterward, using a
+   dedup/exactly-once recovery key so a retried recovery never produces a
+   duplicate audit entry.
 6. Prior generation retention is governed by the Zone's `priorGenerationCount`
    (default 3, range 1..16). No time-based TTL applies.
 
@@ -1374,10 +1462,14 @@ generation:
 - Resources added by the aborted new generation receive Delete.
 - Reactivation is non-blocking and follows the same activation flow.
 
-When the retained count is exceeded the oldest generation is pruned from the
-store with a tamper-evident audit record. Resources that did not complete deletion
-within the retained window have their finalizers forcibly cleared by the store
-lifecycle handler.
+When the retained count is exceeded the oldest generation's bundle record is
+pruned from the store with a tamper-evident audit record. Pruning removes only
+that historical bundle record. It never force-clears an undrained resource
+finalizer: a resource that has not completed deletion remains in its current
+non-terminal phase (Pending or Degraded) indefinitely, exactly as it would
+outside a generation-retention prune, until its owning Provider controller
+drains the outstanding effects/children and clears the finalizer through the
+normal deletion flow.
 
 ### Status, errors, and audit for cleanup
 
@@ -1473,7 +1565,7 @@ audit record.
 | Current source | `packages/d2b-host/src/virtiofsd_argv.rs` (`VirtiofsdArgvInput`, `generate_virtiofsd_argv`), `nixos-modules/minijail-profiles.nix` (virtiofsdProfiles; principals `d2b-<vm>-runner`, `d2b-<vm>-gctlfs`), `nixos-modules/processes-json.nix` (virtiofsdRunner shape; `roStoreSharedDir` sentinel), `packages/d2b-core/src/processes.rs` (`ProcessRole::Virtiofsd`, `VmProcessDag`; the virtiofsd dag node is a `ProcessRole::Virtiofsd` entry in a WorkloadId-keyed `VmProcessDag`), `packages/d2b-priv-broker/src/ops/spawn_runner.rs` (`SpawnRunnerPlan` for virtiofsd; current `SpawnRunnerPlanInput` carries `adr_carve_out` for virtiofsd swtpm path), `packages/d2b-priv-broker/src/sys.rs` (clone3/user-NS pre-establishment), ADR 0021 |
 | Reuse action | extract and adapt |
 | Destination | `packages/d2b-provider-volume-virtiofs/src/` (controller, virtiofsd_argv.rs); `packages/d2b-provider-volume-virtiofs/tests/` (hermetic argv/lifecycle/ADR-0021 tests); `packages/d2b-provider-volume-virtiofs/integration/` (virtiofsd launch and guest-mount fixtures); `packages/d2b-provider-volume-virtiofs/README.md` |
-| Detailed design | volume-virtiofs controller: attachment lifecycle, owned virtiofsd Process create/update/delete, argv generation (reuse current 14 tests), ADR 0021 invariant (capabilities: [], requiresStartRoot: false, sandbox: chroot, user-NS), per-attachment export socket readiness check (`unix-socket-exists` readiness kind; current v2 socket path: `/run/d2b/vms/<vm>/<vm>-virtiofs-<tag>.sock`; v3: stable hash-derived private path under Zone runtime directory, never exposed in spec/status/API), guest-mount status observation, finalizer drain |
+| Detailed design | volume-virtiofs controller: attachment lifecycle, owned virtiofsd Process create/update/delete, argv generation (reuse current 14 tests), ADR 0021 invariant (`capabilityClasses: []`, `startRoot: false`, `sandbox: chroot`, user-NS via `userNamespace.mappingClass: process-principal-root`), per-attachment export socket readiness check (`unix-socket-exists` readiness kind; current v2 socket path: `/run/d2b/vms/<vm>/<vm>-virtiofs-<tag>.sock`; v3: stable hash-derived private path under Zone runtime directory, never exposed in spec/status/API), guest-mount status observation, finalizer drain |
 | Integration | volume-virtiofs registered under Host; virtiofsd Process resource owned by Volume; guest-control health integration for mount readiness |
 | Data migration | Current `processes-json.nix` virtiofsd `VmProcessDag` nodes (keyed by `WorkloadId` = current VM name, role `ProcessRole::Virtiofsd`) replaced by virtiofsd Process resources owned by Volume |
 | Validation | Migrated `virtiofsd_argv` unit tests (14 tests); `tests/tools/gen-migration-ledger.sh` virtiofsd-argv-shape gate adapted; `minijail-validator-virtiofsd` gate adapted to Process sandbox spec; new: attachment lifecycle (create/ready/delete), ADR 0021 invariant rejection test, multi-attachment isolation, readOnly flag per access mode, store-view shared-dir = store-view/live (never /nix/store) |

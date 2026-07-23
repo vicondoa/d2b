@@ -120,7 +120,7 @@ classes to exact implementation.
 | `readOnlyRoot` | bool | `true` | — | If true, rootfs is mounted read-only. |
 | `umask` | string? | `"0022"` | octal 3–4 digits | File-creation mask installed before exec. |
 | `oomScoreAdj` | int | `0` | -1000..1000 | OOM score adjustment. |
-| `userNamespace` | UserNamespaceSpec? | `null` | — | If set, broker pre-establishes a single-entry user namespace before exec. Required for virtiofsd-class processes per ADR 0021. |
+| `userNamespace` | UserNamespaceSpec? | `null` | — | If set, the process's effect adapter pre-establishes a single-entry user namespace before exec. Required for virtiofsd-class processes per ADR 0021. |
 
 `NamespaceClass` enumeration:
 
@@ -158,8 +158,19 @@ a descriptor update):
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `hostUid` | u32 | required | Host UID mapped to in-namespace UID 0 |
-| `hostGid` | u32 | required | Host GID mapped to in-namespace GID 0 |
+| `mappingClass` | `MappingClass` | required | Semantic UID/GID mapping class. No numeric host UID/GID appears in the public spec. |
+
+`MappingClass` enumeration (bounded; frozen):
+
+| Value | Semantics |
+| --- | --- |
+| `process-principal-root` | Maps in-namespace UID/GID 0 to the host UID/GID of the Process's resolved principal — a stable `User/<name>` resource identified by the Process's owning template/ownerRef. This is the ADR 0021 virtiofsd-class mapped-root pattern. |
+
+Core resolves the exact host UID/GID from the named principal and writes
+`uid_map`/`gid_map` only into the private LaunchTicket/effect-adapter state at
+launch time; the numeric values never appear in the public ResourceSpec,
+status, audit, or API surface. The `user` NamespaceClass (CLONE_NEWUSER) is
+unaffected by this change.
 
 ### ExecutionSpec
 
@@ -751,29 +762,34 @@ ever public Process status or audit payload.
 These rules are invariant for all Process Providers. Violation is a
 `runtime-security-violation` audit event and the process is quarantined.
 
-1. Every launched process has a local verified pidfd acquired by the
-   controller or ProviderSupervisor immediately after exec/launch.
-2. Pidfd is acquired only after verifying the process's stable identity:
-   executable hash, template generation, cgroup/scope placement, and
-   provider-specific identity attributes. Any mismatch before pidfd open
-   quarantines rather than adopts.
+1. Every launched process has a local verified pidfd acquired by
+   ProviderSupervisor immediately after exec/launch and handed back to the
+   controller as an opaque identity/lease handle.
+2. Pidfd is acquired only after ProviderSupervisor verifies the process's
+   stable identity: executable hash, template generation, cgroup/scope
+   placement, and provider-specific identity attributes. Any mismatch before
+   pidfd open quarantines rather than adopts.
 3. Pidfd is never serialized to disk, never written to the resource store,
-   never sent over d2b-bus, and never exposed in public status or API.
+   never sent over d2b-bus, and never exposed in public status or API. No
+   Process Provider controller ever holds or imports a raw pidfd; it holds
+   only the opaque handle ProviderSupervisor returns.
 4. Pidfd is closed and reopened (with full re-verification) after every
-   controller restart. No pidfd is valid across a controller process restart.
-5. On adoption after controller restart, the controller locates the candidate
+   ProviderSupervisor restart. No pidfd is valid across a restart.
+5. On adoption after restart, ProviderSupervisor locates the candidate
    process through the cgroup leaf, verifies all stable identity fields
-   against the stored processIdentityDigest, and only then opens a new pidfd.
+   against the stored processIdentityDigest, and only then opens a new pidfd
+   and reports the outcome to the controller.
    Ambiguous identity → `adoptionState: quarantined`.
-6. For system-minijail: `clone3(CLONE_PIDFD)` is preferred; the pidfd is
-   obtained atomically at spawn. d2b performs wait/reap.
-7. For system-systemd: the controller reads the unit's MainPID after
+6. For system-minijail: `clone3(CLONE_PIDFD)` is preferred; ProviderSupervisor
+   dispatches this to the broker, and the pidfd is obtained atomically at
+   spawn. The broker performs wait/reap.
+7. For system-systemd: ProviderSupervisor reads the unit's MainPID after
    InvocationID + cgroup + start-time verification and calls `pidfd_open(2)`
    on that PID. systemd performs wait/reap.
 8. The PID contained in the pidfd is used internally only for `pidfd_send_signal`
    and process group management. It is never written to any log, status, audit,
    or metric with a resource-name label.
-9. Process group management: the controller maintains one PGID entry for
+9. Process group management: ProviderSupervisor maintains one PGID entry for
    SIGKILL of descendants when pidfd signaling is insufficient. It is
    ephemeral process-local state, not a resource.
 
@@ -785,11 +801,15 @@ A process launched under `Provider/system-systemd` must satisfy all of:
 - Unit type must be `Type=exec` (or equivalent non-daemonizing `Type=simple`
   where `Type=exec` is not available). Daemonizing (`Type=forking`) is
   forbidden.
-- The controller binds InvocationID, cgroup path, MainPID, and ExecMainStartTimestamp
-  atomically from the unit's active state before opening pidfd.
+- ProviderSupervisor binds InvocationID, cgroup path, MainPID, and
+  ExecMainStartTimestamp atomically from the unit's active state before
+  opening pidfd, on behalf of the `system-systemd` Provider controller. The
+  Provider controller itself never opens a systemd D-Bus connection or a
+  pidfd directly.
 - pidfd is opened from `MainPID` only after all four binding checks pass.
-- systemd performs wait/reap. The controller does NOT call `waitpid`. It
-  monitors process exit via the unit's active state transitions.
+- systemd performs wait/reap. ProviderSupervisor does NOT call `waitpid`. It
+  monitors process exit via the unit's active state transitions and reports
+  transitions to the controller.
 - No per-Provider static PID1 template unit may be used. All units are
   transient; they exist only while the Process resource is non-terminal.
 - For user domain: a transient user scope is used via the fixed user supervisor.
@@ -797,7 +817,7 @@ A process launched under `Provider/system-systemd` must satisfy all of:
   before creating the scope.
 - Unit name alone is never treated as identity. Identity requires InvocationID +
   cgroup + MainPID + start-time tuple.
-- On adoption after restart: the controller rediscovers the live unit by
+- On adoption after restart: ProviderSupervisor rediscovers the live unit by
   cgroup path, re-checks InvocationID, cgroup, MainPID, start-time against
   stored processIdentityDigest. Mismatch → quarantine.
 
@@ -805,10 +825,14 @@ A process launched under `Provider/system-systemd` must satisfy all of:
 
 A process launched under `Provider/system-minijail` must satisfy all of:
 
-- Spawned by the privileged broker via `clone3(CLONE_PIDFD | CLONE_INTO_CGROUP)`,
-  placing the process directly into its declared cgroup leaf.
+- The `system-minijail` Provider controller never imports or calls the broker
+  itself. It resolves a `ProcessLaunchEffectPort.spawn` call with the opaque
+  LaunchTicket; ProviderSupervisor dispatches that call to the privileged
+  broker via `clone3(CLONE_PIDFD | CLONE_INTO_CGROUP)`, placing the process
+  directly into its declared cgroup leaf.
 - The process is born in its declared cgroup before any instruction executes.
-- d2b performs wait/reap via the pidfd obtained from `clone3`.
+- The broker performs wait/reap via the pidfd obtained from `clone3`;
+  ProviderSupervisor relays exit/adoption state back to the controller.
 - The SandboxSpec's `namespaceClasses`, `capabilityClasses`, `seccompClass`,
   and `userNamespace` are compiled by the broker from the trusted bundle
   into a minijail/seccomp/namespace plan. The compiled plan digest is stored
@@ -817,12 +841,13 @@ A process launched under `Provider/system-minijail` must satisfy all of:
   compiled sandbox plan digest, and cgroup placement before exec.
 - No environment variable, mount, or path from the caller resource payload
   reaches exec without passing through the trusted bundle compilation step.
-- For user namespace processes (virtiofsd class): broker pre-establishes the
-  user namespace with `clone3(CLONE_NEWUSER)` + pipe sync + uid_map/gid_map
-  writes before the process's first instruction. `UserNamespaceSpec.hostUid`
-  and `hostGid` map to in-namespace UID/GID 0.
-- On adoption after restart: the controller locates the process by cgroup leaf
-  and verifies cgroup/PID/start-time/executable identity against
+- For user namespace processes (virtiofsd class): the broker pre-establishes
+  the user namespace with `clone3(CLONE_NEWUSER)` + pipe sync + uid_map/gid_map
+  writes before the process's first instruction. `UserNamespaceSpec.mappingClass:
+  process-principal-root` resolves, only inside this private effect-adapter
+  state, to the host UID/GID mapped to in-namespace UID/GID 0.
+- On adoption after restart: ProviderSupervisor locates the process by cgroup
+  leaf and verifies cgroup/PID/start-time/executable identity against
   processIdentityDigest. Ambiguity → quarantine, never broad kill.
 
 ### Fast path contract (D030)
