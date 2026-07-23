@@ -116,7 +116,7 @@ let
         plan.forbiddenEdits)
     paths;
   violations = builtins.filter
-    (path: !(builtins.elem path ownedFiles))
+    (path: path != "CHANGELOG.md" && !(builtins.elem path ownedFiles))
     paths;
 in
 {

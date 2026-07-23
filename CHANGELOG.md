@@ -12,6 +12,8 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Allowed every declared W8 component to carry its mandatory changelog entry
+  without granting any additional source, contract, or generated-file access.
 - Allowed W8 component branches to use only the exact W8 integration branch
   as parent authority and granted the exact shared contract/state/session
   paths assigned by the parent W8 component plan. Component-level ownership

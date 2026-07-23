@@ -45,6 +45,7 @@ let
   stateLockAuthority = evaluate manifestReadyPlan
     "adr0045-w8-integration-state-lock-authority-contract"
     [
+      "CHANGELOG.md"
       "packages/Cargo.lock"
       "packages/d2b-core/src/storage_lifecycle.rs"
       "packages/d2b-core/src/sync.rs"
