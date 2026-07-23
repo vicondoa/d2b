@@ -802,13 +802,13 @@ Current source: `packages/d2b-core/src/processes.rs` — `ProcessesJson`,
 ```nix
 d2b.zones.dev.resources.wayland-proxy = {
   type = "Process";
+  metadata.ownerRef = "Provider/display-wayland";
   spec = {
     providerRef  = "Provider/system-systemd";   # replaces ProcessRole + minijail profile selection
     executionRef = "Host/host-system";          # replaces per-VM DAG node host/VM assignment
     domain       = "user";
     userRef      = "User/alice";
     processClass = "service";
-    packageRef   = "Provider/display-wayland";  # replaces binaryPath in ProcessNode
     template     = "wayland-proxy-host";        # replaces ProcessRole for template dispatch
     configRef    = "Volume/wayland-proxy-config";
     mounts = [
@@ -856,12 +856,12 @@ Current source: `ProcessRole::StoreVirtiofsPreflight`, `SwtpmPreStartFlush`,
 ```nix
 d2b.zones.dev.resources.store-sync-dev-vm = {
   type = "EphemeralProcess";
+  metadata.ownerRef = "Volume/dev-vm-store-farm";
   spec = {
     providerRef   = "Provider/system-minijail";
     executionRef  = "Host/host-system";
     domain        = "system";
     processClass  = "worker";
-    packageRef    = "Provider/volume-virtiofs";
     template      = "store-sync";
     configRef     = "Volume/store-sync-config";
     successfulTtl = "1h";    # default; explicit for clarity

@@ -583,7 +583,10 @@ Equivalent to `d2b get Host/<name>`.
 
 Equivalent to `d2b list Host`.
 
-**Current v3 source:** `cmd_list`/`cmd_status` read `ListResponse { vms: Vec<ListEntry> }` and `StatusResponse { entries: Vec<VmStatus> }` from `packages/d2b-contracts/src/public_wire.rs:2152,2158`. Each `ListEntry.vm: String` is a `WorkloadId` (old terminology); `ListEntry.lifecycle.state: VmLifecycleState` (old: `Stopped/Starting/Booted/Running/Stopping/Restarting/Failed/Unknown`) maps to target `Host` phase. `Host` ResourceType is new — there is no current separate host-listing command. Evidence class: `implemented-and-reachable` for the list/status daemon paths; `ADR-only` for `Host` as a distinct ResourceType.
+**Current v3 source:** no current command lists physical/local Host contexts.
+`cmd_list`/`cmd_status` list VM workloads and therefore inform the target
+`Guest` command shape, not Host phase semantics. `Host` as a distinct
+ResourceType and `d2b host list` are ADR-only.
 
 ### `d2b host status <name>`
 
