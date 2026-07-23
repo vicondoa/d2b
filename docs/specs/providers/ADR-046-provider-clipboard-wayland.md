@@ -1,0 +1,1556 @@
+# ADR 0046 Provider dossier: clipboard-wayland
+
+| Field | Value |
+| --- | --- |
+| Spec ID | `ADR-046-provider-clipboard-wayland` |
+| Version | 2 |
+| Parent | [ADR 0046](../../adr/0046-d2b-3-provider-control-plane.md) |
+| Status | Proposed |
+| Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
+| Normative | Yes |
+| Owners | `Provider/clipboard-wayland` controller |
+| Depends on | `ADR-046-provider-model-and-packaging`, `ADR-046-componentsession-and-bus`, `ADR-046-resources-host-guest-process-user`, `ADR-046-provider-state`, `ADR-046-nix-configuration`, `ADR-046-telemetry-audit-and-support`, `ADR-046-resource-reconciliation`, `ADR-046-core-controllers`, [ADR 0042](../../adr/0042-d2b-clipboard-authority-and-picker-split.md) |
+| Supersedes | `nixos-modules/clipboard.nix` (v3 migration), ADR-046-provider-clipboard-wayland v1 |
+
+---
+
+## Purpose
+
+`Provider/clipboard-wayland` delivers the split-trust clipboard bridge for
+NixOS desktop microVM hosts running Wayland-only compositors. It exposes
+controlled, policy-audited clipboard transfer between the host compositor
+and one or more Guest VMs while upholding the invariants established in
+ADR 0042:
+
+- clipboard bytes never appear in resources, status, audit, or logs;
+- picker UI runs as an isolated EphemeralProcess without clipboard FDs;
+- FD transfer uses SCM_RIGHTS over ComponentSession-authenticated transport only;
+- all compositor integration flows through the mandatory `Provider/display-wayland`
+  typed dependency;
+- no direct compositor socket (WAYLAND_DISPLAY, NIRI_SOCKET) connections from
+  clipboard-wayland components;
+- no shared filesystem bridge, no per-Guest Unix socket groups or ACLs.
+
+This dossier is normative for the clipboard-wayland crate, Nix module,
+ResourceType schema, ComponentSession services, RBAC, lifecycle, audit
+format, and test requirements.
+
+---
+
+## Scope
+
+- Host component: `clipd-host` user-domain service Process
+- Host component: `clipboard-controller` system-domain controller Process
+- Guest component: none (Guest clipboard access is mediated through
+  `Provider/display-wayland`'s wayland-proxy, which connects to clipd-host
+  via the `d2b.clipboard.bridge.v3` service)
+- Typed dependency: `Provider/display-wayland` (alias: `display`)
+
+Out of scope:
+
+- DND drag-and-drop (no DataDeviceManager protocol)
+- primary X11 selection (no primary selection protocol)
+- cross-Zone clipboard (default-deny; requires explicit future ADR)
+- clipboard history persistence (in-memory only)
+- Wayland protocol client implementation (delegated to display-wayland)
+
+---
+
+## Architecture overview
+
+```
+                   ┌─────────────────────────────────────────────┐
+                   │         Provider/clipboard-wayland           │
+                   │                                             │
+                   │  Process/clipboard-controller               │
+                   │  (system-minijail, system domain)           │
+                   │  - owns ResourceType/clipboard-wayland-*    │
+                   │  - serves d2b.clipboard.picker-coord.v3     │
+                   │  - creates EphemeralProcess/picker-<id>     │
+                   │              │  (bus: picker coord)         │
+                   │              ▼                              │
+                   │  Process/clipd-host                         │
+                   │  (system-systemd, user domain)              │
+                   │  - serves d2b.clipboard.bridge.v3           │
+                   │  - serves d2b.clipboard.v3 (management)     │
+                   │  - consumes d2b.display.host-clipboard.v3   │
+                   └────────────┬──────────────────────┬────────┘
+                                │ enrolled KK          │ enrolled KK
+                   d2b.clipboard.bridge.v3   d2b.display.host-clipboard.v3
+                                │                      │
+                   ┌────────────▼──────┐   ┌───────────▼────────┐
+                   │ Provider/          │   │ Provider/           │
+                   │ display-wayland    │   │ display-wayland     │
+                   │ (wayland-proxy)    │   │ (compositor svc)    │
+                   └───────────────────┘   └────────────────────┘
+```
+
+Key structural rules:
+
+1. **Core creates both Processes.** The `Provider lifecycle` handler in
+   `Provider/system-core` creates `Process/clipboard-controller` and
+   `Process/clipd-host` from the signed component templates in the
+   clipboard-wayland descriptor. The controller does not create itself or
+   the service Process.
+
+2. **Controller creates only operation-scoped EphemeralProcesses.**
+   `Process/clipboard-controller` creates `EphemeralProcess/picker-<id>` per
+   paste request via the resource API. It owns no other child resources.
+
+3. **No shared filesystem IPC.** All inter-component communication uses
+   ComponentSession over private local transport with enrolled KK Noise
+   authentication. There are no bridge directories, per-Guest socket paths,
+   or SO_PEERCRED peer config in sealed configuration.
+
+4. **Core derives Provider status.** The core controller aggregates exact
+   child Process/EphemeralProcess statuses into `Provider/clipboard-wayland`
+   status. The clipboard-wayland controller does not write Provider status.
+
+5. **Core delivers Guest lifecycle messages.** The orchestrator sends
+   authenticated `GuestStopped`, `GuestLocked`, `GuestDestroyed` messages
+   directly to the clipboard controller via ComponentSession. The controller
+   does not watch `Guest/*` resources broadly.
+
+---
+
+## Provider resource spec
+
+### Operator-authored Nix form
+
+```nix
+d2b.zones.dev.resources.clipboard-wayland = {
+  type = "Provider";
+  spec = {
+    artifactId = "clipboard-wayland";   # registered in d2b.artifacts catalog
+    config = {
+      # Required: execution placement
+      hostExecutionRef  = "Host/host-system";
+      hostUserRef       = "User/alice";
+
+      # Optional: typed dependency on display-wayland.
+      # null = host-only mode (no VM clipboard bridge; dependencyStatus.display = Absent)
+      displayWaylandRef = "Provider/display-wayland";
+
+      # Optional: signed picker EphemeralProcess template override.
+      # null = use the default picker bundled with clipboard-wayland.
+      pickerArtifactId  = null;
+
+      # Policy flags
+      policy = {
+        allowHostCapture      = true;   # host compositor → clipboard history
+        allowGuestCapture     = true;   # VM selection → clipboard history
+        requirePickerForPaste = true;   # interactive picker before guest paste
+        suppressEcho          = true;   # loop suppression (default true)
+        crossZone.enable      = false;  # deny cross-Zone clipboard (default)
+      };
+
+      # Capability bounds
+      caps = {
+        maxHistoryEntries   = 20;       # LRU bound; [1, 200]
+        maxItemBytes        = 8388608;  # 8 MiB; [4096, 67108864]
+        maxTotalBytes       = 67108864; # 64 MiB total; ≥ maxItemBytes
+        maxConcurrentFds    = 32;       # active SCM_RIGHTS FDs in flight; [1, 256]
+        maxGuestRatePerMin  = 60;       # materialization requests per Guest per minute
+      };
+
+      # Timing
+      ttl = {
+        pickerTimeoutSeconds  = 20;     # [5, 120]
+        fdWriteTimeoutSeconds = 30;     # [5, 120]
+        hostEntrySeconds      = 3600;   # clipboard history TTL for host entries
+        guestEntrySeconds     = 3600;   # clipboard history TTL for guest entries
+      };
+    };
+  };
+};
+```
+
+### YAML canonical form
+
+```yaml
+apiVersion: resources.d2b.io/v3
+type: Provider
+metadata:
+  name: clipboard-wayland
+  zone: dev
+  ownerRef: null      # root config-owned; core configuration publication handler owns it
+spec:
+  artifactId: clipboard-wayland
+  config:
+    hostExecutionRef: Host/host-system
+    hostUserRef: User/alice
+    displayWaylandRef: Provider/display-wayland   # null for host-only mode
+    pickerArtifactId: null
+    policy:
+      allowHostCapture: true
+      allowGuestCapture: true
+      requirePickerForPaste: true
+      suppressEcho: true
+      crossZone:
+        enable: false
+    caps:
+      maxHistoryEntries: 20
+      maxItemBytes: 8388608
+      maxTotalBytes: 67108864
+      maxConcurrentFds: 32
+      maxGuestRatePerMin: 60
+    ttl:
+      pickerTimeoutSeconds: 20
+      fdWriteTimeoutSeconds: 30
+      hostEntrySeconds: 3600
+      guestEntrySeconds: 3600
+```
+
+### Nix notes
+
+- `spec.config` mirrors the signed Provider component JSON Schema projection.
+  There are no `spec.settings`, `spec.componentPlacements`, or `spec.status`
+  fields in the Nix authoring form.
+- `d2b.artifacts.clipboard-wayland` must be registered in the Zone artifact
+  catalog before this resource is declared. The `artifactId` is a plain
+  bounded ID, not a ResourceRef.
+- `hostExecutionRef` and `hostUserRef` carry placement intent; framework
+  derives Process `executionRef`/`userRef` from these fields during
+  ProviderDeployment.
+- `displayWaylandRef` must be a Ready `Provider/display-wayland` instance in
+  the same Zone when non-null. Framework resolves the typed `display`
+  dependency alias from this value.
+- Ref validation rejects forward references to non-existent resources at
+  config-publication time.
+
+---
+
+## Provider typed dependency
+
+The clipboard-wayland manifest declares one dependency alias:
+
+```text
+alias: display
+type: Provider
+serviceContract: d2b.display.host-clipboard.v3
+optional: true
+```
+
+Zone config binds `display` to the `displayWaylandRef` value from
+`spec.config`. When `displayWaylandRef` is null the dependency is absent; the
+framework does not fail the Provider but sets `dependencyStatus.display =
+Absent` in derived Provider status.
+
+When display-wayland is present and Ready, the framework sets up an enrolled
+KK ComponentSession transport from `Process/clipd-host` (consumer) to the
+`d2b.display.host-clipboard.v3` endpoint on display-wayland. The transport
+uses Noise_KK_25519_ChaChaPoly_SHA256 with both static public keys registered
+in the Zone identity registry before handshake. Neither component receives a
+global route table.
+
+---
+
+## Process resources
+
+### Process/clipboard-controller
+
+Core ProviderDeployment creates this Process from the signed
+`clipboard-controller` component template.
+
+```yaml
+apiVersion: resources.d2b.io/v3
+type: Process
+metadata:
+  name: clipboard-controller
+  zone: dev
+  ownerRef: Provider/clipboard-wayland
+spec:
+  providerRef: Provider/system-minijail
+  executionRef: <spec.config.hostExecutionRef>
+  domain: system
+  userRef: null
+  processClass: controller
+  template: clipboard-controller
+  configRef: null
+  credentialRefs: []
+  mounts: []
+  sandbox:
+    namespaceClasses: [mount, ipc, uts, network]
+    capabilityClasses: []
+    seccompClass: strict
+    noNewPrivileges: true
+    startRoot: false
+    readOnlyRoot: true
+    environmentClass: minimal
+  budget:
+    cpu:
+      request: "50m"
+      limit: "500m"
+    memory:
+      request: "32Mi"
+      limit: "64Mi"
+    pids:
+      limit: 64
+    fds:
+      limit: 256
+  networkUsage: null
+  deviceUsage: []
+  endpoints:
+    - name: picker-coord
+      transport: unix
+      purpose: picker-session-coordination
+  telemetry:
+    metricsEnabled: true
+    tracingEnabled: true
+    logLevel: info
+    sensitiveLabels: false
+  desiredLifecycle: running
+  restartPolicy:
+    class: on-failure
+    backoffBase: "1s"
+    backoffMax: "60s"
+    backoffMultiplier: 2.0
+    maxRestarts: null
+    resetAfter: "300s"
+  readiness:
+    initialDelay: "0s"
+    timeout: "30s"
+    failureThreshold: 3
+    successThreshold: 1
+    class: provider-defined
+  healthCheck:
+    enabled: true
+    interval: "60s"
+    timeout: "5s"
+    failureThreshold: 3
+    class: provider-defined
+  adoptionPolicy: adopt-on-restart
+  drainTimeout: "30s"
+```
+
+The clipboard-controller:
+
+- serves the internal `d2b.clipboard.picker-coord.v3` service on the `picker-coord` endpoint;
+- creates `EphemeralProcess/picker-<id>` resources via the resource API per paste
+  request that requires interactive confirmation;
+- receives `GuestStopped`, `GuestLocked`, `GuestDestroyed`, `GuestSuspended`
+  lifecycle messages from core orchestrator via ComponentSession and forwards
+  corresponding `PurgeZone`/`SuspendZone` instructions to `clipd-host` over
+  the `d2b.clipboard.picker-coord.v3` service;
+- does not write Provider status;
+- does not own, export, or reconcile any Volume resource; `Provider/volume-local`
+  is the sole Volume reconciler; the two persistent state Volumes are created by
+  core ProviderDeployment from the signed component descriptor's stateNamespace
+  declarations, before this Process starts.
+
+### Process/clipd-host
+
+Core ProviderDeployment creates this Process from the signed
+`clipd-host` component template.
+
+```yaml
+apiVersion: resources.d2b.io/v3
+type: Process
+metadata:
+  name: clipd-host
+  zone: dev
+  ownerRef: Provider/clipboard-wayland
+spec:
+  providerRef: Provider/system-systemd
+  executionRef: <spec.config.hostExecutionRef>
+  domain: user
+  userRef: <spec.config.hostUserRef>
+  processClass: service
+  template: clipd-host
+  configRef: null
+  credentialRefs: []
+  mounts: []
+  sandbox:
+    namespaceClasses: []                  # user-domain; inherits user namespace
+    capabilityClasses: []
+    seccompClass: strict
+    noNewPrivileges: true
+    startRoot: false
+    readOnlyRoot: true
+    environmentClass: provider-defined    # system-systemd user scope provides XDG_RUNTIME_DIR
+  budget:
+    cpu:
+      request: "100m"
+      limit: "1000m"
+    memory:
+      request: "64Mi"
+      limit: "256Mi"
+    pids:
+      limit: 128
+    fds:
+      limit: 1024
+  networkUsage: null
+  deviceUsage: []
+  endpoints:
+    - name: bridge
+      transport: unix
+      purpose: clipboard-bridge-wayland-proxy
+    - name: management
+      transport: unix
+      purpose: clipboard-management-api
+  telemetry:
+    metricsEnabled: true
+    tracingEnabled: true
+    logLevel: info
+    sensitiveLabels: false
+  desiredLifecycle: running
+  restartPolicy:
+    class: on-failure
+    backoffBase: "2s"
+    backoffMax: "120s"
+    backoffMultiplier: 2.0
+    maxRestarts: null
+    resetAfter: "300s"
+  readiness:
+    initialDelay: "1s"
+    timeout: "30s"
+    failureThreshold: 3
+    successThreshold: 1
+    class: provider-defined
+  healthCheck:
+    enabled: true
+    interval: "30s"
+    timeout: "5s"
+    failureThreshold: 3
+    class: provider-defined
+  adoptionPolicy: adopt-on-restart
+  drainTimeout: "30s"
+```
+
+`clipd-host`:
+
+- serves `d2b.clipboard.bridge.v3` on the `bridge` endpoint (consumed by
+  display-wayland's wayland-proxy);
+- serves `d2b.clipboard.v3` management API on the `management` endpoint
+  (consumed by authorized CLI/operator sessions);
+- opens one enrolled KK ComponentSession to display-wayland's
+  `d2b.display.host-clipboard.v3` service to receive host selection events,
+  focus attribution data, and to publish selections back to the host compositor;
+- opens one enrolled KK ComponentSession to the clipboard-controller's
+  `d2b.clipboard.picker-coord.v3` endpoint for picker session dispatch and
+  result delivery;
+- does not connect to WAYLAND_DISPLAY or NIRI_SOCKET directly;
+- does not own ResourceTypes;
+- holds clipboard history in bounded process memory only (never in any Volume).
+
+---
+
+## EphemeralProcess/picker-session
+
+`Process/clipboard-controller` creates one `EphemeralProcess/picker-<uuid>`
+per paste request that requires interactive user confirmation.
+
+```yaml
+apiVersion: resources.d2b.io/v3
+type: EphemeralProcess
+metadata:
+  name: picker-3f7a9c12
+  zone: dev
+  ownerRef: Process/clipboard-controller   # controller-owned, not Provider-owned
+spec:
+  providerRef: Provider/system-systemd
+  executionRef: <spec.config.hostExecutionRef>
+  domain: user
+  userRef: <spec.config.hostUserRef>
+  processClass: worker
+  template: picker-session
+  configRef: null                # metadata arrives via named stream from controller
+  credentialRefs: []
+  mounts: []
+  sandbox:
+    namespaceClasses: []
+    capabilityClasses: []
+    seccompClass: strict
+    noNewPrivileges: true
+    startRoot: false
+    readOnlyRoot: true
+    environmentClass: minimal    # WAYLAND_SOCKET FD pre-opened by ProviderSupervisor (FD number only)
+  budget:
+    cpu:
+      request: "50m"
+      limit: "500m"
+    memory:
+      request: "16Mi"
+      limit: "64Mi"
+    pids:
+      limit: 32
+    fds:
+      limit: 64
+  networkUsage: null
+  deviceUsage: []
+  endpoints: []
+  telemetry:
+    metricsEnabled: false        # worker; no per-picker metrics stream
+    tracingEnabled: true
+    logLevel: warn
+    sensitiveLabels: false
+  startDeadline: "10s"
+  runtimeDeadline: "120s"        # picker must complete within 2 min
+  successfulTtl: "1h"
+  failedTtl: "24h"
+  incidentHold: false
+```
+
+### Picker invariants
+
+- `processClass` is always `worker`; a controller or service EphemeralProcess
+  is rejected at spec admission.
+- Picker receives **no clipboard FDs**, no clipboard bytes, no compositor
+  credentials, and no NIRI_SOCKET path in sealed config or as SCM_RIGHTS
+  attachments.
+- Picker metadata (source attribution, MIME list hint, operation ID) arrives
+  via a bounded named stream from `Process/clipboard-controller` over an
+  inherited-socketpair ComponentSession established at spawn time.
+- Picker Wayland access: `d2b.display.host-clipboard.v3` on display-wayland
+  exposes a fixed presentation-only compositor portal. At picker spawn,
+  ProviderSupervisor pre-opens a restricted Wayland connection FD backed by
+  this portal and passes it to the picker with `WAYLAND_SOCKET` set to the
+  FD number (not a socket path). GTK4 connects via this FD. The portal
+  exposes only the presentation subset of the compositor protocol;
+  `zwlr_data_control_manager_v1` and all clipboard-manager globals are absent.
+  No compositor credential, socket path, or WAYLAND_DISPLAY path reaches the
+  picker process.
+- GTK4 and all its runtime dependencies are packaged in the `picker-session`
+  artifact's Nix closure. There is no ambient host GTK4 dependency.
+- Picker sends exactly one `Select(item_digest)` or `Cancel` message back to
+  the controller via the same stream. No clipboard content transits this stream.
+- `successfulTtl: "1h"` — completed/cancelled picker retained 1 hour for
+  debug correlation.
+- `failedTtl: "24h"` — failed picker retained 24 hours for incident hold.
+- Controller writes status to the EphemeralProcess resource; never to
+  `Provider/clipboard-wayland` directly.
+
+---
+
+## ComponentSession services
+
+### d2b.display.host-clipboard.v3
+
+**Served by:** `Provider/display-wayland` (compositor service component)
+**Consumed by:** `Process/clipd-host`
+**Profile:** Enrolled KK (`Noise_KK_25519_ChaChaPoly_SHA256`)
+**Transport:** enrolled Zone transport established by framework on display-wayland
+dependency readiness
+
+Methods and named streams:
+
+| Name | Direction | Class | Description |
+| --- | --- | --- | --- |
+| `SubscribeSelectionChanges` | clipd-host → display-wayland → clipd-host | named stream | Stream of `HostSelectionChangedEvent` (MIME type list, byte hint, source attribution; no payload bytes). |
+| `SubscribeFocusEvents` | clipd-host → display-wayland → clipd-host | named stream | Stream of `HostFocusEvent` (app_id, title, output, workspace; no PII or raw window content). |
+| `MaterializeData` | clipd-host → display-wayland | request+attachment | Request data for a given MIME type from current host selection. Response carries attachment class `host-selection-transfer-fd` (one `O_RDONLY` FD, read-once, validated by fstat/fstatfs). |
+| `AnnounceSelection` | clipd-host → display-wayland | request | Declare clipd-host as host selection owner for given MIME type list. Returns opaque `SelectionToken`. |
+| `ServeDataRequest` | display-wayland → clipd-host | named stream | Reverse stream: display-wayland sends `DataRequest(token, mime_type)` when host compositor needs data from clipd's announced selection. clipd sends `DataResponse` with attachment class `host-selection-supply-fd`. |
+| `RevokeSelection` | clipd-host → display-wayland | request | Relinquish the announced selection (SelectionToken required). |
+
+Clipboard bytes appear only as SCM_RIGHTS attachment FDs. They never appear
+in method arguments, named stream frames, status fields, audit payloads, or
+traces.
+
+### d2b.clipboard.bridge.v3
+
+**Served by:** `Process/clipd-host`
+**Consumed by:** `Provider/display-wayland` (wayland-proxy component)
+**Profile:** Enrolled KK
+**Transport:** inherited private transport via framework enrollment on dependency
+
+This service carries the Guest ↔ Host clipboard bridge. wayland-proxy calls
+this service when a Guest selection becomes available or when a paste into a
+Guest is authorized.
+
+Methods:
+
+| Name | Direction | Class | Description |
+| --- | --- | --- | --- |
+| `NotifyGuestSelection` | wayland-proxy → clipd-host | request | Notify clipd-host that a Guest VM has a new selection. Carries: `zone_id`, `guest_name`, MIME type list, byte hint, source attribution. No clipboard payload. Returns `EntryToken`. |
+| `FetchGuestData` | clipd-host → wayland-proxy | request+attachment | clipd-host requests clipboard data for a given `EntryToken` and `mime_type`. Response carries attachment class `clipboard-transfer-fd` (one `O_RDONLY` FD). Validated: fstat, fstatfs, MSG_CMSG_CLOEXEC, MSG_CTRUNC = fail-closed. |
+| `AuthorizeGuestPaste` | clipd-host → wayland-proxy | request+attachment | clipd-host authorizes a paste to a given Guest. Carries `entry_token`, `mime_type`, attachment class `clipboard-transfer-fd` (one `O_WRONLY` FD, write-once, size-limited). |
+| `CancelEntry` | clipd-host → wayland-proxy | request | Cancel a pending `EntryToken`; wayland-proxy releases associated selection offer. |
+
+### d2b.clipboard.picker-coord.v3
+
+**Served by:** `Process/clipboard-controller`
+**Consumed by:** `Process/clipd-host`
+**Profile:** Local NN (same Host, inherited socketpair)
+**Transport:** inherited socketpair at clipd-host startup
+
+Methods:
+
+| Name | Direction | Class | Description |
+| --- | --- | --- | --- |
+| `RequestPickerSession` | clipd-host → controller | request | Request picker confirmation for a pending paste. Carries: `source_zone_id`, `dest_guest_name`, MIME type list (no payload, no FDs). Returns `picker_session_id`. |
+| `NotifyPickerResult` | controller → clipd-host | callback | Controller calls back when picker EphemeralProcess completes. Carries: `picker_session_id`, outcome (`Selected(item_digest)` or `Cancelled` or `TimedOut`). |
+| `CancelPickerSession` | clipd-host → controller | request | Cancel a pending picker (Guest disconnected, entry expired, etc.). |
+| `PurgeZoneClipboard` | controller → clipd-host | request | Instructs clipd-host to purge all history entries for a given zone/guest. Sent when core delivers `GuestStopped`/`GuestDestroyed`. |
+| `SuspendZoneClipboard` | controller → clipd-host | request | Suspend paste authorization for a given zone/guest. Sent on `GuestLocked`/`GuestSuspended`. |
+
+### d2b.clipboard.v3
+
+**Served by:** `Process/clipd-host`
+**Consumed by:** authorized CLI sessions and operator tooling
+**Profile:** enrolled KK or local NN (operator tool subject)
+**Authorization:** `Role/clipboard-admin` (arm/disarm/delete), `Role/clipboard-viewer`
+(list/status/events)
+
+Methods:
+
+| Name | Description |
+| --- | --- |
+| `ArmBridge` | Enable clipboard capture from host and/or guests. |
+| `DisarmBridge` | Disable capture; pending FDs are closed. |
+| `ListHistory` | Return bounded list of clipboard history metadata entries. No payload bytes. |
+| `DeleteEntry` | Delete a specific history entry by opaque ID. |
+| `GetStatus` | Return current operational status (Ready/Degraded/ArmedHost/ArmedGuest). |
+| `SubscribeEvents` | Named stream of clipboard lifecycle events (no payload bytes). |
+
+---
+
+## MIME and FD safety model
+
+### MIME allowlist
+
+Only the following MIME types are accepted into clipboard history. All other
+MIME types produce audit event `reason: mime-rejected`.
+
+```text
+text/plain;charset=utf-8
+text/plain
+text/html
+image/png
+```
+
+The allowlist is a closed enum defined in the clipboard-wayland descriptor's
+signed policy projection. It cannot be extended at runtime.
+
+### Secret-hint MIME detection
+
+The following MIME types trigger automatic suppression (entry not added to
+history; audit reason: `secret-hint-mime`):
+
+```text
+x-kde-passwordManagerHint
+application/x-password
+x-secret-content
+```
+
+Detection is on the source MIME type list before any FD transfer. No clipboard
+payload inspection is performed.
+
+### FD safety validation
+
+Every SCM_RIGHTS-received FD is validated before use:
+
+1. `fstat(2)` — confirm `st_nlink == 1`, `st_size ≤ maxItemBytes`, expected
+   `st_mode` (regular file or pipe as declared by attachment class).
+2. `fstatfs(2)` — confirm filesystem type is not a network filesystem.
+3. `MSG_CMSG_CLOEXEC` — set at `recvmsg` call; validated before use.
+4. `MSG_CTRUNC` — if set, the ancillary message was truncated; fail closed,
+   do not proceed with partial FD set.
+5. Size guard — read at most `maxItemBytes` bytes before treating as oversized
+   and closing the FD without adding an entry.
+
+FDs are never duplicated after validation, never sent downstream, and are
+closed after exactly one read/write operation.
+
+### Backpressure and cancellation
+
+Named streams use credit-based flow control from ComponentSession. clipd-host
+issues one credit per `maxConcurrentFds` slots. When all FD slots are in use,
+clipd-host withholds credits on the `d2b.clipboard.bridge.v3` bridge stream;
+wayland-proxy cannot enqueue further offers until credits are restored. This
+prevents unbounded FD accumulation.
+
+Every pending FD transfer has a `fdWriteTimeoutSeconds` deadline enforced via
+ComponentSession cancellation token. Expiry closes the FD and emits audit
+event `reason: fd-write-timeout`.
+
+---
+
+## Clipboard policy model
+
+### Direction and allowlist
+
+| Direction | Controlled by | Default |
+| --- | --- | --- |
+| Host compositor → clipboard history | `policy.allowHostCapture` | `true` |
+| Guest VM → clipboard history | `policy.allowGuestCapture` | `true` |
+| Clipboard history → Guest VM paste | `policy.requirePickerForPaste` | `true` |
+| Clipboard history → Host compositor | automatic on selection announcement | always |
+| Cross-Zone clipboard | `policy.crossZone.enable` | `false` (deny) |
+
+`requirePickerForPaste` is enforced by the clipboard-controller via the picker
+session dispatch protocol. If `false`, paste is authorized directly by
+clipd-host without picker confirmation (for automated/headless environments).
+
+### Loop suppression
+
+`policy.suppressEcho` (default `true`) activates per-entry source tracking.
+When clipd-host publishes a selection to the host compositor and that same
+selection arrives back as a new host selection event (same content digest and
+source attribution within a 2-second window), it is silently dropped without
+creating a new history entry. Audit event `reason: suppressed-echo`.
+
+### Same-Guest route
+
+When the source and destination of a paste are the same Guest, the same-MIME
+path is preserved: rich MIME types (text/html, image/png) are preserved
+without downgrade. Cross-Guest paste always uses the MIME allowlist
+intersection.
+
+### Rate limiting
+
+clipd-host enforces a per-Guest materialization rate limit of
+`caps.maxGuestRatePerMin` requests per minute using a per-Guest sliding
+window. Requests that exceed the rate are rejected with audit reason
+`rate-limit-exceeded` and d2b-bus error `resource-exhausted`. This prevents
+a compromised Guest from exhausting FD slots.
+
+---
+
+## ProviderStateSet
+
+A `ProviderStateSet` is the set of all Volume resources in the Zone whose
+`metadata.ownerRef` resolves to `Provider/clipboard-wayland`. It is a
+query-time logical grouping, not a ResourceType or stored artifact.
+
+```text
+ProviderStateSet(zone, clipboard-wayland) =
+  { v : Volume | v.metadata.zone == zone
+              && v.metadata.ownerRef == "Provider/clipboard-wayland" }
+```
+
+Core ProviderDeployment creates one Volume per declared `stateNamespace` per
+execution target from the signed component descriptor, before any component
+Process is started. After the Provider is deleted and all component Processes
+have exited and released finalizers, core ProviderDeployment deletes those same
+Volumes. These are ordinary Volume resources with the `stateSchema` extension.
+
+Both state Volumes are payload-empty: the schema carries no application fields
+(`schemaContent: "{}"`). Provider configuration is delivered exclusively via
+the sealed LaunchTicket config FD at Process start — not through any Volume.
+These Volumes exist solely as durable, identity-bearing state anchors (identity
+marker, quota enforcement, upgrade/reset participation) for each component.
+
+The clipboard-wayland controller (`Process/clipboard-controller`) does not
+create, own, watch, update, or delete Volume resources, and does not add
+`Volume` to any exported or reconciled ResourceType list. `Provider/volume-local`
+is the sole reconciler for all Volumes in this ProviderStateSet. Components
+only consume their required view through the `mounts:` entry in the Process
+spec.
+
+`migrationPolicy: none` on both state Volumes means no migration worker
+EphemeralProcess is ever created. Startup is never blocked on a migration phase.
+
+### Component state Volumes
+
+The clipboard-wayland component descriptor declares two persistent state
+namespaces, one per component:
+
+| Volume name | Component | persistenceClass | sensitivityClass |
+| --- | --- | --- | --- |
+| `clipboard-wayland--controller--state--<host-short>` | clipboard-controller | `persistent` | `private` |
+| `clipboard-wayland--clipd-host--state--<host-short>` | clipd-host | `persistent` | `private` |
+
+Both Volumes are durable: they survive component restarts and Provider restarts,
+and participate in upgrade, destroy, and reset lifecycle operations. Neither is
+`ephemeral` or `cache` class. `quotaBytes` is always nonzero (65536 bytes).
+
+Neither Volume is shared between components. `sensitivityClass: private` means
+the volume-local Provider mounts the Volume to exactly one component Process at
+a time and validates domain and userRef compatibility before exposing the view
+dirfd. volume-local never hands out a dirfd accessible to a different domain or
+user; a mismatch fails Process launch with `volume-domain-mismatch`.
+
+### Canonical Volume resource (clipboard-controller state)
+
+```yaml
+apiVersion: resources.d2b.io/v3
+type: Volume
+metadata:
+  name: clipboard-wayland--controller--state--<host-short>
+  zone: dev
+  ownerRef: Provider/clipboard-wayland
+spec:
+  providerRef: Provider/volume-local
+  kind: state
+  persistenceClass: persistent
+  sensitivityClass: private
+  stateSchema:
+    schemaId: io.d2b.clipboard-wayland/controller/state
+    schemaVersion: "1.0"
+    schemaDigest: sha256:<hex>
+    schemaContent: "{}"
+    migrationPolicy: none
+  quotaBytes: 65536
+  sealingCredentialRef: null
+  source:
+    executionRef: <spec.config.hostExecutionRef>
+    settings:
+      kind: local-path
+      sourcePolicyId: provider-state-persistent
+  layout:
+    - path: state
+      type: directory
+      ownerRef: User/d2b-clipboard-controller   # Nix-preprovisioned system service user
+      groupRef: User/d2b-clipboard-controller
+      mode: "0700"
+      sensitivity: private
+      createPolicy: create-if-never-provisioned
+      repairPolicy: exact-owner
+      cleanupPolicy: owner-controlled
+      noFollow: true
+  views:
+    state:
+      path: state
+      rights: [read, traverse]
+  quota:
+    maxBytes: 65536
+    maxInodes: 64
+    enforcement: none
+  identityMarker:
+    class: broker-maintained
+    markerRoot: provider-state-markers
+  snapshotPolicy: null
+  retentionPolicy: null
+```
+
+### Canonical Volume resource (clipd-host state)
+
+```yaml
+apiVersion: resources.d2b.io/v3
+type: Volume
+metadata:
+  name: clipboard-wayland--clipd-host--state--<host-short>
+  zone: dev
+  ownerRef: Provider/clipboard-wayland
+spec:
+  providerRef: Provider/volume-local
+  kind: state
+  persistenceClass: persistent
+  sensitivityClass: private
+  stateSchema:
+    schemaId: io.d2b.clipboard-wayland/clipd-host/state
+    schemaVersion: "1.0"
+    schemaDigest: sha256:<hex>
+    schemaContent: "{}"
+    migrationPolicy: none
+  quotaBytes: 65536
+  sealingCredentialRef: null
+  source:
+    executionRef: <spec.config.hostExecutionRef>
+    settings:
+      kind: local-path
+      sourcePolicyId: provider-state-persistent
+  layout:
+    - path: state
+      type: directory
+      ownerRef: User/d2b-clipd-host             # Nix-preprovisioned system service user
+      groupRef: User/d2b-clipd-host
+      mode: "0700"
+      sensitivity: private
+      createPolicy: create-if-never-provisioned
+      repairPolicy: exact-owner
+      cleanupPolicy: owner-controlled
+      noFollow: true
+  views:
+    state:
+      path: state
+      rights: [read, traverse]
+  quota:
+    maxBytes: 65536
+    maxInodes: 64
+    enforcement: none
+  identityMarker:
+    class: broker-maintained
+    markerRoot: provider-state-markers
+  snapshotPolicy: null
+  retentionPolicy: null
+```
+
+Layout principals (`User/d2b-clipboard-controller`, `User/d2b-clipd-host`) are
+Nix-preprovisioned system service User resources declared alongside the Provider
+package registration. They are ordinary `User/<name>` ResourceRefs — not
+ComponentPrincipal ResourceRefs or any special type — resolved by volume-local
+through the Host's User resource at provision time.
+
+### Volume mounts in Process specs
+
+Each Process mounts only its own persistent state Volume using the declared `state`
+view. The Process specs in this dossier show `mounts: []` as a field placeholder;
+the actual deployed mount entries are:
+
+`Process/clipboard-controller`:
+```yaml
+mounts:
+  - volumeRef: Volume/clipboard-wayland--controller--state--<host-short>
+    view: state
+    mountPath: /state
+    access: read-only
+    required: true
+```
+
+`Process/clipd-host`:
+```yaml
+mounts:
+  - volumeRef: Volume/clipboard-wayland--clipd-host--state--<host-short>
+    view: state
+    mountPath: /state
+    access: read-only
+    required: true
+```
+
+Clipboard history is bounded in-memory state in `clipd-host`'s process heap
+and is never written to any Volume. No clipboard content, entry bytes, or FD
+data is ever stored in these Volumes.
+---
+
+## RBAC
+
+The clipboard-controller creates and manages these RBAC resources as part of
+its reconcile loop. Core does not pre-create them. The controller manages only
+service-RBAC (ComponentSession roles and bindings); it does not create or manage
+any Volume RBAC, does not hold a Volume reconciler role, and does not interact
+with Volume resources in any way.
+
+### Roles
+
+| Role name | Verbs | Resource targets |
+| --- | --- | --- |
+| `clipboard-admin` | `connect`, `invoke`, `stream` | `d2b.clipboard.v3` (ArmBridge, DisarmBridge, DeleteEntry) |
+| `clipboard-viewer` | `connect`, `invoke`, `stream` | `d2b.clipboard.v3` (ListHistory, GetStatus, SubscribeEvents) |
+| `clipboard-bridge-peer` | `connect`, `stream` | `d2b.clipboard.bridge.v3` |
+| `clipboard-picker-worker` | `connect`, `stream` | `d2b.clipboard.picker-coord.v3` (picker result stream only) |
+
+### RoleBindings
+
+| Binding name | Subject | Role |
+| --- | --- | --- |
+| `display-wayland-bridge` | `Provider/display-wayland` | `clipboard-bridge-peer` |
+| `host-admin-clipboard` | `User/alice` | `clipboard-admin` |
+| `picker-session-worker` | `Process/picker-*` (by template label) | `clipboard-picker-worker` |
+
+All RoleBindings are Zone-local and scoped to the clipboard-wayland Provider
+instance. The `Process/picker-*` binding uses a label selector matching the
+`clipboard-picker-worker` processClass from the `picker-session` template.
+
+---
+
+## Lifecycle phases and conditions
+
+Provider lifecycle is derived by core from child Process statuses. The
+clipboard-wayland controller does not write `Provider/clipboard-wayland.status`.
+
+### Provider phases (core-derived)
+
+| Phase | Condition |
+| --- | --- |
+| `Pending` | Either child Process is not yet Ready |
+| `Ready` | Both `clipboard-controller` and `clipd-host` Processes are Ready; `display-wayland` dependency is Ready or Absent |
+| `Degraded` | One Process is Degraded or display-wayland is down in non-host-only mode |
+| `Failed` | Any required Process has failed beyond maxRestarts |
+| `Disabled` | `desiredLifecycle: stopped` set on both Processes |
+
+### Controller reconcile states
+
+```
+Initial → AwaitingDependency → Ready → Degraded (transient) → Ready
+                                   ↘ Failed (terminal)
+```
+
+- `AwaitingDependency`: display-wayland not yet Ready (if non-null); waiting
+  for clipd-host bridge endpoint to become reachable.
+- `Ready`: enrolled KK sessions established; bridge and management endpoints
+  accepting connections; picker-coord service available.
+- `Degraded`: display-wayland transiently unavailable; clipd-host is restarting;
+  new paste requests held in bounded queue (`maxRestarts` not yet exceeded).
+- `Failed`: Process exhausted maxRestarts; EphemeralProcess cleanup handler
+  detects unrecoverable picker failures.
+
+### clipd-host startup sequence
+
+1. Open inherited-socketpair ComponentSession to `clipboard-controller`
+   (`d2b.clipboard.picker-coord.v3`); receive and validate sealed config.
+2. Open enrolled KK ComponentSession to display-wayland
+   (`d2b.display.host-clipboard.v3`); subscribe `HostSelectionChangedEvent`
+   and `HostFocusEvent` streams.
+3. Bind bridge endpoint (unix, `bridge`); signal readiness via provider-defined
+   mechanism to system-systemd.
+4. Bind management endpoint (unix, `management`).
+5. Enter main event loop: bridge requests, host selection events, picker coord
+   callbacks, management API calls.
+
+---
+
+## Guest lifecycle handling
+
+Core delivers the following authenticated messages to `Process/clipboard-controller`
+via ComponentSession when Guest lifecycle events occur:
+
+| Core message | Controller action |
+| --- | --- |
+| `GuestStarted(guest_name, zone_id)` | Arm clipboard tracking for that guest; notify clipd-host via `PurgeZoneClipboard` (idempotent) to initialize per-guest state. |
+| `GuestStopped(guest_name, zone_id)` | Cancel all in-flight picker sessions for that guest; call `PurgeZoneClipboard` on clipd-host; release associated `EntryToken`s. |
+| `GuestLocked(guest_name, zone_id)` | Call `SuspendZoneClipboard` on clipd-host; paste authorization denied while suspended. |
+| `GuestUnlocked(guest_name, zone_id)` | Resume paste authorization for the guest. |
+| `GuestDestroyed(guest_name, zone_id)` | `PurgeZoneClipboard` + revoke all associated history entries; release any pending picker sessions. |
+| `GuestSuspended(guest_name, zone_id)` | Same as `GuestLocked`. |
+| `GuestResumed(guest_name, zone_id)` | Same as `GuestUnlocked`. |
+
+The controller does not subscribe to `Guest/*` resource watch events. It
+receives only the authenticated lifecycle messages forwarded by core.
+
+---
+
+## Picker session full lifecycle
+
+```
+1. Guest initiates paste (wayland-proxy detects DataOffer)
+2. wayland-proxy calls NotifyGuestSelection on d2b.clipboard.bridge.v3
+   → clipd-host receives EntryToken
+3. policy.requirePickerForPaste == true:
+   clipd-host calls RequestPickerSession on d2b.clipboard.picker-coord.v3
+   → controller creates EphemeralProcess/picker-<id>
+     spec.startDeadline = "10s", runtimeDeadline = "120s"
+4. picker binary starts; receives metadata stream from controller:
+   { operation_id, source_zone, dest_guest, mime_list_hint }
+   (no FDs, no payload, no compositor credentials)
+5. picker renders GTK4 UI via ProviderSupervisor pre-opened WAYLAND_SOCKET FD
+   (presentation-only portal; no clipboard-manager globals)
+6. user selects item or cancels (or runtimeDeadline expires → TimedOut)
+7. picker sends Select(item_digest)|Cancel back to controller stream
+   picker exits 0 (Select/Cancel) or non-zero (error)
+8. controller calls NotifyPickerResult(session_id, outcome) on clipd-host
+9. on Selected:
+   clipd-host calls AuthorizeGuestPaste(entry_token, mime_type, fd)
+   on d2b.clipboard.bridge.v3
+   → wayland-proxy writes clipboard data to Guest selection
+10. on Cancelled/TimedOut:
+   clipd-host calls CancelEntry(entry_token) on d2b.clipboard.bridge.v3
+   → wayland-proxy releases selection offer
+11. EphemeralProcess/picker-<id> enters Succeeded|Failed phase;
+   cleanupEligibleAt set per successfulTtl/failedTtl
+```
+
+---
+
+## Error taxonomy
+
+| Error code | Description | Retryable |
+| --- | --- | --- |
+| `mime-rejected` | MIME type not in MIME allowlist | No |
+| `secret-hint-mime` | Clipboard content matches secret-hint MIME pattern | No |
+| `item-too-large` | Clipboard item exceeds `maxItemBytes` | No |
+| `total-quota-exceeded` | History total exceeds `maxTotalBytes`; LRU eviction ran but insufficient | No |
+| `fd-count-exceeded` | `maxConcurrentFds` in-flight FDs reached | Yes (backoff) |
+| `fd-write-timeout` | FD write not completed within `fdWriteTimeoutSeconds` | Yes (limited) |
+| `msg-ctrunc` | `MSG_CTRUNC` detected on recvmsg; partial ancillary data | No |
+| `fd-safety-violation` | fstat/fstatfs validation failed | No |
+| `rate-limit-exceeded` | Per-Guest materialization rate exceeded | Yes (backoff) |
+| `picker-timed-out` | Picker runtimeDeadline expired without user action | No |
+| `picker-cancelled` | User cancelled picker | No |
+| `picker-start-failed` | EphemeralProcess/picker failed startDeadline | Yes (limited) |
+| `echo-suppressed` | Selection suppressed as host echo | No |
+| `dependency-absent` | display-wayland dependency is Absent; bridge operations rejected | No |
+| `dependency-degraded` | display-wayland transiently unavailable | Yes |
+| `zone-suspended` | Paste rejected because zone is in Suspended state | No |
+| `unauthorized` | RBAC check denied the operation | No |
+| `cross-zone-denied` | `crossZone.enable == false` | No |
+
+---
+
+## Audit format
+
+Audit events are emitted by `clipd-host` to the Zone audit sink via the
+`d2b.audit.v3` service using the `fail-closed` per-Zone queue model from
+ADR 0042. If the queue is full, new clipboard operations are rejected rather
+than proceeding without an audit record.
+
+### AuditEvent schema
+
+```rust
+pub struct ClipboardAuditEvent {
+    pub operation_id: Uuid,             // unique per operation
+    pub event_type: ClipboardEventType,
+    pub source_zone_id: Option<BoundedId>,  // max 63 chars; no path/payload
+    pub dest_zone_id: Option<BoundedId>,
+    pub mime_type: Option<AllowedMime>,     // from MIME allowlist only; null if rejected before check
+    pub byte_hint: Option<SizeBucket>,      // discretized: <1K, 1–64K, 64K–1M, >1M; never exact size
+    pub reason: ReasonCode,
+    pub attribution_quality: AttributionQuality,
+    pub occurred_at: OffsetDateTime,
+    pub operation_duration_ms: u32,
+}
+
+pub enum ClipboardEventType {
+    HostCapture,
+    GuestCapture,
+    PasteAuthorized,
+    PasteRejected,
+    EchoSuppressed,
+    EntryExpired,
+    EntryPurged,
+    BridgeArmed,
+    BridgeDisarmed,
+    PickerSessionStarted,
+    PickerSessionCompleted,
+    PickerSessionFailed,
+}
+
+// closed enum — no fallback/unknown variant that accepts arbitrary strings
+pub enum ReasonCode {
+    Ok,
+    MimeRejected,
+    SecretHintMime,
+    ItemTooLarge,
+    TotalQuotaExceeded,
+    FdCountExceeded,
+    FdWriteTimeout,
+    MsgCtrunc,
+    FdSafetyViolation,
+    RateLimitExceeded,
+    PickerTimedOut,
+    PickerCancelled,
+    PickerStartFailed,
+    EchoSuppressed,
+    DependencyAbsent,
+    DependencyDegraded,
+    ZoneSuspended,
+    Unauthorized,
+    CrossZoneDenied,
+}
+
+pub enum AttributionQuality {
+    Verified,     // focus window attribution confirmed via display-wayland FocusEvent
+    Approximate,  // focus changed between selection and capture
+    Unknown,      // no attribution data available
+}
+
+pub enum SizeBucket {
+    Lt1K,
+    K1To64K,
+    K64ToM1,
+    GtM1,
+}
+```
+
+**Redaction rules:**
+
+- Clipboard bytes, MIME content, raw FD data: never in any field.
+- Zone IDs are bounded opaque IDs; no host-visible user data.
+- `byte_hint` is a discrete bucket, never an exact byte count.
+- Guest names, window titles, app_id, and user-visible text: excluded.
+- PID, cgroup path, socket path, pidfd FD numbers: never in audit.
+- Attribution quality is a coarse enum; no raw window manager metadata.
+
+---
+
+## Telemetry and OTEL
+
+All metrics use stable closed label sets. No clipboard bytes, content hashes,
+window titles, user identifiers, or zone credentials appear in spans or metrics.
+
+### Metrics
+
+| Metric name | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `clipboard_operations_total` | Counter | `operation`, `reason`, `direction` | Clipboard operations by type and outcome. |
+| `clipboard_active_fds` | Gauge | `direction` | Currently in-flight SCM_RIGHTS FDs. |
+| `clipboard_history_entries` | Gauge | `source` (`host`/`guest`) | Current history entry count. |
+| `clipboard_history_bytes_total` | Gauge | — | Total in-memory history bytes. |
+| `clipboard_picker_sessions_total` | Counter | `outcome` (`selected`/`cancelled`/`timed_out`/`failed`) | Picker session outcomes. |
+| `clipboard_mime_rejections_total` | Counter | `reason` | MIME rejections by reason code. |
+
+`operation` labels: `host-capture`, `guest-capture`, `paste-authorized`,
+`paste-rejected`, `purge`, `suspend`, `arm`, `disarm`.
+
+`direction` labels: `host-to-guest`, `guest-to-host`.
+
+No per-Zone, per-Guest, or per-user dimension labels on metrics (cardinality
+control).
+
+### Spans
+
+- One span per clipboard operation (correlation with `operation_id`).
+- Span attributes: `operation_type`, `reason_code`, `mime_type` (from
+  allowlist or `rejected`), `attribution_quality`, `direction`.
+- Excluded span attributes: byte sizes, content hashes, zone IDs, guest names,
+  user names, process IDs, socket paths, FD numbers.
+
+---
+
+## Nix catalog registration
+
+```nix
+# In the host NixOS configuration (or d2b Zone config):
+d2b.artifacts.clipboard-wayland = {
+  package  = inputs.d2b.packages.${system}.clipboard-wayland;
+  type     = "provider";
+  # artifactId is derived from package metadata; no manual ID needed.
+};
+```
+
+The `artifactId = "clipboard-wayland"` in Provider spec resolves through the
+offline catalog compiled from this artifact declaration. The Nix store path is
+never exposed in resource spec, status, or audit.
+
+### Migration from nixos-modules/clipboard.nix
+
+| Old option | New mechanism |
+| --- | --- |
+| `d2b.clipboard.enable` | Declare `d2b.zones.<zone>.resources.clipboard-wayland` with `type = "Provider"` |
+| `d2b.clipboard.bridgeSocketDir` | Removed: no bridge socket directory; FDs flow via ComponentSession |
+| `d2b.clipboard.allowedMimeTypes` | Closed MIME allowlist in Provider descriptor; not operator-configurable |
+| `d2b.clipboard.pickerCommand` | Replaced by `spec.config.pickerArtifactId` (optional; null = bundled picker) |
+| `d2b.clipboard.niriSocket` | Removed: compositor access via `d2b.display.host-clipboard.v3` only |
+| `d2b.clipboard.historySize` | `spec.config.caps.maxHistoryEntries` |
+| `d2b.clipboard.maxItemSize` | `spec.config.caps.maxItemBytes` |
+| `d2b.clipboard.requirePicker` | `spec.config.policy.requirePickerForPaste` |
+| `d2b.clipboard.guestGroups` | Removed: no per-Guest Unix groups; access via enrolled ComponentSession only |
+
+---
+
+## Invariants (normative)
+
+The following invariants are checked by contract tests and must not be
+violated by any implementation:
+
+1. **No bytes in resources.** No clipboard payload byte sequence may appear
+   in any resource spec, status, condition message, or audit payload field.
+
+2. **Closed MIME allowlist.** Only `text/plain;charset=utf-8`, `text/plain`,
+   `text/html`, `image/png` are accepted. No runtime extension.
+
+3. **FD safety.** Every SCM_RIGHTS-received FD is validated with fstat,
+   fstatfs, MSG_CMSG_CLOEXEC, and MSG_CTRUNC detection. MSG_CTRUNC = fail closed.
+
+4. **Picker authority.** Picker EphemeralProcess receives no clipboard FDs,
+   clipboard bytes, compositor credentials, or NIRI_SOCKET path.
+
+5. **No DND.** wl_data_device_manager drag-and-drop is never implemented.
+
+6. **No primary selection.** zwp_primary_selection_device_manager_v1 is
+   never implemented.
+
+7. **Fail-closed audit.** If the Zone audit queue is full, new clipboard
+   operations are rejected; they do not proceed unaudited.
+
+8. **ReasonCode closed enum.** No arbitrary string reason code is accepted.
+   Unknown proto fields fail closed.
+
+9. **No filesystem IPC.** No bridge directory, per-Guest Unix socket, or
+   shared path is used. All IPC is ComponentSession over private transport.
+
+10. **Loop suppression default-on.** `policy.suppressEcho` defaults to `true`.
+    Implementations may not change this default.
+
+11. **No cross-Zone default.** `policy.crossZone.enable` defaults to `false`.
+    Cross-Zone is denied unless explicitly enabled.
+
+12. **Controller does not create itself.** Core ProviderDeployment creates both
+    `Process/clipboard-controller` and `Process/clipd-host`. The controller
+    does not create or adopt itself.
+
+13. **Core derives Provider status.** `Provider/clipboard-wayland.status` is
+    written only by core. The clipboard-wayland controller does not write it.
+
+---
+
+## Work items
+
+### ADR046-clipboard-001 — Crate skeleton
+
+**Type:** implementation  
+**Inputs:** This dossier, `ADR-046-provider-model-and-packaging`
+
+Create `packages/d2b-provider-clipboard-wayland/` with root directories
+`src/`, `tests/`, `integration/`, and `README.md` as required by the
+source layout section of this dossier. Binaries: `clipboard-controller`,
+`clipd-host`, `picker-session`.
+
+`README.md` must include: purpose, component map, local build instructions,
+test commands, dependency on display-wayland fake in integration tests.
+
+### ADR046-clipboard-002 — Service process (clipd-host)
+
+**Type:** implementation  
+**Inputs:** ADR046-clipboard-001; ported from `packages/d2b-clipd/`
+
+Adapt clipboard algorithms from `d2b-clipd` into the `clipd-host` service
+binary. Key changes from baseline:
+
+- Replace `picker.rs` subprocess fork/exec with `RequestPickerSession` call
+  to controller via `d2b.clipboard.picker-coord.v3`.
+- Replace direct WAYLAND_DISPLAY connection with `d2b.display.host-clipboard.v3`
+  client session (display_client.rs).
+- Replace NIRI_SOCKET NiriJsonClient with focus events from the display client.
+- Replace Unix bridge socket server with `d2b.clipboard.bridge.v3` ComponentSession
+  service on the `bridge` endpoint.
+- Remove all `SO_PEERCRED` peer config, bridge directories, and group ACL logic.
+- Port MIME allowlist, FD safety, audit, loop suppression, LRU history from
+  d2b-clipd verbatim (algorithm preservation invariant).
+- `environmentClass: provider-defined` (system-systemd user scope provides
+  XDG_RUNTIME_DIR; clipd-host does not use WAYLAND_DISPLAY itself).
+
+Conformance gates: `make test-rust -p d2b-provider-clipboard-wayland`.
+
+### ADR046-clipboard-003 — Controller process (clipboard-controller)
+
+**Type:** implementation  
+**Inputs:** ADR046-clipboard-001
+
+Implement `Process/clipboard-controller` as a system-domain system-minijail
+Process. Responsibilities:
+
+- Serve `d2b.clipboard.picker-coord.v3` on `picker-coord` unix endpoint.
+- On `RequestPickerSession`: validate, create `EphemeralProcess/picker-<uuid>`
+  via resource API with signed template `picker-session`, `processClass: worker`,
+  `successfulTtl: "1h"`, `failedTtl: "24h"`, `startDeadline: "10s"`,
+  `runtimeDeadline: "120s"`. Picker config is null; metadata arrives via
+  inherited-socketpair ComponentSession stream at spawn time.
+- Watch `EphemeralProcess/picker-*` status for terminal transitions; call
+  `NotifyPickerResult` back to clipd-host.
+- Receive `GuestStopped`/`GuestLocked`/etc. from core orchestrator;
+  call `PurgeZoneClipboard`/`SuspendZoneClipboard` on clipd-host.
+- Create and manage RBAC Role/RoleBinding resources listed in this dossier.
+- Does not write `Provider/clipboard-wayland.status`.
+- Does not own, export, or reconcile any Volume resource; `Provider/volume-local`
+  is the sole Volume reconciler; both persistent state Volumes are created by
+  core ProviderDeployment from the signed component descriptor before this
+  Process starts, and deleted after it stops.
+
+### ADR046-clipboard-004 — EphemeralProcess picker binary
+
+**Type:** implementation  
+**Inputs:** ADR046-clipboard-001, ADR046-clipboard-003
+
+Implement `picker-session` worker binary. Invariants:
+
+- `processClass: worker`; `domain: user`; system-systemd; `environmentClass: minimal`.
+- Receives metadata from clipboard-controller via inherited-socketpair
+  ComponentSession named stream (operation_id, source_zone, dest_guest,
+  mime_list_hint).
+- Wayland access: ProviderSupervisor pre-opens a restricted compositor
+  connection FD backed by display-wayland's presentation-only portal and
+  passes it with `WAYLAND_SOCKET=<fd_number>` (FD number only, no path).
+  GTK4 connects via this FD. `zwlr_data_control_manager_v1` and all
+  clipboard-manager globals are absent from the portal; seccomp policy
+  prevents any attempt to open a compositor socket path.
+- GTK4 and all runtime dependencies are in the picker artifact's Nix closure.
+  No ambient host GTK4 dependency.
+- Sends exactly one `Select(item_digest)` or `Cancel` frame back to the
+  controller via the named stream. No clipboard content transits this stream.
+- Receives no clipboard FDs, no compositor credentials, no socket path.
+- Exits 0 on Select/Cancel; non-zero on startup failure.
+- If `spec.config.policy.requirePickerForPaste` is `false`, this binary is
+  not invoked; clipd-host authorizes pastes directly without a picker session.
+  Install or start failure of the picker EphemeralProcess is a typed error
+  (`PickerStartFailed`), not a silent bypass.
+
+Contract test: picker binary must fail to bind `zwlr_data_control_manager_v1`
+(absent from seccomp allowlist and restricted compositor portal).
+
+### ADR046-clipboard-005 — ComponentSession service definitions
+
+**Type:** implementation  
+**Inputs:** ADR046-clipboard-001; `ADR-046-componentsession-and-bus`
+
+Generate Rust async ttrpc stubs and named-stream types for:
+
+- `d2b.clipboard.bridge.v3` (server: clipd-host; client: wayland-proxy)
+- `d2b.clipboard.picker-coord.v3` (server: controller; client: clipd-host)
+- `d2b.clipboard.v3` (server: clipd-host; client: CLI/operator)
+
+Consume display-wayland's `d2b.display.host-clipboard.v3` generated client
+stubs (imported from the display-wayland crate or a shared contracts crate).
+Service names `d2b.display.host-clipboard.v3` and `d2b.clipboard.picker-coord.v3`
+are normative; generation compilation rejects service-name collisions in the
+Zone service registry.
+
+All attachment class definitions (`clipboard-transfer-fd`,
+`host-selection-transfer-fd`, `host-selection-supply-fd`) must be declared in
+the signed service descriptor and validated at ComponentSession handshake.
+
+### ADR046-clipboard-006 — Provider Nix configuration
+
+**Type:** implementation  
+**Inputs:** `ADR-046-nix-configuration`; this dossier Nix authoring section
+
+Implement the d2b Nix module for `Provider/clipboard-wayland`:
+
+- `d2b.zones.<zone>.resources.<name>` with `type = "Provider"` and
+  `spec.{artifactId, config}` shape as defined in this dossier.
+- Validate: `hostExecutionRef`/`hostUserRef` resolve to declared resources;
+  `displayWaylandRef` resolves to a `Provider/display-wayland` if non-null;
+  `pickerArtifactId` null or registered in artifact catalog.
+- No `spec.componentPlacements`, `spec.settings`, or `spec.status` in Nix.
+- Attribute path: `d2b.artifacts.clipboard-wayland` for the package.
+- Remove `nixos-modules/clipboard.nix` in the same commit as the new module
+  lands (see ADR046-clipboard-012).
+
+### ADR046-clipboard-007 — RBAC resources
+
+**Type:** implementation  
+**Inputs:** ADR046-clipboard-003; RBAC section of this dossier
+
+The clipboard-controller reconcile loop creates:
+
+- `Role/clipboard-admin`, `Role/clipboard-viewer`,
+  `Role/clipboard-bridge-peer`, `Role/clipboard-picker-worker`
+- `RoleBinding/display-wayland-bridge`, `RoleBinding/host-admin-clipboard`,
+  `RoleBinding/picker-session-worker`
+
+All Roles and RoleBindings are Zone-scoped, owned by
+`Process/clipboard-controller`, and are cleaned up when the Provider is
+deleted.
+
+### ADR046-clipboard-008 — Audit and telemetry
+
+**Type:** implementation  
+**Inputs:** ADR046-clipboard-002; `ADR-046-telemetry-audit-and-support`
+
+Implement `ClipboardAuditEvent` and fail-closed queue in `service/audit.rs`:
+
+- Port `audit.rs` from `packages/d2b-clipd/src/audit.rs`.
+- Rename `source_realm`/`destination_realm` → `source_zone_id`/`dest_zone_id`.
+- `ReasonCode` must be a closed Rust enum (`#[non_exhaustive]` is forbidden).
+  Unknown protobuf fields fail the deserialization.
+- `SizeBucket` discretization replaces exact byte counts.
+- Emit `ClipboardAuditEvent` to Zone audit sink via `d2b.audit.v3`.
+- Implement OTEL metrics with label sets from the Metrics table above.
+- Implement OTEL spans with allowed/excluded attribute lists from the Spans
+  section above.
+
+### ADR046-clipboard-009 — Hermetic unit tests
+
+**Type:** test  
+**Inputs:** ADR046-clipboard-001 through ADR046-clipboard-008
+
+Required test coverage (in `packages/d2b-provider-clipboard-wayland/tests/`):
+
+| Test | What it verifies |
+| --- | --- |
+| `policy::test_mime_allowlist_closed` | All listed MIME types accepted; all others rejected |
+| `policy::test_secret_hint_detection` | All secret-hint MIME types trigger suppression |
+| `fd::test_msg_ctrunc_fail_closed` | MSG_CTRUNC on recvmsg → operation rejected, no partial FD |
+| `fd::test_fstat_nlink_guard` | FD with st_nlink > 1 → rejected |
+| `fd::test_item_too_large` | FD content exceeds maxItemBytes → closed without entry |
+| `history::test_lru_eviction` | History bounded at maxHistoryEntries; LRU entry evicted |
+| `history::test_total_quota` | Total bytes quota enforced across entries |
+| `history::test_ttl_expiry` | Entries expire after hostEntrySeconds/guestEntrySeconds |
+| `audit::test_no_bytes_in_event` | ClipboardAuditEvent contains no clipboard bytes |
+| `audit::test_reason_code_closed_enum` | Unknown reason code → deserialization error |
+| `audit::test_fail_closed_queue` | Full queue → operation rejected, not bypassed |
+| `lifecycle::test_guest_stopped_purge` | GuestStopped → all entries for that guest purged |
+| `lifecycle::test_guest_locked_suspend` | GuestLocked → paste requests rejected with zone-suspended |
+| `picker::test_ephemeral_no_fds` | Picker spec contains no SCM_RIGHTS attachments |
+| `picker::test_ephemeral_process_class` | processClass = worker; controller/service rejected |
+| `picker::test_ephemeral_ttl_defaults` | successfulTtl=1h, failedTtl=24h |
+| `invariants::test_no_filesystem_bridge` | No socket path or dir appears in Process spec config |
+| `invariants::test_core_creates_processes` | Controller does not create Process/clipd-host |
+| `state::test_volume_schema_fields` | Both state Volumes carry correct schemaId (`*/state`), `schemaContent: "{}"`, `persistenceClass: persistent` (never config/ephemeral/cache), `sensitivityClass: private`, `quotaBytes > 0`, `migrationPolicy: none`, `identityMarker.class: broker-maintained`; view named `state` mounted read-only at `/state` |
+| `state::test_volume_durable` | Volumes survive component restart and Provider restart; persistenceClass is never ephemeral or cache; quotaBytes is never 0 |
+| `state::test_volume_layout_principals` | Volume layout ownerRef/groupRef reference User/<name> ResourceRefs; no ComponentPrincipal type |
+| `state::test_no_cross_component_volume` | Each component has its own Volume; no Volume is shared between controller and clipd-host |
+| `state::test_no_clipboard_bytes_in_volume` | No clipboard bytes, entry data, or FD content in any Volume payload |
+
+### ADR046-clipboard-010 — Integration tests
+
+**Type:** test  
+**Inputs:** ADR046-clipboard-009; display-wayland fake
+
+Required integration test scenarios (in `packages/d2b-provider-clipboard-wayland/integration/`):
+
+| Test | Scenario |
+| --- | --- |
+| `e2e_paste.rs` | Full paste flow: fake wayland-proxy calls NotifyGuestSelection → RequestPickerSession → fake picker selects → AuthorizeGuestPaste → verify FD arrives |
+| `e2e_host_capture.rs` | Host selection event from fake display client → entry stored → ListHistory returns metadata (no bytes) |
+| `bridge_backpressure.rs` | maxConcurrentFds reached → NotifyGuestSelection returns backpressure error; after FD closed → proceeds |
+| `rate_limit.rs` | maxGuestRatePerMin exceeded → rate-limit-exceeded audit event and rejection |
+| `echo_suppression.rs` | Host selection echoed back from clipd publish → suppressed, not re-added |
+| `dependency_absent.rs` | displayWaylandRef = null → bridge methods return dependency-absent; management API works |
+| `guest_destroy_purge.rs` | GuestDestroyed → all history entries for zone purged; picker sessions cancelled |
+| `audit_fail_closed.rs` | Audit queue filled → clipboard operation rejected; no unaudited operation proceeds |
+| `picker_start_timeout.rs` | Picker EphemeralProcess startDeadline exceeded → PickerStartFailed audit event; operation cancelled |
+| `cross_zone_denied.rs` | crossZone.enable = false → cross-Zone paste rejected |
+
+Integration tests use a fake `d2b.display.host-clipboard.v3` server and a
+fake wayland-proxy bridge client. They do not require a live Wayland compositor.
+
+### ADR046-clipboard-011 — Contract tests
+
+**Type:** test  
+**Inputs:** ADR046-clipboard-005; `packages/d2b-contract-tests/`
+
+Update `packages/d2b-contract-tests/tests/policy_clipboard.rs`:
+
+- Add contract tests for `d2b.clipboard.bridge.v3` wire format.
+- Add contract tests for `d2b.clipboard.picker-coord.v3`.
+- Add tests verifying ReasonCode proto numbers are stable across schema
+  versions (closed enum numeric stability).
+- Verify attachment class names match descriptor declarations.
+- Remove tests that assume shared filesystem bridge paths or SO_PEERCRED config.
+
+### ADR046-clipboard-012 — Remove nixos-modules/clipboard.nix
+
+**Type:** removal  
+**Inputs:** ADR046-clipboard-006
+
+After `ADR046-clipboard-006` lands and is validated:
+
+- Delete `nixos-modules/clipboard.nix`.
+- Remove the `clipboard.nix` import from `nixos-modules/default.nix`.
+- Update `docs/how-to/` migration guide with option mapping table from this
+  dossier's Nix migration section.
+- Ensure `tests/static.sh` example iterations do not fail on removed option
+  paths.
+- Add a CHANGELOG entry under `## [Unreleased]` noting the removal.
+
+---
+
+## Reuse from baseline
+
+The following algorithms and types are ported verbatim from the
+`packages/d2b-clipd/` baseline (algorithm preservation invariant from
+ADR 0042):
+
+| Source | Destination | Notes |
+| --- | --- | --- |
+| `src/policy.rs` — `ALLOWED_MIME_TYPES`, `SECRET_HINT_MIME_TYPES`, `ReasonCode`, `AttributionQuality` | `service/policy.rs` | Exact port; rename `source_realm`/`dest_realm` → `_zone_id` |
+| `src/fd.rs` — `FdCapModel`, `FdSafetyError`, MSG_CTRUNC validation | `service/fd.rs` | Exact port |
+| `src/audit.rs` — `AuditEvent`, fail-closed queue | `service/audit.rs` | Port; adapt zone field names; add `SizeBucket` |
+| `src/framing.rs` — `PICKER_TO_DAEMON_MAX_FRAME_BYTES`, encode/decode | `service/picker_coord.rs` | Adapt to ComponentSession named-stream framing |
+| `packages/d2b-wayland-proxy/src/clipboard.rs` — `ClipboardMimePolicy`, `ClipboardRoute`, `ClipboardObjectForwarding` | wayland-proxy crate (display-wayland Provider) | Not ported here; clipboard-wayland consumes via bridge service |
+
+The following are **not** ported and must be rewritten:
+
+| Baseline | Replacement |
+| --- | --- |
+| `src/picker.rs` subprocess spawn | `EphemeralProcess/picker-<id>` via resource API |
+| `src/niri.rs` NiriJsonClient | `d2b.display.host-clipboard.v3` focus event stream |
+| Unix bridge socket server | `d2b.clipboard.bridge.v3` ComponentSession service |
+| Bridge directory / `clipboard-bridge-root` Volume | None (no filesystem bridge) |
+| NIRI_SOCKET / WAYLAND_DISPLAY injection | `d2b.display.host-clipboard.v3` + ProviderSupervisor pre-opened WAYLAND_SOCKET FD |
+| `SO_PEERCRED` bridge peer validation | Enrolled KK ComponentSession authentication |
+| Per-Guest Unix groups and ACLs | Zone RBAC RoleBinding |
+
+---
+
+## Required source and test layout
+
+The following root directories must exist before ADR046-clipboard-001 closes:
+
+```text
+packages/d2b-provider-clipboard-wayland/
+  Cargo.toml
+  src/
+  tests/
+  integration/
+  README.md
+```
+
+`README.md` must cover: purpose, component map, local build instructions, test
+commands, and the display-wayland fake used by integration tests.
+
+`packages/d2b-contract-tests/tests/policy_clipboard.rs` must be updated
+as part of ADR046-clipboard-011. `nixos-modules/clipboard.nix` is removed in
+ADR046-clipboard-012.
